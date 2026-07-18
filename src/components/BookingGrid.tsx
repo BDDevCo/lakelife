@@ -56,8 +56,9 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const router = useRouter();
   const now = new Date();
   const [freq, setFreq] = useState(0);
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth());
+  // year + month kept together so functional updates handle year-boundary crossings.
+  const [cal, setCal] = useState({ year: now.getFullYear(), month: now.getMonth() });
+  const { year, month } = cal;
   const [picked, setPicked] = useState<string | null>(null);
   const [fullDates, setFullDates] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -92,10 +93,13 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   }, [year, month, fullDates, service.is_water_work, season.start, season.end, today]);
 
   function move(delta: number) {
-    let m = month + delta, y = year;
-    if (m < 0) { m = 11; y--; }
-    if (m > 11) { m = 0; y++; }
-    setMonth(m); setYear(y); setPicked(null);
+    setPicked(null);
+    setCal((c) => {
+      let m = c.month + delta, y = c.year;
+      if (m < 0) { m = 11; y--; }
+      if (m > 11) { m = 0; y++; }
+      return { year: y, month: m };
+    });
   }
 
   async function confirm() {
