@@ -16,16 +16,17 @@ export default function Home() {
         <section className="ll-hero">
           <div className="ll-hero-inner">
             <div className="ll-eyebrow">Welcome to LakeLife</div>
-            <h1>Your lake house, on the water &amp; ready when you are.</h1>
+            <h1>Your lake home, ready when you are.</h1>
             <p>
-              One request, one price, one crew at your door. We coordinate every
-              opening, closing, pier, lift, mow and clean on Big Long, Pretty &amp;
-              Big Turkey Lakes — you just pick the dates.
+              One request, one price, one crew at your door. Opening &amp; closing,
+              housekeeping, mowing, and — if you&apos;re on the water — piers, lifts and
+              boat storage. On or near Big Long, Pretty &amp; Big Turkey Lakes, you pick
+              the services and the dates.
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 22 }}>
-              <span className="ll-chip">📍 <b>Big Long · Pretty · Big Turkey</b></span>
-              <span className="ll-chip">Seasonal opening &amp; closing</span>
-              <span className="ll-chip">Piers · lifts · boats · mowing · housekeeping</span>
+              <span className="ll-chip">📍 <b>On or near Big Long · Pretty · Big Turkey</b></span>
+              <span className="ll-chip">Home &amp; seasonal · housekeeping · mowing</span>
+              <span className="ll-chip">Waterfront? Piers · lifts · boat storage too</span>
               <GetStarted configured={supaOk} />
             </div>
           </div>
@@ -41,19 +42,19 @@ export default function Home() {
             }}
           >
             <FeatureCard
-              pill="One price"
-              title="All-in, no surprises"
-              body="You see a single price per service. We handle the crews, the coordination, and the schedule around each lake's season."
+              pill="Pick what fits"
+              title="Only the services you want"
+              body="On the water or a few blocks off it, you choose the services that fit your place — housekeeping, mowing, seasonal open & close, and waterfront work if you have it."
             />
             <FeatureCard
               pill="Season-aware"
               title="Built around ice-out &amp; freeze"
-              body="Water work opens after ice-out and closes before the pull deadline — automatically, per lake, so nothing gets caught in the freeze."
+              body="Waterfront work opens after ice-out and closes before the pull deadline — automatically, per lake, so nothing gets caught in the freeze."
             />
             <FeatureCard
               pill="Proof every time"
               title="Photos with every visit"
-              body="Every completed job comes with photos texted to you — your pier, your lift, your house, done right."
+              body="Every completed job comes with photos texted to you — your house, your lawn, your pier, done right."
             />
           </div>
         </section>

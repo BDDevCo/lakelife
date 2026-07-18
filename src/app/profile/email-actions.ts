@@ -27,15 +27,16 @@ export async function sendWelcomeEmail(): Promise<{ ok: boolean; skipped?: boole
   if (!profile?.hasProfile) return { ok: false, error: "No profile to summarize." };
   const services = await getPricedServices(profile);
 
-  const priceOf = (name: string) => services.find((s) => s.name === name)?.price ?? 0;
+  const priceMap = new Map(services.map((s) => [s.name, s.price]));
 
-  const rows: Array<[string, string]> = [
-    ["Your house", `${profile.sqft.toLocaleString()} sq ft, ${profile.beds} bd / ${profile.baths} ba — housekeeping ${formatPrice(priceOf("Housekeeping"))} / visit`],
-    ["Your pier", `${profile.pier_sections} sections — ${formatPrice(priceOf("Pier install / removal"))} per install or pull`],
-    ["Your lifts", `${profile.boat_lifts} boat lift${profile.boat_lifts === 1 ? "" : "s"}${profile.pwc_lifts ? `, ${profile.pwc_lifts} PWC lift${profile.pwc_lifts === 1 ? "" : "s"}` : ""} — ${formatPrice(priceOf("Boat lift set / pull"))} per set or pull`],
-    ["Your fleet", profile.boats.length ? `${profile.boats.map((b) => `${b.length_ft}' ${b.type}`).join(", ")} — ${formatPrice(priceOf("Boat storage & winterize"))} / season` : "No boats on file yet"],
-    ["The lawn", `${profile.lawn_band} — ${formatPrice(priceOf("Lawn mowing & trim"))} mow & blow, weekly`],
-  ];
+  // Only the services this customer chose.
+  const chosen = profile.wanted_services.length
+    ? profile.wanted_services
+    : services.map((s) => s.name);
+  const rows: Array<[string, string]> = chosen.map((name) => [
+    name,
+    `${formatPrice(priceMap.get(name) ?? 0)}`,
+  ]);
 
   const html = `
   <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;color:#20343d">

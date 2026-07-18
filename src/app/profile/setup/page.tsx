@@ -52,6 +52,7 @@ export default async function SetupPage() {
       ? {
           lake: profile.lake ?? undefined,
           address: profile.address ?? undefined,
+          wanted: profile.wanted_services,
           sqft: profile.sqft,
           gate: profile.gate ?? undefined,
           beds: profile.beds,
@@ -76,8 +77,8 @@ export default async function SetupPage() {
         <div style={{ maxWidth: 560, margin: "0 auto 16px" }}>
           <h1 style={{ fontSize: 26 }}>Let&apos;s set up your place</h1>
           <p className="mut" style={{ fontSize: 14 }}>
-            Seven quick questions. Answer once, and every price is exact to your property
-            from day one.
+            Pick the services that fit your place — we&apos;ll only ask about what you
+            choose, and every price is exact from day one.
           </p>
         </div>
         <ProfileWizard lakes={lakes} services={services} initial={initial} />

@@ -28,6 +28,7 @@ export interface FullProfile {
   lawn_band: "small" | "medium" | "large";
   boats: Array<{ type: string; length_ft: number }>;
   toys: Array<{ name: string }>;
+  wanted_services: string[];
   boatFeet: number;
 }
 
@@ -71,6 +72,7 @@ export async function getFullProfile(): Promise<FullProfile | null> {
       lawn_band: "medium",
       boats: [],
       toys: [],
+      wanted_services: [],
       boatFeet: 0,
     };
   }
@@ -117,6 +119,7 @@ export async function getFullProfile(): Promise<FullProfile | null> {
     lawn_band: (profile?.lawn_band as FullProfile["lawn_band"]) ?? "medium",
     boats: boatList,
     toys: (toys ?? []).map((t) => ({ name: t.name ?? "" })),
+    wanted_services: (profile?.wanted_services as string[] | null) ?? [],
     boatFeet: boatFeet({ boats: boatList }),
   };
 }

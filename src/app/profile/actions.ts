@@ -23,6 +23,7 @@ export interface WizardInput {
   lawn_band: "small" | "medium" | "large";
   boats: Array<{ type: string; length_ft: number }>;
   toys: Array<{ name: string }>;
+  wanted_services: string[];
 }
 
 export interface SaveResult {
@@ -104,6 +105,7 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
     jet_skis: input.jet_skis || 0,
     pwc_lifts: input.pwc_lifts || 0,
     lawn_band: input.lawn_band,
+    wanted_services: input.wanted_services ?? [],
   });
   if (profErr) return { ok: false, error: profErr.message };
 
