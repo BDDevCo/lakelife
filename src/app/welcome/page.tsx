@@ -23,7 +23,9 @@ export default async function WelcomePage() {
         .eq("id", user.id)
         .maybeSingle();
       name = profile?.name || (user.user_metadata?.full_name as string) || "there";
-      emailVerified = profile?.email_verified ?? Boolean(user.email_confirmed_at);
+      // The Supabase auth record is the source of truth for email confirmation;
+      // the profile flag is just a synced convenience.
+      emailVerified = Boolean(user.email_confirmed_at) || (profile?.email_verified ?? false);
       phoneVerified = profile?.phone_verified ?? false;
     }
   }
