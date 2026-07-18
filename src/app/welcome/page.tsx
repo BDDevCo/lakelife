@@ -40,9 +40,18 @@ export default async function WelcomePage() {
           <div className="ll-eyebrow">You&apos;re in</div>
           <h1>Welcome to LakeLife, {name}.</h1>
           <p>
-            Your account is set up. Next, we&apos;ll build your property profile so we can
-            price your services exactly — that&apos;s Phase 2.
+            Your account is set up. Next, let&apos;s build your property profile so we can
+            price every service exact to your place.
           </p>
+          <div style={{ marginTop: 20 }}>
+            <Link
+              className="ll-btn gold"
+              href="/profile/setup"
+              style={{ textDecoration: "none" }}
+            >
+              Set up my property →
+            </Link>
+          </div>
         </div>
         <Waves />
       </section>

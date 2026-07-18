@@ -28,11 +28,29 @@ function GoogleIcon() {
 export function AuthModal({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const supabase = createClient();
+  const [mode, setMode] = useState<"signup" | "signin">("signup");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [mobile, setMobile] = useState("");
   const [busy, setBusy] = useState(false);
+
+  async function emailSignIn() {
+    if (!email || !password) {
+      toast("Enter your email and password.");
+      return;
+    }
+    setBusy(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setBusy(false);
+    if (error) {
+      toast(error.message);
+      return;
+    }
+    toast("Welcome back!");
+    router.push("/profile");
+    router.refresh();
+  }
 
   async function ssoSignIn(provider: "google" | "apple") {
     setBusy(true);
@@ -97,10 +115,14 @@ export function AuthModal({ onClose }: { onClose: () => void }) {
       <div className="ll-modal">
         <div className="ll-modal-head">
           <div>
-            <span className="ll-pill teal">New customer</span>
-            <h3 style={{ fontSize: 22, marginTop: 8 }}>Create your LakeLife profile</h3>
+            <span className="ll-pill teal">{mode === "signup" ? "New customer" : "Welcome back"}</span>
+            <h3 style={{ fontSize: 22, marginTop: 8 }}>
+              {mode === "signup" ? "Create your LakeLife profile" : "Sign in to LakeLife"}
+            </h3>
             <div className="mut" style={{ marginTop: 4, fontSize: 13 }}>
-              One account for services, scheduling, photos &amp; billing.
+              {mode === "signup"
+                ? "One account for services, scheduling, photos & billing."
+                : "Good to see you again."}
             </div>
           </div>
           <button className="ll-x" onClick={onClose} aria-label="Close">
@@ -121,18 +143,20 @@ export function AuthModal({ onClose }: { onClose: () => void }) {
             <GoogleIcon /> Continue with Google
           </button>
 
-          <div className="ll-or">or start from scratch</div>
+          <div className="ll-or">{mode === "signup" ? "or start from scratch" : "or with email"}</div>
 
+          {mode === "signup" && (
+            <div className="ll-field">
+              <label>Full name</label>
+              <input
+                placeholder="First & last name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </div>
+          )}
           <div className="ll-field">
-            <label>Full name</label>
-            <input
-              placeholder="First & last name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </div>
-          <div className="ll-field">
-            <label>Email — required, receipts &amp; records</label>
+            <label>{mode === "signup" ? "Email — required, receipts & records" : "Email"}</label>
             <input
               type="email"
               placeholder="you@email.com"
@@ -144,35 +168,57 @@ export function AuthModal({ onClose }: { onClose: () => void }) {
             <label>Password</label>
             <input
               type="password"
-              placeholder="Choose a password"
+              placeholder={mode === "signup" ? "Choose a password" : "Your password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
-          <div className="ll-field">
-            <label>Mobile — required, we verify by text</label>
-            <input
-              inputMode="tel"
-              placeholder="(260) 555-0100"
-              value={mobile}
-              onChange={(e) => setMobile(e.target.value)}
-            />
-          </div>
+          {mode === "signup" && (
+            <div className="ll-field">
+              <label>Mobile — required, we verify by text</label>
+              <input
+                inputMode="tel"
+                placeholder="(260) 555-0100"
+                value={mobile}
+                onChange={(e) => setMobile(e.target.value)}
+              />
+            </div>
+          )}
 
           <button
             className="ll-btn"
             style={{ width: "100%" }}
-            onClick={emailSignUp}
+            onClick={mode === "signup" ? emailSignUp : emailSignIn}
             disabled={busy}
           >
-            {busy ? "Creating…" : "Create account"}
+            {busy ? (mode === "signup" ? "Creating…" : "Signing in…") : mode === "signup" ? "Create account" : "Sign in"}
           </button>
 
-          <div className="mut" style={{ fontSize: 11.5, marginTop: 12, lineHeight: 1.5 }}>
-            Apple/Google sign-in verifies your email in one tap — Apple&apos;s Hide My
-            Email works fine, mail still reaches you. Every account needs a working email
-            on file and a text-verified mobile before the first service books.
+          <div style={{ textAlign: "center", marginTop: 14, fontSize: 13 }}>
+            {mode === "signup" ? (
+              <button
+                onClick={() => setMode("signin")}
+                style={{ background: "none", border: "none", color: "var(--teal-dark)", fontWeight: 700, cursor: "pointer" }}
+              >
+                Already have an account? Sign in
+              </button>
+            ) : (
+              <button
+                onClick={() => setMode("signup")}
+                style={{ background: "none", border: "none", color: "var(--teal-dark)", fontWeight: 700, cursor: "pointer" }}
+              >
+                New here? Create a profile
+              </button>
+            )}
           </div>
+
+          {mode === "signup" && (
+            <div className="mut" style={{ fontSize: 11.5, marginTop: 12, lineHeight: 1.5 }}>
+              Apple/Google sign-in verifies your email in one tap — Apple&apos;s Hide My
+              Email works fine, mail still reaches you. Every account needs a working email
+              on file and a text-verified mobile before the first service books.
+            </div>
+          )}
         </div>
       </div>
     </div>

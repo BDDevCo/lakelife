@@ -1,0 +1,127 @@
+"use server";
+
+import { createClient } from "@/lib/supabase/server";
+import { encryptGate } from "@/lib/gate";
+
+export interface WizardInput {
+  lake: string;
+  address: string;
+  sqft: number;
+  gate: string;
+  beds: number;
+  baths: number;
+  pier_sections: number;
+  ladder: boolean;
+  bumpers: boolean;
+  boat_lifts: number;
+  toy_lifts: number;
+  canopy: boolean;
+  lawn_band: "small" | "medium" | "large";
+  boats: Array<{ type: string; length_ft: number }>;
+  toys: Array<{ name: string }>;
+  photo_count: number;
+}
+
+export interface SaveResult {
+  ok: boolean;
+  propertyId?: string;
+  error?: string;
+}
+
+/**
+ * Save the guided-setup answers. Creates the owner's property on first run,
+ * updates it on later runs, and rewrites the profile, boats and toys. The
+ * gate code is encrypted before it touches the database (rule 3). All writes
+ * go through the user's own session, so row-level security keeps them scoped
+ * to this owner.
+ */
+export async function saveProfile(input: WizardInput): Promise<SaveResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Please sign in first." };
+
+  // Look up the lake id from its name.
+  const { data: lake } = await supabase
+    .from("lakes")
+    .select("id")
+    .eq("name", input.lake)
+    .maybeSingle();
+
+  const gateEncrypted = input.gate ? encryptGate(input.gate) : null;
+
+  // Find an existing property for this owner (beta: one property per owner).
+  const { data: existing } = await supabase
+    .from("properties")
+    .select("id")
+    .eq("owner_id", user.id)
+    .limit(1)
+    .maybeSingle();
+
+  let propertyId = existing?.id as string | undefined;
+
+  const propertyFields = {
+    owner_id: user.id,
+    lake_id: lake?.id ?? null,
+    address: input.address || null,
+    sqft: input.sqft || null,
+    beds: input.beds || null,
+    baths: input.baths || null,
+    gate_code_encrypted: gateEncrypted,
+  };
+
+  if (propertyId) {
+    const { error } = await supabase
+      .from("properties")
+      .update(propertyFields)
+      .eq("id", propertyId);
+    if (error) return { ok: false, error: error.message };
+  } else {
+    const { data, error } = await supabase
+      .from("properties")
+      .insert(propertyFields)
+      .select("id")
+      .single();
+    if (error || !data) return { ok: false, error: error?.message ?? "Could not create property." };
+    propertyId = data.id;
+  }
+
+  // Upsert the profile (property_id is the primary key).
+  const { error: profErr } = await supabase.from("property_profile").upsert({
+    property_id: propertyId,
+    pier_sections: input.pier_sections || 0,
+    ladder: input.ladder,
+    bumpers: input.bumpers,
+    boat_lifts: input.boat_lifts || 0,
+    canopy: input.canopy,
+    toy_lifts: input.toy_lifts || 0,
+    lawn_band: input.lawn_band,
+  });
+  if (profErr) return { ok: false, error: profErr.message };
+
+  // Rewrite boats and toys (simplest correct approach for a small list).
+  await supabase.from("boats").delete().eq("property_id", propertyId);
+  const boats = input.boats.filter((b) => b.length_ft > 0);
+  if (boats.length) {
+    const { error } = await supabase.from("boats").insert(
+      boats.map((b) => ({
+        property_id: propertyId,
+        type: b.type || "Boat",
+        length_ft: b.length_ft,
+      })),
+    );
+    if (error) return { ok: false, error: error.message };
+  }
+
+  await supabase.from("toys").delete().eq("property_id", propertyId);
+  const toys = input.toys.filter((t) => t.name.trim());
+  if (toys.length) {
+    const { error } = await supabase.from("toys").insert(
+      toys.map((t) => ({ property_id: propertyId, name: t.name.trim() })),
+    );
+    if (error) return { ok: false, error: error.message };
+  }
+
+  return { ok: true, propertyId };
+}
