@@ -42,7 +42,10 @@ create policy jobs_owner_insert on public.jobs for insert
   );
 
 -- ---------- owner_jobs view: add service name + frequency ----------
-create or replace view public.owner_jobs
+-- Drop first: "create or replace view" can't remove/reorder columns, and we're
+-- changing the column set (adding service_name + frequency).
+drop view if exists public.owner_jobs;
+create view public.owner_jobs
 with (security_invoker = off) as
   select j.id, j.property_id, j.service_id, s.name as service_name,
          j.date, j.slot, j.frequency, j.status, j.customer_price, j.created_at
