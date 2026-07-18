@@ -58,6 +58,7 @@ export interface AddressSelection {
   address: string;
   lat: number | null;
   lng: number | null;
+  placeId: string | null;
 }
 
 // Cache the "is Places (New) enabled?" answer so we probe at most once/session.
@@ -84,6 +85,7 @@ async function placesNewEnabled(places: {
 /* Minimal typings for the new Places element we use. */
 interface PlacePrediction {
   toPlace: () => {
+    id?: string;
     fetchFields: (o: { fields: string[] }) => Promise<void>;
     formattedAddress?: string;
     location?: { lat: () => number; lng: () => number };
@@ -146,11 +148,12 @@ export function AddressAutocomplete({
         el.addEventListener("gmp-select", async (evt: Event) => {
           const { placePrediction } = evt as unknown as { placePrediction: PlacePrediction };
           const place = placePrediction.toPlace();
+          const placeId = place.id ?? null;
           await place.fetchFields({ fields: ["formattedAddress", "location"] });
           const address = place.formattedAddress ?? "";
           const loc = place.location;
           if (address) onChange(address);
-          onSelect({ address, lat: loc ? loc.lat() : null, lng: loc ? loc.lng() : null });
+          onSelect({ address, lat: loc ? loc.lat() : null, lng: loc ? loc.lng() : null, placeId });
         });
 
         setMode("google");

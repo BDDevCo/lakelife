@@ -52,6 +52,7 @@ export default async function SetupPage() {
       ? {
           lake: profile.lake ?? undefined,
           address: profile.address ?? undefined,
+          place_id: profile.place_id ?? undefined,
           wanted: profile.wanted_services,
           sqft: profile.sqft,
           gate: profile.gate ?? undefined,

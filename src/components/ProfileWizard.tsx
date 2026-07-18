@@ -59,6 +59,7 @@ interface Draft {
   address: string;
   lat: number | null;
   lng: number | null;
+  place_id: string | null;
   wanted: string[];
   sqft: number;
   gate: string;
@@ -92,6 +93,7 @@ export function ProfileWizard({
     address: initial.address ?? "",
     lat: initial.lat ?? null,
     lng: initial.lng ?? null,
+    place_id: initial.place_id ?? null,
     wanted: initial.wanted ?? [],
     sqft: initial.sqft ?? 2400,
     gate: initial.gate ?? "",
@@ -164,7 +166,7 @@ export function ProfileWizard({
   async function finish() {
     setBusy(true);
     const payload: WizardInput = {
-      lake: draft.lake, address: draft.address, lat: draft.lat, lng: draft.lng,
+      lake: draft.lake, address: draft.address, lat: draft.lat, lng: draft.lng, place_id: draft.place_id,
       sqft: draft.sqft, gate: draft.gate, beds: draft.beds, baths: draft.baths,
       pier_sections: draft.pier_sections, ladder: draft.ladder, bumpers: draft.bumpers,
       boat_lifts: draft.boat_lifts, toy_lifts: 0, jet_skis: draft.jet_skis, pwc_lifts: draft.pwc_lifts,
@@ -215,7 +217,7 @@ export function ProfileWizard({
           <AddressAutocomplete
             value={draft.address}
             onChange={(address) => set({ address })}
-            onSelect={(s) => set({ address: s.address, lat: s.lat, lng: s.lng })}
+            onSelect={(s) => set({ address: s.address, lat: s.lat, lng: s.lng, place_id: s.placeId })}
           />
         </>
       )}

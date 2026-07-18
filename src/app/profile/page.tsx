@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { NotificationToggles } from "@/components/NotificationToggles";
+import { AccountControls } from "@/components/AccountControls";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getFullProfile } from "./data";
@@ -58,6 +59,9 @@ export default async function ProfilePage() {
               price becomes exact to your property.
             </p>
             <Link className="ll-btn gold" href="/profile/setup">Start guided setup →</Link>
+          </div>
+          <div style={{ maxWidth: 520, margin: "16px auto 0" }}>
+            <AccountControls hasProperty={false} />
           </div>
         </div>
       </>
@@ -144,8 +148,9 @@ export default async function ProfilePage() {
           ))}
         </div>
 
-        <div style={{ maxWidth: 620 }}>
+        <div style={{ maxWidth: 620, display: "grid", gap: 16 }}>
           <NotificationToggles initial={notifStates} />
+          <AccountControls hasProperty={true} />
         </div>
       </div>
     </>

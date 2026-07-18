@@ -8,6 +8,7 @@ export interface WizardInput {
   address: string;
   lat?: number | null;
   lng?: number | null;
+  place_id?: string | null;
   sqft: number;
   gate: string;
   beds: number;
@@ -71,25 +72,36 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
     address: input.address || null,
     lat: input.lat ?? null,
     lng: input.lng ?? null,
+    place_id: input.place_id ?? null,
     sqft: input.sqft || null,
     beds: input.beds || null,
     baths: input.baths || null,
     gate_code_encrypted: gateEncrypted,
   };
 
+  // A duplicate Google Place ID means this property already has a profile.
+  const DUP_MESSAGE =
+    "This property already has a LakeLife profile. If it's yours, contact us and we'll help you get access.";
+
   if (propertyId) {
     const { error } = await supabase
       .from("properties")
       .update(propertyFields)
       .eq("id", propertyId);
-    if (error) return { ok: false, error: error.message };
+    if (error) {
+      if (error.code === "23505") return { ok: false, error: DUP_MESSAGE };
+      return { ok: false, error: error.message };
+    }
   } else {
     const { data, error } = await supabase
       .from("properties")
       .insert(propertyFields)
       .select("id")
       .single();
-    if (error || !data) return { ok: false, error: error?.message ?? "Could not create property." };
+    if (error || !data) {
+      if (error?.code === "23505") return { ok: false, error: DUP_MESSAGE };
+      return { ok: false, error: error?.message ?? "Could not create property." };
+    }
     propertyId = data.id;
   }
 

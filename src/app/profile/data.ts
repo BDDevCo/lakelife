@@ -13,6 +13,7 @@ export interface FullProfile {
   propertyId?: string;
   lake?: string | null;
   address?: string | null;
+  place_id?: string | null;
   gate?: string | null;
   sqft: number;
   beds: number;
@@ -50,7 +51,7 @@ export async function getFullProfile(): Promise<FullProfile | null> {
 
   const { data: property } = await supabase
     .from("properties")
-    .select("id, address, sqft, beds, baths, gate_code_encrypted, lakes(name)")
+    .select("id, address, place_id, sqft, beds, baths, gate_code_encrypted, lakes(name)")
     .eq("owner_id", user.id)
     .limit(1)
     .maybeSingle();
@@ -104,6 +105,7 @@ export async function getFullProfile(): Promise<FullProfile | null> {
     propertyId: property.id,
     lake: lakeName ?? null,
     address: property.address,
+    place_id: (property as { place_id?: string | null }).place_id ?? null,
     gate,
     sqft: property.sqft ?? 0,
     beds: property.beds ?? 0,
