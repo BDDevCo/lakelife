@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { OwnerNav } from "@/components/OwnerNav";
+import { OwnerHeader } from "@/components/OwnerHeader";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
+import { getActivePropertyId } from "@/app/profile/data";
 
 const STATUS_PILL: Record<string, string> = {
   requested: "warn", scheduled: "teal", in_progress: "teal", complete: "ok", paid: "slate",
@@ -33,17 +34,20 @@ export default async function RequestsPage() {
     );
   }
 
-  const { data: jobs } = await supabase
+  const activeId = await getActivePropertyId();
+  let query = supabase
     .from("owner_jobs")
     .select("id, service_name, date, frequency, status, customer_price, created_at")
     .order("created_at", { ascending: false });
+  if (activeId) query = query.eq("property_id", activeId);
+  const { data: jobs } = await query;
 
   const rows = jobs ?? [];
 
   return (
     <>
       <TopBar />
-      <OwnerNav />
+      <OwnerHeader />
       <div className="wrap" style={{ paddingTop: 24 }}>
         <h1 style={{ fontSize: 26, marginBottom: 16 }}>My requests</h1>
 

@@ -81,10 +81,12 @@ export function ProfileWizard({
   lakes,
   services,
   initial,
+  propertyId,
 }: {
   lakes: string[];
   services: ServiceRule[];
   initial: Partial<Draft>;
+  propertyId?: string | null;
 }) {
   const router = useRouter();
 
@@ -166,6 +168,7 @@ export function ProfileWizard({
   async function finish() {
     setBusy(true);
     const payload: WizardInput = {
+      propertyId: propertyId ?? null,
       lake: draft.lake, address: draft.address, lat: draft.lat, lng: draft.lng, place_id: draft.place_id,
       sqft: draft.sqft, gate: draft.gate, beds: draft.beds, baths: draft.baths,
       pier_sections: draft.pier_sections, ladder: draft.ladder, bumpers: draft.bumpers,

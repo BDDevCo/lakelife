@@ -3,7 +3,7 @@ import { TopBar } from "@/components/Brand";
 import { NotificationToggles } from "@/components/NotificationToggles";
 import { AccountControls } from "@/components/AccountControls";
 import { PaymentMethods } from "@/components/PaymentMethods";
-import { OwnerNav } from "@/components/OwnerNav";
+import { OwnerHeader } from "@/components/OwnerHeader";
 import { listPaymentMethods } from "./payment-actions";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -105,7 +105,7 @@ export default async function ProfilePage() {
   return (
     <>
       <TopBar />
-      <OwnerNav />
+      <OwnerHeader />
       <div className="wrap" style={{ paddingTop: 24 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
           <div>

@@ -1,6 +1,43 @@
 import "server-only";
+import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { decryptGate } from "@/lib/gate";
+
+const ACTIVE_PROPERTY_COOKIE = "ll_active_property";
+
+export interface PropertySummary {
+  id: string;
+  address: string | null;
+  lake: string | null;
+}
+
+/** All of the signed-in owner's properties (for the switcher). */
+export async function listProperties(): Promise<PropertySummary[]> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return [];
+  const { data } = await supabase
+    .from("properties")
+    .select("id, address, lakes(name)")
+    .eq("owner_id", user.id)
+    .order("created_at", { ascending: true });
+  return (data ?? []).map((p) => {
+    const lk = Array.isArray(p.lakes) ? p.lakes[0] : p.lakes;
+    return { id: p.id as string, address: (p.address as string) ?? null, lake: (lk as { name?: string } | null)?.name ?? null };
+  });
+}
+
+/** The property the portal is currently focused on (cookie, else the first). */
+export async function getActivePropertyId(): Promise<string | null> {
+  const props = await listProperties();
+  if (props.length === 0) return null;
+  const cookieStore = await cookies();
+  const chosen = cookieStore.get(ACTIVE_PROPERTY_COOKIE)?.value;
+  if (chosen && props.some((p) => p.id === chosen)) return chosen;
+  return props[0].id;
+}
 import {
   priceService,
   boatFeet,
@@ -41,20 +78,27 @@ export interface PricedService {
   is_water_work: boolean;
 }
 
-/** Load the signed-in owner's property profile, or hasProfile:false if none yet. */
-export async function getFullProfile(): Promise<FullProfile | null> {
+/**
+ * Load one of the owner's property profiles. Pass a propertyId to target a
+ * specific home; otherwise the active (switcher) property is used.
+ */
+export async function getFullProfile(propertyId?: string): Promise<FullProfile | null> {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data: property } = await supabase
-    .from("properties")
-    .select("id, address, place_id, sqft, beds, baths, gate_code_encrypted, lakes(name)")
-    .eq("owner_id", user.id)
-    .limit(1)
-    .maybeSingle();
+  const targetId = propertyId ?? (await getActivePropertyId());
+
+  const { data: property } = targetId
+    ? await supabase
+        .from("properties")
+        .select("id, address, place_id, sqft, beds, baths, gate_code_encrypted, lakes(name)")
+        .eq("owner_id", user.id)
+        .eq("id", targetId)
+        .maybeSingle()
+    : { data: null };
 
   if (!property) {
     return {

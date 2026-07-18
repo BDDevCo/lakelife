@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { OwnerNav } from "@/components/OwnerNav";
+import { OwnerHeader } from "@/components/OwnerHeader";
 import { BookingGrid } from "@/components/BookingGrid";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -43,7 +43,7 @@ export default async function BookPage() {
     return (
       <>
         <TopBar />
-        <OwnerNav />
+        <OwnerHeader />
         <div className="wrap" style={{ paddingTop: 24, maxWidth: 520 }}>
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
             <span className="ll-pill gold">First things first</span>
@@ -64,12 +64,12 @@ export default async function BookPage() {
     ? priced.filter((s) => profile.wanted_services.includes(s.name))
     : priced;
 
-  // Lake season window for water-work blocking.
+  // Lake season window for the active property (water-work blocking).
   const { data: prop } = await supabase
     .from("properties")
     .select("lakes(name, ice_out_actual, pull_deadline)")
     .eq("owner_id", user.id)
-    .limit(1)
+    .eq("id", profile.propertyId!)
     .maybeSingle();
   const lake = (Array.isArray(prop?.lakes) ? prop?.lakes[0] : prop?.lakes) as
     | { name?: string; ice_out_actual?: string; pull_deadline?: string }
@@ -78,7 +78,7 @@ export default async function BookPage() {
   return (
     <>
       <TopBar />
-      <OwnerNav />
+      <OwnerHeader />
       <div className="wrap" style={{ paddingTop: 24 }}>
         <h1 style={{ fontSize: 26 }}>Book services</h1>
         <p className="mut" style={{ fontSize: 14, marginBottom: 18 }}>

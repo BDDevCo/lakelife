@@ -1,9 +1,11 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { encryptGate } from "@/lib/gate";
 
 export interface WizardInput {
+  propertyId?: string | null; // set = edit that property; null/absent = create a new one
   lake: string;
   address: string;
   lat?: number | null;
@@ -56,15 +58,17 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
 
   const gateEncrypted = input.gate ? encryptGate(input.gate) : null;
 
-  // Find an existing property for this owner (beta: one property per owner).
-  const { data: existing } = await supabase
-    .from("properties")
-    .select("id")
-    .eq("owner_id", user.id)
-    .limit(1)
-    .maybeSingle();
-
-  let propertyId = existing?.id as string | undefined;
+  // Edit a specific property when an id is given; otherwise create a new one.
+  let propertyId: string | undefined;
+  if (input.propertyId) {
+    const { data: existing } = await supabase
+      .from("properties")
+      .select("id")
+      .eq("owner_id", user.id)
+      .eq("id", input.propertyId)
+      .maybeSingle();
+    propertyId = existing?.id as string | undefined;
+  }
 
   const propertyFields = {
     owner_id: user.id,
@@ -102,7 +106,10 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
       if (error?.code === "23505") return { ok: false, error: DUP_MESSAGE };
       return { ok: false, error: error?.message ?? "Could not create property." };
     }
-    propertyId = data.id;
+    propertyId = data.id as string;
+    // Focus the portal on the property they just added.
+    const cookieStore = await cookies();
+    cookieStore.set("ll_active_property", propertyId, { path: "/", maxAge: 60 * 60 * 24 * 365, sameSite: "lax" });
   }
 
   // Upsert the profile (property_id is the primary key).

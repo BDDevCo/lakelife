@@ -6,7 +6,13 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { getFullProfile } from "../data";
 import type { ServiceRule } from "@/lib/pricing";
 
-export default async function SetupPage() {
+export default async function SetupPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ new?: string }>;
+}) {
+  const { new: isNew } = await searchParams;
+  const addingNew = isNew === "1";
   if (!hasSupabaseEnv()) {
     return (
       <>
@@ -41,11 +47,13 @@ export default async function SetupPage() {
   const [{ data: lakeRows }, { data: serviceRows }, profile] = await Promise.all([
     supabase.from("lakes").select("name").order("name"),
     supabase.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing").eq("active", true),
-    getFullProfile(),
+    // When adding a new property, start blank; otherwise load the active one.
+    addingNew ? Promise.resolve(null) : getFullProfile(),
   ]);
 
   const lakes = (lakeRows ?? []).map((l) => l.name);
   const services = (serviceRows ?? []) as unknown as ServiceRule[];
+  const editingPropertyId = !addingNew && profile?.hasProfile ? profile.propertyId : null;
 
   const initial =
     profile?.hasProfile === true
@@ -76,13 +84,14 @@ export default async function SetupPage() {
       <TopBar />
       <div className="wrap" style={{ paddingTop: 40 }}>
         <div style={{ maxWidth: 560, margin: "0 auto 16px" }}>
-          <h1 style={{ fontSize: 26 }}>Let&apos;s set up your place</h1>
+          <h1 style={{ fontSize: 26 }}>{addingNew ? "Add another property" : "Let's set up your place"}</h1>
           <p className="mut" style={{ fontSize: 14 }}>
-            Pick the services that fit your place — we&apos;ll only ask about what you
-            choose, and every price is exact from day one.
+            {addingNew
+              ? "Same quick setup for your other home — pick its services and we'll price it exactly."
+              : "Pick the services that fit your place — we'll only ask about what you choose, and every price is exact from day one."}
           </p>
         </div>
-        <ProfileWizard lakes={lakes} services={services} initial={initial} />
+        <ProfileWizard lakes={lakes} services={services} initial={initial} propertyId={editingPropertyId} />
       </div>
     </>
   );

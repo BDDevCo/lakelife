@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { OwnerNav } from "@/components/OwnerNav";
+import { OwnerHeader } from "@/components/OwnerHeader";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
 import { listPaymentMethods } from "@/app/profile/payment-actions";
+import { getActivePropertyId } from "@/app/profile/data";
 
 export default async function BillingPage() {
   if (!hasSupabaseEnv()) {
@@ -27,15 +28,18 @@ export default async function BillingPage() {
     );
   }
 
-  const [cards, { data: jobs }, { data: invoices }] = await Promise.all([
-    listPaymentMethods(),
-    supabase
-      .from("owner_jobs")
-      .select("id, service_name, date, status, customer_price")
-      .in("status", ["requested", "scheduled", "in_progress"])
-      .order("date", { ascending: true }),
-    supabase.from("invoices").select("id, amount, status, created_at").order("created_at", { ascending: false }),
-  ]);
+  const activeId = await getActivePropertyId();
+  let upcomingQ = supabase
+    .from("owner_jobs")
+    .select("id, service_name, date, status, customer_price")
+    .in("status", ["requested", "scheduled", "in_progress"])
+    .order("date", { ascending: true });
+  let invoiceQ = supabase.from("invoices").select("id, amount, status, created_at").order("created_at", { ascending: false });
+  if (activeId) {
+    upcomingQ = upcomingQ.eq("property_id", activeId);
+    invoiceQ = invoiceQ.eq("property_id", activeId);
+  }
+  const [cards, { data: jobs }, { data: invoices }] = await Promise.all([listPaymentMethods(), upcomingQ, invoiceQ]);
 
   const defaultCard = cards.find((c) => c.is_default) ?? cards[0];
   const upcoming = jobs ?? [];
@@ -43,7 +47,7 @@ export default async function BillingPage() {
   return (
     <>
       <TopBar />
-      <OwnerNav />
+      <OwnerHeader />
       <div className="wrap" style={{ paddingTop: 24, maxWidth: 720 }}>
         <h1 style={{ fontSize: 26, marginBottom: 16 }}>Billing</h1>
 
