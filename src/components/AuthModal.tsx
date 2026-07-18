@@ -25,10 +25,16 @@ function GoogleIcon() {
   );
 }
 
-export function AuthModal({ onClose }: { onClose: () => void }) {
+export function AuthModal({
+  onClose,
+  initialMode = "signup",
+}: {
+  onClose: () => void;
+  initialMode?: "signup" | "signin";
+}) {
   const router = useRouter();
   const supabase = createClient();
-  const [mode, setMode] = useState<"signup" | "signin">("signup");
+  const [mode, setMode] = useState<"signup" | "signin">(initialMode);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

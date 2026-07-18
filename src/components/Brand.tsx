@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { TopBarAuth } from "@/components/TopBarAuth";
 
 /** The LakeLife mark — gold buoy sun over two waves. Straight from the prototype. */
 export function Logo({ size = 34 }: { size?: number }) {
@@ -69,6 +70,9 @@ export function TopBar() {
           </span>
         </Link>
         <span className="ll-tagline">Your lake house, ready when you are.</span>
+        <div style={{ marginLeft: "auto" }}>
+          <TopBarAuth />
+        </div>
       </div>
     </header>
   );
