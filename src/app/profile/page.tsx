@@ -2,6 +2,8 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { NotificationToggles } from "@/components/NotificationToggles";
 import { AccountControls } from "@/components/AccountControls";
+import { PaymentMethods } from "@/components/PaymentMethods";
+import { listPaymentMethods } from "./payment-actions";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getFullProfile } from "./data";
@@ -39,10 +41,11 @@ export default async function ProfilePage() {
     );
   }
 
-  const [{ data: me }, profile, notifStates] = await Promise.all([
+  const [{ data: me }, profile, notifStates, cards] = await Promise.all([
     supabase.from("users").select("name, email, phone").eq("id", user.id).maybeSingle(),
     getFullProfile(),
     loadNotifStates(),
+    listPaymentMethods(),
   ]);
 
   // No property yet → invite them into the wizard.
@@ -150,6 +153,7 @@ export default async function ProfilePage() {
         </div>
 
         <div style={{ maxWidth: 620, display: "grid", gap: 16 }}>
+          <PaymentMethods initial={cards} />
           <NotificationToggles initial={notifStates} />
           <AccountControls hasProperty={true} />
         </div>
