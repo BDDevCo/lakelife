@@ -28,6 +28,16 @@ values
    array['Set (spring)','Pull (fall)'], 2, true,
    '{"count_field":"boat_lifts","min_count":1}'::jsonb, true),
 
+  -- Jet ski winterize & store: rate × number of jet skis (PLACEHOLDER rate)
+  ('Jet ski winterize & store', 'per_section', 0, 350,
+   array['Winterize + store','De-winterize + launch'], 2, true,
+   '{"count_field":"jet_skis"}'::jsonb, true),
+
+  -- PWC lift set/pull: rate × number of PWC lifts (PLACEHOLDER rate)
+  ('PWC lift set / pull', 'per_section', 0, 165,
+   array['Set (spring)','Pull (fall)'], 2, true,
+   '{"count_field":"pwc_lifts"}'::jsonb, true),
+
   -- Boat storage & winterize: rate × total feet
   ('Boat storage & winterize', 'per_foot', 0, 50,
    array['Winterize + store','De-winterize + launch'], 3, true, null, true),

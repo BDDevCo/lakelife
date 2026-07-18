@@ -24,16 +24,27 @@ export type PricingModel =
   | "band"
   | "per_sqft_band";
 
+/** A profile field that can be counted or multiplied in a pricing rule. */
+export type CountableField =
+  | "pier_sections"
+  | "boat_lifts"
+  | "toy_lifts"
+  | "jet_skis"
+  | "pwc_lifts"
+  | "toys_count"
+  | "beds"
+  | "baths";
+
 /** One additive term: rate × the value of a profile field. */
 export interface AddTerm {
-  field: "pier_sections" | "boat_lifts" | "toy_lifts" | "toys_count" | "beds" | "baths";
+  field: CountableField;
   rate: number;
 }
 
 /** Extra rule parameters stored in services.band_pricing (jsonb). */
 export interface PricingParams {
   /** per_section: which profile field to count (default "pier_sections"). */
-  count_field?: "pier_sections" | "boat_lifts" | "toy_lifts";
+  count_field?: CountableField;
   /** per_section: floor the count at this value (prototype floors lifts at 1). */
   min_count?: number;
   /** band: price per band key. */
@@ -64,6 +75,8 @@ export interface PricingProfile {
   pier_sections: number;
   boat_lifts: number;
   toy_lifts: number;
+  jet_skis: number;
+  pwc_lifts: number;
   lawn_band: "small" | "medium" | "large";
   boats: Array<{ type?: string; length_ft: number }>;
   toys: Array<{ name?: string }>;

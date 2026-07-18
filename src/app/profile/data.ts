@@ -23,6 +23,8 @@ export interface FullProfile {
   boat_lifts: number;
   canopy: boolean;
   toy_lifts: number;
+  jet_skis: number;
+  pwc_lifts: number;
   lawn_band: "small" | "medium" | "large";
   boats: Array<{ type: string; length_ft: number }>;
   toys: Array<{ name: string }>;
@@ -64,6 +66,8 @@ export async function getFullProfile(): Promise<FullProfile | null> {
       boat_lifts: 0,
       canopy: false,
       toy_lifts: 0,
+      jet_skis: 0,
+      pwc_lifts: 0,
       lawn_band: "medium",
       boats: [],
       toys: [],
@@ -108,6 +112,8 @@ export async function getFullProfile(): Promise<FullProfile | null> {
     boat_lifts: profile?.boat_lifts ?? 0,
     canopy: profile?.canopy ?? false,
     toy_lifts: profile?.toy_lifts ?? 0,
+    jet_skis: profile?.jet_skis ?? 0,
+    pwc_lifts: profile?.pwc_lifts ?? 0,
     lawn_band: (profile?.lawn_band as FullProfile["lawn_band"]) ?? "medium",
     boats: boatList,
     toys: (toys ?? []).map((t) => ({ name: t.name ?? "" })),
@@ -124,6 +130,8 @@ export function toPricingProfile(p: FullProfile): PricingProfile {
     pier_sections: p.pier_sections,
     boat_lifts: p.boat_lifts,
     toy_lifts: p.toy_lifts,
+    jet_skis: p.jet_skis,
+    pwc_lifts: p.pwc_lifts,
     lawn_band: p.lawn_band,
     boats: p.boats,
     toys: p.toys,

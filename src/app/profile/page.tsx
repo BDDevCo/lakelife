@@ -68,8 +68,9 @@ export default async function ProfilePage() {
     ["House", `${profile.sqft.toLocaleString()} sq ft · ${profile.beds} bd / ${profile.baths} ba`, `Gate code ${profile.gate ?? "—"} · drives housekeeping pricing`],
     ["Pier", `${profile.pier_sections} sections`, `${[profile.ladder ? "Ladder" : "", profile.bumpers ? "bumpers" : ""].filter(Boolean).join(" + ") || "no extras"} · $48/section install & removal`],
     ["Boat lifts", `${profile.boat_lifts} lift${profile.boat_lifts === 1 ? "" : "s"}${profile.canopy ? " · canopy" : ""}`, "Set each spring, pulled each fall"],
-    ["Toy / PWC lifts", `${profile.toy_lifts}`, `${profile.toys.length} toys stored: ${profile.toys.map((t) => t.name).join(" · ") || "none yet"}`],
     ["Boats", profile.boats.length ? profile.boats.map((b) => `${b.length_ft}' ${b.type}`).join(" · ") : "None on file", `Winterize & store at $50/ft, bow to stern — no repairs`],
+    ["Jet skis / PWC", `${profile.jet_skis} jet ski${profile.jet_skis === 1 ? "" : "s"} · ${profile.pwc_lifts} lift${profile.pwc_lifts === 1 ? "" : "s"}`, "Winterized, stored, and set/pulled each season"],
+    ["Water toys", `${profile.toys.length} stored`, profile.toys.map((t) => t.name).join(" · ") || "none yet"],
     ["Lawn", `${profile.lawn_band[0].toUpperCase()}${profile.lawn_band.slice(1)}`, "Sets your weekly mow price"],
   ];
 

@@ -6,6 +6,8 @@ import { encryptGate } from "@/lib/gate";
 export interface WizardInput {
   lake: string;
   address: string;
+  lat?: number | null;
+  lng?: number | null;
   sqft: number;
   gate: string;
   beds: number;
@@ -15,11 +17,12 @@ export interface WizardInput {
   bumpers: boolean;
   boat_lifts: number;
   toy_lifts: number;
+  jet_skis: number;
+  pwc_lifts: number;
   canopy: boolean;
   lawn_band: "small" | "medium" | "large";
   boats: Array<{ type: string; length_ft: number }>;
   toys: Array<{ name: string }>;
-  photo_count: number;
 }
 
 export interface SaveResult {
@@ -65,6 +68,8 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
     owner_id: user.id,
     lake_id: lake?.id ?? null,
     address: input.address || null,
+    lat: input.lat ?? null,
+    lng: input.lng ?? null,
     sqft: input.sqft || null,
     beds: input.beds || null,
     baths: input.baths || null,
@@ -96,6 +101,8 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
     boat_lifts: input.boat_lifts || 0,
     canopy: input.canopy,
     toy_lifts: input.toy_lifts || 0,
+    jet_skis: input.jet_skis || 0,
+    pwc_lifts: input.pwc_lifts || 0,
     lawn_band: input.lawn_band,
   });
   if (profErr) return { ok: false, error: profErr.message };

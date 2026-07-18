@@ -32,7 +32,7 @@ export async function sendWelcomeEmail(): Promise<{ ok: boolean; skipped?: boole
   const rows: Array<[string, string]> = [
     ["Your house", `${profile.sqft.toLocaleString()} sq ft, ${profile.beds} bd / ${profile.baths} ba — housekeeping ${formatPrice(priceOf("Housekeeping"))} / visit`],
     ["Your pier", `${profile.pier_sections} sections — ${formatPrice(priceOf("Pier install / removal"))} per install or pull`],
-    ["Your lifts", `${profile.boat_lifts} boat lift${profile.boat_lifts > 1 ? "s" : ""}, ${profile.toy_lifts} toy/PWC lift — ${formatPrice(priceOf("Boat lift set / pull"))} per set or pull`],
+    ["Your lifts", `${profile.boat_lifts} boat lift${profile.boat_lifts === 1 ? "" : "s"}${profile.pwc_lifts ? `, ${profile.pwc_lifts} PWC lift${profile.pwc_lifts === 1 ? "" : "s"}` : ""} — ${formatPrice(priceOf("Boat lift set / pull"))} per set or pull`],
     ["Your fleet", profile.boats.length ? `${profile.boats.map((b) => `${b.length_ft}' ${b.type}`).join(", ")} — ${formatPrice(priceOf("Boat storage & winterize"))} / season` : "No boats on file yet"],
     ["The lawn", `${profile.lawn_band} — ${formatPrice(priceOf("Lawn mowing & trim"))} mow & blow, weekly`],
   ];

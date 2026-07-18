@@ -25,6 +25,20 @@ const RULES: Record<string, ServiceRule> = {
     unit_rate: 495,
     band_pricing: { count_field: "boat_lifts", min_count: 1 },
   },
+  jetski: {
+    name: "Jet ski winterize & store",
+    pricing_model: "per_section",
+    base: 0,
+    unit_rate: 350,
+    band_pricing: { count_field: "jet_skis" },
+  },
+  pwclift: {
+    name: "PWC lift set / pull",
+    pricing_model: "per_section",
+    base: 0,
+    unit_rate: 165,
+    band_pricing: { count_field: "pwc_lifts" },
+  },
   boat: {
     name: "Boat storage & winterize",
     pricing_model: "per_foot",
@@ -73,6 +87,8 @@ const PROFILE: PricingProfile = {
   pier_sections: 10,
   boat_lifts: 1,
   toy_lifts: 1,
+  jet_skis: 2,
+  pwc_lifts: 1,
   lawn_band: "medium",
   boats: [{ type: "Pontoon", length_ft: 24 }],
   toys: [{ name: "Kayak" }, { name: "Kayak" }, { name: "Paddleboard" }, { name: "Water trampoline" }],
@@ -149,6 +165,24 @@ describe("boat lift — per_section on lifts, floored at 1", () => {
   });
   it("0 lifts still floors to 1 × 495", () => {
     expect(priceService(RULES.lift, { ...PROFILE, boat_lifts: 0 })).toBe(495);
+  });
+});
+
+describe("jet skis — per-unit winterize & store", () => {
+  it("2 jet skis = 350 × 2 = 700", () => {
+    expect(priceService(RULES.jetski, PROFILE)).toBe(700);
+  });
+  it("no jet skis = $0", () => {
+    expect(priceService(RULES.jetski, { ...PROFILE, jet_skis: 0 })).toBe(0);
+  });
+});
+
+describe("PWC lifts — per-unit set / pull", () => {
+  it("1 PWC lift = 165", () => {
+    expect(priceService(RULES.pwclift, PROFILE)).toBe(165);
+  });
+  it("3 PWC lifts = 495", () => {
+    expect(priceService(RULES.pwclift, { ...PROFILE, pwc_lifts: 3 })).toBe(495);
   });
 });
 

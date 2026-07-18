@@ -60,11 +60,12 @@ export default async function SetupPage() {
           ladder: profile.ladder,
           bumpers: profile.bumpers,
           boat_lifts: profile.boat_lifts,
-          toy_lifts: profile.toy_lifts,
           canopy: profile.canopy,
+          jet_skis: profile.jet_skis,
+          pwc_lifts: profile.pwc_lifts,
           lawn_band: profile.lawn_band,
           boats: profile.boats,
-          toys: profile.toys,
+          toys: profile.toys.map((t) => t.name),
         }
       : {};
 
