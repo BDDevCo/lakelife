@@ -30,8 +30,13 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files — real secrets stay OUT of git...
 .env*
+# ...but the blank example template is safe to commit as a guide
+!.env.local.example
+
+# local, machine-specific Claude Code settings
+.claude/settings.local.json
 
 # vercel
 .vercel

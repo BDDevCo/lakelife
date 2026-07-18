@@ -1,0 +1,1616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LakeLife — Your lake house, ready when you are.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{
+  --ink:#0A2430;          /* deep water */
+  --deep:#0F3648;         /* dusk lake */
+  --teal:#137A8C;         /* open water — primary */
+  --teal-dark:#0E5E6D;
+  --aqua:#BFE3E8;         /* shallow water */
+  --mist:#F3F8F9;         /* morning mist bg */
+  --card:#FFFFFF;
+  --line:#DCE9EC;
+  --sun:#E9B44C;          /* buoy gold accent */
+  --sun-soft:#FBF1DC;
+  --text:#20343D;
+  --sub:#5D7681;
+  --ok:#2E8B57;
+  --warn:#C7772A;
+  --danger:#B34A3A;
+  --r:14px;
+  --shadow:0 1px 2px rgba(10,36,48,.05),0 8px 24px -12px rgba(10,36,48,.18);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{font-family:'Manrope',system-ui,sans-serif;background:var(--mist);color:var(--text);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+h1,h2,h3,.display{font-family:'Bricolage Grotesque',serif}
+button{font-family:inherit;cursor:pointer;border:none;background:none}
+button:focus-visible,a:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--sun);outline-offset:2px;border-radius:6px}
+
+/* ============ TOP BAR ============ */
+.topbar{position:sticky;top:0;z-index:50;background:var(--ink);color:#fff;padding:0 24px}
+.topbar-inner{max-width:1200px;margin:0 auto;display:flex;align-items:center;gap:20px;height:64px}
+.logo{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.logo svg{display:block}
+.logo-name{font-family:'Bricolage Grotesque';font-weight:800;font-size:21px;letter-spacing:-.02em}
+.logo-name em{font-style:normal;color:var(--sun)}
+.tagline{font-size:12px;color:#9FC0CB;border-left:1px solid #2B4B5A;padding-left:14px;letter-spacing:.02em;white-space:nowrap}
+.roles{margin-left:auto;display:flex;gap:4px;background:#12374A;padding:4px;border-radius:99px}
+.role-btn{padding:7px 16px;border-radius:99px;color:#9FC0CB;font-weight:700;font-size:13px;transition:all .18s}
+.role-btn:hover{color:#fff}
+.role-btn.on{background:var(--teal);color:#fff}
+@media(max-width:820px){.tagline{display:none}.topbar-inner{height:auto;flex-wrap:wrap;padding:10px 0}.roles{margin-left:0;width:100%;justify-content:space-between}}
+
+/* ============ LAYOUT ============ */
+.wrap{max-width:1200px;margin:0 auto;padding:0 24px 80px}
+.view{display:none}
+.view.on{display:block;animation:fadein .3s ease}
+@keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* ============ HERO ============ */
+.hero{position:relative;background:linear-gradient(175deg,var(--ink) 0%,var(--deep) 55%,var(--teal) 130%);color:#fff;overflow:hidden}
+.hero-inner{max-width:1200px;margin:0 auto;padding:56px 24px 96px;position:relative;z-index:2}
+.hero .eyebrow{font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--sun);margin-bottom:10px}
+.hero h1{font-size:clamp(30px,4.5vw,46px);font-weight:800;letter-spacing:-.025em;line-height:1.08;max-width:640px}
+.hero p{margin-top:14px;color:#B9D4DC;max-width:520px;font-size:16px}
+.hero-meta{margin-top:22px;display:flex;gap:10px;flex-wrap:wrap}
+.chip{background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.16);border-radius:99px;padding:6px 14px;font-size:13px;font-weight:600;color:#DCEDF1}
+.chip b{color:var(--sun)}
+.waves{position:absolute;left:0;right:0;bottom:-2px;z-index:1;pointer-events:none}
+.waves svg{display:block;width:100%;height:110px}
+.wave{animation:drift 14s linear infinite}
+.wave.w2{animation-duration:22s;animation-direction:reverse;opacity:.6}
+.wave.w3{animation-duration:30s;opacity:.9}
+@keyframes drift{from{transform:translateX(0)}to{transform:translateX(-720px)}}
+@media(prefers-reduced-motion:reduce){.wave,.view.on{animation:none!important}}
+
+/* ============ TABS ============ */
+.tabs{display:flex;gap:6px;margin:26px 0 22px;border-bottom:2px solid var(--line);overflow-x:auto}
+.tab{padding:10px 16px 12px;font-weight:700;font-size:14px;color:var(--sub);border-bottom:3px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:color .15s}
+.tab:hover{color:var(--teal-dark)}
+.tab.on{color:var(--ink);border-color:var(--sun)}
+.pane{display:none}
+.pane.on{display:block;animation:fadein .25s ease}
+
+/* ============ CARDS / GENERAL ============ */
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.g3{grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+.card-pad{padding:20px}
+.sec-title{font-size:20px;font-weight:800;letter-spacing:-.015em;color:var(--ink)}
+.sec-sub{color:var(--sub);font-size:14px;margin-top:3px}
+.sec-head{margin:6px 0 18px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;border-radius:99px;padding:4px 11px}
+.pill.teal{background:#E0F0F3;color:var(--teal-dark)}
+.pill.gold{background:var(--sun-soft);color:#8A6420}
+.pill.ok{background:#E4F2EA;color:var(--ok)}
+.pill.warn{background:#F8ECDD;color:var(--warn)}
+.pill.red{background:#F6E5E1;color:var(--danger)}
+.pill.slate{background:#E9EFF1;color:var(--sub)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--teal);color:#fff;font-weight:800;font-size:14px;padding:11px 20px;border-radius:10px;transition:background .15s,transform .1s}
+.btn:hover{background:var(--teal-dark)}
+.btn:active{transform:scale(.98)}
+.btn.ghost{background:transparent;color:var(--teal-dark);border:1.5px solid var(--line)}
+.btn.ghost:hover{background:#EAF3F5}
+.btn.gold{background:var(--sun);color:var(--ink)}
+.btn.gold:hover{background:#D9A43F}
+.btn.sm{padding:7px 14px;font-size:13px;border-radius:8px}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.hr{height:1px;background:var(--line);margin:16px 0}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--sub);font-weight:800;padding:10px 12px;border-bottom:2px solid var(--line)}
+td{padding:12px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.num{font-variant-numeric:tabular-nums;font-weight:700}
+.mut{color:var(--sub)}
+.right{text-align:right}
+
+/* ============ SERVICE CARDS ============ */
+.svc{display:flex;flex-direction:column;overflow:hidden;transition:transform .15s,box-shadow .15s}
+.svc:hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(10,36,48,.06),0 16px 32px -12px rgba(10,36,48,.22)}
+.svc-art{height:96px;position:relative;display:flex;align-items:center;justify-content:center}
+.svc-art svg{height:56px;width:auto}
+.svc-body{padding:16px 18px 18px;display:flex;flex-direction:column;gap:8px;flex:1}
+.svc-name{font-family:'Bricolage Grotesque';font-weight:700;font-size:17px;color:var(--ink);letter-spacing:-.01em}
+.svc-desc{font-size:13.5px;color:var(--sub);flex:1}
+.svc-foot{display:flex;align-items:center;justify-content:space-between;margin-top:6px}
+.price{font-weight:800;font-size:17px;color:var(--ink)}
+.price small{font-weight:600;color:var(--sub);font-size:12px}
+
+/* ============ BOOKING PANEL ============ */
+.overlay{position:fixed;inset:0;background:rgba(10,36,48,.55);z-index:100;display:none;align-items:flex-start;justify-content:center;padding:5vh 16px;overflow:auto}
+.overlay.on{display:flex}
+.modal{background:#fff;border-radius:18px;max-width:560px;width:100%;box-shadow:0 24px 64px rgba(0,0,0,.3);animation:pop .25s ease}
+@keyframes pop{from{opacity:0;transform:translateY(16px) scale(.98)}to{opacity:1;transform:none}}
+.modal-head{padding:22px 24px 0;display:flex;justify-content:space-between;align-items:flex-start}
+.modal-body{padding:16px 24px 24px}
+.x{width:34px;height:34px;border-radius:99px;background:var(--mist);color:var(--sub);font-size:16px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.x:hover{background:var(--line)}
+.freq-row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px}
+.freq{padding:8px 14px;border-radius:10px;border:1.5px solid var(--line);font-weight:700;font-size:13px;color:var(--sub)}
+.freq.on{border-color:var(--teal);background:#E0F0F3;color:var(--teal-dark)}
+.lbl{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--sub);margin:16px 0 6px}
+.cal{border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.cal-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--mist);border-bottom:1px solid var(--line)}
+.cal-head b{font-size:14px}
+.cal-nav{width:30px;height:30px;border-radius:8px;background:#fff;border:1px solid var(--line);font-weight:800;color:var(--teal-dark)}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;padding:10px}
+.dow{font-size:10.5px;font-weight:800;color:var(--sub);text-align:center;text-transform:uppercase;padding:4px 0}
+.day{aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:9px;font-size:13px;font-weight:700;color:var(--text)}
+.day.off{color:#C3D2D7;pointer-events:none}
+.day.avail{background:#E9F4F6;color:var(--teal-dark)}
+.day.avail:hover{background:var(--aqua)}
+.day.full{background:#F4EDE4;color:#C9A05A;text-decoration:line-through;pointer-events:none}
+.day.ice{background:#EDF1F3;color:#9BB0B8;pointer-events:none;position:relative}
+.day.sel{background:var(--teal);color:#fff}
+.cal-legend{display:flex;gap:14px;padding:8px 12px 12px;font-size:11.5px;color:var(--sub);flex-wrap:wrap}
+.dot{display:inline-block;width:9px;height:9px;border-radius:99px;margin-right:5px;vertical-align:0}
+.notice{background:var(--sun-soft);border:1px solid #EBD9AE;border-radius:10px;padding:10px 14px;font-size:13px;color:#7A5A1D;margin-top:14px}
+.summary-line{display:flex;justify-content:space-between;padding:8px 0;font-size:14px}
+.summary-line.total{border-top:2px solid var(--line);margin-top:6px;padding-top:12px;font-weight:800;font-size:16px}
+
+/* ============ PAY VAULT ============ */
+.payline{display:flex;align-items:center;gap:14px;padding:14px;border:1.5px solid var(--line);border-radius:12px}
+.payline.on{border-color:var(--teal);background:#F2F9FA}
+.cc-badge{width:46px;height:32px;border-radius:6px;background:linear-gradient(135deg,var(--deep),var(--teal));display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:800;letter-spacing:.08em}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:12px;font-weight:800;color:var(--sub);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+.field input,.field select{width:100%;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;font-family:inherit;font-size:14px;background:#fff}
+.field input:focus,.field select:focus{outline:none;border-color:var(--teal)}
+.frow{display:flex;gap:12px}.frow .field{flex:1}
+
+/* ============ TIMELINE / LOG ============ */
+.log{position:relative;padding-left:26px}
+.log::before{content:'';position:absolute;left:8px;top:6px;bottom:6px;width:2px;background:var(--line)}
+.log-item{position:relative;padding-bottom:22px}
+.log-item::before{content:'';position:absolute;left:-24px;top:5px;width:12px;height:12px;border-radius:99px;background:var(--teal);border:3px solid var(--mist)}
+.log-item.done::before{background:var(--ok)}
+.log-item.up::before{background:var(--sun)}
+.log-date{font-size:12px;font-weight:800;color:var(--sub);text-transform:uppercase;letter-spacing:.05em}
+.log-title{font-weight:800;color:var(--ink);margin:2px 0}
+.log-note{font-size:13.5px;color:var(--sub)}
+.photos{display:flex;gap:8px;margin-top:8px}
+.ph{width:72px;height:54px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+.ph svg{width:100%;height:100%;display:block}
+
+/* ============ OPS ============ */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:20px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow)}
+.kpi .v{font-family:'Bricolage Grotesque';font-size:28px;font-weight:800;color:var(--ink);letter-spacing:-.02em}
+.kpi .l{font-size:12px;font-weight:700;color:var(--sub);margin-top:2px}
+.kpi .d{font-size:12px;font-weight:800;margin-top:6px}
+.d.up{color:var(--ok)}.d.dn{color:var(--danger)}
+.bar-row{display:grid;grid-template-columns:150px 1fr 90px;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)}
+.bar-row:last-child{border-bottom:none}
+.bar-track{height:10px;background:var(--mist);border-radius:99px;overflow:hidden}
+.bar-fill{height:100%;border-radius:99px;background:var(--teal);transition:width .6s ease}
+.bar-fill.gold{background:var(--sun)}
+.bar-fill.red{background:var(--danger)}
+.vendor-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.vt{padding:8px 15px;border-radius:99px;border:1.5px solid var(--line);background:#fff;font-weight:700;font-size:13px;color:var(--sub)}
+.vt.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.job{display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--line)}
+.job:last-child{border-bottom:none}
+.slot{flex-shrink:0;width:74px;font-weight:800;font-size:13px;color:var(--teal-dark);background:#E7F2F4;border-radius:8px;text-align:center;padding:6px 0}
+.job-info{flex:1}
+.job-title{font-weight:800;color:var(--ink)}
+.job-addr{font-size:13px;color:var(--sub)}
+.lake-card{position:relative;overflow:hidden}
+.lake-card .svc-art{height:70px}
+.temp{font-family:'Bricolage Grotesque';font-size:26px;font-weight:800;color:var(--ink)}
+.cond-row{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.cond-row:last-child{border-bottom:none}
+
+/* ============ NOTIFICATIONS & VERIFY ============ */
+.tgl{position:relative;width:40px;height:22px;border-radius:99px;background:#CBD9DD;transition:background .15s;flex-shrink:0;cursor:pointer;border:none}
+.tgl.on{background:var(--teal)}
+.tgl::after{content:'';position:absolute;top:2.5px;left:2.5px;width:17px;height:17px;border-radius:99px;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.tgl.on::after{left:20.5px}
+.notif-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px dashed var(--line)}
+.notif-row:last-child{border-bottom:none}
+.code-row{display:flex;gap:8px;justify-content:center;margin:16px 0}
+.code-box{width:44px;height:52px;border:1.5px solid var(--line);border-radius:10px;text-align:center;font-size:20px;font-weight:800;font-family:'Manrope'}
+.code-box:focus{outline:none;border-color:var(--teal)}
+.vbadge{font-size:11px;font-weight:800;color:var(--ok);background:#E4F2EA;border-radius:99px;padding:2px 8px;margin-left:6px;vertical-align:1px}
+
+/* ============ AUTH / SSO ============ */
+.sso{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:12px;border-radius:10px;font-weight:800;font-size:14px;margin-bottom:10px;border:1.5px solid var(--line);background:#fff;color:var(--ink)}
+.sso:hover{background:var(--mist)}
+.sso.apple{background:#000;color:#fff;border-color:#000}
+.sso.apple:hover{background:#1c1c1c}
+.or{display:flex;align-items:center;gap:12px;color:var(--sub);font-size:12px;font-weight:800;margin:14px 0;text-transform:uppercase;letter-spacing:.05em}
+.or::before,.or::after{content:'';flex:1;height:1px;background:var(--line)}
+
+/* ============ VENDOR AVAILABILITY ============ */
+.avail-grid{display:grid;grid-template-columns:72px repeat(4,1fr);gap:6px;margin-top:10px}
+.avail-day{font-weight:800;font-size:12.5px;color:var(--sub);align-self:center}
+.slot-cell{padding:10px 4px;border-radius:8px;text-align:center;font-size:12px;font-weight:800;border:1.5px solid var(--line);cursor:pointer;color:var(--sub);background:#fff;transition:border-color .12s}
+.slot-cell.lk{background:#E0F0F3;border-color:#B8DCE2;color:var(--teal-dark);cursor:not-allowed}
+.slot-cell.blk{background:repeating-linear-gradient(45deg,#EDF1F3,#EDF1F3 6px,#E2E9EC 6px,#E2E9EC 12px);color:#8AA0A9;border-style:dashed}
+.slot-cell:not(.lk):hover{border-color:var(--teal)}
+.daychip{padding:7px 14px;border-radius:99px;border:1.5px solid var(--line);font-weight:800;font-size:13px;color:var(--sub);background:#fff}
+.daychip.on{background:var(--teal);color:#fff;border-color:var(--teal)}
+
+/* ============ LIVE MAPS ============ */
+.livemap{height:280px;border-radius:12px;border:1px solid var(--line);z-index:1;background:#EAF3F5;position:relative}
+.livemap .map-fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--sub);font-size:13px;font-weight:700;text-align:center;padding:20px}
+.num-pin{background:var(--teal);color:#fff;border-radius:99px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;border:2.5px solid #fff;box-shadow:0 2px 6px rgba(10,36,48,.35);font-family:'Manrope'}
+.num-pin.gold{background:var(--sun);color:var(--ink)}
+.num-pin.navy{background:var(--ink)}
+.leaflet-container{font-family:'Manrope'}
+
+/* ============ ROUTE MAPS & PHOTO GATING ============ */
+.map-svg{width:100%;height:auto;display:block;background:#EAF3F5;border-radius:12px;border:1px solid var(--line)}
+.map-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--sub);font-weight:700;margin-top:10px}
+.job-actions{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex-shrink:0}
+.ph-req{font-size:11.5px;font-weight:800;color:var(--warn)}
+.ph-req.ok{color:var(--ok)}
+.ph-thumbs{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap}
+.ph-thumb{width:44px;height:34px;border-radius:6px;object-fit:cover;border:1px solid var(--line)}
+.route-stat{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px}
+.route-stat .rs{background:var(--mist);border:1px solid var(--line);border-radius:10px;padding:8px 14px;font-size:12.5px;font-weight:700;color:var(--sub)}
+.route-stat .rs b{display:block;font-family:'Bricolage Grotesque';font-size:18px;color:var(--ink)}
+
+/* ============ TOAST ============ */
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(120px);background:var(--ink);color:#fff;padding:13px 22px;border-radius:12px;font-weight:700;font-size:14px;box-shadow:0 12px 32px rgba(0,0,0,.3);transition:transform .3s cubic-bezier(.2,.9,.3,1.2);z-index:200;display:flex;gap:10px;align-items:center}
+.toast.on{transform:translateX(-50%) translateY(0)}
+.toast .tick{color:var(--sun)}
+
+/* wave divider between page sections */
+.wavediv{height:26px;margin:34px 0 8px;background-repeat:repeat-x;background-size:80px 26px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='26' viewBox='0 0 80 26'%3E%3Cpath d='M0 13 Q20 3 40 13 T80 13' fill='none' stroke='%23BFE3E8' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E")}
+@media(max-width:820px){#routingLayout,#vendorLayout,#billGrid,#contactGrid{grid-template-columns:1fr!important}}
+@media(max-width:700px){.bar-row{grid-template-columns:110px 1fr 70px}.frow{flex-direction:column;gap:0}.job{flex-wrap:wrap}.job-actions{flex-direction:row;width:100%;justify-content:flex-end}}
+</style>
+</head>
+<body>
+
+<!-- ================= TOP BAR ================= -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="logo">
+      <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
+        <circle cx="17" cy="13" r="6.5" fill="#E9B44C"/>
+        <path d="M3 22 Q9 17 17 22 T31 22" fill="none" stroke="#BFE3E8" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M3 28 Q9 23 17 28 T31 28" fill="none" stroke="#137A8C" stroke-width="2.6" stroke-linecap="round"/>
+      </svg>
+      <span class="logo-name">Lake<em>Life</em></span>
+    </div>
+    <span class="tagline">Your lake house, ready when you are.</span>
+    <nav class="roles" aria-label="Switch view">
+      <button class="role-btn on" data-role="home" onclick="setRole('home')">Homeowner</button>
+      <button class="role-btn" data-role="ops" onclick="setRole('ops')">Operations</button>
+      <button class="role-btn" data-role="vendor" onclick="setRole('vendor')">Vendor</button>
+    </nav>
+  </div>
+</header>
+
+<!-- ============================================================= -->
+<!-- =================== HOMEOWNER VIEW ========================== -->
+<!-- ============================================================= -->
+<section class="view on" id="view-home">
+  <div class="hero">
+    <div class="hero-inner">
+      <div class="eyebrow">Welcome back, Henderson Family</div>
+      <h1>4521 Lakeview Drive is on the water &amp; ready for July.</h1>
+      <p>One request, one price, one crew at your door. We coordinate every opening, closing, pier, lift, mow and clean — you just pick the dates.</p>
+      <div class="hero-meta">
+        <span class="chip">📍 <b>Big Long Lake</b> · South Milford, IN</span>
+        <span class="chip">Water temp <b>76°F</b></span>
+        <span class="chip">Next visit <b>Fri Jul 17 · Mowing</b></span>
+        <span class="chip">Autopay <b>Active</b> · Visa ··4417</span>
+        <button class="chip" style="cursor:pointer;background:var(--sun);color:var(--ink);border-color:var(--sun);font-weight:800" onclick="openAuth()">New here? Create a profile →</button>
+      </div>
+    </div>
+    <div class="waves">
+      <svg viewBox="0 0 1440 110" preserveAspectRatio="none" aria-hidden="true">
+        <g class="wave w2"><path d="M0 60 Q180 30 360 60 T720 60 T1080 60 T1440 60 T1800 60 T2160 60 V110 H0 Z" fill="#1E6E7E"/></g>
+        <g class="wave w3"><path d="M0 75 Q180 50 360 75 T720 75 T1080 75 T1440 75 T1800 75 T2160 75 V110 H0 Z" fill="#7FB8C4"/></g>
+        <g class="wave"><path d="M0 90 Q180 68 360 90 T720 90 T1080 90 T1440 90 T1800 90 T2160 90 V110 H0 Z" fill="#F3F8F9"/></g>
+      </svg>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="tabs" role="tablist">
+      <button class="tab on" onclick="setPane('home','book',this)">Book services</button>
+      <button class="tab" onclick="setPane('home','requests',this)">My requests</button>
+      <button class="tab" onclick="setPane('home','profile',this)">Property profile</button>
+      <button class="tab" onclick="setPane('home','msgs',this)">Messages &amp; approvals <span class="pill warn" id="msgBadge" style="margin-left:4px">2</span></button>
+      <button class="tab" onclick="setPane('home','log',this)">Property log</button>
+      <button class="tab" onclick="setPane('home','billing',this)">Billing &amp; autopay</button>
+    </div>
+
+    <!-- ---- BOOK SERVICES ---- -->
+    <div class="pane on" id="home-book">
+      <div class="sec-head">
+        <div class="sec-title">What can we get ready for you?</div>
+        <div class="sec-sub">Every price is all-in — crew, coordination, and scheduling included. Pick a service, pick your dates, and we handle the rest.</div>
+      </div>
+      <div class="grid g3" id="svcGrid"></div>
+      <div class="notice" style="margin-top:20px">
+        <b>A note on boats:</b> we store, winterize, and de-winterize — we don't service or repair. LakeLife is a coordination &amp; scheduling platform for a small, select set of lake-home services, done exceptionally well.
+      </div>
+    </div>
+
+    <!-- ---- MY REQUESTS ---- -->
+    <div class="pane" id="home-requests">
+      <div class="sec-head">
+        <div class="sec-title">Requested &amp; scheduled services</div>
+        <div class="sec-sub">2026 season · 4521 Lakeview Drive, Big Long Lake</div>
+      </div>
+      <div class="card"><div class="card-pad" style="padding:6px 20px">
+        <table id="reqTable">
+          <thead><tr><th>Service</th><th>Frequency</th><th>Scheduled</th><th>Status</th><th class="right">Price</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div></div>
+    </div>
+
+    <!-- ---- PROPERTY LOG ---- -->
+    <div class="pane" id="home-log">
+      <div class="sec-head">
+        <div class="sec-title">Property log</div>
+        <div class="sec-sub">Every visit to your house, dock, and boat — with crew notes and photos. <b>Crews can't close out a job without uploading photos</b>, so you always see proof of the work.</div>
+      </div>
+      <div class="card"><div class="card-pad">
+        <div class="log">
+          <div class="log-item up">
+            <div class="log-date">Upcoming · Fri, Jul 17</div>
+            <div class="log-title">Weekly mowing &amp; trim — GreenEdge Lawn Co.</div>
+            <div class="log-note">Standing Friday slot, 10:00–10:45a. Gate code on file.</div>
+          </div>
+          <div class="log-item done">
+            <div class="log-date">Fri, Jul 10</div>
+            <div class="log-title">Weekly mowing &amp; trim — completed</div>
+            <div class="log-note">"Mowed, trimmed beds along seawall, blew off pier. Sprinkler head near fire pit is leaking — flagged for owner." — Marcus, GreenEdge</div>
+            <div class="photos">
+              <div class="ph"><svg viewBox="0 0 72 54"><rect width="72" height="54" fill="#DCEDD3"/><rect y="34" width="72" height="20" fill="#8FBF6B"/><circle cx="58" cy="12" r="7" fill="#E9B44C"/></svg></div>
+              <div class="ph"><svg viewBox="0 0 72 54"><rect width="72" height="54" fill="#BFE3E8"/><rect x="10" y="26" width="52" height="6" fill="#8A6A4B"/><rect x="14" y="32" width="4" height="16" fill="#6E543B"/><rect x="54" y="32" width="4" height="16" fill="#6E543B"/></svg></div>
+            </div>
+          </div>
+          <div class="log-item done">
+            <div class="log-date">Wed, Jul 8</div>
+            <div class="log-title">Housekeeping — completed</div>
+            <div class="log-note">"Full clean, linens rotated, dock towels restocked. Left A/C at 72 per guest arrival Friday." — Dana, ShoreClean</div>
+          </div>
+          <div class="log-item done">
+            <div class="log-date">Sat, May 2</div>
+            <div class="log-title">Boat lift set + pontoon de-winterized &amp; launched</div>
+            <div class="log-note">"Lift leveled at 3rd post, canopy installed. Pontoon out of storage, batteries connected, launched and on lift by 2:15p." — TrueNorth Marine Crew</div>
+            <div class="photos">
+              <div class="ph"><svg viewBox="0 0 72 54"><rect width="72" height="54" fill="#BFE3E8"/><rect x="16" y="14" width="40" height="8" rx="2" fill="#F0F4F5"/><rect x="20" y="22" width="32" height="10" rx="3" fill="#137A8C"/><path d="M0 44 Q18 38 36 44 T72 44 V54 H0Z" fill="#1E6E7E"/></svg></div>
+            </div>
+          </div>
+          <div class="log-item done">
+            <div class="log-date">Sat, Apr 18</div>
+            <div class="log-title">Pier installed + spring opening</div>
+            <div class="log-note">"48' pier in, all sections level, ladder + bumpers on. House: water on, lines flushed, water heater lit, screens hung, furniture out on lakeside deck." — DockRight Crew #2</div>
+          </div>
+          <div class="log-item done">
+            <div class="log-date">Fri, Nov 7, 2025</div>
+            <div class="log-title">Full winterization — house, pier out, lift out, boat to storage</div>
+            <div class="log-note">"Lines blown &amp; antifreezed, pier and lift pulled and stacked on shore rack, pontoon winterized, shrink-wrapped, and moved to indoor storage Bay 14."</div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- ---- BILLING ---- -->
+    <div class="pane" id="home-billing">
+      <div class="sec-head">
+        <div class="sec-title">Billing &amp; autopay</div>
+        <div class="sec-sub">One card or bank account on file. Services bill automatically the day work is completed.</div>
+      </div>
+      <div class="grid" style="grid-template-columns:1fr 1.4fr;gap:16px" id="billGrid">
+        <div>
+          <div class="card"><div class="card-pad">
+            <div class="pill teal" style="margin-bottom:12px">Payment method</div>
+            <div class="payline on">
+              <div class="cc-badge">VISA</div>
+              <div style="flex:1">
+                <div style="font-weight:800">Visa ending 4417</div>
+                <div class="mut" style="font-size:12.5px">Autopay on · expires 08/28</div>
+              </div>
+              <span class="pill ok">Active</span>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button class="btn ghost sm" onclick="openPay()">Update card / ACH</button>
+            </div>
+            <div class="hr"></div>
+            <div class="mut" style="font-size:12px;line-height:1.5">Card details are tokenized and vaulted with our PCI-compliant payment processor. LakeLife never stores your full card number.</div>
+          </div></div>
+          <div class="card" style="margin-top:16px"><div class="card-pad">
+            <div class="pill gold" style="margin-bottom:10px">2026 season to date</div>
+            <div class="summary-line"><span>Services completed</span><b>14</b></div>
+            <div class="summary-line"><span>Paid to date</span><b>$4,655.00</b></div>
+            <div class="summary-line"><span>Outstanding</span><b style="color:var(--warn)">$180.00</b></div>
+          </div></div>
+        </div>
+        <div class="card"><div class="card-pad" style="padding:6px 20px">
+          <table>
+            <thead><tr><th>Invoice</th><th>Service</th><th>Date</th><th class="right">Amount</th><th class="right">Status</th></tr></thead>
+            <tbody>
+              <tr><td class="num">#1181</td><td>Weekly mowing</td><td class="mut">Jul 10</td><td class="right num">$85.00</td><td class="right"><span class="pill warn">Due</span></td></tr>
+              <tr><td class="num">#1177</td><td>Housekeeping</td><td class="mut">Jul 8</td><td class="right num">$95.00</td><td class="right"><span class="pill warn">Due</span></td></tr>
+              <tr><td class="num">#1164</td><td>Weekly mowing</td><td class="mut">Jul 3</td><td class="right num">$85.00</td><td class="right"><span class="pill ok">Paid</span></td></tr>
+              <tr><td class="num">#1151</td><td>Housekeeping</td><td class="mut">Jun 24</td><td class="right num">$95.00</td><td class="right"><span class="pill ok">Paid</span></td></tr>
+              <tr><td class="num">#1093</td><td>Boat lift set + launch</td><td class="mut">May 2</td><td class="right num">$495.00</td><td class="right"><span class="pill ok">Paid</span></td></tr>
+              <tr><td class="num">#1071</td><td>Pier install + spring opening</td><td class="mut">Apr 18</td><td class="right num">$1,140.00</td><td class="right"><span class="pill ok">Paid</span></td></tr>
+              <tr><td class="num">#0988</td><td>Winterization pkg + boat storage</td><td class="mut">Nov 7, 2025</td><td class="right num">$1,865.00</td><td class="right"><span class="pill ok">Paid</span></td></tr>
+            </tbody>
+          </table>
+        </div></div>
+      </div>
+    </div>
+
+    <!-- ---- PROPERTY PROFILE ---- -->
+    <div class="pane" id="home-profile">
+      <div class="sec-head" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:10px">
+        <div>
+          <div class="sec-title">Property profile</div>
+          <div class="sec-sub">This is what makes every price exact — pier sections, lawn size, square footage. Answer once, priced right forever.</div>
+        </div>
+        <button class="btn" onclick="openWiz()">Run guided setup</button>
+      </div>
+      <div class="grid" style="grid-template-columns:1fr 1.4fr;gap:16px;margin-bottom:16px" id="contactGrid">
+        <div class="card"><div class="card-pad">
+          <div class="pill teal" style="margin-bottom:12px">Contact on file</div>
+          <div style="font-weight:800">hendersons@gmail.com<span class="vbadge">✓ Verified</span></div>
+          <div class="mut" style="font-size:12.5px;margin-bottom:12px">Required — receipts, invoices &amp; records live here</div>
+          <div style="font-weight:800">(260) 555-0100<span class="vbadge">✓ Verified by text</span></div>
+          <div class="mut" style="font-size:12.5px">Service-day texts &amp; completion alerts</div>
+          <div style="margin-top:14px"><button class="btn ghost sm" onclick="toast('Any change re-verifies by code before it saves — keeps your account locked down.')">Update contact info</button></div>
+        </div></div>
+        <div class="card"><div class="card-pad">
+          <div class="pill gold" style="margin-bottom:6px">Notifications</div>
+          <div id="notifList"></div>
+        </div></div>
+      </div>
+      <div class="grid g3" id="profileFacts"></div>
+      <div class="notice" style="margin-top:16px"><b>Why we ask:</b> pier install is priced per section, mowing by lawn size, housekeeping by square footage. If a crew finds something different on site, they flag it and you approve the change in <b>Messages &amp; approvals</b> — no surprise invoices, ever.</div>
+    </div>
+
+    <!-- ---- MESSAGES & APPROVALS ---- -->
+    <div class="pane" id="home-msgs">
+      <div class="sec-head">
+        <div class="sec-title">Messages &amp; approvals</div>
+        <div class="sec-sub">When a crew finds something your profile missed, it lands here — nothing gets added to your profile or billed until you approve it.</div>
+      </div>
+      <div id="msgList" class="grid" style="grid-template-columns:1fr;gap:12px"></div>
+      <div class="card" style="margin-top:14px"><div class="card-pad" style="display:flex;gap:10px">
+        <input id="msgInput" placeholder="Message LakeLife dispatch…" style="flex:1;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;font-family:inherit;font-size:14px">
+        <button class="btn" onclick="sendMsg()">Send</button>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================= -->
+<!-- ==================== OPERATIONS VIEW ======================== -->
+<!-- ============================================================= -->
+<section class="view" id="view-ops">
+  <div class="wrap" style="padding-top:30px">
+    <div class="sec-head" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:10px">
+      <div>
+        <div class="pill gold" style="margin-bottom:8px">Operations · Internal</div>
+        <div class="sec-title" style="font-size:26px">The logistics brain</div>
+        <div class="sec-sub">Big Long · Pretty · Big Turkey — Thursday, July 16, 2026</div>
+      </div>
+      <span class="pill teal">30% platform margin · hidden from customers</span>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="v">37</div><div class="l">Jobs scheduled this week</div><div class="d up">▲ 12% vs last wk</div></div>
+      <div class="kpi"><div class="v">94%</div><div class="l">On-time completion</div><div class="d up">▲ 2 pts</div></div>
+      <div class="kpi"><div class="v">$11,240</div><div class="l">Wk revenue (customer)</div><div class="d up">▲ $1,380</div></div>
+      <div class="kpi"><div class="v">$3,372</div><div class="l">Wk LakeLife margin</div><div class="d up">30.0% blended</div></div>
+      <div class="kpi"><div class="v">3</div><div class="l">Capacity alerts</div><div class="d dn">Pier crew Sat full</div></div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab on" onclick="setPane('ops','cal',this)">Master calendar</button>
+      <button class="tab" onclick="setPane('ops','routing',this)">Routing &amp; maps</button>
+      <button class="tab" onclick="setPane('ops','vendors',this)">Vendor calendars</button>
+      <button class="tab" onclick="setPane('ops','perf',this)">Performance</button>
+      <button class="tab" onclick="setPane('ops','rev',this)">Revenue &amp; margin</button>
+      <button class="tab" onclick="setPane('ops','lakes',this)">Lake conditions</button>
+    </div>
+
+    <!-- MASTER CALENDAR -->
+    <div class="pane on" id="ops-cal">
+      <div class="grid g2" id="masterCal"></div>
+    </div>
+
+    <!-- ROUTING & MAPS -->
+    <div class="pane" id="ops-routing">
+      <div class="grid" style="grid-template-columns:1.5fr 1fr;gap:16px" id="routingLayout">
+        <div class="card"><div class="card-pad">
+          <div class="map-head">
+            <b style="font-size:16px">Tomorrow's auto-built routes — Fri, Jul 17</b>
+            <span class="pill teal">Rebuilt nightly at 8:00p</span>
+          </div>
+          <div id="opsMap" class="livemap" style="height:320px"><div class="map-fallback">Live map loads here — real OpenStreetMap tiles of Big Long, Pretty &amp; Big Turkey Lakes.<br>(In production: Google Maps SDK with your API key.)</div></div>
+          <div class="legend">
+            <span><span class="dot" style="background:#137A8C"></span>GreenEdge — mow &amp; blow ×8</span>
+            <span><span class="dot" style="background:#E9B44C"></span>ShoreClean — cleans ×4 (west shore)</span>
+            <span><span class="dot" style="background:#0F3648"></span>DockRight — pier installs ×3</span>
+          </div>
+          <div class="route-stat">
+            <div class="rs"><b>4.2 min</b>avg drive between stops</div>
+            <div class="rs"><b>38%</b>drive time cut vs. signup order</div>
+            <div class="rs"><b>2</b>cross-lake hops (was 7)</div>
+            <div class="rs"><b>+1.5</b>extra jobs/day per crew freed up</div>
+          </div>
+        </div></div>
+        <div>
+          <div class="card"><div class="card-pad">
+            <b style="font-size:16px">How routes get built</b>
+            <div class="sec-sub" style="margin:6px 0 10px">Every night, the scheduler takes tomorrow's confirmed jobs and:</div>
+            <div class="cond-row"><span class="mut">1 · Cluster</span><b>Group by lake, then shore segment</b></div>
+            <div class="cond-row"><span class="mut">2 · Sequence</span><b>Order stops in drive direction</b></div>
+            <div class="cond-row"><span class="mut">3 · Balance</span><b>Cap at crew daily capacity</b></div>
+            <div class="cond-row"><span class="mut">4 · Pair</span><b>Pier + lift crews land same address</b></div>
+            <div class="cond-row"><span class="mut">5 · Push</span><b>Map link texted to each crew, 8p</b></div>
+            <div class="notice" style="margin-top:14px">Mowing and cleaning are the daily volume game — dense same-shore loops are what let one GreenEdge crew clear 8+ lawns a day. New signups slot into the nearest existing loop automatically.</div>
+          </div></div>
+          <div class="card" style="margin-top:16px"><div class="card-pad" style="padding:6px 20px">
+            <table>
+              <thead><tr><th>Route</th><th>Stops</th><th class="right">Drive</th><th class="right"></th></tr></thead>
+              <tbody>
+                <tr><td><b>GreenEdge · Fri</b><div class="mut" style="font-size:12px">Big Long E → Pretty</div></td><td class="num">8</td><td class="right num">31 min</td><td class="right"><button class="btn ghost sm" onclick="toast('Route map texted to GreenEdge crew leads.')">Send to crew</button></td></tr>
+                <tr><td><b>ShoreClean · Fri</b><div class="mut" style="font-size:12px">Big Long W loop</div></td><td class="num">4</td><td class="right num">14 min</td><td class="right"><button class="btn ghost sm" onclick="toast('Route map texted to ShoreClean crew leads.')">Send to crew</button></td></tr>
+                <tr><td><b>DockRight · Sat</b><div class="mut" style="font-size:12px">Big Turkey N shore</div></td><td class="num">3</td><td class="right num">9 min</td><td class="right"><button class="btn ghost sm" onclick="toast('Route map texted to DockRight crew leads.')">Send to crew</button></td></tr>
+              </tbody>
+            </table>
+          </div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VENDOR CALENDARS -->
+    <div class="pane" id="ops-vendors">
+      <div class="vendor-tabs" id="vendorTabs"></div>
+      <div class="grid" style="grid-template-columns:1.5fr 1fr;gap:16px" id="vendorLayout">
+        <div class="card"><div class="card-pad">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <b id="vendorDayTitle" style="font-size:16px"></b>
+            <span class="pill teal" id="vendorCap"></span>
+          </div>
+          <div id="vendorJobs"></div>
+        </div></div>
+        <div class="card"><div class="card-pad">
+          <div class="pill slate" style="margin-bottom:12px">This vendor · week &amp; month</div>
+          <div id="vendorWeek"></div>
+        </div></div>
+      </div>
+    </div>
+
+    <!-- PERFORMANCE -->
+    <div class="pane" id="ops-perf">
+      <div class="grid g2">
+        <div class="card"><div class="card-pad">
+          <b style="font-size:16px">Daily throughput vs. rated capacity</b>
+          <div class="sec-sub" style="margin-bottom:12px">Trailing 30-day average per crew-day. This drives which dates customers see as available.</div>
+          <div class="bar-row"><span>Piers installed</span><div class="bar-track"><div class="bar-fill" style="width:87%"></div></div><span class="num">2.6 / 3.0</span></div>
+          <div class="bar-row"><span>Piers removed</span><div class="bar-track"><div class="bar-fill" style="width:0%"></div></div><span class="num mut">fall svc</span></div>
+          <div class="bar-row"><span>Boat lifts set</span><div class="bar-track"><div class="bar-fill" style="width:95%"></div></div><span class="num">3.8 / 4.0</span></div>
+          <div class="bar-row"><span>Boats launched</span><div class="bar-track"><div class="bar-fill" style="width:78%"></div></div><span class="num">3.1 / 4.0</span></div>
+          <div class="bar-row"><span>Lawns mowed</span><div class="bar-track"><div class="bar-fill gold" style="width:104%;max-width:100%"></div></div><span class="num">8.3 / 8.0</span></div>
+          <div class="bar-row"><span>Homes cleaned</span><div class="bar-track"><div class="bar-fill" style="width:88%"></div></div><span class="num">4.4 / 5.0</span></div>
+          <div class="bar-row"><span>Spring openings</span><div class="bar-track"><div class="bar-fill" style="width:83%"></div></div><span class="num">2.5 / 3.0</span></div>
+          <div class="notice" style="margin-top:14px">GreenEdge is running <b>above rated capacity</b> — raise their daily cap to 9 or recruit a second mowing vendor for Pretty Lake before August.</div>
+        </div></div>
+        <div class="card"><div class="card-pad">
+          <b style="font-size:16px">Vendor scorecard</b>
+          <div class="sec-sub" style="margin-bottom:8px">On-time %, avg job time vs. estimate, callbacks.</div>
+          <table>
+            <thead><tr><th>Vendor</th><th>On-time</th><th>Time vs est</th><th>Callbacks</th><th>Grade</th></tr></thead>
+            <tbody>
+              <tr><td><b>DockRight Piers</b></td><td class="num">96%</td><td class="num" style="color:var(--ok)">−8%</td><td class="num">1</td><td><span class="pill ok">A</span></td></tr>
+              <tr><td><b>TrueNorth Marine</b></td><td class="num">98%</td><td class="num" style="color:var(--ok)">−4%</td><td class="num">0</td><td><span class="pill ok">A+</span></td></tr>
+              <tr><td><b>GreenEdge Lawn</b></td><td class="num">93%</td><td class="num" style="color:var(--ok)">−11%</td><td class="num">2</td><td><span class="pill ok">A</span></td></tr>
+              <tr><td><b>ShoreClean</b></td><td class="num">91%</td><td class="num">+3%</td><td class="num">1</td><td><span class="pill teal">B+</span></td></tr>
+              <tr><td><b>Bayside Storage</b></td><td class="num">88%</td><td class="num" style="color:var(--warn)">+14%</td><td class="num">3</td><td><span class="pill warn">B−</span></td></tr>
+            </tbody>
+          </table>
+          <div class="notice" style="margin-top:14px">Bayside is trending slow on winterization prep. Book a review before the fall rush — Oct pull season is where the whole year is won or lost.</div>
+        </div></div>
+      </div>
+    </div>
+
+    <!-- REVENUE -->
+    <div class="pane" id="ops-rev">
+      <div class="card"><div class="card-pad" style="padding:6px 20px">
+        <table>
+          <thead><tr><th>Service line</th><th class="right">Jobs YTD</th><th class="right">Customer price</th><th class="right">Vendor cost</th><th class="right">LakeLife margin</th><th class="right">Margin %</th></tr></thead>
+          <tbody>
+            <tr><td><b>Spring opening pkg</b></td><td class="right num">61</td><td class="right num">$26,230</td><td class="right num">$18,361</td><td class="right num" style="color:var(--teal-dark)">$7,869</td><td class="right num">30%</td></tr>
+            <tr><td><b>Pier install</b></td><td class="right num">58</td><td class="right num">$40,600</td><td class="right num">$28,420</td><td class="right num" style="color:var(--teal-dark)">$12,180</td><td class="right num">30%</td></tr>
+            <tr><td><b>Boat lift set</b></td><td class="right num">54</td><td class="right num">$26,730</td><td class="right num">$18,711</td><td class="right num" style="color:var(--teal-dark)">$8,019</td><td class="right num">30%</td></tr>
+            <tr><td><b>Boat storage &amp; winterize (24–25)</b></td><td class="right num">47</td><td class="right num">$56,400</td><td class="right num">$39,480</td><td class="right num" style="color:var(--teal-dark)">$16,920</td><td class="right num">30%</td></tr>
+            <tr><td><b>Weekly mowing</b></td><td class="right num">412</td><td class="right num">$35,020</td><td class="right num">$24,514</td><td class="right num" style="color:var(--teal-dark)">$10,506</td><td class="right num">30%</td></tr>
+            <tr><td><b>Housekeeping</b></td><td class="right num">231</td><td class="right num">$21,945</td><td class="right num">$15,362</td><td class="right num" style="color:var(--teal-dark)">$6,583</td><td class="right num">30%</td></tr>
+            <tr style="background:var(--sun-soft)"><td><b>Total YTD</b></td><td class="right num"><b>863</b></td><td class="right num"><b>$206,925</b></td><td class="right num"><b>$144,848</b></td><td class="right num"><b>$62,077</b></td><td class="right num"><b>30%</b></td></tr>
+          </tbody>
+        </table>
+      </div></div>
+      <div class="notice" style="margin-top:16px">Customers only ever see the single all-in price. Vendor rates and the 30% platform fee live here and nowhere else.</div>
+    </div>
+
+    <!-- LAKE CONDITIONS -->
+    <div class="pane" id="ops-lakes">
+      <div class="grid g3">
+        <div class="card lake-card"><div class="svc-art" style="background:linear-gradient(160deg,#0F3648,#137A8C)"><svg viewBox="0 0 120 56"><path d="M0 34 Q30 22 60 34 T120 34 V56 H0Z" fill="#BFE3E8" opacity=".5"/><circle cx="96" cy="16" r="9" fill="#E9B44C"/></svg></div>
+          <div class="card-pad">
+            <b style="font-family:'Bricolage Grotesque';font-size:17px">Big Long Lake</b>
+            <div class="temp">76°F <small class="mut" style="font-size:13px;font-weight:600">water</small></div>
+            <div class="hr"></div>
+            <div class="cond-row"><span class="mut">Ice-out 2026 (actual)</span><b>Mar 21</b></div>
+            <div class="cond-row"><span class="mut">Est. hard freeze</span><b>Nov 22</b></div>
+            <div class="cond-row"><span class="mut">Pull deadline (auto-set)</span><b style="color:var(--warn)">Nov 14</b></div>
+            <div class="cond-row"><span class="mut">Active properties</span><b>34</b></div>
+          </div>
+        </div>
+        <div class="card lake-card"><div class="svc-art" style="background:linear-gradient(160deg,#0F3648,#1E8A99)"><svg viewBox="0 0 120 56"><path d="M0 36 Q30 26 60 36 T120 36 V56 H0Z" fill="#BFE3E8" opacity=".5"/><circle cx="24" cy="15" r="9" fill="#E9B44C"/></svg></div>
+          <div class="card-pad">
+            <b style="font-family:'Bricolage Grotesque';font-size:17px">Pretty Lake</b>
+            <div class="temp">75°F <small class="mut" style="font-size:13px;font-weight:600">water</small></div>
+            <div class="hr"></div>
+            <div class="cond-row"><span class="mut">Ice-out 2026 (actual)</span><b>Mar 24</b></div>
+            <div class="cond-row"><span class="mut">Est. hard freeze</span><b>Nov 20</b></div>
+            <div class="cond-row"><span class="mut">Pull deadline (auto-set)</span><b style="color:var(--warn)">Nov 12</b></div>
+            <div class="cond-row"><span class="mut">Active properties</span><b>21</b></div>
+          </div>
+        </div>
+        <div class="card lake-card"><div class="svc-art" style="background:linear-gradient(160deg,#0F3648,#16707F)"><svg viewBox="0 0 120 56"><path d="M0 35 Q30 24 60 35 T120 35 V56 H0Z" fill="#BFE3E8" opacity=".5"/><circle cx="62" cy="14" r="9" fill="#E9B44C"/></svg></div>
+          <div class="card-pad">
+            <b style="font-family:'Bricolage Grotesque';font-size:17px">Big Turkey Lake</b>
+            <div class="temp">77°F <small class="mut" style="font-size:13px;font-weight:600">water</small></div>
+            <div class="hr"></div>
+            <div class="cond-row"><span class="mut">Ice-out 2026 (actual)</span><b>Mar 19</b></div>
+            <div class="cond-row"><span class="mut">Est. hard freeze</span><b>Nov 24</b></div>
+            <div class="cond-row"><span class="mut">Pull deadline (auto-set)</span><b style="color:var(--warn)">Nov 16</b></div>
+            <div class="cond-row"><span class="mut">Active properties</span><b>18</b></div>
+          </div>
+        </div>
+      </div>
+      <div class="notice" style="margin-top:16px"><b>How this drives scheduling:</b> spring water-work dates open the customer calendar only after confirmed ice-out per lake; fall pier &amp; lift removals auto-block after each lake's pull deadline (hard freeze minus an 8-day safety buffer). Update ice-out each March and the whole booking calendar reflows.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================= -->
+<!-- ===================== VENDOR VIEW =========================== -->
+<!-- ============================================================= -->
+<section class="view" id="view-vendor">
+  <div class="wrap" style="padding-top:30px">
+    <div class="sec-head">
+      <div class="pill teal" style="margin-bottom:8px">Vendor portal</div>
+      <div class="sec-title" style="font-size:26px">Today's route</div>
+      <div class="sec-sub">Thursday, July 16 · Signed in as <b>GreenEdge Lawn Co.</b> — jobs in drive order. <b style="color:var(--warn)">Photos are required on every job — no photos, no completion, no payout.</b></div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px"><div class="card-pad">
+      <div class="map-head">
+        <b style="font-size:16px">Route map — 6 stops, 27 min total drive</b>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn ghost sm" onclick="openFullRoute()">Open route in <span id="mapAppName">Maps</span></button>
+          <button class="btn sm" onclick="sendRouteToCrew()">Send route to crew</button>
+        </div>
+      </div>
+      <div id="vMap" class="livemap"><div class="map-fallback">Live route map loads here — real map tiles with numbered stops.<br>(In production: Google Maps SDK with your API key.)</div></div>
+      <div class="legend">
+        <span><span class="dot" style="background:#137A8C"></span>Stops 1–4 · Big Long east shore</span>
+        <span><span class="dot" style="background:#BFE3E8;border:1px solid #7FB8C4"></span>Stops 5–6 · Pretty Lake</span>
+        <span class="mut" id="deviceNote" style="font-weight:600"></span>
+      </div>
+    </div></div>
+
+    <div class="card"><div class="card-pad" id="routeList"></div></div>
+    <div class="card" style="margin-top:16px"><div class="card-pad">
+      <b>Your week at a glance</b>
+      <div class="sec-sub" style="margin-bottom:10px">LakeLife builds your route each night at 8p. Weather holds push automatically.</div>
+      <div class="bar-row"><span>Thu (today)</span><div class="bar-track"><div class="bar-fill" style="width:75%"></div></div><span class="num">6 / 8 jobs</span></div>
+      <div class="bar-row"><span>Fri</span><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><span class="num">8 / 8 jobs</span></div>
+      <div class="bar-row"><span>Sat</span><div class="bar-track"><div class="bar-fill" style="width:50%"></div></div><span class="num">4 / 8 jobs</span></div>
+      <div class="bar-row"><span>Mon</span><div class="bar-track"><div class="bar-fill" style="width:88%"></div></div><span class="num">7 / 8 jobs</span></div>
+    </div></div>
+    <div class="card" style="margin-top:16px"><div class="card-pad">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
+        <div>
+          <b style="font-size:16px">My availability</b>
+          <div class="sec-sub">The LakeLife scheduler only books your open slots. Have work outside the app? Tap any open slot to block it — tap again to reopen.</div>
+        </div>
+        <button class="btn ghost sm" onclick="toast('Google Calendar / iCal sync — outside events will auto-block matching slots.')">Sync my calendar</button>
+      </div>
+      <div class="lbl" style="margin-top:14px">Days I work</div>
+      <div class="freq-row" id="dayChips" style="margin:4px 0 0"></div>
+      <div class="lbl">Next 5 working days — tap to block / reopen</div>
+      <div class="avail-grid" id="availGrid"></div>
+      <div class="legend" style="margin-top:10px">
+        <span><span class="dot" style="background:#E0F0F3;border:1px solid #B8DCE2"></span>LakeLife job (locked — message dispatch to move)</span>
+        <span><span class="dot" style="background:#fff;border:1.5px solid var(--line)"></span>Open to bookings</span>
+        <span><span class="dot" style="background:#E2E9EC"></span>Blocked — outside work</span>
+      </div>
+    </div></div>
+  </div>
+</section>
+
+<!-- ================= BOOKING MODAL ================= -->
+<div class="overlay" id="bookOverlay" role="dialog" aria-modal="true">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="pill teal" id="bkPill">Service</div>
+        <h3 id="bkName" style="font-size:22px;margin-top:8px;letter-spacing:-.02em"></h3>
+      </div>
+      <button class="x" onclick="closeBook()" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="lbl">Frequency</div>
+      <div class="freq-row" id="bkFreq"></div>
+      <div class="lbl" id="bkCalLbl">Pick your date</div>
+      <div class="cal">
+        <div class="cal-head">
+          <button class="cal-nav" onclick="calMove(-1)" aria-label="Previous month">‹</button>
+          <b id="calTitle"></b>
+          <button class="cal-nav" onclick="calMove(1)" aria-label="Next month">›</button>
+        </div>
+        <div class="cal-grid" id="calGrid"></div>
+        <div class="cal-legend">
+          <span><span class="dot" style="background:#E9F4F6;border:1px solid #B8DCE2"></span>Available</span>
+          <span><span class="dot" style="background:#F4EDE4"></span>Crew full</span>
+          <span><span class="dot" style="background:#EDF1F3"></span>Season / freeze block</span>
+        </div>
+      </div>
+      <div id="bkSummary" style="margin-top:14px"></div>
+      <div class="notice" id="bkAuto" style="display:none">Confirming schedules this service and bills your <b>Visa ··4417</b> automatically when each visit is completed. Weekly services repeat in the same slot until you pause them.</div>
+      <button class="btn gold" id="bkConfirm" style="width:100%;margin-top:16px" disabled onclick="confirmBook()">Confirm service</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= PAYMENT MODAL ================= -->
+<div class="overlay" id="payOverlay" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-head">
+      <div>
+        <div class="pill teal">Payment vault</div>
+        <h3 style="font-size:22px;margin-top:8px">Update payment method</h3>
+      </div>
+      <button class="x" onclick="closePay()" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="freq-row" style="margin:0 0 14px">
+        <button class="freq on" id="payCC" onclick="payTab('cc')">Credit / debit card</button>
+        <button class="freq" id="payACH" onclick="payTab('ach')">Bank account (ACH)</button>
+      </div>
+      <div id="payFormCC">
+        <div class="field"><label>Name on card</label><input placeholder="Henderson Family Trust"></div>
+        <div class="field"><label>Card number</label><input placeholder="•••• •••• •••• ••••" inputmode="numeric"></div>
+        <div class="frow">
+          <div class="field"><label>Expiry</label><input placeholder="MM / YY"></div>
+          <div class="field"><label>CVC</label><input placeholder="•••"></div>
+        </div>
+      </div>
+      <div id="payFormACH" style="display:none">
+        <div class="field"><label>Account holder</label><input placeholder="Henderson Family Trust"></div>
+        <div class="field"><label>Routing number</label><input inputmode="numeric" placeholder="•••••••••"></div>
+        <div class="field"><label>Account number</label><input inputmode="numeric" placeholder="••••••••••••"></div>
+      </div>
+      <label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;margin:6px 0 16px;color:var(--sub)">
+        <input type="checkbox" checked style="margin-top:3px">
+        Enable autopay — bill this method automatically when each service is completed.
+      </label>
+      <button class="btn" style="width:100%" onclick="savePay()">Save payment method</button>
+      <div class="mut" style="font-size:11.5px;margin-top:12px;line-height:1.5">
+        Demo note: this form posts to <b>LakeLifePayments.tokenize()</b> — the drop-in point for your card processor's hosted-fields SDK. Raw card / bank data never touches the LakeLife server; only the vault token is stored against the property.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= SIGN IN / CREATE ACCOUNT ================= -->
+<div class="overlay" id="authOverlay" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-head">
+      <div>
+        <div class="pill teal">New customer</div>
+        <h3 style="font-size:22px;margin-top:8px;letter-spacing:-.02em">Create your LakeLife profile</h3>
+        <div class="sec-sub" style="margin-top:4px">One account for services, scheduling, photos &amp; billing.</div>
+      </div>
+      <button class="x" onclick="closeAuth()" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <button class="sso apple" onclick="authWith('Apple')"><svg width="15" height="18" viewBox="0 0 15 18" fill="currentColor"><path d="M12.5 9.6c0-2.4 2-3.6 2.1-3.6-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8C2.6 4.2 1.1 5.1.3 6.6c-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.7 2.5 3 2.4 1.2 0 1.7-.8 3.1-.8 1.5 0 1.9.8 3.2.8 1.3 0 2.1-1.2 2.9-2.4.9-1.4 1.3-2.7 1.3-2.8 0-.1-2.5-1-2.5-4zM10.1 2.5c.7-.8 1.1-1.9 1-3-1 0-2.1.6-2.8 1.4-.6.7-1.2 1.9-1 3 1 .1 2.1-.6 2.8-1.4z"/></svg> Continue with Apple</button>
+      <button class="sso" onclick="authWith('Google')"><svg width="17" height="17" viewBox="0 0 48 48"><path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h11.8c-.5 2.8-2.1 5.1-4.4 6.7v5.5h7.1c4.2-3.8 6.6-9.5 6.6-16.2z"/><path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-7.1-5.5c-2 1.3-4.5 2.1-7.4 2.1-5.7 0-10.5-3.8-12.3-9H4.4v5.7C8 41.2 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.7 28.3c-.4-1.3-.7-2.8-.7-4.3s.3-3 .7-4.3V14H4.4C2.9 17 2 20.4 2 24s.9 7 2.4 10l7.3-5.7z"/><path fill="#EA4335" d="M24 10.8c3.2 0 6.1 1.1 8.4 3.3l6.3-6.3C34.9 4.2 29.9 2 24 2 15.4 2 8 6.8 4.4 14l7.3 5.7c1.8-5.2 6.6-8.9 12.3-8.9z"/></svg> Continue with Google</button>
+      <div class="or">or start from scratch</div>
+      <div class="field"><label>Full name</label><input placeholder="First &amp; last name"></div>
+      <div class="field"><label>Email — required, receipts &amp; records</label><input type="email" placeholder="you@email.com" required></div>
+      <div class="field"><label>Mobile — required, we verify by text</label><input inputmode="tel" placeholder="(260) 555-0100" required></div>
+      <button class="btn" style="width:100%" onclick="authWith('email')">Create account</button>
+      <div class="mut" style="font-size:11.5px;margin-top:12px;line-height:1.5">Apple/Google sign-in verifies your email in one tap — using Apple's Hide My Email works fine, mail still reaches you. Every account needs a working email on file and a text-verified mobile before the first service books.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= SMS VERIFY ================= -->
+<div class="overlay" id="verifyOverlay" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-head">
+      <div>
+        <div class="pill teal">Verify your mobile</div>
+        <h3 style="font-size:22px;margin-top:8px;letter-spacing:-.02em">Enter the code we texted</h3>
+        <div class="sec-sub" style="margin-top:4px">Sent to (260) 555-0100 — this is the number we'll text when a crew is on the way and when work is complete.</div>
+      </div>
+      <button class="x" onclick="closeVerify()" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="code-row" id="codeRow">
+        <input class="code-box" maxlength="1" inputmode="numeric" oninput="codeAdvance(this,0)">
+        <input class="code-box" maxlength="1" inputmode="numeric" oninput="codeAdvance(this,1)">
+        <input class="code-box" maxlength="1" inputmode="numeric" oninput="codeAdvance(this,2)">
+        <input class="code-box" maxlength="1" inputmode="numeric" oninput="codeAdvance(this,3)">
+        <input class="code-box" maxlength="1" inputmode="numeric" oninput="codeAdvance(this,4)">
+        <input class="code-box" maxlength="1" inputmode="numeric" oninput="codeAdvance(this,5)">
+      </div>
+      <button class="btn" style="width:100%" onclick="verifyCode()">Verify &amp; continue</button>
+      <div style="text-align:center;margin-top:12px"><button class="btn ghost sm" onclick="toast('New code texted.')">Resend code</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= PROFILE WIZARD ================= -->
+<div class="overlay" id="wizOverlay" role="dialog" aria-modal="true">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="pill gold" id="wizStepPill">Step 1 of 5</div>
+        <h3 id="wizTitle" style="font-size:22px;margin-top:8px;letter-spacing:-.02em"></h3>
+        <div class="sec-sub" id="wizPrompt" style="max-width:430px;margin-top:4px"></div>
+      </div>
+      <button class="x" onclick="closeWiz()" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="wizBody"></div>
+      <div style="display:flex;gap:10px;margin-top:18px">
+        <button class="btn ghost" id="wizBack" onclick="wizNav(-1)">Back</button>
+        <button class="btn" id="wizNext" style="flex:1" onclick="wizNav(1)">Next</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= VENDOR FLAG MODAL ================= -->
+<div class="overlay" id="flagOverlay" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-head">
+      <div>
+        <div class="pill warn">Flag for owner approval</div>
+        <h3 style="font-size:21px;margin-top:8px" id="flagAddr"></h3>
+      </div>
+      <button class="x" onclick="closeFlag()" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label>What did you find?</label>
+        <select id="flagType">
+          <option value="pier">Pier has more sections than the profile</option>
+          <option value="lift">Extra boat / PWC lift on site</option>
+          <option value="lawn">Lawn is larger than the profile</option>
+          <option value="toys">Water toys not in the profile</option>
+          <option value="other">Something else (describe below)</option>
+        </select>
+      </div>
+      <div class="field"><label>Note to the owner</label><input id="flagNote" placeholder="e.g. Counted 12 sections including the end platform"></div>
+      <div class="notice" style="margin:0 0 14px">This goes to the owner as an approval request, with a copy to LakeLife Ops. Nothing reprices until the owner approves. Attach job photos for backup.</div>
+      <button class="btn gold" style="width:100%" onclick="submitFlag()">Send to owner &amp; Ops</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= PROFILE RECAP ================= -->
+<div class="overlay" id="recapOverlay" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:530px">
+    <div class="modal-head">
+      <div>
+        <div class="pill gold">You're all set 🎉</div>
+        <h3 style="font-size:23px;margin-top:8px;letter-spacing:-.02em">Welcome aboard, Henderson family</h3>
+        <div class="sec-sub" style="margin-top:4px">That's everything we need — you'll never have to explain your place twice. Here's your lake house, the way we see it:</div>
+      </div>
+      <button class="x" onclick="closeRecap(false)" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="recapBody"></div>
+      <div class="notice" style="margin-top:14px">Spot something off? Anything here takes about ten seconds to fix in <b>Property profile</b> — or the first crew out will true it up and you'll approve the change. No surprises, promise.</div>
+      <button class="btn gold" style="width:100%;margin-top:16px" onclick="closeRecap(true)">Looks right — let's pick services</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span class="tick">✓</span><span id="toastMsg"></span></div>
+
+<script>
+/* ============================================================
+   LakeLife demo state — all in-memory. Payment integration point:
+   window.LakeLifePayments = { tokenize(fields) -> Promise<token> }
+   ============================================================ */
+window.LakeLifePayments = { tokenize: async f => 'tok_demo_'+Math.random().toString(36).slice(2,10) };
+
+const SERVICES = [
+  {id:'open',   name:'Spring opening',        price:430, unit:'per visit', freq:['One-time (spring)'], cat:'Seasonal', art:'house',
+   desc:'Water on, lines flushed & tested, water heater lit, screens hung, deck furniture out. Your house, awake.'},
+  {id:'winter', name:'Fall winterization',    price:485, unit:'per visit', freq:['One-time (fall)'], cat:'Seasonal', art:'snow',
+   desc:'Lines blown & antifreezed, systems shut down, furniture stored, house buttoned up for the freeze.'},
+  {id:'pier',   name:'Pier install / removal',price:700, unit:'per install or pull', freq:['Install (spring)','Removal (fall)'], cat:'2× per season', art:'pier',
+   desc:'Sectional pier in after ice-out, out before hard freeze. Leveled, laddered, bumpered.'},
+  {id:'lift',   name:'Boat lift set / pull',  price:495, unit:'per set or pull', freq:['Set (spring)','Pull (fall)'], cat:'2× per season', art:'lift',
+   desc:'Lift set and leveled in spring, pulled and shore-stacked in fall. Canopy on and off included.'},
+  {id:'boat',   name:'Boat storage & winterize', price:1200, unit:'per season', freq:['Winterize + store','De-winterize + launch'], cat:'Storage only', art:'boat',
+   desc:'Priced by the foot, bow to stern. Winterized, shrink-wrapped, stored indoors, then de-winterized and launched in spring. Storage & prep only — we don\'t service or repair.'},
+  {id:'toys',   name:'Water toy prep & storage', price:180, unit:'per season', freq:['Store (fall)','Deploy (spring)'], cat:'Storage only', art:'toys',
+   desc:'Kayaks, paddleboards, tubes and trampolines — cleaned, stored for winter, back out for summer.'},
+  {id:'mow',    name:'Lawn mowing & trim',    price:85,  unit:'per visit', freq:['Weekly','Every 2 weeks'], cat:'Recurring', art:'mow',
+   desc:'Mow, trim, edge, and blow off the pier and patios. Same crew, same day, every week.'},
+  {id:'clean',  name:'Housekeeping & open-up',price:95,  unit:'per visit', freq:['Weekly','Every 2 weeks','Before each arrival'], cat:'Recurring', art:'clean',
+   desc:'Full clean, linens, restock — timed to your arrivals so the house is fresh when you walk in.'},
+];
+
+const ART = {
+  house:['#EAF4F6','<svg viewBox="0 0 90 56"><path d="M45 8 L76 30 H66 V48 H24 V30 H14 Z" fill="#137A8C"/><rect x="39" y="34" width="12" height="14" fill="#E9B44C"/><path d="M8 52 Q26 46 45 52 T82 52" stroke="#7FB8C4" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>'],
+  snow:['#EDF2F5','<svg viewBox="0 0 90 56"><path d="M45 8 L76 30 H66 V48 H24 V30 H14 Z" fill="#5D7681"/><rect x="39" y="34" width="12" height="14" fill="#DCE9EC"/><g fill="#fff"><circle cx="22" cy="14" r="2.4"/><circle cx="66" cy="10" r="2"/><circle cx="78" cy="22" r="2.2"/><circle cx="12" cy="28" r="2"/></g></svg>'],
+  pier:['#DFF0F3','<svg viewBox="0 0 90 56"><rect x="8" y="24" width="66" height="7" rx="2" fill="#8A6A4B"/><rect x="14" y="31" width="5" height="17" fill="#6E543B"/><rect x="40" y="31" width="5" height="17" fill="#6E543B"/><rect x="64" y="31" width="5" height="17" fill="#6E543B"/><path d="M4 50 Q22 44 45 50 T86 50" stroke="#137A8C" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>'],
+  lift:['#DFF0F3','<svg viewBox="0 0 90 56"><path d="M18 16 H72 L64 24 H26 Z" fill="#137A8C"/><rect x="24" y="24" width="4" height="22" fill="#456B76"/><rect x="62" y="24" width="4" height="22" fill="#456B76"/><rect x="30" y="30" width="30" height="9" rx="4" fill="#E9B44C"/><path d="M6 50 Q26 44 45 50 T84 50" stroke="#7FB8C4" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>'],
+  boat:['#E7F1F4','<svg viewBox="0 0 90 56"><path d="M16 30 H74 L64 42 H26 Z" fill="#0F3648"/><rect x="34" y="18" width="24" height="12" rx="3" fill="#137A8C"/><path d="M8 48 Q28 42 45 48 T84 48" stroke="#7FB8C4" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>'],
+  toys:['#EAF4EE','<svg viewBox="0 0 90 56"><ellipse cx="30" cy="34" rx="16" ry="9" fill="#E9B44C"/><ellipse cx="30" cy="34" rx="7" ry="4" fill="#EAF4EE"/><path d="M50 40 L82 30 L78 38 L52 46 Z" fill="#137A8C"/><path d="M6 50 Q26 45 45 50 T84 50" stroke="#7FB8C4" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>'],
+  mow:['#EAF3E4','<svg viewBox="0 0 90 56"><rect y="38" width="90" height="18" fill="#8FBF6B"/><rect x="30" y="24" width="26" height="13" rx="3" fill="#137A8C"/><circle cx="36" cy="41" r="5" fill="#0F3648"/><circle cx="52" cy="41" r="5" fill="#0F3648"/><rect x="54" y="14" width="3" height="12" fill="#456B76" transform="rotate(20 55 20)"/></svg>'],
+  clean:['#F2F0EA','<svg viewBox="0 0 90 56"><rect x="40" y="12" width="5" height="30" rx="2" fill="#8A6A4B"/><path d="M32 40 H53 L50 50 H35 Z" fill="#E9B44C"/><g stroke="#BFE3E8" stroke-width="2.4" stroke-linecap="round"><path d="M20 20 q4 -6 8 0"/><path d="M62 16 q4 -6 8 0"/><path d="M66 30 q4 -6 8 0"/></g></svg>'],
+};
+
+/* which services are water work (blocked pre-ice-out / post-pull-deadline) */
+const WATER = ['pier','lift','boat','toys'];
+/* capacity per service-family per day (drives full/available) */
+const CAP = {pier:3, lift:4, boat:4, toys:6, mow:8, clean:5, open:3, winter:3};
+
+/* ---------- property profile: the pricing source of truth ---------- */
+let PROFILE = {
+  sqft:2400, beds:4, baths:3, gate:'2214',
+  pierSections:10, ladder:true, bumpers:true,
+  boatLifts:1, canopy:true, toyLifts:1,
+  boats:[{type:'Pontoon', len:24}],
+  toysList:['Kayak','Kayak','Paddleboard','Water trampoline'],
+  lawn:'medium', photos:[],
+};
+const LAWN_LABEL={small:'Small · under ¼ acre mowable',medium:'Medium · ¼–½ acre mowable',large:'Large · over ½ acre mowable'};
+const MOW_PRICE={small:65,medium:85,large:110};
+const PIER_BASE=220, PIER_PER_SECTION=48;
+const BOAT_RATE=50; /* $ per foot, bow to stern — winterize + store per season */
+function cleanPrice(sq){return sq<1800?80: sq<2800?95:120;}
+function boatFeet(){return PROFILE.boats.reduce((a,b)=>a+(+b.len||0),0);}
+function priceFor(s){
+  switch(s.id){
+    case 'pier': return {price:PIER_BASE + PIER_PER_SECTION*PROFILE.pierSections, note:`Priced from your profile · ${PROFILE.pierSections} sections`};
+    case 'lift': return {price:495*Math.max(1,PROFILE.boatLifts), note:`${PROFILE.boatLifts} boat lift${PROFILE.boatLifts>1?'s':''} on file${PROFILE.canopy?' · canopy':''}`};
+    case 'boat': return PROFILE.boats.length
+      ? {price:BOAT_RATE*boatFeet(), note:PROFILE.boats.map(b=>`${b.len}' ${b.type}`).join(' · ')+` · $${BOAT_RATE}/ft`}
+      : {price:0, note:'No boats on file — add one in your profile'};
+    case 'toys': return {price:120 + 60*PROFILE.toyLifts + 15*PROFILE.toysList.length, note:`${PROFILE.toyLifts} toy/PWC lift · ${PROFILE.toysList.length} toys stored`};
+    case 'mow':  return {price:MOW_PRICE[PROFILE.lawn], note:LAWN_LABEL[PROFILE.lawn]};
+    case 'clean':return {price:cleanPrice(PROFILE.sqft), note:`${PROFILE.sqft.toLocaleString()} sq ft · ${PROFILE.beds} bd / ${PROFILE.baths} ba`};
+    default: return {price:s.price, note:null};
+  }
+}
+
+/* ---------- render service grid (re-runs whenever the profile changes) ---------- */
+const grid = document.getElementById('svcGrid');
+function drawServices(){
+  grid.innerHTML='';
+  SERVICES.forEach(s=>{
+    const [bg,svg] = ART[s.art];
+    const pf = priceFor(s);
+    const el = document.createElement('div');
+    el.className='card svc';
+    el.innerHTML = `
+      <div class="svc-art" style="background:${bg}">${svg}</div>
+      <div class="svc-body">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span class="pill ${s.cat==='Recurring'?'teal':s.cat==='2× per season'?'gold':'slate'}">${s.cat}</span>
+        </div>
+        <div class="svc-name">${s.name}</div>
+        <div class="svc-desc">${s.desc}</div>
+        <div class="svc-foot">
+          <span class="price">$${pf.price} <small>${s.unit}</small></span>
+          <button class="btn sm" onclick="openBook('${s.id}')">Schedule</button>
+        </div>
+        ${pf.note?`<div class="mut" style="font-size:11.5px">⚙ ${pf.note}</div>`:''}
+      </div>`;
+    grid.appendChild(el);
+  });
+}
+drawServices();
+
+/* ---------- requests table ---------- */
+const REQS = [
+  {name:'Lawn mowing & trim', freq:'Weekly · Fridays', date:'Apr 24 → Oct 16', status:'Active', price:'$85 / wk'},
+  {name:'Housekeeping', freq:'Before each arrival', date:'Season 2026', status:'Active', price:'$95 / visit'},
+  {name:'Pier install', freq:'Spring', date:'Apr 18 · done', status:'Completed', price:'$700'},
+  {name:'Boat lift set + launch', freq:'Spring', date:'May 2 · done', status:'Completed', price:'$495'},
+  {name:'Pier removal', freq:'Fall', date:'Requested · Oct window', status:'Pending', price:'$700'},
+];
+function drawReqs(){
+  const tb = document.querySelector('#reqTable tbody');
+  tb.innerHTML = REQS.map(r=>{
+    const p = r.status==='Active'?'ok':r.status==='Completed'?'slate':r.status==='Scheduled'?'teal':'warn';
+    return `<tr><td><b>${r.name}</b></td><td class="mut">${r.freq}</td><td>${r.date}</td><td><span class="pill ${p}">${r.status}</span></td><td class="right num">${r.price}</td></tr>`;
+  }).join('');
+}
+drawReqs();
+
+/* ---------- booking modal ---------- */
+let bkSvc=null, bkFreqSel=0, bkDate=null, calM=6, calY=2026; /* July 2026 */
+const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+/* seeded pseudo-random bookings so "full" days are stable */
+function booked(svcId, y, m, d){ let h = (svcId.length*7 + y + m*31 + d*13) % 10; return Math.round((h/10) * (CAP[svcId]+1.6)); }
+
+function openBook(id){
+  bkSvc = Object.assign({}, SERVICES.find(s=>s.id===id));
+  bkSvc.price = priceFor(bkSvc).price;
+  bkFreqSel=0; bkDate=null; calM=6; calY=2026;
+  document.getElementById('bkName').textContent = bkSvc.name;
+  document.getElementById('bkPill').textContent = bkSvc.cat;
+  const fr = document.getElementById('bkFreq');
+  fr.innerHTML = bkSvc.freq.map((f,i)=>`<button class="freq ${i===0?'on':''}" onclick="setFreq(${i},this)">${f}</button>`).join('');
+  document.getElementById('bookOverlay').classList.add('on');
+  drawCal(); drawSummary();
+}
+function closeBook(){ document.getElementById('bookOverlay').classList.remove('on'); }
+function setFreq(i,el){ bkFreqSel=i; document.querySelectorAll('#bkFreq .freq').forEach(b=>b.classList.remove('on')); el.classList.add('on'); bkDate=null; drawCal(); drawSummary(); }
+function calMove(d){ calM+=d; if(calM<0){calM=11;calY--} if(calM>11){calM=0;calY++} if(calY<2026){calY=2026;calM=0} if(calY>2026){calY=2026;calM=11} drawCal(); }
+
+function drawCal(){
+  document.getElementById('calTitle').textContent = MONTHS[calM]+' '+calY;
+  const g = document.getElementById('calGrid');
+  const dows=['S','M','T','W','T','F','S'];
+  let html = dows.map(d=>`<div class="dow">${d}</div>`).join('');
+  const first = new Date(calY,calM,1).getDay(), days = new Date(calY,calM+1,0).getDate();
+  const today = new Date(2026,6,16);
+  const isFall = /fall|removal|pull|store|winterize/i.test(bkSvc.freq[bkFreqSel]||'') || bkSvc.id==='winter';
+  for(let i=0;i<first;i++) html += `<div></div>`;
+  for(let d=1;d<=days;d++){
+    const dt = new Date(calY,calM,d);
+    let cls='avail', tip='Available';
+    if(dt <= today){ cls='off'; }
+    else if(WATER.includes(bkSvc.id) || bkSvc.id==='winter'){
+      if(isFall && (calM<8)) { cls='ice'; tip='Fall service — opens Sep 1'; }               /* fall work: Sep+ */
+      if(isFall && (calM===10 && d>14 || calM===11)) { cls='ice'; tip='Past pull deadline — freeze risk'; } /* after Nov 14 */
+      if(!isFall && calM>8){ cls='ice'; tip='Spring service window'; }
+    }
+    if(cls==='avail' && booked(bkSvc.id,calY,calM,d) >= CAP[bkSvc.id]){ cls='full'; tip='Crew at capacity'; }
+    if(bkDate && bkDate.getTime()===dt.getTime()) cls='sel';
+    html += `<div class="day ${cls}" title="${tip}" ${cls==='avail'||cls==='sel'?`onclick="pickDay(${d})"`:''}>${d}</div>`;
+  }
+  g.innerHTML = html;
+}
+function pickDay(d){ bkDate = new Date(calY,calM,d); drawCal(); drawSummary(); }
+function drawSummary(){
+  const s = document.getElementById('bkSummary'), btn = document.getElementById('bkConfirm'), auto=document.getElementById('bkAuto');
+  const recurring = /weekly|2 weeks|arrival/i.test(bkSvc.freq[bkFreqSel]);
+  document.getElementById('bkCalLbl').textContent = recurring ? 'Pick your first visit — it repeats in this slot' : 'Pick your date';
+  if(!bkDate){ s.innerHTML=''; btn.disabled=true; auto.style.display='none'; return; }
+  const ds = bkDate.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
+  s.innerHTML = `
+    <div class="summary-line"><span class="mut">Service</span><b>${bkSvc.name}</b></div>
+    <div class="summary-line"><span class="mut">Frequency</span><b>${bkSvc.freq[bkFreqSel]}</b></div>
+    <div class="summary-line"><span class="mut">${recurring?'First visit':'Date'}</span><b>${ds}</b></div>
+    <div class="summary-line total"><span>Your price</span><span>$${bkSvc.price}<small style="font-weight:600;color:var(--sub)"> ${bkSvc.unit}</small></span></div>`;
+  btn.disabled=false; auto.style.display='block';
+}
+function confirmBook(){
+  const recurring = /weekly|2 weeks|arrival/i.test(bkSvc.freq[bkFreqSel]);
+  const ds = bkDate.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  REQS.splice(0,0,{name:bkSvc.name, freq:bkSvc.freq[bkFreqSel], date: recurring? ds+' → season end' : ds+', 2026', status:'Scheduled', price:'$'+bkSvc.price+(recurring?' / visit':'')});
+  drawReqs(); closeBook();
+  toast(`${bkSvc.name} scheduled — see “My requests.”`);
+}
+
+/* ---------- payment modal ---------- */
+function openPay(){ document.getElementById('payOverlay').classList.add('on'); }
+function closePay(){ document.getElementById('payOverlay').classList.remove('on'); }
+function payTab(t){
+  document.getElementById('payCC').classList.toggle('on', t==='cc');
+  document.getElementById('payACH').classList.toggle('on', t==='ach');
+  document.getElementById('payFormCC').style.display = t==='cc'?'block':'none';
+  document.getElementById('payFormACH').style.display = t==='ach'?'block':'none';
+}
+async function savePay(){
+  await window.LakeLifePayments.tokenize({});
+  closePay(); toast('Payment method vaulted — autopay is on.');
+}
+
+/* ---------- toast ---------- */
+let toastT;
+function toast(msg){
+  const t=document.getElementById('toast'); document.getElementById('toastMsg').textContent=msg;
+  t.classList.add('on'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('on'), 3200);
+}
+
+/* ============================================================
+   LIVE MAPS + DEVICE-AWARE NAVIGATION
+   Prototype uses Leaflet + OpenStreetMap tiles (no API key).
+   Production: swap tile layer for Google Maps SDK / MapKit JS.
+   Navigation handoff below is production-ready as-is.
+   ============================================================ */
+function isIOS(){ return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1); }
+const MAP_APP = isIOS() ? 'Apple Maps' : 'Google Maps';
+
+/* single-stop turn-by-turn: opens the native app for this device */
+function navTo(lat,lng,label){
+  const url = isIOS()
+    ? `https://maps.apple.com/?daddr=${lat},${lng}&q=${encodeURIComponent(label)}&dirflg=d`
+    : `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+  window.open(url,'_blank');
+  toast(`Opening turn-by-turn in ${MAP_APP}…`);
+}
+/* full multi-stop route as one link (Google Maps supports waypoints on all devices) */
+function fullRouteURL(){
+  const pts = ROUTE.map(j=>`${j[3]},${j[4]}`);
+  const dest = pts[pts.length-1], way = pts.slice(0,-1).join('|');
+  return `https://www.google.com/maps/dir/?api=1&destination=${dest}&waypoints=${encodeURIComponent(way)}&travelmode=driving`;
+}
+function openFullRoute(){ window.open(fullRouteURL(),'_blank'); toast('Opening full 6-stop route…'); }
+function sendRouteToCrew(){
+  /* production: POST to /routes/{id}/dispatch → SMS each crew member the link */
+  if(navigator.share){ navigator.share({title:'LakeLife route — Thu Jul 16', url: fullRouteURL()}).catch(()=>{}); }
+  toast('Route link sent to your crew — opens in their maps app, any device.');
+}
+
+/* ---------- Leaflet map builders (lazy-init when their pane is shown) ---------- */
+let vMapObj=null, opsMapObj=null;
+function pin(n, cls){ return L.divIcon({className:'', html:`<div class="num-pin ${cls||''}">${n}</div>`, iconSize:[26,26], iconAnchor:[13,13]}); }
+function tiles(map){ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18, attribution:'© OpenStreetMap'}).addTo(map); }
+
+function initVendorMap(){
+  if(vMapObj || !window.L || !document.getElementById('vMap')) return;
+  vMapObj = L.map('vMap',{scrollWheelZoom:false});
+  tiles(vMapObj);
+  const latlngs = ROUTE.map(j=>[j[3],j[4]]);
+  L.polyline(latlngs,{color:'#137A8C',weight:4,dashArray:'8 6',opacity:.85}).addTo(vMapObj);
+  ROUTE.forEach((j,i)=> L.marker([j[3],j[4]],{icon:pin(i+1)}).addTo(vMapObj).bindPopup(`<b>${j[0]}</b> — ${j[1]}`));
+  vMapObj.fitBounds(latlngs,{padding:[36,36]});
+}
+function initOpsMap(){
+  if(opsMapObj || !window.L || !document.getElementById('opsMap')) return;
+  opsMapObj = L.map('opsMap',{scrollWheelZoom:false});
+  tiles(opsMapObj);
+  const green = ROUTE.map(j=>[j[3],j[4]]);                                     /* GreenEdge — mow route */
+  const clean = [[41.6187,-85.2516],[41.6214,-85.2489],[41.6132,-85.2528],[41.6091,-85.2492]]; /* ShoreClean — west shore */
+  const dock  = [[41.6428,-85.1852],[41.6451,-85.1764],[41.6382,-85.1731]];    /* DockRight — Big Turkey */
+  L.polyline(green,{color:'#137A8C',weight:4,dashArray:'8 6',opacity:.85}).addTo(opsMapObj);
+  L.polyline(clean,{color:'#E9B44C',weight:4,dashArray:'8 6',opacity:.9}).addTo(opsMapObj);
+  L.polyline(dock,{color:'#0A2430',weight:4,dashArray:'8 6',opacity:.85}).addTo(opsMapObj);
+  green.forEach((p,i)=> L.marker(p,{icon:pin(i+1)}).addTo(opsMapObj).bindPopup(`GreenEdge stop ${i+1}`));
+  clean.forEach((p,i)=> L.marker(p,{icon:pin(i+1,'gold')}).addTo(opsMapObj).bindPopup(`ShoreClean stop ${i+1}`));
+  dock.forEach((p,i)=> L.marker(p,{icon:pin(i+1,'navy')}).addTo(opsMapObj).bindPopup(`DockRight stop ${i+1}`));
+  opsMapObj.fitBounds([...green,...clean,...dock],{padding:[30,30]});
+}
+/* label the buttons with the device's native app */
+const appNameEl = document.getElementById('mapAppName');
+if(appNameEl) appNameEl.textContent = MAP_APP;
+const devNote = document.getElementById('deviceNote');
+if(devNote) devNote.textContent = `Navigation opens in ${MAP_APP} on this device — auto-detected.`;
+
+/* ---------- role & pane switching ---------- */
+function setRole(r){
+  document.querySelectorAll('.role-btn').forEach(b=>b.classList.toggle('on', b.dataset.role===r));
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+  document.getElementById('view-'+r).classList.add('on');
+  window.scrollTo({top:0});
+  if(r==='vendor') setTimeout(()=>{ initVendorMap(); vMapObj&&vMapObj.invalidateSize(); },60);
+}
+function setPane(scope,id,tab){
+  tab.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('on')); tab.classList.add('on');
+  document.querySelectorAll(`[id^="${scope}-"]`).forEach(p=>p.classList.remove('on'));
+  document.getElementById(scope+'-'+id).classList.add('on');
+  if(scope==='ops' && id==='routing') setTimeout(()=>{ initOpsMap(); opsMapObj&&opsMapObj.invalidateSize(); },60);
+}
+
+/* ---------- OPS: master calendar ---------- */
+const DAYS = [
+  {d:'Thu · Jul 16', jobs:[
+    ['8:00a','Mowing ×6 route','GreenEdge','Big Long — east shore loop'],
+    ['9:00a','Housekeeping ×4','ShoreClean','Pretty Lake'],
+    ['10:30a','Lift canopy re-set','TrueNorth','8830 N Turkey Trail, Big Turkey'],
+    ['1:00p','Boat de-winterize + launch','Bayside','Late opener — 4120 E Shore Dr, Big Long'],
+  ]},
+  {d:'Fri · Jul 17', jobs:[
+    ['8:00a','Mowing ×8 route (full)','GreenEdge','Big Long + Pretty split'],
+    ['9:00a','Housekeeping ×5 (full)','ShoreClean','Arrival-timed cleans, all lakes'],
+    ['11:00a','Pier section re-level','DockRight','5545 W Pretty Lake Ln'],
+  ]},
+  {d:'Sat · Jul 18', jobs:[
+    ['8:00a','Pier install ×3 (full)','DockRight','Late openers — Big Turkey'],
+    ['8:30a','Lift set ×2','TrueNorth','Big Turkey — pairs with pier crew'],
+    ['10:00a','Mowing ×4 route','GreenEdge','Big Turkey'],
+  ]},
+  {d:'Mon · Jul 20', jobs:[
+    ['8:00a','Mowing ×7 route','GreenEdge','Pretty Lake full loop'],
+    ['9:30a','Housekeeping ×3','ShoreClean','Big Long'],
+    ['1:00p','Water toy deploy ×2','Bayside','Trampoline + SUP rack, Big Long'],
+  ]},
+];
+document.getElementById('masterCal').innerHTML = DAYS.map(day=>`
+  <div class="card"><div class="card-pad">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <b style="font-size:15px">${day.d}</b><span class="pill slate">${day.jobs.length} blocks</span>
+    </div>
+    ${day.jobs.map(j=>`<div class="job"><div class="slot">${j[0]}</div><div class="job-info"><div class="job-title">${j[1]} <span class="mut" style="font-weight:600">· ${j[2]}</span></div><div class="job-addr">${j[3]}</div></div></div>`).join('')}
+  </div></div>`).join('');
+
+/* ---------- OPS: vendor calendars ---------- */
+const VENDORS = {
+  'DockRight Piers':{cap:'3 piers / day', jobs:[
+    ['8:00a','Pier install — 7220 E Big Turkey Rd','Big Turkey · 48ft sectional'],
+    ['10:45a','Pier install — 7288 E Big Turkey Rd','Big Turkey · 32ft + swim ladder'],
+    ['1:30p','Pier install — 150 Ln 101 Big Turkey','Big Turkey · 40ft, new bumpers'],
+  ], week:[['This week','7 installs · 1 re-level'],['Next week','4 installs booked'],['July total','19 jobs · 96% on-time'],['Fall pulls pre-booked','41 of 58 piers']]},
+  'TrueNorth Marine':{cap:'4 lifts / day', jobs:[
+    ['8:30a','Lift set — 7220 E Big Turkey Rd','Pairs with DockRight install'],
+    ['10:00a','Lift set — 7288 E Big Turkey Rd','Canopy install included'],
+    ['12:30p','Canopy re-set — 8830 N Turkey Trail','Warranty visit, no charge'],
+  ], week:[['This week','9 sets · 2 canopy visits'],['July total','22 jobs · 98% on-time'],['Fall pulls pre-booked','36 of 54 lifts'],['Callback rate','0 this season']]},
+  'GreenEdge Lawn':{cap:'8 lawns / day', jobs:[
+    ['8:00a','Mow route — Big Long east (6 stops)','4521 Lakeview Dr is stop #3'],
+    ['1:00p','Trim & edge — 2 add-on stops','Pretty Lake'],
+  ], week:[['This week','25 lawns across 3 lakes'],['Standing weekly clients','31'],['Avg per-lawn time','34 min (est 38)'],['Running','above rated capacity ⚠']]},
+  'ShoreClean':{cap:'5 homes / day', jobs:[
+    ['9:00a','Arrival clean — 5545 W Pretty Lake Ln','Guests land 4p'],
+    ['11:00a','Arrival clean — 4120 E Shore Dr','Big Long'],
+    ['1:30p','Weekly clean — 288 Ln 130 Big Turkey','Standing Thursday'],
+  ], week:[['This week','17 cleans'],['Arrival-timed','9 of 17'],['Avg per-home','1h 48m (est 1h 45m)'],['Callback','1 (missed linens, resolved)']]},
+  'Bayside Storage':{cap:'4 boats / day', jobs:[
+    ['1:00p','De-winterize + launch — 4120 E Shore Dr','Pontoon, Bay 14 → Big Long ramp'],
+    ['3:00p','Water toy deploy — 4521 Lakeview Dr','Trampoline anchor + SUP rack'],
+  ], week:[['This week','5 launches · 3 toy deploys'],['Boats in storage','12 (summer overflow)'],['Fall winterize pre-booked','38 of 47'],['Avg time vs est','+14% ⚠ review booked']]},
+};
+const vtabs = document.getElementById('vendorTabs');
+Object.keys(VENDORS).forEach((v,i)=>{
+  const b=document.createElement('button'); b.className='vt'+(i===0?' on':''); b.textContent=v;
+  b.onclick=()=>{document.querySelectorAll('.vt').forEach(x=>x.classList.remove('on'));b.classList.add('on');drawVendor(v);};
+  vtabs.appendChild(b);
+});
+function drawVendor(name){
+  const v=VENDORS[name];
+  document.getElementById('vendorDayTitle').textContent = name+' — today, Jul 16';
+  document.getElementById('vendorCap').textContent = v.cap;
+  document.getElementById('vendorJobs').innerHTML = v.jobs.map(j=>`<div class="job"><div class="slot">${j[0]}</div><div class="job-info"><div class="job-title">${j[1]}</div><div class="job-addr">${j[2]}</div></div></div>`).join('');
+  document.getElementById('vendorWeek').innerHTML = v.week.map(w=>`<div class="cond-row"><span class="mut">${w[0]}</span><b>${w[1]}</b></div>`).join('');
+}
+drawVendor('DockRight Piers');
+
+/* ---------- VENDOR: today's route (with real coordinates near the lakes) ---------- */
+const ROUTE = [
+  ['8:00a','Mow + trim — 4409 Lakeview Dr','Big Long · gate code 2214', 41.6212,-85.2378],
+  ['8:45a','Mow + trim — 4477 Lakeview Dr','Big Long · dog in yard, owner home', 41.6171,-85.2359],
+  ['9:30a','Mow + trim — 4521 Lakeview Dr','Big Long · blow off pier, flag sprinkler leak status', 41.6128,-85.2377],
+  ['10:30a','Mow + trim — 4610 E Shore Dr','Big Long', 41.6096,-85.2431],
+  ['11:15a','Mow + trim — 120 Ln 150 Pretty Lake','Pretty · trailer parking at lot B', 41.5912,-85.2601],
+  ['12:00p','Mow + trim — 155 Ln 150 Pretty Lake','Pretty · final stop', 41.5874,-85.2655],
+];
+const PH_MIN = 2; /* photos required per job before completion & payout */
+const jobPhotos = ROUTE.map(()=>[]);
+const rl = document.getElementById('routeList');
+rl.innerHTML = ROUTE.map((j,i)=>`
+  <div class="job" id="rj${i}">
+    <div class="slot">${j[0]}</div>
+    <div class="job-info">
+      <div class="job-title">${j[1]}</div>
+      <div class="job-addr">${j[2]}</div>
+      <div class="ph-req" id="req${i}">📷 0 / ${PH_MIN} photos — required to complete</div>
+      <div class="ph-thumbs" id="thumbs${i}"></div>
+    </div>
+    <div class="job-actions">
+      <input type="file" id="file${i}" accept="image/*" capture="environment" multiple style="display:none" onchange="photoAdded(${i},this)">
+      <button class="btn ghost sm" onclick="navTo(${j[3]},${j[4]},'${j[1].replace(/'/g,"\\'")}')">Navigate ➤</button>
+      <button class="btn ghost sm" onclick="openFlag(${i})">Flag item</button>
+      <button class="btn sm" onclick="document.getElementById('file${i}').click()">Add photos</button>
+      <button class="btn ghost sm" id="done${i}" disabled onclick="doneJob(${i},this)">Mark complete</button>
+    </div>
+  </div>`).join('');
+
+function photoAdded(i, input){
+  for(const f of input.files){
+    const url = URL.createObjectURL(f);
+    jobPhotos[i].push(url);
+    const img = document.createElement('img');
+    img.src = url; img.className='ph-thumb'; img.alt='Job photo';
+    document.getElementById('thumbs'+i).appendChild(img);
+  }
+  input.value='';
+  const n = jobPhotos[i].length, req = document.getElementById('req'+i);
+  if(n >= PH_MIN){
+    req.textContent = `📷 ${n} photo${n>1?'s':''} attached — ready to complete`;
+    req.classList.add('ok');
+    document.getElementById('done'+i).disabled = false;
+  } else {
+    req.textContent = `📷 ${n} / ${PH_MIN} photos — required to complete`;
+    toast(`${PH_MIN - n} more photo${PH_MIN-n>1?'s':''} needed before you can close this job.`);
+  }
+}
+function doneJob(i,btn){
+  if(jobPhotos[i].length < PH_MIN){ toast('Photos required — no photos, no payout.'); return; }
+  btn.outerHTML = '<span class="pill ok">Done ✓ · payout released</span>';
+  document.querySelector(`#rj${i} .job-title`).style.opacity=.55;
+  toast('Job complete — payout released.');
+  setTimeout(()=>toast('Owner texted: "Mow & blow done at your place — 2 photos in your property log." 📱'), 1800);
+}
+
+/* ============================================================
+   PROFILE WIZARD — our prompts, our exact questions.
+   ============================================================ */
+function val(id){return document.getElementById(id).value}
+function chk(id){return document.getElementById(id).checked}
+let wizStep=0, wizTmp=null;
+const WIZ=[
+ {t:'Your house', p:'We price housekeeping by square footage — answer once and every clean is priced right, forever.', b:()=>`
+   <div class="frow"><div class="field"><label>Square footage</label><input id="w_sqft" type="number" value="${wizTmp.sqft}"></div>
+   <div class="field"><label>Gate / door code</label><input id="w_gate" value="${wizTmp.gate}"></div></div>
+   <div class="frow"><div class="field"><label>Bedrooms</label><input id="w_beds" type="number" value="${wizTmp.beds}"></div>
+   <div class="field"><label>Bathrooms</label><input id="w_baths" type="number" value="${wizTmp.baths}"></div></div>`,
+  s:()=>{wizTmp.sqft=+val('w_sqft');wizTmp.gate=val('w_gate');wizTmp.beds=+val('w_beds');wizTmp.baths=+val('w_baths');}},
+ {t:'Your pier', p:'Walk it once and count every 8–10 ft section from shore to the end — L-sections and platforms count. Install and removal are priced per section, so this number is the whole ballgame.', b:()=>`
+   <div class="field"><label>Number of pier sections</label><input id="w_pier" type="number" value="${wizTmp.pierSections}"></div>
+   <label style="display:flex;gap:8px;font-size:14px;margin-bottom:8px"><input type="checkbox" id="w_ladder" ${wizTmp.ladder?'checked':''}> Swim ladder</label>
+   <label style="display:flex;gap:8px;font-size:14px"><input type="checkbox" id="w_bump" ${wizTmp.bumpers?'checked':''}> Bumpers / cleats</label>`,
+  s:()=>{wizTmp.pierSections=+val('w_pier');wizTmp.ladder=chk('w_ladder');wizTmp.bumpers=chk('w_bump');}},
+ {t:'Waterfront photos', p:'Snap 2–4 photos: the full pier from shore, your lift(s), and the shoreline. We verify your section count against these before the first crew rolls — exact pricing from day one, no surprises on site.', b:()=>`
+   <input type="file" id="w_photos" accept="image/*" capture="environment" multiple style="display:none" onchange="wizPhotoAdd(this)">
+   <button class="btn ghost" onclick="document.getElementById('w_photos').click()">📷 Add photos</button>
+   <div class="ph-thumbs" style="margin-top:10px">${(wizTmp.photos||[]).map(u=>`<img class="ph-thumb" src="${u}" alt="Waterfront photo">`).join('')}</div>
+   <div class="mut" style="font-size:12.5px;margin-top:8px">${(wizTmp.photos||[]).length} photo${(wizTmp.photos||[]).length===1?'':'s'} attached${(wizTmp.photos||[]).length?' — thanks, this saves a site visit.':' — you can skip this and a crew will verify on the first visit instead.'}</div>`,
+  s:()=>{}},
+ {t:'Your lifts', p:'Every lift on the property — boat lifts, PWC lifts, toy lifts. If it comes out of the water in fall, we need to know it exists.', b:()=>`
+   <div class="frow"><div class="field"><label>Boat lifts</label><input id="w_bl" type="number" value="${wizTmp.boatLifts}"></div>
+   <div class="field"><label>Toy / PWC lifts</label><input id="w_tl" type="number" value="${wizTmp.toyLifts}"></div></div>
+   <label style="display:flex;gap:8px;font-size:14px"><input type="checkbox" id="w_can" ${wizTmp.canopy?'checked':''}> Lift canopy</label>`,
+  s:()=>{wizTmp.boatLifts=+val('w_bl');wizTmp.toyLifts=+val('w_tl');wizTmp.canopy=chk('w_can');}},
+ {t:'Boats & water toys', p:'Winterization and storage price by the foot — measure bow to stern and round up. Add every boat and every toy we\'ll be storing. (We store and winterize; we don\'t service or repair.)', b:()=>`
+   <div class="lbl" style="margin-top:0">Boats · $${BOAT_RATE}/ft to winterize &amp; store</div>
+   ${wizTmp.boats.map((b,i)=>`<div class="frow" style="align-items:flex-end"><div class="field" style="flex:1.5"><label>Boat type</label><input class="wb-type" value="${b.type}" placeholder="Pontoon, ski boat, fishing…"></div><div class="field"><label>Length (ft)</label><input class="wb-len" type="number" value="${b.len}"></div><button class="x" style="margin-bottom:14px;flex-shrink:0" onclick="wizBoatRm(${i})" aria-label="Remove boat">✕</button></div>`).join('')||'<div class="mut" style="font-size:13px;margin-bottom:10px">No boats yet — that\'s fine too.</div>'}
+   <button class="btn ghost sm" onclick="wizBoatAdd()">+ Add a boat</button>
+   <div class="lbl">Water toys we'll store each fall</div>
+   ${wizTmp.toysList.map((t,i)=>`<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px"><input class="wt-name" value="${t}" placeholder="Kayak, SUP, tube, trampoline…" style="flex:1;padding:10px 13px;border:1.5px solid var(--line);border-radius:10px;font-family:inherit;font-size:14px"><button class="x" style="flex-shrink:0" onclick="wizToyRm(${i})" aria-label="Remove toy">✕</button></div>`).join('')||'<div class="mut" style="font-size:13px;margin-bottom:10px">No toys yet.</div>'}
+   <button class="btn ghost sm" onclick="wizToyAdd()">+ Add a toy</button>`,
+  s:()=>{wizReadBoatsToys();}},
+ {t:'Your lawn', p:'Just the mowable area — beds, seawall, and woods don\'t count. This sets your weekly mow & blow price.', b:()=>['small','medium','large'].map(k=>`
+   <label style="display:flex;gap:9px;align-items:center;padding:10px 12px;border:1.5px solid ${wizTmp.lawn===k?'var(--teal)':'var(--line)'};border-radius:10px;margin-bottom:8px;font-size:14px;background:${wizTmp.lawn===k?'#F2F9FA':'#fff'};cursor:pointer">
+   <input type="radio" name="w_lawn" value="${k}" ${wizTmp.lawn===k?'checked':''} onchange="wizTmp.lawn='${k}';drawWiz()"> <b style="min-width:70px;text-transform:capitalize">${k}</b> <span class="mut">${LAWN_LABEL[k].split(' · ')[1]} — $${MOW_PRICE[k]}/visit</span></label>`).join(''),
+  s:()=>{const r=document.querySelector('input[name=w_lawn]:checked'); if(r) wizTmp.lawn=r.value;}},
+];
+function openWiz(){wizTmp=JSON.parse(JSON.stringify(PROFILE));wizStep=0;drawWiz();document.getElementById('wizOverlay').classList.add('on');}
+function wizPhotoAdd(input){ wizTmp.photos=wizTmp.photos||[]; for(const f of input.files){ wizTmp.photos.push(URL.createObjectURL(f)); } input.value=''; drawWiz(); }
+/* dynamic boat & toy rows — read current inputs before any re-render */
+function wizReadBoatsToys(){
+  const types=[...document.querySelectorAll('.wb-type')], lens=[...document.querySelectorAll('.wb-len')];
+  if(types.length===wizTmp.boats.length) wizTmp.boats=types.map((t,i)=>({type:t.value.trim()||'Boat', len:+lens[i].value||0}));
+  const toys=[...document.querySelectorAll('.wt-name')];
+  if(toys.length===wizTmp.toysList.length) wizTmp.toysList=toys.map(t=>t.value.trim()).filter(v=>v);
+}
+function wizBoatAdd(){wizReadBoatsToys();wizTmp.boats.push({type:'',len:''});drawWiz();}
+function wizBoatRm(i){wizReadBoatsToys();wizTmp.boats.splice(i,1);drawWiz();}
+function wizToyAdd(){wizReadBoatsToys();wizTmp.toysList.push('');drawWiz();}
+function wizToyRm(i){wizReadBoatsToys();wizTmp.toysList.splice(i,1);drawWiz();}
+function closeWiz(){document.getElementById('wizOverlay').classList.remove('on');}
+function drawWiz(){
+  const st=WIZ[wizStep];
+  document.getElementById('wizStepPill').textContent=`Step ${wizStep+1} of ${WIZ.length}`;
+  document.getElementById('wizTitle').textContent=st.t;
+  document.getElementById('wizPrompt').textContent=st.p;
+  document.getElementById('wizBody').innerHTML=st.b();
+  document.getElementById('wizBack').style.visibility=wizStep===0?'hidden':'visible';
+  document.getElementById('wizNext').textContent=wizStep===WIZ.length-1?'Save profile':'Next';
+}
+function wizNav(d){
+  if(d===1) WIZ[wizStep].s();
+  wizStep+=d;
+  if(wizStep>=WIZ.length){PROFILE=wizTmp;drawProfile();drawServices();closeWiz();openRecap();return;}
+  if(wizStep<0)wizStep=0;
+  drawWiz();
+}
+
+/* ---------- warm recap after setup ---------- */
+function openRecap(){
+  const p=PROFILE, ft=boatFeet(), ph=(p.photos||[]).length;
+  const rows=[
+    ['🏠','Your house', `${p.sqft.toLocaleString()} sq ft, ${p.beds} bd / ${p.baths} ba — housekeeping lands at $${cleanPrice(p.sqft)} a visit, timed to your arrivals`],
+    ['🛠️','Your pier', `${p.pierSections} sections — in every spring, out every fall, $${PIER_BASE+PIER_PER_SECTION*p.pierSections} a trip, leveled and laddered`],
+    ['⚓','Your lifts', `${p.boatLifts} boat lift${p.boatLifts>1?'s':''}${p.canopy?' with canopy':''} and ${p.toyLifts} toy/PWC lift — set and pulled right alongside the pier`],
+    ['🛥️','Your fleet', p.boats.length ? `${p.boats.map(b=>`${b.len}' ${b.type}`).join(', ')} — winterized, wrapped & stored for $${BOAT_RATE*ft} a season ($${BOAT_RATE}/ft, ${ft} ft total)` : `No boats on file yet — add one anytime and we'll have a storage bay waiting`],
+    ['🛶','The toys', p.toysList.length ? `${p.toysList.join(', ')} — cleaned up and tucked away every fall, back out every spring` : `None yet — the trampoline can always come later`],
+    ['🌱','The lawn', `${LAWN_LABEL[p.lawn].split(' · ')[0]} — $${MOW_PRICE[p.lawn]} mow & blow, same crew, same day, every week`],
+    ['📷','Photos', ph ? `${ph} waterfront photo${ph===1?'':'s'} on file — we'll double-check your pier count against these before the first crew rolls` : `None yet — no worries, the first crew out will verify everything for you`],
+  ];
+  document.getElementById('recapBody').innerHTML = rows.map(r=>`<div style="display:flex;gap:12px;padding:9px 0;border-bottom:1px dashed var(--line)"><span style="font-size:18px;flex-shrink:0">${r[0]}</span><div><b style="font-size:14px">${r[1]}</b><div class="mut" style="font-size:13px">${r[2]}</div></div></div>`).join('');
+  document.getElementById('recapOverlay').classList.add('on');
+}
+function closeRecap(go){
+  document.getElementById('recapOverlay').classList.remove('on');
+  toast('Profile saved — every price you see is now exact to your place.');
+  if(go){ const t=document.querySelector('#view-home .tabs .tab'); t&&t.click(); window.scrollTo({top:0,behavior:'smooth'}); }
+}
+
+/* ---------- profile fact cards ---------- */
+function drawProfile(){
+  const f=document.getElementById('profileFacts'); if(!f) return;
+  const facts=[
+    ['House', `${PROFILE.sqft.toLocaleString()} sq ft · ${PROFILE.beds} bd / ${PROFILE.baths} ba`, `Gate code ${PROFILE.gate} · drives housekeeping pricing`],
+    ['Pier', `${PROFILE.pierSections} sections`, `${PROFILE.ladder?'Ladder':''}${PROFILE.ladder&&PROFILE.bumpers?' + ':''}${PROFILE.bumpers?'bumpers':''} · $${PIER_PER_SECTION}/section install & removal`],
+    ['Boat lifts', `${PROFILE.boatLifts} lift${PROFILE.boatLifts>1?'s':''}${PROFILE.canopy?' · canopy':''}`, 'Set each spring, pulled each fall'],
+    ['Toy / PWC lifts', `${PROFILE.toyLifts}`, `${PROFILE.toysList.length} toys stored: ${PROFILE.toysList.join(' · ')||'none yet'}`],
+    ['Boats', PROFILE.boats.length?PROFILE.boats.map(b=>`${b.len}' ${b.type}`).join(' · '):'None on file', `Winterize & store at $${BOAT_RATE}/ft, bow to stern — no repairs`],
+    ['Lawn', LAWN_LABEL[PROFILE.lawn].split(' · ')[0], LAWN_LABEL[PROFILE.lawn].split(' · ')[1]+' · sets weekly mow price'],
+  ];
+  f.innerHTML = facts.map(x=>`<div class="card"><div class="card-pad"><div class="pill teal" style="margin-bottom:8px">${x[0]}</div><div style="font-family:'Bricolage Grotesque';font-weight:700;font-size:17px;color:var(--ink)">${x[1]}</div><div class="mut" style="font-size:12.5px;margin-top:4px">${x[2]}</div></div></div>`).join('')
+   + `<div class="card"><div class="card-pad"><div class="pill gold" style="margin-bottom:8px">Waterfront photos</div>${(PROFILE.photos&&PROFILE.photos.length)?`<div class="ph-thumbs">${PROFILE.photos.map(u=>`<img class="ph-thumb" src="${u}" alt="Waterfront photo">`).join('')}</div><div class="mut" style="font-size:12.5px;margin-top:6px">On file — used to verify pier sections before the first service</div>`:`<div class="mut" style="font-size:13px">None yet — add them in guided setup so we can verify your pier count before the first crew rolls.</div>`}</div></div>`;
+}
+
+/* ============================================================
+   MESSAGES & APPROVALS — vendor-flagged items, owner-approved.
+   ============================================================ */
+const MSGS=[
+ {id:1, from:'DockRight Piers', when:'Today 9:41a', status:'pending', title:'Pier is 12 sections — profile says 10',
+  body:'Crew counted 12 sections including the L-platform at the end. Install/removal reprices from $700 to $796 per visit if you approve — and your profile updates so it\'s right every season after.', delta:'+$96 per pier visit', action:{type:'pier', sections:12}},
+ {id:2, from:'TrueNorth Marine', when:'Yesterday 4:12p', status:'pending', title:'Second lift on site — PWC lift not in profile',
+  body:'There\'s a PWC lift on the north side of the pier that isn\'t in your profile. Want us to handle it? We\'d set it each spring and pull it each fall alongside the boat lift.', delta:'+$145 fall pull', action:{type:'toyLift'}},
+ {id:3, from:'GreenEdge Lawn', when:'Jul 10', status:'fyi', title:'Sprinkler head leaking near fire pit',
+  body:'Flagged during the Friday mow — irrigation repair is outside LakeLife\'s service set, just letting you know so you can get your sprinkler guy on it.', delta:'No charge — heads up only'},
+];
+function msgBadge(){const n=MSGS.filter(m=>m.status==='pending').length;const b=document.getElementById('msgBadge');if(b){b.textContent=n;b.style.display=n?'inline-flex':'none';}}
+function drawMsgs(){
+  const el=document.getElementById('msgList'); if(!el)return;
+  el.innerHTML=MSGS.map(m=>`
+   <div class="card"><div class="card-pad">
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+      <div><b style="font-size:15px">${m.title}</b><div class="mut" style="font-size:12.5px">${m.from} · ${m.when}</div></div>
+      ${m.status==='pending'?'<span class="pill warn">Needs your approval</span>':m.status==='approved'?'<span class="pill ok">Approved</span>':m.status==='declined'?'<span class="pill slate">Declined</span>':'<span class="pill slate">FYI</span>'}
+    </div>
+    <div style="font-size:14px;margin-top:8px">${m.body}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;flex-wrap:wrap;gap:8px">
+      <b style="color:var(--teal-dark)">${m.delta}</b>
+      ${m.status==='pending'?`<div style="display:flex;gap:8px"><button class="btn ghost sm" onclick="declineMsg(${m.id})">Decline</button><button class="btn sm" onclick="approveMsg(${m.id})">Approve</button></div>`:''}
+    </div>
+   </div></div>`).join('');
+  msgBadge();
+}
+function approveMsg(id){
+  const m=MSGS.find(x=>x.id===id); m.status='approved';
+  if(m.action&&m.action.type==='pier'){PROFILE.pierSections=m.action.sections;drawProfile();drawServices();}
+  if(m.action&&m.action.type==='toyLift'){PROFILE.toyLifts+=1;drawProfile();drawServices();REQS.splice(0,0,{name:'PWC lift set & pull',freq:'2× per season',date:'Added · fall window',status:'Scheduled',price:'$145'});drawReqs();}
+  drawMsgs();toast('Approved — profile updated, pricing recalculated. Bills to your card on file.');
+}
+function declineMsg(id){const m=MSGS.find(x=>x.id===id);m.status='declined';drawMsgs();toast('Declined — no changes made. Vendor and Ops notified.');}
+function sendMsg(){const i=document.getElementById('msgInput');if(!i.value.trim())return;i.value='';toast('Message sent to LakeLife dispatch — we\'ll reply here.');}
+
+/* ---------- vendor flag → owner approval ---------- */
+let flagJob=0;
+const FLAG_META={
+  pier:['Pier section count differs from profile','Reprices per section if approved'],
+  lift:['Extra boat / PWC lift on site','Adds set & pull if approved'],
+  lawn:['Lawn larger than profile','Weekly mow reprices if approved'],
+  toys:['Water toys not in profile','Adds storage & deploy if approved'],
+  other:['Crew note from the field','Pending Ops pricing'],
+};
+function openFlag(i){flagJob=i;document.getElementById('flagAddr').textContent=(ROUTE[i][1].split('— ')[1]||ROUTE[i][1]);document.getElementById('flagOverlay').classList.add('on');}
+function closeFlag(){document.getElementById('flagOverlay').classList.remove('on');}
+function submitFlag(){
+  const t=document.getElementById('flagType').value, note=document.getElementById('flagNote').value.trim()||'Flagged on site by crew.';
+  MSGS.splice(0,0,{id:Date.now(),from:'GreenEdge Lawn (crew)',when:'Just now',status:'pending',title:FLAG_META[t][0],body:note,delta:FLAG_META[t][1]});
+  drawMsgs();closeFlag();document.getElementById('flagNote').value='';
+  toast('Sent — the owner sees it in Messages & approvals, and Ops has a copy.');
+}
+
+/* ============================================================
+   SIGN IN / CREATE ACCOUNT
+   Production: Apple/Google OAuth via the auth provider (e.g.
+   Supabase Auth) — returns verified email + name; the property
+   wizard still runs after, because SSO is identity, not data.
+   ============================================================ */
+function openAuth(){document.getElementById('authOverlay').classList.add('on');}
+function closeAuth(){document.getElementById('authOverlay').classList.remove('on');}
+function authWith(p){
+  closeAuth();
+  toast(p==='email' ? 'Account created — email on file. Now verify your mobile.' : `Signed in with ${p} — verified email captured. Now verify your mobile.`);
+  setTimeout(openVerify, 500);
+}
+
+/* ---------- SMS verification (production: Twilio Verify or similar) ---------- */
+function openVerify(){document.getElementById('verifyOverlay').classList.add('on');const b=document.querySelector('#codeRow .code-box');b&&b.focus();}
+function closeVerify(){document.getElementById('verifyOverlay').classList.remove('on');}
+function codeAdvance(el,i){
+  el.value=el.value.replace(/\D/g,'');
+  if(el.value && i<5) el.nextElementSibling.focus();
+}
+function verifyCode(){
+  const filled=[...document.querySelectorAll('#codeRow .code-box')].every(b=>b.value);
+  if(!filled){ toast('Enter all 6 digits from the text.'); return; }
+  closeVerify();
+  toast('Mobile verified ✓ — next: guided property setup.');
+  setTimeout(openWiz, 500);
+}
+
+/* ---------- customer notification preferences ---------- */
+const NOTIFS=[
+  {k:'book',  l:'Booking confirmed',                 ch:'Text + email', on:true,  lock:false},
+  {k:'day',   l:'Crew on the way / service-day reminder', ch:'Text',    on:true,  lock:false},
+  {k:'done',  l:'Service complete — with photos',    ch:'Text + email', on:true,  lock:false},
+  {k:'appr',  l:'Approval needed from a crew flag',  ch:'Text',         on:true,  lock:false},
+  {k:'rcpt',  l:'Invoices & receipts',               ch:'Email',        on:true,  lock:true},
+  {k:'season',l:'Seasonal reminders — book your fall pull before freeze', ch:'Email', on:true, lock:false},
+];
+function drawNotifs(){
+  const el=document.getElementById('notifList'); if(!el) return;
+  el.innerHTML=NOTIFS.map((n,i)=>`
+    <div class="notif-row">
+      <div><div style="font-weight:800;font-size:13.5px">${n.l}</div><div class="mut" style="font-size:12px">${n.ch}${n.lock?' · always on':''}</div></div>
+      ${n.lock?'<span class="pill slate">Required</span>':`<button class="tgl ${n.on?'on':''}" role="switch" aria-checked="${n.on}" aria-label="${n.l}" onclick="toggleNotif(${i})"></button>`}
+    </div>`).join('');
+}
+function toggleNotif(i){
+  NOTIFS[i].on=!NOTIFS[i].on; drawNotifs();
+  toast(NOTIFS[i].on ? `On — ${NOTIFS[i].l.toLowerCase()} will ${NOTIFS[i].ch.toLowerCase()} you.` : `Off — no more ${NOTIFS[i].l.toLowerCase()} alerts.`);
+}
+
+/* ============================================================
+   VENDOR AVAILABILITY — working days + slot blocking.
+   The nightly router only fills slots marked open.
+   ============================================================ */
+const WORKDAYS={Mon:true,Tue:true,Wed:true,Thu:true,Fri:true,Sat:true,Sun:false};
+const SLOT_TIMES=['8a','10a','1p','3p'];
+const AVAIL_DAYS=['Thu 16','Fri 17','Sat 18','Mon 20','Tue 21'];
+/* 0 = open, 1 = LakeLife-booked (locked), 2 = blocked for outside work */
+const AVAIL=[[1,1,1,0],[1,1,1,1],[1,0,0,2],[1,1,0,0],[0,0,2,2]];
+function toggleDay(d){
+  WORKDAYS[d]=!WORKDAYS[d]; drawDayChips();
+  toast(WORKDAYS[d] ? d+' is on — the scheduler can route you jobs.' : d+' is off — no LakeLife bookings that day.');
+}
+function drawDayChips(){
+  const el=document.getElementById('dayChips'); if(!el) return;
+  el.innerHTML=Object.keys(WORKDAYS).map(d=>`<button class="daychip ${WORKDAYS[d]?'on':''}" onclick="toggleDay('${d}')">${d}</button>`).join('');
+}
+function drawAvail(){
+  const g=document.getElementById('availGrid'); if(!g) return;
+  let h='<div></div>'+SLOT_TIMES.map(t=>`<div class="avail-day" style="text-align:center">${t}</div>`).join('');
+  AVAIL_DAYS.forEach((d,r)=>{
+    h+=`<div class="avail-day">${d}</div>`+AVAIL[r].map((s,c)=>
+      `<div class="slot-cell ${s===1?'lk':s===2?'blk':''}" onclick="toggleSlot(${r},${c})">${s===1?'LL job':s===2?'Blocked':'Open'}</div>`).join('');
+  });
+  g.innerHTML=h;
+}
+function toggleSlot(r,c){
+  if(AVAIL[r][c]===1){ toast('That slot has a LakeLife job on it — message dispatch to move it.'); return; }
+  AVAIL[r][c] = AVAIL[r][c]===0 ? 2 : 0;
+  drawAvail();
+  toast(AVAIL[r][c]===2 ? 'Slot blocked — tonight\'s router will schedule around it.' : 'Slot reopened — available for routing tonight.');
+}
+
+/* initial paint */
+drawProfile();
+drawMsgs();
+drawDayChips();
+drawAvail();
+drawNotifs();
+
+/* close overlays on backdrop click / escape */
+document.querySelectorAll('.overlay').forEach(o=>o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('on')}));
+document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.overlay').forEach(o=>o.classList.remove('on'))});
+</script>
+</body>
+</html>

@@ -1,26 +1,469 @@
 @import "tailwindcss";
 
+/* ============================================================
+   LakeLife design system — pulled 1:1 from lakelife.html
+   Colors, type, radius, shadow, and the core components
+   (card, pill, button, field, wave motif).
+   ============================================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ink: #0a2430; /* deep water */
+  --deep: #0f3648; /* dusk lake */
+  --teal: #137a8c; /* open water — primary */
+  --teal-dark: #0e5e6d;
+  --aqua: #bfe3e8; /* shallow water */
+  --mist: #f3f8f9; /* morning mist bg */
+  --card: #ffffff;
+  --line: #dce9ec;
+  --sun: #e9b44c; /* buoy gold accent */
+  --sun-soft: #fbf1dc;
+  --text: #20343d;
+  --sub: #5d7681;
+  --ok: #2e8b57;
+  --warn: #c7772a;
+  --danger: #b34a3a;
+  --r: 14px;
+  --shadow: 0 1px 2px rgba(10, 36, 48, 0.05),
+    0 8px 24px -12px rgba(10, 36, 48, 0.18);
 }
 
+/* Expose tokens to Tailwind v4 utilities (e.g. text-teal, bg-mist) */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-ink: var(--ink);
+  --color-deep: var(--deep);
+  --color-teal: var(--teal);
+  --color-teal-dark: var(--teal-dark);
+  --color-aqua: var(--aqua);
+  --color-mist: var(--mist);
+  --color-card: var(--card);
+  --color-line: var(--line);
+  --color-sun: var(--sun);
+  --color-sun-soft: var(--sun-soft);
+  --color-text: var(--text);
+  --color-sub: var(--sub);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --font-display: var(--font-display), "Bricolage Grotesque", serif;
+  --font-body: var(--font-body), "Manrope", system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-body);
+  background: var(--mist);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+.display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 3px solid var(--sun);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ---------------- helpers ---------------- */
+.mut {
+  color: var(--sub);
+}
+.wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px 80px;
+}
+
+/* ---------------- card ---------------- */
+.ll-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+}
+.ll-card-pad {
+  padding: 20px;
+}
+
+/* ---------------- pill ---------------- */
+.ll-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-radius: 99px;
+  padding: 4px 11px;
+}
+.ll-pill.teal {
+  background: #e0f0f3;
+  color: var(--teal-dark);
+}
+.ll-pill.gold {
+  background: var(--sun-soft);
+  color: #8a6420;
+}
+.ll-pill.ok {
+  background: #e4f2ea;
+  color: var(--ok);
+}
+.ll-pill.warn {
+  background: #f8ecdd;
+  color: var(--warn);
+}
+.ll-pill.red {
+  background: #f6e5e1;
+  color: var(--danger);
+}
+.ll-pill.slate {
+  background: #e9eff1;
+  color: var(--sub);
+}
+
+/* ---------------- button ---------------- */
+.ll-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--teal);
+  color: #fff;
+  font-weight: 800;
+  font-size: 14px;
+  padding: 11px 20px;
+  border-radius: 10px;
+  border: none;
+  transition: background 0.15s, transform 0.1s;
+}
+.ll-btn:hover {
+  background: var(--teal-dark);
+}
+.ll-btn:active {
+  transform: translateY(1px);
+}
+.ll-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ll-btn.ghost {
+  background: transparent;
+  color: var(--teal-dark);
+  border: 1.5px solid var(--line);
+}
+.ll-btn.ghost:hover {
+  background: #eaf3f5;
+}
+.ll-btn.gold {
+  background: var(--sun);
+  color: var(--ink);
+}
+.ll-btn.gold:hover {
+  background: #d9a43f;
+}
+.ll-btn.sm {
+  padding: 7px 14px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
+/* ---------------- SSO buttons (Apple / Google) ---------------- */
+.ll-sso {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 16px;
+  border-radius: 10px;
+  border: 1.5px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  font-weight: 700;
+  font-size: 14px;
+  transition: background 0.15s;
+}
+.ll-sso:hover {
+  background: #f5f9fa;
+}
+.ll-sso.apple {
+  background: var(--ink);
+  color: #fff;
+  border-color: var(--ink);
+}
+.ll-sso.apple:hover {
+  background: #06131b;
+}
+
+/* ---------------- form field ---------------- */
+.ll-field {
+  margin-bottom: 14px;
+}
+.ll-field label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--sub);
+  margin-bottom: 6px;
+}
+.ll-field input {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  font-size: 15px;
+  font-family: inherit;
+  color: var(--text);
+  background: #fff;
+}
+.ll-field input:focus {
+  outline: none;
+  border-color: var(--teal);
+}
+
+.ll-or {
+  text-align: center;
+  font-size: 12px;
+  color: var(--sub);
+  margin: 16px 0;
+  position: relative;
+}
+.ll-or::before,
+.ll-or::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 32%;
+  height: 1px;
+  background: var(--line);
+}
+.ll-or::before {
+  left: 0;
+}
+.ll-or::after {
+  right: 0;
+}
+
+/* ---------------- 6-box SMS code input ---------------- */
+.ll-code-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 8px 0 18px;
+}
+.ll-code-box {
+  width: 46px;
+  height: 56px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 800;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  background: #fff;
+}
+.ll-code-box:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(19, 122, 140, 0.15);
+}
+
+/* ---------------- top bar ---------------- */
+.ll-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--ink);
+  color: #fff;
+  padding: 0 24px;
+}
+.ll-topbar-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  height: 64px;
+}
+.ll-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ll-logo-name {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 21px;
+  letter-spacing: -0.02em;
+}
+.ll-logo-name em {
+  font-style: normal;
+  color: var(--sun);
+}
+.ll-tagline {
+  font-size: 12px;
+  color: #9fc0cb;
+  border-left: 1px solid #2b4b5a;
+  padding-left: 14px;
+  letter-spacing: 0.02em;
+}
+@media (max-width: 640px) {
+  .ll-tagline {
+    display: none;
+  }
+}
+
+/* ---------------- hero + waves ---------------- */
+.ll-hero {
+  position: relative;
+  background: linear-gradient(160deg, var(--deep), var(--teal));
+  color: #fff;
+  overflow: hidden;
+}
+.ll-hero-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 56px 24px 96px;
+  position: relative;
+  z-index: 2;
+}
+.ll-eyebrow {
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--aqua);
+}
+.ll-hero h1 {
+  font-size: clamp(28px, 5vw, 46px);
+  line-height: 1.05;
+  margin: 12px 0;
+  max-width: 18ch;
+}
+.ll-hero p {
+  max-width: 52ch;
+  color: #d7eaee;
+  font-size: 16px;
+}
+.ll-waves {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  line-height: 0;
+  z-index: 1;
+}
+.ll-waves svg {
+  width: 100%;
+  height: 90px;
+  display: block;
+}
+@keyframes ll-drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-360px);
+  }
+}
+.ll-wave-a {
+  animation: ll-drift 9s linear infinite;
+}
+.ll-wave-b {
+  animation: ll-drift 13s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ll-wave-a,
+  .ll-wave-b {
+    animation: none;
+  }
+}
+
+.ll-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border-radius: 99px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ll-chip b {
+  font-weight: 800;
+}
+
+/* ---------------- modal / overlay ---------------- */
+.ll-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 36, 48, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+.ll-modal {
+  background: #fff;
+  border-radius: 18px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 24px 64px -12px rgba(10, 36, 48, 0.4);
+  max-height: 92vh;
+  overflow: auto;
+}
+.ll-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 22px 22px 0;
+}
+.ll-modal-body {
+  padding: 18px 22px 24px;
+}
+.ll-x {
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: var(--sub);
+  line-height: 1;
+  padding: 4px;
+}
+
+/* ---------------- toast ---------------- */
+.ll-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: var(--shadow);
+  z-index: 200;
+  max-width: 90vw;
+  text-align: center;
 }

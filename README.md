@@ -1,36 +1,124 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LakeLife — the app
 
-## Getting Started
+This is the real LakeLife app (Phase 1). It's the "engine behind the cockpit"
+your prototype designed. You don't edit code — you run it, click around, and
+tell Claude Code what to change.
 
-First, run the development server:
+---
 
-```bash
+## What Phase 1 gives you
+
+- The LakeLife look and feel, pulled straight from your prototype (logo, waves,
+  colors, fonts).
+- **Sign-up** three ways: Continue with Apple, Continue with Google, or email.
+- **Text verification**: after signing up, we text a 6-digit code to the
+  mobile number and confirm it (Twilio) — the same flow as the prototype.
+- A **database** with every table from your launch plan, plus the security
+  rules that keep the three roles apart (vendors can never see customer prices).
+- Your **three lakes** loaded with their real ice-out and freeze dates.
+
+---
+
+## How to run it on your Mac
+
+Open the **Terminal** app, then type these two lines (press Enter after each):
+
+```
+cd "/Users/brendonhome/Claude/LakeLife/LakeLife App Docs"
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+When it says **"Ready"**, open your web browser to:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+> http://localhost:3000
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+That's your app running privately on your own computer. To stop it, click back
+in Terminal and press **Ctrl + C**.
 
-## Learn More
+> Tip: just ask Claude Code *"Start the app for me"* and it'll do the two lines
+> above for you.
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Where your keys go
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Your keys live in a file called **`.env.local`** (already created for you, blank).
+Open it in TextEdit and paste each key from your notebook after the `=` sign.
+The file itself explains each one. The keys you need for Phase 1:
 
-## Deploy on Vercel
+| In the file | From your notebook |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | SUPABASE URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | SUPABASE ANON KEY |
+| `SUPABASE_SERVICE_ROLE_KEY` | SUPABASE SERVICE KEY |
+| `TWILIO_ACCOUNT_SID` | TWILIO SID |
+| `TWILIO_AUTH_TOKEN` | TWILIO TOKEN |
+| `TWILIO_VERIFY_SERVICE_SID` | TWILIO VERIFY SID |
+| `TWILIO_PHONE_NUMBER` | TWILIO PHONE NUMBER |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+**After pasting keys, stop the app (Ctrl + C) and run `npm run dev` again** so it
+picks them up. Until you do, the app still runs — it just shows a friendly
+"add your keys" banner instead of letting you sign up.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+## Two one-time setup steps inside Supabase
+
+These happen in the Supabase website, not in code. Claude Code will walk you
+through them — here's the summary:
+
+1. **Create the database tables.** In Supabase → **SQL Editor** → New query,
+   paste and run each file **in order**:
+   - `supabase/migrations/0001_schema.sql`
+   - `supabase/migrations/0002_rls.sql`
+   - `supabase/seed/seed_lakes.sql`
+   (Just ask Claude Code: *"Walk me through running the SQL files in Supabase."*)
+
+2. **Turn on Google & Apple sign-in.** In Supabase → **Authentication →
+   Providers**, enable Google and Apple. Each needs a couple of values from
+   Google/Apple. This one has a few steps — **ask Claude Code to guide you**, or
+   skip it for now and test with **email sign-up**, which needs no extra setup.
+
+---
+
+## What to click to test (pretend you're a lake homeowner)
+
+1. Go to http://localhost:3000 — you should see the LakeLife home page.
+2. Click **"New here? Create a profile →"**.
+3. Use the **email** option: type your name, email, a password, and your real
+   mobile number. Click **Create account**.
+   - *(For the smoothest test, in Supabase → Authentication → Sign In / Up, you
+     can temporarily turn OFF "Confirm email" so it logs you straight in. Turn it
+     back on before real customers use it. Or just click the confirmation link
+     from your inbox.)*
+4. On the **Verify your mobile** screen, click **Text me a code**. Your real
+   phone gets a real text (Twilio is live!).
+5. Type the 6 digits → **Verify & continue**.
+6. You land on a **Welcome** page with a checklist showing email + mobile
+   verified. 🎉
+
+If something looks off, tell Claude Code like you'd tell a contractor — e.g.
+*"the code boxes are squished"* or *"I never got the text"* — and it'll fix it.
+
+---
+
+## Running the tests
+
+```
+npm test
+```
+
+This checks the phone-number handling and the pull-deadline rule
+(freeze − 8 days). More tests get added as we build pricing and the photo gate.
+
+---
+
+## For the curious — where things live
+
+```
+src/app/            the pages (home, verify, welcome) and the API routes
+src/components/      the reusable UI (logo, waves, sign-in modal, code entry)
+src/lib/             Supabase + Twilio helpers, phone/date math + its tests
+supabase/            the database: schema, security rules, and the lakes seed
+.env.local           your secret keys (never shared, never committed)
+```
