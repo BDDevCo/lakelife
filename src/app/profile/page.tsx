@@ -55,8 +55,9 @@ export default async function ProfilePage() {
             <span className="ll-pill gold">Next step</span>
             <h2 style={{ fontSize: 24, margin: "12px 0 6px" }}>Let&apos;s build your property profile</h2>
             <p className="mut" style={{ fontSize: 14, marginBottom: 18 }}>
-              Seven quick questions about your place — pier, lifts, boats, lawn — and every
-              price becomes exact to your property.
+              Pick the services that fit your place — housekeeping, mowing, seasonal
+              open &amp; close, and waterfront work if you have it — and every price
+              becomes exact to your property.
             </p>
             <Link className="ll-btn gold" href="/profile/setup">Start guided setup →</Link>
           </div>
