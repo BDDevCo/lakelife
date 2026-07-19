@@ -31,6 +31,42 @@ export async function getMyVendorId(): Promise<string | null> {
   return (data?.id as string) ?? null;
 }
 
+export interface MyVendor {
+  id: string;
+  company: string | null;
+  status: "invited" | "active" | "suspended";
+  coi_url: string | null;
+  coi_expiry: string | null;
+  w9_url: string | null;
+  service_types: string[];
+  work_days: string[];
+}
+
+/** The signed-in user's full vendors row (onboarding + status), or null. */
+export async function getMyVendor(): Promise<MyVendor | null> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data } = await supabase
+    .from("vendors")
+    .select("id, company, status, coi_url, coi_expiry, w9_url, service_types, work_days")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!data) return null;
+  return {
+    id: data.id as string,
+    company: (data.company as string | null) ?? null,
+    status: (data.status as MyVendor["status"]) ?? "invited",
+    coi_url: (data.coi_url as string | null) ?? null,
+    coi_expiry: (data.coi_expiry as string | null) ?? null,
+    w9_url: (data.w9_url as string | null) ?? null,
+    service_types: (data.service_types as string[] | null) ?? [],
+    work_days: (data.work_days as string[] | null) ?? [],
+  };
+}
+
 function factsFor(row: {
   service_name: string | null;
   pier_sections: number | null;

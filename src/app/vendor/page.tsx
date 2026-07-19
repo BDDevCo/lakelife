@@ -3,9 +3,10 @@ import { TopBar } from "@/components/Brand";
 import { VendorNav } from "@/components/VendorNav";
 import { VendorStopCard } from "@/components/VendorStopCard";
 import { VendorRouteButton } from "@/components/VendorRouteButton";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { getMyVendorId, getVendorDay } from "./data";
+import { getMyVendorId, getMyVendor, getVendorDay } from "./data";
+import { VendorOnboarding } from "@/components/VendorOnboarding";
 
 export default async function VendorTodayPage() {
   if (!hasSupabaseEnv()) {
@@ -44,6 +45,21 @@ export default async function VendorTodayPage() {
             <Link className="ll-btn" href="/portal">Go to my portal</Link>
           </div>
         </div>
+      </>
+    );
+  }
+
+  // Not active yet? Show the onboarding checklist instead of the route.
+  const vendor = await getMyVendor();
+  if (vendor && vendor.status !== "active") {
+    const admin = createServiceClient();
+    const { data: svcs } = await admin.from("services").select("name").eq("active", true).order("name");
+    const activeServices = (svcs ?? []).map((s) => s.name as string);
+    return (
+      <>
+        <TopBar />
+        <VendorNav />
+        <VendorOnboarding vendor={vendor} activeServices={activeServices} />
       </>
     );
   }

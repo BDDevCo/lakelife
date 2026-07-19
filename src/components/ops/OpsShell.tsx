@@ -6,14 +6,17 @@ import { MarginTable } from "./MarginTable";
 import { LakeConditions } from "./LakeConditions";
 import { RouteBuilder } from "./RouteBuilder";
 import { MessageBoard } from "./MessageBoard";
+import { CrewBoard } from "./CrewBoard";
 import type { OpsJob, ActiveVendor, MarginRow, LakeCondition, RouteSummary } from "@/app/ops/data";
 import type { OpsThread } from "@/app/ops/messages-data";
+import type { OpsCrew } from "@/app/ops/crews-data";
 
 const TABS = [
   { key: "jobs", label: "Jobs" },
   { key: "margin", label: "Revenue & margin" },
   { key: "lakes", label: "Lake conditions" },
   { key: "routing", label: "Routing" },
+  { key: "crews", label: "Crews" },
   { key: "messages", label: "Messages" },
 ] as const;
 
@@ -27,6 +30,8 @@ export function OpsShell({
   routes,
   routeDate,
   threads,
+  crews,
+  crewServiceNames,
 }: {
   jobs: OpsJob[];
   vendors: ActiveVendor[];
@@ -35,6 +40,8 @@ export function OpsShell({
   routes: RouteSummary[];
   routeDate: string;
   threads: OpsThread[];
+  crews: OpsCrew[];
+  crewServiceNames: string[];
 }) {
   const [tab, setTab] = useState<TabKey>("jobs");
 
@@ -70,6 +77,8 @@ export function OpsShell({
       {tab === "margin" && <MarginTable rows={margin.rows} total={margin.total} />}
       {tab === "lakes" && <LakeConditions lakes={lakes} />}
       {tab === "routing" && <RouteBuilder routes={routes} date={routeDate} />}
+
+      {tab === "crews" && <CrewBoard crews={crews} activeServiceNames={crewServiceNames} />}
 
       {tab === "messages" && <MessageBoard threads={threads} />}
     </div>
