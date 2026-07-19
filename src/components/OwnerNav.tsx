@@ -17,7 +17,7 @@ export function OwnerNav() {
       <div
         style={{
           display: "flex", gap: 4, borderBottom: "2px solid var(--line)",
-          overflowX: "auto", marginBottom: 6,
+          flexWrap: "wrap", marginBottom: 6,
         }}
       >
         {TABS.map((t) => {

@@ -194,7 +194,7 @@ export function ProfileWizard({
     }));
   }
 
-  if (done) return <Recap draft={draft} priceOf={priceOf} onGo={() => router.push("/profile")} />;
+  if (done) return <Recap draft={draft} priceOf={priceOf} onGo={() => router.push("/book")} />;
 
   return (
     <div className="ll-card ll-card-pad" style={{ maxWidth: 560, margin: "0 auto" }}>
@@ -453,9 +453,10 @@ function Recap({ draft, priceOf, onGo }: { draft: Draft; priceOf: (name: string)
   return (
     <div className="ll-card ll-card-pad" style={{ maxWidth: 560, margin: "0 auto" }}>
       <span className="ll-pill gold">All set</span>
-      <h2 style={{ fontSize: 24, margin: "10px 0 4px" }}>You&apos;re set up, {draft.address || "welcome"}.</h2>
+      <h2 style={{ fontSize: 24, margin: "10px 0 4px" }}>You&apos;re all set! 🎉</h2>
       <p className="mut" style={{ fontSize: 14, marginBottom: 12 }}>
-        Here are the services you chose, priced exactly to your place. We&apos;ve emailed you this too.
+        {draft.address ? `${draft.address} — here` : "Here"} are the services you chose,
+        priced exactly to your place. We&apos;ve emailed you this too.
       </p>
       <div>
         {lines.map((r, i) => (
@@ -468,7 +469,9 @@ function Recap({ draft, priceOf, onGo }: { draft: Draft; priceOf: (name: string)
           </div>
         ))}
       </div>
-      <button className="ll-btn" style={{ width: "100%", marginTop: 20 }} onClick={onGo}>Go to my property profile →</button>
+      <button className="ll-btn gold" style={{ width: "100%", marginTop: 20 }} onClick={onGo}>
+        Book my services →
+      </button>
     </div>
   );
 }

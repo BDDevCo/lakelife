@@ -83,10 +83,12 @@ export const LakeLifePayments = {
     const brand = detectBrand(digits);
     const last4 = digits.slice(-4);
     // A stand-in vault token. The real one comes from the processor.
+    // The random tail is base36 (letters + digits), so the token can never
+    // contain a long digit run that trips the server's PAN guard.
     const rand =
       typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID().replace(/-/g, "").slice(0, 16)
-        : String(Math.floor(Math.random() * 1e16));
+        ? "x" + crypto.randomUUID().replace(/-/g, "").slice(0, 15)
+        : "x" + Math.random().toString(36).slice(2, 17);
     const token = `tok_mock_${last4}_${rand}`;
 
     return { ok: true, token: { token, brand, last4, exp_month, exp_year } };

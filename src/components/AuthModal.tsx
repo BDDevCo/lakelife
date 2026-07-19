@@ -54,15 +54,18 @@ export function AuthModal({
       return;
     }
     toast("Welcome back!");
-    router.push("/profile");
+    router.push("/book");
     router.refresh();
   }
 
   async function ssoSignIn(provider: "google" | "apple") {
     setBusy(true);
+    // New customers continue to mobile verification; returning customers go
+    // straight to booking (verify/welcome will still catch stragglers).
+    const next = mode === "signup" ? "/verify" : "/book";
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: `${siteUrl()}/auth/callback?next=/verify` },
+      options: { redirectTo: `${siteUrl()}/auth/callback?next=${next}` },
     });
     if (error) {
       toast(error.message);

@@ -39,9 +39,17 @@ export async function savePaymentMethod(token: PaymentToken): Promise<{ ok: bool
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Please sign in first." };
 
-  // Guard: never accept anything that looks like a full card number.
-  if (!token?.token || /\d{13,19}/.test(token.token.replace(/\D/g, "")) === false) {
-    // token format is tok_..., which won't contain a 13-19 digit run; ok.
+  // RULE 4 guard: never store anything that could be a real card number.
+  // A vault token must look like a token (tok_...) and must not contain a
+  // 13-19 digit run (a PAN). The known "tok_<vault>_<last4>_" head is
+  // stripped first so its legitimate digits can't join a run and false-flag.
+  const t = token?.token ?? "";
+  const tail = t.replace(/^tok_[a-z0-9]+_\d{4}_/, "");
+  if (!t.startsWith("tok_") || /\d{13,19}/.test(tail) || t.length > 64) {
+    return { ok: false, error: "Invalid payment token." };
+  }
+  if (token.last4 && !/^\d{4}$/.test(token.last4)) {
+    return { ok: false, error: "Invalid payment token." };
   }
 
   const { count } = await supabase

@@ -1,11 +1,23 @@
+import Link from "next/link";
 import { TopBar, Waves } from "@/components/Brand";
 import { GetStarted } from "@/components/GetStarted";
 import { ConfigNotice } from "@/components/ConfigNotice";
 import { hasSupabaseEnv, hasTwilioEnv } from "@/lib/env";
+import { createClient } from "@/lib/supabase/server";
 
-export default function Home() {
+export default async function Home() {
   const supaOk = hasSupabaseEnv();
   const twilioOk = hasTwilioEnv();
+
+  // A signed-in customer gets a shortcut into their portal, not a signup pitch.
+  let signedIn = false;
+  if (supaOk) {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    signedIn = !!user;
+  }
 
   return (
     <>
@@ -27,7 +39,24 @@ export default function Home() {
               <span className="ll-chip">📍 <b>On or near Big Long · Pretty · Big Turkey</b></span>
               <span className="ll-chip">Home &amp; seasonal · housekeeping · mowing</span>
               <span className="ll-chip">Waterfront? Piers · lifts · boat storage too</span>
-              <GetStarted configured={supaOk} />
+              {signedIn ? (
+                <Link
+                  className="ll-chip"
+                  href="/book"
+                  style={{
+                    cursor: "pointer",
+                    background: "var(--sun)",
+                    color: "var(--ink)",
+                    borderColor: "var(--sun)",
+                    fontWeight: 800,
+                    textDecoration: "none",
+                  }}
+                >
+                  Welcome back — open my portal →
+                </Link>
+              ) : (
+                <GetStarted configured={supaOk} />
+              )}
             </div>
           </div>
           <Waves />

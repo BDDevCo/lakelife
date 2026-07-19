@@ -1,7 +1,9 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { supabaseUrl } from "@/lib/env";
+import { getActivePropertyId } from "./data";
 
 export interface DeleteResult {
   ok: boolean;
@@ -52,21 +54,36 @@ async function retainMarketingContact(
 }
 
 /**
- * Remove the customer's property and all house data, but keep their login so
- * they can add a property again later. Retains a marketing contact first.
+ * Remove ONE property — the one the portal is currently focused on — and all
+ * its house data. The login and any OTHER properties stay untouched.
+ * Retains a marketing contact first.
  */
-export async function removeProperty(): Promise<DeleteResult> {
+export async function removeProperty(propertyId?: string): Promise<DeleteResult> {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Please sign in first." };
 
+  // Prefer the exact property the confirmation dialog showed; fall back to the
+  // active one. Either way the delete below is scoped to this owner.
+  const activeId = propertyId ?? (await getActivePropertyId());
+  if (!activeId) return { ok: false, error: "No property to remove." };
+
   await retainMarketingContact(user.id, "property_removed");
 
   // Deleting the property cascades to profile, boats, toys, photos, jobs, etc.
-  const { error } = await supabase.from("properties").delete().eq("owner_id", user.id);
+  // Scoped to the ACTIVE property only — never the whole portfolio.
+  const { error } = await supabase
+    .from("properties")
+    .delete()
+    .eq("owner_id", user.id)
+    .eq("id", activeId);
   if (error) return { ok: false, error: error.message };
+
+  // Clear the switcher cookie so the portal falls back to another property.
+  const cookieStore = await cookies();
+  cookieStore.set("ll_active_property", "", { path: "/", maxAge: 0 });
   return { ok: true };
 }
 

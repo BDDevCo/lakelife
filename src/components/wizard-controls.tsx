@@ -58,7 +58,7 @@ function StepBtn({
       onClick={onClick}
       disabled={disabled}
       style={{
-        width: 40, height: 40, borderRadius: 12, border: "1.5px solid var(--line)",
+        width: 44, height: 44, borderRadius: 12, border: "1.5px solid var(--line)",
         background: disabled ? "#f0f3f4" : "#fff", color: disabled ? "#b7c3c7" : "var(--teal-dark)",
         fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: disabled ? "not-allowed" : "pointer",
         display: "flex", alignItems: "center", justifyContent: "center",

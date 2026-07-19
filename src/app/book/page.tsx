@@ -37,6 +37,38 @@ export default async function BookPage() {
     );
   }
 
+  // RULE 5 nudge: booking needs a confirmed email + SMS-verified mobile.
+  // Surface it here as a friendly step, not as a failure at confirm time.
+  const { data: me } = await supabase
+    .from("users")
+    .select("email_verified, phone_verified")
+    .eq("id", user.id)
+    .maybeSingle();
+  const emailOk = (me?.email_verified ?? false) || Boolean(user.email_confirmed_at);
+  const phoneOk = me?.phone_verified ?? false;
+  if (!emailOk || !phoneOk) {
+    return (
+      <>
+        <TopBar />
+        <OwnerHeader />
+        <div className="wrap" style={{ paddingTop: 24, maxWidth: 520 }}>
+          <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
+            <span className="ll-pill gold">One quick step</span>
+            <h2 style={{ fontSize: 22, margin: "12px 0 6px" }}>
+              {phoneOk ? "Confirm your email to book" : "Verify your mobile to book"}
+            </h2>
+            <p className="mut" style={{ fontSize: 14, marginBottom: 16 }}>
+              {phoneOk
+                ? "Click the link we emailed you, then come right back."
+                : "It takes 30 seconds — this is the number crews text when they're on the way."}
+            </p>
+            {!phoneOk && <Link className="ll-btn gold" href="/verify">Verify my mobile →</Link>}
+          </div>
+        </div>
+      </>
+    );
+  }
+
   const profile = await getFullProfile();
 
   if (!profile?.hasProfile) {

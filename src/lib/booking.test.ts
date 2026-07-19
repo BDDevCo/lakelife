@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dayStatus, toISODate, isRecurring, type DayContext } from "./booking";
+import { dayStatus, toISODate, isRecurring, todayLakeDate, type DayContext } from "./booking";
 
 // Big Long Lake 2026: ice-out Mar 21, pull deadline Nov 14.
 const waterCtx = (fullDates: string[] = []): DayContext => ({
@@ -45,6 +45,12 @@ describe("dayStatus — capacity", () => {
 
 describe("helpers", () => {
   it("toISODate has no timezone drift", () => expect(toISODate(new Date(2026, 10, 14))).toBe("2026-11-14"));
+  it("todayLakeDate returns Indiana-time YYYY-MM-DD regardless of server TZ", () => {
+    expect(todayLakeDate()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // Must match what Intl computes for Indiana right now (self-consistent check)
+    const indiana = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Indiana/Indianapolis" }).format(new Date());
+    expect(todayLakeDate()).toBe(indiana);
+  });
   it("recurring detection", () => {
     expect(isRecurring("Weekly")).toBe(true);
     expect(isRecurring("Before each arrival")).toBe(true);

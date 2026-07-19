@@ -8,7 +8,15 @@ import { toast } from "@/components/Toast";
 
 type Dialog = null | "property" | "account";
 
-export function AccountControls({ hasProperty }: { hasProperty: boolean }) {
+export function AccountControls({
+  hasProperty,
+  propertyLabel,
+  propertyId,
+}: {
+  hasProperty: boolean;
+  propertyLabel?: string;
+  propertyId?: string;
+}) {
   const router = useRouter();
   const [dialog, setDialog] = useState<Dialog>(null);
   const [confirmText, setConfirmText] = useState("");
@@ -16,7 +24,7 @@ export function AccountControls({ hasProperty }: { hasProperty: boolean }) {
 
   async function doRemoveProperty() {
     setBusy(true);
-    const res = await removeProperty();
+    const res = await removeProperty(propertyId);
     setBusy(false);
     if (!res.ok) {
       toast(res.error ?? "Couldn't remove your property.");
@@ -55,7 +63,7 @@ export function AccountControls({ hasProperty }: { hasProperty: boolean }) {
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
         {hasProperty && (
           <button className="ll-btn ghost" onClick={() => setDialog("property")}>
-            Remove my property
+            Remove this property
           </button>
         )}
         <button
@@ -71,13 +79,16 @@ export function AccountControls({ hasProperty }: { hasProperty: boolean }) {
       {dialog === "property" && (
         <ConfirmOverlay onClose={() => setDialog(null)}>
           <span className="ll-pill warn">Remove property</span>
-          <h3 style={{ fontSize: 20, margin: "10px 0 6px" }}>Remove your property &amp; house data?</h3>
+          <h3 style={{ fontSize: 20, margin: "10px 0 6px" }}>
+            Remove {propertyLabel ?? "this property"}?
+          </h3>
           <p className="mut" style={{ fontSize: 14, marginBottom: 8 }}>
-            This deletes your property profile, pier/lift/boat details, photos and any
-            scheduled work. <b>Your login stays</b>, so you can set up a property again anytime.
+            This deletes this property&apos;s profile, pier/lift/boat details, photos and any
+            scheduled work. <b>Your login — and any other properties — stay</b>, so you can
+            set it up again anytime.
           </p>
           <p className="mut" style={{ fontSize: 12.5, marginBottom: 18 }}>
-            We keep your name, email, phone and lake for seasonal reminders until you opt out.
+            We keep just your name, email, phone and lake for seasonal reminders, until you opt out.
           </p>
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
             <button className="ll-btn ghost" onClick={() => setDialog(null)} disabled={busy}>Cancel</button>
@@ -94,10 +105,12 @@ export function AccountControls({ hasProperty }: { hasProperty: boolean }) {
           <span className="ll-pill red">Delete account</span>
           <h3 style={{ fontSize: 20, margin: "10px 0 6px" }}>Delete your account?</h3>
           <p className="mut" style={{ fontSize: 14, marginBottom: 8 }}>
-            This permanently removes your login and all your data. This can&apos;t be undone.
+            This permanently removes your login, your properties, and your service
+            history. This can&apos;t be undone.
           </p>
           <p className="mut" style={{ fontSize: 12.5, marginBottom: 12 }}>
-            We keep your name, email, phone and lake for seasonal reminders until you opt out.
+            The only thing we keep is your name, email, phone and lake — for seasonal
+            reminders, until you opt out.
           </p>
           <div className="ll-field">
             <label>Type DELETE to confirm</label>

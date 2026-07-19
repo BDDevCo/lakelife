@@ -147,7 +147,9 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
           </div>
 
           <div className="mut" style={{ fontSize: 12.5, marginBottom: 8 }}>
-            {recurring ? "Pick your first visit — it repeats in this slot." : "Pick your date."}
+            {recurring
+              ? "Pick your first visit — we'll line up the repeats with you once it's confirmed."
+              : "Pick your date."}
           </div>
 
           {/* calendar */}
@@ -210,7 +212,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
           </p>
 
           <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={confirm} disabled={!picked || busy}>
-            {busy ? "Booking…" : "Confirm service"}
+            {busy ? "Booking…" : "Confirm booking"}
           </button>
         </div>
       </div>

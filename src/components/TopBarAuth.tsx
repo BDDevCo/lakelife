@@ -42,7 +42,7 @@ export function TopBarAuth() {
   if (signedIn) {
     return (
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <Link href="/profile" style={linkBtn}>My profile</Link>
+        <Link href="/book" style={linkBtn}>My portal</Link>
         <button onClick={signOut} style={ghostBtn}>Sign out</button>
       </div>
     );

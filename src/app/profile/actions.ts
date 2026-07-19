@@ -68,6 +68,11 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
       .eq("id", input.propertyId)
       .maybeSingle();
     propertyId = existing?.id as string | undefined;
+    if (!propertyId) {
+      // The property being edited is gone (removed in another tab?). Fail
+      // loudly rather than silently creating a duplicate.
+      return { ok: false, error: "That property no longer exists — refresh and try again." };
+    }
   }
 
   const propertyFields = {

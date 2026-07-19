@@ -3,7 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getFullProfile, toPricingProfile } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
-import { dayStatus, toISODate } from "@/lib/booking";
+import { dayStatus, toISODate, todayLakeDate } from "@/lib/booking";
 import { sendSms } from "@/lib/sms";
 
 interface ServiceRow extends ServiceRule {
@@ -22,18 +22,13 @@ async function loadService(serviceId: string): Promise<ServiceRow | null> {
   return (data as ServiceRow | null) ?? null;
 }
 
-/** Season window (ice-out → pull deadline) for the signed-in owner's lake. */
-async function loadSeason(): Promise<{ start: string | null; end: string | null }> {
+/** Season window (ice-out → pull deadline) for the SPECIFIC property being booked. */
+async function loadSeason(propertyId: string): Promise<{ start: string | null; end: string | null }> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { start: null, end: null };
   const { data } = await supabase
     .from("properties")
     .select("lakes(ice_out_actual, pull_deadline)")
-    .eq("owner_id", user.id)
-    .limit(1)
+    .eq("id", propertyId)
     .maybeSingle();
   const lake = Array.isArray(data?.lakes) ? data?.lakes[0] : data?.lakes;
   return {
@@ -79,12 +74,16 @@ export async function getAvailability(
 export interface BookingResult {
   ok: boolean;
   error?: string;
+  needsVerification?: boolean;
 }
 
 /**
- * Confirm a booking. Re-prices server-side (never trusts a client price),
- * re-validates the season window + capacity, creates a `requested` job, and
- * fires the booking-confirmed text + email. Best-effort on notifications.
+ * Confirm a booking. Enforces rule 5 (verified email + SMS-verified mobile
+ * before first booking), re-prices server-side (never trusts a client price),
+ * re-validates the season window + capacity against the property's OWN lake,
+ * then creates a `requested` job and fires the booking-confirmed text + email.
+ * The insert runs with the service role — direct owner inserts into jobs are
+ * closed at the RLS layer, so this action is the only door, and it validates.
  */
 export async function createBooking(
   serviceId: string,
@@ -97,6 +96,24 @@ export async function createBooking(
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Please sign in first." };
 
+  // RULE 5: working email AND SMS-verified mobile before any booking.
+  const { data: me } = await supabase
+    .from("users")
+    .select("email_verified, phone_verified, phone, email")
+    .eq("id", user.id)
+    .maybeSingle();
+  const emailOk = (me?.email_verified ?? false) || Boolean(user.email_confirmed_at);
+  const phoneOk = me?.phone_verified ?? false;
+  if (!emailOk || !phoneOk) {
+    return {
+      ok: false,
+      needsVerification: true,
+      error: !phoneOk
+        ? "One quick step first: verify your mobile so crews can reach you — it takes 30 seconds."
+        : "One quick step first: confirm your email, then you're ready to book.",
+    };
+  }
+
   const profile = await getFullProfile();
   if (!profile?.hasProfile || !profile.propertyId) {
     return { ok: false, error: "Set up your property first." };
@@ -104,11 +121,11 @@ export async function createBooking(
   const service = await loadService(serviceId);
   if (!service) return { ok: false, error: "That service isn't available." };
 
-  // Re-validate the day server-side (defense in depth).
-  const season = await loadSeason();
+  // Re-validate the day server-side, against THIS property's lake and Indiana time.
+  const season = await loadSeason(profile.propertyId);
   const { fullDates } = await getAvailability(serviceId, Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1);
   const status = dayStatus(date, {
-    today: toISODate(new Date()),
+    today: todayLakeDate(),
     isWaterWork: service.is_water_work,
     seasonStart: season.start,
     seasonEnd: season.end,
@@ -125,18 +142,35 @@ export async function createBooking(
   // Price it here — the client's number is never trusted.
   const price = priceService(service, toPricingProfile(profile));
 
-  const { error } = await supabase.from("jobs").insert({
-    property_id: profile.propertyId,
-    service_id: serviceId,
-    date,
-    frequency,
-    status: "requested",
-    customer_price: price,
-  });
-  if (error) return { ok: false, error: error.message };
+  const admin = createServiceClient();
+  const { data: inserted, error } = await admin
+    .from("jobs")
+    .insert({
+      property_id: profile.propertyId,
+      service_id: serviceId,
+      date,
+      frequency,
+      status: "requested",
+      customer_price: price,
+    })
+    .select("id")
+    .single();
+  if (error || !inserted) return { ok: false, error: error?.message ?? "Could not book that." };
+
+  // Capacity double-check: if a simultaneous booking pushed the day over the
+  // crew's limit, back ours out rather than overbook a crew.
+  const { count } = await admin
+    .from("jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("service_id", serviceId)
+    .eq("date", date)
+    .in("status", ["requested", "scheduled", "in_progress"]);
+  if ((count ?? 0) > service.daily_capacity) {
+    await admin.from("jobs").delete().eq("id", inserted.id);
+    return { ok: false, error: "That day just filled up — pick another date." };
+  }
 
   // Notifications — best effort, never block the booking.
-  const { data: me } = await supabase.from("users").select("phone, email").eq("id", user.id).maybeSingle();
   const pretty = new Date(date + "T12:00:00").toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric",
   });

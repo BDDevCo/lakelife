@@ -84,13 +84,13 @@ export default async function ProfilePage() {
     facts.push(["Lawn", `${profile.lawn_band[0].toUpperCase()}${profile.lawn_band.slice(1)}`, "Sets your weekly mow price"]);
   }
   if (wants("Pier install / removal")) {
-    facts.push(["Pier", `${profile.pier_sections} sections`, `${[profile.ladder ? "Ladder" : "", profile.bumpers ? "bumpers" : ""].filter(Boolean).join(" + ") || "no extras"} · $48/section`]);
+    facts.push(["Pier", `${profile.pier_sections} sections`, `${[profile.ladder ? "Ladder" : "", profile.bumpers ? "bumpers" : ""].filter(Boolean).join(" + ") || "no extras"} · priced per section`]);
   }
   if (wants("Boat lift set / pull")) {
     facts.push(["Boat lifts", `${profile.boat_lifts} lift${profile.boat_lifts === 1 ? "" : "s"}${profile.canopy ? " · canopy" : ""}`, "Set each spring, pulled each fall"]);
   }
   if (wants("Boat storage & winterize")) {
-    facts.push(["Boats", profile.boats.length ? profile.boats.map((b) => `${b.length_ft}' ${b.type}`).join(" · ") : "None on file", "Winterize & store at $50/ft — no repairs"]);
+    facts.push(["Boats", profile.boats.length ? profile.boats.map((b) => `${b.length_ft}' ${b.type}`).join(" · ") : "None on file", "Winterized & stored by the foot — no repairs"]);
   }
   if (wants("Jet ski winterize & store") || wants("PWC lift set / pull")) {
     facts.push(["Jet skis / PWC", `${profile.jet_skis} jet ski${profile.jet_skis === 1 ? "" : "s"} · ${profile.pwc_lifts} lift${profile.pwc_lifts === 1 ? "" : "s"}`, "Stored and set/pulled each season"]);
@@ -157,7 +157,11 @@ export default async function ProfilePage() {
         <div style={{ maxWidth: 620, display: "grid", gap: 16 }}>
           <PaymentMethods initial={cards} />
           <NotificationToggles initial={notifStates} />
-          <AccountControls hasProperty={true} />
+          <AccountControls
+            hasProperty={true}
+            propertyLabel={profile.address ?? undefined}
+            propertyId={profile.propertyId}
+          />
         </div>
       </div>
     </>

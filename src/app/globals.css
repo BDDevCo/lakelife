@@ -228,10 +228,17 @@ button {
   padding: 11px 13px;
   border: 1.5px solid var(--line);
   border-radius: 10px;
-  font-size: 15px;
+  /* 16px minimum: anything smaller makes iOS Safari zoom in on focus */
+  font-size: 16px;
   font-family: inherit;
   color: var(--text);
   background: #fff;
+}
+
+/* Same iOS-zoom guard for any select/textarea we render */
+select,
+textarea {
+  font-size: 16px;
 }
 .ll-field input:focus {
   outline: none;

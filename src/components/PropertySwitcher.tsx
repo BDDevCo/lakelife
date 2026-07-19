@@ -37,7 +37,7 @@ export function PropertySwitcher({
           aria-label="Choose property"
           style={{
             padding: "8px 12px", border: "1.5px solid var(--line)", borderRadius: 10,
-            fontSize: 13.5, fontWeight: 700, fontFamily: "inherit", background: "#fff",
+            fontSize: 16, fontWeight: 700, fontFamily: "inherit", background: "#fff",
             color: "var(--text)", maxWidth: 320,
           }}
         >

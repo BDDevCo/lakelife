@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { TopBar, Waves } from "@/components/Brand";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { SignOutButton } from "@/components/SignOutButton";
+import { listProperties } from "@/app/profile/data";
 
 export default async function WelcomePage() {
   let name = "there";
@@ -16,6 +18,11 @@ export default async function WelcomePage() {
       data: { user },
     } = await supabase.auth.getUser();
     if (user) {
+      // A customer who already has a property doesn't need onboarding —
+      // send them straight to the portal.
+      const properties = await listProperties();
+      if (properties.length > 0) redirect("/book");
+
       email = user.email ?? "";
       const { data: profile } = await supabase
         .from("users")
@@ -87,8 +94,8 @@ export default async function WelcomePage() {
           </div>
 
           <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-            <Link className="ll-btn" href="/">
-              Back to home
+            <Link className="ll-btn" href="/profile/setup">
+              Set up my property →
             </Link>
             <SignOutButton />
           </div>

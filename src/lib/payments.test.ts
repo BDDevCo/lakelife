@@ -28,6 +28,10 @@ describe("tokenize (mock) — never returns the raw card number", () => {
     expect(res.token!.exp_year).toBe(2028);
     // the token must not contain the full card number
     expect(res.token!.token).not.toContain("4242424242424242");
+    // ...and beyond the "tok_mock_4242_" head, no long digit run that could
+    // ever be mistaken for (or hide) a PAN by the server-side guard
+    const tail = res.token!.token.replace(/^tok_[a-z0-9]+_\d{4}_/, "");
+    expect(/\d{13,19}/.test(tail)).toBe(false);
   });
 
   it("rejects an invalid card number", async () => {

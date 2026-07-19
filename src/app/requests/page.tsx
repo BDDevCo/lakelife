@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
 import { getActivePropertyId } from "@/app/profile/data";
+import { CancelRequestButton } from "@/components/CancelRequestButton";
+import { todayLakeDate } from "@/lib/booking";
 
 const STATUS_PILL: Record<string, string> = {
   requested: "warn", scheduled: "teal", in_progress: "teal", complete: "ok", paid: "slate",
@@ -64,19 +66,25 @@ export default async function RequestsPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                 <thead>
                   <tr style={{ textAlign: "left", background: "#f7fafb" }}>
-                    <Th>Service</Th><Th>Frequency</Th><Th>Date</Th><Th>Status</Th><Th right>Price</Th>
+                    <Th>Service</Th><Th>Frequency</Th><Th>Date</Th><Th>Status</Th><Th right>Price</Th><Th right>{""}</Th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => (
-                    <tr key={r.id} style={{ borderTop: "1px solid var(--line)" }}>
-                      <Td><b>{r.service_name ?? "Service"}</b></Td>
-                      <Td muted>{r.frequency ?? "—"}</Td>
-                      <Td>{r.date ? new Date(r.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}</Td>
-                      <Td><span className={`ll-pill ${STATUS_PILL[r.status] ?? "slate"}`}>{STATUS_LABEL[r.status] ?? r.status}</span></Td>
-                      <Td right>{r.customer_price != null ? formatPrice(Number(r.customer_price)) : "—"}</Td>
-                    </tr>
-                  ))}
+                  {rows.map((r) => {
+                    const cancellable =
+                      r.status === "requested" ||
+                      (r.status === "scheduled" && (!r.date || r.date > todayLakeDate()));
+                    return (
+                      <tr key={r.id} style={{ borderTop: "1px solid var(--line)" }}>
+                        <Td><b>{r.service_name ?? "Service"}</b></Td>
+                        <Td muted>{r.frequency ?? "—"}</Td>
+                        <Td>{r.date ? new Date(r.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}</Td>
+                        <Td><span className={`ll-pill ${STATUS_PILL[r.status] ?? "slate"}`}>{STATUS_LABEL[r.status] ?? r.status}</span></Td>
+                        <Td right>{r.customer_price != null ? formatPrice(Number(r.customer_price)) : "—"}</Td>
+                        <Td right>{cancellable ? <CancelRequestButton jobId={r.id} serviceName={r.service_name ?? "this service"} /> : null}</Td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

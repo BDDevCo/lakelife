@@ -26,6 +26,23 @@ export function VerifyPanel({ initialPhone }: { initialPhone?: string }) {
     }
   }, [initialPhone]);
 
+  // If we already know the number, text the code automatically — the customer
+  // shouldn't have to ask for something they clearly came here to get.
+  // (Session-flagged so refreshes/re-mounts don't burn extra texts.)
+  const autoSent = useRef(false);
+  useEffect(() => {
+    if (autoSent.current || sent) return;
+    const number = initialPhone || (() => { try { return sessionStorage.getItem("ll_pending_phone") ?? ""; } catch { return ""; } })();
+    if (!number) return;
+    let alreadySent = false;
+    try { alreadySent = sessionStorage.getItem("ll_code_autosent") === "1"; } catch {}
+    if (alreadySent) return;
+    autoSent.current = true;
+    try { sessionStorage.setItem("ll_code_autosent", "1"); } catch {}
+    void sendCode(number);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPhone, sent]);
+
   async function sendCode(toNumber: string) {
     if (!toNumber.trim()) {
       setNeedsPhone(true);
@@ -50,11 +67,32 @@ export function VerifyPanel({ initialPhone }: { initialPhone?: string }) {
   }
 
   function onDigit(i: number, val: string) {
-    const clean = val.replace(/\D/g, "").slice(-1);
+    const cleaned = val.replace(/\D/g, "");
+    // iOS SMS auto-fill (or a paste) can drop the whole code into one box —
+    // spread it across all six instead of losing it.
+    if (cleaned.length > 1) {
+      fillCode(cleaned);
+      return;
+    }
     const next = [...digits];
-    next[i] = clean;
+    next[i] = cleaned;
     setDigits(next);
-    if (clean && i < 5) boxes.current[i + 1]?.focus();
+    if (cleaned && i < 5) boxes.current[i + 1]?.focus();
+  }
+
+  function fillCode(codeDigits: string) {
+    const six = codeDigits.slice(0, 6).split("");
+    const next = ["", "", "", "", "", ""].map((_, i) => six[i] ?? "");
+    setDigits(next);
+    boxes.current[Math.min(six.length, 5)]?.focus();
+  }
+
+  function onPaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    const pasted = e.clipboardData.getData("text").replace(/\D/g, "");
+    if (pasted.length >= 2) {
+      e.preventDefault();
+      fillCode(pasted);
+    }
   }
 
   function onKeyDown(i: number, e: React.KeyboardEvent<HTMLInputElement>) {
@@ -135,10 +173,12 @@ export function VerifyPanel({ initialPhone }: { initialPhone?: string }) {
                   }}
                   className="ll-code-box"
                   inputMode="numeric"
-                  maxLength={1}
+                  maxLength={i === 0 ? 6 : 1}
+                  autoComplete={i === 0 ? "one-time-code" : "off"}
                   value={d}
                   onChange={(e) => onDigit(i, e.target.value)}
                   onKeyDown={(e) => onKeyDown(i, e)}
+                  onPaste={onPaste}
                   aria-label={`Digit ${i + 1}`}
                 />
               ))}
@@ -151,13 +191,24 @@ export function VerifyPanel({ initialPhone }: { initialPhone?: string }) {
             >
               {busy ? "Verifying…" : "Verify & continue"}
             </button>
-            <div style={{ textAlign: "center", marginTop: 12 }}>
+            <div style={{ textAlign: "center", marginTop: 12, display: "flex", gap: 8, justifyContent: "center" }}>
               <button
                 className="ll-btn ghost sm"
                 onClick={() => sendCode(phone)}
                 disabled={busy}
               >
                 Resend code
+              </button>
+              <button
+                className="ll-btn ghost sm"
+                onClick={() => {
+                  setSent(false);
+                  setNeedsPhone(true);
+                  setDigits(["", "", "", "", "", ""]);
+                }}
+                disabled={busy}
+              >
+                Wrong number?
               </button>
             </div>
           </>

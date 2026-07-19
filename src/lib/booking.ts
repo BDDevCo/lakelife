@@ -38,6 +38,17 @@ export function toISODate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * Today's date AT THE LAKES (Indiana), regardless of where the server runs.
+ * Production servers run in UTC, where "today" flips at 7-8pm Indiana time —
+ * using server-local time would wrongly reject evening bookings for tomorrow.
+ */
+export function todayLakeDate(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Indiana/Indianapolis",
+  }).format(new Date());
+}
+
 /** Is a frequency a repeating (recurring) one? */
 export function isRecurring(frequency: string): boolean {
   return /weekly|2 weeks|arrival/i.test(frequency);
