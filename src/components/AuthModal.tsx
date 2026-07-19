@@ -54,7 +54,7 @@ export function AuthModal({
       return;
     }
     toast("Welcome back!");
-    router.push("/book");
+    router.push("/portal");
     router.refresh();
   }
 
@@ -62,7 +62,7 @@ export function AuthModal({
     setBusy(true);
     // New customers continue to mobile verification; returning customers go
     // straight to booking (verify/welcome will still catch stragglers).
-    const next = mode === "signup" ? "/verify" : "/book";
+    const next = mode === "signup" ? "/verify" : "/portal";
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: { redirectTo: `${siteUrl()}/auth/callback?next=${next}` },

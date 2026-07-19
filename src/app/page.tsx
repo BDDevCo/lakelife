@@ -42,7 +42,7 @@ export default async function Home() {
               {signedIn ? (
                 <Link
                   className="ll-chip"
-                  href="/book"
+                  href="/portal"
                   style={{
                     cursor: "pointer",
                     background: "var(--sun)",

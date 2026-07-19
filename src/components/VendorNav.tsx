@@ -4,14 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const TABS = [
-  { href: "/book", label: "Book services" },
-  { href: "/requests", label: "My requests" },
-  { href: "/approvals", label: "Approvals" },
-  { href: "/billing", label: "Billing" },
-  { href: "/profile", label: "Property profile" },
+  { href: "/vendor", label: "Today" },
+  { href: "/vendor/availability", label: "Availability" },
 ];
 
-export function OwnerNav() {
+export function VendorNav() {
   const pathname = usePathname();
   return (
     <div className="wrap" style={{ paddingTop: 20, paddingBottom: 0 }}>
@@ -22,7 +19,8 @@ export function OwnerNav() {
         }}
       >
         {TABS.map((t) => {
-          const active = pathname === t.href || (t.href !== "/profile" && pathname.startsWith(t.href));
+          // "/vendor" matches only exactly, so it doesn't stay lit on sub-pages.
+          const active = pathname === t.href || (t.href !== "/vendor" && pathname.startsWith(t.href));
           return (
             <Link
               key={t.href}
