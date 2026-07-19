@@ -304,6 +304,38 @@ export async function getMarginByService(): Promise<{ rows: MarginRow[]; total: 
   return { rows, total };
 }
 
+// ---- Routes ----------------------------------------------------------------
+
+export interface RouteSummary {
+  id: string;
+  date: string;
+  vendor_company: string | null;
+  stops: number;
+  drive_minutes: number | null;
+  map_url: string | null;
+}
+
+/** Tomorrow's built routes (or a given date's). */
+export async function getRoutesForDate(dateISO: string): Promise<RouteSummary[]> {
+  const admin = createServiceClient();
+  const { data } = await admin
+    .from("routes")
+    .select("id, date, stops_order, drive_minutes, map_url, vendors(company)")
+    .eq("date", dateISO)
+    .order("created_at", { ascending: true });
+  return (data ?? []).map((r) => {
+    const v = Array.isArray(r.vendors) ? r.vendors[0] : r.vendors;
+    return {
+      id: r.id as string,
+      date: r.date as string,
+      vendor_company: (v as { company?: string } | null)?.company ?? null,
+      stops: Array.isArray(r.stops_order) ? r.stops_order.length : 0,
+      drive_minutes: r.drive_minutes == null ? null : Number(r.drive_minutes),
+      map_url: (r.map_url as string) ?? null,
+    };
+  });
+}
+
 // ---- Lake conditions ------------------------------------------------------
 
 export interface LakeCondition {
