@@ -50,12 +50,43 @@ export function AuthModal({
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setBusy(false);
     if (error) {
-      toast(error.message);
+      // Supabase says "Invalid login credentials" for both wrong password AND
+      // no-such-account — point people at the recovery path.
+      toast(
+        /invalid login/i.test(error.message)
+          ? "Email or password doesn't match. Try “Forgot password?” below."
+          : error.message,
+      );
       return;
     }
     toast("Welcome back!");
     router.push("/portal");
     router.refresh();
+  }
+
+  async function forgotPassword() {
+    if (!email) {
+      toast("Enter your email above first, then tap “Forgot password?”");
+      return;
+    }
+    setBusy(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${siteUrl()}/auth/callback?next=/reset-password`,
+    });
+    setBusy(false);
+    if (error) {
+      toast(error.message);
+      return;
+    }
+    toast("Check your email for a link to set a new password (check spam too).");
+  }
+
+  // Enter in any field submits the visible action.
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    if (mode === "signup") emailSignUp();
+    else emailSignIn();
   }
 
   async function ssoSignIn(provider: "google" | "apple") {
@@ -154,54 +185,66 @@ export function AuthModal({
 
           <div className="ll-or">{mode === "signup" ? "or start from scratch" : "or with email"}</div>
 
-          {mode === "signup" && (
+          <form onSubmit={onSubmit}>
+            {mode === "signup" && (
+              <div className="ll-field">
+                <label>Full name</label>
+                <input
+                  placeholder="First & last name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+            )}
             <div className="ll-field">
-              <label>Full name</label>
+              <label>{mode === "signup" ? "Email — required, receipts & records" : "Email"}</label>
               <input
-                placeholder="First & last name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                type="email"
+                autoComplete="email"
+                placeholder="you@email.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
               />
             </div>
-          )}
-          <div className="ll-field">
-            <label>{mode === "signup" ? "Email — required, receipts & records" : "Email"}</label>
-            <input
-              type="email"
-              placeholder="you@email.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
-          <div className="ll-field">
-            <label>Password</label>
-            <input
-              type="password"
-              placeholder={mode === "signup" ? "Choose a password" : "Your password"}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-          {mode === "signup" && (
             <div className="ll-field">
-              <label>Mobile — required, we verify by text</label>
+              <label>Password</label>
               <input
-                inputMode="tel"
-                placeholder="(260) 555-0100"
-                value={mobile}
-                onChange={(e) => setMobile(e.target.value)}
+                type="password"
+                autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                placeholder={mode === "signup" ? "Choose a password" : "Your password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
               />
             </div>
-          )}
+            {mode === "signin" && (
+              <div style={{ textAlign: "right", marginTop: -4, marginBottom: 10 }}>
+                <button
+                  type="button"
+                  onClick={forgotPassword}
+                  disabled={busy}
+                  style={{ background: "none", border: "none", color: "var(--teal-dark)", fontWeight: 700, fontSize: 12.5, cursor: "pointer", padding: 0 }}
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
+            {mode === "signup" && (
+              <div className="ll-field">
+                <label>Mobile — required, we verify by text</label>
+                <input
+                  inputMode="tel"
+                  autoComplete="tel"
+                  placeholder="(260) 555-0100"
+                  value={mobile}
+                  onChange={(e) => setMobile(e.target.value)}
+                />
+              </div>
+            )}
 
-          <button
-            className="ll-btn"
-            style={{ width: "100%" }}
-            onClick={mode === "signup" ? emailSignUp : emailSignIn}
-            disabled={busy}
-          >
-            {busy ? (mode === "signup" ? "Creating…" : "Signing in…") : mode === "signup" ? "Create account" : "Sign in"}
-          </button>
+            <button className="ll-btn" style={{ width: "100%" }} type="submit" disabled={busy}>
+              {busy ? (mode === "signup" ? "Creating…" : "Signing in…") : mode === "signup" ? "Create account" : "Sign in"}
+            </button>
+          </form>
 
           <div style={{ textAlign: "center", marginTop: 14, fontSize: 13 }}>
             {mode === "signup" ? (
