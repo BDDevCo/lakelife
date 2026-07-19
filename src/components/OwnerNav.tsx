@@ -7,6 +7,7 @@ const TABS = [
   { href: "/book", label: "Book services" },
   { href: "/requests", label: "My requests" },
   { href: "/approvals", label: "Approvals" },
+  { href: "/messages", label: "Messages" },
   { href: "/billing", label: "Billing" },
   { href: "/profile", label: "Property profile" },
 ];

@@ -11,6 +11,7 @@ import {
   getLakeConditions,
   getRoutesForDate,
 } from "./data";
+import { getMessageThreads } from "./messages-data";
 import { todayLakeDate } from "@/lib/booking";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -44,13 +45,14 @@ export default async function OpsPage() {
   t.setDate(t.getDate() + 1);
   const tomorrow = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
 
-  const [summary, jobs, vendors, margin, lakes, routes] = await Promise.all([
+  const [summary, jobs, vendors, margin, lakes, routes, threads] = await Promise.all([
     getOpsSummary(),
     getJobBoard(),
     getActiveVendors(),
     getMarginByService(),
     getLakeConditions(),
     getRoutesForDate(tomorrow),
+    getMessageThreads(),
   ]);
 
   const kpis = [
@@ -88,7 +90,7 @@ export default async function OpsPage() {
           ))}
         </div>
 
-        <OpsShell jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} />
+        <OpsShell jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} />
       </div>
     </>
   );

@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { NotificationToggles } from "@/components/NotificationToggles";
 import { AccountControls } from "@/components/AccountControls";
 import { PaymentMethods } from "@/components/PaymentMethods";
 import { OwnerHeader } from "@/components/OwnerHeader";
@@ -8,7 +7,6 @@ import { listPaymentMethods } from "./payment-actions";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getFullProfile } from "./data";
-import { loadNotifStates } from "./notif-actions";
 
 export default async function ProfilePage() {
   if (!hasSupabaseEnv()) {
@@ -42,10 +40,9 @@ export default async function ProfilePage() {
     );
   }
 
-  const [{ data: me }, profile, notifStates, cards] = await Promise.all([
+  const [{ data: me }, profile, cards] = await Promise.all([
     supabase.from("users").select("name, email, phone").eq("id", user.id).maybeSingle(),
     getFullProfile(),
-    loadNotifStates(),
     listPaymentMethods(),
   ]);
 
@@ -156,7 +153,10 @@ export default async function ProfilePage() {
 
         <div style={{ maxWidth: 620, display: "grid", gap: 16 }}>
           <PaymentMethods initial={cards} />
-          <NotificationToggles initial={notifStates} />
+          <Link href="/settings/notifications" className="ll-card ll-card-pad" style={{ display: "block", textDecoration: "none", color: "inherit" }}>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>Notification settings →</div>
+            <div className="mut" style={{ fontSize: 13 }}>Choose text or email for each kind of update. Receipts are always on.</div>
+          </Link>
           <AccountControls
             hasProperty={true}
             propertyLabel={profile.address ?? undefined}

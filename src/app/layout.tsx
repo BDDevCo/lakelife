@@ -23,6 +23,12 @@ export const metadata: Metadata = {
   title: "LakeLife — Your lake home, ready when you are.",
   description:
     "One request, one price, one crew at your door. Seasonal opening & closing, piers, lifts, boats, mowing and housekeeping on Big Long, Pretty & Big Turkey Lakes.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "LakeLife",
+    statusBarStyle: "black-translucent",
+  },
 };
 
 export const viewport: Viewport = {

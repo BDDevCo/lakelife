@@ -5,13 +5,16 @@ import { JobBoard } from "./JobBoard";
 import { MarginTable } from "./MarginTable";
 import { LakeConditions } from "./LakeConditions";
 import { RouteBuilder } from "./RouteBuilder";
+import { MessageBoard } from "./MessageBoard";
 import type { OpsJob, ActiveVendor, MarginRow, LakeCondition, RouteSummary } from "@/app/ops/data";
+import type { OpsThread } from "@/app/ops/messages-data";
 
 const TABS = [
   { key: "jobs", label: "Jobs" },
   { key: "margin", label: "Revenue & margin" },
   { key: "lakes", label: "Lake conditions" },
   { key: "routing", label: "Routing" },
+  { key: "messages", label: "Messages" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -23,6 +26,7 @@ export function OpsShell({
   lakes,
   routes,
   routeDate,
+  threads,
 }: {
   jobs: OpsJob[];
   vendors: ActiveVendor[];
@@ -30,6 +34,7 @@ export function OpsShell({
   lakes: LakeCondition[];
   routes: RouteSummary[];
   routeDate: string;
+  threads: OpsThread[];
 }) {
   const [tab, setTab] = useState<TabKey>("jobs");
 
@@ -65,6 +70,8 @@ export function OpsShell({
       {tab === "margin" && <MarginTable rows={margin.rows} total={margin.total} />}
       {tab === "lakes" && <LakeConditions lakes={lakes} />}
       {tab === "routing" && <RouteBuilder routes={routes} date={routeDate} />}
+
+      {tab === "messages" && <MessageBoard threads={threads} />}
     </div>
   );
 }

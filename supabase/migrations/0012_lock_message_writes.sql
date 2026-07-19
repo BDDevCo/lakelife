@@ -1,0 +1,21 @@
+-- ============================================================
+--  LakeLife — lock direct client writes on public.messages (0012).
+--
+--  The dispatch message board (owner <-> ops) writes ONLY through the
+--  service-role client: sendOwnerMessage (src/app/messages/actions.ts) and
+--  sendOpsMessage (src/app/ops/messages-actions.ts). Both assert identity
+--  first, then set from_user to the caller's own id.
+--
+--  Without this revoke, the default INSERT grant to `authenticated` plus the
+--  messages_owner RLS policy (owner OR ops on the property) would let an owner
+--  POST a row straight to PostgREST with a FORGED from_user — e.g. spoofing a
+--  message that renders as "LakeLife dispatch" in their own thread. Revoking
+--  client writes removes that surface and changes nothing for the product,
+--  since every legitimate write is service-role. SELECT stays (RLS-governed)
+--  so owners can read their own thread and ops can read all.
+--
+--  Same pattern as users (0009), vendors (0010), job_photos/flags (0011).
+--  Run once in the Supabase SQL Editor. Safe to re-run.
+-- ============================================================
+
+revoke insert, update, delete on public.messages from authenticated, anon;
