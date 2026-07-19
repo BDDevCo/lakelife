@@ -21,5 +21,6 @@ export default async function PortalPage() {
     .eq("id", user.id)
     .maybeSingle();
 
+  if (me?.role === "ops") redirect("/ops");
   redirect(me?.role === "vendor" ? "/vendor" : "/book");
 }
