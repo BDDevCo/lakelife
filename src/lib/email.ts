@@ -10,10 +10,11 @@ import "server-only";
  * never fails just because an email couldn't send. No-ops gracefully when
  * Resend isn't configured (missing RESEND_API_KEY) or there's no recipient.
  *
- * Note: until the sending domain (lakelife.ai) is verified in Resend, this
- * sends from Resend's shared onboarding@resend.dev address, which only delivers
- * to the Resend account owner's own email in test mode. Verify the domain
- * before real beta.
+ * Sender resolution: explicit opts.from wins, else EMAIL_FROM env (set this to
+ * "LakeLife <noreply@lakelife.ai>" once the domain is verified in Resend), else
+ * Resend's shared onboarding@resend.dev (test mode — only delivers to the Resend
+ * account owner). So flipping every app email to the branded domain is a single
+ * env var, no code change.
  */
 export async function sendEmail(opts: {
   to: string;
@@ -25,7 +26,7 @@ export async function sendEmail(opts: {
   const key = process.env.RESEND_API_KEY;
   if (!key || !opts.to) return { ok: false, error: "email not configured" };
 
-  const from = opts.from ?? "LakeLife <onboarding@resend.dev>";
+  const from = opts.from ?? process.env.EMAIL_FROM ?? "LakeLife <onboarding@resend.dev>";
 
   try {
     const res = await fetch("https://api.resend.com/emails", {
