@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getMyVendorId } from "./data";
 import { sendSms } from "@/lib/sms";
+import { settleJob } from "@/lib/automation";
 import { todayLakeDate } from "@/lib/booking";
 
 // Only these profile fields may be changed by a crew flag, with safe values.
@@ -129,25 +130,16 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
     return { ok: false, error: "That job is already complete." };
   }
 
-  // Raise the customer invoice. Payout is 'released' only once ops has set the
-  // vendor cost; until then it waits as 'pending' so no null-amount payout goes out.
-  await admin.from("invoices").insert({
-    job_id: jobId,
-    property_id: job.property_id,
-    amount: job.customer_price,
-    status: "due",
-  });
-  await admin.from("payouts").insert({
-    vendor_id: job.vendor_id,
-    job_id: jobId,
-    amount: job.vendor_cost,
-    status: job.vendor_cost != null ? "released" : "pending",
-  });
+  // Settle the job: payout + invoice + auto-charge + receipt. Extracted into an
+  // IDEMPOTENT helper (checks-then-writes) so a partial failure here is
+  // recoverable — the nightly reconcile sweep re-runs it for any job left
+  // completed-but-unbilled. rule 4: only the vault token is ever charged.
+  await settleJob(jobId);
 
   // "Service complete — with photos" text to the owner (best effort).
   const { data: prop } = await admin
     .from("properties")
-    .select("address, owner_id, users(phone)")
+    .select("address, users(phone)")
     .eq("id", job.property_id)
     .maybeSingle();
   const ownerPhone = ((Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as { phone?: string } | null)?.phone;

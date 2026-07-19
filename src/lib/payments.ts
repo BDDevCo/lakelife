@@ -59,6 +59,19 @@ export interface TokenizeResult {
   token?: PaymentToken;
 }
 
+export interface ChargeInput {
+  token: string;
+  amountCents: number;
+  description?: string;
+}
+
+export interface ChargeResult {
+  ok: boolean;
+  error?: string;
+  ref?: string;
+  amountCents?: number;
+}
+
 export const LakeLifePayments = {
   /**
    * Mock of the processor's tokenize(). Validates the card, then returns a
@@ -92,5 +105,38 @@ export const LakeLifePayments = {
     const token = `tok_mock_${last4}_${rand}`;
 
     return { ok: true, token: { token, brand, last4, exp_month, exp_year } };
+  },
+
+  /**
+   * Mock of the processor's charge(). In production the processor charges the
+   * vault token and hands back the real `ref`; we never see a card number here.
+   * Amounts are integer cents to avoid float drift. This mock also refuses
+   * anything that looks like a raw PAN, defending CLAUDE.md rule 4 in depth.
+   */
+  async charge(input: ChargeInput): Promise<ChargeResult> {
+    if (!input.token.startsWith("tok_")) {
+      return { ok: false, error: "Invalid payment token." };
+    }
+    // A real processor charges a vault token, never a card number — refuse a
+    // long digit run that could be (or hide) a leaked PAN.
+    if (/\d{12,}/.test(input.token)) {
+      return {
+        ok: false,
+        error: "Refusing to charge what looks like a raw card number.",
+      };
+    }
+    if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
+      return {
+        ok: false,
+        error: "Charge amount must be a positive whole number of cents.",
+      };
+    }
+
+    // A stand-in charge reference. The real one comes from the processor.
+    const rand =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? "x" + crypto.randomUUID().replace(/-/g, "").slice(0, 15)
+        : "x" + Math.random().toString(36).slice(2, 17);
+    return { ok: true, ref: `ch_mock_${rand}`, amountCents: input.amountCents };
   },
 };

@@ -5,6 +5,7 @@ import { getFullProfile, toPricingProfile } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { dayStatus, toISODate, todayLakeDate } from "@/lib/booking";
 import { sendSms } from "@/lib/sms";
+import { sendEmail } from "@/lib/email";
 
 interface ServiceRow extends ServiceRule {
   is_water_work: boolean;
@@ -177,21 +178,16 @@ export async function createBooking(
   if (me?.phone) {
     void sendSms(me.phone, `LakeLife: ${service.name} is booked for ${pretty}. We'll text you when a crew is on the way. 🌊`);
   }
-  if (me?.email && process.env.RESEND_API_KEY) {
-    void fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        from: "LakeLife <onboarding@resend.dev>",
-        to: [me.email],
-        subject: `Booked: ${service.name} 🌊`,
-        html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#20343d">
+  if (me?.email) {
+    void sendEmail({
+      to: me.email,
+      subject: `Booked: ${service.name} 🌊`,
+      html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#20343d">
           <h2>You're booked, ${profile.address ?? "friend"}.</h2>
           <p><b>${service.name}</b> — ${frequency}<br>${pretty}</p>
           <p style="color:#5D7681">Your price: <b>$${price.toLocaleString()}</b>. You're only charged after the service is completed and photos are uploaded.</p>
         </div>`,
-      }),
-    }).catch(() => {});
+    });
   }
 
   return { ok: true };

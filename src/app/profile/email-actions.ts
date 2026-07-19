@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { getFullProfile, getPricedServices } from "./data";
 import { formatPrice } from "@/lib/pricing";
+import { sendEmail } from "@/lib/email";
 
 /**
  * Send the warm setup recap as a welcome email via Resend.
@@ -51,23 +52,9 @@ export async function sendWelcomeEmail(): Promise<{ ok: boolean; skipped?: boole
     </div>
   </div>`;
 
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        from: "LakeLife <onboarding@resend.dev>",
-        to: [user.email],
-        subject: "Your LakeLife property is set up 🌊",
-        html,
-      }),
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      return { ok: false, error: `Resend ${res.status}: ${body}` };
-    }
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "send failed" };
-  }
+  return sendEmail({
+    to: user.email,
+    subject: "Your LakeLife property is set up 🌊",
+    html,
+  });
 }

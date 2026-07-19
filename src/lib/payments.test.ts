@@ -44,3 +44,42 @@ describe("tokenize (mock) — never returns the raw card number", () => {
     expect(res.ok).toBe(false);
   });
 });
+
+describe("LakeLifePayments.charge", () => {
+  it("charges a valid token + positive integer cents", async () => {
+    const res = await LakeLifePayments.charge({ token: "tok_mock_4242_xabc123", amountCents: 12500 });
+    expect(res.ok).toBe(true);
+    expect(res.ref!.startsWith("ch_mock_")).toBe(true);
+    expect(res.amountCents).toBe(12500);
+  });
+
+  it("rejects a token that doesn't start with tok_", async () => {
+    const res = await LakeLifePayments.charge({ token: "card_4242", amountCents: 12500 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Invalid payment token.");
+  });
+
+  it("refuses a token that hides a raw PAN (16-digit run)", async () => {
+    const res = await LakeLifePayments.charge({ token: "tok_4242424242424242", amountCents: 12500 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Refusing to charge what looks like a raw card number.");
+  });
+
+  it("rejects a zero amount", async () => {
+    const res = await LakeLifePayments.charge({ token: "tok_mock_4242_xabc123", amountCents: 0 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Charge amount must be a positive whole number of cents.");
+  });
+
+  it("rejects a negative amount", async () => {
+    const res = await LakeLifePayments.charge({ token: "tok_mock_4242_xabc123", amountCents: -500 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Charge amount must be a positive whole number of cents.");
+  });
+
+  it("rejects a non-integer amount", async () => {
+    const res = await LakeLifePayments.charge({ token: "tok_mock_4242_xabc123", amountCents: 10.5 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Charge amount must be a positive whole number of cents.");
+  });
+});
