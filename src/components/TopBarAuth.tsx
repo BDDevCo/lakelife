@@ -15,6 +15,7 @@ export function TopBarAuth() {
   const router = useRouter();
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
 
   useEffect(() => {
     if (!hasSupabaseEnv()) {
@@ -50,8 +51,11 @@ export function TopBarAuth() {
 
   return (
     <>
-      <button onClick={() => setOpen(true)} style={signInBtn}>Sign in</button>
-      {open && <AuthModal initialMode="signin" onClose={() => setOpen(false)} />}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button onClick={() => { setMode("signin"); setOpen(true); }} style={signInBtn}>Sign in</button>
+        <button onClick={() => { setMode("signup"); setOpen(true); }} style={joinBtn}>Dive in →</button>
+      </div>
+      {open && <AuthModal initialMode={mode} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -65,6 +69,18 @@ const signInBtn: React.CSSProperties = {
   padding: "8px 16px",
   borderRadius: 99,
   cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+const joinBtn: React.CSSProperties = {
+  background: "var(--sun)",
+  border: "1px solid var(--sun)",
+  color: "var(--ink)",
+  fontWeight: 800,
+  fontSize: 13.5,
+  padding: "8px 16px",
+  borderRadius: 99,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
 };
 const linkBtn: React.CSSProperties = {
   color: "#fff",

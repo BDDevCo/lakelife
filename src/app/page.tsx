@@ -35,7 +35,7 @@ export default async function Home() {
               piers &amp; lifts, winterize &amp; storage. Lakefront or a few blocks off,
               around Big Long, Pretty &amp; Big Turkey Lakes.
             </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 22 }}>
+            <div className="ll-hero-chips">
               <span className="ll-chip">📍 <b>Lakefront or near it — Big Long · Pretty · Big Turkey</b></span>
               <span className="ll-chip">Home · housekeeping · lawn &amp; seasonal</span>
               <span className="ll-chip">Boats · jet skis · piers · lifts · storage</span>

@@ -69,7 +69,7 @@ export function TopBar() {
             Lake<em>Life</em>
           </span>
         </Link>
-        <span className="ll-tagline">Your lake home, ready when you are.</span>
+        <span className="ll-tagline">House, boat &amp; toys — every season.</span>
         <div style={{ marginLeft: "auto" }}>
           <TopBarAuth />
         </div>

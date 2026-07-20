@@ -20,7 +20,7 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "LakeLife — Your lake home, ready when you are.",
+  title: "LakeLife — Lake life, handled. House, boat & toy care every season",
   description:
     "One request, one price, one crew at your door. Seasonal opening & closing, piers, lifts, boats, mowing and housekeeping on Big Long, Pretty & Big Turkey Lakes.",
   manifest: "/manifest.webmanifest",

@@ -351,6 +351,38 @@ textarea {
   position: relative;
   z-index: 2;
 }
+.ll-hero-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+/* On desktop the hero centers into a contained column so it doesn't sprawl
+   across a wide teal void; mobile keeps its tighter left-aligned stack. */
+@media (min-width: 760px) {
+  .ll-hero-inner {
+    padding: 88px 24px 124px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .ll-hero h1,
+  .ll-hero p {
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .ll-hero h1 {
+    max-width: 20ch;
+  }
+  .ll-hero p {
+    max-width: 58ch;
+  }
+  .ll-hero-chips {
+    justify-content: center;
+    margin-top: 28px;
+  }
+}
 .ll-eyebrow {
   font-size: 12.5px;
   font-weight: 800;
