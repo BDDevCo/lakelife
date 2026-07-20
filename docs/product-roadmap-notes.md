@@ -165,6 +165,47 @@ seasonal ops + fractional bookkeeper/lawyer (max 5).
   hands) → ping crews to set rates → service graduates into that lake's catalog.
   Zero employees anywhere in the loop.
 
+## 8h. Relationship onboarding flywheel + easy crew invite (owner notes 2026-07-20)
+CORE PRIMITIVE: properties.preferred_vendor — dispatch gives the bound crew first
+right of refusal; auction/waterfall only runs when preferred is unavailable/lapsed.
+Solves "abandoning my guy" AND feeds density. All three notes = one flywheel.
+
+- CREW IMPORTS THEIR BOOK: crew uploads CSV/contacts in portal → dedupe vs
+  existing properties → PRE-PROVISIONED properties (address, services, crew's
+  current price pre-filled as menu price) → crew reviews → sends invite. Customer
+  onboarding collapses to "confirm + add card". Imported customer AUTO-BINDS to
+  that crew (preferred_vendor). Imported price runs the margin-floor check.
+  *** LEGAL GUARDRAIL (critical): NO cold automated blasts (TCPA = $500-1500/text).
+  CREW IS THE MESSENGER, framed as continuity: "it's Mike at GreenEdge — moved my
+  scheduling to LakeLife, same crew/work, photos + easy booking, claim your spot
+  [link]". Customer click+card+ToS = the opt-in. Only then is SMS/email clean.
+  Dedupe by phone/address; a customer can't be two crews' preferred (first-claim
+  or customer chooses).
+
+- EASY OPS→CREW INVITE (ranked): (1) UNIVERSAL QR + join link — self-serve signup
+  (company, COI, W-9, services) → ops approval queue; recruits from a flyer while
+  you sleep, ops types nothing [BUILD]. (2) ONE-TAP SMS invite via Twilio (already
+  wired) — "met a guy, text him the link" [BUILD]. (3) Email invite [EXISTS]. All
+  funnel to the same COI/W-9 approval gate.
+
+- CUSTOMER BRINGS THEIR CONTRACTOR (highest-trust onboarding): portal/onboarding
+  "Already have a crew you love? Invite them." → LakeLife texts the pro ("your
+  customer [Name] wants to keep working with you via LakeLife — join free, keep
+  your customer, we handle scheduling/invoicing/payment") → contractor onboards →
+  auto-bound preferred_vendor, shown as "Your crew: Mike @ GreenEdge ⭐ — always
+  first on your jobs" (visible lock = anti-abandonment feature). Compounds: each
+  customer-brought contractor then imports THEIR other customers.
+  Edge cases: contractor won't join → customer picks available crew or waitlists
+  (never forced). Bound crew lapses → waterfall with SOFT notice ("your usual crew
+  is booked that week — [other] this once, or a later date with Mike?"), never a
+  silent swap.
+
+- SYNERGY w/ dispatch design: preferred-binding OVERRIDES the auction when the
+  bound crew is eligible; auction runs only for unbound customers or when preferred
+  is unavailable. Helps density (a crew's book = their geographic territory).
+  Schema: properties.preferred_vendor uuid null; invite/import tables; consent
+  timestamp at claim.
+
 ## 9. Build sequence when tokens reset (Tue)
 1. Dispatch engine + capacity calendar + crew rates (dispatch-and-pricing-design.md
    §G — the big one, agents).
