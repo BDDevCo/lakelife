@@ -87,6 +87,30 @@ decisions, answers, and phased backlog. Build resumes Tue 7/22 after 7am.
   join fund the fireworks." HOA markets the platform; dodges dues-collection
   regulation entirely.
 
+## 8c. Differentiation & margin strategy (agreed thinking 2026-07-19; zero-employee filter)
+DESIGN FILTER: nothing ships that needs a human to operate. Org ceiling: owner +
+seasonal ops + fractional bookkeeper/lawyer (max 5).
+- MOAT (in order): (1) per-lake route density; (2) Property Dossier — "CarFax for
+  the lake home", photos/conditions accrue per property, TRANSFERS ON HOME SALE
+  (realtor channel: churn event → acquisition channel); (3) AUTOPILOT annual plan —
+  subscribe the season (open/mow/close/winterize/store auto-booked yearly, one
+  confirm-text per event). Autopilot = headline product.
+- Customer onboarding: address-first magic (public county assessor/parcel data
+  pre-fills sqft/lot/shoreline → one-tap confirm); neighbor social proof (never
+  discounts); realtor dossier transfer; HOA ambassadors.
+- Vendor onboarding: back-office-as-product + INSTANT PAY (same-day payout after
+  photo verification for 1.5% fee; weekly batch free) — crews evangelize, pure
+  margin, 0 humans.
+- Margin levers ranked: instant-pay fee; photo-AI inspection → one-tap repair
+  upsell (every visit = inspection; also auto photo-QA + chargeback evidence
+  packs); crunch-window pricing (UN-PARK for fall pull season: menu +15%, crew
+  rates unchanged); AI concierge drafting all Messages; duration-learning →
+  tighter capacity; payment float.
+- KILL LIST: no custom quotes ever (algorithmic pricing only; crew-proposed
+  repair prices auto-marked-up, one-tap approve); no published phone number
+  (Messages + AI only); no manual dispatch (policy); Autopilot customers see one
+  status card, not a booking grid.
+
 ## 9. Build sequence when tokens reset (Tue)
 1. Dispatch engine + capacity calendar + crew rates (dispatch-and-pricing-design.md
    §G — the big one, agents).
