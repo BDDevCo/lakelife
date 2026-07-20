@@ -66,6 +66,27 @@ decisions, answers, and phased backlog. Build resumes Tue 7/22 after 7am.
 - SEO: per-lake landing pages ("pier installation Big Long Lake"), sitemap,
   metadata. Next.js already SSR/SEO-native. Phase with marketing.
 
+## 8b. Sales rep program (DESIGNED — owner to confirm numbers)
+- Two bounty types: homeowner referrals + crew referrals. Single-level ONLY (no MLM).
+- Golden rules: commission accrues ONLY on collected money (never signups);
+  paid out of margin (customer price untouched); trailing 12 months then sunsets.
+- Recommended: homeowner = 5% of that customer's collected spend for 12 months
+  (≈1/6 of margin at 30%). Crew referral = $250 flat after crew's 10th completed
+  job (milestone = quality gate).
+- Payouts: monthly, 30-day maturation (refund/dispute clawback pre-payout). Same
+  batch rails + remittance statements as crews; Stripe Connect handles rep 1099s.
+- Rep portal v1 (tiny, reuses patterns): users.role='rep'; one page = big referral
+  link + QR, funnel (taps→signups→activated→active), earnings
+  (accruing/maturing/paid + statements), PRIVATE standing only (no leaderboard).
+- Mechanics: referral_code at signup attributes the USER (all their properties/jobs);
+  commission ledger accrues inside settleJob when invoice → paid; self-referral
+  blocked; ops can void attribution. Rep agreement doc needed (comp terms, brand
+  rules, clawback, IC status).
+- HOA AMBASSADOR VARIANT (possibly the best growth wedge): HOA signs as rep,
+  5% flows to lake association as donation (payout_to: hoa flag). "Neighbors who
+  join fund the fireworks." HOA markets the platform; dodges dues-collection
+  regulation entirely.
+
 ## 9. Build sequence when tokens reset (Tue)
 1. Dispatch engine + capacity calendar + crew rates (dispatch-and-pricing-design.md
    §G — the big one, agents).
