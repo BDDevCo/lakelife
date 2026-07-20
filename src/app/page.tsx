@@ -30,7 +30,7 @@ export default async function Home() {
             <div className="ll-eyebrow">Welcome to LakeLife</div>
             <h1>Lake life, handled.</h1>
             <p>
-              We dial in your house, boat and toys every season — one request, one
+              Your house, boat &amp; toys — dialed in every season. One request, one
               price, one crew at your door. Opening &amp; closing, cleaning, mowing,
               piers &amp; lifts, winterize &amp; storage. Lakefront or a few blocks off,
               around Big Long, Pretty &amp; Big Turkey Lakes.
