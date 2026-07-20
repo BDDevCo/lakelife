@@ -206,6 +206,30 @@ Solves "abandoning my guy" AND feeds density. All three notes = one flywheel.
   Schema: properties.preferred_vendor uuid null; invite/import tables; consent
   timestamp at claim.
 
+## 8i. RV park / rental module — PARKED (owner agrees too soon, 2026-07-20)
+NOT in the services beta. Revisit only after the lake-services loop proves out.
+When revisited: INTEGRATE AS A MODULE, do NOT build a second app.
+- Won't slow LakeLife IF role-scoped: rental routes/bundle load only for park
+  operators + renters; a lake homeowner never downloads rental code. Slugishness
+  comes from client-bundle bloat + bad queries, not more tables.
+- Reuses ~80%: per-diem pricing (already designed for boat storage = stay
+  check-in→check-out), payments/charge-on-event/receipts, crews (turnover
+  cleaning/hookups/winterize between guests = dispatched jobs), photos + Dossier
+  (check-in/out condition, damage disputes), Messages, policies/e-sign (rental
+  agreement + house rules attached to lot, signed at booking).
+- Data model barely moves: properties.type (lake_home|rv_lot|mobile_home|cabin);
+  park operator = multi-lot owner; renter = NEAR-GUEST (phone-verified, no heavy
+  profile, Airbnb-guest-lite).
+- Growth wedge (same as HOA): buy/partner/sponsor RV parks → bulk onboard every
+  lot + seasonal renter + park turnover/maintenance at once; adjacent crews do
+  dock/winterize for guests' boats → density compounds.
+- PILOT: the "haven" RV property owner is buying/flipping on Pretty Lake = pilot
+  lot #1, dogfood before selling the module to other parks.
+- OPEN: business plan / investment deck / credit memo / pro forma NOT FOUND in
+  either connected drive (Google Drive brendonlochert@gmail.com or BD DevCo
+  OneDrive blochert_bddev_co) as of 2026-07-20 — owner to share the file so the
+  RV economics can be folded into the real financial model. Do NOT assume numbers.
+
 ## 9. Build sequence when tokens reset (Tue)
 1. Dispatch engine + capacity calendar + crew rates (dispatch-and-pricing-design.md
    §G — the big one, agents).
