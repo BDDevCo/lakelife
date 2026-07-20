@@ -147,6 +147,24 @@ seasonal ops + fractional bookkeeper/lawyer (max 5).
   browser, no native app. Long-lived sessions now; passkeys as auth upgrade in
   build queue (verify Supabase passkey support at build time).
 
+## 8f. Crew Offers + demand flywheel (2026-07-19; hero copy fix SHIPPED same night)
+- HERO: fixed live — near-lake homes + boats/jet skis/storage now first-class in
+  subhead + chips (commit 7c8f51c, verified on prod).
+- CREW OFFERS (private add-ons, generalizes the repair-upsell): crew sends a
+  specific customer a one-line offer from their portal (description + THEIR rate);
+  platform auto-applies 30% + floor → one all-in price; customer one-tap accepts →
+  real job (photo-gated, auto-charged); lives in that customer's portal
+  ("Your add-ons"), NEVER in the public catalog; re-offerable to Autopilot.
+  Guardrails: AI text screen pre-send (no phone#s/off-platform bait = automated
+  anti-circumvention), all offers visible in ops, spam hits crew score.
+  Crews = zero-cost sales force standing in the yard.
+- DEMAND FLYWHEEL (poll idea, leaner): (1) Crew Offer accept/decline = revealed
+  preference data; (2) one-tap seasonal pulse riding the existing seasonal email
+  ("tap all you'd pay for: gutters · windows · firewood · dock repair"), no login,
+  no survey product. Both feed an ops demand heatmap per lake; threshold (e.g. 10
+  hands) → ping crews to set rates → service graduates into that lake's catalog.
+  Zero employees anywhere in the loop.
+
 ## 9. Build sequence when tokens reset (Tue)
 1. Dispatch engine + capacity calendar + crew rates (dispatch-and-pricing-design.md
    §G — the big one, agents).
