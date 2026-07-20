@@ -53,7 +53,7 @@ export function TopBarAuth() {
     <>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button onClick={() => { setMode("signin"); setOpen(true); }} style={signInBtn}>Sign in</button>
-        <button onClick={() => { setMode("signup"); setOpen(true); }} style={joinBtn}>Dive in →</button>
+        <button onClick={() => { setMode("signup"); setOpen(true); }} style={joinBtn}>Get set up →</button>
       </div>
       {open && <AuthModal initialMode={mode} onClose={() => setOpen(false)} />}
     </>
