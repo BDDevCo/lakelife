@@ -126,6 +126,27 @@ seasonal ops + fractional bookkeeper/lawyer (max 5).
 - Enrollment moments: (1) end of booking flow; (2) immediately after a completed
   job's photo text ("Loved it? Autopilot it for next season").
 
+## 8e. Speed, exit-readiness, distribution, biometrics (2026-07-19, pre-bed session)
+- SPEED POLICY: perf budget = interactive <~1.5s on 2-bar lake cell. Client-side
+  photo compression before upload (biggest lever); offline-tolerant photo queue
+  (works at end of dock = differentiator); skeletons + optimistic taps; server
+  components default; dependency weight rule.
+- EXIT (5yr, strategic buyer): position as "operating system for seasonal property
+  services" — engine + density network + Dossier dataset + near-zero-headcount
+  EBITDA. lakes table = expansion seam (ski/coastal verticals). Already diligence-
+  strong: RLS security, attack-tested, migration trail 0001+, 180+ tests, docs in
+  repo, MIT-clean deps. TODO for data room: (1) MOVE ALL ACCOUNTS (Vercel/Supabase/
+  Resend/GoDaddy/GitHub) to company org, off personal gmail — do soon; (2) analytics
+  events from day one (GMV, take rate, cohort retention, Autopilot attach — acquirers
+  buy curves); (3) ToS/privacy/IC-IP-assignment papers (§2 list = diligence prep).
+  Zero-employee constraint IS the exit thesis (software-margin EBITDA on GMV).
+- DISTRIBUTION: PWA now (installed icon, camera, no store, no Apple tax, instant
+  updates, one link for all roles). Year 2 optional: thin store wrapper for
+  credibility only — no rebuild.
+- BIOMETRICS: passkeys (WebAuthn) = Face ID/Touch ID/Windows Hello from the
+  browser, no native app. Long-lived sessions now; passkeys as auth upgrade in
+  build queue (verify Supabase passkey support at build time).
+
 ## 9. Build sequence when tokens reset (Tue)
 1. Dispatch engine + capacity calendar + crew rates (dispatch-and-pricing-design.md
    §G — the big one, agents).
