@@ -184,5 +184,5 @@ seasonal ops + fractional bookkeeper/lawyer (max 5).
   message. Accept-rate <~25% auto-pauses crew's offer privilege for season.
   Customer mute in notif prefs; ops per-crew kill switch.
 - HERO v2 shipped: H1 "Lake life, handled." / sub "We dial in your house, boat
-  and toys every season..." TODO Tuesday: align TopBar tagline + <title> metadata
+  and toys every season..." DONE (b452de2): TopBar tagline "House, boat & toys — every season.", <title> "Lake life, handled...", gold "Dive in ->" signup CTA in topbar, hero centered on desktop.
   (still "Your lake home, ready when you are").
