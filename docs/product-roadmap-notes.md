@@ -111,6 +111,21 @@ seasonal ops + fractional bookkeeper/lawyer (max 5).
   (Messages + AI only); no manual dispatch (policy); Autopilot customers see one
   status card, not a booking grid.
 
+## 8d. Autopilot mechanics (owner stress-test resolved 2026-07-19)
+- Autopilot is a PER-SERVICE TOGGLE on services the customer chose — never a
+  bundle/package SKU. "Your season, on rails."
+- NO annual price, NO prepay, NO premium: billing unchanged — per job, at
+  completion, menu price. Autopilot only changes who initiates the booking.
+  Headline: "Same prices. Same pay-per-visit. You just never have to remember."
+- Every event = one-tap confirm text (👍 / change / skip). Skip free. Cancel =
+  stops future auto-booking; no contract/penalty.
+- RATE LOCK perk: Autopilot rates locked at enrollment for the season (à la carte
+  stays exposed to crunch-window pricing) → price protection, not exposure.
+- Season total shown ONLY on-demand ("Your season at a glance" — visits +
+  per-event prices), never the headline.
+- Enrollment moments: (1) end of booking flow; (2) immediately after a completed
+  job's photo text ("Loved it? Autopilot it for next season").
+
 ## 9. Build sequence when tokens reset (Tue)
 1. Dispatch engine + capacity calendar + crew rates (dispatch-and-pricing-design.md
    §G — the big one, agents).
