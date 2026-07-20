@@ -30,15 +30,15 @@ export default async function Home() {
             <div className="ll-eyebrow">Welcome to LakeLife</div>
             <h1>Your lake home, ready when you are.</h1>
             <p>
-              One request, one price, one crew at your door. Opening &amp; closing,
-              housekeeping, mowing, and — if you&apos;re on the water — piers, lifts and
-              boat storage. On or near Big Long, Pretty &amp; Big Turkey Lakes, you pick
-              the services and the dates.
+              One request, one price, one crew at your door. Your house, lawn &amp;
+              housekeeping — and your boat, jet skis, pier, lifts, winterizing &amp;
+              storage when you need them. Lakefront or a few blocks off, around
+              Big Long, Pretty &amp; Big Turkey Lakes, you pick the services and the dates.
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 22 }}>
-              <span className="ll-chip">📍 <b>On or near Big Long · Pretty · Big Turkey</b></span>
-              <span className="ll-chip">Home &amp; seasonal · housekeeping · mowing</span>
-              <span className="ll-chip">Waterfront? Piers · lifts · boat storage too</span>
+              <span className="ll-chip">📍 <b>Lakefront or near it — Big Long · Pretty · Big Turkey</b></span>
+              <span className="ll-chip">Home · housekeeping · lawn &amp; seasonal</span>
+              <span className="ll-chip">Boats · jet skis · piers · lifts · storage</span>
               {signedIn ? (
                 <Link
                   className="ll-chip"
