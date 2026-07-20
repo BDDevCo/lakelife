@@ -175,3 +175,14 @@ seasonal ops + fractional bookkeeper/lawyer (max 5).
 5. Storage service model + two-phase fall booking.
 6. Timestamps migration (started_at/completed_at) — ride along with #1's migration.
 7. Referral code capture + HOA logo field per lake.
+
+## 8g. Crew Offer guardrails (final) + hero v2 (2026-07-19)
+- HYBRID model: crew proposes (opportunity + rate), AI screens (property
+  relevance, price sanity, tone) and REWRITES IN LAKELIFE'S VOICE — brand speaks,
+  never the crew. Caps: 1 open offer/customer, max 2/season, declined = not
+  re-sendable that year, declines silent. Offers ONLY ride the completion
+  message. Accept-rate <~25% auto-pauses crew's offer privilege for season.
+  Customer mute in notif prefs; ops per-crew kill switch.
+- HERO v2 shipped: H1 "Lake life, handled." / sub "We dial in your house, boat
+  and toys every season..." TODO Tuesday: align TopBar tagline + <title> metadata
+  (still "Your lake home, ready when you are").

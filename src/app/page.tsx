@@ -28,12 +28,12 @@ export default async function Home() {
         <section className="ll-hero">
           <div className="ll-hero-inner">
             <div className="ll-eyebrow">Welcome to LakeLife</div>
-            <h1>Your lake home, ready when you are.</h1>
+            <h1>Lake life, handled.</h1>
             <p>
-              One request, one price, one crew at your door. Your house, lawn &amp;
-              housekeeping — and your boat, jet skis, pier, lifts, winterizing &amp;
-              storage when you need them. Lakefront or a few blocks off, around
-              Big Long, Pretty &amp; Big Turkey Lakes, you pick the services and the dates.
+              We dial in your house, boat and toys every season — one request, one
+              price, one crew at your door. Opening &amp; closing, cleaning, mowing,
+              piers &amp; lifts, winterize &amp; storage. Lakefront or a few blocks off,
+              around Big Long, Pretty &amp; Big Turkey Lakes.
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 22 }}>
               <span className="ll-chip">📍 <b>Lakefront or near it — Big Long · Pretty · Big Turkey</b></span>
