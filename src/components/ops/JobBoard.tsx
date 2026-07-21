@@ -36,8 +36,17 @@ function prettyDate(d: string | null): string {
   return new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
-export function JobBoard({ jobs, vendors }: { jobs: OpsJob[]; vendors: ActiveVendor[] }) {
+export function JobBoard({
+  jobs,
+  vendors,
+  preferredJobIds = [],
+}: {
+  jobs: OpsJob[];
+  vendors: ActiveVendor[];
+  preferredJobIds?: string[];
+}) {
   const [assigning, setAssigning] = useState<OpsJob | null>(null);
+  const preferred = useMemo(() => new Set(preferredJobIds), [preferredJobIds]);
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
@@ -54,7 +63,7 @@ export function JobBoard({ jobs, vendors }: { jobs: OpsJob[]; vendors: ActiveVen
             ) : (
               <div style={{ display: "grid", gap: 10 }}>
                 {rows.map((j) => (
-                  <JobRow key={j.id} job={j} onAssign={() => setAssigning(j)} />
+                  <JobRow key={j.id} job={j} preferred={preferred.has(j.id)} onAssign={() => setAssigning(j)} />
                 ))}
               </div>
             )}
@@ -73,8 +82,10 @@ export function JobBoard({ jobs, vendors }: { jobs: OpsJob[]; vendors: ActiveVen
   );
 }
 
-function JobRow({ job, onAssign }: { job: OpsJob; onAssign: () => void }) {
+function JobRow({ job, preferred, onAssign }: { job: OpsJob; preferred?: boolean; onAssign: () => void }) {
   const isRequested = job.status === "requested";
+  // Heuristic: a scheduled job that carries a crew was placed by auto-dispatch.
+  const isAuto = job.status === "scheduled" && !!job.vendor_id;
   const meta = [job.lake_name, job.owner_name ? `owner: ${job.owner_name}` : null, prettyDate(job.date), job.slot]
     .filter(Boolean)
     .join(" · ");
@@ -82,7 +93,11 @@ function JobRow({ job, onAssign }: { job: OpsJob; onAssign: () => void }) {
   return (
     <div className="ll-card ll-card-pad" style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
       <div style={{ flex: 1, minWidth: 200 }}>
-        <div style={{ fontWeight: 800, fontSize: 15 }}>{job.service_name ?? "Service"}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 800, fontSize: 15 }}>{job.service_name ?? "Service"}</span>
+          {isAuto && <span className="ll-pill teal" title="Placed by auto-dispatch">AUTO</span>}
+          {preferred && <span className="ll-pill gold" title="Assigned crew is this property's preferred crew">⭐ preferred</span>}
+        </div>
         <div className="mut" style={{ fontSize: 13 }}>{job.address ?? "Address on file"}</div>
         <div className="mut" style={{ fontSize: 12.5 }}>{meta}</div>
         {job.vendor_company && (

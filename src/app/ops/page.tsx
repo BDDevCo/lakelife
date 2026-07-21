@@ -13,6 +13,7 @@ import {
 } from "./data";
 import { getMessageThreads } from "./messages-data";
 import { getCrews, getActiveServiceNames } from "./crews-data";
+import { getNeedsAttention, getPreferredJobIds } from "./dispatch-data";
 import { todayLakeDate } from "@/lib/booking";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -46,7 +47,7 @@ export default async function OpsPage() {
   t.setDate(t.getDate() + 1);
   const tomorrow = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
 
-  const [summary, jobs, vendors, margin, lakes, routes, threads, crews, crewServiceNames] = await Promise.all([
+  const [summary, jobs, vendors, margin, lakes, routes, threads, crews, crewServiceNames, needsAttention, preferredJobIds] = await Promise.all([
     getOpsSummary(),
     getJobBoard(),
     getActiveVendors(),
@@ -56,6 +57,8 @@ export default async function OpsPage() {
     getMessageThreads(),
     getCrews(),
     getActiveServiceNames(),
+    getNeedsAttention(),
+    getPreferredJobIds(),
   ]);
 
   const kpis = [
@@ -93,7 +96,7 @@ export default async function OpsPage() {
           ))}
         </div>
 
-        <OpsShell jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} crewServiceNames={crewServiceNames} />
+        <OpsShell jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} crewServiceNames={crewServiceNames} needsAttention={needsAttention} preferredJobIds={preferredJobIds} />
       </div>
     </>
   );
