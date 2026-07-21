@@ -153,6 +153,16 @@ describe("decideDispatch", () => {
     expect(d.reasonNoFit).toBe("no_qualifying_rate");
   });
 
+  it("a $0 rate does NOT qualify (never ranks first at 100% margin)", () => {
+    const d = decideDispatch(input({ crews: [crew({ vendorId: "zero", crewRate: 0 }), crew({ vendorId: "real", crewRate: 70 })] }));
+    expect(d.ok).toBe(true);
+    expect(d.result?.vendorId).toBe("real");
+  });
+  it("all crews at $0 -> no_qualifying_rate", () => {
+    const d = decideDispatch(input({ crews: [crew({ crewRate: 0 })] }));
+    expect(d.reasonNoFit).toBe("no_qualifying_rate");
+  });
+
   it("eligible + rated but all below floor -> below_floor (price signal to ops)", () => {
     const d = decideDispatch(input({ menuPrice: 100, marginFloor: 0.25, crews: [crew({ crewRate: 85 }), crew({ crewRate: 90 })] }));
     expect(d.reasonNoFit).toBe("below_floor");

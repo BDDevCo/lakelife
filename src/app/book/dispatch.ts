@@ -138,12 +138,13 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   });
 
   if (!decision.ok || !decision.result) return { assigned: false, decision };
+  const winnerId = decision.result.vendorId;
 
   // Apply — but only to a job that still needs a crew (no double-assign races).
   const { data: changed } = await admin
     .from("jobs")
     .update({
-      vendor_id: decision.result.vendorId,
+      vendor_id: winnerId,
       vendor_cost: decision.result.crewRate,
       margin: decision.result.margin,
       status: "scheduled",
@@ -153,8 +154,30 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     .is("vendor_id", null)
     .select("id");
 
-  const applied = !!changed && changed.length > 0;
-  return { assigned: applied, vendorId: applied ? decision.result.vendorId : undefined, decision };
+  let applied = !!changed && changed.length > 0;
+
+  // Capacity backstop for the concurrent case: two bookings can both read the
+  // crew at the same pre-assignment count and both assign. Re-count AFTER the
+  // write; if we pushed the winner over their daily cap, release THIS job back
+  // to 'requested' so it re-dispatches instead of overbooking the crew.
+  if (applied) {
+    const cap = crews.find((c) => c.vendorId === winnerId)?.dailyCapacity ?? 0;
+    const { count } = await admin
+      .from("jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("vendor_id", winnerId)
+      .eq("date", job.date as string)
+      .in("status", ["scheduled", "in_progress"]);
+    if (cap > 0 && (count ?? 0) > cap) {
+      await admin
+        .from("jobs")
+        .update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" })
+        .eq("id", jobId);
+      applied = false;
+    }
+  }
+
+  return { assigned: applied, vendorId: applied ? winnerId : undefined, decision };
 }
 
 export interface RevalidateOutcome {

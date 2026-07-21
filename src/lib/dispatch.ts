@@ -97,8 +97,9 @@ export function decideDispatch(input: DispatchInput): DispatchDecision {
   const eligible = input.crews.filter((c) => isEligible(c, input));
   if (eligible.length === 0) return { ok: false, reasonNoFit: "all_full_or_blocked", eligibleCount: 0 };
 
-  // A crew must have set a rate to be routable, and it must clear the margin floor.
-  const withRate = eligible.filter((c) => c.crewRate != null);
+  // A crew must have a POSITIVE rate to be routable — a $0/blank rate is not a
+  // real rate (it would otherwise rank first at "100% margin" and get paid $0).
+  const withRate = eligible.filter((c) => c.crewRate != null && (c.crewRate as number) > 0);
   if (withRate.length === 0) return { ok: false, reasonNoFit: "no_qualifying_rate", eligibleCount: eligible.length };
 
   const affordable = withRate.filter((c) => marginPct(input.menuPrice, c.crewRate as number) >= input.marginFloor);

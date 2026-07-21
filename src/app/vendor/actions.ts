@@ -36,7 +36,10 @@ async function assertVendorJob(jobId: string) {
   const admin = createServiceClient();
   const { data } = await admin
     .from("jobs")
-    .select("id, status, vendor_id, service_id, date, customer_price, vendor_cost, property_id, services(name, min_photos)")
+    // Deliberately NO customer_price / vendor_cost: this is the crew code path,
+    // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
+    // those columns out of reach by construction (settleJob re-loads them ops-side).
+    .select("id, status, vendor_id, service_id, date, property_id, services(name, min_photos)")
     .eq("id", jobId)
     .maybeSingle();
   if (!data || data.vendor_id !== vendorId) return null;

@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { sendSms } from "@/lib/sms";
 import { todayLakeDate } from "@/lib/booking";
 import { runRouteBuild } from "@/lib/automation";
+import { MARGIN_FLOOR } from "@/app/book/dispatch";
 import { assertOps } from "./data";
 
 export interface OpsResult {
@@ -78,6 +79,12 @@ export async function assignAndSchedule(
   const cost = Math.round(Number(input.vendorCost) * 100) / 100;
   if (!Number.isFinite(cost) || cost < 0 || cost > price) {
     return { ok: false, error: `Vendor cost must be between $0 and the $${price.toFixed(0)} customer price.` };
+  }
+  // Same 25% margin floor the auto-dispatch engine enforces — a manual assignment
+  // must never break it either (CLAUDE.md non-negotiable). Cap the vendor cost.
+  const maxCost = Math.floor(price * (1 - MARGIN_FLOOR) * 100) / 100;
+  if (cost > maxCost) {
+    return { ok: false, error: `That cost leaves less than ${Math.round(MARGIN_FLOOR * 100)}% margin. Keep vendor cost at or below $${maxCost.toFixed(0)}.` };
   }
   const margin = Math.round((price - cost) * 100) / 100;
 
