@@ -2,7 +2,8 @@ import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule, type PricingProfile } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
-import { decideDispatch, isEligible, type CrewCandidate, type DispatchDecision, type DispatchInput } from "@/lib/dispatch";
+import { decideDispatch, isEligible, remainingCapacity, type CrewCandidate, type DispatchDecision, type DispatchInput } from "@/lib/dispatch";
+import { toISODate } from "@/lib/booking";
 
 /** LakeLife's protected margin floor (menu − crew rate). Config later. */
 export const MARGIN_FLOOR = 0.25;
@@ -87,6 +88,72 @@ async function buildCandidates(
       score: score.get(v.id as string) ?? 0,
     };
   });
+}
+
+/**
+ * Capacity-aware calendar availability for a service in a month. A date is
+ * "full" when NO eligible crew has an open slot that day (real per-crew
+ * capacity, not the old service-level number). If nobody does the service at
+ * all, every date is full. Rate/floor is intentionally NOT checked here — a day
+ * with capacity but no affordable crew still shows bookable and escalates to ops
+ * at assignment time (per the dispatch design).
+ */
+export async function getServiceAvailability(
+  serviceName: string,
+  year: number,
+  month: number, // 0-indexed
+): Promise<{ fullDates: string[]; capacity: number }> {
+  const admin = createServiceClient();
+  const from = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+  const to = toISODate(new Date(year, month + 1, 0));
+  const today = todayLakeDate();
+
+  const [{ data: vendors }, { data: blocks }, { data: dayJobs }] = await Promise.all([
+    admin.from("vendors").select("id, status, coi_expiry, service_types, work_days, daily_capacity"),
+    admin.from("vendor_availability").select("vendor_id, date").eq("status", "blocked").gte("date", from).lte("date", to),
+    admin.from("jobs").select("vendor_id, date").in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null).gte("date", from).lte("date", to),
+  ]);
+
+  // Only crews that do this service can ever contribute capacity.
+  const pool = (vendors ?? []).filter((v) => ((v.service_types as string[]) ?? []).includes(serviceName));
+  const maxDailyCap = pool.reduce((m, v) => m + Math.max(0, Number(v.daily_capacity ?? 0)), 0);
+
+  const blockedByDate = new Map<string, Set<string>>();
+  for (const b of blocks ?? []) {
+    const s = blockedByDate.get(b.date as string) ?? new Set<string>();
+    s.add(b.vendor_id as string);
+    blockedByDate.set(b.date as string, s);
+  }
+  const assignedByKey = new Map<string, number>();
+  for (const j of dayJobs ?? []) {
+    const k = `${j.vendor_id}|${j.date}`;
+    assignedByKey.set(k, (assignedByKey.get(k) ?? 0) + 1);
+  }
+
+  const fullDates: string[] = [];
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  for (let d = 1; d <= daysInMonth; d++) {
+    const iso = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    if (iso < today) continue; // past days are handled by the calendar's own status
+    const weekday = weekdayOf(iso);
+    const blockedSet = blockedByDate.get(iso) ?? new Set<string>();
+    const crews: CrewCandidate[] = pool.map((v) => ({
+      vendorId: v.id as string,
+      status: v.status as string,
+      coiExpiry: (v.coi_expiry as string) ?? null,
+      serviceTypes: (v.service_types as string[]) ?? [],
+      workDays: (v.work_days as string[]) ?? [],
+      dailyCapacity: Number(v.daily_capacity ?? 0),
+      assignedThatDay: assignedByKey.get(`${v.id}|${iso}`) ?? 0,
+      blockedThatDay: blockedSet.has(v.id as string),
+      crewRate: null,
+      score: 0,
+    }));
+    const remaining = remainingCapacity({ date: iso, weekday, serviceName, todayISO: today, crews } as unknown as Parameters<typeof remainingCapacity>[0]);
+    if (remaining <= 0) fullDates.push(iso);
+  }
+
+  return { fullDates, capacity: maxDailyCap };
 }
 
 export interface AssignOutcome {

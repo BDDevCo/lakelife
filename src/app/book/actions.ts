@@ -6,7 +6,7 @@ import { priceService, type ServiceRule } from "@/lib/pricing";
 import { dayStatus, toISODate, todayLakeDate } from "@/lib/booking";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
-import { autoAssignJob } from "./dispatch";
+import { autoAssignJob, getServiceAvailability } from "./dispatch";
 
 interface ServiceRow extends ServiceRule {
   is_water_work: boolean;
@@ -39,7 +39,12 @@ async function loadSeason(propertyId: string): Promise<{ start: string | null; e
   };
 }
 
-/** Count jobs per date for a service across a month (service role — capacity is shared). */
+/**
+ * Calendar availability for a service in a month — now CAPACITY-AWARE: a date is
+ * "full" only when no eligible crew has an open slot that day (real per-crew
+ * capacity via the dispatch engine), not the old service-level count. Keeps the
+ * same { fullDates, capacity } shape the calendar consumes.
+ */
 export async function getAvailability(
   serviceId: string,
   year: number,
@@ -47,30 +52,7 @@ export async function getAvailability(
 ): Promise<{ fullDates: string[]; capacity: number }> {
   const service = await loadService(serviceId);
   if (!service) return { fullDates: [], capacity: 0 };
-
-  const from = `${year}-${String(month + 1).padStart(2, "0")}-01`;
-  const toDate = new Date(year, month + 1, 0);
-  const to = toISODate(toDate);
-
-  const admin = createServiceClient();
-  const { data } = await admin
-    .from("jobs")
-    .select("date")
-    .eq("service_id", serviceId)
-    .in("status", ["requested", "scheduled", "in_progress"])
-    .gte("date", from)
-    .lte("date", to);
-
-  const counts = new Map<string, number>();
-  for (const row of data ?? []) {
-    const d = row.date as string;
-    counts.set(d, (counts.get(d) ?? 0) + 1);
-  }
-  const fullDates = [...counts.entries()]
-    .filter(([, n]) => n >= service.daily_capacity)
-    .map(([d]) => d);
-
-  return { fullDates, capacity: service.daily_capacity };
+  return getServiceAvailability(service.name, year, month);
 }
 
 export interface BookingResult {
@@ -159,24 +141,18 @@ export async function createBooking(
     .single();
   if (error || !inserted) return { ok: false, error: error?.message ?? "Could not book that." };
 
-  // Capacity double-check: if a simultaneous booking pushed the day over the
-  // crew's limit, back ours out rather than overbook a crew.
-  const { count } = await admin
-    .from("jobs")
-    .select("id", { count: "exact", head: true })
-    .eq("service_id", serviceId)
-    .eq("date", date)
-    .in("status", ["requested", "scheduled", "in_progress"]);
-  if ((count ?? 0) > service.daily_capacity) {
-    await admin.from("jobs").delete().eq("id", inserted.id);
-    return { ok: false, error: "That day just filled up — pick another date." };
-  }
-
   // Auto-dispatch: pick the crew now (preferred first, else best-ranked eligible).
-  // Never blocks the booking — if no crew fits, the job stays 'requested' and
-  // lands in the ops "needs attention" bucket.
+  // If the day genuinely filled between page-load and submit (every eligible
+  // crew is now full/blocked), back the booking out and ask for another date.
+  // Any OTHER no-fit reason (no crew does it yet, or none clears the margin
+  // floor) still confirms the booking and lands in the ops "needs attention"
+  // bucket — the customer isn't blocked and ops gets the signal.
   try {
-    await autoAssignJob(inserted.id);
+    const outcome = await autoAssignJob(inserted.id);
+    if (!outcome.assigned && outcome.decision.reasonNoFit === "all_full_or_blocked") {
+      await admin.from("jobs").delete().eq("id", inserted.id);
+      return { ok: false, error: "That day just filled up — pick another date." };
+    }
   } catch {
     /* leave as requested; ops will see it */
   }
