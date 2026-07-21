@@ -6,6 +6,7 @@ import { priceService, type ServiceRule } from "@/lib/pricing";
 import { dayStatus, toISODate, todayLakeDate } from "@/lib/booking";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
+import { autoAssignJob } from "./dispatch";
 
 interface ServiceRow extends ServiceRule {
   is_water_work: boolean;
@@ -169,6 +170,15 @@ export async function createBooking(
   if ((count ?? 0) > service.daily_capacity) {
     await admin.from("jobs").delete().eq("id", inserted.id);
     return { ok: false, error: "That day just filled up — pick another date." };
+  }
+
+  // Auto-dispatch: pick the crew now (preferred first, else best-ranked eligible).
+  // Never blocks the booking — if no crew fits, the job stays 'requested' and
+  // lands in the ops "needs attention" bucket.
+  try {
+    await autoAssignJob(inserted.id);
+  } catch {
+    /* leave as requested; ops will see it */
   }
 
   // Notifications — best effort, never block the booking.

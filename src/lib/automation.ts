@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
 import { LakeLifePayments } from "@/lib/payments";
+import { revalidateJob } from "@/app/book/dispatch";
 import { todayLakeDate } from "@/lib/booking";
 import { planVendorDay, routeMapUrl, type StopIn } from "@/lib/router";
 
@@ -216,6 +217,39 @@ export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: 
     if (r.ok) settled++;
   }
   return { ok: true, settled };
+}
+
+/**
+ * Nightly self-heal: re-validate every assignment for `date` (default tomorrow)
+ * before routes build. Jobs whose crew went ineligible (suspended, COI lapsed,
+ * blocked, dropped service) waterfall to the next eligible crew; still-unassigned
+ * 'requested' jobs get a fresh assignment attempt. Returns counts; anything left
+ * unfilled is the ops "needs attention" signal.
+ */
+export async function revalidateAssignments(dateISO?: string): Promise<{ ok: boolean; checked: number; rehomed: number; unfilled: number }> {
+  const date = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : addDays(todayLakeDate(), 1);
+  const admin = createServiceClient();
+  const { data: jobs } = await admin
+    .from("jobs")
+    .select("id")
+    .eq("date", date)
+    .in("status", ["scheduled", "requested"]);
+  let rehomed = 0;
+  let unfilled = 0;
+  for (const j of jobs ?? []) {
+    const r = await revalidateJob(j.id as string);
+    if (r.rehomed) rehomed++;
+    if (!r.nowAssigned) unfilled++;
+  }
+  // One "needs attention" text to ops if anything couldn't be crewed.
+  if (unfilled > 0) {
+    const { data: ops } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
+    const pretty = new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    for (const o of ops ?? []) {
+      if (o.phone) void sendSms(o.phone as string, `LakeLife ops: ${unfilled} job${unfilled === 1 ? "" : "s"} for ${pretty} need a crew — no eligible/qualified crew available. Time to recruit or adjust. 🌊`);
+    }
+  }
+  return { ok: true, checked: (jobs ?? []).length, rehomed, unfilled };
 }
 
 /** Night-before reminder text to each owner who has a scheduled job on `date`
