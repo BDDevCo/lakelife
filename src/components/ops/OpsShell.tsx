@@ -8,7 +8,7 @@ import { RouteBuilder } from "./RouteBuilder";
 import { MessageBoard } from "./MessageBoard";
 import { CrewBoard } from "./CrewBoard";
 import { NeedsAttention } from "./NeedsAttention";
-import type { NeedsAttentionJob } from "@/app/ops/dispatch-data";
+import type { NeedsAttentionJob, PropertyPreferred } from "@/app/ops/dispatch-data";
 import type { OpsJob, ActiveVendor, MarginRow, LakeCondition, RouteSummary } from "@/app/ops/data";
 import type { OpsThread } from "@/app/ops/messages-data";
 import type { OpsCrew } from "@/app/ops/crews-data";
@@ -37,6 +37,7 @@ export function OpsShell({
   crewServiceNames,
   needsAttention,
   preferredJobIds,
+  preferredProps,
 }: {
   jobs: OpsJob[];
   vendors: ActiveVendor[];
@@ -49,6 +50,7 @@ export function OpsShell({
   crewServiceNames: string[];
   needsAttention: NeedsAttentionJob[];
   preferredJobIds: string[];
+  preferredProps: PropertyPreferred[];
 }) {
   const [tab, setTab] = useState<TabKey>("jobs");
 
@@ -82,7 +84,7 @@ export function OpsShell({
 
       {tab === "jobs" && <JobBoard jobs={jobs} vendors={vendors} preferredJobIds={preferredJobIds} />}
 
-      {tab === "dispatch" && <NeedsAttention jobs={needsAttention} crews={vendors} />}
+      {tab === "dispatch" && <NeedsAttention jobs={needsAttention} crews={vendors} properties={preferredProps} />}
       {tab === "margin" && <MarginTable rows={margin.rows} total={margin.total} />}
       {tab === "lakes" && <LakeConditions lakes={lakes} />}
       {tab === "routing" && <RouteBuilder routes={routes} date={routeDate} />}

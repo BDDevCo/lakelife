@@ -126,6 +126,76 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
   });
 }
 
+// ---- All properties + their preferred crew ---------------------------------
+
+export interface PropertyPreferred {
+  property_id: string;
+  address: string | null;
+  lake_name: string | null;
+  owner_name: string | null;
+  preferred_vendor: string | null; // property's preferred crew, if set
+  preferred_company: string | null; // that crew's company name, if resolvable
+}
+
+/**
+ * Every property with its preferred crew (ops only). Lets ops set/see a
+ * property's preferred crew even when dispatch is healthy and nothing is in the
+ * needs-attention bucket. Ordered by lake, then address. Preferred-crew company
+ * names resolved in one shot, same as getNeedsAttention.
+ */
+export async function getPropertiesWithPreferred(): Promise<PropertyPreferred[]> {
+  const ops = await assertOps();
+  if (!ops) return [];
+
+  const admin = createServiceClient();
+
+  const { data } = await admin
+    .from("properties")
+    .select("id, address, preferred_vendor, lakes(name), users(name)");
+
+  const rows = (data ?? []) as unknown as Array<{
+    id: string;
+    address: string | null;
+    preferred_vendor: string | null;
+    lakes: Embed<{ name: string | null }>;
+    users: Embed<{ name: string | null }>;
+  }>;
+
+  if (rows.length === 0) return [];
+
+  // Resolve preferred-crew company names in one shot.
+  const prefIds = Array.from(
+    new Set(rows.map((r) => r.preferred_vendor).filter((x): x is string => !!x)),
+  );
+  const companyById = new Map<string, string | null>();
+  if (prefIds.length) {
+    const { data: prefVendors } = await admin.from("vendors").select("id, company").in("id", prefIds);
+    for (const v of prefVendors ?? []) companyById.set(v.id as string, (v.company as string) ?? null);
+  }
+
+  const out: PropertyPreferred[] = rows.map((r) => {
+    const lake = first(r.lakes) as { name?: string } | null;
+    const owner = first(r.users) as { name?: string } | null;
+    const preferred_vendor = r.preferred_vendor ?? null;
+    return {
+      property_id: r.id as string,
+      address: r.address ?? null,
+      lake_name: lake?.name ?? null,
+      owner_name: owner?.name ?? null,
+      preferred_vendor,
+      preferred_company: preferred_vendor ? (companyById.get(preferred_vendor) ?? null) : null,
+    };
+  });
+
+  // Order by lake, then address (embedded columns — sort in JS).
+  out.sort(
+    (a, b) =>
+      (a.lake_name ?? "").localeCompare(b.lake_name ?? "") ||
+      (a.address ?? "").localeCompare(b.address ?? ""),
+  );
+  return out;
+}
+
 // ---- Preferred-crew indicator for the job board ----------------------------
 
 /**

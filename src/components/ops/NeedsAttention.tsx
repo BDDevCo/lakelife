@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { retryAssign } from "@/app/ops/dispatch-actions";
 import { PreferredCrew } from "./PreferredCrew";
-import type { NeedsAttentionJob } from "@/app/ops/dispatch-data";
+import type { NeedsAttentionJob, PropertyPreferred } from "@/app/ops/dispatch-data";
 import type { ActiveVendor } from "@/app/ops/data";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -20,9 +20,19 @@ function prettyDate(d: string | null): string {
  * Each card lets ops set a preferred crew and re-run dispatch. The real fix is
  * usually to recruit a crew for that lake/service — surfaced as a note.
  */
-export function NeedsAttention({ jobs, crews }: { jobs: NeedsAttentionJob[]; crews: ActiveVendor[] }) {
+export function NeedsAttention({
+  jobs,
+  crews,
+  properties,
+}: {
+  jobs: NeedsAttentionJob[];
+  crews: ActiveVendor[];
+  properties: PropertyPreferred[];
+}) {
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <PreferredCrews properties={properties} crews={crews} />
+
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
           <span className="ll-pill warn">Needs a crew</span>
@@ -42,6 +52,55 @@ export function NeedsAttention({ jobs, crews }: { jobs: NeedsAttentionJob[]; cre
         <div style={{ display: "grid", gap: 12 }}>
           {jobs.map((j) => (
             <AttentionCard key={j.id} job={j} crews={crews} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Every property + its preferred crew. Renders even when nothing needs a crew,
+ * so ops can always set/see a property's preferred crew (the crew that gets
+ * first right of refusal at auto-dispatch). Ops-only surface — no prices here.
+ */
+function PreferredCrews({ properties, crews }: { properties: PropertyPreferred[]; crews: ActiveVendor[] }) {
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <span className="ll-pill gold">Preferred crews</span>
+        <span className="mut" style={{ fontSize: 13 }}>{properties.length}</span>
+      </div>
+      <p className="mut" style={{ fontSize: 13, margin: "0 0 8px" }}>
+        A property&apos;s preferred crew gets first dibs at auto-dispatch. Set or change it any time.
+      </p>
+
+      {properties.length === 0 ? (
+        <div className="ll-card ll-card-pad mut" style={{ fontSize: 13 }}>No properties on file yet.</div>
+      ) : (
+        <div className="ll-card">
+          {properties.map((p, i) => (
+            <div
+              key={p.property_id}
+              style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                gap: 10, flexWrap: "wrap", padding: "12px 14px",
+                borderTop: i ? "1px solid var(--line)" : "none",
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{p.address ?? "Address on file"}</div>
+                <div className="mut" style={{ fontSize: 12.5 }}>
+                  {[p.lake_name, p.owner_name].filter(Boolean).join(" · ") || "—"}
+                </div>
+              </div>
+              <PreferredCrew
+                propertyId={p.property_id}
+                current={p.preferred_vendor}
+                currentCompany={p.preferred_company}
+                crews={crews}
+              />
+            </div>
           ))}
         </div>
       )}

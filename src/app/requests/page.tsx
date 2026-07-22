@@ -7,6 +7,7 @@ import { formatPrice } from "@/lib/pricing";
 import { getActivePropertyId } from "@/app/profile/data";
 import { CancelRequestButton } from "@/components/CancelRequestButton";
 import { todayLakeDate } from "@/lib/booking";
+import { createServiceClient } from "@/lib/supabase/server";
 
 const STATUS_PILL: Record<string, string> = {
   requested: "warn", scheduled: "teal", in_progress: "teal", complete: "ok", paid: "slate",
@@ -46,12 +47,35 @@ export default async function RequestsPage() {
 
   const rows = jobs ?? [];
 
+  // "Your crew ⭐" — the preferred-crew lock, visible so the owner KNOWS their
+  // crew is theirs (never silently swapped). Ownership is verified before the
+  // service-role read; only the company name is exposed — never rates/margin.
+  let preferredCompany: string | null = null;
+  if (activeId) {
+    const admin = createServiceClient();
+    const { data: prop } = await admin
+      .from("properties")
+      .select("owner_id, preferred_vendor, vendors:preferred_vendor(company)")
+      .eq("id", activeId)
+      .maybeSingle();
+    if (prop && prop.owner_id === user.id) {
+      const v = Array.isArray(prop.vendors) ? prop.vendors[0] : prop.vendors;
+      preferredCompany = (v as { company?: string } | null)?.company ?? null;
+    }
+  }
+
   return (
     <>
       <TopBar />
       <OwnerHeader />
       <div className="wrap" style={{ paddingTop: 24 }}>
-        <h1 style={{ fontSize: 26, marginBottom: 16 }}>My requests</h1>
+        <h1 style={{ fontSize: 26, marginBottom: 6 }}>My requests</h1>
+        {preferredCompany && (
+          <p style={{ fontSize: 13.5, fontWeight: 700, color: "var(--teal-dark)", marginBottom: 16 }}>
+            ⭐ Your crew: {preferredCompany} — always first on your jobs.
+          </p>
+        )}
+        {!preferredCompany && <div style={{ marginBottom: 10 }} />}
 
         {rows.length === 0 ? (
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
