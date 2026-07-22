@@ -86,6 +86,9 @@ export default async function VendorEarningsPage() {
                 {" "}· ${referral.maturing.toFixed(2)} maturing · ${referral.available.toFixed(2)} ready for your next payout batch
               </span>
             </p>
+            <p className="mut" style={{ fontSize: 12, margin: "6px 0 0" }}>
+              <a href="/referral-terms" style={{ color: "inherit" }}>How referral earnings work — plain-English terms</a>
+            </p>
           </div>
         </div>
       )}

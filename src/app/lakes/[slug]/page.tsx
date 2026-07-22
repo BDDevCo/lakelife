@@ -150,7 +150,8 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
             </p>
             <p className="mut" style={{ fontSize: 13.5, margin: 0 }}>
               Neighbors who join through the association&apos;s link fund the lake — fireworks, cleanups,
-              whatever {lake.name} needs. {hoaTotal <= 0 ? "Be the first." : "Keep it going."}
+              whatever {lake.name} needs. {hoaTotal <= 0 ? "Be the first." : "Keep it going."}{" "}
+              <Link href="/referral-terms#hoa" style={{ color: "inherit" }}>How the fund works</Link>
             </p>
           </div>
         )}

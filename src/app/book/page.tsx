@@ -6,6 +6,7 @@ import { InviteMyCrew } from "@/components/InviteMyCrew";
 import { AutopilotCard } from "@/components/AutopilotCard";
 import { ShareLakeLife } from "@/components/ShareLakeLife";
 import { getMyReferralTicker } from "@/lib/referral-data";
+import { getPlatformSettings } from "@/lib/settings";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyReferralLink, getFullProfile, getPricedServices } from "@/app/profile/data";
@@ -76,6 +77,7 @@ export default async function BookPage() {
   const profile = await getFullProfile();
   const referralLink = await getMyReferralLink();
   const referralTicker = await getMyReferralTicker();
+  const dials = await getPlatformSettings();
 
   if (!profile?.hasProfile) {
     return (
@@ -153,7 +155,14 @@ export default async function BookPage() {
             .map((s) => ({ id: s.id, name: s.name, price: s.price }))}
           enrollments={enrollments}
         />
-        {referralLink && <ShareLakeLife link={referralLink} earnedToDate={referralTicker?.earnedTotal} />}
+        {referralLink && (
+          <ShareLakeLife
+            link={referralLink}
+            earnedToDate={referralTicker?.earnedTotal}
+            customerPct={Math.round(dials.referralCustomerPct * 100)}
+            crewCap={dials.referralCrewCap}
+          />
+        )}
       </div>
     </>
   );

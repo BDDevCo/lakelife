@@ -7,6 +7,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const entries: MetadataRoute.Sitemap = [
     { url: site, changeFrequency: "weekly", priority: 1 },
     { url: `${site}/lakes`, changeFrequency: "weekly", priority: 0.9 },
+    { url: `${site}/referral-terms`, changeFrequency: "monthly", priority: 0.4 },
   ];
   try {
     const admin = createServiceClient();

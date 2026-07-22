@@ -754,7 +754,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
     const ok = await send(
       userId, "credit_covers_visit",
       `You've got $${bal.toFixed(2)} in LakeLife credits 🌊`,
-      `<p>Your referral credits just crossed <b>$${bal.toFixed(2)}</b> — enough to cover a visit on us.</p><p>Book anything at <a href="${site}/book">${site}/book</a> and it applies automatically at billing. Keep sharing your link and the next one's on us too.</p>`,
+      `<p>Your referral credits just crossed <b>$${bal.toFixed(2)}</b> — enough to cover a visit on us.</p><p>Book anything at <a href="${site}/book">${site}/book</a> and it applies automatically at billing. Keep sharing your link and the next one's on us too.</p><p style="font-size:12px;color:#5D7681">How credits work: ${site}/referral-terms</p>`,
     );
     if (ok) creditNudges++;
   }
