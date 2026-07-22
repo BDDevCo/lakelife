@@ -5,6 +5,7 @@ import {
   rankCrews,
   decideDispatch,
   remainingCapacity,
+  milesBetween,
   type CrewCandidate,
   type DispatchInput,
 } from "./dispatch";
@@ -14,12 +15,15 @@ const crew = (over: Partial<CrewCandidate> = {}): CrewCandidate => ({
   status: "active",
   coiExpiry: "2027-01-01",
   serviceTypes: ["Housekeeping"],
+  serviceLakes: ["lake-1"],
   workDays: ["Mon", "Tue", "Wed", "Thu", "Fri"],
   dailyCapacity: 5,
   assignedThatDay: 0,
   blockedThatDay: false,
   crewRate: 70,
   score: 0,
+  baseLat: null,
+  baseLng: null,
   ...over,
 });
 
@@ -31,6 +35,9 @@ const input = (over: Partial<DispatchInput> = {}): DispatchInput => ({
   todayISO: "2026-07-20",
   marginFloor: 0.25,
   preferredVendorId: null,
+  lakeId: null,
+  jobLat: null,
+  jobLng: null,
   crews: [],
   ...over,
 });
@@ -196,5 +203,68 @@ describe("remainingCapacity — booking calendar", () => {
   it("returns 0 when nobody is eligible (date must not be offered)", () => {
     const cap = remainingCapacity(input({ crews: [crew({ coiExpiry: null })] }) as unknown as Parameters<typeof remainingCapacity>[0]);
     expect(cap).toBe(0);
+  });
+});
+
+describe("isEligible — geo gate (Phase B)", () => {
+  it("passes a crew that services the job's lake", () => {
+    expect(isEligible(crew({ serviceLakes: ["lake-1", "lake-2"] }), input({ lakeId: "lake-1" }))).toBe(true);
+  });
+  it("blocks a crew that does NOT service the job's lake (far-away crew)", () => {
+    expect(isEligible(crew({ serviceLakes: ["lake-2"] }), input({ lakeId: "lake-1" }))).toBe(false);
+  });
+  it("blocks a crew that services no lakes at all", () => {
+    expect(isEligible(crew({ serviceLakes: [] }), input({ lakeId: "lake-1" }))).toBe(false);
+  });
+  it("applies no geo gate when the job has no lake (lakeId null)", () => {
+    expect(isEligible(crew({ serviceLakes: [] }), input({ lakeId: null }))).toBe(true);
+  });
+  it("excludes an off-lake crew from the whole decision", () => {
+    const d = decideDispatch(input({ lakeId: "lake-1", crews: [crew({ vendorId: "off", serviceLakes: ["lake-9"] })] }));
+    expect(d.ok).toBe(false);
+  });
+});
+
+describe("milesBetween", () => {
+  it("is ~0 for the same point", () => {
+    expect(milesBetween(41.6, -85.3, 41.6, -85.3)).toBeCloseTo(0, 5);
+  });
+  it("returns Infinity when any coordinate is null (unknown base)", () => {
+    expect(milesBetween(41.6, -85.3, null, -85.3)).toBe(Infinity);
+    expect(milesBetween(null, null, 41.6, -85.3)).toBe(Infinity);
+  });
+  it("computes a sane distance (~1 deg latitude ≈ 69 mi)", () => {
+    expect(milesBetween(41, -85, 42, -85)).toBeGreaterThan(68);
+    expect(milesBetween(41, -85, 42, -85)).toBeLessThan(70);
+  });
+});
+
+describe("rankCrews — proximity (Phase B, scenario 3)", () => {
+  const near = { baseLat: 41.60, baseLng: -85.30 }; // ~2 mi from job
+  const far = { baseLat: 41.20, baseLng: -85.80 };  // ~40 mi from job
+  const JOB_LAT = 41.62, JOB_LNG = -85.30;
+
+  it("a NEARER crew beats a FARTHER one when score & density tie", () => {
+    const a = crew({ vendorId: "far", ...far });
+    const b = crew({ vendorId: "near", ...near });
+    expect(rankCrews([a, b], 100, JOB_LAT, JOB_LNG)[0].vendorId).toBe("near");
+  });
+
+  it("a far, CHEAPER crew does NOT win over a local one on margin alone", () => {
+    const local = crew({ vendorId: "local", crewRate: 70, ...near }); // 30% margin
+    const distant = crew({ vendorId: "distant", crewRate: 60, ...far }); // 40% margin but 40 mi
+    expect(rankCrews([distant, local], 100, JOB_LAT, JOB_LNG)[0].vendorId).toBe("local");
+  });
+
+  it("falls through to margin when bases are unknown (no regression pre-base)", () => {
+    const lo = crew({ vendorId: "lo", crewRate: 80 }); // null base, 20% margin
+    const hi = crew({ vendorId: "hi", crewRate: 55 }); // null base, 45% margin
+    expect(rankCrews([lo, hi], 100, JOB_LAT, JOB_LNG)[0].vendorId).toBe("hi");
+  });
+
+  it("route density still outranks proximity (already-there crew wins)", () => {
+    const dense = crew({ vendorId: "dense", assignedThatDay: 3, ...far });
+    const idle = crew({ vendorId: "idle", assignedThatDay: 0, ...near });
+    expect(rankCrews([idle, dense], 100, JOB_LAT, JOB_LNG)[0].vendorId).toBe("dense");
   });
 });

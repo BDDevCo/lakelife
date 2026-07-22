@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { getFullProfile, toPricingProfile } from "@/app/profile/data";
+import { getFullProfile, toPricingProfile, getActivePropertyId } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { dayStatus, toISODate, todayLakeDate } from "@/lib/booking";
 import { sendSms } from "@/lib/sms";
@@ -49,10 +49,20 @@ export async function getAvailability(
   serviceId: string,
   year: number,
   month: number, // 0-indexed
+  propertyId?: string, // defaults to the active property; used to scope by lake
 ): Promise<{ fullDates: string[]; capacity: number }> {
   const service = await loadService(serviceId);
   if (!service) return { fullDates: [], capacity: 0 };
-  return getServiceAvailability(service.name, year, month);
+  // Scope capacity to crews that service THIS property's lake (Phase B): a date
+  // is only bookable if a crew who works this lake has an open slot.
+  const pid = propertyId ?? (await getActivePropertyId());
+  let lakeId: string | null = null;
+  if (pid) {
+    const admin = createServiceClient();
+    const { data } = await admin.from("properties").select("lake_id").eq("id", pid).maybeSingle();
+    lakeId = (data?.lake_id as string) ?? null;
+  }
+  return getServiceAvailability(service.name, year, month, lakeId);
 }
 
 export interface BookingResult {
@@ -107,7 +117,7 @@ export async function createBooking(
 
   // Re-validate the day server-side, against THIS property's lake and Indiana time.
   const season = await loadSeason(profile.propertyId);
-  const { fullDates } = await getAvailability(serviceId, Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1);
+  const { fullDates } = await getAvailability(serviceId, Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, profile.propertyId);
   const status = dayStatus(date, {
     today: todayLakeDate(),
     isWaterWork: service.is_water_work,

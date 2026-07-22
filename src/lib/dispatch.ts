@@ -13,12 +13,15 @@ export interface CrewCandidate {
   status: string; // 'active' | 'invited' | 'suspended'
   coiExpiry: string | null; // YYYY-MM-DD
   serviceTypes: string[]; // service NAMES the crew does
+  serviceLakes: string[]; // lake IDs the crew services (Phase B geo gate)
   workDays: string[]; // e.g. ['Mon','Tue',...]
   dailyCapacity: number;
   assignedThatDay: number; // jobs already on this crew for the target date
   blockedThatDay: boolean; // any vendor_availability block on the date
   crewRate: number | null; // this crew's price for THIS service (from vendor_rates); null = no rate set
   score: number; // performance tier score (higher = better); 0 if unrated
+  baseLat: number | null; // crew home base — for proximity ranking (null = unknown)
+  baseLng: number | null;
 }
 
 export interface DispatchInput {
@@ -29,7 +32,27 @@ export interface DispatchInput {
   todayISO: string; // lake-today, for COI expiry check
   marginFloor: number; // e.g. 0.25
   preferredVendorId: string | null; // property's preferred crew, if any
+  lakeId: string | null; // the job's lake — a crew must service it (null = no geo gate)
+  jobLat: number | null; // the job's location — for proximity ranking
+  jobLng: number | null;
   crews: CrewCandidate[];
+}
+
+/**
+ * Great-circle distance in miles between two points. Any null coordinate ⇒
+ * Infinity (unknown base ranks as "farthest", never eligibility-excluding).
+ * Straight-line is deliberate: cheap, no API call — Directions is reserved for
+ * the actual daily route, not the match (these lakes are ~10–25 mi apart).
+ */
+export function milesBetween(
+  aLat: number | null, aLng: number | null, bLat: number | null, bLng: number | null,
+): number {
+  if (aLat == null || aLng == null || bLat == null || bLng == null) return Infinity;
+  const R = 3958.8; // earth radius, miles
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat), dLng = toRad(bLng - aLng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
 }
 
 export interface DispatchResult {
@@ -54,6 +77,9 @@ export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
   if (c.status !== "active") return false;
   if (!c.coiExpiry || String(c.coiExpiry) < input.todayISO) return false; // no COI, no jobs
   if (!c.serviceTypes.includes(input.serviceName)) return false;
+  // Geo gate: when the job has a lake, the crew must service it. A crew with no
+  // lakes serves nowhere. (lakeId null ⇒ no gate, e.g. a property without a lake.)
+  if (input.lakeId && !(c.serviceLakes ?? []).includes(input.lakeId)) return false;
   if (!c.workDays.includes(input.weekday)) return false;
   if (c.blockedThatDay) return false;
   const cap = c.dailyCapacity > 0 ? c.dailyCapacity : 0;
@@ -71,13 +97,25 @@ export function marginPct(menuPrice: number, crewRate: number): number {
  * Rank comparator for eligible+affordable crews (best first):
  *  1) performance tier (score desc)
  *  2) route density — already has jobs that day (assignedThatDay desc)
- *  3) margin to LakeLife (higher margin first)
- *  4) load fairness — fewer jobs so far, then stable by vendorId
+ *  3) proximity — nearer home base to the job (distance asc)  [Phase B]
+ *  4) margin to LakeLife (higher margin first)
+ *  5) load fairness — fewer jobs so far, then stable by vendorId
+ *
+ * Proximity sits ABOVE margin so a distant, cheaper crew never wins over a local
+ * one on money alone (a 40-mi round trip is a false economy) — but BELOW density
+ * (a crew already routing this lake today is effectively local) and below quality
+ * (a better crew is worth a little drive). Unknown bases tie at Infinity and fall
+ * through to margin, so nothing regresses until crews set a base.
  */
-export function rankCrews(crews: CrewCandidate[], menuPrice: number): CrewCandidate[] {
+export function rankCrews(
+  crews: CrewCandidate[], menuPrice: number, jobLat: number | null = null, jobLng: number | null = null,
+): CrewCandidate[] {
   return [...crews].sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     if (b.assignedThatDay !== a.assignedThatDay) return b.assignedThatDay - a.assignedThatDay;
+    const da = milesBetween(jobLat, jobLng, a.baseLat, a.baseLng);
+    const db = milesBetween(jobLat, jobLng, b.baseLat, b.baseLng);
+    if (da !== db) return da - db; // nearer base first (Infinity ties fall through)
     const ma = marginPct(menuPrice, a.crewRate ?? menuPrice);
     const mb = marginPct(menuPrice, b.crewRate ?? menuPrice);
     if (mb !== ma) return mb - ma;
@@ -123,7 +161,7 @@ export function decideDispatch(input: DispatchInput): DispatchDecision {
     if (pref) return { ok: true, result: build(pref, true, "preferred crew"), eligibleCount: eligible.length };
   }
 
-  const winner = rankCrews(affordable, input.menuPrice)[0];
+  const winner = rankCrews(affordable, input.menuPrice, input.jobLat, input.jobLng)[0];
   return { ok: true, result: build(winner, false, "best-ranked eligible crew"), eligibleCount: eligible.length };
 }
 

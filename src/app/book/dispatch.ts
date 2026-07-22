@@ -49,7 +49,7 @@ async function buildCandidates(
   opts: { serviceId: string; serviceName: string; pricingModel: ServiceRule["pricing_model"]; dateISO: string; profile: PricingProfile },
 ): Promise<CrewCandidate[]> {
   const [{ data: vendors }, { data: rates }, { data: dayJobs }, { data: blocks }, scores] = await Promise.all([
-    admin.from("vendors").select("id, status, coi_expiry, service_types, work_days, daily_capacity"),
+    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng"),
     admin.from("vendor_rates").select("vendor_id, base, unit_rate, band_pricing").eq("service_id", opts.serviceId),
     admin.from("jobs").select("vendor_id").eq("date", opts.dateISO).in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null),
     admin.from("vendor_availability").select("vendor_id").eq("date", opts.dateISO).eq("status", "blocked"),
@@ -79,12 +79,15 @@ async function buildCandidates(
       status: v.status as string,
       coiExpiry: (v.coi_expiry as string) ?? null,
       serviceTypes: (v.service_types as string[]) ?? [],
+      serviceLakes: (v.service_lakes as string[]) ?? [],
       workDays: (v.work_days as string[]) ?? [],
       dailyCapacity: Number(v.daily_capacity ?? 0),
       assignedThatDay: assigned.get(v.id as string) ?? 0,
       blockedThatDay: blocked.has(v.id as string),
       crewRate,
       score: scores.get(v.id as string)?.score ?? 0,
+      baseLat: v.base_lat != null ? Number(v.base_lat) : null,
+      baseLng: v.base_lng != null ? Number(v.base_lng) : null,
     };
   });
 }
@@ -101,6 +104,7 @@ export async function getServiceAvailability(
   serviceName: string,
   year: number,
   month: number, // 0-indexed
+  lakeId: string | null = null, // when set, only crews servicing this lake count
 ): Promise<{ fullDates: string[]; capacity: number }> {
   const admin = createServiceClient();
   const from = `${year}-${String(month + 1).padStart(2, "0")}-01`;
@@ -108,13 +112,18 @@ export async function getServiceAvailability(
   const today = todayLakeDate();
 
   const [{ data: vendors }, { data: blocks }, { data: dayJobs }] = await Promise.all([
-    admin.from("vendors").select("id, status, coi_expiry, service_types, work_days, daily_capacity"),
+    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity"),
     admin.from("vendor_availability").select("vendor_id, date").eq("status", "blocked").gte("date", from).lte("date", to),
     admin.from("jobs").select("vendor_id, date").in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null).gte("date", from).lte("date", to),
   ]);
 
-  // Only crews that do this service can ever contribute capacity.
-  const pool = (vendors ?? []).filter((v) => ((v.service_types as string[]) ?? []).includes(serviceName));
+  // Only crews that do this service — and, when a lake is given, service that
+  // lake — can ever contribute capacity to this property's calendar.
+  const pool = (vendors ?? []).filter(
+    (v) =>
+      ((v.service_types as string[]) ?? []).includes(serviceName) &&
+      (!lakeId || ((v.service_lakes as string[]) ?? []).includes(lakeId)),
+  );
   const maxDailyCap = pool.reduce((m, v) => m + Math.max(0, Number(v.daily_capacity ?? 0)), 0);
 
   const blockedByDate = new Map<string, Set<string>>();
@@ -141,12 +150,15 @@ export async function getServiceAvailability(
       status: v.status as string,
       coiExpiry: (v.coi_expiry as string) ?? null,
       serviceTypes: (v.service_types as string[]) ?? [],
+      serviceLakes: (v.service_lakes as string[]) ?? [],
       workDays: (v.work_days as string[]) ?? [],
       dailyCapacity: Number(v.daily_capacity ?? 0),
       assignedThatDay: assignedByKey.get(`${v.id}|${iso}`) ?? 0,
       blockedThatDay: blockedSet.has(v.id as string),
       crewRate: null,
       score: 0,
+      baseLat: null,
+      baseLng: null,
     }));
     const remaining = remainingCapacity({ date: iso, weekday, serviceName, todayISO: today, crews } as unknown as Parameters<typeof remainingCapacity>[0]);
     if (remaining <= 0) fullDates.push(iso);
@@ -182,7 +194,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   const profile = await loadPricingProfileById(admin, job.property_id as string);
   if (!svc?.name || !profile) return { assigned: false, decision: { ok: false, reasonNoFit: "no_crew_for_service" } };
 
-  const { data: prop } = await admin.from("properties").select("preferred_vendor").eq("id", job.property_id as string).maybeSingle();
+  const { data: prop } = await admin.from("properties").select("preferred_vendor, lake_id, lat, lng").eq("id", job.property_id as string).maybeSingle();
 
   const crews = await buildCandidates(admin, {
     serviceId: job.service_id as string,
@@ -200,6 +212,9 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     todayISO: todayLakeDate(),
     marginFloor: MARGIN_FLOOR,
     preferredVendorId: (prop?.preferred_vendor as string) ?? null,
+    lakeId: (prop?.lake_id as string) ?? null,
+    jobLat: prop?.lat != null ? Number(prop.lat) : null,
+    jobLng: prop?.lng != null ? Number(prop.lng) : null,
     crews,
   });
 
@@ -262,7 +277,7 @@ export async function revalidateJob(jobId: string): Promise<RevalidateOutcome> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, property_id, service_id, date, status, vendor_id, customer_price, services(name, pricing_model)")
+    .select("id, property_id, service_id, date, status, vendor_id, customer_price, services(name, pricing_model), properties(lake_id)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job || !job.service_id || !job.date) return { rehomed: false, nowAssigned: false };
@@ -285,11 +300,13 @@ export async function revalidateJob(jobId: string): Promise<RevalidateOutcome> {
     dateISO: job.date as string,
     profile,
   });
+  const jobLake = (Array.isArray(job.properties) ? job.properties[0] : job.properties) as { lake_id?: string } | null;
   const input = {
     date: job.date as string,
     weekday: weekdayOf(job.date as string),
     serviceName: svc.name,
     todayISO: todayLakeDate(),
+    lakeId: (jobLake?.lake_id as string) ?? null,
   } as DispatchInput;
 
   const current = crews.find((c) => c.vendorId === job.vendor_id);
