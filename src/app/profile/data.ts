@@ -223,3 +223,16 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
     is_water_work: s.is_water_work ?? false,
   }));
 }
+
+/** The signed-in user's shareable referral link (roadmap §8 rails). */
+export async function getMyReferralLink(): Promise<string | null> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data } = await supabase.from("users").select("referral_code").eq("id", user.id).maybeSingle();
+  if (!data?.referral_code) return null;
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  return `${site}/?ref=${data.referral_code}`;
+}

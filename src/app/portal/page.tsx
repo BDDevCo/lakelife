@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { claimCrewInvite } from "@/app/ops/crews-invite";
 import { claimCustomerImports } from "@/app/vendor/import-actions";
+import { claimReferral } from "./referral-actions";
 
 /**
  * The one front door after sign-in: sends each person to THEIR portal.
@@ -24,6 +25,9 @@ export default async function PortalPage() {
     .select("role")
     .eq("id", user.id)
     .maybeSingle();
+
+  // Referral attribution (one-time, self-referral blocked) — §8 rails.
+  await claimReferral(user.id);
 
   let role = me?.role;
   if (role !== "vendor" && role !== "ops") {

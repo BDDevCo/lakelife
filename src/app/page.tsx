@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { TopBar, Waves } from "@/components/Brand";
 import { GetStarted } from "@/components/GetStarted";
+import { RefCatcher } from "@/components/RefCatcher";
 import { ConfigNotice } from "@/components/ConfigNotice";
 import { hasSupabaseEnv, hasTwilioEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
@@ -21,6 +22,7 @@ export default async function Home() {
 
   return (
     <>
+      <RefCatcher />
       <TopBar />
       <ConfigNotice missing={{ supabase: !supaOk, twilio: !twilioOk }} />
 

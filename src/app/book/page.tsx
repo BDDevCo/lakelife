@@ -4,9 +4,10 @@ import { OwnerHeader } from "@/components/OwnerHeader";
 import { BookingGrid } from "@/components/BookingGrid";
 import { InviteMyCrew } from "@/components/InviteMyCrew";
 import { AutopilotCard } from "@/components/AutopilotCard";
+import { ShareLakeLife } from "@/components/ShareLakeLife";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { getFullProfile, getPricedServices } from "@/app/profile/data";
+import { getMyReferralLink, getFullProfile, getPricedServices } from "@/app/profile/data";
 
 export default async function BookPage() {
   if (!hasSupabaseEnv()) {
@@ -72,6 +73,7 @@ export default async function BookPage() {
   }
 
   const profile = await getFullProfile();
+  const referralLink = await getMyReferralLink();
 
   if (!profile?.hasProfile) {
     return (
@@ -149,6 +151,7 @@ export default async function BookPage() {
             .map((s) => ({ id: s.id, name: s.name, price: s.price }))}
           enrollments={enrollments}
         />
+        {referralLink && <ShareLakeLife link={referralLink} />}
       </div>
     </>
   );
