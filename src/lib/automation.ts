@@ -11,7 +11,7 @@ import { proposeAutopilotDate } from "@/lib/autopilot";
 import { shouldDemote, healBase, isCoolingDown } from "@/lib/lake-standing";
 import { warningDue, isExpired } from "@/lib/waitlist";
 import { rushWindowOpen } from "@/lib/rush";
-import { isLastDayOfMonth, nudgeCooling } from "@/lib/growth";
+import { isLastDayOfMonth, nudgeCooling, nearMilestone } from "@/lib/growth";
 import { withinSunset, customerReferralAccrual, crewShareAccrual, creditToApply } from "@/lib/referrals";
 import { getPlatformSettings } from "@/lib/settings";
 import { autoAssignJob, loadPricingProfileById } from "@/app/book/dispatch";
@@ -715,7 +715,7 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
  *     they do; estimate the season at THEIR OWN rates (rule-1 safe) and
  *     hand them the one-tap lakes editor.
  */
-export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; territoryNudges: number }> {
+export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; nearMilestoneNudges: number; territoryNudges: number }> {
   const admin = createServiceClient();
   const { nudgeCreditThreshold, nudgeCooldownDays, lakeDemotionCooldownDays } = await getPlatformSettings();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
@@ -757,6 +757,40 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
       `<p>Your referral credits just crossed <b>$${bal.toFixed(2)}</b> — enough to cover a visit on us.</p><p>Book anything at <a href="${site}/book">${site}/book</a> and it applies automatically at billing. Keep sharing your link and the next one's on us too.</p><p style="font-size:12px;color:#5D7681">How credits work: ${site}/referral-terms</p>`,
     );
     if (ok) creditNudges++;
+  }
+
+  // A2) Near-milestone tease — spendable + maturing has crossed 60% of the
+  // threshold but the balance hasn't: "couple more referrals and it's a free
+  // visit." Homeowners only — a crew's milestone is the month-end batch, not
+  // credits. nearMilestone() itself refuses anyone covers-visit already owns.
+  let nearMilestoneNudges = 0;
+  const { data: accruedRows } = await admin
+    .from("referral_earnings").select("beneficiary, amount").eq("status", "accrued");
+  const accruedBy = new Map<string, number>();
+  for (const a of accruedRows ?? []) accruedBy.set(a.beneficiary as string, (accruedBy.get(a.beneficiary as string) ?? 0) + Number(a.amount ?? 0));
+  const candidates = new Set([...balances.keys(), ...accruedBy.keys()]);
+  if (candidates.size > 0) {
+    const { data: vendorUsers } = await admin
+      .from("vendors").select("user_id").in("user_id", [...candidates]).not("user_id", "is", null);
+    const crewUserIds = new Set((vendorUsers ?? []).map((v) => v.user_id as string));
+    for (const userId of candidates) {
+      if (crewUserIds.has(userId)) continue;
+      const near = nearMilestone(balances.get(userId) ?? 0, accruedBy.get(userId) ?? 0, nudgeCreditThreshold);
+      if (!near) continue;
+      const body =
+        near.gap > 0
+          ? `<p>You're <b>$${near.gap.toFixed(2)} away</b> from your credits covering a whole visit — one more neighbor usually does it.</p><p>Your link is waiting at <a href="${site}/book">${site}/book</a>. 🌊</p>`
+          : `<p>You've got <b>$${(accruedBy.get(userId) ?? 0).toFixed(2)} maturing</b> — when it clears, your credits cross <b>$${nudgeCreditThreshold.toFixed(0)}</b> and your next visit is on us.</p><p>Nothing to do — it applies automatically at billing. Want to stack the next one? Your link's at <a href="${site}/book">${site}/book</a>. 🌊</p>`;
+      const subject =
+        near.gap > 0
+          ? `You're $${near.gap.toFixed(2)} from a visit on us 🌊`
+          : `Your free visit is about to unlock 🌊`;
+      const ok = await send(
+        userId, "near_milestone", subject,
+        body + `<p style="font-size:12px;color:#5D7681">How credits work: ${site}/referral-terms</p>`,
+      );
+      if (ok) nearMilestoneNudges++;
+    }
   }
 
   // B) Territory expansion — waiting demand next door, priced at THEIR rates.
@@ -822,7 +856,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
     }
   }
 
-  return { ok: true, creditNudges, territoryNudges };
+  return { ok: true, creditNudges, nearMilestoneNudges, territoryNudges };
 }
 
 /** Annual COI re-validation nudge (the owner's yearly re-attest). Emails an
