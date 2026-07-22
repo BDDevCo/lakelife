@@ -61,6 +61,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const { year, month } = cal;
   const [picked, setPicked] = useState<string | null>(null);
   const [fullDates, setFullDates] = useState<Set<string>>(new Set());
+  const [findingCrew, setFindingCrew] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const today = toISODate(now);
@@ -68,7 +69,10 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   useEffect(() => {
     let cancelled = false;
     getAvailability(service.id, year, month).then((res) => {
-      if (!cancelled) setFullDates(new Set(res.fullDates));
+      if (!cancelled) {
+        setFullDates(new Set(res.fullDates));
+        setFindingCrew(!!res.findingCrew);
+      }
     });
     return () => { cancelled = true; };
   }, [service.id, year, month]);
@@ -129,6 +133,20 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
         </div>
 
         <div className="ll-modal-body">
+          {/* Cold-start honesty: no regular crew here YET — book anyway, we hunt. */}
+          {findingCrew && (
+            <div
+              style={{
+                border: "1.5px solid var(--gold, #d9a441)", borderRadius: 12, padding: "10px 14px",
+                marginBottom: 14, fontSize: 13.5, lineHeight: 1.45,
+              }}
+            >
+              <b>New water for us 🌊</b> — no regular crew on your lake yet. Book any day and
+              we&apos;ll hunt one down; you&apos;re never charged until the work is done, and
+              we&apos;ll tell you straight if we can&apos;t line one up in time.
+            </div>
+          )}
+
           {/* frequency */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
             {service.frequency_options.map((f, i) => (

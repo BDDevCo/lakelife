@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
-import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases } from "@/lib/automation";
+import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs } from "@/lib/automation";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +21,10 @@ async function run(req: Request) {
   // Phase E: pause crews on lakes they keep ghosting (BEFORE re-dispatch, so
   // tonight's waterfall never re-hands a job to the crew that just lost the lake).
   const lakeStanding = await demoteLakeStrikes();
+  // Waitlist: honest terminal for jobs whose date passed unfilled (+ the
+  // T-minus warning), then try to fill every future waiting job.
+  const waitlist = await expireUnfilledJobs();
+  const sweep = await sweepWaitlist();
   // Self-heal assignments (re-home lapsed crews, fill stragglers), then route.
   const dispatch = await revalidateAssignments(date);
   const routes = await runRouteBuild(date);
@@ -33,7 +37,7 @@ async function run(req: Request) {
   const autopilot = await generateAutopilotProposals();
   // Phase E: re-pin crew bases from where they actually complete jobs.
   const bases = await selfHealCrewBases();
-  return NextResponse.json({ ok: true, noShows, lakeStanding, dispatch, routes, reminders, reconcile, coi, autopilot, bases });
+  return NextResponse.json({ ok: true, noShows, lakeStanding, waitlist, sweep, dispatch, routes, reminders, reconcile, coi, autopilot, bases });
 }
 
 export const GET = run; // Vercel Cron issues GET

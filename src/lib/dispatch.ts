@@ -67,8 +67,11 @@ export interface DispatchResult {
 export interface DispatchDecision {
   ok: boolean;
   result?: DispatchResult;
-  /** Why no crew could take it — drives the ops "needs attention" signal. */
-  reasonNoFit?: "no_crew_for_service" | "all_full_or_blocked" | "no_qualifying_rate" | "below_floor";
+  /** Why no crew could take it — drives the ops "needs attention" signal.
+   *  no_crew_on_lake is the geographic dead-end (cold-start lake): crews do
+   *  this service, just not HERE — distinct from all_full_or_blocked so the
+   *  booking flow never mistakes "no crew yet" for "day genuinely full". */
+  reasonNoFit?: "no_crew_for_service" | "no_crew_on_lake" | "all_full_or_blocked" | "no_qualifying_rate" | "below_floor";
   eligibleCount?: number; // crews that cleared the hard gates (pre-rate)
 }
 
@@ -131,6 +134,12 @@ export function rankCrews(
 export function decideDispatch(input: DispatchInput): DispatchDecision {
   const forService = input.crews.filter((c) => c.serviceTypes.includes(input.serviceName));
   if (forService.length === 0) return { ok: false, reasonNoFit: "no_crew_for_service", eligibleCount: 0 };
+
+  // Geographic dead-end BEFORE the capacity read: crews do this service but
+  // none serves THIS lake — that's a recruiting problem, not a full calendar.
+  if (input.lakeId && !forService.some((c) => (c.serviceLakes ?? []).includes(input.lakeId as string))) {
+    return { ok: false, reasonNoFit: "no_crew_on_lake", eligibleCount: 0 };
+  }
 
   const eligible = input.crews.filter((c) => isEligible(c, input));
   if (eligible.length === 0) return { ok: false, reasonNoFit: "all_full_or_blocked", eligibleCount: 0 };

@@ -50,9 +50,9 @@ export async function getAvailability(
   year: number,
   month: number, // 0-indexed
   propertyId?: string, // defaults to the active property; used to scope by lake
-): Promise<{ fullDates: string[]; capacity: number }> {
+): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean }> {
   const service = await loadService(serviceId);
-  if (!service) return { fullDates: [], capacity: 0 };
+  if (!service) return { fullDates: [], capacity: 0, findingCrew: false };
   // Scope capacity to crews that service THIS property's lake (Phase B): a date
   // is only bookable if a crew who works this lake has an open slot.
   const pid = propertyId ?? (await getActivePropertyId());
@@ -155,24 +155,33 @@ export async function createBooking(
   // If the day genuinely filled between page-load and submit (every eligible
   // crew is now full/blocked), back the booking out and ask for another date.
   // Any OTHER no-fit reason (no crew does it yet, or none clears the margin
-  // floor) still confirms the booking and lands in the ops "needs attention"
-  // bucket — the customer isn't blocked and ops gets the signal.
+  // floor) still confirms the booking as a "Finding a crew" waitlist row —
+  // the customer isn't blocked, the claim board and nightly sweeps hunt for
+  // a crew, and the demand itself is the recruiting signal.
+  let assigned = false;
   try {
     const outcome = await autoAssignJob(inserted.id);
+    assigned = outcome.assigned;
     if (!outcome.assigned && outcome.decision.reasonNoFit === "all_full_or_blocked") {
       await admin.from("jobs").delete().eq("id", inserted.id);
       return { ok: false, error: "That day just filled up — pick another date." };
     }
   } catch {
-    /* leave as requested; ops will see it */
+    /* leave as requested; the waitlist sweeps will keep hunting */
   }
 
-  // Notifications — best effort, never block the booking.
+  // Notifications — best effort, never block the booking. Be HONEST about
+  // whether a crew is locked in or we're still hunting one down.
   const pretty = new Date(date + "T12:00:00").toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric",
   });
   if (me?.phone) {
-    void sendSms(me.phone, `LakeLife: ${service.name} is booked for ${pretty}. We'll text you when a crew is on the way. 🌊`);
+    void sendSms(
+      me.phone,
+      assigned
+        ? `LakeLife: ${service.name} is booked for ${pretty}. We'll text you when a crew is on the way. 🌊`
+        : `LakeLife: got it — ${service.name} for ${pretty}. We're lining up a crew now and you'll hear the moment one's locked in. You're never charged until the work is done. 🌊`,
+    );
   }
   if (me?.email) {
     void sendEmail({

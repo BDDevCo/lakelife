@@ -264,5 +264,14 @@ export async function finishOnboarding(): Promise<OnboardingResult> {
     .eq("id", vendor.id)
     .eq("status", "invited"); // guard: only invited→active, never resurrect a suspension
   if (error) return { ok: false, error: error.message };
+
+  // SUPPLY JUST ARRIVED: sweep the waitlist right now — customers stuck in
+  // "Finding a crew" on this crew's lakes shouldn't wait for tonight's cron.
+  try {
+    const { sweepWaitlist } = await import("@/lib/automation");
+    await sweepWaitlist();
+  } catch {
+    /* nightly sweep is the backstop */
+  }
   return { ok: true };
 }

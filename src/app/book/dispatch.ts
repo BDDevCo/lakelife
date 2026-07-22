@@ -108,7 +108,7 @@ export async function getServiceAvailability(
   year: number,
   month: number, // 0-indexed
   lakeId: string | null = null, // when set, only crews servicing this lake count
-): Promise<{ fullDates: string[]; capacity: number }> {
+): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean }> {
   const admin = createServiceClient();
   const from = `${year}-${String(month + 1).padStart(2, "0")}-01`;
   const to = toISODate(new Date(year, month + 1, 0));
@@ -127,6 +127,14 @@ export async function getServiceAvailability(
       ((v.service_types as string[]) ?? []).includes(serviceName) &&
       (!lakeId || ((v.service_lakes as string[]) ?? []).includes(lakeId)),
   );
+
+  // COLD START (waitlist rung): when NO active crew serves this lake+service
+  // at all, a wall of "full" dates would be a lie — nothing is full, there's
+  // simply no crew YET. Keep every date open and flag it: the booking becomes
+  // a "Finding a crew" waitlist row, which is itself the recruiting signal.
+  if (!pool.some((v) => v.status === "active")) {
+    return { fullDates: [], capacity: 0, findingCrew: true };
+  }
   const maxDailyCap = pool.reduce((m, v) => m + Math.max(0, Number(v.daily_capacity ?? 0)), 0);
 
   const blockedByDate = new Map<string, Set<string>>();
@@ -167,7 +175,7 @@ export async function getServiceAvailability(
     if (remaining <= 0) fullDates.push(iso);
   }
 
-  return { fullDates, capacity: maxDailyCap };
+  return { fullDates, capacity: maxDailyCap, findingCrew: false };
 }
 
 export interface AssignOutcome {

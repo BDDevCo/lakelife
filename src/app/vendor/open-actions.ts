@@ -159,11 +159,19 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     return { ok: false, error: "Your day filled up before this claim landed." };
   }
 
-  // Claiming a new lake = opting into it. Append so future jobs there auto-route.
+  // Claiming a new lake = opting into it. Append so future jobs there auto-route,
+  // and immediately sweep that lake's waitlist — this crew may unlock several
+  // customers stuck in "Finding a crew", not just the one they tapped.
   const prop = one(job.properties) as { lake_id?: string; address?: string; users?: unknown } | null;
   const lakes = (vendor.service_lakes as string[]) ?? [];
   if (prop?.lake_id && !lakes.includes(prop.lake_id)) {
     await admin.from("vendors").update({ service_lakes: [...lakes, prop.lake_id] }).eq("id", vendor.id as string);
+    try {
+      const { sweepWaitlist } = await import("@/lib/automation");
+      await sweepWaitlist(prop.lake_id);
+    } catch {
+      /* nightly sweep is the backstop */
+    }
   }
 
   // Recovery notify: the waiting owner instantly hears a crew picked it up.

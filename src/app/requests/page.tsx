@@ -14,10 +14,11 @@ import { todayLakeDate } from "@/lib/booking";
 import { createServiceClient } from "@/lib/supabase/server";
 
 const STATUS_PILL: Record<string, string> = {
-  requested: "warn", scheduled: "teal", in_progress: "teal", complete: "ok", paid: "slate",
+  requested: "warn", scheduled: "teal", in_progress: "teal", complete: "ok", paid: "slate", cancelled: "slate",
 };
 const STATUS_LABEL: Record<string, string> = {
-  requested: "Requested", scheduled: "Scheduled", in_progress: "In progress", complete: "Complete", paid: "Paid",
+  // A `requested` job is by definition still unassigned — say so honestly.
+  requested: "Finding a crew", scheduled: "Scheduled", in_progress: "In progress", complete: "Complete", paid: "Paid", cancelled: "Cancelled",
 };
 
 export default async function RequestsPage() {

@@ -24,6 +24,8 @@ export interface PlatformSettings {
   lakeStrikeLimit: number;
   /** How long a lake pause lasts before the crew can work that lake again. */
   lakeDemotionCooldownDays: number;
+  /** Days before an UNFILLED job's date the customer gets the options text. */
+  waitlistWarningDays: number;
 }
 
 export const DEFAULT_SETTINGS: PlatformSettings = {
@@ -34,6 +36,7 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   cancelWaterDays: 7,
   lakeStrikeLimit: 2,
   lakeDemotionCooldownDays: 30,
+  waitlistWarningDays: 2,
 };
 
 /** Clamp a raw stored value into a sane band; fall back on anything weird. */
@@ -50,7 +53,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
     const { data } = await admin
       .from("platform_settings")
       .select("key, value")
-      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days"]);
+      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days"]);
     const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]));
     return {
       marginFloor: parseSetting(byKey.get("margin_floor"), DEFAULT_SETTINGS.marginFloor, 0.05, 0.6),
@@ -60,6 +63,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       cancelWaterDays: parseSetting(byKey.get("cancel_water_days"), DEFAULT_SETTINGS.cancelWaterDays, 0, 60),
       lakeStrikeLimit: parseSetting(byKey.get("lake_strike_limit"), DEFAULT_SETTINGS.lakeStrikeLimit, 1, 10),
       lakeDemotionCooldownDays: parseSetting(byKey.get("lake_demotion_cooldown_days"), DEFAULT_SETTINGS.lakeDemotionCooldownDays, 1, 365),
+      waitlistWarningDays: parseSetting(byKey.get("waitlist_warning_days"), DEFAULT_SETTINGS.waitlistWarningDays, 1, 14),
     };
   } catch {
     return DEFAULT_SETTINGS; // table missing / transient error → today's values

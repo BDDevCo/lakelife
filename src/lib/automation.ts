@@ -9,7 +9,9 @@ import { planVendorDay, routeMapUrl, type StopIn } from "@/lib/router";
 import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 import { proposeAutopilotDate } from "@/lib/autopilot";
 import { shouldDemote, healBase } from "@/lib/lake-standing";
+import { warningDue, isExpired } from "@/lib/waitlist";
 import { getPlatformSettings } from "@/lib/settings";
+import { autoAssignJob } from "@/app/book/dispatch";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -425,6 +427,100 @@ export async function sendCoiRevalidations(leadDays = 30): Promise<{ ok: boolean
     emailed++;
   }
   return { ok: true, due, emailed };
+}
+
+/**
+ * WAITLIST SWEEP (ladder rungs 6–7): try to fill EVERY future unassigned job,
+ * not just tomorrow's. Runs nightly, and immediately when supply arrives (a
+ * crew self-activates or claims into a new lake) — the waiting customer hears
+ * "crew locked in" the moment it's true. Optionally scoped to one lake (the
+ * lake a crew just joined). Bounded per run; the nightly catches the rest.
+ */
+export async function sweepWaitlist(lakeId?: string, limit = 25): Promise<{ ok: boolean; checked: number; filled: number }> {
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+  let q = admin
+    .from("jobs")
+    .select("id, date, services(name), properties!inner(lake_id, owner_id)")
+    .eq("status", "requested")
+    .is("vendor_id", null)
+    .gte("date", today)
+    .order("date", { ascending: true })
+    .limit(limit);
+  if (lakeId) q = q.eq("properties.lake_id", lakeId);
+  const { data: waiting } = await q;
+
+  let filled = 0;
+  for (const j of waiting ?? []) {
+    try {
+      const r = await autoAssignJob(j.id as string);
+      if (!r.assigned) continue;
+      filled++;
+      // Recovery notify — the whole point of the waitlist: instant good news.
+      const prop = one(j.properties) as { owner_id?: string } | null;
+      const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
+      if (prop?.owner_id) {
+        const { data: owner } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+        if (owner?.phone) void sendSms(owner.phone as string, `LakeLife: good news — a crew is locked in for your ${svc} on ${prettyDate(j.date as string)}. We'll text you the night before. 🌊`);
+      }
+    } catch {
+      /* keep sweeping */
+    }
+  }
+  return { ok: true, checked: (waiting ?? []).length, filled };
+}
+
+/**
+ * WAITLIST TERMINAL (ladder rung 8): the honest floor. At `waitlist_warning_days`
+ * out, a still-unfilled job's customer gets the self-serve fork (exact-boundary,
+ * one send). If the date passes with nobody to send, the machine cancels,
+ * says so plainly, and reminds them they were never charged — no silent rot,
+ * no ops queue. The demand history stays on the books as the recruit signal.
+ */
+export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: number; expired: number }> {
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+  const { waitlistWarningDays } = await getPlatformSettings();
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+
+  const { data: unfilled } = await admin
+    .from("jobs")
+    .select("id, date, services(name), properties(owner_id, address, nickname)")
+    .eq("status", "requested")
+    .is("vendor_id", null)
+    .not("date", "is", null);
+
+  let warned = 0, expired = 0;
+  for (const j of unfilled ?? []) {
+    const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
+    const prop = one(j.properties) as { owner_id?: string; address?: string; nickname?: string } | null;
+    const where = prop?.nickname || prop?.address || "your place";
+    const phone = prop?.owner_id
+      ? ((await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle()).data?.phone as string | undefined)
+      : undefined;
+
+    if (isExpired(j.date as string, today)) {
+      // Guarded flip — never race a same-moment claim/assign.
+      const { data: gone } = await admin
+        .from("jobs")
+        .update({ status: "cancelled" })
+        .eq("id", j.id as string)
+        .eq("status", "requested")
+        .is("vendor_id", null)
+        .select("id");
+      if (!gone || gone.length === 0) continue;
+      expired++;
+      if (phone) {
+        void sendSms(phone, `LakeLife: we couldn't line up a crew in time for ${svc} at ${where} — so we've cancelled it and you were never charged. Rebook any open day (${site}/book), or invite a crew you trust and they're always first on your jobs (${site}/book). We're recruiting on your lake. 🌊`);
+      }
+    } else if (warningDue(j.date as string, today, waitlistWarningDays)) {
+      warned++;
+      if (phone) {
+        void sendSms(phone, `LakeLife: still lining up a crew for ${svc} at ${where} on ${prettyDate(j.date as string)}. You can hold tight (no charge unless it's done), pick a different day (${site}/requests), or invite a crew you know (${site}/book) — they'd be first on all your jobs. 🌊`);
+      }
+    }
+  }
+  return { ok: true, warned, expired };
 }
 
 /** PHASE E: per-lake auto-demotion. A crew whose net strikes (no-shows minus
