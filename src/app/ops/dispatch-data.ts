@@ -29,16 +29,6 @@ type Embed<T> = T | T[] | null;
 const first = <T>(x: Embed<T> | undefined): T | null =>
   x == null ? null : Array.isArray(x) ? (x[0] ?? null) : x;
 
-/** Does an active crew list this service? Empty service_types = generalist. */
-function crewDoesService(serviceTypes: string[], serviceName: string | null): boolean {
-  if (!serviceTypes.length) return true;
-  const svc = (serviceName ?? "").toLowerCase();
-  return serviceTypes.some((t) => {
-    const tt = String(t).toLowerCase();
-    return svc.includes(tt) || tt.includes(svc.split(" ")[0]);
-  });
-}
-
 /**
  * Jobs the machine couldn't crew: still `requested`, no vendor, and dated today
  * or later. Best-effort reason:
@@ -57,7 +47,7 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
     .from("jobs")
     .select(
       "id, property_id, date, customer_price, service_id, " +
-        "services(name), properties(address, preferred_vendor, lakes(name))",
+        "services(name), properties(address, preferred_vendor, lake_id, lakes(name))",
     )
     .eq("status", "requested")
     .is("vendor_id", null)
@@ -71,15 +61,15 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
     customer_price: number | null;
     service_id: string | null;
     services: Embed<{ name: string | null }>;
-    properties: Embed<{ address: string | null; preferred_vendor: string | null; lakes: Embed<{ name: string | null }> }>;
+    properties: Embed<{ address: string | null; preferred_vendor: string | null; lake_id: string | null; lakes: Embed<{ name: string | null }> }>;
   }>;
 
   if (rows.length === 0) return [];
 
-  // Active, insured crews (for the reason heuristic).
+  // Active, insured crews (for the reason heuristic — incl. WHICH lakes).
   const { data: vendors } = await admin
     .from("vendors")
-    .select("service_types, coi_expiry, status")
+    .select("service_types, service_lakes, coi_expiry, status")
     .eq("status", "active");
   const insured = (vendors ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today);
 
@@ -100,15 +90,32 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
   return rows.map((r) => {
     const svc = first(r.services) as { name?: string } | null;
     const prop = first(r.properties) as
-      | { address?: string; preferred_vendor?: string; lakes?: Embed<{ name: string | null }> }
+      | { address?: string; preferred_vendor?: string; lake_id?: string; lakes?: Embed<{ name: string | null }> }
       | null;
     const lake = first(prop?.lakes) as { name?: string } | null;
     const serviceName = svc?.name ?? null;
 
-    const anyCrewForService = insured.some((v) => crewDoesService((v.service_types as string[]) ?? [], serviceName));
-    const reason = anyCrewForService
-      ? "All crews are full or below the margin floor"
-      : "No active, insured crew signed up for this service";
+    // Distinct unblocks, told apart honestly — and matched to what dispatch
+    // ACTUALLY checks (exact service-name membership, not fuzzy matching, so
+    // this label never disagrees with the engine's verdict).
+    const doesSvc = (v: { service_types?: string[] | null }) =>
+      !!serviceName && ((v.service_types as string[]) ?? []).includes(serviceName);
+    const onLakeOf = (v: { service_lakes?: string[] | null }) =>
+      !prop?.lake_id || (((v.service_lakes ?? []) as string[]).includes(prop.lake_id as string));
+    const insuredForService = insured.filter(doesSvc);
+    // Uninsured-but-otherwise-fitting crews mean the unblock is COI renewal,
+    // not recruiting — say so instead of sending ops recruiting for nothing.
+    const lapsedWouldFit = (vendors ?? []).some((v) => doesSvc(v) && onLakeOf(v)) && !insured.some((v) => doesSvc(v) && onLakeOf(v));
+    const reason =
+      insuredForService.length === 0
+        ? lapsedWouldFit
+          ? "A crew fits but their insurance lapsed — COI renewal is the unblock"
+          : "No active, insured crew signed up for this service"
+        : !insuredForService.some(onLakeOf)
+          ? lapsedWouldFit
+            ? "A crew fits but their insurance lapsed — COI renewal is the unblock"
+            : `No crew serves ${lake?.name ?? "this lake"} yet — recruiting is the unblock`
+          : "All crews are full or below the margin floor";
 
     const preferred_vendor = prop?.preferred_vendor ?? null;
     return {

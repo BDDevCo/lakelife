@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { createServiceClient } from "@/lib/supabase/server";
 import { computeScore, type CrewScore } from "@/lib/scoring";
 
@@ -13,8 +14,10 @@ function lakeDateOf(ts: string): string {
  * date), and flag accuracy (owner-approved vs declined flags). Service-role read
  * — this is ops authority + the dispatch score source. Returns a map by
  * vendor_id; a vendor with no history still gets a computed (new-crew) score.
+ * Wrapped in React cache(): deduped per request, so a waitlist sweep that
+ * auto-assigns dozens of jobs does these 3 table scans ONCE, not once per job.
  */
-export async function getVendorScores(): Promise<Map<string, CrewScore>> {
+export const getVendorScores = cache(async (): Promise<Map<string, CrewScore>> => {
   const admin = createServiceClient();
   const [{ data: jobs }, { data: flags }, { data: noShows }] = await Promise.all([
     admin.from("jobs").select("vendor_id, date, completed_at").in("status", ["complete", "paid"]).not("vendor_id", "is", null),
@@ -48,7 +51,7 @@ export async function getVendorScores(): Promise<Map<string, CrewScore>> {
   const out = new Map<string, CrewScore>();
   for (const [id, a] of by) out.set(id, computeScore(a));
   return out;
-}
+});
 
 /** The signed-in crew's own standing (or null if the caller isn't a vendor).
  *  Imported lazily by the vendor surface; never exposes peers. */

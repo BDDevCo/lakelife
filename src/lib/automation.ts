@@ -12,6 +12,7 @@ import { shouldDemote, healBase } from "@/lib/lake-standing";
 import { warningDue, isExpired } from "@/lib/waitlist";
 import { getPlatformSettings } from "@/lib/settings";
 import { autoAssignJob } from "@/app/book/dispatch";
+import { computeScarcityOffer } from "@/app/requests/offer-data";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -300,7 +301,11 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
   return { ok: true, flagged };
 }
 
-export async function revalidateAssignments(dateISO?: string): Promise<{ ok: boolean; checked: number; rehomed: number; unfilled: number; crewsTexted?: number }> {
+export async function revalidateAssignments(
+  dateISO?: string,
+  opts: { broadcast?: boolean } = {},
+): Promise<{ ok: boolean; checked: number; rehomed: number; unfilled: number; crewsTexted?: number }> {
+  const broadcast = opts.broadcast ?? true; // intraday heartbeat passes false — no SMS every 30 min
   const date = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : addDays(todayLakeDate(), 1);
   const admin = createServiceClient();
   const { data: jobs } = await admin
@@ -322,7 +327,7 @@ export async function revalidateAssignments(dateISO?: string): Promise<{ ok: boo
   // only hears about jobs NO crew could even be asked about (true dead end).
   let crewsTexted = 0;
   const unfilled = unfilledIds.length;
-  if (unfilled > 0) {
+  if (broadcast && unfilled > 0) {
     const today = todayLakeDate();
     const [{ data: openJobs }, { data: crews }] = await Promise.all([
       admin.from("jobs").select("id, services(name)").in("id", unfilledIds),
@@ -393,6 +398,90 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
   return { ok: true, sent };
 }
 
+/**
+ * Retry UNCOLLECTED late-cancellation fees (closes the adversarial-review gap:
+ * the completed-job reconciler never touched cancelled jobs, so a failed fee
+ * charge sat 'due' forever). Nightly: find cancelled jobs whose fee invoice
+ * isn't paid, retry the saved card, and — only once the money is actually in —
+ * release the crew's proportional share (roadmap §2: paid from fees COLLECTED).
+ */
+export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: number; collected: number }> {
+  const admin = createServiceClient();
+  // Inner-join on UNPAID invoices so paid/free-cancelled rows never occupy the
+  // scan window (expired-waitlist cancels accumulate forever — an unfiltered
+  // limit could starve real fee invoices out of the batch permanently).
+  const { data: jobs } = await admin
+    .from("jobs")
+    .select("id, customer_price, vendor_cost, vendor_id, property_id, created_at, services(name), invoices!inner(id, status, amount, created_at), properties(owner_id)")
+    .eq("status", "cancelled")
+    .neq("invoices.status", "paid")
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  const tenMinAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+  let retried = 0, collected = 0;
+  for (const j of jobs ?? []) {
+    const invRaw = j.invoices as { id?: string; status?: string; amount?: number; created_at?: string }[] | { id?: string; status?: string; amount?: number; created_at?: string } | null;
+    const inv = (Array.isArray(invRaw) ? invRaw[0] : invRaw) ?? null;
+    if (!inv?.id || inv.status === "paid") continue;
+    // Age guard: a cancelRequest may be mid-flight (it flips the job, creates
+    // the invoice, THEN charges) — never race it. Fresh invoices wait a cycle.
+    if (inv.created_at && String(inv.created_at) > tenMinAgo) continue;
+    const fee = Number(inv.amount ?? 0);
+    const priceSanity = Number(j.customer_price ?? 0);
+    if (!(fee > 0)) continue;
+    // Sanity: a cancellation fee is a FRACTION of the price. An invoice at or
+    // near full price on a cancelled job is not ours to charge — leave for ops.
+    if (priceSanity > 0 && fee > priceSanity * 0.5) continue;
+    // Retry cap: card networks limit reattempts — after 5 failed nights, stop
+    // (the invoice stays visibly 'due' on the customer's Billing page).
+    const { count: failCount } = await admin
+      .from("payments").select("id", { count: "exact", head: true })
+      .eq("invoice_id", inv.id).eq("status", "failed");
+    if ((failCount ?? 0) >= 5) continue;
+
+    // Never double-charge: skip if a captured payment already exists.
+    const { data: paid } = await admin.from("payments").select("id").eq("invoice_id", inv.id).eq("status", "captured").maybeSingle();
+    if (paid) {
+      await admin.from("invoices").update({ status: "paid" }).eq("id", inv.id);
+    } else {
+      const ownerId = (one(j.properties) as { owner_id?: string } | null)?.owner_id;
+      if (!ownerId) continue;
+      const { data: pm } = await admin
+        .from("payment_methods")
+        .select("token")
+        .eq("user_id", ownerId)
+        .order("is_default", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!pm?.token) continue; // still no card — try again tomorrow
+      retried++;
+      const svc = (one(j.services) as { name?: string } | null)?.name ?? "service";
+      const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(fee * 100), description: `LakeLife — late cancellation, ${svc}` });
+      await admin.from("payments").insert({ invoice_id: inv.id, amount: fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null });
+      if (!charge.ok) continue;
+      await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null }).eq("id", inv.id);
+    }
+    collected++;
+
+    // Fee is in — release the crew's proportional share (same pct of THEIR
+    // rate as the fee is of the customer price), once.
+    const price = Number(j.customer_price ?? 0);
+    const cost = Number(j.vendor_cost ?? 0);
+    if (j.vendor_id && price > 0 && cost > 0) {
+      const crewShare = Math.round((fee / price) * cost * 100) / 100;
+      if (crewShare > 0) {
+        const { data: existing } = await admin.from("payouts").select("id").eq("job_id", j.id as string).maybeSingle();
+        if (!existing) {
+          await admin.from("payouts").insert({ vendor_id: j.vendor_id, job_id: j.id, amount: crewShare, status: "released" });
+        }
+      }
+    }
+  }
+  return { ok: true, retried, collected };
+}
+
 /** Annual COI re-validation nudge (the owner's yearly re-attest). Emails an
  *  active crew when the certificate on file is exactly `leadDays` (default 30)
  *  from expiring, OR on the yearly anniversary of their last verification — one
@@ -436,20 +525,34 @@ export async function sendCoiRevalidations(leadDays = 30): Promise<{ ok: boolean
  * "crew locked in" the moment it's true. Optionally scoped to one lake (the
  * lake a crew just joined). Bounded per run; the nightly catches the rest.
  */
-export async function sweepWaitlist(lakeId?: string, limit = 25): Promise<{ ok: boolean; checked: number; filled: number }> {
+/** Hour of day (0–23) in lake time — for SMS quiet hours. */
+function lakeHour(): number {
+  const h = new Intl.DateTimeFormat("en-US", { timeZone: "America/Indiana/Indianapolis", hour12: false, hour: "2-digit" }).format(new Date());
+  return Number(h) % 24;
+}
+
+export async function sweepWaitlist(lakeId?: string, limit = 60): Promise<{ ok: boolean; checked: number; filled: number }> {
   const admin = createServiceClient();
   const today = todayLakeDate();
+  // FUTURE-only (strictly after today). Same-day fills are deliberately out:
+  // today's capacity math counts completed jobs as freed slots and there's no
+  // time-of-day cutoff, so a late beat could pile guaranteed no-shows onto a
+  // crew — and then strike them for it (adversarial review, 2026-07-22).
   let q = admin
     .from("jobs")
     .select("id, date, services(name), properties!inner(lake_id, owner_id)")
     .eq("status", "requested")
     .is("vendor_id", null)
-    .gte("date", today)
+    .gt("date", today)
     .order("date", { ascending: true })
     .limit(limit);
   if (lakeId) q = q.eq("properties.lake_id", lakeId);
   const { data: waiting } = await q;
 
+  // Good-news texts respect quiet hours (8a–9p lake). A night fill still
+  // happens — the portal shows Scheduled and the night-before reminder is
+  // guaranteed — we just don't buzz a phone at 2am about it.
+  const canText = lakeHour() >= 8 && lakeHour() < 21;
   let filled = 0;
   for (const j of waiting ?? []) {
     try {
@@ -459,9 +562,9 @@ export async function sweepWaitlist(lakeId?: string, limit = 25): Promise<{ ok: 
       // Recovery notify — the whole point of the waitlist: instant good news.
       const prop = one(j.properties) as { owner_id?: string } | null;
       const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
-      if (prop?.owner_id) {
+      if (canText && prop?.owner_id) {
         const { data: owner } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
-        if (owner?.phone) void sendSms(owner.phone as string, `LakeLife: good news — a crew is locked in for your ${svc} on ${prettyDate(j.date as string)}. We'll text you the night before. 🌊`);
+        if (owner?.phone) void sendSms(owner.phone as string, `LakeLife: good news — a crew is locked in for your ${svc} on ${prettyDate(j.date as string)}. You'll get a reminder before we arrive. 🌊`);
       }
     } catch {
       /* keep sweeping */
@@ -516,7 +619,16 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
     } else if (warningDue(j.date as string, today, waitlistWarningDays)) {
       warned++;
       if (phone) {
-        void sendSms(phone, `LakeLife: still lining up a crew for ${svc} at ${where} on ${prettyDate(j.date as string)}. You can hold tight (no charge unless it's done), pick a different day (${site}/requests), or invite a crew you know (${site}/book) — they'd be first on all your jobs. 🌊`);
+        // If a price bump would unlock a crew RIGHT NOW (rung 3), say so in
+        // the same text — the fix shouldn't hide on a page they may not visit.
+        let boost = "";
+        try {
+          const offer = await computeScarcityOffer(j.id as string);
+          if (offer) boost = ` Crews are tight that day — add $${offer.uplift.toFixed(2)} (new total $${offer.newPrice.toFixed(2)}) on your requests page and we'll lock one in now.`;
+        } catch {
+          /* offer is a bonus, never a blocker */
+        }
+        void sendSms(phone, `LakeLife: still lining up a crew for ${svc} at ${where} on ${prettyDate(j.date as string)}. You can hold tight (no charge unless it's done), pick a different day (${site}/requests), or invite a crew you know (${site}/book) — they'd be first on all your jobs.${boost} 🌊`);
       }
     }
   }
