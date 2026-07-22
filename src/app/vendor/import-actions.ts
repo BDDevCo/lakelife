@@ -133,6 +133,17 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
 
   let claimed = 0;
   for (const imp of imports) {
+    // CLAIM THE ROW FIRST (atomic): flip pending -> claiming, guarded on the row
+    // still being 'pending'. Only the runner whose update returns a row proceeds,
+    // so a double-invocation (prefetch + navigation) can't create two properties.
+    const { data: won } = await admin
+      .from("customer_imports")
+      .update({ status: "claiming" })
+      .eq("id", imp.id)
+      .eq("status", "pending")
+      .select("id");
+    if (!won || won.length === 0) continue; // another runner already took it
+
     // Materialize the property (owner = the new user), preferred = the crew.
     const { data: prop, error: propErr } = await admin
       .from("properties")
@@ -146,7 +157,11 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
       })
       .select("id")
       .single();
-    if (propErr || !prop) continue; // e.g. place_id dedup — leave the import to ops
+    if (propErr || !prop) {
+      // Materialization failed (e.g. place_id dedup) — release the row for ops.
+      await admin.from("customer_imports").update({ status: "pending" }).eq("id", imp.id);
+      continue;
+    }
     await admin
       .from("customer_imports")
       .update({ status: "claimed", claimed_property: prop.id })
