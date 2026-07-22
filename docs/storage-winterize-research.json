@@ -1,0 +1,1015 @@
+{
+ "summary": "Four-perspective research sweep for boat winterization + storage service design",
+ "agentCount": 4,
+ "logs": [
+  "research complete: taxonomy=ok rates=ok platform=ok risk=ok"
+ ],
+ "result": {
+  "taxonomy": {
+   "scenarios": [
+    {
+     "name": "Mobile round-trip (owner's A): winterize at customer property, boat stays home, spring recommission on site",
+     "steps": [
+      "FALL - Customer: makes boat accessible (on lift pulled onshore, on its trailer in driveway, or blocked in yard) and confirms last-use date",
+      "FALL - Vendor: on-site engine winterization (fuel stabilizer, fog cylinders, drain/antifreeze block and manifolds for sterndrive/inboard, gear lube for outboards), drain freshwater/livewell/ballast systems",
+      "FALL - Vendor: optional on-site add-ons (battery pull or disconnect, shrink wrap or cover fit, rodent packs)",
+      "WINTER - Customer: boat sits at customer property; customer bears weather, snow-load, and rodent risk",
+      "SPRING - Vendor: returns after ice-out to de-winterize (reinstall/charge batteries, unfog, impeller/plug check, flush, remove wrap) and test-run on muffs or at the dock",
+      "SPRING - Either: launch - vendor floats it off trailer/lift or customer splashes it; requires the lift/pier to already be set (hard dependency on pier and lift services)"
+     ],
+     "whoDoesWhat": "Customer stages the boat and owns winter custody; vendor does all mechanical work both legs; launch is either party. No transport at all.",
+     "vendorTypesOffering": [
+      "Mobile marine tech",
+      "Marina service dept (travel fee)",
+      "Dealer service center (travel fee)",
+      "Pole-barn shop that also runs mobile"
+     ],
+     "prevalence": "Common - the default for pontoons/outboards at seasonal lake homes with room to store; the bread-and-butter mobile transaction on small Indiana lakes",
+     "constraints": [
+      "Boat must be out of the water or on a lift for most sterndrive/inboard work; outboard pontoons can be done on the lift",
+      "Fall crunch: must complete before first hard freeze (block-crack risk); platform pull-deadline (hard freeze minus 8 days) is the real backstop",
+      "Spring leg cannot precede ice-out and usually cannot precede lift/pier set - sequencing dependency the router must enforce",
+      "Shrink wrap on site needs a dry boat and workable temps; wrapping in late Nov cold is miserable and slower",
+      "Wake/ski boats with ballast bags and heaters take 2-3x the mobile labor of a pontoon - price and slot accordingly"
+     ]
+    },
+    {
+     "name": "Full-service valet (owner's B): vendor hauls out, winterizes at shop, stores at vendor facility, recommissions and relaunches in spring",
+     "steps": [
+      "FALL - Vendor: retrieves boat - floats it onto a hydraulic/pontoon trailer at a ramp, or lifts off the customer's dock/lift",
+      "FALL - Vendor: transports to shop; winterizes indoors (full engine + systems)",
+      "FALL - Vendor: shrink wraps (if outdoor yard) or blocks/racks indoors; logs storage location",
+      "WINTER - Vendor: custody, insurance, and optional battery tending; prime window to sell winter repair/upgrade work",
+      "SPRING - Vendor: de-winterizes, details if sold, launches at ramp or sets boat back on the customer's lift",
+      "SPRING - Customer: confirms delivery; lift/pier must be set before redelivery"
+     ],
+     "whoDoesWhat": "Vendor does everything both directions; customer only books and pays. Vendor holds custody all winter.",
+     "vendorTypesOffering": [
+      "Marina with yard",
+      "Dealer service center",
+      "Pole-barn shop WITH hauling equipment",
+      "Pier/lift contractor partnered with a mechanic (split-vendor)"
+     ],
+     "prevalence": "Common but capacity-capped - the premium product; indoor slots frequently sell out by Labor Day and vendors with hydraulic trailers are scarce",
+     "constraints": [
+      "Requires hydraulic trailer or dedicated pontoon trailer - the single scarcest asset in the market; most boats on these lakes (lift-kept pontoons) have NO trailer of their own",
+      "Ramp access: small glacial lakes have few, shallow public ramps; deep-draft inboards can be hard to retrieve late season when levels drop",
+      "Fall route density matters - vendors batch pickups by lake; platform should cluster jobs",
+      "Commercial tow/garagekeeper insurance required for custody and transport - a real vendor-qualification gate",
+      "Spring redelivery is gated by ice-out AND lift set AND ramp usability; everyone wants back in by Memorial Day",
+      "Storage tier (heated indoor / cold indoor / outdoor wrapped) changes price and what add-ons are needed"
+     ]
+    },
+    {
+     "name": "Customer-transport store (owner's C): customer tows both ways, shop winterizes + stores + de-winterizes",
+     "steps": [
+      "FALL - Customer: tows boat on own trailer to shop by appointment",
+      "FALL - Vendor: winterizes at shop; wraps if outdoor storage",
+      "WINTER - Vendor: stores boat (usually on customer's trailer, sometimes blocked with trailer stored separately)",
+      "SPRING - Vendor: de-winterizes on schedule or on customer's call; notifies when ready",
+      "SPRING - Customer: picks up, tows to lake, launches self"
+     ],
+     "whoDoesWhat": "Customer does all transport and launch; vendor does all mechanical work and holds winter custody.",
+     "vendorTypesOffering": [
+      "Marina with yard",
+      "Dealer service center",
+      "Pole-barn shop",
+      "Storage-only operator partnered with a mobile tech (split-vendor)"
+     ],
+     "prevalence": "Very common for trailer-owning customers - fishing boats, ski boats, PWCs; cheapest full-package path since no vendor transport",
+     "constraints": [
+      "Only works if the customer actually owns a roadworthy trailer - excludes most lift-kept pontoons",
+      "Boat typically occupies its trailer all winter; some shops charge extra to store boat and trailer separately",
+      "Drop-off and pickup appointment slotting creates fall/spring counter congestion - platform scheduling helps here",
+      "Spring notification-to-pickup lag ties up yard space; vendors want pickup deadlines"
+     ]
+    },
+    {
+     "name": "Mobile winterize-only: fall service with NO storage arrangement and NO spring leg booked",
+     "steps": [
+      "FALL - Customer: stages boat (lift/trailer/yard)",
+      "FALL - Vendor: engine + systems winterization on site; optional wrap/battery add-ons",
+      "WINTER/SPRING - Customer: everything else - storage, de-winterize, launch are the customer's problem (or a later separate booking)"
+     ],
+     "whoDoesWhat": "Vendor does one visit; customer owns everything else. Fall and spring are decoupled transactions.",
+     "vendorTypesOffering": [
+      "Mobile marine tech",
+      "Any shop willing to travel"
+     ],
+     "prevalence": "Very common - likely the single highest-volume transaction type in the market; many owners DIY the spring because it is easier than winterizing",
+     "constraints": [
+      "Must be sold as a standalone leg - platforms that force a bundled spring leg lose this volume",
+      "Spring leg should be offered as an upsell at winterize time and again at ice-out",
+      "Same freeze-deadline crunch as scenario A"
+     ]
+    },
+    {
+     "name": "Shop winterize, home storage: customer tows in, vendor winterizes, customer tows home to own pole barn/garage",
+     "steps": [
+      "FALL - Customer: tows boat to shop",
+      "FALL - Vendor: winterizes (same-day or 1-3 day turnaround); optional wrap if customer stores outdoors",
+      "FALL - Customer: tows boat home and stores it in own outbuilding",
+      "SPRING - Either: customer DIYs recommission and launch, or books a mobile spring visit / tows back to shop"
+     ],
+     "whoDoesWhat": "Customer transports both ways and stores; vendor does fall mechanical only.",
+     "vendorTypesOffering": [
+      "Marina with yard",
+      "Dealer service center",
+      "Pole-barn shop"
+     ],
+     "prevalence": "Very common in rural Indiana - pole barns and machine sheds are everywhere; owners want pro winterization but free storage",
+     "constraints": [
+      "Fast turnaround expected - customer does not want two round trips a week apart",
+      "No vendor winter custody, so no storage revenue; shops still like it for throughput",
+      "Spring is naturally decoupled - platform should prompt a spring-mobile upsell"
+     ]
+    },
+    {
+     "name": "Storage-only: boat arrives already winterized, vendor just stores it",
+     "steps": [
+      "FALL - Customer (or another vendor): winterizes the boat elsewhere",
+      "FALL - Either: customer tows to storage, or storage vendor picks up (transport add-on)",
+      "WINTER - Vendor: indoor (heated or cold) or outdoor storage; no mechanical work; optional battery tending",
+      "SPRING - Either: customer retrieves, or vendor delivers (transport add-on)"
+     ],
+     "whoDoesWhat": "Vendor provides space and custody only; all mechanical work is someone else's. Transport either party per leg.",
+     "vendorTypesOffering": [
+      "General contractor/farmer with barn or lot",
+      "Pole-barn shop",
+      "Marina with yard",
+      "Self-storage operators (off-platform competitors)"
+     ],
+     "prevalence": "Common - a large silent market; ag buildings and contractor barns absorb huge boat volume every winter at $30-60/ft dry rates",
+     "constraints": [
+      "Vendor must disclaim mechanical liability - boat must arrive winterized in writing (waiver) or storage vendor requires proof/partner winterization",
+      "Access policy matters: many barn operators are dead-storage (no mid-winter access, boats packed nose-to-tail)",
+      "This is the archetype that lets non-marine vendors (contractors with land) join the platform",
+      "Outdoor storage effectively requires shrink wrap or a mooring cover"
+     ]
+    },
+    {
+     "name": "Shrink-wrap-only: wrap service with no mechanical winterization",
+     "steps": [
+      "FALL - Customer or another vendor: engine already winterized (or outboard owner skipping it)",
+      "FALL - Vendor: shrink wraps boat on site or at shop (frame, film, vents, optional zipper door)",
+      "SPRING - Either: vendor returns to remove and dispose of wrap, or customer cuts it off"
+     ],
+     "whoDoesWhat": "Vendor wraps only; customer handles all mechanical and storage decisions.",
+     "vendorTypesOffering": [
+      "Mobile marine tech",
+      "Dedicated shrink-wrap crews (seasonal operators)",
+      "Marina",
+      "Pier/lift contractor crews (trainable low-skill-ceiling add-on trade)"
+     ],
+     "prevalence": "Moderately common as a standalone; near-universal as an add-on - some seasonal crews do nothing but wrap for 8 weeks",
+     "constraints": [
+      "Boat must be dry and reasonably clean before wrapping",
+      "Late-fall temperature and wind make on-site wrapping slow and risky - film and propane heat gun in the wind",
+      "Wrap disposal in spring is a real cost line; recycling access is spotty in Indiana",
+      "Pricing is per foot plus tower/arch surcharges - fits the platform's per_foot model"
+     ]
+    },
+    {
+     "name": "Spring-only recommission / splash service: no fall relationship",
+     "steps": [
+      "WINTER - Customer: boat was winterized by customer, a different vendor, or came with a winter purchase",
+      "SPRING - Vendor: de-winterizes (batteries, unfog, impeller, flush, systems check), removes wrap, safety check",
+      "SPRING - Either: vendor launches/delivers to lift, or customer launches; a bare 'splash-only' variant is just transport + launch with no mechanical work"
+     ],
+     "whoDoesWhat": "Vendor does spring mechanical and optionally launch; customer did or bought the fall work elsewhere.",
+     "vendorTypesOffering": [
+      "Mobile marine tech",
+      "Marina",
+      "Dealer service center",
+      "Pier/lift contractor (splash-only variant)"
+     ],
+     "prevalence": "Moderately common - DIY winterizers who want a pro spring check, and every boat bought over the winter needs one",
+     "constraints": [
+      "Extreme compression: nearly all demand lands in the 3-4 weeks after ice-out",
+      "If the vendor did not winterize it, they will not warranty freeze damage - expect a documented pre-check",
+      "Splash-only needs the same trailer/ramp assets as scenario B",
+      "Lift/pier set is again the upstream dependency"
+     ]
+    },
+    {
+     "name": "Hybrid: vendor hauls in fall, customer retrieves in spring",
+     "steps": [
+      "FALL - Vendor: picks boat up from dock/lift/ramp, winterizes at shop, stores",
+      "SPRING - Vendor: de-winterizes and notifies",
+      "SPRING - Customer: tows home or launches self (e.g., customer has a trailer but no time in the fall crunch, or wants the boat at a different lake in spring)"
+     ],
+     "whoDoesWhat": "Vendor does fall transport + all mechanical + storage; customer does spring transport/launch.",
+     "vendorTypesOffering": [
+      "Marina with yard",
+      "Dealer service center",
+      "Pole-barn shop with hauling"
+     ],
+     "prevalence": "Niche but real - asymmetric transport shows up whenever the customer's fall and spring situations differ",
+     "constraints": [
+      "Pricing must split transport per leg, not bundle round-trip",
+      "Custody handoff and 'ready for pickup' notification need explicit states in the platform"
+     ]
+    },
+    {
+     "name": "Hybrid: customer tows in fall, vendor delivers and launches in spring",
+     "steps": [
+      "FALL - Customer: tows to shop (has trailer and time in fall)",
+      "FALL/WINTER - Vendor: winterizes and stores",
+      "SPRING - Vendor: de-winterizes, then delivers to the lake and launches / sets on lift (customer is absent, wants the boat waiting at the dock Memorial Day weekend)"
+     ],
+     "whoDoesWhat": "Customer does fall transport; vendor does everything else including spring delivery.",
+     "vendorTypesOffering": [
+      "Marina with yard",
+      "Dealer service center",
+      "Pole-barn shop with hauling"
+     ],
+     "prevalence": "Niche-to-moderate - very attractive to absentee seasonal owners, which is exactly LakeLife's customer base",
+     "constraints": [
+      "Spring delivery needs hauling equipment even though fall didn't - vendor capability check is per-leg",
+      "Delivery-to-lift requires lift set first; gate codes / dock access on delivery day",
+      "The 'boat is in the water when you arrive' promise is a flagship concierge SKU"
+     ]
+    },
+    {
+     "name": "Transport-only hauling: standalone move with no mechanical work",
+     "steps": [
+      "ANY - Vendor: moves the boat between any two points - lake to customer's own barn, lake to third-party storage, shop to lake, lake to lake",
+      "ANY - Customer: books the leg; someone else (or no one) does the mechanical work"
+     ],
+     "whoDoesWhat": "Vendor is purely a hauler; customer or other vendors handle everything else.",
+     "vendorTypesOffering": [
+      "Pier/lift contractor with hydraulic or pontoon trailer",
+      "Marina",
+      "Independent boat haulers",
+      "General contractor with equipment"
+     ],
+     "prevalence": "Niche as a consumer-facing SKU but constant in reality - it is the glue leg inside most split-vendor arrangements",
+     "constraints": [
+      "Hydraulic trailer or correct-bunk pontoon trailer required; width permits for 10 ft+ pontoons on road",
+      "Commercial auto + on-hook insurance",
+      "Priced per move + distance; platform should expose it so other scenarios can be composed from it"
+     ]
+    },
+    {
+     "name": "Split-vendor bundle (platform-orchestrated): mobile tech winterizes at dock + hauler transports + barn owner stores",
+     "steps": [
+      "FALL - Vendor 1 (mobile tech): winterizes at the customer's dock or driveway",
+      "FALL - Vendor 2 (hauler): picks up and delivers to storage",
+      "WINTER - Vendor 3 (barn/lot owner): stores; no mechanical liability because Vendor 1 documented winterization (photos)",
+      "SPRING - Vendor 2: returns boat to lake; Vendor 1: recommissions on the lift; platform sequences all of it"
+     ],
+     "whoDoesWhat": "Three specialized vendors each do one leg; the PLATFORM is the general contractor presenting one price and one schedule to the customer.",
+     "vendorTypesOffering": [
+      "Composed from: Mobile marine tech + hauler + land/barn owner - none of whom could sell scenario B alone"
+     ],
+     "prevalence": "Rare as an advertised retail product, but common informally (shops subcontract hauling and rent barn space constantly) - this is LakeLife's structural advantage: manufacture full-service capacity out of partial vendors",
+     "constraints": [
+      "Requires per-leg job states, per-leg payouts, and custody handoff records (photo-at-handoff)",
+      "One customer price, three vendor costs - margin math per leg",
+      "Failure of one leg (hauler no-show) strands the others - needs the claim-board/waitlist machinery",
+      "Liability boundaries must be explicit: mechanical vs transport vs storage damage"
+     ]
+    },
+    {
+     "name": "PWC / jet ski winterize + rack storage (multi-unit)",
+     "steps": [
+      "FALL - Either: vendor collects PWCs (several fit one trailer) or customer drops off",
+      "FALL - Vendor: winterizes (exhaust antifreeze, fog, stabilize, battery out on tender)",
+      "WINTER - Vendor: racks them - PWCs stack densely, high revenue per sq ft; or mobile variant: winterize on the customer's PWC lift and leave in the garage",
+      "SPRING - Either: vendor recommissions and redelivers to lift, or customer picks up"
+     ],
+     "whoDoesWhat": "Same leg permutations as boats but batched - households often have 2-3 units; vendor typically transports because PWC lifts outnumber PWC trailers.",
+     "vendorTypesOffering": [
+      "Mobile marine tech (mobile variant)",
+      "Marina",
+      "Dealer service center",
+      "Pole-barn shop"
+     ],
+     "prevalence": "Common - nearly every lake house on these lakes has at least one PWC; per-unit pricing with a multi-unit discount matches reality",
+     "constraints": [
+      "Cheap per unit, so route density and batching decide profitability",
+      "Supercharged models (some Sea-Doo/Yamaha) need more than the basic service - flag by model",
+      "Freeze damage risk is identical to boats - same deadline pressure"
+     ]
+    },
+    {
+     "name": "Lift and canopy offsite winter storage (extension of lift pull/set)",
+     "steps": [
+      "FALL - Vendor: pulls the boat lift and canopy frame from the water (existing lift-pull service), removes canopy fabric",
+      "FALL - Vendor: hauls lift to vendor yard instead of leaving it on the customer's shoreline; stores fabric indoors (mildew/rodent)",
+      "WINTER - Vendor: outdoor lift storage in rows at yard",
+      "SPRING - Vendor: returns and sets lift before the boat comes back - it is the first domino of the spring sequence"
+     ],
+     "whoDoesWhat": "Vendor does everything; customer just lacks shoreline/yard space to keep the lift.",
+     "vendorTypesOffering": [
+      "Pier/lift contractor with yard",
+      "Marina",
+      "General contractor with land"
+     ],
+     "prevalence": "Niche-to-moderate - most lifts overwinter on the owner's shore, but small-lot and association properties pay for offsite; canopy-fabric indoor storage is a popular sub-service",
+     "constraints": [
+      "Barge or shore-crane access for pull/set (already solved by existing lift service)",
+      "Spring ordering: lift set must beat boat redelivery - platform already models this dependency",
+      "Canopy fabric stored damp will mildew - must dry before storage"
+     ]
+    }
+   ],
+   "addons": [
+    {
+     "name": "Shrink wrap (per foot + tower/arch surcharge)",
+     "appliesTo": "Any fall scenario; effectively mandatory for outdoor storage",
+     "notes": "Includes frame, vents, film; zipper access door is a common sub-add-on. Boat must be dry/clean; cold and wind slow on-site wrapping. Fits platform per_foot pricing."
+    },
+    {
+     "name": "Shrink wrap removal + disposal (spring)",
+     "appliesTo": "Any spring leg",
+     "notes": "Separate line item vendors always charge; wrap recycling access in Indiana is spotty so disposal is a real cost."
+    },
+    {
+     "name": "Battery removal, winter tending (trickle charge), spring reinstall",
+     "appliesTo": "All scenarios",
+     "notes": "Per battery. Wake boats carry 2-4. Vendor-stored variant only when vendor has a facility; mobile variant is disconnect-in-place or store-in-customer-garage on customer's charger."
+    },
+    {
+     "name": "Engine oil + filter change (fall, pre-storage)",
+     "appliesTo": "All winterize scenarios",
+     "notes": "Best practice is fall (acids in used oil sit all winter). Highest-attach add-on at winterize time."
+    },
+    {
+     "name": "Lower unit / gear lube change + water-intrusion check",
+     "appliesTo": "Outboards and sterndrives",
+     "notes": "Milky lube in fall reveals a seal problem BEFORE it freezes and cracks the case - genuinely protective, easy to sell."
+    },
+    {
+     "name": "Fuel stabilizer + fuel system treatment",
+     "appliesTo": "All winterize scenarios",
+     "notes": "Usually bundled into the base winterize; listed so vendors who itemize can."
+    },
+    {
+     "name": "Ballast system winterization (wake/ski boats)",
+     "appliesTo": "Wake and ski boats",
+     "notes": "Bags, pumps, lines, heaters must be drained/antifreezed. Materially more labor - should be a surcharge or separate SKU, not silently absorbed."
+    },
+    {
+     "name": "Freshwater system / head / livewell winterization",
+     "appliesTo": "Cruisers, pontoons with sinks/changing rooms, fishing boats",
+     "notes": "Non-toxic antifreeze through plumbing; often overlooked by DIYers and a cause of spring claims."
+    },
+    {
+     "name": "De-winterize / spring recommission package",
+     "appliesTo": "Any spring leg",
+     "notes": "Batteries in, unfog, flush, systems check, test run. The core spring SKU (existing $430 flat maps here)."
+    },
+    {
+     "name": "Spring tune-up (plugs, impeller, filters)",
+     "appliesTo": "Spring leg",
+     "notes": "Impeller every 2-3 seasons on sterndrives/inboards; natural spring attach."
+    },
+    {
+     "name": "Detail / wax",
+     "appliesTo": "Fall (protective) or spring (cosmetic - higher demand)",
+     "notes": "Spring detail on stored boats is easy winter/early-spring shop revenue; can be its own vendor archetype (detailer)."
+    },
+    {
+     "name": "Hull / pontoon tube cleaning (scum line acid wash, tube brightening)",
+     "appliesTo": "Fall at haul-out, or spring",
+     "notes": "Glacial-lake hard water leaves scale on pontoon tubes; best done right at haul-out while growth is wet."
+    },
+    {
+     "name": "Trailer service (bearings, lights, tires, brakes)",
+     "appliesTo": "Any scenario where a trailer exists",
+     "notes": "Fall or spring; prevents the spring-tow breakdown. Natural add-on for scenarios C and shop-winterize."
+    },
+    {
+     "name": "Winter trailer storage (boat stored off-trailer)",
+     "appliesTo": "Vendor-storage scenarios",
+     "notes": "Some shops block the boat and rack trailers separately for density; small fee."
+    },
+    {
+     "name": "Summer trailer storage (trailer parked at vendor while boat is in the water)",
+     "appliesTo": "Trailer-owning customers, May-Oct",
+     "notes": "The inverse-season service the owner likely missed - lake lots have nowhere to put a trailer all summer; cheap recurring revenue for any vendor with a lot."
+    },
+    {
+     "name": "Heated indoor storage upgrade (vs cold indoor vs outdoor)",
+     "appliesTo": "Vendor-storage scenarios",
+     "notes": "Three-tier storage pricing is the industry norm (roughly outdoor < cold indoor < heated); heated skips some winterization steps but reputable shops winterize anyway."
+    },
+    {
+     "name": "Mid-winter checks / battery tending subscription",
+     "appliesTo": "Vendor-stored boats; premium mobile variant for home-stored boats",
+     "notes": "Monthly wrap/strap/battery check with photo report - fits LakeLife's photo-proof DNA perfectly."
+    },
+    {
+     "name": "Rodent protection (deterrent packs, covers sealed, bait boxes outside boat)",
+     "appliesTo": "All storage, especially barns and home yards",
+     "notes": "Mice are the number-one winter damage source in barn storage; cheap add-on that prevents expensive upholstery/wiring claims."
+    },
+    {
+     "name": "Winter repair / upgrade work (engine work, upholstery, electronics, gelcoat)",
+     "appliesTo": "Any vendor-stored boat",
+     "notes": "The biggest missed revenue stream: shops sell off-peak labor into stored boats all winter. Platform should support estimate-approve-complete flow on stored jobs."
+    },
+    {
+     "name": "Prop inspection / reconditioning",
+     "appliesTo": "Fall (send out over winter) or spring",
+     "notes": "Winter is when props go to the prop shop; classic stored-boat add-on."
+    },
+    {
+     "name": "Delivery + launch / splash fee",
+     "appliesTo": "Any spring leg with vendor transport",
+     "notes": "Priced per move; separate from mechanical work so hybrids and split-vendor bundles can price per leg."
+    },
+    {
+     "name": "Haul-out fee (float-on or lift-off retrieval)",
+     "appliesTo": "Any fall leg with vendor transport",
+     "notes": "Counterpart to launch fee; surcharge when no trailer exists and vendor must bring a pontoon/hydraulic trailer."
+    }
+   ],
+   "vendorTypes": [
+    {
+     "type": "Mobile marine tech (truck + tools, no facility)",
+     "capabilities": [
+      "On-site winterize/de-winterize at dock, lift, or driveway",
+      "Shrink wrap on site",
+      "Battery service (disconnect/in-place or customer-garage storage)",
+      "Oil/gear lube changes, small repairs on site",
+      "PWC mobile winterize",
+      "Winterize-only, spring-only, and both legs of the mobile round-trip"
+     ],
+     "cannotDo": [
+      "Winter storage of any kind",
+      "Hauling/transport (no hydraulic trailer, no custody insurance typically)",
+      "Major repairs needing a shop or hoist",
+      "Anything requiring the boat to leave the property"
+     ]
+    },
+    {
+     "type": "Marina with service yard (on-lake or nearby)",
+     "capabilities": [
+      "Everything: haul-out, shop winterization, indoor/outdoor storage, shrink wrap, spring recommission, launch/redelivery",
+      "Hydraulic and pontoon trailers, sometimes forklift",
+      "Winter repair/upgrade work on stored boats",
+      "Trailer summer storage",
+      "Warranty-adjacent service if also a dealer"
+     ],
+     "cannotDo": [
+      "Scale beyond physical yard/building capacity - indoor sells out by Labor Day",
+      "Cheap mobile-only visits economically (shop overhead makes travel work expensive)",
+      "Fast response during crunch weeks - service queue is the bottleneck"
+     ]
+    },
+    {
+     "type": "Independent shop with pole barn (rural Indiana staple)",
+     "capabilities": [
+      "Shop winterization and de-winterization",
+      "Cold indoor (sometimes heated) storage",
+      "Shrink wrap at shop",
+      "Winter repair work",
+      "Hauling IF they own a pontoon/hydraulic trailer - roughly half do",
+      "Customer-transport scenarios always; full-service only with hauling gear"
+     ],
+     "cannotDo": [
+      "On-water/at-dock work unless they also run mobile",
+      "Heated storage (most are cold barns)",
+      "Warranty work on major brands",
+      "Full-service B without a hauling partner - prime split-vendor candidate"
+     ]
+    },
+    {
+     "type": "General contractor / farmer with land and buildings",
+     "capabilities": [
+      "Storage-only: outdoor lot or dead-storage barn",
+      "Lift and canopy offsite storage",
+      "Transport sometimes (trucks, trailers, telehandlers exist on farms)",
+      "Summer trailer parking"
+     ],
+     "cannotDo": [
+      "ANY mechanical winterization or recommissioning - must require proof of winterization or a bundled tech (liability)",
+      "Shrink wrap (usually)",
+      "Mid-winter boat access (dead storage, packed tight)",
+      "Insurance-grade custody unless they add a garagekeeper policy - platform should verify"
+     ]
+    },
+    {
+     "type": "Dealer service center (brand-affiliated, may be off-lake)",
+     "capabilities": [
+      "Shop winterize/store/recommission, warranty and recall work",
+      "Pickup/delivery programs with proper equipment and insurance",
+      "Winter refit and rigging work",
+      "Handles the complex boats (supercharged PWCs, wake boat ballast/surf systems) other vendors decline"
+     ],
+     "cannotDo": [
+      "Cheap or fast - premium labor rates and long queues",
+      "Mobile dock-side work usually",
+      "Compete on storage price with barn operators"
+     ]
+    },
+    {
+     "type": "Pier/lift contractor (already on LakeLife) expanding into boat logistics",
+     "capabilities": [
+      "Haul-out and redelivery (barge, shore equipment, trailers already owned)",
+      "Lift/canopy pull, offsite storage, spring set",
+      "Splash-only and transport-only legs",
+      "Shrink wrap as a trainable add-on trade",
+      "Perfect sequencing partner: they already control the lift-set date the boat legs depend on"
+     ],
+     "cannotDo": [
+      "Engine/mechanical winterization (not marine techs)",
+      "Warranty or repair work",
+      "Storage unless they have yard space - many do"
+     ]
+    }
+   ],
+   "missedScenarios": [
+    "Winterize-only with no spring leg and no storage - probably the highest-volume transaction in the market; fall and spring must be decoupled, sellable separately, with spring offered as an upsell at winterize time and again at ice-out",
+    "Shop-winterize + home-storage: customer tows in, vendor winterizes, customer tows home to their own pole barn - huge in rural Indiana, zero storage revenue but high throughput",
+    "Storage-only for already-winterized boats - opens the platform to non-marine vendors (contractors/farmers with barns and lots) and needs a proof-of-winterization/waiver mechanic",
+    "Shrink-wrap-only as a standalone SKU (and wrap REMOVAL as a separate spring SKU with disposal fee)",
+    "Spring-only recommission and splash-only launch - DIY winterizers, and every boat purchased over the winter",
+    "Asymmetric transport hybrids: vendor hauls fall / customer retrieves spring, and customer tows fall / vendor delivers-and-launches spring - transport must be priced per leg, not round-trip",
+    "Transport-only hauling as a composable leg (lake to own barn, lake to third-party storage, lake to lake)",
+    "Split-vendor orchestration: mobile tech + hauler + barn owner composed by the platform into one full-service product none of them could sell alone - LakeLife's structural moat, requires per-leg states, per-leg payouts, and photo custody handoffs",
+    "PWC multi-unit batching with per-unit pricing and household discounts (2-3 units per home is normal on these lakes)",
+    "Lift and canopy offsite winter storage plus canopy-fabric indoor storage - natural extension of the existing lift pull/set service",
+    "Summer trailer storage (May-Oct) while the boat is in the water - the inverse-season service; lake lots have no trailer parking",
+    "Mid-winter care subscription: battery tending, strap/wrap checks with photo reports - fits the platform's photo-proof model, works for vendor-stored AND home-stored boats",
+    "Winter repair/upgrade work sold into stored boats (engine, upholstery, electronics, prop reconditioning) - the industry's biggest off-season revenue stream; needs an estimate-approve-complete flow on jobs in storage status",
+    "Storage tiering as a pricing dimension (outdoor wrapped / cold indoor / heated indoor) rather than one flat storage product",
+    "New-purchase spring commissioning and delivery for boats bought over the winter (no fall relationship exists)",
+    "In-water overwintering with de-icers/bubblers - list only to explicitly EXCLUDE it: essentially nonexistent and inadvisable on small hard-freeze glacial lakes where piers and lifts come out; de-icers around permanent piers are a different (rare) product",
+    "Sequencing dependencies as first-class platform logic: ice-out gates spring work, lift/pier set must precede boat redelivery, winterize must precede hauling to a no-mechanical storage vendor, and the pull-deadline (hard freeze minus 8 days) backstops every fall leg"
+   ]
+  },
+  "rates": {
+   "rates": [
+    {
+     "service": "Winterization labor \u2014 outboard engine (fog, fuel stabilize, drain; gearcase check)",
+     "unit": "flat, per engine",
+     "low": 109,
+     "high": 340,
+     "notes": "Larsen Marine $109 labor-only single / $199 twin (materials extra); Midwest Winterizing $180 all-in; Just Add Water (Indianapolis) $250 (0-149hp) / $300 (150hp+); Timber Marine $175-340 by HP/tier; Loon Marine 4-stroke $180-460 by HP. Lower-unit gear oil change is a common add-on: $88-106 (Larsen). All-in typical for the 90-300hp pontoons/fishing boats on small Indiana lakes: $180-300.",
+     "source": "Larsen Marine (Waukegan IL) 2025 price guide; Midwest Winterizing (Twin Cities MN); Just Add Water Boats (Indianapolis IN); Timber Marine Services (Hayward WI); Loon Marine Service"
+    },
+    {
+     "service": "Winterization labor \u2014 inboard/outboard sterndrive (I/O)",
+     "unit": "flat, per engine",
+     "low": 200,
+     "high": 520,
+     "notes": "Basic (fog/stabilize/drain/antifreeze) $200-390: Larsen $244 labor-only single / $434 twin; Midwest Winterizing $315; Just Add Water $325 basic, $375 Bravo/Volvo; Timber $200-390. 'Complete' incl. engine oil+filter runs $400-520 (Loon 4cyl-big block V8). National guide range $300-600.",
+     "source": "Larsen Marine 2025; Midwest Winterizing; Just Add Water Boats (Indianapolis); Timber Marine Services; Loon Marine Service; premiumboatcare.com"
+    },
+    {
+     "service": "Winterization labor \u2014 true inboard / V-drive (ski & wake boats)",
+     "unit": "flat, per engine",
+     "low": 252,
+     "high": 650,
+     "notes": "Larsen $252 labor-only single gas (oil+filter +$174, transmission oil +$95); Twin Lakes Marine (WI) inboard from $396 + parts; Loon complete $400-520 (+$60 V-drive fluid); Midwest Winterizing $600 all-in for inboard rear-motor. National guides put inboards at $400-800; ballast/heater systems on wake boats push toward the top.",
+     "source": "Larsen Marine 2025 Inboard guide; Twin Lakes Marine (WI); Loon Marine Service; Midwest Winterizing; premiumboatcare.com"
+    },
+    {
+     "service": "Winterization labor \u2014 pontoon with outboard",
+     "unit": "flat, per boat",
+     "low": 150,
+     "high": 325,
+     "notes": "Industry prices pontoons at the outboard-engine rate (by HP) \u2014 no pontoon premium on the engine work itself. The premiums show up elsewhere: shrink wrap billed at a higher per-foot tier ($19/ft vs $16/ft at Midwest Winterizing), tri-toon transport +$40-75/trip (Timber), and $50-85 trailer rental per move if the owner has no trailer (Pointe Marine $50/haul; Timber $85 rental).",
+     "source": "Midwest Winterizing; Just Add Water Boats; Timber Marine Services; Pointe Marine Association (MI)"
+    },
+    {
+     "service": "Winterization \u2014 PWC / jet ski",
+     "unit": "flat, per unit (per engine)",
+     "low": 100,
+     "high": 300,
+     "notes": "$100-200 is the common shop range (2-stroke low end, 4-stroke high end); Midwest Winterizing $250/engine with 10% multi-engine discount; Timber $135-275; Loon jet drive $160 (2-stroke) / $300 (4-stroke); Just Add Water jet boats $275. Winterize+indoor-storage combos for PWC run $350-700 flat.",
+     "source": "Outdoor Troop / Bayside Jet Drive survey; Midwest Winterizing; Timber Marine Services; Loon Marine Service; Just Add Water Boats"
+    },
+    {
+     "service": "Shrink wrap",
+     "unit": "per foot LOA",
+     "low": 16,
+     "high": 30,
+     "notes": "Midwest Winterizing $16/ft (\u226423'), $19/ft pontoons & 24'+; Minnesota Shrinkwrapping (mobile, MN/WI) $17-19/ft by LOA; Timber $22-23/ft; Foster Bros (Delano MN) $25/ft; Just Add Water (Indianapolis) $30/ft. Larsen bills per sq ft ($2.80-3.40/sqft = roughly $24-29/LOA-ft on an 8.5' beam) plus $75 removal/disposal fee. PWC wrap: ~$200 flat. Wrap is single-season; includes zipper door + mildew protection at full-service yards.",
+     "source": "Midwest Winterizing; Minnesota Shrinkwrapping LLC; Timber Marine Services; Foster Bros Marine; Just Add Water Boats; Larsen Marine 2025"
+    },
+    {
+     "service": "Winter storage \u2014 outdoor open lot (seasonal)",
+     "unit": "per foot LOA, per season",
+     "low": 12,
+     "high": 40,
+     "notes": "Midwest Winterizing $12/ft bare, $22/ft with shrink wrap; Timber $25/ft misc / $30/ft with wrap; Just Add Water outdoor $35/ft; Manitowoc Marina (WI) flat tiers $970 (\u226424') to $2,075 (\u226444') \u2248 $40-52/ft but includes travelift haul, bottom wash, and spring launch. PWC outdoor: $250-400 flat (Timber). Bare-lot small-lake pricing clusters $12-25/ft; full-service (haul+wash+launch included) $35-50/ft.",
+     "source": "Midwest Winterizing; Timber Marine Services; Just Add Water Boats; Manitowoc Marina"
+    },
+    {
+     "service": "Winter storage \u2014 outdoor open lot (monthly)",
+     "unit": "per month",
+     "low": 40,
+     "high": 80,
+     "notes": "Great Lakes states outdoor-uncovered self-storage/lot rate; covered outdoor $60-130/mo. Monthly billing is a self-storage-facility norm \u2014 marinas overwhelmingly sell the whole winter season, not months.",
+     "source": "FindBoatStorage 2026 state comparison; storage.com 2025 guide"
+    },
+    {
+     "service": "Winter storage \u2014 indoor cold (unheated building, seasonal)",
+     "unit": "per foot LOA, per season",
+     "low": 38,
+     "high": 56,
+     "notes": "Timber indoor $38/ft; Just Add Water (Indianapolis) flat $895-1,525 for 16'-30' (\u2248$50-56/ft), Oct 15-Apr 15; Torresen Marine (Muskegon MI) $5.15/sqft \u2248 $44/LOA-ft on 8.5' beam. PWC indoor $325 single / $550 double (Timber). Monthly equivalent at Great Lakes self-storage: $100-250/mo.",
+     "source": "Timber Marine Services; Just Add Water Boats; Torresen Marine (Muskegon MI); FindBoatStorage"
+    },
+    {
+     "service": "Winter storage \u2014 indoor heated (seasonal)",
+     "unit": "per sq ft (LOA x beam), per season",
+     "low": 7.3,
+     "high": 15,
+     "notes": "Torresen (Muskegon) $7.30/sqft; West Michigan Dock & Market $8.00/sqft incl pullout, bottom wash, blocking, spring launch; Manitowoc Marina $10.25/sqft; Pier 33 (St. Joseph MI) $11.15 early / $15.00 late; Southport Marina (Kenosha WI) $12.50/sqft. On an 8.5' beam that's \u2248 $62-128/LOA-ft \u2014 a 2-3x premium over cold indoor. Monthly self-storage equivalent $150-400.",
+     "source": "Torresen Marine; West Michigan Dock & Market Corp; Manitowoc Marina; Pier 33; Southport Marina"
+    },
+    {
+     "service": "Haul-out / local boat transport (vendor trailers boat, <20 miles, one-way)",
+     "unit": "per one-way trip",
+     "low": 150,
+     "high": 350,
+     "notes": "Timber $150 (1-10 mi) / $225 (11-20 mi), tri-toon $225/$265; Just Add Water local lakes $250-300 with customer present, $300-350 without; Foster Bros $350 for BOTH legs (fall pickup + spring drop-off) within 25 mi \u2248 $175/leg; Pointe Marine (MI) free within 20 mi when bundled with storage, then $3.60/mile. Add $50-85 trailer rental per move if the boat has no trailer.",
+     "source": "Timber Marine Services; Just Add Water Boats; Foster Bros Marine; Pointe Marine Association"
+    },
+    {
+     "service": "Spring de-winterization / commissioning (summerize)",
+     "unit": "flat, per boat",
+     "low": 99,
+     "high": 400,
+     "notes": "Timber spring prep $99 (storage customers) / $155 (non-customers); one MI inland marina $115; simple recommission (battery, fluids check, run-up) $100-200; national full-commissioning range $200-800 for boats with water systems/AC/gensets \u2014 inland pontoons and runabouts sit $100-300. Often discounted or bundled free for winter-storage customers.",
+     "source": "Timber Marine Services; Club Bennington forum (MI marina); TPG Marinas / seaboundmagazine survey"
+    },
+    {
+     "service": "Launch / splash fee (spring put-in)",
+     "unit": "per launch",
+     "low": 25,
+     "high": 160,
+     "notes": "Dry-stack/forklift launch $25-75 per splash; Pepin Marina (WI) spring launch $5.30/ft trailered, $7.74/ft non-trailered, $3.50/ft travelift drive-over (\u2248$106-155 for a 20' boat); public ramp fees $5-20/day (WI DNR caps un-approved fees at $13/day). Full-service seasonal storage almost always includes one spring launch in the storage price.",
+     "source": "Pepin Marina (WI); Wisconsin DNR fee schedule; storage.com dry-stack survey; Manitowoc Marina (included example)"
+    },
+    {
+     "service": "Bundled package \u2014 winterize + shrink wrap + storage + spring prep (20-24 ft boat)",
+     "unit": "flat, per season",
+     "low": 335,
+     "high": 1800,
+     "notes": "Lake Ogemaw Marina (MI) advertises complete fall packages 'starting at $335' (small boats: pull, wrap, winterize, store, spring prep, dock). Mid-market build-up: Midwest Winterizing 22' I/O = $315 winterize + $22/ft outdoor-with-wrap \u2248 $800. Indoor high end: Just Add Water 22' \u2248 $1,100 indoor storage + $325-375 winterize + transport \u2248 $1,700-1,800. National shorthand: 'about $500 winterize incl wrap + spring dewinterize' at full-service marinas. Bundles typically discount 10-20% vs a-la-carte and fold the spring launch in free.",
+     "source": "Lake Ogemaw Marina (West Branch MI); Midwest Winterizing (computed); Just Add Water Boats (computed); boatsetter.com"
+    },
+    {
+     "service": "Add-on \u2014 engine oil & filter change (with winterization)",
+     "unit": "flat, per engine",
+     "low": 94,
+     "high": 300,
+     "notes": "Larsen: outboard 4-stroke $94, gas I/O $174 (+$12 disposal); Midwest Winterizing $105 (+$15 synthetic); Just Add Water $175-300 by HP, Mercury I/O $250 / Volvo $275 (+$50 big block). Most shops require it be combined with winterization in fall.",
+     "source": "Larsen Marine 2025; Midwest Winterizing; Just Add Water Boats"
+    },
+    {
+     "service": "Add-on \u2014 winterize fresh water system (cottage-style boats)",
+     "unit": "flat, per boat",
+     "low": 73,
+     "high": 275,
+     "notes": "Larsen $73 (\u226426'), $166 (27-40'); Just Add Water $275. Head winterize $45-150; pump-out $82. Rare on small inland lakes but applies to larger cruisers.",
+     "source": "Larsen Marine 2025; Just Add Water Boats"
+    },
+    {
+     "service": "Late pickup / overstay after storage season ends",
+     "unit": "per day or per month",
+     "low": 10,
+     "high": 30,
+     "notes": "Just Add Water (Indianapolis): $10/DAY after May 1. Midwest Winterizing: $30/MONTH after season end (May 18). Both patterns exist; per-diem is the sharper and increasingly common one. Late PAYMENT is separate: 1.75%/mo or $50/mo minimum in standard marina storage contracts.",
+     "source": "Just Add Water Boats; Midwest Winterizing; River Bend Marina / Westin's Marine Center storage contracts"
+    }
+   ],
+   "billingNorms": [
+    "Winter storage is sold as a SEASON, not by the month: one flat price covers the whole winter regardless of exact in/out dates. Per-foot-of-LOA-per-season is the dominant unit at inland Midwest yards ($12-38/ft); large Lake Michigan yards bill per square foot (LOA x beam, $2.80-15/sqft); flat length-tier pricing (e.g. 16'-30' brackets, Manitowoc's $970-$2,590 tiers) and flat PWC pricing are the other common shapes. True monthly billing ($40-400/mo) is a self-storage-facility pattern, not a marina pattern.",
+    "Full-service storage prices commonly INCLUDE haul-out, pressure wash, blocking, and one spring launch (Manitowoc Marina, West Michigan Dock & Market, Pointe Marine); winterization, oil changes, and shrink wrap are always billed separately on top. Cheaper bare-lot storage ($12-25/ft) includes nothing.",
+    "Deposit/balance pattern A (reserve-then-settle): signed contract + non-refundable deposit reserves the space; ~50% deposit with balance due by ~March 31 / before spring launch. Pattern B (bill-at-haul-out): full storage invoice issued when the boat goes into storage, due ~November 1. Universal rule either way: the boat does not launch in spring until the account is paid in full.",
+    "Overstay per-diems start ~May 1: $10/day (Just Add Water, Indianapolis) or $30/month (Midwest Winterizing, after May 18). Late payment on invoices runs 1.75%/month or $50/month minimum in standard storage contracts.",
+    "Quote style splits by shop type: full-service yards (Larsen) quote LABOR ONLY with oil, filters, antifreeze, and materials additional plus environmental/disposal fees ($12/engine oil disposal, $75 shrink wrap disposal); mobile services and small-lake shops quote ALL-IN flat prices. All-in flat pricing is what homeowners on small Indiana lakes expect.",
+    "Engine-count and HP drive winterization price, not boat length: twin-engine adds ~80% of the single rate (Larsen $109->$199 outboard, $244->$434 I/O); outboard tiers break around 90-150hp; multi-PWC discounts ~10%. Boat LENGTH drives wrap, storage, and launch pricing.",
+    "Shrink wrap is single-season and per-foot, with pontoons billed one tier higher than runabouts ($19 vs $16/ft at Midwest Winterizing); removal/disposal in spring is either bundled or a separate $75 fee.",
+    "Transport is billed per one-way move in distance bands (1-10 mi / 11-20 mi / 20+ mi at $3.50-3.60 per extra mile), with a tri-toon surcharge (+$40-75) and $50-85 trailer rental per move when the owner has no trailer; storage customers often get free transport within ~20 miles as a bundle perk.",
+    "Spring prep/commissioning is routinely discounted for storage customers ($99 vs $155 at Timber) or folded in free as bundle bait; spring launch is included in full-service storage but $25-75 (or $3.50-7.74/ft) a la carte.",
+    "Proof of insurance is required for storage (Just Add Water; standard in storage contracts), and winter-storage packages are commonly marketed with fall pickup + spring delivery included within a radius (Burt Lake Marina: free within 20 miles)."
+   ],
+   "seasonDefinitions": "The Midwest winter storage 'season' is a single ~7-9 month block sold at one price: typical contract windows are Sept 1 - May 31 (Timber Marine, Hayward WI, 9-month contract), Sept 15 - June 15 (Manitowoc Marina WI), mid-Sept - mid-May (Midwest Winterizing MN), Oct 1 - Apr 30 (Westin's Marine contract), and Oct 15 - Apr 15 (Just Add Water, Indianapolis indoor). In practice boats come out late September through early November (ahead of hard freeze) and go back late April through May (after ice-out); the contract window is deliberately wider than actual use and costs the same whether the boat arrives in September or November. Overstay per-diem/monthly fees begin around May 1 - May 18. Summer storage is a separate, cheaper product (roughly Apr 15 - Oct 15; High & Dry in Angola IN charges $600 flat outdoor for that window; Timber sells summer months at $100-125/mo). For LakeLife's Steuben/LaGrange County lakes this maps cleanly onto the existing pull-deadline (est. hard freeze minus 8 days, i.e. storage intake peaks Oct-Nov) and ice-out (spring splash-back and launch demand peaks mid-Apr to mid-May)."
+  },
+  "platform": {
+   "options": [
+    {
+     "name": "Option 1 \u2014 Separate service row per package (SKU-per-scenario)",
+     "description": "Each delivery scenario becomes its own row in `services`: 'Winterize at your dock (mobile)', 'Haul-out + shop winterize + storage', 'You-tow shop winterize + storage', 'Winterize only', 'Storage only', plus add-on rows (shrink wrap, battery care) as separately bookable services. Storage-bearing SKUs use the new `seasonal_plus_perdiem` pricing model; the fall and spring visits are booked as two SKU jobs (e.g. 'Haul + winterize + store' in fall, 'De-winterize + relaunch' in spring) linked only informally.",
+     "pros": [
+      "Dispatch matching needs ZERO code change: `vendors.service_types[]` + `vendor_rates` per service already gate by SKU \u2014 the mobile tech simply never lists the haul SKU, the barn owner never lists the mobile SKU",
+      "Rate cards stay exactly as built: one `vendor_rates` row per (vendor, SKU), priced through the existing `priceService`",
+      "One-price rule holds trivially: every SKU resolves to one number via the existing engine; nothing new for the vendor-price firewall",
+      "Photo gate works unchanged and can differ per SKU (`services.min_photos` \u2014 the haul SKU can demand at-dock + on-trailer + in-rack shots)",
+      "Fastest to ship for the Oct\u2013Nov 2026 beta; the seed file just grows"
+     ],
+     "cons": [
+      "SKU explosion: 3 scenarios \u00d7 (with/without storage) \u00d7 add-ons multiplies rows; the customer menu clutters and ops must keep N overlapping price rows coherent",
+      "The fall\u2192spring lifecycle has no first-class link: spring de-winterize is a separate booking the customer must remember to make, per-diem overage has no anchor row to compute days from, and vendor stickiness (the boat is physically at THAT barn) is unenforced",
+      "Add-ons as separate services create separate jobs that could dispatch to a DIFFERENT crew than the one holding the boat \u2014 nonsense for shrink wrap on a stored boat",
+      "Capability drift is honor-system: nothing structural stops a vendor without a hydraulic trailer from listing the haul SKU"
+     ]
+    },
+    {
+     "name": "Option 2 \u2014 One service + selectable priced components in JSONB (option groups)",
+     "description": "Keep a single 'Boat winterize & storage' service row; extend `band_pricing` params with customer-selectable option groups (scenario: mobile/haul/you-tow; storage: yes/no; add-ons: shrink wrap per-foot, batteries flat). The chosen options are stored on the job (`jobs.options jsonb`); price = sum of selected component prices. Vendor capability comes from new `vendors.capabilities text[]` flags ('haul','indoor_storage','shrink_wrap') and per-option rates inside `vendor_rates.band_pricing`.",
+     "pros": [
+      "One clean menu tile with a wizard \u2014 matches the roadmap's 'wizard adds: store-with-us vs self-store, splash-into-which-lake' UX intent",
+      "No SKU explosion; ops edits one row's params to reprice everything",
+      "Pricing rules still live in the DB (components are data in band_pricing), honoring rule 8"
+     ],
+     "cons": [
+      "Breaks the engine's core contract: `priceService(rule, profile) \u2192 number` must become option-aware, and `vendor_rates` no longer mirrors `services` cleanly \u2014 the crew rate card becomes a per-option matrix every vendor must fully fill in",
+      "Dispatch matching gets genuinely harder: eligibility now depends on the job's selected options, not the service name \u2014 `isEligible`/`canClaim` need a capabilities gate PLUS a per-option rate-completeness check (a crew missing a shrink-wrap rate silently can't take a wrapped job), and the margin floor becomes ambiguous (per component or per package?)",
+      "Photo gate weakens: `min_photos` is per service, but a mobile 3-photo winterize and a haul+rack job need different counts \u2014 you'd need per-option photo minimums, new server enforcement code",
+      "Still one job for a two-visit season: split fall/spring billing and per-diem require job splitting anyway, so the 'one service' simplicity is illusory"
+     ]
+    },
+    {
+     "name": "Option 3 \u2014 Package = bundle of component services, one job per visit (RECOMMENDED)",
+     "description": "Model the primitives as component rows in `services` (winterize_mobile per_foot, winterize_shop per_foot, haul_out flat-or-per_foot, de_winterize, relaunch/return_visit, storage_season using new model `seasonal_plus_perdiem`, shrink_wrap per_foot, battery_care flat), flagged with a `kind` column (standalone/component/addon). New `service_packages` + `package_components` tables define the customer-facing bundles (Scenario A/B/C, winterize-only, storage-only) with each component tagged fall-phase or spring-phase. Booking creates a `job_groups` envelope (property, package, ONE boat) plus one job per VISIT; `job_items` line-items tie each visit job to its components with per-component customer_price and vendor_cost. Customer sees one all-in package price = sum of component menu prices, each computed by the existing `priceService`.",
+     "pros": [
+      "Dispatch stays per-job and structurally capability-gated: a crew is eligible for a visit only if `service_types` covers ALL of that visit's components with positive `vendor_rates` \u2014 components ARE the capability flags, so the mobile tech physically cannot receive a haul job",
+      "Rate cards keep the exact current shape: one `vendor_rates` row per (vendor, component service), same table, same pricing engine, same RLS \u2014 vendors still never see menu prices (job_items vendor_cost is ops-only like jobs.vendor_cost)",
+      "One-price rule holds at the right altitude: the package quotes one number at booking (stored on job_groups.total_quoted); per-visit allocation is internal and invisible to the customer until the two receipts",
+      "Photo gate needs ZERO new enforcement code: each visit job carries its own min_photos (sum of its components') and rides the existing complete-action \u2192 settleJob path; fall intake photos and spring relaunch photos are independently gated",
+      "`seasonal_plus_perdiem` lands cleanly as the pricing model of exactly one component, one new switch case in priceService, and split fall/spring billing falls out of one-invoice-per-job for free",
+      "Vendor stickiness is expressible: the spring leg of a stored boat pre-pins to the storing vendor via the job_group"
+     ],
+     "cons": [
+      "Most schema work: 4 new tables (service_packages, package_components, job_groups, job_items) plus a storage_stays ledger, and the booking wizard must become multi-visit aware",
+      "Spring jobs are born dateless ('reserve now, pick date when ops opens the window') \u2014 needs the two-phase booking rails the roadmap already calls for, but they don't exist yet",
+      "Ops repricing is indirect: changing a component's rate changes every package containing it (arguably correct, but a behavior change to explain)",
+      "decideDispatch needs a real change: crewRate becomes the SUM of the visit's component rates and the margin floor is checked against the visit's summed menu price, plus a new seasonal (not daily) storage-capacity gate"
+     ]
+    }
+   ],
+   "recommendation": "Option 3 \u2014 package as a bundle of component services with one job per visit. Rationale: it is the only option where all four hard rules stay enforced by EXISTING machinery instead of new parallel code. (1) Vendor price-blindness: vendor_rates keeps its per-service shape and RLS; job_items inherits the jobs.vendor_cost ops-only pattern \u2014 no new firewall surface. (2) Pricing-in-DB: components and packages are rows; seasonal_plus_perdiem is one new enum value + one priceService case; ops edits rates in data exactly as today. (3) Photo gate: the current complete-action already counts job_photos against the job's service minimum per job \u2014 one job per visit means fall intake and spring splash are each independently photo-gated and independently settled with no changes to settleJob's idempotent one-invoice/one-payout-per-job design. (4) Dispatch: capability gating collapses into the mechanism that already exists (service_types membership + positive rate), rather than a new capabilities vocabulary that can drift from rates (Option 2's biggest trap). Option 1 is the honest fallback if the Oct beta timeline slips \u2014 it ships in days \u2014 but it hard-codes the package combinatorics into the menu, leaves the fall\u2192spring lifecycle unlinked (per-diem has no anchor), and lets under-equipped vendors self-select into SKUs they can't perform. Migration path is friendly: retire the current 'Boat storage & winterize' per_foot row, seed the ~8 component rows and 5 packages, and Option 1-style single-visit packages (winterize-only) are just one-component bundles, so the simple cases cost nothing extra.",
+   "schemaDeltas": [
+    "ALTER TYPE pricing_model ADD VALUE 'seasonal_plus_perdiem' (0001 defines pricing_model as a Postgres enum; note ALTER TYPE ... ADD VALUE cannot run inside the same transaction that uses it \u2014 separate migration) and add the matching case to src/lib/pricing.ts. Rule params in band_pricing jsonb: { seasonal_base, seasonal_per_foot, included_days, perdiem_rate, perdiem_per_foot } \u2014 fall leg prices seasonal_base + seasonal_per_foot \u00d7 boat feet; spring leg prices max(0, days_stored \u2212 included_days) \u00d7 (perdiem_rate + perdiem_per_foot \u00d7 feet)",
+    "services: ADD COLUMN kind text NOT NULL DEFAULT 'standalone' CHECK (kind IN ('standalone','component','addon')) \u2014 components/addons are priceable but not directly bookable tiles; existing rows stay 'standalone'",
+    "NEW TABLE service_packages (id uuid PK, name text, description text, active boolean, sort int) \u2014 the customer-facing bundles: mobile-winterize (Scenario A), full-service haul+store (B), you-tow+store (C), winterize-only, storage-only",
+    "NEW TABLE package_components (package_id FK, service_id FK \u2192 services, phase text CHECK (phase IN ('fall','spring')), required boolean, default_on boolean, PRIMARY KEY (package_id, service_id, phase)) \u2014 e.g. Scenario B fall = haul_out + winterize_shop + storage_season(fall leg); spring = de_winterize + relaunch + storage_season(spring/per-diem leg); shrink_wrap and battery_care attach as required=false addons",
+    "NEW TABLE job_groups (id uuid PK, property_id FK, package_id FK, boat_id FK \u2192 boats, status text, total_quoted numeric, storing_vendor uuid FK \u2192 vendors NULL, created_at) \u2014 the season envelope; boat_id fixes the fleet-summing bug: package pricing must use THIS boat's length_ft, not boatFeet() across all boats",
+    "jobs: ADD COLUMN group_id uuid FK \u2192 job_groups, ADD COLUMN phase text ('fall'|'spring'), ADD COLUMN price_finalized boolean DEFAULT true \u2014 spring per-diem jobs are created with price_finalized=false and customer_price recomputed at completion time from actual days stored",
+    "NEW TABLE job_items (id uuid PK, job_id FK, service_id FK, customer_price numeric, vendor_cost numeric) \u2014 per-component line items; jobs.customer_price/vendor_cost stay as the sums so settleJob, invoices, payouts, and the vendor_jobs price-free view are untouched; REVOKE client writes and mirror the ops-only visibility of jobs money columns (per the Supabase default-write-grants lesson)",
+    "NEW TABLE storage_stays (id uuid PK, job_group_id FK, vendor_id FK, boat_id FK, intake_at timestamptz, out_at timestamptz, included_days int, status text ('reserved','in_storage','released','overstay')) \u2014 the per-diem clock and the ops answer to 'whose barn is this boat in'; intake_at stamped by fall-job settle, out_at by spring-job settle",
+    "vendors: ADD COLUMN storage_capacity_feet integer DEFAULT 0, ADD COLUMN storage_types text[] DEFAULT '{}' ('indoor','outdoor') \u2014 storage is a SEASONAL capacity pool, not the daily_capacity slot count; remaining pool = storage_capacity_feet \u2212 sum of active storage_stays boat feet",
+    "seed_services.sql: retire/deactivate the current 'Boat storage & winterize' per_foot row; seed component rows (winterize_mobile per_foot, winterize_shop per_foot, haul_out, de_winterize, relaunch, storage_season seasonal_plus_perdiem, shrink_wrap per_foot addon, battery_care flat addon) each with their own min_photos, and the five packages"
+   ],
+   "dispatchChanges": [
+    "Visit-level capability gate: extend isEligible/the loader in src/app/book/dispatch.ts so a crew qualifies for a visit job only if vendors.service_types contains EVERY component service on that job's job_items AND vendor_rates has a positive rate for each \u2014 the component list is the capability flag, so 'mobile tech has no storage' and 'barn owner has no hydraulic trailer' are enforced by construction, not by a checkbox",
+    "Rate/margin math: crewRate for a visit = sum of the crew's component rates (each computed by the existing priceService against vendor_rates rows); margin floor (decideDispatch's affordable filter and canClaim's rate_too_high) checks summed crew rate vs the visit's summed menu price \u2014 one floor per visit, no per-component ambiguity",
+    "Storage capacity gate (new, seasonal not daily): for visits containing storage_season, require vendor storage_capacity_feet minus feet already committed in active storage_stays \u2265 this boat's length_ft; this sits beside dailyCapacity (which still governs the day's labor slots for the haul/winterize work)",
+    "Job-group vendor stickiness: spring legs of a stored boat (Scenario B/C) do NOT re-enter decideDispatch \u2014 they pre-assign to job_groups.storing_vendor (the boat is physically at their barn); Scenario A's spring return visit re-dispatches normally with preferredVendorId = the fall crew for right-of-refusal continuity",
+    "Two-phase spring scheduling: spring jobs are created dateless at booking ('reserved'); when ops opens the lake's spring window the customer picks a date (roadmap \u00a74 mechanic) and only then does the job hit routes/capacity \u2014 remainingCapacity and the calendar must ignore dateless reserved jobs",
+    "Claim board: canClaim gets the same all-components-covered + per-component-rate + storage-capacity checks; storage-bearing jobs should arguably NOT be claim-board cold-start items (a stranger crew claiming custody of a boat is a trust event, not a mow) \u2014 gate claimability to non-storage visits unless the owner decides otherwise",
+    "Photo gate per visit (no code change, config only): fall haul job min_photos = sum of its components' minimums (at-dock, on-trailer, in-rack), spring job likewise (out-of-rack, at-dock running) \u2014 the existing completeJob action and settleJob path enforce it unchanged"
+   ],
+   "billingTiming": "Split billing, two invoices per package, riding the existing one-invoice-per-job settleJob flow unchanged. FALL: when the fall visit job passes its photo gate and completes, settleJob charges invoice #1 = fall components (haul + winterize + shrink wrap addon) + the storage seasonal minimum (seasonal_base + seasonal_per_foot \u00d7 boat feet, covering included_days \u2248 210 days / ~7 months Oct\u2013Apr \u2014 owner to confirm the roadmap's '~3 months charged at pull' wording vs the real Indiana season) \u2014 this matches the roadmap note 'storage seasonal minimum charged at pull'. Fall settle also stamps storage_stays.intake_at and releases the fall payout (crew's fall component rates). SPRING: the spring job is created price_finalized=false; when the customer schedules splash and the job completes its own photo gate, a finalize step recomputes customer_price = spring components (de-winterize + relaunch) + per-diem overage = max(0, days(intake_at \u2192 completed_at) \u2212 included_days) \u00d7 per-diem rate, then settleJob charges invoice #2 and releases the spring payout \u2014 'per-diem overage billed at splash', exactly per the roadmap. OVERSTAY: if the boat is still in the barn N days past included_days with no scheduled splash, the existing nightly cron flips storage_stays to 'overstay' and raises a monthly interim per-diem invoice against the job_group (new small settle path \u2014 the one genuinely new billing surface), so a never-collected boat can't accrue silently for a year. Card-on-file autopay, credits-first, and receipt behavior all inherit from the current settleJob. Vendor payout split follows the invoices: fall components + storage seasonal share at fall settle, spring components + per-diem share at spring settle (keeps payout-follows-photo-verified-completion intact for both visits).",
+   "openQuestions": [
+    "Billing split confirmation: the roadmap says seasonal minimum at pull + per-diem at splash \u2014 confirm the customer ALSO pays the spring de-winterize/relaunch labor at splash (two-receipt model) rather than everything up front at fall; and confirm the included period (the note says '~3 months' but Indiana storage runs Oct\u2013Apr \u2248 7 months \u2014 which number is the minimum?)",
+    "Per-diem economics: is the seasonal minimum flat per boat or per foot? Is the per-diem overage flat per day or per foot per day? Who keeps the per-diem \u2014 the storing vendor at their rate share, or is it margin-weighted like everything else (30% target)?",
+    "Abandonment/overstay policy: at what point does an uncollected boat trigger the interim monthly invoice, and is there a hard cutoff (lien/disposal terms)? The roadmap already flags a 'storage terms' ToS page \u2014 legal review needed before beta storage bookings",
+    "Spring vendor stickiness for Scenario A (mobile, boat stays home): is the spring return visit required to be the same crew, preferred-same-crew, or any qualified mobile crew?",
+    "Storage claim-board policy: may a crew claim a storage-bearing job cold (custody of a customer's boat via first-tap), or are storage packages dispatch/preferred-only?",
+    "Insurance: is a standard COI sufficient for months-long custody of a $40k boat (fire/theft in the barn), or does the storage_season capability require a storage-specific endorsement flag on the vendor before the gate opens?",
+    "Indoor vs outdoor storage: one component priced by band, or two components \u2014 and does the customer choose, or the vendor's storage_types decide?",
+    "Shrink wrap lifecycle: does the fall wrap price include spring removal/disposal, or is removal a spring component line?",
+    "Early exit: customer wants the boat back in January \u2014 is the seasonal minimum non-refundable (recommended, matches 'minimum'), and does an off-season retrieval visit price as a separate flat service?",
+    "Multi-boat households: one package per boat (implied by job_groups.boat_id \u2014 recommended), and does booking two boats into the same barn earn any bundle discount, or strictly linear pricing?",
+    "Scenario C drop-off mechanics: when the customer tows to the shop, does the drop-off consume one of the vendor's daily_capacity slots (an appointment) or is it a free-form window with only the storage-feet gate?"
+   ]
+  },
+  "risk": {
+   "risks": [
+    {
+     "risk": "Bailment liability: the storage vendor becomes a legal bailee of a $30k-$150k asset for ~6 months \u2014 a fundamentally different legal posture than a 2-hour dockside service call.",
+     "whyItMatters": "Under Indiana common law, a paid (mutual-benefit) bailment imposes a duty of ordinary care with a burden-shifting presumption: if the boat comes back damaged, the bailee is presumed negligent unless they can prove otherwise. One totaled wake boat can exceed a small crew's net worth, and the claim will splash onto the platform reputationally and possibly legally.",
+     "mitigation": "A written per-job storage agreement that names the vendor (not LakeLife) as bailee, defines the standard of care, caps liability and disclaims consequential damages, and requires the customer to keep hull insurance in force through the lay-up period. Every custody transfer is documented with timestamped, countersigned condition evidence.",
+     "productImplication": "New e-sign clickwrap 'Storage Agreement' step in the storage booking flow (versioned, stored per job); a custody_transfers table logging every hand-off (timestamp, actor, GPS, photo set); a booking-time checkbox + policy upload proving the homeowner's hull insurance stays active during lay-up."
+    },
+    {
+     "risk": "A standard COI is worthless for this service: general liability policies exclude damage to property in the vendor's 'care, custody, or control' \u2014 which is the entire exposure of storage.",
+     "whyItMatters": "A vendor who passes today's onboarding insurance check is effectively uninsured for the core risk of storing boats. When an uninsured vendor damages a stored boat, the customer's only deep pocket is the platform.",
+     "mitigation": "Require garagekeepers legal liability (direct-primary basis preferred) or marina operators / bailee's-customer coverage as a precondition for offering storage, with per-boat and aggregate limits sized to the vendor's declared inventory (e.g., $500k+ aggregate). Re-verify every fall before the crunch, not just once at onboarding.",
+     "productImplication": "Onboarding gains an insurance-requirements matrix keyed to service type: the storage service is unlockable only with a garagekeepers/bailee COI on file; coverage type, per-boat limit, aggregate limit, and expiry become structured fields; policy lapse auto-suspends the vendor from storage dispatch; ops dashboard shows expiry alerts at 60/30/7 days."
+    },
+    {
+     "risk": "Transport is a separate uninsured exposure: garagekeepers generally does not cover the boat while it is on the trailer on a public road ('on-hook'/in-tow), and the truck's auto policy covers the truck, not the cargo.",
+     "whyItMatters": "The two road legs are statistically the most dangerous hours of the whole six-month engagement \u2014 a dropped or crashed boat in transit is the single most likely total-loss scenario, and it is the gap between two policies.",
+     "mitigation": "Require on-hook/in-tow cargo coverage with limits >= the maximum declared hull value the vendor will haul. Capture the vendor's max tow length/weight and trailer specs so the router never assigns a boat the vendor cannot legally or insurably move.",
+     "productImplication": "Boat profile gains declared_hull_value, length, beam, and dry_weight; vendor rate card gains max insured hull value and max tow specs; the router adds an insurable-match hard constraint; transport becomes its own job leg with its own status and photo checkpoints (loaded/strapped at origin, arrival at destination)."
+    },
+    {
+     "risk": "Damage discovered at spring splash with no agreed baseline \u2014 'that gouge wasn't there in October' \u2014 six months and several custody transfers after intake.",
+     "whyItMatters": "Without a countersigned condition record, both sides argue from memory, and the bailment presumption means the vendor loses by default \u2014 so good vendors will refuse the service, or the platform will eat goodwill refunds on every claim. Condition proof is the load-bearing wall of the entire service.",
+     "mitigation": "Mandatory structured intake and outtake condition surveys with a fixed shot list (hull sides, transom, gelcoat close-ups, prop/skeg, upholstery, engine bay, hour meter, fuel level), damage annotations, and homeowner countersignature within 48 hours or auto-accept. The identical protocol runs in reverse at splash, with a defined dispute window.",
+     "productImplication": "The photo gate evolves from 'minimum count' to a typed checklist: a condition_report entity with required shot classes per leg, a customer e-acknowledgment step, and a dispute_window_ends field; the spring splash flow opens by showing both parties the fall intake report side-by-side."
+    },
+    {
+     "risk": "Shrink-wrap failures and winter damage attribution: a torn or badly vented wrap causes mold, water intrusion, or snow-load collapse months after the workmanship error \u2014 and the wrapper, the storer, and the weather are three different liability buckets, sometimes two different vendors.",
+     "whyItMatters": "Wrap-failure damage is latent, expensive, and ambiguous by nature; it is the archetypal 'whose fault is winter?' dispute and will consume ops time out of all proportion to its dollar value unless attribution is pre-built.",
+     "mitigation": "Photograph the completed wrap (supports, vents, belly bands, strapping) as a required leg completion; run a mid-winter inspection cadence with photo proof, triggered after major snow events for outdoor storage; contract language allocating wrap workmanship to the wrapper and post-wrap monitoring to the storer.",
+     "productImplication": "Storage splits into indoor-heated / indoor-cold / outdoor-wrapped tiers with different prices and inspection SLAs; auto-generated mid_winter_check micro-jobs attached to each storage job; 'completed wrap' becomes a distinct required photo class on the winterize/wrap leg."
+    },
+    {
+     "risk": "The fall crunch: nearly all haul-out demand compresses into the ~2 weeks before the pull-deadline, and capacity is physically bounded by ramps, trucks, trailers, and daylight.",
+     "whyItMatters": "A missed haul-out is not a rescheduled mow \u2014 it is a boat frozen into the lake or a cracked block, a five-figure loss against a hard external deadline the platform itself computes and advertises (pull deadline = est. hard freeze minus 8 days).",
+     "mitigation": "Open the fall calendar in mid-summer with early-bird pricing that decays toward the deadline; have each vendor declare daily haul capacity; run a per-lake capacity-vs-booked gauge with waitlist and auto-escalation; set a cutoff date after which new bookings are explicitly 'best effort, no freeze guarantee.'",
+     "productImplication": "Vendor capacity calendar (slots/day per service); per-lake demand-vs-capacity gauge on the ops dashboard; honest scarcity display in the booking flow; a system-controlled 'guaranteed by pull-deadline' badge that stops being offered the moment remaining capacity math no longer supports it."
+    },
+    {
+     "risk": "The spring crunch at ice-out, compounded by a dependency chain: pier must be in and lift set before the boat can splash, and the ice-out date itself is only known days in advance.",
+     "whyItMatters": "A boat trucked to a lake with no lift in the water is a stranded asset sitting dockside; promising hard splash dates against an unknowable ice-out date guarantees broken promises in the platform's highest-emotion week of the year.",
+     "mitigation": "Sequenced multi-service scheduling that auto-orders pier install \u2192 lift set \u2192 splash at the same property; release splash slots only after ice-out is confirmed per lake; sell customers a priority window and a visible queue position rather than a calendar date.",
+     "productImplication": "Cross-job dependency fields (blocks / blocked_by) in the jobs model; splash booking captures a priority tier + window instead of a hard date; the existing per-lake ice-out confirmation event flips queued splash jobs from 'waiting' to 'schedulable' and notifies homeowners with their queue position."
+    },
+    {
+     "risk": "Mid-winter customer access: 'I sold the boat,' 'I need my gear out of it' \u2014 the customer (or a stranger claiming to be a buyer) wants access to a wrapped, racked boat in January.",
+     "whyItMatters": "De-racking and re-wrapping costs real vendor labor that nobody priced, and releasing a boat to an unverified 'buyer' is conversion \u2014 full-asset-value liability and the nightmare custody scenario for the platform.",
+     "mitigation": "A published access policy (N included scheduled visits, per-visit fee after, X business days notice); gear retrieval as a bookable micro-job; release of custody only via in-app authorization by the verified account holder naming the recipient, who presents a one-time code.",
+     "productImplication": "Homeowner access-request flow (request \u2192 vendor schedules \u2192 fee auto-billed); a release_authorization record (authorizer, named recipient, code, timestamp, recipient ID photo) required before the job can move to released_early; the access policy is a linked page inside the storage agreement."
+    },
+    {
+     "risk": "Non-payment while the vendor holds the boat: Indiana's possessory/mechanic's lien route for stored boats is slow and procedural \u2014 certified-mail notice to the owner and any lienholders, statutory waiting periods, then a title/sale process through state channels \u2014 and doing it wrong creates liability for the vendor.",
+     "whyItMatters": "A non-paying boat occupies revenue-producing rack space for months while the 'remedy' crawls; individual crews will not know the statute and will improvise (selling or scrapping a boat without proper process), and their improvisation becomes the platform's scandal.",
+     "mitigation": "Structure billing so nobody is ever deep in arrears: card on file with pre-authorized installments, dunning and service-pause at first failed charge, and 'paid in full before relaunch' as policy \u2014 spring splash is the natural leverage point. The storage agreement grants an express contractual lien alongside the statutory one; the platform supplies a lien-process playbook and template notices rather than leaving vendors to freelance.",
+     "productImplication": "A storage_billing schedule table with dunning states; delinquency badges with day counters on the ops dashboard; a server-enforced rule that a splash leg cannot be scheduled while a balance is outstanding; a later-phase lien-notice letter generator for vendors."
+    },
+    {
+     "risk": "Abandoned boats: the customer ghosts entirely \u2014 no payment, no contact \u2014 and a derelict pontoon occupies a rack indefinitely; low-value boats can cost more to dispose of than they are worth.",
+     "whyItMatters": "Distinct from slow-pay because there is no one to dun; the statutory abandonment/lien-sale process requires documented contact attempts, and without pre-built evidence trails the vendor is stuck warehousing a liability for free.",
+     "mitigation": "An abandonment clause in the storage agreement with a defined trigger (e.g., 60 days past contracted season end plus 3 documented failed contacts across SMS and email); a deposit or final-installment structure sized so disposal costs are covered; platform-verified contact info (already required by rule 5) as the evidentiary backbone.",
+     "productImplication": "An abandoned_pending job status with automated, logged contact attempts (each SMS/email recorded as evidence for the statutory process); an ops runbook page for the abandonment procedure; version-tracked abandonment clause in the agreement."
+    },
+    {
+     "risk": "Per-diem overstay disputes: the boat stays past the contracted season end \u2014 customer not ready, lift not yet set, or customer unresponsive \u2014 and nobody agrees who owes daily storage or from when.",
+     "whyItMatters": "Spring is precisely when vendors need racks empty for turnover; a surprise per-diem invoice is the classic bill-shock dispute, and it lands on the platform because the platform holds the payment relationship. Critically, the overstay is sometimes the platform's own fault (the lift job it scheduled ran late).",
+     "mitigation": "Fix the contracted end date and per-diem rate at booking, not in April; automated countdown notices at T-30/14/7/1; a grace period; and a fault-attribution step \u2014 per-diem is waived when the delay is caused by the vendor or the platform's own scheduling chain.",
+     "productImplication": "contracted_end_date and per_diem_rate as booking fields shown on the price screen; an automated notice sequence; overstay charges accrue as itemized line items with a displayed reason; an ops-set delay-fault flag (customer / vendor / weather / platform) that gates whether per-diem actually bills."
+    },
+    {
+     "risk": "Mid-season cancellation: the customer cancels in January and expects prepaid storage back, but the vendor's opportunity cost was front-loaded \u2014 that rack was reserved through the fall crunch and cannot be re-sold in midwinter.",
+     "whyItMatters": "Pure pro-rata refunds are unfair to vendors; 'no refunds' feels predatory to customers; ad-hoc ops decisions create precedent chaos. This needs a published schedule before the first booking, not after the first dispute.",
+     "mitigation": "A published, tiered refund schedule: full refund minus deposit before haul-out; after rack-in, performed legs (haul-out, transport, wrap) are non-refundable and unused whole months refund at a stated percentage; early release also runs through the release-of-custody protocol.",
+     "productImplication": "Extend the existing cancellation-policy engine with a duration-service policy type (per-leg performed/not-performed logic plus a monthly proration table); the app shows a computed refund preview before the customer confirms cancellation."
+    },
+    {
+     "risk": "Billing timing breaks the platform's core trust promise: 'never charged until work is complete' has no coherent meaning for a 6-month duration service.",
+     "whyItMatters": "Charging everything upfront abandons the promise and creates a large refund liability sitting on the platform; charging only at spring completion makes the vendor float six months of cost and concentrates non-payment risk at the exact moment the boat must be released. Trust and cash flow pull in opposite directions unless the promise itself is redefined.",
+     "mitigation": "Redefine the promise per milestone: storage is explicitly sold as a multi-leg service where each leg bills on its own completion \u2014 haul-out/winterize charged when done, storage billed as disclosed fall/spring installments (or monthly) against the card on file, splash leg charged at completion.",
+     "productImplication": "Jobs model gains legs with independent billing events; the services table gains a duration/installment pricing model (per rule 8, this lives in the DB, not code); the booking screen shows a payment-timeline graphic; the marketing trust-promise copy gets a storage-specific variant: 'you're charged as each milestone completes.'"
+    },
+    {
+     "risk": "The photo-gate rule (rule 2) does not map to multi-leg custody: modeled as one job, the gate fires once at spring completion, leaving haul-out, transport, wrap, and rack-in completely unevidenced \u2014 exactly where the disputes live.",
+     "whyItMatters": "The photo gate is the platform's core enforcement mechanism and its main defense in every custody dispute; a six-month evidentiary blind spot between booking and completion neutralizes it precisely for the highest-value service on the menu.",
+     "mitigation": "Decompose storage into discrete legs \u2014 haul-out, transport-in, winterize/wrap, rack-in, mid-winter checks, de-rack, transport-out, splash \u2014 each carrying its own required photo classes and its own payout release, server-enforced at the leg level.",
+     "productImplication": "Schema change: a job_legs table with per-leg minimum photo counts and typed photo classes; the payout ledger releases per leg rather than per job; the server-side photo gate is re-implemented at leg granularity; the homeowner app shows a boat-journey timeline with photos at every hop."
+    },
+    {
+     "risk": "Marketplace liability position: if the terms are silent on who the bailee is, a platform that sets the customer price, brands the service, and holds the money looks like the principal, not a venue \u2014 and plaintiffs will sue everyone.",
+     "whyItMatters": "One serious claim (sunk trailer load, burned facility) could pull LakeLife into a bailment it never priced or insured. The platform's hidden-margin, one-price model actively strengthens the 'LakeLife was my counterparty' argument, so the paper trail has to push the other way explicitly.",
+     "mitigation": "Terms state explicitly that the vendor is the independent bailee and custodian and LakeLife is a coordination platform; vendor insurance is primary; require LakeLife as additional insured on the vendor's garagekeepers and on-hook policies where obtainable; carry a platform-level contingent/excess liability policy as a backstop.",
+     "productImplication": "A storage-specific terms addendum with its own versioned acceptance checkbox for both homeowner and vendor; an onboarding upload slot for the additional-insured endorsement; a claims-intake flow (report damage \u2192 freeze payouts on affected legs \u2192 assemble the condition-report evidence bundle \u2192 route to the vendor's insurer)."
+    },
+    {
+     "risk": "Seasonal price-gouging optics: scarcity pricing during the fall crunch reads as gouging ('it was $485 in August, why is it $900 in October?') in a small-lake community where everyone compares notes.",
+     "whyItMatters": "Customers already cannot see vendor cost or margin; unexplained seasonal jumps burn the one-price trust model that justifies that opacity. But refusing to price the crunch wastes the platform's best lever for smoothing demand away from the pull-deadline wall.",
+     "mitigation": "Frame the curve as an early-bird discount, not a late surcharge: anchor the peak price, publish the full-season price calendar the day booking opens, decay the discount on a disclosed schedule, and cap the peak-to-base spread.",
+     "productImplication": "The services pricing model gains date-banded pricing rows in the DB (rule 8); the booking UI shows the whole season's price curve upfront ('book by Sept 1: $X'); an ops-configurable cap on the peak/base ratio; this reuses the existing scarcity-surcharge machinery with mandatory disclosure."
+    },
+    {
+     "risk": "Vendor failure mid-winter: the storage vendor goes out of business, loses their lease, or their building burns or collapses under snow load with thirty customer boats inside \u2014 a correlated, catastrophic loss.",
+     "whyItMatters": "Every boat in one facility fails simultaneously, in midwinter, when relocation capacity is near zero \u2014 and it is exactly the scenario where customers look straight past the crew to the platform that took their money. The platform must know, at all times, which boats are physically where.",
+     "mitigation": "Facility vetting at storage onboarding (structure type, snow-load adequacy, fire suppression, security, photos); every stored boat linked to a specific facility address; a contingency playbook where ops can trigger mass relocation using other storage vendors as backstop capacity; contingent platform insurance.",
+     "productImplication": "A storage_facilities entity (address, type, capacity, vetting checklist, photos) linked to each storage job; a facility-level incident flag that fans out notifications to every affected homeowner at once; facility capacity feeds the same demand-vs-capacity gauge as the fall crunch."
+    },
+    {
+     "risk": "Split winterization: the customer stores with a LakeLife vendor but winterized the engine themselves or elsewhere \u2014 the block cracks over winter and the storer is holding the boat when it is discovered.",
+     "whyItMatters": "Freeze damage is the most expensive common winter loss and is invisible at intake; when winterization and storage are split across parties, each blames the other, and the bailee presumption unfairly pins it on the storer.",
+     "mitigation": "Bundle aggressively (winterize + store discount, which also feeds the existing $485 winterization service); if unbundled, require proof of professional winterization or a signed waiver excluding freeze damage to unverified engines from storer liability; record engine winterization status on the intake report.",
+     "productImplication": "The intake condition report gains a winterized_by field (linked LakeLife job / third-party receipt upload / owner-DIY waiver checkbox); the booking flow nudges the bundle; the freeze-damage waiver is a clause in the storage agreement triggered by that field."
+    },
+    {
+     "risk": "Boat spec mis-declaration: the customer under-declares length or weight, so the per-foot price is wrong and the assigned vendor may be unable to legally or insurably tow the boat \u2014 discovered as a wasted truck roll in the worst week of the fall crunch.",
+     "whyItMatters": "Per-foot pricing already depends on declared length, but storage raises the stakes: an overweight/oversize surprise is a road-legality and insurance problem, not just a pricing one, and it burns a crunch-week slot that cannot be resold.",
+     "mitigation": "Verify length and beam at haul-out as part of intake (tape-measure photo), then run the existing vendor-flag mechanic (rule 6): correction proposed \u2192 homeowner approves \u2192 profile updates and repricing happen atomically; mark the boat profile verified after first measured intake.",
+     "productImplication": "Reuse the vendor-flag/approve/reprice flow for dimension corrections at intake; add a verified flag to the boat profile; the router filters candidate vendors by their declared max tow specs before assignment."
+    },
+    {
+     "risk": "Third-party release and ownership disputes: a spouse mid-divorce, a purported buyer, or a lender attempting repossession shows up at the facility for a stored boat.",
+     "whyItMatters": "Releasing to the wrong party is conversion at full asset value, and a bank's perfected lien on a financed boat can legally outrank the owner's instructions \u2014 a judgment call no crew member should ever make at a roll-up door.",
+     "mitigation": "Hard rule: release only via in-app authorization by the verified account holder naming the recipient, who presents a one-time code plus ID; all repossession or court-order demands route to ops with proof-of-lien documentation before any release; everything logged.",
+     "productImplication": "The same release_authorization flow as mid-winter access, plus an ops-only exception path for legal demands with document upload and dual sign-off; a one-line vendor training rule surfaced in the crew app: 'never release without the code.'"
+    },
+    {
+     "risk": "Fire and hazmat exposure of stored boats: fuel aboard, batteries (increasingly lithium trolling-motor packs), and propane canisters mean one customer's boat can burn the facility and every neighboring boat.",
+     "whyItMatters": "This is correlated loss plus a subrogation nightmare \u2014 if customer A's faulty battery destroys customers B through Z's boats, multiple insurers fight for years and the platform sits in the middle of every conversation. Indoor storage multiplies both probability of ignition sources mattering and the stakes.",
+     "mitigation": "Intake protocol requires fuel level recorded and stabilized, batteries disconnected or removed (lithium disclosed), and no propane or portable fuel tanks aboard; facility fire-safety items in the vetting checklist; agreement clauses making the owner responsible for undisclosed hazards.",
+     "productImplication": "Structured intake checklist fields on the condition report (battery_disconnected, fuel_level, stabilizer_added, lithium_aboard, propane_removed); corresponding clauses in the storage agreement; fire-suppression line item in the storage_facilities vetting checklist."
+    },
+    {
+     "risk": "Contents and gear claims: 'my $800 fish finder / tow rope / cooler was in the boat in October and gone in April' \u2014 loose personal property that no one can verify either way.",
+     "whyItMatters": "Contents disputes are the high-frequency, high-emotion, low-dollar category that will dominate support volume; garagekeepers coverage protects the boat, not miscellaneous contents, so there is no insurer to absorb them \u2014 only goodwill.",
+     "mitigation": "Agreement requires valuables removed before haul-out and disclaims liability for loose contents unless inventoried; offer an optional photographed contents inventory as an intake add-on so the honest cases have evidence and the dishonest ones have a deterrent.",
+     "productImplication": "A contents step in the intake flow: a 'valuables removed' acknowledgment tap plus an optional photo-inventory list stored with the condition report; the disclaimer clause lives in the storage agreement and is quoted automatically in any contents-dispute ticket."
+    }
+   ]
+  }
+ },
+ "workflowProgress": [
+  {
+   "type": "workflow_phase",
+   "index": 1,
+   "title": "Research"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 1,
+   "label": "ops-taxonomy",
+   "phaseIndex": 1,
+   "phaseTitle": "Research",
+   "agentId": "ab90d7102c917e26a",
+   "model": "claude-fable-5",
+   "state": "done",
+   "startedAt": 1784756911762,
+   "queuedAt": 1784756911738,
+   "attempt": 1,
+   "lastToolName": "StructuredOutput",
+   "promptPreview": "CONTEXT: LakeLife is a lake-home services platform on Big Long, Pretty, and Big Turkey Lakes in northeast Indiana (Steuben/LaGrange County area \u2014 small glacial lakes, boats are mostly 16-30ft pontoons, ski/wake boats, fishing boats, and PWCs/jet skis). Three roles: homeowner, vendor (crew), ops. Customers see ONE all-in price; vendor cost + ~30% platform margin are hidden. Crews set their OWN rate\u2026",
+   "lastProgressAt": 1784757247362,
+   "tokens": 47605,
+   "toolCalls": 2,
+   "durationMs": 335600,
+   "resultPreview": "{\"scenarios\":[{\"name\":\"Mobile round-trip (owner's A): winterize at customer property, boat stays home, spring recommission on site\",\"steps\":[\"FALL - Customer: makes boat accessible (on lift pulled onshore, on its trailer in driveway, or blocked in yard) and confirms last-use date\",\"FALL - Vendor: on-site engine winterization (fuel stabilizer, fog cylinders, drain/antifreeze block and manifolds for\u2026"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 2,
+   "label": "market-rates",
+   "phaseIndex": 1,
+   "phaseTitle": "Research",
+   "agentId": "a7abca54786b88d09",
+   "model": "claude-fable-5",
+   "state": "done",
+   "startedAt": 1784756911770,
+   "queuedAt": 1784756911738,
+   "attempt": 1,
+   "lastToolName": "StructuredOutput",
+   "lastToolSummary": "The Midwest winter storage 'season' is a single ~7-9 month \u2026",
+   "promptPreview": "CONTEXT: LakeLife is a lake-home services platform on Big Long, Pretty, and Big Turkey Lakes in northeast Indiana (Steuben/LaGrange County area \u2014 small glacial lakes, boats are mostly 16-30ft pontoons, ski/wake boats, fishing boats, and PWCs/jet skis). Three roles: homeowner, vendor (crew), ops. Customers see ONE all-in price; vendor cost + ~30% platform margin are hidden. Crews set their OWN rate\u2026",
+   "lastProgressAt": 1784757384818,
+   "tokens": 80432,
+   "toolCalls": 38,
+   "durationMs": 473048,
+   "resultPreview": "{\"rates\":[{\"service\":\"Winterization labor \u2014 outboard engine (fog, fuel stabilize, drain; gearcase check)\",\"unit\":\"flat, per engine\",\"low\":109,\"high\":340,\"notes\":\"Larsen Marine $109 labor-only single / $199 twin (materials extra); Midwest Winterizing $180 all-in; Just Add Water (Indianapolis) $250 (0-149hp) / $300 (150hp+); Timber Marine $175-340 by HP/tier; Loon Marine 4-stroke $180-460 by HP. Low\u2026"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 3,
+   "label": "platform-modeling",
+   "phaseIndex": 1,
+   "phaseTitle": "Research",
+   "agentId": "aa05b82e0dfe2bd1a",
+   "model": "claude-fable-5",
+   "state": "done",
+   "startedAt": 1784756911777,
+   "queuedAt": 1784756911738,
+   "attempt": 1,
+   "lastToolName": "StructuredOutput",
+   "lastToolSummary": "Option 3 \u2014 package as a bundle of component services with o\u2026",
+   "promptPreview": "TASK: You are the platform architect for LakeLife, a Next.js + Supabase lake-services marketplace. Work INSIDE the repo at /Users/brendonhome/Claude/LakeLife/LakeLife App Docs. Read these before proposing anything: (1) lakelife-beta-launch-plan.md \u2014 \u00a74 mentions a storage pricing model \"seasonal_plus_perdiem\", \u00a75 has the data schema; (2) src/lib/pricing.ts \u2014 the pricing engine and its models (flat,\u2026",
+   "lastProgressAt": 1784757233373,
+   "tokens": 82254,
+   "toolCalls": 26,
+   "durationMs": 321596,
+   "resultPreview": "{\"options\":[{\"name\":\"Option 1 \u2014 Separate service row per package (SKU-per-scenario)\",\"description\":\"Each delivery scenario becomes its own row in `services`: 'Winterize at your dock (mobile)', 'Haul-out + shop winterize + storage', 'You-tow shop winterize + storage', 'Winterize only', 'Storage only', plus add-on rows (shrink wrap, battery care) as separately bookable services. Storage-bearing SKUs\u2026"
+  },
+  {
+   "type": "workflow_agent",
+   "index": 4,
+   "label": "risk-analysis",
+   "phaseIndex": 1,
+   "phaseTitle": "Research",
+   "agentId": "a396cd5bb2cf98f13",
+   "model": "claude-fable-5",
+   "state": "done",
+   "startedAt": 1784756911783,
+   "queuedAt": 1784756911739,
+   "attempt": 1,
+   "lastToolName": "StructuredOutput",
+   "promptPreview": "CONTEXT: LakeLife is a lake-home services platform on Big Long, Pretty, and Big Turkey Lakes in northeast Indiana (Steuben/LaGrange County area \u2014 small glacial lakes, boats are mostly 16-30ft pontoons, ski/wake boats, fishing boats, and PWCs/jet skis). Three roles: homeowner, vendor (crew), ops. Customers see ONE all-in price; vendor cost + ~30% platform margin are hidden. Crews set their OWN rate\u2026",
+   "lastProgressAt": 1784757155852,
+   "tokens": 38089,
+   "toolCalls": 1,
+   "durationMs": 244069,
+   "resultPreview": "{\"risks\":[{\"risk\":\"Bailment liability: the storage vendor becomes a legal bailee of a $30k-$150k asset for ~6 months \u2014 a fundamentally different legal posture than a 2-hour dockside service call.\",\"whyItMatters\":\"Under Indiana common law, a paid (mutual-benefit) bailment imposes a duty of ordinary care with a burden-shifting presumption: if the boat comes back damaged, the bailee is presumed negli\u2026"
+  }
+ ],
+ "totalTokens": 248380,
+ "totalToolCalls": 67
+}
