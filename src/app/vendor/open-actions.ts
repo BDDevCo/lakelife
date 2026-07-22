@@ -4,7 +4,8 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
 import { canClaim, type ClaimBlocker, type CrewCandidate } from "@/lib/dispatch";
-import { loadPricingProfileById, MARGIN_FLOOR } from "@/app/book/dispatch";
+import { loadPricingProfileById } from "@/app/book/dispatch";
+import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
 
 /**
@@ -105,12 +106,13 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     baseLat: vendor.base_lat != null ? Number(vendor.base_lat) : null,
     baseLng: vendor.base_lng != null ? Number(vendor.base_lng) : null,
   };
+  const settings = await getPlatformSettings();
   const verdict = canClaim(candidate, {
     serviceName: svc.name,
     weekday: WEEKDAYS[new Date((job.date as string) + "T12:00:00").getDay()],
     todayISO: today,
     menuPrice: Number(job.customer_price ?? 0),
-    marginFloor: MARGIN_FLOOR,
+    marginFloor: settings.marginFloor,
   });
   if (!verdict.ok) return { ok: false, error: BLOCKER_MSG[verdict.blocker ?? "not_active"] };
 

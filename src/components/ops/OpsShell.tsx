@@ -8,6 +8,7 @@ import { RouteBuilder } from "./RouteBuilder";
 import { MessageBoard } from "./MessageBoard";
 import { CrewBoard } from "./CrewBoard";
 import { NeedsAttention } from "./NeedsAttention";
+import { PlatformSettingsCard } from "./PlatformSettingsCard";
 import type { NeedsAttentionJob, PropertyPreferred } from "@/app/ops/dispatch-data";
 import type { OpsJob, ActiveVendor, MarginRow, LakeCondition, RouteSummary } from "@/app/ops/data";
 import type { OpsThread } from "@/app/ops/messages-data";
@@ -38,6 +39,7 @@ export function OpsShell({
   needsAttention,
   preferredJobIds,
   preferredProps,
+  settings,
 }: {
   jobs: OpsJob[];
   vendors: ActiveVendor[];
@@ -51,6 +53,7 @@ export function OpsShell({
   needsAttention: NeedsAttentionJob[];
   preferredJobIds: string[];
   preferredProps: PropertyPreferred[];
+  settings: { marginFloorPct: number; surgeCapPct: number };
 }) {
   const [tab, setTab] = useState<TabKey>("jobs");
 
@@ -85,6 +88,7 @@ export function OpsShell({
       {tab === "jobs" && <JobBoard jobs={jobs} vendors={vendors} preferredJobIds={preferredJobIds} />}
 
       {tab === "dispatch" && <NeedsAttention jobs={needsAttention} crews={vendors} properties={preferredProps} />}
+      {tab === "dispatch" && <PlatformSettingsCard settings={settings} />}
       {tab === "margin" && <MarginTable rows={margin.rows} total={margin.total} />}
       {tab === "lakes" && <LakeConditions lakes={lakes} />}
       {tab === "routing" && <RouteBuilder routes={routes} date={routeDate} />}

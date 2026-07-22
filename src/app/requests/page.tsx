@@ -6,6 +6,8 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
 import { getActivePropertyId } from "@/app/profile/data";
 import { CancelRequestButton } from "@/components/CancelRequestButton";
+import { ScarcityOffers } from "@/components/ScarcityOffers";
+import { getScarcityOffers } from "@/app/requests/offer-data";
 import { todayLakeDate } from "@/lib/booking";
 import { createServiceClient } from "@/lib/supabase/server";
 
@@ -47,6 +49,9 @@ export default async function RequestsPage() {
 
   const rows = jobs ?? [];
 
+  const stuckIds = rows.filter((r) => r.status === "requested").map((r) => r.id as string);
+  const offers = stuckIds.length > 0 ? await getScarcityOffers(stuckIds) : [];
+
   // "Your crew ⭐" — the preferred-crew lock, visible so the owner KNOWS their
   // crew is theirs (never silently swapped). Ownership is verified before the
   // service-role read; only the company name is exposed — never rates/margin.
@@ -76,6 +81,8 @@ export default async function RequestsPage() {
           </p>
         )}
         {!preferredCompany && <div style={{ marginBottom: 10 }} />}
+
+        {offers.length > 0 && <ScarcityOffers offers={offers} />}
 
         {rows.length === 0 ? (
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>

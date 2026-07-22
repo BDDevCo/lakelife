@@ -195,6 +195,30 @@ export function canClaim(
 }
 
 /**
+ * SCARCITY OFFER (Phase C, ladder rung 3). When every willing crew prices a
+ * job below the margin floor, the machine doesn't page a human to "adjust" —
+ * it computes the smallest whole-dollar price bump that would clear the floor
+ * for the cheapest crew and OFFERS it to the customer (accept/decline). The
+ * bump is capped at menu × (1 + capPct); past the cap the machine stays
+ * honest and lets the job ride the claim board / waitlist instead.
+ * Returns null when no offer makes sense: no rate, floor already clears, or
+ * the needed price busts the cap. RULE 1 note: the customer only ever sees
+ * the new all-in price; the crew rate and margin stay hidden.
+ */
+export function scarcityOffer(
+  menuPrice: number, bestRate: number, floor: number, capPct: number,
+): { newPrice: number; uplift: number } | null {
+  if (!(menuPrice > 0) || !(bestRate > 0) || floor >= 1) return null;
+  if (marginPct(menuPrice, bestRate) >= floor) return null; // already clears — no offer
+  const needed = Math.ceil(bestRate / (1 - floor)); // whole dollars, rounded UP to clear
+  const cap = menuPrice * (1 + Math.max(0, capPct));
+  if (needed > cap) return null; // can't fix within the cap — honest dead end
+  const uplift = needed - menuPrice;
+  if (uplift <= 0) return null; // floor clears at (rounded) menu already
+  return { newPrice: needed, uplift };
+}
+
+/**
  * Capacity for the booking calendar: how many open service-slots exist for a
  * service on a date across all eligible crews. 0 ⇒ the date must not be
  * offered. (Rate/floor is checked at assignment, not calendar time — a date

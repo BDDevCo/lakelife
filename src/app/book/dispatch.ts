@@ -5,9 +5,10 @@ import { todayLakeDate } from "@/lib/booking";
 import { decideDispatch, isEligible, remainingCapacity, type CrewCandidate, type DispatchDecision, type DispatchInput } from "@/lib/dispatch";
 import { getVendorScores } from "@/lib/scoring-data";
 import { toISODate } from "@/lib/booking";
+import { getPlatformSettings } from "@/lib/settings";
 
-/** LakeLife's protected margin floor (menu − crew rate). Config later. */
-export const MARGIN_FLOOR = 0.25;
+// The margin floor now lives in the DATABASE (platform_settings, rule 8) —
+// read via getPlatformSettings(); owner-tunable from the ops dashboard.
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 function weekdayOf(dateISO: string): string {
@@ -44,8 +45,9 @@ export async function loadPricingProfileById(
 }
 
 /** Build every crew candidate for a service+date, with their private rate priced
- *  against this property. All reads are service-role (dispatch is ops-authority). */
-async function buildCandidates(
+ *  against this property. All reads are service-role (dispatch is ops-authority).
+ *  Exported for the scarcity-offer computation on the owner's requests page. */
+export async function buildCandidates(
   admin: ReturnType<typeof createServiceClient>,
   opts: { serviceId: string; serviceName: string; pricingModel: ServiceRule["pricing_model"]; dateISO: string; profile: PricingProfile },
 ): Promise<CrewCandidate[]> {
@@ -195,7 +197,10 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   const profile = await loadPricingProfileById(admin, job.property_id as string);
   if (!svc?.name || !profile) return { assigned: false, decision: { ok: false, reasonNoFit: "no_crew_for_service" } };
 
-  const { data: prop } = await admin.from("properties").select("preferred_vendor, lake_id, lat, lng").eq("id", job.property_id as string).maybeSingle();
+  const [{ data: prop }, settings] = await Promise.all([
+    admin.from("properties").select("preferred_vendor, lake_id, lat, lng").eq("id", job.property_id as string).maybeSingle(),
+    getPlatformSettings(),
+  ]);
 
   const crews = await buildCandidates(admin, {
     serviceId: job.service_id as string,
@@ -211,7 +216,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     serviceName: svc.name,
     menuPrice: Number(job.customer_price ?? 0),
     todayISO: todayLakeDate(),
-    marginFloor: MARGIN_FLOOR,
+    marginFloor: settings.marginFloor,
     preferredVendorId: (prop?.preferred_vendor as string) ?? null,
     lakeId: (prop?.lake_id as string) ?? null,
     jobLat: prop?.lat != null ? Number(prop.lat) : null,

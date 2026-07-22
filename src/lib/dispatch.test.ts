@@ -7,6 +7,7 @@ import {
   remainingCapacity,
   milesBetween,
   canClaim,
+  scarcityOffer,
   type CrewCandidate,
   type DispatchInput,
 } from "./dispatch";
@@ -299,5 +300,39 @@ describe("canClaim — claim board gate (Phase D)", () => {
     expect(canClaim(crew({ crewRate: 0 }), claimInput).blocker).toBe("no_rate");
     expect(canClaim(crew({ crewRate: 80 }), claimInput).blocker).toBe("rate_too_high"); // 20% < 25% floor
     expect(canClaim(crew({ crewRate: 75 }), claimInput).ok).toBe(true); // exactly at floor
+  });
+});
+
+describe("scarcityOffer — customer price bump to clear the floor (Phase C)", () => {
+  it("computes the smallest whole-dollar price that clears the floor", () => {
+    // rate 80, floor 25% → need ceil(80 / 0.75) = 107; menu 100 → +7
+    expect(scarcityOffer(100, 80, 0.25, 0.25)).toEqual({ newPrice: 107, uplift: 7 });
+  });
+
+  it("the offered price actually clears the floor", () => {
+    const o = scarcityOffer(100, 80, 0.25, 0.25)!;
+    expect(marginPct(o.newPrice, 80)).toBeGreaterThanOrEqual(0.25);
+  });
+
+  it("no offer when the floor already clears at menu price", () => {
+    expect(scarcityOffer(100, 70, 0.25, 0.25)).toBeNull(); // 30% ≥ 25%
+    expect(scarcityOffer(100, 75, 0.25, 0.25)).toBeNull(); // exactly at floor
+  });
+
+  it("no offer past the surge cap — honest dead end instead", () => {
+    // rate 110, floor 25% → need 147 > cap 125 → null
+    expect(scarcityOffer(100, 110, 0.25, 0.25)).toBeNull();
+    // widen the cap and the same job becomes offerable
+    expect(scarcityOffer(100, 110, 0.25, 0.5)).toEqual({ newPrice: 147, uplift: 47 });
+  });
+
+  it("no offer on degenerate inputs (no rate, no price, absurd floor)", () => {
+    expect(scarcityOffer(100, 0, 0.25, 0.25)).toBeNull();
+    expect(scarcityOffer(0, 80, 0.25, 0.25)).toBeNull();
+    expect(scarcityOffer(100, 80, 1, 0.25)).toBeNull();
+  });
+
+  it("cap of 0 means never offer above menu", () => {
+    expect(scarcityOffer(100, 80, 0.25, 0)).toBeNull();
   });
 });

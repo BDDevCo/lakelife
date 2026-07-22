@@ -3,7 +3,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
 import { canClaim, milesBetween, type ClaimBlocker, type CrewCandidate } from "@/lib/dispatch";
-import { loadPricingProfileById, MARGIN_FLOOR } from "@/app/book/dispatch";
+import { loadPricingProfileById } from "@/app/book/dispatch";
+import { getPlatformSettings } from "@/lib/settings";
 import type { MyVendor } from "./data";
 
 /**
@@ -33,6 +34,7 @@ const BOARD_CAP = 30; // soonest-first; plenty for the board's purpose
 export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   const admin = createServiceClient();
   const today = todayLakeDate();
+  const settings = await getPlatformSettings();
 
   const { data: jobs } = await admin
     .from("jobs")
@@ -106,7 +108,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       weekday: WEEKDAYS[new Date((j.date as string) + "T12:00:00").getDay()],
       todayISO: today,
       menuPrice: Number(j.customer_price ?? 0), // server-side only — never returned
-      marginFloor: MARGIN_FLOOR,
+      marginFloor: settings.marginFloor,
     });
 
     const miles = milesBetween(prop?.lat ?? null, prop?.lng ?? null, vendor.base_lat, vendor.base_lng);
