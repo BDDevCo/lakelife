@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
-import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings } from "@/lib/automation";
+import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges } from "@/lib/automation";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +43,11 @@ async function run(req: Request) {
   const autopilot = await generateAutopilotProposals();
   // Phase E: re-pin crew bases from where they actually complete jobs.
   const bases = await selfHealCrewBases();
-  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, waitlist, sweep, dispatch, routes, reminders, reconcile, feeReconcile, referrals, coi, autopilot, bases });
+  // Growth: month-end referral payout batch (self-gates to the last lake-day)
+  // + the frequency-capped, prefs-gated nudge engine.
+  const payoutBatch = await runReferralPayoutBatch();
+  const nudges = await runNudges();
+  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, waitlist, sweep, dispatch, routes, reminders, reconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, nudges });
 }
 
 export const GET = run; // Vercel Cron issues GET

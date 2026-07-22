@@ -44,6 +44,10 @@ export interface PlatformSettings {
   referralSunsetDays: number;
   /** Accruals mature (become spendable) after this clawback window. */
   referralMaturationDays: number;
+  /** Credit balance that triggers the "covers a visit" nudge. */
+  nudgeCreditThreshold: number;
+  /** Per-kind, per-user quiet period between growth nudges. */
+  nudgeCooldownDays: number;
 }
 
 export const DEFAULT_SETTINGS: PlatformSettings = {
@@ -64,6 +68,8 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   referralCrewCap: 250,
   referralSunsetDays: 365,
   referralMaturationDays: 30,
+  nudgeCreditThreshold: 50,
+  nudgeCooldownDays: 30,
 };
 
 /** Clamp a raw stored value into a sane band; fall back on anything weird. */
@@ -80,7 +86,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
     const { data } = await admin
       .from("platform_settings")
       .select("key, value")
-      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days"]);
+      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days", "nudge_credit_threshold", "nudge_cooldown_days"]);
     const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]));
     return {
       marginFloor: parseSetting(byKey.get("margin_floor"), DEFAULT_SETTINGS.marginFloor, 0.05, 0.6),
@@ -100,6 +106,8 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       referralCrewCap: parseSetting(byKey.get("referral_crew_cap"), DEFAULT_SETTINGS.referralCrewCap, 0, 2000),
       referralSunsetDays: parseSetting(byKey.get("referral_sunset_days"), DEFAULT_SETTINGS.referralSunsetDays, 30, 3650),
       referralMaturationDays: parseSetting(byKey.get("referral_maturation_days"), DEFAULT_SETTINGS.referralMaturationDays, 0, 120),
+      nudgeCreditThreshold: parseSetting(byKey.get("nudge_credit_threshold"), DEFAULT_SETTINGS.nudgeCreditThreshold, 5, 1000),
+      nudgeCooldownDays: parseSetting(byKey.get("nudge_cooldown_days"), DEFAULT_SETTINGS.nudgeCooldownDays, 7, 120),
     };
   } catch {
     return DEFAULT_SETTINGS; // table missing / transient error → today's values

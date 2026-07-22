@@ -8,9 +8,10 @@ import { todayLakeDate } from "@/lib/booking";
 import { planVendorDay, routeMapUrl, type StopIn } from "@/lib/router";
 import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 import { proposeAutopilotDate } from "@/lib/autopilot";
-import { shouldDemote, healBase } from "@/lib/lake-standing";
+import { shouldDemote, healBase, isCoolingDown } from "@/lib/lake-standing";
 import { warningDue, isExpired } from "@/lib/waitlist";
 import { rushWindowOpen } from "@/lib/rush";
+import { isLastDayOfMonth, nudgeCooling } from "@/lib/growth";
 import { withinSunset, customerReferralAccrual, crewShareAccrual, creditToApply } from "@/lib/referrals";
 import { getPlatformSettings } from "@/lib/settings";
 import { autoAssignJob, loadPricingProfileById } from "@/app/book/dispatch";
@@ -637,6 +638,191 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
     if (won && won.length > 0) matured++;
   }
   return { ok: true, matured, credited };
+}
+
+/**
+ * MONTH-END REFERRAL PAYOUT BATCH (owner cadence, 2026-07-23): crews and
+ * HOAs get their matured referral money once a month — one guarded
+ * matured→paid flip per row, one statement email per beneficiary (their
+ * digest: paid now + still maturing). Runs only on the last lake-day of the
+ * month; customers' credits never wait for this (they apply continuously).
+ * Real money movement rides the crew remittance rails when the processor
+ * lands — until then the flip + statement IS the batch, idempotently.
+ */
+export async function runReferralPayoutBatch(force = false): Promise<{ ok: boolean; ran: boolean; beneficiaries: number; total: number }> {
+  const today = todayLakeDate();
+  if (!force && !isLastDayOfMonth(today)) return { ok: true, ran: false, beneficiaries: 0, total: 0 };
+  const admin = createServiceClient();
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+
+  const { data: matured } = await admin
+    .from("referral_earnings")
+    .select("id, beneficiary, amount")
+    .eq("status", "matured")
+    .limit(500);
+
+  // Only vendor/HOA-type beneficiaries batch out; (customers were already
+  // granted credits at maturation and never reach 'matured' with money owed).
+  const byUser = new Map<string, { ids: string[]; total: number }>();
+  for (const e of matured ?? []) {
+    const u = byUser.get(e.beneficiary as string) ?? { ids: [], total: 0 };
+    u.ids.push(e.id as string);
+    u.total += Number(e.amount ?? 0);
+    byUser.set(e.beneficiary as string, u);
+  }
+
+  let beneficiaries = 0, total = 0;
+  for (const [userId, u] of byUser) {
+    const { data: vendorRow } = await admin.from("vendors").select("id, company").eq("user_id", userId).maybeSingle();
+    if (!vendorRow) continue; // non-vendor matured rows shouldn't exist; leave for audit
+    let paidThis = 0;
+    for (const id of u.ids) {
+      const { data: won } = await admin
+        .from("referral_earnings")
+        .update({ status: "paid" })
+        .eq("id", id)
+        .eq("status", "matured")
+        .select("amount");
+      if (won && won.length > 0) paidThis += Number(won[0].amount ?? 0);
+    }
+    if (paidThis <= 0) continue;
+    beneficiaries++;
+    total += paidThis;
+    // Still-maturing remainder for the digest line.
+    const { data: pending } = await admin
+      .from("referral_earnings").select("amount").eq("beneficiary", userId).eq("status", "accrued");
+    const maturing = (pending ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
+    const { data: u2 } = await admin.from("users").select("email, name").eq("id", userId).maybeSingle();
+    if (u2?.email) {
+      void sendEmail({
+        to: u2.email,
+        subject: `Referral payout approved — $${paidThis.toFixed(2)} 🌊`,
+        html: `<p>Hi ${vendorRow.company ?? u2.name ?? "there"},</p><p>Your referral earnings for the month are in: <b>$${paidThis.toFixed(2)}</b> approved and riding your next remittance.${maturing > 0 ? ` Another $${maturing.toFixed(2)} is maturing and lands next batch.` : ""}</p><p>Keep sharing — it stacks. 🌊</p><p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>`,
+      });
+    }
+  }
+  return { ok: true, ran: true, beneficiaries, total: Math.round(total * 100) / 100 };
+}
+
+/**
+ * NUDGE ENGINE (owner direction: keep the game alive, never spammy).
+ * Email-only (SMS stays operational), per-kind per-user cooldown via
+ * nudge_log, and a notification_prefs opt-out (type 'growth', channel
+ * 'email' — absence means opted in).
+ *  A) credit_covers_visit — a customer's balance crossed the threshold:
+ *     their credits now cover a real visit. One email, then quiet.
+ *  B) territory — a crew's neighboring lake has WAITING demand for work
+ *     they do; estimate the season at THEIR OWN rates (rule-1 safe) and
+ *     hand them the one-tap lakes editor.
+ */
+export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; territoryNudges: number }> {
+  const admin = createServiceClient();
+  const { nudgeCreditThreshold, nudgeCooldownDays, lakeDemotionCooldownDays } = await getPlatformSettings();
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  const now = Date.now();
+
+  const optedOut = async (userId: string): Promise<boolean> => {
+    const { data } = await admin
+      .from("notification_prefs").select("enabled")
+      .eq("user_id", userId).eq("type", "growth").eq("channel", "email").maybeSingle();
+    return data?.enabled === false;
+  };
+  const cooling = async (userId: string, kind: string): Promise<boolean> => {
+    const { data } = await admin
+      .from("nudge_log").select("sent_at")
+      .eq("user_id", userId).eq("kind", kind)
+      .order("sent_at", { ascending: false }).limit(1).maybeSingle();
+    return nudgeCooling((data?.sent_at as string) ?? null, nudgeCooldownDays, now);
+  };
+  const send = async (userId: string, kind: string, subject: string, html: string): Promise<boolean> => {
+    if (await optedOut(userId)) return false;
+    if (await cooling(userId, kind)) return false;
+    const { data: u } = await admin.from("users").select("email").eq("id", userId).maybeSingle();
+    if (!u?.email) return false;
+    void sendEmail({ to: u.email, subject, html: html + `<p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>` });
+    await admin.from("nudge_log").insert({ user_id: userId, kind });
+    return true;
+  };
+
+  // A) Credits now cover a visit.
+  let creditNudges = 0;
+  const { data: creditRows } = await admin.from("user_credits").select("user_id, amount");
+  const balances = new Map<string, number>();
+  for (const c of creditRows ?? []) balances.set(c.user_id as string, (balances.get(c.user_id as string) ?? 0) + Number(c.amount ?? 0));
+  for (const [userId, bal] of balances) {
+    if (bal < nudgeCreditThreshold) continue;
+    const ok = await send(
+      userId, "credit_covers_visit",
+      `You've got $${bal.toFixed(2)} in LakeLife credits 🌊`,
+      `<p>Your referral credits just crossed <b>$${bal.toFixed(2)}</b> — enough to cover a visit on us.</p><p>Book anything at <a href="${site}/book">${site}/book</a> and it applies automatically at billing. Keep sharing your link and the next one's on us too.</p>`,
+    );
+    if (ok) creditNudges++;
+  }
+
+  // B) Territory expansion — waiting demand next door, priced at THEIR rates.
+  let territoryNudges = 0;
+  const today = todayLakeDate();
+  const { data: waiting } = await admin
+    .from("jobs")
+    .select("id, service_id, property_id, services(name, pricing_model), properties(lake_id, lakes(name))")
+    .eq("status", "requested").is("vendor_id", null).gte("date", today).limit(50);
+  if (waiting && waiting.length > 0) {
+    const { data: crews } = await admin
+      .from("vendors")
+      .select("id, user_id, company, service_types, service_lakes, coi_expiry")
+      .eq("status", "active").not("user_id", "is", null);
+    const { data: rates } = await admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing");
+    const rateBy = new Map((rates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
+
+    for (const v of crews ?? []) {
+      if (!v.coi_expiry || String(v.coi_expiry) < today) continue;
+      const myLakes = new Set((v.service_lakes as string[]) ?? []);
+      // Group this crew's claimable-if-they-expanded demand by lake.
+      const byLake = new Map<string, { name: string; jobs: typeof waiting; est: number }>();
+      for (const j of waiting) {
+        const svc = one(j.services) as { name?: string; pricing_model?: string } | null;
+        const prop = one(j.properties) as { lake_id?: string; lakes?: unknown } | null;
+        const lakeId = prop?.lake_id as string | undefined;
+        if (!svc?.name || !lakeId || myLakes.has(lakeId)) continue;
+        if (!((v.service_types as string[]) ?? []).includes(svc.name)) continue;
+        const vr = rateBy.get(`${v.id}|${j.service_id}`);
+        if (!vr) continue; // no rate = no honest estimate
+        const lakeName = (one(prop?.lakes) as { name?: string } | null)?.name ?? "a nearby lake";
+        const entry = byLake.get(lakeId) ?? { name: lakeName, jobs: [] as typeof waiting, est: 0 };
+        const profile = await loadPricingProfileById(admin, j.property_id as string);
+        if (profile) {
+          const rule: ServiceRule = {
+            name: svc.name, pricing_model: svc.pricing_model as ServiceRule["pricing_model"],
+            base: Number(vr.base ?? 0), unit_rate: Number(vr.unit_rate ?? 0),
+            band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
+          };
+          entry.est += priceService(rule, profile);
+        }
+        entry.jobs.push(j);
+        byLake.set(lakeId, entry);
+      }
+      // Best single lake pitch; skip lakes the crew is paused on (Phase E).
+      let best: { lakeId: string; name: string; count: number; est: number } | null = null;
+      for (const [lakeId, e] of byLake) {
+        if (e.jobs.length === 0 || e.est <= 0) continue;
+        const { data: pause } = await admin
+          .from("vendor_lake_demotions").select("demoted_at")
+          .eq("vendor_id", v.id as string).eq("lake_id", lakeId).maybeSingle();
+        if (pause && isCoolingDown(pause.demoted_at as string, lakeDemotionCooldownDays, now)) continue;
+        if (!best || e.est > best.est) best = { lakeId, name: e.name, count: e.jobs.length, est: e.est };
+      }
+      if (best) {
+        const ok = await send(
+          v.user_id as string, "territory",
+          `${best.count} homeowner${best.count === 1 ? "" : "s"} waiting on ${best.name} 🌊`,
+          `<p>Hi ${v.company ?? "there"},</p><p><b>${best.count} homeowner${best.count === 1 ? " is" : "s are"} waiting</b> for work you do on ${best.name} — at your rates that's about <b>$${best.est.toFixed(0)}</b> sitting there right now.</p><p>Add the lake in one tap and the machine starts routing you: <a href="${site}/vendor/availability">${site}/vendor/availability</a></p>`,
+        );
+        if (ok) territoryNudges++;
+      }
+    }
+  }
+
+  return { ok: true, creditNudges, territoryNudges };
 }
 
 /** Annual COI re-validation nudge (the owner's yearly re-attest). Emails an
