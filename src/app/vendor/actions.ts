@@ -74,6 +74,10 @@ export async function uploadJobPhoto(jobId: string, form: FormData): Promise<Act
   const { error: rowErr } = await admin.from("job_photos").insert({ job_id: jobId, url: path });
   if (rowErr) return { ok: false, error: rowErr.message };
 
+  // Stamp the crew's clock-in on the first photo (scoring: actual job duration).
+  // Best-effort, only if not already set.
+  await admin.from("jobs").update({ started_at: new Date().toISOString() }).eq("id", jobId).is("started_at", null);
+
   const { count } = await admin
     .from("job_photos")
     .select("id", { count: "exact", head: true })
@@ -124,7 +128,7 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   // can't raise two invoices or release two payouts.
   const { data: changed, error } = await admin
     .from("jobs")
-    .update({ status: "complete" })
+    .update({ status: "complete", completed_at: new Date().toISOString() })
     .eq("id", jobId)
     .in("status", ["scheduled", "in_progress", "requested"])
     .select("id");

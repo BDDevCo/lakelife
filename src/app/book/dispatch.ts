@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule, type PricingProfile } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
 import { decideDispatch, isEligible, remainingCapacity, type CrewCandidate, type DispatchDecision, type DispatchInput } from "@/lib/dispatch";
+import { getVendorScores } from "@/lib/scoring-data";
 import { toISODate } from "@/lib/booking";
 
 /** LakeLife's protected margin floor (menu − crew rate). Config later. */
@@ -47,20 +48,18 @@ async function buildCandidates(
   admin: ReturnType<typeof createServiceClient>,
   opts: { serviceId: string; serviceName: string; pricingModel: ServiceRule["pricing_model"]; dateISO: string; profile: PricingProfile },
 ): Promise<CrewCandidate[]> {
-  const [{ data: vendors }, { data: rates }, { data: dayJobs }, { data: blocks }, { data: doneJobs }] = await Promise.all([
+  const [{ data: vendors }, { data: rates }, { data: dayJobs }, { data: blocks }, scores] = await Promise.all([
     admin.from("vendors").select("id, status, coi_expiry, service_types, work_days, daily_capacity"),
     admin.from("vendor_rates").select("vendor_id, base, unit_rate, band_pricing").eq("service_id", opts.serviceId),
     admin.from("jobs").select("vendor_id").eq("date", opts.dateISO).in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null),
     admin.from("vendor_availability").select("vendor_id").eq("date", opts.dateISO).eq("status", "blocked"),
-    admin.from("jobs").select("vendor_id").eq("status", "complete").not("vendor_id", "is", null),
+    getVendorScores(), // real quality score (on-time + flag accuracy + volume), not a raw count
   ]);
 
   const rateByVendor = new Map((rates ?? []).map((r) => [r.vendor_id as string, r]));
   const assigned = new Map<string, number>();
   for (const j of dayJobs ?? []) assigned.set(j.vendor_id as string, (assigned.get(j.vendor_id as string) ?? 0) + 1);
   const blocked = new Set((blocks ?? []).map((b) => b.vendor_id as string));
-  const score = new Map<string, number>();
-  for (const j of doneJobs ?? []) score.set(j.vendor_id as string, (score.get(j.vendor_id as string) ?? 0) + 1);
 
   return (vendors ?? []).map((v) => {
     const vr = rateByVendor.get(v.id as string);
@@ -85,7 +84,7 @@ async function buildCandidates(
       assignedThatDay: assigned.get(v.id as string) ?? 0,
       blockedThatDay: blocked.has(v.id as string),
       crewRate,
-      score: score.get(v.id as string) ?? 0,
+      score: scores.get(v.id as string)?.score ?? 0,
     };
   });
 }
