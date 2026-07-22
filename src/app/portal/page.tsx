@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { claimCrewInvite } from "@/app/ops/crews-invite";
+import { claimCustomerImports } from "@/app/vendor/import-actions";
 
 /**
  * The one front door after sign-in: sends each person to THEIR portal.
@@ -28,6 +29,11 @@ export default async function PortalPage() {
   if (role !== "vendor" && role !== "ops") {
     const claimed = await claimCrewInvite(user.id, user.email);
     if (claimed) role = "vendor";
+  }
+
+  // Homeowners: materialize any crew-imported properties (crew stays preferred).
+  if (role !== "vendor" && role !== "ops") {
+    await claimCustomerImports(user.id, user.email);
   }
 
   if (role === "ops") redirect("/ops");

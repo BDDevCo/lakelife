@@ -8,6 +8,7 @@ const TABS = [
   { href: "/vendor/availability", label: "Availability" },
   { href: "/vendor/rates", label: "Rates" },
   { href: "/vendor/earnings", label: "Earnings" },
+  { href: "/vendor/import", label: "Customers" },
 ];
 
 export function VendorNav() {
