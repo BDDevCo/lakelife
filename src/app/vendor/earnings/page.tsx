@@ -69,12 +69,26 @@ export default async function VendorEarningsPage() {
 
   const earnings = await getMyEarnings();
   const today = todayLakeDate();
+  const referral = await (await import("@/lib/referral-data")).getMyReferralTicker();
 
   return (
     <>
       <TopBar />
       <VendorNav />
       <VendorEarnings rows={earnings.rows} totals={earnings.totals} today={today} />
+      {referral && referral.earnedTotal > 0 && (
+        <div className="wrap" style={{ paddingBottom: 24 }}>
+          <div className="ll-card ll-card-pad">
+            <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>Referral earnings 🌊</h3>
+            <p style={{ fontSize: 15, fontWeight: 800, color: "var(--teal-dark)", margin: 0 }}>
+              ${referral.earnedTotal.toFixed(2)} earned
+              <span className="mut" style={{ fontWeight: 400, fontSize: 13.5 }}>
+                {" "}· ${referral.maturing.toFixed(2)} maturing · ${referral.available.toFixed(2)} ready for your next payout batch
+              </span>
+            </p>
+          </div>
+        </div>
+      )}
     </>
   );
 }

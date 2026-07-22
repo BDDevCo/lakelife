@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
-import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks } from "@/lib/automation";
+import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings } from "@/lib/automation";
 
 export const dynamic = "force-dynamic";
 
@@ -35,13 +35,15 @@ async function run(req: Request) {
   // and retry uncollected late-cancellation fees (crew share releases on collect).
   const reconcile = await reconcileUnsettledJobs();
   const feeReconcile = await reconcileCancelledFees();
+  // Referral accruals past the clawback window become spendable credits.
+  const referrals = await matureReferralEarnings();
   // Yearly COI re-attest nudge (fires on an exact boundary, so once per crew).
   const coi = await sendCoiRevalidations();
   // Autopilot: propose enrolled services' next visits (one-tap confirm texts).
   const autopilot = await generateAutopilotProposals();
   // Phase E: re-pin crew bases from where they actually complete jobs.
   const bases = await selfHealCrewBases();
-  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, waitlist, sweep, dispatch, routes, reminders, reconcile, feeReconcile, coi, autopilot, bases });
+  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, waitlist, sweep, dispatch, routes, reminders, reconcile, feeReconcile, referrals, coi, autopilot, bases });
 }
 
 export const GET = run; // Vercel Cron issues GET

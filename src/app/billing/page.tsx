@@ -39,10 +39,12 @@ export default async function BillingPage() {
     upcomingQ = upcomingQ.eq("property_id", activeId);
     invoiceQ = invoiceQ.eq("property_id", activeId);
   }
-  const [cards, { data: jobs }, { data: invoices }] = await Promise.all([listPaymentMethods(), upcomingQ, invoiceQ]);
+  const creditQ = supabase.from("user_credits").select("amount");
+  const [cards, { data: jobs }, { data: invoices }, { data: credits }] = await Promise.all([listPaymentMethods(), upcomingQ, invoiceQ, creditQ]);
 
   const defaultCard = cards.find((c) => c.is_default) ?? cards[0];
   const upcoming = jobs ?? [];
+  const creditBalance = (credits ?? []).reduce((sum, c) => sum + Number(c.amount ?? 0), 0);
 
   return (
     <>
@@ -50,6 +52,19 @@ export default async function BillingPage() {
       <OwnerHeader />
       <div className="wrap" style={{ paddingTop: 24, maxWidth: 720 }}>
         <h1 style={{ fontSize: 26, marginBottom: 16 }}>Billing</h1>
+
+        {/* referral credit balance */}
+        {creditBalance > 0 && (
+          <div className="ll-card ll-card-pad" style={{ marginBottom: 16, borderColor: "var(--teal)" }}>
+            <span className="ll-pill ok">Referral credit</span>
+            <div style={{ fontWeight: 700, fontSize: 18, margin: "8px 0 4px" }}>
+              ${creditBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} in service credits
+            </div>
+            <p className="mut" style={{ fontSize: 13.5, margin: 0 }}>
+              Applies automatically to your next bill — earned by spreading the word. 🌊
+            </p>
+          </div>
+        )}
 
         {/* payment method */}
         <div className="ll-card ll-card-pad" style={{ marginBottom: 16 }}>

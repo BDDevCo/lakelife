@@ -32,6 +32,18 @@ export interface PlatformSettings {
   sameDayFillDiscountPct: number;
   /** Lake-time hour when same-day booking/claiming closes (14 = 2pm). */
   sameDayCutoffHour: number;
+  /** Homeowner→homeowner referral: % of the referee's collected spend. */
+  referralCustomerPct: number;
+  /** Importing crew's finder's fee on services they DON'T perform. */
+  referralCrossSellPct: number;
+  /** Crew-bringer bounty: share of collected margin from the brought crew... */
+  referralCrewSharePct: number;
+  /** ...until this lifetime cap per (referrer, crew) pair. */
+  referralCrewCap: number;
+  /** Customer-spend referral arms sunset after this many days. */
+  referralSunsetDays: number;
+  /** Accruals mature (become spendable) after this clawback window. */
+  referralMaturationDays: number;
 }
 
 export const DEFAULT_SETTINGS: PlatformSettings = {
@@ -46,6 +58,12 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   sameDaySurchargePct: 0.25,
   sameDayFillDiscountPct: 0.15,
   sameDayCutoffHour: 14,
+  referralCustomerPct: 0.05,
+  referralCrossSellPct: 0.05,
+  referralCrewSharePct: 0.25,
+  referralCrewCap: 250,
+  referralSunsetDays: 365,
+  referralMaturationDays: 30,
 };
 
 /** Clamp a raw stored value into a sane band; fall back on anything weird. */
@@ -62,7 +80,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
     const { data } = await admin
       .from("platform_settings")
       .select("key, value")
-      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour"]);
+      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days"]);
     const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]));
     return {
       marginFloor: parseSetting(byKey.get("margin_floor"), DEFAULT_SETTINGS.marginFloor, 0.05, 0.6),
@@ -76,6 +94,12 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       sameDaySurchargePct: parseSetting(byKey.get("same_day_surcharge_pct"), DEFAULT_SETTINGS.sameDaySurchargePct, 0, 1),
       sameDayFillDiscountPct: parseSetting(byKey.get("same_day_fill_discount_pct"), DEFAULT_SETTINGS.sameDayFillDiscountPct, 0, 0.5),
       sameDayCutoffHour: parseSetting(byKey.get("same_day_cutoff_hour"), DEFAULT_SETTINGS.sameDayCutoffHour, 0, 23),
+      referralCustomerPct: parseSetting(byKey.get("referral_customer_pct"), DEFAULT_SETTINGS.referralCustomerPct, 0, 0.2),
+      referralCrossSellPct: parseSetting(byKey.get("referral_cross_sell_pct"), DEFAULT_SETTINGS.referralCrossSellPct, 0, 0.2),
+      referralCrewSharePct: parseSetting(byKey.get("referral_crew_share_pct"), DEFAULT_SETTINGS.referralCrewSharePct, 0, 0.5),
+      referralCrewCap: parseSetting(byKey.get("referral_crew_cap"), DEFAULT_SETTINGS.referralCrewCap, 0, 2000),
+      referralSunsetDays: parseSetting(byKey.get("referral_sunset_days"), DEFAULT_SETTINGS.referralSunsetDays, 30, 3650),
+      referralMaturationDays: parseSetting(byKey.get("referral_maturation_days"), DEFAULT_SETTINGS.referralMaturationDays, 0, 120),
     };
   } catch {
     return DEFAULT_SETTINGS; // table missing / transient error → today's values

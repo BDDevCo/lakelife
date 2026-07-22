@@ -11,6 +11,7 @@ import { proposeAutopilotDate } from "@/lib/autopilot";
 import { shouldDemote, healBase } from "@/lib/lake-standing";
 import { warningDue, isExpired } from "@/lib/waitlist";
 import { rushWindowOpen } from "@/lib/rush";
+import { withinSunset, customerReferralAccrual, crewShareAccrual, creditToApply } from "@/lib/referrals";
 import { getPlatformSettings } from "@/lib/settings";
 import { autoAssignJob, loadPricingProfileById } from "@/app/book/dispatch";
 import { computeScarcityOffer } from "@/app/requests/offer-data";
@@ -120,7 +121,7 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, status, customer_price, vendor_cost, vendor_id, property_id, services(name)")
+    .select("id, status, customer_price, vendor_cost, vendor_id, property_id, margin, services(name)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) return { ok: false, error: "job not found" };
@@ -172,6 +173,30 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
       .eq("status", "captured")
       .maybeSingle();
     if (!paid && ownerId) {
+      // SERVICE CREDITS first (§8b: homeowner referral rewards are credits, not
+      // cash — no 1099s, and the money comes home as bookings). Idempotent:
+      // exactly one application row per invoice (partial unique index); a
+      // re-run reuses the existing application instead of double-spending.
+      let creditApplied = 0;
+      try {
+        const { data: existingApp } = await admin
+          .from("user_credits").select("amount").eq("invoice_id", invoice.id).maybeSingle();
+        if (existingApp) {
+          creditApplied = Math.abs(Number(existingApp.amount ?? 0));
+        } else {
+          const { data: creditRows } = await admin.from("user_credits").select("amount").eq("user_id", ownerId);
+          const balance = (creditRows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
+          const apply = creditToApply(balance, price);
+          if (apply > 0) {
+            const { error: capErr } = await admin.from("user_credits").insert({
+              user_id: ownerId, amount: -apply, reason: `Applied to ${svcName}`, invoice_id: invoice.id,
+            });
+            if (!capErr) creditApplied = apply;
+          }
+        }
+      } catch { /* credits are a bonus — never block a settle */ }
+      const cashDue = Math.round((price - creditApplied) * 100) / 100;
+
       const { data: pm } = await admin
         .from("payment_methods")
         .select("token, last4, brand")
@@ -180,11 +205,23 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (pm?.token) {
-        const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(price * 100), description: `LakeLife — ${svcName}` });
+      if (cashDue <= 0 && creditApplied > 0) {
+        // Fully covered by credits — no card involved, invoice settles clean.
+        await admin.from("invoices").update({ status: "paid", processor_ref: "credits" }).eq("id", invoice.id);
+        charged = true;
+        const owner = one((prop as { users?: unknown } | null)?.users) as { email?: string; name?: string } | null;
+        if (owner?.email) {
+          void sendEmail({
+            to: owner.email,
+            subject: `Your LakeLife receipt — ${svcName}`,
+            html: `<p>Hi ${owner.name ?? "there"},</p><p>Your ${svcName} at ${prop?.address ?? "your property"} is complete.</p><p><b>Covered entirely by your referral credits</b> ($${creditApplied.toFixed(2)}) — nothing charged to your card. Thanks for spreading the word. 🌊</p>`,
+          });
+        }
+      } else if (pm?.token) {
+        const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(cashDue * 100), description: `LakeLife — ${svcName}` });
         await admin.from("payments").insert({
           invoice_id: invoice.id,
-          amount: job.customer_price,
+          amount: cashDue,
           status: charge.ok ? "captured" : "failed",
           processor_ref: charge.ref ?? null,
         });
@@ -192,18 +229,92 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
         charged = charge.ok;
         const owner = one((prop as { users?: unknown } | null)?.users) as { email?: string; name?: string } | null;
         if (charge.ok && owner?.email) {
-          const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(price);
+          const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cashDue);
+          const creditLine = creditApplied > 0 ? ` (after $${creditApplied.toFixed(2)} in referral credits)` : "";
           void sendEmail({
             to: owner.email,
             subject: `Your LakeLife receipt — ${svcName}`,
-            html: `<p>Hi ${owner.name ?? "there"},</p><p>Your ${svcName} at ${prop?.address ?? "your property"} is complete.</p><p><b>Charged: ${amt}</b>${pm.brand ? ` to your ${pm.brand} ending ${pm.last4}` : ""}.</p><p>Thank you. 🌊</p>`,
+            html: `<p>Hi ${owner.name ?? "there"},</p><p>Your ${svcName} at ${prop?.address ?? "your property"} is complete.</p><p><b>Charged: ${amt}</b>${creditLine}${pm.brand ? ` to your ${pm.brand} ending ${pm.last4}` : ""}.</p><p>Thank you. 🌊</p>`,
           });
         }
+      }
+
+      // REFERRAL ACCRUALS — only after money actually COLLECTED this run, and
+      // only on the CASH portion (never commission on our own credits — that
+      // would let credits recycle into more credits). Idempotent: one accrual
+      // per (beneficiary, job, kind) via unique index.
+      if (charged && cashDue > 0) {
+        try {
+          await accrueReferralEarnings(admin, {
+            jobId, ownerId, vendorId: (job.vendor_id as string) ?? null,
+            cashCollected: cashDue, price, margin: Number((job as { margin?: number }).margin ?? 0),
+          });
+        } catch { /* accrual is a bonus — never block a settle */ }
       }
     }
   }
 
   return { ok: true, invoiced: true, charged };
+}
+
+/** §8b accrual hooks — called by settleJob strictly AFTER cash collection. */
+async function accrueReferralEarnings(
+  admin: ReturnType<typeof createServiceClient>,
+  p: { jobId: string; ownerId: string; vendorId: string | null; cashCollected: number; price: number; margin: number },
+): Promise<void> {
+  const settings = await getPlatformSettings();
+  const cashRatio = p.price > 0 ? p.cashCollected / p.price : 0;
+
+  // Arm 1+2: the customer was referred — by a neighbor (customer_referral)
+  // or by the crew who imported them (cross_sell, only when someone ELSE did
+  // this job; the importer is already paid their rate when they do the work).
+  const { data: refUser } = await admin.from("users").select("id, referred_by, created_at").eq("id", p.ownerId).maybeSingle();
+  const referrerId = (refUser?.referred_by as string) ?? null;
+  if (referrerId && withinSunset((refUser?.created_at as string) ?? null, Date.now(), settings.referralSunsetDays)) {
+    const { data: refVendor } = await admin.from("vendors").select("id").eq("user_id", referrerId).maybeSingle();
+    let kind: "customer_referral" | "cross_sell" | null = null;
+    let pct = 0;
+    if (!refVendor) {
+      kind = "customer_referral";
+      pct = settings.referralCustomerPct;
+    } else if (p.vendorId && refVendor.id !== p.vendorId) {
+      kind = "cross_sell";
+      pct = settings.referralCrossSellPct;
+    }
+    if (kind && pct > 0) {
+      const amount = customerReferralAccrual(p.cashCollected, pct);
+      if (amount > 0) {
+        const { error: aErr } = await admin.from("referral_earnings").insert({
+          beneficiary: referrerId, kind, source_job: p.jobId, source_vendor: p.vendorId, amount,
+        }); // unique (beneficiary, job, kind) — re-runs no-op on the index
+        if (aErr && !/duplicate|unique/i.test(aErr.message)) console.error(`[referral ${p.jobId}] ${kind} accrual failed:`, aErr.message);
+      }
+    }
+  }
+
+  // Arm 3: this job's crew was BROUGHT by someone — share of collected margin
+  // until the lifetime cap for that (bringer, crew) pair. Self-financing.
+  if (p.vendorId && p.margin > 0) {
+    const { data: crew } = await admin.from("vendors").select("invited_by").eq("id", p.vendorId).maybeSingle();
+    const bringer = (crew?.invited_by as string) ?? null;
+    if (bringer && bringer !== p.ownerId) { // no earning on your own bills
+      const { data: prior } = await admin
+        .from("referral_earnings")
+        .select("amount")
+        .eq("beneficiary", bringer)
+        .eq("source_vendor", p.vendorId)
+        .eq("kind", "crew_referral")
+        .neq("status", "void");
+      const already = (prior ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
+      const amount = crewShareAccrual(p.margin * cashRatio, settings.referralCrewSharePct, settings.referralCrewCap, already);
+      if (amount > 0) {
+        const { error: aErr } = await admin.from("referral_earnings").insert({
+          beneficiary: bringer, kind: "crew_referral", source_job: p.jobId, source_vendor: p.vendorId, amount,
+        });
+        if (aErr && !/duplicate|unique/i.test(aErr.message)) console.error(`[referral ${p.jobId}] crew_referral accrual failed:`, aErr.message);
+      }
+    }
+  }
 }
 
 /** Reconcile sweep: settle any job that's complete but wasn't fully billed
@@ -482,6 +593,50 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
     }
   }
   return { ok: true, retried, collected };
+}
+
+/** Referral maturation (§8b): accruals become SPENDABLE after the clawback
+ *  window. Homeowner/HOA beneficiaries get service credits; crew beneficiaries
+ *  flip to 'matured' and ride the payout batch when it runs. Idempotent —
+ *  guarded status flips, one credit grant per earning row. */
+export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: number; credited: number }> {
+  const admin = createServiceClient();
+  const { referralMaturationDays } = await getPlatformSettings();
+  const cutoff = new Date(Date.now() - referralMaturationDays * 86_400_000).toISOString();
+  const { data: due } = await admin
+    .from("referral_earnings")
+    .select("id, beneficiary, amount, kind")
+    .eq("status", "accrued")
+    .lt("accrued_at", cutoff)
+    .order("accrued_at", { ascending: true })
+    .limit(200);
+
+  let matured = 0, credited = 0;
+  for (const e of due ?? []) {
+    // GRANT FIRST, idempotently (user_credits.earning_id unique) — a crash
+    // between grant and flip re-runs safely: the dup grant no-ops on the
+    // index and the flip then completes. Money can't vanish in the gap.
+    const { data: isVendor } = await admin.from("vendors").select("id").eq("user_id", e.beneficiary as string).maybeSingle();
+    if (!isVendor && Number(e.amount) > 0) {
+      const { error: gErr } = await admin.from("user_credits").insert({
+        user_id: e.beneficiary, amount: Number(e.amount), earning_id: e.id,
+        reason: e.kind === "crew_referral" ? "Referral reward — you brought a crew aboard" : "Referral reward — thanks for spreading the word",
+      });
+      if (gErr && !/duplicate|unique/i.test(gErr.message)) {
+        console.error(`[referral mature ${e.id}] credit grant failed:`, gErr.message);
+        continue; // don't flip — retry tomorrow
+      }
+      credited++;
+    }
+    const { data: won } = await admin
+      .from("referral_earnings")
+      .update({ status: "matured", matured_at: new Date().toISOString() })
+      .eq("id", e.id)
+      .eq("status", "accrued")
+      .select("id");
+    if (won && won.length > 0) matured++;
+  }
+  return { ok: true, matured, credited };
 }
 
 /** Annual COI re-validation nudge (the owner's yearly re-attest). Emails an

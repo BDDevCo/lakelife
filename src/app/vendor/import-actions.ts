@@ -162,6 +162,14 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
       await admin.from("customer_imports").update({ status: "pending" }).eq("id", imp.id);
       continue;
     }
+    // Referral attribution (§8b cross-sell arm) BEFORE the final status flip —
+    // a crash after 'claimed' would otherwise lose the crew's attribution
+    // forever (the loop only ever processes 'pending' rows).
+    const { data: crewRow } = await admin.from("vendors").select("user_id").eq("id", imp.vendor_id as string).maybeSingle();
+    if (crewRow?.user_id && crewRow.user_id !== userId) {
+      await admin.from("users").update({ referred_by: crewRow.user_id }).eq("id", userId).is("referred_by", null);
+    }
+
     await admin
       .from("customer_imports")
       .update({ status: "claimed", claimed_property: prop.id })
