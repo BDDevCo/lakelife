@@ -14,9 +14,21 @@ export interface PlatformSettings {
   marginFloor: number;
   /** Max scarcity uplift over menu price the machine may OFFER a customer. */
   surgeCapPct: number;
+  /** Late-cancellation fee as a share of the all-in price (0 = free always). */
+  cancelFeePct: number;
+  /** Routine services: cancelling is free until this many hours before start. */
+  cancelRoutineHours: number;
+  /** Water work: cancelling is free until this many days before the date. */
+  cancelWaterDays: number;
 }
 
-export const DEFAULT_SETTINGS: PlatformSettings = { marginFloor: 0.25, surgeCapPct: 0.25 };
+export const DEFAULT_SETTINGS: PlatformSettings = {
+  marginFloor: 0.25,
+  surgeCapPct: 0.25,
+  cancelFeePct: 0.25,
+  cancelRoutineHours: 48,
+  cancelWaterDays: 7,
+};
 
 /** Clamp a raw stored value into a sane band; fall back on anything weird. */
 export function parseSetting(raw: unknown, fallback: number, min: number, max: number): number {
@@ -29,11 +41,17 @@ export function parseSetting(raw: unknown, fallback: number, min: number, max: n
 export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => {
   try {
     const admin = createServiceClient();
-    const { data } = await admin.from("platform_settings").select("key, value").in("key", ["margin_floor", "surge_cap_pct"]);
+    const { data } = await admin
+      .from("platform_settings")
+      .select("key, value")
+      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days"]);
     const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]));
     return {
       marginFloor: parseSetting(byKey.get("margin_floor"), DEFAULT_SETTINGS.marginFloor, 0.05, 0.6),
       surgeCapPct: parseSetting(byKey.get("surge_cap_pct"), DEFAULT_SETTINGS.surgeCapPct, 0, 1),
+      cancelFeePct: parseSetting(byKey.get("cancel_fee_pct"), DEFAULT_SETTINGS.cancelFeePct, 0, 1),
+      cancelRoutineHours: parseSetting(byKey.get("cancel_routine_hours"), DEFAULT_SETTINGS.cancelRoutineHours, 0, 24 * 14),
+      cancelWaterDays: parseSetting(byKey.get("cancel_water_days"), DEFAULT_SETTINGS.cancelWaterDays, 0, 60),
     };
   } catch {
     return DEFAULT_SETTINGS; // table missing / transient error → today's values

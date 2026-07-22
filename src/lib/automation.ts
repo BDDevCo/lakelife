@@ -7,6 +7,7 @@ import { revalidateJob } from "@/app/book/dispatch";
 import { todayLakeDate } from "@/lib/booking";
 import { planVendorDay, routeMapUrl, type StopIn } from "@/lib/router";
 import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
+import { proposeAutopilotDate } from "@/lib/autopilot";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -412,6 +413,86 @@ export async function sendCoiRevalidations(leadDays = 30): Promise<{ ok: boolean
     emailed++;
   }
   return { ok: true, due, emailed };
+}
+
+/** AUTOPILOT (§8d): propose each enrolled service's next visit and text the
+ *  owner a one-tap confirm/skip. One OPEN proposal per enrollment (DB-enforced);
+ *  nothing is booked without the customer's tap; skip is free. Proposals older
+ *  than 14 days quietly expire (no nagging). */
+export async function generateAutopilotProposals(): Promise<{ ok: boolean; proposed: number; expired: number; texted: number }> {
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+
+  // Expire stale proposals (their token links die with them).
+  const { data: stale } = await admin
+    .from("autopilot_events")
+    .update({ status: "expired" })
+    .eq("status", "proposed")
+    .lt("created_at", new Date(Date.now() - 14 * 86_400_000).toISOString())
+    .select("id");
+  const expired = stale?.length ?? 0;
+
+  const { data: enrollments } = await admin
+    .from("autopilot_enrollments")
+    .select("id, property_id, service_id, locked_price, services(name, is_water_work), properties(owner_id, address, nickname, lake_id, lakes(ice_out_actual, pull_deadline))")
+    .eq("active", true);
+
+  let proposed = 0, texted = 0;
+  for (const e of enrollments ?? []) {
+    // One open proposal at a time (also DB-enforced by the partial unique index).
+    const { data: open } = await admin
+      .from("autopilot_events").select("id").eq("enrollment_id", e.id).eq("status", "proposed").maybeSingle();
+    if (open) continue;
+    // Don't propose when a manual/confirmed booking is already ahead.
+    const { data: upcoming } = await admin
+      .from("jobs").select("id")
+      .eq("property_id", e.property_id).eq("service_id", e.service_id)
+      .in("status", ["requested", "scheduled", "in_progress"])
+      .gte("date", today)
+      .limit(1);
+    if (upcoming && upcoming.length > 0) continue;
+
+    const svc = one(e.services) as { name?: string; is_water_work?: boolean } | null;
+    const prop = one(e.properties) as { owner_id?: string; address?: string; nickname?: string; lakes?: unknown } | null;
+    const lake = one(prop?.lakes) as { ice_out_actual?: string; pull_deadline?: string } | null;
+    if (!svc?.name || !prop?.owner_id) continue;
+
+    const { data: lastDone } = await admin
+      .from("jobs").select("date")
+      .eq("property_id", e.property_id).eq("service_id", e.service_id)
+      .in("status", ["complete", "paid"])
+      .order("date", { ascending: false })
+      .limit(1);
+    const date = proposeAutopilotDate({
+      serviceName: svc.name,
+      isWaterWork: !!svc.is_water_work,
+      iceOutISO: (lake?.ice_out_actual as string) ?? null,
+      pullDeadlineISO: (lake?.pull_deadline as string) ?? null,
+      lastCompletedISO: (lastDone?.[0]?.date as string) ?? null,
+      todayISO: today,
+    });
+    if (!date) continue;
+
+    const { data: ev } = await admin
+      .from("autopilot_events")
+      .insert({ enrollment_id: e.id, proposed_date: date })
+      .select("confirm_token")
+      .maybeSingle();
+    if (!ev) continue;
+    proposed++;
+
+    const { data: owner } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+    if (owner?.phone) {
+      const where = prop.nickname || prop.address || "your place";
+      void sendSms(
+        owner.phone as string,
+        `LakeLife Autopilot 🌊: time for ${svc.name} at ${where} — we've penciled ${prettyDate(date)} at your locked price. Book it: ${site}/a/${ev.confirm_token}/confirm  ·  Skip: ${site}/a/${ev.confirm_token}/skip`,
+      );
+      texted++;
+    }
+  }
+  return { ok: true, proposed, expired, texted };
 }
 
 /** Seasonal "book your fall pull before freeze" email. Fires the day a lake's

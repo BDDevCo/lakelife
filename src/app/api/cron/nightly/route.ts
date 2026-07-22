@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
-import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, sendCoiRevalidations } from "@/lib/automation";
+import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, sendCoiRevalidations, generateAutopilotProposals } from "@/lib/automation";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +26,9 @@ async function run(req: Request) {
   const reconcile = await reconcileUnsettledJobs();
   // Yearly COI re-attest nudge (fires on an exact boundary, so once per crew).
   const coi = await sendCoiRevalidations();
-  return NextResponse.json({ ok: true, noShows, dispatch, routes, reminders, reconcile, coi });
+  // Autopilot: propose enrolled services' next visits (one-tap confirm texts).
+  const autopilot = await generateAutopilotProposals();
+  return NextResponse.json({ ok: true, noShows, dispatch, routes, reminders, reconcile, coi, autopilot });
 }
 
 export const GET = run; // Vercel Cron issues GET

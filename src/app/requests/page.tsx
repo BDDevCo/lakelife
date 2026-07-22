@@ -4,9 +4,11 @@ import { OwnerHeader } from "@/components/OwnerHeader";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
-import { getActivePropertyId } from "@/app/profile/data";
+import { getActivePropertyId, getMyCalendarUrl } from "@/app/profile/data";
 import { CancelRequestButton } from "@/components/CancelRequestButton";
 import { ScarcityOffers } from "@/components/ScarcityOffers";
+import { UpcomingCalendar } from "@/components/UpcomingCalendar";
+import { CalendarSubscribe } from "@/components/CalendarSubscribe";
 import { getScarcityOffers } from "@/app/requests/offer-data";
 import { todayLakeDate } from "@/lib/booking";
 import { createServiceClient } from "@/lib/supabase/server";
@@ -52,6 +54,21 @@ export default async function RequestsPage() {
   const stuckIds = rows.filter((r) => r.status === "requested").map((r) => r.id as string);
   const offers = stuckIds.length > 0 ? await getScarcityOffers(stuckIds) : [];
 
+  // Month-at-a-glance: confirmed visits only (scheduled / in progress), today
+  // or later in lake time.
+  const today = todayLakeDate();
+  const events = rows
+    .filter((r) => r.date && (r.status === "scheduled" || r.status === "in_progress") && (r.date as string) >= today)
+    .map((r) => ({
+      id: r.id as string,
+      date: r.date as string,
+      serviceName: (r.service_name as string) ?? "Service",
+      status: r.status as string,
+    }));
+
+  // Personal ICS feed (null until the migration adds tokens → hide the card).
+  const calendarUrl = await getMyCalendarUrl();
+
   // "Your crew ⭐" — the preferred-crew lock, visible so the owner KNOWS their
   // crew is theirs (never silently swapped). Ownership is verified before the
   // service-role read; only the company name is exposed — never rates/margin.
@@ -83,6 +100,12 @@ export default async function RequestsPage() {
         {!preferredCompany && <div style={{ marginBottom: 10 }} />}
 
         {offers.length > 0 && <ScarcityOffers offers={offers} />}
+
+        {events.length > 0 && (
+          <div className="ll-card ll-card-pad" style={{ marginBottom: 16 }}>
+            <UpcomingCalendar events={events} />
+          </div>
+        )}
 
         {rows.length === 0 ? (
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
@@ -119,6 +142,16 @@ export default async function RequestsPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {calendarUrl && (
+          <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>📅 Live in your calendar</div>
+            <p className="mut" style={{ fontSize: 13, marginBottom: 10 }}>
+              Subscribe once and every LakeLife visit shows up automatically.
+            </p>
+            <CalendarSubscribe url={calendarUrl} />
           </div>
         )}
       </div>

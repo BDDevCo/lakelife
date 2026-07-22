@@ -9,6 +9,7 @@ export interface PropertySummary {
   id: string;
   address: string | null;
   lake: string | null;
+  nickname: string | null;
 }
 
 /** All of the signed-in owner's properties (for the switcher). */
@@ -20,13 +21,31 @@ export async function listProperties(): Promise<PropertySummary[]> {
   if (!user) return [];
   const { data } = await supabase
     .from("properties")
-    .select("id, address, lakes(name)")
+    .select("id, address, nickname, lakes(name)")
     .eq("owner_id", user.id)
     .order("created_at", { ascending: true });
   return (data ?? []).map((p) => {
     const lk = Array.isArray(p.lakes) ? p.lakes[0] : p.lakes;
-    return { id: p.id as string, address: (p.address as string) ?? null, lake: (lk as { name?: string } | null)?.name ?? null };
+    return {
+      id: p.id as string,
+      address: (p.address as string) ?? null,
+      lake: (lk as { name?: string } | null)?.name ?? null,
+      nickname: ((p as { nickname?: string | null }).nickname as string) ?? null,
+    };
   });
+}
+
+/** The signed-in user's personal calendar-feed URL (unguessable token). */
+export async function getMyCalendarUrl(): Promise<string | null> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data } = await supabase.from("users").select("ics_token").eq("id", user.id).maybeSingle();
+  if (!data?.ics_token) return null;
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  return `${site}/api/ics/${data.ics_token}`;
 }
 
 /** The property the portal is currently focused on (cookie, else the first). */

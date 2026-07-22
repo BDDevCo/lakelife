@@ -24,8 +24,10 @@ export function PropertySwitcher({
     setBusy(false);
   }
 
-  const label = (p: PropertySummary) =>
-    `${p.address ?? "Property"}${p.lake ? ` · ${p.lake}` : ""}`;
+  const label = (p: PropertySummary) => {
+    const base = `${p.address ?? "Property"}${p.lake ? ` · ${p.lake}` : ""}`;
+    return p.nickname ? `${p.nickname} — ${base}` : base;
+  };
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>

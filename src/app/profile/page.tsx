@@ -3,6 +3,7 @@ import { TopBar } from "@/components/Brand";
 import { AccountControls } from "@/components/AccountControls";
 import { PaymentMethods } from "@/components/PaymentMethods";
 import { OwnerHeader } from "@/components/OwnerHeader";
+import { NicknameEditor } from "@/components/NicknameEditor";
 import { listPaymentMethods } from "./payment-actions";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -70,6 +71,18 @@ export default async function ProfilePage() {
     );
   }
 
+  // The nickname lives on the properties row; getFullProfile doesn't carry it,
+  // so read it here (page-local — shared data functions stay untouched).
+  let nickname: string | null = null;
+  if (profile.propertyId) {
+    const { data: prop } = await supabase
+      .from("properties")
+      .select("nickname")
+      .eq("id", profile.propertyId)
+      .maybeSingle();
+    nickname = (prop as { nickname?: string | null } | null)?.nickname ?? null;
+  }
+
   // Only show the fact cards that match what this customer selected, so a
   // near-the-lake home doesn't get an empty "Pier: 0 sections" card.
   const wants = (name: string) => profile.wanted_services.includes(name);
@@ -110,6 +123,11 @@ export default async function ProfilePage() {
             <p className="mut" style={{ fontSize: 14 }}>
               {profile.address ?? "Your place"}{profile.lake ? ` · ${profile.lake}` : ""}
             </p>
+            {profile.propertyId && (
+              <div style={{ marginTop: 6 }}>
+                <NicknameEditor propertyId={profile.propertyId} nickname={nickname} />
+              </div>
+            )}
           </div>
           <Link className="ll-btn ghost" href="/profile/setup">Edit in guided setup</Link>
         </div>

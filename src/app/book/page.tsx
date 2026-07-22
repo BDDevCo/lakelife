@@ -3,6 +3,7 @@ import { TopBar } from "@/components/Brand";
 import { OwnerHeader } from "@/components/OwnerHeader";
 import { BookingGrid } from "@/components/BookingGrid";
 import { InviteMyCrew } from "@/components/InviteMyCrew";
+import { AutopilotCard } from "@/components/AutopilotCard";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getFullProfile, getPricedServices } from "@/app/profile/data";
@@ -108,6 +109,19 @@ export default async function BookPage() {
     | { name?: string; ice_out_actual?: string; pull_deadline?: string }
     | undefined;
 
+  // Autopilot enrollment state — RLS means owners only ever see their own
+  // rows. The table may not exist yet (migration pending): a query error just
+  // means "not enrolled", never a crash.
+  const { data: autopilotRows } = await supabase
+    .from("autopilot_enrollments")
+    .select("service_id, active, locked_price")
+    .eq("property_id", profile.propertyId!);
+  const enrollments = (autopilotRows ?? []).map((r) => ({
+    service_id: String(r.service_id),
+    active: Boolean(r.active),
+    locked_price: Number(r.locked_price) || 0,
+  }));
+
   return (
     <>
       <TopBar />
@@ -127,6 +141,13 @@ export default async function BookPage() {
             is_water_work: s.is_water_work,
           }))}
           season={{ start: lake?.ice_out_actual ?? null, end: lake?.pull_deadline ?? null, lake: lake?.name ?? null }}
+        />
+        <AutopilotCard
+          propertyId={profile.propertyId!}
+          services={wanted
+            .filter((s) => s.price > 0)
+            .map((s) => ({ id: s.id, name: s.name, price: s.price }))}
+          enrollments={enrollments}
         />
       </div>
     </>
