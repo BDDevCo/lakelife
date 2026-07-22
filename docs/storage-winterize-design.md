@@ -1,6 +1,6 @@
 # Storage & Winterization — Service Design Brainstorm
 
-*2026-07-22 · four-perspective research synthesis · rev 2: owner killed at-dock winterization — all winterize legs are shop-based (operations taxonomy, Midwest market
+*2026-07-22 · four-perspective research synthesis · rev 3: no at-dock winterization (all shop-based); no standalone spring-only tile (operations taxonomy, Midwest market
 rates, platform modeling, custody risk). Status: BRAINSTORM — owner decisions pending
 (§F). Nothing here is built.*
 
@@ -34,11 +34,11 @@ automatically is a structural moat and pure zero-ops.
 Asymmetric hybrids (vendor hauls in fall / customer retrieves in spring, and the
 reverse) fall out for free when transport is priced **per leg, not round trip**.
 
-## B. The customer menu (4 tiles, everything else is a toggle)
+## B. The customer menu (3 tiles, everything else is a toggle)
 
 Fourteen scenarios cannot be fourteen tiles — and with all winterization at the shop,
 the menu is really TWO AXES the wizard walks: *who moves the boat* (each direction
-separately) and *where it winters*. Four tiles cover everything:
+separately) and *where it winters*. Three tiles cover everything:
 
 1. **You tow it to the shop** — shop winterizes. Toggle A: *tow it home and store it
    yourself* (very common in rural Indiana — pole barns everywhere; zero storage
@@ -53,8 +53,12 @@ separately) and *where it winters*. Four tiles cover everything:
 3. **Storage only** — boat arrives already winterized (you tow in). Opens the platform
    to non-marine vendors (barns, lots). Proof-of-winterization or freeze-damage waiver
    at intake.
-4. **Spring-only recommission / splash** — DIY winterizers and boats bought over the
-   winter; the ice-out upsell text to every fall winterize-only customer.
+
+~~Spring-only recommission tile~~ — **cut (owner decision, 2026-07-22)**. Spring work
+exists ONLY as the spring toggle inside tiles 1–2; there is no standalone spring entry
+point for DIY winterizers or boats bought over the winter. The ice-out upsell email to
+fall winterize-only customers offers the spring toggle on their existing package, not a
+separate SKU.
 
 PWC variant of 1–3 with per-unit pricing and a multi-unit discount (2–3 per household
 is normal here). Shrink-wrap-only exists as an add-on booked alone.
@@ -101,7 +105,6 @@ Monthly billing is a self-storage pattern, not a marina pattern — don't adopt 
 | Full-service valet w/ outdoor wrapped storage (B) | 200 haul + 180 wtr + 396 wrap + 660 storage + 130 dewtr + 150 return = $1,716 | ≈ **$2,450/season** |
 | You-tow + indoor cold storage (C) | 180 + 990 + 130 = $1,300 | ≈ **$1,860/season** |
 | Storage only (outdoor, wrapped elsewhere) | $660 | ≈ **$945/season** |
-| Spring-only recommission + splash | $150–$280 | ≈ **$215–$400** |
 
 Advertised full-package market comps for 20–24 ft run **$1,500–$2,600/season** — the
 valet tier at ~$2,450 is inside the band. (Side note: our current flat menu — Fall
