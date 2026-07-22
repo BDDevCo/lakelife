@@ -71,7 +71,7 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
 
   const admin = createServiceClient();
   const [{ data: services }, { data: crews }, { count: completedCount }, { data: thumbs }, { data: hoaEarnings }] = await Promise.all([
-    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work").eq("active", true).order("name"),
+    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work").eq("active", true).eq("kind", "standalone").order("name"),
     admin.from("vendors").select("id, coi_expiry, service_lakes").eq("status", "active").contains("service_lakes", [lake.id]),
     admin.from("jobs").select("id, properties!inner(lake_id)", { count: "exact", head: true }).eq("properties.lake_id", lake.id).in("status", ["complete", "paid"]),
     admin.from("job_confirmations").select("verdict, properties!inner(lake_id)").eq("properties.lake_id", lake.id).eq("verdict", "good"),

@@ -12,6 +12,11 @@
  *   per_foot       — base + unit_rate × total boat feet (bow to stern)
  *   band           — a price chosen by a named band (lawn: small/medium/large)
  *   per_sqft_band  — a price chosen by a square-footage tier (housekeeping)
+ *   seasonal_plus_perdiem — winter storage: this computes the SEASONAL
+ *                    MINIMUM (base + unit_rate × boat feet), charged when
+ *                    the fall visit completes. The per-diem overage past
+ *                    the season-end dials is billed at spring splash by
+ *                    the settle machinery — never part of the booking quote.
  *
  * A rule may also carry generic additive terms in its params (e.g. water-toy
  * prep = base + per-lift + per-toy), so the whole thing stays data-driven.
@@ -22,7 +27,8 @@ export type PricingModel =
   | "per_section"
   | "per_foot"
   | "band"
-  | "per_sqft_band";
+  | "per_sqft_band"
+  | "seasonal_plus_perdiem";
 
 /** A profile field that can be counted or multiplied in a pricing rule. */
 export type CountableField =
@@ -115,6 +121,7 @@ export function priceService(rule: ServiceRule, p: PricingProfile): number {
     }
 
     case "per_foot":
+    case "seasonal_plus_perdiem": // seasonal minimum scales by the fleet's feet
       price = rule.base + rule.unit_rate * boatFeet(p);
       break;
 

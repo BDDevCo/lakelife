@@ -194,3 +194,20 @@ describe("water toys — flat base + per-lift + per-toy", () => {
     expect(priceService(RULES.toys, { ...PROFILE, toy_lifts: 0, toys: [] })).toBe(120);
   });
 });
+
+describe("seasonal_plus_perdiem — the storage seasonal minimum", () => {
+  const rule = (base: number, unit: number): ServiceRule =>
+    ({ name: "Winter storage — outdoor", pricing_model: "seasonal_plus_perdiem", base, unit_rate: unit });
+  it("scales by total fleet feet, like per_foot (24-ft pontoon fixture)", () => {
+    expect(priceService(rule(0, 43), PROFILE)).toBe(1032); // 43 × 24
+  });
+  it("multi-boat households pay for every foot in the barn", () => {
+    expect(priceService(rule(0, 43), { ...PROFILE, boats: [{ length_ft: 22 }, { length_ft: 14 }] })).toBe(1548);
+  });
+  it("a base-only rule behaves flat (no boats → base)", () => {
+    expect(priceService(rule(120, 0), { ...PROFILE, boats: [] })).toBe(120);
+  });
+  it("never negative on garbage", () => {
+    expect(priceService(rule(-50, 0), { ...PROFILE, boats: [] })).toBe(0);
+  });
+});

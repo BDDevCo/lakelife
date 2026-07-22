@@ -32,6 +32,8 @@ export function fromPrice(rule: Pick<ServiceRule, "pricing_model" | "base" | "un
     }
     case "per_foot":
       return unit > 0 ? { amount: unit, unit: "per boat foot", from: true } : null;
+    case "seasonal_plus_perdiem":
+      return unit > 0 ? { amount: unit, unit: "per boat foot / season", from: true } : null;
     case "band": {
       const b = rule.band_pricing as { small?: number; medium?: number; large?: number } | null;
       const vals = [b?.small, b?.medium, b?.large].map(Number).filter((n) => n > 0);

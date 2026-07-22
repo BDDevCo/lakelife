@@ -32,3 +32,9 @@ describe("fromPrice — unit names follow the service's count_field", () => {
     expect(fromPrice({ pricing_model: "per_section", base: 0, unit_rate: 495, band_pricing: { count_field: "boat_lifts" } as never })).toEqual({ amount: 495, unit: "per lift", from: true });
   });
 });
+
+describe("fromPrice — winter storage shows its seasonal unit", () => {
+  it("seasonal_plus_perdiem reads 'per boat foot / season'", () => {
+    expect(fromPrice({ pricing_model: "seasonal_plus_perdiem", base: 0, unit_rate: 43, band_pricing: null })).toEqual({ amount: 43, unit: "per boat foot / season", from: true });
+  });
+});

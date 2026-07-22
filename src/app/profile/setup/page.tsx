@@ -46,7 +46,7 @@ export default async function SetupPage({
 
   const [{ data: lakeRows }, { data: serviceRows }, profile] = await Promise.all([
     supabase.from("lakes").select("name").order("name"),
-    supabase.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing").eq("active", true),
+    supabase.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing").eq("active", true).eq("kind", "standalone"),
     // When adding a new property, start blank; otherwise load the active one.
     addingNew ? Promise.resolve(null) : getFullProfile(),
   ]);

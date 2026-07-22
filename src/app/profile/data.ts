@@ -212,7 +212,8 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
   const { data: services } = await supabase
     .from("services")
     .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work")
-    .eq("active", true);
+    .eq("active", true)
+    .eq("kind", "standalone"); // components/add-ons price inside packages, never as menu tiles
 
   const pp = toPricingProfile(p);
   return (services ?? []).map((s) => ({

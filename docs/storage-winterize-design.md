@@ -1,6 +1,6 @@
 # Storage & Winterization — Service Design Brainstorm
 
-*2026-07-22 · four-perspective research synthesis · rev 3: no at-dock winterization (all shop-based); no standalone spring-only tile (operations taxonomy, Midwest market
+*2026-07-22 · four-perspective research synthesis · rev 4: ALL DECISIONS RESOLVED — building (S1 schema shipped in migrations 0032/0033) (operations taxonomy, Midwest market
 rates, platform modeling, custody risk). Status: BRAINSTORM — owner decisions pending
 (§F). Nothing here is built.*
 
@@ -174,21 +174,18 @@ that must exist at launch:
 5. **Access & release flow:** mid-winter "I sold it / need my gear" requests get a
    logged release-authorization (who, to whom, photo) — never informal.
 
-## F. Decisions the owner must make
+## F. Decisions — ALL RESOLVED (owner, 2026-07-22: "your recs are fine, go with those")
 
 1. ~~At-dock winterization~~ — **DECIDED (2026-07-22): none. All winterization at the
    shop; customer tows or vendor hauls.**
-2. **Storage tiers at launch:** outdoor-wrapped + indoor-cold (recommended) — heated
-   later?
-3. **Seasonal minimum shape:** per-foot × length (market norm, recommended) — and the
-   included window (recommend Oct 1 – May 31 to absorb the lift-set dependency) —
-   confirm against roadmap's "~3 months at pull" note.
-4. **Per-diem:** flat $/day (recommend, ~$10 market) vs per-foot/day; platform dial or
-   crew-set; who keeps it (recommend margin-weighted like everything else).
-5. **Insurance strictness:** hard gate on garagekeepers doc-on-file before storage
-   legs unlock (recommended) vs agreement-clause-only.
-6. **Split-vendor composition (hauler + shop + barn) at launch,** or single-vendor
-   packages first and compose in v2? (Recommend v2.)
+2. **Storage tiers:** DECIDED — outdoor-wrapped + indoor-cold at launch; heated later.
+3. **Seasonal minimum:** DECIDED — per-foot × length; included window Oct 1 – May 31
+   (season-end month/day are platform dials).
+4. **Per-diem:** DECIDED — flat $/day platform dial (default $10), margin-weighted
+   like everything else.
+5. **Insurance:** DECIDED — hard gate: storage legs unlock only with an unexpired
+   garagekeepers/bailee doc on file (same present+unexpired posture as the COI).
+6. **Split-vendor composition:** DECIDED — v2; single-vendor packages at launch.
 7. **Owner's storage rates** — plug real vendor quotes into §C's reference table as
    they arrive.
 

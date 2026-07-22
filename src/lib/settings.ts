@@ -48,6 +48,11 @@ export interface PlatformSettings {
   nudgeCreditThreshold: number;
   /** Per-kind, per-user quiet period between growth nudges. */
   nudgeCooldownDays: number;
+  /** Storage overstay: dollars per day past the season end (margin-weighted like all money). */
+  storagePerdiemDaily: number;
+  /** Storage season ends on this month/day — per-diem accrues after it. */
+  storageSeasonEndMonth: number;
+  storageSeasonEndDay: number;
 }
 
 export const DEFAULT_SETTINGS: PlatformSettings = {
@@ -70,6 +75,9 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   referralMaturationDays: 30,
   nudgeCreditThreshold: 50,
   nudgeCooldownDays: 30,
+  storagePerdiemDaily: 10,
+  storageSeasonEndMonth: 5,
+  storageSeasonEndDay: 31,
 };
 
 /** Clamp a raw stored value into a sane band; fall back on anything weird. */
@@ -86,7 +94,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
     const { data } = await admin
       .from("platform_settings")
       .select("key, value")
-      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days", "nudge_credit_threshold", "nudge_cooldown_days"]);
+      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days", "nudge_credit_threshold", "nudge_cooldown_days", "storage_perdiem_daily", "storage_season_end_month", "storage_season_end_day"]);
     const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]));
     return {
       marginFloor: parseSetting(byKey.get("margin_floor"), DEFAULT_SETTINGS.marginFloor, 0.05, 0.6),
@@ -108,6 +116,9 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       referralMaturationDays: parseSetting(byKey.get("referral_maturation_days"), DEFAULT_SETTINGS.referralMaturationDays, 0, 120),
       nudgeCreditThreshold: parseSetting(byKey.get("nudge_credit_threshold"), DEFAULT_SETTINGS.nudgeCreditThreshold, 5, 1000),
       nudgeCooldownDays: parseSetting(byKey.get("nudge_cooldown_days"), DEFAULT_SETTINGS.nudgeCooldownDays, 7, 120),
+      storagePerdiemDaily: parseSetting(byKey.get("storage_perdiem_daily"), DEFAULT_SETTINGS.storagePerdiemDaily, 0, 100),
+      storageSeasonEndMonth: parseSetting(byKey.get("storage_season_end_month"), DEFAULT_SETTINGS.storageSeasonEndMonth, 1, 12),
+      storageSeasonEndDay: parseSetting(byKey.get("storage_season_end_day"), DEFAULT_SETTINGS.storageSeasonEndDay, 1, 31),
     };
   } catch {
     return DEFAULT_SETTINGS; // table missing / transient error → today's values
