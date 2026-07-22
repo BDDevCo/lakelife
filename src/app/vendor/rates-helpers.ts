@@ -150,8 +150,9 @@ export function buildRateForm(service: RateService, existing: ExistingRate | nul
     }
 
     case "per_foot":
+    case "seasonal_plus_perdiem": // storage tiers: priced per boat foot, same as per_foot (see lib/pricing.ts)
       return {
-        model: "per_foot",
+        model: service.pricing_model,
         unitNoun: "foot",
         fields: [
           { key: "base", kind: "base", label: "Base charge (optional)", value: base },
@@ -226,6 +227,7 @@ export function computeRateRow(service: RateService, payload: RatePayload): Rate
     }
 
     case "per_foot":
+    case "seasonal_plus_perdiem": // storage tiers: same base+per-foot shape as per_foot
       return { ok: true, row: { base: b.value, unit_rate: u.value, band_pricing: null } };
 
     case "band": {

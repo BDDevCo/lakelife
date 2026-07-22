@@ -99,6 +99,10 @@ export default async function BookPage() {
   }
 
   const priced = await getPricedServices(profile);
+  const { count: packageCount } = await supabase
+    .from("service_packages")
+    .select("id", { count: "exact", head: true })
+    .eq("active", true);
   // Show the services this customer chose (fall back to all if none chosen).
   const wanted = profile.wanted_services.length
     ? priced.filter((s) => profile.wanted_services.includes(s.name))
@@ -138,6 +142,19 @@ export default async function BookPage() {
           {profile.address ?? "Your place"}{lake?.name ? ` · ${lake.name}` : ""} — every price is exact to your property.
         </p>
         <InviteMyCrew />
+        {(packageCount ?? 0) > 0 && (
+          <Link href="/book/storage" style={{ textDecoration: "none", color: "inherit" }}>
+            <div className="ll-card ll-card-pad" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h3 style={{ fontSize: 17, margin: "0 0 2px" }}>Winter &amp; storage packages 🧊</h3>
+                <p className="mut" style={{ fontSize: 13.5, margin: 0 }}>
+                  Winterize, store, splash back in spring — one all-in price, your choice of who tows.
+                </p>
+              </div>
+              <span aria-hidden style={{ fontSize: 18, color: "var(--sub)" }}>›</span>
+            </div>
+          </Link>
+        )}
         <BookingGrid
           services={wanted.map((s) => ({
             id: s.id,

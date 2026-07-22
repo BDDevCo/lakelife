@@ -8,6 +8,7 @@ import { todayLakeDate, toISODate } from "@/lib/booking";
 import { AvailabilityGrid, SLOT_TIMES, type DayRow, type SlotStatus } from "./AvailabilityGrid";
 import { WorkDayChips } from "./WorkDayChips";
 import { MyLakesEditor } from "@/components/MyLakesEditor";
+import { VendorStorage } from "@/components/VendorStorage";
 
 // getDay() index -> the 3-letter form stored in vendors.work_days.
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -44,11 +45,15 @@ export default async function VendorAvailabilityPage() {
   const supabase = await createClient();
   const { data: vendor } = await supabase
     .from("vendors")
-    .select("work_days, service_lakes")
+    .select("work_days, service_lakes, storage_capacity_feet, storage_types, garagekeepers_url, garagekeepers_expiry")
     .eq("id", vendorId)
     .maybeSingle();
   const workDays: string[] = (vendor?.work_days as string[] | null) ?? [];
   const serviceLakes: string[] = (vendor?.service_lakes as string[] | null) ?? [];
+  const storageCapacityFeet: number = (vendor?.storage_capacity_feet as number | null) ?? 0;
+  const storageTypes: string[] = (vendor?.storage_types as string[] | null) ?? [];
+  const garagekeepersUrl: string | null = (vendor?.garagekeepers_url as string | null) ?? null;
+  const garagekeepersExpiry: string | null = (vendor?.garagekeepers_expiry as string | null) ?? null;
 
   // All lakes on the platform, for the "Lakes I service" editor.
   const admin = createServiceClient();
@@ -124,6 +129,15 @@ export default async function VendorAvailabilityPage() {
             </p>
             <MyLakesEditor lakes={lakes} selectedIds={serviceLakes} />
           </div>
+        </section>
+
+        <section style={{ marginTop: 28 }}>
+          <VendorStorage
+            capacityFeet={storageCapacityFeet}
+            storageTypes={storageTypes}
+            garagekeepersUrl={garagekeepersUrl}
+            garagekeepersExpiry={garagekeepersExpiry}
+          />
         </section>
       </div>
     </>

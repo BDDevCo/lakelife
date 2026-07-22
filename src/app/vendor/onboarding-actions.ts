@@ -34,25 +34,29 @@ async function assertMyVendor(): Promise<{ id: string; status: string } | null> 
 }
 
 /**
- * Upload a Certificate of Insurance or W-9 to the private vendor-docs bucket
- * and record its path on the vendor row. The crew's device sends the file in a
- * FormData; for a COI it must also send a future `expiry` (YYYY-MM-DD). The
- * client can ONLY ever move coi_url/coi_expiry/w9_url — never status, capacity
- * or payout (those are the service role's / ops' to set).
+ * Upload a Certificate of Insurance, W-9, or garagekeepers/bailee policy to
+ * the private vendor-docs bucket and record its path on the vendor row. The
+ * crew's device sends the file in a FormData; a COI or garagekeepers doc must
+ * also send a future `expiry` (YYYY-MM-DD) — a standard COI excludes property
+ * in the vendor's custody, so storage jobs need this second, separate policy
+ * on file (storage-schema design, owner-approved 2026-07-22). The client can
+ * ONLY ever move coi_url/coi_expiry/w9_url/garagekeepers_url/garagekeepers_expiry
+ * — never status, capacity or payout (those are the service role's / ops' to set).
  */
-export async function uploadVendorDoc(kind: "coi" | "w9", form: FormData): Promise<OnboardingResult> {
+export async function uploadVendorDoc(kind: "coi" | "w9" | "garagekeepers", form: FormData): Promise<OnboardingResult> {
   const vendor = await assertMyVendor();
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") {
     return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
   }
-  if (kind !== "coi" && kind !== "w9") return { ok: false, error: "Unknown document." };
+  if (kind !== "coi" && kind !== "w9" && kind !== "garagekeepers") return { ok: false, error: "Unknown document." };
 
-  // COI needs a valid future expiry BEFORE we store anything.
+  // COI and garagekeepers both need a valid future expiry BEFORE we store anything.
   let expiry: string | null = null;
-  if (kind === "coi") {
+  if (kind === "coi" || kind === "garagekeepers") {
     expiry = validExpiry(form.get("expiry"), todayLakeDate());
-    if (!expiry) return { ok: false, error: "Enter the COI's expiry date — it must be in the future." };
+    const label = kind === "coi" ? "COI" : "garagekeepers policy";
+    if (!expiry) return { ok: false, error: `Enter the ${label}'s expiry date — it must be in the future.` };
   }
 
   const file = form.get("file");
@@ -74,23 +78,27 @@ export async function uploadVendorDoc(kind: "coi" | "w9", form: FormData): Promi
   if (upErr) return { ok: false, error: upErr.message };
 
   const patch =
-    kind === "coi" ? { coi_url: path, coi_expiry: expiry } : { w9_url: path };
+    kind === "coi" ? { coi_url: path, coi_expiry: expiry }
+    : kind === "garagekeepers" ? { garagekeepers_url: path, garagekeepers_expiry: expiry }
+    : { w9_url: path };
   const { error: rowErr } = await admin.from("vendors").update(patch).eq("id", vendor.id);
   if (rowErr) return { ok: false, error: rowErr.message };
   return { ok: true };
 }
 
 /** A short-lived signed URL to view a stored vendor doc (own row only). */
-export async function getVendorDocUrl(kind: "coi" | "w9"): Promise<string | null> {
+export async function getVendorDocUrl(kind: "coi" | "w9" | "garagekeepers"): Promise<string | null> {
   const vendor = await assertMyVendor();
   if (!vendor) return null;
   const admin = createServiceClient();
   const { data } = await admin
     .from("vendors")
-    .select("coi_url, w9_url")
+    .select("coi_url, w9_url, garagekeepers_url")
     .eq("id", vendor.id)
     .maybeSingle();
-  const path = (kind === "coi" ? data?.coi_url : data?.w9_url) as string | null;
+  const path = (
+    kind === "coi" ? data?.coi_url : kind === "garagekeepers" ? data?.garagekeepers_url : data?.w9_url
+  ) as string | null;
   if (!path) return null;
   const { data: signed } = await admin.storage.from("vendor-docs").createSignedUrl(path, 3600);
   return signed?.signedUrl ?? null;

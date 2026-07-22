@@ -1,6 +1,6 @@
 # Storage & Winterization — Service Design Brainstorm
 
-*2026-07-22 · four-perspective research synthesis · rev 4: ALL DECISIONS RESOLVED — building (S1 schema shipped in migrations 0032/0033) (operations taxonomy, Midwest market
+*2026-07-22 · four-perspective research synthesis · rev 5: S1+S2 SHIPPED (schema, quote engine, wizard, dispatch custody gates — live-proven); service_packages.active is the launch switch, still OFF pending owner rate tuning; S3 = split billing + condition photos, S4 = spring two-phase + per-diem (operations taxonomy, Midwest market
 rates, platform modeling, custody risk). Status: BRAINSTORM — owner decisions pending
 (§F). Nothing here is built.*
 

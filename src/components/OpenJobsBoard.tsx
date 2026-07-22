@@ -30,6 +30,7 @@ const BLOCKER_REASON: Record<Exclude<Blocker, "no_rate">, string> = {
   wrong_service: "Not available",
   not_active: "Not available",
   lake_paused: "Paused on this lake — finish strong elsewhere and it reopens",
+  custody_job: "Storage jobs are routed, never claimed",
 };
 
 function prettyDate(date: string): string {

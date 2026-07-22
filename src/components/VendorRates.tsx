@@ -34,6 +34,9 @@ export function VendorRates({ rates }: { rates: MyRate[] }) {
     );
   }
 
+  const standard = rates.filter((r) => r.kind === "standalone");
+  const legs = rates.filter((r) => r.kind !== "standalone");
+
   return (
     <div className="wrap" style={{ paddingTop: 24, maxWidth: 620 }}>
       <h1 style={{ fontSize: 26, marginBottom: 4 }}>Your rates</h1>
@@ -45,11 +48,28 @@ export function VendorRates({ rates }: { rates: MyRate[] }) {
         Set a rate to be matched to jobs — no rate, no routing.
       </p>
 
-      <div style={{ display: "grid", gap: 12 }}>
-        {rates.map((r) => (
-          <RateCard key={r.service_id} rate={r} />
-        ))}
-      </div>
+      {standard.length > 0 && (
+        <div style={{ display: "grid", gap: 12 }}>
+          {standard.map((r) => (
+            <RateCard key={r.service_id} rate={r} />
+          ))}
+        </div>
+      )}
+
+      {legs.length > 0 && (
+        <section style={{ marginTop: standard.length > 0 ? 28 : 0 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>Winter & storage legs 🧊</h2>
+          <p className="mut" style={{ fontSize: 13, marginBottom: 12, maxWidth: 540 }}>
+            Set your rate for each leg you can actually do — no rate means the machine
+            never sends you that work.
+          </p>
+          <div style={{ display: "grid", gap: 12 }}>
+            {legs.map((r) => (
+              <RateCard key={r.service_id} rate={r} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

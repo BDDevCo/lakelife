@@ -63,6 +63,7 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
         .from("jobs")
         .select("id, service_id, vendor_cost")
         .eq("property_id", ctx.propertyId)
+        .is("group_id", null) // package jobs price as a SUM of legs — repricing by the anchor alone would collapse the bundle (component-aware reprice = S3)
         .in("status", ["requested", "scheduled"]);
       for (const j of openJobs ?? []) {
         const rule = j.service_id ? byId.get(j.service_id) : undefined;

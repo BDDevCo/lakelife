@@ -20,8 +20,8 @@ values
   ('Boat haul-out (we pick it up)',  'flat',                285,  0, array['One-time (fall)'],   2, true,  null, false, 'component'),
   ('Boat return & splash',           'flat',                285,  0, array['One-time (spring)'], 2, true,  null, false, 'component'),
   -- storage tiers (owner decision: outdoor-wrapped + indoor-cold at launch)
-  ('Winter storage — outdoor',       'seasonal_plus_perdiem', 0, 43, array['Seasonal'],          1, false, null, false, 'component'),
-  ('Winter storage — indoor',        'seasonal_plus_perdiem', 0, 64, array['Seasonal'],          1, false, null, false, 'component'),
+  ('Winter storage — outdoor',       'seasonal_plus_perdiem', 0, 43, array['Seasonal'],          1, false, '{"storage_type":"outdoor"}'::jsonb, false, 'component'),
+  ('Winter storage — indoor',        'seasonal_plus_perdiem', 0, 64, array['Seasonal'],          1, false, '{"storage_type":"indoor"}'::jsonb, false, 'component'),
   -- add-ons
   ('Shrink wrap',                    'per_foot',              0, 26, array['One-time (fall)'],   1, false, null, false, 'addon'),
   ('Battery care (pull, tend, reinstall)', 'flat',           90,  0, array['Seasonal'],          1, false, null, false, 'addon'),

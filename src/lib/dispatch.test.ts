@@ -336,3 +336,45 @@ describe("scarcityOffer — customer price bump to clear the floor (Phase C)", (
     expect(scarcityOffer(100, 80, 0.25, 0)).toBeNull();
   });
 });
+
+describe("S2 storage-package gates — legs are capabilities, custody is guarded", () => {
+  const base = crew();
+  
+  it("a package visit demands EVERY component name", () => {
+    const c = { ...base, serviceTypes: ["Boat winterization (shop)", "Boat haul-out (we pick it up)"] };
+    expect(isEligible(c, input({ serviceName: "Boat winterization (shop)", componentNames: ["Boat winterization (shop)", "Boat haul-out (we pick it up)", "Winter storage — outdoor"] }))).toBe(false);
+    expect(isEligible({ ...c, serviceTypes: [...c.serviceTypes, "Winter storage — outdoor"], garagekeepersExpiry: "2027-01-01", storageTypes: ["outdoor"], storageCapacityFeet: 100, storageCommittedFeet: 0 },
+      input({ serviceName: "Boat winterization (shop)", componentNames: ["Boat winterization (shop)", "Boat haul-out (we pick it up)", "Winter storage — outdoor"], storage: { tier: "outdoor", boatFeet: 22 } }))).toBe(true);
+  });
+  it("storage demands unexpired garagekeepers — a plain COI is not custody insurance", () => {
+    const c = { ...base, storageTypes: ["outdoor"], storageCapacityFeet: 100, storageCommittedFeet: 0, garagekeepersExpiry: "2026-01-01" };
+    expect(isEligible(c, input({ storage: { tier: "outdoor", boatFeet: 20 } }))).toBe(false);
+  });
+  it("the feet pool is seasonal: committed feet block the barn", () => {
+    const c = { ...base, garagekeepersExpiry: "2027-01-01", storageTypes: ["indoor"], storageCapacityFeet: 100, storageCommittedFeet: 90 };
+    expect(isEligible(c, input({ storage: { tier: "indoor", boatFeet: 22 } }))).toBe(false);
+    expect(isEligible({ ...c, storageCommittedFeet: 60 }, input({ storage: { tier: "indoor", boatFeet: 22 } }))).toBe(true);
+  });
+  it("wrong building: outdoor-only crew never gets an indoor stay", () => {
+    const c = { ...base, garagekeepersExpiry: "2027-01-01", storageTypes: ["outdoor"], storageCapacityFeet: 100 };
+    expect(isEligible(c, input({ storage: { tier: "indoor", boatFeet: 20 } }))).toBe(false);
+  });
+  it("custody jobs are never claim-board prizes", () => {
+    const r = canClaim({ ...base, crewRate: 50 }, { serviceName: base.serviceTypes[0], weekday: "Mon", todayISO: "2026-07-22", menuPrice: 100, marginFloor: 0.25, storage: { tier: "outdoor", boatFeet: 20 } });
+    expect(r).toEqual({ ok: false, blocker: "custody_job" });
+  });
+});
+
+describe("no_custody_crew — a missing barn is a recruiting gap, not a full day", () => {
+  it("crews fine except the custody gates → no_custody_crew (never 'day full')", () => {
+    const c = crew({ crewRate: 500, serviceTypes: ["Winter storage — outdoor"] }); // no garagekeepers
+    const r = decideDispatch(input({ serviceName: "Winter storage — outdoor", menuPrice: 1000, storage: { tier: "outdoor", boatFeet: 22 }, crews: [c] }));
+    expect(r.ok).toBe(false);
+    expect(r.reasonNoFit).toBe("no_custody_crew");
+  });
+  it("genuinely blocked day stays all_full_or_blocked even with storage", () => {
+    const c = crew({ crewRate: 500, serviceTypes: ["Winter storage — outdoor"], blockedThatDay: true, garagekeepersExpiry: "2099-01-01", storageTypes: ["outdoor"], storageCapacityFeet: 100 });
+    const r = decideDispatch(input({ serviceName: "Winter storage — outdoor", menuPrice: 1000, storage: { tier: "outdoor", boatFeet: 22 }, crews: [c] }));
+    expect(r.reasonNoFit).toBe("all_full_or_blocked");
+  });
+});

@@ -26,8 +26,10 @@ async function loadService(serviceId: string): Promise<ServiceRow | null> {
   const supabase = await createClient();
   const { data } = await supabase
     .from("services")
-    .select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work, daily_capacity, frequency_options")
+    .select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work, daily_capacity, frequency_options, kind, active")
     .eq("id", serviceId)
+    .eq("active", true)
+    .eq("kind", "standalone") // components/add-ons book only inside packages
     .maybeSingle();
   return (data as ServiceRow | null) ?? null;
 }

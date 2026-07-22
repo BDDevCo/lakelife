@@ -22,6 +22,13 @@ export interface CrewCandidate {
   score: number; // performance tier score (higher = better); 0 if unrated
   baseLat: number | null; // crew home base — for proximity ranking (null = unknown)
   baseLng: number | null;
+  /** Storage capability (S2): a seasonal FEET pool, not daily slots. */
+  storageCapacityFeet?: number;
+  /** Feet already committed to reserved/in_storage stays this winter. */
+  storageCommittedFeet?: number;
+  storageTypes?: string[]; // 'outdoor' | 'indoor'
+  /** Bailee/garagekeepers doc — a standard COI excludes custody (hard gate). */
+  garagekeepersExpiry?: string | null;
 }
 
 export interface DispatchInput {
@@ -35,6 +42,11 @@ export interface DispatchInput {
   lakeId: string | null; // the job's lake — a crew must service it (null = no geo gate)
   jobLat: number | null; // the job's location — for proximity ranking
   jobLng: number | null;
+  /** Multi-component visit (storage packages): the crew must cover EVERY
+   *  name; the loader already summed component rates into crewRate. */
+  componentNames?: string[];
+  /** Present when the visit includes a storage tier: the custody gates. */
+  storage?: { tier: "outdoor" | "indoor"; boatFeet: number } | null;
   crews: CrewCandidate[];
 }
 
@@ -71,7 +83,7 @@ export interface DispatchDecision {
    *  no_crew_on_lake is the geographic dead-end (cold-start lake): crews do
    *  this service, just not HERE — distinct from all_full_or_blocked so the
    *  booking flow never mistakes "no crew yet" for "day genuinely full". */
-  reasonNoFit?: "no_crew_for_service" | "no_crew_on_lake" | "all_full_or_blocked" | "no_qualifying_rate" | "below_floor";
+  reasonNoFit?: "no_crew_for_service" | "no_crew_on_lake" | "all_full_or_blocked" | "no_qualifying_rate" | "below_floor" | "no_custody_crew";
   eligibleCount?: number; // crews that cleared the hard gates (pre-rate)
 }
 
@@ -79,7 +91,18 @@ export interface DispatchDecision {
 export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
   if (c.status !== "active") return false;
   if (!c.coiExpiry || String(c.coiExpiry) < input.todayISO) return false; // no COI, no jobs
-  if (!c.serviceTypes.includes(input.serviceName)) return false;
+  // Capability: single-service jobs check the one name; package visits
+  // demand EVERY component — the legs ARE the capability flags.
+  const needed = input.componentNames?.length ? input.componentNames : [input.serviceName];
+  if (!needed.every((n) => c.serviceTypes.includes(n))) return false;
+  // Custody gates (storage visits only): unexpired garagekeepers doc, the
+  // right building, and free feet in the seasonal pool. Hard by owner decision.
+  if (input.storage) {
+    if (!c.garagekeepersExpiry || String(c.garagekeepersExpiry) < input.todayISO) return false;
+    if (!(c.storageTypes ?? []).includes(input.storage.tier)) return false;
+    const free = (c.storageCapacityFeet ?? 0) - (c.storageCommittedFeet ?? 0);
+    if (free < input.storage.boatFeet) return false;
+  }
   // Geo gate: when the job has a lake, the crew must service it. A crew with no
   // lakes serves nowhere. (lakeId null ⇒ no gate, e.g. a property without a lake.)
   if (input.lakeId && !(c.serviceLakes ?? []).includes(input.lakeId)) return false;
@@ -132,7 +155,8 @@ export function rankCrews(
  * their rate clears the floor); otherwise rank the affordable eligible pool.
  */
 export function decideDispatch(input: DispatchInput): DispatchDecision {
-  const forService = input.crews.filter((c) => c.serviceTypes.includes(input.serviceName));
+  const neededNames = input.componentNames?.length ? input.componentNames : [input.serviceName];
+  const forService = input.crews.filter((c) => neededNames.every((n) => c.serviceTypes.includes(n)));
   if (forService.length === 0) return { ok: false, reasonNoFit: "no_crew_for_service", eligibleCount: 0 };
 
   // Geographic dead-end BEFORE the capacity read: crews do this service but
@@ -142,7 +166,18 @@ export function decideDispatch(input: DispatchInput): DispatchDecision {
   }
 
   const eligible = input.crews.filter((c) => isEligible(c, input));
-  if (eligible.length === 0) return { ok: false, reasonNoFit: "all_full_or_blocked", eligibleCount: 0 };
+  if (eligible.length === 0) {
+    // Custody honesty (S2, found live): when crews could take the visit but
+    // NONE clears the storage gates (garagekeepers doc / building type /
+    // feet), that's a RECRUITING gap, not a full calendar. Telling the
+    // customer "that day just filled up" would be the same lie the lake
+    // cold-start fix killed — surface it as its own reason so the booking
+    // flow keeps the demand as an honest Finding-a-crew row.
+    if (input.storage && input.crews.some((c) => isEligible(c, { ...input, storage: null }))) {
+      return { ok: false, reasonNoFit: "no_custody_crew", eligibleCount: 0 };
+    }
+    return { ok: false, reasonNoFit: "all_full_or_blocked", eligibleCount: 0 };
+  }
 
   // A crew must have a POSITIVE rate to be routable — a $0/blank rate is not a
   // real rate (it would otherwise rank first at "100% margin" and get paid $0).
@@ -186,12 +221,20 @@ export function decideDispatch(input: DispatchInput): DispatchDecision {
 export type ClaimBlocker =
   | "not_active" | "no_coi" | "wrong_service" | "off_day" | "day_blocked" | "day_full"
   | "no_rate" | "rate_too_high"
-  | "lake_paused"; // Phase E cooldown — set by the data layer, not canClaim (it's per-job DB state)
+  | "lake_paused" // Phase E cooldown — set by the data layer, not canClaim (it's per-job DB state)
+  | "custody_job"; // storage visits never appear as cold-claim prizes (S2)
 
 export function canClaim(
   c: CrewCandidate,
-  input: Pick<DispatchInput, "serviceName" | "weekday" | "todayISO" | "menuPrice" | "marginFloor">,
+  input: Pick<DispatchInput, "serviceName" | "weekday" | "todayISO" | "menuPrice" | "marginFloor"> &
+    Partial<Pick<DispatchInput, "componentNames" | "storage">>,
 ): { ok: boolean; blocker?: ClaimBlocker } {
+  // Custody is never a first-tap prize: a stranger crew must not win six
+  // months of holding a customer's boat off the claim board (owner decision).
+  if (input.storage) return { ok: false, blocker: "custody_job" };
+  if (input.componentNames?.length && !input.componentNames.every((n) => c.serviceTypes.includes(n))) {
+    return { ok: false, blocker: "wrong_service" };
+  }
   if (c.status !== "active") return { ok: false, blocker: "not_active" };
   if (!c.coiExpiry || String(c.coiExpiry) < input.todayISO) return { ok: false, blocker: "no_coi" };
   if (!c.serviceTypes.includes(input.serviceName)) return { ok: false, blocker: "wrong_service" };

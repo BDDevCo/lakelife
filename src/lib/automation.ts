@@ -965,7 +965,7 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
 
   const { data: unfilled } = await admin
     .from("jobs")
-    .select("id, date, services(name), properties(owner_id, address, nickname)")
+    .select("id, date, group_id, services(name), properties(owner_id, address, nickname)")
     .eq("status", "requested")
     .is("vendor_id", null)
     .eq("is_rush", false) // rush stragglers get their own, kinder fallback rung
@@ -989,6 +989,13 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
         .eq("status", "requested")
         .is("vendor_id", null)
         .select("id");
+      // Package fall visit: expiring the job closes the season envelope and
+      // frees the barn's reserved feet (no phantom spring work in S4).
+      if ((j as { group_id?: string | null }).group_id) {
+        const gid = (j as { group_id?: string | null }).group_id as string;
+        await admin.from("storage_stays").update({ status: "cancelled" }).eq("group_id", gid).eq("status", "reserved");
+        await admin.from("job_groups").update({ status: "cancelled", storing_vendor: null }).eq("id", gid);
+      }
       if (!gone || gone.length === 0) continue;
       expired++;
       if (phone) {

@@ -64,10 +64,17 @@ export async function setMyRate(serviceId: string, payload: RatePayload): Promis
   const admin = createServiceClient();
   const { data: svc } = await admin
     .from("services")
-    .select("id, name, pricing_model, band_pricing, active")
+    .select("id, name, pricing_model, band_pricing, active, kind")
     .eq("id", serviceId)
     .maybeSingle();
-  if (!svc || !svc.active || !vendor.serviceTypes.includes(svc.name as string)) {
+  if (!svc) return { ok: false, error: "That service isn't one you do." };
+
+  // Component/addon legs (winter & storage) are priceable regardless of the
+  // active flag or the crew's service_types — there's no menu-selection step
+  // for them yet. Standalone services keep the original gate.
+  const kind = (svc.kind as string | null) ?? "standalone";
+  const isLeg = kind === "component" || kind === "addon";
+  if (!isLeg && (!svc.active || !vendor.serviceTypes.includes(svc.name as string))) {
     return { ok: false, error: "That service isn't one you do." };
   }
 

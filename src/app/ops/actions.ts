@@ -45,10 +45,13 @@ export async function assignAndSchedule(
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, status, customer_price, property_id, service_id, services(name)")
+    .select("id, status, customer_price, property_id, service_id, group_id, services(name)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) return { ok: false, error: "Job not found." };
+  if (job.group_id) {
+    return { ok: false, error: "Storage packages route automatically — this visit needs a crew that covers every leg (rates, insurance, barn space). Fix the crew's docs or capacity and the machine will place it." };
+  }
   if (!["requested", "scheduled"].includes(job.status as string)) {
     return { ok: false, error: `Can't reschedule a job that's ${job.status}.` };
   }

@@ -50,6 +50,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
     .select("id, date, customer_price, service_id, property_id, is_rush, services(name, pricing_model), properties(lake_id, lat, lng, lakes(name))")
     .eq("status", "requested")
     .is("vendor_id", null)
+    .is("group_id", null) // package visits are routed, never cold-claimed — a claim can't price multi-leg work, and custody is never a first-tap prize
     .gte("date", today)
     .order("date", { ascending: true })
     .limit(BOARD_CAP);

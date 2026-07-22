@@ -47,41 +47,92 @@ export async function loadPricingProfileById(
 /** Build every crew candidate for a service+date, with their private rate priced
  *  against this property. All reads are service-role (dispatch is ops-authority).
  *  Exported for the scarcity-offer computation on the owner's requests page. */
+export interface VisitComponent {
+  serviceId: string;
+  serviceName: string;
+  pricingModel: ServiceRule["pricing_model"];
+}
+
 export async function buildCandidates(
   admin: ReturnType<typeof createServiceClient>,
-  opts: { serviceId: string; serviceName: string; pricingModel: ServiceRule["pricing_model"]; dateISO: string; profile: PricingProfile },
+  opts: {
+    serviceId: string; serviceName: string; pricingModel: ServiceRule["pricing_model"];
+    dateISO: string; profile: PricingProfile;
+    /** Package visits (S2): price the crew across EVERY leg — a missing
+     *  component rate means no rate at all (legs are capabilities). */
+    components?: VisitComponent[];
+    /** Present when the visit stores the boat — loads the feet ledger. */
+    storage?: { tier: "outdoor" | "indoor"; boatFeet: number } | null;
+    /** Re-dispatch: this group's OWN reserved stay must not count against
+     *  the incumbent barn (the committed feet ARE this boat). */
+    excludeGroupId?: string | null;
+  },
 ): Promise<CrewCandidate[]> {
-  const [{ data: vendors }, { data: rates }, { data: dayJobs }, { data: blocks }, scores] = await Promise.all([
-    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng"),
-    admin.from("vendor_rates").select("vendor_id, base, unit_rate, band_pricing").eq("service_id", opts.serviceId),
+  const comps: VisitComponent[] = opts.components?.length
+    ? opts.components
+    : [{ serviceId: opts.serviceId, serviceName: opts.serviceName, pricingModel: opts.pricingModel }];
+  const [{ data: vendors }, { data: rates }, { data: dayJobs }, { data: blocks }, scores, { data: stays }] = await Promise.all([
+    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, storage_capacity_feet, storage_types, garagekeepers_expiry"),
+    admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing").in("service_id", comps.map((c) => c.serviceId)),
     admin.from("jobs").select("vendor_id").eq("date", opts.dateISO).in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null),
     admin.from("vendor_availability").select("vendor_id").eq("date", opts.dateISO).eq("status", "blocked"),
     getVendorScores(), // real quality score (on-time + flag accuracy + volume), not a raw count
+    opts.storage
+      ? admin.from("storage_stays").select("vendor_id, boat_feet, group_id").in("status", ["reserved", "in_storage"])
+      : Promise.resolve({ data: null as Array<{ vendor_id: string; boat_feet: number; group_id: string }> | null }),
   ]);
 
-  const rateByVendor = new Map((rates ?? []).map((r) => [r.vendor_id as string, r]));
+  const rateByKey = new Map((rates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
   const assigned = new Map<string, number>();
   for (const j of dayJobs ?? []) assigned.set(j.vendor_id as string, (assigned.get(j.vendor_id as string) ?? 0) + 1);
   const blocked = new Set((blocks ?? []).map((b) => b.vendor_id as string));
+  const committed = new Map<string, number>();
+  for (const st of stays ?? []) {
+    if (opts.excludeGroupId && (st as { group_id?: string }).group_id === opts.excludeGroupId) continue;
+    committed.set(st.vendor_id as string, (committed.get(st.vendor_id as string) ?? 0) + Number(st.boat_feet ?? 0));
+  }
+
+  // Capability-by-rate (review fix): component legs never appear in the
+  // service-type picker (they're not menu tiles), so a crew's capability
+  // for a leg IS their rate card — "no rate means the machine never sends
+  // you that work", exactly as the rates page promises. Synthesize the
+  // names so the pure engine's coverage check stays a set test.
+  const rateNamesByVendor = new Map<string, string[]>();
+  if (opts.components?.length) {
+    const nameById = new Map(comps.map((c) => [c.serviceId, c.serviceName]));
+    for (const r of rates ?? []) {
+      const nm = nameById.get(r.service_id as string);
+      if (!nm) continue;
+      const list = rateNamesByVendor.get(r.vendor_id as string) ?? [];
+      list.push(nm);
+      rateNamesByVendor.set(r.vendor_id as string, list);
+    }
+  }
 
   return (vendors ?? []).map((v) => {
-    const vr = rateByVendor.get(v.id as string);
-    let crewRate: number | null = null;
-    if (vr) {
+    // Sum this crew's private rate across every leg of the visit. Any leg
+    // without a rate row ⇒ no rate at all — the crew can't take the visit.
+    let crewRate: number | null = 0;
+    for (const comp of comps) {
+      const vr = rateByKey.get(`${v.id}|${comp.serviceId}`);
+      if (!vr) { crewRate = null; break; }
       const rule: ServiceRule = {
-        name: opts.serviceName,
-        pricing_model: opts.pricingModel,
+        name: comp.serviceName,
+        pricing_model: comp.pricingModel,
         base: Number(vr.base ?? 0),
         unit_rate: Number(vr.unit_rate ?? 0),
         band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
       };
-      crewRate = priceService(rule, opts.profile);
+      crewRate += priceService(rule, opts.profile);
     }
     return {
       vendorId: v.id as string,
       status: v.status as string,
       coiExpiry: (v.coi_expiry as string) ?? null,
-      serviceTypes: (v.service_types as string[]) ?? [],
+      serviceTypes: [
+        ...(((v.service_types as string[]) ?? [])),
+        ...(rateNamesByVendor.get(v.id as string) ?? []),
+      ],
       serviceLakes: (v.service_lakes as string[]) ?? [],
       workDays: (v.work_days as string[]) ?? [],
       dailyCapacity: Number(v.daily_capacity ?? 0),
@@ -91,6 +142,10 @@ export async function buildCandidates(
       score: scores.get(v.id as string)?.score ?? 0,
       baseLat: v.base_lat != null ? Number(v.base_lat) : null,
       baseLng: v.base_lng != null ? Number(v.base_lng) : null,
+      storageCapacityFeet: Number(v.storage_capacity_feet ?? 0),
+      storageCommittedFeet: committed.get(v.id as string) ?? 0,
+      storageTypes: (v.storage_types as string[]) ?? [],
+      garagekeepersExpiry: (v.garagekeepers_expiry as string) ?? null,
     };
   });
 }
@@ -195,7 +250,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, property_id, service_id, date, status, customer_price, vendor_id, services(name, pricing_model)")
+    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, services(name, pricing_model)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job || !job.service_id || !job.date) {
@@ -204,6 +259,47 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string } | null;
   const profile = await loadPricingProfileById(admin, job.property_id as string);
   if (!svc?.name || !profile) return { assigned: false, decision: { ok: false, reasonNoFit: "no_crew_for_service" } };
+
+  // Package visits (S2): the job's line items are its legs. Every leg is a
+  // capability the crew must cover; a storage leg brings the custody gates.
+  let components: VisitComponent[] | undefined;
+  let storage: { tier: "outdoor" | "indoor"; boatFeet: number } | null = null;
+  if (job.group_id) {
+    const { data: items } = await admin
+      .from("job_items")
+      .select("service_id, services(name, pricing_model)")
+      .eq("job_id", jobId);
+    if (!items || items.length === 0) {
+      // Booking is mid-flight (items land right after the job row) — do not
+      // price a bundle as its anchor leg alone. The next sweep gets it.
+      return { assigned: false, decision: { ok: false, reasonNoFit: "no_crew_for_service" } };
+    }
+    {
+      components = items.map((it) => {
+        const isvc = (Array.isArray(it.services) ? it.services[0] : it.services) as { name?: string; pricing_model?: string } | null;
+        return {
+          serviceId: it.service_id as string,
+          serviceName: isvc?.name ?? "",
+          pricingModel: (isvc?.pricing_model ?? "flat") as ServiceRule["pricing_model"],
+        };
+      }).filter((c) => c.serviceName);
+      const tierComp = components.find((c) => c.pricingModel === "seasonal_plus_perdiem");
+      if (tierComp) {
+        // Tier comes from DATA (band_pricing.storage_type) so a rule-8
+        // rename can never silently downgrade the custody gate; the name
+        // is only the legacy fallback.
+        const { data: tierSvc } = await admin
+          .from("services").select("band_pricing").eq("id", tierComp.serviceId).maybeSingle();
+        const declared = (tierSvc?.band_pricing as { storage_type?: string } | null)?.storage_type;
+        storage = {
+          tier: declared === "indoor" || declared === "outdoor"
+            ? declared
+            : tierComp.serviceName.toLowerCase().includes("indoor") ? "indoor" : "outdoor",
+          boatFeet: profile.boats.reduce((sum, b) => sum + (Number(b.length_ft) || 0), 0),
+        };
+      }
+    }
+  }
 
   const [{ data: prop }, settings] = await Promise.all([
     admin.from("properties").select("preferred_vendor, lake_id, lat, lng").eq("id", job.property_id as string).maybeSingle(),
@@ -216,6 +312,9 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     pricingModel: svc.pricing_model as ServiceRule["pricing_model"],
     dateISO: job.date as string,
     profile,
+    components,
+    storage,
+    excludeGroupId: (job.group_id as string) ?? null,
   });
 
   const decision = decideDispatch({
@@ -229,6 +328,8 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     lakeId: (prop?.lake_id as string) ?? null,
     jobLat: prop?.lat != null ? Number(prop.lat) : null,
     jobLng: prop?.lng != null ? Number(prop.lng) : null,
+    componentNames: components?.map((c) => c.serviceName),
+    storage,
     crews,
   });
 
@@ -272,6 +373,79 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     }
   }
 
+  // Package bookkeeping (S2), only once the assignment stuck: stamp each
+  // line item with THIS crew's per-leg rate (ops-only economics per leg),
+  // pin the storing vendor on the season envelope, and hold their feet.
+  if (applied && job.group_id && components?.length) {
+    try {
+      let custodyOk = true;
+      const { data: rateRows } = await admin
+        .from("vendor_rates")
+        .select("service_id, base, unit_rate, band_pricing")
+        .eq("vendor_id", winnerId)
+        .in("service_id", components.map((c) => c.serviceId));
+      const byService = new Map((rateRows ?? []).map((r) => [r.service_id as string, r]));
+      for (const comp of components) {
+        const vr = byService.get(comp.serviceId);
+        if (!vr) continue;
+        const cost = priceService({
+          name: comp.serviceName, pricing_model: comp.pricingModel,
+          base: Number(vr.base ?? 0), unit_rate: Number(vr.unit_rate ?? 0),
+          band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
+        }, profile);
+        await admin.from("job_items").update({ vendor_cost: cost }).eq("job_id", jobId).eq("service_id", comp.serviceId);
+      }
+      if (storage) {
+        await admin.from("job_groups").update({ storing_vendor: winnerId }).eq("id", job.group_id as string);
+        const { data: stay } = await admin
+          .from("storage_stays").select("id, status").eq("group_id", job.group_id as string).maybeSingle();
+        if (!stay) {
+          const { error: stayErr } = await admin.from("storage_stays").insert({
+            group_id: job.group_id, vendor_id: winnerId, boat_feet: storage.boatFeet, status: "reserved",
+          });
+          if (stayErr) custodyOk = false; // no stay = no custody assignment, period
+        } else if (stay.status === "reserved") {
+          // Pre-intake re-dispatch may move the reservation; an in_storage
+          // stay never moves — the boat is physically in that barn.
+          const { error: stayErr } = await admin
+            .from("storage_stays").update({ vendor_id: winnerId, boat_feet: storage.boatFeet }).eq("id", stay.id as string);
+          if (stayErr) custodyOk = false;
+        }
+
+        // FEET BACKSTOP (mirror of the daily-cap backstop): two concurrent
+        // bookings can both read the pool pre-insert and both pass. Re-sum
+        // AFTER the write; if this barn is now over capacity, release THIS
+        // job (and its stay) back to the pool instead of overcommitting a
+        // physical building for six months.
+        if (custodyOk) {
+          const [{ data: allStays }, { data: vRow }] = await Promise.all([
+            admin.from("storage_stays").select("boat_feet, group_id").eq("vendor_id", winnerId).in("status", ["reserved", "in_storage"]),
+            admin.from("vendors").select("storage_capacity_feet").eq("id", winnerId).maybeSingle(),
+          ]);
+          const total = (allStays ?? []).reduce((sum, st) => sum + Number(st.boat_feet ?? 0), 0);
+          if (total > Number(vRow?.storage_capacity_feet ?? 0)) custodyOk = false;
+        }
+
+        if (!custodyOk) {
+          await admin.from("storage_stays").delete().eq("group_id", job.group_id as string).eq("status", "reserved");
+          await admin.from("job_groups").update({ storing_vendor: null }).eq("id", job.group_id as string);
+          await admin.from("jobs")
+            .update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" })
+            .eq("id", jobId);
+          applied = false;
+        }
+      }
+    } catch (e) {
+      console.error("package bookkeeping failed; releasing assignment", jobId, e);
+      await admin.from("storage_stays").delete().eq("group_id", job.group_id as string).eq("status", "reserved");
+      await admin.from("job_groups").update({ storing_vendor: null }).eq("id", job.group_id as string);
+      await admin.from("jobs")
+        .update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" })
+        .eq("id", jobId);
+      applied = false;
+    }
+  }
+
   return { assigned: applied, vendorId: applied ? winnerId : undefined, decision };
 }
 
@@ -291,7 +465,7 @@ export async function revalidateJob(jobId: string): Promise<RevalidateOutcome> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, property_id, service_id, date, status, vendor_id, customer_price, services(name, pricing_model), properties(lake_id)")
+    .select("id, property_id, service_id, date, status, vendor_id, customer_price, group_id, services(name, pricing_model), properties(lake_id)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job || !job.service_id || !job.date) return { rehomed: false, nowAssigned: false };
@@ -302,6 +476,12 @@ export async function revalidateJob(jobId: string): Promise<RevalidateOutcome> {
     return { rehomed: false, nowAssigned: r.assigned };
   }
   if (job.status !== "scheduled") return { rehomed: false, nowAssigned: true };
+
+  // Package visits are never silently rehomed once scheduled (same hazard
+  // class as same-day revalidation: multi-leg custody work needs a human-
+  // visible change, not a midnight swap). Unassigned ones still flow through
+  // autoAssignJob above, which is fully component-aware.
+  if ((job as { group_id?: string | null }).group_id) return { rehomed: false, nowAssigned: true };
 
   const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string } | null;
   const profile = await loadPricingProfileById(admin, job.property_id as string);

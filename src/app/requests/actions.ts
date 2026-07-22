@@ -29,6 +29,7 @@ interface LoadedJob {
   job: {
     id: string; status: string; date: string | null; slot: string | null;
     customer_price: number; vendor_cost: number | null; vendor_id: string | null; property_id: string;
+    group_id: string | null;
   };
   svcName: string;
   isWaterWork: boolean;
@@ -44,7 +45,7 @@ async function loadOwnJob(jobId: string): Promise<LoadedJob | null> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, status, date, slot, customer_price, vendor_cost, vendor_id, property_id, services(name, is_water_work), properties(owner_id, address)")
+    .select("id, status, date, slot, customer_price, vendor_cost, vendor_id, property_id, group_id, services(name, is_water_work), properties(owner_id, address)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) return null;
@@ -61,6 +62,7 @@ async function loadOwnJob(jobId: string): Promise<LoadedJob | null> {
       vendor_cost: job.vendor_cost == null ? null : Number(job.vendor_cost),
       vendor_id: (job.vendor_id as string) ?? null,
       property_id: job.property_id as string,
+      group_id: (job.group_id as string) ?? null,
     },
     svcName: svc?.name ?? "service",
     isWaterWork: !!svc?.is_water_work,
@@ -126,9 +128,31 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   }
 
   const admin = createServiceClient();
+  const groupId = (l.job as { group_id?: string | null }).group_id ?? null;
+
+  // Package fall visit (S2): the cancel must also close the season
+  // envelope and free the barn's reserved feet — otherwise the vendor
+  // carries phantom feet all winter and S4 births spring work for a
+  // package whose fall never happened. A boat already IN storage never
+  // self-serve-cancels (that's a release flow, not a booking cancel).
+  const cascadePackage = async (): Promise<string | null> => {
+    if (!groupId) return null;
+    const { data: stay } = await admin
+      .from("storage_stays").select("id, status").eq("group_id", groupId).maybeSingle();
+    if (stay?.status === "in_storage") {
+      return "Your boat is already in winter storage — text or call us to arrange a release instead.";
+    }
+    if (stay) await admin.from("storage_stays").update({ status: "cancelled" }).eq("id", stay.id as string).eq("status", "reserved");
+    await admin.from("job_groups").update({ status: "cancelled", storing_vendor: null }).eq("id", groupId);
+    return null;
+  };
 
   // ---------- FREE PATH (also covers a degenerate $0 fee): delete, verified ----------
   if (q.free || q.fee <= 0) {
+    if (groupId) {
+      const blocked = await cascadePackage();
+      if (blocked) return { ok: false, error: blocked };
+    }
     const { data: gone, error } = await admin
       .from("jobs").delete().eq("id", jobId).in("status", ["requested", "scheduled"]).select("id");
     if (error) return { ok: false, error: error.message };
@@ -148,6 +172,7 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   if (!flipped || flipped.length === 0) {
     return { ok: false, error: "This job just changed — refresh and try again." };
   }
+  if (groupId) await cascadePackage(); // envelope + reserved feet close with the job
 
   // Fee invoice + charge (mirrors settleJob; invoice stays 'due' if the card fails).
   let { data: invoice } = await admin.from("invoices").select("id, status").eq("job_id", jobId).maybeSingle();

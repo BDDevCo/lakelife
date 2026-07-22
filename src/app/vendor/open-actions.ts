@@ -35,6 +35,7 @@ const BLOCKER_MSG: Record<ClaimBlocker, string> = {
   no_rate: "Set your rate for this service first — then you can claim jobs like this.",
   rate_too_high: "This one doesn't clear at your current rate for the service.",
   lake_paused: "You're paused on this lake for now — keep completing jobs on your other lakes and it reopens automatically.",
+  custody_job: "Storage jobs are routed, never claimed — the boat needs a vetted home.",
 };
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -63,9 +64,13 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const today = todayLakeDate();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, services(name, pricing_model), properties(lake_id, address, users(phone))")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, services(name, pricing_model), properties(lake_id, address, users(phone))")
     .eq("id", jobId)
     .maybeSingle();
+  // Package visits are routed, never claimed: a claim can only price ONE
+  // service, and custody must clear the storage gates — the board already
+  // hides these, but the ACTION is the security boundary, not the UI.
+  if (job?.group_id) return { ok: false, error: BLOCKER_MSG.custody_job };
   if (!job || job.status !== "requested" || job.vendor_id != null || !job.date || (job.date as string) < today) {
     return { ok: false, error: "That job was already taken — grab the next one. 🌊" };
   }
