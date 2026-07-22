@@ -19,6 +19,12 @@ const STATUS_PILL: Record<OpsCrew["status"], { tone: string; label: string }> = 
   suspended: { tone: "slate", label: "suspended" },
 };
 
+const TIER_PILL: Record<OpsCrew["tier"], { tone: string; label: string }> = {
+  priority: { tone: "gold", label: "Priority ⭐" },
+  building: { tone: "teal", label: "Building" },
+  new: { tone: "slate", label: "New" },
+};
+
 function prettyDate(d: string | null): string {
   if (!d) return "—";
   return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -136,6 +142,8 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
   const [cap, setCap] = useState<number>(crew.daily_capacity > 0 ? crew.daily_capacity : 5);
 
   const pill = STATUS_PILL[crew.status];
+  const tierPill = TIER_PILL[crew.tier];
+  const showTier = crew.status === "active" || crew.completedCount > 0;
   const docsComplete = crew.hasCoiDoc && crew.hasW9Doc && crew.coiState !== "missing" && crew.coiState !== "expired";
   const approveHint = !crew.hasCoiDoc
     ? "Waiting on the insurance certificate (COI)."
@@ -174,7 +182,13 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontWeight: 800, fontSize: 16 }}>{crew.company ?? "Unnamed crew"}</span>
             <span className={`ll-pill ${pill.tone}`}>{pill.label}</span>
+            {showTier && <span className={`ll-pill ${tierPill.tone}`}>{tierPill.label}</span>}
           </div>
+          {crew.status === "active" && (
+            <div className="mut" style={{ fontSize: 12.5, marginTop: 3 }}>
+              Score {crew.score} · On-time {Math.round(crew.onTimeRate * 100)}% · {crew.completedCount} {crew.completedCount === 1 ? "job" : "jobs"}
+            </div>
+          )}
           <div className="mut" style={{ fontSize: 12.5, marginTop: 3 }}>{contactLine || "No contact on file"}</div>
         </div>
       </div>

@@ -3,9 +3,12 @@ import { TopBar } from "@/components/Brand";
 import { VendorNav } from "@/components/VendorNav";
 import { VendorStopCard } from "@/components/VendorStopCard";
 import { VendorRouteButton } from "@/components/VendorRouteButton";
+import { VendorStanding } from "@/components/VendorStanding";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyVendorId, getMyVendor, getVendorDay } from "./data";
+import { getMyStanding } from "@/lib/scoring-data";
+import { tierLabel } from "@/lib/scoring";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
 
 export default async function VendorTodayPage() {
@@ -64,7 +67,8 @@ export default async function VendorTodayPage() {
     );
   }
 
-  const day = await getVendorDay();
+  const [day, standing] = await Promise.all([getVendorDay(), getMyStanding(vendorId)]);
+  const standingLabels = standing ? tierLabel(standing.tier) : null;
   const stops = day?.stops ?? [];
   const prettyDay = day ? new Date(day.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }) : "";
   const pins = stops.filter((s) => s.lat != null && s.lng != null).map((s) => ({ lat: s.lat as number, lng: s.lng as number }));
@@ -81,6 +85,10 @@ export default async function VendorTodayPage() {
         <p style={{ fontSize: 13, fontWeight: 700, color: "var(--warn)", marginBottom: 16 }}>
           Photos are required on every job — no photos, no completion, no payout.
         </p>
+
+        {standing && standingLabels && (
+          <VendorStanding standing={standing} label={standingLabels.label} blurb={standingLabels.blurb} />
+        )}
 
         {stops.length === 0 ? (
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>

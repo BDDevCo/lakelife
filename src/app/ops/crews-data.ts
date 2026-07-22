@@ -1,6 +1,8 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
+import { getVendorScores } from "@/lib/scoring-data";
+import { computeScore, type CrewTier } from "@/lib/scoring";
 import { coiState, type CoiState } from "./crews-coi";
 
 /** Crew (vendor) roster for the ops Crews tab. Ops-only, service-role read —
@@ -30,7 +32,13 @@ export interface OpsCrew {
   hasW9Doc: boolean;
   coiSignedUrl: string | null;
   w9SignedUrl: string | null;
+  score: number;
+  tier: CrewTier;
+  onTimeRate: number;
+  completedCount: number;
 }
+
+const FRESH_CREW = computeScore({ completedCount: 0, onTimeCount: 0, ratedCount: 0, flagsApproved: 0, flagsDeclined: 0 });
 
 const DOC_BUCKET = "vendor-docs";
 const STATUS_ORDER: Record<string, number> = { invited: 0, active: 1, suspended: 2 };
@@ -58,12 +66,15 @@ export async function getCrews(): Promise<OpsCrew[]> {
   const admin = createServiceClient();
   const today = todayLakeDate();
 
-  const { data } = await admin
-    .from("vendors")
-    .select(
-      "id, company, status, invite_email, service_types, daily_capacity, work_days, " +
-        "coi_url, coi_expiry, w9_url, created_at, users(name, email, phone)",
-    );
+  const [{ data }, scores] = await Promise.all([
+    admin
+      .from("vendors")
+      .select(
+        "id, company, status, invite_email, service_types, daily_capacity, work_days, " +
+          "coi_url, coi_expiry, w9_url, created_at, users(name, email, phone)",
+      ),
+    getVendorScores(),
+  ]);
 
   const rows = (data ?? []) as unknown as CrewRaw[];
 
@@ -81,6 +92,7 @@ export async function getCrews(): Promise<OpsCrew[]> {
       const claimed = !!u;
       const [coiSignedUrl, w9SignedUrl] = await Promise.all([sign(r.coi_url), sign(r.w9_url)]);
       const status = (["invited", "active", "suspended"].includes(r.status) ? r.status : "invited") as OpsCrew["status"];
+      const sc = scores.get(r.id) ?? FRESH_CREW;
       return {
         id: r.id,
         company: r.company ?? null,
@@ -101,14 +113,22 @@ export async function getCrews(): Promise<OpsCrew[]> {
         hasW9Doc: !!r.w9_url,
         coiSignedUrl,
         w9SignedUrl,
+        score: sc.score,
+        tier: sc.tier,
+        onTimeRate: sc.onTimeRate,
+        completedCount: sc.completedCount,
       };
     }),
   );
 
-  // Invited first, then active, then suspended; newest first within each group.
+  // Invited first, then active, then suspended. Active crews sort by score desc
+  // (dispatch priority); invited/suspended keep newest-first within the group.
   return crews.sort((a, b) => {
     const so = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9);
     if (so !== 0) return so;
+    if (a.status === "active" && b.status === "active" && a.score !== b.score) {
+      return b.score - a.score;
+    }
     const ai = rows.find((r) => r.id === a.id)?.created_at ?? "";
     const bi = rows.find((r) => r.id === b.id)?.created_at ?? "";
     return bi < ai ? -1 : bi > ai ? 1 : 0;
