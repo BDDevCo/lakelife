@@ -166,6 +166,35 @@ export function decideDispatch(input: DispatchInput): DispatchDecision {
 }
 
 /**
+ * CLAIM BOARD gate (Phase D). Can this crew claim an open job? Same hard gates
+ * as isEligible with ONE deliberate difference: the LAKE gate is skipped —
+ * claiming a job on a new lake is how a crew opts INTO that lake (the claim
+ * action appends it to service_lakes). That's the cold-start unlock: a lake
+ * with zero crews gets its first one the moment a nearby crew grabs a job.
+ * Unlike auto-dispatch, a claim also requires the crew's OWN rate to exist and
+ * clear the margin floor — crews compete on speed, never on price.
+ */
+export type ClaimBlocker =
+  | "not_active" | "no_coi" | "wrong_service" | "off_day" | "day_blocked" | "day_full"
+  | "no_rate" | "rate_too_high";
+
+export function canClaim(
+  c: CrewCandidate,
+  input: Pick<DispatchInput, "serviceName" | "weekday" | "todayISO" | "menuPrice" | "marginFloor">,
+): { ok: boolean; blocker?: ClaimBlocker } {
+  if (c.status !== "active") return { ok: false, blocker: "not_active" };
+  if (!c.coiExpiry || String(c.coiExpiry) < input.todayISO) return { ok: false, blocker: "no_coi" };
+  if (!c.serviceTypes.includes(input.serviceName)) return { ok: false, blocker: "wrong_service" };
+  if (!c.workDays.includes(input.weekday)) return { ok: false, blocker: "off_day" };
+  if (c.blockedThatDay) return { ok: false, blocker: "day_blocked" };
+  const cap = c.dailyCapacity > 0 ? c.dailyCapacity : 0;
+  if (cap <= 0 || c.assignedThatDay >= cap) return { ok: false, blocker: "day_full" };
+  if (c.crewRate == null || c.crewRate <= 0) return { ok: false, blocker: "no_rate" };
+  if (marginPct(input.menuPrice, c.crewRate) < input.marginFloor) return { ok: false, blocker: "rate_too_high" };
+  return { ok: true };
+}
+
+/**
  * Capacity for the booking calendar: how many open service-slots exist for a
  * service on a date across all eligible crews. 0 ⇒ the date must not be
  * offered. (Rate/floor is checked at assignment, not calendar time — a date

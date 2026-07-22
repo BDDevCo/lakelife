@@ -6,6 +6,7 @@ import {
   decideDispatch,
   remainingCapacity,
   milesBetween,
+  canClaim,
   type CrewCandidate,
   type DispatchInput,
 } from "./dispatch";
@@ -266,5 +267,37 @@ describe("rankCrews — proximity (Phase B, scenario 3)", () => {
     const dense = crew({ vendorId: "dense", assignedThatDay: 3, ...far });
     const idle = crew({ vendorId: "idle", assignedThatDay: 0, ...near });
     expect(rankCrews([idle, dense], 100, JOB_LAT, JOB_LNG)[0].vendorId).toBe("dense");
+  });
+});
+
+describe("canClaim — claim board gate (Phase D)", () => {
+  const claimInput = { serviceName: "Housekeeping", weekday: "Wed", todayISO: "2026-07-20", menuPrice: 100, marginFloor: 0.25 };
+
+  it("a clean crew with a floor-clearing rate can claim", () => {
+    expect(canClaim(crew({ crewRate: 70 }), claimInput)).toEqual({ ok: true });
+  });
+
+  it("SKIPS the lake gate — an off-lake crew can claim (that's the cold-start opt-in)", () => {
+    // serviceLakes doesn't include any lake for this job — still claimable.
+    expect(canClaim(crew({ serviceLakes: [] }), claimInput).ok).toBe(true);
+    expect(canClaim(crew({ serviceLakes: ["some-other-lake"] }), claimInput).ok).toBe(true);
+  });
+
+  it("still enforces every other hard gate, with a named blocker", () => {
+    expect(canClaim(crew({ status: "suspended" }), claimInput).blocker).toBe("not_active");
+    expect(canClaim(crew({ coiExpiry: "2026-07-19" }), claimInput).blocker).toBe("no_coi");
+    expect(canClaim(crew({ coiExpiry: null }), claimInput).blocker).toBe("no_coi");
+    expect(canClaim(crew({ serviceTypes: ["Pier install / removal"] }), claimInput).blocker).toBe("wrong_service");
+    expect(canClaim(crew({ workDays: ["Sat"] }), claimInput).blocker).toBe("off_day");
+    expect(canClaim(crew({ blockedThatDay: true }), claimInput).blocker).toBe("day_blocked");
+    expect(canClaim(crew({ dailyCapacity: 2, assignedThatDay: 2 }), claimInput).blocker).toBe("day_full");
+    expect(canClaim(crew({ dailyCapacity: 0 }), claimInput).blocker).toBe("day_full");
+  });
+
+  it("requires the crew's OWN rate: none/zero = no_rate, floor-busting = rate_too_high", () => {
+    expect(canClaim(crew({ crewRate: null }), claimInput).blocker).toBe("no_rate");
+    expect(canClaim(crew({ crewRate: 0 }), claimInput).blocker).toBe("no_rate");
+    expect(canClaim(crew({ crewRate: 80 }), claimInput).blocker).toBe("rate_too_high"); // 20% < 25% floor
+    expect(canClaim(crew({ crewRate: 75 }), claimInput).ok).toBe(true); // exactly at floor
   });
 });

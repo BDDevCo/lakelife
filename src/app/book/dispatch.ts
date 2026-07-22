@@ -15,8 +15,9 @@ function weekdayOf(dateISO: string): string {
 }
 
 /** Service-role pricing profile by property id (works with no signed-in user,
- *  so the nightly self-heal can re-price against any property). */
-async function loadPricingProfileById(
+ *  so the nightly self-heal can re-price against any property). Exported for
+ *  the claim board, which prices each open job at the viewing crew's OWN rate. */
+export async function loadPricingProfileById(
   admin: ReturnType<typeof createServiceClient>,
   propertyId: string,
 ): Promise<PricingProfile | null> {

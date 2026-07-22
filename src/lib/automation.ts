@@ -285,7 +285,7 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
   return { ok: true, flagged };
 }
 
-export async function revalidateAssignments(dateISO?: string): Promise<{ ok: boolean; checked: number; rehomed: number; unfilled: number }> {
+export async function revalidateAssignments(dateISO?: string): Promise<{ ok: boolean; checked: number; rehomed: number; unfilled: number; crewsTexted?: number }> {
   const date = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : addDays(todayLakeDate(), 1);
   const admin = createServiceClient();
   const { data: jobs } = await admin
@@ -294,21 +294,62 @@ export async function revalidateAssignments(dateISO?: string): Promise<{ ok: boo
     .eq("date", date)
     .in("status", ["scheduled", "requested"]);
   let rehomed = 0;
-  let unfilled = 0;
+  const unfilledIds: string[] = [];
   for (const j of jobs ?? []) {
     const r = await revalidateJob(j.id as string);
     if (r.rehomed) rehomed++;
-    if (!r.nowAssigned) unfilled++;
+    if (!r.nowAssigned) unfilledIds.push(j.id as string);
   }
-  // One "needs attention" text to ops if anything couldn't be crewed.
+
+  // Phase D: unfilled jobs go to the CREWS, not ops — broadcast "up for grabs"
+  // to every active, insured crew that does one of the open services (any lake:
+  // claiming a new lake opts them into it). One text per crew per night. Ops
+  // only hears about jobs NO crew could even be asked about (true dead end).
+  let crewsTexted = 0;
+  const unfilled = unfilledIds.length;
   if (unfilled > 0) {
-    const { data: ops } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
-    const pretty = new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-    for (const o of ops ?? []) {
-      if (o.phone) void sendSms(o.phone as string, `LakeLife ops: ${unfilled} job${unfilled === 1 ? "" : "s"} for ${pretty} need a crew — no eligible/qualified crew available. Time to recruit or adjust. 🌊`);
+    const today = todayLakeDate();
+    const [{ data: openJobs }, { data: crews }] = await Promise.all([
+      admin.from("jobs").select("id, services(name)").in("id", unfilledIds),
+      admin.from("vendors").select("id, user_id, service_types, coi_expiry").eq("status", "active").not("user_id", "is", null),
+    ]);
+    const openServices = new Set(
+      (openJobs ?? []).map((j) => (one(j.services) as { name?: string } | null)?.name).filter((n): n is string => !!n),
+    );
+    const claimersByService = new Map<string, number>(); // service -> how many crews were told
+    const notifiable = (crews ?? []).filter((v) => {
+      if (!v.coi_expiry || String(v.coi_expiry) < today) return false;
+      const mine = ((v.service_types as string[]) ?? []).filter((s) => openServices.has(s));
+      for (const s of mine) claimersByService.set(s, (claimersByService.get(s) ?? 0) + 1);
+      return mine.length > 0;
+    });
+    if (notifiable.length > 0) {
+      const { data: users } = await admin
+        .from("users")
+        .select("id, phone")
+        .in("id", notifiable.map((v) => v.user_id as string))
+        .not("phone", "is", null);
+      const phoneByUser = new Map((users ?? []).map((u) => [u.id as string, u.phone as string]));
+      const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+      for (const v of notifiable) {
+        const phone = phoneByUser.get(v.user_id as string);
+        if (!phone) continue;
+        void sendSms(phone, `LakeLife: ${unfilled} open job${unfilled === 1 ? "" : "s"} up for grabs near you — first crew to claim gets it: ${site}/vendor/open 🌊`);
+        crewsTexted++;
+      }
+    }
+    // True dead end: a service nobody on the platform offers ⇒ recruit signal.
+    const deadEnd = [...openServices].filter((s) => !claimersByService.has(s));
+    if (deadEnd.length > 0 || crewsTexted === 0) {
+      const { data: ops } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
+      const pretty = new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      const what = deadEnd.length > 0 ? deadEnd.join(", ") : "open jobs";
+      for (const o of ops ?? []) {
+        if (o.phone) void sendSms(o.phone as string, `LakeLife: no crew on the platform can claim ${what} for ${pretty} — recruiting signal, nothing to dispatch. 🌊`);
+      }
     }
   }
-  return { ok: true, checked: (jobs ?? []).length, rehomed, unfilled };
+  return { ok: true, checked: (jobs ?? []).length, rehomed, unfilled, crewsTexted };
 }
 
 /** Night-before reminder text to each owner who has a scheduled job on `date`
