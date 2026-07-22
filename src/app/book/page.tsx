@@ -2,6 +2,7 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { OwnerHeader } from "@/components/OwnerHeader";
 import { BookingGrid } from "@/components/BookingGrid";
+import { InviteMyCrew } from "@/components/InviteMyCrew";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getFullProfile, getPricedServices } from "@/app/profile/data";
@@ -116,6 +117,7 @@ export default async function BookPage() {
         <p className="mut" style={{ fontSize: 14, marginBottom: 18 }}>
           {profile.address ?? "Your place"}{lake?.name ? ` · ${lake.name}` : ""} — every price is exact to your property.
         </p>
+        <InviteMyCrew />
         <BookingGrid
           services={wanted.map((s) => ({
             id: s.id,
