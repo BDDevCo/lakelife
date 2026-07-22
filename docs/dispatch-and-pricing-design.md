@@ -67,3 +67,22 @@ with crews or customers. Machine matches; owner only gets growth/exception signa
 5. Crew onboarding step 4: "set your rates" (+ rates editor in vendor portal).
 6. Crew "My standing" private card; ops ranked table + needs-attention bucket.
 7. Retire manual assign as the default path (Reassign stays as override).
+
+## H. Rate-card vs bidding — RESOLVED (owner, 2026-07-22)
+CONFIRMED: there is NO per-job bid model and never was. Crews set STANDING
+per-unit rates by service in the Rates tab (vendor_rates: $/pier section, lawn
+band, sqft tier, per-foot, flat). The engine computes crew cost from that card
+at assignment. Keep this — it's zero-negotiation, quality-safe, 1099-clean.
+Two SEPARATE questions:
+  (1) how is PRICE set? → rate-card. Locked. Do not change.
+  (2) how is a JOB awarded? → today: silent auto-assign (score+preferred+margin).
+NEXT (planned): add a CLAIM BOARD for jobs the engine can't auto-place (no
+preferred / tie / overflow / "needs a crew" bucket). All ELIGIBLE crews see them;
+first qualified crew to CLAIM wins; they're paid THEIR OWN rate-card price — crews
+compete on speed/hunger, NOT on price (no underbidding, no margin erosion). Margin
+floor still gates eligibility. This is the "crews fight over new jobs" energy
+without a price auction. Engine already supports it — the needs-attention bucket
+IS the board's job set.
+PARKED (year 2, scale only): true $-bid ONLY on overflow jobs no rate-card crew
+takes, bids capped AT/BELOW menu price so a bid can only widen margin, never move
+the customer price. Needs deep crew liquidity per lake; not for beta.
