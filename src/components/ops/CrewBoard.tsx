@@ -186,7 +186,8 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
           </div>
           {crew.status === "active" && (
             <div className="mut" style={{ fontSize: 12.5, marginTop: 3 }}>
-              Score {crew.score} · On-time {Math.round(crew.onTimeRate * 100)}% · {crew.completedCount} {crew.completedCount === 1 ? "job" : "jobs"}
+              Score {crew.score} · On-time {Math.round(crew.onTimeRate * 100)}% · {crew.completedCount} {crew.completedCount === 1 ? "job" : "jobs"} · 👍{crew.thumbsUp}
+              {crew.thumbsDown > 0 ? ` 👎${crew.thumbsDown}` : ""}
             </div>
           )}
           <div className="mut" style={{ fontSize: 12.5, marginTop: 3 }}>{contactLine || "No contact on file"}</div>

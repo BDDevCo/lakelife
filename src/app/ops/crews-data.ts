@@ -36,6 +36,8 @@ export interface OpsCrew {
   tier: CrewTier;
   onTimeRate: number;
   completedCount: number;
+  thumbsUp: number; // customer 👍 confirmations
+  thumbsDown: number; // customer 👎 issue flags
 }
 
 const FRESH_CREW = computeScore({ completedCount: 0, onTimeCount: 0, ratedCount: 0, flagsApproved: 0, flagsDeclined: 0 });
@@ -66,7 +68,7 @@ export async function getCrews(): Promise<OpsCrew[]> {
   const admin = createServiceClient();
   const today = todayLakeDate();
 
-  const [{ data }, scores] = await Promise.all([
+  const [{ data }, scores, { data: confirmations }] = await Promise.all([
     admin
       .from("vendors")
       .select(
@@ -74,7 +76,15 @@ export async function getCrews(): Promise<OpsCrew[]> {
           "coi_url, coi_expiry, w9_url, created_at, users(name, email, phone)",
       ),
     getVendorScores(),
+    admin.from("job_confirmations").select("vendor_id, verdict").not("verdict", "is", null),
   ]);
+  const thumbs = new Map<string, { up: number; down: number }>();
+  for (const c of confirmations ?? []) {
+    const t = thumbs.get(c.vendor_id as string) ?? { up: 0, down: 0 };
+    if (c.verdict === "good") t.up++;
+    else if (c.verdict === "issue") t.down++;
+    thumbs.set(c.vendor_id as string, t);
+  }
 
   const rows = (data ?? []) as unknown as CrewRaw[];
 
@@ -117,6 +127,8 @@ export async function getCrews(): Promise<OpsCrew[]> {
         tier: sc.tier,
         onTimeRate: sc.onTimeRate,
         completedCount: sc.completedCount,
+        thumbsUp: thumbs.get(r.id)?.up ?? 0,
+        thumbsDown: thumbs.get(r.id)?.down ?? 0,
       };
     }),
   );

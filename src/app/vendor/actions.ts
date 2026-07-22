@@ -143,17 +143,34 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   // completed-but-unbilled. rule 4: only the vault token is ever charged.
   await settleJob(jobId);
 
-  // "Service complete — with photos" text to the owner (best effort).
+  // "Service complete — with photos" text to the owner (best effort), now
+  // carrying the one-tap quality check: the CUSTOMER is the auditor (Phase E
+  // design). 👍 builds the crew's trust record; 👎 pings the crew to make it
+  // right — never an ops queue.
   const { data: prop } = await admin
     .from("properties")
     .select("address, users(phone)")
     .eq("id", job.property_id)
     .maybeSingle();
   const ownerPhone = ((Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as { phone?: string } | null)?.phone;
+  let confirmLinks = "";
+  try {
+    const { data: conf } = await admin
+      .from("job_confirmations")
+      .insert({ job_id: jobId, property_id: job.property_id, vendor_id: job.vendor_id })
+      .select("confirm_token")
+      .single();
+    if (conf?.confirm_token) {
+      const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+      confirmLinks = ` All good? ${site}/c/${conf.confirm_token}/good — something off? ${site}/c/${conf.confirm_token}/issue`;
+    }
+  } catch {
+    /* pre-migration or duplicate row — the completion text still goes out */
+  }
   if (ownerPhone) {
     void sendSms(
       ownerPhone,
-      `LakeLife: ${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"} — ${photoCount} photos are in your property log. 🌊`,
+      `LakeLife: ${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"} — ${photoCount} photos are in your property log.${confirmLinks} 🌊`,
     );
   }
 

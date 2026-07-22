@@ -69,7 +69,14 @@ export default async function VendorTodayPage() {
     );
   }
 
-  const [day, standing] = await Promise.all([getVendorDay(), getMyStanding(vendorId)]);
+  const admin2 = createServiceClient();
+  const [day, standing, { data: confRows }] = await Promise.all([
+    getVendorDay(),
+    getMyStanding(vendorId),
+    admin2.from("job_confirmations").select("verdict").eq("vendor_id", vendorId).not("verdict", "is", null),
+  ]);
+  const thumbsUp = (confRows ?? []).filter((c) => c.verdict === "good").length;
+  const thumbsDown = (confRows ?? []).filter((c) => c.verdict === "issue").length;
   const standingLabels = standing ? tierLabel(standing.tier) : null;
   const stops = day?.stops ?? [];
   const prettyDay = day ? new Date(day.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }) : "";
@@ -89,7 +96,7 @@ export default async function VendorTodayPage() {
         </p>
 
         {standing && standingLabels && (
-          <VendorStanding standing={standing} label={standingLabels.label} blurb={standingLabels.blurb} />
+          <VendorStanding standing={standing} label={standingLabels.label} blurb={standingLabels.blurb} thumbsUp={thumbsUp} thumbsDown={thumbsDown} />
         )}
 
         {stops.length === 0 ? (

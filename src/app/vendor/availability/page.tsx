@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { VendorNav } from "@/components/VendorNav";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyVendorId } from "@/app/vendor/data";
 import { todayLakeDate, toISODate } from "@/lib/booking";
 import { AvailabilityGrid, SLOT_TIMES, type DayRow, type SlotStatus } from "./AvailabilityGrid";
 import { WorkDayChips } from "./WorkDayChips";
+import { MyLakesEditor } from "@/components/MyLakesEditor";
 
 // getDay() index -> the 3-letter form stored in vendors.work_days.
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -43,10 +44,16 @@ export default async function VendorAvailabilityPage() {
   const supabase = await createClient();
   const { data: vendor } = await supabase
     .from("vendors")
-    .select("work_days")
+    .select("work_days, service_lakes")
     .eq("id", vendorId)
     .maybeSingle();
   const workDays: string[] = (vendor?.work_days as string[] | null) ?? [];
+  const serviceLakes: string[] = (vendor?.service_lakes as string[] | null) ?? [];
+
+  // All lakes on the platform, for the "Lakes I service" editor.
+  const admin = createServiceClient();
+  const { data: lakeRows } = await admin.from("lakes").select("id, name").order("name");
+  const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
 
   // The next 5 days the vendor actually works, starting today (lake time).
   const today = todayLakeDate();
@@ -107,6 +114,16 @@ export default async function VendorAvailabilityPage() {
           ) : (
             <AvailabilityGrid days={rows} />
           )}
+        </section>
+
+        <section style={{ marginTop: 28 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>Lakes I service</h2>
+          <div className="ll-card ll-card-pad">
+            <p className="mut" style={{ fontSize: 13, margin: "0 0 10px" }}>
+              Tap the lakes your crew works. New lakes take effect on tomorrow&apos;s dispatch.
+            </p>
+            <MyLakesEditor lakes={lakes} selectedIds={serviceLakes} />
+          </div>
         </section>
       </div>
     </>
