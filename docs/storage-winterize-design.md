@@ -1,6 +1,6 @@
 # Storage & Winterization — Service Design Brainstorm
 
-*2026-07-22 · four-perspective research synthesis (operations taxonomy, Midwest market
+*2026-07-22 · four-perspective research synthesis · rev 2: owner killed at-dock winterization — all winterize legs are shop-based (operations taxonomy, Midwest market
 rates, platform modeling, custody risk). Status: BRAINSTORM — owner decisions pending
 (§F). Nothing here is built.*
 
@@ -14,8 +14,7 @@ of them decomposes into the same ~8 building blocks:
 
 | Component (leg) | What it is | Pricing shape |
 |---|---|---|
-| `winterize_mobile` | Engine + systems winterization at the customer's dock/driveway | flat by engine type (crew's rate card) |
-| `winterize_shop` | Same work at the vendor's shop | flat by engine type |
+| `winterize` | Engine + systems winterization AT THE SHOP — owner decision (2026-07-22): no at-dock/mobile winterization; the boat always comes to a facility | flat by engine type (crew's rate card) |
 | `haul_out` | Vendor retrieves boat (ramp float-on or lift-off) and transports one way | flat per one-way leg (+ tri-toon surcharge) |
 | `return_delivery` | Vendor transports back and splashes/sets on lift, one way | flat per one-way leg |
 | `storage_season` | Winter custody at the vendor's facility | **seasonal_plus_perdiem**: per-foot × boat length for the season + per-diem overage |
@@ -23,37 +22,39 @@ of them decomposes into the same ~8 building blocks:
 | `shrink_wrap` | Wrap (fall) — removal/disposal is a spring line | per foot |
 | add-ons | batteries, oil change, gear lube, ballast/freshwater systems, detail, rodent packs, trailer storage… | flat / per foot |
 
-**Why legs win:** crews price only the legs they can physically do — a mobile tech has
-no barn, a farmer with a pole barn has no hydraulic trailer, and the pier/lift
-contractors *already on our platform* own shore equipment but aren't mechanics. Legs
-ARE the capability flags: no rate card for `haul_out` → dispatch can never send you a
-haul. And the platform can **compose vendors** — mobile tech winterizes at the dock,
-hauler moves it, barn owner stores it — into a full-service product *none of them could
+**Why legs win:** crews price only the legs they can physically do — a shop with no
+hydraulic trailer never sees a haul job, a farmer's barn with no mechanic never sees a
+winterize, and the pier/lift contractors *already on our platform* own shore equipment
+but aren't mechanics. Legs ARE the capability flags: no rate card for `haul_out` →
+dispatch can never send you a haul. And the platform can **compose vendors** — a hauler moves the boat, a shop
+winterizes it, a barn owner stores it — into a full-service product *none of them could
 sell alone*. Real shops do this informally by subcontracting; a platform that does it
 automatically is a structural moat and pure zero-ops.
 
 Asymmetric hybrids (vendor hauls in fall / customer retrieves in spring, and the
 reverse) fall out for free when transport is priced **per leg, not round trip**.
 
-## B. The customer menu (5 tiles, everything else is a toggle)
+## B. The customer menu (4 tiles, everything else is a toggle)
 
-Fourteen scenarios cannot be fourteen tiles. The menu collapses to five packages; the
-wizard's toggles cover the rest:
+Fourteen scenarios cannot be fourteen tiles — and with all winterization at the shop,
+the menu is really TWO AXES the wizard walks: *who moves the boat* (each direction
+separately) and *where it winters*. Four tiles cover everything:
 
-1. **Winterize at your dock** — Scenario A. Boat stays home. *Spring return visit is a
-   default-ON toggle* — turning it off yields winterize-only, which research says is
-   likely the single highest-volume transaction in the market. Never force the bundle.
-2. **Full-service: we pick it up, store it, bring it back in spring** — Scenario B.
-   The premium valet. Storage tier choice: outdoor-wrapped / indoor.
-3. **You tow it in, we winterize & store** — Scenario C. Cheapest full package; for
-   trailer-owning customers (fishing/ski boats, PWCs). Spring: notify-for-pickup, with
-   "we deliver & splash instead" as a paid toggle (absentee owners love this).
-4. **Storage only** — boat arrives already winterized. Opens the platform to
-   non-marine vendors (barns, lots). Requires proof-of-winterization or a signed
-   freeze-damage waiver at intake.
-5. **Spring-only recommission / splash** — for DIY winterizers and boats bought over
-   the winter. Also the natural upsell text at ice-out to every fall winterize-only
-   customer.
+1. **You tow it to the shop** — shop winterizes. Toggle A: *tow it home and store it
+   yourself* (very common in rural Indiana — pole barns everywhere; zero storage
+   revenue, great throughput and spring-upsell surface) or *store it at the shop*
+   (outdoor-wrapped / indoor tier). Spring toggle: DIY / recommission-and-you-pick-up /
+   we-deliver-and-splash.
+2. **We pick it up** — vendor hauls from your lift or shore, shop winterizes.
+   Toggle A: *back to your place for the winter* (the owner's original scenario A —
+   haul, winterize, return; spring is the mirror: pick up, de-winterize, splash) or
+   *store at the facility* (the full valet). This is the ONLY option for lift-kept
+   pontoons with no trailer — which is most boats on these lakes.
+3. **Storage only** — boat arrives already winterized (you tow in). Opens the platform
+   to non-marine vendors (barns, lots). Proof-of-winterization or freeze-damage waiver
+   at intake.
+4. **Spring-only recommission / splash** — DIY winterizers and boats bought over the
+   winter; the ice-out upsell text to every fall winterize-only customer.
 
 PWC variant of 1–3 with per-unit pricing and a multi-unit discount (2–3 per household
 is normal here). Shrink-wrap-only exists as an add-on booked alone.
@@ -72,9 +73,9 @@ Timber Marine, Just Add Water Indianapolis, Manitowoc Marina, Torresen, others):
 
 | Leg | Market range (vendor-side) | Notes |
 |---|---|---|
-| Winterize — outboard | $109–$340 /engine | engine count & HP drive price, not boat length; twin ≈ +80% |
+| Winterize (shop) — outboard | $109–$340 /engine | engine count & HP drive price, not boat length; twin ≈ +80% |
 | Winterize — sterndrive (I/O) | $200–$520 /engine | |
-| Winterize — inboard/V-drive (ski/wake) | $252–$650 /engine | ballast systems extra; 2–3× a pontoon's mobile labor |
+| Winterize — inboard/V-drive (ski/wake) | $252–$650 /engine | ballast systems extra; 2–3× a pontoon's labor |
 | Winterize — PWC | $100–$300 /unit | multi-unit discount ~10% |
 | Shrink wrap | $16–$30 /ft | pontoons bill one tier higher; spring removal/disposal ~$75 if separate |
 | Storage — outdoor lot | $12–$40 /ft/season | |
@@ -94,9 +95,11 @@ Monthly billing is a self-storage pattern, not a marina pattern — don't adopt 
 
 | Package | Crew-side legs (mid-range) | Customer all-in @ ~30% |
 |---|---|---|
-| Winterize at your dock + spring return | 180 + 150 = $330 | ≈ **$475** (billed $255 fall / $220 spring) |
-| Full-service w/ outdoor wrapped storage | 200 haul + 180 wtr + 396 wrap + 660 storage + 130 dewtr + 150 return = $1,716 | ≈ **$2,450/season** |
-| You-tow + indoor cold storage | 180 + 990 + 130 = $1,300 | ≈ **$1,860/season** |
+| You tow in, winterize, tow home | 180 wtr = $180 | ≈ **$255** (fall) |
+| …+ spring recommission (you tow in) | + 130 dewtr = $310 | ≈ **$445** (billed $255 fall / $190 spring) |
+| We pick up, winterize, return to your place; spring mirror (owner's A) | fall: 200 haul + 180 wtr + 150 return = $530 · spring: 200 + 130 + 150 = $480 | ≈ **$1,445/yr** (billed ≈$755 fall / ≈$690 spring) |
+| Full-service valet w/ outdoor wrapped storage (B) | 200 haul + 180 wtr + 396 wrap + 660 storage + 130 dewtr + 150 return = $1,716 | ≈ **$2,450/season** |
+| You-tow + indoor cold storage (C) | 180 + 990 + 130 = $1,300 | ≈ **$1,860/season** |
 | Storage only (outdoor, wrapped elsewhere) | $660 | ≈ **$945/season** |
 | Spring-only recommission + splash | $150–$280 | ≈ **$215–$400** |
 
@@ -118,6 +121,9 @@ enforced by EXISTING machinery:
   `seasonal_plus_perdiem` is one new pricing_model value + one `priceService` case.
 - **Rule 2 (photo gate):** each visit is its own job → fall intake and spring splash
   are each independently photo-gated and independently settled. `settleJob` unchanged.
+- **Winterize is shop-only** (owner decision): mobile-only techs without a facility
+  have no winterize rate and thus never match; the hauler/trailer pool becomes the
+  scarce resource that gates the fall funnel — watch it on Margin Health.
 - **Dispatch:** a crew is eligible for a visit only if `service_types` covers every
   component on it with a positive rate — components ARE capabilities, no new
   vocabulary to drift.
@@ -167,7 +173,8 @@ that must exist at launch:
 
 ## F. Decisions the owner must make
 
-1. **Launch menu:** all 5 tiles, or start with 1–3 (dock winterize / valet / you-tow)?
+1. ~~At-dock winterization~~ — **DECIDED (2026-07-22): none. All winterization at the
+   shop; customer tows or vendor hauls.**
 2. **Storage tiers at launch:** outdoor-wrapped + indoor-cold (recommended) — heated
    later?
 3. **Seasonal minimum shape:** per-foot × length (market norm, recommended) — and the
@@ -177,9 +184,8 @@ that must exist at launch:
    crew-set; who keeps it (recommend margin-weighted like everything else).
 5. **Insurance strictness:** hard gate on garagekeepers doc-on-file before storage
    legs unlock (recommended) vs agreement-clause-only.
-6. **Split-vendor composition (mobile tech + hauler + barn) at launch,** or
-   single-vendor packages first and compose in v2? (Recommend v2 — it needs per-leg
-   custody handoffs; single-vendor covers the launch market.)
+6. **Split-vendor composition (hauler + shop + barn) at launch,** or single-vendor
+   packages first and compose in v2? (Recommend v2.)
 7. **Owner's storage rates** — plug real vendor quotes into §C's reference table as
    they arrive.
 
