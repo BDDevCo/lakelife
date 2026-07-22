@@ -16,16 +16,17 @@ function lakeDateOf(ts: string): string {
  */
 export async function getVendorScores(): Promise<Map<string, CrewScore>> {
   const admin = createServiceClient();
-  const [{ data: jobs }, { data: flags }] = await Promise.all([
+  const [{ data: jobs }, { data: flags }, { data: noShows }] = await Promise.all([
     admin.from("jobs").select("vendor_id, date, completed_at").in("status", ["complete", "paid"]).not("vendor_id", "is", null),
     admin.from("flags").select("vendor_id, status").in("status", ["approved", "declined"]).not("vendor_id", "is", null),
+    admin.from("vendor_no_shows").select("vendor_id"),
   ]);
 
-  interface Agg { completedCount: number; onTimeCount: number; ratedCount: number; flagsApproved: number; flagsDeclined: number }
+  interface Agg { completedCount: number; onTimeCount: number; ratedCount: number; flagsApproved: number; flagsDeclined: number; noShows: number }
   const by = new Map<string, Agg>();
   const get = (id: string): Agg => {
     let a = by.get(id);
-    if (!a) { a = { completedCount: 0, onTimeCount: 0, ratedCount: 0, flagsApproved: 0, flagsDeclined: 0 }; by.set(id, a); }
+    if (!a) { a = { completedCount: 0, onTimeCount: 0, ratedCount: 0, flagsApproved: 0, flagsDeclined: 0, noShows: 0 }; by.set(id, a); }
     return a;
   };
 
@@ -42,6 +43,7 @@ export async function getVendorScores(): Promise<Map<string, CrewScore>> {
     if (f.status === "approved") a.flagsApproved++;
     else if (f.status === "declined") a.flagsDeclined++;
   }
+  for (const n of noShows ?? []) get(n.vendor_id as string).noShows++;
 
   const out = new Map<string, CrewScore>();
   for (const [id, a] of by) out.set(id, computeScore(a));

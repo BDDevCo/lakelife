@@ -7,6 +7,7 @@ const inb = (o: Partial<Parameters<typeof computeScore>[0]> = {}) => ({
   ratedCount: 0,
   flagsApproved: 0,
   flagsDeclined: 0,
+  noShows: 0,
   ...o,
 });
 
@@ -68,6 +69,32 @@ describe("computeScore", () => {
 
   it("tier < 3 jobs is 'new' regardless of quality", () => {
     expect(computeScore(inb({ completedCount: 2, onTimeCount: 2, ratedCount: 2 })).tier).toBe("new");
+  });
+
+  it("a no-show drops reliability and the score vs an otherwise-identical clean crew", () => {
+    const clean = computeScore(inb({ completedCount: 20, onTimeCount: 20, ratedCount: 20 }));
+    const ghost = computeScore(inb({ completedCount: 20, onTimeCount: 20, ratedCount: 20, noShows: 2 }));
+    expect(clean.reliabilityRate).toBe(1);
+    expect(ghost.reliabilityRate).toBeCloseTo(20 / 22);
+    expect(ghost.score).toBeLessThan(clean.score);
+  });
+
+  it("2+ no-shows blocks Priority even with an otherwise top record", () => {
+    const s = computeScore(inb({ completedCount: 40, onTimeCount: 40, ratedCount: 40, noShows: 2 }));
+    expect(s.noShows).toBe(2);
+    expect(s.tier).not.toBe("priority");
+  });
+
+  it("one historical no-show doesn't alone bar Priority if the record is strong", () => {
+    const s = computeScore(inb({ completedCount: 40, onTimeCount: 40, ratedCount: 40, noShows: 1 }));
+    // reliability 40/41 ≈ 0.976, still a high score; one slip is forgiven for tier.
+    expect(s.tier).toBe("priority");
+  });
+
+  it("reliability recovers as a crew completes more good jobs after a miss", () => {
+    const fresh = computeScore(inb({ completedCount: 3, onTimeCount: 3, ratedCount: 3, noShows: 1 }));
+    const recovered = computeScore(inb({ completedCount: 30, onTimeCount: 30, ratedCount: 30, noShows: 1 }));
+    expect(recovered.reliabilityRate).toBeGreaterThan(fresh.reliabilityRate);
   });
 });
 

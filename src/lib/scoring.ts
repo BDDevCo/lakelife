@@ -14,6 +14,7 @@ export interface ScoreInputs {
   ratedCount: number; // completed jobs we have completion data for (on-time denominator)
   flagsApproved: number; // flags the owner approved (accurate call)
   flagsDeclined: number; // flags the owner declined (bad call)
+  noShows?: number; // scheduled jobs the crew ghosted (no photos, no completion)
 }
 
 export interface CrewScore {
@@ -21,6 +22,8 @@ export interface CrewScore {
   tier: CrewTier;
   onTimeRate: number; // 0–1
   flagAccuracy: number; // 0–1
+  reliabilityRate: number; // 0–1 (honored vs ghosted commitments)
+  noShows: number;
   confidence: number; // 0–1 (how much history backs the score)
   completedCount: number;
   nextTierHint: string;
@@ -40,12 +43,16 @@ export function computeScore(inb: ScoreInputs): CrewScore {
   const onTimeCount = Math.max(0, Math.min(Math.floor(inb.onTimeCount || 0), ratedCount));
   const approved = Math.max(0, Math.floor(inb.flagsApproved || 0));
   const declined = Math.max(0, Math.floor(inb.flagsDeclined || 0));
+  const noShows = Math.max(0, Math.floor(inb.noShows || 0));
 
   // Benefit of the doubt when there's no data yet (new crews aren't punished).
   const onTimeRate = ratedCount > 0 ? clamp01(onTimeCount / ratedCount) : 1;
   const flagAccuracy = approved + declined > 0 ? clamp01(approved / (approved + declined)) : 1;
+  // Reliability: commitments honored vs ghosted. Recovers as they complete more,
+  // so a miss dents the score but a crew earns trust back — no permanent brand.
+  const reliabilityRate = completedCount + noShows > 0 ? clamp01(completedCount / (completedCount + noShows)) : 1;
 
-  const rawQuality = 0.65 * onTimeRate + 0.35 * flagAccuracy; // 0–1
+  const rawQuality = 0.45 * onTimeRate + 0.2 * flagAccuracy + 0.35 * reliabilityRate; // 0–1
   const confidence = clamp01(completedCount / CONFIDENCE_JOBS); // 0–1
   // A new crew (confidence 0) starts at half its raw quality, so proven crews
   // rank above unproven ones — but a new crew still scores enough to earn work.
@@ -53,19 +60,22 @@ export function computeScore(inb: ScoreInputs): CrewScore {
 
   let tier: CrewTier;
   if (completedCount < NEW_MAX_JOBS) tier = "new";
-  else if (completedCount >= PRIORITY_MIN_JOBS && score >= PRIORITY_MIN_SCORE) tier = "priority";
+  // A repeat ghost (2+ no-shows) can't be Priority no matter the raw score.
+  else if (completedCount >= PRIORITY_MIN_JOBS && score >= PRIORITY_MIN_SCORE && noShows <= 1) tier = "priority";
   else tier = "building";
 
   const nextTierHint =
-    tier === "priority"
-      ? "You're Priority — first pick of new work. Keep it up."
-      : tier === "new"
-        ? `A few more completed jobs and a solid on-time record moves you up.`
-        : onTimeRate < 0.9
-          ? "Finish jobs on their scheduled day to climb toward Priority."
-          : `${Math.max(0, PRIORITY_MIN_JOBS - completedCount)} more strong jobs could reach Priority.`;
+    noShows > 0 && tier !== "priority"
+      ? "Missed jobs hurt your standing — show up on scheduled days to recover it."
+      : tier === "priority"
+        ? "You're Priority — first pick of new work. Keep it up."
+        : tier === "new"
+          ? `A few more completed jobs and a solid on-time record moves you up.`
+          : onTimeRate < 0.9
+            ? "Finish jobs on their scheduled day to climb toward Priority."
+            : `${Math.max(0, PRIORITY_MIN_JOBS - completedCount)} more strong jobs could reach Priority.`;
 
-  return { score, tier, onTimeRate, flagAccuracy, confidence, completedCount, nextTierHint };
+  return { score, tier, onTimeRate, flagAccuracy, reliabilityRate, noShows, confidence, completedCount, nextTierHint };
 }
 
 /** Human label + short descriptor for a tier (crew-facing, never shows peers). */

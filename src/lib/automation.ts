@@ -226,6 +226,64 @@ export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: 
  * 'requested' jobs get a fresh assignment attempt. Returns counts; anything left
  * unfilled is the ops "needs attention" signal.
  */
+/**
+ * No-show sweep: a job whose scheduled day has PASSED while still 'scheduled'
+ * with ZERO photos was ghosted by its crew. We record the no-show (feeds the
+ * crew's reliability score → demotes dispatch rank / Priority), then release the
+ * job for a PENALTY-FREE reschedule: crew unassigned, status back to 'requested'
+ * (needs a crew), no charge to the customer. Both sides are notified. Idempotent
+ * via the unique(job_id) on vendor_no_shows. A job WITH photos is a "forgot to
+ * tap complete", not a ghost — left alone for ops.
+ */
+export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }> {
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+  const { data: stale } = await admin
+    .from("jobs")
+    .select("id, vendor_id, property_id, date, services(name), properties(address, owner_id), vendors(user_id)")
+    .lt("date", today)
+    .in("status", ["scheduled", "in_progress"])
+    .not("vendor_id", "is", null);
+
+  const one = <T>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
+  let flagged = 0;
+
+  for (const j of stale ?? []) {
+    const { count } = await admin.from("job_photos").select("id", { count: "exact", head: true }).eq("job_id", j.id as string);
+    if ((count ?? 0) > 0) continue; // photos on file → not a ghost, leave for ops
+
+    // Record the no-show (idempotent). Skip re-processing if already recorded.
+    const { error: insErr } = await admin.from("vendor_no_shows").insert({
+      vendor_id: j.vendor_id,
+      job_id: j.id,
+      property_id: j.property_id,
+      scheduled_date: j.date,
+    });
+    if (insErr) continue; // unique(job_id) violation = already handled
+
+    // Penalty-free release: unassign, wipe the priced amounts, back to needs-a-crew.
+    await admin.from("jobs").update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" }).eq("id", j.id);
+    flagged++;
+
+    const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
+    const prop = one(j.properties) as { address?: string; owner_id?: string } | null;
+    const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+
+    // Owner: no charge, easy reschedule.
+    if (prop?.owner_id) {
+      const { data: owner } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+      if (owner?.phone) void sendSms(owner.phone as string, `LakeLife: your crew couldn't make ${svc} at ${prop?.address ?? "your place"} — no charge. Pick any open day to rebook: ${site}/book 🌊`);
+    }
+    // Crew: reliability warning (standing-based, no fine).
+    const crewUser = (one(j.vendors) as { user_id?: string } | null)?.user_id;
+    if (crewUser) {
+      const { data: cu } = await admin.from("users").select("phone").eq("id", crewUser).maybeSingle();
+      if (cu?.phone) void sendSms(cu.phone as string, `LakeLife: a scheduled job was marked missed and affects your standing. If something came up, block the day ahead next time — no penalty for advance notice.`);
+    }
+  }
+  return { ok: true, flagged };
+}
+
 export async function revalidateAssignments(dateISO?: string): Promise<{ ok: boolean; checked: number; rehomed: number; unfilled: number }> {
   const date = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : addDays(todayLakeDate(), 1);
   const admin = createServiceClient();
