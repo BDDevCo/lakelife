@@ -4,6 +4,7 @@ import { priceService, type ServiceRule } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
 import { canClaim, milesBetween, type ClaimBlocker, type CrewCandidate } from "@/lib/dispatch";
 import { isCoolingDown } from "@/lib/lake-standing";
+import { fillInRate, rushWindowOpen } from "@/lib/rush";
 import { loadPricingProfileById } from "@/app/book/dispatch";
 import { getPlatformSettings } from "@/lib/settings";
 import type { MyVendor } from "./data";
@@ -27,10 +28,17 @@ export interface OpenJob {
   takeHome: number | null; // crew's own rate priced for this property (null = no rate set)
   claimable: boolean;
   blocker: ClaimBlocker | null; // why not, when not claimable
+  rush: boolean; // ⚡ same-day fill-in — takeHome already reflects the discount
 }
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const BOARD_CAP = 30; // soonest-first; plenty for the board's purpose
+
+/** Current lake-time hour — rush rows show only inside the rush window. */
+function lakeHour(): number {
+  const h = new Intl.DateTimeFormat("en-US", { timeZone: "America/Indiana/Indianapolis", hour12: false, hour: "2-digit" }).format(new Date());
+  return Number(h) % 24;
+}
 
 export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   const admin = createServiceClient();
@@ -39,7 +47,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
 
   const { data: jobs } = await admin
     .from("jobs")
-    .select("id, date, customer_price, service_id, property_id, services(name, pricing_model), properties(lake_id, lat, lng, lakes(name))")
+    .select("id, date, customer_price, service_id, property_id, is_rush, services(name, pricing_model), properties(lake_id, lat, lng, lakes(name))")
     .eq("status", "requested")
     .is("vendor_id", null)
     .gte("date", today)
@@ -75,8 +83,14 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   for (const j of myJobs ?? []) assignedByDate.set(j.date as string, (assignedByDate.get(j.date as string) ?? 0) + 1);
   const blockedDates = new Set((myBlocks ?? []).map((b) => b.date as string));
 
+  const rushOpen = rushWindowOpen(lakeHour(), settings.sameDayCutoffHour);
   const out: OpenJob[] = [];
   for (const j of doable) {
+    // Rush rows are TODAY-only prizes: hidden once the window closes (the
+    // cutoff rung rolls or cancels them), and a stale rush row on a past
+    // date never renders.
+    const isRushRow = !!(j as { is_rush?: boolean }).is_rush;
+    if (isRushRow && (!rushOpen || (j.date as string) !== today)) continue;
     const svc = one(j.services) as { name?: string; pricing_model?: string } | null;
     const prop = one(j.properties) as { lake_id?: string; lat?: number; lng?: number; lakes?: unknown } | null;
     const lakeName = (one(prop?.lakes) as { name?: string } | null)?.name ?? "a nearby lake";
@@ -94,6 +108,9 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       };
       const profile = await loadPricingProfileById(admin, j.property_id as string);
       if (profile) takeHome = priceService(rule, profile);
+      // Same-day fill-in: the board shows the DISCOUNTED take-home — tapping
+      // Claim is accepting it (the discount is a dial, not a negotiation).
+      if (takeHome != null && isRushRow) takeHome = fillInRate(takeHome, settings.sameDayFillDiscountPct);
     }
 
     const candidate: CrewCandidate = {
@@ -134,11 +151,14 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       takeHome,
       claimable: verdict.ok,
       blocker: verdict.blocker ?? null,
+      rush: isRushRow,
     });
   }
 
-  // Own lakes first, then nearest, then soonest — the crew's natural priority.
+  // Rush first (it expires at the cutoff), then own lakes, then nearest,
+  // then soonest — the crew's natural priority.
   out.sort((a, b) => {
+    if (a.rush !== b.rush) return a.rush ? -1 : 1;
     if (a.onMyLake !== b.onMyLake) return a.onMyLake ? -1 : 1;
     const da = a.milesAway ?? Infinity, db = b.milesAway ?? Infinity;
     if (da !== db) return da - db;

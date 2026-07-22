@@ -5,6 +5,7 @@ import { priceService, type ServiceRule } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
 import { canClaim, type ClaimBlocker, type CrewCandidate } from "@/lib/dispatch";
 import { isCoolingDown } from "@/lib/lake-standing";
+import { fillInRate, rushWindowOpen } from "@/lib/rush";
 import { loadPricingProfileById } from "@/app/book/dispatch";
 import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
@@ -37,6 +38,12 @@ const BLOCKER_MSG: Record<ClaimBlocker, string> = {
 };
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Current lake-time hour — the rush-window clock. */
+function lakeHour(): number {
+  const h = new Intl.DateTimeFormat("en-US", { timeZone: "America/Indiana/Indianapolis", hour12: false, hour: "2-digit" }).format(new Date());
+  return Number(h) % 24;
+}
 const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
 
 export async function claimJob(jobId: string): Promise<ClaimResult> {
@@ -56,7 +63,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const today = todayLakeDate();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, services(name, pricing_model), properties(lake_id, address, users(phone))")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, services(name, pricing_model), properties(lake_id, address, users(phone))")
     .eq("id", jobId)
     .maybeSingle();
   if (!job || job.status !== "requested" || job.vendor_id != null || !job.date || (job.date as string) < today) {
@@ -100,6 +107,18 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     };
     const profile = await loadPricingProfileById(admin, job.property_id as string);
     if (profile) myRate = priceService(rule, profile);
+  }
+
+  // ⚡ Same-day rush: claimable only inside the window (today, pre-cutoff) and
+  // paid at the fill-in rate — the discounted number the board showed. Tapping
+  // Claim IS accepting it; the discount is a dial, never a negotiation.
+  const isRush = !!(job as { is_rush?: boolean }).is_rush;
+  const settingsRush = await getPlatformSettings();
+  if (isRush) {
+    if ((job.date as string) !== today || !rushWindowOpen(lakeHour(), settingsRush.sameDayCutoffHour)) {
+      return { ok: false, error: "This same-day job is past the cutoff — it's being rolled or cancelled automatically. 🌊" };
+    }
+    if (myRate != null) myRate = fillInRate(myRate, settingsRush.sameDayFillDiscountPct);
   }
 
   // Re-check the full claim gate server-side (fresh counts — the board may be stale).

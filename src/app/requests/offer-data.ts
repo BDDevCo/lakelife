@@ -36,10 +36,11 @@ export async function computeScarcityOffer(jobId: string): Promise<ScarcityOffer
   const today = todayLakeDate();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, services(name, pricing_model), properties(lake_id)")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, services(name, pricing_model), properties(lake_id)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job || job.status !== "requested" || job.vendor_id != null || !job.date || (job.date as string) < today) return null;
+  if ((job as { is_rush?: boolean }).is_rush) return null; // rush already carries its premium — never stack a boost
   const svc = one(job.services) as { name?: string; pricing_model?: string } | null;
   if (!svc?.name) return null;
   const menuPrice = Number(job.customer_price ?? 0);

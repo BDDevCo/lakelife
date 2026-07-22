@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatPrice } from "@/lib/pricing";
 import { dayStatus, toISODate, isRecurring, type DayStatus } from "@/lib/booking";
-import { getAvailability, createBooking } from "@/app/book/actions";
+import { rushPrice } from "@/lib/rush";
+import { getAvailability, createBooking, type RushWindow } from "@/app/book/actions";
 import { toast } from "@/components/Toast";
 
 interface Service {
@@ -62,6 +63,8 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const [picked, setPicked] = useState<string | null>(null);
   const [fullDates, setFullDates] = useState<Set<string>>(new Set());
   const [findingCrew, setFindingCrew] = useState(false);
+  const [rush, setRush] = useState<RushWindow | null>(null);
+  const [rushFallback, setRushFallback] = useState<"roll" | "cancel">("roll");
   const [busy, setBusy] = useState(false);
 
   const today = toISODate(now);
@@ -72,6 +75,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
       if (!cancelled) {
         setFullDates(new Set(res.fullDates));
         setFindingCrew(!!res.findingCrew);
+        setRush(res.rush);
       }
     });
     return () => { cancelled = true; };
@@ -90,11 +94,13 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
         seasonStart: season.start,
         seasonEnd: season.end,
         fullDates,
+        rushNowHour: rush?.nowHour,
+        rushCutoffHour: rush?.cutoffHour,
       });
       out.push({ day: d, iso, status });
     }
     return out;
-  }, [year, month, fullDates, service.is_water_work, season.start, season.end, today]);
+  }, [year, month, fullDates, service.is_water_work, season.start, season.end, today, rush]);
 
   function move(delta: number) {
     setPicked(null);
@@ -106,10 +112,19 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
     });
   }
 
+  // Is the picked date today's rush slot? (Status lives on the cell.)
+  const pickedIsRush = picked != null && cells.some((c) => c?.iso === picked && c.status === "rush");
+  const rushAllIn = rush ? rushPrice(service.price, rush.surchargePct) : service.price;
+
   async function confirm() {
     if (!picked) return;
     setBusy(true);
-    const res = await createBooking(service.id, picked, service.frequency_options[freq] ?? "");
+    const res = await createBooking(
+      service.id,
+      picked,
+      service.frequency_options[freq] ?? "",
+      pickedIsRush ? rushFallback : undefined,
+    );
     setBusy(false);
     if (!res.ok) { toast(res.error ?? "Couldn't book that."); return; }
     toast(`${service.name} booked — see “My requests.”`);
@@ -182,11 +197,21 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
             ))}
             {cells.map((c, i) => {
               if (!c) return <div key={i} />;
-              const clickable = c.status === "available";
+              const isRushDay = c.status === "rush";
+              const clickable = c.status === "available" || isRushDay;
               const sel = picked === c.iso;
-              const bg = sel ? "var(--teal)" : c.status === "available" ? "#fff" : c.status === "full" ? "#F4EDE4" : "#f0f3f4";
-              const color = sel ? "#fff" : c.status === "available" ? "var(--text)" : "#aab6ba";
-              const title = c.status === "off-season" ? "Outside the water-work season" : c.status === "full" ? "Crew at capacity" : c.status === "past" ? "" : "Available";
+              const bg = sel
+                ? (isRushDay ? "var(--gold, #d9a441)" : "var(--teal)")
+                : isRushDay ? "#FBF3E1"
+                : c.status === "available" ? "#fff" : c.status === "full" ? "#F4EDE4" : "#f0f3f4";
+              const color = sel ? "#fff" : clickable ? "var(--text)" : "#aab6ba";
+              const border = sel
+                ? (isRushDay ? "var(--gold, #d9a441)" : "var(--teal)")
+                : isRushDay ? "var(--gold, #d9a441)" : "var(--line)";
+              const title = c.status === "off-season" ? "Outside the water-work season"
+                : c.status === "full" ? "Crew at capacity"
+                : c.status === "past" ? ""
+                : isRushDay ? "Book today — rush rate" : "Available";
               return (
                 <button
                   key={i}
@@ -195,12 +220,13 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
                   title={title}
                   style={{
                     aspectRatio: "1", borderRadius: 8, fontSize: 13, fontWeight: 600,
-                    border: `1px solid ${sel ? "var(--teal)" : "var(--line)"}`,
+                    border: `${isRushDay ? "1.5px" : "1px"} solid ${border}`,
                     background: bg, color, cursor: clickable ? "pointer" : "default",
                     textDecoration: c.status === "off-season" ? "line-through" : "none",
                   }}
                 >
                   {c.day}
+                  {isRushDay && <span style={{ fontSize: 9, verticalAlign: "top" }}>⚡</span>}
                 </button>
               );
             })}
@@ -215,22 +241,61 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
 
           {/* summary + confirm */}
           {prettyPicked && (
-            <div style={{ marginTop: 14, padding: "12px 14px", background: "#F2F9FA", borderRadius: 12 }}>
+            <div style={{ marginTop: 14, padding: "12px 14px", background: pickedIsRush ? "#FBF3E1" : "#F2F9FA", borderRadius: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
                 <span className="mut">{recurring ? "First visit" : "Date"}</span><b>{prettyPicked}</b>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
-                <b>Your price</b><b>{formatPrice(service.price)}</b>
+                <b>Your price</b><b>{pickedIsRush ? formatPrice(rushAllIn) : formatPrice(service.price)}</b>
               </div>
+              {pickedIsRush && (
+                <div style={{ fontSize: 12, marginTop: 4 }}>
+                  ⚡ Same-day rush — includes the rush premium
+                </div>
+              )}
             </div>
           )}
+
+          {/* rush fallback: customer pre-picks what happens if no crew claims by cutoff */}
+          {pickedIsRush && (
+            <div style={{ marginTop: 12 }} role="radiogroup" aria-label="If no crew frees up by cutoff">
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>If no crew frees up by cutoff:</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {([
+                  { value: "roll" as const, label: "Move to tomorrow at standard price" },
+                  { value: "cancel" as const, label: "Cancel — no charge" },
+                ]).map((opt) => {
+                  const on = rushFallback === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      role="radio"
+                      aria-checked={on}
+                      onClick={() => setRushFallback(opt.value)}
+                      style={{
+                        padding: "10px 13px", minHeight: 44, borderRadius: 99, fontWeight: 700, fontSize: 13, cursor: "pointer",
+                        border: `1.5px solid ${on ? "var(--teal)" : "var(--line)"}`,
+                        background: on ? "var(--teal)" : "#fff", color: on ? "#fff" : "var(--text)",
+                      }}
+                    >
+                      {opt.label}{opt.value === "roll" ? " (default)" : ""}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mut" style={{ fontSize: 12.5, margin: "8px 0 0", lineHeight: 1.5 }}>
+                We&apos;ll offer this to crews already out on your lake. You&apos;re only charged after the work is done.
+              </p>
+            </div>
+          )}
+
           <p className="mut" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
             Confirming creates a request. Autopay charges only after the service is
             completed and its photos are uploaded — never before.
           </p>
 
           <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={confirm} disabled={!picked || busy}>
-            {busy ? "Booking…" : "Confirm booking"}
+            {busy ? "Booking…" : pickedIsRush ? `Book today ⚡ — ${formatPrice(rushAllIn)}` : "Confirm booking"}
           </button>
         </div>
       </div>

@@ -4,9 +4,17 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getFullProfile, toPricingProfile, getActivePropertyId } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { dayStatus, toISODate, todayLakeDate } from "@/lib/booking";
+import { rushPrice, validRushFallback } from "@/lib/rush";
+import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
 import { autoAssignJob, getServiceAvailability } from "./dispatch";
+
+/** Current hour (0–23) in lake time — the rush-window clock. */
+function lakeHour(): number {
+  const h = new Intl.DateTimeFormat("en-US", { timeZone: "America/Indiana/Indianapolis", hour12: false, hour: "2-digit" }).format(new Date());
+  return Number(h) % 24;
+}
 
 interface ServiceRow extends ServiceRule {
   is_water_work: boolean;
@@ -45,14 +53,22 @@ async function loadSeason(propertyId: string): Promise<{ start: string | null; e
  * capacity via the dispatch engine), not the old service-level count. Keeps the
  * same { fullDates, capacity } shape the calendar consumes.
  */
+export interface RushWindow {
+  nowHour: number; // current lake-time hour (server truth — client TZ lies)
+  cutoffHour: number; // same_day_cutoff_hour dial
+  surchargePct: number; // same_day_surcharge_pct dial (for display pricing)
+}
+
 export async function getAvailability(
   serviceId: string,
   year: number,
   month: number, // 0-indexed
   propertyId?: string, // defaults to the active property; used to scope by lake
-): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean }> {
+): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean; rush: RushWindow }> {
+  const settings = await getPlatformSettings();
+  const rush: RushWindow = { nowHour: lakeHour(), cutoffHour: settings.sameDayCutoffHour, surchargePct: settings.sameDaySurchargePct };
   const service = await loadService(serviceId);
-  if (!service) return { fullDates: [], capacity: 0, findingCrew: false };
+  if (!service) return { fullDates: [], capacity: 0, findingCrew: false, rush };
   // Scope capacity to crews that service THIS property's lake (Phase B): a date
   // is only bookable if a crew who works this lake has an open slot.
   const pid = propertyId ?? (await getActivePropertyId());
@@ -62,7 +78,8 @@ export async function getAvailability(
     const { data } = await admin.from("properties").select("lake_id").eq("id", pid).maybeSingle();
     lakeId = (data?.lake_id as string) ?? null;
   }
-  return getServiceAvailability(service.name, year, month, lakeId);
+  const avail = await getServiceAvailability(service.name, year, month, lakeId);
+  return { ...avail, rush };
 }
 
 export interface BookingResult {
@@ -83,6 +100,7 @@ export async function createBooking(
   serviceId: string,
   date: string, // YYYY-MM-DD
   frequency: string,
+  rushFallback?: string, // same-day only: 'roll' (tomorrow at standard price) | 'cancel'
 ): Promise<BookingResult> {
   const supabase = await createClient();
   const {
@@ -116,6 +134,7 @@ export async function createBooking(
   if (!service) return { ok: false, error: "That service isn't available." };
 
   // Re-validate the day server-side, against THIS property's lake and Indiana time.
+  const settings = await getPlatformSettings();
   const season = await loadSeason(profile.propertyId);
   const { fullDates } = await getAvailability(serviceId, Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, profile.propertyId);
   const status = dayStatus(date, {
@@ -124,17 +143,22 @@ export async function createBooking(
     seasonStart: season.start,
     seasonEnd: season.end,
     fullDates: new Set(fullDates),
+    rushNowHour: lakeHour(),
+    rushCutoffHour: settings.sameDayCutoffHour,
   });
-  if (status !== "available") {
+  if (status !== "available" && status !== "rush") {
     const why =
       status === "past" ? "That date has passed." :
       status === "off-season" ? "That date is outside this lake's water-work season." :
       "That day's crew is full — pick another.";
     return { ok: false, error: why };
   }
+  const isRush = status === "rush";
 
-  // Price it here — the client's number is never trusted.
-  const price = priceService(service, toPricingProfile(profile));
+  // Price it here — the client's number is never trusted. Rush pays the
+  // premium; the crew side gets its fill-in discount at claim time.
+  const standardPrice = priceService(service, toPricingProfile(profile));
+  const price = isRush ? rushPrice(standardPrice, settings.sameDaySurchargePct) : standardPrice;
 
   const admin = createServiceClient();
   const { data: inserted, error } = await admin
@@ -146,12 +170,16 @@ export async function createBooking(
       frequency,
       status: "requested",
       customer_price: price,
+      ...(isRush ? { is_rush: true, rush_fallback: validRushFallback(rushFallback) } : {}),
     })
     .select("id")
     .single();
   if (error || !inserted) return { ok: false, error: error?.message ?? "Could not book that." };
 
   // Auto-dispatch: pick the crew now (preferred first, else best-ranked eligible).
+  // RUSH jobs are the exception — they NEVER auto-dispatch. Same-day push is
+  // unsafe (today's capacity math can't see a crew's real remaining day), so a
+  // rush job is born on the claim board: picking it up is the crew's consent.
   // If the day genuinely filled between page-load and submit (every eligible
   // crew is now full/blocked), back the booking out and ask for another date.
   // Any OTHER no-fit reason (no crew does it yet, or none clears the margin
@@ -159,15 +187,58 @@ export async function createBooking(
   // the customer isn't blocked, the claim board and nightly sweeps hunt for
   // a crew, and the demand itself is the recruiting signal.
   let assigned = false;
-  try {
-    const outcome = await autoAssignJob(inserted.id);
-    assigned = outcome.assigned;
-    if (!outcome.assigned && outcome.decision.reasonNoFit === "all_full_or_blocked") {
-      await admin.from("jobs").delete().eq("id", inserted.id);
-      return { ok: false, error: "That day just filled up — pick another date." };
+  if (!isRush) {
+    try {
+      const outcome = await autoAssignJob(inserted.id);
+      assigned = outcome.assigned;
+      if (!outcome.assigned && outcome.decision.reasonNoFit === "all_full_or_blocked") {
+        await admin.from("jobs").delete().eq("id", inserted.id);
+        return { ok: false, error: "That day just filled up — pick another date." };
+      }
+    } catch {
+      /* leave as requested; the waitlist sweeps will keep hunting */
     }
-  } catch {
-    /* leave as requested; the waitlist sweeps will keep hunting */
+  } else {
+    // ⚡ Blast the crews best placed to say yes: anyone already working THIS
+    // lake today (they're physically there — a rush job fills a gap in their
+    // route). If nobody's out there today, fall back to every active crew
+    // serving the lake. Content is rule-1 clean: no prices, just the board.
+    try {
+      const { data: propRow } = await admin.from("properties").select("lake_id, lakes(name)").eq("id", profile.propertyId).maybeSingle();
+      const jobLake = (propRow?.lake_id as string) ?? null;
+      const lakeName = ((Array.isArray(propRow?.lakes) ? propRow?.lakes[0] : propRow?.lakes) as { name?: string } | null)?.name ?? "your lake";
+      if (jobLake) {
+        const { data: outToday } = await admin
+          .from("jobs")
+          .select("vendor_id, properties!inner(lake_id)")
+          .eq("date", date)
+          .eq("properties.lake_id", jobLake)
+          .in("status", ["scheduled", "in_progress"])
+          .not("vendor_id", "is", null);
+        let crewIds = [...new Set((outToday ?? []).map((r) => r.vendor_id as string))];
+        if (crewIds.length === 0) {
+          const { data: lakeCrews } = await admin
+            .from("vendors")
+            .select("id")
+            .eq("status", "active")
+            .contains("service_lakes", [jobLake]);
+          crewIds = (lakeCrews ?? []).map((v) => v.id as string);
+        }
+        if (crewIds.length > 0) {
+          const { data: crewRows } = await admin.from("vendors").select("user_id").in("id", crewIds).not("user_id", "is", null);
+          const userIds = (crewRows ?? []).map((v) => v.user_id as string);
+          if (userIds.length > 0) {
+            const { data: phones } = await admin.from("users").select("phone").in("id", userIds).not("phone", "is", null);
+            const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+            for (const p of phones ?? []) {
+              void sendSms(p.phone as string, `LakeLife ⚡ same-day ${service.name} just posted on ${lakeName} — fits a gap in your day, first crew to claim gets it: ${site}/vendor/open 🌊`);
+            }
+          }
+        }
+      }
+    } catch {
+      /* the board itself is the source of truth; the blast is best-effort */
+    }
   }
 
   // Notifications — best effort, never block the booking. Be HONEST about
@@ -178,9 +249,11 @@ export async function createBooking(
   if (me?.phone) {
     void sendSms(
       me.phone,
-      assigned
-        ? `LakeLife: ${service.name} is booked for ${pretty}. We'll text you when a crew is on the way. 🌊`
-        : `LakeLife: got it — ${service.name} for ${pretty}. We're lining up a crew now and you'll hear the moment one's locked in. You're never charged until the work is done. 🌊`,
+      isRush
+        ? `LakeLife ⚡: got it — same-day ${service.name} at the rush rate ($${price}). We're offering it to crews already out on your lake right now. If nobody frees up by ${settings.sameDayCutoffHour > 12 ? settings.sameDayCutoffHour - 12 + "pm" : settings.sameDayCutoffHour + "am"}, we'll ${validRushFallback(rushFallback) === "roll" ? "move it to tomorrow at the standard price" : "cancel it — no charge"}. 🌊`
+        : assigned
+          ? `LakeLife: ${service.name} is booked for ${pretty}. We'll text you when a crew is on the way. 🌊`
+          : `LakeLife: got it — ${service.name} for ${pretty}. We're lining up a crew now and you'll hear the moment one's locked in. You're never charged until the work is done. 🌊`,
     );
   }
   if (me?.email) {

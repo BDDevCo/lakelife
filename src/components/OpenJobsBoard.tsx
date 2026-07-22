@@ -84,6 +84,7 @@ function JobCard({ job }: { job: OpenJob }) {
     <div className="ll-card ll-card-pad">
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <h3 style={{ fontSize: 17, margin: 0, flex: 1, minWidth: 160 }}>{job.serviceName}</h3>
+        {job.rush && <span className="ll-pill gold">⚡ Today</span>}
         {job.onMyLake ? (
           <span className="ll-pill ok">Your lake</span>
         ) : job.milesAway != null ? (
@@ -98,12 +99,17 @@ function JobCard({ job }: { job: OpenJob }) {
       </p>
 
       {job.takeHome != null ? (
-        <p style={{ fontSize: 17, fontWeight: 800, color: "var(--teal-dark)", margin: "0 0 12px" }}>
+        <p style={{ fontSize: 17, fontWeight: 800, color: "var(--teal-dark)", margin: job.rush ? "0 0 4px" : "0 0 12px" }}>
           You&apos;d take home {formatCurrency(job.takeHome)}
         </p>
       ) : (
-        <p className="mut" style={{ fontSize: 14, margin: "0 0 12px" }}>
+        <p className="mut" style={{ fontSize: 14, margin: job.rush ? "0 0 4px" : "0 0 12px" }}>
           Set your rate to see your take-home
+        </p>
+      )}
+      {job.rush && (
+        <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
+          Same-day fill-in — fits a gap in your day. First claim wins.
         </p>
       )}
 
@@ -114,7 +120,7 @@ function JobCard({ job }: { job: OpenJob }) {
           disabled={pending}
           style={{ width: "100%", minHeight: 48 }}
         >
-          {pending ? "Claiming…" : "Claim this job"}
+          {pending ? "Claiming…" : job.rush ? "Claim today's job ⚡" : "Claim this job"}
         </button>
       ) : job.blocker === "no_rate" ? (
         <Link

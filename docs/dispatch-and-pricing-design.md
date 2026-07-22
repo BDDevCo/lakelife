@@ -199,3 +199,28 @@ A lake begins with zero crews. Sequence, all machine-driven:
 13. Self-heal the base coordinate from photo-gated job-completion GPS (rolling median) so a bad onboarding pin auto-corrects; add homeowner post-job confirmation as the quality auditor.
 
 **Critical dependency:** Phase A must land first. Phases B–E are inert or actively harmful (silent auto-cancels a human would have saved) until crew activation is machine-only. Ship the ladder's SMS-deletion (#4) only after auto-activation (#3) exists.
+
+## J. SAME-DAY RUSH — built + live-proven (owner design, 2026-07-22)
+Owner insight: same-day is where BOTH sides fund the margin willingly. Customer
+pays a rush premium (urgency is honestly worth it); the crew picks the job up at
+a fill-in discount off their own rate (found money in a schedule gap, zero extra
+drive). Both levers widen the spread: e.g. lawn $85 menu → rush $107 customer,
+GreenEdge $59 rate → $50.15 fill-in, LakeLife margin $56.85 = 53% vs ~31% normal.
+SAFETY SYNTHESIS: rush jobs NEVER auto-dispatch (same-day push = silent overload
++ unjust no-show strikes per the adversarial review) — they are born on the claim
+board; the claim IS the crew's consent. The discount is a DIAL, not a negotiation:
+the board shows the discounted take-home, tapping Claim accepts it.
+Mechanics: bookable TODAY 6am→cutoff dial (14) at rushPrice=ceil(menu×(1+surcharge
+dial .25)); customer pre-chooses fallback (roll to tomorrow at STANDARD price |
+cancel free); crew blast SMS to crews already out on that lake today (else all
+lake crews); board sorts rush first (⚡ Today, hidden post-cutoff); claim pays
+fillInRate=rate×(1−discount dial .15), window-guarded server-side; cutoff rung
+resolveRushFallbacks() on the intraday heartbeat + nightly (roll re-prices to
+standard — the premium bought a shot at TODAY only — then normal dispatch).
+Guards: expire rung skips rush (kinder fallback owns it); scarcity offers never
+stack on rush; season gate (rule 7) outranks urgency; fullDates exempt (crew
+judges own day). Dials: same_day_surcharge_pct/.fill_discount_pct/.cutoff_hour.
+Migration 0025. Live-proven E2E in browser: owner booked ⚡ $107 (fallback chooser),
+job requested+unassigned (no auto-dispatch), crew board showed ⚡ $50.15 first,
+claim → scheduled 107/50.15/56.85; fallback rung separately proven (stale roll →
+tomorrow @ $85 standard + auto-assigned; stale cancel → deleted, no charge).

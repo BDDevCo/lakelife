@@ -10,9 +10,11 @@ import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 import { proposeAutopilotDate } from "@/lib/autopilot";
 import { shouldDemote, healBase } from "@/lib/lake-standing";
 import { warningDue, isExpired } from "@/lib/waitlist";
+import { rushWindowOpen } from "@/lib/rush";
 import { getPlatformSettings } from "@/lib/settings";
-import { autoAssignJob } from "@/app/book/dispatch";
+import { autoAssignJob, loadPricingProfileById } from "@/app/book/dispatch";
 import { computeScarcityOffer } from "@/app/requests/offer-data";
+import { priceService, type ServiceRule } from "@/lib/pricing";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -591,6 +593,7 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
     .select("id, date, services(name), properties(owner_id, address, nickname)")
     .eq("status", "requested")
     .is("vendor_id", null)
+    .eq("is_rush", false) // rush stragglers get their own, kinder fallback rung
     .not("date", "is", null);
 
   let warned = 0, expired = 0;
@@ -633,6 +636,89 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
     }
   }
   return { ok: true, warned, expired };
+}
+
+/**
+ * ⚡ SAME-DAY RUSH FALLBACK. When the rush window closes with a rush job still
+ * unclaimed, execute the customer's PRE-CHOSEN fallback — no limbo, no ops:
+ *  - 'roll'   → move to tomorrow at the STANDARD price (the premium bought a
+ *               shot at today, not tomorrow) and run normal dispatch;
+ *  - 'cancel' → delete it — nothing was ever charged.
+ * Runs on the intraday heartbeat (first beat past the cutoff resolves) and
+ * nightly as the backstop for anything stale.
+ */
+export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: number; cancelled: number }> {
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+  const { sameDayCutoffHour } = await getPlatformSettings();
+  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Indiana/Indianapolis", hour12: false, hour: "2-digit" }).format(new Date())) % 24;
+
+  // Nothing to resolve while the window is still open (today's rush jobs are
+  // legitimately waiting to be claimed); stale rows from prior days always resolve.
+  const windowStillOpen = rushWindowOpen(hour, sameDayCutoffHour);
+  let q = admin
+    .from("jobs")
+    .select("id, date, rush_fallback, service_id, property_id, customer_price, services(name, pricing_model, base, unit_rate, band_pricing), properties(owner_id, address, nickname)")
+    .eq("is_rush", true)
+    .eq("status", "requested")
+    .is("vendor_id", null)
+    .lte("date", today)
+    .limit(50);
+  if (windowStillOpen) q = q.lt("date", today); // only stale rows mid-window
+  const { data: stuck } = await q;
+
+  const tomorrow = addDays(today, 1);
+  let rolled = 0, cancelled = 0;
+  for (const j of stuck ?? []) {
+    const svcRow = one(j.services) as { name?: string; pricing_model?: string; base?: number; unit_rate?: number; band_pricing?: unknown } | null;
+    const prop = one(j.properties) as { owner_id?: string; address?: string; nickname?: string } | null;
+    const svcName = svcRow?.name ?? "your service";
+    const where = prop?.nickname || prop?.address || "your place";
+    const phone = prop?.owner_id
+      ? ((await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle()).data?.phone as string | undefined)
+      : undefined;
+
+    if ((j.rush_fallback as string) === "cancel") {
+      const { data: gone } = await admin
+        .from("jobs").delete().eq("id", j.id as string).eq("status", "requested").is("vendor_id", null).select("id");
+      if (!gone || gone.length === 0) continue; // claimed at the buzzer — leave it
+      cancelled++;
+      if (phone) void sendSms(phone, `LakeLife: no crew could free up today for ${svcName} at ${where} — cancelled as you asked, nothing charged. Book any other day at your standard price. 🌊`);
+      continue;
+    }
+
+    // Roll: tomorrow at the STANDARD menu price, recomputed server-side.
+    let standard = Number(j.customer_price ?? 0); // fallback: keep rush price only if repricing fails
+    const profile = await loadPricingProfileById(admin, j.property_id as string);
+    if (svcRow?.name && profile) {
+      const rule: ServiceRule = {
+        name: svcRow.name,
+        pricing_model: svcRow.pricing_model as ServiceRule["pricing_model"],
+        base: Number(svcRow.base ?? 0),
+        unit_rate: Number(svcRow.unit_rate ?? 0),
+        band_pricing: (svcRow.band_pricing as ServiceRule["band_pricing"]) ?? null,
+      };
+      const p = priceService(rule, profile);
+      if (p > 0) standard = p;
+    }
+    const { data: moved } = await admin
+      .from("jobs")
+      .update({ date: tomorrow, customer_price: standard, is_rush: false, rush_fallback: null })
+      .eq("id", j.id as string)
+      .eq("status", "requested")
+      .is("vendor_id", null)
+      .select("id");
+    if (!moved || moved.length === 0) continue; // claimed at the buzzer — leave it
+    rolled++;
+    let assignedNow = false;
+    try {
+      assignedNow = (await autoAssignJob(j.id as string)).assigned;
+    } catch { /* waitlist sweeps take it from here */ }
+    if (phone) {
+      void sendSms(phone, `LakeLife: no crew could free up today for ${svcName} at ${where}, so it's moved to tomorrow at the standard price ($${standard.toFixed(2)})${assignedNow ? " — and a crew is already locked in" : " — we're lining up a crew now"}. 🌊`);
+    }
+  }
+  return { ok: true, rolled, cancelled };
 }
 
 /** PHASE E: per-lake auto-demotion. A crew whose net strikes (no-shows minus

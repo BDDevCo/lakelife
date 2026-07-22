@@ -57,3 +57,33 @@ describe("helpers", () => {
     expect(isRecurring("Install (spring)")).toBe(false);
   });
 });
+
+describe("dayStatus — same-day rush (⚡)", () => {
+  const base: DayContext = {
+    today: "2026-07-22", isWaterWork: false, seasonStart: null, seasonEnd: null, fullDates: new Set<string>(),
+  };
+
+  it("today is 'rush' inside the window, 'past' outside it", () => {
+    expect(dayStatus("2026-07-22", { ...base, rushNowHour: 9, rushCutoffHour: 14 })).toBe("rush");
+    expect(dayStatus("2026-07-22", { ...base, rushNowHour: 14, rushCutoffHour: 14 })).toBe("past"); // at cutoff
+    expect(dayStatus("2026-07-22", { ...base, rushNowHour: 3, rushCutoffHour: 14 })).toBe("past"); // pre-6am
+  });
+
+  it("rush disabled entirely when the hours aren't provided (pre-rush behavior)", () => {
+    expect(dayStatus("2026-07-22", base)).toBe("past");
+  });
+
+  it("rush is exempt from fullDates — the claiming crew judges their own day", () => {
+    const full = new Set(["2026-07-22"]);
+    expect(dayStatus("2026-07-22", { ...base, fullDates: full, rushNowHour: 9, rushCutoffHour: 14 })).toBe("rush");
+  });
+
+  it("rush still respects the water-work season gate (rule 7 outranks urgency)", () => {
+    const water: DayContext = { ...base, isWaterWork: true, seasonStart: "2026-08-01", seasonEnd: "2026-10-20", rushNowHour: 9, rushCutoffHour: 14 };
+    expect(dayStatus("2026-07-22", water)).toBe("off-season"); // ice-out not until Aug
+  });
+
+  it("future days are untouched by rush context", () => {
+    expect(dayStatus("2026-07-23", { ...base, rushNowHour: 9, rushCutoffHour: 14 })).toBe("available");
+  });
+});

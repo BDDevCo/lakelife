@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
-import { sweepWaitlist } from "@/lib/automation";
+import { sweepWaitlist, resolveRushFallbacks } from "@/lib/automation";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +23,10 @@ async function run(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const sweep = await sweepWaitlist();
-  return NextResponse.json({ ok: true, sweep });
+  // ⚡ First beat past the rush cutoff executes each unclaimed rush job's
+  // pre-chosen fallback (roll to tomorrow at standard price, or free-cancel).
+  const rush = await resolveRushFallbacks();
+  return NextResponse.json({ ok: true, sweep, rush });
 }
 
 export const GET = run;

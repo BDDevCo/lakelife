@@ -26,6 +26,12 @@ export interface PlatformSettings {
   lakeDemotionCooldownDays: number;
   /** Days before an UNFILLED job's date the customer gets the options text. */
   waitlistWarningDays: number;
+  /** Same-day rush premium over menu price (0.25 = +25%). */
+  sameDaySurchargePct: number;
+  /** Fill-in discount off the crew's own rate for same-day claims (0.15). */
+  sameDayFillDiscountPct: number;
+  /** Lake-time hour when same-day booking/claiming closes (14 = 2pm). */
+  sameDayCutoffHour: number;
 }
 
 export const DEFAULT_SETTINGS: PlatformSettings = {
@@ -37,6 +43,9 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   lakeStrikeLimit: 2,
   lakeDemotionCooldownDays: 30,
   waitlistWarningDays: 2,
+  sameDaySurchargePct: 0.25,
+  sameDayFillDiscountPct: 0.15,
+  sameDayCutoffHour: 14,
 };
 
 /** Clamp a raw stored value into a sane band; fall back on anything weird. */
@@ -53,7 +62,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
     const { data } = await admin
       .from("platform_settings")
       .select("key, value")
-      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days"]);
+      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour"]);
     const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]));
     return {
       marginFloor: parseSetting(byKey.get("margin_floor"), DEFAULT_SETTINGS.marginFloor, 0.05, 0.6),
@@ -64,6 +73,9 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       lakeStrikeLimit: parseSetting(byKey.get("lake_strike_limit"), DEFAULT_SETTINGS.lakeStrikeLimit, 1, 10),
       lakeDemotionCooldownDays: parseSetting(byKey.get("lake_demotion_cooldown_days"), DEFAULT_SETTINGS.lakeDemotionCooldownDays, 1, 365),
       waitlistWarningDays: parseSetting(byKey.get("waitlist_warning_days"), DEFAULT_SETTINGS.waitlistWarningDays, 1, 14),
+      sameDaySurchargePct: parseSetting(byKey.get("same_day_surcharge_pct"), DEFAULT_SETTINGS.sameDaySurchargePct, 0, 1),
+      sameDayFillDiscountPct: parseSetting(byKey.get("same_day_fill_discount_pct"), DEFAULT_SETTINGS.sameDayFillDiscountPct, 0, 0.5),
+      sameDayCutoffHour: parseSetting(byKey.get("same_day_cutoff_hour"), DEFAULT_SETTINGS.sameDayCutoffHour, 0, 23),
     };
   } catch {
     return DEFAULT_SETTINGS; // table missing / transient error → today's values

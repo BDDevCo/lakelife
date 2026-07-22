@@ -1,16 +1,20 @@
 /**
  * Booking calendar rules — which days a service can be scheduled.
  *
- *  - past           : the day is today or earlier
+ *  - past           : the day is before today (or today, outside the rush window)
+ *  - rush           : TODAY, inside the same-day rush window — bookable at the
+ *                     rush premium; never auto-dispatched (claim board only)
  *  - off-season     : water work outside the lake's in-water window
  *                     (before ice-out or after the pull deadline) — CLAUDE.md rule 7
  *  - full           : the crew is at capacity that day
  *  - available      : bookable
  *
  * Dates are handled as YYYY-MM-DD strings so timezones can't shift a day.
+ * Rush is exempt from `fullDates` (capacity is the claiming crew's own call —
+ * a claim is consent) but NOT from the season gate (rule 7 outranks urgency).
  */
 
-export type DayStatus = "past" | "off-season" | "full" | "available";
+export type DayStatus = "past" | "rush" | "off-season" | "full" | "available";
 
 export interface DayContext {
   today: string; // YYYY-MM-DD
@@ -18,14 +22,28 @@ export interface DayContext {
   seasonStart: string | null; // lake ice-out (YYYY-MM-DD)
   seasonEnd: string | null; // lake pull deadline (YYYY-MM-DD)
   fullDates: Set<string>; // days already at crew capacity
+  /** Same-day rush: current lake-time hour + the cutoff dial. Omit either to
+   *  disable rush entirely (today then reads "past" — the pre-rush behavior). */
+  rushNowHour?: number;
+  rushCutoffHour?: number;
 }
 
 export function dayStatus(date: string, ctx: DayContext): DayStatus {
-  if (date <= ctx.today) return "past";
+  if (date < ctx.today) return "past";
+  const isToday = date === ctx.today;
+  if (isToday) {
+    const rushOpen =
+      ctx.rushNowHour != null &&
+      ctx.rushCutoffHour != null &&
+      ctx.rushNowHour >= 6 && // RUSH_OPEN_HOUR — "today" isn't real at 3am
+      ctx.rushNowHour < ctx.rushCutoffHour;
+    if (!rushOpen) return "past";
+  }
   if (ctx.isWaterWork) {
     if (ctx.seasonStart && date < ctx.seasonStart) return "off-season";
     if (ctx.seasonEnd && date > ctx.seasonEnd) return "off-season";
   }
+  if (isToday) return "rush";
   if (ctx.fullDates.has(date)) return "full";
   return "available";
 }
