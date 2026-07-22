@@ -11,6 +11,12 @@ import { Stepper, ChoiceChips, ToggleChips, Toggle } from "@/components/wizard-c
 
 type Lawn = "small" | "medium" | "large";
 
+const ENGINE_LABELS: Array<[string, string]> = [
+  ["Outboard", "outboard"], ["Sterndrive (I/O)", "sterndrive"], ["Inboard", "inboard"], ["Jet drive", "jet"], ["No engine", "none"],
+];
+const engineLabel = (code: string) => ENGINE_LABELS.find(([, c]) => c === code)?.[0] ?? "";
+const engineCode = (label: string) => ENGINE_LABELS.find(([l]) => l === label)?.[1] ?? "";
+
 const BOAT_TYPES = [
   "Pontoon", "Tritoon", "Wake boat", "Ski boat", "Fishing boat", "Runabout / bowrider", "Sailboat", "Other",
 ];
@@ -73,7 +79,7 @@ interface Draft {
   jet_skis: number;
   pwc_lifts: number;
   lawn_band: Lawn;
-  boats: Array<{ type: string; length_ft: number }>;
+  boats: Array<{ type: string; length_ft: number; engine_type: string; engine_hp: number; engines: number }>;
   toys: string[];
 }
 
@@ -85,7 +91,9 @@ export function ProfileWizard({
 }: {
   lakes: string[];
   services: ServiceRule[];
-  initial: Partial<Draft>;
+  initial: Partial<Omit<Draft, "boats">> & {
+    boats?: Array<{ type: string; length_ft: number; engine_type?: string | null; engine_hp?: number | null; engines?: number | null }>;
+  };
   propertyId?: string | null;
 }) {
   const router = useRouter();
@@ -109,7 +117,9 @@ export function ProfileWizard({
     jet_skis: initial.jet_skis ?? 0,
     pwc_lifts: initial.pwc_lifts ?? 0,
     lawn_band: initial.lawn_band ?? "medium",
-    boats: initial.boats?.length ? initial.boats : [{ type: "Pontoon", length_ft: 24 }],
+    boats: initial.boats?.length
+      ? initial.boats.map((b) => ({ ...b, engine_type: b.engine_type ?? "", engine_hp: b.engine_hp ?? 0, engines: b.engines ?? 1 }))
+      : [{ type: "Pontoon", length_ft: 24, engine_type: "outboard", engine_hp: 0, engines: 1 }],
     toys: initial.toys ?? ["Kayak"],
   });
 
@@ -367,6 +377,28 @@ export function ProfileWizard({
                 <label>Length (ft)</label>
                 <input type="number" value={b.length_ft || ""} onChange={(e) => updateBoat(i, { length_ft: +e.target.value })} />
               </div>
+              <div style={{ marginTop: 10 }}>
+                <div className="mut" style={{ fontSize: 12.5, marginBottom: 6 }}>Engine — crews price winterization by it</div>
+                <ChoiceChips
+                  options={ENGINE_LABELS.map(([l]) => l)}
+                  value={engineLabel(b.engine_type)}
+                  onChange={(label) => updateBoat(i, { engine_type: engineCode(label) })}
+                />
+              </div>
+              {b.engine_type && b.engine_type !== "none" && (
+                <div style={{ display: "flex", gap: 12, alignItems: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
+                  <div className="ll-field" style={{ marginBottom: 0, maxWidth: 140 }}>
+                    <label>Horsepower</label>
+                    <input type="number" value={b.engine_hp || ""} placeholder="e.g. 150"
+                      onChange={(e) => updateBoat(i, { engine_hp: +e.target.value })} />
+                  </div>
+                  <ChoiceChips
+                    options={["Single", "Twin"]}
+                    value={b.engines >= 2 ? "Twin" : "Single"}
+                    onChange={(v) => updateBoat(i, { engines: v === "Twin" ? 2 : 1 })}
+                  />
+                </div>
+              )}
             </div>
           ))}
           <button className="ll-btn ghost sm" onClick={addBoat}>+ Add a boat</button>
@@ -417,11 +449,11 @@ export function ProfileWizard({
     </div>
   );
 
-  function updateBoat(i: number, patch: Partial<{ type: string; length_ft: number }>) {
+  function updateBoat(i: number, patch: Partial<{ type: string; length_ft: number; engine_type: string; engine_hp: number; engines: number }>) {
     setDraft((d) => ({ ...d, boats: d.boats.map((b, j) => (j === i ? { ...b, ...patch } : b)) }));
   }
   function addBoat() {
-    setDraft((d) => ({ ...d, boats: [...d.boats, { type: "Pontoon", length_ft: 20 }] }));
+    setDraft((d) => ({ ...d, boats: [...d.boats, { type: "Pontoon", length_ft: 20, engine_type: "outboard", engine_hp: 0, engines: 1 }] }));
   }
   function removeBoat(i: number) {
     setDraft((d) => ({ ...d, boats: d.boats.filter((_, j) => j !== i) }));

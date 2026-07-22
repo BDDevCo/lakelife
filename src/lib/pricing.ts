@@ -59,6 +59,14 @@ export interface PricingParams {
   large?: number;
   /** per_sqft_band: ordered tiers; first whose max > sqft wins (max null = top tier). */
   tiers?: Array<{ max: number | null; price: number }>;
+  /**
+   * Additive per-engine pricing (winterize/de-winterize): for each boat
+   * that has an engine, add the first tier whose max > engine_hp (max null
+   * = top tier), times the boat's engine count. Rides ON TOP of the model
+   * price — the per-foot rate still matters (owner, 2026-07-22); engines
+   * refine it, they don't replace it.
+   */
+  per_engine_hp_tiers?: Array<{ max: number | null; price: number }>;
   /** generic additive terms applied on top of the model price. */
   add?: AddTerm[];
 }
@@ -84,7 +92,14 @@ export interface PricingProfile {
   jet_skis: number;
   pwc_lifts: number;
   lawn_band: "small" | "medium" | "large";
-  boats: Array<{ type?: string; length_ft: number }>;
+  boats: Array<{
+    type?: string;
+    length_ft: number;
+    /** 'outboard' | 'sterndrive' | 'inboard' | 'jet' | 'none' — null/absent = unknown (legacy). */
+    engine_type?: string | null;
+    engine_hp?: number | null;
+    engines?: number | null;
+  }>;
   toys: Array<{ name?: string }>;
 }
 
@@ -134,6 +149,17 @@ export function priceService(rule: ServiceRule, p: PricingProfile): number {
       const tier = tiers.find((t) => t.max == null || p.sqft < t.max);
       price = tier ? Number(tier.price) : rule.base;
       break;
+    }
+  }
+
+  // Per-engine adds: sail/no-engine boats skip; unknown HP prices at the
+  // cheapest tier (an honest floor, never a guess up).
+  if (Array.isArray(cfg.per_engine_hp_tiers) && cfg.per_engine_hp_tiers.length) {
+    for (const b of p.boats ?? []) {
+      if ((b.engine_type ?? "") === "none") continue;
+      const hp = Number(b.engine_hp) || 0;
+      const tier = cfg.per_engine_hp_tiers.find((t) => t.max == null || hp < t.max);
+      if (tier) price += Math.max(1, Number(b.engines) || 1) * Number(tier.price);
     }
   }
 

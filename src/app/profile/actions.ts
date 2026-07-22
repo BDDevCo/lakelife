@@ -24,7 +24,7 @@ export interface WizardInput {
   pwc_lifts: number;
   canopy: boolean;
   lawn_band: "small" | "medium" | "large";
-  boats: Array<{ type: string; length_ft: number }>;
+  boats: Array<{ type: string; length_ft: number; engine_type?: string; engine_hp?: number; engines?: number }>;
   toys: Array<{ name: string }>;
   wanted_services: string[];
 }
@@ -142,6 +142,9 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
         property_id: propertyId,
         type: b.type || "Boat",
         length_ft: b.length_ft,
+        engine_type: b.engine_type || null,
+        engine_hp: b.engine_hp && b.engine_hp > 0 ? b.engine_hp : null,
+        engines: Math.max(1, Math.min(4, Math.round(b.engines || 1))),
       })),
     );
     if (error) return { ok: false, error: error.message };

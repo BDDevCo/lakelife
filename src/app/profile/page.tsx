@@ -100,7 +100,12 @@ export default async function ProfilePage() {
     facts.push(["Boat lifts", `${profile.boat_lifts} lift${profile.boat_lifts === 1 ? "" : "s"}${profile.canopy ? " · canopy" : ""}`, "Set each spring, pulled each fall"]);
   }
   if (wants("Boat storage & winterize")) {
-    facts.push(["Boats", profile.boats.length ? profile.boats.map((b) => `${b.length_ft}' ${b.type}`).join(" · ") : "None on file", "Winterized & stored by the foot — no repairs"]);
+    facts.push(["Boats", profile.boats.length ? profile.boats.map((b) => {
+      const eng = b.engine_type && b.engine_type !== "none"
+        ? ` · ${(b.engines ?? 1) > 1 ? `twin ` : ""}${b.engine_hp ? `${b.engine_hp}hp ` : ""}${b.engine_type}`
+        : b.engine_type === "none" ? " · no engine" : "";
+      return `${b.length_ft}' ${b.type}${eng}`;
+    }).join(" · ") : "None on file", "Winterized & stored by the foot — no repairs"]);
   }
   if (wants("Jet ski winterize & store") || wants("PWC lift set / pull")) {
     facts.push(["Jet skis / PWC", `${profile.jet_skis} jet ski${profile.jet_skis === 1 ? "" : "s"} · ${profile.pwc_lifts} lift${profile.pwc_lifts === 1 ? "" : "s"}`, "Stored and set/pulled each season"]);

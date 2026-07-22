@@ -83,7 +83,7 @@ export interface FullProfile {
   jet_skis: number;
   pwc_lifts: number;
   lawn_band: "small" | "medium" | "large";
-  boats: Array<{ type: string; length_ft: number }>;
+  boats: Array<{ type: string; length_ft: number; engine_type?: string | null; engine_hp?: number | null; engines?: number | null }>;
   toys: Array<{ name: string }>;
   wanted_services: string[];
   boatFeet: number;
@@ -143,7 +143,7 @@ export async function getFullProfile(propertyId?: string): Promise<FullProfile |
 
   const [{ data: profile }, { data: boats }, { data: toys }] = await Promise.all([
     supabase.from("property_profile").select("*").eq("property_id", property.id).maybeSingle(),
-    supabase.from("boats").select("type, length_ft").eq("property_id", property.id),
+    supabase.from("boats").select("type, length_ft, engine_type, engine_hp, engines").eq("property_id", property.id),
     supabase.from("toys").select("name").eq("property_id", property.id),
   ]);
 
@@ -161,6 +161,9 @@ export async function getFullProfile(propertyId?: string): Promise<FullProfile |
   const boatList = (boats ?? []).map((b) => ({
     type: b.type ?? "Boat",
     length_ft: Number(b.length_ft) || 0,
+    engine_type: (b.engine_type as string | null) ?? null,
+    engine_hp: b.engine_hp != null ? Number(b.engine_hp) : null,
+    engines: b.engines != null ? Number(b.engines) : 1,
   }));
 
   return {

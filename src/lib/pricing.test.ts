@@ -211,3 +211,31 @@ describe("seasonal_plus_perdiem — the storage seasonal minimum", () => {
     expect(priceService(rule(-50, 0), { ...PROFILE, boats: [] })).toBe(0);
   });
 });
+
+describe("per_engine_hp_tiers — engines refine the price, per-foot still matters", () => {
+  const winterize: ServiceRule = {
+    name: "Boat winterization (shop)", pricing_model: "per_foot", base: 0, unit_rate: 12,
+    band_pricing: { per_engine_hp_tiers: [{ max: 150, price: 60 }, { max: null, price: 120 }] },
+  };
+  it("per-foot base + the boat's HP tier", () => {
+    const p = { ...PROFILE, boats: [{ length_ft: 24, engine_type: "outboard", engine_hp: 115, engines: 1 }] };
+    expect(priceService(winterize, p)).toBe(348); // 12×24 + 60
+  });
+  it("twins pay the tier twice; big HP hits the top tier", () => {
+    const p = { ...PROFILE, boats: [{ length_ft: 28, engine_type: "sterndrive", engine_hp: 300, engines: 2 }] };
+    expect(priceService(winterize, p)).toBe(576); // 12×28 + 2×120
+  });
+  it("sailboats (engine 'none') pay feet only", () => {
+    const p = { ...PROFILE, boats: [{ length_ft: 20, engine_type: "none", engine_hp: 0, engines: 1 }] };
+    expect(priceService(winterize, p)).toBe(240);
+  });
+  it("legacy boats with unknown engine price at the cheapest tier — an honest floor", () => {
+    const p = { ...PROFILE, boats: [{ length_ft: 24 }] };
+    expect(priceService(winterize, p)).toBe(348); // 288 + first tier 60
+  });
+  it("rules without the param are untouched", () => {
+    const bare: ServiceRule = { name: "x", pricing_model: "per_foot", base: 0, unit_rate: 12 };
+    const p = { ...PROFILE, boats: [{ length_ft: 24, engine_type: "inboard", engine_hp: 450, engines: 2 }] };
+    expect(priceService(bare, p)).toBe(288);
+  });
+});

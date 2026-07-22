@@ -25,7 +25,7 @@ export async function loadPricingProfileById(
   const [{ data: prop }, { data: pp }, { data: boats }, { data: toys }] = await Promise.all([
     admin.from("properties").select("sqft, beds, baths").eq("id", propertyId).maybeSingle(),
     admin.from("property_profile").select("*").eq("property_id", propertyId).maybeSingle(),
-    admin.from("boats").select("type, length_ft").eq("property_id", propertyId),
+    admin.from("boats").select("type, length_ft, engine_type, engine_hp, engines").eq("property_id", propertyId),
     admin.from("toys").select("name").eq("property_id", propertyId),
   ]);
   if (!prop) return null;
