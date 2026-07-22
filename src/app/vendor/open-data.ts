@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
 import { canClaim, milesBetween, type ClaimBlocker, type CrewCandidate } from "@/lib/dispatch";
+import { isCoolingDown } from "@/lib/lake-standing";
 import { loadPricingProfileById } from "@/app/book/dispatch";
 import { getPlatformSettings } from "@/lib/settings";
 import type { MyVendor } from "./data";
@@ -55,13 +56,20 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   });
   if (doable.length === 0) return [];
 
-  // One shot each: my rates, my assigned counts per date, my blocked dates.
+  // One shot each: my rates, my assigned counts per date, my blocked dates,
+  // and any lakes I'm paused on (Phase E cooldowns).
   const dates = [...new Set(doable.map((j) => j.date as string))];
-  const [{ data: rates }, { data: myJobs }, { data: myBlocks }] = await Promise.all([
+  const [{ data: rates }, { data: myJobs }, { data: myBlocks }, { data: myPauses }] = await Promise.all([
     admin.from("vendor_rates").select("service_id, base, unit_rate, band_pricing").eq("vendor_id", vendor.id),
     admin.from("jobs").select("date").eq("vendor_id", vendor.id).in("status", ["scheduled", "in_progress"]).in("date", dates),
     admin.from("vendor_availability").select("date").eq("vendor_id", vendor.id).eq("status", "blocked").in("date", dates),
+    admin.from("vendor_lake_demotions").select("lake_id, demoted_at").eq("vendor_id", vendor.id),
   ]);
+  const pausedLakes = new Set(
+    (myPauses ?? [])
+      .filter((p) => isCoolingDown(p.demoted_at as string, settings.lakeDemotionCooldownDays, Date.now()))
+      .map((p) => p.lake_id as string),
+  );
   const rateBySvc = new Map((rates ?? []).map((r) => [r.service_id as string, r]));
   const assignedByDate = new Map<string, number>();
   for (const j of myJobs ?? []) assignedByDate.set(j.date as string, (assignedByDate.get(j.date as string) ?? 0) + 1);
@@ -103,13 +111,17 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       baseLat: vendor.base_lat,
       baseLng: vendor.base_lng,
     };
-    const verdict = canClaim(candidate, {
+    let verdict = canClaim(candidate, {
       serviceName: svc?.name ?? "",
       weekday: WEEKDAYS[new Date((j.date as string) + "T12:00:00").getDay()],
       todayISO: today,
       menuPrice: Number(j.customer_price ?? 0), // server-side only — never returned
       marginFloor: settings.marginFloor,
     });
+    // Phase E: a cooling-down lake overrides everything else — be upfront.
+    if (prop?.lake_id && pausedLakes.has(prop.lake_id as string)) {
+      verdict = { ok: false, blocker: "lake_paused" };
+    }
 
     const miles = milesBetween(prop?.lat ?? null, prop?.lng ?? null, vendor.base_lat, vendor.base_lng);
     out.push({

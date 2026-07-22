@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
 import { canClaim, type ClaimBlocker, type CrewCandidate } from "@/lib/dispatch";
+import { isCoolingDown } from "@/lib/lake-standing";
 import { loadPricingProfileById } from "@/app/book/dispatch";
 import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
@@ -32,6 +33,7 @@ const BLOCKER_MSG: Record<ClaimBlocker, string> = {
   day_full: "Your day is already full.",
   no_rate: "Set your rate for this service first — then you can claim jobs like this.",
   rate_too_high: "This one doesn't clear at your current rate for the service.",
+  lake_paused: "You're paused on this lake for now — keep completing jobs on your other lakes and it reopens automatically.",
 };
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -63,6 +65,22 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
 
   const svc = one(job.services) as { name?: string; pricing_model?: string } | null;
   if (!svc?.name) return { ok: false, error: "That job isn't claimable." };
+
+  // Phase E: a crew paused on this job's lake can't claim there (and therefore
+  // can't auto-re-opt into the lake) until the cooldown runs out.
+  const jobLakeId = (one(job.properties) as { lake_id?: string } | null)?.lake_id ?? null;
+  if (jobLakeId) {
+    const settingsEarly = await getPlatformSettings();
+    const { data: pause } = await admin
+      .from("vendor_lake_demotions")
+      .select("demoted_at")
+      .eq("vendor_id", vendor.id as string)
+      .eq("lake_id", jobLakeId)
+      .maybeSingle();
+    if (pause && isCoolingDown(pause.demoted_at as string, settingsEarly.lakeDemotionCooldownDays, Date.now())) {
+      return { ok: false, error: BLOCKER_MSG.lake_paused };
+    }
+  }
 
   // Price the job at THIS crew's standing rate (no bidding, ever).
   const { data: vr } = await admin

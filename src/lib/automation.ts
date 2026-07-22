@@ -8,6 +8,8 @@ import { todayLakeDate } from "@/lib/booking";
 import { planVendorDay, routeMapUrl, type StopIn } from "@/lib/router";
 import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 import { proposeAutopilotDate } from "@/lib/autopilot";
+import { shouldDemote, healBase } from "@/lib/lake-standing";
+import { getPlatformSettings } from "@/lib/settings";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -242,7 +244,7 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
   const today = todayLakeDate();
   const { data: stale } = await admin
     .from("jobs")
-    .select("id, vendor_id, property_id, date, services(name), properties(address, owner_id), vendors(user_id)")
+    .select("id, vendor_id, property_id, date, services(name), properties(address, owner_id, lake_id), vendors(user_id)")
     .lt("date", today)
     .in("status", ["scheduled", "in_progress"])
     .not("vendor_id", "is", null);
@@ -254,13 +256,23 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
     const { count } = await admin.from("job_photos").select("id", { count: "exact", head: true }).eq("job_id", j.id as string);
     if ((count ?? 0) > 0) continue; // photos on file → not a ghost, leave for ops
 
-    // Record the no-show (idempotent). Skip re-processing if already recorded.
-    const { error: insErr } = await admin.from("vendor_no_shows").insert({
-      vendor_id: j.vendor_id,
-      job_id: j.id,
-      property_id: j.property_id,
-      scheduled_date: j.date,
-    });
+    // Record the no-show (idempotent), stamped with the LAKE it happened on —
+    // that's what drives the per-lake auto-demotion (Phase E). If the lake_id
+    // column doesn't exist yet (migration 0021 pending), fall back to the
+    // legacy shape — the sweep itself must never silently stop.
+    const missLake = (one(j.properties) as { lake_id?: string } | null)?.lake_id ?? null;
+    let insErr = (
+      await admin.from("vendor_no_shows").insert({
+        vendor_id: j.vendor_id, job_id: j.id, property_id: j.property_id, scheduled_date: j.date, lake_id: missLake,
+      })
+    ).error;
+    if (insErr && /lake_id/i.test(insErr.message)) {
+      insErr = (
+        await admin.from("vendor_no_shows").insert({
+          vendor_id: j.vendor_id, job_id: j.id, property_id: j.property_id, scheduled_date: j.date,
+        })
+      ).error;
+    }
     if (insErr) continue; // unique(job_id) violation = already handled
 
     // Penalty-free release: unassign, wipe the priced amounts, back to needs-a-crew.
@@ -413,6 +425,92 @@ export async function sendCoiRevalidations(leadDays = 30): Promise<{ ok: boolean
     emailed++;
   }
   return { ok: true, due, emailed };
+}
+
+/** PHASE E: per-lake auto-demotion. A crew whose net strikes (no-shows minus
+ *  completions) on ONE lake reach the dial gets paused there: the lake is
+ *  removed from their service area and a cooldown row blocks claims/re-adds
+ *  until the clock runs out. Nobody suspends anyone — the marketplace heals. */
+export async function demoteLakeStrikes(): Promise<{ ok: boolean; demoted: number }> {
+  const admin = createServiceClient();
+  const { lakeStrikeLimit } = await getPlatformSettings();
+
+  const [{ data: vendors }, { data: misses }, { data: dones }, { data: lakes }] = await Promise.all([
+    admin.from("vendors").select("id, user_id, service_lakes").eq("status", "active"),
+    admin.from("vendor_no_shows").select("vendor_id, lake_id").not("lake_id", "is", null),
+    admin.from("jobs").select("vendor_id, properties(lake_id)").in("status", ["complete", "paid"]).not("vendor_id", "is", null),
+    admin.from("lakes").select("id, name"),
+  ]);
+  const lakeName = new Map((lakes ?? []).map((l) => [l.id as string, l.name as string]));
+
+  const key = (v: string, l: string) => `${v}|${l}`;
+  const strikes = new Map<string, number>();
+  for (const m of misses ?? []) strikes.set(key(m.vendor_id as string, m.lake_id as string), (strikes.get(key(m.vendor_id as string, m.lake_id as string)) ?? 0) + 1);
+  const comps = new Map<string, number>();
+  for (const d of dones ?? []) {
+    const lk = (one(d.properties) as { lake_id?: string } | null)?.lake_id;
+    if (!lk) continue;
+    comps.set(key(d.vendor_id as string, lk), (comps.get(key(d.vendor_id as string, lk)) ?? 0) + 1);
+  }
+
+  let demoted = 0;
+  for (const v of vendors ?? []) {
+    const myLakes = (v.service_lakes as string[]) ?? [];
+    for (const lk of myLakes) {
+      const s = strikes.get(key(v.id as string, lk)) ?? 0;
+      const c = comps.get(key(v.id as string, lk)) ?? 0;
+      if (!shouldDemote(s, c, lakeStrikeLimit)) continue;
+
+      // Pause: drop the lake from their service area + start the cooldown.
+      await admin.from("vendors").update({ service_lakes: myLakes.filter((x) => x !== lk) }).eq("id", v.id as string);
+      await admin.from("vendor_lake_demotions").upsert(
+        { vendor_id: v.id, lake_id: lk, strikes: s, demoted_at: new Date().toISOString() },
+        { onConflict: "vendor_id,lake_id" },
+      );
+      demoted++;
+
+      if (v.user_id) {
+        const { data: cu } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
+        if (cu?.phone) {
+          void sendSms(cu.phone as string, `LakeLife: after repeated missed jobs on ${lakeName.get(lk) ?? "a lake"}, we've paused routing you there for a while. Keep completing jobs on your other lakes and it reopens automatically. Advance-notice blocks never count against you. 🌊`);
+        }
+      }
+      break; // one demotion per crew per night — no pile-ons
+    }
+  }
+  return { ok: true, demoted };
+}
+
+/** PHASE E: base-pin self-heal. The rolling median of where a crew actually
+ *  COMPLETES jobs is ground truth for proximity ranking — set a missing pin
+ *  from it, correct a wildly-wrong one (>25 mi), leave sane pins alone. */
+export async function selfHealCrewBases(): Promise<{ ok: boolean; set: number; corrected: number }> {
+  const admin = createServiceClient();
+  const { data: vendors } = await admin
+    .from("vendors")
+    .select("id, base_lat, base_lng")
+    .eq("status", "active");
+
+  let setCount = 0, corrected = 0;
+  for (const v of vendors ?? []) {
+    const { data: recent } = await admin
+      .from("jobs")
+      .select("date, properties(lat, lng)")
+      .eq("vendor_id", v.id as string)
+      .in("status", ["complete", "paid"])
+      .order("date", { ascending: false })
+      .limit(20);
+    const points = (recent ?? []).map((r) => {
+      const p = one(r.properties) as { lat?: number; lng?: number } | null;
+      return { lat: p?.lat != null ? Number(p.lat) : null, lng: p?.lng != null ? Number(p.lng) : null };
+    });
+    const d = healBase(points, v.base_lat != null ? Number(v.base_lat) : null, v.base_lng != null ? Number(v.base_lng) : null);
+    if (d.action === "keep") continue;
+    await admin.from("vendors").update({ base_lat: d.lat, base_lng: d.lng }).eq("id", v.id as string);
+    if (d.action === "set") setCount++;
+    else corrected++;
+  }
+  return { ok: true, set: setCount, corrected };
 }
 
 /** AUTOPILOT (§8d): propose each enrolled service's next visit and text the

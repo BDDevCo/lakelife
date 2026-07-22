@@ -176,7 +176,8 @@ export function decideDispatch(input: DispatchInput): DispatchDecision {
  */
 export type ClaimBlocker =
   | "not_active" | "no_coi" | "wrong_service" | "off_day" | "day_blocked" | "day_full"
-  | "no_rate" | "rate_too_high";
+  | "no_rate" | "rate_too_high"
+  | "lake_paused"; // Phase E cooldown — set by the data layer, not canClaim (it's per-job DB state)
 
 export function canClaim(
   c: CrewCandidate,

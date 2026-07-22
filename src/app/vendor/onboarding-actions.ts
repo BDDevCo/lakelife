@@ -161,12 +161,39 @@ export async function setServiceLakes(lakeIds: string[]): Promise<OnboardingResu
   if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
 
   const admin = createServiceClient();
-  const { data: lakes } = await admin.from("lakes").select("id");
+  const { data: lakes } = await admin.from("lakes").select("id, name");
   const allowed = new Set((lakes ?? []).map((l) => l.id as string));
 
   const wanted = Array.isArray(lakeIds) ? lakeIds : [];
-  const clean = [...new Set(wanted.filter((id) => typeof id === "string" && allowed.has(id)))];
+  let clean = [...new Set(wanted.filter((id) => typeof id === "string" && allowed.has(id)))];
   if (clean.length === 0) return { ok: false, error: "Choose at least one lake you service." };
+
+  // Phase E: a lake the crew is paused on can't be re-added until its
+  // cooldown runs out (missing table pre-migration ⇒ no pauses — safe).
+  try {
+    const { isCoolingDown } = await import("@/lib/lake-standing");
+    const { getPlatformSettings } = await import("@/lib/settings");
+    const [{ data: pauses }, settings] = await Promise.all([
+      admin.from("vendor_lake_demotions").select("lake_id, demoted_at").eq("vendor_id", vendor.id),
+      getPlatformSettings(),
+    ]);
+    const cooling = new Set(
+      (pauses ?? [])
+        .filter((p) => isCoolingDown(p.demoted_at as string, settings.lakeDemotionCooldownDays, Date.now()))
+        .map((p) => p.lake_id as string),
+    );
+    const blocked = clean.filter((id) => cooling.has(id));
+    if (blocked.length > 0) {
+      const nameById = new Map((lakes ?? []).map((l) => [l.id as string, l.name as string]));
+      const names = blocked.map((id) => nameById.get(id) ?? "that lake").join(", ");
+      clean = clean.filter((id) => !cooling.has(id));
+      if (clean.length === 0) {
+        return { ok: false, error: `${names} is paused for your crew right now — it reopens automatically. Pick your other lakes for now.` };
+      }
+    }
+  } catch {
+    /* pre-migration: no pause table yet — proceed */
+  }
 
   const { error } = await admin.from("vendors").update({ service_lakes: clean }).eq("id", vendor.id);
   if (error) return { ok: false, error: error.message };
