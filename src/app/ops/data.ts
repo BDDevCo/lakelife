@@ -367,3 +367,102 @@ export async function getLakeConditions(): Promise<LakeCondition[]> {
     active_properties: byLake.get(l.id as string) ?? 0,
   }));
 }
+
+// ---- Margin health (per service × lake) -----------------------------------
+// The owner's menu-tuning instrument (pricing discussion, 2026-07-22): for
+// each service on each lake — how much business, what blended margin, how
+// many crews could actually take the work, and how much demand is WAITING.
+// Reading it: high margin + waiting demand ⇒ consider a menu cut or recruit;
+// margin pinned near the floor ⇒ menu price is too low for that market;
+// waiting > 0 with 0 rated crews ⇒ recruiting (not pricing) is the unblock.
+
+export interface MarginHealthRow {
+  service_name: string;
+  lake_name: string;
+  jobs: number; // booked/completed volume carrying real margin data
+  margin_pct: number; // blended, one decimal
+  crews_with_rate: number; // active+insured crews serving this lake WITH a rate
+  waiting: number; // requested & unassigned future jobs (live demand signal)
+}
+
+export async function getMarginHealth(): Promise<MarginHealthRow[]> {
+  const ops = await assertOps();
+  if (!ops) return [];
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+
+  const [{ data: jobs }, { data: waiting }, { data: vendors }, { data: rates }] = await Promise.all([
+    admin
+      .from("jobs")
+      .select("customer_price, margin, service_id, services(name), properties(lake_id, lakes(name))")
+      .in("status", ["scheduled", "in_progress", "complete", "paid"])
+      .not("margin", "is", null),
+    admin
+      .from("jobs")
+      .select("service_id, services(name), properties(lake_id, lakes(name))")
+      .eq("status", "requested")
+      .is("vendor_id", null)
+      .gte("date", today),
+    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes").eq("status", "active"),
+    admin.from("vendor_rates").select("vendor_id, service_id"),
+  ]);
+
+  const key = (svc: string, lake: string) => `${svc}|${lake}`;
+  const acc = new Map<string, MarginHealthRow & { price_total: number; margin_total: number; service_id: string | null; lake_id: string | null }>();
+  const bump = (svcName: string, lakeName: string, svcId: string | null, lakeId: string | null) => {
+    const k = key(svcName, lakeName);
+    let row = acc.get(k);
+    if (!row) {
+      row = { service_name: svcName, lake_name: lakeName, jobs: 0, margin_pct: 0, crews_with_rate: 0, waiting: 0, price_total: 0, margin_total: 0, service_id: svcId, lake_id: lakeId };
+      acc.set(k, row);
+    }
+    return row;
+  };
+  const unpack = (r: { services?: unknown; properties?: unknown; service_id?: string | null }) => {
+    const svc = (Array.isArray(r.services) ? r.services[0] : r.services) as { name?: string } | null;
+    const prop = (Array.isArray(r.properties) ? r.properties[0] : r.properties) as { lake_id?: string; lakes?: unknown } | null;
+    const lake = (Array.isArray(prop?.lakes) ? prop?.lakes[0] : prop?.lakes) as { name?: string } | null;
+    return { svcName: svc?.name ?? "Unassigned", lakeName: lake?.name ?? "No lake", svcId: (r.service_id as string) ?? null, lakeId: (prop?.lake_id as string) ?? null };
+  };
+
+  for (const r of jobs ?? []) {
+    const u = unpack(r);
+    const row = bump(u.svcName, u.lakeName, u.svcId, u.lakeId);
+    row.jobs += 1;
+    row.price_total += Number((r as { customer_price?: number }).customer_price ?? 0);
+    row.margin_total += Number((r as { margin?: number }).margin ?? 0);
+  }
+  for (const r of waiting ?? []) {
+    const u = unpack(r);
+    bump(u.svcName, u.lakeName, u.svcId, u.lakeId).waiting += 1;
+  }
+
+  // Crews that could actually take the work: active, insured, do the service,
+  // serve the lake, and have a rate on file for the service.
+  const ratedPairs = new Set((rates ?? []).map((r) => `${r.vendor_id}|${r.service_id}`));
+  const insured = (vendors ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today);
+  const { data: svcRows } = await admin.from("services").select("id, name");
+  const svcNameById = new Map((svcRows ?? []).map((s) => [s.id as string, s.name as string]));
+  for (const row of acc.values()) {
+    if (!row.service_id || !row.lake_id) continue;
+    const svcName = svcNameById.get(row.service_id) ?? row.service_name;
+    row.crews_with_rate = insured.filter(
+      (v) =>
+        ((v.service_types as string[]) ?? []).includes(svcName) &&
+        ((v.service_lakes as string[]) ?? []).includes(row.lake_id as string) &&
+        ratedPairs.has(`${v.id}|${row.service_id}`),
+    ).length;
+  }
+
+  const rows = [...acc.values()].map((r) => ({
+    service_name: r.service_name,
+    lake_name: r.lake_name,
+    jobs: r.jobs,
+    margin_pct: r.price_total > 0 ? Math.round((r.margin_total / r.price_total) * 1000) / 10 : 0,
+    crews_with_rate: r.crews_with_rate,
+    waiting: r.waiting,
+  }));
+  // Trouble first: waiting demand desc, then thin crews, then volume.
+  rows.sort((a, b) => b.waiting - a.waiting || a.crews_with_rate - b.crews_with_rate || b.jobs - a.jobs);
+  return rows;
+}

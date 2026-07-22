@@ -10,6 +10,8 @@ import { CrewBoard } from "./CrewBoard";
 import { NeedsAttention } from "./NeedsAttention";
 import { PlatformSettingsCard } from "./PlatformSettingsCard";
 import type { NeedsAttentionJob, PropertyPreferred } from "@/app/ops/dispatch-data";
+import { MarginHealth } from "./MarginHealth";
+import type { MarginHealthRow } from "@/app/ops/data";
 import type { OpsJob, ActiveVendor, MarginRow, LakeCondition, RouteSummary } from "@/app/ops/data";
 import type { OpsThread } from "@/app/ops/messages-data";
 import type { OpsCrew } from "@/app/ops/crews-data";
@@ -30,6 +32,7 @@ export function OpsShell({
   jobs,
   vendors,
   margin,
+  marginHealth,
   lakes,
   routes,
   routeDate,
@@ -44,6 +47,7 @@ export function OpsShell({
   jobs: OpsJob[];
   vendors: ActiveVendor[];
   margin: { rows: MarginRow[]; total: MarginRow };
+  marginHealth: MarginHealthRow[];
   lakes: LakeCondition[];
   routes: RouteSummary[];
   routeDate: string;
@@ -89,7 +93,7 @@ export function OpsShell({
 
       {tab === "dispatch" && <NeedsAttention jobs={needsAttention} crews={vendors} properties={preferredProps} />}
       {tab === "dispatch" && <PlatformSettingsCard settings={settings} />}
-      {tab === "margin" && <MarginTable rows={margin.rows} total={margin.total} />}
+      {tab === "margin" && (<><MarginTable rows={margin.rows} total={margin.total} /><MarginHealth rows={marginHealth} /></>)}
       {tab === "lakes" && <LakeConditions lakes={lakes} />}
       {tab === "routing" && <RouteBuilder routes={routes} date={routeDate} />}
 

@@ -10,6 +10,7 @@ import {
   getMarginByService,
   getLakeConditions,
   getRoutesForDate,
+  getMarginHealth,
 } from "./data";
 import { getMessageThreads } from "./messages-data";
 import { getCrews, getActiveServiceNames } from "./crews-data";
@@ -48,7 +49,7 @@ export default async function OpsPage() {
   t.setDate(t.getDate() + 1);
   const tomorrow = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
 
-  const [summary, jobs, vendors, margin, lakes, routes, threads, crews, crewServiceNames, needsAttention, preferredJobIds, preferredProps, s] = await Promise.all([
+  const [summary, jobs, vendors, margin, lakes, routes, threads, crews, crewServiceNames, needsAttention, preferredJobIds, preferredProps, s, marginHealth] = await Promise.all([
     getOpsSummary(),
     getJobBoard(),
     getActiveVendors(),
@@ -62,6 +63,7 @@ export default async function OpsPage() {
     getPreferredJobIds(),
     getPropertiesWithPreferred(),
     getPlatformSettings(),
+    getMarginHealth(),
   ]);
 
   const kpis = [
@@ -99,7 +101,7 @@ export default async function OpsPage() {
           ))}
         </div>
 
-        <OpsShell jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} crewServiceNames={crewServiceNames} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100) }} />
+        <OpsShell marginHealth={marginHealth} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} crewServiceNames={crewServiceNames} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100) }} />
       </div>
     </>
   );
