@@ -54,11 +54,13 @@ export default async function VendorImportPage() {
     const admin = createServiceClient();
     const { data: svcs } = await admin.from("services").select("name").eq("active", true).order("name");
     const activeServices = (svcs ?? []).map((s) => s.name as string);
+    const { data: lakeRows } = await admin.from("lakes").select("id, name").order("name");
+    const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
     return (
       <>
         <TopBar />
         <VendorNav />
-        <VendorOnboarding vendor={vendor} activeServices={activeServices} />
+        <VendorOnboarding vendor={vendor} activeServices={activeServices} lakes={lakes} />
       </>
     );
   }

@@ -40,6 +40,10 @@ export interface MyVendor {
   w9_url: string | null;
   service_types: string[];
   work_days: string[];
+  service_lakes: string[];
+  daily_capacity: number;
+  base_lat: number | null;
+  base_lng: number | null;
 }
 
 /** The signed-in user's full vendors row (onboarding + status), or null. */
@@ -51,7 +55,7 @@ export async function getMyVendor(): Promise<MyVendor | null> {
   if (!user) return null;
   const { data } = await supabase
     .from("vendors")
-    .select("id, company, status, coi_url, coi_expiry, w9_url, service_types, work_days")
+    .select("id, company, status, coi_url, coi_expiry, w9_url, service_types, work_days, service_lakes, daily_capacity, base_lat, base_lng")
     .eq("user_id", user.id)
     .maybeSingle();
   if (!data) return null;
@@ -64,6 +68,10 @@ export async function getMyVendor(): Promise<MyVendor | null> {
     w9_url: (data.w9_url as string | null) ?? null,
     service_types: (data.service_types as string[] | null) ?? [],
     work_days: (data.work_days as string[] | null) ?? [],
+    service_lakes: (data.service_lakes as string[] | null) ?? [],
+    daily_capacity: (data.daily_capacity as number | null) ?? 0,
+    base_lat: (data.base_lat as number | null) ?? null,
+    base_lng: (data.base_lng as number | null) ?? null,
   };
 }
 

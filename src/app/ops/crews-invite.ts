@@ -60,7 +60,7 @@ export async function inviteCrew(input: {
     company,
     invite_email: email,
     service_types: serviceTypes,
-    daily_capacity: 0,
+    daily_capacity: 1, // routable default; the crew sets their real number at onboarding
     status: "invited",
   });
   if (insErr) return { ok: false, error: insErr.message };

@@ -2,15 +2,26 @@
 
 /**
  * The crew's onboarding checklist — shown whenever a vendor isn't 'active' yet.
- * Three dead-simple steps (insurance, W-9, what work you do); when all three are
- * done we tell them LakeLife is reviewing. Big tap targets for wet gloves.
+ * Simple, tap-first steps (insurance, W-9, work, lakes, daily capacity, and an
+ * optional home base). There is NO human approval gate anymore: the moment the
+ * required steps clear, the crew flips THEMSELVES live with one button. Big tap
+ * targets for wet gloves.
  */
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ToggleChips } from "@/components/wizard-controls";
+import { Stepper, ToggleChips } from "@/components/wizard-controls";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { toast } from "@/components/Toast";
-import { uploadVendorDoc, setServiceTypes } from "@/app/vendor/onboarding-actions";
+import {
+  uploadVendorDoc,
+  setServiceTypes,
+  setDailyCapacity,
+  setServiceLakes,
+  setBaseLocation,
+  finishOnboarding,
+} from "@/app/vendor/onboarding-actions";
+import { activationGaps } from "@/app/vendor/onboarding-helpers";
 import type { MyVendor } from "@/app/vendor/data";
 
 function prettyDate(iso: string | null): string {
@@ -21,12 +32,38 @@ function prettyDate(iso: string | null): string {
     : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+/** Today (YYYY-MM-DD) in lake time — the yardstick for COI expiry. */
+function lakeToday(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Indiana/Indianapolis",
+  }).format(new Date());
+}
+
+/** Shared step number/checkmark badge, matching the existing step cards. */
+function StepBadge({ num, done }: { num: number; done: boolean }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 26, height: 26, borderRadius: 999, flex: "0 0 auto",
+        display: "grid", placeItems: "center", fontSize: 14, fontWeight: 800,
+        background: done ? "var(--teal)" : "var(--line)",
+        color: done ? "#fff" : "var(--sub)",
+      }}
+    >
+      {done ? "✓" : num}
+    </span>
+  );
+}
+
 export function VendorOnboarding({
   vendor,
   activeServices,
+  lakes = [],
 }: {
   vendor: MyVendor;
   activeServices: string[];
+  lakes?: { id: string; name: string }[];
 }) {
   const router = useRouter();
 
@@ -49,7 +86,24 @@ export function VendorOnboarding({
   const coiDone = !!vendor.coi_url;
   const w9Done = !!vendor.w9_url;
   const servicesDone = vendor.service_types.length > 0;
-  const allDone = coiDone && w9Done && servicesDone;
+  const lakesDone = vendor.service_lakes.length > 0;
+  const capacityDone = vendor.daily_capacity >= 1;
+  const baseDone = vendor.base_lat != null;
+
+  const today = lakeToday();
+  const gaps = activationGaps(
+    {
+      coi_url: vendor.coi_url,
+      coi_expiry: vendor.coi_expiry,
+      w9_url: vendor.w9_url,
+      service_types: vendor.service_types,
+      service_lakes: vendor.service_lakes,
+      daily_capacity: vendor.daily_capacity,
+    },
+    today,
+  );
+  const readyToGoLive = gaps.length === 0;
+  const coiFlagged = gaps.some((g) => /insurance|COI/i.test(g));
 
   return (
     <div className="wrap" style={{ paddingTop: 24, maxWidth: 560 }}>
@@ -57,7 +111,7 @@ export function VendorOnboarding({
         {vendor.company ? `Welcome, ${vendor.company}` : "Welcome to LakeLife"}
       </h1>
       <p className="mut" style={{ fontSize: 14, marginBottom: 18 }}>
-        Three quick things and you&apos;re ready for jobs. Do them in any order.
+        A few quick things and you can flip yourself live. Do them in any order.
       </p>
 
       <div style={{ display: "grid", gap: 12 }}>
@@ -83,27 +137,54 @@ export function VendorOnboarding({
           selected={vendor.service_types}
           onDone={() => router.refresh()}
         />
+        <LakeStep
+          num={4}
+          done={lakesDone}
+          lakes={lakes}
+          selectedIds={vendor.service_lakes}
+          onDone={() => router.refresh()}
+        />
+        <CapacityStep
+          num={5}
+          done={capacityDone}
+          initial={vendor.daily_capacity}
+          onDone={() => router.refresh()}
+        />
+        <BaseStep
+          num={6}
+          done={baseDone}
+          onDone={() => router.refresh()}
+        />
       </div>
 
       <div style={{ marginTop: 18 }}>
-        {allDone ? (
-          <div
-            className="ll-card ll-card-pad"
-            style={{ textAlign: "center", borderColor: "var(--teal)" }}
-          >
-            <span className="ll-pill ok">All set</span>
-            <p style={{ fontSize: 16, fontWeight: 700, margin: "10px 0 4px" }}>
-              You&apos;re all set — LakeLife is reviewing.
-            </p>
-            <p className="mut" style={{ fontSize: 14 }}>
-              You&apos;ll get a text when jobs start routing to you. 🌊
-            </p>
-          </div>
+        {readyToGoLive ? (
+          <GoLiveCard onDone={() => router.refresh()} />
         ) : (
-          <div className="ll-card ll-card-pad" style={{ background: "var(--warn-bg, transparent)" }}>
-            <p style={{ fontSize: 14, fontWeight: 700, color: "var(--warn)", margin: 0 }}>
-              No insurance on file, no jobs — it&apos;s how we keep every dock covered.
+          <div className="ll-card ll-card-pad">
+            <span className="ll-pill warn">Almost there</span>
+            <p style={{ fontSize: 16, fontWeight: 700, margin: "10px 0 2px" }}>
+              A few things left before you can go live
             </p>
+            <ul style={{ listStyle: "none", padding: 0, margin: "10px 0 0", display: "grid", gap: 8 }}>
+              {gaps.map((g) => (
+                <li key={g} style={{ display: "flex", gap: 9, alignItems: "flex-start", fontSize: 14 }}>
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 20, height: 20, borderRadius: 999, flex: "0 0 auto", marginTop: 1,
+                      border: "1.5px solid var(--line)", background: "#fff",
+                    }}
+                  />
+                  <span>{g}</span>
+                </li>
+              ))}
+            </ul>
+            {coiFlagged && (
+              <p style={{ fontSize: 13, fontWeight: 700, color: "var(--warn)", margin: "12px 0 0" }}>
+                No insurance on file, no jobs — it&apos;s how we keep every dock covered.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -285,6 +366,221 @@ function ServiceStep({
         style={{ marginTop: 12, width: "100%", minHeight: 48 }}
       >
         {pending ? "Saving…" : "Save"}
+      </button>
+    </div>
+  );
+}
+
+function LakeStep({
+  num,
+  done,
+  lakes,
+  selectedIds,
+  onDone,
+}: {
+  num: number;
+  done: boolean;
+  lakes: { id: string; name: string }[];
+  selectedIds: string[];
+  onDone: () => void;
+}) {
+  const nameById = new Map(lakes.map((l) => [l.id, l.name]));
+  const idByName = new Map(lakes.map((l) => [l.name, l.id]));
+  const initialNames = selectedIds
+    .map((id) => nameById.get(id))
+    .filter((n): n is string => !!n);
+
+  const [picked, setPicked] = useState<string[]>(initialNames);
+  const [pending, startTransition] = useTransition();
+
+  function toggle(name: string) {
+    setPicked((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
+  }
+
+  function save() {
+    if (picked.length === 0) {
+      toast("Tap at least one lake you service.");
+      return;
+    }
+    const ids = picked
+      .map((n) => idByName.get(n))
+      .filter((id): id is string => !!id);
+    startTransition(async () => {
+      const res = await setServiceLakes(ids);
+      if (!res.ok) {
+        toast(res.error ?? "Couldn't save.");
+        return;
+      }
+      toast("Lakes saved.");
+      onDone();
+    });
+  }
+
+  return (
+    <div className="ll-card ll-card-pad">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <StepBadge num={num} done={done} />
+        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>Which lakes do you service?</h3>
+        {done && <span className="ll-pill ok">Saved ✓</span>}
+      </div>
+
+      <p className="mut" style={{ fontSize: 13, margin: "0 0 10px" }}>
+        Tap every lake your crew works.
+      </p>
+
+      {lakes.length === 0 ? (
+        <p className="mut" style={{ fontSize: 14 }}>No lakes set up yet — call dispatch.</p>
+      ) : (
+        <ToggleChips options={lakes.map((l) => l.name)} selected={picked} onToggle={toggle} />
+      )}
+
+      <button
+        className="ll-btn gold"
+        onClick={save}
+        disabled={pending}
+        style={{ marginTop: 12, width: "100%", minHeight: 48 }}
+      >
+        {pending ? "Saving…" : "Save"}
+      </button>
+    </div>
+  );
+}
+
+function CapacityStep({
+  num,
+  done,
+  initial,
+  onDone,
+}: {
+  num: number;
+  done: boolean;
+  initial: number;
+  onDone: () => void;
+}) {
+  const [n, setN] = useState<number>(initial >= 1 ? initial : 1);
+  const [pending, startTransition] = useTransition();
+
+  function save() {
+    startTransition(async () => {
+      const res = await setDailyCapacity(n);
+      if (!res.ok) {
+        toast(res.error ?? "Couldn't save.");
+        return;
+      }
+      toast("Daily capacity saved.");
+      onDone();
+    });
+  }
+
+  return (
+    <div className="ll-card ll-card-pad">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <StepBadge num={num} done={done} />
+        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>How many jobs a day?</h3>
+        {done && <span className="ll-pill ok">Saved ✓</span>}
+      </div>
+
+      <Stepper
+        label="Jobs per day"
+        value={n}
+        onChange={setN}
+        min={1}
+        max={20}
+        hint="The most stops we'll route to your crew in one day."
+      />
+
+      <button
+        className="ll-btn gold"
+        onClick={save}
+        disabled={pending}
+        style={{ marginTop: 4, width: "100%", minHeight: 48 }}
+      >
+        {pending ? "Saving…" : "Save"}
+      </button>
+    </div>
+  );
+}
+
+function BaseStep({
+  num,
+  done,
+  onDone,
+}: {
+  num: number;
+  done: boolean;
+  onDone: () => void;
+}) {
+  const [value, setValue] = useState("");
+  const [pending, startTransition] = useTransition();
+
+  function handleSelect(sel: { address: string; lat: number | null; lng: number | null; placeId: string | null }) {
+    const { lat, lng } = sel;
+    if (lat == null || lng == null) return;
+    startTransition(async () => {
+      const res = await setBaseLocation(lat, lng);
+      if (!res.ok) {
+        toast(res.error ?? "Couldn't save your home base.");
+        return;
+      }
+      toast("Home base saved.");
+      onDone();
+    });
+  }
+
+  return (
+    <div className="ll-card ll-card-pad">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <StepBadge num={num} done={done} />
+        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>Where&apos;s home base?</h3>
+        {done ? (
+          <span className="ll-pill ok">Saved ✓</span>
+        ) : (
+          <span className="ll-pill slate">Optional</span>
+        )}
+      </div>
+
+      <p className="mut" style={{ fontSize: 13, margin: "0 0 10px" }}>
+        Optional — sharpens which nearby jobs reach you. You can add it later. {pending ? "Saving…" : "🌊"}
+      </p>
+
+      <AddressAutocomplete value={value} onChange={setValue} onSelect={handleSelect} />
+    </div>
+  );
+}
+
+function GoLiveCard({ onDone }: { onDone: () => void }) {
+  const [pending, startTransition] = useTransition();
+
+  function go() {
+    startTransition(async () => {
+      const res = await finishOnboarding();
+      if (!res.ok) {
+        toast(res.error ?? "Couldn't go live — try again.");
+        return;
+      }
+      onDone();
+    });
+  }
+
+  return (
+    <div
+      className="ll-card ll-card-pad"
+      style={{ textAlign: "center", borderColor: "var(--teal)" }}
+    >
+      <span className="ll-pill ok">Ready</span>
+      <p style={{ fontSize: 18, fontWeight: 800, margin: "10px 0 4px" }}>
+        You&apos;re ready to go live 🌊
+      </p>
+      <p className="mut" style={{ fontSize: 14, marginBottom: 14 }}>
+        Flip yourself on and jobs start routing to your crew — no waiting on us.
+      </p>
+      <button
+        className="ll-btn gold"
+        onClick={go}
+        disabled={pending}
+        style={{ width: "100%", minHeight: 48 }}
+      >
+        {pending ? "Going live…" : "Go live — start getting jobs"}
       </button>
     </div>
   );

@@ -2,7 +2,9 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
-import { DOC_TYPES, MAX_DOC_BYTES, safeExt, validExpiry } from "./onboarding-helpers";
+import {
+  DOC_TYPES, MAX_DOC_BYTES, safeExt, validExpiry, validLatLng, activationGaps,
+} from "./onboarding-helpers";
 
 export interface OnboardingResult {
   ok: boolean;
@@ -117,6 +119,123 @@ export async function setServiceTypes(types: string[]): Promise<OnboardingResult
     .from("vendors")
     .update({ service_types: clean })
     .eq("id", vendor.id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/** Clamp to a whole-number daily capacity in the allowed 1–20 range. */
+function validCapacity(n: unknown): number | null {
+  const v = Math.floor(Number(n));
+  if (!Number.isFinite(v) || v < 1 || v > 20) return null;
+  return v;
+}
+
+/**
+ * Crew self-sets how many jobs a day they can take (1–20). Writes
+ * vendors.daily_capacity only, own row, via the service role after an identity
+ * check — the same trust model as setServiceTypes. This replaces the ops-only
+ * setCrewCapacity for the onboarding path.
+ */
+export async function setDailyCapacity(n: number): Promise<OnboardingResult> {
+  const vendor = await assertMyVendor();
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+
+  const cap = validCapacity(n);
+  if (cap == null) return { ok: false, error: "Enter a whole number of jobs per day, 1 to 20." };
+
+  const admin = createServiceClient();
+  const { error } = await admin.from("vendors").update({ daily_capacity: cap }).eq("id", vendor.id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/**
+ * Crew self-selects the lakes they service. Every id is whitelisted against the
+ * lakes table (service-role select) so a tampered client can't invent a lake or
+ * claim one that doesn't exist. Writes vendors.service_lakes only.
+ */
+export async function setServiceLakes(lakeIds: string[]): Promise<OnboardingResult> {
+  const vendor = await assertMyVendor();
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+
+  const admin = createServiceClient();
+  const { data: lakes } = await admin.from("lakes").select("id");
+  const allowed = new Set((lakes ?? []).map((l) => l.id as string));
+
+  const wanted = Array.isArray(lakeIds) ? lakeIds : [];
+  const clean = [...new Set(wanted.filter((id) => typeof id === "string" && allowed.has(id)))];
+  if (clean.length === 0) return { ok: false, error: "Choose at least one lake you service." };
+
+  const { error } = await admin.from("vendors").update({ service_lakes: clean }).eq("id", vendor.id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/**
+ * Crew self-sets a home base (from address autocomplete → lat/lng). Optional:
+ * it sharpens distance ranking but must NEVER block activation. Coordinates are
+ * sanity-bounded (rejects 0,0 and out-of-region typos) before storing.
+ */
+export async function setBaseLocation(lat: number, lng: number): Promise<OnboardingResult> {
+  const vendor = await assertMyVendor();
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+
+  const base = validLatLng(lat, lng);
+  if (!base) return { ok: false, error: "That location didn't look right — pick your town from the list." };
+
+  const admin = createServiceClient();
+  const { error } = await admin.from("vendors").update({ base_lat: base.lat, base_lng: base.lng }).eq("id", vendor.id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/**
+ * ZERO-OPS SELF-ACTIVATION (Phase A). The crew flips THEMSELVES from 'invited'
+ * to 'active' the moment their documents + declarations clear the mechanical
+ * gate — no ops approval. Every requirement is re-checked SERVER-SIDE against a
+ * fresh service-role read (never trust the browser). A suspended crew can never
+ * self-reactivate here (that stays an ops-only override), and verified_at is
+ * stamped for the annual COI re-validation cycle.
+ *
+ * Note: this proves the docs are present, typed, and unexpired — not that the
+ * COI is authentic. Authenticity is carried by the onboarding agreement + the
+ * yearly re-attest + a future third-party verification callback.
+ */
+export async function finishOnboarding(): Promise<OnboardingResult> {
+  const vendor = await assertMyVendor();
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+  if (vendor.status === "active") return { ok: true }; // already live — idempotent
+
+  const admin = createServiceClient();
+  const { data: v } = await admin
+    .from("vendors")
+    .select("coi_url, coi_expiry, w9_url, service_types, service_lakes, daily_capacity")
+    .eq("id", vendor.id)
+    .maybeSingle();
+  if (!v) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+
+  const gaps = activationGaps(
+    {
+      coi_url: (v.coi_url as string | null) ?? null,
+      coi_expiry: (v.coi_expiry as string | null) ?? null,
+      w9_url: (v.w9_url as string | null) ?? null,
+      service_types: (v.service_types as string[] | null) ?? [],
+      service_lakes: (v.service_lakes as string[] | null) ?? [],
+      daily_capacity: (v.daily_capacity as number | null) ?? null,
+    },
+    todayLakeDate(),
+  );
+  if (gaps.length > 0) return { ok: false, error: gaps[0] };
+
+  const { error } = await admin
+    .from("vendors")
+    .update({ status: "active", verified_at: new Date().toISOString() })
+    .eq("id", vendor.id)
+    .eq("status", "invited"); // guard: only invited→active, never resurrect a suspension
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }

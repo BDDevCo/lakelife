@@ -6,6 +6,7 @@ import { LakeLifePayments } from "@/lib/payments";
 import { revalidateJob } from "@/app/book/dispatch";
 import { todayLakeDate } from "@/lib/booking";
 import { planVendorDay, routeMapUrl, type StopIn } from "@/lib/router";
+import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -334,6 +335,42 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
     sent++;
   }
   return { ok: true, sent };
+}
+
+/** Annual COI re-validation nudge (the owner's yearly re-attest). Emails an
+ *  active crew when the certificate on file is exactly `leadDays` (default 30)
+ *  from expiring, OR on the yearly anniversary of their last verification — one
+ *  send per crew per cycle, no tracking column (same idiom as the seasonal
+ *  reminder). An already-expired COI drops the crew from routing regardless
+ *  (no COI, no jobs), so this is the courtesy heads-up before that bites. */
+export async function sendCoiRevalidations(leadDays = 30): Promise<{ ok: boolean; due: number; emailed: number }> {
+  const today = todayLakeDate();
+  const admin = createServiceClient();
+  const { data: crews } = await admin
+    .from("vendors")
+    .select("id, company, coi_expiry, verified_at, users(email, name)")
+    .eq("status", "active");
+
+  let due = 0, emailed = 0;
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  for (const c of crews ?? []) {
+    const isDue = coiRevalidationDue(
+      { coi_expiry: (c.coi_expiry as string | null) ?? null, verified_at: (c.verified_at as string | null) ?? null },
+      today,
+      leadDays,
+    );
+    if (!isDue) continue;
+    due++;
+    const u = one((c as { users?: unknown }).users) as { email?: string; name?: string } | null;
+    if (!u?.email) continue;
+    void sendEmail({
+      to: u.email,
+      subject: "Keep your LakeLife crew active — refresh your insurance on file",
+      html: `<p>Hi ${c.company ?? u?.name ?? "there"},</p><p>Time for your yearly insurance check-in. Upload a current Certificate of Insurance so jobs keep routing to you without a gap — it takes a minute from your crew portal.</p><p><a href="${site}/vendor">Update my COI</a> 🌊</p>`,
+    });
+    emailed++;
+  }
+  return { ok: true, due, emailed };
 }
 
 /** Seasonal "book your fall pull before freeze" email. Fires the day a lake's
