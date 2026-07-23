@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { seasonEndFor, overstayDays, perdiemCharge } from "./storage";
+import { seasonEndFor, overstayDays, perdiemCharge, trueLegsToQuote } from "./storage";
 
 describe("seasonEndFor — the season end rolls to the year AFTER intake", () => {
   it("October intake ends the following May 31", () => {
@@ -31,5 +31,26 @@ describe("overstayDays + perdiemCharge — the polite meter", () => {
     expect(perdiemCharge(0, 10)).toBe(0);
     expect(perdiemCharge(5, 0)).toBe(0);
     expect(perdiemCharge(-3, 10)).toBe(0);
+  });
+});
+
+describe("trueLegsToQuote — the booking promise wins, no leg goes negative", () => {
+  it("unchanged when the sum already matches", () => {
+    expect(trueLegsToQuote([{ id: "a", price: 198 }, { id: "b", price: 285 }], 483))
+      .toEqual([{ id: "a", price: 198 }, { id: "b", price: 285 }]);
+  });
+  it("scales proportionally when dials moved, summing exactly to the quote", () => {
+    const out = trueLegsToQuote([{ id: "a", price: 400 }, { id: "b", price: 150 }], 483);
+    expect(out.reduce((t, l) => t + l.price, 0)).toBe(483);
+    expect(out.every((l) => l.price >= 0)).toBe(true);
+  });
+  it("a quote far below the recomputed sum never yields a negative leg", () => {
+    const out = trueLegsToQuote([{ id: "dew", price: 400 }, { id: "ret", price: 150 }], 100);
+    expect(out.reduce((t, l) => t + l.price, 0)).toBe(100);
+    expect(out.every((l) => l.price >= 0)).toBe(true);
+  });
+  it("zero-priced recompute puts the quote on one leg, not NaN everywhere", () => {
+    const out = trueLegsToQuote([{ id: "a", price: 0 }, { id: "b", price: 0 }], 250);
+    expect(out.reduce((t, l) => t + l.price, 0)).toBe(250);
   });
 });

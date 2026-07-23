@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
-import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges } from "@/lib/automation";
+import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices } from "@/lib/automation";
 
 export const dynamic = "force-dynamic";
 
@@ -25,8 +25,10 @@ async function run(req: Request) {
   // then the honest terminal for jobs whose date passed unfilled (+ the
   // T-minus warning), then try to fill every future waiting job.
   const rushFallbacks = await resolveRushFallbacks();
+  const springBirths = await birthSpringJobs(); // before the sweep: home-variant spring jobs get filled the same night
   const waitlist = await expireUnfilledJobs();
   const sweep = await sweepWaitlist();
+  const overstay = await overstayNotices();
   // Self-heal assignments (re-home lapsed crews, fill stragglers), then route.
   const dispatch = await revalidateAssignments(date);
   const routes = await runRouteBuild(date);
@@ -47,7 +49,7 @@ async function run(req: Request) {
   // + the frequency-capped, prefs-gated nudge engine.
   const payoutBatch = await runReferralPayoutBatch();
   const nudges = await runNudges();
-  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, waitlist, sweep, dispatch, routes, reminders, reconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, nudges });
+  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, sweep, dispatch, routes, reminders, reconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, nudges });
 }
 
 export const GET = run; // Vercel Cron issues GET

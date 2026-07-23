@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateSelection, defaultSelection, anchorServiceId, type PackageView, type PackageComponentView } from "./packages";
+import { validateSelection, defaultSelection, anchorServiceId, anchorFromServices, type PackageView, type PackageComponentView } from "./packages";
 
 const C = (over: Partial<PackageComponentView>): PackageComponentView => ({
   serviceId: over.serviceId ?? "svc",
@@ -91,5 +91,21 @@ describe("anchorServiceId — the visit's primary service is deterministic", () 
   });
   it("no components in phase → null", () => {
     expect(anchorServiceId(STORAGE_ONLY, "spring", ["ind"])).toBeNull();
+  });
+});
+
+describe("anchorFromServices — the spring birth picks the same kind of anchor", () => {
+  it("de-winterize (per_foot component) beats transport and add-ons", () => {
+    expect(anchorFromServices([
+      { id: "ret", kind: "component", pricing_model: "flat" },
+      { id: "dew", kind: "component", pricing_model: "per_foot" },
+      { id: "bat", kind: "addon", pricing_model: "flat" },
+    ])).toBe("dew");
+  });
+  it("transport-only spring anchors on the transport leg", () => {
+    expect(anchorFromServices([{ id: "ret", kind: "component", pricing_model: "flat" }])).toBe("ret");
+  });
+  it("empty → null", () => {
+    expect(anchorFromServices([])).toBeNull();
   });
 });

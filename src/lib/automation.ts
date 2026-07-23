@@ -122,12 +122,64 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, status, customer_price, vendor_cost, vendor_id, property_id, margin, services(name)")
+    .select("id, status, customer_price, vendor_cost, vendor_id, property_id, margin, group_id, phase, price_finalized, services(name)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) return { ok: false, error: "job not found" };
   if (!["complete", "paid"].includes(job.status as string)) return { ok: false, error: "job not complete" };
   const svcName = (one(job.services) as { name?: string } | null)?.name ?? "service";
+
+  // SPRING SPLASH FINALIZE (S4, review-hardened): EVERY settle path —
+  // completeJob's inline call AND the nightly reconcile — finalizes the
+  // spring price BEFORE any invoice exists: quoted total + the overstay
+  // meter (days past season end × the daily dial), the meter as its own
+  // line item so items always sum to the bill. Guarded exactly-once; a
+  // failed finalize ABORTS the settle (the reconcile rail retries), so
+  // the card can never be charged the unfinalized number.
+  if (job.phase === "spring" && job.group_id && job.price_finalized === false) {
+    const { data: stay } = await admin
+      .from("storage_stays").select("id, intake_at, status").eq("group_id", job.group_id as string)
+      .eq("status", "in_storage").maybeSingle();
+    let addOn = 0;
+    if (stay?.intake_at) {
+      const { seasonEndFor, overstayDays, perdiemCharge } = await import("@/lib/storage");
+      const dials = await getPlatformSettings();
+      const end = seasonEndFor((stay.intake_at as string).slice(0, 10), dials.storageSeasonEndMonth, dials.storageSeasonEndDay);
+      addOn = perdiemCharge(overstayDays(todayLakeDate(), end), dials.storagePerdiemDaily);
+    }
+    const finalPrice = Math.round((Number(job.customer_price ?? 0) + addOn) * 100) / 100;
+    const { data: finalized, error: finErr } = await admin
+      .from("jobs")
+      .update({
+        customer_price: finalPrice,
+        margin: job.vendor_cost != null ? Math.round((finalPrice - Number(job.vendor_cost)) * 100) / 100 : null,
+        price_finalized: true,
+      })
+      .eq("id", jobId)
+      .eq("price_finalized", false)
+      .select("id");
+    if (finErr) return { ok: false, error: `spring finalize failed: ${finErr.message}` };
+    if (finalized && finalized.length > 0) {
+      job.customer_price = finalPrice; // the number every step below bills
+      if (addOn > 0) {
+        // The meter as its own honest line (items must sum to the bill).
+        const { data: meterSvc } = await admin
+          .from("services").select("id").eq("name", "Storage overstay (per-diem)").maybeSingle();
+        if (meterSvc) {
+          await admin.from("job_items").insert({
+            job_id: jobId, service_id: meterSvc.id, customer_price: addOn, vendor_cost: 0,
+          });
+        }
+      }
+    }
+    // Custody closes with the splash — release the stay, complete the season.
+    if (stay) {
+      await admin.from("storage_stays")
+        .update({ status: "released", out_at: new Date().toISOString() })
+        .eq("id", stay.id as string).eq("status", "in_storage");
+    }
+    await admin.from("job_groups").update({ status: "completed" }).eq("id", job.group_id as string).eq("status", "active");
+  }
 
   // 1) Payout — release once (photo-verified completion already happened).
   const { data: existingPayout } = await admin.from("payouts").select("id").eq("job_id", jobId).maybeSingle();
@@ -361,7 +413,7 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
   const today = todayLakeDate();
   const { data: stale } = await admin
     .from("jobs")
-    .select("id, vendor_id, property_id, date, services(name), properties(address, owner_id, lake_id), vendors(user_id)")
+    .select("id, vendor_id, property_id, date, group_id, phase, services(name), properties(address, owner_id, lake_id), vendors(user_id)")
     .lt("date", today)
     .in("status", ["scheduled", "in_progress"])
     .not("vendor_id", "is", null);
@@ -393,6 +445,17 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
     if (insErr) continue; // unique(job_id) violation = already handled
 
     // Penalty-free release: unassign, wipe the priced amounts, back to needs-a-crew.
+    // CUSTODY GUARD (S4 review): a sticky spring splash whose boat is
+    // physically in the assigned crew's barn is never released to the
+    // lottery and never strikes the barn holding it — only that vendor
+    // CAN do the work. The overstay meter and the ops Storage ledger
+    // carry the pressure instead.
+    if ((j as { phase?: string }).phase === "spring" && (j as { group_id?: string }).group_id) {
+      const { data: custody } = await admin
+        .from("storage_stays").select("id").eq("group_id", (j as { group_id?: string }).group_id as string)
+        .eq("status", "in_storage").limit(1);
+      if (custody && custody.length > 0) continue;
+    }
     await admin.from("jobs").update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" }).eq("id", j.id);
     flagged++;
 
@@ -981,6 +1044,16 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
       : undefined;
 
     if (isExpired(j.date as string, today)) {
+      // CUSTODY GUARD (S4 review): never expire a visit whose boat is IN
+      // the barn — cancelling the envelope would silence the overstay
+      // meter and strand the boat with no billing rail. The stay, the
+      // meter and the ops ledger own this case; the job stays requested.
+      const gid0 = (j as { group_id?: string | null }).group_id ?? null;
+      if (gid0) {
+        const { data: custody } = await admin
+          .from("storage_stays").select("id").eq("group_id", gid0).eq("status", "in_storage").limit(1);
+        if (custody && custody.length > 0) continue;
+      }
       // Guarded flip — never race a same-moment claim/assign.
       const { data: gone } = await admin
         .from("jobs")
@@ -989,14 +1062,13 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
         .eq("status", "requested")
         .is("vendor_id", null)
         .select("id");
-      // Package fall visit: expiring the job closes the season envelope and
+      if (!gone || gone.length === 0) continue; // lost the race → the winner owns the envelope too
+      // Package visit: expiring the job closes the season envelope and
       // frees the barn's reserved feet (no phantom spring work in S4).
-      if ((j as { group_id?: string | null }).group_id) {
-        const gid = (j as { group_id?: string | null }).group_id as string;
-        await admin.from("storage_stays").update({ status: "cancelled" }).eq("group_id", gid).eq("status", "reserved");
-        await admin.from("job_groups").update({ status: "cancelled", storing_vendor: null }).eq("id", gid);
+      if (gid0) {
+        await admin.from("storage_stays").update({ status: "cancelled" }).eq("group_id", gid0).eq("status", "reserved");
+        await admin.from("job_groups").update({ status: "cancelled", storing_vendor: null }).eq("id", gid0);
       }
-      if (!gone || gone.length === 0) continue;
       expired++;
       if (phone) {
         void sendSms(phone, `LakeLife: we couldn't line up a crew in time for ${svc} at ${where} — so we've cancelled it and you were never charged. Rebook any open day (${site}/book), or invite a crew you trust and they're always first on your jobs (${site}/book). We're recruiting on your lake. 🌊`);
@@ -1300,4 +1372,226 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
     }
   }
   return { ok: true, lakes: lakes.length, emailed };
+}
+
+// ============================================================================
+// S4 — spring two-phase: the season envelope births its spring visit at
+// ice-out, custody stays sticky, and the overstay meter stays polite.
+// ============================================================================
+
+/**
+ * Birth spring visits (nightly). For every ACTIVE envelope with a spring
+ * recipe, a COMPLETED fall visit, and its lake's ice-out confirmed on/after
+ * the fall visit (i.e. THIS coming spring, not last year's stale date):
+ * create the spring job dated ice-out + 14 days (lift/pier breathing room)
+ * at the QUOTED price (the booking-time promise; per-diem rides on top at
+ * splash). Stored boats pre-assign to the storing vendor — the boat is
+ * physically in their barn, there is no dispatch lottery. Home-storage
+ * variants flow through the component-aware engine like any job.
+ */
+export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; sticky: number }> {
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+  let born = 0, sticky = 0;
+
+  const { data: groups } = await admin
+    .from("job_groups")
+    .select("id, property_id, spring_service_ids, spring_quote, storing_vendor, fall_job_id, properties(lake_id, owner_id, lakes(name, ice_out_actual))")
+    .eq("status", "active");
+  for (const g of groups ?? []) {
+    const springIds = (g.spring_service_ids as string[]) ?? [];
+    if (springIds.length === 0) continue;
+    const prop = (Array.isArray(g.properties) ? g.properties[0] : g.properties) as
+      | { lake_id?: string; owner_id?: string; lakes?: unknown } | null;
+    const lake = (Array.isArray(prop?.lakes) ? prop?.lakes[0] : prop?.lakes) as
+      | { name?: string; ice_out_actual?: string } | null;
+    const iceOut = lake?.ice_out_actual as string | undefined;
+    if (!iceOut || iceOut > today) continue;
+
+    // Exactly-once: skip envelopes with a LIVE spring job (a cancelled
+    // penciled date may re-birth); the partial unique index in 0037 is
+    // the concurrent-nightly backstop.
+    const { data: existing } = await admin
+      .from("jobs").select("id").eq("group_id", g.id as string).eq("phase", "spring").neq("status", "cancelled").limit(1);
+    if (existing && existing.length > 0) continue;
+
+    // The fall visit must be DONE, and the ice-out must belong to the spring
+    // AFTER it — a stale last-spring date would otherwise birth in October.
+    if (!g.fall_job_id) continue;
+    const { data: fall } = await admin
+      .from("jobs").select("status, date").eq("id", g.fall_job_id as string).maybeSingle();
+    if (!fall || !["complete", "paid"].includes(fall.status as string)) continue;
+    if (iceOut < ((fall.date as string) ?? "")) continue;
+
+    const profile = await loadPricingProfileById(admin, g.property_id as string);
+    const { data: svcRows } = await admin
+      .from("services")
+      .select("id, name, kind, pricing_model, base, unit_rate, band_pricing")
+      .in("id", springIds);
+    if (!profile || !svcRows?.length) continue;
+
+    const { anchorFromServices } = await import("@/lib/packages");
+    const anchor = anchorFromServices(svcRows.map((s) => ({ id: s.id as string, kind: (s.kind as string) ?? "component", pricing_model: s.pricing_model as string })));
+    if (!anchor) continue;
+
+    // Per-leg prices recomputed for the breakdown, then trued to the QUOTE:
+    // the customer pays what they were promised, to the penny, even if the
+    // owner turned menu dials mid-winter. Largest leg absorbs the rounding.
+    const quote = Math.round(Number(g.spring_quote ?? 0));
+    const legs = svcRows.map((s) => ({
+      id: s.id as string,
+      price: priceService({
+        name: s.name as string, pricing_model: s.pricing_model as ServiceRule["pricing_model"],
+        base: Number(s.base ?? 0), unit_rate: Number(s.unit_rate ?? 0),
+        band_pricing: (s.band_pricing as ServiceRule["band_pricing"]) ?? null,
+      }, profile),
+    }));
+    const sum = legs.reduce((t, l) => t + l.price, 0);
+    const trued = quote > 0 ? (await import("@/lib/storage")).trueLegsToQuote(legs, quote) : legs;
+    legs.length = 0; legs.push(...trued);
+    const price = quote > 0 ? quote : sum;
+
+    const springDate = (() => {
+      const d = new Date(iceOut + "T12:00:00Z");
+      d.setUTCDate(d.getUTCDate() + 14);
+      const proposed = d.toISOString().slice(0, 10);
+      // A backfilled ice-out must never birth a job already in the past —
+      // that would feed it straight into the no-show/expiry machinery.
+      const t = new Date(today + "T12:00:00Z");
+      t.setUTCDate(t.getUTCDate() + 2);
+      const floor = t.toISOString().slice(0, 10);
+      return proposed > floor ? proposed : floor;
+    })();
+
+    const { data: job, error: birthErr } = await admin
+      .from("jobs")
+      .insert({
+        property_id: g.property_id, service_id: anchor, date: springDate,
+        frequency: "One-time (spring)", status: "requested",
+        customer_price: price, group_id: g.id, phase: "spring", price_finalized: false,
+      })
+      .select("id").single();
+    if (birthErr || !job) continue; // unique-index loser (twin nightly) or transient — next night retries
+    const { error: legsErr } = await admin
+      .from("job_items").insert(legs.map((l) => ({ job_id: job.id, service_id: l.id, customer_price: l.price, vendor_cost: 0 })));
+    if (legsErr) {
+      // A spring job with no legs would dodge the summed photo gate and
+      // confuse dispatch — unwind and let the next nightly re-birth it.
+      await admin.from("jobs").delete().eq("id", job.id);
+      continue;
+    }
+    born++;
+
+    // Sticky custody: the storing vendor holds the boat — assign directly at
+    // THEIR rates (legs without a rate price $0 and show up on Margin Health;
+    // physics beats the rate card when the boat is already in the barn).
+    const { data: stay } = await admin
+      .from("storage_stays").select("id, status").eq("group_id", g.id as string).eq("status", "in_storage").maybeSingle();
+    // Sticky custody needs a HEALTHY barn: suspended crew or lapsed COI is
+    // a genuine exception (the boat is physically theirs) — leave the job
+    // requested, alert ops, and let the docs get fixed rather than
+    // assigning work to a crew the platform has benched.
+    let stickyOk = false;
+    if (stay && g.storing_vendor) {
+      const { data: sv } = await admin
+        .from("vendors").select("status, coi_expiry").eq("id", g.storing_vendor as string).maybeSingle();
+      stickyOk = sv?.status === "active" && !!sv?.coi_expiry && String(sv.coi_expiry) >= today;
+      if (!stickyOk) {
+        try {
+          const { data: ops } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
+          for (const o of ops ?? []) {
+            void sendSms(o.phone as string, `LakeLife OPS: spring splash for a stored boat can't auto-assign — the storing crew is ${sv?.status !== "active" ? "not active" : "COI-lapsed"}. Group ${g.id}. Fix their docs and the machine takes it from there.`);
+          }
+        } catch { /* best effort */ }
+      }
+    }
+    if (stay && g.storing_vendor && stickyOk) {
+      const { data: rates } = await admin
+        .from("vendor_rates").select("service_id, base, unit_rate, band_pricing")
+        .eq("vendor_id", g.storing_vendor as string).in("service_id", springIds);
+      const rateBy = new Map((rates ?? []).map((r) => [r.service_id as string, r]));
+      let cost = 0;
+      for (const s of svcRows) {
+        const vr = rateBy.get(s.id as string);
+        if (!vr) continue;
+        const c = priceService({
+          name: s.name as string, pricing_model: s.pricing_model as ServiceRule["pricing_model"],
+          base: Number(vr.base ?? 0), unit_rate: Number(vr.unit_rate ?? 0),
+          band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
+        }, profile);
+        cost += c;
+        await admin.from("job_items").update({ vendor_cost: c }).eq("job_id", job.id).eq("service_id", s.id as string);
+      }
+      await admin.from("jobs")
+        .update({ vendor_id: g.storing_vendor, vendor_cost: cost, margin: price - cost, status: "scheduled" })
+        .eq("id", job.id).eq("status", "requested");
+      sticky++;
+    } else {
+      try { await autoAssignJob(job.id as string); } catch { /* sweeps keep hunting */ }
+    }
+
+    // The penciled-date text — reschedule rides the existing rails.
+    try {
+      if (prop?.owner_id) {
+        const { data: u } = await admin.from("users").select("phone").eq("id", prop.owner_id as string).maybeSingle();
+        const prettyDate = new Date(springDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+        if (u?.phone) {
+          void sendSms(u.phone as string, `LakeLife: ice-out is here on ${lake?.name ?? "your lake"} 🌊 We've penciled your boat's spring visit for ${prettyDate} — $${price.toLocaleString()} as quoted at booking. Need a different day? Just cancel and rebook from your requests page, or text us.`);
+        }
+      }
+    } catch { /* best effort */ }
+  }
+  return { ok: true, born, sticky };
+}
+
+/**
+ * The polite overstay meter (nightly): boats still in storage past the
+ * season end, with no scheduled splash on the calendar, get ONE weekly
+ * operational text with the running number — never a surprise bill.
+ */
+export async function overstayNotices(): Promise<{ ok: boolean; sent: number }> {
+  const admin = createServiceClient();
+  const settings = await getPlatformSettings();
+  const today = todayLakeDate();
+  const now = Date.now();
+  let sent = 0;
+
+  const { data: stays } = await admin
+    .from("storage_stays")
+    .select("id, group_id, intake_at, job_groups(property_id, status, properties(owner_id, address))")
+    .eq("status", "in_storage");
+  for (const st of stays ?? []) {
+    const grp = (Array.isArray(st.job_groups) ? st.job_groups[0] : st.job_groups) as
+      | { property_id?: string; status?: string; properties?: unknown } | null;
+    if (!grp || grp.status !== "active" || !st.intake_at) continue;
+    const { seasonEndFor, overstayDays, perdiemCharge } = await import("@/lib/storage");
+    const end = seasonEndFor((st.intake_at as string).slice(0, 10), settings.storageSeasonEndMonth, settings.storageSeasonEndDay);
+    const days = overstayDays(today, end);
+    if (days <= 0) continue;
+
+    // A scheduled splash on the books = the meter is already understood.
+    const { data: springJob } = await admin
+      .from("jobs").select("id").eq("group_id", st.group_id as string).eq("phase", "spring")
+      .in("status", ["scheduled", "in_progress"]).limit(1);
+    if (springJob && springJob.length > 0) continue;
+
+    const prop = (Array.isArray(grp.properties) ? grp.properties[0] : grp.properties) as
+      | { owner_id?: string; address?: string } | null;
+    if (!prop?.owner_id) continue;
+
+    // Weekly, not daily — polite is the covenant.
+    const { data: last } = await admin
+      .from("nudge_log").select("sent_at").eq("user_id", prop.owner_id as string).eq("kind", `overstay_meter:${st.group_id}`)
+      .order("sent_at", { ascending: false }).limit(1).maybeSingle();
+    if (nudgeCooling((last?.sent_at as string) ?? null, 7, now)) continue;
+
+    const charge = perdiemCharge(days, settings.storagePerdiemDaily);
+    const { data: u } = await admin.from("users").select("phone").eq("id", prop.owner_id as string).maybeSingle();
+    if (u?.phone) {
+      void sendSms(u.phone as string, `LakeLife: your boat's storage season ended ${end} — the meter's at $${charge.toFixed(2).replace(/\.00$/, "")} ($${settings.storagePerdiemDaily.toFixed(2).replace(/\.00$/, "")}/day, billed at splash). Pick your splash day from your requests page and we'll get it back on the water. 🌊`);
+      await admin.from("nudge_log").insert({ user_id: prop.owner_id, kind: `overstay_meter:${st.group_id}` });
+      sent++;
+    }
+  }
+  return { ok: true, sent };
 }

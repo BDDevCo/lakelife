@@ -130,6 +130,18 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   const admin = createServiceClient();
   const groupId = (l.job as { group_id?: string | null }).group_id ?? null;
 
+  // A boat already IN winter storage never self-serve-cancels its splash —
+  // that's a release conversation, not a booking cancel. This guard runs
+  // BEFORE either path (the fee path flips first, so a late check would
+  // cancel the job and strand the boat with no billing rail).
+  if (groupId) {
+    const { data: custody } = await admin
+      .from("storage_stays").select("id").eq("group_id", groupId).eq("status", "in_storage").limit(1);
+    if (custody && custody.length > 0) {
+      return { ok: false, error: "Your boat is in winter storage — text or call us to arrange the splash or a release instead." };
+    }
+  }
+
   // Package fall visit (S2): the cancel must also close the season
   // envelope and free the barn's reserved feet — otherwise the vendor
   // carries phantom feet all winter and S4 births spring work for a

@@ -116,6 +116,12 @@ export function defaultSelection(pkg: PackageView): string[] {
   return pkg.components.filter((c) => c.required || c.defaultOn).map(ckey);
 }
 
+/** Rank shared by both anchor pickers: winterize-type per-foot work first,
+ *  then storage intake, then transport, then add-ons. */
+function anchorRank(c: { kind: string; isStorageTier: boolean; pricingModel: string }): number {
+  return c.kind === "addon" ? 3 : c.isStorageTier ? 1 : c.pricingModel === "flat" ? 2 : 0;
+}
+
 /**
  * The primary service for a visit job (jobs.service_id): the piece a
  * crew would name if you asked what the visit IS. Winterize-type work
@@ -125,9 +131,21 @@ export function defaultSelection(pkg: PackageView): string[] {
 export function anchorServiceId(pkg: PackageView, phase: "fall" | "spring", ids: string[]): string | null {
   const inPhase = pkg.components.filter((c) => c.phase === phase && ids.includes(c.serviceId));
   if (inPhase.length === 0) return null;
-  const rank = (c: PackageComponentView) =>
-    c.kind === "addon" ? 3 :
-    c.isStorageTier ? 1 :
-    c.pricingModel === "flat" ? 2 : 0; // per_foot components (winterize/de-winterize) first
-  return [...inPhase].sort((a, b) => rank(a) - rank(b))[0].serviceId;
+  return [...inPhase].sort((a, b) => anchorRank(a) - anchorRank(b))[0].serviceId;
+}
+
+/**
+ * Anchor picker for S4's spring birth, working from bare service rows
+ * (the envelope stores spring serviceIds, not a PackageView). Same rank,
+ * ties broken by id for determinism.
+ */
+export function anchorFromServices(
+  rows: Array<{ id: string; kind: string; pricing_model: string }>,
+): string | null {
+  if (!rows.length) return null;
+  return [...rows].sort((a, b) => {
+    const ra = anchorRank({ kind: a.kind, isStorageTier: a.pricing_model === "seasonal_plus_perdiem", pricingModel: a.pricing_model });
+    const rb = anchorRank({ kind: b.kind, isStorageTier: b.pricing_model === "seasonal_plus_perdiem", pricingModel: b.pricing_model });
+    return ra !== rb ? ra - rb : a.id < b.id ? -1 : 1;
+  })[0].id;
 }

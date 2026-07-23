@@ -192,3 +192,33 @@ that must exist at launch:
 *Full agent outputs (14 scenarios with steps/constraints, 20+ add-ons, 6 vendor
 archetypes, 22 risks with mitigations, complete schema/dispatch deltas): session
 research archive; regenerate on demand.*
+
+## G. S4 design — spring two-phase + the polite meter (locked 2026-07-22)
+
+**Birth at ice-out (zero-ops):** nightly `birthSpringJobs()` — for every active
+`job_group` with a non-empty spring recipe whose lake has `ice_out_actual` on or
+before today and no spring job yet: create the spring visit dated **ice-out + 14
+days** (breathing room for lift/pier set), status `requested`, `phase='spring'`,
+`price_finalized=false`, line items from the envelope's recipe at the QUOTED
+prices (the booking-time promise), and text the customer the penciled date
+(reschedule = existing cancel/rebook rails; cancel of an in-storage boat's
+spring visit is blocked by the release-flow guard).
+
+**Sticky custody:** stored boats' spring visits pre-assign to `storing_vendor`
+(the boat is physically in their barn — no dispatch lottery, no claim board);
+home-storage variants dispatch normally through the component-aware engine.
+
+**Billed at splash:** spring `completeJob` finalizes price BEFORE settle:
+`customer_price = spring_quote + perdiemCharge(overstayDays(completion,
+seasonEndFor(intake_at, dials)), storage_perdiem_daily)` — the overage appears
+as its own line in the receipt copy. Stay flips `in_storage → released` with
+`out_at`. `price_finalized=true` guards the recompute to exactly once.
+
+**Overstay notices:** nightly, for in-storage stays past season end with no
+scheduled spring job: one polite operational SMS per week — "the meter's
+running, $X so far — pick your splash day." Never spammy, always a number.
+
+**Ops visibility (agent-built):** ops Storage panel — stays with intake/out,
+per-vendor feet utilization, overstay meter. **Customer status (agent-built):**
+requests-page card — "Your boat: in storage at {company} since Oct 15 · season
+through May 31 · spring splash ~$483."

@@ -33,3 +33,28 @@ export function perdiemCharge(days: number, dailyRate: number): number {
   if (!(days > 0) || !(dailyRate > 0)) return 0;
   return Math.round(days * dailyRate * 100) / 100;
 }
+
+/**
+ * True recomputed per-leg prices to the booking-time QUOTE (the promise
+ * wins even if menu dials moved over the winter). Proportional scaling,
+ * every leg clamped ≥ 0, whole dollars, rounding remainder on the
+ * largest leg — items always sum exactly to the quote.
+ */
+export function trueLegsToQuote(
+  legs: Array<{ id: string; price: number }>,
+  quote: number,
+): Array<{ id: string; price: number }> {
+  if (!legs.length) return [];
+  const q = Math.max(0, Math.round(quote));
+  const sum = legs.reduce((t, l) => t + Math.max(0, l.price), 0);
+  if (q === 0 || sum === 0) {
+    // No honest proportions available — put the whole quote on the largest.
+    const out = legs.map((l) => ({ id: l.id, price: 0 }));
+    out.reduce((a, b) => (b.price >= a.price ? b : a), out[0]).price = q;
+    return out;
+  }
+  const scaled = legs.map((l) => ({ id: l.id, price: Math.max(0, Math.floor((Math.max(0, l.price) * q) / sum)) }));
+  const drift = q - scaled.reduce((t, l) => t + l.price, 0);
+  scaled.reduce((a, b) => (b.price >= a.price ? b : a), scaled[0]).price += drift;
+  return scaled;
+}

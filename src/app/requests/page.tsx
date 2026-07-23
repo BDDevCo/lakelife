@@ -10,7 +10,7 @@ import { ScarcityOffers } from "@/components/ScarcityOffers";
 import { UpcomingCalendar } from "@/components/UpcomingCalendar";
 import { CalendarSubscribe } from "@/components/CalendarSubscribe";
 import { getScarcityOffers } from "@/app/requests/offer-data";
-import { getPackageBreakdowns, type PackageBreakdown } from "@/app/requests/package-data";
+import { getPackageBreakdowns, getStorageStatusCards, type PackageBreakdown, type StorageStatusCard } from "@/app/requests/package-data";
 import { todayLakeDate } from "@/lib/booking";
 import { createServiceClient } from "@/lib/supabase/server";
 
@@ -59,6 +59,16 @@ export default async function RequestsPage() {
   // Package visits (storage/winterize) show what's inside — CUSTOMER prices
   // only, shaped server-side from job_items (see package-data.ts).
   const packageBreakdowns = await getPackageBreakdowns(rows.map((r) => r.id as string));
+
+  // "Your boat is tucked in" — active season envelopes with a boat currently
+  // in_storage. job_groups is owner-readable directly at RLS (job_groups_read
+  // policy), so this fetch is real RLS, not a manual ownership check; only
+  // the resulting ids go to the service-role shaping in package-data.ts
+  // (storage_stays itself is OPS/vendor-only at RLS).
+  let groupQuery = supabase.from("job_groups").select("id").eq("status", "active");
+  if (activeId) groupQuery = groupQuery.eq("property_id", activeId);
+  const { data: groupRows } = await groupQuery;
+  const storageCards = await getStorageStatusCards((groupRows ?? []).map((g) => g.id as string));
 
   // Month-at-a-glance: confirmed visits only (scheduled / in progress), today
   // or later in lake time.
@@ -112,6 +122,8 @@ export default async function RequestsPage() {
             <UpcomingCalendar events={events} />
           </div>
         )}
+
+        {storageCards.length > 0 && <StorageStatusCards cards={storageCards} />}
 
         {rows.length === 0 ? (
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
@@ -187,6 +199,34 @@ function PackageServiceCell({ name, breakdown }: { name: string; breakdown: Pack
         )}
       </div>
     </details>
+  );
+}
+
+// "Your boat is tucked in" status card(s) — CUSTOMER-safe fields only
+// (company name, dates, spring quote, per-diem meter). One card per active
+// stay; multiple boats in storage stack as separate cards.
+function shortDate(d: string): string {
+  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function StorageStatusCards({ cards }: { cards: StorageStatusCard[] }) {
+  return (
+    <div style={{ display: "grid", gap: 12, marginBottom: 16 }}>
+      {cards.map((c) => (
+        <div key={c.groupId} className="ll-card ll-card-pad">
+          <div style={{ fontWeight: 800, fontSize: 16 }}>🛥️ Your boat is tucked in at {c.vendorCompany}</div>
+          <p className="mut" style={{ fontSize: 13.5, margin: "4px 0 0" }}>
+            In storage since {shortDate(c.intakeAt)} · season through {shortDate(c.seasonEnd)} · spring visit ~
+            {formatPrice(c.springQuote)} — quoted at booking, billed at splash.
+          </p>
+          {c.meterDollars != null && (
+            <span className="ll-pill gold" style={{ marginTop: 10, display: "inline-block" }}>
+              ⏱ Storage meter: {formatPrice(c.meterDollars)} (${c.perdiemDaily}/day past season end) — pick your splash day.
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 

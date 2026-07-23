@@ -1,5 +1,8 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { getPlatformSettings } from "@/lib/settings";
+import { seasonEndFor, overstayDays, perdiemCharge } from "@/lib/storage";
+import { todayLakeDate } from "@/lib/booking";
 
 /**
  * PACKAGE BREAKDOWNS for the owner's requests table (storage packages —
@@ -82,6 +85,78 @@ export async function getPackageBreakdowns(jobIds: string[]): Promise<Record<str
         ? { names: springServiceIds.map((id) => springNameById.get(id) ?? "Service"), quote: Number(group?.spring_quote ?? 0) }
         : null;
     out[job.id] = { legs: legsByJobId.get(job.id) ?? [], spring };
+  }
+
+  return out;
+}
+
+/**
+ * STORAGE STATUS for the owner's requests page ("your boat is tucked in"
+ * card). Trust boundary: same pattern as getPackageBreakdowns above — the
+ * caller passes job_group ids straight from its own RLS-scoped job_groups
+ * query (job_groups_read policy already lets the owner see their own
+ * groups directly), so no extra ownership check is needed before the
+ * service-role reads below.
+ *
+ * storage_stays is OPS/vendor-only at RLS (0032_storage_schema.sql —
+ * "homeowners get status through the requests UI server-side"), so this
+ * function is that server-side shaping. Only customer-safe fields are
+ * selected: the crew's public company name, the intake date, the season
+ * end (computed from the platform dials), the spring quote (customer
+ * price, quoted at booking), and the per-diem dollar rate/running meter.
+ * NEVER vendor_cost, boat rates, or anything else off job_items/vendors.
+ */
+
+export interface StorageStatusCard {
+  groupId: string;
+  vendorCompany: string;
+  intakeAt: string; // ISO date (YYYY-MM-DD)
+  seasonEnd: string; // ISO date (YYYY-MM-DD)
+  springQuote: number;
+  perdiemDaily: number;
+  meterDollars: number | null; // null until today is past season end
+}
+
+/** Status cards for every job_group id (already owner-verified) that has a
+ *  boat currently in_storage. Groups with no matching in_storage stay are
+ *  simply absent from the result. */
+export async function getStorageStatusCards(groupIds: string[]): Promise<StorageStatusCard[]> {
+  const out: StorageStatusCard[] = [];
+  if (groupIds.length === 0) return out;
+  const admin = createServiceClient();
+
+  const [{ data: groupRows }, settings] = await Promise.all([
+    admin.from("job_groups").select("id, spring_quote").in("id", groupIds),
+    getPlatformSettings(),
+  ]);
+  const groups = (groupRows ?? []) as { id: string; spring_quote: number }[];
+  if (groups.length === 0) return out;
+
+  const { data: stayRows } = await admin
+    .from("storage_stays")
+    .select("group_id, intake_at, vendors(company)")
+    .in("group_id", groups.map((g) => g.id))
+    .eq("status", "in_storage");
+
+  const springQuoteByGroup = new Map(groups.map((g) => [g.id, Number(g.spring_quote ?? 0)]));
+  const today = todayLakeDate();
+
+  for (const stay of (stayRows ?? []) as { group_id: string; intake_at: string | null; vendors: unknown }[]) {
+    if (!stay.intake_at) continue;
+    const vendor = one(stay.vendors as { company?: string } | { company?: string }[] | null);
+    const intakeAt = stay.intake_at.slice(0, 10);
+    const seasonEnd = seasonEndFor(intakeAt, settings.storageSeasonEndMonth, settings.storageSeasonEndDay);
+    const days = overstayDays(today, seasonEnd);
+    const meterDollars = days > 0 ? perdiemCharge(days, settings.storagePerdiemDaily) : null;
+    out.push({
+      groupId: stay.group_id,
+      vendorCompany: vendor?.company ?? "your crew",
+      intakeAt,
+      seasonEnd,
+      springQuote: springQuoteByGroup.get(stay.group_id) ?? 0,
+      perdiemDaily: settings.storagePerdiemDaily,
+      meterDollars,
+    });
   }
 
   return out;
