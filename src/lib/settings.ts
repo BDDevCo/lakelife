@@ -55,6 +55,16 @@ export interface PlatformSettings {
   storageSeasonEndDay: number;
   /** Early-payout ("get it now") fee as a share of the batch gross. */
   earlyPayoutFeePct: number;
+  /** Fill-in offers: share of the crew's own anchor rate they're offered. */
+  gapAnchorPct: number;
+  /** Fill-in offers: smallest offer worth posting (dust guard, floor $20). */
+  gapMinOffer: number;
+  /** Hours a fill-in-eligible job may sit unclaimed before the ops SLA alert. */
+  gapSlaHours: number;
+  /** Fill-in digest: don't email a crew under this many offer dollars. */
+  fillinDigestMin: number;
+  /** Fill-in digest: per-crew quiet period between digests. */
+  fillinDigestCooldownDays: number;
 }
 
 export const DEFAULT_SETTINGS: PlatformSettings = {
@@ -81,6 +91,11 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   storageSeasonEndMonth: 5,
   storageSeasonEndDay: 31,
   earlyPayoutFeePct: 0.02,
+  gapAnchorPct: 0.95,
+  gapMinOffer: 20,
+  gapSlaHours: 72,
+  fillinDigestMin: 200,
+  fillinDigestCooldownDays: 30,
 };
 
 /** Clamp a raw stored value into a sane band; fall back on anything weird. */
@@ -97,7 +112,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
     const { data } = await admin
       .from("platform_settings")
       .select("key, value")
-      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days", "nudge_credit_threshold", "nudge_cooldown_days", "storage_perdiem_daily", "storage_season_end_month", "storage_season_end_day", "early_payout_fee_pct"]);
+      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days", "nudge_credit_threshold", "nudge_cooldown_days", "storage_perdiem_daily", "storage_season_end_month", "storage_season_end_day", "early_payout_fee_pct", "gap_anchor_pct", "gap_min_offer", "gap_sla_hours", "fillin_digest_min", "fillin_digest_cooldown_days"]);
     const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]));
     return {
       marginFloor: parseSetting(byKey.get("margin_floor"), DEFAULT_SETTINGS.marginFloor, 0.05, 0.6),
@@ -123,6 +138,11 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       storageSeasonEndMonth: parseSetting(byKey.get("storage_season_end_month"), DEFAULT_SETTINGS.storageSeasonEndMonth, 1, 12),
       storageSeasonEndDay: parseSetting(byKey.get("storage_season_end_day"), DEFAULT_SETTINGS.storageSeasonEndDay, 1, 31),
       earlyPayoutFeePct: parseSetting(byKey.get("early_payout_fee_pct"), DEFAULT_SETTINGS.earlyPayoutFeePct, 0, 0.1),
+      gapAnchorPct: parseSetting(byKey.get("gap_anchor_pct"), DEFAULT_SETTINGS.gapAnchorPct, 0.8, 1),
+      gapMinOffer: parseSetting(byKey.get("gap_min_offer"), DEFAULT_SETTINGS.gapMinOffer, 20, 500),
+      gapSlaHours: parseSetting(byKey.get("gap_sla_hours"), DEFAULT_SETTINGS.gapSlaHours, 12, 240),
+      fillinDigestMin: parseSetting(byKey.get("fillin_digest_min"), DEFAULT_SETTINGS.fillinDigestMin, 0, 5000),
+      fillinDigestCooldownDays: parseSetting(byKey.get("fillin_digest_cooldown_days"), DEFAULT_SETTINGS.fillinDigestCooldownDays, 7, 120),
     };
   } catch {
     return DEFAULT_SETTINGS; // table missing / transient error → today's values

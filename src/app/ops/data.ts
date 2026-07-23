@@ -1,6 +1,8 @@
 import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
+import { getPlatformSettings } from "@/lib/settings";
+import { marginPct } from "@/lib/dispatch";
 
 /** The one place margin lives (rule 1): ops-only. Everything here is service-role
  *  read, gated by assertOps — never import this into a vendor/owner surface. */
@@ -375,14 +377,24 @@ export async function getLakeConditions(): Promise<LakeCondition[]> {
 // Reading it: high margin + waiting demand ⇒ consider a menu cut or recruit;
 // margin pinned near the floor ⇒ menu price is too low for that market;
 // waiting > 0 with 0 rated crews ⇒ recruiting (not pricing) is the unblock.
+//
+// Fill-in rates etiology (docs/margin-gap-design.md, 2026-07-23): waiting
+// demand splits into two root causes and the split drives a different fix.
+// capacity_stranded — a truly ready crew exists (clears every dispatch gate,
+// margin floor included) but calendars are full ⇒ recruit/expand. margin_
+// stranded — every crew that lists the service here HAS a rate on file but
+// none of them clears the floor ⇒ the MENU is priced under the market; the
+// fill-in claims proves it. Neither fires when no crew lists the service at
+// all — that stays the plain recruit signal it always was.
 
 export interface MarginHealthRow {
   service_name: string;
   lake_name: string;
   jobs: number; // booked/completed volume carrying real margin data
   margin_pct: number; // blended, one decimal
-  crews_with_rate: number; // active+insured crews serving this lake WITH a rate
+  crews_with_rate: number; // active+insured crews serving this lake whose rate ALSO clears the margin floor — i.e. truly ready to take the work, not merely priced
   waiting: number; // requested & unassigned future jobs (live demand signal)
+  etiology: "capacity_stranded" | "margin_stranded" | null; // why waiting demand isn't clearing (null when waiting === 0, or when no crew lists the service at all)
 }
 
 export async function getMarginHealth(): Promise<MarginHealthRow[]> {
@@ -390,6 +402,7 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
   if (!ops) return [];
   const admin = createServiceClient();
   const today = todayLakeDate();
+  const settings = await getPlatformSettings();
 
   const [{ data: jobs }, { data: waiting }, { data: vendors }, { data: rates }] = await Promise.all([
     admin
@@ -399,21 +412,37 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
       .not("margin", "is", null),
     admin
       .from("jobs")
-      .select("service_id, services(name), properties(lake_id, lakes(name))")
+      .select("customer_price, service_id, services(name), properties(lake_id, lakes(name))")
       .eq("status", "requested")
       .is("vendor_id", null)
       .gte("date", today),
     admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes").eq("status", "active"),
-    admin.from("vendor_rates").select("vendor_id, service_id"),
+    admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"),
   ]);
 
   const key = (svc: string, lake: string) => `${svc}|${lake}`;
-  const acc = new Map<string, MarginHealthRow & { price_total: number; margin_total: number; service_id: string | null; lake_id: string | null }>();
+  const acc = new Map<
+    string,
+    MarginHealthRow & { price_total: number; margin_total: number; waiting_price_total: number; service_id: string | null; lake_id: string | null }
+  >();
   const bump = (svcName: string, lakeName: string, svcId: string | null, lakeId: string | null) => {
     const k = key(svcName, lakeName);
     let row = acc.get(k);
     if (!row) {
-      row = { service_name: svcName, lake_name: lakeName, jobs: 0, margin_pct: 0, crews_with_rate: 0, waiting: 0, price_total: 0, margin_total: 0, service_id: svcId, lake_id: lakeId };
+      row = {
+        service_name: svcName,
+        lake_name: lakeName,
+        jobs: 0,
+        margin_pct: 0,
+        crews_with_rate: 0,
+        waiting: 0,
+        etiology: null,
+        price_total: 0,
+        margin_total: 0,
+        waiting_price_total: 0,
+        service_id: svcId,
+        lake_id: lakeId,
+      };
       acc.set(k, row);
     }
     return row;
@@ -434,24 +463,112 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
   }
   for (const r of waiting ?? []) {
     const u = unpack(r);
-    bump(u.svcName, u.lakeName, u.svcId, u.lakeId).waiting += 1;
+    const row = bump(u.svcName, u.lakeName, u.svcId, u.lakeId);
+    row.waiting += 1;
+    row.waiting_price_total += Number((r as { customer_price?: number }).customer_price ?? 0);
   }
 
   // Crews that could actually take the work: active, insured, do the service,
-  // serve the lake, and have a rate on file for the service.
-  const ratedPairs = new Set((rates ?? []).map((r) => `${r.vendor_id}|${r.service_id}`));
+  // serve the lake, and have a rate on file for the service that ALSO clears
+  // the margin floor. Split "has a rate" from "clears the floor" so a
+  // service×lake with 0 truly-ready crews can still tell recruiting apart
+  // from mispricing (see etiology note above).
+  //
+  // The floor test compares the crew's FULL rate row against the MENU's own
+  // numbers, both priced the same way at a representative size per pricing
+  // model (band → medium band, sqft_band → middle tier, per-unit → base +
+  // unit × typical count). Apples-to-apples by construction — a base-only
+  // test would blank out every band-priced crew (their base is $0) and wave
+  // through per-unit crews whose margin actually erodes with size. This is
+  // an aggregate instrument; exact per-job pricing stays in priceService
+  // against the real property.
+  const TYPICAL_PIER_SECTIONS = 6;
+  const TYPICAL_BOAT_FEET = 22;
+  const comparable = (
+    pm: string | null,
+    base: number,
+    unit: number,
+    bands: unknown,
+  ): number | null => {
+    const b = (bands ?? null) as { small?: number; medium?: number; large?: number; tiers?: { price?: number }[] } | null;
+    switch (pm) {
+      case "band": {
+        const m = Number(b?.medium ?? 0);
+        return m > 0 ? m : null;
+      }
+      case "per_sqft_band":
+      case "sqft_band": {
+        const tiers = Array.isArray(b?.tiers) ? b.tiers : [];
+        const mid = Number(tiers[Math.floor(tiers.length / 2)]?.price ?? 0);
+        return mid > 0 ? mid : null;
+      }
+      case "per_section": {
+        const t = base + unit * TYPICAL_PIER_SECTIONS;
+        return t > 0 ? t : null;
+      }
+      case "per_foot":
+      case "seasonal_plus_perdiem": {
+        // Storage rates are seeded base-0 with the money in unit_rate ($/ft),
+        // same shape as per_foot — the default base-only branch would read
+        // every storage crew as "no rate on file".
+        const t = base + unit * TYPICAL_BOAT_FEET;
+        return t > 0 ? t : null;
+      }
+      default:
+        return base > 0 ? base : null;
+    }
+  };
+  const rateRows = new Map((rates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
   const insured = (vendors ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today);
-  const { data: svcRows } = await admin.from("services").select("id, name");
-  const svcNameById = new Map((svcRows ?? []).map((s) => [s.id as string, s.name as string]));
+  const { data: svcRows } = await admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing");
+  const svcById = new Map((svcRows ?? []).map((s) => [s.id as string, s]));
   for (const row of acc.values()) {
     if (!row.service_id || !row.lake_id) continue;
-    const svcName = svcNameById.get(row.service_id) ?? row.service_name;
-    row.crews_with_rate = insured.filter(
+    const svcRow = svcById.get(row.service_id);
+    const svcName = (svcRow?.name as string) ?? row.service_name;
+    const menuComparable = svcRow
+      ? comparable(
+          (svcRow.pricing_model as string) ?? null,
+          Number(svcRow.base ?? 0),
+          Number(svcRow.unit_rate ?? 0),
+          svcRow.band_pricing,
+        )
+      : null;
+    const listing = insured.filter(
       (v) =>
         ((v.service_types as string[]) ?? []).includes(svcName) &&
-        ((v.service_lakes as string[]) ?? []).includes(row.lake_id as string) &&
-        ratedPairs.has(`${v.id}|${row.service_id}`),
-    ).length;
+        ((v.service_lakes as string[]) ?? []).includes(row.lake_id as string),
+    );
+
+    let ready = 0;
+    let floorFail = 0;
+    for (const v of listing) {
+      const vr = rateRows.get(`${v.id}|${row.service_id}`);
+      if (!vr) continue; // no rate on file at all — not a floor failure, just unset
+      const crewComparable = comparable(
+        (svcRow?.pricing_model as string) ?? null,
+        Number(vr.base ?? 0),
+        Number(vr.unit_rate ?? 0),
+        vr.band_pricing,
+      );
+      if (crewComparable == null) continue; // rate row carries no dollars — treat as unset
+      if (menuComparable == null) {
+        // Menu has no comparable number to test against — don't guess a
+        // failure; count the crew as rated (the pre-fill-ins behavior).
+        ready += 1;
+        continue;
+      }
+      // The SAME marginPct/floor gate the dispatch and claim engines use
+      // (rule 8, one formula), at the representative size.
+      if (marginPct(menuComparable, crewComparable) < settings.marginFloor) floorFail += 1;
+      else ready += 1;
+    }
+    row.crews_with_rate = ready;
+    if (row.waiting > 0) {
+      if (ready > 0) row.etiology = "capacity_stranded";
+      else if (floorFail > 0) row.etiology = "margin_stranded";
+      // else: nobody here has priced the work at all — the plain recruit signal stands (etiology stays null).
+    }
   }
 
   const rows = [...acc.values()].map((r) => ({
@@ -461,6 +578,7 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
     margin_pct: r.price_total > 0 ? Math.round((r.margin_total / r.price_total) * 1000) / 10 : 0,
     crews_with_rate: r.crews_with_rate,
     waiting: r.waiting,
+    etiology: r.etiology,
   }));
   // Trouble first: waiting demand desc, then thin crews, then volume.
   rows.sort((a, b) => b.waiting - a.waiting || a.crews_with_rate - b.crews_with_rate || b.jobs - a.jobs);

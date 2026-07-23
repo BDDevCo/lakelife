@@ -18,6 +18,14 @@ import { claimJob } from "@/app/vendor/open-actions";
 import { formatCurrency } from "@/app/vendor/earnings-helpers";
 import type { OpenJob } from "@/app/vendor/open-data";
 
+/**
+ * FILL-IN RATES (docs/margin-gap-design.md, 2026-07-23): a job that failed
+ * dispatch on margin becomes a posted-price offer, same consent pattern as
+ * same-day rush. RULE 1: takeHome already carries the fill-in number (same
+ * shape as rush's discounted take-home); this file never sees, and never
+ * renders, a crew's own card rate next to it.
+ */
+
 type Blocker = NonNullable<OpenJob["blocker"]>;
 
 /** Short on-card reason a job can't be claimed (no_rate gets a link instead). */
@@ -56,8 +64,19 @@ export function OpenJobsBoard({ jobs }: { jobs: OpenJob[] }) {
     );
   }
 
+  const gapCount = jobs.filter((j) => j.gap).length;
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      {gapCount > 0 && (
+        <div className="ll-card ll-card-pad" style={{ background: "var(--sun-soft)" }}>
+          <p style={{ fontSize: 14, fontWeight: 800, margin: 0 }}>
+            {gapCount === 1
+              ? "1 job on your lakes is offering fill-in rates — first tap takes it."
+              : `${gapCount} jobs on your lakes are offering fill-in rates — first tap takes them.`}
+          </p>
+        </div>
+      )}
       {jobs.map((job) => (
         <JobCard key={job.id} job={job} />
       ))}
@@ -68,6 +87,8 @@ export function OpenJobsBoard({ jobs }: { jobs: OpenJob[] }) {
 function JobCard({ job }: { job: OpenJob }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const gap = job.gap;
+  const hasSubline = job.rush || gap; // either sub-line pins the take-home line up to make room
 
   function claim() {
     startTransition(async () => {
@@ -85,6 +106,7 @@ function JobCard({ job }: { job: OpenJob }) {
     <div className="ll-card ll-card-pad">
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <h3 style={{ fontSize: 17, margin: 0, flex: 1, minWidth: 160 }}>{job.serviceName}</h3>
+        {gap && <span className="ll-pill gold">FILL-IN RATE</span>}
         {job.rush && <span className="ll-pill gold">⚡ Today</span>}
         {job.onMyLake ? (
           <span className="ll-pill ok">Your lake</span>
@@ -100,17 +122,22 @@ function JobCard({ job }: { job: OpenJob }) {
       </p>
 
       {job.takeHome != null ? (
-        <p style={{ fontSize: 17, fontWeight: 800, color: "var(--teal-dark)", margin: job.rush ? "0 0 4px" : "0 0 12px" }}>
+        <p style={{ fontSize: 17, fontWeight: 800, color: "var(--teal-dark)", margin: hasSubline ? "0 0 4px" : "0 0 12px" }}>
           You&apos;d take home {formatCurrency(job.takeHome)}
         </p>
       ) : (
-        <p className="mut" style={{ fontSize: 14, margin: job.rush ? "0 0 4px" : "0 0 12px" }}>
+        <p className="mut" style={{ fontSize: 14, margin: hasSubline ? "0 0 4px" : "0 0 12px" }}>
           Set your rate to see your take-home
         </p>
       )}
       {job.rush && (
         <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
           Same-day fill-in — fits a gap in your day. First claim wins.
+        </p>
+      )}
+      {gap && (
+        <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
+          Posted rate for this job — your regular rates stay yours.
         </p>
       )}
 
@@ -121,7 +148,7 @@ function JobCard({ job }: { job: OpenJob }) {
           disabled={pending}
           style={{ width: "100%", minHeight: 48 }}
         >
-          {pending ? "Claiming…" : job.rush ? "Claim today's job ⚡" : "Claim this job"}
+          {pending ? "Claiming…" : gap ? `Claim at ${formatCurrency(job.takeHome)}` : job.rush ? "Claim today's job ⚡" : "Claim this job"}
         </button>
       ) : job.blocker === "no_rate" ? (
         <Link

@@ -70,6 +70,14 @@ price IS the market price; rule 8 makes the fix one DB dial.
 - **Flex window** (standing auto-accept −N%) — two lenses flagged it as the
   resentment engine / shadow-rate-card; only if board uptake proves too slow.
 - **Retune reward** (2h exclusive first-look after a digest-prompted retune).
+- **Rate-edit throttle** (review finding, 2026-07-23): the anchor reads the
+  oldest-first trailing-90d history capped at 500 rows, so spam edits can
+  never flush a low card that PRECEDES them — but a premeditated crew could
+  front-load 500 junk edits BEFORE ever setting a low card, keeping their
+  anchor high. Damage is bounded (offers still capped at the floor-clearing
+  ceiling; LakeLife margin never dips), it requires scripting inside one
+  90-day window, and a per-day edit cap in setMyRate kills it outright when
+  crew volume justifies the friction.
 
 ## Dials (all rule-8 DB settings)
 margin_floor 0.30 (flip LAST) · gap_discount_pct 0.05 · gap round-down $5,

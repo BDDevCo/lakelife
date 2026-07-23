@@ -1,8 +1,8 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule } from "@/lib/pricing";
-import { todayLakeDate } from "@/lib/booking";
-import { canClaim, milesBetween, type ClaimBlocker, type CrewCandidate } from "@/lib/dispatch";
+import { todayLakeDate, lakeDateOf } from "@/lib/booking";
+import { canClaim, milesBetween, gapTakeHome, gapOfferFor, gapJitter, type ClaimBlocker, type CrewCandidate } from "@/lib/dispatch";
 import { isCoolingDown } from "@/lib/lake-standing";
 import { fillInRate, rushWindowOpen } from "@/lib/rush";
 import { loadPricingProfileById } from "@/app/book/dispatch";
@@ -29,6 +29,48 @@ export interface OpenJob {
   claimable: boolean;
   blocker: ClaimBlocker | null; // why not, when not claimable
   rush: boolean; // ⚡ same-day fill-in — takeHome already reflects the discount
+  /** Fill-in offer (margin-gap design): takeHome IS the posted offer. */
+  gap: boolean;
+}
+
+/**
+ * The anti-harvest anchor: the crew's trailing-90-day LOWEST card for this
+ * service, priced against THIS property. A card hike never raises a fill-in
+ * offer because the anchor remembers the old card (vendor_rate_history).
+ * All inputs are the crew's own numbers — rule-1 safe.
+ */
+export async function loadGapAnchor(
+  admin: ReturnType<typeof createServiceClient>,
+  vendorId: string,
+  serviceId: string,
+  serviceName: string,
+  pricingModel: ServiceRule["pricing_model"],
+  profile: NonNullable<Awaited<ReturnType<typeof loadPricingProfileById>>>,
+  currentPriced: number | null,
+): Promise<number | null> {
+  const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
+  // OLDEST-first, wide limit: the pre-hike low card sits at the FRONT of the
+  // window, so no amount of rapid rate-editing (spam rows are newest) can
+  // flush it out of the sample and raise the anchor. It only ages out at the
+  // designed 90-day decay. 500 edits/90d is far beyond honest use.
+  const { data: hist } = await admin
+    .from("vendor_rate_history")
+    .select("base, unit_rate, band_pricing")
+    .eq("vendor_id", vendorId)
+    .eq("service_id", serviceId)
+    .gte("changed_at", since)
+    .order("changed_at", { ascending: true })
+    .limit(500);
+  let low = currentPriced != null && currentPriced > 0 ? currentPriced : null;
+  for (const h of hist ?? []) {
+    const priced = priceService({
+      name: serviceName, pricing_model: pricingModel,
+      base: Number(h.base ?? 0), unit_rate: Number(h.unit_rate ?? 0),
+      band_pricing: (h.band_pricing as ServiceRule["band_pricing"]) ?? null,
+    }, profile);
+    if (priced > 0 && (low == null || priced < low)) low = priced;
+  }
+  return low;
 }
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -47,7 +89,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
 
   const { data: jobs } = await admin
     .from("jobs")
-    .select("id, date, customer_price, service_id, property_id, is_rush, services(name, pricing_model), properties(lake_id, lat, lng, lakes(name))")
+    .select("id, date, customer_price, service_id, property_id, is_rush, created_at, services(name, pricing_model), properties(lake_id, lat, lng, lakes(name))")
     .eq("status", "requested")
     .is("vendor_id", null)
     .is("group_id", null) // package visits are routed, never cold-claimed — a claim can't price multi-leg work, and custody is never a first-tap prize
@@ -98,6 +140,8 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
 
     // Price this job at the crew's OWN rate (their info — rule-1 safe).
     let takeHome: number | null = null;
+    let cardPriced: number | null = null; // UNdiscounted card vs this property — the anchor input
+    let profile: Awaited<ReturnType<typeof loadPricingProfileById>> = null;
     const vr = rateBySvc.get(j.service_id as string);
     if (vr && svc?.name) {
       const rule: ServiceRule = {
@@ -107,8 +151,9 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
         unit_rate: Number(vr.unit_rate ?? 0),
         band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
       };
-      const profile = await loadPricingProfileById(admin, j.property_id as string);
-      if (profile) takeHome = priceService(rule, profile);
+      profile = await loadPricingProfileById(admin, j.property_id as string);
+      if (profile) cardPriced = priceService(rule, profile);
+      takeHome = cardPriced;
       // Same-day fill-in: the board shows the DISCOUNTED take-home — tapping
       // Claim is accepting it (the discount is a dial, not a negotiation).
       if (takeHome != null && isRushRow) takeHome = fillInRate(takeHome, settings.sameDayFillDiscountPct);
@@ -141,6 +186,39 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       verdict = { ok: false, blocker: "lake_paused" };
     }
 
+    // FILL-IN OFFER (margin-gap design): a job blocked ONLY on rate becomes a
+    // posted-price offer once it has survived a full dispatch cycle (the age
+    // gate kills hike-and-harvest plays; rush rows are exempt — their premium
+    // already funds the gap). The offer is the crew's own anchor with a
+    // haircut, clipped at the fuzzed floor-clearing ceiling — never more.
+    // Age gate in LAKE time, failing CLOSED on a missing created_at — this is
+    // a money control, so an unreadable birthdate means "not aged", never
+    // "aged". Rush rows are exempt (their premium funds the gap).
+    const createdLakeDate = j.created_at ? lakeDateOf(String(j.created_at)) : null;
+    let isGap = false;
+    if (
+      verdict.blocker === "rate_too_high" &&
+      (isRushRow || (createdLakeDate != null && createdLakeDate < today))
+    ) {
+      const tStar = gapTakeHome(Number(j.customer_price ?? 0), settings.marginFloor, gapJitter(j.id as string), settings.gapMinOffer);
+      if (tStar != null && profile && svc?.name) {
+        // Anchor on the UNdiscounted card — the rush discount never stacks
+        // onto a fill-in offer (one haircut, never two), and the board must
+        // post the same number the claim will write.
+        const anchor = await loadGapAnchor(
+          admin, vendor.id, j.service_id as string, svc.name,
+          svc.pricing_model as ServiceRule["pricing_model"], profile,
+          cardPriced,
+        );
+        const offer = gapOfferFor(tStar, anchor, settings.gapAnchorPct, settings.gapMinOffer);
+        if (offer != null) {
+          takeHome = offer;
+          verdict = { ok: true };
+          isGap = true;
+        }
+      }
+    }
+
     const miles = milesBetween(prop?.lat ?? null, prop?.lng ?? null, vendor.base_lat, vendor.base_lng);
     out.push({
       id: j.id as string,
@@ -153,6 +231,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       claimable: verdict.ok,
       blocker: verdict.blocker ?? null,
       rush: isRushRow,
+      gap: isGap,
     });
   }
 

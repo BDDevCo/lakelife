@@ -10,6 +10,9 @@ import {
   scarcityOffer,
   type CrewCandidate,
   type DispatchInput,
+  gapTakeHome,
+  gapOfferFor,
+  gapJitter,
 } from "./dispatch";
 
 const crew = (over: Partial<CrewCandidate> = {}): CrewCandidate => ({
@@ -390,5 +393,64 @@ describe("no_full_coverage_crew — a partial crew on the lake is a gap, not a g
     const fullElsewhere = crew({ serviceTypes: ["Boat winterization (shop)", "Shrink wrap"], serviceLakes: ["lake-1"] });
     const r = decideDispatch(input({ serviceName: "Boat winterization (shop)", lakeId: "lake-9", componentNames: ["Boat winterization (shop)", "Shrink wrap"], crews: [fullElsewhere] }));
     expect(r.reasonNoFit).toBe("no_crew_on_lake");
+  });
+});
+
+describe("gapTakeHome — the fill-in ceiling clears the floor and hides the menu", () => {
+  it("rounds DOWN to $5 so margin is always ≥ the floor", () => {
+    expect(gapTakeHome(120, 0.3)).toBe(80); // 84 → 80; margin 40/120 = 33%
+    expect(gapTakeHome(485, 0.3)).toBe(335); // 339.5 → 335; margin 30.9%
+  });
+  it("÷0.70 of the offer never reproduces the menu (inversion broken)", () => {
+    const t = gapTakeHome(485, 0.3)!;
+    expect(t / 0.7).not.toBe(485);
+  });
+  it("degenerate inputs are null, tiny offers are null", () => {
+    expect(gapTakeHome(0, 0.3)).toBeNull();
+    expect(gapTakeHome(100, 1)).toBeNull();
+    expect(gapTakeHome(25, 0.3)).toBeNull(); // 17.5 → 15 < $20
+  });
+  it("jitter only ever lowers the ceiling — margin ≥ floor survives any jitter", () => {
+    for (const menu of [120, 485, 2067, 95]) {
+      for (const jit of [0, 5, 10]) {
+        const t = gapTakeHome(menu, 0.3, jit);
+        if (t != null) expect((menu - t) / menu).toBeGreaterThanOrEqual(0.3);
+      }
+    }
+    expect(gapTakeHome(120, 0.3, 10)).toBe(70); // 80 − 10
+  });
+  it("a jittered ceiling under the minimum offer dies instead of shrinking the dust guard", () => {
+    expect(gapTakeHome(35, 0.3, 0)).toBe(20); // 24.5 → 20, right at the guard
+    expect(gapTakeHome(35, 0.3, 5)).toBeNull(); // 15 < $20
+  });
+});
+
+describe("gapJitter — deterministic, bounded, and actually varies across jobs", () => {
+  it("returns only $0/$5/$10 and the same value for the same id", () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `job-${i}-c0ffee`);
+    const steps = new Set(ids.map((id) => gapJitter(id)));
+    for (const s of steps) expect([0, 5, 10]).toContain(s);
+    expect(gapJitter("job-7-c0ffee")).toBe(gapJitter("job-7-c0ffee"));
+    // Board and claim hash the same id — and across many jobs the steps
+    // genuinely differ, so equal menu prices don't print equal offers.
+    expect(steps.size).toBeGreaterThan(1);
+  });
+});
+
+describe("gapOfferFor — hiking your card can never raise your offer", () => {
+  it("anchored below the ceiling when the crew's trailing rate is low", () => {
+    // ceiling $335, but their 90d-low rate prices this job at $300 → offer 300×.95=285
+    expect(gapOfferFor(335, 300)).toBe(285);
+  });
+  it("the ceiling clips a fat anchor — the floor is never crossed", () => {
+    expect(gapOfferFor(335, 900)).toBe(335);
+  });
+  it("no anchor → the fuzzed ceiling; dust anchors → null", () => {
+    expect(gapOfferFor(335, null)).toBe(335);
+    expect(gapOfferFor(335, 15)).toBeNull();
+  });
+  it("anchorPct and minOffer are dials", () => {
+    expect(gapOfferFor(335, 300, 0.9)).toBe(270); // 270 exactly at 90%
+    expect(gapOfferFor(335, 60, 0.95, 60)).toBeNull(); // 55 < $60 min
   });
 });

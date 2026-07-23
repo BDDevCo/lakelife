@@ -2,11 +2,12 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule } from "@/lib/pricing";
-import { todayLakeDate } from "@/lib/booking";
-import { canClaim, type ClaimBlocker, type CrewCandidate } from "@/lib/dispatch";
+import { todayLakeDate, lakeDateOf } from "@/lib/booking";
+import { canClaim, type ClaimBlocker, type CrewCandidate, gapTakeHome, gapOfferFor, gapJitter } from "@/lib/dispatch";
 import { isCoolingDown } from "@/lib/lake-standing";
 import { fillInRate, rushWindowOpen } from "@/lib/rush";
 import { loadPricingProfileById } from "@/app/book/dispatch";
+import { loadGapAnchor } from "./open-data";
 import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
 
@@ -64,7 +65,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const today = todayLakeDate();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, services(name, pricing_model), properties(lake_id, address, users(phone))")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model), properties(lake_id, address, users(phone))")
     .eq("id", jobId)
     .maybeSingle();
   // Package visits are routed, never claimed: a claim can only price ONE
@@ -156,17 +157,57 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     menuPrice: Number(job.customer_price ?? 0),
     marginFloor: settings.marginFloor,
   });
-  if (!verdict.ok) return { ok: false, error: BLOCKER_MSG[verdict.blocker ?? "not_active"] };
+  // FILL-IN ACCEPTANCE (margin-gap design): blocked ONLY on rate, past the
+  // age gate (or rush, whose premium funds the gap) → the claim happens at
+  // the posted offer instead: the crew's own anchored number, clipped at the
+  // fuzzed floor-clearing ceiling. Margin ≥ floor by construction.
+  let isGapClaim = false;
+  // Age gate in LAKE time, failing CLOSED on a missing created_at — money
+  // control: unreadable birthdate means "not aged", never "aged".
+  const createdLakeDate = (job as { created_at?: string }).created_at
+    ? lakeDateOf(String((job as { created_at?: string }).created_at))
+    : null;
+  if (!verdict.ok && verdict.blocker === "rate_too_high" &&
+      (isRush || (createdLakeDate != null && createdLakeDate < today))) {
+    // Jitter hashes the DB row id, never the client-supplied string — uuid
+    // matching is case-insensitive, so an uppercased jobId would still find
+    // the row but hash to a different (pickable) jitter.
+    const tStar = gapTakeHome(Number(job.customer_price ?? 0), settings.marginFloor, gapJitter(String(job.id)), settings.gapMinOffer);
+    const profileForAnchor = await loadPricingProfileById(admin, job.property_id as string);
+    if (tStar != null && profileForAnchor) {
+      // Anchor from the UN-discounted card (rush discount never stacks onto a
+      // fill-in offer — one haircut, never two).
+      const undiscounted = vr ? priceService({
+        name: svc.name, pricing_model: svc.pricing_model as ServiceRule["pricing_model"],
+        base: Number(vr.base ?? 0), unit_rate: Number(vr.unit_rate ?? 0),
+        band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
+      }, profileForAnchor) : null;
+      const anchor = await loadGapAnchor(
+        admin, vendor.id as string, job.service_id as string, svc.name,
+        svc.pricing_model as ServiceRule["pricing_model"], profileForAnchor, undiscounted,
+      );
+      const offer = gapOfferFor(tStar, anchor, settings.gapAnchorPct, settings.gapMinOffer);
+      if (offer != null) {
+        myRate = offer;
+        isGapClaim = true;
+      }
+    }
+  }
+  if (!isGapClaim && !verdict.ok) return { ok: false, error: BLOCKER_MSG[verdict.blocker ?? "not_active"] };
 
+  const priceAtRead = Number(job.customer_price ?? 0);
   const rate = myRate as number;
-  const margin = Math.round((Number(job.customer_price ?? 0) - rate) * 100) / 100;
+  const margin = Math.round((priceAtRead - rate) * 100) / 100;
 
-  // THE CLAIM — atomic, first valid claim wins.
+  // THE CLAIM — atomic, first valid claim wins. Price-aware: if a scarcity
+  // offer bumped the customer price mid-flight, this claim loses cleanly
+  // instead of writing a stale margin (hardens the pre-existing race too).
   const { data: won } = await admin
     .from("jobs")
-    .update({ vendor_id: vendor.id, vendor_cost: rate, margin, status: "scheduled" })
+    .update({ vendor_id: vendor.id, vendor_cost: rate, margin, status: "scheduled", ...(isGapClaim ? { gap_claim: true } : {}) })
     .eq("id", jobId)
     .eq("status", "requested")
+    .eq("customer_price", priceAtRead)
     .is("vendor_id", null)
     .select("id");
   if (!won || won.length === 0) return { ok: false, error: "That job was already taken — grab the next one. 🌊" };

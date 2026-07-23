@@ -295,3 +295,57 @@ export function remainingCapacity(input: Omit<DispatchInput, "menuPrice" | "marg
     return sum + Math.max(0, cap - c.assignedThatDay);
   }, 0);
 }
+
+// ============================================================================
+// FILL-IN RATES (docs/margin-gap-design.md) — the zero-stranded-jobs margin
+// mechanism. A job that failed dispatch on margin becomes a POSTED-PRICE
+// offer on the claim board; one tap = consent, exactly the rush pattern.
+// ============================================================================
+
+/**
+ * Deterministic per-job jitter for menu-derived offers: $0/$5/$10, hashed
+ * from the job id. Two jobs at the SAME menu price show different ceilings,
+ * so equal offers can't confirm equal menu prices across properties — and
+ * the [t/(1−f), (t+5)/(1−f)) back-solve band widens to three steps. Only
+ * ever subtracted (downward), so margin ≥ floor survives by construction.
+ * Board and claim hash the same id → the posted price IS the paid price.
+ */
+export function gapJitter(jobId: string): number {
+  let h = 2166136261; // FNV-1a
+  for (let i = 0; i < jobId.length; i++) {
+    h ^= jobId.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 3) * 5;
+}
+
+/**
+ * The floor-clearing take-home ceiling for a job: menu × (1 − floor),
+ * rounded DOWN to a $5 step, minus the per-job jitter. Rounding down does
+ * two jobs at once — margin stays ≥ floor by construction, and the
+ * ÷(1−floor) inversion breaks so a crew can't back-solve the menu price
+ * (rule 1 by arithmetic). Null when the number would be silly (no price,
+ * degenerate floor, offer under the minimum). The $5 step is structural —
+ * it IS the fuzz — so it stays in code; the minimum is a rule-8 dial.
+ */
+export function gapTakeHome(menuPrice: number, floor: number, jitter = 0, minOffer = 20): number | null {
+  if (!(menuPrice > 0) || !(floor > 0) || floor >= 1) return null;
+  const t = Math.floor((menuPrice * (1 - floor)) / 5) * 5 - jitter;
+  return t >= Math.max(20, minOffer) ? t : null;
+}
+
+/**
+ * The crew's actual fill-in offer: never more than the ceiling, and never
+ * more than anchorPct (dial, default 95%) of THEIR OWN trailing anchor rate
+ * (their lowest card of the last 90 days, priced against this job). Hiking
+ * your card can never raise your offer — the harvest play strictly loses.
+ * Crews with no anchor (no history and no current rate) see the fuzzed
+ * ceiling.
+ */
+export function gapOfferFor(tStar: number | null, crewAnchorRate: number | null, anchorPct = 0.95, minOffer = 20): number | null {
+  if (tStar == null) return null;
+  if (crewAnchorRate == null || !(crewAnchorRate > 0)) return tStar;
+  const anchored = Math.floor((crewAnchorRate * anchorPct) / 5) * 5;
+  if (anchored < Math.max(20, minOffer)) return null; // an offer this small is noise, not work
+  return Math.min(tStar, anchored);
+}

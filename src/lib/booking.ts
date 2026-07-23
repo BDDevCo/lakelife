@@ -67,6 +67,22 @@ export function todayLakeDate(): string {
   }).format(new Date());
 }
 
+/**
+ * A timestamp's calendar date AT THE LAKES, or null if the input doesn't
+ * parse. Comparing a raw UTC date slice against todayLakeDate() makes an
+ * 8pm booking look like "tomorrow" — any age-gated rule (fill-in offers)
+ * would then wait a full extra day. Null (not a throw) on garbage keeps a
+ * single malformed row from crashing a whole board or nightly run; age
+ * gates treat null as "not aged" (fail closed).
+ */
+export function lakeDateOf(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Indiana/Indianapolis",
+  }).format(d);
+}
+
 /** Is a frequency a repeating (recurring) one? */
 export function isRecurring(frequency: string): boolean {
   return /weekly|2 weeks|arrival/i.test(frequency);

@@ -1710,3 +1710,196 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
   }
   return { ok: true, ran: true, batches, total: Math.round(total * 100) / 100 };
 }
+
+/**
+ * FILL-IN DIGEST (margin-gap design, weekly-ish on the growth rails):
+ * "$X of fill-in work is open on your lakes right now" — aggregate, never
+ * comparative, never a rate critique. A job counts for a crew ONLY when it
+ * would actually render as a gap offer for them (their own card, priced
+ * against the property, fails the floor — and they aren't paused on the
+ * lake), and the dollars are THEIR anchored offers, not the raw ceiling.
+ * Two-job minimum so the total can never identify a single job's number
+ * (a one-job "aggregate" IS that job — rule 1 by arithmetic again).
+ */
+export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> {
+  const admin = createServiceClient();
+  const settings = await getPlatformSettings();
+  const today = todayLakeDate();
+  const now = Date.now();
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  let sent = 0;
+
+  // Open, aged, unassigned, non-package jobs = the gap-offer universe.
+  // Age gate in LAKE time, failing closed on a missing created_at — the same
+  // rule the board and the claim action enforce.
+  const { lakeDateOf } = await import("@/lib/booking");
+  const { data: open } = await admin
+    .from("jobs")
+    .select("id, date, customer_price, service_id, property_id, created_at, services(name, pricing_model), properties(lake_id)")
+    .eq("status", "requested").is("vendor_id", null).is("group_id", null)
+    .gte("date", today).limit(200);
+  const aged = (open ?? []).filter((j) => {
+    const d = j.created_at != null ? lakeDateOf(String(j.created_at)) : null;
+    return d != null && d < today;
+  });
+  if (aged.length === 0) return { ok: true, sent: 0 };
+
+  const [{ data: crews }, { data: allRates }, { data: allPauses }] = await Promise.all([
+    admin.from("vendors")
+      .select("id, user_id, company, service_types, service_lakes, work_days, coi_expiry, status")
+      .eq("status", "active").not("user_id", "is", null),
+    admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"),
+    admin.from("vendor_lake_demotions").select("vendor_id, lake_id, demoted_at"),
+  ]);
+  const { gapTakeHome, gapOfferFor, gapJitter, marginPct } = await import("@/lib/dispatch");
+  const { loadGapAnchor } = await import("@/app/vendor/open-data");
+  const rateByCrewSvc = new Map((allRates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
+  const pausedNow = new Set(
+    (allPauses ?? [])
+      .filter((p) => isCoolingDown(p.demoted_at as string, settings.lakeDemotionCooldownDays, now))
+      .map((p) => `${p.vendor_id}|${p.lake_id}`),
+  );
+  // Small caches: profiles per property, anchors per crew×service×property.
+  const profileCache = new Map<string, Awaited<ReturnType<typeof loadPricingProfileById>>>();
+  const anchorCache = new Map<string, number | null>();
+
+  const DIGEST_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  for (const v of crews ?? []) {
+    if (!v.coi_expiry || String(v.coi_expiry) < today) continue;
+    const myLakes = new Set((v.service_lakes as string[]) ?? []);
+    const myDays = new Set((v.work_days as string[]) ?? []);
+    let total = 0, count = 0;
+    for (const j of aged) {
+      const svc = one(j.services) as { name?: string; pricing_model?: string } | null;
+      const lakeId = (one(j.properties) as { lake_id?: string } | null)?.lake_id;
+      if (!svc?.name || !lakeId || !myLakes.has(lakeId)) continue;
+      if (!((v.service_types as string[]) ?? []).includes(svc.name)) continue;
+      if (pausedNow.has(`${v.id}|${lakeId}`)) continue;
+      // Standing day-off check: don't advertise Saturday work to a crew that
+      // never works Saturdays. (Transient gates — a blocked date, a full
+      // day — are left to the claim action; the digest is directional.)
+      const wd = DIGEST_WEEKDAYS[new Date(String(j.date) + "T12:00:00").getDay()];
+      if (myDays.size > 0 && !myDays.has(wd)) continue;
+      const vr = rateByCrewSvc.get(`${v.id}|${j.service_id}`);
+      if (!vr) continue; // no rate = no capability — this job never gaps for them
+      let profile = profileCache.get(j.property_id as string);
+      if (profile === undefined) {
+        profile = await loadPricingProfileById(admin, j.property_id as string);
+        profileCache.set(j.property_id as string, profile);
+      }
+      if (!profile) continue;
+      const cardPriced = priceService({
+        name: svc.name, pricing_model: svc.pricing_model as ServiceRule["pricing_model"],
+        base: Number(vr.base ?? 0), unit_rate: Number(vr.unit_rate ?? 0),
+        band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
+      }, profile);
+      if (!(cardPriced > 0)) continue;
+      const menu = Number(j.customer_price ?? 0);
+      if (marginPct(menu, cardPriced) >= settings.marginFloor) continue; // clears at card — not a gap for them
+      const tStar = gapTakeHome(menu, settings.marginFloor, gapJitter(j.id as string), settings.gapMinOffer);
+      if (tStar == null) continue;
+      const anchorKey = `${v.id}|${j.service_id}|${j.property_id}`;
+      let anchor = anchorCache.get(anchorKey);
+      if (anchor === undefined) {
+        anchor = await loadGapAnchor(
+          admin, v.id as string, j.service_id as string, svc.name,
+          svc.pricing_model as ServiceRule["pricing_model"], profile, cardPriced,
+        );
+        anchorCache.set(anchorKey, anchor);
+      }
+      const offer = gapOfferFor(tStar, anchor, settings.gapAnchorPct, settings.gapMinOffer);
+      if (offer != null) { total += offer; count++; }
+    }
+    // Two-job minimum + dollar threshold: a single-job "digest" would print
+    // that job's exact offer in a subject line — aggregate or nothing.
+    if (count < 2 || total < settings.fillinDigestMin) continue;
+
+    const { data: last } = await admin
+      .from("nudge_log").select("sent_at").eq("user_id", v.user_id as string).eq("kind", "fillin_digest")
+      .order("sent_at", { ascending: false }).limit(1).maybeSingle();
+    if (nudgeCooling((last?.sent_at as string) ?? null, settings.fillinDigestCooldownDays, now)) continue;
+    const { data: pref } = await admin
+      .from("notification_prefs").select("enabled")
+      .eq("user_id", v.user_id as string).eq("type", "growth").eq("channel", "email").maybeSingle();
+    if (pref?.enabled === false) continue;
+    const { data: u } = await admin.from("users").select("email").eq("id", v.user_id as string).maybeSingle();
+    if (!u?.email) continue;
+    // The cooldown row is only written when the email actually went out — a
+    // Resend hiccup must not buy 30 days of silence (same standard as the
+    // SLA valve's SMS).
+    const sentRes = await sendEmail({
+      to: u.email,
+      subject: `$${total.toFixed(0)} of fill-in work is open on your lakes 🌊`,
+      html: `<p>Hi ${v.company ?? "there"},</p><p><b>${count} jobs</b> on your lakes are offering posted fill-in rates right now — <b>$${total.toFixed(0)}</b> of take-home, first tap takes each one: <a href="${site}/vendor/open">${site}/vendor/open</a></p><p>Your regular rates stay yours — fill-ins are extra work at a posted price, nothing more.</p><p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>`,
+    });
+    if (!sentRes.ok) continue;
+    await admin.from("nudge_log").insert({ user_id: v.user_id, kind: "fillin_digest" });
+    sent++;
+  }
+  return { ok: true, sent };
+}
+
+/**
+ * GAP SLA VALVE (margin-gap design): an open job unclaimed past the window
+ * (gap_sla_hours dial, or — water work only — inside 96h of a still-future
+ * pull deadline) alerts ops ONCE — the machine never crosses the floor on
+ * its own, but nothing sits silently either. The three sanctioned exits are
+ * human: recruit, logged override, or proactive rebook.
+ */
+export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number }> {
+  const admin = createServiceClient();
+  const settings = await getPlatformSettings();
+  const today = todayLakeDate();
+  const now = Date.now();
+  let alerted = 0;
+  const MAX_ALERTS_PER_RUN = 10; // backlog-burst guard — the rest alert on later runs
+  const cutoffIso = new Date(now - settings.gapSlaHours * 3_600_000).toISOString();
+  // Oldest first: with more than 50 open jobs, the ones stuck LONGEST are
+  // always in the sample — an unordered page could skip a stranded job on
+  // every run. Null created_at rows can't be aged, so they're excluded.
+  const { data: stuck } = await admin
+    .from("jobs")
+    .select("id, date, created_at, services(name, is_water_work), properties(address, lakes(name, pull_deadline))")
+    .eq("status", "requested").is("vendor_id", null).is("group_id", null)
+    .gte("date", today).not("created_at", "is", null)
+    .order("created_at", { ascending: true }).limit(200);
+  // 200-deep page: already-alerted jobs stay 'requested' until a human acts,
+  // so a 50-row page could fill up with alerted-but-unresolved rows during a
+  // surge and starve job #51. The per-run SMS cap still bounds the noise.
+  const { data: ops } = await admin.from("users").select("id, phone").eq("role", "ops").not("phone", "is", null);
+  if (!ops || ops.length === 0) return { ok: true, alerted: 0 };
+  for (const j of stuck ?? []) {
+    if (alerted >= MAX_ALERTS_PER_RUN) break;
+    const svc = one(j.services) as { name?: string; is_water_work?: boolean } | null;
+    const lake = one(j.properties) as { lakes?: unknown } | null;
+    const lk = one(lake?.lakes) as { name?: string; pull_deadline?: string } | null;
+    // Deadline pressure only means anything for WATER work, and only while
+    // the deadline is still ahead — a past deadline is a different problem
+    // (the season-close rails own it), not a claim-board SLA.
+    const deadlineDelta = lk?.pull_deadline
+      ? new Date((lk.pull_deadline as string) + "T00:00:00Z").getTime() - now
+      : null;
+    const nearDeadline = !!svc?.is_water_work && deadlineDelta != null && deadlineDelta > 0 && deadlineDelta < 96 * 3_600_000;
+    const overSla = String(j.created_at) < cutoffIso;
+    if (!overSla && !nearDeadline) continue;
+    // once per job — nudge_log keyed by job id
+    const { data: seen } = await admin
+      .from("nudge_log").select("id").eq("kind", `gap_sla:${j.id}`).limit(1);
+    if (seen && seen.length > 0) continue;
+    const svcName = svc?.name ?? "a job";
+    // Cause-neutral copy: "unclaimed" is the fact; rate-vs-capacity is for
+    // the Margin Health board to say. Every ops phone hears it; the one-shot
+    // dedupe row is only written after at least one SMS actually went out —
+    // a Twilio hiccup must not burn the job's single lifetime alert.
+    let delivered = false;
+    for (const o of ops) {
+      const res = await sendSms(o.phone as string, `LakeLife OPS: ${svcName} on ${lk?.name ?? "a lake"} has sat ${overSla ? `${settings.gapSlaHours}h+` : "into the pull-deadline window"} unclaimed — no crew has taken it at card or fill-in rates. Exits: recruit, logged override, or rebook the customer. Job ${j.id}.`);
+      if (res.ok) delivered = true;
+    }
+    if (delivered) {
+      await admin.from("nudge_log").insert({ user_id: ops[0].id, kind: `gap_sla:${j.id}` });
+      alerted++;
+    }
+  }
+  return { ok: true, alerted };
+}
