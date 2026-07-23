@@ -53,6 +53,8 @@ export interface PlatformSettings {
   /** Storage season ends on this month/day — per-diem accrues after it. */
   storageSeasonEndMonth: number;
   storageSeasonEndDay: number;
+  /** Early-payout ("get it now") fee as a share of the batch gross. */
+  earlyPayoutFeePct: number;
 }
 
 export const DEFAULT_SETTINGS: PlatformSettings = {
@@ -78,6 +80,7 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   storagePerdiemDaily: 10,
   storageSeasonEndMonth: 5,
   storageSeasonEndDay: 31,
+  earlyPayoutFeePct: 0.02,
 };
 
 /** Clamp a raw stored value into a sane band; fall back on anything weird. */
@@ -94,7 +97,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
     const { data } = await admin
       .from("platform_settings")
       .select("key, value")
-      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days", "nudge_credit_threshold", "nudge_cooldown_days", "storage_perdiem_daily", "storage_season_end_month", "storage_season_end_day"]);
+      .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days", "nudge_credit_threshold", "nudge_cooldown_days", "storage_perdiem_daily", "storage_season_end_month", "storage_season_end_day", "early_payout_fee_pct"]);
     const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]));
     return {
       marginFloor: parseSetting(byKey.get("margin_floor"), DEFAULT_SETTINGS.marginFloor, 0.05, 0.6),
@@ -119,6 +122,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       storagePerdiemDaily: parseSetting(byKey.get("storage_perdiem_daily"), DEFAULT_SETTINGS.storagePerdiemDaily, 0, 100),
       storageSeasonEndMonth: parseSetting(byKey.get("storage_season_end_month"), DEFAULT_SETTINGS.storageSeasonEndMonth, 1, 12),
       storageSeasonEndDay: parseSetting(byKey.get("storage_season_end_day"), DEFAULT_SETTINGS.storageSeasonEndDay, 1, 31),
+      earlyPayoutFeePct: parseSetting(byKey.get("early_payout_fee_pct"), DEFAULT_SETTINGS.earlyPayoutFeePct, 0, 0.1),
     };
   } catch {
     return DEFAULT_SETTINGS; // table missing / transient error → today's values

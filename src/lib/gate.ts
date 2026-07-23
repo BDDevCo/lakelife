@@ -44,3 +44,11 @@ export function decryptGate(stored: string | null | undefined): string | null {
   d.setAuthTag(tag);
   return Buffer.concat([d.update(data), d.final()]).toString("utf8");
 }
+
+/**
+ * Generic aliases for other secrets encrypted at rest with the SAME
+ * key + envelope (bank routing/account numbers for payout_accounts).
+ * The blobs never leave the server; clients only ever see last4.
+ */
+export const sealSecret = encryptGate;
+export const openSecret = decryptGate;

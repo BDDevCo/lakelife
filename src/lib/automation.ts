@@ -1595,3 +1595,64 @@ export async function overstayNotices(): Promise<{ ok: boolean; sent: number }> 
   }
   return { ok: true, sent };
 }
+
+/**
+ * Month-end payout batches (owner: all automated, no human banking).
+ * Last lake-day of the month: every crew with released, un-batched job
+ * payouts AND a bank account on file gets ONE free batch (fee 0). The
+ * queued batch is what the bank-API layer (or the auto-generated ACH
+ * export until it lands) executes. Crews without bank details just keep
+ * accumulating — nothing is ever lost, and the earnings page nags them.
+ */
+export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: boolean; ran: boolean; batches: number; total: number }> {
+  const today = todayLakeDate();
+  if (!force && !isLastDayOfMonth(today)) return { ok: true, ran: false, batches: 0, total: 0 };
+  const admin = createServiceClient();
+
+  const { data: unbatched } = await admin
+    .from("payouts").select("vendor_id, amount").eq("status", "released").is("batch_id", null).not("vendor_id", "is", null);
+  const byVendor = new Map<string, number>();
+  for (const p of unbatched ?? []) byVendor.set(p.vendor_id as string, (byVendor.get(p.vendor_id as string) ?? 0) + Number(p.amount ?? 0));
+
+  let batches = 0, total = 0;
+  for (const [vendorId, sum] of byVendor) {
+    if (sum <= 0) continue;
+    const { data: v } = await admin.from("vendors").select("user_id").eq("id", vendorId).maybeSingle();
+    if (!v?.user_id) continue;
+    const { data: acct } = await admin
+      .from("payout_accounts").select("account_last4").eq("user_id", v.user_id as string).maybeSingle();
+    if (!acct) continue; // no bank on file — keep accumulating, keep nudging
+
+    const { data: batch } = await admin
+      .from("payout_batches")
+      .insert({ user_id: v.user_id, vendor_id: vendorId, kind: "monthly", status: "building" })
+      .select("id").single();
+    if (!batch) continue;
+    const { data: claimed } = await admin
+      .from("payouts")
+      .update({ batch_id: batch.id })
+      .eq("vendor_id", vendorId).eq("status", "released").is("batch_id", null)
+      .select("amount");
+    const gross = Math.round((claimed ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0) * 100) / 100;
+    if (gross <= 0) {
+      await admin.from("payouts").update({ batch_id: null }).eq("batch_id", batch.id);
+      await admin.from("payout_batches").delete().eq("id", batch.id);
+      continue;
+    }
+    const { data: fin } = await admin
+      .from("payout_batches").update({ gross, net: gross, status: "queued" })
+      .eq("id", batch.id).eq("status", "building").select("id");
+    if (!fin || fin.length === 0) {
+      await admin.from("payouts").update({ batch_id: null }).eq("batch_id", batch.id);
+      await admin.from("payout_batches").delete().eq("id", batch.id);
+      continue;
+    }
+    batches++;
+    total += gross;
+    try {
+      const { data: u } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
+      if (u?.phone) void sendSms(u.phone as string, `LakeLife: month-end payout queued — $${gross.toFixed(2)} to your account ····${acct.account_last4}, no fee. 🌊`);
+    } catch { /* best effort */ }
+  }
+  return { ok: true, ran: true, batches, total: Math.round(total * 100) / 100 };
+}

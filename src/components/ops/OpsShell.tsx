@@ -14,6 +14,8 @@ import { MarginHealth } from "./MarginHealth";
 import type { MarginHealthRow } from "@/app/ops/data";
 import { StorageLedger } from "./StorageLedger";
 import type { StorageLedger as StorageLedgerData } from "@/app/ops/storage-data";
+import { PayoutQueue } from "./PayoutQueue";
+import type { PayoutQueue as PayoutQueueData } from "@/app/ops/payout-data";
 import type { OpsJob, ActiveVendor, MarginRow, LakeCondition, RouteSummary } from "@/app/ops/data";
 import type { OpsThread } from "@/app/ops/messages-data";
 import type { OpsCrew } from "@/app/ops/crews-data";
@@ -46,6 +48,7 @@ export function OpsShell({
   preferredProps,
   settings,
   storageLedger,
+  payoutQueue,
 }: {
   jobs: OpsJob[];
   vendors: ActiveVendor[];
@@ -62,6 +65,7 @@ export function OpsShell({
   preferredProps: PropertyPreferred[];
   settings: { marginFloorPct: number; surgeCapPct: number };
   storageLedger: StorageLedgerData;
+  payoutQueue: PayoutQueueData;
 }) {
   const [tab, setTab] = useState<TabKey>("jobs");
 
@@ -98,6 +102,7 @@ export function OpsShell({
       {tab === "dispatch" && <NeedsAttention jobs={needsAttention} crews={vendors} properties={preferredProps} />}
       {tab === "dispatch" && <PlatformSettingsCard settings={settings} />}
       {tab === "dispatch" && <StorageLedger ledger={storageLedger} />}
+      {tab === "dispatch" && <PayoutQueue queue={payoutQueue} />}
       {tab === "margin" && (<><MarginTable rows={margin.rows} total={margin.total} /><MarginHealth rows={marginHealth} /></>)}
       {tab === "lakes" && <LakeConditions lakes={lakes} />}
       {tab === "routing" && <RouteBuilder routes={routes} date={routeDate} />}

@@ -3,11 +3,13 @@ import { TopBar } from "@/components/Brand";
 import { VendorNav } from "@/components/VendorNav";
 import { VendorEarnings } from "@/components/VendorEarnings";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
+import { VendorPayouts } from "@/components/VendorPayouts";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { todayLakeDate } from "@/lib/booking";
 import { getMyVendorId, getMyVendor } from "../data";
 import { getMyEarnings } from "../earnings-data";
+import { getMyPayoutState } from "../bank-data";
 
 export default async function VendorEarningsPage() {
   if (!hasSupabaseEnv()) {
@@ -70,12 +72,14 @@ export default async function VendorEarningsPage() {
   const earnings = await getMyEarnings();
   const today = todayLakeDate();
   const referral = await (await import("@/lib/referral-data")).getMyReferralTicker();
+  const payoutState = await getMyPayoutState();
 
   return (
     <>
       <TopBar />
       <VendorNav />
       <VendorEarnings rows={earnings.rows} totals={earnings.totals} today={today} />
+      {payoutState && <VendorPayouts state={payoutState} />}
       {referral && referral.earnedTotal > 0 && (
         <div className="wrap" style={{ paddingBottom: 24 }}>
           <div className="ll-card ll-card-pad">
