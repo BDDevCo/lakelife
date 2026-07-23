@@ -171,6 +171,12 @@ export async function createBooking(
   // Price it here — the client's number is never trusted. Rush pays the
   // premium; the crew side gets its fill-in discount at claim time.
   const standardPrice = priceService(service, toPricingProfile(profile));
+  // SIM-FOUND (Wave 1): a $0 price means the profile has none of what this
+  // service counts (0 PWC lifts booking a PWC pull). A $0 job can never
+  // assign and sits as phantom "demand" — refuse with the honest fix.
+  if (standardPrice <= 0) {
+    return { ok: false, error: `${service.name} prices to $0 for your place — your profile shows none of the equipment it covers. Update your property profile and the real price appears.` };
+  }
   const price = isRush ? rushPrice(standardPrice, settings.sameDaySurchargePct) : standardPrice;
 
   const admin = createServiceClient();

@@ -378,3 +378,17 @@ describe("no_custody_crew — a missing barn is a recruiting gap, not a full day
     expect(r.reasonNoFit).toBe("all_full_or_blocked");
   });
 });
+
+describe("no_full_coverage_crew — a partial crew on the lake is a gap, not a ghost town", () => {
+  it("crew on the lake covering some legs → no_full_coverage_crew, not no_crew_on_lake", () => {
+    const partial = crew({ serviceTypes: ["Boat winterization (shop)", "Winter storage — outdoor"], serviceLakes: ["lake-9"] });
+    const fullElsewhere = crew({ vendorId: "v2", serviceTypes: ["Boat winterization (shop)", "Winter storage — outdoor", "Shrink wrap"], serviceLakes: ["lake-1"] });
+    const r = decideDispatch(input({ serviceName: "Boat winterization (shop)", lakeId: "lake-9", componentNames: ["Boat winterization (shop)", "Winter storage — outdoor", "Shrink wrap"], crews: [partial, fullElsewhere] }));
+    expect(r.reasonNoFit).toBe("no_full_coverage_crew");
+  });
+  it("truly no crew on the lake stays no_crew_on_lake", () => {
+    const fullElsewhere = crew({ serviceTypes: ["Boat winterization (shop)", "Shrink wrap"], serviceLakes: ["lake-1"] });
+    const r = decideDispatch(input({ serviceName: "Boat winterization (shop)", lakeId: "lake-9", componentNames: ["Boat winterization (shop)", "Shrink wrap"], crews: [fullElsewhere] }));
+    expect(r.reasonNoFit).toBe("no_crew_on_lake");
+  });
+});

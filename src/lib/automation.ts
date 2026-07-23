@@ -483,13 +483,19 @@ export async function revalidateAssignments(
   opts: { broadcast?: boolean } = {},
 ): Promise<{ ok: boolean; checked: number; rehomed: number; unfilled: number; crewsTexted?: number }> {
   const broadcast = opts.broadcast ?? true; // intraday heartbeat passes false — no SMS every 30 min
-  const date = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : addDays(todayLakeDate(), 1);
   const admin = createServiceClient();
-  const { data: jobs } = await admin
-    .from("jobs")
-    .select("id")
-    .eq("date", date)
-    .in("status", ["scheduled", "requested"]);
+  // SIM-FOUND (Wave 2): healing only "tomorrow" left a COI-lapsed crew
+  // holding every job further out until the night before each one. When no
+  // explicit date is given, sweep the WHOLE forward book (bounded 60 days)
+  // so ineligibility strips a crew's future the night it happens.
+  let query = admin.from("jobs").select("id").in("status", ["scheduled", "requested"]);
+  if (dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO)) {
+    query = query.eq("date", dateISO);
+  } else {
+    const from = addDays(todayLakeDate(), 1);
+    query = query.gte("date", from).lte("date", addDays(from, 60));
+  }
+  const { data: jobs } = await query;
   let rehomed = 0;
   const unfilledIds: string[] = [];
   for (const j of jobs ?? []) {
@@ -539,7 +545,9 @@ export async function revalidateAssignments(
     const deadEnd = [...openServices].filter((s) => !claimersByService.has(s));
     if (deadEnd.length > 0 || crewsTexted === 0) {
       const { data: ops } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
-      const pretty = new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      const pretty = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO)
+        ? new Date(dateISO + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
+        : "the coming days";
       const what = deadEnd.length > 0 ? deadEnd.join(", ") : "open jobs";
       for (const o of ops ?? []) {
         if (o.phone) void sendSms(o.phone as string, `LakeLife: no crew on the platform can claim ${what} for ${pretty} — recruiting signal, nothing to dispatch. 🌊`);
@@ -681,6 +689,10 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
     // between grant and flip re-runs safely: the dup grant no-ops on the
     // index and the flip then completes. Money can't vanish in the gap.
     const { data: isVendor } = await admin.from("vendors").select("id").eq("user_id", e.beneficiary as string).maybeSingle();
+    // SIM-FOUND (Wave 2): a lake association is a users row like any owner —
+    // but its money is a month-end DONATION, never spendable credits.
+    const { data: isHoa } = await admin.from("lakes").select("id").eq("hoa_user_id", e.beneficiary as string).limit(1);
+    const hoaBeneficiary = !!isHoa && isHoa.length > 0;
     if (!isVendor && Number(e.amount) > 0) {
       const { error: gErr } = await admin.from("user_credits").insert({
         user_id: e.beneficiary, amount: Number(e.amount), earning_id: e.id,
@@ -737,8 +749,24 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
   let beneficiaries = 0, total = 0;
   for (const [userId, u] of byUser) {
     const { data: vendorRow } = await admin.from("vendors").select("id, company").eq("user_id", userId).maybeSingle();
-    if (!vendorRow) continue; // non-vendor matured rows shouldn't exist; leave for audit
+    const { data: hoaLake } = await admin.from("lakes").select("id").eq("hoa_user_id", userId).limit(1);
+    const isHoa = !!hoaLake && hoaLake.length > 0;
+    if (!vendorRow && !isHoa) continue; // customer rows were credited at maturation
+
+    // SIM-FOUND (Wave 2): money never flips to "paid" without a destination
+    // AND a batch artifact the banking layer can execute. No bank on file →
+    // the earnings stay matured and next month retries (the statement nags).
+    const { data: acct } = await admin
+      .from("payout_accounts").select("account_last4").eq("user_id", userId).maybeSingle();
+    if (!acct) continue;
+    const { data: batch } = await admin
+      .from("payout_batches")
+      .insert({ user_id: userId, vendor_id: vendorRow?.id ?? null, kind: "referral", status: "building" })
+      .select("id").single();
+    if (!batch) continue;
+
     let paidThis = 0;
+    const flippedIds: string[] = [];
     for (const id of u.ids) {
       const { data: won } = await admin
         .from("referral_earnings")
@@ -746,9 +774,26 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
         .eq("id", id)
         .eq("status", "matured")
         .select("amount");
-      if (won && won.length > 0) paidThis += Number(won[0].amount ?? 0);
+      if (won && won.length > 0) { paidThis += Number(won[0].amount ?? 0); flippedIds.push(id); }
     }
-    if (paidThis <= 0) continue;
+    paidThis = Math.round(paidThis * 100) / 100;
+    if (paidThis <= 0) {
+      await admin.from("payout_batches").delete().eq("id", batch.id);
+      continue;
+    }
+    const { data: fin, error: finErr } = await admin
+      .from("payout_batches")
+      .update({ gross: paidThis, fee: 0, net: paidThis, status: "queued" })
+      .eq("id", batch.id).eq("status", "building")
+      .select("id");
+    if (finErr || !fin || fin.length === 0) {
+      // Whole-batch unwind: earnings back to matured, batch gone — retried next run.
+      for (const id of flippedIds) {
+        await admin.from("referral_earnings").update({ status: "matured" }).eq("id", id).eq("status", "paid");
+      }
+      await admin.from("payout_batches").delete().eq("id", batch.id);
+      continue;
+    }
     beneficiaries++;
     total += paidThis;
     // Still-maturing remainder for the digest line.
@@ -760,7 +805,7 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
       void sendEmail({
         to: u2.email,
         subject: `Referral payout approved — $${paidThis.toFixed(2)} 🌊`,
-        html: `<p>Hi ${vendorRow.company ?? u2.name ?? "there"},</p><p>Your referral earnings for the month are in: <b>$${paidThis.toFixed(2)}</b> approved and riding your next remittance.${maturing > 0 ? ` Another $${maturing.toFixed(2)} is maturing and lands next batch.` : ""}</p><p>Keep sharing — it stacks. 🌊</p><p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>`,
+        html: `<p>Hi ${vendorRow?.company ?? u2.name ?? "there"},</p><p>Your referral earnings for the month are in: <b>$${paidThis.toFixed(2)}</b> approved and riding your next remittance.${maturing > 0 ? ` Another $${maturing.toFixed(2)} is maturing and lands next batch.` : ""}</p><p>Keep sharing — it stacks. 🌊</p><p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>`,
       });
     }
   }

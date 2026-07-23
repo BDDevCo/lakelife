@@ -83,7 +83,7 @@ export interface DispatchDecision {
    *  no_crew_on_lake is the geographic dead-end (cold-start lake): crews do
    *  this service, just not HERE — distinct from all_full_or_blocked so the
    *  booking flow never mistakes "no crew yet" for "day genuinely full". */
-  reasonNoFit?: "no_crew_for_service" | "no_crew_on_lake" | "all_full_or_blocked" | "no_qualifying_rate" | "below_floor" | "no_custody_crew";
+  reasonNoFit?: "no_crew_for_service" | "no_crew_on_lake" | "all_full_or_blocked" | "no_qualifying_rate" | "below_floor" | "no_custody_crew" | "no_full_coverage_crew";
   eligibleCount?: number; // crews that cleared the hard gates (pre-rate)
 }
 
@@ -157,12 +157,23 @@ export function rankCrews(
 export function decideDispatch(input: DispatchInput): DispatchDecision {
   const neededNames = input.componentNames?.length ? input.componentNames : [input.serviceName];
   const forService = input.crews.filter((c) => neededNames.every((n) => c.serviceTypes.includes(n)));
-  if (forService.length === 0) return { ok: false, reasonNoFit: "no_crew_for_service", eligibleCount: 0 };
+  // SIM-FOUND (Wave 2): a crew ON the lake covering SOME of a package's legs
+  // is a coverage gap, not "no crew on this lake" — the alarming message was
+  // firing on lakes with a real (partial) crew. Name it honestly.
+  const partialOnLake = (): boolean =>
+    !!input.componentNames?.length && !!input.lakeId &&
+    input.crews.some((c) =>
+      (c.serviceLakes ?? []).includes(input.lakeId as string) &&
+      neededNames.some((n) => c.serviceTypes.includes(n)) &&
+      !neededNames.every((n) => c.serviceTypes.includes(n)));
+  if (forService.length === 0) {
+    return { ok: false, reasonNoFit: partialOnLake() ? "no_full_coverage_crew" : "no_crew_for_service", eligibleCount: 0 };
+  }
 
   // Geographic dead-end BEFORE the capacity read: crews do this service but
   // none serves THIS lake — that's a recruiting problem, not a full calendar.
   if (input.lakeId && !forService.some((c) => (c.serviceLakes ?? []).includes(input.lakeId as string))) {
-    return { ok: false, reasonNoFit: "no_crew_on_lake", eligibleCount: 0 };
+    return { ok: false, reasonNoFit: partialOnLake() ? "no_full_coverage_crew" : "no_crew_on_lake", eligibleCount: 0 };
   }
 
   const eligible = input.crews.filter((c) => isEligible(c, input));
