@@ -768,6 +768,15 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
     let paidThis = 0;
     const flippedIds: string[] = [];
     for (const id of u.ids) {
+      // Double-pay guard (sim final audit): an earning already granted as
+      // credits (user_credits.earning_id linkage) never ALSO rides a bank
+      // batch — mark it paid-with-no-money and move on.
+      const { data: credited } = await admin
+        .from("user_credits").select("id").eq("earning_id", id).limit(1);
+      if (credited && credited.length > 0) {
+        await admin.from("referral_earnings").update({ status: "paid" }).eq("id", id).eq("status", "matured");
+        continue;
+      }
       const { data: won } = await admin
         .from("referral_earnings")
         .update({ status: "paid" })
