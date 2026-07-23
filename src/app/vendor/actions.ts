@@ -39,7 +39,7 @@ async function assertVendorJob(jobId: string) {
     // Deliberately NO customer_price / vendor_cost: this is the crew code path,
     // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
     // those columns out of reach by construction (settleJob re-loads them ops-side).
-    .select("id, status, vendor_id, service_id, date, property_id, services(name, min_photos)")
+    .select("id, status, vendor_id, service_id, date, property_id, group_id, services(name, min_photos)")
     .eq("id", jobId)
     .maybeSingle();
   if (!data || data.vendor_id !== vendorId) return null;
@@ -107,9 +107,24 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
     | { name?: string; min_photos?: number }
     | null;
   if (!job.service_id || !svc) return { ok: false, error: "This job has no service set — call Ops." };
-  const minPhotos = svc.min_photos ?? 0;
+  let minPhotos = svc.min_photos ?? 0;
 
   const admin = createServiceClient();
+  // Package visit (rule 2 across legs): the gate is the SUM of every leg's
+  // minimum — a haul-winterize-wrap-store visit needs its at-dock,
+  // on-trailer, wrapped and racked shots, not just the anchor's two. The
+  // condition photos ARE the custody baseline that settles spring disputes.
+  const groupId = (job as { group_id?: string | null }).group_id ?? null;
+  if (groupId) {
+    const { data: legs } = await admin
+      .from("job_items").select("services(min_photos)").eq("job_id", jobId);
+    if (legs && legs.length > 0) {
+      minPhotos = legs.reduce((sum, l) => {
+        const ls = (Array.isArray(l.services) ? l.services[0] : l.services) as { min_photos?: number } | null;
+        return sum + (ls?.min_photos ?? 0);
+      }, 0);
+    }
+  }
   const { count } = await admin
     .from("job_photos")
     .select("id", { count: "exact", head: true })
@@ -135,6 +150,17 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   if (error) return { ok: false, error: error.message };
   if (!changed || changed.length === 0) {
     return { ok: false, error: "That job is already complete." };
+  }
+
+  // CUSTODY BEGINS (S3): a completed fall visit with a reserved stay flips
+  // it to in_storage and stamps intake_at — the timestamp the season-end
+  // and per-diem math hang off. Guarded flip: only a reserved stay moves.
+  if (groupId) {
+    await admin
+      .from("storage_stays")
+      .update({ status: "in_storage", intake_at: new Date().toISOString() })
+      .eq("group_id", groupId)
+      .eq("status", "reserved");
   }
 
   // Settle the job: payout + invoice + auto-charge + receipt. Extracted into an

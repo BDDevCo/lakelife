@@ -101,6 +101,9 @@ export async function createPackageBooking(input: {
       storage_service_id: sel.storageTierId,
       spring_service_ids: sel.spring,
       spring_quote: sel.springTotal,
+      ...(sel.storageTierId
+        ? { agreement_version: "storage-terms-v1-beta", agreement_accepted_at: new Date().toISOString() }
+        : {}),
     })
     .select("id")
     .single();

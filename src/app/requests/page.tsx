@@ -10,6 +10,7 @@ import { ScarcityOffers } from "@/components/ScarcityOffers";
 import { UpcomingCalendar } from "@/components/UpcomingCalendar";
 import { CalendarSubscribe } from "@/components/CalendarSubscribe";
 import { getScarcityOffers } from "@/app/requests/offer-data";
+import { getPackageBreakdowns, type PackageBreakdown } from "@/app/requests/package-data";
 import { todayLakeDate } from "@/lib/booking";
 import { createServiceClient } from "@/lib/supabase/server";
 
@@ -54,6 +55,10 @@ export default async function RequestsPage() {
 
   const stuckIds = rows.filter((r) => r.status === "requested").map((r) => r.id as string);
   const offers = stuckIds.length > 0 ? await getScarcityOffers(stuckIds) : [];
+
+  // Package visits (storage/winterize) show what's inside — CUSTOMER prices
+  // only, shaped server-side from job_items (see package-data.ts).
+  const packageBreakdowns = await getPackageBreakdowns(rows.map((r) => r.id as string));
 
   // Month-at-a-glance: confirmed visits only (scheduled / in progress), today
   // or later in lake time.
@@ -129,9 +134,10 @@ export default async function RequestsPage() {
                     const cancellable =
                       r.status === "requested" ||
                       (r.status === "scheduled" && (!r.date || r.date > todayLakeDate()));
+                    const pkg = packageBreakdowns[r.id as string];
                     return (
                       <tr key={r.id} style={{ borderTop: "1px solid var(--line)" }}>
-                        <Td><b>{r.service_name ?? "Service"}</b></Td>
+                        <Td>{pkg ? <PackageServiceCell name={r.service_name ?? "Service"} breakdown={pkg} /> : <b>{r.service_name ?? "Service"}</b>}</Td>
                         <Td muted>{r.frequency ?? "—"}</Td>
                         <Td>{r.date ? new Date(r.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}</Td>
                         <Td><span className={`ll-pill ${STATUS_PILL[r.status] ?? "slate"}`}>{STATUS_LABEL[r.status] ?? r.status}</span></Td>
@@ -157,6 +163,30 @@ export default async function RequestsPage() {
         )}
       </div>
     </>
+  );
+}
+
+// Package visits (storage/winterize): a small "🧊 package" pill next to the
+// service name, expandable to each fall leg + (when quoted) next spring's
+// preview. CUSTOMER prices only — breakdown is shaped server-side in
+// package-data.ts, which never selects job_items.vendor_cost.
+function PackageServiceCell({ name, breakdown }: { name: string; breakdown: PackageBreakdown }) {
+  return (
+    <details>
+      <summary style={{ cursor: "pointer", listStyle: "none" }}>
+        <b>{name}</b> <span className="ll-pill teal" style={{ marginLeft: 6 }}>🧊 package</span>
+      </summary>
+      <div style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>
+        {breakdown.legs.map((leg, i) => (
+          <div key={i}>{leg.name} — {formatPrice(leg.price)}</div>
+        ))}
+        {breakdown.spring && (
+          <div className="mut" style={{ marginTop: 4 }}>
+            Next spring: {breakdown.spring.names.join(", ")} — ~{formatPrice(breakdown.spring.quote)} quoted now, billed at splash.
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 

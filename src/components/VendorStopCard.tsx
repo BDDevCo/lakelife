@@ -85,6 +85,11 @@ export function VendorStopCard({ stop, index }: { stop: VendorStop; index: numbe
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 800, fontSize: 15 }}>{stop.service_name ?? "Service"}</div>
+          {stop.legs && stop.legs.length > 1 && (
+            <div className="mut" style={{ fontSize: 12, marginTop: 2 }}>
+              🧊 This visit: {stop.legs.join(" · ")}
+            </div>
+          )}
           <div className="mut" style={{ fontSize: 13 }}>{stop.address ?? "Address on file"}</div>
           <div className="mut" style={{ fontSize: 12.5 }}>
             {[stop.lake_name, stop.facts, stop.owner_name ? `owner: ${stop.owner_name}` : null].filter(Boolean).join(" · ")}

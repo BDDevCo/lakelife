@@ -18,6 +18,7 @@ export interface VendorStop {
   facts: string; // short crew-facing profile summary (no prices)
   gate_code: string | null; // only populated for TODAY's jobs (rule 3)
   photo_count: number;
+  legs?: string[]; // package-visit leg NAMES ONLY (no prices) — set when job_items exist
 }
 
 /** Is the signed-in user a vendor? Returns their vendor id, or null. */
@@ -126,6 +127,29 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
   const counts = new Map<string, number>();
   for (const p of photos ?? []) counts.set(p.job_id, (counts.get(p.job_id) ?? 0) + 1);
 
+  // Package-visit legs (crews must see every leg of a package visit, not
+  // just the anchor service name). group_id lives on `jobs`, not the
+  // price-free `vendor_jobs` view, so look it up directly with the
+  // service-role client (bypasses RLS; NAMES ONLY ever leave this function —
+  // job_items also carries customer_price/vendor_cost, which we never select).
+  const legsByJob = new Map<string, string[]>();
+  const { data: jobRows } = await admin.from("jobs").select("id, group_id").in("id", jobIds);
+  const groupedJobIds = (jobRows ?? []).filter((j) => j.group_id != null).map((j) => j.id as string);
+  if (groupedJobIds.length > 0) {
+    const { data: items } = await admin
+      .from("job_items")
+      .select("job_id, created_at, services(name)")
+      .in("job_id", groupedJobIds)
+      .order("created_at", { ascending: true });
+    for (const it of items ?? []) {
+      const svc = (Array.isArray(it.services) ? it.services[0] : it.services) as { name?: string } | null;
+      if (!svc?.name) continue;
+      const arr = legsByJob.get(it.job_id as string) ?? [];
+      arr.push(svc.name);
+      legsByJob.set(it.job_id as string, arr);
+    }
+  }
+
   // Gate codes: only for TODAY, and only decrypted server-side here.
   const gateByProp = new Map<string, string | null>();
   if (date === today) {
@@ -158,6 +182,7 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
     facts: factsFor(r),
     gate_code: date === today ? gateByProp.get(r.property_id) ?? null : null,
     photo_count: counts.get(r.id) ?? 0,
+    legs: legsByJob.get(r.id),
   }));
 
   return { date, stops };
