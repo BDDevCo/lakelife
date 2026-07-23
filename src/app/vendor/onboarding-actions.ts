@@ -9,6 +9,8 @@ import {
 export interface OnboardingResult {
   ok: boolean;
   error?: string;
+  /** Go-live needs the one-time scroll-and-agree; retry with tosAccepted. */
+  needsTos?: boolean;
 }
 
 /**
@@ -17,7 +19,7 @@ export interface OnboardingResult {
  * with the SERVICE client so RLS can't hide a still-onboarding record. NEVER
  * trust a vendorId sent from the browser.
  */
-async function assertMyVendor(): Promise<{ id: string; status: string } | null> {
+async function assertMyVendor(): Promise<{ id: string; status: string; user_id: string | null } | null> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -26,11 +28,11 @@ async function assertMyVendor(): Promise<{ id: string; status: string } | null> 
   const admin = createServiceClient();
   const { data } = await admin
     .from("vendors")
-    .select("id, status")
+    .select("id, status, user_id")
     .eq("user_id", user.id)
     .maybeSingle();
   if (!data) return null;
-  return { id: data.id as string, status: data.status as string };
+  return { id: data.id as string, status: data.status as string, user_id: (data.user_id as string) ?? null };
 }
 
 /**
@@ -239,11 +241,18 @@ export async function setBaseLocation(lat: number, lng: number): Promise<Onboard
  * COI is authentic. Authenticity is carried by the onboarding agreement + the
  * yearly re-attest + a future third-party verification callback.
  */
-export async function finishOnboarding(): Promise<OnboardingResult> {
+export async function finishOnboarding(tosAccepted?: boolean): Promise<OnboardingResult> {
   const vendor = await assertMyVendor();
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
   if (vendor.status === "active") return { ok: true }; // already live — idempotent
+
+  // THE AGREEMENT at go-live: crews accept the same terms — independent
+  // businesses, responsible and liable for the work they provide.
+  const { ensureTos } = await import("@/lib/tos-server");
+  if (vendor.user_id && (await ensureTos(vendor.user_id, tosAccepted)) === "needs") {
+    return { ok: false, needsTos: true };
+  }
 
   const admin = createServiceClient();
   const { data: v } = await admin

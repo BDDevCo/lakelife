@@ -8,11 +8,14 @@ import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
 import { autoAssignJob } from "@/app/book/dispatch";
 import { getPackageViews } from "./data";
+import { ensureTos } from "@/lib/tos-server";
 
 export interface PackageBookingResult {
   ok: boolean;
   error?: string;
   needsVerification?: boolean;
+  /** First service request: show the scroll-and-agree, retry with tosAccepted. */
+  needsTos?: boolean;
   /** Honest cold-start state: booked, no crew locked yet — we hunt. */
   findingCrew?: boolean;
 }
@@ -32,6 +35,7 @@ export async function createPackageBooking(input: {
   selectedServiceIds: string[]; // "serviceId" or "serviceId|phase" keys
   fallDate: string; // YYYY-MM-DD
   agreementAccepted: boolean;
+  tosAccepted?: boolean; // the agree modal's retry — stamps and proceeds
 }): Promise<PackageBookingResult> {
   const supabase = await createClient();
   const {
@@ -49,6 +53,10 @@ export async function createPackageBooking(input: {
   const phoneOk = me?.phone_verified ?? false;
   if (!emailOk || !phoneOk) {
     return { ok: false, needsVerification: true, error: "One quick step first: verify your contact info, then you're ready to book." };
+  }
+
+  if ((await ensureTos(user.id, input.tosAccepted)) === "needs") {
+    return { ok: false, needsTos: true };
   }
 
   const profile = await getFullProfile();

@@ -4,8 +4,9 @@ import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { TOS_VERSION } from "@/lib/tos";
 
-/** Explicit, versioned acceptance — stamped who/which/when, then onward. */
-export async function acceptTos(): Promise<void> {
+/** Explicit, versioned acceptance — stamped who/which/when, then onward.
+ *  Used by the grandfathered-crew card (crews active before the rails). */
+export async function acceptTos(form: FormData): Promise<void> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -16,5 +17,6 @@ export async function acceptTos(): Promise<void> {
     .from("users")
     .update({ tos_version: TOS_VERSION, tos_accepted_at: new Date().toISOString() })
     .eq("id", user.id);
-  redirect("/portal");
+  const next = String(form.get("next") ?? "/portal");
+  redirect(next.startsWith("/") ? next : "/portal");
 }

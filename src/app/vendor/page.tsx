@@ -10,6 +10,9 @@ import { getMyVendorId, getMyVendor, getVendorDay } from "./data";
 import { getMyStanding } from "@/lib/scoring-data";
 import { tierLabel } from "@/lib/scoring";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
+import { TermsBody } from "@/components/TermsBody";
+import { TOS_VERSION } from "@/lib/tos";
+import { acceptTos } from "@/app/portal/tos-actions";
 
 export default async function VendorTodayPage() {
   if (!hasSupabaseEnv()) {
@@ -67,6 +70,33 @@ export default async function VendorTodayPage() {
         <VendorOnboarding vendor={vendor} activeServices={activeServices} lakes={lakes} />
       </>
     );
+  }
+
+  // Grandfathered crews (active before the at-the-moment-of-service TOS rails
+  // existed) accept once here, gating the route until they do. New crews
+  // accept at go-live instead — this only fires for accounts already active.
+  if (vendor && vendor.status === "active") {
+    const { data: meRow } = await supabase.from("users").select("tos_version").eq("id", user.id).maybeSingle();
+    if ((meRow?.tos_version as string | null) !== TOS_VERSION) {
+      return (
+        <>
+          <TopBar />
+          <VendorNav />
+          <div className="wrap" style={{ paddingTop: 24, maxWidth: 560 }}>
+            <div className="ll-card ll-card-pad">
+              <h2 style={{ fontSize: 22, margin: "0 0 12px" }}>The ground rules 🌊</h2>
+              <TermsBody />
+              <form action={acceptTos}>
+                <input type="hidden" name="next" value="/vendor" />
+                <button className="ll-btn gold" style={{ width: "100%", marginTop: 4 }}>
+                  I agree — back to my route 🌊
+                </button>
+              </form>
+            </div>
+          </div>
+        </>
+      );
+    }
   }
 
   const admin2 = createServiceClient();

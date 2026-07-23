@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { TopBar } from "@/components/Brand";
+import { TermsBody } from "@/components/TermsBody";
 import { TOS_VERSION } from "@/lib/tos";
 
 /**
@@ -26,36 +27,7 @@ export default function TermsPage() {
           accept it when it does.
         </p>
 
-        <div className="ll-card ll-card-pad" style={{ marginBottom: 14 }}>
-          <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>What LakeLife is</h3>
-          <p className="mut" style={{ fontSize: 14, margin: 0, lineHeight: 1.6 }}>
-            LakeLife is a <b>third-party administrator</b>: we run the booking, scheduling,
-            photo-verification, and payment rails that connect lake homeowners with independent
-            local crews. The services themselves — mowing, winterizing, hauling, storing — are
-            performed by those independent crews, not by LakeLife.
-          </p>
-        </div>
-
-        <div className="ll-card ll-card-pad" style={{ marginBottom: 14 }}>
-          <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>Who you&apos;re agreeing with</h3>
-          <p className="mut" style={{ fontSize: 14, margin: 0, lineHeight: 1.6 }}>
-            When a job is booked, the service agreement is <b>between the homeowner and the
-            crew</b> — both sides accept these shared terms as the rules of that relationship.
-            LakeLife administers it: one all-in price, photo-verified completion, payment released
-            only after the work is done.
-          </p>
-        </div>
-
-        <div className="ll-card ll-card-pad" style={{ marginBottom: 14 }}>
-          <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>What LakeLife verifies</h3>
-          <p className="mut" style={{ fontSize: 14, margin: 0, lineHeight: 1.6 }}>
-            Every active crew has <b>insurance on file</b> (a certificate of insurance, re-validated
-            yearly; storage crews additionally carry custody coverage) and a <b>W-9 with a valid
-            EIN or SSN</b> on file before they can be routed work. Verification of documents is the
-            extent of LakeLife&apos;s role — crews are independent businesses responsible for their
-            own work.
-          </p>
-        </div>
+        <TermsBody />
 
         <p className="mut" style={{ fontSize: 13 }}>
           Questions? <a href="mailto:hello@lakelife.ai">hello@lakelife.ai</a> — a human reads it.

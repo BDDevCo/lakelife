@@ -9,6 +9,7 @@ import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
 import { autoAssignJob, getServiceAvailability } from "./dispatch";
+import { ensureTos } from "@/lib/tos-server";
 
 /** Current hour (0–23) in lake time — the rush-window clock. */
 function lakeHour(): number {
@@ -88,6 +89,8 @@ export interface BookingResult {
   ok: boolean;
   error?: string;
   needsVerification?: boolean;
+  /** First service request: show the scroll-and-agree, retry with tosAccepted. */
+  needsTos?: boolean;
 }
 
 /**
@@ -103,6 +106,7 @@ export async function createBooking(
   date: string, // YYYY-MM-DD
   frequency: string,
   rushFallback?: string, // same-day only: 'roll' (tomorrow at standard price) | 'cancel'
+  tosAccepted?: boolean, // set by the agree modal's retry — stamps and proceeds
 ): Promise<BookingResult> {
   const supabase = await createClient();
   const {
@@ -126,6 +130,13 @@ export async function createBooking(
         ? "One quick step first: verify your mobile so crews can reach you — it takes 30 seconds."
         : "One quick step first: confirm your email, then you're ready to book.",
     };
+  }
+
+  // THE AGREEMENT, at the moment of service: one quick scroll-and-agree the
+  // first time, stamped forever (until a version bump), then the booking
+  // pushes straight through on the retry.
+  if ((await ensureTos(user.id, tosAccepted)) === "needs") {
+    return { ok: false, needsTos: true };
   }
 
   const profile = await getFullProfile();

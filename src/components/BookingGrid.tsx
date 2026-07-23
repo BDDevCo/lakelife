@@ -7,6 +7,7 @@ import { dayStatus, toISODate, isRecurring, type DayStatus } from "@/lib/booking
 import { rushPrice } from "@/lib/rush";
 import { getAvailability, createBooking, type RushWindow } from "@/app/book/actions";
 import { toast } from "@/components/Toast";
+import { TosAgreeModal } from "@/components/TosAgreeModal";
 
 interface Service {
   id: string;
@@ -66,6 +67,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const [rush, setRush] = useState<RushWindow | null>(null);
   const [rushFallback, setRushFallback] = useState<"roll" | "cancel">("roll");
   const [busy, setBusy] = useState(false);
+  const [tosOpen, setTosOpen] = useState(false);
 
   const today = toISODate(now);
 
@@ -116,7 +118,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const pickedIsRush = picked != null && cells.some((c) => c?.iso === picked && c.status === "rush");
   const rushAllIn = rush ? rushPrice(service.price, rush.surchargePct) : service.price;
 
-  async function confirm() {
+  async function confirm(tosAccepted?: boolean) {
     if (!picked) return;
     setBusy(true);
     const res = await createBooking(
@@ -124,9 +126,12 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
       picked,
       service.frequency_options[freq] ?? "",
       pickedIsRush ? rushFallback : undefined,
+      tosAccepted,
     );
     setBusy(false);
+    if (res.needsTos) { setTosOpen(true); return; }
     if (!res.ok) { toast(res.error ?? "Couldn't book that."); return; }
+    setTosOpen(false);
     toast(`${service.name} booked — see “My requests.”`);
     onClose();
     router.refresh();
@@ -294,11 +299,18 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
             completed and its photos are uploaded — never before.
           </p>
 
-          <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={confirm} disabled={!picked || busy}>
+          <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={() => confirm()} disabled={!picked || busy}>
             {busy ? "Booking…" : pickedIsRush ? `Book today ⚡ — ${formatPrice(rushAllIn)}` : "Confirm booking"}
           </button>
         </div>
       </div>
+
+      <TosAgreeModal
+        open={tosOpen}
+        busy={busy}
+        onAgree={() => confirm(true)}
+        onClose={() => setTosOpen(false)}
+      />
     </div>
   );
 }

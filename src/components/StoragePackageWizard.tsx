@@ -24,6 +24,7 @@ import { createPackageBooking } from "@/app/book/storage/actions";
 import { formatPrice } from "@/lib/pricing";
 import { toast } from "@/components/Toast";
 import { Toggle } from "@/components/wizard-controls";
+import { TosAgreeModal } from "@/components/TosAgreeModal";
 
 const ckey = (c: Pick<PackageComponentView, "serviceId" | "phase">) => `${c.serviceId}|${c.phase}`;
 
@@ -121,6 +122,7 @@ function PackageConfigurator({ pkg, boatLabel }: { pkg: PackageView; boatLabel: 
   const [busy, setBusy] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<{ findingCrew: boolean } | null>(null);
+  const [tosOpen, setTosOpen] = useState(false);
 
   const validation = useMemo(() => validateSelection(pkg, selectedKeys), [pkg, selectedKeys]);
 
@@ -145,7 +147,7 @@ function PackageConfigurator({ pkg, boatLabel }: { pkg: PackageView; boatLabel: 
   const hasStorage = validation.storageTierId != null;
   const canBook = validation.ok && fallDate !== "" && (!hasStorage || agreement);
 
-  async function book() {
+  async function book(tosAccepted?: boolean) {
     if (!canBook) return;
     setBusy(true);
     setSubmitError(null);
@@ -154,14 +156,17 @@ function PackageConfigurator({ pkg, boatLabel }: { pkg: PackageView; boatLabel: 
       selectedServiceIds: selectedKeys,
       fallDate,
       agreementAccepted: agreement,
+      tosAccepted,
     });
     setBusy(false);
+    if (res.needsTos) { setTosOpen(true); return; }
     if (!res.ok) {
       const msg = res.error ?? "Couldn't book that — try again.";
       setSubmitError(msg);
       toast(msg);
       return;
     }
+    setTosOpen(false);
     setResult({ findingCrew: !!res.findingCrew });
   }
 
@@ -291,9 +296,16 @@ function PackageConfigurator({ pkg, boatLabel }: { pkg: PackageView; boatLabel: 
         <p style={{ color: "var(--danger)", fontSize: 13, fontWeight: 600, margin: "8px 0 0" }}>{submitError}</p>
       )}
 
-      <button className="ll-btn gold" style={{ width: "100%", marginTop: 14 }} disabled={!canBook || busy} onClick={book}>
+      <button className="ll-btn gold" style={{ width: "100%", marginTop: 14 }} disabled={!canBook || busy} onClick={() => book()}>
         {busy ? "Booking…" : `Book — ${formatPrice(validation.total)}`}
       </button>
+
+      <TosAgreeModal
+        open={tosOpen}
+        busy={busy}
+        onAgree={() => book(true)}
+        onClose={() => setTosOpen(false)}
+      />
     </div>
   );
 }

@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { Stepper, ToggleChips } from "@/components/wizard-controls";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { toast } from "@/components/Toast";
+import { TosAgreeModal } from "@/components/TosAgreeModal";
 import {
   uploadVendorDoc,
   setServiceTypes,
@@ -550,14 +551,20 @@ function BaseStep({
 
 function GoLiveCard({ onDone }: { onDone: () => void }) {
   const [pending, startTransition] = useTransition();
+  const [tosOpen, setTosOpen] = useState(false);
 
-  function go() {
+  function go(tosAccepted?: boolean) {
     startTransition(async () => {
-      const res = await finishOnboarding();
+      const res = await finishOnboarding(tosAccepted);
+      if (res.needsTos) {
+        setTosOpen(true);
+        return;
+      }
       if (!res.ok) {
         toast(res.error ?? "Couldn't go live — try again.");
         return;
       }
+      setTosOpen(false);
       onDone();
     });
   }
@@ -576,12 +583,20 @@ function GoLiveCard({ onDone }: { onDone: () => void }) {
       </p>
       <button
         className="ll-btn gold"
-        onClick={go}
+        onClick={() => go()}
         disabled={pending}
         style={{ width: "100%", minHeight: 48 }}
       >
         {pending ? "Going live…" : "Go live — start getting jobs"}
       </button>
+
+      <TosAgreeModal
+        open={tosOpen}
+        busy={pending}
+        onAgree={() => go(true)}
+        onClose={() => setTosOpen(false)}
+        agreeLabel="I agree — go live 🌊"
+      />
     </div>
   );
 }
