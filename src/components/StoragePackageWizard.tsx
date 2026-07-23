@@ -280,7 +280,7 @@ function PackageConfigurator({ pkg, boatLabel }: { pkg: PackageView; boatLabel: 
       {hasStorage && (
         <div style={{ margin: "4px 0 8px" }}>
           <Toggle
-            label="I agree to the winter storage terms — condition photos at every hand-off, balance due before spring splash."
+            label="I agree to the winter storage terms — condition photos at every hand-off, balance due before spring splash. Storage is performed by your crew under the LakeLife terms of service."
             checked={agreement}
             onChange={setAgreement}
           />

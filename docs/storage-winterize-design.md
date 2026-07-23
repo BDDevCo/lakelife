@@ -165,10 +165,15 @@ that must exist at launch:
    at every custody handoff (at-dock, on-trailer, racked, splashed) + customer
    e-acknowledgment. Kills "that gouge wasn't there in October." This is our
    photo-verified DNA turned into the differentiator: *photo-verified custody*.
-3. **Storage agreement e-sign** at booking (versioned): freeze-damage waiver if
-   winterized elsewhere, valuables-removed acknowledgment, fuel/battery/propane intake
-   checklist, abandonment terms, per-diem terms. One attorney pass with the referral
-   terms hour.
+3. **Storage agreement e-sign** at booking (versioned). LEGAL POSTURE (owner,
+   2026-07-22): NO service-specific attorney language — ONE bulletproof user
+   agreement covers both sides; LakeLife is a third-party administrator; the
+   service relationship (including custody) is customer ↔ crew, accepted
+   between each other; LakeLife's duty is verification (insurance + valid
+   EIN). The storage checkbox is an operational addendum under that master
+   agreement; acceptance rails are versioned (users.tos_version + the
+   envelope's agreement_version), so the final ToS text drops in with a
+   version bump and everyone re-accepts at next sign-in.
 4. **No cold claims on custody:** storage-bearing jobs are dispatch/preferred-only —
    a stranger crew must not win custody of a boat via first-tap.
 5. **Access & release flow:** mid-winter "I sold it / need my gear" requests get a
