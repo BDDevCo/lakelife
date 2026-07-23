@@ -15,7 +15,7 @@ const SLOTS = [
 ];
 
 const BUCKETS: Array<{ key: string; label: string; statuses: string[]; tone: string }> = [
-  { key: "requested", label: "Needs scheduling", statuses: ["requested"], tone: "warn" },
+  { key: "requested", label: "Machine hunting (no approval needed)", statuses: ["requested"], tone: "warn" },
   { key: "scheduled", label: "Scheduled", statuses: ["scheduled"], tone: "teal" },
   { key: "in_progress", label: "In progress", statuses: ["in_progress"], tone: "slate" },
   { key: "done", label: "Complete", statuses: ["complete", "paid"], tone: "ok" },
@@ -122,7 +122,7 @@ function JobRow({ job, preferred, onAssign }: { job: OpsJob; preferred?: boolean
 
       <div style={{ width: "100%", display: "flex", justifyContent: "flex-end", gap: 8 }}>
         {isRequested ? (
-          <button className="ll-btn gold sm" onClick={onAssign}>Assign &amp; schedule</button>
+          <button className="ll-btn ghost sm" onClick={onAssign} title="The machine keeps hunting on its own — sweeps, claim board, scarcity offers. Override only if you must.">Override (manual assign)</button>
         ) : job.status === "scheduled" ? (
           <button className="ll-btn ghost sm" onClick={onAssign}>Reassign</button>
         ) : null}
@@ -185,7 +185,7 @@ function AssignModal({ job, vendors, onClose }: { job: OpsJob; vendors: ActiveVe
       <div className="ll-modal" style={{ maxWidth: 460 }}>
         <div className="ll-modal-head">
           <div>
-            <span className="ll-pill teal">Assign &amp; schedule</span>
+            <span className="ll-pill teal">Manual override</span>
             <h3 style={{ fontSize: 20, marginTop: 8 }}>{job.service_name ?? "Service"}</h3>
             <div className="mut" style={{ fontSize: 13 }}>{job.address}{job.owner_name ? ` · ${job.owner_name}` : ""}</div>
           </div>

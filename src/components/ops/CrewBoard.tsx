@@ -91,7 +91,7 @@ function InviteCard({ serviceNames }: { serviceNames: string[] }) {
         <span className="ll-pill teal">Invite a crew</span>
       </div>
       <p className="mut" style={{ fontSize: 13, marginBottom: 12 }}>
-        We&apos;ll email them a join link. They set up their account, upload insurance &amp; W-9, then you approve.
+        We&apos;ll email them a join link. They set up their account, upload insurance &amp; W-9, pick their lakes, and go live THEMSELVES — zero touch from you. This board is visibility, not a queue.
       </p>
       <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
         <div className="ll-field">
@@ -238,17 +238,17 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
 
         {crew.status !== "active" ? (
           <button
-            className="ll-btn gold sm"
+            className={`ll-btn ${crew.status === "suspended" ? "gold" : "ghost"} sm`}
             disabled={busy || !docsComplete}
             title={docsComplete ? undefined : approveHint}
             onClick={() =>
               run(
                 () => (crew.status === "suspended" ? reactivateCrew(crew.id) : approveCrew(crew.id, cap)),
-                crew.status === "suspended" ? "Crew reactivated — back on the board." : "Approved — crew is live. 🌊",
+                crew.status === "suspended" ? "Crew reactivated — back on the board." : "Force-activated (override) — crews normally go live themselves. 🌊",
               )
             }
           >
-            {crew.status === "suspended" ? "Reactivate" : "Approve"}
+            {crew.status === "suspended" ? "Reactivate" : "Force-activate (override)"}
           </button>
         ) : null}
 
