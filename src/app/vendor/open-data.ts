@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { todayLakeDate, lakeDateOf } from "@/lib/booking";
 import { canClaim, milesBetween, gapTakeHome, gapOfferFor, gapJitter, type ClaimBlocker, type CrewCandidate } from "@/lib/dispatch";
+import { fleetJobCap, fleetMinuteBudget, jobMinutesOf, DEFAULT_JOB_MINUTES } from "@/lib/fleet";
 import { isCoolingDown } from "@/lib/lake-standing";
 import { fillInRate, rushWindowOpen } from "@/lib/rush";
 import { loadPricingProfileById } from "@/app/book/dispatch";
@@ -89,7 +90,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
 
   const { data: jobs } = await admin
     .from("jobs")
-    .select("id, date, customer_price, service_id, property_id, is_rush, created_at, services(name, pricing_model), properties(lake_id, lat, lng, lakes(name))")
+    .select("id, date, customer_price, service_id, property_id, is_rush, created_at, services(name, pricing_model, est_minutes), properties(lake_id, lat, lng, lakes(name))")
     .eq("status", "requested")
     .is("vendor_id", null)
     .is("group_id", null) // package visits are routed, never cold-claimed — a claim can't price multi-leg work, and custody is never a first-tap prize
@@ -110,12 +111,22 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   // One shot each: my rates, my assigned counts per date, my blocked dates,
   // and any lakes I'm paused on (Phase E cooldowns).
   const dates = [...new Set(doable.map((j) => j.date as string))];
-  const [{ data: rates }, { data: myJobs }, { data: myBlocks }, { data: myPauses }] = await Promise.all([
+  const [{ data: rates }, { data: myJobs }, { data: myBlocks }, { data: myPauses }, { data: myUnits }] = await Promise.all([
     admin.from("vendor_rates").select("service_id, base, unit_rate, band_pricing").eq("vendor_id", vendor.id),
-    admin.from("jobs").select("date").eq("vendor_id", vendor.id).in("status", ["scheduled", "in_progress"]).in("date", dates),
+    admin.from("jobs").select("date, group_id, services(est_minutes), job_items(services(est_minutes))").eq("vendor_id", vendor.id).in("status", ["scheduled", "in_progress"]).in("date", dates),
     admin.from("vendor_availability").select("date").eq("vendor_id", vendor.id).eq("status", "blocked").in("date", dates),
     admin.from("vendor_lake_demotions").select("lake_id, demoted_at").eq("vendor_id", vendor.id),
+    admin.from("crew_units").select("capacity, work_start, work_end").eq("vendor_id", vendor.id).eq("active", true),
   ]);
+  // Fleet layer: with trucks, cap = fleet sum + a minute budget activates;
+  // without, legacy vendor numbers (budget null = gate off) — the invariant.
+  const units = (myUnits ?? []).map((u) => ({
+    capacity: Number(u.capacity ?? 0),
+    workStart: Number(u.work_start ?? 0),
+    workEnd: Number(u.work_end ?? 0),
+  }));
+  const myJobCap = fleetJobCap(units, vendor.daily_capacity);
+  const myMinuteBudget = fleetMinuteBudget(units);
   const pausedLakes = new Set(
     (myPauses ?? [])
       .filter((p) => isCoolingDown(p.demoted_at as string, settings.lakeDemotionCooldownDays, Date.now()))
@@ -123,7 +134,16 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   );
   const rateBySvc = new Map((rates ?? []).map((r) => [r.service_id as string, r]));
   const assignedByDate = new Map<string, number>();
-  for (const j of myJobs ?? []) assignedByDate.set(j.date as string, (assignedByDate.get(j.date as string) ?? 0) + 1);
+  const assignedMinByDate = new Map<string, number>();
+  for (const j of myJobs ?? []) {
+    assignedByDate.set(j.date as string, (assignedByDate.get(j.date as string) ?? 0) + 1);
+    // Packages cost their legs' sum — the number their admission charged.
+    const s = one(j.services) as { est_minutes?: number } | null;
+    const legs = (j as { group_id?: string | null }).group_id
+      ? ((j as { job_items?: Array<{ services?: unknown }> }).job_items ?? []).map((it) => (one(it.services) as { est_minutes?: number } | null)?.est_minutes ?? null)
+      : null;
+    assignedMinByDate.set(j.date as string, (assignedMinByDate.get(j.date as string) ?? 0) + jobMinutesOf(s?.est_minutes, legs));
+  }
   const blockedDates = new Set((myBlocks ?? []).map((b) => b.date as string));
 
   const rushOpen = rushWindowOpen(lakeHour(), settings.sameDayCutoffHour);
@@ -159,6 +179,10 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       if (takeHome != null && isRushRow) takeHome = fillInRate(takeHome, settings.sameDayFillDiscountPct);
     }
 
+    const jobMinutes = (() => {
+      const m = Number((svc as { est_minutes?: number } | null)?.est_minutes ?? 0);
+      return m > 0 ? m : DEFAULT_JOB_MINUTES;
+    })();
     const candidate: CrewCandidate = {
       vendorId: vendor.id,
       status: vendor.status,
@@ -166,9 +190,11 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       serviceTypes: vendor.service_types,
       serviceLakes: vendor.service_lakes,
       workDays: vendor.work_days,
-      dailyCapacity: vendor.daily_capacity,
+      dailyCapacity: myJobCap,
       assignedThatDay: assignedByDate.get(j.date as string) ?? 0,
       blockedThatDay: blockedDates.has(j.date as string),
+      minuteBudget: myMinuteBudget,
+      assignedMinutes: assignedMinByDate.get(j.date as string) ?? 0,
       crewRate: takeHome != null && takeHome > 0 ? takeHome : null,
       score: 0,
       baseLat: vendor.base_lat,
@@ -180,6 +206,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       todayISO: today,
       menuPrice: Number(j.customer_price ?? 0), // server-side only — never returned
       marginFloor: settings.marginFloor,
+      jobMinutes,
     });
     // Phase E: a cooling-down lake overrides everything else — be upfront.
     if (prop?.lake_id && pausedLakes.has(prop.lake_id as string)) {

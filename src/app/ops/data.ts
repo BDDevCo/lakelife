@@ -315,18 +315,47 @@ export interface RouteSummary {
   stops: number;
   drive_minutes: number | null;
   map_url: string | null;
+  unit_name: string | null; // set on fleet (per-truck) routes; null on legacy single-route
+  drive_km: number | null;
+  est_miles: number | null; // drive_km × 0.621, 1 decimal (display only)
+  est_fuel: number | null; // est_miles × fuel_cost_per_mile dial, 2 decimals (display only)
+}
+
+const KM_TO_MILES = 0.621;
+
+/** fuel_cost_per_mile dial (0.65 default) — the ops-display-only economics
+ *  in docs/fleet-routing-design.md. getPlatformSettings doesn't carry this
+ *  key yet, so read the platform_settings row directly; fall back to the
+ *  migration 0042 default if the row is missing or unreachable. */
+async function fuelCostPerMile(admin: ReturnType<typeof createServiceClient>): Promise<number> {
+  try {
+    const settings = await getPlatformSettings();
+    const fromSettings = (settings as unknown as { fuelCostPerMile?: number }).fuelCostPerMile;
+    if (typeof fromSettings === "number" && Number.isFinite(fromSettings)) return fromSettings;
+  } catch {
+    // getPlatformSettings unreachable — fall through to a direct read.
+  }
+  const { data } = await admin.from("platform_settings").select("value").eq("key", "fuel_cost_per_mile").maybeSingle();
+  const n = Number(data?.value);
+  return Number.isFinite(n) ? n : 0.65;
 }
 
 /** Tomorrow's built routes (or a given date's). */
 export async function getRoutesForDate(dateISO: string): Promise<RouteSummary[]> {
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("routes")
-    .select("id, date, stops_order, drive_minutes, map_url, vendors(company)")
-    .eq("date", dateISO)
-    .order("created_at", { ascending: true });
+  const [{ data }, fuelDial] = await Promise.all([
+    admin
+      .from("routes")
+      .select("id, date, stops_order, drive_minutes, map_url, unit_name, drive_km, vendors(company)")
+      .eq("date", dateISO)
+      .order("created_at", { ascending: true }),
+    fuelCostPerMile(admin),
+  ]);
   return (data ?? []).map((r) => {
     const v = Array.isArray(r.vendors) ? r.vendors[0] : r.vendors;
+    const driveKm = r.drive_km == null ? null : Number(r.drive_km);
+    const estMiles = driveKm == null ? null : Math.round(driveKm * KM_TO_MILES * 10) / 10;
+    const estFuel = estMiles == null ? null : Math.round(estMiles * fuelDial * 100) / 100;
     return {
       id: r.id as string,
       date: r.date as string,
@@ -334,6 +363,10 @@ export async function getRoutesForDate(dateISO: string): Promise<RouteSummary[]>
       stops: Array.isArray(r.stops_order) ? r.stops_order.length : 0,
       drive_minutes: r.drive_minutes == null ? null : Number(r.drive_minutes),
       map_url: (r.map_url as string) ?? null,
+      unit_name: (r.unit_name as string) ?? null,
+      drive_km: driveKm,
+      est_miles: estMiles,
+      est_fuel: estFuel,
     };
   });
 }

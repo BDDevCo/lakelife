@@ -18,7 +18,11 @@ import { toast } from "@/components/Toast";
 
 export type SlotStatus = "open" | "blocked" | "booked";
 
-export const SLOT_TIMES = ["8a", "10a", "1p", "3p"] as const;
+// Re-exported for existing importers; the VALUE lives in ./slots (a neutral
+// module) because a client-module value export is only a proxy to the
+// server page that also needs it.
+import { SLOT_TIMES } from "./slots";
+export { SLOT_TIMES } from "./slots";
 
 export interface DayRow {
   date: string; // YYYY-MM-DD

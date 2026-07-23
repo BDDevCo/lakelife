@@ -2,6 +2,7 @@ import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
 import { isEligible, scarcityOffer, type DispatchInput } from "@/lib/dispatch";
+import { DEFAULT_JOB_MINUTES } from "@/lib/fleet";
 import { buildCandidates, loadPricingProfileById } from "@/app/book/dispatch";
 import { getPlatformSettings } from "@/lib/settings";
 import type { ServiceRule } from "@/lib/pricing";
@@ -36,12 +37,12 @@ export async function computeScarcityOffer(jobId: string): Promise<ScarcityOffer
   const today = todayLakeDate();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, services(name, pricing_model), properties(lake_id)")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, services(name, pricing_model, est_minutes), properties(lake_id)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job || job.status !== "requested" || job.vendor_id != null || !job.date || (job.date as string) < today) return null;
   if ((job as { is_rush?: boolean }).is_rush) return null; // rush already carries its premium — never stack a boost
-  const svc = one(job.services) as { name?: string; pricing_model?: string } | null;
+  const svc = one(job.services) as { name?: string; pricing_model?: string; est_minutes?: number } | null;
   if (!svc?.name) return null;
   const menuPrice = Number(job.customer_price ?? 0);
   if (!(menuPrice > 0)) return null;
@@ -66,6 +67,9 @@ export async function computeScarcityOffer(jobId: string): Promise<ScarcityOffer
     serviceName: svc.name,
     todayISO: today,
     lakeId: ((one(job.properties) as { lake_id?: string } | null)?.lake_id as string) ?? null,
+    // Real duration, not the 60-min default — a time-full fleet crew must
+    // not trigger an offer the accept path's re-gate can never honor.
+    jobMinutes: Number(svc.est_minutes ?? 0) > 0 ? Number(svc.est_minutes) : DEFAULT_JOB_MINUTES,
   } as DispatchInput;
 
   // Cheapest crew that could genuinely take it (all hard gates incl. lake).

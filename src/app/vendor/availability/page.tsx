@@ -5,10 +5,13 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyVendorId } from "@/app/vendor/data";
 import { todayLakeDate, toISODate } from "@/lib/booking";
-import { AvailabilityGrid, SLOT_TIMES, type DayRow, type SlotStatus } from "./AvailabilityGrid";
+import { AvailabilityGrid, type DayRow, type SlotStatus } from "./AvailabilityGrid";
+import { SLOT_TIMES } from "./slots";
 import { WorkDayChips } from "./WorkDayChips";
 import { MyLakesEditor } from "@/components/MyLakesEditor";
 import { VendorStorage } from "@/components/VendorStorage";
+import { MyTrucks } from "@/components/MyTrucks";
+import { getMyTrucks } from "@/app/vendor/trucks-data";
 
 // getDay() index -> the 3-letter form stored in vendors.work_days.
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -85,6 +88,10 @@ export default async function VendorAvailabilityPage() {
     }
   }
 
+  // This crew's fleet (crew_units) — empty for the vast majority of vendors
+  // today; the legacy single-route path is untouched either way.
+  const trucks = await getMyTrucks();
+
   const rows: DayRow[] = workingDays.map((d) => ({
     date: d.date,
     label: d.label,
@@ -138,6 +145,10 @@ export default async function VendorAvailabilityPage() {
             garagekeepersUrl={garagekeepersUrl}
             garagekeepersExpiry={garagekeepersExpiry}
           />
+        </section>
+
+        <section style={{ marginTop: 28, marginBottom: 28 }}>
+          <MyTrucks trucks={trucks} />
         </section>
       </div>
     </>

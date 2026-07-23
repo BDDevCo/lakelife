@@ -5,7 +5,8 @@ import { sendEmail } from "@/lib/email";
 import { LakeLifePayments } from "@/lib/payments";
 import { revalidateJob } from "@/app/book/dispatch";
 import { todayLakeDate } from "@/lib/booking";
-import { planVendorDay, routeMapUrl, type StopIn } from "@/lib/router";
+import { planVendorDay, routeMapUrl } from "@/lib/router";
+import { planFleetDay, jobMinutesOf, type TruckIn, type FleetStop } from "@/lib/fleet";
 import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 import { proposeAutopilotDate } from "@/lib/autopilot";
 import { shouldDemote, healBase, isCoolingDown } from "@/lib/lake-standing";
@@ -42,13 +43,20 @@ export interface RouteBuildOutcome {
   stops?: number;
   overflow?: number;
   texted?: number;
+  trucks?: number; // count of per-truck route rows written (fleet vendors only)
+  hoursBust?: number; // count of truck days that busted the truck's work window
 }
 
 /**
  * Build routes for a day (default: tomorrow, lake time). Clusters each vendor's
- * scheduled jobs by lake, orders them in drive direction, caps at capacity,
- * writes routes + per-job sequence, texts each crew their map link. Skips crews
- * whose COI lapsed. Deterministic rebuild — clears that day's routes first.
+ * scheduled jobs by lake, orders them in drive direction, writes routes +
+ * per-job sequence, texts each crew their map link. Skips crews whose COI
+ * lapsed. Deterministic rebuild — clears that day's routes first.
+ *
+ * Fleet-aware (docs/fleet-routing-design.md): a vendor with crew_units gets
+ * ONE routes row PER TRUCK (planFleetDay, time-budget aware); a vendor with
+ * ZERO crew_units rows gets the EXACT legacy path (planVendorDay, one route,
+ * one SMS to the vendor phone) — the backward-compat invariant.
  */
 export async function runRouteBuild(dateISO?: string): Promise<RouteBuildOutcome> {
   const date = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : addDays(todayLakeDate(), 1);
@@ -56,50 +64,161 @@ export async function runRouteBuild(dateISO?: string): Promise<RouteBuildOutcome
 
   const { data: jobs, error: loadErr } = await admin
     .from("jobs")
-    .select("id, vendor_id, properties(lat, lng, lakes(name)), vendors(daily_capacity, company, user_id, status, coi_expiry)")
+    .select(
+      "id, vendor_id, group_id, properties(lat, lng, lakes(name)), vendors(daily_capacity, company, user_id, status, coi_expiry, base_lat, base_lng), services(est_minutes), job_items(services(est_minutes))",
+    )
     .eq("date", date)
     .eq("status", "scheduled")
     .not("vendor_id", "is", null);
   if (loadErr) return { ok: false, error: loadErr.message };
 
-  const byVendor = new Map<string, { capacity: number; user_id: string | null; stops: StopIn[] }>();
+  const byVendor = new Map<
+    string,
+    { capacity: number; user_id: string | null; baseLat: number | null; baseLng: number | null; stops: FleetStop[] }
+  >();
   for (const j of jobs ?? []) {
-    const v = one(j.vendors) as { daily_capacity?: number; user_id?: string; status?: string; coi_expiry?: string } | null;
+    const v = one(j.vendors) as
+      | { daily_capacity?: number; user_id?: string; status?: string; coi_expiry?: string; base_lat?: number; base_lng?: number }
+      | null;
     if (!v || v.status !== "active" || !v.coi_expiry || String(v.coi_expiry) < todayLakeDate()) continue;
     const p = one(j.properties) as { lat?: number; lng?: number; lakes?: unknown } | null;
     const lake = one(p?.lakes) as { name?: string } | null;
+    const svc = one(j.services) as { est_minutes?: number } | null;
     const key = j.vendor_id as string;
-    if (!byVendor.has(key)) byVendor.set(key, { capacity: Number(v.daily_capacity ?? 0), user_id: v.user_id ?? null, stops: [] });
-    byVendor.get(key)!.stops.push({ id: j.id as string, lat: p?.lat ?? null, lng: p?.lng ?? null, lake_name: lake?.name ?? null });
+    if (!byVendor.has(key)) {
+      byVendor.set(key, {
+        capacity: Number(v.daily_capacity ?? 0),
+        user_id: v.user_id ?? null,
+        baseLat: v.base_lat ?? null,
+        baseLng: v.base_lng ?? null,
+        stops: [],
+      });
+    }
+    // Packages cost their legs' sum (jobMinutesOf) — the same number their
+    // admission was charged, so fitsHours sees the real day.
+    const legs = (j as { group_id?: string | null }).group_id
+      ? ((j as { job_items?: Array<{ services?: unknown }> }).job_items ?? []).map((it) => (one(it.services) as { est_minutes?: number } | null)?.est_minutes ?? null)
+      : null;
+    byVendor.get(key)!.stops.push({
+      id: j.id as string,
+      lat: p?.lat ?? null,
+      lng: p?.lng ?? null,
+      lake_name: lake?.name ?? null,
+      estMinutes: jobMinutesOf(svc?.est_minutes, legs),
+    });
+  }
+
+  // ALL active crew_units for the involved vendors, ONE query. Created-order
+  // keeps the fleet split deterministic across rebuilds (design doc).
+  const vendorIds = [...byVendor.keys()];
+  const unitsByVendor = new Map<string, TruckIn[]>();
+  if (vendorIds.length > 0) {
+    const { data: units, error: uErr } = await admin
+      .from("crew_units")
+      .select("id, vendor_id, name, phone, capacity, work_start, work_end, base_lat, base_lng")
+      .in("vendor_id", vendorIds)
+      .eq("active", true)
+      .order("created_at", { ascending: true });
+    if (uErr) return { ok: false, error: uErr.message };
+    for (const u of units ?? []) {
+      const vid = u.vendor_id as string;
+      if (!unitsByVendor.has(vid)) unitsByVendor.set(vid, []);
+      unitsByVendor.get(vid)!.push({
+        id: u.id as string,
+        name: (u.name as string) ?? "Truck 1",
+        phone: (u.phone as string) ?? null,
+        capacity: Number(u.capacity ?? 0),
+        workStart: Number(u.work_start ?? 0),
+        workEnd: Number(u.work_end ?? 24),
+        baseLat: u.base_lat == null ? null : Number(u.base_lat),
+        baseLng: u.base_lng == null ? null : Number(u.base_lng),
+      });
+    }
   }
 
   await admin.from("routes").delete().eq("date", date);
   await admin.from("jobs").update({ route_id: null, sequence: null }).eq("date", date).eq("status", "scheduled");
 
-  let routes = 0, stops = 0, overflow = 0, texted = 0;
+  const vendorPhoneFor = async (userId: string | null): Promise<string | null> => {
+    if (!userId) return null;
+    const { data: u } = await admin.from("users").select("phone").eq("id", userId).maybeSingle();
+    return (u?.phone as string) ?? null;
+  };
+
+  let routes = 0, stops = 0, overflow = 0, texted = 0, trucks = 0, hoursBust = 0;
   for (const [vendorId, v] of byVendor) {
-    const plan = planVendorDay(v.stops, v.capacity);
-    if (!plan.ordered.length) continue;
-    const mapUrl = routeMapUrl(plan.ordered);
-    const { data: routeRow, error: rErr } = await admin
-      .from("routes")
-      .insert({ vendor_id: vendorId, date, stops_order: plan.ordered.map((s) => s.id), drive_minutes: plan.driveMinutes, map_url: mapUrl })
-      .select("id")
-      .single();
-    if (rErr) return { ok: false, error: rErr.message };
-    for (let i = 0; i < plan.ordered.length; i++) {
-      await admin.from("jobs").update({ sequence: i + 1, route_id: routeRow.id }).eq("id", plan.ordered[i].id);
+    const units = unitsByVendor.get(vendorId) ?? [];
+
+    if (units.length === 0) {
+      // ZERO crew units — EXACT legacy path (behavior byte-identical to today).
+      const plan = planVendorDay(v.stops, v.capacity);
+      if (!plan.ordered.length) continue;
+      const mapUrl = routeMapUrl(plan.ordered);
+      const { data: routeRow, error: rErr } = await admin
+        .from("routes")
+        .insert({ vendor_id: vendorId, date, stops_order: plan.ordered.map((s) => s.id), drive_minutes: plan.driveMinutes, map_url: mapUrl })
+        .select("id")
+        .single();
+      if (rErr) return { ok: false, error: rErr.message };
+      for (let i = 0; i < plan.ordered.length; i++) {
+        await admin.from("jobs").update({ sequence: i + 1, route_id: routeRow.id }).eq("id", plan.ordered[i].id);
+      }
+      routes++; stops += plan.ordered.length; overflow += plan.overflow.length;
+      const phone = await vendorPhoneFor(v.user_id);
+      if (phone) {
+        void sendSms(phone, `LakeLife route for ${prettyDate(date)}: ${plan.ordered.length} stops, ~${plan.driveMinutes} min drive.${mapUrl ? " Map: " + mapUrl : ""} Details in your Today list. 🌊`);
+        texted++;
+      }
+      continue;
     }
-    routes++; stops += plan.ordered.length; overflow += plan.overflow.length;
-    if (v.user_id) {
-      const { data: u } = await admin.from("users").select("phone").eq("id", v.user_id).maybeSingle();
-      if (u?.phone) {
-        void sendSms(u.phone as string, `LakeLife route for ${prettyDate(date)}: ${plan.ordered.length} stops, ~${plan.driveMinutes} min drive.${mapUrl ? " Map: " + mapUrl : ""} Details in your Today list. 🌊`);
+
+    // Fleet path: N trucks, one routes row (and one SMS) each.
+    const vendorBase = v.baseLat != null && v.baseLng != null ? { lat: v.baseLat, lng: v.baseLng } : null;
+    const plan = planFleetDay(v.stops, units, vendorBase);
+    overflow += plan.overflow.length;
+    const vendorPhone = await vendorPhoneFor(v.user_id);
+    // sequence runs CONTINUOUSLY across trucks (Truck 1: 1..n, Truck 2:
+    // n+1..m) — the vendor Today list orders by sequence and would
+    // interleave the trucks if each restarted at 1. Each truck's own
+    // stop order still lives in routes.stops_order and its map link.
+    let seq = 0;
+    for (const tp of plan.trucks) {
+      if (!tp.ordered.length) continue;
+      const mapUrl = routeMapUrl(tp.ordered);
+      const { data: routeRow, error: rErr } = await admin
+        .from("routes")
+        .insert({
+          vendor_id: vendorId,
+          date,
+          stops_order: tp.ordered.map((s) => s.id),
+          drive_minutes: tp.driveMinutes,
+          map_url: mapUrl,
+          crew_unit_id: tp.truck.id,
+          unit_name: tp.truck.name,
+          drive_km: tp.driveKm,
+        })
+        .select("id")
+        .single();
+      if (rErr) return { ok: false, error: rErr.message };
+      for (let i = 0; i < tp.ordered.length; i++) {
+        seq++;
+        await admin.from("jobs").update({ sequence: seq, route_id: routeRow.id }).eq("id", tp.ordered[i].id);
+      }
+      routes++; stops += tp.ordered.length; trucks++;
+      if (!tp.fitsHours) hoursBust++;
+      const phone = tp.truck.phone ?? vendorPhone;
+      if (phone) {
+        let msg = `LakeLife route for ${prettyDate(date)} — ${tp.truck.name}: ${tp.ordered.length} stops, ~${tp.driveMinutes} min drive.${mapUrl ? " Map: " + mapUrl : ""} 🌊`;
+        if (!tp.fitsHours) msg += " Heads up: this day runs past your hours — tap Availability to adjust.";
+        void sendSms(phone, msg);
         texted++;
       }
     }
+    if (plan.overflow.length > 0 && vendorPhone) {
+      void sendSms(vendorPhone, `LakeLife: ${plan.overflow.length} job${plan.overflow.length === 1 ? "" : "s"} didn't fit tomorrow's trucks — ops has them. 🌊`);
+    }
   }
-  return { ok: true, date, routes, stops, overflow, texted };
+  return { ok: true, date, routes, stops, overflow, texted, trucks, hoursBust };
 }
 
 export interface SettleOutcome {

@@ -46,9 +46,14 @@ export function RouteBuilder({ routes, date }: { routes: RouteSummary[]; date: s
         routes.map((r) => (
           <div key={r.id} className="ll-card ll-card-pad" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
             <div>
-              <b style={{ fontSize: 15 }}>{r.vendor_company ?? "Crew"}</b>
+              <b style={{ fontSize: 15 }}>
+                {r.vendor_company ?? "Crew"}
+                {r.unit_name && <span className="mut" style={{ fontWeight: 400 }}> — {r.unit_name}</span>}
+              </b>
               <div className="mut" style={{ fontSize: 12.5 }}>
                 {r.stops} stop{r.stops === 1 ? "" : "s"} · ~{r.drive_minutes ?? "—"} min drive
+                {r.est_miles != null && <> · ~{r.est_miles} mi</>}
+                {r.est_fuel != null && <> · ~${r.est_fuel.toFixed(2)} fuel</>}
               </div>
             </div>
             {r.map_url && (

@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { todayLakeDate, lakeDateOf } from "@/lib/booking";
 import { canClaim, type ClaimBlocker, type CrewCandidate, gapTakeHome, gapOfferFor, gapJitter } from "@/lib/dispatch";
+import { fleetJobCap, fleetMinuteBudget, fitsTimeBudget, jobMinutesOf, DEFAULT_JOB_MINUTES } from "@/lib/fleet";
 import { isCoolingDown } from "@/lib/lake-standing";
 import { fillInRate, rushWindowOpen } from "@/lib/rush";
 import { loadPricingProfileById } from "@/app/book/dispatch";
@@ -65,7 +66,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const today = todayLakeDate();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model), properties(lake_id, address, users(phone))")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model, est_minutes), properties(lake_id, address, users(phone))")
     .eq("id", jobId)
     .maybeSingle();
   // Package visits are routed, never claimed: a claim can only price ONE
@@ -128,12 +129,33 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   }
 
   // Re-check the full claim gate server-side (fresh counts — the board may be stale).
-  const [{ count: assignedCount }, { data: blockRow }] = await Promise.all([
-    admin.from("jobs").select("id", { count: "exact", head: true })
+  const [{ data: myDayJobs }, { data: blockRow }, { data: myUnits }] = await Promise.all([
+    admin.from("jobs").select("id, group_id, services(est_minutes), job_items(services(est_minutes))")
       .eq("vendor_id", vendor.id as string).eq("date", job.date as string).in("status", ["scheduled", "in_progress"]),
     admin.from("vendor_availability").select("id")
       .eq("vendor_id", vendor.id as string).eq("date", job.date as string).eq("status", "blocked").maybeSingle(),
+    admin.from("crew_units").select("capacity, work_start, work_end")
+      .eq("vendor_id", vendor.id as string).eq("active", true),
   ]);
+  // Fleet layer: trucks sum the cap + arm the minute budget; no trucks =
+  // legacy vendor numbers, gate off (the invariant).
+  const units = (myUnits ?? []).map((u) => ({
+    capacity: Number(u.capacity ?? 0),
+    workStart: Number(u.work_start ?? 0),
+    workEnd: Number(u.work_end ?? 0),
+  }));
+  const dayJobMinutes = (rows: typeof myDayJobs) =>
+    (rows ?? []).reduce((s, r) => {
+      // Packages cost their legs' sum — the number their admission charged.
+      const em = (one(r.services) as { est_minutes?: number } | null)?.est_minutes;
+      const legs = (r as { group_id?: string | null }).group_id
+        ? ((r as { job_items?: Array<{ services?: unknown }> }).job_items ?? []).map((it) => (one(it.services) as { est_minutes?: number } | null)?.est_minutes ?? null)
+        : null;
+      return s + jobMinutesOf(em, legs);
+    }, 0);
+  const assignedMinutes = dayJobMinutes(myDayJobs);
+  const svcMinutes = Number((svc as { est_minutes?: number }).est_minutes ?? 0);
+  const jobMinutes = svcMinutes > 0 ? svcMinutes : DEFAULT_JOB_MINUTES;
   const candidate: CrewCandidate = {
     vendorId: vendor.id as string,
     status: vendor.status as string,
@@ -141,9 +163,11 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     serviceTypes: (vendor.service_types as string[]) ?? [],
     serviceLakes: (vendor.service_lakes as string[]) ?? [],
     workDays: (vendor.work_days as string[]) ?? [],
-    dailyCapacity: Number(vendor.daily_capacity ?? 0),
-    assignedThatDay: assignedCount ?? 0,
+    dailyCapacity: fleetJobCap(units, Number(vendor.daily_capacity ?? 0)),
+    assignedThatDay: (myDayJobs ?? []).length,
     blockedThatDay: !!blockRow,
+    minuteBudget: fleetMinuteBudget(units),
+    assignedMinutes,
     crewRate: myRate != null && myRate > 0 ? myRate : null,
     score: 0,
     baseLat: vendor.base_lat != null ? Number(vendor.base_lat) : null,
@@ -156,6 +180,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     todayISO: today,
     menuPrice: Number(job.customer_price ?? 0),
     marginFloor: settings.marginFloor,
+    jobMinutes,
   });
   // FILL-IN ACCEPTANCE (margin-gap design): blocked ONLY on rate, past the
   // age gate (or rush, whose premium funds the gap) → the claim happens at
@@ -213,13 +238,18 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   if (!won || won.length === 0) return { ok: false, error: "That job was already taken — grab the next one. 🌊" };
 
   // Capacity backstop (same as autoAssignJob): if a concurrent claim pushed us
-  // over our own daily cap, release this one back rather than overbook the day.
-  const cap = Number(vendor.daily_capacity ?? 0);
-  const { count: afterCount } = await admin
+  // over our own daily cap — job COUNT or the fleet's MINUTE budget (two
+  // simultaneous long claims can each pass the pre-write time gate) —
+  // release this one back rather than overbook the day.
+  const cap = fleetJobCap(units, Number(vendor.daily_capacity ?? 0));
+  const { data: afterJobs } = await admin
     .from("jobs")
-    .select("id", { count: "exact", head: true })
+    .select("id, group_id, services(est_minutes), job_items(services(est_minutes))")
     .eq("vendor_id", vendor.id as string).eq("date", job.date as string).in("status", ["scheduled", "in_progress"]);
-  if (cap > 0 && (afterCount ?? 0) > cap) {
+  const afterCount = (afterJobs ?? []).length;
+  const budget = fleetMinuteBudget(units);
+  const bustedHours = budget != null && !fitsTimeBudget(dayJobMinutes(afterJobs), 0, budget);
+  if ((cap > 0 && afterCount > cap) || bustedHours) {
     await admin.from("jobs").update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" }).eq("id", jobId);
     return { ok: false, error: "Your day filled up before this claim landed." };
   }

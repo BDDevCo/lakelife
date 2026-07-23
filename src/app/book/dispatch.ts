@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule, type PricingProfile } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
 import { decideDispatch, isEligible, remainingCapacity, type CrewCandidate, type DispatchDecision, type DispatchInput } from "@/lib/dispatch";
+import { fleetJobCap, fleetMinuteBudget, fitsTimeBudget, jobMinutesOf, DEFAULT_JOB_MINUTES } from "@/lib/fleet";
 import { getVendorScores } from "@/lib/scoring-data";
 import { toISODate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
@@ -51,6 +52,8 @@ export interface VisitComponent {
   serviceId: string;
   serviceName: string;
   pricingModel: ServiceRule["pricing_model"];
+  /** services.est_minutes for the leg — feeds the fleet time budget. */
+  estMinutes?: number;
 }
 
 export async function buildCandidates(
@@ -71,21 +74,45 @@ export async function buildCandidates(
   const comps: VisitComponent[] = opts.components?.length
     ? opts.components
     : [{ serviceId: opts.serviceId, serviceName: opts.serviceName, pricingModel: opts.pricingModel }];
-  const [{ data: vendors }, { data: rates }, { data: dayJobs }, { data: blocks }, scores, { data: stays }] = await Promise.all([
+  const [{ data: vendors }, { data: rates }, { data: dayJobs }, { data: blocks }, scores, { data: stays }, { data: units }] = await Promise.all([
     admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, storage_capacity_feet, storage_types, garagekeepers_expiry"),
     admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing").in("service_id", comps.map((c) => c.serviceId)),
-    admin.from("jobs").select("vendor_id").eq("date", opts.dateISO).in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null),
+    admin.from("jobs").select("vendor_id, group_id, services(est_minutes), job_items(services(est_minutes))").eq("date", opts.dateISO).in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null),
     admin.from("vendor_availability").select("vendor_id").eq("date", opts.dateISO).eq("status", "blocked"),
     getVendorScores(), // real quality score (on-time + flag accuracy + volume), not a raw count
     opts.storage
       ? admin.from("storage_stays").select("vendor_id, boat_feet, group_id").in("status", ["reserved", "in_storage"])
       : Promise.resolve({ data: null as Array<{ vendor_id: string; boat_feet: number; group_id: string }> | null }),
+    admin.from("crew_units").select("vendor_id, capacity, work_start, work_end").eq("active", true),
   ]);
 
   const rateByKey = new Map((rates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
   const assigned = new Map<string, number>();
-  for (const j of dayJobs ?? []) assigned.set(j.vendor_id as string, (assigned.get(j.vendor_id as string) ?? 0) + 1);
+  const assignedMin = new Map<string, number>();
+  for (const j of dayJobs ?? []) {
+    const vid = j.vendor_id as string;
+    assigned.set(vid, (assigned.get(vid) ?? 0) + 1);
+    // Package visits cost the SUM of their legs — the same number their
+    // admission was charged (jobMinutesOf; review finding).
+    const svc = (Array.isArray(j.services) ? j.services[0] : j.services) as { est_minutes?: number } | null;
+    const legs = (j as { group_id?: string | null }).group_id
+      ? ((j as { job_items?: Array<{ services?: unknown }> }).job_items ?? []).map((it) => {
+          const s = (Array.isArray(it.services) ? it.services[0] : it.services) as { est_minutes?: number } | null;
+          return s?.est_minutes ?? null;
+        })
+      : null;
+    assignedMin.set(vid, (assignedMin.get(vid) ?? 0) + jobMinutesOf(svc?.est_minutes, legs));
+  }
   const blocked = new Set((blocks ?? []).map((b) => b.vendor_id as string));
+  // Fleet layer (docs/fleet-routing-design.md): with trucks, the cap is the
+  // fleet's sum and a minute budget activates; without, both fall back to
+  // the legacy vendor numbers (budget null = gate off) — the invariant.
+  const unitsByVendor = new Map<string, { capacity: number; workStart: number; workEnd: number }[]>();
+  for (const u of units ?? []) {
+    const list = unitsByVendor.get(u.vendor_id as string) ?? [];
+    list.push({ capacity: Number(u.capacity ?? 0), workStart: Number(u.work_start ?? 0), workEnd: Number(u.work_end ?? 0) });
+    unitsByVendor.set(u.vendor_id as string, list);
+  }
   const committed = new Map<string, number>();
   for (const st of stays ?? []) {
     if (opts.excludeGroupId && (st as { group_id?: string }).group_id === opts.excludeGroupId) continue;
@@ -135,9 +162,11 @@ export async function buildCandidates(
       ],
       serviceLakes: (v.service_lakes as string[]) ?? [],
       workDays: (v.work_days as string[]) ?? [],
-      dailyCapacity: Number(v.daily_capacity ?? 0),
+      dailyCapacity: fleetJobCap(unitsByVendor.get(v.id as string) ?? [], Number(v.daily_capacity ?? 0)),
       assignedThatDay: assigned.get(v.id as string) ?? 0,
       blockedThatDay: blocked.has(v.id as string),
+      minuteBudget: fleetMinuteBudget(unitsByVendor.get(v.id as string) ?? []),
+      assignedMinutes: assignedMin.get(v.id as string) ?? 0,
       crewRate,
       score: scores.get(v.id as string)?.score ?? 0,
       baseLat: v.base_lat != null ? Number(v.base_lat) : null,
@@ -169,11 +198,21 @@ export async function getServiceAvailability(
   const to = toISODate(new Date(year, month + 1, 0));
   const today = todayLakeDate();
 
-  const [{ data: vendors }, { data: blocks }, { data: dayJobs }] = await Promise.all([
+  const [{ data: vendors }, { data: blocks }, { data: dayJobs }, { data: units }] = await Promise.all([
     admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity"),
     admin.from("vendor_availability").select("vendor_id, date").eq("status", "blocked").gte("date", from).lte("date", to),
     admin.from("jobs").select("vendor_id, date").in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null).gte("date", from).lte("date", to),
+    admin.from("crew_units").select("vendor_id, capacity").eq("active", true),
   ]);
+  // Fleet cap: trucks sum where they exist, legacy number otherwise. The
+  // calendar stays count-based on purpose — the time budget is enforced at
+  // dispatch/claim, where the actual job's duration is known.
+  const unitCapByVendor = new Map<string, { capacity: number }[]>();
+  for (const u of units ?? []) {
+    const list = unitCapByVendor.get(u.vendor_id as string) ?? [];
+    list.push({ capacity: Number(u.capacity ?? 0) });
+    unitCapByVendor.set(u.vendor_id as string, list);
+  }
 
   // Only crews that do this service — and, when a lake is given, service that
   // lake — can ever contribute capacity to this property's calendar.
@@ -190,7 +229,7 @@ export async function getServiceAvailability(
   if (!pool.some((v) => v.status === "active")) {
     return { fullDates: [], capacity: 0, findingCrew: true };
   }
-  const maxDailyCap = pool.reduce((m, v) => m + Math.max(0, Number(v.daily_capacity ?? 0)), 0);
+  const maxDailyCap = pool.reduce((m, v) => m + Math.max(0, fleetJobCap(unitCapByVendor.get(v.id as string) ?? [], Number(v.daily_capacity ?? 0))), 0);
 
   const blockedByDate = new Map<string, Set<string>>();
   for (const b of blocks ?? []) {
@@ -218,7 +257,7 @@ export async function getServiceAvailability(
       serviceTypes: (v.service_types as string[]) ?? [],
       serviceLakes: (v.service_lakes as string[]) ?? [],
       workDays: (v.work_days as string[]) ?? [],
-      dailyCapacity: Number(v.daily_capacity ?? 0),
+      dailyCapacity: fleetJobCap(unitCapByVendor.get(v.id as string) ?? [], Number(v.daily_capacity ?? 0)),
       assignedThatDay: assignedByKey.get(`${v.id}|${iso}`) ?? 0,
       blockedThatDay: blockedSet.has(v.id as string),
       crewRate: null,
@@ -250,13 +289,13 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, services(name, pricing_model)")
+    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, services(name, pricing_model, est_minutes)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job || !job.service_id || !job.date) {
     return { assigned: false, decision: { ok: false, reasonNoFit: "no_crew_for_service" } };
   }
-  const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string } | null;
+  const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string; est_minutes?: number } | null;
   const profile = await loadPricingProfileById(admin, job.property_id as string);
   if (!svc?.name || !profile) return { assigned: false, decision: { ok: false, reasonNoFit: "no_crew_for_service" } };
 
@@ -267,7 +306,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   if (job.group_id) {
     const { data: items } = await admin
       .from("job_items")
-      .select("service_id, services(name, pricing_model)")
+      .select("service_id, services(name, pricing_model, est_minutes)")
       .eq("job_id", jobId);
     if (!items || items.length === 0) {
       // Booking is mid-flight (items land right after the job row) — do not
@@ -276,11 +315,12 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     }
     {
       components = items.map((it) => {
-        const isvc = (Array.isArray(it.services) ? it.services[0] : it.services) as { name?: string; pricing_model?: string } | null;
+        const isvc = (Array.isArray(it.services) ? it.services[0] : it.services) as { name?: string; pricing_model?: string; est_minutes?: number } | null;
         return {
           serviceId: it.service_id as string,
           serviceName: isvc?.name ?? "",
           pricingModel: (isvc?.pricing_model ?? "flat") as ServiceRule["pricing_model"],
+          estMinutes: Number(isvc?.est_minutes ?? 0),
         };
       }).filter((c) => c.serviceName);
       const tierComp = components.find((c) => c.pricingModel === "seasonal_plus_perdiem");
@@ -317,6 +357,12 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     excludeGroupId: (job.group_id as string) ?? null,
   });
 
+  // Visit duration for the fleet time budget: the one service's dial, or a
+  // package's legs summed (each missing dial contributes the engine default).
+  const jobMinutes = components?.length
+    ? components.reduce((s, c) => s + ((c.estMinutes ?? 0) > 0 ? (c.estMinutes as number) : DEFAULT_JOB_MINUTES), 0)
+    : Number(svc.est_minutes ?? 0) > 0 ? Number(svc.est_minutes) : DEFAULT_JOB_MINUTES;
+
   const decision = decideDispatch({
     date: job.date as string,
     weekday: weekdayOf(job.date as string),
@@ -329,6 +375,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     jobLat: prop?.lat != null ? Number(prop.lat) : null,
     jobLng: prop?.lng != null ? Number(prop.lng) : null,
     componentNames: components?.map((c) => c.serviceName),
+    jobMinutes,
     storage,
     crews,
   });
@@ -357,14 +404,31 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   // write; if we pushed the winner over their daily cap, release THIS job back
   // to 'requested' so it re-dispatches instead of overbooking the crew.
   if (applied) {
-    const cap = crews.find((c) => c.vendorId === winnerId)?.dailyCapacity ?? 0;
-    const { count } = await admin
+    const winner = crews.find((c) => c.vendorId === winnerId);
+    const cap = winner?.dailyCapacity ?? 0;
+    const { data: dayNow } = await admin
       .from("jobs")
-      .select("id", { count: "exact", head: true })
+      .select("id, group_id, services(est_minutes), job_items(services(est_minutes))")
       .eq("vendor_id", winnerId)
       .eq("date", job.date as string)
       .in("status", ["scheduled", "in_progress"]);
-    if (cap > 0 && (count ?? 0) > cap) {
+    const count = (dayNow ?? []).length;
+    // Fleet mirror of the count backstop: two concurrent long jobs can each
+    // pass the pre-write time gate — re-sum the day's minutes AFTER the
+    // write and release if the fleet's hours busted (review finding).
+    const minutesNow = (dayNow ?? []).reduce((s, r) => {
+      const svcEm = (Array.isArray(r.services) ? r.services[0] : r.services) as { est_minutes?: number } | null;
+      const legs = (r as { group_id?: string | null }).group_id
+        ? ((r as { job_items?: Array<{ services?: unknown }> }).job_items ?? []).map((it) => {
+            const s = (Array.isArray(it.services) ? it.services[0] : it.services) as { est_minutes?: number } | null;
+            return s?.est_minutes ?? null;
+          })
+        : null;
+      return s + jobMinutesOf(svcEm?.est_minutes, legs);
+    }, 0);
+    const budget = winner?.minuteBudget ?? null;
+    const busted = (cap > 0 && count > cap) || (budget != null && !fitsTimeBudget(minutesNow, 0, budget));
+    if (busted) {
       await admin
         .from("jobs")
         .update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" })
@@ -465,7 +529,7 @@ export async function revalidateJob(jobId: string): Promise<RevalidateOutcome> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, property_id, service_id, date, status, vendor_id, customer_price, group_id, services(name, pricing_model), properties(lake_id)")
+    .select("id, property_id, service_id, date, status, vendor_id, customer_price, group_id, services(name, pricing_model, est_minutes), properties(lake_id)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job || !job.service_id || !job.date) return { rehomed: false, nowAssigned: false };
@@ -483,7 +547,7 @@ export async function revalidateJob(jobId: string): Promise<RevalidateOutcome> {
   // autoAssignJob above, which is fully component-aware.
   if ((job as { group_id?: string | null }).group_id) return { rehomed: false, nowAssigned: true };
 
-  const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string } | null;
+  const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string; est_minutes?: number } | null;
   const profile = await loadPricingProfileById(admin, job.property_id as string);
   if (!svc?.name || !profile) return { rehomed: false, nowAssigned: true };
 
@@ -495,18 +559,26 @@ export async function revalidateJob(jobId: string): Promise<RevalidateOutcome> {
     profile,
   });
   const jobLake = (Array.isArray(job.properties) ? job.properties[0] : job.properties) as { lake_id?: string } | null;
+  const ownMinutes = Number(svc.est_minutes ?? 0) > 0 ? Number(svc.est_minutes) : DEFAULT_JOB_MINUTES;
   const input = {
     date: job.date as string,
     weekday: weekdayOf(job.date as string),
     serviceName: svc.name,
     todayISO: todayLakeDate(),
     lakeId: (jobLake?.lake_id as string) ?? null,
+    jobMinutes: ownMinutes,
   } as DispatchInput;
 
   const current = crews.find((c) => c.vendorId === job.vendor_id);
-  // The current crew's own slot counts as theirs — exclude it from "full" math.
+  // The current crew's own slot counts as theirs — exclude it from "full"
+  // math, BOTH the job count and this job's own minutes (a fleet vendor's
+  // job must not double-count against its own time budget every night).
   if (current) {
-    const adjusted = { ...current, assignedThatDay: Math.max(0, current.assignedThatDay - 1) };
+    const adjusted = {
+      ...current,
+      assignedThatDay: Math.max(0, current.assignedThatDay - 1),
+      assignedMinutes: Math.max(0, (current.assignedMinutes ?? 0) - ownMinutes),
+    };
     if (isEligible(adjusted, input)) return { rehomed: false, nowAssigned: true };
   }
 

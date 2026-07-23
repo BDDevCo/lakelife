@@ -7,6 +7,7 @@
  * self-heals nightly. Customer price is fixed (menu); each crew sets their own
  * private rate; margin = menu − crew rate, and a floor protects LakeLife.
  */
+import { fitsTimeBudget, DEFAULT_JOB_MINUTES } from "@/lib/fleet";
 
 export interface CrewCandidate {
   vendorId: string;
@@ -15,9 +16,15 @@ export interface CrewCandidate {
   serviceTypes: string[]; // service NAMES the crew does
   serviceLakes: string[]; // lake IDs the crew services (Phase B geo gate)
   workDays: string[]; // e.g. ['Mon','Tue',...]
-  dailyCapacity: number;
+  dailyCapacity: number; // fleet vendors: Σ active trucks' capacity (loader's job)
   assignedThatDay: number; // jobs already on this crew for the target date
   blockedThatDay: boolean; // any vendor_availability block on the date
+  /** Fleet time budget (docs/fleet-routing-design.md): Σ trucks' working
+   *  minutes for the day. null/undefined = vendor has no trucks = the
+   *  time-budget gate is OFF (legacy count-only behavior, the invariant). */
+  minuteBudget?: number | null;
+  /** Σ est_minutes of jobs already assigned that day (0 when unknown). */
+  assignedMinutes?: number;
   crewRate: number | null; // this crew's price for THIS service (from vendor_rates); null = no rate set
   score: number; // performance tier score (higher = better); 0 if unrated
   baseLat: number | null; // crew home base — for proximity ranking (null = unknown)
@@ -45,6 +52,9 @@ export interface DispatchInput {
   /** Multi-component visit (storage packages): the crew must cover EVERY
    *  name; the loader already summed component rates into crewRate. */
   componentNames?: string[];
+  /** This job's duration (services.est_minutes; packages = Σ legs). Only
+   *  consulted when a candidate carries a minute budget (has trucks). */
+  jobMinutes?: number;
   /** Present when the visit includes a storage tier: the custody gates. */
   storage?: { tier: "outdoor" | "indoor"; boatFeet: number } | null;
   crews: CrewCandidate[];
@@ -110,6 +120,15 @@ export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
   if (c.blockedThatDay) return false;
   const cap = c.dailyCapacity > 0 ? c.dailyCapacity : 0;
   if (cap <= 0 || c.assignedThatDay >= cap) return false;
+  // Fleet time budget: a day full of 3-hour pier installs is FULL long
+  // before the job COUNT says so. Only active for vendors with trucks
+  // (minuteBudget null/undefined = legacy count-only, unchanged).
+  if (
+    c.minuteBudget != null &&
+    !fitsTimeBudget(c.assignedMinutes ?? 0, input.jobMinutes ?? DEFAULT_JOB_MINUTES, c.minuteBudget)
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -238,7 +257,7 @@ export type ClaimBlocker =
 export function canClaim(
   c: CrewCandidate,
   input: Pick<DispatchInput, "serviceName" | "weekday" | "todayISO" | "menuPrice" | "marginFloor"> &
-    Partial<Pick<DispatchInput, "componentNames" | "storage">>,
+    Partial<Pick<DispatchInput, "componentNames" | "storage" | "jobMinutes">>,
 ): { ok: boolean; blocker?: ClaimBlocker } {
   // Custody is never a first-tap prize: a stranger crew must not win six
   // months of holding a customer's boat off the claim board (owner decision).
@@ -253,6 +272,14 @@ export function canClaim(
   if (c.blockedThatDay) return { ok: false, blocker: "day_blocked" };
   const cap = c.dailyCapacity > 0 ? c.dailyCapacity : 0;
   if (cap <= 0 || c.assignedThatDay >= cap) return { ok: false, blocker: "day_full" };
+  // Same fleet time budget as auto-dispatch — the claim board can't
+  // overstuff a fleet's hours any more than the machine can.
+  if (
+    c.minuteBudget != null &&
+    !fitsTimeBudget(c.assignedMinutes ?? 0, input.jobMinutes ?? DEFAULT_JOB_MINUTES, c.minuteBudget)
+  ) {
+    return { ok: false, blocker: "day_full" };
+  }
   if (c.crewRate == null || c.crewRate <= 0) return { ok: false, blocker: "no_rate" };
   if (marginPct(input.menuPrice, c.crewRate) < input.marginFloor) return { ok: false, blocker: "rate_too_high" };
   return { ok: true };
