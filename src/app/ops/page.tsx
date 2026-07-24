@@ -17,6 +17,7 @@ import { getCrews, getActiveServiceNames } from "./crews-data";
 import { getNeedsAttention, getPreferredJobIds, getPropertiesWithPreferred } from "./dispatch-data";
 import { getStorageLedger } from "./storage-data";
 import { getPayoutQueue } from "./payout-data";
+import { getOpsCalendar } from "./calendar-data";
 import { getPlatformSettings } from "@/lib/settings";
 import { todayLakeDate } from "@/lib/booking";
 
@@ -50,8 +51,9 @@ export default async function OpsPage() {
   const t = new Date(todayLakeDate() + "T12:00:00");
   t.setDate(t.getDate() + 1);
   const tomorrow = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  const calendarYear = Number(todayLakeDate().slice(0, 4));
 
-  const [summary, jobs, vendors, margin, lakes, routes, threads, crews, crewServiceNames, needsAttention, preferredJobIds, preferredProps, s, marginHealth, storageLedger, payoutQueue] = await Promise.all([
+  const [summary, jobs, vendors, margin, lakes, routes, threads, crews, crewServiceNames, needsAttention, preferredJobIds, preferredProps, s, marginHealth, storageLedger, payoutQueue, calendarRows] = await Promise.all([
     getOpsSummary(),
     getJobBoard(),
     getActiveVendors(),
@@ -68,6 +70,7 @@ export default async function OpsPage() {
     getMarginHealth(),
     getStorageLedger(),
     getPayoutQueue(),
+    getOpsCalendar(calendarYear),
   ]);
 
   const kpis = [
@@ -105,7 +108,7 @@ export default async function OpsPage() {
           ))}
         </div>
 
-        <OpsShell marginHealth={marginHealth} storageLedger={storageLedger} payoutQueue={payoutQueue} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} crewServiceNames={crewServiceNames} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100) }} />
+        <OpsShell marginHealth={marginHealth} storageLedger={storageLedger} payoutQueue={payoutQueue} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} crewServiceNames={crewServiceNames} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100) }} calendarYear={calendarYear} calendarRows={calendarRows} />
       </div>
     </>
   );

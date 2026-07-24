@@ -19,9 +19,12 @@ import type { PayoutQueue as PayoutQueueData } from "@/app/ops/payout-data";
 import type { OpsJob, ActiveVendor, MarginRow, LakeCondition, RouteSummary } from "@/app/ops/data";
 import type { OpsThread } from "@/app/ops/messages-data";
 import type { OpsCrew } from "@/app/ops/crews-data";
+import { OpsCalendar } from "./OpsCalendar";
+import type { CalRow } from "@/app/ops/calendar-data";
 
 const TABS = [
   { key: "jobs", label: "Jobs" },
+  { key: "calendar", label: "Calendar" },
   { key: "dispatch", label: "Dispatch" },
   { key: "margin", label: "Revenue & margin" },
   { key: "lakes", label: "Lake conditions" },
@@ -49,6 +52,8 @@ export function OpsShell({
   settings,
   storageLedger,
   payoutQueue,
+  calendarYear,
+  calendarRows,
 }: {
   jobs: OpsJob[];
   vendors: ActiveVendor[];
@@ -66,6 +71,8 @@ export function OpsShell({
   settings: { marginFloorPct: number; surgeCapPct: number };
   storageLedger: StorageLedgerData;
   payoutQueue: PayoutQueueData;
+  calendarYear: number;
+  calendarRows: CalRow[];
 }) {
   const [tab, setTab] = useState<TabKey>("jobs");
 
@@ -98,6 +105,14 @@ export function OpsShell({
       </div>
 
       {tab === "jobs" && <JobBoard jobs={jobs} vendors={vendors} preferredJobIds={preferredJobIds} />}
+
+      {tab === "calendar" && (
+        <OpsCalendar
+          initialYear={calendarYear}
+          initialRows={calendarRows}
+          lakes={lakes.map((l) => ({ id: l.id, name: l.name }))}
+        />
+      )}
 
       {tab === "dispatch" && <NeedsAttention jobs={needsAttention} crews={vendors} properties={preferredProps} />}
       {tab === "dispatch" && <PlatformSettingsCard settings={settings} />}
