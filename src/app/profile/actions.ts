@@ -3,10 +3,15 @@
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { encryptGate } from "@/lib/gate";
+import { findOrCreateLake } from "@/lib/lake-birth";
 
 export interface WizardInput {
   propertyId?: string | null; // set = edit that property; null/absent = create a new one
   lake: string;
+  /** Set when the wizard's "My lake isn't listed" path was used — takes
+   * priority over `lake` and births/dedupes the lake (owner directive
+   * 2026-07-23: customers create lakes, ops never a bottleneck). */
+  newLakeName?: string | null;
   address: string;
   lat?: number | null;
   lng?: number | null;
@@ -49,12 +54,21 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Please sign in first." };
 
-  // Look up the lake id from its name.
-  const { data: lake } = await supabase
-    .from("lakes")
-    .select("id")
-    .eq("name", input.lake)
-    .maybeSingle();
+  // Look up the lake id from its name — or, when the wizard's "My lake isn't
+  // listed" path was used, birth/dedupe it now and use that id instead.
+  let lakeId: string | null = null;
+  if (input.newLakeName && input.newLakeName.trim()) {
+    const born = await findOrCreateLake(input.newLakeName, "customer");
+    if (!born.ok) return { ok: false, error: born.error };
+    lakeId = born.lakeId ?? null;
+  } else {
+    const { data: lake } = await supabase
+      .from("lakes")
+      .select("id")
+      .eq("name", input.lake)
+      .maybeSingle();
+    lakeId = (lake?.id as string | undefined) ?? null;
+  }
 
   const gateEncrypted = input.gate ? encryptGate(input.gate) : null;
 
@@ -77,7 +91,7 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
 
   const propertyFields = {
     owner_id: user.id,
-    lake_id: lake?.id ?? null,
+    lake_id: lakeId,
     address: input.address || null,
     lat: input.lat ?? null,
     lng: input.lng ?? null,

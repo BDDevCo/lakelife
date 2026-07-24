@@ -11,6 +11,8 @@ import { Stepper, ChoiceChips, ToggleChips, Toggle } from "@/components/wizard-c
 
 type Lawn = "small" | "medium" | "large";
 
+const NOT_LISTED = "My lake isn't listed";
+
 const ENGINE_LABELS: Array<[string, string]> = [
   ["Outboard", "outboard"], ["Sterndrive (I/O)", "sterndrive"], ["Inboard", "inboard"], ["Jet drive", "jet"], ["No engine", "none"],
 ];
@@ -62,6 +64,7 @@ const SERVICE_GROUPS: Array<{ title: string; note: string; items: Array<{ name: 
 
 interface Draft {
   lake: string;
+  newLakeName: string;
   address: string;
   lat: number | null;
   lng: number | null;
@@ -100,6 +103,7 @@ export function ProfileWizard({
 
   const [draft, setDraft] = useState<Draft>({
     lake: initial.lake ?? lakes[0] ?? "",
+    newLakeName: "",
     address: initial.address ?? "",
     lat: initial.lat ?? null,
     lng: initial.lng ?? null,
@@ -168,6 +172,10 @@ export function ProfileWizard({
   };
 
   function next() {
+    if (key === "place" && draft.lake === NOT_LISTED && !draft.newLakeName.trim()) {
+      toast("Type your lake's name so we can add it.");
+      return;
+    }
     if (key === "services" && draft.wanted.length === 0) {
       toast("Pick at least one service to continue.");
       return;
@@ -179,7 +187,9 @@ export function ProfileWizard({
     setBusy(true);
     const payload: WizardInput = {
       propertyId: propertyId ?? null,
-      lake: draft.lake, address: draft.address, lat: draft.lat, lng: draft.lng, place_id: draft.place_id,
+      lake: draft.lake === NOT_LISTED ? "" : draft.lake,
+      newLakeName: draft.lake === NOT_LISTED ? draft.newLakeName.trim() : undefined,
+      address: draft.address, lat: draft.lat, lng: draft.lng, place_id: draft.place_id,
       sqft: draft.sqft, gate: draft.gate, beds: draft.beds, baths: draft.baths,
       pier_sections: draft.pier_sections, ladder: draft.ladder, bumpers: draft.bumpers,
       boat_lifts: draft.boat_lifts, toy_lifts: 0, jet_skis: draft.jet_skis, pwc_lifts: draft.pwc_lifts,
@@ -225,7 +235,21 @@ export function ProfileWizard({
           </p>
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Lake</div>
-            <ChoiceChips options={lakes} value={draft.lake} onChange={(lake) => set({ lake })} />
+            <ChoiceChips options={[...lakes, NOT_LISTED]} value={draft.lake} onChange={(lake) => set({ lake })} />
+            {draft.lake === NOT_LISTED && (
+              <div className="ll-field" style={{ marginTop: 10 }}>
+                <label>Your lake&apos;s name</label>
+                <input
+                  value={draft.newLakeName}
+                  onChange={(e) => set({ newLakeName: e.target.value })}
+                  placeholder="e.g. Little Turkey"
+                  autoFocus
+                />
+                <p className="mut" style={{ fontSize: 12.5, marginTop: 6 }}>
+                  Type the lake&apos;s name — we&apos;ll add it and start lining up crews.
+                </p>
+              </div>
+            )}
           </div>
           <AddressAutocomplete
             value={draft.address}

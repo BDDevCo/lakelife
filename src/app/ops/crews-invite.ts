@@ -66,11 +66,19 @@ export async function inviteCrew(input: {
   if (insErr) return { ok: false, error: insErr.message };
 
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  // Lake list is DYNAMIC — an invite sent the day a new lake launches must
+  // name it (zz-% test lakes excluded, same rule as the public pages).
+  const { data: lakeRows } = await admin
+    .from("lakes").select("name").not("name", "ilike", "zz-%").order("name");
+  const shortNames = (lakeRows ?? []).map((l) => (l.name as string).replace(/ Lake$/, ""));
+  const lakeList = shortNames.length > 1
+    ? `${shortNames.slice(0, -1).join(", ")} &amp; ${shortNames[shortNames.length - 1]}`
+    : shortNames[0] ?? "your local lakes";
   void sendEmail({
     to: email,
     subject: `${company} — you're invited to LakeLife crews`,
     html: `<p>Hi ${company},</p>
-<p>LakeLife routes lake-home jobs on Big Long, Pretty &amp; Big Turkey to trusted local crews — your day's stops arrive by text, in drive order, and payouts release the moment a job is photo-verified complete.</p>
+<p>LakeLife routes lake-home jobs on ${lakeList} to trusted local crews — your day's stops arrive by text, in drive order, and payouts release the moment a job is photo-verified complete.</p>
 <p><b>Getting started takes 3 steps:</b></p>
 <ol>
 <li>Create your account at <a href="${site}">${site}</a> — use THIS email address (${email}).</li>

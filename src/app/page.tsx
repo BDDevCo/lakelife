@@ -12,13 +12,26 @@ export default async function Home() {
 
   // A signed-in customer gets a shortcut into their portal, not a signup pitch.
   let signedIn = false;
+  // The lake list is DYNAMIC (new lakes row = new copy, zero code changes);
+  // the founding three stay as the env-less fallback so the page never
+  // renders empty. zz-% test lakes excluded, same rule as /lakes.
+  let shortNames = ["Big Long", "Pretty", "Big Turkey"];
   if (supaOk) {
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
     signedIn = !!user;
+    const { data: lakeRows } = await supabase
+      .from("lakes").select("name").not("name", "ilike", "zz-%").order("name");
+    if (lakeRows && lakeRows.length > 0) {
+      shortNames = lakeRows.map((l) => (l.name as string).replace(/ Lake$/, ""));
+    }
   }
+  const lakeSentence = shortNames.length > 1
+    ? `${shortNames.slice(0, -1).join(", ")} & ${shortNames[shortNames.length - 1]}`
+    : shortNames[0] ?? "";
+  const lakeChips = shortNames.join(" · ");
 
   return (
     <>
@@ -35,10 +48,10 @@ export default async function Home() {
               Your house, boat &amp; toys — dialed in every season. One request, one
               price, one crew at your door. Opening &amp; closing, cleaning, mowing,
               piers &amp; lifts, winterize &amp; storage. Lakefront or a few blocks off,
-              around Big Long, Pretty &amp; Big Turkey Lakes.
+              around {lakeSentence} Lakes.
             </p>
             <div className="ll-hero-chips">
-              <span className="ll-chip">📍 <b>Lakefront or near it — Big Long · Pretty · Big Turkey</b></span>
+              <span className="ll-chip">📍 <b>Lakefront or near it — {lakeChips}</b></span>
               <span className="ll-chip">Home · housekeeping · lawn &amp; seasonal</span>
               <span className="ll-chip">Boats · jet skis · piers · lifts · storage</span>
               {signedIn ? (

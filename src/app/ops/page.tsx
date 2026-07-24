@@ -88,7 +88,10 @@ export default async function OpsPage() {
           <div>
             <span className="ll-pill gold" style={{ marginBottom: 8, display: "inline-block" }}>Operations · Internal</span>
             <h1 style={{ fontSize: 26 }}>The logistics brain</h1>
-            <p className="mut" style={{ fontSize: 14 }}>Big Long · Pretty · Big Turkey</p>
+            {/* Dynamic — a new lakes row shows up here (and everywhere) with zero code changes. */}
+            <p className="mut" style={{ fontSize: 14 }}>
+              {lakes.filter((l) => !l.name.startsWith("zz-")).map((l) => l.name.replace(/ Lake$/, "")).join(" · ") || "No lakes yet"}
+            </p>
           </div>
           <span className="ll-pill teal">30% platform margin · hidden from customers &amp; crews</span>
         </div>

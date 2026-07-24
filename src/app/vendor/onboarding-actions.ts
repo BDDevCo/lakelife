@@ -210,6 +210,41 @@ export async function setServiceLakes(lakeIds: string[]): Promise<OnboardingResu
   return { ok: true };
 }
 
+export interface AddLakeResult {
+  ok: boolean;
+  error?: string;
+  lakeName?: string;
+}
+
+/**
+ * Crew adds a lake they serve that isn't in the onboarding list — demand-born
+ * lakes (owner directive 2026-07-23): a crew expanding coverage creates the
+ * lake, ops gets an FYI, never a bottleneck. The actual service_lakes write
+ * goes through setServiceLakes so the SAME whitelist + Phase E cooldown guard
+ * applies — a crew cooling down on this lake gets that same friendly refusal
+ * instead of a silent re-add.
+ */
+export async function addLakeAndServe(rawName: string): Promise<AddLakeResult> {
+  const vendor = await assertMyVendor();
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+
+  const { findOrCreateLake } = await import("@/lib/lake-birth");
+  const born = await findOrCreateLake(rawName, "crew");
+  if (!born.ok || !born.lakeId) return { ok: false, error: born.error ?? "Couldn't add that lake just now." };
+
+  const admin = createServiceClient();
+  const { data: v } = await admin.from("vendors").select("service_lakes").eq("id", vendor.id).maybeSingle();
+  const current: string[] = (v?.service_lakes as string[] | null) ?? [];
+  if (current.includes(born.lakeId)) {
+    return { ok: true, lakeName: born.lakeName }; // already served — nothing to change
+  }
+
+  const res = await setServiceLakes([...current, born.lakeId]);
+  if (!res.ok) return { ok: false, error: res.error };
+  return { ok: true, lakeName: born.lakeName };
+}
+
 /**
  * Crew self-sets a home base (from address autocomplete → lat/lng). Optional:
  * it sharpens distance ranking but must NEVER block activation. Coordinates are
