@@ -9,13 +9,43 @@
  * the loader splits WHY — a ready crew exists but is at capacity (recruit),
  * or every crew here is priced under the floor (the menu is the problem).
  * Ops-side only; prices are allowed here (never on a vendor/customer surface).
+ *
+ * Margin-stranded rows carry a one-tap price suggestion — a gold chip with
+ * an Apply button that, after a confirm(), writes the raise straight to the
+ * live services menu (menu-actions.ts). That changes what customers pay
+ * going forward; existing booked jobs keep the price they were quoted.
  */
 
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "@/components/Toast";
 import type { MarginHealthRow } from "@/app/ops/data";
+import { applyMenuSuggestion } from "@/app/ops/menu-actions";
 
 export function MarginHealth({ rows }: { rows: MarginHealthRow[] }) {
+  const router = useRouter();
+  const [applyingKey, setApplyingKey] = useState<string | null>(null);
+
   if (rows.length === 0) return null;
+
+  async function apply(rowKey: string, suggestion: NonNullable<MarginHealthRow["suggestion"]>) {
+    if (applyingKey) return;
+    const ok = window.confirm("Raises the menu for ALL future bookings of this service. Apply?");
+    if (!ok) return;
+    setApplyingKey(rowKey);
+    const res = await applyMenuSuggestion({
+      serviceId: suggestion.serviceId,
+      field: suggestion.field,
+      newValue: suggestion.newValue,
+    });
+    setApplyingKey(null);
+    if (!res.ok) {
+      toast(res.error ?? "Couldn't apply that price change.");
+      return;
+    }
+    toast(res.applied ?? "Menu price updated. 🌊");
+    router.refresh();
+  }
   return (
     <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
       <h3 style={{ fontSize: 17, margin: "0 0 2px" }}>Margin health by lake</h3>
@@ -64,6 +94,18 @@ export function MarginHealth({ rows }: { rows: MarginHealthRow[] }) {
                           <p className="mut" style={{ fontSize: 12.5, margin: "6px 0 0" }}>
                             Every crew here prices above the floor — the fill-in price is the market talking. Consider raising the menu.
                           </p>
+                          {r.suggestion && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                              <span className="ll-pill gold">{r.suggestion.label}</span>
+                              <button
+                                className="ll-btn ghost sm"
+                                disabled={applyingKey === `${r.service_name}|${r.lake_name}`}
+                                onClick={() => apply(`${r.service_name}|${r.lake_name}`, r.suggestion as NonNullable<MarginHealthRow["suggestion"]>)}
+                              >
+                                {applyingKey === `${r.service_name}|${r.lake_name}` ? "Applying…" : "Apply"}
+                              </button>
+                            </div>
+                          )}
                         </>
                       )}
                     </td>

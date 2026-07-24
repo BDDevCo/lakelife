@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
-import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, runFillInDigest, gapSlaAlerts, reconcileRefunds } from "@/lib/automation";
+import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, runFillInDigest, gapSlaAlerts, reconcileRefunds, learnServiceDurations } from "@/lib/automation";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +31,7 @@ async function run(req: Request) {
   const overstay = await overstayNotices();
   // Self-heal assignments (re-home lapsed crews, fill stragglers), then route.
   const dispatch = await revalidateAssignments(date);
+  const learning = await learnServiceDurations();
   const routes = await runRouteBuild(date);
   const reminders = await sendNightBeforeReminders(date);
   // Catch any job completed but left partially billed (e.g. a mid-write crash),
@@ -53,7 +54,7 @@ async function run(req: Request) {
   const fillInDigest = await runFillInDigest();
   const gapSla = await gapSlaAlerts();
   const nudges = await runNudges();
-  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, sweep, dispatch, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, gapSla, nudges });
+  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, gapSla, nudges });
 }
 
 export const GET = run; // Vercel Cron issues GET

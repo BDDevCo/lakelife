@@ -437,6 +437,17 @@ export interface MarginHealthRow {
   crews_with_rate: number; // active+insured crews serving this lake whose rate ALSO clears the margin floor — i.e. truly ready to take the work, not merely priced
   waiting: number; // requested & unassigned future jobs (live demand signal)
   etiology: "capacity_stranded" | "margin_stranded" | null; // why waiting demand isn't clearing (null when waiting === 0, or when no crew lists the service at all)
+  /** One-tap price-up candidate for margin_stranded rows only (never a cut).
+   *  The smallest menu raise that clears the floor for the CHEAPEST
+   *  floor-failing crew, translated back into the specific services field
+   *  that moves for this pricing model. Absent when there's no floor-failing
+   *  crew, or the raise needed would exceed the 40% sanity cap. */
+  suggestion?: {
+    label: string;
+    serviceId: string;
+    field: "base" | "unit_rate" | "band:medium" | "tier:mid";
+    newValue: number;
+  };
 }
 
 export async function getMarginHealth(): Promise<MarginHealthRow[]> {
@@ -584,6 +595,7 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
 
     let ready = 0;
     let floorFail = 0;
+    let cheapestFailingComparable: number | null = null; // lowest-cost crew that STILL fails the floor — the suggestion targets this one
     for (const v of listing) {
       const vr = rateRows.get(`${v.id}|${row.service_id}`);
       if (!vr) continue; // no rate on file at all — not a floor failure, just unset
@@ -602,14 +614,80 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
       }
       // The SAME marginPct/floor gate the dispatch and claim engines use
       // (rule 8, one formula), at the representative size.
-      if (marginPct(menuComparable, crewComparable) < settings.marginFloor) floorFail += 1;
-      else ready += 1;
+      if (marginPct(menuComparable, crewComparable) < settings.marginFloor) {
+        floorFail += 1;
+        if (cheapestFailingComparable == null || crewComparable < cheapestFailingComparable) {
+          cheapestFailingComparable = crewComparable;
+        }
+      } else ready += 1;
     }
     row.crews_with_rate = ready;
     if (row.waiting > 0) {
       if (ready > 0) row.etiology = "capacity_stranded";
       else if (floorFail > 0) row.etiology = "margin_stranded";
       // else: nobody here has priced the work at all — the plain recruit signal stands (etiology stays null).
+    }
+
+    // Suggestion (Margin Health price-up, docs/margin-gap-design.md follow-on):
+    // margin_stranded only, and only when we have a concrete floor-failing
+    // crew number to target. needed = smallest menu comparable that clears
+    // the floor for the CHEAPEST floor-failing crew — raise that far and no
+    // farther. Translated back into the specific field this pricing model
+    // stores money in; never a cut, and capped at a 40% jump so a data
+    // glitch can't propose something absurd.
+    if (row.etiology === "margin_stranded" && cheapestFailingComparable != null && menuComparable != null && svcRow) {
+      const floor = settings.marginFloor;
+      const needed = Math.ceil(cheapestFailingComparable / (1 - floor));
+      const deltaPct = (needed - menuComparable) / menuComparable;
+      if (needed > menuComparable && deltaPct <= 0.4) {
+        const pm = (svcRow.pricing_model as string) ?? null;
+        const base = Number(svcRow.base ?? 0);
+        const unit = Number(svcRow.unit_rate ?? 0);
+        const round = (n: number) => Math.round(n);
+        if (pm === "band") {
+          row.suggestion = {
+            label: `raise medium band $${round(menuComparable)} → $${needed}`,
+            serviceId: row.service_id,
+            field: "band:medium",
+            newValue: needed,
+          };
+        } else if (pm === "per_sqft_band" || pm === "sqft_band") {
+          row.suggestion = {
+            label: `raise mid tier $${round(menuComparable)} → $${needed}`,
+            serviceId: row.service_id,
+            field: "tier:mid",
+            newValue: needed,
+          };
+        } else if (pm === "per_section") {
+          const newUnit = Math.ceil((needed - base) / TYPICAL_PIER_SECTIONS);
+          if (newUnit > 0) {
+            row.suggestion = {
+              label: `raise per-section rate $${round(unit)} → $${newUnit}`,
+              serviceId: row.service_id,
+              field: "unit_rate",
+              newValue: newUnit,
+            };
+          }
+        } else if (pm === "per_foot" || pm === "seasonal_plus_perdiem") {
+          const newUnit = Math.ceil((needed - base) / TYPICAL_BOAT_FEET);
+          if (newUnit > 0) {
+            row.suggestion = {
+              label: `raise per-foot rate $${round(unit)} → $${newUnit}`,
+              serviceId: row.service_id,
+              field: "unit_rate",
+              newValue: newUnit,
+            };
+          }
+        } else {
+          // flat (and any other base-only model)
+          row.suggestion = {
+            label: `raise base $${round(menuComparable)} → $${needed}`,
+            serviceId: row.service_id,
+            field: "base",
+            newValue: needed,
+          };
+        }
+      }
     }
   }
 
@@ -621,6 +699,7 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
     crews_with_rate: r.crews_with_rate,
     waiting: r.waiting,
     etiology: r.etiology,
+    ...(r.suggestion ? { suggestion: r.suggestion } : {}),
   }));
   // Trouble first: waiting demand desc, then thin crews, then volume.
   rows.sort((a, b) => b.waiting - a.waiting || a.crews_with_rate - b.crews_with_rate || b.jobs - a.jobs);

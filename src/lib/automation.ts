@@ -1994,6 +1994,46 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
 }
 
 /**
+ * DURATION LEARNING (lib/learning.ts): the first self-tuning dial. Trailing
+ * 90 days of real started→completed durations per service walk the
+ * services.est_minutes dial toward reality, damped, every night — so the
+ * fleet router's time budgets and hours-fit checks get truer on their own.
+ * Runs BEFORE the route build so tomorrow's routes use tonight's lesson.
+ */
+export async function learnServiceDurations(): Promise<{ ok: boolean; updated: number; changes: Array<{ service: string; from: number; to: number; samples: number }> }> {
+  const admin = createServiceClient();
+  const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
+  const [{ data: services }, { data: done }] = await Promise.all([
+    admin.from("services").select("id, name, est_minutes"),
+    admin.from("jobs")
+      .select("service_id, started_at, completed_at")
+      .in("status", ["complete", "paid"])
+      .not("started_at", "is", null)
+      .not("completed_at", "is", null)
+      .gte("completed_at", since)
+      .limit(5000),
+  ]);
+  const samplesBySvc = new Map<string, number[]>();
+  for (const j of done ?? []) {
+    const mins = (new Date(j.completed_at as string).getTime() - new Date(j.started_at as string).getTime()) / 60_000;
+    const list = samplesBySvc.get(j.service_id as string) ?? [];
+    list.push(mins);
+    samplesBySvc.set(j.service_id as string, list);
+  }
+  const { learnedEstimate } = await import("@/lib/learning");
+  const changes: Array<{ service: string; from: number; to: number; samples: number }> = [];
+  for (const s of services ?? []) {
+    const current = Number(s.est_minutes ?? 0) || 60;
+    const res = learnedEstimate(current, samplesBySvc.get(s.id as string) ?? []);
+    if (res.moved) {
+      await admin.from("services").update({ est_minutes: res.next }).eq("id", s.id);
+      changes.push({ service: s.name as string, from: current, to: res.next, samples: res.samples });
+    }
+  }
+  return { ok: true, updated: changes.length, changes };
+}
+
+/**
  * REFUND RECONCILE (docs/refunds-design.md, review hardening): heal the two
  * crash windows the action itself can't. (1) A claim inserted but never
  * settled at the processor (crash before the call, or the compensating

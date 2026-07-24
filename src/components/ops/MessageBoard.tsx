@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { sendOpsMessage } from "@/app/ops/messages-actions";
+import { sendOpsMessage, draftReplyForThread } from "@/app/ops/messages-actions";
 import { toast } from "@/components/Toast";
 import type { OpsThread } from "@/app/ops/messages-data";
 
@@ -37,6 +37,8 @@ function Thread({ thread, open, onToggle }: { thread: OpsThread; open: boolean; 
   const router = useRouter();
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [draftMock, setDraftMock] = useState(false);
   const last = thread.messages[thread.messages.length - 1];
 
   async function send() {
@@ -50,7 +52,23 @@ function Thread({ thread, open, onToggle }: { thread: OpsThread; open: boolean; 
       return;
     }
     setBody("");
+    setDraftMock(false);
     router.refresh();
+  }
+
+  // Drafting only fills the textarea below — ops still reviews/edits and
+  // clicks the existing Send button. The AI never sends a message itself.
+  async function draft() {
+    if (drafting) return;
+    setDrafting(true);
+    const res = await draftReplyForThread(thread.propertyId);
+    setDrafting(false);
+    if (!res.ok) {
+      toast(res.error ?? "Couldn't draft a reply — try again.");
+      return;
+    }
+    setBody(res.text ?? "");
+    setDraftMock(!!res.mock);
   }
 
   return (
@@ -111,7 +129,21 @@ function Thread({ thread, open, onToggle }: { thread: OpsThread; open: boolean; 
             })}
           </div>
 
-          <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 14 }}>
+            <button
+              className="ll-btn ghost sm"
+              onClick={() => void draft()}
+              disabled={drafting || sending}
+            >
+              {drafting ? "Drafting…" : "✨ Draft reply"}
+            </button>
+            {draftMock && (
+              <span className="ll-pill slate" style={{ fontSize: 11 }}>
+                draft: offline template — add ANTHROPIC_API_KEY for Claude
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
             <input
               style={{
                 flex: 1, padding: "11px 13px", border: "1.5px solid var(--line)",
