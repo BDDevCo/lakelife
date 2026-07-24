@@ -73,10 +73,12 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
     .maybeSingle();
 
   // NOTE: the jobs embed lists ONLY date / service name / address — no price,
-  // no margin (CLAUDE.md rule 1). amount is the crew's own take-home.
+  // no margin (CLAUDE.md rule 1). amount is the crew's own take-home. No
+  // `kind` filter — 'earning' (job pay) and 'adjustment' (negative refund
+  // clawback, migration 0043) rows both belong here so totals stay accurate.
   const { data: payouts } = await admin
     .from("payouts")
-    .select("id, amount, status, created_at, jobs(date, services(name), properties(address))")
+    .select("id, amount, status, kind, created_at, jobs(date, services(name), properties(address))")
     .eq("vendor_id", vendorId)
     .order("created_at", { ascending: false });
 
@@ -88,7 +90,14 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
     const address = (one(job?.properties) as { address?: string } | null)?.address ?? null;
     // Prefer the job date; fall back to the payout's created date so grouping
     // and period math always have a real day to work with.
-    const jobDate = job?.date ?? String(p.created_at ?? "").slice(0, 10);
+    // Adjustments (clawbacks) date to WHEN THEY WERE APPLIED, not the
+    // original job — a September clawback must land in September's period
+    // totals/statement, never restate a July statement the crew already
+    // downloaded (review finding, 2026-07-23).
+    const jobDate = (p as { kind?: string }).kind === "adjustment"
+      ? String(p.created_at ?? "").slice(0, 10)
+      : job?.date ?? String(p.created_at ?? "").slice(0, 10);
+    const kind = (p.kind as string) === "adjustment" ? "adjustment" : "earning";
     return {
       id: p.id as string,
       jobDate,
@@ -96,6 +105,7 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
       address,
       amount: Number(p.amount) || 0,
       status: (p.status as string) ?? "pending",
+      kind,
     };
   });
 

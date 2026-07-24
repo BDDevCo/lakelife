@@ -15,7 +15,7 @@ const FLAG_TYPES: Array<{ value: string; label: string; countField?: string; cou
   { value: "other", label: "Something else (describe below)" },
 ];
 
-export function VendorStopCard({ stop, index }: { stop: VendorStop; index: number }) {
+export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; index: number; truckLabel?: string | null }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [count, setCount] = useState(stop.photo_count);
@@ -84,7 +84,10 @@ export function VendorStopCard({ stop, index }: { stop: VendorStop; index: numbe
           {index + 1}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 800, fontSize: 15 }}>{stop.service_name ?? "Service"}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>{stop.service_name ?? "Service"}</div>
+            {truckLabel && <span className="ll-pill slate" style={{ fontSize: 11 }}>{truckLabel}</span>}
+          </div>
           {stop.legs && stop.legs.length > 1 && (
             <div className="mut" style={{ fontSize: 12, marginTop: 2 }}>
               🧊 This visit: {stop.legs.join(" · ")}

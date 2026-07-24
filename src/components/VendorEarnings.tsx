@@ -16,6 +16,7 @@ import {
   formatCurrency,
   periodRanges,
   statusLabel,
+  earningsRowLabel,
   type EarningRow,
 } from "@/app/vendor/earnings-helpers";
 
@@ -173,7 +174,7 @@ function JobRow({ row, first }: { row: EarningRow; first: boolean }) {
       }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 700 }}>{row.service ?? "Service"}</div>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>{earningsRowLabel(row)}</div>
         <div className="mut" style={{ fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {row.jobDate}
           {row.address ? ` · ${row.address}` : ""}

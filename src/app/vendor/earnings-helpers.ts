@@ -17,8 +17,12 @@ export interface EarningRow {
   jobDate: string; // "YYYY-MM-DD" (job date, or the payout's created date as fallback)
   service: string | null;
   address: string | null;
-  amount: number; // the crew's take-home for this job
+  amount: number; // the crew's take-home for this job (negative for adjustments)
   status: string; // 'released' | 'pending'
+  // 'earning' = job pay; 'adjustment' = a refund clawback (docs/refunds-design.md,
+  // migration 0043). Optional so existing test fixtures without it still type-check
+  // — treat missing as 'earning'.
+  kind?: "earning" | "adjustment";
 }
 
 /** A week bucket of payouts with its subtotal. */
@@ -195,4 +199,16 @@ export function statusLabel(status: string): string {
   if (status === "released") return "In Friday's payout";
   if (status === "pending") return "Awaiting release";
   return status;
+}
+
+/**
+ * The line-item label shared by the list, statement, and CSV. An 'adjustment'
+ * row (negative, a refund clawback per docs/refunds-design.md §Crew clawback)
+ * is deliberately generic — it never names the job's service so it can't read
+ * as "you got docked for the pier install," and it never references a customer
+ * amount (rule 1 in reverse: the crew sees only their own number).
+ */
+export function earningsRowLabel(row: Pick<EarningRow, "kind" | "service">): string {
+  if (row.kind === "adjustment") return "Adjustment per service terms";
+  return row.service ?? "Service";
 }

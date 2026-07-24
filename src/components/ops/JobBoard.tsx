@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { assignAndSchedule } from "@/app/ops/actions";
 import { toast } from "@/components/Toast";
+import { RefundModal } from "@/components/ops/RefundModal";
 import type { OpsJob, ActiveVendor } from "@/app/ops/data";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -46,6 +47,7 @@ export function JobBoard({
   preferredJobIds?: string[];
 }) {
   const [assigning, setAssigning] = useState<OpsJob | null>(null);
+  const [refunding, setRefunding] = useState<OpsJob | null>(null);
   const preferred = useMemo(() => new Set(preferredJobIds), [preferredJobIds]);
 
   return (
@@ -63,7 +65,13 @@ export function JobBoard({
             ) : (
               <div style={{ display: "grid", gap: 10 }}>
                 {rows.map((j) => (
-                  <JobRow key={j.id} job={j} preferred={preferred.has(j.id)} onAssign={() => setAssigning(j)} />
+                  <JobRow
+                    key={j.id}
+                    job={j}
+                    preferred={preferred.has(j.id)}
+                    onAssign={() => setAssigning(j)}
+                    onRefund={() => setRefunding(j)}
+                  />
                 ))}
               </div>
             )}
@@ -78,14 +86,37 @@ export function JobBoard({
           onClose={() => setAssigning(null)}
         />
       )}
+
+      {refunding && (
+        <RefundModal
+          jobId={refunding.id}
+          serviceName={refunding.service_name}
+          address={refunding.address}
+          onClose={() => setRefunding(null)}
+        />
+      )}
     </div>
   );
 }
 
-function JobRow({ job, preferred, onAssign }: { job: OpsJob; preferred?: boolean; onAssign: () => void }) {
+function JobRow({
+  job,
+  preferred,
+  onAssign,
+  onRefund,
+}: {
+  job: OpsJob;
+  preferred?: boolean;
+  onAssign: () => void;
+  onRefund: () => void;
+}) {
   const isRequested = job.status === "requested";
   // Heuristic: a scheduled job that carries a crew was placed by auto-dispatch.
   const isAuto = job.status === "scheduled" && !!job.vendor_id;
+  // Refunds apply once cash has actually been captured (complete/paid jobs
+  // with a paid invoice); a fully-refunded invoice shows a pill instead.
+  const isRefunded = job.invoice_status === "refunded";
+  const canRefund = (job.status === "complete" || job.status === "paid") && !isRefunded;
   const meta = [job.lake_name, job.owner_name ? `owner: ${job.owner_name}` : null, prettyDate(job.date), job.slot]
     .filter(Boolean)
     .join(" · ");
@@ -120,12 +151,14 @@ function JobRow({ job, preferred, onAssign }: { job: OpsJob; preferred?: boolean
         )}
       </div>
 
-      <div style={{ width: "100%", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+      <div style={{ width: "100%", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
         {isRequested ? (
           <button className="ll-btn ghost sm" onClick={onAssign} title="The machine keeps hunting on its own — sweeps, claim board, scarcity offers. Override only if you must.">Override (manual assign)</button>
         ) : job.status === "scheduled" ? (
           <button className="ll-btn ghost sm" onClick={onAssign}>Reassign</button>
         ) : null}
+        {isRefunded && <span className="ll-pill slate">↩ refunded</span>}
+        {canRefund && <button className="ll-btn ghost sm" onClick={onRefund}>Refund…</button>}
       </div>
     </div>
   );

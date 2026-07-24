@@ -2,7 +2,7 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import { sendSms } from "@/lib/sms";
-import { todayLakeDate } from "@/lib/booking";
+import { todayLakeDate, dayStatus } from "@/lib/booking";
 import { runRouteBuild } from "@/lib/automation";
 import { getPlatformSettings } from "@/lib/settings";
 import { assertOps } from "./data";
@@ -45,7 +45,7 @@ export async function assignAndSchedule(
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, status, customer_price, property_id, service_id, group_id, services(name)")
+    .select("id, status, customer_price, property_id, service_id, group_id, services(name, is_water_work)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) return { ok: false, error: "Job not found." };
@@ -63,6 +63,41 @@ export async function assignAndSchedule(
   if (!isISODate(input.date)) return { ok: false, error: "Pick a valid date." };
   if (input.date < todayLakeDate()) return { ok: false, error: "That date is in the past." };
   if (!SLOTS.has(input.slot)) return { ok: false, error: "Pick a valid time slot." };
+
+  // SEASON GATE (sim-report defense-in-depth, rule 7): the customer booking
+  // flow refuses water work outside the lake's ice-out → pull-deadline window
+  // (dayStatus, src/lib/booking.ts) — that gate was booking-time-only by
+  // design, so a manual ops override could still schedule water work outside
+  // the season. Re-check the same rule here. Rush-window fields are forced
+  // open: ops can place a same-day job any hour, this gate only cares whether
+  // the DATE itself falls inside the season.
+  const svcRow = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; is_water_work?: boolean } | null;
+  if (svcRow?.is_water_work) {
+    const { data: propRow } = await admin
+      .from("properties")
+      .select("lakes(ice_out_actual, pull_deadline)")
+      .eq("id", job.property_id as string)
+      .maybeSingle();
+    const lake = (Array.isArray(propRow?.lakes) ? propRow?.lakes[0] : propRow?.lakes) as
+      | { ice_out_actual?: string; pull_deadline?: string } | undefined;
+    const seasonStart = lake?.ice_out_actual ?? null;
+    const seasonEnd = lake?.pull_deadline ?? null;
+    const status = dayStatus(input.date, {
+      today: todayLakeDate(),
+      isWaterWork: true,
+      seasonStart: seasonStart ?? null,
+      seasonEnd: seasonEnd ?? null,
+      fullDates: new Set<string>(),
+      rushNowHour: 12,
+      rushCutoffHour: 24,
+    });
+    if (status === "off-season") {
+      return {
+        ok: false,
+        error: `Outside the water-work window for this lake (ice-out ${seasonStart ?? "not set"}, pull by ${seasonEnd ?? "not set"}).`,
+      };
+    }
+  }
 
   // Validate the vendor: must be active with a valid COI (spec: no COI, no jobs).
   const { data: vendor } = await admin

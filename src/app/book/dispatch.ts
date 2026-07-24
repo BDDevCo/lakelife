@@ -464,8 +464,24 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
         const { data: stay } = await admin
           .from("storage_stays").select("id, status").eq("group_id", job.group_id as string).maybeSingle();
         if (!stay) {
+          // Boat label (polish item 3): storage_stays carries its own label so
+          // ops/crew custody views read the boat without a price-bearing join
+          // back to the profile. Mirrors the exact display format used in the
+          // wizard/profile/storage pages (e.g. "22' Tritoon · 150hp outboard").
+          const { data: boatRows } = await admin
+            .from("boats")
+            .select("type, length_ft, engine_type, engine_hp, engines")
+            .eq("property_id", job.property_id as string);
+          const boatLabel = (boatRows ?? [])
+            .map((b) => {
+              const eng = b.engine_type && b.engine_type !== "none"
+                ? ` · ${(Number(b.engines) || 1) > 1 ? "twin " : ""}${b.engine_hp ? `${b.engine_hp}hp ` : ""}${b.engine_type}`
+                : "";
+              return `${b.length_ft}' ${b.type}${eng}`;
+            })
+            .join(" + ") || null;
           const { error: stayErr } = await admin.from("storage_stays").insert({
-            group_id: job.group_id, vendor_id: winnerId, boat_feet: storage.boatFeet, status: "reserved",
+            group_id: job.group_id, vendor_id: winnerId, boat_feet: storage.boatFeet, boat_label: boatLabel, status: "reserved",
           });
           if (stayErr) custodyOk = false; // no stay = no custody assignment, period
         } else if (stay.status === "reserved") {

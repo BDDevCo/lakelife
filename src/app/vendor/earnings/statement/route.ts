@@ -5,6 +5,7 @@ import {
   formatCurrency,
   formatDateHuman,
   statusLabel,
+  earningsRowLabel,
   type EarningRow,
 } from "../../earnings-helpers";
 
@@ -78,7 +79,7 @@ function renderStatement(
           .map(
             (r) => `<tr>
       <td>${esc(r.jobDate)}</td>
-      <td>${esc(r.service ?? "Service")}</td>
+      <td>${esc(earningsRowLabel(r))}</td>
       <td>${esc(r.address ?? "—")}</td>
       <td class="num">${esc(formatCurrency(r.amount))}</td>
       <td class="status">${esc(statusLabel(r.status))}</td>

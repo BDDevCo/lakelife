@@ -111,6 +111,10 @@ export default async function VendorTodayPage() {
   const stops = day?.stops ?? [];
   const prettyDay = day ? new Date(day.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }) : "";
   const pins = stops.filter((s) => s.lat != null && s.lng != null).map((s) => ({ lat: s.lat as number, lng: s.lng as number }));
+  // Truck pill (polish item 1): only worth showing once ANY stop today
+  // carries a truck name — a single-truck (legacy) vendor's list stays
+  // exactly as clean as before.
+  const showTrucks = stops.some((s) => s.unit_name);
 
   return (
     <>
@@ -145,7 +149,7 @@ export default async function VendorTodayPage() {
             )}
             <div style={{ display: "grid", gap: 12 }}>
               {stops.map((s, i) => (
-                <VendorStopCard key={s.id} stop={s} index={i} />
+                <VendorStopCard key={s.id} stop={s} index={i} truckLabel={showTrucks ? s.unit_name : null} />
               ))}
             </div>
           </>

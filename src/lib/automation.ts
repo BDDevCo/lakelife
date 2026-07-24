@@ -58,11 +58,14 @@ export interface RouteBuildOutcome {
  * ZERO crew_units rows gets the EXACT legacy path (planVendorDay, one route,
  * one SMS to the vendor phone) — the backward-compat invariant.
  */
-export async function runRouteBuild(dateISO?: string): Promise<RouteBuildOutcome> {
+export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Promise<RouteBuildOutcome> {
   const date = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : addDays(todayLakeDate(), 1);
   const admin = createServiceClient();
 
-  const { data: jobs, error: loadErr } = await admin
+  // onlyVendorId scopes a mid-day self-heal (truck down) to ONE vendor —
+  // a platform-wide rebuild would re-text every crew's route on every
+  // toggle (review finding, 2026-07-23). Nightly passes no vendor.
+  let jobsQuery = admin
     .from("jobs")
     .select(
       "id, vendor_id, group_id, properties(lat, lng, lakes(name)), vendors(daily_capacity, company, user_id, status, coi_expiry, base_lat, base_lng), services(est_minutes), job_items(services(est_minutes))",
@@ -70,6 +73,8 @@ export async function runRouteBuild(dateISO?: string): Promise<RouteBuildOutcome
     .eq("date", date)
     .eq("status", "scheduled")
     .not("vendor_id", "is", null);
+  if (onlyVendorId) jobsQuery = jobsQuery.eq("vendor_id", onlyVendorId);
+  const { data: jobs, error: loadErr } = await jobsQuery;
   if (loadErr) return { ok: false, error: loadErr.message };
 
   const byVendor = new Map<
@@ -136,8 +141,13 @@ export async function runRouteBuild(dateISO?: string): Promise<RouteBuildOutcome
     }
   }
 
-  await admin.from("routes").delete().eq("date", date);
-  await admin.from("jobs").update({ route_id: null, sequence: null }).eq("date", date).eq("status", "scheduled");
+  if (onlyVendorId) {
+    await admin.from("routes").delete().eq("date", date).eq("vendor_id", onlyVendorId);
+    await admin.from("jobs").update({ route_id: null, sequence: null }).eq("date", date).eq("status", "scheduled").eq("vendor_id", onlyVendorId);
+  } else {
+    await admin.from("routes").delete().eq("date", date);
+    await admin.from("jobs").update({ route_id: null, sequence: null }).eq("date", date).eq("status", "scheduled");
+  }
 
   const vendorPhoneFor = async (userId: string | null): Promise<string | null> => {
     if (!userId) return null;
@@ -301,12 +311,13 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
   }
 
   // 1) Payout — release once (photo-verified completion already happened).
-  const { data: existingPayout } = await admin.from("payouts").select("id").eq("job_id", jobId).maybeSingle();
+  const { data: existingPayout } = await admin.from("payouts").select("id").eq("job_id", jobId).eq("kind", "earning").maybeSingle();
   if (!existingPayout) {
     const { error: pErr } = await admin.from("payouts").insert({
       vendor_id: job.vendor_id,
       job_id: jobId,
       amount: job.vendor_cost,
+      original_amount: job.vendor_cost, // immutable "ever owed" anchor — refund clawback conservation
       status: job.vendor_cost != null ? "released" : "pending",
     });
     if (pErr) console.error(`[settleJob ${jobId}] payout insert failed:`, pErr.message);
@@ -503,7 +514,7 @@ export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: 
   for (const j of jobs ?? []) {
     const inv = j.invoices as { status?: string }[] | { status?: string } | null;
     const rows = Array.isArray(inv) ? inv : inv ? [inv] : [];
-    const fullyPaid = rows.length > 0 && rows.every((r) => r.status === "paid");
+    const fullyPaid = rows.length > 0 && rows.every((r) => r.status === "paid" || r.status === "refunded");
     if (fullyPaid) continue; // already settled + charged
     const r = await settleJob(j.id as string);
     if (r.ok) settled++;
@@ -776,9 +787,9 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
     if (j.vendor_id && price > 0 && cost > 0) {
       const crewShare = Math.round((fee / price) * cost * 100) / 100;
       if (crewShare > 0) {
-        const { data: existing } = await admin.from("payouts").select("id").eq("job_id", j.id as string).maybeSingle();
+        const { data: existing } = await admin.from("payouts").select("id").eq("job_id", j.id as string).eq("kind", "earning").maybeSingle();
         if (!existing) {
-          await admin.from("payouts").insert({ vendor_id: j.vendor_id, job_id: j.id, amount: crewShare, status: "released" });
+          await admin.from("payouts").insert({ vendor_id: j.vendor_id, job_id: j.id, amount: crewShare, original_amount: crewShare, status: "released" });
         }
       }
     }
@@ -803,33 +814,57 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
     .limit(200);
 
   let matured = 0, credited = 0;
-  for (const e of due ?? []) {
-    // GRANT FIRST, idempotently (user_credits.earning_id unique) — a crash
-    // between grant and flip re-runs safely: the dup grant no-ops on the
-    // index and the flip then completes. Money can't vanish in the gap.
-    const { data: isVendor } = await admin.from("vendors").select("id").eq("user_id", e.beneficiary as string).maybeSingle();
+  const grantFor = async (earningId: string, beneficiary: string, amount: number, kind: string): Promise<boolean> => {
+    const { data: isVendor } = await admin.from("vendors").select("id").eq("user_id", beneficiary).maybeSingle();
     // SIM-FOUND (Wave 2): a lake association is a users row like any owner —
     // but its money is a month-end DONATION, never spendable credits.
-    const { data: isHoa } = await admin.from("lakes").select("id").eq("hoa_user_id", e.beneficiary as string).limit(1);
-    const hoaBeneficiary = !!isHoa && isHoa.length > 0;
-    if (!isVendor && Number(e.amount) > 0) {
-      const { error: gErr } = await admin.from("user_credits").insert({
-        user_id: e.beneficiary, amount: Number(e.amount), earning_id: e.id,
-        reason: e.kind === "crew_referral" ? "Referral reward — you brought a crew aboard" : "Referral reward — thanks for spreading the word",
-      });
-      if (gErr && !/duplicate|unique/i.test(gErr.message)) {
-        console.error(`[referral mature ${e.id}] credit grant failed:`, gErr.message);
-        continue; // don't flip — retry tomorrow
-      }
-      credited++;
+    const { data: isHoa } = await admin.from("lakes").select("id").eq("hoa_user_id", beneficiary).limit(1);
+    if (isVendor || (isHoa && isHoa.length > 0) || !(amount > 0)) return false;
+    const { error: gErr } = await admin.from("user_credits").insert({
+      user_id: beneficiary, amount, earning_id: earningId,
+      reason: kind === "crew_referral" ? "Referral reward — you brought a crew aboard" : "Referral reward — thanks for spreading the word",
+    });
+    if (gErr && !/duplicate|unique/i.test(gErr.message)) {
+      console.error(`[referral mature ${earningId}] credit grant failed:`, gErr.message);
+      return false;
     }
+    return true;
+  };
+
+  for (const e of due ?? []) {
+    // FLIP FIRST (guarded accrued→matured), grant only on a won flip — a
+    // refund VOIDING this accrual mid-loop then loses cleanly: the flip
+    // misses and no credit is ever minted for voided money (review finding,
+    // 2026-07-23). The crash direction (flipped, then died before granting)
+    // is healed by the backfill sweep below — money can't vanish either way.
     const { data: won } = await admin
       .from("referral_earnings")
       .update({ status: "matured", matured_at: new Date().toISOString() })
       .eq("id", e.id)
       .eq("status", "accrued")
       .select("id");
-    if (won && won.length > 0) matured++;
+    if (!won || won.length === 0) continue;
+    matured++;
+    if (await grantFor(e.id as string, e.beneficiary as string, Number(e.amount), e.kind as string)) credited++;
+  }
+
+  // BACKFILL: recently-matured earnings whose credit never landed (crash
+  // between flip and grant). earning_id-unique keeps this idempotent.
+  const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
+  const { data: recent } = await admin
+    .from("referral_earnings")
+    .select("id, beneficiary, amount, kind")
+    .eq("status", "matured")
+    .gte("matured_at", weekAgo)
+    .limit(200);
+  if (recent && recent.length > 0) {
+    const { data: creditRows } = await admin
+      .from("user_credits").select("earning_id").in("earning_id", recent.map((r) => r.id));
+    const granted = new Set((creditRows ?? []).map((c) => c.earning_id as string));
+    for (const e of recent) {
+      if (granted.has(e.id as string)) continue;
+      if (await grantFor(e.id as string, e.beneficiary as string, Number(e.amount), e.kind as string)) credited++;
+    }
   }
   return { ok: true, matured, credited };
 }
@@ -1956,6 +1991,53 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
     sent++;
   }
   return { ok: true, sent };
+}
+
+/**
+ * REFUND RECONCILE (docs/refunds-design.md, review hardening): heal the two
+ * crash windows the action itself can't. (1) A claim inserted but never
+ * settled at the processor (crash before the call, or the compensating
+ * delete failed) would strand refundable cash forever — claims older than
+ * 30 minutes with no processor_ref are deleted; no cash ever moved for
+ * them. (2) A refund that settled but crashed before the invoice flip /
+ * referral void gets its downstream effects completed idempotently.
+ */
+export async function reconcileRefunds(): Promise<{ ok: boolean; orphansCleared: number; flipsCompleted: number }> {
+  const admin = createServiceClient();
+  const cutoff = new Date(Date.now() - 30 * 60_000).toISOString();
+  const { data: orphans } = await admin
+    .from("refunds").select("id").is("processor_ref", null).lt("created_at", cutoff).limit(50);
+  let orphansCleared = 0;
+  for (const o of orphans ?? []) {
+    const { data: gone } = await admin.from("refunds").delete().eq("id", o.id).is("processor_ref", null).select("id");
+    if (gone && gone.length > 0) orphansCleared++;
+  }
+
+  // Durable full refunds whose invoice never flipped: complete the flip +
+  // referral void. Small scan — refunds are rare events.
+  const { data: recent } = await admin
+    .from("refunds").select("invoice_id, job_id").not("processor_ref", "is", null)
+    .gte("created_at", new Date(Date.now() - 7 * 86_400_000).toISOString()).limit(200);
+  const byInvoice = new Map<string, string | null>();
+  for (const r of recent ?? []) byInvoice.set(r.invoice_id as string, (r.job_id as string) ?? null);
+  let flipsCompleted = 0;
+  for (const [invoiceId, jobId] of byInvoice) {
+    const [{ data: inv }, { data: pay }, { data: rows }] = await Promise.all([
+      admin.from("invoices").select("id, status").eq("id", invoiceId).maybeSingle(),
+      admin.from("payments").select("amount").eq("invoice_id", invoiceId).eq("status", "captured").maybeSingle(),
+      admin.from("refunds").select("amount").eq("invoice_id", invoiceId).not("processor_ref", "is", null),
+    ]);
+    if (!inv || inv.status === "refunded" || !pay) continue;
+    const durable = (rows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
+    if (durable >= Number(pay.amount ?? 0) - 0.001) {
+      await admin.from("invoices").update({ status: "refunded" }).eq("id", invoiceId).eq("status", "paid");
+      if (jobId) {
+        await admin.from("referral_earnings").update({ status: "void" }).eq("source_job", jobId).eq("status", "accrued");
+      }
+      flipsCompleted++;
+    }
+  }
+  return { ok: true, orphansCleared, flipsCompleted };
 }
 
 /**

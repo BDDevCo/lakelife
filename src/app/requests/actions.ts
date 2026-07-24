@@ -224,10 +224,10 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   // charge failed, the invoice sits 'due' and no payout releases: LakeLife
   // never fronts crew pay against an uncollected fee. One per job.
   if (charged && l.job.vendor_id && q.crewShare > 0) {
-    const { data: existing } = await admin.from("payouts").select("id").eq("job_id", jobId).maybeSingle();
+    const { data: existing } = await admin.from("payouts").select("id").eq("job_id", jobId).eq("kind", "earning").maybeSingle();
     if (!existing) {
       await admin.from("payouts").insert({
-        vendor_id: l.job.vendor_id, job_id: jobId, amount: q.crewShare, status: "released",
+        vendor_id: l.job.vendor_id, job_id: jobId, amount: q.crewShare, original_amount: q.crewShare, status: "released",
       });
     }
   }

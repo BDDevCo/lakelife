@@ -19,6 +19,7 @@ export interface VendorStop {
   gate_code: string | null; // only populated for TODAY's jobs (rule 3)
   photo_count: number;
   legs?: string[]; // package-visit leg NAMES ONLY (no prices) — set when job_items exist
+  unit_name: string | null; // truck name (routes.unit_name), fleet vendors only — crew's own data, rule 1 safe
 }
 
 /** Is the signed-in user a vendor? Returns their vendor id, or null. */
@@ -150,6 +151,17 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
     }
   }
 
+  // Truck labels (polish item 1): vendor_jobs carries route_id but not the
+  // truck name — routes.unit_name is null for legacy (single-truck) vendors
+  // and set per-truck for fleet vendors (0042_crew_units). Crew's own data,
+  // safe under rule 1.
+  const unitNameByRoute = new Map<string, string | null>();
+  const routeIds = [...new Set(rows.map((r) => r.route_id).filter((id): id is string => !!id))];
+  if (routeIds.length > 0) {
+    const { data: routeRows } = await admin.from("routes").select("id, unit_name").in("id", routeIds);
+    for (const rt of routeRows ?? []) unitNameByRoute.set(rt.id as string, (rt.unit_name as string | null) ?? null);
+  }
+
   // Gate codes: only for TODAY, and only decrypted server-side here.
   const gateByProp = new Map<string, string | null>();
   if (date === today) {
@@ -183,6 +195,7 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
     gate_code: date === today ? gateByProp.get(r.property_id) ?? null : null,
     photo_count: counts.get(r.id) ?? 0,
     legs: legsByJob.get(r.id),
+    unit_name: r.route_id ? unitNameByRoute.get(r.route_id) ?? null : null,
   }));
 
   return { date, stops };

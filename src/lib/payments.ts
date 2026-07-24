@@ -139,4 +139,28 @@ export const LakeLifePayments = {
         : "x" + Math.random().toString(36).slice(2, 17);
     return { ok: true, ref: `ch_mock_${rand}`, amountCents: input.amountCents };
   },
+
+  /**
+   * Mock of the processor's refund(). Real processors refund against the
+   * original charge reference, never the card; same shape here so the real
+   * adapter is a drop-in (docs/refunds-design.md). A charge ref containing
+   * "rf_fail" refuses deterministically — the test hook for the failure
+   * path, mirroring how declining cards are staged for charge().
+   */
+  async refund(input: { chargeRef: string; amountCents: number }): Promise<ChargeResult> {
+    if (!input.chargeRef || !input.chargeRef.startsWith("ch_")) {
+      return { ok: false, error: "Invalid charge reference." };
+    }
+    if (input.chargeRef.includes("rf_fail")) {
+      return { ok: false, error: "Processor refused the refund." };
+    }
+    if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
+      return { ok: false, error: "Refund amount must be a positive whole number of cents." };
+    }
+    const rand =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? "x" + crypto.randomUUID().replace(/-/g, "").slice(0, 15)
+        : "x" + Math.random().toString(36).slice(2, 17);
+    return { ok: true, ref: `rf_mock_${rand}`, amountCents: input.amountCents };
+  },
 };

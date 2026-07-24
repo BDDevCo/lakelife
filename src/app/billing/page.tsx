@@ -114,12 +114,25 @@ export default async function BillingPage() {
           {(!invoices || invoices.length === 0) ? (
             <p className="mut" style={{ fontSize: 14 }}>No invoices yet — they appear here after your first completed service.</p>
           ) : (
-            invoices.map((inv) => (
-              <div key={inv.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px dashed var(--line)", fontSize: 14 }}>
-                <span className="mut">{inv.created_at ? new Date(inv.created_at).toLocaleDateString() : ""}</span>
-                <span><span className="ll-pill slate" style={{ marginRight: 8 }}>{inv.status}</span><b>{inv.amount != null ? formatPrice(Number(inv.amount)) : "—"}</b></span>
-              </div>
-            ))
+            invoices.map((inv) => {
+              // A refund is ops-only at RLS, so this surface never queries the
+              // refunds ledger directly — it only ever reads invoice status.
+              // A FULL refund flips status to 'refunded' (shown below); a
+              // partial refund leaves the invoice 'paid' with no amount shown
+              // here (v1 — see docs/refunds-design.md).
+              const refunded = inv.status === "refunded";
+              return (
+                <div key={inv.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px dashed var(--line)", fontSize: 14 }}>
+                  <span className="mut">{inv.created_at ? new Date(inv.created_at).toLocaleDateString() : ""}</span>
+                  <span>
+                    <span className="ll-pill slate" style={{ marginRight: 8 }}>
+                      {refunded ? "↩ Refunded" : inv.status}
+                    </span>
+                    <b>{inv.amount != null ? formatPrice(Number(inv.amount)) : "—"}</b>
+                  </span>
+                </div>
+              );
+            })
           )}
         </div>
       </div>

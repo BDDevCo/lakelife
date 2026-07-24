@@ -96,6 +96,7 @@ export interface OpsJob {
   vendor_company: string | null;
   photo_count: number;
   min_photos: number;
+  invoice_status: string | null; // 'due' | 'paid' | 'refunded' | ... — drives the Refund button + "↩ refunded" pill
 }
 
 const BOARD_STATUSES = ["requested", "scheduled", "in_progress", "complete", "paid"] as const;
@@ -135,9 +136,16 @@ export async function getJobBoard(): Promise<OpsJob[]> {
   const rows = (data ?? []) as unknown as JobBoardRaw[];
   const ids = rows.map((r) => r.id);
   const counts = new Map<string, number>();
+  const invoiceStatus = new Map<string, string>();
   if (ids.length) {
     const { data: photos } = await admin.from("job_photos").select("job_id").in("job_id", ids);
     for (const p of photos ?? []) counts.set(p.job_id, (counts.get(p.job_id) ?? 0) + 1);
+
+    // One invoice per job (refund-actions.ts assumes the same) — used only to
+    // drive the ops "Refund…" button / "↩ refunded" pill. Never joined into any
+    // customer or vendor read (rule 1 doesn't apply here — this IS the ops board).
+    const { data: invoices } = await admin.from("invoices").select("job_id, status").in("job_id", ids);
+    for (const inv of invoices ?? []) if (inv.job_id) invoiceStatus.set(inv.job_id as string, inv.status as string);
   }
 
   const first = <T>(x: T | T[] | null | undefined): T | null =>
@@ -169,6 +177,7 @@ export async function getJobBoard(): Promise<OpsJob[]> {
       vendor_company: vend?.company ?? null,
       photo_count: counts.get(r.id as string) ?? 0,
       min_photos: (svc as { min_photos?: number } | null)?.min_photos ?? 0,
+      invoice_status: invoiceStatus.get(r.id as string) ?? null,
     };
   });
 }

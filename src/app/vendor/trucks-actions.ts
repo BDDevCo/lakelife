@@ -16,6 +16,14 @@ export interface TruckResult {
  *  (1..20) in spirit: a sane ceiling, not a real-world constraint. */
 const MAX_ACTIVE_TRUCKS = 10;
 
+/** Add days to an ISO date string (no TZ drift). Reimplemented locally —
+ *  automation.ts's addDays is module-private. */
+function addDays(iso: string, n: number): string {
+  const d = new Date(iso + "T12:00:00");
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 /**
  * Confirm the signed-in user owns a vendors row. Identity is asserted with
  * the SESSION client (auth.getUser); the row is read with the SERVICE client
@@ -316,6 +324,26 @@ export async function setTruckActive(unitId: string, active: boolean): Promise<T
 
   const { error } = await admin.from("crew_units").update({ active }).eq("id", unitId).eq("vendor_id", vendor.id);
   if (error) return { ok: false, error: error.message };
+
+  // TRUCK-DOWN SELF-HEAL (zero-ops mid-day recovery): a truck going down
+  // mid-shift leaves its stops stranded on a route plan built for a fleet
+  // that no longer exists — rebuild THIS VENDOR's routes for TODAY and
+  // TOMORROW right away instead of waiting for the 8pm cron. AWAITED, not
+  // fire-and-forget: serverless freezes detached promises the moment the
+  // response ships, so a void'd rebuild silently never runs in production
+  // (review finding, 2026-07-23). Scoped to this vendor so a toggle never
+  // re-texts every crew on the platform. Failures degrade to the nightly
+  // rebuild — the toggle itself must still succeed.
+  if (!active) {
+    try {
+      const { runRouteBuild } = await import("@/lib/automation");
+      const today = todayLakeDate();
+      await runRouteBuild(today, vendor.id);
+      await runRouteBuild(addDays(today, 1), vendor.id);
+    } catch {
+      /* nightly rebuild is the backstop */
+    }
+  }
 
   // Post-write cap recheck (check-then-write race), same rail as addTruck.
   if (active) {

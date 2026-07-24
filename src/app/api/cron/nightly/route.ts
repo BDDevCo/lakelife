@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
-import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, runFillInDigest, gapSlaAlerts } from "@/lib/automation";
+import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, runFillInDigest, gapSlaAlerts, reconcileRefunds } from "@/lib/automation";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +36,7 @@ async function run(req: Request) {
   // Catch any job completed but left partially billed (e.g. a mid-write crash),
   // and retry uncollected late-cancellation fees (crew share releases on collect).
   const reconcile = await reconcileUnsettledJobs();
+  const refundReconcile = await reconcileRefunds();
   const feeReconcile = await reconcileCancelledFees();
   // Referral accruals past the clawback window become spendable credits.
   const referrals = await matureReferralEarnings();
@@ -52,7 +53,7 @@ async function run(req: Request) {
   const fillInDigest = await runFillInDigest();
   const gapSla = await gapSlaAlerts();
   const nudges = await runNudges();
-  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, sweep, dispatch, routes, reminders, reconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, gapSla, nudges });
+  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, sweep, dispatch, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, gapSla, nudges });
 }
 
 export const GET = run; // Vercel Cron issues GET

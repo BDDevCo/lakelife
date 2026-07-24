@@ -1,6 +1,6 @@
 import { todayLakeDate } from "@/lib/booking";
 import { getMyEarningsFor } from "../../earnings-data";
-import { periodRanges, csvRow, statusLabel } from "../../earnings-helpers";
+import { periodRanges, csvRow, statusLabel, earningsRowLabel } from "../../earnings-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -28,9 +28,9 @@ export async function GET(req: Request) {
     lines.push(
       csvRow([
         r.jobDate,
-        r.service ?? "Service",
+        earningsRowLabel(r),
         r.address ?? "",
-        r.amount.toFixed(2), // plain number for bookkeeping import (no $)
+        r.amount.toFixed(2), // plain number for bookkeeping import (no $) — negative for adjustments
         statusLabel(r.status),
       ]),
     );
