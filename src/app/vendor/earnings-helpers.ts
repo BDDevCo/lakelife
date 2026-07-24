@@ -198,6 +198,7 @@ export function csvRow(cells: Array<string | number | null | undefined>): string
 export function statusLabel(status: string): string {
   if (status === "released") return "In Friday's payout";
   if (status === "pending") return "Awaiting release";
+  if (status === "held") return "On hold — make-it-right in progress";
   return status;
 }
 

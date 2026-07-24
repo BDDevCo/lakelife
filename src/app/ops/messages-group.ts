@@ -14,6 +14,7 @@ export interface OpsMessage {
   body: string;
   created_at: string;
   from: Sender;
+  ai: boolean;
 }
 
 export interface OpsThread {
@@ -36,6 +37,9 @@ export interface FlatMessage {
   from_user: string | null;
   body: string;
   created_at: string;
+  /** Optional so existing callers/tests that predate the AI auto-reply
+   *  column keep compiling untouched; absent -> not an AI message. */
+  ai?: boolean;
 }
 
 /**
@@ -63,6 +67,7 @@ export function groupThreads(rows: FlatMessage[]): OpsThread[] {
       body: r.body,
       created_at: r.created_at,
       from: r.owner_id != null && r.from_user === r.owner_id ? "owner" : "ops",
+      ai: Boolean(r.ai),
     });
   }
 

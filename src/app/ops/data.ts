@@ -450,12 +450,42 @@ export interface MarginHealthRow {
   };
 }
 
-export async function getMarginHealth(): Promise<MarginHealthRow[]> {
-  const ops = await assertOps();
-  if (!ops) return [];
-  const admin = createServiceClient();
+/** UNGATED price-up suggestion, one per margin_stranded service×lake (Lane C,
+ *  2026-07-23): the same math getMarginHealth shows on the ops board, plus
+ *  currentValue/raisePct so a caller can gate an auto-apply dial against it
+ *  without re-deriving anything. serviceId/field/newValue/label match the
+ *  shape applyMenuSuggestion already accepts. */
+export interface MenuSuggestion {
+  serviceId: string;
+  serviceName: string;
+  lakeName: string;
+  field: "base" | "unit_rate" | "band:medium" | "tier:mid";
+  newValue: number;
+  currentValue: number;
+  raisePct: number; // (needed − current) / current — the same delta already checked against the 40% sanity cap below
+  label: string;
+  /** The floor-failing crew whose card produced this suggestion — the
+   *  auto-apply loop refuses cards changed in the last 30 days (a fresh
+   *  hike must never drag the menu up behind it; menu-follows-crew is the
+   *  feedback loop the fill-in anchor already kills for offers). */
+  drivenByVendorId: string | null;
+}
+
+type MarginHealthRowInternal = MarginHealthRow & { suggestionFull?: MenuSuggestion };
+
+/**
+ * The margin-health computation, UNGATED (Lane C, 2026-07-23 follow-on to
+ * docs/margin-gap-design.md): extracted out of getMarginHealth so the nightly
+ * price auto-apply pass (lib/automation.ts) computes the SAME suggestions the
+ * ops board shows, from ONE formula, via computeMenuSuggestions below. Never
+ * checks role — the caller authorizes (getMarginHealth's assertOps gate, or
+ * the cron route's CRON_SECRET).
+ */
+async function computeMarginHealthRows(
+  admin: ReturnType<typeof createServiceClient>,
+  marginFloor: number,
+): Promise<MarginHealthRowInternal[]> {
   const today = todayLakeDate();
-  const settings = await getPlatformSettings();
 
   const [{ data: jobs }, { data: waiting }, { data: vendors }, { data: rates }] = await Promise.all([
     admin
@@ -476,7 +506,7 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
   const key = (svc: string, lake: string) => `${svc}|${lake}`;
   const acc = new Map<
     string,
-    MarginHealthRow & { price_total: number; margin_total: number; waiting_price_total: number; service_id: string | null; lake_id: string | null }
+    MarginHealthRow & { price_total: number; margin_total: number; waiting_price_total: number; service_id: string | null; lake_id: string | null; suggestionFull?: MenuSuggestion }
   >();
   const bump = (svcName: string, lakeName: string, svcId: string | null, lakeId: string | null) => {
     const k = key(svcName, lakeName);
@@ -596,6 +626,7 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
     let ready = 0;
     let floorFail = 0;
     let cheapestFailingComparable: number | null = null; // lowest-cost crew that STILL fails the floor — the suggestion targets this one
+    let cheapestFailingVendorId: string | null = null;
     for (const v of listing) {
       const vr = rateRows.get(`${v.id}|${row.service_id}`);
       if (!vr) continue; // no rate on file at all — not a floor failure, just unset
@@ -614,10 +645,11 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
       }
       // The SAME marginPct/floor gate the dispatch and claim engines use
       // (rule 8, one formula), at the representative size.
-      if (marginPct(menuComparable, crewComparable) < settings.marginFloor) {
+      if (marginPct(menuComparable, crewComparable) < marginFloor) {
         floorFail += 1;
         if (cheapestFailingComparable == null || crewComparable < cheapestFailingComparable) {
           cheapestFailingComparable = crewComparable;
+          cheapestFailingVendorId = v.id as string;
         }
       } else ready += 1;
     }
@@ -636,7 +668,7 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
     // stores money in; never a cut, and capped at a 40% jump so a data
     // glitch can't propose something absurd.
     if (row.etiology === "margin_stranded" && cheapestFailingComparable != null && menuComparable != null && svcRow) {
-      const floor = settings.marginFloor;
+      const floor = marginFloor;
       const needed = Math.ceil(cheapestFailingComparable / (1 - floor));
       const deltaPct = (needed - menuComparable) / menuComparable;
       if (needed > menuComparable && deltaPct <= 0.4) {
@@ -644,54 +676,55 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
         const base = Number(svcRow.base ?? 0);
         const unit = Number(svcRow.unit_rate ?? 0);
         const round = (n: number) => Math.round(n);
+        const menuCurrent = round(menuComparable);
         if (pm === "band") {
-          row.suggestion = {
-            label: `raise medium band $${round(menuComparable)} → $${needed}`,
-            serviceId: row.service_id,
-            field: "band:medium",
-            newValue: needed,
+          row.suggestionFull = {
+            serviceId: row.service_id, serviceName: svcName, lakeName: row.lake_name,
+            field: "band:medium", newValue: needed, currentValue: menuCurrent, raisePct: deltaPct,
+            label: `raise medium band $${menuCurrent} → $${needed}`,
+            drivenByVendorId: cheapestFailingVendorId,
           };
         } else if (pm === "per_sqft_band" || pm === "sqft_band") {
-          row.suggestion = {
-            label: `raise mid tier $${round(menuComparable)} → $${needed}`,
-            serviceId: row.service_id,
-            field: "tier:mid",
-            newValue: needed,
+          row.suggestionFull = {
+            serviceId: row.service_id, serviceName: svcName, lakeName: row.lake_name,
+            field: "tier:mid", newValue: needed, currentValue: menuCurrent, raisePct: deltaPct,
+            label: `raise mid tier $${menuCurrent} → $${needed}`,
+            drivenByVendorId: cheapestFailingVendorId,
           };
         } else if (pm === "per_section") {
           const newUnit = Math.ceil((needed - base) / TYPICAL_PIER_SECTIONS);
           if (newUnit > 0) {
-            row.suggestion = {
+            row.suggestionFull = {
+              serviceId: row.service_id, serviceName: svcName, lakeName: row.lake_name,
+              field: "unit_rate", newValue: newUnit, currentValue: round(unit), raisePct: deltaPct,
               label: `raise per-section rate $${round(unit)} → $${newUnit}`,
-              serviceId: row.service_id,
-              field: "unit_rate",
-              newValue: newUnit,
+              drivenByVendorId: cheapestFailingVendorId,
             };
           }
         } else if (pm === "per_foot" || pm === "seasonal_plus_perdiem") {
           const newUnit = Math.ceil((needed - base) / TYPICAL_BOAT_FEET);
           if (newUnit > 0) {
-            row.suggestion = {
+            row.suggestionFull = {
+              serviceId: row.service_id, serviceName: svcName, lakeName: row.lake_name,
+              field: "unit_rate", newValue: newUnit, currentValue: round(unit), raisePct: deltaPct,
               label: `raise per-foot rate $${round(unit)} → $${newUnit}`,
-              serviceId: row.service_id,
-              field: "unit_rate",
-              newValue: newUnit,
+              drivenByVendorId: cheapestFailingVendorId,
             };
           }
         } else {
           // flat (and any other base-only model)
-          row.suggestion = {
-            label: `raise base $${round(menuComparable)} → $${needed}`,
-            serviceId: row.service_id,
-            field: "base",
-            newValue: needed,
+          row.suggestionFull = {
+            serviceId: row.service_id, serviceName: svcName, lakeName: row.lake_name,
+            field: "base", newValue: needed, currentValue: menuCurrent, raisePct: deltaPct,
+            label: `raise base $${menuCurrent} → $${needed}`,
+            drivenByVendorId: cheapestFailingVendorId,
           };
         }
       }
     }
   }
 
-  const rows = [...acc.values()].map((r) => ({
+  const rows: MarginHealthRowInternal[] = [...acc.values()].map((r) => ({
     service_name: r.service_name,
     lake_name: r.lake_name,
     jobs: r.jobs,
@@ -699,9 +732,76 @@ export async function getMarginHealth(): Promise<MarginHealthRow[]> {
     crews_with_rate: r.crews_with_rate,
     waiting: r.waiting,
     etiology: r.etiology,
-    ...(r.suggestion ? { suggestion: r.suggestion } : {}),
+    ...(r.suggestionFull ? { suggestionFull: r.suggestionFull } : {}),
   }));
   // Trouble first: waiting demand desc, then thin crews, then volume.
   rows.sort((a, b) => b.waiting - a.waiting || a.crews_with_rate - b.crews_with_rate || b.jobs - a.jobs);
   return rows;
+}
+
+/** UNGATED — margin_stranded price-up suggestions only, for the nightly
+ *  auto-apply pass. Caller authorizes (the cron route's CRON_SECRET). */
+export async function computeMenuSuggestions(
+  admin: ReturnType<typeof createServiceClient>,
+  marginFloor: number,
+): Promise<MenuSuggestion[]> {
+  const rows = await computeMarginHealthRows(admin, marginFloor);
+  const out: MenuSuggestion[] = [];
+  for (const r of rows) if (r.suggestionFull) out.push(r.suggestionFull);
+  return out;
+}
+
+export async function getMarginHealth(): Promise<MarginHealthRow[]> {
+  const ops = await assertOps();
+  if (!ops) return [];
+  const admin = createServiceClient();
+  const settings = await getPlatformSettings();
+  const rows = await computeMarginHealthRows(admin, settings.marginFloor);
+  return rows.map((r) => {
+    const { suggestionFull, ...rest } = r;
+    return suggestionFull
+      ? { ...rest, suggestion: { label: suggestionFull.label, serviceId: suggestionFull.serviceId, field: suggestionFull.field, newValue: suggestionFull.newValue } }
+      : rest;
+  });
+}
+
+// ---- Make-It-Right escalations (Autonomy Ladder) ---------------------------
+
+export interface EscalatedDispute {
+  id: string;
+  service: string;
+  where: string;
+  note: string;
+  why: string;
+  customerPrice: number;
+  openedAt: string;
+}
+
+/** The disputes waiting on a HUMAN — the only rung of the ladder that is.
+ *  Each row's held crew pay stays frozen until one of the two buttons on
+ *  the ops card resolves it (dispute-actions.ts). */
+export async function getEscalatedDisputes(): Promise<EscalatedDispute[]> {
+  const ops = await assertOps();
+  if (!ops) return [];
+  const admin = createServiceClient();
+  const { data } = await admin
+    .from("disputes")
+    .select("id, customer_note, resolution, opened_at, jobs!disputes_job_id_fkey(customer_price, services(name), properties(address, nickname))")
+    .eq("status", "escalated")
+    .order("opened_at", { ascending: true })
+    .limit(50);
+  const first = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
+  return (data ?? []).map((d) => {
+    const job = first((d as { jobs?: unknown }).jobs) as { customer_price?: number; services?: unknown; properties?: unknown } | null;
+    const prop = first(job?.properties) as { address?: string; nickname?: string } | null;
+    return {
+      id: d.id as string,
+      service: (first(job?.services) as { name?: string } | null)?.name ?? "a job",
+      where: prop?.nickname || prop?.address || "a property",
+      note: ((d.customer_note as string) ?? "").slice(0, 200),
+      why: ((d.resolution as string) ?? "").slice(0, 200),
+      customerPrice: Number(job?.customer_price ?? 0),
+      openedAt: ((d.opened_at as string) ?? "").slice(0, 10),
+    };
+  });
 }

@@ -42,14 +42,18 @@ export interface PayoutSnapshot {
 
 export type ClawbackPlan =
   | { mode: "none" }
-  | { mode: "reduce"; payoutId: string; newAmount: number; newStatus: "released" | "clawed" }
+  | { mode: "reduce"; payoutId: string; newAmount: number; newStatus: "released" | "held" | "clawed" }
   | { mode: "adjust"; adjustmentAmount: number } // negative row, nets against next batch (ToS §7.6)
   | { mode: "reduce_and_adjust"; payoutId: string; newAmount: 0; newStatus: "clawed"; adjustmentAmount: number };
 
 /**
  * Decide HOW to recover the clawback from the crew:
- * - earning payout still loose (unbatched, released) → reduce it in place;
- *   reduced to zero it flips to 'clawed' so batches skip an empty row.
+ * - earning payout still loose (unbatched, released OR HELD) → reduce it
+ *   in place; a held remainder STAYS held (the dispute that froze it still
+ *   owns its release); reduced to zero it flips to 'clawed' so batches
+ *   skip an empty row. Treating a held row as untouchable would insert an
+ *   adjustment while the full held earning survives — the crew loses the
+ *   clawback twice the moment the hold releases (review finding).
  * - already batched/paid → a negative 'adjustment' payout that the next
  *   batch nets automatically.
  * - loose but smaller than the clawback (prior partial reductions) →
@@ -60,14 +64,15 @@ export type ClawbackPlan =
 export function planClawback(clawback: number, payout: PayoutSnapshot | null): ClawbackPlan {
   const c = round2(clawback);
   if (!(c > 0)) return { mode: "none" };
-  if (!payout || payout.batchId != null || payout.status !== "released") {
+  const loose = payout != null && payout.batchId == null && (payout.status === "released" || payout.status === "held");
+  if (!payout || !loose) {
     return { mode: "adjust", adjustmentAmount: -c };
   }
   const available = round2(Math.max(0, payout.amount));
   if (available >= c) {
     const newAmount = round2(available - c);
     return newAmount > 0
-      ? { mode: "reduce", payoutId: payout.id, newAmount, newStatus: "released" }
+      ? { mode: "reduce", payoutId: payout.id, newAmount, newStatus: payout.status as "released" | "held" }
       : { mode: "reduce", payoutId: payout.id, newAmount: 0, newStatus: "clawed" };
   }
   // Drain what's loose, adjust the rest.

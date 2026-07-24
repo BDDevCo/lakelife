@@ -20,6 +20,7 @@ interface ThreadRaw {
   body: string | null;
   created_at: string;
   from_user: string | null;
+  ai: boolean | null;
   property_id: string;
   properties: Embed<{
     address: string | null;
@@ -38,7 +39,7 @@ export async function getMessageThreads(): Promise<OpsThread[]> {
   const { data } = await admin
     .from("messages")
     .select(
-      "id, body, created_at, from_user, property_id, " +
+      "id, body, created_at, from_user, ai, property_id, " +
         "properties(address, owner_id, lakes(name), users(name))",
     )
     .order("created_at", { ascending: true });
@@ -60,6 +61,7 @@ export async function getMessageThreads(): Promise<OpsThread[]> {
       from_user: r.from_user,
       body: (r.body as string) ?? "",
       created_at: r.created_at,
+      ai: Boolean(r.ai),
     };
   });
 

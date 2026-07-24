@@ -120,8 +120,22 @@ function Thread({ thread, open, onToggle }: { thread: OpsThread; open: boolean; 
                     >
                       {m.body}
                     </div>
-                    <div className="mut" style={{ fontSize: 11.5, marginTop: 3, textAlign: ops ? "right" : "left" }}>
-                      {ops ? "LakeLife dispatch" : thread.ownerName ?? "Owner"} · {whenLabel(m.created_at)}
+                    <div
+                      className="mut"
+                      style={{
+                        fontSize: 11.5, marginTop: 3, textAlign: ops ? "right" : "left",
+                        display: "flex", justifyContent: ops ? "flex-end" : "flex-start",
+                        alignItems: "center", gap: 6,
+                      }}
+                    >
+                      <span>
+                        {ops ? "LakeLife dispatch" : thread.ownerName ?? "Owner"} · {whenLabel(m.created_at)}
+                      </span>
+                      {m.ai && (
+                        <span className="ll-pill slate" style={{ fontSize: 10, padding: "1px 7px" }}>
+                          AI · auto-answered
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>

@@ -18,6 +18,9 @@ import { getPlatformSettings } from "@/lib/settings";
 import { autoAssignJob, loadPricingProfileById } from "@/app/book/dispatch";
 import { computeScarcityOffer } from "@/app/requests/offer-data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
+import { computeMenuSuggestions } from "@/app/ops/data";
+import { executeMenuUpdate } from "@/lib/menu-core";
+import { composeNightlyDigest, type DigestSections } from "@/lib/digest-render";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -251,11 +254,15 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, status, customer_price, vendor_cost, vendor_id, property_id, margin, group_id, phase, price_finalized, services(name)")
+    .select("id, status, customer_price, vendor_cost, vendor_id, property_id, margin, group_id, phase, price_finalized, correction_of, services(name)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) return { ok: false, error: "job not found" };
   if (!["complete", "paid"].includes(job.status as string)) return { ok: false, error: "job not complete" };
+  // Make-It-Right correction visits are FREE by design: no invoice, no
+  // charge, no payout — the photo-gated completion is the point, and the
+  // dispute resolution (lib/disputes.ts) owns what happens next.
+  if ((job as { correction_of?: string | null }).correction_of) return { ok: true, invoiced: false, charged: false };
   const svcName = (one(job.services) as { name?: string } | null)?.name ?? "service";
 
   // SPRING SPLASH FINALIZE (S4, review-hardened): EVERY settle path —
@@ -310,6 +317,16 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
     await admin.from("job_groups").update({ status: "completed" }).eq("id", job.group_id as string).eq("status", "active");
   }
 
+  // A 👎 can land before settle runs (reconcile path especially). An open
+  // dispute means TWO things here: a payout born onto this job is born
+  // HELD, and the CHARGE step stays quiet — charging a card mid-dispute
+  // days after completion, possibly right before an auto-refund, is
+  // processor fees both ways and reads terribly (review finding). The
+  // reconcile rail retries the charge after resolution.
+  const { data: openDispute } = await admin
+    .from("disputes").select("id").eq("job_id", jobId)
+    .in("status", ["crew_review", "fixing", "verifying", "talk", "escalated"]).maybeSingle();
+
   // 1) Payout — release once (photo-verified completion already happened).
   const { data: existingPayout } = await admin.from("payouts").select("id").eq("job_id", jobId).eq("kind", "earning").maybeSingle();
   if (!existingPayout) {
@@ -318,7 +335,7 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
       job_id: jobId,
       amount: job.vendor_cost,
       original_amount: job.vendor_cost, // immutable "ever owed" anchor — refund clawback conservation
-      status: job.vendor_cost != null ? "released" : "pending",
+      status: openDispute ? "held" : job.vendor_cost != null ? "released" : "pending",
     });
     if (pErr) console.error(`[settleJob ${jobId}] payout insert failed:`, pErr.message);
   }
@@ -342,7 +359,7 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
   //    has a saved card, and no captured payment already exists for this invoice.
   let charged = false;
   const price = job.customer_price == null ? 0 : Number(job.customer_price);
-  if (invoice.status !== "paid" && price > 0 && job.property_id) {
+  if (invoice.status !== "paid" && price > 0 && job.property_id && !openDispute) {
     const { data: prop } = await admin
       .from("properties")
       .select("address, owner_id, users(email, name)")
@@ -509,6 +526,7 @@ export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: 
     .from("jobs")
     .select("id, invoices(status)")
     .eq("status", "complete")
+    .is("correction_of", null) // $0 correction visits never invoice — don't rescan them nightly
     .limit(500);
   let settled = 0;
   for (const j of jobs ?? []) {
@@ -2143,4 +2161,143 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number }> 
     }
   }
   return { ok: true, alerted };
+}
+
+/**
+ * PRICE AUTO-APPLY (Autonomy Ladder, 2026-07-23): margin_stranded raises
+ * within the priceAutoapplyMaxPct dial apply THEMSELVES, through the exact
+ * same executor (executeMenuUpdate) and the exact same 40% sanity cap a
+ * human's one tap uses — gated by an independent dial (0 = off; suggestions
+ * stay one-tap-only on the Margin Health board) and a per-service 30-day
+ * cooldown so the machine never re-prices the same menu row twice in one
+ * lull. A service can carry more than one suggestion tonight (one per lake
+ * it's thin on) — the cooldown is re-checked fresh per suggestion and
+ * updated IN-MEMORY the instant one applies, so a single run can't
+ * double-price the same row even before the DB write would've caught it.
+ */
+export async function autoApplyPriceSuggestions(): Promise<{
+  ok: boolean;
+  applied: number;
+  changes: Array<{ label: string; service: string }>;
+}> {
+  const settings = await getPlatformSettings();
+  if (!(settings.priceAutoapplyMaxPct > 0)) return { ok: true, applied: 0, changes: [] };
+
+  const admin = createServiceClient();
+  const suggestions = await computeMenuSuggestions(admin, settings.marginFloor);
+  if (suggestions.length === 0) return { ok: true, applied: 0, changes: [] };
+
+  const serviceIds = [...new Set(suggestions.map((s) => s.serviceId))];
+  const { data: svcRows } = await admin.from("services").select("id, last_auto_priced_at").in("id", serviceIds);
+  const lastPriced = new Map<string, string | null>(
+    (svcRows ?? []).map((s) => [s.id as string, (s.last_auto_priced_at as string) ?? null]),
+  );
+  const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString();
+
+  let applied = 0;
+  const changes: Array<{ label: string; service: string }> = [];
+  for (const s of suggestions) {
+    if (s.raisePct > settings.priceAutoapplyMaxPct) continue; // too big a jump for the machine to take alone
+    const last = lastPriced.get(s.serviceId) ?? null;
+    if (last != null && last >= cutoff) continue; // priced within the last 30 days — leave it be
+    // MENU-FOLLOWS-CREW GUARD: the suggestion is driven by a crew's card —
+    // if that card CHANGED in the last 30 days, a fresh hike may be the
+    // real cause, and auto-applying would let a crew drag the menu up
+    // behind their own raises (the loop the fill-in anchor kills for
+    // offers). Recent-card suggestions stay one-tap for a human.
+    if (s.drivenByVendorId) {
+      const { data: card } = await admin
+        .from("vendor_rates").select("updated_at")
+        .eq("vendor_id", s.drivenByVendorId).eq("service_id", s.serviceId)
+        .maybeSingle();
+      // No card or a card touched in the last 30 days (updated OR brand new —
+      // updated_at covers both; the history trigger misses inserts) → the
+      // rate isn't proven stable. Leave the suggestion one-tap for a human.
+      if (!card || (card.updated_at as string) >= cutoff) continue;
+    }
+    const res = await executeMenuUpdate(admin, { serviceId: s.serviceId, field: s.field, newValue: s.newValue });
+    if (!res.ok) continue; // cap re-check or a stale service row refused it — skip, never force
+    const nowIso = new Date().toISOString();
+    await admin.from("services").update({ last_auto_priced_at: nowIso }).eq("id", s.serviceId);
+    lastPriced.set(s.serviceId, nowIso); // in-run guard: a second lake's suggestion for this service tonight won't double-fire
+    applied++;
+    changes.push({ label: s.label, service: s.serviceName });
+  }
+  return { ok: true, applied, changes };
+}
+
+/**
+ * THE NIGHTLY DIGEST (Autonomy Ladder, 2026-07-23): the ONE email that
+ * carries everything the machine did or noticed tonight — humans read only
+ * what's non-empty, and a quiet night says so and nothing else.
+ * composeNightlyDigest is a pure HTML builder from an already-assembled
+ * `sections` object (easy to reason about, easy to test); sendNightlyDigest
+ * gathers the few live facts no other nightly runner already produced
+ * (currently-escalated disputes, lakes born in the last 24h, AI auto-replies
+ * sent), merges them with the results the nightly route already collected,
+ * and emails every ops user once.
+ */
+/** Gathers the live extras, composes, and sends ONE email per ops user.
+ *  `results` is whatever the nightly route already collected this run. */
+export async function sendNightlyDigest(results: {
+  learning: { changes: Array<{ service: string; from: number; to: number; samples: number }> };
+  autoPricing: { changes: Array<{ label: string; service: string }> };
+  disputeSweep: { fired: number; escalated: number; quietCloses?: number; reconciled?: number };
+  routes: { hoursBust?: number };
+  gapSla: { alerted: number };
+}): Promise<{ ok: boolean; sent: number }> {
+  const admin = createServiceClient();
+  const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString();
+
+  const { data: escalatedRows } = await admin
+    .from("disputes")
+    .select("customer_note, jobs!disputes_job_id_fkey(services(name))")
+    .eq("status", "escalated")
+    .order("opened_at", { ascending: true })
+    .limit(20);
+  const escalatedDisputes = (escalatedRows ?? []).map((d) => {
+    const job = one((d as { jobs?: unknown }).jobs) as { services?: unknown } | null;
+    const svcName = (one(job?.services) as { name?: string } | null)?.name ?? "a job";
+    return { service: svcName, note: ((d.customer_note as string) ?? "").slice(0, 140) };
+  });
+
+  const { data: bornRows } = await admin.from("lakes").select("name, source").gte("created_at", dayAgo);
+  const lakesBorn = (bornRows ?? []).map((l) => ({ name: l.name as string, source: (l.source as string) ?? "ops" }));
+
+  const { count: aiCount } = await admin
+    .from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("ai", true)
+    .gte("created_at", dayAgo);
+  const { data: aiRows } = await admin
+    .from("messages")
+    .select("body")
+    .eq("ai", true)
+    .gte("created_at", dayAgo)
+    .order("created_at", { ascending: false })
+    .limit(5);
+  const aiReplyTexts = (aiRows ?? []).map((m) => ((m.body as string) ?? "").slice(0, 200));
+
+  const sections: DigestSections = {
+    learning: results.learning,
+    autoPricing: results.autoPricing,
+    disputeSweep: results.disputeSweep,
+    escalatedDisputes,
+    lakesBorn,
+    routes: results.routes,
+    aiAutoReplies: aiCount ?? 0,
+    aiReplyTexts,
+    gapSla: results.gapSla,
+  };
+  const html = composeNightlyDigest(sections);
+
+  const { data: opsUsers } = await admin.from("users").select("email").eq("role", "ops").not("email", "is", null);
+  let sent = 0;
+  for (const u of opsUsers ?? []) {
+    const email = u.email as string | null;
+    if (!email) continue;
+    const res = await sendEmail({ to: email, subject: "LakeLife nightly — the machine's report", html });
+    if (res.ok) sent++;
+  }
+  return { ok: true, sent };
 }

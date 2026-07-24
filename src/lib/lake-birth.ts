@@ -1,7 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { slugify } from "@/lib/lake-pages";
-import { sendSms } from "@/lib/sms";
 import { normalizeLakeName } from "@/lib/lake-name";
 
 /**
@@ -83,17 +82,7 @@ export async function findOrCreateLake(
     return { ok: false, error: insErr?.message ?? "Couldn't add that lake just now." };
   }
 
-  // Ops FYI — an option to true up the dates, never a gate.
-  try {
-    const { data: opsUsers } = await admin
-      .from("users").select("phone").eq("role", "ops").not("phone", "is", null).limit(3);
-    for (const o of opsUsers ?? []) {
-      void sendSms(
-        o.phone as string,
-        `LakeLife: new lake born from a ${source} — ${name}. Season dates defaulted${donor ? " from your newest lake" : " to none"}; confirm ice-out/pull dates in Lake conditions when you can. 🌊`,
-      );
-    }
-  } catch { /* FYI is best effort */ }
+  // ops FYI rides the nightly digest — no per-birth SMS needed.
 
   return { ok: true, lakeId: born.id as string, lakeName: born.name as string, created: true };
 }

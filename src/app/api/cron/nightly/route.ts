@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
-import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, runFillInDigest, gapSlaAlerts, reconcileRefunds, learnServiceDurations } from "@/lib/automation";
+import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, runFillInDigest, gapSlaAlerts, reconcileRefunds, learnServiceDurations, autoApplyPriceSuggestions, sendNightlyDigest } from "@/lib/automation";
+import { sweepDisputeDeadlines } from "@/lib/disputes";
 
 export const dynamic = "force-dynamic";
 
@@ -52,9 +53,15 @@ async function run(req: Request) {
   const payoutBatch = await runReferralPayoutBatch();
   const monthlyPayouts = await runMonthlyPayoutBatches();
   const fillInDigest = await runFillInDigest();
+  // Autonomy Ladder (2026-07-23): silent-crew disputes fire their policy,
+  // margin_stranded prices within the dial apply themselves.
+  const disputeSweep = await sweepDisputeDeadlines();
+  const autoPricing = await autoApplyPriceSuggestions();
   const gapSla = await gapSlaAlerts();
   const nudges = await runNudges();
-  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, gapSla, nudges });
+  // THE nightly digest — always last, carries everything above to ops in one email.
+  const digest = await sendNightlyDigest({ learning, autoPricing, disputeSweep, routes, gapSla });
+  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, digest });
 }
 
 export const GET = run; // Vercel Cron issues GET

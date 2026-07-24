@@ -133,6 +133,41 @@ describe("planClawback — mode: reduce (loose payout, in-place reduction)", () 
   });
 });
 
+describe("planClawback — HELD rows (Make-It-Right hold) are still ours to reduce", () => {
+  it("partial reduction of a held payout keeps the remainder 'held' — the dispute owns its release", () => {
+    const p = payout({ amount: 59, status: "held", batchId: null });
+    expect(planClawback(20, p)).toEqual<ClawbackPlan>({
+      mode: "reduce",
+      payoutId: p.id,
+      newAmount: 39,
+      newStatus: "held",
+    });
+  });
+  it("a held payout drained to zero flips to 'clawed' — nothing left to hold", () => {
+    const p = payout({ amount: 59, status: "held", batchId: null });
+    expect(planClawback(59, p)).toEqual<ClawbackPlan>({
+      mode: "reduce",
+      payoutId: p.id,
+      newAmount: 0,
+      newStatus: "clawed",
+    });
+  });
+  it("a held payout too small drains AND adjusts — never an adjustment beside a surviving held row", () => {
+    const p = payout({ amount: 20, status: "held", batchId: null });
+    expect(planClawback(50, p)).toEqual<ClawbackPlan>({
+      mode: "reduce_and_adjust",
+      payoutId: p.id,
+      newAmount: 0,
+      newStatus: "clawed",
+      adjustmentAmount: -30,
+    });
+  });
+  it("a held row already inside a batch still falls back to adjust (batch owns it)", () => {
+    const p = payout({ amount: 100, status: "held", batchId: "batch-1" });
+    expect(planClawback(25, p)).toEqual<ClawbackPlan>({ mode: "adjust", adjustmentAmount: -25 });
+  });
+});
+
 describe("planClawback — mode: reduce_and_adjust (loose payout too small)", () => {
   it("drains the loose payout to 0 ('clawed') and adjusts for the remainder", () => {
     const p = payout({ amount: 20, status: "released", batchId: null });
