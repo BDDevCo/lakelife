@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { OpsShell } from "@/components/ops/OpsShell";
+import { JobSearch } from "@/components/ops/JobSearch";
 import { hasSupabaseEnv } from "@/lib/env";
 import {
   assertOps,
@@ -113,6 +114,8 @@ export default async function OpsPage() {
             </div>
           ))}
         </div>
+
+        <JobSearch />
 
         {escalations.length > 0 && (
           <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--gold, #d9a441)" }}>

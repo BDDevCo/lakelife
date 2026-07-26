@@ -1,6 +1,13 @@
+import Link from "next/link";
+
 /**
  * Lightweight month-at-a-glance of upcoming LakeLife visits. Pure render — no
  * actions, no libraries. "Today" is lake time (America/Indiana/Indianapolis).
+ *
+ * Every visit is a DOOR (job detail, 2026-07-26): the day chip and the
+ * "coming up" rows both link to /requests/[id], where the owner gets the
+ * photos, the invoice, the 👍/👎 and the comment thread for that job. A day
+ * with several visits links to the first — the rows below cover the rest.
  */
 
 const LAKE_TZ = "America/Indiana/Indianapolis";
@@ -81,11 +88,12 @@ export function UpcomingCalendar({ events }: { events: CalendarEvent[] }) {
                 {c.day}
               </div>
               {has && (
-                <div
+                <Link
+                  href={`/requests/${c.evts[0].id}`}
                   title={c.evts.map((e) => e.serviceName).join(" · ")}
                   style={{
                     display: "flex", alignItems: "center", gap: 3, justifyContent: "center",
-                    minWidth: 0, marginTop: 2,
+                    minWidth: 0, marginTop: 2, textDecoration: "none",
                   }}
                 >
                   <span
@@ -101,7 +109,7 @@ export function UpcomingCalendar({ events }: { events: CalendarEvent[] }) {
                     {c.evts[0].serviceName}
                     {c.evts.length > 1 ? ` +${c.evts.length - 1}` : ""}
                   </span>
-                </div>
+                </Link>
               )}
             </div>
           );
@@ -111,14 +119,22 @@ export function UpcomingCalendar({ events }: { events: CalendarEvent[] }) {
       {upcoming.length > 0 && (
         <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
           {upcoming.map((e) => (
-            <div key={e.id} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 13.5, padding: "3px 0", minWidth: 0 }}>
+            <Link
+              key={e.id}
+              href={`/requests/${e.id}`}
+              style={{
+                display: "flex", gap: 8, alignItems: "baseline", fontSize: 13.5, padding: "3px 0",
+                minWidth: 0, textDecoration: "none", color: "inherit",
+              }}
+            >
               <b style={{ flex: "0 0 auto" }}>{prettyDate(e.date)}</b>
               <span className="mut" aria-hidden>—</span>
               <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {e.serviceName}
                 {e.status === "in_progress" ? " (in progress)" : ""}
               </span>
-            </div>
+              <span className="mut" aria-hidden style={{ marginLeft: "auto", flex: "0 0 auto" }}>›</span>
+            </Link>
           ))}
         </div>
       )}

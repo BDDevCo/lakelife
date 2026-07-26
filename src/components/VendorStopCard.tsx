@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { navUrl } from "@/lib/navlink";
 import { uploadJobPhoto, completeJob, submitFlag, getJobPhotoUrls } from "@/app/vendor/actions";
@@ -85,7 +86,13 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ fontWeight: 800, fontSize: 15 }}>{stop.service_name ?? "Service"}</div>
+            {/* The stop's title is the way into its full job page. */}
+            <Link
+              href={`/vendor/jobs/${stop.id}`}
+              style={{ fontWeight: 800, fontSize: 15, color: "inherit", textDecoration: "none" }}
+            >
+              {stop.service_name ?? "Service"}
+            </Link>
             {truckLabel && <span className="ll-pill slate" style={{ fontSize: 11 }}>{truckLabel}</span>}
           </div>
           {stop.legs && stop.legs.length > 1 && (
@@ -109,8 +116,11 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
       </div>
 
       {done ? (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <span className="ll-pill ok">Done ✓ · payout released</span>
+          <Link href={`/vendor/jobs/${stop.id}`} className="ll-btn ghost sm" style={{ textDecoration: "none" }}>
+            Open job
+          </Link>
         </div>
       ) : (
         <>
@@ -141,6 +151,9 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
           />
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+            <Link href={`/vendor/jobs/${stop.id}`} className="ll-btn ghost sm" style={{ textDecoration: "none" }}>
+              Open job
+            </Link>
             <button className="ll-btn ghost sm" onClick={navigate}>Navigate ➤</button>
             <button className="ll-btn ghost sm" onClick={() => setFlagOpen(true)}>Flag item</button>
             <button className="ll-btn sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
@@ -169,7 +182,12 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
   );
 }
 
-function FlagModal({
+/**
+ * Exported so the crew's job page (VendorJobPanel) raises a flag through the
+ * exact same form the Today card uses — one wording, one sanitizer, one
+ * promise that nothing reprices until the owner approves (rule 6).
+ */
+export function FlagModal({
   address,
   onClose,
   onSubmit,

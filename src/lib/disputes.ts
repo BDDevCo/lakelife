@@ -1,7 +1,7 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getPlatformSettings } from "@/lib/settings";
-import { decideDisputeOutcome, respondByFrom } from "@/lib/dispute-policy";
+import { decideDisputeOutcome, respondByFrom, DISPUTE_ACCEPTABLE_STATUSES, DISPUTE_ESCALATABLE_STATUSES } from "@/lib/dispute-policy";
 import { executeRefund } from "@/lib/refund-core";
 import { refundableRemaining } from "@/lib/refunds";
 import { sendSms } from "@/lib/sms";
@@ -189,6 +189,11 @@ export async function crewChooseTalk(crewToken: string): Promise<{ ok: boolean; 
   if (job?.property_id && crewUserId) {
     await admin.from("messages").insert({
       property_id: job.property_id,
+      // Annotate the job (0046) so the customer's job page — which shows this
+      // job's conversation — actually contains the reply its own copy
+      // promises ("Your crew replied below"). Without this the crew's message
+      // lands only on the property board (review finding).
+      job_id: d.job_id,
       from_user: crewUserId,
       body: `About the ${svcName} — we saw your note and want to get this right. What would you like us to do? We can come back, or talk it through here.`,
     });
@@ -224,6 +229,51 @@ export async function customerStill(customerToken: string): Promise<{ ok: boolea
   if (!d) return { ok: false, error: "That link isn't valid anymore." };
   if (!["verifying", "talk", "fixing", "crew_review"].includes(d.status)) return { ok: false, error: "Already settled." };
   return firePolicy(d, "customer says still unresolved");
+}
+
+/**
+ * SESSION-AUTHORIZED doors to the two customer levers (job detail, 2026-07-26).
+ *
+ * customerResolved/customerStill are keyed by an unguessable customer_token
+ * because they were built for an SMS link. The in-portal job page needs the
+ * same two levers, but rendering that token into a page would be a real hole:
+ * a token is a bearer credential, and the dispute row also carries the CREW's
+ * token — ship either to a browser and one party can act as the other.
+ *
+ * So these resolve the token server-side from the job and never return it.
+ * AUTH IS STILL THE CALLER'S JOB: the portal action must prove the signed-in
+ * user owns the property behind this job BEFORE calling either of these.
+ */
+async function openDisputeTokenForJob(jobId: string, statuses: string[]): Promise<string | null> {
+  const admin = createServiceClient();
+  const { data } = await admin
+    .from("disputes")
+    .select("customer_token")
+    .eq("job_id", jobId)
+    .in("status", statuses)
+    .maybeSingle();
+  return (data?.customer_token as string) ?? null;
+}
+
+// The two status lists live in lib/dispute-policy.ts (pure + unit-tested):
+// accepting is allowed anytime, escalating only after the crew has had its
+// turn — the right-to-cure, enforced here rather than in the JSX.
+
+
+/** "That settles it" from the portal — same path as the SMS link. */
+export async function customerResolvedForJob(jobId: string): Promise<{ ok: boolean; error?: string }> {
+  const tok = await openDisputeTokenForJob(jobId, [...DISPUTE_ACCEPTABLE_STATUSES]);
+  if (!tok) return { ok: false, error: "There's nothing open on this job." };
+  return customerResolved(tok);
+}
+
+/** "Still not right" from the portal — fires the same policy engine. */
+export async function customerStillForJob(jobId: string): Promise<{ ok: boolean; error?: string; refunded?: boolean }> {
+  const tok = await openDisputeTokenForJob(jobId, [...DISPUTE_ESCALATABLE_STATUSES]);
+  if (!tok) {
+    return { ok: false, error: "Your crew is still working on this one — give them a chance to make it right, and you'll get a yes/no from us as soon as they respond." };
+  }
+  return customerStill(tok);
 }
 
 /** Correction visit's fresh 👍/👎 closes the loop. */

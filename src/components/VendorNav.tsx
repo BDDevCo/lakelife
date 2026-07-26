@@ -5,6 +5,10 @@ import { usePathname } from "next/navigation";
 
 const TABS = [
   { href: "/vendor", label: "Today" },
+  // Schedule sits next to Today on purpose: same work, wider lens. "/vendor"
+  // matches EXACTLY (see below), so this tab lights on /vendor/schedule
+  // without stealing Today's highlight.
+  { href: "/vendor/schedule", label: "Schedule" },
   { href: "/vendor/open", label: "Open jobs" },
   { href: "/vendor/availability", label: "Availability" },
   { href: "/vendor/rates", label: "Rates" },

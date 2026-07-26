@@ -13,8 +13,12 @@ export interface OpsSendResult {
  * Ops replies to an owner on a property's thread. The sender is recorded as the
  * ops user's id (from_user); the read side labels it "ops" because that id is
  * not the property's owner_id. Ops-only — assertOps gates it.
+ *
+ * `jobId` is optional and purely an annotation — passing it does NOT split the
+ * thread (the AI auto-reply rails and ops' thread grouping both key on the
+ * property), it just records which job the reply concerns.
  */
-export async function sendOpsMessage(propertyId: string, body: string): Promise<OpsSendResult> {
+export async function sendOpsMessage(propertyId: string, body: string, jobId?: string): Promise<OpsSendResult> {
   const ops = await assertOps();
   if (!ops) return { ok: false, error: "Operations only." };
 
@@ -34,6 +38,10 @@ export async function sendOpsMessage(propertyId: string, body: string): Promise<
     property_id: propertyId,
     from_user: ops.id,
     body: text,
+    // Optional job annotation (0046): a reply sent from a job's file stays
+    // on the ONE property thread but remembers what it was about, so both
+    // the job page and the board can show it in context.
+    ...(jobId ? { job_id: jobId } : {}),
   });
   if (error) return { ok: false, error: error.message };
   return { ok: true };

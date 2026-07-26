@@ -1,6 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { htmlPage } from "@/app/a/[token]/respond";
-import { resolveFromCorrection } from "@/lib/disputes";
+import { recordJobVerdict } from "@/lib/job-verdict";
 
 /**
  * Post-job quality check — 👍 ALL GOOD. GET is SAFE (renders a confirm button;
@@ -24,11 +24,8 @@ async function loadConf(token: string) {
   return data ?? null;
 }
 
-const jobOf = (c: { jobs?: unknown }): { correction_of?: string | null; services?: unknown } | null =>
-  (Array.isArray(c.jobs) ? c.jobs[0] : c.jobs) as { correction_of?: string | null; services?: unknown } | null;
-
 const svcName = (c: { jobs?: unknown }): string => {
-  const j = jobOf(c);
+  const j = (Array.isArray(c.jobs) ? c.jobs[0] : c.jobs) as { services?: unknown } | null;
   const s = (Array.isArray(j?.services) ? j?.services[0] : j?.services) as { name?: string } | null;
   return s?.name ?? "your service";
 };
@@ -51,19 +48,8 @@ export async function POST(_req: Request, ctx: { params: Promise<{ token: string
   const { token } = await ctx.params;
   const conf = await loadConf(token);
   if (!conf) return htmlPage("That link isn't right", "This link doesn't match anything. 🌊", false);
-  if (!conf.verdict) {
-    const admin = createServiceClient();
-    const { data: won } = await admin
-      .from("job_confirmations")
-      .update({ verdict: "good", responded_at: new Date().toISOString() })
-      .eq("id", conf.id)
-      .is("verdict", null) // one verdict, ever — first tap wins
-      .select("id");
-    if (won && won.length > 0 && jobOf(conf)?.correction_of) {
-      // Fresh 👍 on a CORRECTION visit — customer accepted the fix — close
-      // the loop: dispute resolves, held payout releases.
-      await resolveFromCorrection(conf.job_id, true);
-    }
-  }
+  // ONE implementation, two doors: this SMS link and the in-portal tap on the
+  // job page both run recordJobVerdict, so the consequences can never drift.
+  await recordJobVerdict(conf.id as string, "good", "");
   return htmlPage("Thanks — that's what we like to hear 🌊", "Your crew gets the credit. See you next time.");
 }

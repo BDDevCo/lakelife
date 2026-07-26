@@ -10,6 +10,7 @@
  */
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { ChoiceChips } from "@/components/wizard-controls";
 import { toast } from "@/components/Toast";
 import { loadOpsCalendarYear } from "@/app/ops/calendar-actions";
@@ -319,7 +320,14 @@ function DayPanel({
           {jobs.map((j) => {
             const m = statusMeta(j.status);
             return (
-              <div key={j.id} className="ll-card ll-card-pad" style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+              // Every row opens that job's full ops file — comments, photos,
+              // the whole money story, and the levers (owner ask, 2026-07-26).
+              <Link
+                key={j.id}
+                href={`/ops/jobs/${j.id}`}
+                className="ll-card ll-card-pad"
+                style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap", textDecoration: "none", color: "inherit" }}
+              >
                 <span aria-hidden style={{ width: 9, height: 9, borderRadius: 99, background: m.dot, marginTop: 5, flex: "0 0 auto" }} />
                 <div style={{ flex: 1, minWidth: 160 }}>
                   <div style={{ fontWeight: 800, fontSize: 14 }}>{j.service_name ?? "Service"}</div>
@@ -331,7 +339,7 @@ function DayPanel({
                   </div>
                 </div>
                 <span className="ll-pill" style={{ background: m.bg, color: m.fg }}>{m.label}</span>
-              </div>
+              </Link>
             );
           })}
         </div>

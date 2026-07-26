@@ -13,13 +13,13 @@ import { getScarcityOffers } from "@/app/requests/offer-data";
 import { getPackageBreakdowns, getStorageStatusCards, type PackageBreakdown, type StorageStatusCard } from "@/app/requests/package-data";
 import { todayLakeDate } from "@/lib/booking";
 import { createServiceClient } from "@/lib/supabase/server";
+import { customerStatusLabel } from "@/lib/job-view";
 
+// Pill COLOUR lives here; the WORDS come from customerStatusLabel
+// (src/lib/job-view, under test) so this table and the job-detail page can
+// never drift apart on what a status is called.
 const STATUS_PILL: Record<string, string> = {
   requested: "warn", scheduled: "teal", in_progress: "teal", complete: "ok", paid: "slate", cancelled: "slate",
-};
-const STATUS_LABEL: Record<string, string> = {
-  // A `requested` job is by definition still unassigned — say so honestly.
-  requested: "Finding a crew", scheduled: "Scheduled", in_progress: "In progress", complete: "Complete", paid: "Paid", cancelled: "Cancelled",
 };
 
 export default async function RequestsPage() {
@@ -147,14 +147,31 @@ export default async function RequestsPage() {
                       r.status === "requested" ||
                       (r.status === "scheduled" && (!r.date || r.date > todayLakeDate()));
                     const pkg = packageBreakdowns[r.id as string];
+                    const href = `/requests/${r.id}`;
                     return (
                       <tr key={r.id} style={{ borderTop: "1px solid var(--line)" }}>
-                        <Td>{pkg ? <PackageServiceCell name={r.service_name ?? "Service"} breakdown={pkg} /> : <b>{r.service_name ?? "Service"}</b>}</Td>
+                        {/* The service name is the door into the job's own file
+                            — photos, invoice, 👍/👎 and comments live there. */}
+                        <Td>
+                          <Link href={href} style={{ color: "inherit", textDecoration: "none", fontWeight: 800 }}>
+                            {r.service_name ?? "Service"}
+                          </Link>
+                          {pkg && <PackageBreakdownCell breakdown={pkg} />}
+                        </Td>
                         <Td muted>{r.frequency ?? "—"}</Td>
-                        <Td>{r.date ? new Date(r.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}</Td>
-                        <Td><span className={`ll-pill ${STATUS_PILL[r.status] ?? "slate"}`}>{STATUS_LABEL[r.status] ?? r.status}</span></Td>
+                        <Td>
+                          <Link href={href} style={{ color: "inherit", textDecoration: "none" }}>
+                            {r.date ? new Date(r.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                          </Link>
+                        </Td>
+                        <Td><span className={`ll-pill ${STATUS_PILL[r.status] ?? "slate"}`}>{customerStatusLabel(r.status as string)}</span></Td>
                         <Td right>{r.customer_price != null ? formatPrice(Number(r.customer_price)) : "—"}</Td>
-                        <Td right>{cancellable ? <CancelRequestButton jobId={r.id} serviceName={r.service_name ?? "this service"} /> : null}</Td>
+                        <Td right>
+                          <span style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                            <Link className="ll-btn ghost sm" href={href} style={{ minHeight: 44 }}>Open</Link>
+                            {cancellable ? <CancelRequestButton jobId={r.id} serviceName={r.service_name ?? "this service"} /> : null}
+                          </span>
+                        </Td>
                       </tr>
                     );
                   })}
@@ -178,15 +195,16 @@ export default async function RequestsPage() {
   );
 }
 
-// Package visits (storage/winterize): a small "🧊 package" pill next to the
+// Package visits (storage/winterize): a small "🧊 package" pill under the
 // service name, expandable to each fall leg + (when quoted) next spring's
 // preview. CUSTOMER prices only — breakdown is shaped server-side in
-// package-data.ts, which never selects job_items.vendor_cost.
-function PackageServiceCell({ name, breakdown }: { name: string; breakdown: PackageBreakdown }) {
+// package-data.ts, which never selects job_items.vendor_cost. The NAME is a
+// link to the job now, so the pill (not the name) owns the toggle.
+function PackageBreakdownCell({ breakdown }: { breakdown: PackageBreakdown }) {
   return (
     <details>
-      <summary style={{ cursor: "pointer", listStyle: "none" }}>
-        <b>{name}</b> <span className="ll-pill teal" style={{ marginLeft: 6 }}>🧊 package</span>
+      <summary style={{ cursor: "pointer", listStyle: "none", marginTop: 4 }}>
+        <span className="ll-pill teal">🧊 package</span>
       </summary>
       <div style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>
         {breakdown.legs.map((leg, i) => (

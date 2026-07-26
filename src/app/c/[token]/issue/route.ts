@@ -1,7 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { htmlPage, escapeHtml } from "@/app/a/[token]/respond";
-import { sendSms } from "@/lib/sms";
-import { openDisputeForJob, resolveFromCorrection } from "@/lib/disputes";
+import { recordJobVerdict } from "@/lib/job-verdict";
 
 /**
  * Post-job quality check — 👎 SOMETHING'S OFF. GET renders a small form
@@ -56,49 +55,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
     /* bare 👎 without a form still counts */
   }
 
-  const admin = createServiceClient();
-  const { data: won } = await admin
-    .from("job_confirmations")
-    .update({ verdict: "issue", note: note || null, responded_at: new Date().toISOString() })
-    .eq("id", conf.id)
-    .is("verdict", null) // one verdict, ever
-    .select("id");
-  if (!won || won.length === 0) return htmlPage("Thanks — got it ✓", "Your feedback is already in. 🌊");
-
-  const job = one(conf.jobs) as { date?: string; correction_of?: string | null; services?: unknown } | null;
-  const svc = (one(job?.services) as { name?: string } | null)?.name ?? "the service";
-  const prop = one(conf.properties) as { address?: string; nickname?: string; owner_id?: string } | null;
-  const where = prop?.nickname || prop?.address || "the property";
-
-  if (job?.correction_of) {
-    // A fresh 👎 on a CORRECTION visit — the dispute's own policy engine
-    // decides what happens next and owns all comms; no crew SMS from here.
-    await resolveFromCorrection(conf.job_id, false);
-  } else {
-    // ZERO-OPS routing: open the Make-It-Right dispute (holds the crew's
-    // pay) and hand the crew the cure-first ladder in one text.
-    const r = await openDisputeForJob(conf.job_id, note || null);
-    if (r.ok && r.crewLinks && conf.vendor_id) {
-      const { data: v } = await admin.from("vendors").select("user_id").eq("id", conf.vendor_id as string).maybeSingle();
-      if (v?.user_id) {
-        const { data: cu } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
-        if (cu?.phone) {
-          void sendSms(
-            cu.phone as string,
-            `LakeLife: the customer flagged the ${svc} at ${where}${note ? ` — "${note.slice(0, 120)}"` : ""}. Your pay for it is ON HOLD until this is settled. Make it right (free return visit): ${r.crewLinks.fix} · It was done right (send them your photos): ${r.crewLinks.verify} · Talk it through: ${r.crewLinks.talk}`,
-          );
-        }
-      }
-    }
-  }
-  // And the note lands on the property's Messages board (owner + ops can see).
-  if (conf.property_id) {
-    await admin.from("messages").insert({
-      property_id: conf.property_id,
-      from_user: prop?.owner_id ?? null,
-      body: `⚠️ Issue flagged on ${svc}${job?.date ? ` (${job.date})` : ""}: ${note || "no details left — crew has been notified"}`,
-    });
-  }
+  // ONE implementation, two doors: this SMS link and the in-portal tap on the
+  // job page both run recordJobVerdict — the guarded first-tap-wins flip, the
+  // Make-It-Right dispute (which holds the crew's pay and texts them their
+  // three cure links), and the annotated board post all live there.
+  const res = await recordJobVerdict(conf.id as string, "issue", note);
+  if (!res.recorded) return htmlPage("Thanks — got it ✓", "Your feedback is already in. 🌊");
 
   return htmlPage(
     "Flagged — your crew is on it 🌊",

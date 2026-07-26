@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { assignAndSchedule } from "@/app/ops/actions";
 import { toast } from "@/components/Toast";
@@ -125,7 +126,10 @@ function JobRow({
     <div className="ll-card ll-card-pad" style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
       <div style={{ flex: 1, minWidth: 200 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <span style={{ fontWeight: 800, fontSize: 15 }}>{job.service_name ?? "Service"}</span>
+          {/* The whole job file — comments, photos, money, levers — is one click away. */}
+          <Link href={`/ops/jobs/${job.id}`} style={{ fontWeight: 800, fontSize: 15, color: "inherit" }}>
+            {job.service_name ?? "Service"}
+          </Link>
           {isAuto && <span className="ll-pill teal" title="Placed by auto-dispatch">AUTO</span>}
           {preferred && <span className="ll-pill gold" title="Assigned crew is this property's preferred crew">⭐ preferred</span>}
         </div>
@@ -152,6 +156,9 @@ function JobRow({
       </div>
 
       <div style={{ width: "100%", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
+        <Link className="ll-btn ghost sm" href={`/ops/jobs/${job.id}`} style={{ marginRight: "auto" }}>
+          Open job file →
+        </Link>
         {isRequested ? (
           <button className="ll-btn ghost sm" onClick={onAssign} title="The machine keeps hunting on its own — sweeps, claim board, scarcity offers. Override only if you must.">Override (manual assign)</button>
         ) : job.status === "scheduled" ? (
