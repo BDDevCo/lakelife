@@ -20,7 +20,12 @@ update public.services set daily_capacity = case name
   when 'Housekeeping'                then 5
   when 'Spring opening'              then 3
   when 'Fall winterization'          then 3
-  else daily_capacity end;
+  else daily_capacity end
+where daily_capacity = 5; -- only rows still at the column default
+-- The `where` matters on a REPLAY: daily_capacity is a rule-8 dial an operator
+-- tunes from Ops, and an unguarded re-run would silently reset every named
+-- service to these canonical numbers. On a fresh rebuild every row is still 5,
+-- so the guard is a no-op there. (Rebuild verification, 2026-07-26.)
 
 -- ---------- remember the chosen frequency on a job ----------
 alter table public.jobs

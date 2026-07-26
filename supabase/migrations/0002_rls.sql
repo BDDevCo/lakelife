@@ -11,6 +11,14 @@
 -- ============================================================
 
 -- ---------- helper functions ----------
+-- NOTE (rebuild audit, 2026-07-26): every `create policy` below is now
+-- preceded by `drop policy if exists`, matching the convention every later
+-- migration already followed. Before this, 0002 was the ONE file in the set
+-- that could not be re-run — a second pass died on
+-- `policy "users_select" for table "users" already exists`, which is exactly
+-- the kind of thing that turns a recovery into an outage. Semantics on a
+-- fresh database are unchanged.
+
 create or replace function public.ll_is_ops()
 returns boolean
 language sql stable security definer set search_path = public
@@ -102,8 +110,10 @@ alter table public.notification_prefs  enable row level security;
 -- ============================================================
 --  USERS — see/update yourself; ops sees everyone
 -- ============================================================
+drop policy if exists users_select on public.users;
 create policy users_select on public.users for select
   using (id = auth.uid() or public.ll_is_ops());
+drop policy if exists users_update on public.users;
 create policy users_update on public.users for update
   using (id = auth.uid() or public.ll_is_ops());
 
@@ -112,46 +122,57 @@ create policy users_update on public.users for update
 --  Readable by owners and ops ONLY (vendors must not see prices).
 --  Only ops can edit.
 -- ============================================================
+drop policy if exists lakes_read on public.lakes;
 create policy lakes_read on public.lakes for select
   using (auth.uid() is not null);   -- season dates are not price data; all logged-in users may read
+drop policy if exists lakes_write on public.lakes;
 create policy lakes_write on public.lakes for all
   using (public.ll_is_ops()) with check (public.ll_is_ops());
 
+drop policy if exists services_read on public.services;
 create policy services_read on public.services for select
   using (public.ll_is_ops() or exists (
     select 1 from public.users u where u.id = auth.uid() and u.role = 'owner'
   ));  -- NOT vendors: services carry customer pricing
+drop policy if exists services_write on public.services;
 create policy services_write on public.services for all
   using (public.ll_is_ops()) with check (public.ll_is_ops());
 
 -- ============================================================
 --  PROPERTIES and everything hanging off them — owner owns, ops sees all
 -- ============================================================
+drop policy if exists properties_owner on public.properties;
 create policy properties_owner on public.properties for all
   using (owner_id = auth.uid() or public.ll_is_ops())
   with check (owner_id = auth.uid() or public.ll_is_ops());
 
 -- child tables keyed by property_id
+drop policy if exists profile_owner on public.property_profile;
 create policy profile_owner on public.property_profile for all
   using (exists (select 1 from public.properties p where p.id = property_id and (p.owner_id = auth.uid() or public.ll_is_ops())))
   with check (exists (select 1 from public.properties p where p.id = property_id and (p.owner_id = auth.uid() or public.ll_is_ops())));
 
+drop policy if exists boats_owner on public.boats;
 create policy boats_owner on public.boats for all
   using (exists (select 1 from public.properties p where p.id = property_id and (p.owner_id = auth.uid() or public.ll_is_ops())))
   with check (exists (select 1 from public.properties p where p.id = property_id and (p.owner_id = auth.uid() or public.ll_is_ops())));
 
+drop policy if exists toys_owner on public.toys;
 create policy toys_owner on public.toys for all
   using (exists (select 1 from public.properties p where p.id = property_id and (p.owner_id = auth.uid() or public.ll_is_ops())))
   with check (exists (select 1 from public.properties p where p.id = property_id and (p.owner_id = auth.uid() or public.ll_is_ops())));
 
+drop policy if exists photos_owner on public.profile_photos;
 create policy photos_owner on public.profile_photos for all
   using (exists (select 1 from public.properties p where p.id = property_id and (p.owner_id = auth.uid() or public.ll_is_ops())))
   with check (exists (select 1 from public.properties p where p.id = property_id and (p.owner_id = auth.uid() or public.ll_is_ops())));
 
+drop policy if exists messages_owner on public.messages;
 create policy messages_owner on public.messages for all
   using (exists (select 1 from public.properties p where p.id = property_id and (p.owner_id = auth.uid() or public.ll_is_ops())))
   with check (exists (select 1 from public.properties p where p.id = property_id and (p.owner_id = auth.uid() or public.ll_is_ops())));
 
+drop policy if exists notif_self on public.notification_prefs;
 create policy notif_self on public.notification_prefs for all
   using (user_id = auth.uid() or public.ll_is_ops())
   with check (user_id = auth.uid() or public.ll_is_ops());
@@ -159,13 +180,17 @@ create policy notif_self on public.notification_prefs for all
 -- ============================================================
 --  VENDORS — a vendor sees only their own row; ops sees all
 -- ============================================================
+drop policy if exists vendors_self on public.vendors;
 create policy vendors_self on public.vendors for select
   using (user_id = auth.uid() or public.ll_is_ops());
+drop policy if exists vendors_ops_write on public.vendors;
 create policy vendors_ops_write on public.vendors for all
   using (public.ll_is_ops()) with check (public.ll_is_ops());
+drop policy if exists vendor_updates_self on public.vendors;
 create policy vendor_updates_self on public.vendors for update
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 
+drop policy if exists avail_vendor on public.vendor_availability;
 create policy avail_vendor on public.vendor_availability for all
   using (vendor_id = public.ll_my_vendor_id() or public.ll_is_ops())
   with check (vendor_id = public.ll_my_vendor_id() or public.ll_is_ops());
@@ -175,9 +200,11 @@ create policy avail_vendor on public.vendor_availability for all
 --  Base tables are OPS-ONLY. Owners and vendors read through
 --  purpose-built views that omit the columns they must not see.
 -- ============================================================
+drop policy if exists jobs_ops on public.jobs;
 create policy jobs_ops on public.jobs for all
   using (public.ll_is_ops()) with check (public.ll_is_ops());
 
+drop policy if exists jobphotos_access on public.job_photos;
 create policy jobphotos_access on public.job_photos for all
   using (public.ll_is_ops()
     or exists (select 1 from public.jobs j where j.id = job_id and j.vendor_id = public.ll_my_vendor_id())
@@ -186,11 +213,14 @@ create policy jobphotos_access on public.job_photos for all
   with check (public.ll_is_ops()
     or exists (select 1 from public.jobs j where j.id = job_id and j.vendor_id = public.ll_my_vendor_id()));
 
+drop policy if exists routes_access on public.routes;
 create policy routes_access on public.routes for select
   using (vendor_id = public.ll_my_vendor_id() or public.ll_is_ops());
+drop policy if exists routes_ops_write on public.routes;
 create policy routes_ops_write on public.routes for all
   using (public.ll_is_ops()) with check (public.ll_is_ops());
 
+drop policy if exists flags_access on public.flags;
 create policy flags_access on public.flags for all
   using (public.ll_is_ops()
     or vendor_id = public.ll_my_vendor_id()
@@ -198,19 +228,24 @@ create policy flags_access on public.flags for all
                where j.id = job_id and p.owner_id = auth.uid()))
   with check (public.ll_is_ops() or vendor_id = public.ll_my_vendor_id());
 
+drop policy if exists invoices_access on public.invoices;
 create policy invoices_access on public.invoices for select
   using (public.ll_is_ops()
     or exists (select 1 from public.properties p where p.id = property_id and p.owner_id = auth.uid()));
+drop policy if exists invoices_ops_write on public.invoices;
 create policy invoices_ops_write on public.invoices for all
   using (public.ll_is_ops()) with check (public.ll_is_ops());
 
+drop policy if exists payments_ops on public.payments;
 create policy payments_ops on public.payments for all
   using (public.ll_is_ops()) with check (public.ll_is_ops());
 
 -- Vendors may read their own payout STATUS, but payouts carry no
 -- customer price, so a row read is fine; ops manages everything.
+drop policy if exists payouts_access on public.payouts;
 create policy payouts_access on public.payouts for select
   using (vendor_id = public.ll_my_vendor_id() or public.ll_is_ops());
+drop policy if exists payouts_ops_write on public.payouts;
 create policy payouts_ops_write on public.payouts for all
   using (public.ll_is_ops()) with check (public.ll_is_ops());
 
@@ -222,7 +257,14 @@ create policy payouts_ops_write on public.payouts for all
 
 -- Owners: their jobs WITH the single all-in customer price,
 -- but WITHOUT vendor_cost or margin.
-create or replace view public.owner_jobs
+-- drop-then-create, not `create or replace`: 0008 and 0010 later REDEFINE both
+-- of these views with different column sets, and `create or replace view`
+-- cannot change a view's columns ("cannot change name of view column ..."). On
+-- a replay this file is reached second and would die here — the exact moment,
+-- during a disaster recovery, when you can least afford to debug SQL.
+-- (Rebuild verification, 2026-07-26.)
+drop view if exists public.owner_jobs;
+create view public.owner_jobs
 with (security_invoker = off) as
   select j.id, j.property_id, j.service_id, j.vendor_id, j.date, j.slot,
          j.status, j.customer_price, j.route_id, j.sequence, j.created_at
@@ -231,7 +273,8 @@ with (security_invoker = off) as
   where p.owner_id = auth.uid();
 
 -- Vendors: their assigned jobs with NO pricing at all.
-create or replace view public.vendor_jobs
+drop view if exists public.vendor_jobs;
+create view public.vendor_jobs
 with (security_invoker = off) as
   select j.id, j.property_id, j.service_id, j.vendor_id, j.date, j.slot,
          j.status, j.route_id, j.sequence, j.created_at
