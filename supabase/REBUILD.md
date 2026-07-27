@@ -32,22 +32,37 @@ broken database**. Worth understanding, because the failure mode is silent:
 
 `0047` folds the seeds in and re-issues those three backfills after them.
 
-## The production history needs one repair
+## The production history — repaired 2026-07-27, and proven
 
-Migrations `0001`–`0017` were applied by hand in the SQL Editor before the CLI
-was wired up, so **Supabase does not know they ran**. Everything works today,
-but any tool that replays history — a branch, a clone, a restore — starts at
-`0018`, which immediately calls a function created back in `0002`, and dies.
-That is exactly how the audit's first branch build failed.
+This is done. Recorded here because the shape of the problem is worth
+remembering.
 
-Register them once, against production:
+A branch, clone or restore replays the SQL stored in
+`supabase_migrations.schema_migrations.statements` — **not** the files in this
+repo. Two things were wrong:
 
-```bash
-supabase migration repair --status applied 0001 0002 0003 0004 0005 0006 0007 0008 0009 0010 0011 0012 0013 0014 0015 0016 0017
-```
+1. **Migrations `0001`–`0021` were never recorded.** They were applied by hand
+   before the CLI existed, so any replay started at `0022`, immediately called
+   a function created back in `0002`, and died. They are now registered *with
+   their actual file contents* (a bare version number would have fixed
+   nothing — there would have been no SQL to replay).
+2. **24 recorded migrations had drifted from their repo files.** The one that
+   proved it: `0041_fill_in_rates`'s stored copy was missing its dial inserts,
+   so a rebuild came up with 29 of 34 dials and no fill-in pricing at all. All
+   24 were rewritten to match this repo byte-for-byte.
 
-This only writes to Supabase's migration bookkeeping table. It does not touch
-your data or re-run anything.
+Three rows are deliberately left as they are — `0043b`, `0043c` and
+`one_invoice_per_job` have no repo file, because their DDL was later folded
+into `0043` and `0046`. Their recorded SQL is the only record of what ran, and
+they replay harmlessly after the folded files since everything is
+`if not exists`-guarded.
+
+**Verified by building a branch from production's history**: status
+`FUNCTIONS_DEPLOYED`, 34 dials, 3 lakes with slugs, 20 services / 10 active,
+43 tables, both buckets private, both price-safe views resolving.
+
+If you ever apply SQL to production by hand again, apply it as a migration
+instead — that drift is invisible until the day you need to recover.
 
 ## Two things that still live outside SQL
 
