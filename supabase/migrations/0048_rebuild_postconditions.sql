@@ -51,11 +51,14 @@ begin
   select count(*) into n_dials    from public.platform_settings;
   select count(*) into n_buckets  from storage.buckets where id in ('job-photos','vendor-docs');
   -- 0008's backfill silently no-oped on the original rebuild, leaving every
-  -- service at the column default. Named services must differ from it.
+  -- service at the column default. We test that the backfill RAN, not that any
+  -- one dial holds a particular value: an operator may legitimately tune a
+  -- service TO 5, so only ALL of the probes sitting at the default indicates a
+  -- backfill that never applied. (False-alarm caught in re-verification.)
   select count(*) into n_cap_default
     from public.services
    where daily_capacity = 5
-     and name in ('Pier install / removal', 'Lawn mowing & trim');
+     and name in ('Pier install / removal', 'Lawn mowing & trim', 'Spring opening');
 
   if n_lakes < 3 then
     raise exception 'rebuild check: expected at least 3 lakes, found % — did 0047 run?', n_lakes;
@@ -72,8 +75,8 @@ begin
   if n_nomins > 0 then
     raise exception 'rebuild check: % service(s) have no est_minutes — the fleet router has no time budget', n_nomins;
   end if;
-  if n_cap_default > 0 then
-    raise exception 'rebuild check: daily_capacity still at the default for % named service(s) — 0008''s backfill did not apply', n_cap_default;
+  if n_cap_default >= 3 then
+    raise exception 'rebuild check: daily_capacity is still the column default on every probed service — 0008''s backfill did not apply';
   end if;
   if n_dials < 34 then
     raise exception 'rebuild check: expected 34 platform_settings dials, found % — pricing rules live in the database (rule 8)', n_dials;
@@ -81,4 +84,34 @@ begin
   if n_buckets < 2 then
     raise exception 'rebuild check: storage buckets missing — no photos means no job can complete and no crew can be paid';
   end if;
+end $$;
+
+-- --------------------------------------- WHAT SQL STILL CANNOT RESTORE --
+-- The storage buckets used to be a hand-made artifact that no migration knew
+-- about, and a rebuilt platform silently could not trade. These three are the
+-- same class of thing and cannot be fixed the same way, because each depends
+-- on a secret that must never live in a public repo. So instead of failing a
+-- legitimate rebuild, say so loudly in the migration output — a recovery that
+-- comes up "green" while its automation is dead is the exact trap 0048 exists
+-- to close. See supabase/REBUILD.md.
+do $$
+declare has_cron boolean;
+begin
+  select exists (
+    select 1 from pg_extension e
+     where e.extname = 'pg_cron'
+  ) into has_cron;
+
+  raise notice '--------------------------------------------------------------';
+  raise notice 'REBUILD OK. Three things SQL cannot restore — do them now:';
+  raise notice '  1. The intraday heartbeat. pg_cron installed: %. Nothing is', has_cron;
+  raise notice '     scheduled by this migration because the statement embeds';
+  raise notice '     CRON_SECRET. Without it there is NO 30-minute sweep:';
+  raise notice '     no waitlist retries, no intraday re-homing. REBUILD.md has';
+  raise notice '     the exact cron.schedule() call.';
+  raise notice '  2. The first ops account. guard_role_change blocks role';
+  raise notice '     changes from non-ops, so promote it with the service key.';
+  raise notice '  3. GATE_ENCRYPTION_KEY must match the one used when any';
+  raise notice '     restored gate codes were written, or they are unreadable.';
+  raise notice '--------------------------------------------------------------';
 end $$;

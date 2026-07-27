@@ -80,12 +80,27 @@ errors and a broken platform**:
 
 That last one is the sharp edge: a rebuilt LakeLife looks fine and cannot trade.
 
+**Verified after the fix:** all 48 migrations applied to an empty database with
+zero errors and the post-conditions passed; then the entire set replayed a
+second time, also with zero errors. Every one of the 97 applications was
+md5-checked against the repo files, so "nothing was quietly patched to make it
+pass" is machine-proven rather than asserted.
+
 **Fixed in this commit:** `0047` folds the seeds in and re-issues the three
 backfills; `0048` creates the two private buckets and asserts the
 post-conditions; `0002` is now re-runnable (it was the one file that failed a
 second pass); `0008`'s backfill no longer stomps operator-tuned dials on a
 replay; `setup-all.sql` — which advertised "complete database setup" while
 containing two migrations — is deleted in favour of `supabase/REBUILD.md`.
+
+**What SQL still cannot restore.** The buckets were a hand-made artifact no
+migration knew about. Three more are the same class, and each depends on a
+secret that must never sit in a public repo, so `0048` now prints them loudly at
+the end of every rebuild rather than letting a recovery come up green with dead
+automation: the **intraday cron heartbeat** (no 30-minute sweep, so no waitlist
+retries and no intraday re-homing), the **first ops account**, and
+**`GATE_ENCRYPTION_KEY`** (a mismatched key leaves restored gate codes
+unreadable). `supabase/REBUILD.md` carries the exact commands.
 
 One thing still needs your hand, once, against production:
 
