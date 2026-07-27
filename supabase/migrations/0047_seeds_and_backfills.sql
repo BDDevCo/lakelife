@@ -33,17 +33,22 @@ insert into public.lakes (name, ice_out_actual, hard_freeze_est, pull_deadline) 
   ('Big Long Lake',   date '2026-03-21', date '2026-11-22', date '2026-11-14'),
   ('Pretty Lake',     date '2026-03-24', date '2026-11-20', date '2026-11-12'),
   ('Big Turkey Lake', date '2026-03-19', date '2026-11-24', date '2026-11-16')
-on conflict (name) do update
-  set ice_out_actual  = excluded.ice_out_actual,
-      hard_freeze_est = excluded.hard_freeze_est,
-      pull_deadline   = excluded.pull_deadline;
+-- SEED ONLY — never stomp. Ice-out and freeze dates are re-entered by an
+-- operator every spring; an upsert here would silently reset a live lake's
+-- season on any replay. A rebuild has no lakes, so the insert still does its
+-- job. (Audit follow-up: this file must be safe to run against production.)
+on conflict (name) do nothing;
 
 -- Sanity check: pull deadline must equal freeze minus 8 days.
 do $$
 declare bad int;
 begin
+  -- Scoped to the seeded lakes on purpose: a demand-born lake or an operator
+  -- edit that violates rule 7 is a real problem, but it must not be able to
+  -- block a disaster-recovery replay of this file.
   select count(*) into bad from public.lakes
-   where pull_deadline <> hard_freeze_est - 8;
+   where name in ('Big Long Lake', 'Pretty Lake', 'Big Turkey Lake')
+     and pull_deadline <> hard_freeze_est - 8;
   if bad > 0 then
     raise exception 'Pull deadline rule broken on % lake(s)', bad;
   end if;
@@ -99,15 +104,12 @@ values
   ('Housekeeping', 'per_sqft_band', 0, 0,
    array['Weekly','Every 2 weeks','Before each arrival'], 2, false,
    '{"tiers":[{"max":1800,"price":80},{"max":2800,"price":95},{"max":null,"price":120}]}'::jsonb, true)
-on conflict (name) do update set
-  pricing_model     = excluded.pricing_model,
-  base              = excluded.base,
-  unit_rate         = excluded.unit_rate,
-  frequency_options = excluded.frequency_options,
-  min_photos        = excluded.min_photos,
-  is_water_work     = excluded.is_water_work,
-  band_pricing      = excluded.band_pricing,
-  active            = excluded.active;
+-- SEED ONLY — never stomp. RULE 8: all pricing lives in this table and the
+-- owner tunes it from Ops (and the nightly auto-pricing moves it too). An
+-- upsert would reset every price, band, photo minimum and the storage launch
+-- switch to these starting values on any replay. Seeding a fresh database is
+-- this file's job; re-pricing a live one is not.
+on conflict (name) do nothing;
 
 -- ------------------------------------------- BACKFILLS, RE-ISSUED IN ORDER --
 -- These three ran in 0008 / 0031 / 0042 against an empty table on a rebuild.
