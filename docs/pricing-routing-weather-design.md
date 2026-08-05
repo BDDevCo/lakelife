@@ -629,3 +629,109 @@ and nobody told anyone."
   which is also what the agreement already says: **adopted**.
 - Weather starts as a crew-triggered flag plus customer comms, not an
   auto-rescheduler: **adopted**.
+
+---
+
+## 1e. Launch strategy — simple now, monetise later. Mostly right, with two edits.
+
+**The owner's plan:** *"Start super simple knowing we can add on features later
+(but build the features now)… get people hooked then pop something in like
+'ready for next season exclusive offering'… something to keep increasing
+billing revenue after we get them using the platform."*
+
+Land-and-expand is the correct playbook for a two-sided marketplace with no
+liquidity. Two things in the phrasing need changing, and one number should
+probably change the launch plan itself. Model: `docs/launch_model.py`.
+
+### Edit 1: "build the features now" — build the DATA now, not the machinery
+
+This is the one to push back on, because the audit just demonstrated the cost.
+The storage product is fully built and switched off, and the simulation found
+phantom pricing, an impossible calendar date that grants a free year of storage,
+and booking rules keyed to a display name — all in code that has never carried a
+real customer. **Dormant code doesn't stay correct. It drifts from reality while
+nobody is watching, and it is broken on the day you switch it on.**
+
+A membership billing system built now and turned on in eighteen months will be
+wrong in exactly the same way, except the failure mode is mischarging customers.
+
+The distinction that matters:
+
+| Build NOW (cheap, and impossible to retrofit) | Build LATER (expensive, and safe to defer) |
+|---|---|
+| **Per-customer, per-season spend history** — tier eligibility is meaningless without it, and you cannot recreate last season's data | Subscription billing, auto-renewal, dunning, cancellation flows |
+| **Crew volume and reliability history** — same reason, for crew-side offers | Paid-tier gating and entitlement checks |
+| **ToS language that contemplates future paid tiers** — otherwise you re-paper every customer | Exclusivity contracts and capacity commitments |
+| **A read-only "here's what you'd unlock" surface** — free, and it teaches the upsell | Anything that takes payment |
+
+The rule: **anything that RECORDS is cheap and must happen now. Anything that
+CHARGES can wait, and is safer waiting.**
+
+### Edit 2: "get people hooked then pop something in" — only ever ADD
+
+There is a version of this that builds trust and a version that burns it, and
+they look identical on a roadmap.
+
+- **Fine:** a genuinely new capability arrives and is paid. "Year-round property
+  watch is new this season — here's what it costs."
+- **Not fine:** something a customer already has quietly moves behind a paywall.
+  "Priority scheduling now requires membership."
+
+The second is churn, complaints on a lake where everyone talks, and in several
+states a material-change-of-terms problem. **Grandfather everything.** Whatever
+a customer has on day one, they keep for as long as they stay. New money comes
+from new value only. This costs nothing and removes the entire risk.
+
+### The number that should change the launch plan
+
+**Platform costs are not the constraint.** All-in infrastructure is roughly
+**$135/month — $1,620/year**. That is covered by *eight* lawn-only customers, or
+**one** whole-house customer. Ramping "to cover costs" is a bar you clear almost
+immediately.
+
+The real constraint is giving a **crew** a reason to show up:
+
+| Lawn customers on ONE lake | Full crew-days per week |
+|---|---|
+| 8 | 0.5 |
+| **16** | **1.0** |
+| 32 | 2.0 |
+| 64 | 4.0 (a crew's whole week) |
+
+And the same customers, deployed two ways:
+
+| | Stops per day | Crew nets |
+|---|---|---|
+| 24 customers spread over 3 lakes | 4 | $34/hr |
+| **24 customers concentrated on 1 lake** | **8** | **$41/hr** |
+
+Identical customer count. One is a business for a crew; the other is a favour
+they will stop doing.
+
+**So the launch strategy is not "sign up as many customers as possible."** It is
+**"reach ~16 customers on ONE lake before opening the second."** Density is what
+retains crews, crew retention is what fills jobs, and filled jobs are the only
+thing customers actually experience. Spreading thin across three lakes to look
+bigger is the fastest way to lose the crews who make it work — and the audit
+already showed where that ends: 14 of 34 crews idle, 20% of demand unserved.
+
+### What "exclusivity" should mean on each side
+
+- **Customer exclusivity** is a capacity promise. Sell too much of it and you
+  cannot honour it. Cap it per lake per service against actual crew hours.
+- **Crew exclusivity** — first refusal on a lake — is genuinely valuable to a
+  crew and genuinely dangerous to the marketplace: it is the concentration
+  problem as a product. If offered, bound it: exclusive only while they serve
+  the demand, with automatic release when they can't.
+
+### The launch shape
+
+1. **One lake. À la carte. One price. No fees, no tiers, no membership UI.**
+   The customer-facing product is already this simple — the complexity is all
+   internal, where it belongs.
+2. **Record everything** — spend by season, crew volume, reliability.
+3. **Reach ~16-20 customers there**, so a crew gets a real day, before opening
+   lake two.
+4. **Then** switch on earned tiers (free, already-earned, no billing).
+5. **Later still**, and only when there is a genuinely new service worth paying
+   for, introduce the first paid thing — added, never taken away.
