@@ -80,79 +80,121 @@ cost, and thin lakes can be tuned rather than abandoned.
 
 ---
 
-## 1c. A customer-side management fee — the strongest idea on this list
+## 1c. A customer-side management fee — modelled, and the answer changed
 
 **The owner's proposal:** *"I think we should have the customer take some of the
-burden for providing a LakeLife management for all the services they need for
-their house before, during and after lake season."*
+burden for providing a LakeLife management for all the services they need."*
 
-This is worth taking seriously as a business-model change, not a feature.
+**And the constraint that decides it:** *"I don't want to turn off some lady
+that just wants her lawn mowed 2x a month because that could add up."*
 
-### Why it fits this business unusually well
+That constraint is right, and modelling it changed my recommendation. The
+working model is committed alongside this doc (`docs/membership_model.py`,
+`docs/membership_model2.py`) so the numbers can be re-run with real inputs.
+Prices are production's real menu; the customer mix is an estimate of a lake
+community and is the assumption most worth arguing with.
 
-1. **It matches what customers are actually buying.** These are mostly second
-   homes. The product is not "a mown lawn" — it is *not having to think about a
-   house you are not at*. That is a membership, and it has been mispriced as a
-   series of transactions.
-2. **It unsticks the margin floor.** Margin is currently trapped inside each
-   job's spread, which is precisely what creates the audit's largest ops
-   workload: 348 jobs per 1,000 customers where no crew clears 30%. Move part of
-   the margin into a membership and the per-job floor can come *down* — which
-   means **more crews qualify, more jobs fill, and the biggest source of human
-   work shrinks by construction.** The fee and the floor problem are the same
-   conversation.
-3. **It fixes the price-raise problem.** A membership renews annually, which is
-   an expected, announced moment. Adjusting it is normal. Silently raising a
-   recurring customer's mow price is not.
-4. **It is worth more on exit.** A book of renewing memberships with retention
-   data is an asset. A flow of jobs is a business. For a platform being built to
-   sell, this is the single highest-leverage structural change available.
+### Where the money actually is
 
-### The arithmetic, and an honest caveat about it
+| Archetype | Customers | Season spend | Share of book |
+|---|---|---|---|
+| Just the lawn, 2×/month | 260 | $650 | 4.7% |
+| Lawn weekly, small lot | 140 | $1,300 | 5.0% |
+| Lawn + clean before visits | 120 | $2,460 | 8.2% |
+| Open/close + lawn | 160 | $2,615 | 11.6% |
+| Pier family | 160 | $4,621 | 20.5% |
+| Whole house + boat storage | 110 | $10,413 | 31.7% |
+| Estate, everything | 50 | $13,307 | 18.4% |
 
-From the two-season simulation: ~$995 of service spend per customer per season
-at 35.5% blended margin ≈ **$353 of margin per customer per season**.
+**The top 16% of customers are half the book. The lawn-only quarter is 4.7%.**
 
-Illustratively, a **$250/season membership plus a reduced ~20% embedded floor**:
+### Why a flat fee is out
 
-| | Today | With membership |
+A $250 flat membership is **38% of the lawn-only customer's entire annual
+spend**. At $250, 40% of customers would be paying more than 15% of everything
+they spend just for the privilege. The owner's instinct wasn't cautious, it was
+correct — a flat fee taxes the customers who receive the least coordination,
+because a single recurring service has almost nothing to coordinate.
+
+### Why a DISCOUNT membership is also out — adverse selection
+
+This is the finding that changed my mind, and it invalidates the optimistic
+table I showed in the previous round.
+
+A membership that buys cheaper prices is **only ever bought by the customers it
+loses money on.** Nobody joins unless their discount exceeds the fee — so by
+construction every joiner costs more in discount than they pay in fee, and the
+fee just claws part of it back.
+
+| Design | Who joins | Margin change |
 |---|---|---|
-| Membership | — | $250 |
-| Embedded margin | $353 (35.5%) | ~$199 (20%) |
-| **Total per customer/season** | **$353** | **~$449** |
-| Predictable? | No | $250 of it, yes |
-| Crews clearing the floor | fewer | **many more** |
+| $250 fee, 8% off | 320 | **+1.7%** |
+| $400 fee, 8% off | 160 | **+1.9%** |
+| $250 fee, 5% off | 160 | **+1.2%** |
 
-**Caveat, stated plainly:** those per-customer numbers come from a simulation I
-constructed, not from real customers. Treat the *shape* of the argument as
-sound and every specific number as a placeholder awaiting the owner's real-world
-judgement. The structural point — that moving margin out of the job spread
-lowers the floor and fills more jobs — holds regardless of the numbers.
+One to two percent, in exchange for a subscription product, auto-renewal law,
+and a new billing surface. **Not worth building.**
 
-### What has to be decided, and the traps
+The rule, if it's ever revisited: a discounting membership only pays when
+`fee > discount % × that customer's season spend`. At 8% off, a $250 fee stops
+paying for itself above $3,125 of spend — which is precisely the customer most
+motivated to join.
 
-- **Replace, don't stack.** If a customer pays a membership *and* the same
-  marked-up job price, and ever learns what the crew was paid, it reads as two
-  bites. The membership should buy down the embedded margin, not sit on top of
-  it.
-- **Cold start.** Nobody pays a fee to a platform they have never used. Either
-  make it optional with non-member pricing higher (the Costco model), waive the
-  first season, or have it auto-apply once spend crosses the point where it pays
-  for itself.
-- **It must contain something.** Priority dates, no rush surcharge, a guaranteed
-  preferred crew, storage discount, one thread with someone who knows the house
-  — and the genuinely membership-shaped one: **off-season checks**, a drive-by
-  after a storm. That is a service that cannot be sold per-transaction.
-- **Annual or per-season, not monthly.** These are seasonal homes; a monthly
-  charge for a house nobody visits in January feels like a subscription trap.
-- **A real legal item.** Auto-renewing consumer subscriptions carry specific
-  disclosure and cancellation requirements in several states, and the current
-  counsel draft does not cover a recurring membership at all. This must go to
-  the attorney *with* the ToS, not after. On the positive side, charging an
-  explicit administration fee **strengthens** the third-party-administrator
-  posture in §3 rather than weakening it.
+### What does work: sell ACCESS, not a discount
 
----
+Keep every menu price exactly as it is. The membership buys things that cost
+LakeLife little and are worth a lot to someone who isn't at the house:
+
+- priority on the calendar,
+- a guaranteed preferred crew,
+- no same-day rush surcharge,
+- **off-season checks — a drive-by after a storm, photos in the app.** This is
+  the genuinely membership-shaped service: it cannot be sold per-transaction and
+  it is exactly what an absentee owner lies awake about.
+
+Because no prices move, **every dollar of fee is margin**:
+
+| Fee | Take-up among the 600 higher-spend customers | Margin change |
+|---|---|---|
+| $250 | 20% (120 members) | +2.8% |
+| $250 | 35% (210 members) | **+4.8%** |
+| $250 | 50% (300 members) | **+6.9%** |
+| $400 | 35% (210 members) | **+7.7%** |
+
+And unlike the discount design, this revenue is recurring, predictable, and the
+kind a buyer pays a real multiple for.
+
+### The answer to the owner's actual question
+
+**Per-service stays the default, for everybody.** The lawn-only customer is
+never shown a fee and nothing about her experience changes. She is 4.7% of
+revenue but a large share of the neighbourhood conversation on a small lake, and
+the referral engine runs on exactly that.
+
+**One optional membership, not tiers.** Tiering by services requested creates a
+mid-season upgrade conversation ("you've added a pier, you owe us more"), which
+is an ops touchpoint we are trying to delete, and it punishes the one behaviour
+we most want to encourage. A single opt-in membership self-selects to the right
+customers with none of that machinery — and the app can show each customer their
+own break-even honestly.
+
+**Add season-pass bundles as the middle product.** "Opening + closing + 20 mows,
+one price, booked once" reuses the `service_packages` machinery that already
+exists for storage, locks in volume, gives the mid-market customer one decision
+instead of twenty, and carries **no subscription or auto-renewal law at all**.
+For the $2,600 open/close+lawn customer this is a better fit than a membership
+in every respect.
+
+So: three products, matched to three real segments — à la carte for the small
+customer, a season pass for the middle, a membership for the top third who are
+half the revenue.
+
+### Still to decide
+
+- The membership price, and take-up worth assuming.
+- Whether off-season checks are in scope operationally — they need a crew
+  willing to do short paid drive-bys in January.
+- Auto-renewal disclosure requirements go to the attorney **with** the ToS.
 
 ## 1b. Should crews just dispatch themselves? — partly yes, and the ToS says so
 
