@@ -292,6 +292,114 @@ most of the value, and it is honest about who actually knows the conditions.
 
 ---
 
+---
+
+## 1d. The crew side — don't tax them, feed them
+
+**The owner's question:** *"ok so how do we do this for the crew side?"*
+
+Model committed as `docs/crew_model.py`. The short answer is that the crew side
+is not a pricing problem at all — it is a supply problem wearing a pricing
+costume, and the two obvious monetisation moves are both blocked.
+
+### Blocker 1: a percentage fee on crews breaks rule 1 by arithmetic
+
+If a crew is ever shown "LakeLife takes 20%," they immediately know the customer
+paid `their rate ÷ 0.8`. Rule 1 — vendors never see customer prices or margin —
+is defeated by division, on every job, forever. **Any percentage take-rate
+disclosed to crews is architecturally incompatible with the platform's first
+non-negotiable.** Only a flat fee reveals nothing.
+
+### Blocker 2: crews are price-setters, so a fee comes straight back
+
+Customers accept a menu price. **Crews set their own rate cards.** Charge a crew
+$99/month and the rational response is to raise their card enough to cover it —
+which lands as a higher `vendor_cost`, which pushes more jobs *below* the margin
+floor, which is already the single largest source of ops work. A crew fee is
+substantially self-financing in the wrong direction.
+
+The spread already is the fee. It is invisible, it is rule-1 safe, and it does
+not invite a counter-move.
+
+### What LakeLife actually sells a crew: a full, MIXED day
+
+| Stops (mows only) | Crew net | Net/hour |
+|---|---|---|
+| 1 | $10 | **$7** |
+| 2 | $57 | $22 |
+| 4 | $150 | $34 |
+| 8 | $335 | **$41** |
+
+A crew driving 25 minutes each way for one $85 mow nets **$7/hour**. That is the
+thing a lone contractor cannot fix for themselves, and it is exactly what a
+platform can.
+
+But note the ceiling: **even eight mows in a day only reaches ~$41/hour.** Cheap
+recurring work does not make a crew's living no matter how much of it you stack.
+A *mixed* day does:
+
+> Spring opening + 3 mows + a boat-lift set = 5 stops, 7.4 hours,
+> **$709 net to the crew — $96/hour.** Four days a week for a 22-week season is
+> **~$62,000**.
+
+This matters strategically: the cheap recurring services are simultaneously the
+hardest to clear the margin floor on *and* the least valuable to the crew. The
+platform's job is not to hand crews volume — it is to hand them **water work
+with mows filled in around it.**
+
+### The real crew-side crisis: 14 of 34 crews did nothing
+
+The audit found the top 4 crews carried 37% of 10,184 jobs while **14 crews
+completed zero.** That is not a power law, it is a bug.
+
+Dispatch ranks on score → density → margin → **fairness last**. A new crew has
+no score, so it loses every comparison to an established crew, so it never
+completes a job, so it never earns a score. **A cold-start trap that starves new
+supply**, and starved crews quit. Every crew that quits shrinks supply, and thin
+supply is precisely what generates the 348 below-floor jobs per 1,000 customers.
+
+**The minimal fix:** a new crew should start at the **median** score, not zero,
+and move on evidence. One change, and the trap opens. Optionally reserve a small
+share of each week's jobs for crews under a volume threshold — a proving period
+rather than a subsidy.
+
+Fixing this is worth far more than any crew fee, because it attacks the root of
+the biggest ops workload rather than collecting a toll on the way past.
+
+### Three crew segments, matching the three customer ones
+
+| Crew | Wants | What we sell them |
+|---|---|---|
+| **Solo operator** | a few dense days, fast money, no admin | a full day on one lake; 2% early payout; photo records that win disputes |
+| **Multi-truck contractor** | predictable volume, efficient days | suggested truck split, season-ahead visibility, block booking |
+| **Marina / shop** | capacity utilisation on high-value work | the storage and winterisation pipeline, custody-qualified routing |
+
+### How to monetise the crew side without taxing it
+
+1. **Keep the spread as the only charge on their work.** No subscription, no
+   commission line, nothing that invites a rate-card counter-move.
+2. **The 2% early payout already exists and is already crew-side revenue** —
+   optional, valued, and it reveals nothing about customer pricing. That is the
+   correct shape for anything added later.
+3. **Sell things LakeLife's volume makes cheaper than a one-truck operator can
+   buy alone**: group-rate liability and garagekeepers insurance, equipment or
+   vehicle financing, a year-end tax package with mileage and 1099s already
+   assembled. These earn partner or referral revenue and make the crew *better
+   off*, so nobody prices against them.
+
+The asymmetry is the point. On the customer side we are looking for revenue. On
+the crew side we are looking for **retention**, because supply is the binding
+constraint on the whole business.
+
+### Still to decide
+
+- Whether new crews start at the median score (recommended) or a reserved share
+  of jobs.
+- Whether to pursue group insurance — it is the highest-value crew perk and the
+  most work to arrange.
+
+---
+
 ## 2. Cross-lake days — the router's "one lake per truck" rule is wrong here
 
 **The owner's question:** *"what if they do some jobs at multiple lakes
