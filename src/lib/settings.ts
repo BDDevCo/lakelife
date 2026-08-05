@@ -10,7 +10,12 @@ import { createServiceClient } from "@/lib/supabase/server";
  */
 
 export interface PlatformSettings {
-  /** Min share of the menu price LakeLife keeps (crew ineligible below it). */
+  /** Min share of the menu price LakeLife keeps (crew ineligible below it).
+   *  A CIRCUIT BREAKER, not a target. Modelled 2026-07-27: at launch, with few
+   *  crews competing, a 30% floor fills only 24% of bookings while 20% fills
+   *  59% and yields nearly double the total margin — an unfilled job is $0 AND
+   *  a churned customer AND a crew with an empty day. Realized margin then
+   *  rises on its own as competition tightens, without touching this dial. */
   marginFloor: number;
   /** Max scarcity uplift over menu price the machine may OFFER a customer. */
   surgeCapPct: number;
@@ -78,7 +83,7 @@ export interface PlatformSettings {
 }
 
 export const DEFAULT_SETTINGS: PlatformSettings = {
-  marginFloor: 0.25,
+  marginFloor: 0.20, // launch setting — see docs/floor_model.py; the LIVE value is the DB dial
   surgeCapPct: 0.25,
   cancelFeePct: 0.25,
   cancelRoutineHours: 48,

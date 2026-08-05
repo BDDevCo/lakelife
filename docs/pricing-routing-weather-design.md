@@ -735,3 +735,94 @@ already showed where that ends: 14 of 34 crews idle, 20% of demand unserved.
 4. **Then** switch on earned tiers (free, already-earned, no billing).
 5. **Later still**, and only when there is a genuinely new service worth paying
    for, introduce the first paid thing — added, never taken away.
+
+---
+
+## 1f. The margin floor: 20% at launch — and probably never back to 30%
+
+**The owner:** *"lower the 30% to 20% (maybe even lower) to start and ratchet up
+after the marketplace becomes frothy. I think we might price ourselves out at
+30%."*
+
+Modelled (`docs/floor_model.py`, 4,000 simulated bookings against the real
+menu). The instinct is right, and the model says something stronger than the
+proposal.
+
+### At launch, 30% doesn't price out customers — it prices out the WORK
+
+| Floor | Bookings that fill | Total margin |
+|---|---|---|
+| **30%** | **24%** | $133,204 |
+| 25% | 40% | $193,765 |
+| **20%** | **59%** | **$251,799** |
+| 15% | 74% | $296,817 |
+
+At 30%, in a thin crew market, **three of every four bookings never get
+served.** Dropping to 20% nearly doubles total margin — not by taking more per
+job, but by filling work that otherwise sits. An unfilled booking is $0 margin,
+a churned customer, a crew with an empty day, and a story on a small lake.
+
+This is the same finding the audit produced from the other direction: 348
+below-floor jobs per 1,000 customers was never a pricing problem, it was the
+floor set above what a young market could clear.
+
+### The floor is a circuit breaker, not a target — so don't plan to ratchet it
+
+The important second result:
+
+| Floor | Fill (frothy market) | Total margin | Margin per filled job |
+|---|---|---|---|
+| 30% | 69% | $402,767 | $147 |
+| 25% | 81% | $456,923 | $141 |
+| **20% or $25** | **81%** | **$504,755** | **$157** |
+| 20% | 92% | $489,455 | $134 |
+
+**Even in a liquid market, a flat 30% earns less than 20%.** And note the
+margin-per-filled-job at the *same* 20% dial rises from $108 at launch to $134
+once crews compete — the market ratchets realized margin on its own, because
+more bidders means a cheaper cheapest bid.
+
+So the plan isn't "20% now, 30% later." It's **set the floor low enough that
+work gets done, and let competition raise what you actually earn.** Raising the
+dial later only helps if crew rates haven't fallen — and if they have fallen,
+you don't need to.
+
+### The dollar floor is a maturity tool, not a launch tool
+
+This corrects the earlier "percentage or dollars, whichever is greater"
+decision. The dollar floor is right *eventually* and wrong *now*:
+
+- At launch it **costs fill**: "20% or $25" drops from 59% to 40% fill and
+  $252k to $237k, because it blocks exactly the cheap recurring jobs that build
+  the density crews need.
+- Once liquid it is **the best design on the board**: $504,755, the highest
+  total in the model.
+
+Build the dial now; set it to **$0 at launch** and turn it on when fill rates
+are healthy.
+
+### Where the real bottom is
+
+Card processing is the floor under the floor — roughly 2.9% + $0.30:
+
+| Service | Price | 20% margin | Processing | Net |
+|---|---|---|---|---|
+| Mow | $85 | $17.00 | $2.77 | **$14.23** |
+| Open/close | $457 | $91.40 | $13.55 | $77.85 |
+| Storage package | $2,550 | $510.00 | $74.25 | $435.75 |
+
+At 20% even the cheapest job on the menu nets **$14.23** — comfortably
+positive. At 15% it is $9.98. At 10% it is $5.73, before a single support
+message or partial refund.
+
+**So: 20% is the right launch number, and I would not go below 15%.** Between
+15% and 20% you are buying fill rate with the cushion that absorbs refunds,
+goodwill and support. At launch, with few customers and every experience
+visible on a small lake, that cushion is worth keeping.
+
+### Applied
+
+`margin_floor` is now **0.20** in production, and `DEFAULT_SETTINGS.marginFloor`
+matches so a rebuilt database starts in the same place. It is one dial — a
+single statement changes it, per rule 8 — and the per-lake override remains the
+right way to run a tighter floor where crews genuinely compete.
