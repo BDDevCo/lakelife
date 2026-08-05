@@ -189,12 +189,88 @@ So: three products, matched to three real segments — à la carte for the small
 customer, a season pass for the middle, a membership for the top third who are
 half the revenue.
 
-### Still to decide
+### "We grow with you" — modelled, and it beats charging a fee
 
-- The membership price, and take-up worth assuming.
-- Whether off-season checks are in scope operationally — they need a crew
-  willing to do short paid drive-bys in January.
-- Auto-renewal disclosure requirements go to the attorney **with** the ToS.
+**The owner's refinement:** *"we grow with you so not a lot of upfront cost, but
+we take a cut each service provided."*
+
+That instinct is right, and the arithmetic says take it further: **charge no fee
+at all.** Model in `docs/grow_model.py`.
+
+**First, the thing already true:** the per-service cut *is* "we grow with you."
+It is proportional by construction — LakeLife earns only when the customer
+actually uses something. Adding an upfront fee makes the model *less* aligned,
+not more.
+
+**An upfront fee is a bad trade at any size**, because it lands at signup, the
+single highest drop-off moment in the funnel:
+
+| Upfront | Collects | Cost of losing just 5% of signups |
+|---|---|---|
+| $25 | $25,000 | **$54,221** |
+| $50 | $50,000 | $54,221 |
+| $100 | $100,000 | $54,221 |
+
+At $25 nobody is priced out but it collects less than half of what a 5% signup
+loss costs. At $50 the lawn-only customer feels it. At $100 a quarter of the
+book is priced out before they book anything.
+
+**And the number that decides the whole question:**
+
+> Moving ONE "pier family" customer up to "whole house" is worth **$1,738** of
+> margin. A $250 membership is worth **$250**. The upsell is worth **7×** the
+> fee.
+
+So the effort belongs in growing the relationship, not collecting a toll on it.
+
+| Design | Margin impact | Friction | Subscription law |
+|---|---|---|---|
+| Paid membership, $250 @ 35% take-up | +4.8% | signup + billing | yes |
+| **Free tiers earned on spend, 10% move up one level** | **+5.3%** | **none** | **none** |
+| Free tiers, 15% move up | **+8.0%** | none | none |
+
+### The recommendation: tiers you *earn*, not tiers you *buy*
+
+Same tiers the owner asked about — unlocked by season spend rather than paid for:
+
+| Tier | Unlocks at | What opens up |
+|---|---|---|
+| **Standard** | anyone, from job one | full service, photos, guaranteed pay-on-completion |
+| **Priority** | moderate season spend | first pick of dates, no same-day rush surcharge |
+| **Concierge** | whole-house spend | guaranteed preferred crew, off-season storm checks, one thread that knows the house |
+
+Why this is strictly better than a paid membership here:
+
+- **Zero upfront cost** — the owner's stated goal, taken literally.
+- **Literally "we grow with you"** — what they get grows as they grow, with no
+  invoice in between.
+- **No adverse selection.** Nobody self-selects into a discount that loses money;
+  perks are rewards for spend already captured.
+- **No subscription or auto-renewal law**, no second billing surface, no
+  cancellation flow, nothing new for the attorney.
+- **The lawn-only customer is never charged and never rejected.** She is
+  Standard, she is served exactly as well, and if she ever adds a pier the app
+  can show her what opens up. That is an upsell prompt, not a toll booth.
+- **It costs almost nothing to deliver.** Priority is queue position. A
+  guaranteed crew is a flag that already exists (`preferred_vendor`). Only the
+  off-season storm check has real cost — and it is reserved for the customers
+  who are half the revenue.
+
+### What this means for the three products
+
+The earlier recommendation stands with one correction: **drop the paid
+membership.**
+
+1. **À la carte per-service, for everyone** — with the cut embedded, exactly as
+   today. This is the "we grow with you" engine and it already works.
+2. **Season-pass bundles** for the middle — one decision instead of twenty,
+   locks in volume, no subscription law.
+3. **Earned tiers** replacing the paid membership — the retention and upsell
+   mechanism, free to the customer and nearly free to run.
+
+If a paid tier is ever wanted, the honest place for it is a genuinely new
+service with real cost behind it (year-round property watch, say), sold as a
+service and not as access to the platform.
 
 ## 1b. Should crews just dispatch themselves? — partly yes, and the ToS says so
 
