@@ -1,5 +1,6 @@
 import "server-only";
 import { aiComplete } from "@/lib/ai";
+import { screenMessage, type Population, type Outcome } from "@/lib/comms-fence";
 
 /**
  * Messaging autonomy — Level 1 classifier (Autonomy Ladder, owner directive
@@ -25,7 +26,16 @@ export type Confidence = "high" | "medium" | "low";
 export interface ClassifyResult {
   intent: string;
   confidence: Confidence;
+  /** Kept for the existing callers: true whenever the fence refused to let the
+   *  model see the message. */
   risky: boolean;
+  /** The fence's full verdict, so ops can be told WHY rather than just "held". */
+  outcome: Outcome;
+  /** The one line ops reads on the board. Null when nothing fired. */
+  opsLine: string | null;
+  /** Population-aware: false for every tenant, park owner, crew and RV guest
+   *  at launch, no matter how innocuous the message. */
+  mayAutoSend: boolean;
 }
 
 /** Intents narrow and low-stakes enough to auto-send a reply to (Level 1). */
@@ -37,41 +47,20 @@ export const WHITELIST: string[] = [
   "thanks",
 ];
 
-// Substring match on the lowercased body — deliberately broad. A false
-// positive here just means a human reads the message on the ops board,
-// same as today; a false negative means the machine answers something it
-// shouldn't. Bias toward caution.
-const RISK_WORDS = [
-  "refund",
-  "money",
-  "charge",
-  "angry",
-  "terrible",
-  "lawyer",
-  "attorney",
-  "sue",
-  "damage",
-  "broke",
-  "cancel",
-  "complaint",
-  // Commitment smells — a message asking the machine to ratify a deal
-  // ("confirming next month is free like your guy promised") must reach a
-  // human even when it's wrapped in a thank-you (review finding). "free"
-  // also catches "freeze" — a false positive here is just a human reading.
-  "dispute",
-  "waive",
-  "free",
-  "credit",
-  "promise",
-  "discount",
-  "owed",
-  "bill",
-];
-
-function isRisky(body: string): boolean {
-  const lower = body.toLowerCase();
-  return RISK_WORDS.some((word) => lower.includes(word));
-}
+/**
+ * THE RISK SCREEN NOW LIVES IN lib/comms-fence.ts.
+ *
+ * What used to be here was twenty words matched as SUBSTRINGS, and it was
+ * backwards in both directions. It cleared every housing message we tested —
+ * "can I get a ramp? I use a wheelchair" was eligible for a machine reply —
+ * while blocking the safest traffic we have, because "free" matches inside
+ * "freeze", "sue" inside "issue" and "owed" inside "showed".
+ *
+ * The replacement matches whole tokens and whole phrases, knows which
+ * POPULATION is on the other end (a tenant is not a lake homeowner and fair
+ * housing applies to them), and returns four outcomes rather than a boolean:
+ * allow / hold / never_ai / emergency. See docs/ai-safety-fence.md.
+ */
 
 const SYSTEM = `Classify a homeowner's message to LakeLife, a lake-home services company.
 Respond with STRICT JSON only — no prose, no markdown fences:
@@ -84,10 +73,26 @@ function unfence(text: string): string {
   return fenced ? fenced[1].trim() : trimmed;
 }
 
-export async function classifyCustomerMessage(body: string): Promise<ClassifyResult> {
-  // Gate 1: pure risk screen, no AI call.
-  if (isRisky(body)) {
-    return { intent: "other", confidence: "low", risky: true };
+export async function classifyCustomerMessage(
+  body: string,
+  population: Population = "unknown",
+): Promise<ClassifyResult> {
+  // GATE 1: the fence. Pure, no AI call, no cost.
+  //
+  // `population` defaults to "unknown", which is the FAIL-CLOSED lane: every
+  // rule runs and nothing auto-sends. A caller that has not been taught to
+  // stamp the population therefore gets the strictest treatment, rather than
+  // the loosest — which is the opposite of what the old default did.
+  const fence = screenMessage(body, population);
+  if (fence.outcome !== "allow") {
+    return {
+      intent: "other",
+      confidence: "low",
+      risky: true,
+      outcome: fence.outcome,
+      opsLine: fence.opsLine,
+      mayAutoSend: false,
+    };
   }
 
   // Gate 2: model classification.
@@ -99,7 +104,7 @@ export async function classifyCustomerMessage(body: string): Promise<ClassifyRes
 
   if (res.mock || !res.ok || !res.text) {
     // No API key (or a failed call) — autonomy silently stays off.
-    return { intent: "other", confidence: "low", risky: false };
+    return { intent: "other", confidence: "low", risky: false, outcome: "allow", opsLine: null, mayAutoSend: false };
   }
 
   try {
@@ -109,8 +114,8 @@ export async function classifyCustomerMessage(body: string): Promise<ClassifyRes
       parsed.confidence === "high" || parsed.confidence === "medium" || parsed.confidence === "low"
         ? parsed.confidence
         : "low";
-    return { intent, confidence, risky: false };
+    return { intent, confidence, risky: false, outcome: "allow", opsLine: null, mayAutoSend: fence.mayAutoSend };
   } catch {
-    return { intent: "other", confidence: "low", risky: false };
+    return { intent: "other", confidence: "low", risky: false, outcome: "allow", opsLine: null, mayAutoSend: false };
   }
 }

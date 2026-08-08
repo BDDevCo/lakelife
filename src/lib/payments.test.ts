@@ -83,3 +83,31 @@ describe("LakeLifePayments.charge", () => {
     expect(res.error).toBe("Charge amount must be a positive whole number of cents.");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A mock token must never be rejected by our own charge() PAN guard. The tail
+// used to be raw UUID HEX — ten digits out of sixteen symbols — so roughly one
+// token in a few hundred carried 12+ consecutive digits and charge() refused
+// it. Bounded by construction now; this is the proof, not a spot check.
+// ---------------------------------------------------------------------------
+describe("mock token never trips our own leaked-PAN guard", () => {
+  it("no digit run of 12+ across many tokens, and every one is chargeable", async () => {
+    for (let i = 0; i < 3000; i++) {
+      const res = await LakeLifePayments.tokenize({
+        number: "4242 4242 4242 4242", exp: "12/30", cvc: "123",
+      });
+      expect(res.ok).toBe(true);
+      expect(/\d{12,}/.test(res.token!.token)).toBe(false);
+    }
+  });
+
+  it("a token from tokenize() is always accepted by charge()", async () => {
+    for (let i = 0; i < 300; i++) {
+      const t = await LakeLifePayments.tokenize({
+        number: "4242 4242 4242 4242", exp: "12/30", cvc: "123",
+      });
+      const charged = await LakeLifePayments.charge({ token: t.token!.token, amountCents: 1000 });
+      expect(charged.ok).toBe(true);
+    }
+  });
+});

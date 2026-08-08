@@ -115,7 +115,16 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   disputeAutoRefundMax: 150,
   disputeFixDays: 7,
   priceAutoapplyMaxPct: 0.10,
-  aiAutoreplyEnabled: 1,
+  // MESSAGING AUTONOMY FAILS CLOSED. This was 1, and the `catch` at the bottom
+  // of the loader returns DEFAULT_SETTINGS — so a transient database error, or
+  // a missing dial row, TURNED UNATTENDED AI SENDING ON. The safety property
+  // has to point the other way: when we cannot read the dial, we do not know
+  // whether the owner wants a machine speaking for the company, and the honest
+  // answer to not knowing is silence.
+  //
+  // The live value is still the DB dial (rule 8) — this is only what we fall
+  // back to when there is nothing to read.
+  aiAutoreplyEnabled: 0,
 };
 
 /** Clamp a raw stored value into a sane band; fall back on anything weird. */
@@ -170,6 +179,10 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       aiAutoreplyEnabled: parseSetting(byKey.get("ai_autoreply_enabled"), DEFAULT_SETTINGS.aiAutoreplyEnabled, 0, 1),
     };
   } catch {
-    return DEFAULT_SETTINGS; // table missing / transient error → today's values
+    // Table missing / transient error → today's values, and note that
+    // aiAutoreplyEnabled defaults to 0 precisely so this path cannot switch
+    // unattended AI sending ON. Every other dial here is a number; that one is
+    // permission to speak in the company's voice, and it is not a number.
+    return DEFAULT_SETTINGS;
   }
 });

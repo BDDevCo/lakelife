@@ -96,12 +96,24 @@ export const LakeLifePayments = {
     const brand = detectBrand(digits);
     const last4 = digits.slice(-4);
     // A stand-in vault token. The real one comes from the processor.
-    // The random tail is base36 (letters + digits), so the token can never
-    // contain a long digit run that trips the server's PAN guard.
-    const rand =
+    //
+    // The tail must never contain a long digit run, because charge() below
+    // REFUSES any token matching /\d{12,}/ as a leaked-PAN defence (rule 4).
+    // The previous version claimed in a comment that its tail was "base36
+    // (letters + digits), so the token can never contain a long digit run" —
+    // but crypto.randomUUID() is HEX, and hex is ten digits out of sixteen
+    // symbols. About one token in a few hundred came out with twelve or more
+    // digits in a row, and our own charge() then rejected our own token. It
+    // surfaced as a ~1-in-900 test flake; the real cost was a payment that
+    // failed for no reason a customer could understand.
+    //
+    // Now bounded BY CONSTRUCTION: groups of five, joined by a letter, so the
+    // longest possible digit run is five whatever the random source does.
+    const raw =
       typeof crypto !== "undefined" && crypto.randomUUID
-        ? "x" + crypto.randomUUID().replace(/-/g, "").slice(0, 15)
-        : "x" + Math.random().toString(36).slice(2, 17);
+        ? crypto.randomUUID().replace(/-/g, "")
+        : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const rand = `x${raw.slice(0, 5)}x${raw.slice(5, 10)}x${raw.slice(10, 15)}`;
     const token = `tok_mock_${last4}_${rand}`;
 
     return { ok: true, token: { token, brand, last4, exp_month, exp_year } };
