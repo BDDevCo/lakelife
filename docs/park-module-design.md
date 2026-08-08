@@ -305,8 +305,18 @@ a dial, rather than trying to anticipate parks.
 **Park shape**
 - MH-only, RV-only, or mixed
 - Year-round or seasonal (does the park close in winter?)
-- All-ages or 55+ *(a fair-housing exemption category with its own verification
-  rules — flag for counsel)*
+- **All-ages or 55+** — declared by the park owner in their park profile. Two
+  consequences that are cheap now and painful to retrofit:
+  - **The flag gates whether age is collected at all.** In an all-ages park the
+    application must not ask for date of birth — there is no legitimate purpose
+    for it and it is a familial-status/age exposure sitting in the record. Only
+    a park that has declared 55+ should ever see an age field.
+  - **Declaring 55+ turns on a workflow, not just a filter.** The exemption
+    depends on the park actually meeting and *documenting* occupancy
+    requirements, with periodic verification — a recurring administrative chore
+    that is exactly the kind of paperwork this module exists to carry. The
+    platform maintains the record and chases the survey; it never asserts that
+    the park qualifies. That claim is the park owner's, and their counsel's.
 - Whether the park also rents park-owned homes, not just lots
 
 **Tenancy**
