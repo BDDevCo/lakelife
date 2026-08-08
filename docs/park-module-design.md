@@ -221,6 +221,142 @@ Same renter, two rails, chosen by what the money is for.
 
 ---
 
+---
+
+## 1h. Screening: integrate it, never build it
+
+**The owner:** *"park owners will need to approve but you will need to design a
+credit check/background check like a typical property owner needs to have."*
+
+Park owners absolutely need this. But **LakeLife must not be the one performing
+it**, and the reason is structural rather than squeamish.
+
+### The trap
+
+Running credit or background checks on rental applicants puts everyone involved
+under the **Fair Credit Reporting Act**. The party that *assembles or evaluates*
+consumer information to produce reports for third parties is a **Consumer
+Reporting Agency**, and a CRA carries a heavy, permanent compliance load —
+accuracy obligations, a dispute-and-reinvestigation process, verifying
+permissible purpose for every pull, and liability when it gets any of that
+wrong.
+
+If LakeLife aggregates data, computes a score, or produces a
+recommendation, **LakeLife plausibly becomes a CRA.** That is a different
+company than the one being built here, and it is not a line to cross by
+accident while shipping a park feature.
+
+This also sharpens the earlier "build no screening logic" advice: the reason is
+not only fair-housing optics. Building it changes what LakeLife legally *is*.
+
+### The design: be the conduit, not the source
+
+1. **The park owner configures what they require** — credit, eviction history,
+   criminal history, income verification — as their own criteria. Their park,
+   their standard, their decision.
+2. **A licensed third-party screening provider does the work.** The applicant
+   authorizes the provider and (usually) pays them directly; the report is
+   delivered to the **park owner**. LakeLife initiates and tracks the request
+   and nothing more. This is the standard integration shape for exactly this
+   reason.
+3. **Store as little as possible.** Ideally the report never enters LakeLife's
+   database at all — only *requested / completed / decision recorded*, plus the
+   provider's reference. Storing report contents would import FCRA retention and
+   accuracy duties, plus breach exposure, for data LakeLife has no use for.
+4. **Adverse action is the park owner's obligation, and the platform must
+   prompt it.** When a denial rests wholly or partly on a consumer report, the
+   applicant is owed a notice naming the reporting agency, stating the agency
+   did not make the decision, and explaining their right to a free copy and to
+   dispute it. The platform should surface that requirement and the provider's
+   template at the moment of decline — and the park owner sends it.
+5. **No scoring, no ranking, no "recommended" flag, ever.** Not even a helpful
+   colour on a row.
+
+### What still needs the attorney
+
+- Whether this integration shape keeps LakeLife outside the CRA definition, and
+  what the platform's contract with the screening provider must say.
+- **Criminal history is the sharpest edge.** HUD guidance has long treated
+  blanket criminal-history bans as potential Fair Housing Act violations through
+  disparate impact, and a growing number of states and cities restrict what may
+  be asked and when. Whether Indiana constrains this — and whether the platform
+  should offer a criminal-history option *at all* — is a counsel question, not a
+  product one.
+- Application-fee limits, if Indiana sets any, and who may charge them.
+- Retention: how long a decision record must be kept, and how long it may be.
+
+---
+
+## 1i. Configurability: model the dimensions, not the parks
+
+**The owner:** *"our engine needs to have ability to accommodate all the
+suggestions or pathways a park owner would use and if they want something custom
+we can build it for them just for their park. but bill them for it… want to try
+not to offer that to anyone."*
+
+That instinct is right and worth stating as a rule: **per-park custom code is
+how a software business dies.** Every bespoke build is permanent maintenance,
+becomes a blocker on every future refactor, and cannot be sold to park #2. The
+goal is a configuration space wide enough that "custom" almost never comes up.
+
+The way to get there is to enumerate the **axes of variation** and make each one
+a dial, rather than trying to anticipate parks.
+
+**Park shape**
+- MH-only, RV-only, or mixed
+- Year-round or seasonal (does the park close in winter?)
+- All-ages or 55+ *(a fair-housing exemption category with its own verification
+  rules — flag for counsel)*
+- Whether the park also rents park-owned homes, not just lots
+
+**Tenancy**
+- Terms offered: nightly, weekly, monthly, seasonal, annual
+- Minimum stay; month-to-month rollover after a term ends
+- Whether transient/nightly stays are sold at all
+
+**Money — the richest axis, and the one most likely to drive "custom" requests**
+- Due date: fixed day of month, or anniversary of move-in
+- Proration on the first and last month
+- Late fees: flat or percentage, grace period, cap
+- Deposits: amount, refundable, and how held
+- **Utilities: included, flat add-on, or submetered.** Many MH parks submeter
+  water and electric and bill an amount that changes every month. This is a
+  *variable recurring charge*, not rent, and a design that assumes flat rent
+  will meet its first custom request here.
+- Recurring extras: additional occupant, second vehicle, pet rent, storage lot,
+  slip fee
+
+**Compliance**
+- Which documents, which insurance rules, which screening checks
+- Approval required, or instant
+
+### The escape valves that prevent most custom builds
+
+Three generic mechanisms turn the majority of "can you build us X" into
+configuration:
+
+1. **A generic charge model.** Not hardcoded kinds like `rent` and `pet_fee`,
+   but *charge types the park owner defines* — name, amount or rate, recurrence,
+   taxable or not, prorated or not. Submetered water, a slip fee and a
+   third-vehicle charge are then the same object with different rows.
+2. **Custom fields the park owner defines** — on the application, on the lot, on
+   the tenancy. Anything the platform did not anticipate becomes data the park
+   owner captures without code.
+3. **Custom document slots.** Any addendum, any local form, uploaded and
+   e-signed through the same pipeline as the lease.
+
+With those three, the remaining true custom requests are rare — which is exactly
+what makes it reasonable to price them high and rarely offer them.
+
+**The one thing to protect absolutely:** custom work must never fork the engine.
+If a park genuinely needs different behaviour, it belongs behind a per-park
+configuration flag on the *same* code path — never a branch, never a second
+implementation. The two-season audit already showed what dormant, unexercised
+code does: the storage product was built, switched off, and had four real bugs
+waiting in it when the simulation finally ran.
+
+---
+
 ## 2. The new core primitive: a lot is bookable inventory
 
 This is the piece the previous draft under-scoped, and it is the heart of the
