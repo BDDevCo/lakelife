@@ -1,49 +1,170 @@
-# The Park module — MH/RV parks on the LakeLife engine
+# The Park module — LakeLife.ai as a park owner's management system
 
-**Status:** design. Nothing built. Written 2026-08-07 after a four-lane
-read-only mapping of the backend (identity/RLS, money, documents, application
-surface).
+**Status:** design. Nothing built. Revised 2026-08-07 after the owner corrected
+the framing; backed by a four-lane read-only mapping of the backend.
 
-**The trigger:** the owner is buying a mobile-home / RV park on Pretty Lake, and
-wants park owners and renters on the platform — rent collection, leases,
-document upload, asset declaration, and the existing lake services. More parks
-follow if this works.
+**What this actually is.** Not "a park is a big customer." A park owner adopts
+**LakeLife.ai as their exclusive park management system**. Their renters become
+platform customers *scoped to that park*. The park owner gets software that
+fills lots and keeps them covered; LakeLife gets the services revenue from every
+renter in the park.
 
-**The owner's clarification, which shapes everything below:** *"rent collection
-would not have the 30%, it would just be collecting rent, we are trying to
-capture more services through the platform. We will end up charging the park
-owner for an annual usage but that's down the road."*
+> *"a park owner can use lakelife.ai as their own little exclusive tool to
+> attract more people to the area, while we are capturing fees and services from
+> all the park renters."*
+
+**The strategic shape: the software is the channel, the services are the
+business.** Park-management software is a crowded, unremarkable market. Nobody
+in it bundles *"and your renters get a concierge for their boat, their golf cart
+and their mobile home."* That bundle is the reason a park owner switches, and
+their switching is how LakeLife acquires eighty service customers in one
+conversation.
 
 ---
 
-## 1. Why this is worth doing — it fixes the platform's worst problem
+## 1. The three parties and what each one gets
 
-The launch model found that **~16 customers on one lake gives a crew one full
-day a week**, and that thin, scattered demand is what starves crews and creates
-the below-floor backlog.
+**The park owner** — runs their park from one back end: lot inventory and a
+map, reservations and availability, the rent roll and who's delinquent, which
+renters have documents on file and whose insurance is about to lapse, executed
+agreements, and their own service requests for common areas. Plus a public page
+that fills vacancies.
 
-**A park is 80 customers at one address.**
+**The renter** — books a lot for a term that suits them (a few weeks, a season,
+a year), signs the rental agreement in their portal, uploads their driver's
+licence and any insurance the park requires, declares a boat or a golf cart,
+sets up autopay for the monthly bill, and books the services that make lake life
+work: cleaning, mobile-home winterization and de-winterization, boat storage,
+winterize/de-winterize, and the spring drop-in. They see the lake conditions
+that already exist on the platform.
 
-| | Stops/day | Crew's day |
+**LakeLife** — three revenue streams, only two of which carry margin:
+
+| Stream | Margin | Notes |
 |---|---|---|
-| Golf-cart winterizations scattered round a lake | 6 | $1,058 |
-| The same work inside one park | **14** | **$2,629** |
+| **Services to renters** | yes (the normal engine) | ~$18k/park/season modelled |
+| **Park-owner software fee** | yes | deliberately small — see below |
+| **Rent collection** | **none, by design** | pass-through; ACH only (§2b) |
 
-Inside a park, drive time between stops is two or three minutes instead of
-twelve. The crew's *hourly* rises modestly (+16–34%); the real win is
-**throughput** — the same crew clears more than twice the jobs in a day.
+### Price the software low on purpose
 
-Modelled service capture for an 80-lot park (`docs/park_model.py`): roughly
-**$92k of service revenue and $18k of margin per season**, at $1,152 of revenue
-per lot — from golf-cart and mobile-home winterization, spring de-winterize,
-boat storage and lot mowing. Rent contributes **$0 margin by design**.
+Park software runs roughly $1–3 per lot per month. Eighty lots at $2 is about
+**$1,920 a year**. The services from the same park are worth **~$18,400**. If
+charging for the software costs even 30% of park adoption, that trades $5,500 of
+services for $1,920 of fees — a bad deal.
 
-So the park is not a rent business. **It is a customer-acquisition and density
-engine that happens to also collect rent.**
+**So the software should be free or near-free at first.** It is customer
+acquisition, not a product line. This is the same conclusion the launch strategy
+reached for homeowners: no upfront fee, land and expand.
 
 ---
 
-## 2. The central rule: rent must never enter the job pipeline
+## 2. The new core primitive: a lot is bookable inventory
+
+This is the piece the previous draft under-scoped, and it is the heart of the
+product. Everything the platform books today is a **service at a point in time**
+against a property. A lot rental is **exclusive occupancy of a thing over a date
+range**, priced by term.
+
+The closest existing cousin is storage: `storage_stays` already models
+intake → occupancy → release with custody. A reservation is that shape plus
+pricing and an agreement.
+
+**`lot_reservations`** — lot, renter, `during daterange`, term type
+(nightly / weekly / monthly / seasonal / annual), rate, status
+(held → agreement sent → executed → active → ended).
+
+**Two lots can never be double-booked, and the database enforces it.**
+`btree_gist` is available on the project (confirmed, not yet installed), so:
+
+```sql
+create extension if not exists btree_gist;
+
+alter table public.lot_reservations
+  add constraint lot_no_double_booking
+  exclude using gist (
+    park_lot_id with =,
+    during      with &&
+  ) where (status in ('held','executed','active'));
+```
+
+That is a real guarantee, not a convention — exactly the pattern the two-season
+audit said the money tables were missing. An overlapping booking fails at the
+database, whatever wrote it.
+
+**Term pricing lives in the database (rule 8).** A lot carries a rate card —
+nightly, weekly, monthly, seasonal, annual — and the park owner tunes it. This
+mirrors how `services` already works and needs no new concept.
+
+**Availability is a read over that same range**, which means the public park
+page and the renter's booking calendar are the same query.
+
+---
+
+## 3. The compliance engine — "keep the park covered"
+
+The previous draft treated documents as generic upload. That misses the actual
+job. The park owner has a contract, and the contract has requirements: *a boat
+at a slip needs watercraft liability naming the park as additionally insured; a
+golf cart driven on property needs liability; everyone needs a licence on file.*
+
+So the park owner **defines requirements**, and the platform tracks **coverage**:
+
+- **`park_requirements`** — per park: what triggers it (all renters, or owning a
+  boat, or a golf cart), what document is needed, any minimum coverage, and
+  whether the park must be named additional insured.
+- **`renter_assets`** — a boat or a golf cart declared by the renter. Declaring
+  one *turns on* the matching requirement. (Note: `boats` already exists as a
+  table for homeowners; a golf cart needs the generic version.)
+- **`renter_documents`** — the uploaded file, its expiry, and a verification
+  state, following the vendor-COI pattern that already gates crew eligibility.
+
+The park owner's dashboard then answers the question they actually have: **who
+is out of compliance, and whose certificate expires next month.** That is the
+feature that makes the software worth having, and it is the same expiry
+machinery that already runs `sendCoiRevalidations` for crews — with the
+correction noted in §4 that a lapse notice needs a sent-ledger, because unlike a
+crew COI there is no automatic backstop stopping anything.
+
+---
+
+## 4. "Encumbered just in the park area" — scoping a renter
+
+A renter is a platform customer whose world is bounded to their park. This has a
+precise technical meaning and it is mostly good news:
+
+- They stay `role = 'owner'` in the database. **Do not add an enum value** — the
+  `services_read` policy grants SELECT on `services` only to `role='owner'`, so
+  a `role='renter'` user would get an **empty services menu with no error**,
+  killing exactly the service capture this whole project exists for.
+- Their identity as a renter comes from `tenancies` / `lot_reservations`, not
+  from a role.
+- Their bookable "property" is their lot, resolved through the tenancy — not
+  through `properties.owner_id`, which must keep meaning *"the person we charge
+  and text."*
+- The park owner sees lots, tenancies, rent and compliance. They must **not**
+  see a renter's personal service history or payment details, and they must
+  never be given the ops role (`assertOps` is all-or-nothing and would hand them
+  every homeowner's price, LakeLife's margin, and every crew's W-9).
+
+---
+
+## 5. Filling the park — reuse what already exists
+
+The owner's phrase was *"attract more people to the area."* The platform already
+has the machinery:
+
+- **`/lakes/[slug]`** is a live, SEO-indexed public page built from real data
+  (crew counts, honest from-prices, season dates, the HOA ticker). A
+  **`/parks/[slug]`** page with live lot availability and "what's included" is
+  the same pattern with a different query.
+- **Lake conditions** — ice-out, pull deadlines — are already modelled and are
+  genuinely useful to an RV or mobile-home renter deciding on a season.
+- **Referrals** already exist; a park is a dense referral graph.
+
+---
+
+## 6. The central rule: rent must never enter the job pipeline
 
 The money lane's finding is unambiguous — *"nothing in this codebase can bill
 anything that is not a `jobs` row."* Rent is not a job. Forcing it through the
@@ -73,7 +194,7 @@ tables, their own charge function, their own receipts. It reuses
 
 ---
 
-## 2b. LakeLife as merchant of record — and the fee that decides the design
+## 7. LakeLife as merchant of record — and the fee that decides the design
 
 **The owner:** *"the app would be doing the processing as the 1 vendor on the CC
 processing and pay the park owner if that makes it easier."*
@@ -145,7 +266,7 @@ below.
 
 ---
 
-## 3. Do not model a lot as a `properties` row, and do not add a role
+## 8. Do not model a lot as a `properties` row, and do not add a role
 
 Two shortcuts look obvious and both are traps.
 
@@ -201,7 +322,7 @@ Park owners get park-scoped readers with their own authorization.
 
 ---
 
-## 4. Documents: the driver's-licence problem is the sharpest edge
+## 9. Documents: the driver's-licence problem is the sharpest edge
 
 Renter documents look like the crew COI flow. They are not, in two ways that
 matter.
@@ -233,7 +354,7 @@ nullable-on-delete, storing a hash of the exact rendered bytes.
 
 ---
 
-## 5. Where it attaches, and how it ships dark
+## 10. Where it attaches, and how it ships dark
 
 - **New route groups** `/park/*` (owner) and the renter surfaces, excluded from
   `sitemap.ts`.
@@ -258,7 +379,7 @@ nullable-on-delete, storing a hash of the exact rendered bytes.
 
 ---
 
-## 6. What this means legally — questions, not conclusions
+## 11. What this means legally — questions, not conclusions
 
 The whole platform rests on LakeLife being a **third-party administrator** that
 is not a party to the service relationship (§3 of the counsel draft) and acts
@@ -288,22 +409,27 @@ For the attorney, alongside the ToS work already queued:
 
 ---
 
-## 7. Suggested phasing
+## 12. Suggested phasing
 
 **Phase 0 — prerequisites that are worth doing anyway.** The document-erase
 path; one shared `docCurrent(expiry, today)` predicate (the same test is
 open-coded in eight-plus places today); the `tos_acceptances` evidence ledger
 already on the checklist; `.eq('kind','earning')` guarding the payout batch.
 
-**Phase 1 — the park as a services customer.** `parks` + `park_lots` +
-`tenancies`, a park-owner portal that manages lots and renters, renters
-onboarded as ordinary `role='owner'` customers who can book the existing lake
-services. **No rent, no leases, no documents.** This alone captures the density
-and the service revenue — the entire financial case — with almost no new risk.
+**Phase 1 — inventory, tenancy and services.** `parks` + `park_lots` +
+`lot_reservations` (with the exclusion constraint) + `tenancies`; the park-owner
+back end for lots, availability and the rent roll as a *record* (not yet
+collecting); renters onboarded as ordinary `role='owner'` customers who can book
+the existing lake services against their lot. A `/parks/[slug]` public page so
+the park can fill vacancies. **No money movement, no documents yet** — and this
+already delivers the park owner a working management system and LakeLife the
+whole service-revenue case.
 
-**Phase 2 — documents and leases.** Renter DL/insurance with the per-record
-signer and the erase path; the lease ledger with hashed rendered text; asset
-declaration (golf cart alongside boat) feeding additional-insured tracking.
+**Phase 2 — agreements and compliance.** The rental agreement signed in the
+portal against a hashed document record; `park_requirements` +
+`renter_assets` + `renter_documents`; the park owner's coverage dashboard. The
+driver's-licence signer and the **erase path must land here or earlier** — never
+after the first upload.
 
 **Phase 3 — rent, on ACH.** Its own ledger, its own cron, its own remittance
 batch. **ACH first, not card** — the fee model above makes that structural. The
@@ -320,7 +446,7 @@ wait until park #1 has proven the model on ground the owner controls.
 
 ---
 
-## 8. Build it on a branch
+## 13. Build it on a branch
 
 Everything above lands behind a feature flag, on a git branch, with the park
 tables in their own migrations. The `parks.active` switch means it can be merged
