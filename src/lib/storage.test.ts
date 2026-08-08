@@ -16,6 +16,43 @@ describe("seasonEndFor — the season end rolls to the year AFTER intake", () =>
   });
 });
 
+describe("seasonEndFor — the (month, day) pair must be a date that EXISTS (audit finding 9)", () => {
+  it("April 31 clamps to April 30 — and the overstay meter actually runs", () => {
+    const end = seasonEndFor("2026-10-05", 4, 31);
+    expect(end).toBe("2027-04-30");
+    // The money that was leaking: "2027-04-31" is unparseable, so overstayDays
+    // returned 0 and a boat sitting in the barn ten days late billed nothing.
+    expect(overstayDays("2027-05-10", end)).toBe(10);
+    expect(perdiemCharge(overstayDays("2027-05-10", end), 12)).toBe(120);
+  });
+
+  it("February clamps to the real last day, leap year included", () => {
+    expect(seasonEndFor("2026-10-05", 2, 31)).toBe("2027-02-28");
+    expect(seasonEndFor("2027-10-05", 2, 30)).toBe("2028-02-29"); // 2028 is a leap year
+    expect(seasonEndFor("2028-01-05", 2, 29)).toBe("2028-02-29");
+    expect(seasonEndFor("2027-01-05", 2, 29)).toBe("2027-02-28");
+  });
+
+  it("every month's dial-31 end is a real calendar date", () => {
+    const real = (s: string) => {
+      const [y, m, d] = s.split("-").map(Number);
+      const dt = new Date(Date.UTC(y, m - 1, d));
+      return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+    };
+    for (let m = 1; m <= 12; m++) {
+      const end = seasonEndFor("2026-10-05", m, 31);
+      expect(real(end), `month ${m} produced ${end}`).toBe(true);
+    }
+  });
+
+  it("clamping does not move the season-end cliff a year", () => {
+    // Intake ON the clamped end date is that season, not the next one — the
+    // lexical compare against a non-date used to push it a full year out.
+    expect(seasonEndFor("2027-04-30", 4, 31)).toBe("2027-04-30");
+    expect(seasonEndFor("2027-05-01", 4, 31)).toBe("2028-04-30");
+  });
+});
+
 describe("overstayDays + perdiemCharge — the polite meter", () => {
   it("out on time (or early) costs nothing", () => {
     expect(overstayDays("2027-05-20", "2027-05-31")).toBe(0);

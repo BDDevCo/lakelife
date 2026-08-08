@@ -30,20 +30,37 @@ export function median(xs: number[]): number {
  * - walks the current estimate toward the sample median by at most 15%
  *   (never less than one $5-style 5-minute step, so small dials can move)
  * - lands on 5-minute steps, floor 10 — the units the router thinks in
+ *
+ * AUDIT BUG 10c: an INVALID stored dial (0 or negative — the seeded
+ * 'Storage overstay (per-diem)' row ships at 0) used to substitute 60 and
+ * then compare 60 to 60, reporting moved=false forever, so the row could
+ * never heal and the router budgeted no time for that work. Damping exists
+ * to protect a number a human chose; 0 is not a choice, so an invalid dial
+ * lands ON the evidence in one step and `moved` is judged against what is
+ * actually STORED, not against the substitute.
  */
 export function learnedEstimate(
   currentEst: number,
   sampleMinutes: number[],
 ): { next: number; moved: boolean; samples: number } {
   const clean = sampleMinutes.filter((m) => Number.isFinite(m) && m >= MIN_REAL_MINUTES && m <= MAX_REAL_MINUTES);
-  const current = Number.isFinite(currentEst) && currentEst > 0 ? currentEst : 60;
+  const stored = Number.isFinite(currentEst) ? currentEst : 0;
+  const valid = stored > 0;
+  const current = valid ? stored : 60; // the router's working assumption meanwhile
+  // No evidence, no heal — an invalid dial waits for real samples rather
+  // than inventing a number from nothing.
   if (clean.length < MIN_SAMPLES) return { next: current, moved: false, samples: clean.length };
 
   const target = median(clean);
-  const maxStep = Math.max(5, Math.round((current * 0.15) / 5) * 5);
-  let next = current;
-  if (target > current) next = Math.min(target, current + maxStep);
-  else if (target < current) next = Math.max(target, current - maxStep);
+  let next: number;
+  if (!valid) {
+    next = target;
+  } else {
+    const maxStep = Math.max(5, Math.round((current * 0.15) / 5) * 5);
+    next = current;
+    if (target > current) next = Math.min(target, current + maxStep);
+    else if (target < current) next = Math.max(target, current - maxStep);
+  }
   next = Math.max(10, Math.round(next / 5) * 5);
-  return { next, moved: next !== current, samples: clean.length };
+  return { next, moved: next !== stored, samples: clean.length };
 }

@@ -54,3 +54,89 @@ describe("composeNightlyDigest — AI auto-replies show their TEXT, not just a c
     expect(html).not.toContain("<ul>");
   });
 });
+
+// ---------------------------------------------------------------------------
+// AUDIT BUG 10a: "The digest says 'Quiet night' on nights money moved."
+// DigestSections had nine keys and not one could carry a payout batch, a
+// matured referral credit, a collected cancellation fee, or a reconciled
+// refund — the nightly ran all of those, returned them in an HTTP response
+// nobody reads, and dropped them. Month-end, the night the largest sum of the
+// month leaves the account, is the night most likely to read as quiet.
+// ---------------------------------------------------------------------------
+describe("composeNightlyDigest — the night money moved is never a quiet night (audit bug 10a)", () => {
+  it("a month-end referral payout batch is reported, with the dollars", () => {
+    const html = composeNightlyDigest({ ...quiet, referralPayouts: { beneficiaries: 3, total: 412.5 } });
+    expect(html).not.toContain("Quiet night");
+    expect(html).toContain("$412.50");
+    expect(html).toContain("3 ");
+  });
+  it("crew month-end payout batches are reported, with the dollars", () => {
+    const html = composeNightlyDigest({ ...quiet, crewPayouts: { batches: 7, total: 18_240.75 } });
+    expect(html).not.toContain("Quiet night");
+    expect(html).toContain("$18240.75");
+    expect(html).toContain("7 ");
+  });
+  it("matured referral earnings granted as credits are reported", () => {
+    const html = composeNightlyDigest({ ...quiet, referralCredits: { granted: 4, total: 100 } });
+    expect(html).not.toContain("Quiet night");
+    expect(html).toContain("$100.00");
+  });
+  it("collected cancellation fees are reported", () => {
+    const html = composeNightlyDigest({ ...quiet, cancellationFees: { collected: 2, total: 47.5 } });
+    expect(html).not.toContain("Quiet night");
+    expect(html).toContain("$47.50");
+  });
+  it("reconciled refunds are reported (cash the machine healed on its own)", () => {
+    const html = composeNightlyDigest({ ...quiet, refundsReconciled: { orphansCleared: 1, flipsCompleted: 2 } });
+    expect(html).not.toContain("Quiet night");
+    expect(html).toContain("2");
+  });
+  it("all the money lines land in ONE section, in one email", () => {
+    const html = composeNightlyDigest({
+      ...quiet,
+      referralPayouts: { beneficiaries: 3, total: 412.5 },
+      crewPayouts: { batches: 7, total: 18_240.75 },
+      referralCredits: { granted: 4, total: 100 },
+      cancellationFees: { collected: 2, total: 47.5 },
+      refundsReconciled: { orphansCleared: 1, flipsCompleted: 2 },
+    });
+    expect(html.match(/<h3>Money moved/g) ?? []).toHaveLength(1);
+  });
+  it("a genuinely quiet money night stays quiet — zeros never manufacture a section", () => {
+    const html = composeNightlyDigest({
+      ...quiet,
+      referralPayouts: { beneficiaries: 0, total: 0 },
+      crewPayouts: { batches: 0, total: 0 },
+      referralCredits: { granted: 0, total: 0 },
+      cancellationFees: { collected: 0, total: 0 },
+      refundsReconciled: { orphansCleared: 0, flipsCompleted: 0 },
+    });
+    expect(html).toBe("<p>Quiet night — nothing needed a human. 🌊</p>");
+  });
+});
+
+// AUDIT BUG 10b: the AI section was gated solely on aiAutoReplies > 0, but
+// that number comes from a head-count query via `aiCount ?? 0` while the texts
+// come from a different query. A null count zeroed the gate while the texts
+// survived — and the safety net (seeing what the machine promised a customer
+// overnight) silently disappeared.
+describe("composeNightlyDigest — AI replies survive a null count (audit bug 10b)", () => {
+  it("renders the texts when the count came back 0 but texts exist", () => {
+    const html = composeNightlyDigest({
+      ...quiet,
+      aiAutoReplies: 0,
+      aiReplyTexts: ["We'll have someone out Tuesday and there's no charge for the visit."],
+    });
+    expect(html).toContain("AI auto-replies");
+    expect(html).toContain("no charge for the visit");
+  });
+  it("falls back to the number of texts it can actually show", () => {
+    const html = composeNightlyDigest({ ...quiet, aiAutoReplies: 0, aiReplyTexts: ["a", "b"] });
+    expect(html).toContain("2 customer messages got an AI auto-reply");
+  });
+  it("no count and no texts is still silence", () => {
+    expect(composeNightlyDigest({ ...quiet, aiAutoReplies: 0, aiReplyTexts: [] })).toBe(
+      "<p>Quiet night — nothing needed a human. 🌊</p>",
+    );
+  });
+});

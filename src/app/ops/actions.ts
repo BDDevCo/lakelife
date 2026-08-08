@@ -2,7 +2,7 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import { sendSms } from "@/lib/sms";
-import { todayLakeDate, dayStatus } from "@/lib/booking";
+import { todayLakeDate, dayStatus, effectiveSeason, validateSeasonDates } from "@/lib/booking";
 import { runRouteBuild } from "@/lib/automation";
 import { getPlatformSettings } from "@/lib/settings";
 import { assertOps } from "./data";
@@ -10,19 +10,15 @@ import { assertOps } from "./data";
 export interface OpsResult {
   ok: boolean;
   error?: string;
+  /** Saved, but something about the save is worth saying out loud (e.g. a
+   *  lake left closed for water work because ice-out is still unknown). */
+  warning?: string;
 }
 
 const SLOTS = new Set(["8a", "10a", "1p", "3p"]);
 
 function isISODate(s: unknown): s is string {
   return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
-}
-
-/** Subtract days from an ISO date string, returning ISO (no TZ drift). */
-function minusDays(iso: string, days: number): string {
-  const d = new Date(iso + "T12:00:00");
-  d.setDate(d.getDate() - days);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 /**
@@ -80,21 +76,28 @@ export async function assignAndSchedule(
       .maybeSingle();
     const lake = (Array.isArray(propRow?.lakes) ? propRow?.lakes[0] : propRow?.lakes) as
       | { ice_out_actual?: string; pull_deadline?: string } | undefined;
-    const seasonStart = lake?.ice_out_actual ?? null;
-    const seasonEnd = lake?.pull_deadline ?? null;
+    const today = todayLakeDate();
     const status = dayStatus(input.date, {
-      today: todayLakeDate(),
+      today,
       isWaterWork: true,
-      seasonStart: seasonStart ?? null,
-      seasonEnd: seasonEnd ?? null,
+      seasonStart: lake?.ice_out_actual ?? null,
+      seasonEnd: lake?.pull_deadline ?? null,
       fullDates: new Set<string>(),
       rushNowHour: 12,
       rushCutoffHour: 24,
     });
     if (status === "off-season") {
+      // Report the window dayStatus actually used, and say when it's a rolled
+      // guess rather than a confirmed ice-out (audit finding 1) — otherwise
+      // the refusal quotes dates ops can't find on the lake card.
+      const eff = effectiveSeason(
+        { iceOut: lake?.ice_out_actual ?? null, pullDeadline: lake?.pull_deadline ?? null },
+        today,
+      );
+      const note = eff.wasRolled ? " — provisional dates, rolled from last season; confirm them on Lake conditions" : "";
       return {
         ok: false,
-        error: `Outside the water-work window for this lake (ice-out ${seasonStart ?? "not set"}, pull by ${seasonEnd ?? "not set"}).`,
+        error: `Outside the water-work window for this lake (ice-out ${eff.seasonStart ?? "not set"}, pull by ${eff.seasonEnd ?? "not set"}${note}).`,
       };
     }
   }
@@ -190,6 +193,13 @@ export async function buildRoutesForDate(dateISO?: string): Promise<BuildRoutesR
  * Update a lake's season dates (ops only). The pull deadline is derived, not
  * entered: hard freeze − 8 days (rule 7). Saving reflows the customer booking
  * calendar, which already reads ice_out_actual + pull_deadline.
+ *
+ * Validation lives in the pure `validateSeasonDates` (src/lib/booking.ts) —
+ * format was the whole gate before, and the two-season audit (finding 8)
+ * showed what got through: the two dates swapped into each other's boxes
+ * saved fine and closed the lake's entire water calendar with no error, and a
+ * blank ice-out saved fine and left the lower half of the gate open. Marking
+ * the season confirmed is what turns off the provisional year-roll.
  */
 export async function updateLakeConditions(
   lakeId: string,
@@ -200,16 +210,21 @@ export async function updateLakeConditions(
 
   const iceOut = input.iceOut === "" ? null : input.iceOut;
   const hardFreeze = input.hardFreeze === "" ? null : input.hardFreeze;
-  if (iceOut != null && !isISODate(iceOut)) return { ok: false, error: "Ice-out must be a valid date." };
-  if (hardFreeze != null && !isISODate(hardFreeze)) return { ok: false, error: "Hard freeze must be a valid date." };
-
-  const pullDeadline = hardFreeze != null ? minusDays(hardFreeze, 8) : null;
+  const check = validateSeasonDates({ iceOut, hardFreeze });
+  if (!check.ok) return { ok: false, error: check.error };
 
   const admin = createServiceClient();
   const { error } = await admin
     .from("lakes")
-    .update({ ice_out_actual: iceOut, hard_freeze_est: hardFreeze, pull_deadline: pullDeadline })
+    .update({
+      ice_out_actual: iceOut,
+      hard_freeze_est: hardFreeze,
+      pull_deadline: check.pullDeadline,
+      // A human just typed these: they are this season's real dates, not a
+      // rolled guess, so the lake stops being provisional.
+      season_confirmed: iceOut != null && hardFreeze != null,
+    })
     .eq("id", lakeId);
   if (error) return { ok: false, error: error.message };
-  return { ok: true };
+  return { ok: true, warning: check.warning };
 }

@@ -2,6 +2,7 @@ import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { slugify } from "@/lib/lake-pages";
 import { normalizeLakeName } from "@/lib/lake-name";
+import { effectiveSeason, addYearsISO, todayLakeDate } from "@/lib/booking";
 
 /**
  * Demand-born lakes (owner directive, 2026-07-23): a customer whose lake
@@ -24,9 +25,10 @@ export interface LakeBirthResult {
  * Dedup is slug-based (the same normalization the public pages use), so
  * "big long", "Big Long", and "Big Long Lake" all resolve to one row.
  * A NEW lake copies season dates from an existing lake (same Indiana
- * climate) as a FAIL-SAFE default — null dates would disable the
- * water-work season gate — and is flagged season_confirmed=false with an
- * ops FYI so the dates get trued up. No approval step anywhere.
+ * climate) as a PROVISIONAL default, rolled onto the current season year
+ * so the born lake can actually take water bookings, and is flagged
+ * season_confirmed=false with an ops FYI so the dates get trued up. No
+ * approval step anywhere.
  */
 export async function findOrCreateLake(
   rawName: string,
@@ -59,6 +61,20 @@ export async function findOrCreateLake(
     .limit(1)
     .maybeSingle();
 
+  // Copy the donor's month/day onto THIS season's year (audit finding 2).
+  // Verbatim inheritance handed a lake born in season 2 season 1's absolute
+  // dates, so zero of its next 200 days were bookable for water work — the
+  // customer who names a lake to get a pier installed was exactly the person
+  // who could not book one. Still season_confirmed = false: provisional, and
+  // a human trues it up off the nightly ops FYI.
+  const eff = effectiveSeason(
+    { iceOut: (donor?.ice_out_actual as string | null) ?? null, pullDeadline: (donor?.pull_deadline as string | null) ?? null },
+    todayLakeDate(),
+  );
+  // The freeze estimate rides the SAME roll, so rule 7's pull = freeze − 8
+  // still holds on the born row.
+  const hardFreeze = addYearsISO((donor?.hard_freeze_est as string | null) ?? null, eff.yearsRolled);
+
   const { data: born, error: insErr } = await admin
     .from("lakes")
     .insert({
@@ -66,9 +82,9 @@ export async function findOrCreateLake(
       slug,
       source,
       season_confirmed: false,
-      ice_out_actual: donor?.ice_out_actual ?? null,
-      hard_freeze_est: donor?.hard_freeze_est ?? null,
-      pull_deadline: donor?.pull_deadline ?? null,
+      ice_out_actual: eff.seasonStart,
+      hard_freeze_est: hardFreeze,
+      pull_deadline: eff.seasonEnd,
     })
     .select("id, name")
     .single();

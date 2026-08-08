@@ -51,7 +51,11 @@ export interface AddTerm {
 export interface PricingParams {
   /** per_section: which profile field to count (default "pier_sections"). */
   count_field?: CountableField;
-  /** per_section: floor the count at this value (prototype floors lifts at 1). */
+  /**
+   * per_section: floor the count at this value (prototype floors lifts at 1).
+   * The floor only ever raises a count an OWNER already has — it can never
+   * conjure equipment from zero; serviceApplies() runs first (audit bug 5).
+   */
   min_count?: number;
   /** band: price per band key. */
   small?: number;
@@ -115,11 +119,59 @@ function profileValue(p: PricingProfile, field: AddTerm["field"]): number {
 }
 
 /**
+ * The equipment fields a rule's own data says the work is measured in.
+ *
+ * Two sources, both already in `band_pricing` — no new column, rule 8 intact:
+ *  1. `count_field` — the per_section counter (pier sections, lifts, skis).
+ *  2. a FLAT rule's `add` terms. This is the water-toy case, and the audit
+ *     (two-season audit 2026-07, bug 5) is right to count it as phantom: the
+ *     $120 base is the *visit fee* for handling the things the `add` terms
+ *     name (toy lifts, loose toys). With none of them there is nothing to
+ *     pull, wrap or store — the crew drives out to a bare shoreline. A flat
+ *     rule that names no equipment (spring opening, fall winterization,
+ *     battery care) has an empty list here and always applies, which is why
+ *     the gate cannot touch the seasonal and land services.
+ */
+export function countedFields(rule: ServiceRule): CountableField[] {
+  const cfg: PricingParams = rule.band_pricing ?? {};
+  if (cfg.count_field) return [cfg.count_field];
+  if (rule.pricing_model === "flat" && Array.isArray(cfg.add) && cfg.add.length) {
+    return cfg.add.map((t) => t.field);
+  }
+  return [];
+}
+
+/**
+ * Does this service have anything to DO at this property?
+ *
+ * Audit bug 5: the "$0 means you don't own this" guard in createBooking only
+ * ever protected pure multipliers, so a `base` (pier $220, water toys $120)
+ * or a `min_count` floor (boat lift $495) quoted a real, bookable price to
+ * someone who owns none of it — ~455 phantom tiles per 1,000 customers, each
+ * one a crew driving to a property with nothing to do. Applicability is now
+ * an explicit property of (rule, profile) instead of something the arithmetic
+ * was hoped to reach, so it is stateable and testable on its own.
+ *
+ * A rule that counts nothing always applies — lawn, housekeeping, opening and
+ * winterization are unaffected.
+ */
+export function serviceApplies(rule: ServiceRule, p: PricingProfile): boolean {
+  const fields = countedFields(rule);
+  if (fields.length === 0) return true;
+  return fields.some((f) => profileValue(p, f) > 0);
+}
+
+/**
  * Compute the customer price for one service against one property profile.
- * Always returns a finite number ≥ 0.
+ * Always returns a finite number ≥ 0, and exactly 0 when the service does
+ * not apply to the property at all.
  */
 export function priceService(rule: ServiceRule, p: PricingProfile): number {
   const cfg: PricingParams = rule.band_pricing ?? {};
+
+  // Nothing to do here → no price, no tile, no booking (audit bug 5).
+  if (!serviceApplies(rule, p)) return 0;
+
   let price = 0;
 
   switch (rule.pricing_model) {

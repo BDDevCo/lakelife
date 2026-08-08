@@ -260,3 +260,107 @@ describe("planFleetDay — zero trucks", () => {
     expect(plan.totalKm).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// AUDIT BUG 3 (docs/two-season-audit-2026-07.md): planFleetDay handed a whole
+// LAKE cluster to the truck with the most remaining JOB SLOTS and never
+// rebalanced, so one truck opened the morning to an over-hours route (62 per
+// 1,000 customers per season) while a sibling truck of the same fleet got
+// nothing. Owner call: lake grouping is a SOFT preference, trucks balance on
+// MINUTES (work + drive), and a cluster may split when keeping it whole would
+// bust hours. The two invariants below that fix must never break: every job
+// placed EXACTLY once, and a vendor with zero trucks untouched.
+// ---------------------------------------------------------------------------
+describe("planFleetDay — balances on MINUTES, not job counts (audit bug 3)", () => {
+  const winterizations = (n: number): FleetStop[] =>
+    Array.from({ length: n }, (_, i) =>
+      mkStop({ id: `s${i}`, lat: 41.65 + i * 0.001, lng: -85.38 + i * 0.001, lake_name: "Big Long", estMinutes: 120 }),
+    );
+  const twoTrucks = (): TruckIn[] => [
+    mkTruck({ id: "A", name: "A", capacity: 8, workStart: 7, workEnd: 15, baseLat: 41.65, baseLng: -85.38 }), // 8h
+    mkTruck({ id: "B", name: "B", capacity: 8, workStart: 7, workEnd: 16, baseLat: 41.65, baseLng: -85.38 }), // 9h
+  ];
+
+  it("splits a same-lake cluster rather than busting one truck while its sibling sits empty", () => {
+    // The audit's exact repro: 5 fall winterizations (the real 120-min dial)
+    // on ONE lake, a fleet of two 8-slot trucks. Count-based partition put all
+    // five on truck A (600+ min into a 480-min window) and left B idle.
+    const plan = planFleetDay(winterizations(5), twoTrucks(), { lat: 41.65, lng: -85.38 });
+
+    expect(plan.trucks).toHaveLength(2);
+    expect(plan.trucks.every((t) => t.fitsHours)).toBe(true);
+    expect(plan.overflow).toEqual([]);
+    // Both trucks carry real work — nobody is handed an impossible day.
+    for (const t of plan.trucks) expect(t.ordered.length).toBeGreaterThan(0);
+  });
+
+  it("gives a fresh cluster to the truck with the fewest MINUTES, not the most open slots", () => {
+    // Truck A: 20 slots but a 3-hour window. Truck B: 4 slots, a 10-hour day.
+    // Count-based partition always picked A (most remaining slots) and busted
+    // it; the minute-balanced plan hands the second lake to B.
+    const trucks: TruckIn[] = [
+      mkTruck({ id: "A", capacity: 20, workStart: 7, workEnd: 10, baseLat: 41.65, baseLng: -85.38 }),
+      mkTruck({ id: "B", capacity: 4, workStart: 7, workEnd: 17, baseLat: 41.65, baseLng: -85.38 }),
+    ];
+    const stops = [
+      mkStop({ id: "a1", lat: 41.650, lng: -85.380, lake_name: "Big Long", estMinutes: 80 }),
+      mkStop({ id: "a2", lat: 41.651, lng: -85.381, lake_name: "Big Long", estMinutes: 80 }),
+      mkStop({ id: "b1", lat: 41.500, lng: -85.350, lake_name: "Pretty", estMinutes: 120 }),
+      mkStop({ id: "b2", lat: 41.501, lng: -85.351, lake_name: "Pretty", estMinutes: 120 }),
+    ];
+    const plan = planFleetDay(stops, trucks, null);
+    // Partition, not route order (planTruckRoute owns the within-truck order).
+    const byTruck = new Map(plan.trucks.map((t) => [t.truck.id, [...t.ordered.map((s) => s.id)].sort()]));
+    expect(byTruck.get("A")).toEqual(["a1", "a2"]);
+    expect(byTruck.get("B")).toEqual(["b1", "b2"]);
+    expect(plan.trucks.every((t) => t.fitsHours)).toBe(true);
+  });
+
+  it("INVARIANT: every job placed exactly once — none dropped, none duplicated", () => {
+    // Mixed lakes, mixed durations, uneven windows and capacities, plus a
+    // stop with no coordinates: the shapes the sim drives at scale.
+    const stops = [
+      ...winterizations(6),
+      mkStop({ id: "p1", lat: 41.50, lng: -85.35, lake_name: "Pretty", estMinutes: 45 }),
+      mkStop({ id: "p2", lat: 41.51, lng: -85.35, lake_name: "Pretty", estMinutes: 240 }),
+      mkStop({ id: "t1s", lat: 41.40, lng: -85.20, lake_name: "Big Turkey", estMinutes: 30 }),
+      mkStop({ id: "nowhere", lat: null, lng: null, lake_name: null, estMinutes: 60 }),
+    ];
+    const trucks = [
+      mkTruck({ id: "A", capacity: 4, workStart: 7, workEnd: 15, baseLat: 41.65, baseLng: -85.38 }),
+      mkTruck({ id: "B", capacity: 3, workStart: 8, workEnd: 16, baseLat: 41.50, baseLng: -85.35 }),
+      mkTruck({ id: "C", capacity: 2, workStart: 8, workEnd: 12, baseLat: null, baseLng: null }),
+    ];
+    const plan = planFleetDay(stops, trucks, { lat: 41.6, lng: -85.3 });
+
+    const placed = [...plan.trucks.flatMap((t) => t.ordered.map((s) => s.id)), ...plan.overflow.map((s) => s.id)];
+    expect(placed).toHaveLength(stops.length);
+    expect(new Set(placed).size).toBe(stops.length);
+    expect([...placed].sort()).toEqual(stops.map((s) => s.id).sort());
+    // Capacity stays a hard cap even while minutes drive the balance.
+    for (const t of plan.trucks) expect(t.ordered.length).toBeLessThanOrEqual(t.truck.capacity);
+  });
+
+  it("INVARIANT: still deterministic — same inputs, byte-identical plan", () => {
+    const stops = winterizations(9);
+    const summarize = (p: ReturnType<typeof planFleetDay>) => ({
+      trucks: p.trucks.map((tp) => ({ id: tp.truck.id, ids: tp.ordered.map((s) => s.id), km: tp.driveKm, work: tp.workMinutes })),
+      overflow: p.overflow.map((s) => s.id),
+      totalKm: p.totalKm,
+    });
+    expect(summarize(planFleetDay(stops, twoTrucks(), null))).toEqual(summarize(planFleetDay(stops, twoTrucks(), null)));
+  });
+
+  it("INVARIANT: a fleet that cannot fit the day anywhere still places every stop (flagged, never dropped)", () => {
+    // One truck, one hour, three 3-hour jobs: nothing fits. The plan must
+    // still carry all three and say so with fitsHours=false.
+    const stops = Array.from({ length: 3 }, (_, i) =>
+      mkStop({ id: `x${i}`, lat: 41.6 + i * 0.01, lng: -85.2, lake_name: "Big Long", estMinutes: 180 }),
+    );
+    const plan = planFleetDay(stops, [mkTruck({ id: "solo", capacity: 5, workStart: 8, workEnd: 9 })], null);
+    expect(plan.trucks).toHaveLength(1);
+    expect(plan.trucks[0].ordered).toHaveLength(3);
+    expect(plan.trucks[0].fitsHours).toBe(false);
+    expect(plan.overflow).toEqual([]);
+  });
+});

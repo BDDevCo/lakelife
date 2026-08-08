@@ -10,7 +10,7 @@ import { planFleetDay, jobMinutesOf, type TruckIn, type FleetStop } from "@/lib/
 import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 import { proposeAutopilotDate } from "@/lib/autopilot";
 import { shouldDemote, healBase, isCoolingDown } from "@/lib/lake-standing";
-import { warningDue, isExpired } from "@/lib/waitlist";
+import { warningDue, isExpired, WAITLIST_WARNING_KIND } from "@/lib/waitlist";
 import { rushWindowOpen } from "@/lib/rush";
 import { isLastDayOfMonth, nudgeCooling, nearMilestone } from "@/lib/growth";
 import { withinSunset, customerReferralAccrual, crewShareAccrual, creditToApply } from "@/lib/referrals";
@@ -738,7 +738,7 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
  * isn't paid, retry the saved card, and — only once the money is actually in —
  * release the crew's proportional share (roadmap §2: paid from fees COLLECTED).
  */
-export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: number; collected: number }> {
+export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: number; collected: number; collectedAmount: number }> {
   const admin = createServiceClient();
   // Inner-join on UNPAID invoices so paid/free-cancelled rows never occupy the
   // scan window (expired-waitlist cancels accumulate forever — an unfiltered
@@ -752,7 +752,9 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
     .limit(200);
 
   const tenMinAgo = new Date(Date.now() - 10 * 60_000).toISOString();
-  let retried = 0, collected = 0;
+  // collectedAmount: the DOLLARS, not just the count — the nightly digest
+  // has to be able to say what money moved tonight (audit bug 10a).
+  let retried = 0, collected = 0, collectedAmount = 0;
   for (const j of jobs ?? []) {
     const invRaw = j.invoices as { id?: string; status?: string; amount?: number; created_at?: string }[] | { id?: string; status?: string; amount?: number; created_at?: string } | null;
     const inv = (Array.isArray(invRaw) ? invRaw[0] : invRaw) ?? null;
@@ -797,6 +799,7 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
       await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null }).eq("id", inv.id);
     }
     collected++;
+    collectedAmount = Math.round((collectedAmount + fee) * 100) / 100;
 
     // Fee is in — release the crew's proportional share (same pct of THEIR
     // rate as the fee is of the customer price), once.
@@ -812,14 +815,22 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
       }
     }
   }
-  return { ok: true, retried, collected };
+  return { ok: true, retried, collected, collectedAmount };
 }
+
+/**
+ * The ledger state an earning lands on once it has been SETTLED AS CREDITS.
+ * There is no 'credited' status in the schema (0028: accrued|matured|paid|
+ * void), and 'paid' is what the batch already stamped on credit-settled rows
+ * — so 'paid' means "closed out, nothing further owed", by either rail.
+ */
+const CREDIT_SETTLED_STATUS = "paid";
 
 /** Referral maturation (§8b): accruals become SPENDABLE after the clawback
  *  window. Homeowner/HOA beneficiaries get service credits; crew beneficiaries
  *  flip to 'matured' and ride the payout batch when it runs. Idempotent —
  *  guarded status flips, one credit grant per earning row. */
-export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: number; credited: number }> {
+export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: number; credited: number; creditedAmount: number }> {
   const admin = createServiceClient();
   const { referralMaturationDays } = await getPlatformSettings();
   const cutoff = new Date(Date.now() - referralMaturationDays * 86_400_000).toISOString();
@@ -831,7 +842,23 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
     .order("accrued_at", { ascending: true })
     .limit(200);
 
-  let matured = 0, credited = 0;
+  let matured = 0, credited = 0, creditedAmount = 0;
+  /**
+   * AUDIT BUG 4: a credit grant is a SETTLEMENT — the beneficiary has been
+   * paid, in credits. Leaving the earning at 'matured' parked it in the
+   * payout batch's 500-row window forever, crowding out crews and HOAs who
+   * are owed actual cash. Close it out the moment the credit lands (guarded
+   * flip, so a concurrent void still wins), and the window only ever holds
+   * rows representing real money to move.
+   */
+  const closeOutAsCredited = async (earningId: string): Promise<void> => {
+    const { error } = await admin
+      .from("referral_earnings")
+      .update({ status: CREDIT_SETTLED_STATUS })
+      .eq("id", earningId)
+      .eq("status", "matured");
+    if (error) console.error(`[referral mature ${earningId}] credit close-out failed:`, error.message);
+  };
   const grantFor = async (earningId: string, beneficiary: string, amount: number, kind: string): Promise<boolean> => {
     const { data: isVendor } = await admin.from("vendors").select("id").eq("user_id", beneficiary).maybeSingle();
     // SIM-FOUND (Wave 2): a lake association is a users row like any owner —
@@ -863,7 +890,11 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
       .select("id");
     if (!won || won.length === 0) continue;
     matured++;
-    if (await grantFor(e.id as string, e.beneficiary as string, Number(e.amount), e.kind as string)) credited++;
+    if (await grantFor(e.id as string, e.beneficiary as string, Number(e.amount), e.kind as string)) {
+      credited++;
+      creditedAmount = Math.round((creditedAmount + Number(e.amount ?? 0)) * 100) / 100;
+      await closeOutAsCredited(e.id as string);
+    }
   }
 
   // BACKFILL: recently-matured earnings whose credit never landed (crash
@@ -880,11 +911,20 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
       .from("user_credits").select("earning_id").in("earning_id", recent.map((r) => r.id));
     const granted = new Set((creditRows ?? []).map((c) => c.earning_id as string));
     for (const e of recent) {
-      if (granted.has(e.id as string)) continue;
-      if (await grantFor(e.id as string, e.beneficiary as string, Number(e.amount), e.kind as string)) credited++;
+      // Already credited but still sitting at 'matured' (a pre-fix row, or a
+      // crash between the grant and the close-out): close it, don't re-grant.
+      if (granted.has(e.id as string)) {
+        await closeOutAsCredited(e.id as string);
+        continue;
+      }
+      if (await grantFor(e.id as string, e.beneficiary as string, Number(e.amount), e.kind as string)) {
+        credited++;
+        creditedAmount = Math.round((creditedAmount + Number(e.amount ?? 0)) * 100) / 100;
+        await closeOutAsCredited(e.id as string);
+      }
     }
   }
-  return { ok: true, matured, credited };
+  return { ok: true, matured, credited, creditedAmount };
 }
 
 /**
@@ -896,11 +936,56 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
  * Real money movement rides the crew remittance rails when the processor
  * lands — until then the flip + statement IS the batch, idempotently.
  */
-export async function runReferralPayoutBatch(force = false): Promise<{ ok: boolean; ran: boolean; beneficiaries: number; total: number }> {
+export async function runReferralPayoutBatch(force = false): Promise<{ ok: boolean; ran: boolean; beneficiaries: number; total: number; creditSettledClosed: number }> {
   const today = todayLakeDate();
-  if (!force && !isLastDayOfMonth(today)) return { ok: true, ran: false, beneficiaries: 0, total: 0 };
+  if (!force && !isLastDayOfMonth(today)) return { ok: true, ran: false, beneficiaries: 0, total: 0, creditSettledClosed: 0 };
   const admin = createServiceClient();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+
+  // AUDIT BUG 4 — DRAIN THE SILT FIRST. Earnings already settled as credits
+  // (user_credits.earning_id is the linkage) used to sit at 'matured'
+  // forever; as the credit ledger grew they filled the 500-row window below
+  // and crews and HOAs owed actual CASH stopped getting paid. Maturation now
+  // closes these out at the source, so this is the one-time backlog sweep —
+  // and the permanent belt-and-braces for any row that slips through.
+  //
+  // Paging note: closing a row REMOVES it from the matured set, so the offset
+  // only advances by the rows this page could NOT close. Otherwise the shift
+  // would skip un-closeable rows and the sweep would never terminate cleanly.
+  const PAGE = 500;
+  const MAX_PAGES = 40; // 20k rows a night — far past any real backlog
+  let creditSettledClosed = 0;
+  let offset = 0;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data: scan } = await admin
+      .from("referral_earnings")
+      .select("id")
+      .eq("status", "matured")
+      // TOTAL ordering (id breaks matured_at ties): equal timestamps under a
+      // partial sort can shuffle between pages, which would let a row slip
+      // the scan. Seeing one twice is harmless — the flip is guarded.
+      .order("matured_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(offset, offset + PAGE - 1);
+    if (!scan || scan.length === 0) break;
+    const { data: creditRows } = await admin
+      .from("user_credits").select("earning_id").in("earning_id", scan.map((r) => r.id));
+    const settled = new Set((creditRows ?? []).map((c) => c.earning_id as string));
+    let closedThisPage = 0;
+    for (const id of scan.map((r) => r.id as string)) {
+      if (!settled.has(id)) continue;
+      const { data: done } = await admin
+        .from("referral_earnings")
+        .update({ status: CREDIT_SETTLED_STATUS })
+        .eq("id", id)
+        .eq("status", "matured")
+        .select("id");
+      if (done && done.length > 0) closedThisPage++;
+    }
+    creditSettledClosed += closedThisPage;
+    offset += scan.length - closedThisPage;
+    if (scan.length < PAGE) break;
+  }
 
   const { data: matured } = await admin
     .from("referral_earnings")
@@ -908,8 +993,9 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
     .eq("status", "matured")
     .limit(500);
 
-  // Only vendor/HOA-type beneficiaries batch out; (customers were already
-  // granted credits at maturation and never reach 'matured' with money owed).
+  // Only vendor/HOA-type beneficiaries batch out; customers settled as
+  // credits at maturation are CLOSED OUT above, so the window they used to
+  // silt up now holds only rows that still represent real money to move.
   const byUser = new Map<string, { ids: string[]; total: number }>();
   for (const e of matured ?? []) {
     const u = byUser.get(e.beneficiary as string) ?? { ids: [], total: 0 };
@@ -942,11 +1028,14 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
     for (const id of u.ids) {
       // Double-pay guard (sim final audit): an earning already granted as
       // credits (user_credits.earning_id linkage) never ALSO rides a bank
-      // batch — mark it paid-with-no-money and move on.
+      // batch — close it out with no money and move on. The drain above
+      // normally catches these; this stays as the per-row last word.
       const { data: credited } = await admin
         .from("user_credits").select("id").eq("earning_id", id).limit(1);
       if (credited && credited.length > 0) {
-        await admin.from("referral_earnings").update({ status: "paid" }).eq("id", id).eq("status", "matured");
+        const { data: closed } = await admin
+          .from("referral_earnings").update({ status: CREDIT_SETTLED_STATUS }).eq("id", id).eq("status", "matured").select("id");
+        if (closed && closed.length > 0) creditSettledClosed++;
         continue;
       }
       const { data: won } = await admin
@@ -990,7 +1079,7 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
       });
     }
   }
-  return { ok: true, ran: true, beneficiaries, total: Math.round(total * 100) / 100 };
+  return { ok: true, ran: true, beneficiaries, total: Math.round(total * 100) / 100, creditSettledClosed };
 }
 
 /**
@@ -1300,6 +1389,21 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
         void sendSms(phone, `LakeLife: we couldn't line up a crew in time for ${svc} at ${where} — so we've cancelled it and you were never charged. Rebook any open day (${site}/book), or invite a crew you trust and they're always first on your jobs (${site}/book). We're recruiting on your lake. 🌊`);
       }
     } else if (warningDue(j.date as string, today, waitlistWarningDays)) {
+      // AUDIT BUG 10d: the warning used to be a bare date equality — a missed
+      // nightly lost it forever, a manual re-run re-texted everyone in the
+      // window. warningDue now covers a short CATCH-UP window, and the
+      // sent-ledger (0049, unique on (job_id, kind)) is what makes it
+      // exactly-once: the INSERT is the claim, so two runs racing the same
+      // job produce one text. A duplicate means "already warned" — stay quiet.
+      const { error: logErr } = await admin
+        .from("waitlist_notice_log")
+        .insert({ job_id: j.id as string, kind: WAITLIST_WARNING_KIND });
+      if (logErr) {
+        if (!/duplicate|unique/i.test(logErr.message)) {
+          console.error(`[waitlist warn ${j.id}] ledger write failed:`, logErr.message);
+        }
+        continue; // never text without a durable record of having texted
+      }
       warned++;
       if (phone) {
         // If a price bump would unlock a crew RIGHT NOW (rung 3), say so in
@@ -2041,11 +2145,16 @@ export async function learnServiceDurations(): Promise<{ ok: boolean; updated: n
   const { learnedEstimate } = await import("@/lib/learning");
   const changes: Array<{ service: string; from: number; to: number; samples: number }> = [];
   for (const s of services ?? []) {
-    const current = Number(s.est_minutes ?? 0) || 60;
-    const res = learnedEstimate(current, samplesBySvc.get(s.id as string) ?? []);
+    // AUDIT BUG 10c: this used to coerce the stored dial with `|| 60` BEFORE
+    // learning, so a 0 dial (the seeded 'Storage overstay (per-diem)' row)
+    // never even reached learnedEstimate as invalid — it compared 60 to 60,
+    // reported moved=false, and the row stayed 0 forever. Pass what is
+    // ACTUALLY stored; learnedEstimate owns the invalid-dial case now.
+    const stored = Number(s.est_minutes ?? 0);
+    const res = learnedEstimate(stored, samplesBySvc.get(s.id as string) ?? []);
     if (res.moved) {
       await admin.from("services").update({ est_minutes: res.next }).eq("id", s.id);
-      changes.push({ service: s.name as string, from: current, to: res.next, samples: res.samples });
+      changes.push({ service: s.name as string, from: stored, to: res.next, samples: res.samples });
     }
   }
   return { ok: true, updated: changes.length, changes };
@@ -2245,6 +2354,24 @@ export async function sendNightlyDigest(results: {
   disputeSweep: { fired: number; escalated: number; quietCloses?: number; reconciled?: number };
   routes: { hoursBust?: number };
   gapSla: { alerted: number };
+  /**
+   * AUDIT BUG 10a — THE MONEY. The nightly runs the payout batches, the
+   * referral maturation, the cancellation-fee retries and the refund
+   * reconcile, then drops every one of them into an HTTP response nobody
+   * reads: month-end, the night the largest sum of the month leaves the
+   * account, read as "Quiet night — nothing needed a human."
+   *
+   * These are OPTIONAL on purpose — the cron route can be wired up on its own
+   * schedule and keeps compiling untouched meanwhile; each one absent is
+   * simply silence, exactly like every other empty digest section. Pass the
+   * results the route ALREADY collects: `payoutBatch`, `monthlyPayouts`,
+   * `referrals`, `feeReconcile`, `refundReconcile`.
+   */
+  payoutBatch?: { beneficiaries: number; total: number };
+  monthlyPayouts?: { batches: number; total: number };
+  referrals?: { credited: number; creditedAmount?: number };
+  feeReconcile?: { collected: number; collectedAmount?: number };
+  refundReconcile?: { orphansCleared: number; flipsCompleted: number };
 }): Promise<{ ok: boolean; sent: number }> {
   const admin = createServiceClient();
   const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString();
@@ -2285,9 +2412,27 @@ export async function sendNightlyDigest(results: {
     escalatedDisputes,
     lakesBorn,
     routes: results.routes,
-    aiAutoReplies: aiCount ?? 0,
+    // AUDIT BUG 10b: `aiCount ?? 0` on a null head-count zeroed the section's
+    // gate while the TEXTS (a different query) survived — the safety net
+    // disappeared silently. Fall back to what we can actually show; the
+    // renderer opens the section on texts OR a positive count either way.
+    aiAutoReplies: aiCount ?? aiReplyTexts.length,
     aiReplyTexts,
     gapSla: results.gapSla,
+    // The money rails (bug 10a). Absent = silence, zero = silence.
+    referralPayouts: results.payoutBatch
+      ? { beneficiaries: results.payoutBatch.beneficiaries, total: results.payoutBatch.total }
+      : undefined,
+    crewPayouts: results.monthlyPayouts
+      ? { batches: results.monthlyPayouts.batches, total: results.monthlyPayouts.total }
+      : undefined,
+    referralCredits: results.referrals
+      ? { granted: results.referrals.credited, total: results.referrals.creditedAmount }
+      : undefined,
+    cancellationFees: results.feeReconcile
+      ? { collected: results.feeReconcile.collected, total: results.feeReconcile.collectedAmount }
+      : undefined,
+    refundsReconciled: results.refundReconcile,
   };
   const html = composeNightlyDigest(sections);
 

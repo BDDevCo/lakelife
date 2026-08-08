@@ -22,15 +22,32 @@
  *  DETERMINISM: one inline mulberry32 PRNG, no Math.random anywhere. The seed
  *  is printed in every failure message so a red run reproduces exactly.
  *
- *  Assertions marked `SIM-FOUND BUG` pin the CURRENT behavior on purpose so
- *  the suite stays green while the defect stays documented (and detected if
- *  someone "fixes" it without telling anyone).
+ *  HISTORY: this file was written DURING the two-season audit
+ *  (docs/two-season-audit-2026-07.md) and its findings were originally PINNED
+ *  at the then-current (wrong) behavior so the suite stayed green while the
+ *  defect stayed documented. Those engine bugs were fixed in 2026-08, so each
+ *  of those pins is now a REGRESSION GUARD on the CORRECT behavior, labelled
+ *  `REGRESSION (audit bug N)` with a past-tense note about what used to
+ *  happen. Anything still labelled `SIM-FOUND` or `MEASURED near-miss` is a
+ *  finding that has NOT been fixed and is still pinned at current behavior.
  * ============================================================================
  */
 
 import { describe, it, expect } from "vitest";
-import { dayStatus, lakeDateOf, todayLakeDate, isRecurring, type DayContext, type DayStatus } from "../lib/booking";
-import { warningDue, isExpired } from "../lib/waitlist";
+import {
+  dayStatus,
+  lakeDateOf,
+  todayLakeDate,
+  isRecurring,
+  effectiveSeason,
+  validateSeasonDates,
+  isRealDate,
+  PULL_BUFFER_DAYS as ENGINE_PULL_BUFFER_DAYS,
+  pullDeadlineFrom,
+  type DayContext,
+  type DayStatus,
+} from "../lib/booking";
+import { warningDue, isExpired, DEFAULT_WARNING_CATCHUP_DAYS, WAITLIST_WARNING_KIND } from "../lib/waitlist";
 import { learnedEstimate, median, MIN_REAL_MINUTES, MAX_REAL_MINUTES, MIN_SAMPLES } from "../lib/learning";
 import { seasonEndFor, overstayDays, perdiemCharge, trueLegsToQuote } from "../lib/storage";
 import { shouldDemote, isCoolingDown, healBase } from "../lib/lake-standing";
@@ -227,19 +244,36 @@ describe("SEASON CLOCK · dayStatus is total across two seasons, 6 lakes, 10 ser
         // Determinism: the same inputs must always give the same answer.
         expect(dayStatus(target, ctx), S("dayStatus is not deterministic")).toBe(st);
 
+        // THE WINDOW RULE 7 IS ACTUALLY MEASURED AGAINST (audit bug 1, fixed
+        // 2026-08). dayStatus normalises the stored row through
+        // effectiveSeason, so a lake carrying LAST season's absolute dates is
+        // gated on this year's roll of them, not on the stale literals. The
+        // invariants below therefore compare against the EFFECTIVE window —
+        // the same pure helper the engine uses, never a reimplementation.
+        const eff = effectiveSeason({ iceOut: row.start, pullDeadline: row.end }, today);
+
         // ORDERING INVARIANTS (documented in booking.ts's header)
         if (target < today) expect(st, S(`a past date must be "past" (${target} < ${today})`)).toBe("past");
         if (!svc.water) expect(st, S("land work can never be off-season (rule 7 is water-only)")).not.toBe("off-season");
         if (st === "full") expect(ctx.fullDates.has(target), S("full must mean the day is in fullDates")).toBe(true);
         if (st === "off-season") {
           expect(svc.water, S("off-season implies water work")).toBe(true);
-          const before = !!row.start && target < row.start;
-          const after = !!row.end && target > row.end;
-          expect(before || after, S(`off-season outside the window: ${target} vs [${row.start}, ${row.end}]`)).toBe(true);
+          // Half a window is not a window — an unknown season fails CLOSED
+          // (audit bug 8b): a missing end is a legitimate off-season reason.
+          const unknown = !eff.seasonStart || !eff.seasonEnd;
+          const before = !!eff.seasonStart && target < eff.seasonStart;
+          const after = !!eff.seasonEnd && target > eff.seasonEnd;
+          expect(unknown || before || after, S(`off-season inside the effective window: ${target} vs [${eff.seasonStart}, ${eff.seasonEnd}] (stored [${row.start}, ${row.end}], today ${today})`)).toBe(true);
         }
         if (st === "available" || st === "rush") {
-          if (svc.water && row.start) expect(target >= row.start, S("bookable water work before ice-out — rule 7 breach")).toBe(true);
-          if (svc.water && row.end) expect(target <= row.end, S("bookable water work past the pull deadline — rule 7 breach")).toBe(true);
+          if (svc.water) {
+            // Rule 7, at full strength: a bookable water day is inside the
+            // effective window, and the window is KNOWN at both ends.
+            expect(eff.seasonStart, S("bookable water work with no ice-out on file — rule 7 breach")).not.toBeNull();
+            expect(eff.seasonEnd, S("bookable water work with no pull deadline on file — rule 7 breach")).not.toBeNull();
+            expect(target >= (eff.seasonStart as string), S(`bookable water work before ice-out — rule 7 breach (${target} < ${eff.seasonStart})`)).toBe(true);
+            expect(target <= (eff.seasonEnd as string), S(`bookable water work past the pull deadline — rule 7 breach (${target} > ${eff.seasonEnd})`)).toBe(true);
+          }
         }
         if (st === "rush") expect(target, S("rush is only ever TODAY")).toBe(today);
       }
@@ -302,11 +336,14 @@ describe("SEASON CLOCK · dayStatus is total across two seasons, 6 lakes, 10 ser
 // ===========================================================================
 
 describe("SEASON CLOCK · the year roll", () => {
-  it("SIM-FOUND BUG: season dates are a single absolute year — with no ops edit, ALL of season 2 is off-season", () => {
-    // Big Long Lake, straight from seed_lakes.sql. Nobody has touched the row
-    // since the 2026 season was entered (there is no auto-roll anywhere in
-    // the nightly ladder — only ops/actions.ts#updateLakeConditions writes
-    // ice_out_actual / pull_deadline).
+  it("REGRESSION (audit bug 1): the season rolls onto the current year with no ops edit", () => {
+    // Audit bug 1, fixed 2026-08. The lakes row holds ONE season's ABSOLUTE
+    // dates, and dayStatus used to read them literally — so the day year 1's
+    // pull deadline passed, every lake went 100% off-season for water work
+    // until a human retyped both dates on every lake. Land work kept booking,
+    // so the outage was silent. dayStatus now normalises through
+    // effectiveSeason(), which rolls a STALE window's month/day onto the
+    // current year. This pins that it stays rolled.
     const start = "2026-03-21";
     const end = "2026-11-14";
     let bookableDaysSeason2 = 0;
@@ -317,20 +354,30 @@ describe("SEASON CLOCK · the year roll", () => {
       });
       if (st === "available" || st === "rush") bookableDaysSeason2++;
     }
-    // CURRENT behavior, pinned: zero bookable water days in the whole of 2027.
-    expect(bookableDaysSeason2, S("the entire second season is off-season on stale dates")).toBe(0);
-    expect(dayStatus("2027-06-15", { today: "2027-04-01", isWaterWork: true, seasonStart: start, seasonEnd: end, fullDates: new Set() })).toBe("off-season");
-    // And it starts the day after year 1's pull deadline — a customer trying
-    // in November to book next spring's pier install already sees a dead
-    // calendar, months before anyone would think to look.
-    expect(dayStatus("2027-05-01", { today: "2026-11-15", isWaterWork: true, seasonStart: start, seasonEnd: end, fullDates: new Set() })).toBe("off-season");
+    // Was 0 — the whole second season was dead. Now the rolled window
+    // (2027-03-21 .. 2027-11-14) is open, so a full season of water days is
+    // bookable without anyone touching the lake row.
+    expect(bookableDaysSeason2, S("season 2 must sell water work on rolled dates")).toBeGreaterThan(200);
+    expect(dayStatus("2027-06-15", { today: "2027-04-01", isWaterWork: true, seasonStart: start, seasonEnd: end, fullDates: new Set() })).toBe("available");
+    // The rolled window's EDGES must still hold — rolling must never widen the
+    // season or weaken rule 7. Asked from JANUARY so both edges are in the
+    // future: dayStatus checks "past" before it checks the season, so asking
+    // about March from April answers "past", which tells us nothing about the
+    // window.
+    const fromJan = { today: "2027-01-15", isWaterWork: true, seasonStart: start, seasonEnd: end, fullDates: new Set<string>() };
+    expect(dayStatus("2027-03-20", fromJan), S("the day before the rolled ice-out is still closed")).toBe("off-season");
+    expect(dayStatus("2027-03-21", fromJan), S("the rolled ice-out day itself is open")).toBe("available");
+    expect(dayStatus("2027-11-14", fromJan), S("the rolled pull deadline is still bookable")).toBe("available");
+    expect(dayStatus("2027-11-15", fromJan), S("the day after the rolled deadline is closed")).toBe("off-season");
   });
 
-  it("SIM-FOUND BUG: a demand-born lake inherits the DONOR'S YEAR, so it is born off-season for water work", () => {
-    // lake-birth.ts copies ice_out_actual / pull_deadline verbatim from the
-    // newest confirmed lake. A lake born in season 2 therefore carries season
-    // 1's absolute dates and cannot take a single water booking.
-    const donor = { start: "2026-03-21", end: "2026-11-14" }; // 2026 row, never rolled
+  it("REGRESSION (audit bug 2): a demand-born lake can sell what it was born for", () => {
+    // Audit bug 2, fixed 2026-08. lake-birth.ts copied the donor lake's dates
+    // VERBATIM, year included, so a lake born in season 2 carried season 1's
+    // window and had ZERO bookable water days — the customer who named the
+    // lake to get a pier installed was exactly the person who could not book
+    // one. Inherited dates are now rolled onto the current season year.
+    const donor = { start: "2026-03-21", end: "2026-11-14" };
     const bornOn = "2027-05-11";
     let bookable = 0;
     for (let i = 1; i <= 200; i++) {
@@ -339,9 +386,9 @@ describe("SEASON CLOCK · the year roll", () => {
       });
       if (st !== "off-season") bookable++;
     }
-    expect(bookable, S("a lake born in season 2 has zero bookable water days")).toBe(0);
-    // Land work still flows — which is exactly why this hides: mowing and
-    // housekeeping book fine on the new lake, only the water money is dead.
+    // Was 0 of 200. The rolled window runs to 2027-11-14, so roughly the rest
+    // of the season is open from the day the lake is born.
+    expect(bookable, S("a lake born mid-season must be able to take water work")).toBeGreaterThan(150);
     expect(dayStatus(shift(bornOn, 30), {
       today: bornOn, isWaterWork: false, seasonStart: donor.start, seasonEnd: donor.end, fullDates: new Set(),
     })).toBe("available");
@@ -362,13 +409,25 @@ describe("SEASON CLOCK · the year roll", () => {
     expect(anyBookable, S("an inverted season pair makes EVERY day off-season, with no error anywhere")).toBe(false);
   });
 
-  it("SIM-FOUND BUG: setting only the hard freeze (leaving ice-out null) opens water work in January", () => {
-    // The ops form allows either field independently; a null ice-out disables
-    // the lower half of the gate entirely.
+  it("REGRESSION (audit bug 8): an unknown ice-out fails CLOSED, not open", () => {
+    // Audit bug 8, fixed 2026-08. The ops form allows either date
+    // independently, and a null ice-out used to disable the lower half of the
+    // gate entirely — so a pier install was bookable in mid-January, under the
+    // ice. Rule 7 defeated by an empty field. Half a window is not a window:
+    // water work now stays SHUT until both ends are known.
     const st = dayStatus("2027-01-15", {
       today: "2026-12-01", isWaterWork: true, seasonStart: null, seasonEnd: "2027-11-14", fullDates: new Set(),
     });
-    expect(st, S("water work under the ice is bookable when ice-out is null")).toBe("available");
+    expect(st, S("water work under the ice must be refused when ice-out is unknown")).toBe("off-season");
+    // Both ends unknown is equally closed for water work...
+    expect(dayStatus("2027-06-15", {
+      today: "2026-12-01", isWaterWork: true, seasonStart: null, seasonEnd: null, fullDates: new Set(),
+    })).toBe("off-season");
+    // ...but LAND work on a season-less lake is unaffected. Failing closed
+    // must not take the mowing down with it.
+    expect(dayStatus("2027-01-15", {
+      today: "2026-12-01", isWaterWork: false, seasonStart: null, seasonEnd: null, fullDates: new Set(),
+    }), S("land work never depends on the water season")).toBe("available");
   });
 
   it("a LATE-confirmed ice-out strands already-booked water jobs (the engine has no re-validation)", () => {
@@ -432,10 +491,36 @@ describe("LADDER · waitlist warning + expiry over two seasons", () => {
         if (exp && !(jobDate < today)) bad.push(`isExpired fired on/before the job date: ${jobDate} vs ${today}`);
       }
 
-      if (warnDays_fired.length > 1) bad.push(`warningDue fired ${warnDays_fired.length}× for job ${jobDate} (warnDays ${warnDays}): ${warnDays_fired.join(",")}`);
-      if (warnDays_fired.length === 1) {
-        if (warnDays_fired[0] !== shift(jobDate, -warnDays)) bad.push(`warning landed on ${warnDays_fired[0]}, expected ${shift(jobDate, -warnDays)}`);
-        if (!(warnDays_fired[0] < (firstExpiredDay ?? "9999"))) bad.push(`warning ${warnDays_fired[0]} did not precede expiry ${firstExpiredDay}`);
+      // Audit bug 10d, fixed 2026-08. warningDue used to be a pure equality on
+      // jobDate === today + warnDays, so ONE missed nightly (a deploy, an
+      // outage) dropped the customer's only warning forever. It is now a
+      // CATCH-UP WINDOW: it stays true for DEFAULT_WARNING_CATCHUP_DAYS + 1
+      // consecutive nights, and exactly-once delivery moved to the ledger
+      // (migration 0049) where it belongs. So the predicate's contract is no
+      // longer "fires once" — it is "opens on the boundary, never earlier,
+      // stays open a bounded number of nights, contiguously".
+      if (warnDays_fired.length > 0) {
+        const maxNights = DEFAULT_WARNING_CATCHUP_DAYS + 1;
+        if (warnDays_fired.length > maxNights) {
+          bad.push(`warning window ${warnDays_fired.length} nights > ${maxNights} for job ${jobDate} (warnDays ${warnDays}): ${warnDays_fired.join(",")}`);
+        }
+        // NEVER early: the window opens on the original boundary — or, for a
+        // job booked INSIDE its own window, on the first night it existed.
+        const opensOn = shift(jobDate, -warnDays);
+        const expectedFirst = createdDate > opensOn ? createdDate : opensOn;
+        if (warnDays_fired[0] !== expectedFirst) {
+          bad.push(`window opened on ${warnDays_fired[0]}, expected ${expectedFirst}`);
+        }
+        // Contiguous — a gap would mean a night where the catch-up silently lapsed.
+        for (let k = 1; k < warnDays_fired.length; k++) {
+          if (warnDays_fired[k] !== shift(warnDays_fired[k - 1], 1)) {
+            bad.push(`window not contiguous for job ${jobDate}: ${warnDays_fired.join(",")}`);
+            break;
+          }
+        }
+        // Every night of it still precedes expiry.
+        const last = warnDays_fired[warnDays_fired.length - 1];
+        if (!(last < (firstExpiredDay ?? "9999"))) bad.push(`warning ${last} did not precede expiry ${firstExpiredDay}`);
         warnedTotal++;
       } else {
         neverWarned++;
@@ -465,8 +550,14 @@ describe("LADDER · waitlist warning + expiry over two seasons", () => {
       const warnDays = int(r, 1, 14);
       const boundary = shift(today, warnDays);
       expect(warningDue(boundary, today, warnDays), S(`no fire on the boundary ${boundary} from ${today} @${warnDays}d`)).toBe(true);
+      // A job FURTHER out than the boundary must never fire — the window
+      // catches up on missed nights, it never runs ahead.
       expect(warningDue(shift(boundary, 1), today, warnDays), S("fired a day early")).toBe(false);
-      expect(warningDue(shift(boundary, -1), today, warnDays), S("fired a day late")).toBe(false);
+      // A job one day CLOSER than the boundary is the catch-up case: it fires
+      // when warnDays leaves room inside the window (audit bug 10d).
+      const closer = shift(boundary, -1);
+      const earliestOffset = Math.max(1, warnDays - DEFAULT_WARNING_CATCHUP_DAYS);
+      expect(warningDue(closer, today, warnDays), S(`catch-up window @${warnDays}d`)).toBe(warnDays - 1 >= earliestOffset);
     }
     // Explicit nasty edges.
     expect(warningDue("2028-02-29", "2028-02-27", 2)).toBe(true);
@@ -477,31 +568,29 @@ describe("LADDER · waitlist warning + expiry over two seasons", () => {
     expect(isExpired(null, "2026-05-01")).toBe(false);
   });
 
-  it("SIM-FOUND BUG (fragility): the warning is an exact-day equality — one skipped nightly run drops it forever", () => {
-    // There is no "warned_at" ledger and no catch-up window: warningDue is
-    // pure equality on jobDate === today + warnDays. If the cron misses that
-    // ONE night (deploy, outage, Vercel incident), no later night re-fires.
+  it("REGRESSION (audit bug 10d): a skipped nightly no longer drops the warning", () => {
+    // Audit bug 10d, fixed 2026-08. warningDue was a pure equality, so if the
+    // cron missed the ONE night the boundary fell on (a deploy, an outage, a
+    // Vercel incident) the customer went straight from silence to "we
+    // cancelled it" — losing their only chance to pick another day or invite
+    // their own crew. A catch-up window now recovers a missed night; the
+    // ledger in migration 0049 keeps delivery exactly-once.
     const jobDate = "2026-08-20";
-    const warnDays = 2;
-    const missedNight = shift(jobDate, -warnDays); // 2026-08-18
-    let firedOnAnyOtherNight = false;
-    for (const today of ALL_DAYS) {
-      if (today === missedNight) continue; // the run that never happened
-      if (warningDue(jobDate, today, warnDays)) firedOnAnyOtherNight = true;
-    }
-    expect(firedOnAnyOtherNight, S("a skipped nightly permanently loses the customer's warning")).toBe(false);
-    // Conversely, a manual re-run of the nightly on the SAME lake day re-sends
-    // it — the "exactly once" promise is cron discipline, not a ledger.
-    expect(warningDue(jobDate, missedNight, warnDays)).toBe(true);
-    expect(warningDue(jobDate, missedNight, warnDays)).toBe(true);
+    const warnDays = 7;
+    const boundary = shift(jobDate, -warnDays); // 2026-08-13
+    expect(warningDue(jobDate, boundary, warnDays), S("still fires on the boundary itself")).toBe(true);
+    // The night AFTER a missed boundary still owes the warning.
+    expect(warningDue(jobDate, shift(boundary, 1), warnDays), S("recovers one missed night")).toBe(true);
+    expect(warningDue(jobDate, shift(boundary, 2), warnDays), S("recovers two missed nights")).toBe(true);
+    // But it is BOUNDED — it does not nag every night up to the job date.
+    expect(
+      warningDue(jobDate, shift(boundary, DEFAULT_WARNING_CATCHUP_DAYS + 1), warnDays),
+      S("the window closes; it is a catch-up, not a daily nag"),
+    ).toBe(false);
+    // And it never fires before the boundary.
+    expect(warningDue(jobDate, shift(boundary, -1), warnDays), S("never early")).toBe(false);
   });
-});
 
-// ===========================================================================
-// BLOCK 4 — LEARNING: converge, don't oscillate, respect the damping band
-// ===========================================================================
-
-describe("LADDER · learnedEstimate over a season of real durations", () => {
   it("against a STABLE reality every dial reaches a fixed point and then stops moving (no 2-cycles)", () => {
     const r = mkRng(4);
     const bad: string[] = [];
@@ -624,17 +713,19 @@ describe("LADDER · learnedEstimate over a season of real durations", () => {
     expect(median([])).toBe(0);
   });
 
-  it("SIM-FOUND BUG: a zero/garbage est_minutes dial silently reports moved=false while the stored value stays wrong", () => {
-    // 0042_crew_units.sql seeds 'Storage overstay (per-diem)' with est_minutes
-    // = 0. learnedEstimate substitutes 60 internally, so when reality really
-    // is 60 minutes it returns { next: 60, moved: false } — and the caller
-    // (learnServiceDurations) only writes when `moved`, so the DB row stays 0
-    // forever. Every capacity/time-budget read then falls back per call.
+  it("REGRESSION (audit bug 10c): a zero/garbage est_minutes dial heals from real samples", () => {
+    // Audit bug 10c, fixed 2026-08. 0042_crew_units.sql seeds 'Storage
+    // overstay (per-diem)' with est_minutes = 0. learnedEstimate substituted
+    // 60 internally, so when reality really was 60 it returned
+    // { next: 60, moved: false } — and learnServiceDurations only writes when
+    // `moved`, so the row stayed 0 forever and every time-budget read fell
+    // back per call. An invalid stored dial is now treated as broken, not as
+    // a signal, and is corrected from the samples.
     const res = learnedEstimate(0, [60, 60, 60, 60, 60, 60]);
     expect(res.next).toBe(60);
-    expect(res.moved, S("a 0-minute dial that should be corrected to 60 reports no change")).toBe(false);
+    expect(res.moved, S("a 0-minute dial must be corrected from real samples")).toBe(true);
     // Same for a negative dial written by hand.
-    expect(learnedEstimate(-30, [60, 60, 60, 60, 60]).moved).toBe(false);
+    expect(learnedEstimate(-30, [60, 60, 60, 60, 60]).moved).toBe(true);
   });
 });
 
@@ -662,27 +753,28 @@ describe("SEASON CLOCK · winter-storage season roll", () => {
     }
   });
 
-  it("SIM-FOUND BUG: month + day dials are clamped independently, so seasonEndFor can emit a date that does not exist", () => {
+  it("REGRESSION (audit bug 9): the (month, day) dial pair always yields a real date", () => {
     // settings.ts clamps storage_season_end_month to [1,12] and
     // storage_season_end_day to [1,31] SEPARATELY. Day defaults to 31, so an
     // owner who moves the season end to April and leaves the day alone gets
     // "2027-04-31" — a string Postgres rejects on a `date` column, and which
     // the per-diem math silently reads as May 1.
-    expect(seasonEndFor("2026-10-15", 4, 31)).toBe("2027-04-31");
-    expect(isRealCalendarDate("2027-04-31"), S("April 31 is not a real date")).toBe(false);
-    expect(seasonEndFor("2026-10-15", 2, 30)).toBe("2027-02-30");
-    expect(seasonEndFor("2026-10-15", 2, 31)).toBe("2027-02-31");
+    // The (month, day) pair is now clamped to the month's REAL last day.
+    expect(seasonEndFor("2026-10-15", 4, 31)).toBe("2027-04-30");
+    expect(isRealCalendarDate("2027-04-30"), S("the emitted date must exist")).toBe(true);
+    expect(seasonEndFor("2026-10-15", 2, 30)).toBe("2027-02-28");
+    expect(seasonEndFor("2026-10-15", 2, 31)).toBe("2027-02-28");
+    // Leap-aware: Feb 29 is real in 2028 and must not be clamped away.
+    expect(seasonEndFor("2027-10-15", 2, 31)).toBe("2028-02-29");
 
-    // Money consequence 1: the meter starts LATE, because V8 rolls the
-    // impossible date forward instead of rejecting it.
-    expect(overstayDays("2027-05-01", "2027-04-31"), S("Apr 31 == May 1, so May 1 reads as on time")).toBe(0);
-    expect(overstayDays("2027-05-02", "2027-04-31")).toBe(1);
+    // Money consequence 1, closed: the meter now starts on the real due-out
+    // day instead of a day late.
+    expect(overstayDays("2027-05-01", "2027-04-30"), S("a boat one day over is one day over")).toBe(1);
 
-    // Money consequence 2: the string compare inside seasonEndFor uses the
-    // LEXICAL date, so an intake on May 1 2027 (which is the very same day as
-    // the bogus "2027-04-31") rolls a whole extra year — 365 free storage days.
-    expect(seasonEndFor("2027-05-01", 4, 31)).toBe("2028-04-31");
-    expect(diffDays("2028-05-01", "2027-05-01"), S("a full extra year of storage, unbilled")).toBe(366);
+    // Money consequence 2, closed: no lexical roll, so a May 1 intake gets the
+    // NEXT April — not a free extra year in the barn.
+    expect(seasonEndFor("2027-05-01", 4, 31)).toBe("2028-04-30");
+    expect(diffDays("2028-04-30", "2027-05-01"), S("one season, not two")).toBe(365);
   });
 
   it("the overstay meter is monotone, never negative, and the per-diem is whole cents", () => {
@@ -933,7 +1025,7 @@ describe("LADDER · nightly digest honesty", () => {
     ]);
   });
 
-  it("SIM-FOUND BUG: aiReplyTexts are dropped whenever the AI count is 0/null", () => {
+  it("REGRESSION (audit bug 10b): AI reply texts survive a null/zero count", () => {
     // sendNightlyDigest fills aiAutoReplies from a `head:true, count:'exact'`
     // query (`aiCount ?? 0`) and aiReplyTexts from a SEPARATE select. If the
     // count comes back null — the documented failure mode of a head count —
@@ -942,7 +1034,12 @@ describe("LADDER · nightly digest honesty", () => {
     const s = emptySections();
     s.aiReplyTexts = ["Sure — we'll waive the fee and send someone Saturday."];
     s.aiAutoReplies = 0;
-    expect(composeNightlyDigest(s), S("AI replies were sent but the digest reports a quiet night")).toBe(QUIET);
+    const html = composeNightlyDigest(s);
+    expect(html, S("a promise the machine made must never be swallowed by a null count")).not.toBe(QUIET);
+    expect(html).toContain("waive the fee");
+    // Genuinely nothing to report is still silence.
+    const empty = emptySections();
+    expect(composeNightlyDigest(empty)).toBe(QUIET);
   });
 });
 

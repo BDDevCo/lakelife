@@ -14,7 +14,7 @@ export async function getPackageViews(profile: PricingProfile): Promise<PackageV
   const admin = createServiceClient();
   const [{ data: packages }, { data: recipe }, { data: services }] = await Promise.all([
     admin.from("service_packages").select("id, code, name, description, sort").eq("active", true).order("sort"),
-    admin.from("package_components").select("package_id, service_id, phase, required, default_on"),
+    admin.from("package_components").select("package_id, service_id, phase, required, default_on, role"),
     admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, kind").in("kind", ["component", "addon"]),
   ]);
   if (!packages?.length) return [];
@@ -41,6 +41,9 @@ export async function getPackageViews(profile: PricingProfile): Promise<PackageV
           required: Boolean(r.required),
           defaultOn: Boolean(r.default_on),
           kind: (svc.kind as "component" | "addon") ?? "component",
+          // Audit bug 7: the legality rails key on this stable tag, never on
+          // the service's display name. Migration 0051 populates it.
+          role: (r.role as PackageComponentView["role"]) ?? null,
           pricingModel: svc.pricing_model as string,
           price: priceService(rule, profile),
           isStorageTier: svc.pricing_model === "seasonal_plus_perdiem",

@@ -7,17 +7,31 @@
  * dates come in, dollars come out (rule 8: the rates are dials).
  */
 
+import { daysInMonth } from "@/lib/booking";
+
 /**
  * The season-end date governing a stay: the first occurrence of the
  * (month, day) dial ON OR AFTER intake. An October 2026 intake ends
  * May 31, 2027; a (weird) June 2027 intake would end May 31, 2028.
+ *
+ * The (month, day) pair is clamped TOGETHER, per candidate year (audit
+ * finding 9). Clamping them independently — 1-12 and 1-31 — made (4, 31)
+ * settable and emitted "2027-04-31": a date Postgres rejects, that JS rolls
+ * to May 1, and that `overstayDays` can't parse at all — so the per-diem
+ * meter read zero and an overstaying boat billed nothing. It also sorted
+ * BEFORE "2027-05-01" lexically, pushing the due-out date a full year out.
  */
 export function seasonEndFor(intakeISO: string, endMonth: number, endDay: number): string {
   const [y] = intakeISO.split("-").map(Number);
-  const mm = String(Math.min(12, Math.max(1, Math.round(endMonth)))).padStart(2, "0");
-  const dd = String(Math.min(31, Math.max(1, Math.round(endDay)))).padStart(2, "0");
-  const sameYear = `${y}-${mm}-${dd}`;
-  return sameYear >= intakeISO ? sameYear : `${y + 1}-${mm}-${dd}`;
+  const m = Math.min(12, Math.max(1, Math.round(endMonth)));
+  const wantedDay = Math.max(1, Math.round(endDay));
+  // Per year, because Feb 29 exists in a leap year and not in a common one.
+  const on = (year: number) => {
+    const d = Math.min(wantedDay, daysInMonth(year, m));
+    return `${year}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  };
+  const sameYear = on(y);
+  return sameYear >= intakeISO ? sameYear : on(y + 1);
 }
 
 /** Whole days past the season end (0 when out on time). Date-only math. */

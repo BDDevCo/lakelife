@@ -3,7 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getFullProfile, toPricingProfile } from "@/app/profile/data";
 import { validateSelection, anchorServiceId } from "@/lib/packages";
-import { todayLakeDate } from "@/lib/booking";
+import { todayLakeDate, effectiveSeason } from "@/lib/booking";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
 import { autoAssignJob } from "@/app/book/dispatch";
@@ -92,8 +92,17 @@ export async function createPackageBooking(input: {
   const { data: fallSvcRows } = await admin
     .from("services").select("id, is_water_work").in("id", sel.fall);
   const touchesWater = (fallSvcRows ?? []).some((s) => s.is_water_work);
-  if (touchesWater && lake?.pull_deadline && input.fallDate > lake.pull_deadline) {
-    return { ok: false, error: `That's past ${lake.name ?? "your lake"}'s pull deadline (${lake.pull_deadline}) — the water work has to happen before the freeze window.` };
+  // Compare against the EFFECTIVE window, not the raw stored dates. A lake row
+  // holds one season's absolute dates and nothing writes a rolled year back to
+  // it, so from the first January after the stored season ages out the raw
+  // deadline is in the past and this check would refuse every storage booking
+  // the calendar had just offered. Same roll dayStatus applies (audit bug 1).
+  const effective = effectiveSeason(
+    { iceOut: lake?.ice_out_actual ?? null, pullDeadline: lake?.pull_deadline ?? null },
+    todayLakeDate(),
+  );
+  if (touchesWater && effective.seasonEnd && input.fallDate > effective.seasonEnd) {
+    return { ok: false, error: `That's past ${lake?.name ?? "your lake"}'s pull deadline (${effective.seasonEnd}) — the water work has to happen before the freeze window.` };
   }
 
   const anchor = anchorServiceId(pkg, "fall", sel.fall);

@@ -16,6 +16,20 @@ export interface DigestSections {
   aiAutoReplies: number;
   aiReplyTexts: string[];
   gapSla: { alerted: number };
+  /**
+   * MONEY THAT MOVED TONIGHT (two-season audit, bug 10a). The nightly ran the
+   * payout batches, the referral maturation, the cancellation-fee retries and
+   * the refund reconcile, then returned them in an HTTP response nobody reads
+   * — so month-end, the night the largest sum of the month leaves the account,
+   * read as "Quiet night — nothing needed a human." These are OPTIONAL so a
+   * caller that hasn't been wired up yet still compiles and still gets the
+   * rest of its digest; a zero is silence, the same as every other section.
+   */
+  referralPayouts?: { beneficiaries: number; total: number };
+  crewPayouts?: { batches: number; total: number };
+  referralCredits?: { granted: number; total?: number };
+  cancellationFees?: { collected: number; total?: number };
+  refundsReconciled?: { orphansCleared: number; flipsCompleted: number };
 }
 
 function escHtml(s: string): string {
@@ -75,14 +89,55 @@ export function composeNightlyDigest(sections: DigestSections): string {
     );
   }
 
-  if (sections.aiAutoReplies > 0) {
+  // AUDIT BUG 10b: the gate was `aiAutoReplies > 0` alone — but the count is
+  // a head-count query (`aiCount ?? 0`) while the texts come from a different
+  // query, so a null count zeroed the gate while the texts survived and the
+  // safety net vanished. Texts OR a positive count opens the section, and the
+  // headline falls back to the number of texts actually in hand.
+  if (sections.aiAutoReplies > 0 || sections.aiReplyTexts.length > 0) {
+    const n = sections.aiAutoReplies > 0 ? sections.aiAutoReplies : sections.aiReplyTexts.length;
     // The TEXTS, not just the count — an auto-sent reply that promised
     // something it shouldn't have needs to be seen the next morning, not
     // discovered by the customer holding LakeLife to it (review finding).
     const samples = sections.aiReplyTexts.length > 0
       ? `<ul>${sections.aiReplyTexts.map((t) => `<li>"${escHtml(t)}"</li>`).join("")}</ul>`
       : "";
-    parts.push(`<h3>AI auto-replies</h3><p>${sections.aiAutoReplies} customer message${plural(sections.aiAutoReplies)} got an AI auto-reply in the last 24 hours.</p>${samples}`);
+    parts.push(`<h3>AI auto-replies</h3><p>${n} customer message${plural(n)} got an AI auto-reply in the last 24 hours.</p>${samples}`);
+  }
+
+  // MONEY MOVED (audit bug 10a) — one section, every rail that moved cash
+  // tonight. Ops should never learn that month-end ran from a bank statement.
+  {
+    const money: string[] = [];
+    const usd = (n: number) => `$${n.toFixed(2)}`;
+    const rp = sections.referralPayouts;
+    if (rp && (rp.beneficiaries > 0 || rp.total > 0)) {
+      money.push(`<li>Referral payout batch: <b>${usd(rp.total)}</b> approved for ${rp.beneficiaries} beneficiar${rp.beneficiaries === 1 ? "y" : "ies"}.</li>`);
+    }
+    const cp = sections.crewPayouts;
+    if (cp && (cp.batches > 0 || cp.total > 0)) {
+      money.push(`<li>Crew month-end payouts: <b>${usd(cp.total)}</b> queued across ${cp.batches} batch${cp.batches === 1 ? "" : "es"}.</li>`);
+    }
+    const rc = sections.referralCredits;
+    if (rc && (rc.granted > 0 || (rc.total ?? 0) > 0)) {
+      const amt = rc.total != null ? ` — <b>${usd(rc.total)}</b>` : "";
+      money.push(`<li>Referral earnings matured into spendable credits: ${rc.granted}${amt}.</li>`);
+    }
+    const cf = sections.cancellationFees;
+    if (cf && (cf.collected > 0 || (cf.total ?? 0) > 0)) {
+      const amt = cf.total != null ? ` — <b>${usd(cf.total)}</b>` : "";
+      money.push(`<li>Late-cancellation fee${plural(cf.collected)} collected on retry: ${cf.collected}${amt}.</li>`);
+    }
+    const rr = sections.refundsReconciled;
+    if (rr && (rr.orphansCleared > 0 || rr.flipsCompleted > 0)) {
+      const bits: string[] = [];
+      if (rr.flipsCompleted > 0) bits.push(`${rr.flipsCompleted} refund${plural(rr.flipsCompleted)} finished settling (invoice flipped, referrals voided)`);
+      if (rr.orphansCleared > 0) bits.push(`${rr.orphansCleared} stranded claim${plural(rr.orphansCleared)} cleared (no cash ever moved)`);
+      money.push(`<li>Refunds reconciled: ${bits.join("; ")}.</li>`);
+    }
+    if (money.length > 0) {
+      parts.push(`<h3>Money moved tonight</h3><ul>${money.join("")}</ul>`);
+    }
   }
 
   if (sections.gapSla.alerted > 0) {

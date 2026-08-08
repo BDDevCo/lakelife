@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   priceService,
+  serviceApplies,
   boatFeet,
   type ServiceRule,
   type PricingProfile,
@@ -110,8 +111,12 @@ describe("pier — per_section: base + rate × sections", () => {
   it("12 sections = 220 + 48×12 = 796 (the vendor-flag reprice)", () => {
     expect(priceService(RULES.pier, { ...PROFILE, pier_sections: 12 })).toBe(796);
   });
-  it("0 sections falls back to just the base", () => {
-    expect(priceService(RULES.pier, { ...PROFILE, pier_sections: 0 })).toBe(220);
+  // WAS: "0 sections falls back to just the base" → 220. That test encoded
+  // audit bug 5 (docs/two-season-audit-2026-07.md): the base quoted a real
+  // price to a property with no pier. A pier service with no pier sections
+  // is not applicable, full stop.
+  it("0 sections is NOT APPLICABLE — the base never quotes a pier that isn't there", () => {
+    expect(priceService(RULES.pier, { ...PROFILE, pier_sections: 0 })).toBe(0);
   });
 });
 
@@ -163,8 +168,11 @@ describe("boat lift — per_section on lifts, floored at 1", () => {
   it("2 lifts = 990", () => {
     expect(priceService(RULES.lift, { ...PROFILE, boat_lifts: 2 })).toBe(990);
   });
-  it("0 lifts still floors to 1 × 495", () => {
-    expect(priceService(RULES.lift, { ...PROFILE, boat_lifts: 0 })).toBe(495);
+  // WAS: "0 lifts still floors to 1 × 495". Audit bug 5: min_count is a floor
+  // for people who OWN a lift and left the count blank — it was never meant to
+  // invent a lift. Zero lifts means there is no lift to set or pull.
+  it("0 lifts is NOT APPLICABLE — min_count floors owners, it does not invent equipment", () => {
+    expect(priceService(RULES.lift, { ...PROFILE, boat_lifts: 0 })).toBe(0);
   });
 });
 
@@ -190,8 +198,69 @@ describe("water toys — flat base + per-lift + per-toy", () => {
   it("120 + 60×1 lift + 15×4 toys = 240", () => {
     expect(priceService(RULES.toys, PROFILE)).toBe(240);
   });
-  it("no lifts, no toys = base 120", () => {
-    expect(priceService(RULES.toys, { ...PROFILE, toy_lifts: 0, toys: [] })).toBe(120);
+  it("one toy and no lift still prices — the visit fee plus that toy", () => {
+    expect(priceService(RULES.toys, { ...PROFILE, toy_lifts: 0, toys: [{ name: "Kayak" }] })).toBe(135);
+  });
+  it("a lift and no loose toys still prices — there is a lift to pull", () => {
+    expect(priceService(RULES.toys, { ...PROFILE, toy_lifts: 1, toys: [] })).toBe(180);
+  });
+  // WAS: "no lifts, no toys = base 120". Audit bug 5 counted this as phantom
+  // and it is: the $120 is the visit fee for handling the toys named in the
+  // rule's own `add` terms. With none of them there is nothing to prep, wrap
+  // or store — a crew drives out to an empty shoreline.
+  it("no lifts and no toys is NOT APPLICABLE — the visit fee needs something to visit", () => {
+    expect(priceService(RULES.toys, { ...PROFILE, toy_lifts: 0, toys: [] })).toBe(0);
+  });
+});
+
+// ── Audit bug 5: ~455 phantom-priced tiles per 1,000 customers ──────────
+// The old "$0 means you don't own this" guard in createBooking only caught
+// pure multipliers. Applicability is now an explicit, testable property of
+// the rule + profile rather than something arithmetic happened to reach.
+describe("applicability — a service that counts equipment you don't own", () => {
+  it("services that count nothing always apply (flat, band, sqft_band)", () => {
+    const none: PricingProfile = { ...PROFILE, pier_sections: 0, boat_lifts: 0, toy_lifts: 0, jet_skis: 0, pwc_lifts: 0, boats: [], toys: [] };
+    expect(serviceApplies(RULES.opening, none)).toBe(true);
+    expect(serviceApplies(RULES.winter, none)).toBe(true);
+    expect(serviceApplies(RULES.mow, none)).toBe(true);
+    expect(serviceApplies(RULES.clean, none)).toBe(true);
+    expect(priceService(RULES.opening, none)).toBe(430);
+    expect(priceService(RULES.winter, none)).toBe(485);
+    expect(priceService(RULES.mow, none)).toBe(85);
+    expect(priceService(RULES.clean, none)).toBe(95);
+  });
+
+  it("every counting service is inapplicable — and $0 — on a bare property", () => {
+    const bare: PricingProfile = { ...PROFILE, pier_sections: 0, boat_lifts: 0, toy_lifts: 0, jet_skis: 0, pwc_lifts: 0, boats: [], toys: [] };
+    for (const key of ["pier", "lift", "jetski", "pwclift", "toys"] as const) {
+      expect(serviceApplies(RULES[key], bare), key).toBe(false);
+      expect(priceService(RULES[key], bare), key).toBe(0);
+    }
+  });
+
+  it("one unit of the counted thing makes it applicable again", () => {
+    const bare: PricingProfile = { ...PROFILE, pier_sections: 0, boat_lifts: 0, toy_lifts: 0, jet_skis: 0, pwc_lifts: 0, boats: [], toys: [] };
+    expect(priceService(RULES.pier, { ...bare, pier_sections: 1 })).toBe(268); // 220 + 48
+    expect(priceService(RULES.lift, { ...bare, boat_lifts: 1 })).toBe(495);
+    expect(priceService(RULES.jetski, { ...bare, jet_skis: 1 })).toBe(350);
+  });
+
+  it("min_count still floors an owner who left the count blank at 1", () => {
+    // A property that HAS a lift but recorded 0.4 of one (garbage) is not the
+    // case min_count exists for; a property recording 1 is. The floor only
+    // ever raises a positive count, it can no longer conjure one from zero.
+    expect(priceService(RULES.lift, { ...PROFILE, boat_lifts: 1 })).toBe(495);
+  });
+
+  it("a negative or NaN count reads as zero, not as equipment", () => {
+    expect(priceService(RULES.pier, { ...PROFILE, pier_sections: -3 })).toBe(0);
+    expect(priceService(RULES.pier, { ...PROFILE, pier_sections: NaN })).toBe(0);
+  });
+
+  it("per_foot / seasonal rules keep their own no-boats behaviour (no count_field)", () => {
+    // Not in scope of the count_field gate: boats are counted in FEET, and a
+    // no-boat property already reaches $0 by arithmetic on the seeded rows.
+    expect(priceService(RULES.boat, { ...PROFILE, boats: [] })).toBe(0);
   });
 });
 

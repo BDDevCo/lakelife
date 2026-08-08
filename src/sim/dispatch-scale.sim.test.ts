@@ -40,7 +40,7 @@ import {
 import { computeScore } from "@/lib/scoring";
 import { shouldDemote, healBase, median, isCoolingDown } from "@/lib/lake-standing";
 import { rushPrice, fillInRate, rushWindowOpen, RUSH_OPEN_HOUR } from "@/lib/rush";
-import { warningDue, isExpired } from "@/lib/waitlist";
+import { warningDue, isExpired, DEFAULT_WARNING_CATCHUP_DAYS } from "@/lib/waitlist";
 import { priceService, type ServiceRule, type PricingProfile } from "@/lib/pricing";
 
 // ---------------------------------------------------------------------------
@@ -960,19 +960,21 @@ describe("fleet routing at scale", () => {
 
     const plan = planFleetDay(stops, trucks, { lat: 41.65, lng: -85.38 });
 
-    // CURRENT BEHAVIOR (the defect): one truck takes all five.
-    expect(plan.trucks.length).toBe(1);
-    expect(plan.trucks[0].truck.id).toBe("A");
-    expect(plan.trucks[0].ordered.length).toBe(5);
-    expect(plan.trucks[0].fitsHours).toBe(false);
-    expect(plan.trucks[0].workMinutes).toBeGreaterThan(480); // busts A's 8h window
-    expect(plan.overflow).toEqual([]);
-    // …and the other truck was given nothing at all.
-    const idle = trucks.filter((t) => !plan.trucks.some((p) => p.truck.id === t.id));
-    expect(idle.map((t) => t.id)).toEqual(["B"]);
-    // A balanced 3/2 split exists and fits BOTH trucks — the plan chose badly.
-    expect(planTruckRoute(trucks[0], stops.slice(0, 3), null).fitsHours).toBe(true);
-    expect(planTruckRoute(trucks[1], stops.slice(3), null).fitsHours).toBe(true);
+    // Audit bug 3, fixed 2026-08. planFleetDay used to treat the LAKE cluster
+    // as a hard partition and deal it whole to the truck with the most free
+    // SLOTS — so one truck took all five, busted its 8h window, and its
+    // sibling was given nothing (62 over-hours routes per 1,000 customers per
+    // season). Trucks now balance on MINUTES and a cluster may split.
+    expect(plan.trucks.length, S("both trucks must be used")).toBe(2);
+    // Every stop placed exactly once — the invariant that must never bend.
+    const placed = plan.trucks.flatMap((t) => t.ordered.map((o) => o.id)).concat(plan.overflow.map((o) => o.id));
+    expect(placed.slice().sort()).toEqual(stops.map((s2) => s2.id).slice().sort());
+    expect(new Set(placed).size, S("no stop duplicated")).toBe(stops.length);
+    expect(plan.overflow, S("a day that fits the fleet budget must not overflow")).toEqual([]);
+    // And the split actually respects the hours it was chosen for.
+    for (const t of plan.trucks) {
+      expect(t.fitsHours, S(`truck ${t.truck.id} must fit its own window`)).toBe(true);
+    }
   });
 
   it("planTruckRoute keeps every stop and counts the base legs", () => {
@@ -1309,20 +1311,36 @@ describe("crew standing at scale", () => {
     expect(median([4, 1, 2, 3])).toBe(2.5);
   });
 
-  it("waitlist: the warning fires exactly once and expiry is the honest floor", () => {
+  it("waitlist: the warning window is bounded and contiguous, and expiry is the honest floor", () => {
     const r = mulberry32(SEED ^ 0x7a17);
     const bad: string[] = [];
     for (let t = 0; t < 3000; t++) {
       const y = 2026 + Math.floor(r() * 2);
       const jobDate = iso(y, 1 + Math.floor(r() * 12), 1 + Math.floor(r() * 28));
-      let fired = 0;
+      // Audit bug 10d, fixed 2026-08: warningDue was a pure day equality, so a
+      // single missed nightly dropped the customer's only warning forever. It
+      // is now a bounded CATCH-UP window (DEFAULT_WARNING_CATCHUP_DAYS + 1
+      // nights) and exactly-once delivery lives in the ledger, migration 0049.
+      const days: string[] = [];
       const warn = 1 + Math.floor(r() * 5);
       for (let d = -20; d <= 20; d++) {
         const today = new Date(Date.parse(jobDate + "T00:00:00Z") + d * 86400000).toISOString().slice(0, 10);
-        if (warningDue(jobDate, today, warn)) fired++;
+        if (warningDue(jobDate, today, warn)) days.push(today);
         if (isExpired(jobDate, today) !== (jobDate < today)) bad.push(`t${t}: expiry`);
       }
-      if (fired !== 1) bad.push(`t${t}: warning fired ${fired}x for ${jobDate} warn=${warn}`);
+      const maxNights = DEFAULT_WARNING_CATCHUP_DAYS + 1;
+      if (days.length < 1 || days.length > maxNights) {
+        bad.push(`t${t}: window ${days.length} nights (max ${maxNights}) for ${jobDate} warn=${warn}`);
+      }
+      // Opens exactly on the original boundary — catch-up never runs early.
+      const opensOn = new Date(Date.parse(jobDate + "T00:00:00Z") - warn * 86400000).toISOString().slice(0, 10);
+      if (days[0] !== opensOn) bad.push(`t${t}: opened ${days[0]}, expected ${opensOn}`);
+      // Contiguous, and always before the job date.
+      for (let k = 1; k < days.length; k++) {
+        const prev = new Date(Date.parse(days[k - 1] + "T00:00:00Z") + 86400000).toISOString().slice(0, 10);
+        if (days[k] !== prev) { bad.push(`t${t}: window not contiguous ${days.join(",")}`); break; }
+      }
+      if (days.length && !(days[days.length - 1] < jobDate)) bad.push(`t${t}: warned on/after the job date`);
     }
     expect(bad, S(bad.slice(0, 5).join(" | "))).toEqual([]);
   });

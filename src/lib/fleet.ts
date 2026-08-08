@@ -130,14 +130,39 @@ export function planTruckRoute(
   return { truck, ordered, driveKm, driveMinutes, workMinutes, fitsHours: workMinutes <= windowMinutes };
 }
 
+/** A truck's running day while the partition is being built: the minutes it
+ *  has taken on, and just enough geometry to price the NEXT stop's drive
+ *  without re-routing the whole truck for every candidate. */
+interface TruckLoad {
+  count: number;
+  jobMinutes: number;
+  chainKm: number; // Σ legs between consecutive placed stops
+  firstLat: number | null; // first LOCATED stop (base → first leg)
+  firstLng: number | null;
+  lastLat: number | null; // last LOCATED stop (last → base leg)
+  lastLng: number | null;
+  lakes: Set<string>;
+}
+
 /**
  * Partition one vendor's day across their trucks, then route each truck.
  *
- * Whole clusters (lakes) go to the truck with the most remaining room —
- * that's what keeps trucks from criss-crossing lakes. A cluster too big
- * for any one truck is drive-ordered and split at capacity boundaries.
- * Deterministic: ties break by truck order (caller passes created-order),
- * so tomorrow's rebuild of the same day gives the same routes.
+ * Lake grouping is a SOFT PREFERENCE, not a hard partition (owner call after
+ * the two-season audit, bug 3): Big Long, Pretty and Big Turkey are a short
+ * drive apart, so a cross-lake day is normal and a truck busting its hours
+ * while a sibling sits empty is not. Trucks therefore balance on MINUTES
+ * (work + drive), a cluster stays on its truck only while that truck's day
+ * still fits, and it splits the moment keeping it whole would bust hours.
+ *
+ * The old rule — whole cluster to the truck with the most remaining JOB
+ * SLOTS, never rebalanced — produced 62 over-hours routes per 1,000
+ * customers per season with idle trucks in the same fleet.
+ *
+ * Capacity stays a HARD cap (dispatch admits against fleetJobCap), stops
+ * beyond the fleet's total capacity still surface as overflow, and a vendor
+ * with zero trucks is still the legacy path, untouched. Deterministic: ties
+ * break by base-to-cluster distance then truck order (caller passes
+ * created-order), so tomorrow's rebuild of the same day gives the same routes.
  */
 export function planFleetDay(
   stops: FleetStop[],
@@ -153,36 +178,72 @@ export function planFleetDay(
     if (!byLake.has(k)) byLake.set(k, []);
     byLake.get(k)!.push(s);
   }
-  const clusters = [...byLake.values()].sort((a, b) => b.length - a.length);
+  const clusters = [...byLake.entries()].sort((a, b) => b[1].length - a[1].length);
 
   const remaining = new Map<string, number>(active.map((t) => [t.id, t.capacity]));
   const assigned = new Map<string, FleetStop[]>(active.map((t) => [t.id, []]));
+  const load = new Map<string, TruckLoad>(
+    active.map((t) => [
+      t.id,
+      { count: 0, jobMinutes: 0, chainKm: 0, firstLat: null, firstLng: null, lastLat: null, lastLng: null, lakes: new Set<string>() },
+    ]),
+  );
   const overflow: FleetStop[] = [];
 
-  // Most room wins; a TIE breaks toward the truck whose own base is nearest
-  // the cluster (a Pretty-Lake truck should draw the Pretty cluster, not
-  // whichever truck was created first). Trucks without a base tie at
-  // Infinity and fall through to created order — deterministic rebuilds.
-  const bestTruck = (centroid: { lat: number; lng: number } | null): TruckIn | null => {
-    let best: TruckIn | null = null;
-    let bestRoom = 0;
-    let bestDist = Infinity;
-    for (const t of active) {
-      const room = remaining.get(t.id) ?? 0;
-      if (room <= 0) continue;
-      const bLat = t.baseLat ?? fallbackBase?.lat ?? null;
-      const bLng = t.baseLng ?? fallbackBase?.lng ?? null;
-      const dist = centroid && bLat != null && bLng != null ? kmBetween(bLat, bLng, centroid.lat, centroid.lng) : Infinity;
-      if (best == null || room > bestRoom || (room === bestRoom && dist < bestDist)) {
-        best = t;
-        bestRoom = room;
-        bestDist = dist;
-      }
-    }
-    return best;
+  const baseOf = (t: TruckIn): { lat: number; lng: number } | null => {
+    const lat = t.baseLat ?? fallbackBase?.lat ?? null;
+    const lng = t.baseLng ?? fallbackBase?.lng ?? null;
+    return lat != null && lng != null ? { lat, lng } : null;
+  };
+  const windowOf = (t: TruckIn): number => Math.max(60, (t.workEnd - t.workStart) * 60);
+  const minutesOf = (s: FleetStop): number => (s.estMinutes > 0 ? s.estMinutes : DEFAULT_JOB_MINUTES);
+
+  /**
+   * What this truck's day would cost in MINUTES if it took `s` next — the
+   * same formula planTruckRoute lands on (drive + Σ job minutes), estimated
+   * from the append order rather than the final nearest-neighbor order. It
+   * is an estimate only for CHOOSING; the honest number is recomputed by
+   * planTruckRoute below and still reported in fitsHours.
+   */
+  const projectMinutes = (t: TruckIn, s: FleetStop): number => {
+    const l = load.get(t.id)!;
+    const base = baseOf(t);
+    const has = s.lat != null && s.lng != null;
+    const legKm = has && l.lastLat != null ? kmBetween(l.lastLat, l.lastLng as number, s.lat as number, s.lng as number) : 0;
+    const firstLat = l.firstLat ?? (has ? (s.lat as number) : null);
+    const firstLng = l.firstLng ?? (has ? (s.lng as number) : null);
+    const lastLat = has ? (s.lat as number) : l.lastLat;
+    const lastLng = has ? (s.lng as number) : l.lastLng;
+    const baseLegs =
+      base && firstLat != null && lastLat != null
+        ? kmBetween(base.lat, base.lng, firstLat, firstLng as number) + kmBetween(lastLat, lastLng as number, base.lat, base.lng)
+        : 0;
+    const km = Math.round((baseLegs + l.chainKm + legKm) * 10) / 10;
+    const count = l.count + 1;
+    const driveMinutes = Math.round(km * MIN_PER_KM + Math.max(0, count - 1) * MIN_PER_HOP);
+    return driveMinutes + l.jobMinutes + minutesOf(s);
   };
 
-  for (const cluster of clusters) {
+  const place = (t: TruckIn, s: FleetStop, lakeKey: string): void => {
+    const l = load.get(t.id)!;
+    const has = s.lat != null && s.lng != null;
+    if (has && l.lastLat != null) l.chainKm += kmBetween(l.lastLat, l.lastLng as number, s.lat as number, s.lng as number);
+    if (has && l.firstLat == null) {
+      l.firstLat = s.lat as number;
+      l.firstLng = s.lng as number;
+    }
+    if (has) {
+      l.lastLat = s.lat as number;
+      l.lastLng = s.lng as number;
+    }
+    l.count += 1;
+    l.jobMinutes += minutesOf(s);
+    l.lakes.add(lakeKey);
+    assigned.get(t.id)!.push(s);
+    remaining.set(t.id, (remaining.get(t.id) ?? 0) - 1);
+  };
+
+  for (const [lakeKey, cluster] of clusters) {
     const located = cluster.filter((s) => s.lat != null && s.lng != null);
     const centroid = located.length
       ? {
@@ -190,20 +251,49 @@ export function planFleetDay(
           lng: located.reduce((s, x) => s + (x.lng as number), 0) / located.length,
         }
       : null;
-    // Drive-order the cluster ONCE so any capacity split cuts along the
-    // route, not across it (front half and back half stay contiguous).
-    let queue = nearestNeighborOrder(cluster) as FleetStop[];
-    while (queue.length) {
-      const t = bestTruck(centroid);
-      if (!t) {
-        overflow.push(...queue);
+    // Drive-order the cluster ONCE so any split cuts along the route, not
+    // across it (front half and back half stay contiguous on their trucks).
+    const queue = nearestNeighborOrder(cluster) as FleetStop[];
+
+    for (let i = 0; i < queue.length; i++) {
+      const s = queue[i];
+      // Candidates: every truck with a slot left. Score each on the minutes
+      // its day would cost with this stop; tie → base nearest this lake's
+      // centroid (a Pretty-Lake truck should draw the Pretty cluster), tie →
+      // created order. Deterministic rebuilds either way.
+      const cands = active
+        .filter((t) => (remaining.get(t.id) ?? 0) > 0)
+        .map((t) => {
+          const base = baseOf(t);
+          const est = projectMinutes(t, s);
+          return {
+            t,
+            est,
+            fits: est <= windowOf(t),
+            sameLake: load.get(t.id)!.lakes.has(lakeKey),
+            dist: centroid && base ? kmBetween(base.lat, base.lng, centroid.lat, centroid.lng) : Infinity,
+          };
+        });
+      if (cands.length === 0) {
+        // The whole fleet is full — the rest of the day surfaces, in order.
+        overflow.push(...queue.slice(i));
         break;
       }
-      const room = remaining.get(t.id) ?? 0;
-      const take = queue.slice(0, room);
-      queue = queue.slice(room);
-      assigned.get(t.id)!.push(...take);
-      remaining.set(t.id, room - take.length);
+      const pickBest = (pool: typeof cands) => {
+        let best: (typeof cands)[number] | null = null;
+        for (const c of pool) {
+          if (best == null || c.est < best.est || (c.est === best.est && c.dist < best.dist)) best = c;
+        }
+        return best;
+      };
+      // MILD same-lake preference: a truck already on this lake keeps the
+      // cluster whole — but only while its day still fits. The moment it
+      // doesn't, the cluster splits to the lightest truck that does fit; if
+      // NOTHING fits, the lightest truck takes it and fitsHours says so
+      // (flagged, never dropped — the old contract).
+      const chosen =
+        pickBest(cands.filter((c) => c.fits && c.sameLake)) ?? pickBest(cands.filter((c) => c.fits)) ?? pickBest(cands)!;
+      place(chosen.t, s, lakeKey);
     }
   }
 

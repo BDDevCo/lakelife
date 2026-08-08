@@ -14,7 +14,26 @@
  *    sleep at the shop unstored); WITH storage it must NOT fall-return
  *  - a spring-only transport leg without any spring work is fine
  *    (deliver-and-splash for home-stored boats)
+ *
+ * Which row IS the return leg is answered by `role` (or the caller's
+ * returnLegServiceId), never by services.name — see PackageComponentRole.
  */
+
+/**
+ * A component's meaning in the legality rules, independent of what it is
+ * CALLED. Audit bug 7 (two-season audit 2026-07): this file used to key
+ * we_haul's rails on the literal string "Boat return & splash", matching
+ * services.name — an ops-editable column that rule 8 explicitly tells the
+ * owner to tune. One ordinary rename inverted the rails in both directions:
+ * a legal home-storage booking became unsatisfiable, and storing a boat for
+ * the winter WHILE billing a $285 trip home for that same boat was accepted,
+ * with custody opened on a boat that had been delivered back.
+ *
+ * Roles are set by whoever builds the PackageView (see getPackageViews in
+ * src/app/book/storage/data.ts) and must come from something immutable —
+ * a service id or slug — not from the display name.
+ */
+export type PackageComponentRole = "return_leg";
 
 export interface PackageComponentView {
   serviceId: string;
@@ -28,6 +47,12 @@ export interface PackageComponentView {
   price: number;
   /** seasonal_plus_perdiem rows form the mutually-exclusive tier group. */
   isStorageTier: boolean;
+  /**
+   * What this row MEANS to the legality rules. "return_leg" = the trip that
+   * brings the boat back to the customer. Absent/null is honest ignorance,
+   * and we_haul refuses rather than guess (audit bug 7).
+   */
+  role?: PackageComponentRole | null;
 }
 
 export interface PackageView {
@@ -50,17 +75,28 @@ export interface SelectionResult {
   storageTierId: string | null;
 }
 
-const FALL_RETURN = "Boat return & splash"; // the home-storage fall leg
-
 /** Key for a component row (a service can appear in both phases). */
 const ckey = (c: Pick<PackageComponentView, "serviceId" | "phase">) => `${c.serviceId}|${c.phase}`;
+
+export interface ValidateOptions {
+  /**
+   * The service id of the leg that brings the boat home. Overrides the
+   * components' own `role` tags, for callers that hold the stable key
+   * (a slug lookup, a config row) but not the tagged view.
+   */
+  returnLegServiceId?: string | null;
+}
 
 /**
  * Normalize + validate a selection against a package recipe.
  * `selectedKeys` may contain serviceIds (legacy) or "serviceId|phase"
  * keys — ids alone select that service in EVERY phase it appears.
  */
-export function validateSelection(pkg: PackageView, selectedKeys: string[]): SelectionResult {
+export function validateSelection(
+  pkg: PackageView,
+  selectedKeys: string[],
+  opts: ValidateOptions = {},
+): SelectionResult {
   const sel = new Set<string>();
   for (const k of selectedKeys) {
     if (k.includes("|")) sel.add(k);
@@ -81,7 +117,22 @@ export function validateSelection(pkg: PackageView, selectedKeys: string[]): Sel
   const storing = tiers.length === 1;
 
   if (pkg.code === "we_haul") {
-    const fallReturn = chosen.some((c) => c.phase === "fall" && c.name === FALL_RETURN);
+    // Identity of the return leg, most-trusted source first: the caller's
+    // explicit id, then the row's own role tag. NEVER the display name —
+    // that is the bug this rule was rewritten to close (audit bug 7).
+    const returnLegIds = new Set<string>();
+    if (opts.returnLegServiceId) returnLegIds.add(opts.returnLegServiceId);
+    else for (const c of pkg.components) if (c.role === "return_leg") returnLegIds.add(c.serviceId);
+
+    // Fail CLOSED. The old name match got this backwards in both directions;
+    // an unidentifiable return leg means we cannot tell "boat comes home" from
+    // "boat stays" — and the wrong answer bills a winter of storage AND a trip
+    // home for the same hull. Refuse and send it to a human.
+    if (returnLegIds.size === 0) {
+      return fail("This package isn't set up for booking yet — its return trip isn't identified. Give us a call and we'll sort it out.");
+    }
+
+    const fallReturn = chosen.some((c) => c.phase === "fall" && returnLegIds.has(c.serviceId));
     if (!storing && !fallReturn) {
       return fail("No storage picked — add the fall return trip so your boat comes home for the winter.");
     }

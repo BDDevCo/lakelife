@@ -20,9 +20,13 @@
  * DETERMINISM: one seeded mulberry32 PRNG, never Math.random(). Every
  * failure message carries the seed so a red run reproduces exactly.
  *
- * Findings confirmed against the engine source are marked `SIM-FOUND BUG:`
- * and asserted at CURRENT behavior so this file stays green while the
- * defect stays documented.
+ * HISTORY: this sim was written DURING the two-season audit
+ * (docs/two-season-audit-2026-07.md) and originally PINNED the defects it
+ * found at their then-current (wrong) behavior. Those engine bugs were fixed
+ * in 2026-08, so every one of those pins is now a REGRESSION GUARD asserting
+ * the CORRECT behavior, labelled `REGRESSION (audit bug N)` with a past-tense
+ * note saying what used to happen. A `SIM-FOUND` label that survives is a
+ * finding that has NOT been fixed and is still pinned at current behavior.
  */
 
 import { describe, it, expect } from "vitest";
@@ -309,11 +313,28 @@ const PKG_NAMES: Record<string, string> = {
 };
 
 /**
+ * The recipe row that IS the trip home. Keyed on the seed row's identity —
+ * the thing migration 0051 turns into `role = 'return_leg'` on the component
+ * row — never on services.name, which ops may rename at any time (audit bug
+ * 7). `ruleOverrides` below renames the DISPLAY name of this same row and the
+ * tag must survive it, which is exactly the regression this fixture protects.
+ */
+const RETURN_LEG_SEED_NAME = "Boat return & splash";
+
+/**
  * Mirror of src/app/book/storage/data.ts getPackageViews — WIRING only
  * (it maps recipe rows to views and calls the real priceService for every
  * price); the legality and the money math under test stay in packages.ts.
+ *
+ * `tagReturnLeg = false` reproduces a package whose return leg is NOT
+ * identified (a recipe migration 0051 never reached, or a hand-inserted row)
+ * — the fail-closed case, exercised below.
  */
-function buildPackageViews(profile: PricingProfile, ruleOverrides?: Record<string, ServiceRule>): PackageView[] {
+function buildPackageViews(
+  profile: PricingProfile,
+  ruleOverrides?: Record<string, ServiceRule>,
+  tagReturnLeg = true,
+): PackageView[] {
   const byName = new Map(COMPONENTS.map((c) => [c.name, c]));
   return Object.keys(RECIPES).map((code) => {
     const components: PackageComponentView[] = RECIPES[code]
@@ -330,6 +351,7 @@ function buildPackageViews(profile: PricingProfile, ruleOverrides?: Record<strin
           pricingModel: c.rule.pricing_model,
           price: priceService(rule, profile),
           isStorageTier: c.rule.pricing_model === "seasonal_plus_perdiem",
+          role: tagReturnLeg && name === RETURN_LEG_SEED_NAME ? ("return_leg" as const) : null,
         };
       })
       // same ordering the server hands the wizard
@@ -504,15 +526,16 @@ describe("scale: owners never price to $0; non-owners are the interesting case",
     expect(priceService(MENU.find((m) => m.key === "boatstore")!.rule, zeroEquip)).toBe(0);
   });
 
-  // SIM-FOUND BUG: services carrying a `base` or a `min_count` floor quote a
-  // REAL price to a customer who owns none of that equipment, so the "$0 =
-  // you don't own this" guard in src/app/book/actions.ts (line ~176) never
-  // fires for them. getPricedServices() shows every active service to every
-  // customer, so a property with no pier is offered "Pier install / removal"
-  // at $220, a property with no boat lift is offered "Boat lift set / pull"
-  // at $495, and a property with no toys is offered water-toy prep at $120 —
-  // all bookable, all dispatching a crew to do nothing.
-  it("SIM-FOUND BUG: floored/based services quote non-owners a real price (guard blind spot)", () => {
+  // REGRESSION (audit bug 5): a service that COUNTS equipment used to quote a
+  // customer who owns none of it a real, bookable price, because the "$0 = you
+  // don't own this" guard in src/app/book/actions.ts only ever caught pure
+  // multipliers. A `base` (pier $220, water toys $120) or a `min_count` floor
+  // (boat lift $495) sailed straight past it — 501 phantom-priced tiles across
+  // these 1,100 properties (~455 per 1,000 customers per season), each one a
+  // crew dispatched to a property with nothing to do. priceService now asks
+  // serviceApplies() FIRST and returns 0 when the property owns none of the
+  // equipment the rule's own data names, so the guard sees every case.
+  it("REGRESSION (audit bug 5): equipment services price to $0 for a non-owner, never a phantom price", () => {
     const zeroEquip: PricingProfile = {
       sqft: 2200,
       beds: 3,
@@ -527,11 +550,27 @@ describe("scale: owners never price to $0; non-owners are the interesting case",
       toys: [],
     };
     bump(3);
-    expect(priceService(MENU.find((m) => m.key === "pier")!.rule, zeroEquip)).toBe(220);
-    expect(priceService(MENU.find((m) => m.key === "boatlift")!.rule, zeroEquip)).toBe(495);
-    expect(priceService(MENU.find((m) => m.key === "watertoys")!.rule, zeroEquip)).toBe(120);
+    // Was 220 / 495 / 120 respectively — the three floored/based rules.
+    expect(priceService(MENU.find((m) => m.key === "pier")!.rule, zeroEquip)).toBe(0);
+    expect(priceService(MENU.find((m) => m.key === "boatlift")!.rule, zeroEquip)).toBe(0);
+    expect(priceService(MENU.find((m) => m.key === "watertoys")!.rule, zeroEquip)).toBe(0);
 
-    // Scale reading: how many phantom-priced tiles does the population see?
+    // …and the fix is NARROW: a rule that counts no equipment still applies to
+    // everybody. Seasonal and land work must not be touched by the gate.
+    bump(4);
+    expect(priceService(MENU.find((m) => m.key === "opening")!.rule, zeroEquip)).toBe(430);
+    expect(priceService(MENU.find((m) => m.key === "winterization")!.rule, zeroEquip)).toBe(485);
+    expect(priceService(MENU.find((m) => m.key === "lawn")!.rule, zeroEquip)).toBe(85);
+    expect(priceService(MENU.find((m) => m.key === "housekeeping")!.rule, zeroEquip)).toBe(95);
+
+    // Owning ONE of the counted things is enough to bring the tile back, at
+    // the honest floored price — the gate is applicability, not a discount.
+    bump(2);
+    expect(priceService(MENU.find((m) => m.key === "pier")!.rule, { ...zeroEquip, pier_sections: 1 })).toBe(268);
+    expect(priceService(MENU.find((m) => m.key === "boatlift")!.rule, { ...zeroEquip, boat_lifts: 1 })).toBe(495);
+
+    // Scale reading: the phantom-tile count over the whole population is now
+    // ZERO, and every non-owner tile reads $0 so the booking guard refuses it.
     let phantomTiles = 0;
     let zeroTiles = 0;
     const perService: Record<string, number> = {};
@@ -548,15 +587,18 @@ describe("scale: owners never price to $0; non-owners are the interesting case",
         }
       }
     }
-    // Every phantom tile belongs to exactly the three floored/based services.
-    expect(Object.keys(perService).sort()).toEqual(["boatlift", "pier", "watertoys"]);
-    // Measured at seed 20260726 over 1,100 properties: 501 phantom-priced
-    // tiles (boat lift 258, water toys 124, pier 119) — ~455 per 1,000
-    // customers per season, every one of them bookable.
-    expect(phantomTiles).toBeGreaterThan(400);
-    // And 1,383 more tiles that read "$0" and refuse the tap — the guard
-    // working, but shown to the customer as a price rather than "not for you".
-    expect(zeroTiles).toBeGreaterThan(1200);
+    // RECALIBRATED: was `phantomTiles > 400` (measured 501, of which boat lift
+    // 258, water toys 124, pier 119). The fix removes the whole category, so
+    // the honest assertion is exact zero — and nothing may creep back.
+    expect(perService).toEqual({});
+    expect(phantomTiles).toBe(0);
+    // RECALIBRATED: was `zeroTiles > 1200` (measured 1,383). The 501 former
+    // phantoms moved into this bucket, so it is now 1,884 — same tiles, all
+    // of them now honestly $0 and un-bookable.
+    expect(zeroTiles).toBeGreaterThan(1800);
+    expect(phantomTiles + zeroTiles).toBe(
+      PROPERTIES.reduce((n, prop) => n + MENU.filter((m) => !m.owns(prop.profile)).length, 0),
+    );
   });
 });
 
@@ -672,19 +714,22 @@ describe("scale: band + sqft-tier boundaries", () => {
     expect(priceService(lawn, { ...p, lawn_band: "xl" as unknown as "large" })).toBe(0);
   });
 
-  // SIM-FOUND BUG: nothing anywhere keeps the band/tier LADDER sorted.
-  // executeMenuUpdate (src/lib/menu-core.ts) can only move the MIDDLE rung
-  // ("band:medium" / "tier:mid") and gates it solely on a 40% cap against
-  // that rung's own current value — it never compares the new value to the
-  // rung above it. Margin Health proposes exactly those fields (ops/data.ts
-  // ~line 683) and a one-tap Apply writes them. 85 × 1.4 = 119 > large 110;
-  // 95 × 1.4 = 133 > top tier 120. priceService then faithfully quotes a
-  // MEDIUM lawn above a LARGE one, and a 2,000 sqft house above a 5,000 one
-  // — both visible side by side in the profile wizard's band picker.
-  it("SIM-FOUND BUG: a within-cap mid-rung raise inverts the ladder and priceService honors it", () => {
+  // REGRESSION (audit bug 6): nothing used to keep the band/tier LADDER
+  // sorted. executeMenuUpdate (src/lib/menu-core.ts) can only move the MIDDLE
+  // rung ("band:medium" / "tier:mid") and gated it solely on a 40% cap against
+  // that rung's OWN current value, never against the rung above. Margin Health
+  // proposes exactly those fields and a one-tap Apply wrote them: 85 × 1.4 =
+  // 119 > large 110, and 95 × 1.4 = 133 > top tier 120. The guard now refuses
+  // any mid-rung write that would cross a neighbouring rung, which is the ONLY
+  // defence — as this test shows, priceService faithfully quotes whatever the
+  // menu says, so an inverted ladder has to be stopped at the write.
+  // (The refusal itself is asserted directly in src/lib/menu-core.test.ts;
+  // this is the blast radius it prevents, measured over the population.)
+  it("REGRESSION (audit bug 6): an inverted ladder is priced verbatim — which is why the write must refuse it", () => {
     const p = PROPERTIES[0].profile;
 
-    // The exact write executeMenuUpdate would accept: 118 <= 85 * 1.4.
+    // The write executeMenuUpdate USED to accept: 118 <= 85 * 1.4 clears the
+    // 40% cap, and nothing else looked at the $110 large band above it.
     expect(118).toBeLessThanOrEqual(85 * 1.4);
     const tunedLawn: ServiceRule = {
       name: "Lawn mowing & trim",
@@ -861,31 +906,47 @@ describe("scale: winter storage money over two seasons", () => {
     expect(perdiemCharge(-5, 10)).toBe(0);
   });
 
-  // SIM-FOUND BUG: platform settings clamp storage_season_end_month to 1..12
-  // and storage_season_end_day to 1..31 INDEPENDENTLY (src/lib/settings.ts
-  // ~line 153), and seasonEndFor re-clamps the same way — so the dial pair
-  // (April, 31) is fully settable and yields the string "2027-04-31". That
-  // string is what the customer sees as their due-out date on /requests and
-  // what ops sees in the storage board, but Date.parse rolls it forward, so
-  // billing silently measures overstay from a DIFFERENT day than the one on
-  // the screen (Feb 31 → Mar 3, a 3-day free ride at $10/day per boat).
-  it("SIM-FOUND BUG: an ops dial of (month, 31) produces a date that does not exist", () => {
+  // REGRESSION (audit bug 9): platform settings clamp
+  // storage_season_end_month to 1..12 and storage_season_end_day to 1..31
+  // INDEPENDENTLY, and seasonEndFor used to re-clamp the same way — so the
+  // dial pair (April, 31) emitted the string "2027-04-31". That is what the
+  // customer saw as their due-out date on /requests, but Date.parse rolled it
+  // forward, so billing measured overstay from a DIFFERENT day than the one on
+  // the screen (Feb 31 → Mar 3, a 3-day free ride at $10/day per boat), and
+  // Postgres rejects it outright on a `date` column. seasonEndFor now clamps
+  // the (month, day) PAIR against that month's real last day, per candidate
+  // year, so every dial pair an ops form can produce is a real date.
+  it("REGRESSION (audit bug 9): every (month, day) dial pair yields a REAL calendar date", () => {
     bump(4);
-    expect(seasonEndFor("2026-10-05", 4, 31)).toBe("2027-04-31");
-    expect(isRealDate("2027-04-31")).toBe(false);
-    // What the meter actually measures against: May 1, not April 31/30.
-    expect(overstayDays("2027-05-01", "2027-04-31")).toBe(0);
-    expect(overstayDays("2027-05-02", "2027-04-31")).toBe(1);
+    // Was "2027-04-31"; April has 30 days.
+    expect(seasonEndFor("2026-10-05", 4, 31)).toBe("2027-04-30");
+    expect(isRealDate("2027-04-30")).toBe(true);
+    // The meter now measures from the day on the screen: May 1 is one day late.
+    expect(overstayDays("2027-05-01", seasonEndFor("2026-10-05", 4, 31))).toBe(1);
+    expect(overstayDays("2027-04-30", seasonEndFor("2026-10-05", 4, 31))).toBe(0);
 
-    // February is the worst: the shown end rolls three days forward.
-    bump(2);
-    expect(seasonEndFor("2026-10-05", 2, 31)).toBe("2027-02-31");
-    expect(overstayDays("2027-03-03", "2027-02-31")).toBe(0);
+    // February was the worst case (the shown end used to roll three days
+    // forward). It is now leap-aware, clamped per candidate year.
+    bump(3);
+    expect(seasonEndFor("2026-10-05", 2, 31)).toBe("2027-02-28");
+    expect(seasonEndFor("2027-10-05", 2, 31)).toBe("2028-02-29"); // leap year
+    expect(overstayDays("2027-03-01", seasonEndFor("2026-10-05", 2, 31))).toBe(1);
 
-    // The four 30-day months plus February are all reachable dial pairs.
-    const impossible = [2, 4, 6, 9, 11].filter((m) => !isRealDate(seasonEndFor("2026-10-05", m, 31)));
-    bump(5);
-    expect(impossible).toEqual([2, 4, 6, 9, 11]);
+    // Every dial pair the settings clamp allows — 12 months × 1..31 days,
+    // across a leap year and a common one — is a real date on or after intake.
+    const fails: string[] = [];
+    for (const intake of ["2026-10-05", "2027-10-05", "2027-01-31", "2028-02-29"]) {
+      for (let m = 1; m <= 12; m++) {
+        for (let d = 1; d <= 31; d++) {
+          const end = seasonEndFor(intake, m, d);
+          bump();
+          if (!isRealDate(end)) fails.push(why(`seasonEndFor(${intake}, ${m}, ${d}) = ${end}, not a real date`));
+          else if (end < intake) fails.push(why(`seasonEndFor(${intake}, ${m}, ${d}) = ${end} precedes intake`));
+          if (fails.length > 3) break;
+        }
+      }
+    }
+    expect(firstFailure(fails)).toBeNull();
   });
 
   // SIM-FOUND BUG (cliff): seasonEndFor takes the first (month, day) ON OR
@@ -1021,6 +1082,10 @@ describe("scale: storage packages", () => {
       }
     }
     expect(firstFailure(fails)).toBeNull();
+    // Measured at seed 20260726 with the return leg tagged (as migration 0051
+    // now tags it in production): 4,641 accepted and 3,999 refused selections.
+    // Both numbers are unchanged by the audit-bug-7 fix — the role tag decides
+    // exactly what the old name match decided, it just cannot be renamed away.
     expect(okCount).toBeGreaterThan(4000);
     expect(failCount).toBeGreaterThan(100); // the legality rails really do fire
   });
@@ -1068,18 +1133,21 @@ describe("scale: storage packages", () => {
     expect(firstFailure(fails)).toBeNull();
   });
 
-  // SIM-FOUND BUG: packages.ts hard-codes the fall-return leg by its DISPLAY
-  // NAME (`const FALL_RETURN = "Boat return & splash"`), and that name is an
-  // ops-editable `services.name` column. Rename the row — a normal Ops menu
-  // edit — and the we_haul legality rails silently invert: a customer who
-  // DOES pick the fall return is told to add it (nothing they can tap will
-  // ever satisfy the check), and a customer who picks storage AND the fall
-  // return sails through — booked and billed for both a winter at the shop
-  // and a trip home for the same boat.
-  it("SIM-FOUND BUG: renaming the fall-return service in Ops breaks we_haul's legality rails both ways", () => {
+  // REGRESSION (audit bug 7): packages.ts used to identify the fall-return leg
+  // by its DISPLAY NAME (`const FALL_RETURN = "Boat return & splash"`) — an
+  // ops-editable `services.name` column that rule 8 explicitly tells the owner
+  // to tune. One ordinary rename inverted the we_haul rails in BOTH
+  // directions: a customer who DID pick the fall return was told to add it
+  // (nothing they could tap would ever satisfy the check), and a customer who
+  // picked storage AND the fall return sailed through — billed for a winter at
+  // the shop and a trip home for the same hull, with custody opened on a boat
+  // that had been delivered back. The leg is now identified by the immutable
+  // `role: "return_leg"` tag (or an explicit returnLegServiceId), so a rename
+  // is exactly what it should be: a copy edit.
+  it("REGRESSION (audit bug 7): renaming the fall-return service leaves we_haul's rails intact", () => {
     const prop = PROPERTIES.find((p) => p.profile.boats.length > 0)!;
     const renamed: Record<string, ServiceRule> = {
-      "Boat return & splash": {
+      [RETURN_LEG_SEED_NAME]: {
         name: "Spring splash & delivery", // an ops copy edit, nothing more
         pricing_model: "flat",
         base: 285,
@@ -1087,21 +1155,78 @@ describe("scale: storage packages", () => {
       },
     };
     const pkg = buildPackageViews(prop.profile, renamed).find((p) => p.code === "we_haul")!;
-    const fallReturnKey = `${svcId("Boat return & splash")}|fall`;
+    const fallReturnKey = `${svcId(RETURN_LEG_SEED_NAME)}|fall`;
+    // The rename really did land — the rails are not passing by luck.
+    expect(pkg.components.some((c) => c.name === "Spring splash & delivery")).toBe(true);
+    expect(pkg.components.some((c) => c.name === RETURN_LEG_SEED_NAME)).toBe(false);
 
-    // (a) A legal home-storage booking (no tier, fall return picked) is refused.
+    // (a) The legal home-storage booking (no tier, fall return picked) is
+    //     ACCEPTED under the new name — it used to be unsatisfiable.
     const homeStorage = validateSelection(pkg, [fallReturnKey]);
     bump();
-    expect(homeStorage.ok).toBe(false);
-    expect(homeStorage.error).toMatch(/add the fall return trip/i);
+    expect(homeStorage.ok).toBe(true);
+    expect(homeStorage.storageTierId).toBeNull();
+    expect(homeStorage.fall).toContain(svcId(RETURN_LEG_SEED_NAME));
 
-    // (b) The illegal combination (storage tier AND a fall return) is accepted.
+    // (b) The illegal combination (storage tier AND a fall return) is REFUSED
+    //     under the new name — it used to be accepted and double-billed.
     const tier = pkg.components.find((c) => c.isStorageTier)!;
     const both = validateSelection(pkg, [fallReturnKey, `${tier.serviceId}|fall`]);
     bump();
-    expect(both.ok).toBe(true);
-    expect(both.storageTierId).toBe(tier.serviceId);
-    expect(both.fall).toContain(svcId("Boat return & splash")); // stored AND shipped home
+    expect(both.ok).toBe(false);
+    expect(both.error).toMatch(/drop the fall return trip/i);
+    // A refused selection quotes nothing at all — no leaked money, no tier.
+    expect([both.total, both.fallTotal, both.springTotal]).toEqual([0, 0, 0]);
+    expect(both.storageTierId).toBeNull();
+    expect(both.fall).toEqual([]);
+
+    // (c) And the caller's explicit id wins over the tags, for the surfaces
+    //     that hold the stable key but not the tagged view.
+    const untagged = buildPackageViews(prop.profile, renamed, false).find((p) => p.code === "we_haul")!;
+    const byId = validateSelection(untagged, [fallReturnKey], { returnLegServiceId: svcId(RETURN_LEG_SEED_NAME) });
+    bump();
+    expect(byId.ok).toBe(true);
+  });
+
+  // REGRESSION (audit bug 7, the fail-closed half): when NOTHING identifies the
+  // return leg — an untagged recipe row, a package migration 0051 never reached
+  // — we_haul cannot tell "the boat comes home" from "the boat stays", and the
+  // wrong guess bills a winter of storage AND a trip home for the same hull.
+  // It now refuses every we_haul selection and sends the customer to a human,
+  // rather than guessing. The OTHER packages are untouched: the rails are
+  // we_haul's alone, so an untagged recipe must not take you_tow or
+  // storage_only offline with it.
+  it("REGRESSION (audit bug 7): a package with no identifiable return leg fails CLOSED", () => {
+    const fails: string[] = [];
+    let refusedWeHaul = 0;
+    let acceptedOthers = 0;
+    for (const prop of PROPERTIES.slice(0, 150)) {
+      const pkgs = buildPackageViews(prop.profile, undefined, false);
+      const weHaul = pkgs.find((p) => p.code === "we_haul")!;
+      // The default tile, the bare minimum, and the "bring it home" pick —
+      // three shapes that would ALL have been decidable with a tagged leg.
+      const keySets = [defaultSelection(weHaul), [], [`${svcId(RETURN_LEG_SEED_NAME)}|fall`]];
+      for (const keys of keySets) {
+        const sel = validateSelection(weHaul, keys);
+        bump();
+        if (sel.ok) fails.push(why(`we_haul accepted with an unidentifiable return leg on ${prop.id}`));
+        else {
+          refusedWeHaul++;
+          if (!/return trip isn't identified/i.test(sel.error ?? "")) fails.push(why(`wrong refusal on ${prop.id}: ${sel.error}`));
+          // Fail-closed still means quote nothing.
+          if (sel.total !== 0 || sel.storageTierId) fails.push(why(`fail-closed leaked a quote on ${prop.id}`));
+        }
+      }
+      for (const other of pkgs.filter((p) => p.code !== "we_haul")) {
+        const sel = validateSelection(other, defaultSelection(other));
+        bump();
+        if (!sel.ok) fails.push(why(`${other.code} taken offline by an untagged we_haul row on ${prop.id}: ${sel.error}`));
+        else acceptedOthers++;
+      }
+    }
+    expect(firstFailure(fails)).toBeNull();
+    expect(refusedWeHaul).toBe(450);
+    expect(acceptedOthers).toBe(300);
   });
 
   it("legacy bare-serviceId selection keys select a service in EVERY phase (documented, still surprising)", () => {
@@ -1110,7 +1235,7 @@ describe("scale: storage packages", () => {
     const tier = pkg.components.find((c) => c.isStorageTier && c.defaultOn)!;
     // A legacy client asking for "storage + the SPRING return" gets the FALL
     // return too, because the bare id matches both rows — and is refused.
-    const sel = validateSelection(pkg, [tier.serviceId, svcId("Boat return & splash")]);
+    const sel = validateSelection(pkg, [tier.serviceId, svcId(RETURN_LEG_SEED_NAME)]);
     bump();
     expect(sel.ok).toBe(false);
     expect(sel.error).toMatch(/drop the fall return trip/i);
@@ -1208,6 +1333,9 @@ describe("scale: two full seasons of storage customers, end to end", () => {
     // Measured at seed 20260726: 885 storage stays over two seasons, 119 of
     // them overstaying (~134 per 1,000 stays) for $37,540 of per-diem —
     // every one of those a notice, a phone call and a pickup to chase.
+    // (Unchanged by the audit fixes. With an UNTAGGED return leg this falls to
+    // 496 because every we_haul stay fails closed — see the fail-closed test
+    // above; that drop is the tell that a package recipe is missing its tag.)
     expect(stays).toBeGreaterThan(800);
     expect(overstays).toBeGreaterThan(90);
     expect(perdiemDollars).toBeGreaterThan(20_000);
