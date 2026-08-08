@@ -59,6 +59,168 @@ reached for homeowners: no upfront fee, land and expand.
 
 ---
 
+---
+
+## 1b. Two property managers, one platform — and the park owner is the human
+
+The owner's framing, which corrects the automation assumption running through
+the rest of this platform:
+
+> *"I don't think it's gonna be as automated as we think… There's still gonna be
+> some type of human involvement on the park side as an owner, but I want them to
+> be able to use this tool as the ability to cut down on their management. So
+> it's basically like a little property manager for the park, and then it's also
+> a mini property manager for the customers that are in the park."*
+
+That is two managers stacked:
+
+- **The park owner manages the park** — lots, tenancies, compliance, rent.
+- **The renter manages their own unit** — their mobile home or RV, and the
+  services that keep it running through a lake season.
+
+And it inverts the platform's usual ideology on purpose. Everywhere else,
+LakeLife automates the judgment. **Here the park owner keeps the judgment and
+the platform removes the paperwork.** The design rule that follows:
+
+> **The platform surfaces the queue, holds the record, moves the money and sends
+> the reminders. The park owner decides. The platform never decides.**
+
+### The routing rule that protects LakeLife
+
+A corollary that matters more than it looks: **park exceptions route to the park
+owner's queue, never to LakeLife's ops console.** The two-season audit showed
+ops workload scaling linearly with customers — roughly one action per customer
+per season. If every park's approvals, insurance chases and late rents landed in
+`/ops`, each park added would grow LakeLife's burden by the size of the park,
+and the whole zero-ops thesis would break at park #3.
+
+Only genuine platform failures — a processor outage, a stuck remittance — reach
+LakeLife.
+
+---
+
+## 1c. The park owner's setup interview *is* the product
+
+Every park runs differently, so the platform cannot hardcode one. The park
+owner's onboarding is a configuration interview whose answers drive everything a
+renter later sees. What it has to capture:
+
+**Inventory.** Lots with numbers/sections and *site type* — mobile-home pad, RV
+full hookup, RV water-and-electric, seasonal slip. Crucially **fit
+constraints**: max length, hookup amperage, whether a slip comes with it. A
+40-foot RV cannot go on a 30-foot pad, so this is matching data, not decoration.
+
+**Terms and rates.** What durations this park sells — a few weeks, monthly,
+seasonal, annual — and the rate for each. The park owner dictates the money;
+LakeLife never prices a lot. (This is `services`-style rule-8 configuration
+pointed at lots.)
+
+**What's included** — water, sewer, trash, wifi, a slip — because that is the
+first question every renter asks and it belongs on the public park page.
+
+**Documents.** Their lease, park rules, any addenda: uploaded by the park owner,
+versioned, and served to renters for e-signature.
+
+**Insurance requirements**, expressed as rules rather than prose: what triggers
+each one (everyone / owns a boat / has a golf cart), what document, minimum
+limits, and whether the park must be named additional insured.
+
+**The approval switch.** Does an application need the park owner's approval, or
+is booking instant? **Default to approval** — most park owners will want it, and
+it is the safer default.
+
+**House rules** — pets, guests, quiet hours — displayed to renters, never
+enforced by software.
+
+---
+
+## 1d. The renter's path, and the fork at the top
+
+At signup the customer portal asks one question: **"Do you rent in a park, or do
+you own a lake property?"** Everything downstream branches there.
+
+The park-renter branch:
+
+1. **Pick the lake, then the park** (or the park directly — the lake is already
+   modelled, and parks hang off it).
+2. **Describe the unit they own** — make, model, year, length. They own the
+   mobile home or RV; they rent the *lot*. That distinction drives both lot fit
+   and which services apply (winterizing a park model is not winterizing a
+   travel trailer).
+3. **See lots that actually fit**, with availability and the park owner's price
+   for the term they want.
+4. **Apply** for that lot and duration.
+5. **The park owner approves** (unless instant booking is on).
+6. **Then** sign the agreement, upload insurance and photo ID, declare a boat or
+   golf cart, and set up payment.
+
+**Note step 6 deliberately follows step 5.** See below.
+
+---
+
+## 1e. The approval step is the biggest new legal exposure
+
+The moment a park owner accepts or declines applicants inside LakeLife's
+software, LakeLife is supplying a tool used to make a **housing decision**. That
+is regulated ground — federal fair housing plus Indiana's mobile-home community
+statute — and it is materially heavier than anything the platform does today.
+
+Concrete design choices that reduce exposure, all of them cheap if made now and
+expensive to retrofit:
+
+- **Build no screening logic.** No scoring, no ranking, no recommendations, no
+  "similar parks accept…" nudges. The platform records a decision; it must never
+  produce or suggest one.
+- **Collect nothing that touches a protected class.** No questions about family
+  status, disability, national origin, religion. Watch out for innocent-looking
+  fields — "how many children" is a classic trap.
+- **Collect the photo ID *after* approval, not with the application.** Having a
+  picture of an applicant's face in the file before the accept/decline decision
+  looks bad in a way that is hard to explain later, whatever actually happened.
+- **Keep the decision record factual and minimal**, and treat it as
+  discoverable — because it is.
+- **Do not automate denial**, and do not template a denial reason.
+
+**For the attorney, alongside the ToS work:** what an application may ask, what
+must be retained and for how long, and what notice a decline requires.
+
+---
+
+## 1f. What stays human on purpose
+
+Not everything here should be automated even if it could be:
+
+| Stays with the park owner | Why |
+|---|---|
+| Approving an applicant | A housing decision. Software must not make it. |
+| Judging whether a certificate is *adequate* | The platform can read an expiry date; it cannot tell whether the endorsement really names the park. |
+| Delinquency and eviction | Regulated, state-specific, and different for mobile-home parks. **Hard line: the platform records the failure, notifies both parties, and stops.** It must never auto-generate a legal notice or auto-escalate. |
+| Disputes with a renter | Their tenancy, their relationship. |
+| Odd lot assignments | They know their own park. |
+
+What the platform *does* take off their plate: chasing signatures, chasing
+documents, chasing expiries, collecting rent, reconciling it, remitting it,
+publishing availability, and answering "when is my mobile home being
+winterized."
+
+That is the honest version of "cut down on management," and it is a better
+promise than "eliminate it" because it is one the platform can actually keep.
+
+---
+
+## 1g. Two payment instruments, on purpose
+
+A renter puts both on file:
+
+- **Rent → ACH.** The fee model (§7) is decisive: card rent on an 80-lot park
+  costs ~$12,800 a year against ~$18,400 of total park margin.
+- **Services → card.** Small, occasional, and the fee is immaterial at that
+  size; card is also what the existing engine already does well.
+
+Same renter, two rails, chosen by what the money is for.
+
+---
+
 ## 2. The new core primitive: a lot is bookable inventory
 
 This is the piece the previous draft under-scoped, and it is the heart of the
