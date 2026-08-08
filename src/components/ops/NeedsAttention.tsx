@@ -43,6 +43,25 @@ export function NeedsAttention({
         </p>
       </div>
 
+      {/* PROTECTIVE work whose date has already passed. The nightly refuses to
+          cancel these (0053) — which means ops is the only thing between a
+          missed winterization and a burst pipe. It goes above everything. */}
+      {jobs.some((j) => j.overdue_protective) && (
+        <div className="ll-card ll-card-pad" style={{ borderLeft: "4px solid #b3261e" }}>
+          <span className="ll-pill warn">Past due · protective</span>
+          <h3 style={{ fontSize: 17, margin: "10px 0 4px" }}>
+            {jobs.filter((j) => j.overdue_protective).length === 1
+              ? "1 job is past due and can't be cancelled"
+              : `${jobs.filter((j) => j.overdue_protective).length} jobs are past due and can't be cancelled`}
+          </h3>
+          <p className="mut" style={{ fontSize: 13, margin: 0 }}>
+            This is work where doing nothing damages the property — winterization
+            before a freeze. The machine will never cancel it and the customer has
+            been told we haven&apos;t given up. It stays here until a crew takes it.
+          </p>
+        </div>
+      )}
+
       {jobs.length === 0 ? (
         <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
           <div style={{ fontSize: 15, fontWeight: 700 }}>All jobs have a crew ✓</div>
@@ -50,9 +69,11 @@ export function NeedsAttention({
         </div>
       ) : (
         <div style={{ display: "grid", gap: 12 }}>
-          {jobs.map((j) => (
-            <AttentionCard key={j.id} job={j} crews={crews} />
-          ))}
+          {[...jobs]
+            .sort((a, b) => Number(b.overdue_protective) - Number(a.overdue_protective))
+            .map((j) => (
+              <AttentionCard key={j.id} job={j} crews={crews} />
+            ))}
         </div>
       )}
     </div>

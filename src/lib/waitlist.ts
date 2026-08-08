@@ -55,3 +55,39 @@ export function isExpired(jobDateISO: string | null, todayISO: string): boolean 
   if (!jobDateISO) return false;
   return jobDateISO < todayISO;
 }
+
+// ------------------------------------------------- protective work ---------
+
+/**
+ * PROTECTIVE work is work whose ABSENCE destroys property: winterization
+ * before a hard freeze, a pier or lift left in the water through ice-up.
+ * ROUTINE work is everything else — a missed mow is a long lawn.
+ *
+ * The distinction exists because the honest terminal above is only honest for
+ * routine work. Telling someone "we couldn't line up a crew in time, so we've
+ * cancelled it and you were never charged" is a fair outcome for a mow. For a
+ * winterization it is a burst pipe, a destroyed home, and a text from us that
+ * reads as a shrug. Never being charged is not the point.
+ */
+export type Criticality = "routine" | "protective";
+export type ExpiryAction = "cancel" | "escalate";
+
+/** The ledger `kind` for the one-and-only protective escalation notice. */
+export const PROTECTIVE_ESCALATION_KIND = "protective_escalation";
+
+/**
+ * What the nightly must do with an unfilled job whose date has passed.
+ *
+ * Null is treated as routine on purpose: `services.criticality` carries a NOT
+ * NULL default of 'routine', so null only appears on a row written before that
+ * column existed, and escalating the entire back catalogue would bury ops in
+ * noise on the first run.
+ *
+ * Any OTHER unrecognised value escalates. A future criticality tier we have
+ * not taught this function about should land in the safe lane — the cost of a
+ * wrong escalate is an ops glance, and the cost of a wrong cancel is a house.
+ */
+export function expiryActionFor(criticality: string | null | undefined): ExpiryAction {
+  if (criticality == null || criticality === "routine") return "cancel";
+  return "escalate";
+}

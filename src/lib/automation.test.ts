@@ -313,6 +313,87 @@ describe("expireUnfilledJobs — the warning is exactly-once, and survives a mis
     expect(table("waitlist_notice_log")).toHaveLength(1);
   });
 
+  // -------------------------------------------------------------------------
+  // 0053: the nightly may never cancel work whose ABSENCE destroys property.
+  // A cancelled mow is a long lawn. A cancelled winterization is a burst pipe,
+  // and "you were never charged" is not the point.
+  // -------------------------------------------------------------------------
+  const seedProtective = (dateISO: string) => {
+    table("users").push({ id: "owner-2", phone: "+15559998888" });
+    table("properties").push({ id: "p2", owner_id: "owner-2", address: "9 Ice Rd", nickname: "The lake house" });
+    table("jobs").push({
+      id: "job-prot", date: dateISO, status: "requested", vendor_id: null,
+      is_rush: false, group_id: null,
+      services: { name: "Fall winterization", criticality: "protective" },
+      properties: { owner_id: "owner-2", address: "9 Ice Rd", nickname: "The lake house" },
+    });
+  };
+
+  it("a past-due PROTECTIVE job is NOT cancelled — it escalates and stays open", async () => {
+    seedProtective(inDays(-1));
+    const res = await expireUnfilledJobs();
+
+    expect(res.expired).toBe(0);
+    expect(res.escalated).toBe(1);
+    // The job survives. This is the whole fix.
+    expect(table("jobs").find((j) => j.id === "job-prot")?.status).toBe("requested");
+  });
+
+  it("the escalation text says we are NOT cancelling — never 'you were never charged'", async () => {
+    seedProtective(inDays(-1));
+    await expireUnfilledJobs();
+
+    const body = String(vi.mocked(sendSms).mock.calls.at(-1)?.[1] ?? "");
+    expect(body).toMatch(/not cancelling/i);
+    expect(body).not.toMatch(/never charged/i);
+    expect(body).not.toMatch(/we've cancelled it/i);
+  });
+
+  it("escalates ONCE — a nightly that runs twice does not text every night", async () => {
+    seedProtective(inDays(-1));
+    await expireUnfilledJobs();
+    vi.mocked(sendSms).mockClear();
+
+    const again = await expireUnfilledJobs();
+    expect(again.escalated).toBe(0);
+    expect(vi.mocked(sendSms)).not.toHaveBeenCalled();
+    // ...and it is still open, still ours to fill.
+    expect(table("jobs").find((j) => j.id === "job-prot")?.status).toBe("requested");
+  });
+
+  it("ROUTINE work still cancels, and now records WHY so the DB guard can tell", async () => {
+    table("users").push({ id: "owner-3", phone: "+15557776666" });
+    table("properties").push({ id: "p3", owner_id: "owner-3", address: "4 Fairway" });
+    table("jobs").push({
+      id: "job-mow", date: inDays(-1), status: "requested", vendor_id: null,
+      is_rush: false, group_id: null,
+      services: { name: "Lawn mowing & trim", criticality: "routine" },
+      properties: { owner_id: "owner-3", address: "4 Fairway" },
+    });
+
+    const res = await expireUnfilledJobs();
+    expect(res.expired).toBe(1);
+    expect(res.escalated).toBe(0);
+    const job = table("jobs").find((j) => j.id === "job-mow");
+    expect(job?.status).toBe("cancelled");
+    expect(job?.cancel_reason).toBe("expired_unfilled");
+  });
+
+  it("a service with NO criticality still cancels — the back catalogue is not swept into ops", async () => {
+    table("users").push({ id: "owner-4", phone: "+15551112222" });
+    table("properties").push({ id: "p4", owner_id: "owner-4", address: "8 Old Rd" });
+    table("jobs").push({
+      id: "job-legacy", date: inDays(-1), status: "requested", vendor_id: null,
+      is_rush: false, group_id: null,
+      services: { name: "Housekeeping" }, // no criticality at all
+      properties: { owner_id: "owner-4", address: "8 Old Rd" },
+    });
+
+    const res = await expireUnfilledJobs();
+    expect(res.expired).toBe(1);
+    expect(table("jobs").find((j) => j.id === "job-legacy")?.status).toBe("cancelled");
+  });
+
   it("a MISSED night is caught the next night — the warning is not lost forever", async () => {
     // The 2-days-out run never happened; tonight the job is 1 day out.
     seedJob(inDays(1));

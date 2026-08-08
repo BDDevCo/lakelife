@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { expiryActionFor } from "@/lib/waitlist";
 import { todayLakeDate } from "@/lib/booking";
 import { assertOps } from "./data";
 
@@ -21,6 +22,10 @@ export interface NeedsAttentionJob {
   date: string | null;
   customer_price: number | null;
   reason: string; // best-effort human label for why no crew took it
+  /** PROTECTIVE work whose date has already passed and still has no crew. The
+   *  nightly refuses to cancel these (migration 0053), so ops is the only
+   *  thing standing between a missed winterization and a burst pipe. */
+  overdue_protective: boolean;
   preferred_vendor: string | null; // property's preferred crew, if set
   preferred_company: string | null; // that crew's company name, if resolvable
 }
@@ -47,12 +52,18 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
     .from("jobs")
     .select(
       "id, property_id, date, customer_price, service_id, " +
-        "services(name), properties(address, preferred_vendor, lake_id, lakes(name))",
+        "services(name, criticality), properties(address, preferred_vendor, lake_id, lakes(name))",
     )
     .eq("status", "requested")
     .is("vendor_id", null)
-    .gte("date", today)
     .order("date", { ascending: false });
+  // NOTE: the `.gte("date", today)` filter that used to live here is GONE, and
+  // that is the point. It was safe only because the nightly cancelled every
+  // past-dated unfilled job, so nothing could linger behind it. Migration 0053
+  // stops the nightly cancelling PROTECTIVE work — which would have made those
+  // jobs invisible to everyone, turning a loud wrong answer into a silent one.
+  // Past-dated rows are filtered below: protective ones stay and shout, routine
+  // ones are dropped (the nightly is about to cancel them anyway).
 
   const rows = (data ?? []) as unknown as Array<{
     id: string;
@@ -60,7 +71,7 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
     date: string | null;
     customer_price: number | null;
     service_id: string | null;
-    services: Embed<{ name: string | null }>;
+    services: Embed<{ name: string | null; criticality: string | null }>;
     properties: Embed<{ address: string | null; preferred_vendor: string | null; lake_id: string | null; lakes: Embed<{ name: string | null }> }>;
   }>;
 
@@ -87,8 +98,19 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
     for (const v of prefVendors ?? []) companyById.set(v.id as string, (v.company as string) ?? null);
   }
 
-  return rows.map((r) => {
-    const svc = first(r.services) as { name?: string } | null;
+  // Drop past-dated ROUTINE work: the nightly cancels it, so surfacing it here
+  // would just be a queue of things about to disappear. Past-dated PROTECTIVE
+  // work is the opposite — it is the most urgent thing on the board.
+  const visible = rows.filter((r) => {
+    const d = (r.date as string | null) ?? null;
+    if (!d || d >= today) return true;
+    const c = (first(r.services) as { criticality?: string | null } | null)?.criticality;
+    return expiryActionFor(c) === "escalate";
+  });
+  if (visible.length === 0) return [];
+
+  return visible.map((r) => {
+    const svc = first(r.services) as { name?: string; criticality?: string | null } | null;
     const prop = first(r.properties) as
       | { address?: string; preferred_vendor?: string; lake_id?: string; lakes?: Embed<{ name: string | null }> }
       | null;
@@ -118,7 +140,10 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
           : "All crews are full or below the margin floor";
 
     const preferred_vendor = prop?.preferred_vendor ?? null;
+    const overdue_protective =
+      !!r.date && (r.date as string) < today && expiryActionFor(svc?.criticality) === "escalate";
     return {
+      overdue_protective,
       id: r.id as string,
       property_id: r.property_id ?? null,
       service_name: serviceName,

@@ -1,4 +1,25 @@
 import { describe, it, expect } from "vitest";
+import { expiryActionFor } from "@/lib/waitlist";
+
+describe("expiryActionFor — a wrong cancel costs a house, a wrong escalate costs a glance", () => {
+  it("protective work escalates, never cancels", () => {
+    expect(expiryActionFor("protective")).toBe("escalate");
+  });
+  it("routine work still cancels — the honest floor is right for a mow", () => {
+    expect(expiryActionFor("routine")).toBe("cancel");
+  });
+  it("null and undefined are routine — matching the column default, so the back catalogue is not swept into ops", () => {
+    expect(expiryActionFor(null)).toBe("cancel");
+    expect(expiryActionFor(undefined)).toBe("cancel");
+  });
+  it("an UNRECOGNISED tier fails SAFE — a future criticality we haven't been taught escalates", () => {
+    // Deliberately asymmetric with null. A value someone deliberately wrote
+    // that we don't understand is a reason to be careful, not to cancel.
+    expect(expiryActionFor("life_safety")).toBe("escalate");
+    expect(expiryActionFor("critical")).toBe("escalate");
+  });
+});
+
 import { warningDue, isExpired } from "./waitlist";
 
 const today = "2026-07-22";

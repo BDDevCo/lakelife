@@ -10,7 +10,7 @@ import { planFleetDay, jobMinutesOf, type TruckIn, type FleetStop } from "@/lib/
 import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 import { proposeAutopilotDate } from "@/lib/autopilot";
 import { shouldDemote, healBase, isCoolingDown } from "@/lib/lake-standing";
-import { warningDue, isExpired, WAITLIST_WARNING_KIND } from "@/lib/waitlist";
+import { warningDue, isExpired, WAITLIST_WARNING_KIND, expiryActionFor, PROTECTIVE_ESCALATION_KIND } from "@/lib/waitlist";
 import { rushWindowOpen } from "@/lib/rush";
 import { isLastDayOfMonth, nudgeCooling, nearMilestone } from "@/lib/growth";
 import { withinSunset, customerReferralAccrual, crewShareAccrual, creditToApply } from "@/lib/referrals";
@@ -1335,7 +1335,7 @@ export async function sweepWaitlist(lakeId?: string, limit = 60): Promise<{ ok: 
  * says so plainly, and reminds them they were never charged — no silent rot,
  * no ops queue. The demand history stays on the books as the recruit signal.
  */
-export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: number; expired: number }> {
+export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: number; expired: number; escalated: number }> {
   const admin = createServiceClient();
   const today = todayLakeDate();
   const { waitlistWarningDays } = await getPlatformSettings();
@@ -1343,15 +1343,16 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
 
   const { data: unfilled } = await admin
     .from("jobs")
-    .select("id, date, group_id, services(name), properties(owner_id, address, nickname)")
+    .select("id, date, group_id, services(name, criticality), properties(owner_id, address, nickname)")
     .eq("status", "requested")
     .is("vendor_id", null)
     .eq("is_rush", false) // rush stragglers get their own, kinder fallback rung
     .not("date", "is", null);
 
-  let warned = 0, expired = 0;
+  let warned = 0, expired = 0, escalated = 0;
   for (const j of unfilled ?? []) {
-    const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
+    const svcRow = one(j.services) as { name?: string; criticality?: string | null } | null;
+    const svc = svcRow?.name ?? "your service";
     const prop = one(j.properties) as { owner_id?: string; address?: string; nickname?: string } | null;
     const where = prop?.nickname || prop?.address || "your place";
     const phone = prop?.owner_id
@@ -1369,10 +1370,39 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
           .from("storage_stays").select("id").eq("group_id", gid0).eq("status", "in_storage").limit(1);
         if (custody && custody.length > 0) continue;
       }
+
+      // PROTECTIVE WORK NEVER GETS CANCELLED BY A MACHINE (migration 0053).
+      // Same shape as the custody guard above, higher stakes: telling someone
+      // we cancelled their winterization and they were never charged is a
+      // burst pipe, not a refund. The job stays `requested` and becomes LOUD
+      // instead — it stays on the ops board (getNeedsAttention now reaches
+      // back past today for exactly these) and the customer gets one honest
+      // message saying we have NOT given up.
+      //
+      // The database refuses the cancel too, so a future edit here cannot
+      // reintroduce this.
+      if (expiryActionFor(svcRow?.criticality) === "escalate") {
+        // Exactly-once, via the same sent-ledger the waitlist warning uses:
+        // the INSERT is the claim, so a nightly that runs twice, or a manual
+        // re-run, does not text the same person every night about a job we
+        // are already chasing.
+        const { error: escLogErr } = await admin
+          .from("waitlist_notice_log")
+          .insert({ job_id: j.id as string, kind: PROTECTIVE_ESCALATION_KIND });
+        if (escLogErr) continue; // already escalated — stay quiet, stay open
+        escalated++;
+        if (phone) {
+          void sendSms(
+            phone,
+            `LakeLife: we still don't have a crew for ${svc} at ${where}, and we are NOT cancelling it — this is the kind of work that can't wait. We're on it and will text as soon as it's set. If it's urgent, reply here. 🌊`,
+          );
+        }
+        continue;
+      }
       // Guarded flip — never race a same-moment claim/assign.
       const { data: gone } = await admin
         .from("jobs")
-        .update({ status: "cancelled" })
+        .update({ status: "cancelled", cancel_reason: "expired_unfilled" })
         .eq("id", j.id as string)
         .eq("status", "requested")
         .is("vendor_id", null)
@@ -1419,7 +1449,7 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
       }
     }
   }
-  return { ok: true, warned, expired };
+  return { ok: true, warned, expired, escalated };
 }
 
 /**
