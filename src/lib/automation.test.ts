@@ -282,10 +282,17 @@ describe("expireUnfilledJobs — the warning is exactly-once, and survives a mis
     table("services").push({ id: "svc1", name: "Fall winterization" });
     table("jobs").push({ id: "job-1", date: dateISO, status: "requested", vendor_id: null, is_rush: false, group_id: null, services: { name: "Fall winterization" }, properties: { owner_id: "owner-1", address: "1 Lake Rd", nickname: "The cottage" } });
   };
+  // Count from the LAKE's today, not the machine's. The engine reasons in
+  // America/Indiana/Indianapolis (todayLakeDate); a fixture built on the local
+  // clock silently drifts a day whenever the two disagree — which for any
+  // machine west of Indiana is every evening. That made this suite pass all
+  // afternoon and fail after 9pm Phoenix time, which is the worst kind of red.
   const inDays = (n: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() + n);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const lakeToday = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Indiana/Indianapolis",
+    }).format(new Date());
+    const [y, m, d] = lakeToday.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
   };
 
   it("texts once and records it", async () => {
