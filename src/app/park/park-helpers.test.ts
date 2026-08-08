@@ -12,7 +12,7 @@ const lot = (over: Partial<Lot> = {}): Lot => ({
 });
 
 const raw = (over: Partial<RawReservation> = {}): RawReservation => ({
-  id: "r1", park_lot_id: "l1", renter_user_id: "u1", renter_unit_id: null,
+  id: "r1", park_lot_id: "l1", renter_id: "pr1", renter_unit_id: null,
   during: "[2026-07-01,2026-07-08)", term: "weekly", quoted_amount: 315,
   status: "approved", decided_at: null, created_at: "2026-06-01T00:00:00Z", ...over,
 });

@@ -231,7 +231,7 @@ export async function decideApplication(
 
   const { data: appRow } = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_user_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
+    .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
     .eq("id", reservationId)
     .maybeSingle();
   if (!appRow) return { ok: false, error: "That application is gone." };
@@ -260,7 +260,7 @@ export async function decideApplication(
 
   const { data: others } = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_user_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
+    .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
     .eq("park_lot_id", scope.lotId);
 
   const check = canApprove(

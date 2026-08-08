@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { claimCrewInvite } from "@/app/ops/crews-invite";
 import { claimCustomerImports } from "@/app/vendor/import-actions";
@@ -30,6 +30,32 @@ export default async function PortalPage() {
   await claimReferral(user.id);
 
   let role = me?.role;
+
+  // PARK MEMBERS ROUTE FIRST, and deliberately BEFORE claimCrewInvite.
+  //
+  // Two bugs live in that ordering. The small one: a park owner signing in had
+  // no branch at all and landed on /book, the homeowner booking page, with no
+  // way to find his own park.
+  //
+  // The damaging one: claimCrewInvite flips ANY non-vendor/non-ops user to
+  // role='vendor' on an email match. A park owner who also mows his own common
+  // areas is exactly the person ops would invite as a crew — and that flip
+  // empties his services menu, because services_read grants SELECT on services
+  // only to ops or role='owner' (migration 0052 constraint 2 documents this).
+  // guard_role_change then makes it awkward to undo. Park identity lives in a
+  // side table precisely so it never has to touch users.role; honouring that
+  // here means checking membership before anything can rewrite the role.
+  if (role !== "ops") {
+    const admin = createServiceClient();
+    const { data: membership } = await admin
+      .from("park_members")
+      .select("park_id")
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle();
+    if (membership) redirect("/park");
+  }
+
   if (role !== "vendor" && role !== "ops") {
     const claimed = await claimCrewInvite(user.id, user.email);
     if (claimed) role = "vendor";

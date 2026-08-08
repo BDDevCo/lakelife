@@ -143,11 +143,51 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
   };
   const fit = lotFits(lot, { unitType: input.unitType as UnitType, lengthFt, needsAmps: null });
 
+  // --- the park's FILE on this person ---
+  // A tenancy hangs off park_renters, never off the account (migration 0055).
+  // Someone applying through the website has an account, so their file is
+  // created already claimed — but it is still a FILE, so it survives them
+  // deleting that account later, and it sits alongside the files the park
+  // owner typed in for tenants who never signed up.
+  let renterId: string | null = null;
+  const { data: existing } = await admin
+    .from("park_renters")
+    .select("id")
+    .eq("park_id", park.id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (existing) {
+    renterId = existing.id as string;
+  } else {
+    const { data: created, error: renterErr } = await admin
+      .from("park_renters")
+      .insert({
+        park_id: park.id,
+        user_id: user.id,
+        display_name: (user.user_metadata?.name as string | undefined)?.trim()
+          || user.email?.split("@")[0]
+          || "Renter",
+        email: user.email ?? null,
+        // They came in through the website, so the sensible default channel is
+        // the one they already used to reach us — not paper.
+        contact_pref: "email",
+        source: "self_signup",
+        claimed_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+    if (renterErr || !created) {
+      return { ok: false, error: "Couldn't start your application — try again." };
+    }
+    renterId = created.id as string;
+  }
+
   // --- record the rig, then the application ---
   const { data: unit, error: unitErr } = await admin
     .from("renter_units")
     .insert({
-      user_id: user.id,
+      renter_id: renterId,
       unit_type: input.unitType,
       make: input.unitMake.trim() || null,
       model: input.unitModel.trim() || null,
@@ -160,7 +200,7 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
 
   const { error: resErr } = await admin.from("lot_reservations").insert({
     park_lot_id: input.lotId,
-    renter_user_id: user.id,
+    renter_id: renterId,
     renter_unit_id: unit.id,
     during: toDaterange(range),
     term: input.term,

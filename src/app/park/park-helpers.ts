@@ -20,7 +20,7 @@ import {
 export interface RawReservation {
   id: string;
   park_lot_id: string;
-  renter_user_id: string;
+  renter_id: string;
   renter_unit_id: string | null;
   during: string | null; // Postgres daterange text
   term: string;
@@ -33,7 +33,9 @@ export interface RawReservation {
 export interface Stay {
   id: string;
   lotId: string;
-  renterUserId: string;
+  /** The park's FILE on this person — NOT an account id. May belong to
+   *  someone who has never logged in and never will. */
+  renterId: string;
   renterUnitId: string | null;
   range: DateRange | null;
   term: Term;
@@ -47,7 +49,7 @@ export function toStay(r: RawReservation): Stay {
   return {
     id: r.id,
     lotId: r.park_lot_id,
-    renterUserId: r.renter_user_id,
+    renterId: r.renter_id,
     renterUnitId: r.renter_unit_id,
     range: parseDaterange(r.during),
     term: r.term as Term,

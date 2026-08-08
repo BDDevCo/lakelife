@@ -222,7 +222,7 @@ export async function getParkRoll(parkId: string): Promise<ParkRoll> {
   const lotIds = lots.map((l) => l.lot.id);
   const { data: resRows } = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_user_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
+    .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
     .in("park_lot_id", lotIds); // <- the scope: this park's lots only
 
   const stays: Stay[] = (resRows ?? []).map((r) => toStay(r as unknown as RawReservation));
@@ -238,17 +238,25 @@ export async function getParkRoll(parkId: string): Promise<ParkRoll> {
 }
 
 /**
- * Names for the people on the roll. NAME ONLY — deliberately not email, not
- * phone, not their other properties. A park owner needs to know who is on lot
- * 12; everything past that is the renter's business until they choose to share
- * it, and this file is service-role so nothing but this narrow select stops us.
+ * Names for the people on the roll, read from the PARK'S OWN FILE rather than
+ * from the users table. That is not a detail — it is why the rent roll works
+ * at all for a tenant who has never signed up, and why it keeps working after
+ * one deletes their account (park_renters.user_id goes null; display_name and
+ * the tenancy stay).
+ *
+ * NAME ONLY — deliberately not email, not phone, not their other properties.
+ * A park owner needs to know who is on lot 12; everything past that is the
+ * renter's business until they choose to share it, and this file is
+ * service-role, so nothing but this narrow select stops us.
  */
 async function loadRenterNames(stays: Stay[]): Promise<Map<string, string>> {
-  const ids = [...new Set(stays.map((s) => s.renterUserId))];
+  const ids = [...new Set(stays.map((s) => s.renterId))];
   if (ids.length === 0) return new Map();
   const admin = createServiceClient();
-  const { data } = await admin.from("users").select("id, name").in("id", ids);
-  return new Map((data ?? []).map((u) => [u.id as string, (u.name as string | null) || "Renter"]));
+  const { data } = await admin.from("park_renters").select("id, display_name").in("id", ids);
+  return new Map(
+    (data ?? []).map((r) => [r.id as string, (r.display_name as string | null) || "Renter"]),
+  );
 }
 
 /** The rigs on this park's lots — what the owner needs to judge fit, and

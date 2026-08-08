@@ -55,7 +55,7 @@ export async function getOpsParks(): Promise<OpsParkRow[]> {
   const { data: resRows } = lots.length
     ? await admin
         .from("lot_reservations")
-        .select("id, park_lot_id, renter_user_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
+        .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
         .in("park_lot_id", lots.map((l) => l.id as string))
     : { data: [] as RawReservation[] };
 
