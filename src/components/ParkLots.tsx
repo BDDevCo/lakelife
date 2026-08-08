@@ -1,0 +1,303 @@
+"use client";
+
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "@/components/Toast";
+import { saveLot, saveLotRates } from "@/app/park/actions";
+import type { LotFormInput } from "@/app/park/park-helpers";
+
+/**
+ * Lots and rates — the park's inventory and its rate card. The park owner
+ * dictates the money here (rule 8: the numbers live in the database, never in
+ * our code) and LakeLife never prices a lot.
+ *
+ * A blank rate means "we don't sell that term", and the engine treats it that
+ * way: a stay quoted against a term with no rate comes back null rather than
+ * silently falling through to another term.
+ */
+
+export interface LotView {
+  id: string;
+  lotNumber: string;
+  siteType: string;
+  maxLengthFt: number | null;
+  amperage: number | null;
+  hasWater: boolean;
+  hasSewer: boolean;
+  slipIncluded: boolean;
+  notes: string | null;
+  active: boolean;
+  rates: { term: string; amount: number }[];
+}
+
+const SITE_TYPES = [
+  { value: "rv_full", label: "Full hookup (water, power, sewer)" },
+  { value: "rv_we", label: "Water + electric" },
+  { value: "mh_pad", label: "Mobile-home pad" },
+  { value: "tent", label: "Tent site" },
+  { value: "slip_only", label: "Boat slip only" },
+];
+const TERMS = ["nightly", "weekly", "monthly", "seasonal", "annual"] as const;
+
+const blank = (): LotFormInput => ({
+  lotNumber: "", siteType: "rv_full", maxLengthFt: "", amperage: "",
+  hasWater: true, hasSewer: false, slipIncluded: false, notes: "", active: true,
+});
+
+export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [editing, setEditing] = useState<string | "new" | null>(lots.length === 0 ? "new" : null);
+  const [form, setForm] = useState<LotFormInput>(blank());
+
+  function openNew() {
+    setForm(blank());
+    setEditing("new");
+  }
+
+  function openEdit(lot: LotView) {
+    setForm({
+      lotNumber: lot.lotNumber,
+      siteType: lot.siteType,
+      maxLengthFt: lot.maxLengthFt?.toString() ?? "",
+      amperage: lot.amperage?.toString() ?? "",
+      hasWater: lot.hasWater,
+      hasSewer: lot.hasSewer,
+      slipIncluded: lot.slipIncluded,
+      notes: lot.notes ?? "",
+      active: lot.active,
+    });
+    setEditing(lot.id);
+  }
+
+  function submit() {
+    startTransition(async () => {
+      const res = await saveLot(parkId, editing === "new" ? null : editing, form);
+      if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
+      toast(res.signal ?? "Saved.");
+      setEditing(null);
+      router.refresh();
+    });
+  }
+
+  return (
+    <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 18, margin: 0 }}>Lots &amp; rates</h2>
+        {editing !== "new" && <button className="ll-btn" onClick={openNew}>Add a lot</button>}
+      </div>
+
+      {editing === "new" && (
+        <LotForm
+          title="New lot"
+          form={form}
+          setForm={setForm}
+          onSave={submit}
+          onCancel={() => setEditing(null)}
+          pending={pending}
+        />
+      )}
+
+      {lots.length === 0 && editing !== "new" && (
+        <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
+          <h3 style={{ fontSize: 17, margin: "0 0 6px" }}>No lots yet</h3>
+          <p className="mut" style={{ fontSize: 14, marginBottom: 14 }}>
+            Add each site you rent. You can put in what you charge now or later.
+          </p>
+          <button className="ll-btn" onClick={openNew}>Add my first lot</button>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+        {lots.map((lot) =>
+          editing === lot.id ? (
+            <LotForm
+              key={lot.id}
+              title={`Lot ${lot.lotNumber}`}
+              form={form}
+              setForm={setForm}
+              onSave={submit}
+              onCancel={() => setEditing(null)}
+              pending={pending}
+            />
+          ) : (
+            <LotCard key={lot.id} lot={lot} onEdit={() => openEdit(lot)} />
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LotCard({ lot, onEdit }: { lot: LotView; onEdit: () => void }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [open, setOpen] = useState(false);
+  const [rates, setRates] = useState<Record<string, string>>(() => {
+    const seed: Record<string, string> = {};
+    for (const t of TERMS) {
+      seed[t] = lot.rates.find((r) => r.term === t)?.amount.toString() ?? "";
+    }
+    return seed;
+  });
+
+  function saveRates() {
+    startTransition(async () => {
+      const res = await saveLotRates(lot.id, rates);
+      if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
+      toast(res.signal ?? "Saved.");
+      setOpen(false);
+      router.refresh();
+    });
+  }
+
+  const priced = lot.rates.filter((r) => r.amount > 0);
+  const site = SITE_TYPES.find((s) => s.value === lot.siteType)?.label ?? lot.siteType;
+
+  return (
+    <div className="ll-card ll-card-pad" style={{ opacity: lot.active ? 1 : 0.6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <strong style={{ fontSize: 15 }}>Lot {lot.lotNumber}</strong>
+          {!lot.active && <span className="ll-pill slate" style={{ marginLeft: 8 }}>Off</span>}
+          <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
+            {site}
+            {lot.maxLengthFt && ` · up to ${lot.maxLengthFt} ft`}
+            {lot.amperage && ` · ${lot.amperage} amp`}
+            {lot.slipIncluded && " · slip included"}
+          </div>
+          <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
+            {priced.length === 0
+              ? "No rates set — this lot can't be quoted yet."
+              : priced.map((r) => `$${r.amount.toLocaleString()}/${r.term.replace("ly", "")}`).join(" · ")}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <button className="ll-btn ghost" onClick={() => setOpen((v) => !v)}>
+            {open ? "Close" : "Rates"}
+          </button>
+          <button className="ll-btn ghost" onClick={onEdit}>Edit</button>
+        </div>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+          <p className="mut" style={{ fontSize: 13, marginBottom: 10 }}>
+            What you charge. Leave a box empty if you don&apos;t rent by that term —
+            we&apos;ll never quote a term you haven&apos;t priced.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
+            {TERMS.map((t) => (
+              <label key={t} className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+                <span className="mut" style={{ textTransform: "capitalize" }}>{t}</span>
+                <input
+                                    inputMode="decimal"
+                  placeholder="—"
+                  value={rates[t] ?? ""}
+                  onChange={(e) => setRates((prev) => ({ ...prev, [t]: e.target.value }))}
+                  style={{ marginTop: 4 }}
+                />
+              </label>
+            ))}
+          </div>
+          <button className="ll-btn" onClick={saveRates} disabled={pending} style={{ marginTop: 12 }}>
+            Save rates
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LotForm({
+  title, form, setForm, onSave, onCancel, pending,
+}: {
+  title: string;
+  form: LotFormInput;
+  setForm: (f: LotFormInput) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  pending: boolean;
+}) {
+  const set = <K extends keyof LotFormInput>(k: K, v: LotFormInput[K]) =>
+    setForm({ ...form, [k]: v });
+
+  return (
+    <div className="ll-card ll-card-pad">
+      <h3 style={{ fontSize: 16, margin: "0 0 12px" }}>{title}</h3>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Lot number</span>
+          <input
+            value={form.lotNumber}
+            onChange={(e) => set("lotNumber", e.target.value)}
+            placeholder="12" style={{ marginTop: 4 }}
+          />
+        </label>
+
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Site type</span>
+          <select
+            value={form.siteType}
+            onChange={(e) => set("siteType", e.target.value)}
+            style={{ marginTop: 4 }}
+          >
+            {SITE_TYPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+        </label>
+
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Longest rig it fits (ft)</span>
+          <input
+            inputMode="numeric" value={form.maxLengthFt}
+            onChange={(e) => set("maxLengthFt", e.target.value)}
+            placeholder="leave blank if unsure" style={{ marginTop: 4 }}
+          />
+        </label>
+
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Power</span>
+          <select
+            value={form.amperage}
+            onChange={(e) => set("amperage", e.target.value)}
+            style={{ marginTop: 4 }}
+          >
+            <option value="">Not sure / none</option>
+            {[20, 30, 50, 100].map((a) => <option key={a} value={a}>{a} amp</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 14, fontSize: 14 }}>
+        <Check label="Water" checked={form.hasWater} onChange={(v) => set("hasWater", v)} />
+        <Check label="Sewer" checked={form.hasSewer} onChange={(v) => set("hasSewer", v)} />
+        <Check label="Boat slip included" checked={form.slipIncluded} onChange={(v) => set("slipIncluded", v)} />
+        <Check label="In service" checked={form.active} onChange={(v) => set("active", v)} />
+      </div>
+
+      <label className="ll-field" style={{ fontSize: 13, display: "block", marginTop: 14 }}>
+        <span className="mut">Notes (only you see these)</span>
+        <textarea
+          rows={2} value={form.notes}
+          onChange={(e) => set("notes", e.target.value)}
+          placeholder="Shady, close to the pier" style={{ marginTop: 4 }}
+        />
+      </label>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button className="ll-btn" onClick={onSave} disabled={pending}>Save lot</button>
+        <button className="ll-btn ghost" onClick={onCancel} disabled={pending}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      {label}
+    </label>
+  );
+}

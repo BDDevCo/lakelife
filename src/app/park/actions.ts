@@ -1,0 +1,317 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { assertMyPark } from "./data";
+import {
+  buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
+  decideProblemText, toStay,
+  type LotFormInput, type ParkProfileInput, type RawReservation,
+} from "./park-helpers";
+
+/**
+ * The park owner's write path. Every action asserts membership of the park it
+ * is about BEFORE it touches anything, and re-derives the park from the row
+ * being edited rather than trusting a parkId from the browser.
+ *
+ * Phase 1 moves NO money. There is no charge, no invoice, no payout here, and
+ * a rent amount never enters the job pipeline — see the header of migration
+ * 0052 for what breaks if it ever does.
+ */
+
+export interface ParkResult {
+  ok: boolean;
+  error?: string;
+  signal?: string;
+}
+
+const DENIED = "You don't manage that park.";
+
+/** Resolve the park that owns a lot, then assert membership. */
+async function assertLotIsMine(lotId: string): Promise<string | null> {
+  const admin = createServiceClient();
+  const { data } = await admin
+    .from("park_lots").select("park_id").eq("id", lotId).maybeSingle();
+  const parkId = (data?.park_id as string) ?? null;
+  if (!parkId) return null;
+  return (await assertMyPark(parkId)) ? parkId : null;
+}
+
+/** Resolve the park that owns a reservation, then assert membership. */
+async function assertReservationIsMine(
+  reservationId: string,
+): Promise<{ parkId: string; lotId: string } | null> {
+  const admin = createServiceClient();
+  const { data } = await admin
+    .from("lot_reservations")
+    .select("park_lot_id, park_lots(park_id)")
+    .eq("id", reservationId)
+    .maybeSingle();
+  if (!data) return null;
+  const lotId = data.park_lot_id as string;
+  const parkId = (data.park_lots as unknown as { park_id: string } | null)?.park_id ?? null;
+  if (!parkId) return null;
+  return (await assertMyPark(parkId)) ? { parkId, lotId } : null;
+}
+
+// ------------------------------------------------------------- profile ----
+
+export async function saveParkProfile(
+  parkId: string,
+  input: ParkProfileInput,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const built = buildParkProfileRow(input);
+  if (!built.ok || !built.row) return { ok: false, error: built.error };
+
+  const admin = createServiceClient();
+  const { error } = await admin.from("parks").update(built.row).eq("id", parkId);
+  if (error) return { ok: false, error: "Couldn't save that — try again." };
+
+  revalidatePath("/park");
+  revalidatePath("/park/setup");
+  return { ok: true, signal: "Park profile saved." };
+}
+
+/**
+ * The launch switch. An active park shows on the public page and can take
+ * applications; a dark one is visible only to the people setting it up.
+ * OWNER only — a manager runs the park day to day, but putting it in front of
+ * the public is the owner's call.
+ */
+export async function setParkLive(parkId: string, active: boolean): Promise<ParkResult> {
+  const membership = await assertMyPark(parkId);
+  if (!membership) return { ok: false, error: DENIED };
+  if (membership.role !== "owner") {
+    return { ok: false, error: "Only the park owner can publish the park." };
+  }
+
+  const admin = createServiceClient();
+
+  if (active) {
+    // Refuse to publish an empty park. A public page with no lots is a dead
+    // link that costs the owner a first impression they only get once.
+    const { count } = await admin
+      .from("park_lots")
+      .select("id", { count: "exact", head: true })
+      .eq("park_id", parkId)
+      .eq("active", true);
+    if (!count) {
+      return { ok: false, error: "Add at least one lot before you publish the park." };
+    }
+    const { data: park } = await admin
+      .from("parks").select("slug, name").eq("id", parkId).maybeSingle();
+    if (!park?.slug) {
+      const slug = await mintSlug(park?.name as string ?? "park", parkId);
+      if (!slug) return { ok: false, error: "Couldn't create the park's web address — try a different name." };
+    }
+  }
+
+  const { error } = await admin.from("parks").update({ active }).eq("id", parkId);
+  if (error) return { ok: false, error: "Couldn't change that — try again." };
+
+  revalidatePath("/park");
+  revalidatePath("/parks");
+  return {
+    ok: true,
+    signal: active ? "Your park is live. 🌊" : "Park unpublished — only you can see it now.",
+  };
+}
+
+/** A URL-safe, unique slug for the public park page. Collisions get a suffix
+ *  rather than an error the owner can do nothing about. */
+async function mintSlug(name: string, parkId: string): Promise<string | null> {
+  const admin = createServiceClient();
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48)
+    || "park";
+  for (let i = 0; i < 25; i++) {
+    const slug = i === 0 ? base : `${base}-${i + 1}`;
+    const { error } = await admin.from("parks").update({ slug }).eq("id", parkId);
+    if (!error) return slug;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------- lots ----
+
+export async function saveLot(
+  parkId: string,
+  lotId: string | null,
+  input: LotFormInput,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  if (lotId && (await assertLotIsMine(lotId)) !== parkId) {
+    return { ok: false, error: DENIED };
+  }
+
+  const built = buildLotRow(input);
+  if (!built.ok || !built.row) return { ok: false, error: built.error };
+
+  const admin = createServiceClient();
+  const { error } = lotId
+    ? await admin.from("park_lots").update(built.row).eq("id", lotId)
+    : await admin.from("park_lots").insert({ ...built.row, park_id: parkId });
+
+  if (error) {
+    // 23505 = the (park_id, lot_number) unique index. Say what happened.
+    if (error.code === "23505") {
+      return { ok: false, error: `Lot ${built.row.lot_number} already exists in this park.` };
+    }
+    return { ok: false, error: "Couldn't save that lot — try again." };
+  }
+
+  revalidatePath("/park");
+  revalidatePath("/park/lots");
+  return { ok: true, signal: lotId ? "Lot updated." : `Lot ${built.row.lot_number} added.` };
+}
+
+/**
+ * The park's rate card for one lot. Terms the owner left blank are DELETED,
+ * which is how a park stops selling nightly — quoteStay then returns null for
+ * that term instead of quietly falling back to another one.
+ */
+export async function saveLotRates(
+  lotId: string,
+  rates: Record<string, string>,
+): Promise<ParkResult> {
+  if (!(await assertLotIsMine(lotId))) return { ok: false, error: DENIED };
+
+  const built = buildRateRows(rates);
+  if (!built.ok || !built.rows) return { ok: false, error: built.error };
+
+  const admin = createServiceClient();
+  const keep = built.rows.map((r) => r.term);
+
+  // Drop the terms that are no longer for sale...
+  let del = admin.from("lot_rates").delete().eq("park_lot_id", lotId);
+  if (keep.length > 0) del = del.not("term", "in", `(${keep.join(",")})`);
+  await del;
+
+  // ...then write the ones that are.
+  if (built.rows.length > 0) {
+    const { error } = await admin
+      .from("lot_rates")
+      .upsert(
+        built.rows.map((r) => ({ park_lot_id: lotId, term: r.term, amount: r.amount })),
+        { onConflict: "park_lot_id,term" },
+      );
+    if (error) return { ok: false, error: "Couldn't save those rates — try again." };
+  }
+
+  revalidatePath("/park/lots");
+  return { ok: true, signal: "Rates saved." };
+}
+
+// -------------------------------------------------------- applications ----
+
+/**
+ * Approve or decline an application. The DATABASE is the real guard against
+ * double-booking (the exclusion constraint in 0052); canApprove exists so the
+ * owner reads "Lot 12 is already taken those nights" instead of a constraint
+ * violation, and so two managers deciding at once get a clean answer rather
+ * than a 500.
+ *
+ * NOT a screening decision. The platform records what a human decided and
+ * never produces, scores, or suggests one — see the FCRA note in the design
+ * doc.
+ */
+export async function decideApplication(
+  reservationId: string,
+  decision: "approve" | "decline",
+): Promise<ParkResult> {
+  const scope = await assertReservationIsMine(reservationId);
+  if (!scope) return { ok: false, error: DENIED };
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: DENIED };
+
+  const admin = createServiceClient();
+
+  const { data: appRow } = await admin
+    .from("lot_reservations")
+    .select("id, park_lot_id, renter_user_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
+    .eq("id", reservationId)
+    .maybeSingle();
+  if (!appRow) return { ok: false, error: "That application is gone." };
+
+  const application = toStay(appRow as unknown as RawReservation);
+
+  if (decision === "decline") {
+    const { error } = await admin
+      .from("lot_reservations")
+      .update({ status: "declined", decided_by: user.id, decided_at: new Date().toISOString() })
+      .eq("id", reservationId)
+      .eq("status", "applied"); // no-op if someone already decided it
+    if (error) return { ok: false, error: "Couldn't record that — try again." };
+    revalidatePath("/park");
+    return { ok: true, signal: "Application declined." };
+  }
+
+  // Approving: re-read the lot and its other stays so the check is against the
+  // CURRENT state, not what the page rendered a few minutes ago.
+  const { data: lotRow } = await admin
+    .from("park_lots")
+    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active")
+    .eq("id", scope.lotId)
+    .maybeSingle();
+  if (!lotRow) return { ok: false, error: "That lot is gone." };
+
+  const { data: others } = await admin
+    .from("lot_reservations")
+    .select("id, park_lot_id, renter_user_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
+    .eq("park_lot_id", scope.lotId);
+
+  const check = canApprove(
+    application,
+    (others ?? []).map((r) => toStay(r as unknown as RawReservation)),
+    {
+      id: lotRow.id as string,
+      lotNumber: lotRow.lot_number as string,
+      siteType: lotRow.site_type as "mh_pad" | "rv_full" | "rv_we" | "tent" | "slip_only",
+      maxLengthFt: (lotRow.max_length_ft as number | null) ?? null,
+      amperage: (lotRow.amperage as number | null) ?? null,
+      hasWater: !!lotRow.has_water,
+      hasSewer: !!lotRow.has_sewer,
+      slipIncluded: !!lotRow.slip_included,
+      active: !!lotRow.active,
+    },
+  );
+  if (!check.ok) return { ok: false, error: decideProblemText(check.problem!) };
+
+  const { error } = await admin
+    .from("lot_reservations")
+    .update({ status: "approved", decided_by: user.id, decided_at: new Date().toISOString() })
+    .eq("id", reservationId)
+    .eq("status", "applied");
+
+  if (error) {
+    // 23P01 = the exclusion constraint. Someone approved a conflicting stay
+    // between our check and our write — the database won, which is correct.
+    if (error.code === "23P01") {
+      return { ok: false, error: "Someone just took those nights on that lot. Nothing was changed." };
+    }
+    return { ok: false, error: "Couldn't approve that — try again." };
+  }
+
+  revalidatePath("/park");
+  return { ok: true, signal: "Approved. The lot is held for those dates." };
+}
+
+/** End a tenancy early, or close one out. Frees the dates for the next renter
+ *  — the exclusion constraint only holds `approved` and `active` rows. */
+export async function endTenancy(reservationId: string, reason: "ended" | "cancelled"): Promise<ParkResult> {
+  if (!(await assertReservationIsMine(reservationId))) return { ok: false, error: DENIED };
+
+  const admin = createServiceClient();
+  const { error } = await admin
+    .from("lot_reservations")
+    .update({ status: reason })
+    .eq("id", reservationId)
+    .in("status", ["approved", "active"]);
+  if (error) return { ok: false, error: "Couldn't update that — try again." };
+
+  revalidatePath("/park");
+  return { ok: true, signal: reason === "ended" ? "Tenancy closed out." : "Reservation cancelled." };
+}

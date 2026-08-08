@@ -21,6 +21,8 @@ import type { OpsThread } from "@/app/ops/messages-data";
 import type { OpsCrew } from "@/app/ops/crews-data";
 import { OpsCalendar } from "./OpsCalendar";
 import type { CalRow } from "@/app/ops/calendar-data";
+import { ParkBoard } from "./ParkBoard";
+import type { OpsParkRow } from "@/app/ops/parks-data";
 
 const TABS = [
   { key: "jobs", label: "Jobs" },
@@ -31,6 +33,7 @@ const TABS = [
   { key: "routing", label: "Routing" },
   { key: "crews", label: "Crews" },
   { key: "messages", label: "Messages" },
+  { key: "parks", label: "Parks" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -54,6 +57,7 @@ export function OpsShell({
   payoutQueue,
   calendarYear,
   calendarRows,
+  parks,
 }: {
   jobs: OpsJob[];
   vendors: ActiveVendor[];
@@ -73,6 +77,7 @@ export function OpsShell({
   payoutQueue: PayoutQueueData;
   calendarYear: number;
   calendarRows: CalRow[];
+  parks: OpsParkRow[];
 }) {
   const [tab, setTab] = useState<TabKey>("jobs");
 
@@ -125,6 +130,7 @@ export function OpsShell({
       {tab === "crews" && <CrewBoard crews={crews} activeServiceNames={crewServiceNames} />}
 
       {tab === "messages" && <MessageBoard threads={threads} />}
+      {tab === "parks" && <ParkBoard parks={parks} />}
     </div>
   );
 }

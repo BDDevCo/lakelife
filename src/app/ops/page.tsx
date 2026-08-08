@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
+import { getOpsParks } from "@/app/ops/parks-data";
 import { OpsShell } from "@/components/ops/OpsShell";
 import { JobSearch } from "@/components/ops/JobSearch";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -77,6 +78,17 @@ export default async function OpsPage() {
     getEscalatedDisputes(),
   ]);
 
+  // Parks are fetched SEPARATELY and defensively. The Promise.all above is
+  // all-or-nothing: one loader throwing 500s the entire operations dashboard.
+  // A brand-new module is the likeliest thing to throw, and losing the jobs
+  // board over an empty parks table would be a self-inflicted outage.
+  let parks: Awaited<ReturnType<typeof getOpsParks>> = [];
+  try {
+    parks = await getOpsParks();
+  } catch (err) {
+    console.error("ops: parks board unavailable", err);
+  }
+
   const kpis = [
     { v: String(summary.requestsWaiting), l: "Requests waiting" },
     { v: String(summary.jobsThisWeek), l: "Jobs this week" },
@@ -145,7 +157,8 @@ export default async function OpsPage() {
           </div>
         )}
 
-        <OpsShell marginHealth={marginHealth} storageLedger={storageLedger} payoutQueue={payoutQueue} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} crewServiceNames={crewServiceNames} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100) }} calendarYear={calendarYear} calendarRows={calendarRows} />
+        <OpsShell marginHealth={marginHealth} storageLedger={storageLedger} payoutQueue={payoutQueue} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} crewServiceNames={crewServiceNames} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100) }} calendarYear={calendarYear} calendarRows={calendarRows}
+          parks={parks} />
       </div>
     </>
   );

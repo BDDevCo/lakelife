@@ -223,7 +223,11 @@ button {
   color: var(--sub);
   margin-bottom: 6px;
 }
-.ll-field input {
+/* Selects and textareas get the same box as inputs — a form that mixes a
+   styled input with a raw OS dropdown reads as half-finished. */
+.ll-field input,
+.ll-field select,
+.ll-field textarea {
   width: 100%;
   padding: 11px 13px;
   border: 1.5px solid var(--line);
@@ -233,6 +237,9 @@ button {
   font-family: inherit;
   color: var(--text);
   background: #fff;
+}
+.ll-field textarea {
+  resize: vertical;
 }
 
 /* Same iOS-zoom guard for any select/textarea we render */

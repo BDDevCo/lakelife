@@ -125,6 +125,36 @@ export function nightsIn(r: DateRange): number {
 }
 
 /**
+ * Postgres hands a `daterange` back as text — `[2026-07-01,2026-07-08)`. It
+ * NORMALISES to `[)` on the way in, so the stored form is always
+ * inclusive-start / exclusive-end no matter what we wrote. We still read the
+ * brackets rather than assuming, because assuming is how an off-by-one night
+ * gets billed, and we accept the `[]` form Postgres produces for a
+ * single-day-precision range so an unexpected shape degrades to the right
+ * answer instead of a wrong one.
+ *
+ * Returns null on anything unparseable — the caller shows "—", never a
+ * fabricated date.
+ */
+export function parseDaterange(raw: string | null | undefined): DateRange | null {
+  if (!raw) return null;
+  const m = /^([[(])\s*(\d{4}-\d{2}-\d{2})\s*,\s*(\d{4}-\d{2}-\d{2})\s*([\])])$/.exec(raw.trim());
+  if (!m) return null;
+  const [, lo, rawStart, rawEnd, hi] = m;
+  // Normalise to half-open [start, end).
+  const start = lo === "(" ? fmt(parse(rawStart) + DAY) : rawStart;
+  const end = hi === "]" ? fmt(parse(rawEnd) + DAY) : rawEnd;
+  const range = { start, end };
+  return isRealRange(range) ? range : null;
+}
+
+/** The literal Postgres expects. Always half-open, to match the exclusion
+ *  constraint and `overlaps` below. */
+export function toDaterange(r: DateRange): string {
+  return `[${r.start},${r.end})`;
+}
+
+/**
  * Do two stays collide? Half-open, so back-to-back is FINE: one renter leaving
  * on the 1st and the next arriving on the 1st is a normal changeover day, and
  * treating it as a conflict would strand a night on every turnover.
