@@ -3,12 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
-import type { Lot } from "@/lib/parks";
+import { toDaterange, type Lot } from "@/lib/parks";
+import { todayLakeDate } from "@/lib/booking";
 import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
-  buildLotRange, planBulkRates,
+  buildLotRange, planBulkRates, buildTenant,
   type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
+  type TenantInput,
 } from "./park-helpers";
 
 /**
@@ -333,6 +335,73 @@ export async function setRatesForLots(
     signal:
       `Rates set on ${n} lot${n === 1 ? "" : "s"}` +
       (skipped > 0 ? ` — ${skipped} already had their own and were left alone.` : "."),
+  };
+}
+
+/**
+ * Put the tenant who is ALREADY LIVING THERE onto a lot.
+ *
+ * This is the single most-used screen in year one and the one that decides
+ * whether the product gets used at all: until the rent roll is right, the
+ * owner keeps the notebook, and then none of the rest of this matters.
+ *
+ * The renter file is created UNCLAIMED (park_renters.user_id stays null). She
+ * needs no account, no password and no app — and if she ever makes one, it
+ * claims this file rather than starting a second one.
+ */
+export async function addTenant(
+  parkId: string,
+  lotId: string,
+  input: TenantInput,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  if ((await assertLotIsMine(lotId)) !== parkId) return { ok: false, error: DENIED };
+
+  const built = buildTenant(input, todayLakeDate());
+  if (!built.ok || !built.renter || !built.tenancy) {
+    return { ok: false, error: built.error };
+  }
+
+  const admin = createServiceClient();
+
+  const { data: renter, error: renterErr } = await admin
+    .from("park_renters")
+    .insert({ ...built.renter, park_id: parkId })
+    .select("id")
+    .single();
+  if (renterErr || !renter) return { ok: false, error: "Couldn't save that tenant — try again." };
+
+  const { error: resErr } = await admin.from("lot_reservations").insert({
+    park_lot_id: lotId,
+    renter_id: renter.id,
+    during: toDaterange({ start: built.tenancy.start, end: built.tenancy.end }),
+    term: built.tenancy.term,
+    quoted_amount: built.tenancy.quoted_amount,
+    // They are living there right now. `active` holds the dates, which is what
+    // makes the lot read as occupied rather than vacant.
+    status: "active",
+  });
+
+  if (resErr) {
+    // Don't strand a renter file with no tenancy — she would show nowhere and
+    // be re-created next time he tried.
+    await admin.from("park_renters").delete().eq("id", renter.id);
+    // 23P01 = the no-double-booking constraint. Somebody is already on this
+    // lot for those dates, which is a real answer, not a crash.
+    if (resErr.code === "23P01") {
+      return {
+        ok: false,
+        error: "Someone is already recorded on that lot for those dates. Move them out first, or check the dates.",
+      };
+    }
+    return { ok: false, error: "Couldn't put them on that lot — try again." };
+  }
+
+  revalidatePath("/park");
+  return {
+    ok: true,
+    signal: `${built.renter.display_name} is on the roll.` +
+      (built.renter.mobile_e164 ? " They'll get receipts and reminders by text." : ""),
   };
 }
 

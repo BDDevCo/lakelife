@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   toStay, buildRentRoll, summarise, coversDay, canApprove,
   buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
-  planBulkRates, type BulkRateTarget,
+  planBulkRates, buildTenant,
+  type BulkRateTarget, type TenantInput,
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
 } from "./park-helpers";
 import { parseDaterange, toDaterange, type Lot } from "@/lib/parks";
@@ -563,5 +564,83 @@ describe("tier and features — what a lot is WORTH, separate from what it IS", 
       { nightly: "55" }, { tier: "standard" },
     );
     expect(plan.lotIds).toEqual(["a"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SITTING TENANT. The person already living there when he bought the park.
+// Until these exist in the system the rent roll is empty and he keeps using
+// the notebook — at which point nothing else we built matters.
+// ---------------------------------------------------------------------------
+describe("buildTenant — the tenant who was already there", () => {
+  const TODAY = "2026-08-09";
+  const input = (over: Partial<TenantInput> = {}): TenantInput => ({
+    displayName: "Donna Reyes", mobile: "", email: "",
+    movedInOn: "", term: "monthly", rent: "", source: "seller_roll", ...over,
+  });
+
+  it("a NAME alone is enough to start", () => {
+    // A form that demands rent and a date before it saves is a form abandoned
+    // at lot 9. A name and a lot already beat a notebook.
+    const res = buildTenant(input(), TODAY);
+    expect(res.ok).toBe(true);
+    expect(res.renter!.display_name).toBe("Donna Reyes");
+    expect(res.tenancy!.quoted_amount).toBeNull();
+  });
+
+  it("NEVER asks for a move-out date — it writes a finite range silently", () => {
+    // Unbounded ranges are forbidden: parseDaterange returns null for
+    // "[2019-05-01,)", a null range makes coversDay false, and the rent roll
+    // would report the lot VACANT while someone lives on it.
+    const res = buildTenant(input({ movedInOn: "2019-05-01" }), TODAY);
+    expect(res.tenancy!.start).toBe("2019-05-01");
+    expect(res.tenancy!.end).toBe("2020-04-30");
+    expect(parseDaterange(toDaterange({ start: res.tenancy!.start, end: res.tenancy!.end }))).not.toBeNull();
+  });
+
+  it("blank move-in means ALREADY HERE and dates the record, not the person", () => {
+    const res = buildTenant(input({ movedInOn: "" }), TODAY);
+    expect(res.tenancy!.start).toBe(TODAY);
+  });
+
+  it("refuses a future move-in — that is a booking, not a sitting tenant", () => {
+    expect(buildTenant(input({ movedInOn: "2027-01-01" }), TODAY).ok).toBe(false);
+  });
+
+  it("defaults to PAPER, and only to SMS when a number was actually given", () => {
+    // Defaulting to SMS would text someone who never agreed to be texted.
+    expect(buildTenant(input(), TODAY).renter!.contact_pref).toBe("paper");
+    expect(buildTenant(input({ mobile: "(260) 555-0142" }), TODAY).renter!.contact_pref).toBe("sms");
+  });
+
+  it("keeps the phone number in a shape we can text", () => {
+    const res = buildTenant(input({ mobile: "(260) 555-0142" }), TODAY);
+    expect(res.renter!.mobile_e164).toBe("2605550142");
+  });
+
+  it("carries PROVENANCE, so the roll can later show its work", () => {
+    expect(buildTenant(input({ source: "seller_roll" }), TODAY).renter!.source).toBe("seller_roll");
+    expect(buildTenant(input({ source: "owner_knowledge" }), TODAY).renter!.source).toBe("owner_knowledge");
+    expect(buildTenant(input({ source: "invented" }), TODAY).ok).toBe(false);
+  });
+
+  it("takes rent the way a person types it, and refuses nonsense", () => {
+    expect(buildTenant(input({ rent: "$1,250" }), TODAY).tenancy!.quoted_amount).toBe(1250);
+    expect(buildTenant(input({ rent: "-5" }), TODAY).ok).toBe(false);
+    expect(buildTenant(input({ rent: "9999999" }), TODAY).ok).toBe(false);
+  });
+
+  it("needs a name, and catches a short phone or a bad email", () => {
+    expect(buildTenant(input({ displayName: "  " }), TODAY).ok).toBe(false);
+    expect(buildTenant(input({ mobile: "555" }), TODAY).ok).toBe(false);
+    expect(buildTenant(input({ email: "donna@" }), TODAY).ok).toBe(false);
+  });
+
+  it("the range it writes always survives a round trip through Postgres", () => {
+    for (const start of ["2019-05-01", "2024-02-29", "2026-12-31"]) {
+      const res = buildTenant(input({ movedInOn: start }), "2027-01-01");
+      const back = parseDaterange(toDaterange({ start: res.tenancy!.start, end: res.tenancy!.end }));
+      expect(back).toEqual({ start: res.tenancy!.start, end: res.tenancy!.end });
+    }
   });
 });

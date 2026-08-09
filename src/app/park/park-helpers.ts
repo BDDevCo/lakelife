@@ -542,6 +542,138 @@ export function planBulkRates(
   return { ok: true, lotIds, skippedPriced, skippedType, rows: built.rows };
 }
 
+// ------------------------------------------------- the sitting tenant -----
+
+export interface TenantInput {
+  displayName: string;
+  /** The park-scoped number. No account needed — this is what buys her rent
+   *  receipts and freeze warnings without installing anything. */
+  mobile: string;
+  email: string;
+  /** Blank means "already here", which is the common case. */
+  movedInOn: string;
+  term: string;
+  rent: string;
+  /** Where the fact came from, so the roll can later show its work. */
+  source: string;
+}
+
+export interface TenantResult {
+  ok: boolean;
+  error?: string;
+  renter?: {
+    display_name: string;
+    mobile_e164: string | null;
+    email: string | null;
+    contact_pref: string;
+    source: string;
+  };
+  tenancy?: { start: string; end: string; term: Term; quoted_amount: number | null };
+}
+
+const TENANT_SOURCES = ["seller_roll", "owner_knowledge", "tenant_confirmed", "document"];
+
+/**
+ * How far out a sitting tenancy is written.
+ *
+ * UNBOUNDED RANGES ARE FORBIDDEN (phase 2 design §1h) and the reasoning is
+ * load-bearing: parseDaterange returns null for `[2019-05-01,)`, a null range
+ * makes coversDay false, and THE RENT ROLL WOULD REPORT THE LOT VACANT WHILE
+ * SOMEONE IS LIVING ON IT. His park is full of exactly this shape. An unbounded
+ * row would also block the lot forever under the exclusion constraint —
+ * including for that same renter's next term.
+ *
+ * So month-to-month is a rolling finite range. A year is long enough that
+ * nobody trips over it and short enough to force an annual touch, which is
+ * where renewal and compliance live anyway.
+ */
+export const TENANCY_HORIZON_DAYS = 365;
+
+/** Add days to an ISO date without touching local time. */
+function addDays(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+/**
+ * Shape a tenant the park owner types in — the person who was already living
+ * there when he bought the place.
+ *
+ * NEVER ASKS FOR A MOVE-OUT DATE. He does not have one, the tenant does not
+ * have one, and demanding it is how an import becomes a three-hour session.
+ * The finite range is written silently.
+ *
+ * The ONLY required field is a name. Everything else can arrive later — a rent
+ * roll that holds a name and a lot is already more than a notebook, and a form
+ * that demands rent and a date before it will save anything is a form that
+ * gets abandoned at lot 9.
+ */
+export function buildTenant(input: TenantInput, todayISO: string): TenantResult {
+  const displayName = input.displayName.trim();
+  if (!displayName) return { ok: false, error: "Who lives here? A name is enough to start." };
+  if (displayName.length > 120) return { ok: false, error: "That name is too long." };
+
+  const source = input.source.trim() || "owner_knowledge";
+  if (!TENANT_SOURCES.includes(source)) {
+    return { ok: false, error: "Where did this come from?" };
+  }
+
+  // A blank move-in date means "already here", which is the common case and a
+  // true answer. Today is the honest stand-in: it says when the RECORD starts,
+  // not when the person did.
+  const start = input.movedInOn.trim() || todayISO;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+    return { ok: false, error: "That move-in date doesn't look right." };
+  }
+  if (start > todayISO) {
+    return { ok: false, error: "That move-in date is in the future — use the booking flow for someone arriving later." };
+  }
+
+  const term = (input.term.trim() || "monthly") as Term;
+  if (!["nightly", "weekly", "monthly", "seasonal", "annual"].includes(term)) {
+    return { ok: false, error: "Pick how they pay — usually monthly." };
+  }
+
+  let quoted: number | null = null;
+  const rawRent = input.rent.trim();
+  if (rawRent) {
+    const n = Number(rawRent.replace(/[$,]/g, ""));
+    if (!Number.isFinite(n) || n < 0) return { ok: false, error: "Rent needs to be a dollar amount." };
+    if (n > 100_000) return { ok: false, error: "That rent looks like a typo." };
+    quoted = Math.round(n * 100) / 100;
+  }
+
+  const mobile = input.mobile.replace(/[^0-9+]/g, "");
+  if (mobile && mobile.replace(/\D/g, "").length < 10) {
+    return { ok: false, error: "That phone number looks short." };
+  }
+
+  const email = input.email.trim();
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return { ok: false, error: "That email doesn't look right." };
+  }
+
+  return {
+    ok: true,
+    renter: {
+      display_name: displayName,
+      mobile_e164: mobile || null,
+      email: email || null,
+      // PAPER until they tell us otherwise. A tenant who never converts is a
+      // permanent, respectable state, and defaulting them to SMS would text
+      // someone who never agreed to be texted.
+      contact_pref: mobile ? "sms" : "paper",
+      source,
+    },
+    tenancy: {
+      start,
+      end: addDays(start, TENANCY_HORIZON_DAYS),
+      term,
+      quoted_amount: quoted,
+    },
+  };
+}
+
 // -------------------------------------------------------- park profile -----
 
 export interface ParkProfileInput {

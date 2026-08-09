@@ -4,7 +4,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
-import { decideApplication, endTenancy, setParkLive } from "@/app/park/actions";
+import { decideApplication, endTenancy, setParkLive, addTenant } from "@/app/park/actions";
+import type { TenantInput } from "@/app/park/park-helpers";
 
 /**
  * The park owner's home screen: every lot, who is on it, and who is asking.
@@ -26,6 +27,8 @@ export interface RollRowView {
   currentUntil: string | null;
   currentReservationId: string | null;
   nightsLeft: number | null;
+  /** A month-to-month tenancy: no real end date, so no countdown. */
+  rolling?: boolean;
   nextRenter: string | null;
   nextFrom: string | null;
   pending: {
@@ -88,6 +91,7 @@ export function ParkRentRoll({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [addingTo, setAddingTo] = useState<string | null>(null);
 
   function decide(id: string, decision: "approve" | "decline") {
     setBusyId(id);
@@ -248,7 +252,9 @@ export function ParkRentRoll({
                           {r.currentRenter}
                           {r.currentUnit && <span className="mut"> · {r.currentUnit}</span>}
                           <span className="mut">
-                            {" "}· through {pretty(r.currentUntil)}
+                            {r.rolling
+                              ? " · month-to-month"
+                              : ` · through ${pretty(r.currentUntil)}`}
                             {r.nightsLeft != null && ` (${r.nightsLeft} night${r.nightsLeft === 1 ? "" : "s"} left)`}
                           </span>
                         </>
@@ -271,13 +277,111 @@ export function ParkRentRoll({
                         Move out
                       </button>
                     )}
+                    {r.state === "vacant" && (
+                      <button className="ll-btn ghost"
+                        onClick={() => setAddingTo(addingTo === r.lotId ? null : r.lotId)}>
+                        {addingTo === r.lotId ? "Cancel" : "Someone lives here"}
+                      </button>
+                    )}
                   </div>
                 </div>
+
+                {addingTo === r.lotId && (
+                  <AddTenant
+                    parkId={parkId}
+                    lotId={r.lotId}
+                    lotNumber={r.lotNumber}
+                    onDone={() => setAddingTo(null)}
+                  />
+                )}
               </div>
             );
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The tenant who was ALREADY LIVING THERE when he bought the park.
+ *
+ * The most-used screen in year one, and the one that decides whether any of
+ * this gets used at all: until the rent roll is right he keeps the notebook.
+ *
+ * A NAME IS THE ONLY REQUIRED FIELD, and there is deliberately no move-out
+ * date — he does not have one and neither does she. Asking is how a 79-lot
+ * park turns into a three-hour data-entry session that gets abandoned at lot 9.
+ */
+function AddTenant({
+  parkId, lotId, lotNumber, onDone,
+}: {
+  parkId: string; lotId: string; lotNumber: string; onDone: () => void;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [form, setForm] = useState<TenantInput>({
+    displayName: "", mobile: "", email: "",
+    movedInOn: "", term: "monthly", rent: "", source: "seller_roll",
+  });
+  const set = <K extends keyof TenantInput>(k: K, v: TenantInput[K]) =>
+    setForm((f) => ({ ...f, [k]: v }));
+
+  function save() {
+    startTransition(async () => {
+      const res = await addTenant(parkId, lotId, form);
+      if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
+      toast(res.signal ?? "Added.");
+      onDone();
+      router.refresh();
+    });
+  }
+
+  return (
+    <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+      <p className="mut" style={{ fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+        Who&apos;s on lot {lotNumber}? A name is enough — you can fill in the rest
+        whenever you get it.
+      </p>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Name</span>
+          <input value={form.displayName} placeholder="Donna Reyes"
+            onChange={(e) => set("displayName", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Best number (optional)</span>
+          <input type="tel" inputMode="tel" value={form.mobile} placeholder="(260) 555-0142"
+            onChange={(e) => set("mobile", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Rent (optional)</span>
+          <input inputMode="decimal" value={form.rent} placeholder="340"
+            onChange={(e) => set("rent", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Paid</span>
+          <select value={form.term} onChange={(e) => set("term", e.target.value)} style={{ marginTop: 4 }}>
+            <option value="monthly">monthly</option>
+            <option value="weekly">weekly</option>
+            <option value="seasonal">seasonally</option>
+            <option value="annual">yearly</option>
+          </select>
+        </label>
+      </div>
+
+      <p className="mut" style={{ fontSize: 12.5, marginTop: 10 }}>
+        Give us a number and they get rent receipts and freeze warnings by text —
+        no app, no password, nothing to install.
+      </p>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button className="ll-btn" onClick={save} disabled={pending || !form.displayName.trim()}>
+          Add to lot {lotNumber}
+        </button>
+        <button className="ll-btn ghost" onClick={onDone} disabled={pending}>Cancel</button>
+      </div>
     </div>
   );
 }
