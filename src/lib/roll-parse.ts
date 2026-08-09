@@ -309,6 +309,42 @@ export function parseLot(raw: string, knownLots?: readonly string[]): Field<stri
   return stated(tidy, s);
 }
 
+/**
+ * THINGS THAT ARE NOT PEOPLE BUT SATISFY `display_name text not null`.
+ *
+ * This is the trap the whole name column sits on: the database will accept
+ * "SEE NOTE" as a tenant and then it is a person forever, on a lease, in a
+ * rent-due text, on the wall of the office. Every one of these appears in real
+ * seller rolls.
+ *
+ * MATCHED AGAINST THE WHOLE CELL, never as a substring — "Sameer" contains
+ * "same" and "Seenath" contains "see", and refusing a real person's name is a
+ * worse failure than accepting a placeholder.
+ */
+const NOT_A_PERSON = new Set([
+  "same", "same as above", "ditto", "do", "as above", "see note", "see notes",
+  "n/a", "na", "n.a.", "none", "no name", "unknown", "unk", "tbd", "tba",
+  "vacant lot", "blank", "empty", "?", "??", "???", "-", "--", "---", ".",
+  "total", "totals", "subtotal", "sub total", "grand total", "total lot rent",
+  "tenant", "renter", "resident", "name", "occupant", "lessee",
+  "deceased", "estate", "owner", "mgmt", "management", "park", "rental",
+]);
+
+/** Excel's own error values, which paste as text and look authoritative. */
+const EXCEL_POISON_RE = /^#(ref|n\/a|value|div\/0|name|null|num|spill|calc)[!?]?$/i;
+
+/** "SEE NOTE — son living in home, mother in nursing home since Feb". */
+const SEE_SOMETHING_RE = /^see\s+(note|notes|above|below|attached|attachment|lease|file|memo|comment)\b/i;
+
+export function isPlaceholderName(s: string): boolean {
+  const t = s.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
+  if (!t) return true;
+  if (NOT_A_PERSON.has(t)) return true;
+  if (EXCEL_POISON_RE.test(t)) return true;
+  if (SEE_SOMETHING_RE.test(t)) return true;
+  return false;
+}
+
 /** A name is taken VERBATIM. We never reorder "Reyes, Donna" — guessing which
  *  half is the surname is how a whole park imports backwards. */
 export function parseName(raw: string): Field<string> {
@@ -316,6 +352,11 @@ export function parseName(raw: string): Field<string> {
   if (!s) return unknownField<string>(raw ?? "");
   if (VACANT_RE.test(s) || FACILITY_RE.test(s)) {
     return unknownField<string>(s, "That doesn't look like a person's name.");
+  }
+  // Placeholders satisfy every other test we could write — they are the right
+  // length, they are made of letters, and they are not people.
+  if (isPlaceholderName(s)) {
+    return unknownField<string>(s, `"${s}" isn't a person, so we won't file it as one.`);
   }
   if (!/[A-Za-z]{2}/.test(s)) return unknownField<string>(s, "That doesn't look like a name.");
   return stated(s, s);

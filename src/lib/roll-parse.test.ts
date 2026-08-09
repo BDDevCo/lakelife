@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseRentRoll, parseMoney, parseLot, parseName, detectDelimiter, contentHash,
+  isPlaceholderName,
 } from "@/lib/roll-parse";
 
 /** Every parse must satisfy the never-drop guarantee. A dropped line is a
@@ -368,5 +369,65 @@ describe("never-drop, fuzzed", () => {
       for (let i = 0; i < len; i++) blob += chars[Math.floor(rnd() * chars.length)];
       expect(() => parseRentRoll(blob)).not.toThrow();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Things that are NOT people but satisfy `display_name text not null`. Every
+// one of these appears in real seller rolls, and every one of them would
+// become a tenant forever — on a lease, in a rent-due text, on the office wall.
+// ---------------------------------------------------------------------------
+describe("placeholders are not people", () => {
+  const NOT_PEOPLE = [
+    "SEE NOTE", "See note", "see notes",
+    "SEE NOTE - son living in home, mother in nursing home since Feb",
+    "See above", "SEE LEASE", "see attached",
+    "SAME", "same as above", "DITTO", "As above",
+    "N/A", "n/a", "NA", "NONE", "UNKNOWN", "TBD", "TBA",
+    "#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NAME?",
+    "???", "-", "--", ".", "?",
+    "TOTAL", "TOTALS", "SUBTOTAL", "GRAND TOTAL", "TOTAL LOT RENT",
+    "TENANT", "Renter", "Resident", "Name", "OCCUPANT",
+    "ESTATE", "DECEASED", "MGMT", "Management",
+  ];
+
+  it("refuses every one of them as a name", () => {
+    for (const s of NOT_PEOPLE) {
+      expect(isPlaceholderName(s), s).toBe(true);
+      expect(parseName(s).value, s).toBeNull();
+    }
+  });
+
+  // The failure that matters more: refusing a REAL person is worse than
+  // accepting a placeholder, because he never finds out who went missing.
+  const REAL_PEOPLE = [
+    "Sameer Patel",            // contains "same"
+    "Seenath, Robert",         // starts with "see"
+    "Samantha Doe",
+    "Nan Nash",                // contains "na"
+    "Noel Nunn",
+    "Donna None-Smith",
+    "Reyes, Donna",
+    "O'Brien, Pat",
+    "José Álvarez",
+    "Estate of the Realm LLC",  // "estate" only as a word, not the whole cell
+    "Total Comfort Homes LLC",  // a real business tenant
+    "Tenant Holdings LLC",
+    "Bill Ames",
+    "Ditto Ramirez",            // a surname that IS the placeholder word
+  ];
+
+  it("never refuses a real name", () => {
+    for (const s of REAL_PEOPLE) {
+      expect(isPlaceholderName(s), s).toBe(false);
+      expect(parseName(s).value, s).toBe(s);
+    }
+  });
+
+  it("blocks the whole row, so a placeholder never reaches the database", () => {
+    const res = parseRentRoll("Lot\tTenant\tRent\n13\tSEE NOTE\t385", { knownLots: ["13"] });
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0].verdict).toBe("ask");
+    expect(res.rows[0].name.value).toBeNull();
   });
 });
