@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   toStay, buildRentRoll, summarise, coversDay, canApprove,
   buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
+  planBulkRates, type BulkRateTarget,
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
 } from "./park-helpers";
 import { parseDaterange, toDaterange, type Lot } from "@/lib/parks";
@@ -402,5 +403,70 @@ describe("buildLotRange — a whole park in one form", () => {
     const res = buildLotRange(range({ amperage: "42" }));
     expect(res.ok).toBe(false);
     expect(res.rows).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BULK RATES. The generator solved "79 lots, one form"; this is the identical
+// problem one step later. Without it, pricing a park means opening a panel per
+// lot — the same wall the owner already quit at.
+// ---------------------------------------------------------------------------
+describe("planBulkRates — price a park without clobbering what was tuned by hand", () => {
+  const t = (lotId: string, siteType = "mh_pad", existingRateCount = 0): BulkRateTarget =>
+    ({ lotId, siteType, existingRateCount });
+
+  it("prices every unpriced lot", () => {
+    const plan = planBulkRates([t("a"), t("b"), t("c")], { monthly: "340" });
+    expect(plan.ok).toBe(true);
+    expect(plan.lotIds).toEqual(["a", "b", "c"]);
+    expect(plan.rows).toEqual([{ term: "monthly", amount: 340 }]);
+  });
+
+  it("SKIPS lots that already have rates — a silent overwrite is unrecoverable", () => {
+    // There is no undo on a rate card, and the damage stays invisible until a
+    // renter is quoted the wrong number.
+    const plan = planBulkRates([t("a"), t("b", "mh_pad", 2), t("c")], { monthly: "340" });
+    expect(plan.lotIds).toEqual(["a", "c"]);
+    expect(plan.skippedPriced).toBe(1);
+  });
+
+  it("replaces existing only when explicitly asked", () => {
+    const plan = planBulkRates(
+      [t("a"), t("b", "mh_pad", 2)], { monthly: "340" }, { replaceExisting: true },
+    );
+    expect(plan.lotIds).toEqual(["a", "b"]);
+    expect(plan.skippedPriced).toBe(0);
+  });
+
+  it("can target one site type — pads at $340, RV sites at $55 a night", () => {
+    const plan = planBulkRates(
+      [t("a", "mh_pad"), t("b", "rv_full"), t("c", "mh_pad")],
+      { monthly: "340" }, { siteType: "mh_pad" },
+    );
+    expect(plan.lotIds).toEqual(["a", "c"]);
+    expect(plan.skippedType).toBe(1);
+  });
+
+  it("refuses an empty card rather than pricing 79 lots at nothing", () => {
+    expect(planBulkRates([t("a")], {}).ok).toBe(false);
+    expect(planBulkRates([t("a")], { monthly: "" }).ok).toBe(false);
+    expect(planBulkRates([t("a")], { monthly: "0" }).ok).toBe(false);
+  });
+
+  it("passes a bad amount straight through the same validator a single lot uses", () => {
+    expect(planBulkRates([t("a")], { monthly: "-5" }).ok).toBe(false);
+    expect(planBulkRates([t("a")], { monthly: "abc" }).ok).toBe(false);
+  });
+
+  it("says something ACTIONABLE when every lot was already priced", () => {
+    const plan = planBulkRates([t("a", "mh_pad", 1), t("b", "mh_pad", 1)], { monthly: "340" });
+    expect(plan.ok).toBe(false);
+    expect(plan.error).toMatch(/replace existing/i);
+    expect(plan.skippedPriced).toBe(2);
+  });
+
+  it("accepts money typed the way a person types it", () => {
+    const plan = planBulkRates([t("a")], { monthly: "$1,250.50" });
+    expect(plan.rows).toEqual([{ term: "monthly", amount: 1250.5 }]);
   });
 });

@@ -6,7 +6,7 @@ import { assertMyPark } from "./data";
 import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
-  buildLotRange,
+  buildLotRange, planBulkRates,
   type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
 } from "./park-helpers";
 
@@ -256,6 +256,82 @@ export async function saveLotRates(
 
   revalidatePath("/park/lots");
   return { ok: true, signal: "Rates saved." };
+}
+
+/**
+ * Price a whole park in one action.
+ *
+ * Same problem as generateLots, one step later: without this, setting rates
+ * means opening a panel per lot, seventy-nine times.
+ *
+ * FILLS BY DEFAULT, never overwrites. A bulk write that clobbers rates the
+ * owner tuned lot by lot is unrecoverable — there is no undo on a rate card,
+ * and the damage is silent until a renter is quoted the wrong number.
+ * Replacing is a separate, deliberate tick.
+ */
+export async function setRatesForLots(
+  parkId: string,
+  rates: Record<string, string>,
+  opts: { siteType?: string; replaceExisting?: boolean } = {},
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const admin = createServiceClient();
+
+  const { data: lotRows } = await admin
+    .from("park_lots").select("id, site_type").eq("park_id", parkId);
+  const lots = lotRows ?? [];
+  if (lots.length === 0) return { ok: false, error: "Add some lots first." };
+
+  const { data: rateRows } = await admin
+    .from("lot_rates").select("park_lot_id, amount")
+    .in("park_lot_id", lots.map((l) => l.id as string));
+
+  // Only a PRICED rate counts as "already set" — a stored 0 is our own
+  // representation of "not for sale", and treating it as priced would make
+  // those lots permanently unreachable by the bulk tool.
+  const priced = new Map<string, number>();
+  for (const r of rateRows ?? []) {
+    if (Number(r.amount) > 0) {
+      priced.set(r.park_lot_id as string, (priced.get(r.park_lot_id as string) ?? 0) + 1);
+    }
+  }
+
+  const plan = planBulkRates(
+    lots.map((l) => ({
+      lotId: l.id as string,
+      siteType: l.site_type as string,
+      existingRateCount: priced.get(l.id as string) ?? 0,
+    })),
+    rates,
+    opts,
+  );
+  if (!plan.ok || !plan.lotIds || !plan.rows) return { ok: false, error: plan.error };
+
+  // Replacing means the OLD card goes first — otherwise a lot that used to
+  // sell nightly and now sells monthly would quietly sell both.
+  if (opts.replaceExisting) {
+    await admin.from("lot_rates").delete().in("park_lot_id", plan.lotIds);
+  }
+
+  const payload = plan.lotIds.flatMap((lotId) =>
+    plan.rows!.map((r) => ({ park_lot_id: lotId, term: r.term, amount: r.amount })),
+  );
+  const { error } = await admin
+    .from("lot_rates").upsert(payload, { onConflict: "park_lot_id,term" });
+  if (error) return { ok: false, error: "Couldn't save those rates — try again." };
+
+  revalidatePath("/park");
+  revalidatePath("/park/lots");
+
+  const n = plan.lotIds.length;
+  const skipped = plan.skippedPriced ?? 0;
+  return {
+    ok: true,
+    signal:
+      `Rates set on ${n} lot${n === 1 ? "" : "s"}` +
+      (skipped > 0 ? ` — ${skipped} already had their own and were left alone.` : "."),
+  };
 }
 
 // -------------------------------------------------------- applications ----

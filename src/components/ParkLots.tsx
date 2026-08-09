@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { saveLot, saveLotRates, generateLots } from "@/app/park/actions";
+import { saveLot, saveLotRates, generateLots, setRatesForLots } from "@/app/park/actions";
 import { SITE_DEFAULTS, type LotFormInput, type LotRangeInput } from "@/app/park/park-helpers";
 
 /**
@@ -96,6 +96,8 @@ export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) 
         // work did not take.
         onAdded={() => setEditing(null)}
       />
+
+      {lots.length > 1 && <BulkRates parkId={parkId} lotCount={lots.length} />}
 
       {editing === "new" && (
         <LotForm
@@ -420,6 +422,98 @@ function BulkAdd({
         {hasLots && (
           <button className="ll-btn ghost" onClick={() => setOpen(false)} disabled={pending}>Cancel</button>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+/**
+ * PRICE THE WHOLE PARK AT ONCE.
+ *
+ * The generator solved "79 lots, one form". This is the same wall one step
+ * later: without it, pricing a park means opening the Rates panel per lot,
+ * seventy-nine times.
+ *
+ * It FILLS by default and never overwrites. There is no undo on a rate card,
+ * and a wrong one stays invisible until a renter is quoted from it — so lots
+ * the owner already priced by hand are left alone and counted, and replacing
+ * them is a separate tick they have to reach for.
+ */
+function BulkRates({ parkId, lotCount }: { parkId: string; lotCount: number }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [rates, setRates] = useState<Record<string, string>>({});
+  const [siteType, setSiteType] = useState("");
+  const [replaceExisting, setReplaceExisting] = useState(false);
+
+  function apply() {
+    startTransition(async () => {
+      const res = await setRatesForLots(parkId, rates, {
+        siteType: siteType || undefined,
+        replaceExisting,
+      });
+      if (!res.ok) { toast(res.error ?? "Couldn't set those."); return; }
+      toast(res.signal ?? "Rates set.");
+      setOpen(false);
+      setRates({});
+      setReplaceExisting(false);
+      router.refresh();
+    });
+  }
+
+  if (!open) {
+    return (
+      <div style={{ marginBottom: 12 }}>
+        <button className="ll-btn ghost" onClick={() => setOpen(true)}>
+          Set rates on all {lotCount} lots
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ll-card ll-card-pad" style={{ marginBottom: 14 }}>
+      <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>Set rates on many lots</h3>
+      <p className="mut" style={{ fontSize: 13, marginBottom: 14 }}>
+        Fill in what you charge and it goes on every lot that doesn&apos;t have its
+        own price yet. Leave a box empty if you don&apos;t rent by that term.
+      </p>
+
+      <label className="ll-field" style={{ fontSize: 13, display: "block", marginBottom: 12, maxWidth: 280 }}>
+        <span className="mut">Which lots</span>
+        <select value={siteType} onChange={(e) => setSiteType(e.target.value)} style={{ marginTop: 4 }}>
+          <option value="">All of them</option>
+          {SITE_TYPES.map((s) => <option key={s.value} value={s.value}>Only {s.label.toLowerCase()}</option>)}
+        </select>
+      </label>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
+        {TERMS.map((t) => (
+          <label key={t} className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+            <span className="mut" style={{ textTransform: "capitalize" }}>{t}</span>
+            <input inputMode="decimal" placeholder="—" value={rates[t] ?? ""}
+              onChange={(e) => setRates((p) => ({ ...p, [t]: e.target.value }))}
+              style={{ marginTop: 4 }} />
+          </label>
+        ))}
+      </div>
+
+      <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 14, fontSize: 14, cursor: "pointer" }}>
+        <input type="checkbox" checked={replaceExisting}
+          onChange={(e) => setReplaceExisting(e.target.checked)} />
+        Replace rates on lots that already have their own
+      </label>
+      {replaceExisting && (
+        <p className="mut" style={{ fontSize: 13, marginTop: 6 }}>
+          This overwrites prices you set lot by lot, and there&apos;s no undo.
+        </p>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button className="ll-btn" onClick={apply} disabled={pending}>Set these rates</button>
+        <button className="ll-btn ghost" onClick={() => setOpen(false)} disabled={pending}>Cancel</button>
       </div>
     </div>
   );

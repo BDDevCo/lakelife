@@ -438,6 +438,74 @@ export function buildLotRange(input: LotRangeInput, existingLotNumbers: string[]
   return { ok: true, rows, skipped };
 }
 
+// ------------------------------------------------------ bulk rate card -----
+
+export interface BulkRateTarget {
+  lotId: string;
+  siteType: string;
+  /** How many priced terms this lot already has. */
+  existingRateCount: number;
+}
+
+export interface BulkRatePlan {
+  ok: boolean;
+  error?: string;
+  /** Lots that will get the card. */
+  lotIds?: string[];
+  /** Lots deliberately left alone because they already have rates. */
+  skippedPriced?: number;
+  /** Lots outside the chosen site type. */
+  skippedType?: number;
+  rows?: { term: Term; amount: number }[];
+}
+
+/**
+ * Price a whole park in one action.
+ *
+ * The generator solved "79 lots, one form". This solves the identical problem
+ * one step later: without it, setting rates means opening a panel per lot,
+ * seventy-nine times, which is the same wall the owner already quit at.
+ *
+ * DEFAULT IS FILL, NOT OVERWRITE. A bulk write that clobbers rates the owner
+ * tuned lot by lot is unrecoverable — there is no undo on a rate card, and the
+ * damage is silent until a renter is quoted the wrong number. So lots that
+ * already have a price are SKIPPED and counted, and replacing them is a
+ * separate, deliberate choice.
+ */
+export function planBulkRates(
+  targets: BulkRateTarget[],
+  rates: Record<string, string>,
+  opts: { siteType?: string; replaceExisting?: boolean } = {},
+): BulkRatePlan {
+  const built = buildRateRows(rates);
+  if (!built.ok || !built.rows) return { ok: false, error: built.error };
+  if (built.rows.length === 0) {
+    return { ok: false, error: "Fill in at least one rate before applying it." };
+  }
+
+  let skippedType = 0;
+  let skippedPriced = 0;
+  const lotIds: string[] = [];
+
+  for (const t of targets) {
+    if (opts.siteType && t.siteType !== opts.siteType) { skippedType++; continue; }
+    if (!opts.replaceExisting && t.existingRateCount > 0) { skippedPriced++; continue; }
+    lotIds.push(t.lotId);
+  }
+
+  if (lotIds.length === 0) {
+    return {
+      ok: false,
+      error: skippedPriced > 0
+        ? "Every one of those lots already has rates. Tick “replace existing” if you meant to change them."
+        : "No lots match that.",
+      skippedPriced,
+      skippedType,
+    };
+  }
+  return { ok: true, lotIds, skippedPriced, skippedType, rows: built.rows };
+}
+
 // -------------------------------------------------------- park profile -----
 
 export interface ParkProfileInput {
