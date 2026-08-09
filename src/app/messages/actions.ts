@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getPlatformSettings } from "@/lib/settings";
 import { classifyCustomerMessage, WHITELIST } from "@/lib/comms-classify";
+import { triageInboundMessage, populationForOwner } from "@/lib/message-triage";
 import { draftCustomerReply } from "@/lib/comms-draft";
 
 export interface SendResult {
@@ -117,11 +118,47 @@ export async function sendOwnerMessage(propertyId: string, body: string): Promis
   });
   if (error) return { ok: false, error: error.message };
 
+  // TRIAGE RUNS ON EVERY INBOUND MESSAGE, UNCONDITIONALLY — and specifically
+  // BEFORE and INDEPENDENT OF the auto-reply path.
+  //
+  // This ordering is the whole point. maybeAutoReply() begins with
+  // `if (settings.aiAutoreplyEnabled !== 1) return;`, so if triage lived
+  // inside it, turning autonomy OFF would also turn off the thing that pages a
+  // human about a gas leak. The safety net would be wired to the automation
+  // switch, and the moment anyone flipped that switch for an unrelated reason
+  // the net would come down with it. Deciding not to answer and telling
+  // somebody are the same act.
+  let allow = false;
   try {
-    await maybeAutoReply(admin, propertyId, ctx.userId, text);
+    const population = await populationForOwner(admin, ctx.userId);
+    // The page carries WHERE, so an on-call can decide from the driveway
+    // instead of opening an app to find out whose place it is.
+    const { data: prop } = await admin
+      .from("properties").select("nickname, address").eq("id", propertyId).maybeSingle();
+    const where = ((prop?.nickname as string | null) || (prop?.address as string | null)) ?? null;
+
+    const triage = await triageInboundMessage(admin, text, population, { where });
+    await admin.from("messages")
+      .update(triage.columns)
+      .eq("property_id", propertyId)
+      .eq("from_user", ctx.userId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    allow = triage.verdict.outcome === "allow";
   } catch {
-    // Classifier/draft/DB hiccup — the customer's send already succeeded;
-    // a human will see the message on the ops board regardless.
+    // Triage itself failed. The customer's message is already saved, and we
+    // do NOT fall through to the auto-reply: not knowing what a message says
+    // is not a reason to let a machine answer it.
+    allow = false;
+  }
+
+  if (allow) {
+    try {
+      await maybeAutoReply(admin, propertyId, ctx.userId, text);
+    } catch {
+      // Classifier/draft/DB hiccup — the send already succeeded and the
+      // message is on the board with its verdict.
+    }
   }
 
   return { ok: true };
