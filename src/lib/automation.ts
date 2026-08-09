@@ -11,6 +11,8 @@ import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 import { proposeAutopilotDate } from "@/lib/autopilot";
 import { shouldDemote, healBase, isCoolingDown } from "@/lib/lake-standing";
 import { warningDue, isExpired, WAITLIST_WARNING_KIND, expiryActionFor, PROTECTIVE_ESCALATION_KIND } from "@/lib/waitlist";
+import { remindDecision, extendedRange, extensionPrice } from "@/lib/extend-stay";
+import { parseDaterange, type Term } from "@/lib/parks";
 import { rushWindowOpen } from "@/lib/rush";
 import { isLastDayOfMonth, nudgeCooling, nearMilestone } from "@/lib/growth";
 import { withinSunset, customerReferralAccrual, crewShareAccrual, creditToApply } from "@/lib/referrals";
@@ -2475,4 +2477,100 @@ export async function sendNightlyDigest(results: {
     if (res.ok) sent++;
   }
   return { ok: true, sent };
+}
+
+
+/**
+ * REMIND A RENTER THEIR STAY IS ENDING, with a one-tap way to keep it.
+ *
+ * Two jobs in one sweep. For a transient guest this is revenue — turning a
+ * short stay into a long one is the highest-value behaviour change in a park,
+ * and the moment to ask is before they start packing. For a month-to-month
+ * tenant it is CORRECTNESS: their tenancy is a rolling finite range (unbounded
+ * ranges make the rent roll report a lot vacant while someone lives on it), and
+ * before this nothing rolled it forward — a year after move-in it would quietly
+ * lapse with them still on the lot.
+ *
+ * The renter has NO ACCOUNT, so a signed link in a text is the only thing that
+ * can reach her. The token is minted HERE, at send time: a token that was never
+ * texted to anybody is a credential lying around for nothing.
+ *
+ * Exactly-once by the `extend_reminded_at` stamp, same discipline the waitlist
+ * warning learned the hard way — a guest texted three nights running about the
+ * same checkout stops reading our texts, and the one they stop reading is the
+ * freeze warning.
+ */
+export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: number }> {
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+
+  const { data: stays } = await admin
+    .from("lot_reservations")
+    .select("id, park_lot_id, renter_id, during, term, status, extended_count, extend_reminded_at")
+    .in("status", ["approved", "active"])
+    .is("extend_reminded_at", null);
+
+  let reminded = 0;
+
+  for (const s of stays ?? []) {
+    const range = parseDaterange(s.during as string);
+    const term = s.term as Term;
+
+    const decision = remindDecision({
+      range,
+      term,
+      status: s.status as string,
+      todayISO: today,
+      alreadySent: false, // the query already filtered on the stamp
+      extendedCount: (s.extended_count as number) ?? 0,
+    });
+    if (decision !== "send") continue;
+
+    // Only text somebody who gave us a number AND said texting was fine.
+    // contact_pref 'paper' is a permanent, respectable answer.
+    const { data: renter } = await admin
+      .from("park_renters")
+      .select("display_name, mobile_e164, contact_pref")
+      .eq("id", s.renter_id as string)
+      .maybeSingle();
+    const phone = renter?.mobile_e164 as string | undefined;
+    if (!phone || renter?.contact_pref !== "sms") continue;
+
+    const { data: lot } = await admin
+      .from("park_lots").select("lot_number").eq("id", s.park_lot_id as string).maybeSingle();
+    const { data: rateRows } = await admin
+      .from("lot_rates").select("term, amount").eq("park_lot_id", s.park_lot_id as string);
+    const price = extensionPrice(
+      (rateRows ?? []).map((r) => ({ term: r.term as Term, amount: Number(r.amount) })),
+      term,
+    );
+    // No rate for that term means we have nothing honest to quote, so we do not
+    // ask. The park can still extend it by hand.
+    if (price == null || !range) continue;
+
+    const next = extendedRange(range, term);
+    const token = `x${crypto.randomUUID().replace(/-/g, "")}`;
+
+    // The STAMP IS THE CLAIM: setting it while it is still null is what makes
+    // this exactly-once even if two runs race. If it comes back empty, another
+    // run already took this stay.
+    const { data: claimed } = await admin
+      .from("lot_reservations")
+      .update({ extend_reminded_at: new Date().toISOString(), extend_token: token })
+      .eq("id", s.id as string)
+      .is("extend_reminded_at", null)
+      .select("id");
+    if (!claimed || claimed.length === 0) continue;
+
+    reminded++;
+    void sendSms(
+      phone,
+      `LakeLife: your site ${lot?.lot_number ?? ""} is booked through ${range.end}. ` +
+      `Want to keep it through ${next.end} for $${price.toLocaleString()}? ` +
+      `One tap: ${site}/x/${token}`,
+    );
+  }
+
+  return { ok: true, reminded };
 }
