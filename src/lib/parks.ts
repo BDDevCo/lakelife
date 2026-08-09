@@ -9,7 +9,23 @@
  * Design: docs/park-module-design.md
  */
 
-export type SiteType = "mh_pad" | "rv_full" | "rv_we" | "tent" | "slip_only";
+/**
+ * What a lot physically IS. Hookups are NOT here — has_water, has_sewer and
+ * amperage carry those (migration 0057). rv_full and rv_we used to be separate
+ * types even though they differed only by sewer, which meant the same fact
+ * lived in two places and could disagree with itself.
+ */
+export type SiteType = "rv_site" | "mh_single" | "mh_double" | "tent" | "slip";
+
+/** What a lot is WORTH, independent of what it is. Combines with any type, so
+ *  "premium double-wide" is sayable. */
+export type Tier = "standard" | "premium";
+
+/** WHY it is worth more. An allowlist — free text on a housing listing is
+ *  where a fair-housing problem gets typed. */
+export type LotFeature =
+  | "waterfront" | "water_view" | "corner" | "shade" | "pull_through"
+  | "extra_parking" | "concrete_pad" | "fenced" | "near_amenities" | "private";
 export type Term = "nightly" | "weekly" | "monthly" | "seasonal" | "annual";
 export type UnitType =
   | "mobile_home" | "park_model" | "travel_trailer" | "fifth_wheel" | "motorhome" | "rv";
@@ -24,6 +40,8 @@ export interface Lot {
   hasSewer: boolean;
   slipIncluded: boolean;
   active: boolean;
+  tier?: Tier;
+  features?: LotFeature[];
 }
 
 export interface RenterUnit {
@@ -57,12 +75,15 @@ export interface FitResult {
  *  home needs a pad — it is not going on a tent site — and a slip is water,
  *  not land. */
 const SITE_FOR_UNIT: Record<UnitType, SiteType[]> = {
-  mobile_home:    ["mh_pad"],
-  park_model:     ["mh_pad", "rv_full"],
-  travel_trailer: ["rv_full", "rv_we"],
-  fifth_wheel:    ["rv_full", "rv_we"],
-  motorhome:      ["rv_full", "rv_we"],
-  rv:             ["rv_full", "rv_we"],
+  // A mobile home fits either pad width. We do not capture whether the HOME is
+  // single or double wide, so refusing a double pad to a single-wide would be
+  // guessing — and the owner walks the lot anyway. Length still applies.
+  mobile_home:    ["mh_single", "mh_double"],
+  park_model:     ["mh_single", "mh_double", "rv_site"],
+  travel_trailer: ["rv_site"],
+  fifth_wheel:    ["rv_site"],
+  motorhome:      ["rv_site"],
+  rv:             ["rv_site"],
 };
 
 /**

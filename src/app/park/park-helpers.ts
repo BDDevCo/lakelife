@@ -233,6 +233,10 @@ export interface LotFormInput {
   slipIncluded: boolean;
   notes: string;
   active: boolean;
+  /** What it is WORTH, independent of what it IS. */
+  tier?: string;
+  /** WHY it is worth more. Allowlisted — never free text. */
+  features?: string[];
 }
 
 export interface LotFormResult {
@@ -248,10 +252,17 @@ export interface LotFormResult {
     slip_included: boolean;
     notes: string | null;
     active: boolean;
+    tier: string;
+    features: string[];
   };
 }
 
-const SITE_TYPES = ["mh_pad", "rv_full", "rv_we", "tent", "slip_only"];
+const SITE_TYPES = ["rv_site", "mh_single", "mh_double", "tent", "slip"];
+const TIERS = ["standard", "premium"];
+const FEATURES = [
+  "waterfront", "water_view", "corner", "shade", "pull_through",
+  "extra_parking", "concrete_pad", "fenced", "near_amenities", "private",
+];
 const AMPS = [20, 30, 50, 100];
 
 /**
@@ -269,11 +280,14 @@ const AMPS = [20, 30, 50, 100];
  * the rule stops arguing with the form.
  */
 export const SITE_DEFAULTS: Record<string, { hasWater: boolean; hasSewer: boolean }> = {
-  mh_pad:    { hasWater: true,  hasSewer: true  },
-  rv_full:   { hasWater: true,  hasSewer: true  },
-  rv_we:     { hasWater: true,  hasSewer: false },
+  // An RV site defaults to FULL hookup because that is what most parks build
+  // and what an owner means when they say "RV lot" — they uncheck sewer for
+  // the water-and-electric row, which is the smaller number.
+  rv_site:   { hasWater: true,  hasSewer: true  },
+  mh_single: { hasWater: true,  hasSewer: true  },
+  mh_double: { hasWater: true,  hasSewer: true  },
   tent:      { hasWater: false, hasSewer: false },
-  slip_only: { hasWater: false, hasSewer: false },
+  slip:      { hasWater: false, hasSewer: false },
 };
 
 /**
@@ -312,16 +326,30 @@ export function buildLotRow(input: LotFormInput): LotFormResult {
   // A mobile-home pad without sewer is almost always a typo, not a park with
   // no sewer — flag it rather than let the fit rules quietly hide the lot from
   // every mobile home that searches.
-  if (input.siteType === "mh_pad" && !input.hasSewer) {
+  if ((input.siteType === "mh_single" || input.siteType === "mh_double") && !input.hasSewer) {
     return { ok: false, error: "A mobile-home pad needs sewer. Turn sewer on, or pick a different site type." };
   }
 
   const notes = input.notes.trim();
   if (notes.length > 500) return { ok: false, error: "Notes are a bit long — keep it under 500 characters." };
 
+  const tier = (input.tier ?? "standard").trim() || "standard";
+  if (!TIERS.includes(tier)) {
+    return { ok: false, error: "A lot is either standard or premium." };
+  }
+
+  // Unrecognised features are DROPPED rather than rejected, matching how the
+  // park profile handles utilities: a stale value from an older client should
+  // not block an owner from saving a lot. The database allowlist is the real
+  // guard, and it exists because free text on a housing listing is where a
+  // fair-housing problem gets typed.
+  const features = (input.features ?? []).filter((f) => FEATURES.includes(f));
+
   return {
     ok: true,
     row: {
+      tier,
+      features,
       lot_number: lotNumber,
       site_type: input.siteType,
       max_length_ft: maxLengthFt,
@@ -346,6 +374,9 @@ export interface LotRangeInput {
   /** Applied to every lot in the range; individuals get edited afterwards. */
   maxLengthFt: string;
   amperage: string;
+  /** Applied to every lot in the range — a row of premium waterfront sites is
+   *  one action, not seventy-nine. */
+  tier?: string;
 }
 
 export interface LotRangeResult {
@@ -425,6 +456,7 @@ export function buildLotRange(input: LotRangeInput, existingLotNumbers: string[]
       slipIncluded: false,
       notes: "",
       active: true,
+      tier: input.tier,
     });
     if (!built.ok || !built.row) {
       return { ok: false, error: built.error };
@@ -443,6 +475,7 @@ export function buildLotRange(input: LotRangeInput, existingLotNumbers: string[]
 export interface BulkRateTarget {
   lotId: string;
   siteType: string;
+  tier?: string;
   /** How many priced terms this lot already has. */
   existingRateCount: number;
 }
@@ -475,7 +508,7 @@ export interface BulkRatePlan {
 export function planBulkRates(
   targets: BulkRateTarget[],
   rates: Record<string, string>,
-  opts: { siteType?: string; replaceExisting?: boolean } = {},
+  opts: { siteType?: string; tier?: string; replaceExisting?: boolean } = {},
 ): BulkRatePlan {
   const built = buildRateRows(rates);
   if (!built.ok || !built.rows) return { ok: false, error: built.error };
@@ -489,6 +522,9 @@ export function planBulkRates(
 
   for (const t of targets) {
     if (opts.siteType && t.siteType !== opts.siteType) { skippedType++; continue; }
+    // Premium exists precisely so it can be priced differently; scoping by it
+    // is the second-most useful axis after site type.
+    if (opts.tier && (t.tier ?? "standard") !== opts.tier) { skippedType++; continue; }
     if (!opts.replaceExisting && t.existingRateCount > 0) { skippedPriced++; continue; }
     lotIds.push(t.lotId);
   }

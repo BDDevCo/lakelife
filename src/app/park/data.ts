@@ -125,6 +125,8 @@ export interface LotWithRates {
   lot: Lot;
   rates: RateCard[];
   notes: string | null;
+  tier: string;
+  features: string[];
   from: { term: Term; amount: number } | null;
 }
 
@@ -148,7 +150,7 @@ export async function getParkLots(parkId: string): Promise<LotWithRates[]> {
   const admin = createServiceClient();
   const { data: lotRows } = await admin
     .from("park_lots")
-    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, notes, active")
+    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, notes, active, tier, features")
     .eq("park_id", parkId); // <- the scope
   const lots = lotRows ?? [];
   if (lots.length === 0) return [];
@@ -173,6 +175,8 @@ export async function getParkLots(parkId: string): Promise<LotWithRates[]> {
         lot: toLot(row),
         rates,
         notes: (row.notes as string | null) ?? null,
+        tier: (row.tier as string | null) ?? "standard",
+        features: (row.features as string[] | null) ?? [],
         from: fromPrice(rates),
       };
     })

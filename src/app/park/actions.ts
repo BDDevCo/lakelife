@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
+import type { Lot } from "@/lib/parks";
 import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
@@ -272,14 +273,14 @@ export async function saveLotRates(
 export async function setRatesForLots(
   parkId: string,
   rates: Record<string, string>,
-  opts: { siteType?: string; replaceExisting?: boolean } = {},
+  opts: { siteType?: string; tier?: string; replaceExisting?: boolean } = {},
 ): Promise<ParkResult> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
 
   const { data: lotRows } = await admin
-    .from("park_lots").select("id, site_type").eq("park_id", parkId);
+    .from("park_lots").select("id, site_type, tier").eq("park_id", parkId);
   const lots = lotRows ?? [];
   if (lots.length === 0) return { ok: false, error: "Add some lots first." };
 
@@ -301,6 +302,7 @@ export async function setRatesForLots(
     lots.map((l) => ({
       lotId: l.id as string,
       siteType: l.site_type as string,
+      tier: (l.tier as string | null) ?? "standard",
       existingRateCount: priced.get(l.id as string) ?? 0,
     })),
     rates,
@@ -400,7 +402,7 @@ export async function decideApplication(
     {
       id: lotRow.id as string,
       lotNumber: lotRow.lot_number as string,
-      siteType: lotRow.site_type as "mh_pad" | "rv_full" | "rv_we" | "tent" | "slip_only",
+      siteType: lotRow.site_type as Lot["siteType"],
       maxLengthFt: (lotRow.max_length_ft as number | null) ?? null,
       amperage: (lotRow.amperage as number | null) ?? null,
       hasWater: !!lotRow.has_water,

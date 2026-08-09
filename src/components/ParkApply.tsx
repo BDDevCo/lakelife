@@ -33,8 +33,8 @@ const UNIT_TYPES = [
 ];
 
 const SITE_LABEL: Record<string, string> = {
-  mh_pad: "Mobile-home pad", rv_full: "Full hookup", rv_we: "Water + electric",
-  tent: "Tent site", slip_only: "Boat slip",
+  rv_site: "RV site", mh_single: "Single-wide pad", mh_double: "Double-wide pad",
+  tent: "Tent site", slip: "Boat slip",
 };
 
 const blank = (lotId: string): ApplyInput => ({

@@ -8,7 +8,7 @@ import {
 import { parseDaterange, toDaterange, type Lot } from "@/lib/parks";
 
 const lot = (over: Partial<Lot> = {}): Lot => ({
-  id: "l1", lotNumber: "12", siteType: "rv_full", maxLengthFt: 40, amperage: 50,
+  id: "l1", lotNumber: "12", siteType: "rv_site", maxLengthFt: 40, amperage: 50,
   hasWater: true, hasSewer: true, slipIncluded: false, active: true, ...over,
 });
 
@@ -195,13 +195,13 @@ describe("canApprove — a friendly sentence before the database says no", () =>
 // ---------------------------------------------------------------------------
 describe("buildLotRow", () => {
   const form = (over: Partial<LotFormInput> = {}): LotFormInput => ({
-    lotNumber: "12", siteType: "rv_full", maxLengthFt: "40", amperage: "50",
+    lotNumber: "12", siteType: "rv_site", maxLengthFt: "40", amperage: "50",
     hasWater: true, hasSewer: true, slipIncluded: false, notes: "", active: true, ...over,
   });
   it("shapes a good lot", () => {
     const res = buildLotRow(form());
     expect(res.ok).toBe(true);
-    expect(res.row).toMatchObject({ lot_number: "12", site_type: "rv_full", max_length_ft: 40, amperage: 50 });
+    expect(res.row).toMatchObject({ lot_number: "12", site_type: "rv_site", max_length_ft: 40, amperage: 50 });
   });
   it("blank length and power are UNKNOWN, not zero", () => {
     const res = buildLotRow(form({ maxLengthFt: "", amperage: "" }));
@@ -222,7 +222,7 @@ describe("buildLotRow", () => {
   it("catches the mobile-home-pad-without-sewer typo", () => {
     // Left alone, the fit rules would silently hide this lot from every mobile
     // home that searched — a vacancy the owner never learns about.
-    expect(buildLotRow(form({ siteType: "mh_pad", hasSewer: false })).error).toMatch(/needs sewer/i);
+    expect(buildLotRow(form({ siteType: "mh_single", hasSewer: false })).error).toMatch(/needs sewer/i);
   });
   it("trims, and stores empty notes as null", () => {
     const res = buildLotRow(form({ lotNumber: "  7 ", notes: "   " }));
@@ -317,7 +317,7 @@ describe("previewStayValue", () => {
 // ---------------------------------------------------------------------------
 describe("buildLotRange — a whole park in one form", () => {
   const range = (over: Partial<LotRangeInput> = {}): LotRangeInput => ({
-    prefix: "", from: "1", to: "79", siteType: "mh_pad",
+    prefix: "", from: "1", to: "79", siteType: "mh_single",
     maxLengthFt: "", amperage: "", ...over,
   });
 
@@ -333,14 +333,42 @@ describe("buildLotRange — a whole park in one form", () => {
     // The trap this fixes: a new lot defaulted to rv_full + hasSewer:false, and
     // buildLotRow REFUSES an mh_pad without sewer. Setting up a park of pads hit
     // that refusal on every single lot, caused by a default nobody chose.
-    const res = buildLotRange(range({ siteType: "mh_pad" }));
+    const res = buildLotRange(range({ siteType: "mh_single" }));
     expect(res.ok).toBe(true);
     expect(res.rows!.every((r) => r.has_sewer)).toBe(true);
   });
 
-  it("water-and-electric sites honestly have no sewer", () => {
-    const res = buildLotRange(range({ siteType: "rv_we", to: "5" }));
-    expect(res.rows!.every((r) => r.has_water && !r.has_sewer)).toBe(true);
+  it("an RV site defaults to FULL hookup — the owner unchecks sewer for the smaller row", () => {
+    // 0057 removed rv_full/rv_we as separate TYPES: they were the same lot with
+    // different equipment, and duplicating the fact let a lot claim
+    // site_type=rv_full with has_sewer=false — storable and meaningless.
+    // Hookups now live only in has_water/has_sewer/amperage.
+    const res = buildLotRange(range({ siteType: "rv_site", to: "5" }));
+    expect(res.rows!.every((r) => r.site_type === "rv_site")).toBe(true);
+    expect(res.rows!.every((r) => r.has_water && r.has_sewer)).toBe(true);
+  });
+
+  it("both pad widths exist, and both come with sewer", () => {
+    // The gap this migration closed: mh_pad collapsed single and double into
+    // one type, so a park with both was unrepresentable.
+    for (const t of ["mh_single", "mh_double"]) {
+      const res = buildLotRange(range({ siteType: t, to: "3" }));
+      expect(res.ok).toBe(true);
+      expect(res.rows!.every((r) => r.site_type === t && r.has_sewer)).toBe(true);
+    }
+  });
+
+  it("a tent site and a slip carry no hookups by default", () => {
+    for (const t of ["tent", "slip"]) {
+      const res = buildLotRange(range({ siteType: t, to: "3" }));
+      expect(res.rows!.every((r) => !r.has_water && !r.has_sewer)).toBe(true);
+    }
+  });
+
+  it("a retired type name is refused rather than silently stored", () => {
+    for (const dead of ["rv_full", "rv_we", "mh_pad", "slip_only"]) {
+      expect(buildLotRange(range({ siteType: dead })).ok).toBe(false);
+    }
   });
 
   it("supports a prefix — A1 through A20", () => {
@@ -387,7 +415,7 @@ describe("buildLotRange — a whole park in one form", () => {
   it("every generated row passes the SAME validator a hand-typed lot does", () => {
     // If the generator could emit a row the form would reject, the two paths
     // would drift and only one of them would be right.
-    const res = buildLotRange(range({ siteType: "mh_pad", maxLengthFt: "60", amperage: "100", to: "10" }));
+    const res = buildLotRange(range({ siteType: "mh_single", maxLengthFt: "60", amperage: "100", to: "10" }));
     for (const row of res.rows!) {
       const reBuilt = buildLotRow({
         lotNumber: row.lot_number, siteType: row.site_type,
@@ -412,7 +440,7 @@ describe("buildLotRange — a whole park in one form", () => {
 // lot — the same wall the owner already quit at.
 // ---------------------------------------------------------------------------
 describe("planBulkRates — price a park without clobbering what was tuned by hand", () => {
-  const t = (lotId: string, siteType = "mh_pad", existingRateCount = 0): BulkRateTarget =>
+  const t = (lotId: string, siteType = "mh_single", existingRateCount = 0): BulkRateTarget =>
     ({ lotId, siteType, existingRateCount });
 
   it("prices every unpriced lot", () => {
@@ -425,14 +453,14 @@ describe("planBulkRates — price a park without clobbering what was tuned by ha
   it("SKIPS lots that already have rates — a silent overwrite is unrecoverable", () => {
     // There is no undo on a rate card, and the damage stays invisible until a
     // renter is quoted the wrong number.
-    const plan = planBulkRates([t("a"), t("b", "mh_pad", 2), t("c")], { monthly: "340" });
+    const plan = planBulkRates([t("a"), t("b", "mh_single", 2), t("c")], { monthly: "340" });
     expect(plan.lotIds).toEqual(["a", "c"]);
     expect(plan.skippedPriced).toBe(1);
   });
 
   it("replaces existing only when explicitly asked", () => {
     const plan = planBulkRates(
-      [t("a"), t("b", "mh_pad", 2)], { monthly: "340" }, { replaceExisting: true },
+      [t("a"), t("b", "mh_single", 2)], { monthly: "340" }, { replaceExisting: true },
     );
     expect(plan.lotIds).toEqual(["a", "b"]);
     expect(plan.skippedPriced).toBe(0);
@@ -440,8 +468,8 @@ describe("planBulkRates — price a park without clobbering what was tuned by ha
 
   it("can target one site type — pads at $340, RV sites at $55 a night", () => {
     const plan = planBulkRates(
-      [t("a", "mh_pad"), t("b", "rv_full"), t("c", "mh_pad")],
-      { monthly: "340" }, { siteType: "mh_pad" },
+      [t("a", "mh_single"), t("b", "rv_site"), t("c", "mh_single")],
+      { monthly: "340" }, { siteType: "mh_single" },
     );
     expect(plan.lotIds).toEqual(["a", "c"]);
     expect(plan.skippedType).toBe(1);
@@ -459,7 +487,7 @@ describe("planBulkRates — price a park without clobbering what was tuned by ha
   });
 
   it("says something ACTIONABLE when every lot was already priced", () => {
-    const plan = planBulkRates([t("a", "mh_pad", 1), t("b", "mh_pad", 1)], { monthly: "340" });
+    const plan = planBulkRates([t("a", "mh_single", 1), t("b", "mh_single", 1)], { monthly: "340" });
     expect(plan.ok).toBe(false);
     expect(plan.error).toMatch(/replace existing/i);
     expect(plan.skippedPriced).toBe(2);
@@ -468,5 +496,72 @@ describe("planBulkRates — price a park without clobbering what was tuned by ha
   it("accepts money typed the way a person types it", () => {
     const plan = planBulkRates([t("a")], { monthly: "$1,250.50" });
     expect(plan.rows).toEqual([{ term: "monthly", amount: 1250.5 }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TIER AND FEATURES. Premium is an ATTRIBUTE, not a site type — make it a type
+// and "premium double-wide" becomes inexpressible, which is exactly the model
+// starting to lie.
+// ---------------------------------------------------------------------------
+describe("tier and features — what a lot is WORTH, separate from what it IS", () => {
+  const form = (over: Partial<LotFormInput> = {}): LotFormInput => ({
+    lotNumber: "12", siteType: "rv_site", maxLengthFt: "", amperage: "",
+    hasWater: true, hasSewer: true, slipIncluded: false, notes: "", active: true, ...over,
+  });
+
+  it("a premium double-wide is sayable — the whole point of splitting them", () => {
+    const res = buildLotRow(form({ siteType: "mh_double", tier: "premium", features: ["waterfront", "corner"] }));
+    expect(res.ok).toBe(true);
+    expect(res.row).toMatchObject({ site_type: "mh_double", tier: "premium" });
+    expect(res.row!.features).toEqual(["waterfront", "corner"]);
+  });
+
+  it("defaults to standard with no features", () => {
+    const res = buildLotRow(form());
+    expect(res.row).toMatchObject({ tier: "standard" });
+    expect(res.row!.features).toEqual([]);
+  });
+
+  it("refuses a tier we do not know", () => {
+    expect(buildLotRow(form({ tier: "deluxe" })).ok).toBe(false);
+  });
+
+  it("DROPS an unrecognised feature rather than storing it", () => {
+    // Free text on a housing listing is where a fair-housing problem gets
+    // typed. The database allowlist is the real guard; this is the soft one.
+    const res = buildLotRow(form({ features: ["waterfront", "no kids", "shade"] }));
+    expect(res.row!.features).toEqual(["waterfront", "shade"]);
+  });
+
+  it("a whole row of lots can be made premium in one action", () => {
+    const res = buildLotRange({
+      prefix: "W", from: "1", to: "6", siteType: "rv_site",
+      maxLengthFt: "", amperage: "", tier: "premium",
+    });
+    expect(res.rows).toHaveLength(6);
+    expect(res.rows!.every((r) => r.tier === "premium")).toBe(true);
+  });
+
+  it("bulk rates can price PREMIUM differently, which is why premium exists", () => {
+    const plan = planBulkRates(
+      [
+        { lotId: "a", siteType: "rv_site", tier: "premium" },
+        { lotId: "b", siteType: "rv_site", tier: "standard" },
+        { lotId: "c", siteType: "rv_site", tier: "premium" },
+      ].map((x) => ({ ...x, existingRateCount: 0 })),
+      { nightly: "75" },
+      { tier: "premium" },
+    );
+    expect(plan.lotIds).toEqual(["a", "c"]);
+    expect(plan.skippedType).toBe(1);
+  });
+
+  it("a lot with no tier recorded counts as standard", () => {
+    const plan = planBulkRates(
+      [{ lotId: "a", siteType: "rv_site", existingRateCount: 0 }],
+      { nightly: "55" }, { tier: "standard" },
+    );
+    expect(plan.lotIds).toEqual(["a"]);
   });
 });

@@ -6,7 +6,7 @@ import {
 } from "@/lib/parks";
 
 const lot = (over: Partial<Lot> = {}): Lot => ({
-  id: "l1", lotNumber: "12", siteType: "rv_full",
+  id: "l1", lotNumber: "12", siteType: "rv_site",
   maxLengthFt: 40, amperage: 50,
   hasWater: true, hasSewer: true, slipIncluded: false, active: true,
   ...over,
@@ -32,11 +32,11 @@ describe("lotFits — a lot the unit cannot physically use is never offered", ()
     expect(lotFits(lot({ amperage: 30 }), unit({ needsAmps: 50 })).problems).toContain("not_enough_power");
   });
   it("a mobile home needs a pad, not an RV site", () => {
-    expect(lotFits(lot({ siteType: "rv_we" }), unit({ unitType: "mobile_home" })).problems)
+    expect(lotFits(lot({ siteType: "rv_site" }), unit({ unitType: "mobile_home" })).problems)
       .toContain("wrong_site_type");
   });
   it("a mobile home needs sewer — it is not visiting a dump station", () => {
-    expect(lotFits(lot({ siteType: "mh_pad", hasSewer: false }), unit({ unitType: "mobile_home" })).problems)
+    expect(lotFits(lot({ siteType: "mh_single", hasSewer: false }), unit({ unitType: "mobile_home" })).problems)
       .toContain("needs_sewer");
   });
   it("an inactive lot never fits, whatever the unit", () => {

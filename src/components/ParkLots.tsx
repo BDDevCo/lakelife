@@ -27,21 +27,39 @@ export interface LotView {
   slipIncluded: boolean;
   notes: string | null;
   active: boolean;
+  tier?: string;
+  features?: string[];
   rates: { term: string; amount: number }[];
 }
 
 const SITE_TYPES = [
-  { value: "rv_full", label: "Full hookup (water, power, sewer)" },
-  { value: "rv_we", label: "Water + electric" },
-  { value: "mh_pad", label: "Mobile-home pad" },
+  { value: "rv_site", label: "RV site" },
+  { value: "mh_single", label: "Single-wide pad" },
+  { value: "mh_double", label: "Double-wide pad" },
   { value: "tent", label: "Tent site" },
-  { value: "slip_only", label: "Boat slip only" },
+  { value: "slip", label: "Boat slip" },
 ];
 const TERMS = ["nightly", "weekly", "monthly", "seasonal", "annual"] as const;
 
+/** WHY a lot is worth more. An allowlist, never a text box — a free-text field
+ *  on a housing listing is where a fair-housing problem gets typed. */
+const FEATURES = [
+  { value: "waterfront", label: "Waterfront" },
+  { value: "water_view", label: "Water view" },
+  { value: "corner", label: "Corner" },
+  { value: "shade", label: "Shade" },
+  { value: "pull_through", label: "Pull-through" },
+  { value: "extra_parking", label: "Extra parking" },
+  { value: "concrete_pad", label: "Concrete pad" },
+  { value: "fenced", label: "Fenced" },
+  { value: "near_amenities", label: "Near amenities" },
+  { value: "private", label: "Private" },
+];
+
 const blank = (): LotFormInput => ({
-  lotNumber: "", siteType: "rv_full", maxLengthFt: "", amperage: "",
-  hasWater: true, hasSewer: false, slipIncluded: false, notes: "", active: true,
+  lotNumber: "", siteType: "rv_site", maxLengthFt: "", amperage: "",
+  hasWater: true, hasSewer: true, slipIncluded: false, notes: "", active: true,
+  tier: "standard", features: [],
 });
 
 export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) {
@@ -66,6 +84,8 @@ export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) 
       slipIncluded: lot.slipIncluded,
       notes: lot.notes ?? "",
       active: lot.active,
+      tier: lot.tier ?? "standard",
+      features: lot.features ?? [],
     });
     setEditing(lot.id);
   }
@@ -301,6 +321,37 @@ function LotForm({
         <Check label="In service" checked={form.active} onChange={(v) => set("active", v)} />
       </div>
 
+      <div style={{ marginTop: 16 }}>
+        <span className="mut" style={{ fontSize: 13 }}>Is this a premium lot?</span>
+        <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+          {[{ v: "standard", l: "Standard" }, { v: "premium", l: "Premium" }].map((o) => (
+            <Chip key={o.v} label={o.l} on={(form.tier ?? "standard") === o.v}
+              onClick={() => set("tier", o.v)} />
+          ))}
+        </div>
+      </div>
+
+      {(form.tier ?? "standard") === "premium" && (
+        <div style={{ marginTop: 14 }}>
+          <span className="mut" style={{ fontSize: 13 }}>What makes it premium?</span>
+          <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+            {FEATURES.map((f) => {
+              const on = (form.features ?? []).includes(f.value);
+              return (
+                <Chip key={f.value} label={f.label} on={on}
+                  onClick={() => set("features", on
+                    ? (form.features ?? []).filter((x) => x !== f.value)
+                    : [...(form.features ?? []), f.value])} />
+              );
+            })}
+          </div>
+          <p className="mut" style={{ fontSize: 13, marginTop: 8 }}>
+            These show on your public page, so a renter can see what they&apos;re paying
+            more for.
+          </p>
+        </div>
+      )}
+
       <label className="ll-field" style={{ fontSize: 13, display: "block", marginTop: 14 }}>
         <span className="mut">Notes (only you see these)</span>
         <textarea
@@ -349,7 +400,7 @@ function BulkAdd({
   const [open, setOpen] = useState(!hasLots); // a brand-new park opens on this
   const [pending, startTransition] = useTransition();
   const [range, setRange] = useState<LotRangeInput>({
-    prefix: "", from: "1", to: "", siteType: "mh_pad", maxLengthFt: "", amperage: "",
+    prefix: "", from: "1", to: "", siteType: "mh_single", maxLengthFt: "", amperage: "",
   });
 
   function make() {
@@ -516,5 +567,25 @@ function BulkRates({ parkId, lotCount }: { parkId: string; lotCount: number }) {
         <button className="ll-btn ghost" onClick={() => setOpen(false)} disabled={pending}>Cancel</button>
       </div>
     </div>
+  );
+}
+
+
+/** Same chip as the park setup interview, so the two forms feel like one
+ *  product rather than two people's work. */
+function Chip({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        padding: "7px 13px", borderRadius: 999, fontSize: 13.5, fontWeight: 600, cursor: "pointer",
+        border: `2px solid ${on ? "var(--teal)" : "var(--line)"}`,
+        background: on ? "var(--teal-wash, #e6f5f4)" : "transparent",
+        color: on ? "var(--teal-dark)" : "var(--sub)",
+      }}
+    >
+      {label}
+    </button>
   );
 }

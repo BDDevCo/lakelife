@@ -51,8 +51,8 @@ export interface RollSummaryView {
 }
 
 const SITE_LABEL: Record<string, string> = {
-  mh_pad: "MH pad", rv_full: "Full hookup", rv_we: "Water + electric",
-  tent: "Tent", slip_only: "Slip",
+  rv_site: "RV site", mh_single: "Single-wide pad", mh_double: "Double-wide pad",
+  tent: "Tent site", slip: "Boat slip",
 };
 
 const STATE_STYLE: Record<RollRowView["state"], { pill: string; label: string }> = {
