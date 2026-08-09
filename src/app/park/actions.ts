@@ -6,7 +6,8 @@ import { assertMyPark } from "./data";
 import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
-  type LotFormInput, type ParkProfileInput, type RawReservation,
+  buildLotRange,
+  type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
 } from "./park-helpers";
 
 /**
@@ -164,6 +165,60 @@ export async function saveLot(
   revalidatePath("/park");
   revalidatePath("/park/lots");
   return { ok: true, signal: lotId ? "Lot updated." : `Lot ${built.row.lot_number} added.` };
+}
+
+/**
+ * Make a whole park's worth of lots at once.
+ *
+ * This is the FIRST thing an owner does, and before it existed it was the
+ * reason they never got to the second: park_lots is empty on closing morning,
+ * the importer joins on lot_number, and adding lots one form at a time is five
+ * interactions and a page refresh, seventy-nine times.
+ *
+ * Existing lot numbers are skipped rather than rejected, so re-running the same
+ * range after hand-adding one lot quietly does the rest instead of failing on
+ * the first collision and leaving the park half-built.
+ */
+export async function generateLots(
+  parkId: string,
+  input: LotRangeInput,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const admin = createServiceClient();
+
+  // Read what is already there so collisions become a "skipped" line in the
+  // confirmation rather than a unique-violation the owner cannot interpret.
+  const { data: existing } = await admin
+    .from("park_lots").select("lot_number").eq("park_id", parkId);
+  const have = (existing ?? []).map((r) => r.lot_number as string);
+
+  const built = buildLotRange(input, have);
+  if (!built.ok || !built.rows) return { ok: false, error: built.error };
+
+  const { error } = await admin
+    .from("park_lots")
+    .insert(built.rows.map((r) => ({ ...r, park_id: parkId })));
+  if (error) {
+    // A collision here means someone added a lot between our read and our
+    // write. Say something true rather than leaking a constraint name.
+    if (error.code === "23505") {
+      return { ok: false, error: "Someone just added a lot with one of those numbers. Try again." };
+    }
+    return { ok: false, error: "Couldn't create those lots — try again." };
+  }
+
+  revalidatePath("/park");
+  revalidatePath("/park/lots");
+
+  const made = built.rows.length;
+  const skipped = built.skipped?.length ?? 0;
+  return {
+    ok: true,
+    signal:
+      `${made} lot${made === 1 ? "" : "s"} added` +
+      (skipped > 0 ? ` — ${skipped} already existed and were left alone.` : ". Edit any of them individually below."),
+  };
 }
 
 /**

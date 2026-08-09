@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   toStay, buildRentRoll, summarise, coversDay, canApprove,
-  buildLotRow, buildParkProfileRow, buildRateRows, previewStayValue,
-  type RawReservation, type Stay, type LotFormInput, type ParkProfileInput,
+  buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
+  type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
 } from "./park-helpers";
 import { parseDaterange, toDaterange, type Lot } from "@/lib/parks";
 
@@ -305,5 +305,102 @@ describe("previewStayValue", () => {
   it("is null for a term they do not sell, and for missing dates", () => {
     expect(previewStayValue(rates, "monthly", { start: "2026-07-01", end: "2026-08-01" })).toBeNull();
     expect(previewStayValue(rates, "weekly", null)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE LOT GENERATOR. Without it the importer has nothing to import into —
+// park_lots is empty on closing morning and the join key is lot_number. A real
+// owner walked through the one-at-a-time form and quit at lot 22, having never
+// reached the part that helps them.
+// ---------------------------------------------------------------------------
+describe("buildLotRange — a whole park in one form", () => {
+  const range = (over: Partial<LotRangeInput> = {}): LotRangeInput => ({
+    prefix: "", from: "1", to: "79", siteType: "mh_pad",
+    maxLengthFt: "", amperage: "", ...over,
+  });
+
+  it("makes 79 lots for a 79-lot park", () => {
+    const res = buildLotRange(range());
+    expect(res.ok).toBe(true);
+    expect(res.rows).toHaveLength(79);
+    expect(res.rows![0].lot_number).toBe("1");
+    expect(res.rows![78].lot_number).toBe("79");
+  });
+
+  it("a mobile-home pad comes with sewer, so our own validator stops refusing it", () => {
+    // The trap this fixes: a new lot defaulted to rv_full + hasSewer:false, and
+    // buildLotRow REFUSES an mh_pad without sewer. Setting up a park of pads hit
+    // that refusal on every single lot, caused by a default nobody chose.
+    const res = buildLotRange(range({ siteType: "mh_pad" }));
+    expect(res.ok).toBe(true);
+    expect(res.rows!.every((r) => r.has_sewer)).toBe(true);
+  });
+
+  it("water-and-electric sites honestly have no sewer", () => {
+    const res = buildLotRange(range({ siteType: "rv_we", to: "5" }));
+    expect(res.rows!.every((r) => r.has_water && !r.has_sewer)).toBe(true);
+  });
+
+  it("supports a prefix — A1 through A20", () => {
+    const res = buildLotRange(range({ prefix: "A", from: "1", to: "20" }));
+    expect(res.rows).toHaveLength(20);
+    expect(res.rows![0].lot_number).toBe("A1");
+    expect(res.rows![19].lot_number).toBe("A20");
+  });
+
+  it("SKIPS lots that already exist rather than dying on the first collision", () => {
+    // Re-running "1 to 79" after adding lot 3 by hand must quietly do the rest,
+    // not fail and leave the park half-built.
+    const res = buildLotRange(range({ to: "5" }), ["2", "4"]);
+    expect(res.ok).toBe(true);
+    expect(res.rows!.map((r) => r.lot_number)).toEqual(["1", "3", "5"]);
+    expect(res.skipped).toEqual(["2", "4"]);
+  });
+
+  it("says so plainly when the whole range already exists", () => {
+    const res = buildLotRange(range({ to: "3" }), ["1", "2", "3"]);
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/already exist/i);
+    expect(res.skipped).toEqual(["1", "2", "3"]);
+  });
+
+  it("catches the fat finger — 1 to 7900 is a sentence, not 90 seconds of inserts", () => {
+    const res = buildLotRange(range({ to: "7900" }));
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/7,900 lots/);
+  });
+
+  it("refuses a backwards or non-numeric range", () => {
+    expect(buildLotRange(range({ from: "79", to: "1" })).ok).toBe(false);
+    expect(buildLotRange(range({ from: "one", to: "ten" })).ok).toBe(false);
+    expect(buildLotRange(range({ from: "-3", to: "5" })).ok).toBe(false);
+  });
+
+  it("a single lot is a valid range", () => {
+    const res = buildLotRange(range({ from: "12", to: "12" }));
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows![0].lot_number).toBe("12");
+  });
+
+  it("every generated row passes the SAME validator a hand-typed lot does", () => {
+    // If the generator could emit a row the form would reject, the two paths
+    // would drift and only one of them would be right.
+    const res = buildLotRange(range({ siteType: "mh_pad", maxLengthFt: "60", amperage: "100", to: "10" }));
+    for (const row of res.rows!) {
+      const reBuilt = buildLotRow({
+        lotNumber: row.lot_number, siteType: row.site_type,
+        maxLengthFt: String(row.max_length_ft ?? ""), amperage: String(row.amperage ?? ""),
+        hasWater: row.has_water, hasSewer: row.has_sewer,
+        slipIncluded: row.slip_included, notes: row.notes ?? "", active: row.active,
+      });
+      expect(reBuilt.ok).toBe(true);
+    }
+  });
+
+  it("rejects a bad amperage once, for the whole range, before writing anything", () => {
+    const res = buildLotRange(range({ amperage: "42" }));
+    expect(res.ok).toBe(false);
+    expect(res.rows).toBeUndefined();
   });
 });

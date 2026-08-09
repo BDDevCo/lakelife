@@ -255,6 +255,28 @@ const SITE_TYPES = ["mh_pad", "rv_full", "rv_we", "tent", "slip_only"];
 const AMPS = [20, 30, 50, 100];
 
 /**
+ * What a site type comes with, before anyone touches it.
+ *
+ * This exists because the two halves of the lot form used to disagree: a new
+ * lot defaulted to `rv_full` with `hasSewer: false`, and buildLotRow REFUSES a
+ * mobile-home pad without sewer. So an owner setting up a mobile-home park —
+ * a park with seventy-nine pads in it — got that refusal on every single lot,
+ * caused entirely by a default they never chose. The validation rule is right;
+ * it was firing on our own bad starting point.
+ *
+ * A pad has sewer. A full-hookup RV site has sewer. A water-and-electric site
+ * does not, which is what the name says. Pick the honest default per type and
+ * the rule stops arguing with the form.
+ */
+export const SITE_DEFAULTS: Record<string, { hasWater: boolean; hasSewer: boolean }> = {
+  mh_pad:    { hasWater: true,  hasSewer: true  },
+  rv_full:   { hasWater: true,  hasSewer: true  },
+  rv_we:     { hasWater: true,  hasSewer: false },
+  tent:      { hasWater: false, hasSewer: false },
+  slip_only: { hasWater: false, hasSewer: false },
+};
+
+/**
  * Validate and shape one lot. Every value the park owner types is re-checked
  * here against the same rules the database CHECK constraints hold, so a
  * mistake comes back as a sentence instead of a Postgres error string.
@@ -311,6 +333,109 @@ export function buildLotRow(input: LotFormInput): LotFormResult {
       active: input.active,
     },
   };
+}
+
+// ----------------------------------------------------- the lot generator ---
+
+export interface LotRangeInput {
+  /** Optional leading text: "A" gives A1, A2, A3. */
+  prefix: string;
+  from: string;
+  to: string;
+  siteType: string;
+  /** Applied to every lot in the range; individuals get edited afterwards. */
+  maxLengthFt: string;
+  amperage: string;
+}
+
+export interface LotRangeResult {
+  ok: boolean;
+  error?: string;
+  /** Ready to insert, minus park_id. NonNullable so callers do not have to
+   *  narrow every element — a row that failed validation aborts the whole
+   *  range instead of landing here as undefined. */
+  rows?: NonNullable<ReturnType<typeof buildLotRow>["row"]>[];
+  /** Lot numbers that already exist and were skipped, so the owner is told
+   *  rather than hitting a unique-violation wall. */
+  skipped?: string[];
+}
+
+/** Hard ceiling. Not a business rule — a fat-finger guard. Typing 1 to 7900
+ *  instead of 1 to 79 should be a sentence, not ninety seconds of inserts and
+ *  a park nobody can scroll. */
+export const MAX_LOTS_PER_RANGE = 500;
+
+/**
+ * Make a whole park's worth of lots in one go.
+ *
+ * THE PROBLEM THIS SOLVES. The importer's join key is `park_lots.lot_number`,
+ * and on closing morning that table is EMPTY. Without this, an owner adds lots
+ * one form at a time — five interactions and a page refresh, seventy-nine
+ * times — before the importer has anything to import into. Tested on a real
+ * owner, that is where they quit: at lot 22, having never reached the part
+ * that helps them.
+ *
+ * Existing lot numbers are SKIPPED, not rejected. Re-running "1 to 79" after
+ * adding lot 80 by hand should quietly do nothing rather than fail on the
+ * first collision and leave the park half-built.
+ */
+export function buildLotRange(input: LotRangeInput, existingLotNumbers: string[] = []): LotRangeResult {
+  const prefix = input.prefix.trim();
+  if (prefix.length > 8) return { ok: false, error: "That prefix is too long — 8 characters max." };
+
+  const from = Number(input.from.trim());
+  const to = Number(input.to.trim());
+  if (!Number.isInteger(from) || !Number.isInteger(to)) {
+    return { ok: false, error: "Give a first and last lot number, like 1 and 79." };
+  }
+  if (from < 0 || to < 0) return { ok: false, error: "Lot numbers can't be negative." };
+  if (to < from) return { ok: false, error: "The last lot number needs to be bigger than the first." };
+
+  const count = to - from + 1;
+  if (count > MAX_LOTS_PER_RANGE) {
+    return {
+      ok: false,
+      error: `That would make ${count.toLocaleString()} lots. Did you mean a smaller range? (${MAX_LOTS_PER_RANGE} at a time is the limit.)`,
+    };
+  }
+
+  if (!SITE_TYPES.includes(input.siteType)) {
+    return { ok: false, error: "Pick what kind of sites these are." };
+  }
+  const defaults = SITE_DEFAULTS[input.siteType] ?? { hasWater: true, hasSewer: false };
+
+  const existing = new Set(existingLotNumbers.map((n) => n.trim()));
+  const rows: NonNullable<ReturnType<typeof buildLotRow>["row"]>[] = [];
+  const skipped: string[] = [];
+
+  for (let n = from; n <= to; n++) {
+    const lotNumber = `${prefix}${n}`;
+    if (existing.has(lotNumber)) { skipped.push(lotNumber); continue; }
+
+    // Each row goes through the SAME validator a hand-typed lot does. If the
+    // generator could produce a row the form would reject, the two paths would
+    // drift and only one of them would be right.
+    const built = buildLotRow({
+      lotNumber,
+      siteType: input.siteType,
+      maxLengthFt: input.maxLengthFt,
+      amperage: input.amperage,
+      hasWater: defaults.hasWater,
+      hasSewer: defaults.hasSewer,
+      slipIncluded: false,
+      notes: "",
+      active: true,
+    });
+    if (!built.ok || !built.row) {
+      return { ok: false, error: built.error };
+    }
+    rows.push(built.row);
+  }
+
+  if (rows.length === 0) {
+    return { ok: false, error: "Every lot in that range already exists.", skipped };
+  }
+  return { ok: true, rows, skipped };
 }
 
 // -------------------------------------------------------- park profile -----

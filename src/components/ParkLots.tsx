@@ -3,8 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { saveLot, saveLotRates } from "@/app/park/actions";
-import type { LotFormInput } from "@/app/park/park-helpers";
+import { saveLot, saveLotRates, generateLots } from "@/app/park/actions";
+import { SITE_DEFAULTS, type LotFormInput, type LotRangeInput } from "@/app/park/park-helpers";
 
 /**
  * Lots and rates — the park's inventory and its rate card. The park owner
@@ -86,6 +86,16 @@ export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) 
         <h2 style={{ fontSize: 18, margin: 0 }}>Lots &amp; rates</h2>
         {editing !== "new" && <button className="ll-btn" onClick={openNew}>Add a lot</button>}
       </div>
+
+      <BulkAdd
+        parkId={parkId}
+        hasLots={lots.length > 0}
+        // A brand-new park opens with the single-lot form showing (there was
+        // nothing else to do). After a bulk add there is plenty to do, and an
+        // empty "New lot" form sitting above 79 fresh lots reads like the
+        // work did not take.
+        onAdded={() => setEditing(null)}
+      />
 
       {editing === "new" && (
         <LotForm
@@ -240,7 +250,20 @@ function LotForm({
           <span className="mut">Site type</span>
           <select
             value={form.siteType}
-            onChange={(e) => set("siteType", e.target.value)}
+            onChange={(e) => {
+              // Picking a site type sets what that type COMES WITH. A pad has
+              // sewer; a water-and-electric site does not, which is what the
+              // name says. Before this a new lot started as "RV site, no
+              // sewer", and buildLotRow REFUSES a mobile-home pad without
+              // sewer — so setting up a park of pads meant fighting our own
+              // default on every single lot.
+              const d = SITE_DEFAULTS[e.target.value];
+              setForm({
+                ...form,
+                siteType: e.target.value,
+                ...(d ? { hasWater: d.hasWater, hasSewer: d.hasSewer } : {}),
+              });
+            }}
             style={{ marginTop: 4 }}
           >
             {SITE_TYPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
@@ -299,5 +322,105 @@ function Check({ label, checked, onChange }: { label: string; checked: boolean; 
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       {label}
     </label>
+  );
+}
+
+
+/**
+ * ADD A WHOLE PARK AT ONCE.
+ *
+ * The first thing an owner does, and — before this existed — the reason they
+ * never got to the second. park_lots is empty on closing morning, the rent-roll
+ * importer joins on lot_number, and the one-at-a-time form below is five
+ * interactions and a page refresh, seventy-nine times. Walked through by a real
+ * park owner, that is where they quit: at lot 22, having never reached the part
+ * that helps them.
+ */
+function BulkAdd({
+  parkId, hasLots, onAdded,
+}: {
+  parkId: string;
+  hasLots: boolean;
+  onAdded: () => void;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(!hasLots); // a brand-new park opens on this
+  const [pending, startTransition] = useTransition();
+  const [range, setRange] = useState<LotRangeInput>({
+    prefix: "", from: "1", to: "", siteType: "mh_pad", maxLengthFt: "", amperage: "",
+  });
+
+  function make() {
+    startTransition(async () => {
+      const res = await generateLots(parkId, range);
+      if (!res.ok) { toast(res.error ?? "Couldn't add those."); return; }
+      toast(res.signal ?? "Lots added.");
+      setRange((r) => ({ ...r, from: "1", to: "" }));
+      setOpen(false);
+      onAdded();
+      router.refresh();
+    });
+  }
+
+  if (!open) {
+    return (
+      <div style={{ marginBottom: 12 }}>
+        <button className="ll-btn ghost" onClick={() => setOpen(true)}>Add a row of lots</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ll-card ll-card-pad" style={{ marginBottom: 14 }}>
+      <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>Add your lots</h3>
+      <p className="mut" style={{ fontSize: 13, marginBottom: 14 }}>
+        Number them all at once — you can change any single one afterwards. Most
+        parks do this once and never come back.
+      </p>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Letter in front (optional)</span>
+          <input value={range.prefix} placeholder="A"
+            onChange={(e) => setRange({ ...range, prefix: e.target.value })}
+            style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">First lot</span>
+          <input inputMode="numeric" value={range.from}
+            onChange={(e) => setRange({ ...range, from: e.target.value })}
+            style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Last lot</span>
+          <input inputMode="numeric" value={range.to} placeholder="79"
+            onChange={(e) => setRange({ ...range, to: e.target.value })}
+            style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">These are</span>
+          <select value={range.siteType}
+            onChange={(e) => setRange({ ...range, siteType: e.target.value })}
+            style={{ marginTop: 4 }}>
+            {SITE_TYPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <p className="mut" style={{ fontSize: 13, marginTop: 12 }}>
+        {range.to.trim()
+          ? `Makes ${range.prefix}${range.from} through ${range.prefix}${range.to}. Anything that already exists is left alone.`
+          : "Tell us the last lot number and we'll make the whole row."}
+      </p>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button className="ll-btn" onClick={make} disabled={pending || !range.to.trim()}>
+          Add these lots
+        </button>
+        {hasLots && (
+          <button className="ll-btn ghost" onClick={() => setOpen(false)} disabled={pending}>Cancel</button>
+        )}
+      </div>
+    </div>
   );
 }
