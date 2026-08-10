@@ -87,13 +87,14 @@ Stabilized revenue stack, for reference:
 
 Ordered by when it bites.
 
-1. **The day-one re-rate.** 19 sitting tenancies move to $400 at once. Nothing
-   in the app can change the rent on existing tenancies in bulk —
-   `planBulkRates` writes the *rate card*, not what a sitting tenant pays. This
-   is the single most important operation in Year 1 and it happens on day one.
-   A ~45% increase on sitting mobile-home tenants also carries statutory notice
-   requirements in Indiana; **the mechanism needs a notice period dial and
-   counsel needs to set it.** Do not hard-code a number.
+1. ~~**The day-one re-rate.**~~ **BUILT** (0061 + `rerate-helpers.ts`).
+   Scheduled, not applied: `quoted_amount` moves only on the effective date,
+   and the DATABASE refuses to apply any change that was never served or was
+   served inside the notice period. Verified against these 19 lots —
+   $5,200 → $7,600, largest jump +60%.
+   **STILL NEEDS COUNSEL:** `parks.rent_notice_days` defaults to 30 as a
+   conservative placeholder. Nobody has confirmed Indiana's actual requirement
+   for a mobile-home community, and the software deliberately does not guess.
 
 2. **Mixed seasonality.** Lot rent runs year-round; **boat slips are Apr–Oct**.
    The season is currently a single park-level window
