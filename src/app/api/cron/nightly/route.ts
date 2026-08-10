@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
 import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, runFillInDigest, gapSlaAlerts, reconcileRefunds, learnServiceDurations, autoApplyPriceSuggestions, sendNightlyDigest, remindExpiringStays } from "@/lib/automation";
+import { applyDueRentChanges } from "@/app/park/rerate-actions";
 import { sweepDisputeDeadlines } from "@/lib/disputes";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,10 @@ async function run(req: Request) {
   // Ask a renter before they pack, and roll a month-to-month tenancy forward
   // before it lapses. Both are the same mechanism — see lib/extend-stay.ts.
   const extendReminders = await remindExpiringStays();
+  // Scheduled rent changes that have come due AND were properly served. The
+  // database refuses any that weren't, so this can only ever apply the ones
+  // with notice on the record.
+  const rentChanges = await applyDueRentChanges();
   const sweep = await sweepWaitlist();
   const overstay = await overstayNotices();
   // Self-heal assignments (re-home lapsed crews, fill stragglers), then route.
@@ -64,7 +69,7 @@ async function run(req: Request) {
   const nudges = await runNudges();
   // THE nightly digest — always last, carries everything above to ops in one email.
   const digest = await sendNightlyDigest({ learning, autoPricing, disputeSweep, routes, gapSla });
-  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, digest });
+  return NextResponse.json({ ok: true, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, rentChanges, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, digest });
 }
 
 export const GET = run; // Vercel Cron issues GET

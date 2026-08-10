@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { ParkNav } from "@/components/ParkNav";
+import { ParkReRate } from "@/components/ParkReRate";
 import { ParkRentRoll, type RollRowView } from "@/components/ParkRentRoll";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
+import { pendingReRates } from "@/app/park/rerate-actions";
 import { getMyPark, getParkLots, getParkRoll, type ParkUnitView } from "@/app/park/data";
 import { lotFits, fitProblemText, type Lot } from "@/lib/parks";
 
@@ -54,7 +56,20 @@ export default async function ParkPage() {
     );
   }
 
-  const [roll, lots] = await Promise.all([getParkRoll(park.id), getParkLots(park.id)]);
+  const [roll, lots, pending] = await Promise.all([
+    getParkRoll(park.id),
+    getParkLots(park.id),
+    pendingReRates(park.id),
+  ]);
+
+  // The notice period is a park dial set by counsel — read it, never assume it.
+  const sb = await createClient();
+  const { data: parkRow } = await sb
+    .from("parks")
+    .select("rent_notice_days")
+    .eq("id", park.id)
+    .maybeSingle();
+  const noticeDays = (parkRow?.rent_notice_days as number) ?? 30;
   const lotById = new Map(lots.map((l) => [l.lot.id, l]));
 
   const rows: RollRowView[] = roll.rows.map((r) => ({
@@ -102,6 +117,20 @@ export default async function ParkPage() {
     <>
       <TopBar />
       <ParkNav parkName={park.name} live={park.active} />
+      {/* RESERVED counts too. The Haven's whole roll is "reserved" until the
+          Dec 15 cutover, so gating on `occupied` would hide the re-rate panel
+          on precisely the park it was built for — and on every park during the
+          window between signing and closing. */}
+      {roll.summary.occupied + roll.summary.reserved > 0 && (
+        <div className="wrap" style={{ paddingTop: 14, paddingBottom: 0 }}>
+          <ParkReRate
+            parkId={park.id}
+            noticeDays={noticeDays}
+            pending={pending}
+            todayISO={roll.today}
+          />
+        </div>
+      )}
       <ParkRentRoll
         parkId={park.id}
         isOwner={park.role === "owner"}
