@@ -293,6 +293,7 @@ export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
     season: seasonFor(park, batch.cutover_date as string),
     approvedNewLots,
     overrides,
+    namelessRoll: !parsed.shape.hasNameColumn,
   });
 
   const others = (rowRecords ?? [])
@@ -419,8 +420,11 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
 
   // ---- phase 1: LOTS. Distinct labels only, so two rows on one new lot do
   // not create it twice.
+  // Seed from EVERY planned row, not just the importable ones — in the
+  // nameless-roll mode `ready` is empty by design, and seeding from it would
+  // leave every existing lot unresolved and write no rates at all.
   const lotIdByLabel = new Map<string, string>();
-  for (const row of loaded.plan.ready) {
+  for (const row of loaded.plan.rows) {
     if (row.matchedLotId && row.lotLabel) lotIdByLabel.set(row.lotLabel, row.matchedLotId);
   }
 
@@ -455,6 +459,58 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
       if (found) { lotIdByLabel.set(label, found.id as string); continue; }
     }
     failures.push({ lot: label, name: null, message: `Couldn't create lot ${label}.` });
+  }
+
+  // ---- THE NAMELESS ROLL stops here. Lots and rates, and nobody recorded as
+  // living anywhere, because the sheet did not say who does. Writing a tenancy
+  // would mean inventing a person, which is the one thing this importer will
+  // not do.
+  if (loaded.plan.namelessRoll) {
+    let ratesWritten = 0;
+    for (const r of loaded.plan.rates) {
+      const lotId = lotIdByLabel.get(r.lotLabel);
+      if (!lotId) continue;
+      if (r.amount == null) continue;
+
+      const { error } = await admin
+        .from("lot_rates")
+        .upsert(
+          { park_lot_id: lotId, term: "monthly", amount: r.amount },
+          { onConflict: "park_lot_id,term" },
+        );
+      if (error) {
+        failures.push({ lot: r.lotLabel, name: null, message: `Couldn't save the rent for lot ${r.lotLabel}.` });
+        continue;
+      }
+      ratesWritten += 1;
+      await admin
+        .from("park_import_rows")
+        .update({
+          matched_lot_id: lotId,
+          created_lot_id: lotsWeCreated.has(r.lotLabel) ? lotId : null,
+          commit_error: null,
+        })
+        .eq("batch_id", batchId)
+        .eq("line_no", r.lineNo);
+    }
+
+    const counts = { tenants: 0, lots: lotsCreated, rates: ratesWritten, failed: failures.length, monthly: loaded.plan.monthlyTotal };
+    await admin
+      .from("park_import_batches")
+      .update({ committed_at: new Date().toISOString(), counts })
+      .eq("id", batchId);
+
+    revalidatePath("/park");
+    revalidatePath(`/park/import/${batchId}`);
+    return {
+      ok: true,
+      tenantsAdded: 0,
+      lotsCreated,
+      monthlyTotal: loaded.plan.monthlyTotal,
+      failures,
+      orphans: [],
+      signal: `${lotsCreated} ${lotsCreated === 1 ? "lot" : "lots"} set up. Nobody was filed as living on them — your list didn't say who.`,
+    };
   }
 
   // ---- phases 2 and 3: a renter file, then a tenancy, per row.

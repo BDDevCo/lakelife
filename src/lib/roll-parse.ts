@@ -97,6 +97,13 @@ export interface ParseResult {
     columnCount: number;
     /** FNV-1a over the normalised blob — re-paste detection. */
     contentHash: string;
+    /**
+     * FALSE when the sheet carries no name column AT ALL — not merely a row
+     * with a blank name. A roll of lots and rents with nobody on it is a real
+     * and common shape (it is exactly what the Pretty Lake proforma is), and it
+     * is worth importing as inventory even though it names no tenants.
+     */
+    hasNameColumn: boolean;
   };
   columns: ColumnMap;
   rows: ParsedRow[];
@@ -183,6 +190,104 @@ function targetFor(header: string): { target: Target; term?: Term } | "carry" | 
   return null;
 }
 
+
+// ------------------------------------------------- headerless inference ----
+
+/**
+ * WHEN THERE IS NO HEADER ROW.
+ *
+ * Real rolls often have none. The Pretty Lake proforma is two columns —
+ * "Lot 1" and "325.00 $" — under a single merged label that does not survive
+ * the paste. Without inference every one of its 20 rows came back unreadable,
+ * which is a loud failure but an unhelpful one: the shape is obvious to a
+ * human at a glance.
+ *
+ * The rule stays conservative, because the F9 trap is real: on a two-column
+ * sheet of bare numbers you cannot tell a lot from a rent. So a column only
+ * becomes the RENT if it actually looks like money — a currency symbol, a
+ * decimal, or a thousands separator — and never merely because it is numeric.
+ * When it is ambiguous we infer nothing and keep asking.
+ */
+function looksLikeMoney(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (!/\d/.test(t)) return false;
+  // Must carry a money TELL. A bare "12" is a lot number far more often than
+  // it is a rent, and guessing wrong puts the rent in the lot column.
+  return /[$]/.test(t) || /\d[.,]\d{2}\b/.test(t) || /\d,\d{3}/.test(t);
+}
+
+function looksLikeLotLabel(s: string): boolean {
+  const t = s.trim().replace(/^#\s*/, "").replace(/^(lot|site|space|unit|stall|pad)\s+/i, "");
+  return /^[A-Za-z]{0,2}\d{1,4}[A-Za-z]?$/.test(t);
+}
+
+function looksLikeName(s: string): boolean {
+  const t = s.trim();
+  if (t.length < 3) return false;
+  if (looksLikeMoney(t) || looksLikeLotLabel(t)) return false;
+  if (isPlaceholderName(t)) return false;
+  // Two words, or "Surname, Given" — the two shapes a roll writes people in.
+  return /[A-Za-z]{2}/.test(t) && (/\s/.test(t) || t.includes(","));
+}
+
+export interface InferredColumns {
+  index: Partial<Record<Target, number>>;
+  why: string;
+}
+
+/**
+ * Infer the column map from the BODY of the sheet. Returns null when the shape
+ * is not clear enough to act on — null means "keep asking", which is always an
+ * available and honest answer.
+ */
+export function inferColumns(bodyRows: readonly string[][]): InferredColumns | null {
+  const width = Math.max(0, ...bodyRows.map((r) => r.length));
+  if (width < 2 || bodyRows.length < 3) return null;
+
+  const frac = (col: number, pred: (s: string) => boolean) => {
+    const cells = bodyRows.map((r) => (r[col] ?? "").trim()).filter(Boolean);
+    if (cells.length === 0) return 0;
+    return cells.filter(pred).length / cells.length;
+  };
+
+  const score = Array.from({ length: width }, (_, c) => ({
+    col: c,
+    money: frac(c, looksLikeMoney),
+    lot: frac(c, looksLikeLotLabel),
+    name: frac(c, looksLikeName),
+  }));
+
+  const pick = (key: "money" | "lot" | "name", taken: Set<number>) => {
+    const best = score
+      .filter((s) => !taken.has(s.col))
+      .sort((a, b) => b[key] - a[key])[0];
+    return best && best[key] >= 0.6 ? best.col : undefined;
+  };
+
+  const taken = new Set<number>();
+  const index: Partial<Record<Target, number>> = {};
+
+  const rentCol = pick("money", taken);
+  if (rentCol !== undefined) { index.rent = rentCol; taken.add(rentCol); }
+
+  const lotCol = pick("lot", taken);
+  if (lotCol !== undefined) { index.lot = lotCol; taken.add(lotCol); }
+
+  const nameCol = pick("name", taken);
+  if (nameCol !== undefined) { index.name = nameCol; taken.add(nameCol); }
+
+  // A lot column is the ONE thing worth inferring on its own. Without it there
+  // is no join key and nothing downstream works.
+  if (index.lot === undefined) return null;
+
+  const parts: string[] = [`column ${index.lot + 1} is the lot`];
+  if (index.name !== undefined) parts.push(`column ${index.name + 1} is the name`);
+  if (index.rent !== undefined) parts.push(`column ${index.rent + 1} is the rent`);
+
+  return { index, why: parts.join(", ") };
+}
+
 // ------------------------------------------------------------ line kinds ---
 
 const TOTALS_RE = /^\s*(total|totals|sum|grand total|subtotal)\b/i;
@@ -190,11 +295,36 @@ const PAGE_RE = /^\s*(page\s+\d+\s+of\s+\d+|page\s+\d+)\s*$/i;
 const VACANT_RE = /\b(vacant|empty|available|open|unoccupied|no tenant|for rent)\b/i;
 const FACILITY_RE = /\b(office|shop|laundry|clubhouse|storage|maintenance|shed|pool|dumpster|common)\b/i;
 
-/** A lot number with nothing else on the line. NOT the same as declared-vacant:
- *  silence means the seller told us nothing, which is the number worth walking. */
-const BARE_LOT_RE = /^\s*#?\s*([A-Za-z]{0,2}\d{1,4}[A-Za-z]?)\s*$/;
+/**
+ * A lot number with nothing else on the line. NOT the same as declared-vacant:
+ * silence means the seller told us nothing, which is the number worth walking.
+ *
+ * ACCEPTS THE WORD IN FRONT OF IT. The first version matched a bare "3" but not
+ * "Lot 3" — and "Lot 3" is how a human actually writes it. Checked against the
+ * real Pretty Lake roll, where lots 3 and 22-25 are each written exactly that
+ * way: every one of them fell through to `unparsed` and THE WALK LIST CAME BACK
+ * EMPTY. The walk list is the one output he could not have produced himself,
+ * so losing it silently is the worst failure this parser has.
+ */
+const BARE_LOT_RE =
+  /^\s*(?:#\s*|(?:lot|site|space|unit|stall|pad)\s+)?([A-Za-z]{0,2}\d{1,4}[A-Za-z]?)\s*$/i;
+
+/**
+ * A row that is just money — the last line of a column of amounts, with no
+ * "TOTAL" label in front of it. Spreadsheets produce this constantly: the
+ * label lives in a merged cell one column over and does not survive the paste.
+ * Without this the seller's own arithmetic is never checked.
+ */
+const BARE_MONEY_RE = /^[\s\t]*\$?\s*[\d,]+(?:\.\d{1,2})?\s*\$?\s*$/;
 
 // --------------------------------------------------------------- helpers ---
+
+/** Is every remaining line blank? Used to tell a trailing total from a row we
+ *  simply could not read. */
+function isLastContentLine(lines: readonly string[], idx: number): boolean {
+  for (let j = idx + 1; j < lines.length; j++) if (lines[j].trim()) return false;
+  return true;
+}
 
 /** FNV-1a over the normalised blob. Cheap, deterministic, and enough to catch
  *  the same list pasted twice — which without it creates 158 tenant files. */
@@ -401,6 +531,22 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     roles.push({ kind: "field", target: t.target, ...(t.term ? { term: t.term } : {}) });
     if (index[t.target] === undefined) index[t.target] = i;
   });
+  // NO HEADER? Infer the shape from the body rather than giving up. Reported,
+  // never silent — the screen says what we guessed and lets him correct it.
+  let inferredWhy: string | null = null;
+  if (headerLine === null) {
+    const body = rawLines
+      .map((l) => splitLine(l, delimiter).map((c) => c.trim()))
+      .filter((cells) => cells.some((c) => c) && cells.length > 1);
+    const guess = inferColumns(body);
+    if (guess) {
+      inferredWhy = guess.why;
+      for (const [target, col] of Object.entries(guess.index)) {
+        if (index[target as Target] === undefined) index[target as Target] = col as number;
+      }
+    }
+  }
+
   const columns: ColumnMap = { roles, index, unrecognised };
 
   // THE BLOCK QUESTIONS. Asked ONCE for the whole paste, not silently per row.
@@ -410,10 +556,19 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
   const noLotColumn = index.lot === undefined;
   const noNameColumn = index.name === undefined;
   if (headerLine === null) {
-    blockQuestions.push({
-      code: "NO_HEADER",
-      question: "We couldn't find a header row. Which column is the lot number, and which is the name?",
-    });
+    blockQuestions.push(
+      inferredWhy
+        ? {
+            code: "COLUMNS_INFERRED",
+            // Not a blocker — a disclosure. He can see the paste beside this
+            // and correct it in one look.
+            question: `This list has no header row, so we went by what the columns look like: ${inferredWhy}. Change it if that's not right.`,
+          }
+        : {
+            code: "NO_HEADER",
+            question: "We couldn't find a header row. Which column is the lot number, and which is the name?",
+          },
+    );
   }
   if (noLotColumn) {
     blockQuestions.push({
@@ -450,6 +605,13 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     if (!text) { skipped.push({ lines: [lineNo], text: line, why: "blank" }); continue; }
     if (PAGE_RE.test(text)) { skipped.push({ lines: [lineNo], text, why: "page marker" }); continue; }
     if (TOTALS_RE.test(text)) { totals.push({ lines: [lineNo], text }); continue; }
+    // A bare amount, and it is the LAST thing on the sheet: a totals row that
+    // lost its label. Only at the end — a bare amount in the middle is a row we
+    // failed to read, and calling that a total would hide it.
+    if (BARE_MONEY_RE.test(text) && isLastContentLine(rawLines, i)) {
+      totals.push({ lines: [lineNo], text, why: "an unlabelled total" });
+      continue;
+    }
     // A repeated header mid-data (PDF page breaks).
     if (headerLine !== null && norm(text) === norm(rawLines[headerLine - 1])) {
       skipped.push({ lines: [lineNo], text, why: "repeated header" }); continue;
@@ -567,6 +729,7 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     shape: {
       delimiter,
       headerLine,
+      hasNameColumn: index.name !== undefined,
       columnCount: headerCells.length,
       contentHash: contentHash(blob ?? ""),
     },

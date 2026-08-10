@@ -192,6 +192,14 @@ export interface PlannedRow {
   notes: string[];
 }
 
+/** A lot and what it rents for, with nobody attached. */
+export interface PlannedRate {
+  lineNo: number;
+  lotLabel: string;
+  amount: number | null;
+  createsLot: boolean;
+}
+
 export interface ImportPlan {
   rows: PlannedRow[];
   /** Rows that will be written. */
@@ -202,6 +210,13 @@ export interface ImportPlan {
   lotsToCreate: string[];
   /** What the rent roll will say, if he commits exactly this. */
   monthlyTotal: number;
+  /**
+   * Set when the sheet named nobody. `ready` and `needsYou` are both empty in
+   * this mode — there are no tenancies to write — and `rates` carries the whole
+   * import instead.
+   */
+  namelessRoll: boolean;
+  rates: PlannedRate[];
 }
 
 export interface ExistingLot {
@@ -242,6 +257,12 @@ export interface PlanInput {
   approvedNewLots?: readonly string[];
   /** Keyed by the row's first source line. */
   overrides?: Record<number, RowOverride>;
+  /**
+   * The sheet has no name column at all. Then this is an INVENTORY import: we
+   * set up lots and what each one currently rents for, and we record nobody as
+   * living anywhere, because the list does not say who does.
+   */
+  namelessRoll?: boolean;
 }
 
 /**
@@ -372,6 +393,35 @@ export function planImport(input: PlanInput): ImportPlan {
 
   // A skipped row is neither ready nor a question. It is a decision he made,
   // and it still appears in `rows` so the accounting never loses it.
+  // ---- THE NAMELESS ROLL. No name column means no people, and we will not
+  // invent any. What the sheet DOES tell us is real and useful: which lots
+  // exist and what each one currently brings in. Import that, say so plainly,
+  // and let the names arrive as he meets them.
+  //
+  // The alternative — 20 rows each asking "who lives here?" — is 20 questions
+  // he cannot answer from the document in front of him, which is the same as
+  // importing nothing.
+  if (input.namelessRoll) {
+    const rates: PlannedRate[] = planned
+      .filter((p) => !p.skipped && p.lotLabel && !p.blockers.includes("label_too_long"))
+      .map((p) => ({
+        lineNo: p.lineNo,
+        lotLabel: p.lotLabel!,
+        amount: p.amount,
+        createsLot: p.createsLot,
+      }));
+
+    return {
+      rows: planned,
+      ready: [],
+      needsYou: [],
+      lotsToCreate: [...new Set(rates.filter((r) => r.createsLot).map((r) => r.lotLabel))],
+      monthlyTotal: rates.reduce((sum, r) => sum + (r.amount ?? 0), 0),
+      namelessRoll: true,
+      rates,
+    };
+  }
+
   const ready = planned.filter((p) => !p.skipped && p.blockers.length === 0);
   const needsYou = planned.filter((p) => !p.skipped && p.blockers.length > 0);
 
@@ -386,7 +436,7 @@ export function planImport(input: PlanInput): ImportPlan {
     .filter((p) => p.term === "monthly" && p.amount != null)
     .reduce((sum, p) => sum + p.amount!, 0);
 
-  return { rows: planned, ready, needsYou, lotsToCreate, monthlyTotal };
+  return { rows: planned, ready, needsYou, lotsToCreate, monthlyTotal, namelessRoll: false, rates: [] };
 }
 
 // ------------------------------------------------------------- the money ----

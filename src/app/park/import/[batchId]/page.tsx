@@ -48,6 +48,8 @@ export default async function ParkImportBatchPage({
     needsYou: batch.plan.needsYou,
     lotsToCreate: batch.plan.lotsToCreate,
     monthlyTotal: batch.plan.monthlyTotal,
+    namelessRoll: batch.plan.namelessRoll,
+    rates: batch.plan.rates,
     others: batch.others,
     blockQuestions: batch.blockQuestions,
     counts: batch.counts,

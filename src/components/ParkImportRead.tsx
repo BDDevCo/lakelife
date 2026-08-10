@@ -38,6 +38,8 @@ export interface ReadView {
   needsYou: PlannedRow[];
   lotsToCreate: string[];
   monthlyTotal: number;
+  namelessRoll: boolean;
+  rates: { lineNo: number; lotLabel: string; amount: number | null; createsLot: boolean }[];
   others: { lineNo: number; text: string; verdict: string; why: string | null }[];
   blockQuestions: { code: string; question: string }[];
   counts: Record<string, number>;
@@ -232,6 +234,42 @@ export function ParkImportRead({ view }: { view: ReadView }) {
         </section>
       )}
 
+      {/* ---- The NAMELESS ROLL. His sheet has lots and rents and nobody on
+              it. That is a real shape, not a broken one, and it is exactly
+              what a proforma looks like. We set up inventory and the money,
+              and we record no tenants — because inventing them is the one
+              thing this importer will not do. ------------------------------ */}
+      {view.namelessRoll && (
+        <section style={{ marginTop: 22 }}>
+          <h2 style={{ fontSize: 18, margin: "0 0 6px" }}>
+            This list has lots and rents, but no names
+          </h2>
+          <p className="mut" style={{ margin: "0 0 14px", lineHeight: 1.5 }}>
+            So we won&apos;t record anyone as living anywhere — it doesn&apos;t say
+            who. We&apos;ll set up {view.rates.length}{" "}
+            {view.rates.length === 1 ? "lot" : "lots"} and what each one brings
+            in today. Add the people as you meet them; every lot below will be
+            waiting for a name.
+          </p>
+          <div className="ll-card">
+            {view.rates.map((r) => (
+              <div
+                key={r.lineNo}
+                style={{
+                  padding: "10px 14px", borderTop: "1px solid rgba(0,0,0,.06)",
+                  display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap",
+                }}
+              >
+                <strong style={{ minWidth: 72 }}>Lot {r.lotLabel}</strong>
+                <span className="mut" style={{ flex: 1 }}>no name on the list</span>
+                <span>{r.amount == null ? "Rent not set" : money(r.amount)}</span>
+                {r.createsLot && <span className="ll-pill slate">new lot</span>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* ---- Section 4: the boring part, and it should look boring. ------- */}
       {view.ready.length > 0 && (
         <section style={{ marginTop: 22 }}>
@@ -345,14 +383,18 @@ export function ParkImportRead({ view }: { view: ReadView }) {
           }}
         >
           <span className="mut" style={{ flex: 1, fontSize: 14 }}>
-            {view.ready.length} ready · {view.needsYou.length} need you · {walk.length} empty
+            {view.namelessRoll
+              ? `${view.rates.length} lots · no names on this list · ${walk.length} empty`
+              : `${view.ready.length} ready · ${view.needsYou.length} need you · ${walk.length} empty`}
           </span>
           <button
             className="ll-btn"
-            disabled={pending || view.ready.length === 0}
+            disabled={pending || (view.namelessRoll ? view.rates.length === 0 : view.ready.length === 0)}
             onClick={() => setConfirming(true)}
           >
-            Put {view.ready.length} {view.ready.length === 1 ? "tenant" : "tenants"} in
+            {view.namelessRoll
+              ? `Set up ${view.rates.length} ${view.rates.length === 1 ? "lot" : "lots"}`
+              : `Put ${view.ready.length} ${view.ready.length === 1 ? "tenant" : "tenants"} in`}
           </button>
         </div>
       </div>
@@ -366,10 +408,21 @@ export function ParkImportRead({ view }: { view: ReadView }) {
             </div>
             <div className="ll-modal-body">
               <p style={{ marginTop: 0, lineHeight: 1.5 }}>
-                This adds {view.ready.length}{" "}
-                {view.ready.length === 1 ? "tenant" : "tenants"}
-                {view.lotsToCreate.length > 0 && <>, creates {view.lotsToCreate.length}{" "}
-                  {view.lotsToCreate.length === 1 ? "lot" : "lots"}</>}.
+                {view.namelessRoll ? (
+                  <>
+                    This sets up {view.rates.length}{" "}
+                    {view.rates.length === 1 ? "lot" : "lots"} and what each one
+                    rents for. <strong>Nobody is recorded as living on them</strong> —
+                    your list doesn&apos;t say who.
+                  </>
+                ) : (
+                  <>
+                    This adds {view.ready.length}{" "}
+                    {view.ready.length === 1 ? "tenant" : "tenants"}
+                    {view.lotsToCreate.length > 0 && <>, creates {view.lotsToCreate.length}{" "}
+                      {view.lotsToCreate.length === 1 ? "lot" : "lots"}</>}.
+                  </>
+                )}
               </p>
               <p className="mut" style={{ lineHeight: 1.5 }}>
                 Nothing gets texted, emailed, or charged to anybody. Rent amounts
