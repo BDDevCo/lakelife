@@ -141,3 +141,46 @@ That is exactly the shape of a proforma, and exactly what he has.
 
 Pinned as a regression test in `src/app/park/haven-import.test.ts`, asserting
 the total ties to $5,200/mo → $62,400/yr.
+
+---
+
+## 6. How tenancies are structured at The Haven (owner's rule, Aug 10 2026)
+
+**No stay runs longer than three months.** Somebody may stay as long as they
+like, but each further period is a **new three-month agreement**, executed on
+its own. **If the periods are consecutive, no second deposit is collected.**
+
+Built in 0062:
+
+- `parks.max_agreement_months = 3` and `parks.deposit_amount` — both dials, both
+  NULL-able, because a park that runs month-to-month is a normal park.
+- `lot_reservations.agreement_chain_id` + `agreement_seq` — consecutive
+  agreements share a chain. **The chain, not the agreement, is the unit that
+  matters**: it is what the deposit attaches to and what "how long have they
+  been here" means.
+- `check (agreement_seq = 1 or deposit_amount is null)` — a renewal cannot
+  record a second deposit. The owner's rule is a database constraint, not a
+  code path.
+- The one-tap renewal writes a **successor row**, not a wider date range.
+  Widening would destroy the discrete signed period the whole structure exists
+  to produce.
+
+**Consecutive** is precise: the next agreement starts the day the last one ends.
+A gap means they left — new chain, seq 1, deposit due again.
+
+**The 19 sitting tenants are exempt.** They were inherited month-to-month and
+the importer writes them on a rolling one-year horizon; the cap applies to new
+agreements only. **Converting them to three-month agreements is an open
+decision** — it is a change to their arrangement and would carry its own notice.
+Nobody has decided it.
+
+### For counsel, alongside the notice-period question
+
+Serial short agreements are a recognised structure and are also something some
+jurisdictions look through. Somebody on their **eighth consecutive three-month
+agreement has in practice lived here two years**, and may be treated as a
+long-term tenant whatever each agreement says. Rather than hide that,
+`agreement_seq` makes it visible, and past twelve months the app says so plainly
+and points at the attorney. **LakeLife takes no position on whether the
+structure achieves what it intends** — that is a legal question, not a software
+one.
