@@ -30,6 +30,8 @@ export interface RollRowView {
   currentDueDay: number | null;
   /** 'seller_roll' until a human confirms it — the rent roll shows its work. */
   currentSource: string | null;
+  /** What this household owes this month — or why we can't say. */
+  owedThisMonth: string | null;
   nightsLeft: number | null;
   /** A month-to-month tenancy: no real end date, so no countdown. */
   rolling?: boolean;
@@ -84,6 +86,9 @@ export function ParkRentRoll({
   slug,
   rows,
   summary,
+  owedTotal,
+  owedBlocked,
+  owedMonth,
 }: {
   parkId: string;
   isOwner: boolean;
@@ -91,6 +96,9 @@ export function ParkRentRoll({
   slug: string | null;
   rows: RollRowView[];
   summary: RollSummaryView;
+  owedTotal?: number;
+  owedBlocked?: number;
+  owedMonth?: string;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -146,6 +154,15 @@ export function ParkRentRoll({
         />
         <Stat label="Vacant" value={`${summary.vacant}`} sub={summary.reserved ? `${summary.reserved} reserved` : ""} />
         <Stat label="Waiting on you" value={`${summary.pending}`} sub={summary.pending === 1 ? "application" : "applications"} />
+        {owedTotal != null && (
+          <Stat
+            label="Owed this month"
+            value={`$${owedTotal.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
+            // A blocked row is a rent nobody set. Surfaced here rather than
+            // quietly missing from the total.
+            sub={owedBlocked ? `${owedBlocked} can't be totalled` : (owedMonth ?? "")}
+          />
+        )}
       </div>
 
       {!live && (
@@ -273,6 +290,9 @@ export function ParkRentRoll({
                       )}
                       {r.state === "reserved" && (
                         <span className="mut">{r.nextRenter} arrives {pretty(r.nextFrom)}</span>
+                      )}
+                      {r.owedThisMonth && (
+                        <span className="mut"> · {r.owedThisMonth}</span>
                       )}
                       {r.state === "vacant" && <span className="mut">Open</span>}
                       {r.state === "inactive" && <span className="mut">Not in service</span>}

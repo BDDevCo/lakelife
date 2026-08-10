@@ -6,6 +6,7 @@ import { ParkRentRoll, type RollRowView } from "@/components/ParkRentRoll";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { pendingReRates } from "@/app/park/rerate-actions";
+import { buildStatement, rollUp, statementLine, type StatementFee } from "@/app/park/statement-helpers";
 import { getMyPark, getParkLots, getParkRoll, type ParkUnitView } from "@/app/park/data";
 import { lotFits, fitProblemText, type Lot } from "@/lib/parks";
 
@@ -62,14 +63,48 @@ export default async function ParkPage() {
     pendingReRates(park.id),
   ]);
 
-  // The notice period is a park dial set by counsel — read it, never assume it.
+  // WHAT EACH HOUSEHOLD OWES THIS MONTH. Rent plus the monthly fees, prorated
+  // for a part month, and withheld entirely where a rent was never set —
+  // billing somebody the fee alone is worse than billing nothing.
   const sb = await createClient();
   const { data: parkRow } = await sb
     .from("parks")
-    .select("rent_notice_days")
+    .select("rent_notice_days, rent_due_day")
     .eq("id", park.id)
     .maybeSingle();
   const noticeDays = (parkRow?.rent_notice_days as number) ?? 30;
+
+  const { data: feeRows } = await sb
+    .from("park_fees")
+    .select("label, amount, cadence, applies_to, active")
+    .eq("park_id", park.id)
+    .eq("active", true);
+
+  const monthlyFees: StatementFee[] = (feeRows ?? [])
+    .filter((f) => ["all_lots", "long_term"].includes(f.applies_to as string))
+    .map((f) => ({
+      label: f.label as string,
+      amount: Number(f.amount),
+      cadence: f.cadence as string,
+    }));
+
+  const thisMonth = roll.today.slice(0, 7);
+  const owed = new Map<string, string>();
+  const statements = [];
+  for (const r of roll.rows) {
+    if (!r.current?.range) continue;
+    const st = buildStatement({
+      month: thisMonth,
+      stay: r.current.range,
+      rent: r.current.quotedAmount,
+      fees: r.lot.rentalMode === "short_term" ? [] : monthlyFees,
+      dueDay: (parkRow?.rent_due_day as number) ?? 1,
+    });
+    statements.push(st);
+    owed.set(r.lot.id, statementLine(st));
+  }
+  const owedSummary = rollUp(statements);
+
   const lotById = new Map(lots.map((l) => [l.lot.id, l]));
 
   const rows: RollRowView[] = roll.rows.map((r) => ({
@@ -85,6 +120,7 @@ export default async function ParkPage() {
     currentRent: r.current?.quotedAmount ?? null,
     currentDueDay: r.current?.dueDay ?? null,
     currentSource: r.current?.amountSource ?? null,
+    owedThisMonth: owed.get(r.lot.id) ?? null,
     // A countdown is only true for a SHORT stay. A month-to-month tenant's end
     // date is a rolling horizon we write silently (phase 2 design §1h) — it is
     // not a lease end, and "365 nights left" reads like one. Say the honest
@@ -138,6 +174,9 @@ export default async function ParkPage() {
         slug={park.slug}
         rows={rows}
         summary={roll.summary}
+        owedTotal={owedSummary.total}
+        owedBlocked={owedSummary.blocked}
+        owedMonth={thisMonth}
       />
     </>
   );
