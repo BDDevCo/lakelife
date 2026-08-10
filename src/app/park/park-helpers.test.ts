@@ -144,6 +144,8 @@ describe("summarise", () => {
     );
     expect(summarise(rows)).toEqual({
       lots: 3, occupied: 1, reserved: 1, vacant: 1, inactive: 1, pending: 1, occupancyPct: 33,
+      // 0065: inventory that isn't real yet, counted apart from occupancy.
+      planned: 0, renovating: 0, shortTermLots: 0,
     });
   });
   it("an INACTIVE lot is not inventory — it never dilutes occupancy", () => {

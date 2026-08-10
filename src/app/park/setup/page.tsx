@@ -2,8 +2,10 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { ParkNav } from "@/components/ParkNav";
 import { ParkSetup } from "@/components/ParkSetup";
+import { ParkStreams } from "@/components/ParkStreams";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
+import { parkStreamStatuses } from "@/app/park/stream-actions";
 import type { ParkProfileInput } from "@/app/park/park-helpers";
 
 const md = (m: number | null, d: number | null) =>
@@ -42,10 +44,17 @@ export default async function ParkSetupPage() {
     houseRules: park.houseRules ?? "",
   };
 
+  const statuses = await parkStreamStatuses(park.id);
+
   return (
     <>
       <TopBar />
       <ParkNav parkName={park.name} live={park.active} />
+      {/* WHAT THE PARK EARNS FROM comes first: it decides which of everything
+          below is even relevant to this owner. */}
+      <div className="wrap" style={{ paddingTop: 18, paddingBottom: 0 }}>
+        <ParkStreams parkId={park.id} statuses={statuses} />
+      </div>
       <ParkSetup parkId={park.id} initial={initial} />
     </>
   );

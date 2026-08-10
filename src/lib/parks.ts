@@ -31,6 +31,10 @@ export type UnitType =
   | "mobile_home" | "park_model" | "travel_trailer" | "fifth_wheel" | "motorhome" | "rv";
 
 export interface Lot {
+  /** planned | renovating | live | retired. Absent means live. */
+  lifecycle?: string;
+  /** long_term (somebody lives there) | short_term (booked by the night). */
+  rentalMode?: string;
   id: string;
   lotNumber: string;
   siteType: SiteType;

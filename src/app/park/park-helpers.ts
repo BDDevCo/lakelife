@@ -159,15 +159,43 @@ export interface RollSummary {
    *  lots — a brand-new park is not "0% full", it has nothing to be full of,
    *  and showing 0% on setup day is a discouraging lie. */
   occupancyPct: number | null;
+
+  /**
+   * NOT YET REAL. Homes being bought, lots being cleared, numbers on a
+   * proforma. Counted apart and EXCLUDED from `lots` and from occupancy —
+   * four unbuilt homes would take a true 91% down to 77%, and that number
+   * goes in front of a lender.
+   */
+  planned: number;
+  renovating: number;
+  /**
+   * Rented by the night, not lived on. Occupancy means a different thing for
+   * these — 19 nights of 30, not "somebody lives there" — so they are kept
+   * out of the long-term percentage rather than averaged into nonsense.
+   */
+  shortTermLots: number;
 }
 
 export function summarise(rows: RollRow[]): RollSummary {
   const s: RollSummary = {
     lots: 0, occupied: 0, reserved: 0, vacant: 0, inactive: 0, pending: 0,
     occupancyPct: null,
+    planned: 0, renovating: 0, shortTermLots: 0,
   };
   for (const r of rows) {
     s.pending += r.pending.length;
+
+    // Inventory that does not exist yet is not inventory. It is counted, and
+    // said out loud, but it never touches occupancy — a home nobody has
+    // bought cannot be "vacant".
+    const life = r.lot.lifecycle ?? "live";
+    if (life === "planned")    { s.planned++;    continue; }
+    if (life === "renovating") { s.renovating++; continue; }
+    if (life === "retired")    { continue; }
+
+    // A nightly home's occupancy is nights booked, not "somebody lives here".
+    if (r.lot.rentalMode === "short_term") { s.shortTermLots++; continue; }
+
     if (r.state === "inactive") { s.inactive++; continue; }
     s.lots++;
     if (r.state === "occupied") s.occupied++;
