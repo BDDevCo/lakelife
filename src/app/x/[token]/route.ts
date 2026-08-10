@@ -26,10 +26,30 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
     return htmlPage("That link isn't right", "This link doesn't match a stay. 🌊", false);
   }
   if (view.refusal || !view.newEnd) {
-    return htmlPage("We can't extend that from here", view.message ?? "Give the park a call. 🌊", false);
+    return htmlPage("We can't do that from here", view.message ?? "Give the park a call. 🌊", false);
   }
 
   const money = view.price != null ? ` for $${view.price.toLocaleString()}` : "";
+
+  // A capped park is not extending anything — it is starting the NEXT
+  // agreement, and calling that "keep your spot" would be telling somebody
+  // they are doing something smaller than they are. It is a fresh term with
+  // its own dates, and the only thing that carries over is the deposit.
+  if (view.isRenewal) {
+    const months = view.capMonths ?? 3;
+    return htmlPage(
+      `Stay on at site ${view.lotNumber}? 🌊`,
+      `Your agreement runs to ${pretty(view.currentEnd)}. ` +
+        `Tapping below starts a NEW ${months}-month agreement, ` +
+        `${pretty(view.newStart!)} to ${pretty(view.newEnd)}${money}. ` +
+        `Your deposit carries over — there's nothing more to pay on it. ` +
+        `${view.parkName} will send the agreement to sign.`,
+      true,
+      new URL(req.url).pathname,
+      `Yes — start the next ${months} months`,
+    );
+  }
+
   return htmlPage(
     `Stay longer on site ${view.lotNumber}? 🌊`,
     `Right now you're booked through ${pretty(view.currentEnd)}. ` +
@@ -49,7 +69,8 @@ export async function POST(_req: Request, ctx: { params: Promise<{ token: string
   }
   return htmlPage(
     "You're set 🌊",
-    `Your site is yours through ${pretty(res.newEnd!)}. Nothing else to do — ` +
-      `we've told the park.`,
+    `Your site is yours through ${pretty(res.newEnd!)}. ` +
+      `The park will send the paperwork if there's any to sign — ` +
+      `nothing more to pay on your deposit.`,
   );
 }

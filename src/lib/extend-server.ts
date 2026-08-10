@@ -18,9 +18,14 @@ export interface ExtendView {
   currentEnd: string;
   /** Null when it cannot be extended — `refusal` says why. */
   newEnd: string | null;
+  /** The successor's START. Only set on a renewal — an extension keeps its own. */
+  newStart: string | null;
   price: number | null;
   refusal: ExtendRefusal | null;
   message: string | null;
+  /** True when this park writes a NEW agreement instead of widening this one. */
+  isRenewal: boolean;
+  capMonths: number | null;
 }
 
 /**
@@ -34,7 +39,7 @@ export async function loadExtendByToken(token: string): Promise<ExtendView | nul
 
   const { data: res } = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_id, during, term, status, extended_count")
+    .select("id, park_lot_id, renter_id, during, term, status, extended_count, agreement_chain_id, agreement_seq, quoted_amount")
     .eq("extend_token", token)
     .maybeSingle();
   if (!res) return null;
@@ -46,7 +51,8 @@ export async function loadExtendByToken(token: string): Promise<ExtendView | nul
   if (!lot) return null;
 
   const [{ data: park }, { data: rateRows }, { data: others }] = await Promise.all([
-    admin.from("parks").select("name").eq("id", lot.park_id as string).maybeSingle(),
+    admin.from("parks").select("name, max_agreement_months, deposit_amount")
+      .eq("id", lot.park_id as string).maybeSingle(),
     admin.from("lot_rates").select("term, amount").eq("park_lot_id", res.park_lot_id as string),
     admin
       .from("lot_reservations")
@@ -65,6 +71,8 @@ export async function loadExtendByToken(token: string): Promise<ExtendView | nul
     .map((o) => parseDaterange(o.during as string))
     .filter((r): r is DateRange => r != null);
 
+  const capMonths = (park?.max_agreement_months as number | null) ?? null;
+
   const verdict = canExtend({
     range,
     term,
@@ -72,6 +80,8 @@ export async function loadExtendByToken(token: string): Promise<ExtendView | nul
     todayISO: todayLakeDate(),
     otherHeld,
     rates: (rateRows ?? []).map((r) => ({ term: r.term as Term, amount: Number(r.amount) })),
+    capMonths,
+    currentAmount: res.quoted_amount == null ? null : Number(res.quoted_amount),
   });
 
   return {
@@ -82,9 +92,15 @@ export async function loadExtendByToken(token: string): Promise<ExtendView | nul
     term,
     currentEnd: range?.end ?? "",
     newEnd: verdict.ok ? verdict.range!.end : null,
+    newStart: verdict.ok ? verdict.range!.start : null,
     price: verdict.ok ? verdict.price! : null,
     refusal: verdict.refusal ?? null,
     message: verdict.refusal ? refusalText(verdict.refusal) : null,
+    // At a park that caps agreement length this is not an extension at all —
+    // it is the NEXT AGREEMENT, and the screen has to say so, because signing
+    // one is a different act from staying on.
+    isRenewal: Boolean(verdict.isRenewal),
+    capMonths,
   };
 }
 
@@ -110,11 +126,46 @@ export async function extendByToken(
   const admin = createServiceClient();
   const { data: current } = await admin
     .from("lot_reservations")
-    .select("during, extended_count")
+    .select("during, extended_count, park_lot_id, renter_id, term, quoted_amount, agreement_chain_id, agreement_seq")
     .eq("id", view.reservationId)
     .maybeSingle();
   const range = parseDaterange(current?.during as string);
   if (!range) return { ok: false, error: refusalText("not_found") };
+
+  // ---- A CAPPED PARK WRITES A NEW AGREEMENT, it does not widen this one.
+  //
+  // Widening would destroy the thing the structure exists to produce: a
+  // discrete, dated period with its own signature. So the successor is its own
+  // row, sharing the chain, one higher in the sequence — and carrying NO
+  // deposit, because a consecutive stay does not pay one twice. The database
+  // refuses a deposit on any row with seq > 1, so that cannot drift.
+  if (view.isRenewal && view.newStart && view.newEnd) {
+    const { error: insErr } = await admin.from("lot_reservations").insert({
+      park_lot_id: current!.park_lot_id,
+      renter_id: current!.renter_id,
+      during: toDaterange({ start: view.newStart, end: view.newEnd }),
+      term: current!.term,
+      quoted_amount: current!.quoted_amount,
+      status: "active",
+      origin: "office",
+      agreement_chain_id: current!.agreement_chain_id,
+      agreement_seq: ((current!.agreement_seq as number) ?? 1) + 1,
+    });
+
+    if (insErr) {
+      if (insErr.code === "23P01") return { ok: false, error: refusalText("lot_taken") };
+      return { ok: false, error: "Something went wrong — give the park a call and they'll sort it." };
+    }
+
+    // Clear the reminder on the OLD agreement so the new one gets asked in its
+    // own right when its time comes.
+    await admin
+      .from("lot_reservations")
+      .update({ extend_reminded_at: null, extended_at: new Date().toISOString() })
+      .eq("id", view.reservationId);
+
+    return { ok: true, newEnd: view.newEnd };
+  }
 
   const { data: updated, error } = await admin
     .from("lot_reservations")

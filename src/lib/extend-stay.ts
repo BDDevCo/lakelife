@@ -57,9 +57,32 @@ function addDays(iso: string, days: number): string {
  * exclusion constraint sees a clean hand-off rather than an overlap with
  * itself.
  */
-export function extendedRange(current: DateRange, term: Term): DateRange {
+export function extendedRange(
+  current: DateRange,
+  term: Term,
+  /**
+   * A park that caps agreement length does not EXTEND — it writes the next
+   * agreement. The successor starts the day this one ends, which is what makes
+   * the two consecutive and carries the deposit forward. See
+   * app/park/agreement-helpers.ts.
+   */
+  capMonths?: number | null,
+): DateRange {
+  if (capMonths != null) {
+    return { start: current.end, end: addMonthsClamped(current.end, capMonths) };
+  }
   const nights = TERM_NIGHTS[term] ?? 30;
   return { start: current.start, end: addDays(current.end, nights) };
+}
+
+/** Whole months, clamping to the end of a short month. Mirrors addMonths in
+ *  app/park/agreement-helpers.ts — the two must not disagree about Jan 31. */
+function addMonthsClamped(iso: string, months: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1 + months, 1));
+  const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
+  t.setUTCDate(Math.min(d, last));
+  return t.toISOString().slice(0, 10);
 }
 
 /** What one more period costs, from the PARK'S card. Null when the park does
@@ -132,17 +155,32 @@ export function canExtend(input: {
   /** Other DECIDED stays on the same lot. */
   otherHeld: DateRange[];
   rates: { term: Term; amount: number }[];
-}): { ok: boolean; refusal?: ExtendRefusal; range?: DateRange; price?: number } {
-  const { range, term, status, todayISO, otherHeld, rates } = input;
+  /** The park's agreement cap, when it has one. */
+  capMonths?: number | null;
+  /** What this tenant already pays. The fallback price on a renewal. */
+  currentAmount?: number | null;
+}): { ok: boolean; refusal?: ExtendRefusal; range?: DateRange; price?: number; isRenewal?: boolean } {
+  const { range, term, status, todayISO, otherHeld, rates, capMonths, currentAmount } = input;
 
   if (!range) return { ok: false, refusal: "not_found" };
   if (status !== "approved" && status !== "active") return { ok: false, refusal: "not_extendable" };
   if (range.end < todayISO) return { ok: false, refusal: "already_ended" };
 
-  const price = extensionPrice(rates, term);
+  // The park's asking rate, when it publishes one for this term.
+  let price = extensionPrice(rates, term);
+
+  // A RENEWAL FALLS BACK TO WHAT THEY ALREADY PAY. At a park that caps
+  // agreement length, renewing is the normal way to stay, and refusing it
+  // because the rate CARD is empty would strand a sitting tenant who has been
+  // paying the same rent for a year. The card wins when it exists — that is
+  // how the owner raises a price — but its absence is not a reason to refuse
+  // somebody the next term.
+  if (price == null && capMonths != null && currentAmount != null && currentAmount > 0) {
+    price = currentAmount;
+  }
   if (price == null) return { ok: false, refusal: "no_rate" };
 
-  const next = extendedRange(range, term);
+  const next = extendedRange(range, term, capMonths);
 
   // Half-open, matching the exclusion constraint exactly. The stay we are
   // widening is NOT in otherHeld — the caller excludes it — so any overlap
@@ -150,7 +188,7 @@ export function canExtend(input: {
   const clash = otherHeld.some((h) => h.start < next.end && next.start < h.end);
   if (clash) return { ok: false, refusal: "lot_taken" };
 
-  return { ok: true, range: next, price };
+  return { ok: true, range: next, price, isRenewal: capMonths != null };
 }
 
 /** What the renter reads. Never blames them, never mentions another renter. */

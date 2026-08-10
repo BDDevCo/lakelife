@@ -158,3 +158,66 @@ describe("canExtend — the tap we can actually honour", () => {
     expect(res.range!.end).toBe("2027-09-08");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A PARK THAT CAPS AGREEMENT LENGTH renews instead of extending. The Haven
+// writes three-month agreements; staying on is a NEW one, starting the day the
+// last ends, which is what carries the deposit forward.
+// ---------------------------------------------------------------------------
+describe("renewal at a capped park", () => {
+  const base = {
+    range: { start: "2026-12-15", end: "2027-03-15" },
+    term: "monthly" as const,
+    status: "active",
+    todayISO: "2027-03-01",
+    otherHeld: [],
+    rates: [{ term: "monthly" as const, amount: 400 }],
+  };
+
+  it("produces the SUCCESSOR's range, not a wider one", () => {
+    const r = canExtend({ ...base, capMonths: 3 });
+    expect(r.ok).toBe(true);
+    expect(r.isRenewal).toBe(true);
+    // Starts where the last one ended — that is what "consecutive" means.
+    expect(r.range).toEqual({ start: "2027-03-15", end: "2027-06-15" });
+  });
+
+  it("still WIDENS when the park has no cap", () => {
+    const r = canExtend({ ...base, capMonths: null });
+    expect(r.isRenewal).toBeFalsy();
+    expect(r.range!.start).toBe("2026-12-15");   // unchanged
+    expect(r.range!.end).toBe("2027-04-14");
+  });
+
+  it("falls back to what they already pay when the rate card is empty", () => {
+    // Refusing a sitting tenant the next term because the ASKING rate is unset
+    // would strand them. The card wins when it exists; its absence is not a
+    // reason to say no.
+    const r = canExtend({ ...base, rates: [], capMonths: 3, currentAmount: 400 });
+    expect(r.ok).toBe(true);
+    expect(r.price).toBe(400);
+  });
+
+  it("prefers the park's card over the old rent when both exist", () => {
+    const r = canExtend({
+      ...base, rates: [{ term: "monthly", amount: 500 }], capMonths: 3, currentAmount: 400,
+    });
+    expect(r.price).toBe(500);
+  });
+
+  it("still refuses when there is no card AND no established rent", () => {
+    const r = canExtend({ ...base, rates: [], capMonths: 3, currentAmount: null });
+    expect(r.ok).toBe(false);
+    expect(r.refusal).toBe("no_rate");
+  });
+
+  it("refuses a renewal that would land on somebody else", () => {
+    const r = canExtend({
+      ...base,
+      capMonths: 3,
+      otherHeld: [{ start: "2027-04-01", end: "2027-05-01" }],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.refusal).toBe("lot_taken");
+  });
+});
