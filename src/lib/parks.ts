@@ -198,8 +198,18 @@ export interface Held {
   status: string;
 }
 
-export function isAvailable(lot: Lot, want: DateRange, held: Held[]): boolean {
+export function isAvailable(
+  lot: Lot,
+  want: DateRange,
+  held: Held[],
+  /** The lot's effective season. Omit for year-round. */
+  season?: ParkSeason,
+): boolean {
   if (!lot.active || !isRealRange(want)) return false;
+  // A closed lot is not available, however empty it is. Checked BEFORE the
+  // clash scan because "the slips are out of the water" is a better answer
+  // than "somebody has it".
+  if (season && !parkOpenFor(season, want)) return false;
   return !held.some(
     (h) => (HOLDING_STATUSES as readonly string[]).includes(h.status) && overlaps(h.during, want),
   );
@@ -265,6 +275,59 @@ export interface ParkSeason {
  * so: an unknown LAKE season means we cannot tell if there is ice, while an
  * unconfigured PARK season means the park owner never told us they close.
  */
+/**
+ * The season that actually governs a lot.
+ *
+ * A lot with no window of its own inherits the park's; a park with none is
+ * year-round. Written as one function so the precedence lives in exactly one
+ * place — the alternative is every caller remembering the fallback, and the
+ * one that forgets sells a boat slip in January.
+ */
+export function effectiveSeason(
+  lot: Partial<ParkSeason> | null | undefined,
+  park: ParkSeason | null | undefined,
+): ParkSeason {
+  const complete = (s: Partial<ParkSeason> | null | undefined): s is ParkSeason =>
+    s != null &&
+    s.openMonth != null && s.openDay != null &&
+    s.closeMonth != null && s.closeDay != null;
+
+  if (complete(lot)) return lot;
+  if (complete(park)) return park;
+  return { openMonth: null, openDay: null, closeMonth: null, closeDay: null };
+}
+
+/** Does this season actually close, or is it year-round? */
+export function isSeasonal(season: ParkSeason): boolean {
+  return season.openMonth != null && season.openDay != null
+    && season.closeMonth != null && season.closeDay != null;
+}
+
+/**
+ * The first day AFTER the season, on or after `fromISO` — i.e. the checkout
+ * morning a stay must not run past.
+ *
+ * Half-open to match everything else: a season closing Oct 31 returns Nov 1,
+ * because the guest's last night is the 31st.
+ *
+ * Returns null for a year-round season, which means "nothing to clamp to".
+ */
+export function seasonEndAfter(fromISO: string, season: ParkSeason): string | null {
+  if (!isSeasonal(season)) return null;
+  const [y] = fromISO.split("-").map(Number);
+
+  // Try this year and the next: a stay starting in December under a Nov-Mar
+  // window closes in the FOLLOWING year.
+  for (const year of [y, y + 1]) {
+    const close = new Date(Date.UTC(year, season.closeMonth! - 1, season.closeDay!));
+    // The morning after the last night.
+    close.setUTCDate(close.getUTCDate() + 1);
+    const iso = close.toISOString().slice(0, 10);
+    if (iso > fromISO) return iso;
+  }
+  return null;
+}
+
 export function parkOpenFor(season: ParkSeason, want: DateRange): boolean {
   const { openMonth, openDay, closeMonth, closeDay } = season;
   if (openMonth == null || openDay == null || closeMonth == null || closeDay == null) return true;

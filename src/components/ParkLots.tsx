@@ -26,6 +26,8 @@ export interface LotView {
   hasSewer: boolean;
   slipIncluded: boolean;
   notes: string | null;
+  seasonOpen?: string;
+  seasonClose?: string;
   active: boolean;
   tier?: string;
   features?: string[];
@@ -59,6 +61,7 @@ const FEATURES = [
 const blank = (): LotFormInput => ({
   lotNumber: "", siteType: "rv_site", maxLengthFt: "", amperage: "",
   hasWater: true, hasSewer: true, slipIncluded: false, notes: "", active: true,
+  seasonOpen: "", seasonClose: "",
   tier: "standard", features: [],
 });
 
@@ -83,6 +86,8 @@ export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) 
       hasSewer: lot.hasSewer,
       slipIncluded: lot.slipIncluded,
       notes: lot.notes ?? "",
+      seasonOpen: lot.seasonOpen ?? "",
+      seasonClose: lot.seasonClose ?? "",
       active: lot.active,
       tier: lot.tier ?? "standard",
       features: lot.features ?? [],
@@ -318,6 +323,28 @@ function LotForm({
         <Check label="Water" checked={form.hasWater} onChange={(v) => set("hasWater", v)} />
         <Check label="Sewer" checked={form.hasSewer} onChange={(v) => set("hasSewer", v)} />
         <Check label="Boat slip included" checked={form.slipIncluded} onChange={(v) => set("slipIncluded", v)} />
+
+        {/* A LOT'S OWN SEASON. Blank means it follows the park — which for a
+            year-round park means year-round. Boat slips are the reason this
+            exists: they come out of the water while the pads beside them stay
+            open all winter. */}
+        <div style={{ gridColumn: "1 / -1", marginTop: 4 }}>
+          <div className="mut" style={{ fontSize: 13, marginBottom: 6 }}>
+            Season for this lot — leave blank to follow the park
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+              <span className="mut">Opens (MM-DD)</span>
+              <input value={form.seasonOpen ?? ""} placeholder="04-01"
+                onChange={(e) => set("seasonOpen", e.target.value)} style={{ marginTop: 4, maxWidth: 120 }} />
+            </label>
+            <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+              <span className="mut">Closes (MM-DD)</span>
+              <input value={form.seasonClose ?? ""} placeholder="10-31"
+                onChange={(e) => set("seasonClose", e.target.value)} style={{ marginTop: 4, maxWidth: 120 }} />
+            </label>
+          </div>
+        </div>
         <Check label="In service" checked={form.active} onChange={(v) => set("active", v)} />
       </div>
 

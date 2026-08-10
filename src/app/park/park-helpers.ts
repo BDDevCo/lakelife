@@ -12,6 +12,8 @@
 import {
   isAvailable, overlaps, parseDaterange, quoteStay, nightsIn,
   type DateRange, type Lot, type Term, type RateCard,
+  parkOpenFor,
+  type ParkSeason,
 } from "@/lib/parks";
 
 // ------------------------------------------------------------ rent roll ----
@@ -181,6 +183,7 @@ export function summarise(rows: RollRow[]): RollSummary {
 export type DecideProblem =
   | "not_pending"      // already decided — a double-tap, or two managers at once
   | "no_dates"         // the range never parsed; refuse rather than guess
+  | "out_of_season"    // the lot is closed for part of those dates
   | "lot_taken";       // another decided stay already holds these dates
 
 /**
@@ -197,6 +200,8 @@ export function canApprove(
   application: Stay,
   otherStays: Stay[],
   lot: Lot,
+  /** The lot's EFFECTIVE season (its own, else the park's). */
+  season?: ParkSeason,
 ): { ok: boolean; problem?: DecideProblem } {
   if (application.status !== "applied") return { ok: false, problem: "not_pending" };
   if (!application.range) return { ok: false, problem: "no_dates" };
@@ -213,9 +218,15 @@ export function canApprove(
 
   // Belt and braces: isAvailable also refuses an inactive lot and a nonsense
   // range, so the two answers can never disagree.
+  // A stay that runs outside the lot's season is refused with its own reason —
+  // "the slips are out of the water" is a better answer than "lot taken".
+  if (season && !parkOpenFor(season, application.range)) {
+    return { ok: false, problem: "out_of_season" };
+  }
+
   if (!isAvailable(lot, application.range, otherStays
     .filter((s) => s.id !== application.id && s.lotId === application.lotId)
-    .map((s) => ({ during: s.range ?? { start: "", end: "" }, status: s.status })))) {
+    .map((s) => ({ during: s.range ?? { start: "", end: "" }, status: s.status })), season)) {
     return { ok: false, problem: "lot_taken" };
   }
   return { ok: true };
@@ -225,6 +236,7 @@ export function decideProblemText(p: DecideProblem): string {
   switch (p) {
     case "not_pending": return "This application has already been decided.";
     case "no_dates":    return "This application has no usable dates — ask the renter to re-apply.";
+    case "out_of_season": return "That spot is closed for part of those dates — check the season on the lot.";
     case "lot_taken":   return "That lot is already taken for some of those nights.";
   }
 }
@@ -245,6 +257,12 @@ export interface LotFormInput {
   tier?: string;
   /** WHY it is worth more. Allowlisted — never free text. */
   features?: string[];
+  /**
+   * This lot's OWN season, as "MM-DD" strings. Blank on both = inherit the
+   * park's window. A slip is Apr-Oct while the pads beside it are year-round.
+   */
+  seasonOpen?: string;
+  seasonClose?: string;
 }
 
 export interface LotFormResult {
@@ -260,6 +278,10 @@ export interface LotFormResult {
     slip_included: boolean;
     notes: string | null;
     active: boolean;
+    season_open_month: number | null;
+    season_open_day: number | null;
+    season_close_month: number | null;
+    season_close_day: number | null;
     tier: string;
     features: string[];
   };
@@ -339,6 +361,9 @@ export function buildLotRow(input: LotFormInput): LotFormResult {
   }
 
   const notes = input.notes.trim();
+
+  const season = parseLotSeason(input.seasonOpen, input.seasonClose);
+  if (!season.ok) return { ok: false, error: season.error };
   if (notes.length > 500) return { ok: false, error: "Notes are a bit long — keep it under 500 characters." };
 
   const tier = (input.tier ?? "standard").trim() || "standard";
@@ -358,6 +383,7 @@ export function buildLotRow(input: LotFormInput): LotFormResult {
     row: {
       tier,
       features,
+      ...season.row,
       lot_number: lotNumber,
       site_type: input.siteType,
       max_length_ft: maxLengthFt,
@@ -367,6 +393,59 @@ export function buildLotRow(input: LotFormInput): LotFormResult {
       slip_included: input.slipIncluded,
       notes: notes || null,
       active: input.active,
+    },
+  };
+}
+
+/**
+ * A lot's own season, from two "MM-DD" strings.
+ *
+ * HALF A SEASON IS WORSE THAN NONE — an open date with no close reads as
+ * year-round and quietly sells a slip in February — so it is both or neither,
+ * and the database holds the same line.
+ */
+export interface LotSeasonRow {
+  season_open_month: number | null;
+  season_open_day: number | null;
+  season_close_month: number | null;
+  season_close_day: number | null;
+}
+
+export function parseLotSeason(
+  open: string | undefined,
+  close: string | undefined,
+): { ok: boolean; error?: string; row: LotSeasonRow } {
+  const blankRow: LotSeasonRow = {
+    season_open_month: null, season_open_day: null,
+    season_close_month: null, season_close_day: null,
+  };
+  const o = (open ?? "").trim();
+  const c = (close ?? "").trim();
+  if (!o && !c) return { ok: true, row: blankRow };
+  if (!o || !c) {
+    return { ok: false, error: "Give the season both an opening and a closing date, or leave both blank.", row: blankRow };
+  }
+
+  const parse = (v: string) => {
+    const m = /^(\d{1,2})-(\d{1,2})$/.exec(v);
+    if (!m) return null;
+    const month = Number(m[1]);
+    const day = Number(m[2]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return { month, day };
+  };
+
+  const po = parse(o);
+  const pc = parse(c);
+  if (!po || !pc) {
+    return { ok: false, error: "Season dates look like MM-DD — 04-01 for April 1st.", row: blankRow };
+  }
+
+  return {
+    ok: true,
+    row: {
+      season_open_month: po.month, season_open_day: po.day,
+      season_close_month: pc.month, season_close_day: pc.day,
     },
   };
 }

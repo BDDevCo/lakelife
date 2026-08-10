@@ -46,6 +46,11 @@ export interface AgreementTerms {
   maxAgreementMonths: number | null;
   /** What the park collects once per chain. NULL means none. */
   depositAmount: number | null;
+  /**
+   * The first morning AFTER this lot's season, when it has one. An agreement
+   * ends at whichever comes first — the term cap or the season close.
+   */
+  seasonEnd?: string | null;
 }
 
 /**
@@ -55,8 +60,18 @@ export interface AgreementTerms {
  * before this date, and it is checkout morning.
  */
 export function agreementEnd(startISO: string, terms: AgreementTerms): string | null {
-  if (terms.maxAgreementMonths == null) return null;
-  return addMonths(startISO, terms.maxAgreementMonths);
+  const capped = terms.maxAgreementMonths == null
+    ? null
+    : addMonths(startISO, terms.maxAgreementMonths);
+
+  // WHICHEVER COMES FIRST. A three-month slip agreement taken out in September
+  // would otherwise run to December, and the slips come out of the water in
+  // October. Selling somebody a slip for a month it does not exist is the kind
+  // of error that is discovered by the customer.
+  const season = terms.seasonEnd ?? null;
+  if (capped == null) return season;
+  if (season == null) return capped;
+  return season < capped ? season : capped;
 }
 
 export interface PriorAgreement {
@@ -73,7 +88,8 @@ export interface PriorAgreement {
 export type RenewalRefusal =
   | "no_cap"
   | "already_ended"
-  | "not_yet_renewable";
+  | "not_yet_renewable"
+  | "season_closed";
 
 export function renewalRefusalText(r: RenewalRefusal): string {
   switch (r) {
@@ -83,6 +99,8 @@ export function renewalRefusalText(r: RenewalRefusal): string {
       return "That agreement has already ended. Start a new one instead — it won't carry the old deposit.";
     case "not_yet_renewable":
       return "It's too early to renew this one.";
+    case "season_closed":
+      return "That spot is closed for the season. You can book it again when the season opens.";
   }
 }
 
@@ -127,7 +145,13 @@ export function planRenewal(
   if (terms.maxAgreementMonths == null) return { ok: false, refusal: "no_cap" };
 
   const start = startFrom ?? prior.end;
-  const end = addMonths(start, terms.maxAgreementMonths);
+  const end = agreementEnd(start, terms)!;
+
+  // A renewal that would begin after the season has already closed is not a
+  // renewal — there is nothing to renew into until the season opens again.
+  if (terms.seasonEnd != null && start >= terms.seasonEnd) {
+    return { ok: false, refusal: "season_closed" };
+  }
 
   // CONSECUTIVE means the next one begins the morning the last one ends. Not
   // "close to"; not "within a few days". A gap is a period during which the

@@ -41,6 +41,10 @@ export default async function ParkLotsPage() {
     tier: l.tier,
     features: l.features,
     rates: l.rates,
+    seasonOpen: l.season.openMonth != null
+      ? `${String(l.season.openMonth).padStart(2, "0")}-${String(l.season.openDay).padStart(2, "0")}` : "",
+    seasonClose: l.season.closeMonth != null
+      ? `${String(l.season.closeMonth).padStart(2, "0")}-${String(l.season.closeDay).padStart(2, "0")}` : "",
   }));
 
   return (

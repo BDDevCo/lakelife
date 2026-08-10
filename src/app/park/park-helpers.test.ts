@@ -7,6 +7,7 @@ import {
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
   buildTenantEdit,
   type TenantEditInput,
+  parseLotSeason,
 } from "./park-helpers";
 import { parseDaterange, toDaterange, type Lot } from "@/lib/parks";
 
@@ -735,5 +736,65 @@ describe("buildTenantEdit", () => {
     for (const b of [{ displayName: "   " }, { rent: "four hundred" }, { dueDay: "41" }]) {
       expect(bad(b).error, JSON.stringify(b)).toMatch(/[a-z]/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A LOT'S OWN SEASON. The Haven's slips come out of the water in October while
+// the pads beside them run year-round — a shape a park-level season alone
+// cannot express.
+// ---------------------------------------------------------------------------
+describe("parseLotSeason", () => {
+  const blank = {
+    season_open_month: null, season_open_day: null,
+    season_close_month: null, season_close_day: null,
+  };
+
+  it("blank on both means: inherit the park", () => {
+    expect(parseLotSeason("", "")).toEqual({ ok: true, row: blank });
+    expect(parseLotSeason(undefined, undefined)).toEqual({ ok: true, row: blank });
+  });
+
+  it("reads a real slip season", () => {
+    expect(parseLotSeason("04-01", "10-31").row).toEqual({
+      season_open_month: 4, season_open_day: 1,
+      season_close_month: 10, season_close_day: 31,
+    });
+  });
+
+  it("REFUSES half a season", () => {
+    // An open date with no close reads as year-round and sells a slip in
+    // February. Both or neither.
+    expect(parseLotSeason("04-01", "").ok).toBe(false);
+    expect(parseLotSeason("", "10-31").ok).toBe(false);
+    expect(parseLotSeason("04-01", "").error).toMatch(/both/i);
+  });
+
+  it("refuses nonsense dates in words", () => {
+    for (const bad of [["13-01", "10-31"], ["04-32", "10-31"], ["April", "October"], ["4/1", "10/31"]]) {
+      const r = parseLotSeason(bad[0], bad[1]);
+      expect(r.ok, bad.join(" ")).toBe(false);
+      expect(r.error).toBeTruthy();
+    }
+  });
+
+  it("carries the season onto the lot row", () => {
+    const r = buildLotRow({
+      lotNumber: "S1", siteType: "slip", maxLengthFt: "", amperage: "",
+      hasWater: false, hasSewer: false, slipIncluded: true, notes: "",
+      active: true, seasonOpen: "04-01", seasonClose: "10-31",
+    });
+    expect(r.ok).toBe(true);
+    expect(r.row!.season_open_month).toBe(4);
+    expect(r.row!.season_close_day).toBe(31);
+  });
+
+  it("leaves a year-round pad with no season at all", () => {
+    const r = buildLotRow({
+      lotNumber: "1", siteType: "mh_single", maxLengthFt: "", amperage: "",
+      hasWater: true, hasSewer: true, slipIncluded: false, notes: "",
+      active: true,
+    });
+    expect(r.row!.season_open_month).toBeNull();
   });
 });

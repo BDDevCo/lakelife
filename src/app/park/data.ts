@@ -5,7 +5,7 @@ import {
   buildRentRoll, summarise, toStay,
   type RawReservation, type RollRow, type RollSummary, type Stay,
 } from "./park-helpers";
-import { fromPrice, type Lot, type RateCard, type RenterUnit, type Term } from "@/lib/parks";
+import { fromPrice, type Lot, type RateCard, type RenterUnit, type Term, type ParkSeason } from "@/lib/parks";
 
 /**
  * Data for the park-owner back end. Reads are SERVICE-ROLE after asserting the
@@ -128,6 +128,8 @@ export interface LotWithRates {
   tier: string;
   features: string[];
   from: { term: Term; amount: number } | null;
+  /** This lot's OWN window. All-null means it inherits the park's. */
+  season: ParkSeason;
 }
 
 function toLot(row: Record<string, unknown>): Lot {
@@ -150,7 +152,7 @@ export async function getParkLots(parkId: string): Promise<LotWithRates[]> {
   const admin = createServiceClient();
   const { data: lotRows } = await admin
     .from("park_lots")
-    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, notes, active, tier, features")
+    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, notes, active, tier, features, season_open_month, season_open_day, season_close_month, season_close_day")
     .eq("park_id", parkId); // <- the scope
   const lots = lotRows ?? [];
   if (lots.length === 0) return [];
@@ -178,6 +180,12 @@ export async function getParkLots(parkId: string): Promise<LotWithRates[]> {
         tier: (row.tier as string | null) ?? "standard",
         features: (row.features as string[] | null) ?? [],
         from: fromPrice(rates),
+        season: {
+          openMonth:  (row.season_open_month  as number | null) ?? null,
+          openDay:    (row.season_open_day    as number | null) ?? null,
+          closeMonth: (row.season_close_month as number | null) ?? null,
+          closeDay:   (row.season_close_day   as number | null) ?? null,
+        },
       };
     })
     .sort((a, b) => compareLotNumbers(a.lot.lotNumber, b.lot.lotNumber));

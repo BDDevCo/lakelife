@@ -96,16 +96,18 @@ Ordered by when it bites.
    conservative placeholder. Nobody has confirmed Indiana's actual requirement
    for a mobile-home community, and the software deliberately does not guess.
 
-2. **Mixed seasonality.** Lot rent runs year-round; **boat slips are Apr–Oct**.
-   The season is currently a single park-level window
-   (`parks.season_open_month` …), which cannot express "lots year-round, slips
-   seasonal". `rangeForTerm` correctly refuses a seasonal tenancy with no
-   season configured — so slips will be refused until this is modelled.
+2. ~~**Mixed seasonality.**~~ **BUILT** (0063). A season can now live on the
+   LOT: all-null inherits the park's, and a park with none is year-round. So
+   the 21 pads stay year-round while the slips run Apr–Oct. An agreement ends
+   at whichever comes first, the 3-month cap or the season close — a September
+   slip stops on Nov 1 rather than running to December.
+
+4. ~~**Boat slips as inventory.**~~ Unblocked by the above: a slip is a lot
+   with `site_type='slip'` and its own season, priced from the rate card.
+   **Still to do:** the 28-section dock → 20 rentable slips is a lot-generator
+   run, and nobody has set the real slip numbers or the Apr–Oct dates yet.
 
 3. **RUBS / utility bill-back.** $16,000/yr, entirely unbuilt.
-
-4. **Boat slips as inventory.** 20 rentable slips off a 28-section dock.
-   `site_type = 'slip'` exists; nothing else does.
 
 5. **The park-owned double-wide (lot 7).** A home the park owns and rents at
    $1,200/mo — a *unit* tenancy, not a lot tenancy. Designed in phase 2, unbuilt.

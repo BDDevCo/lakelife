@@ -4,6 +4,7 @@ import { todayLakeDate } from "@/lib/booking";
 import {
   fromPrice, isAvailable, parseDaterange, parkOpenFor,
   type DateRange, type Lot, type RateCard, type Term,
+  effectiveSeason,
 } from "@/lib/parks";
 import { compareLotNumbers } from "@/app/park/data";
 
@@ -70,7 +71,7 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
 
   const { data: lotRows } = await admin
     .from("park_lots")
-    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active")
+    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, season_open_month, season_open_day, season_close_month, season_close_day")
     .eq("park_id", park.id)
     .eq("active", true);
   const lots = lotRows ?? [];
@@ -124,7 +125,25 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
         ...lot,
         rates,
         from: fromPrice(rates),
-        openNow: isAvailable(lot, tonight, heldBy.get(lot.id) ?? []),
+        // A SLIP IS NOT OPEN IN JANUARY, however empty it is. Its own window
+        // wins over the park's; the park's over year-round.
+        openNow: isAvailable(
+          lot, tonight, heldBy.get(lot.id) ?? [],
+          effectiveSeason(
+            {
+              openMonth:  (l.season_open_month  as number | null) ?? null,
+              openDay:    (l.season_open_day    as number | null) ?? null,
+              closeMonth: (l.season_close_month as number | null) ?? null,
+              closeDay:   (l.season_close_day   as number | null) ?? null,
+            },
+            {
+              openMonth:  (park.season_open_month  as number | null) ?? null,
+              openDay:    (park.season_open_day    as number | null) ?? null,
+              closeMonth: (park.season_close_month as number | null) ?? null,
+              closeDay:   (park.season_close_day   as number | null) ?? null,
+            },
+          ),
+        ),
       };
     })
     .sort((a, b) => compareLotNumbers(a.lotNumber, b.lotNumber));

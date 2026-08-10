@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
-import { toDaterange, type Lot } from "@/lib/parks";
+import { toDaterange, type Lot, effectiveSeason } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
 import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
@@ -455,7 +455,7 @@ export async function decideApplication(
   // CURRENT state, not what the page rendered a few minutes ago.
   const { data: lotRow } = await admin
     .from("park_lots")
-    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active")
+    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, park_id, season_open_month, season_open_day, season_close_month, season_close_day")
     .eq("id", scope.lotId)
     .maybeSingle();
   if (!lotRow) return { ok: false, error: "That lot is gone." };
@@ -464,6 +464,29 @@ export async function decideApplication(
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
     .eq("park_lot_id", scope.lotId);
+
+  // The lot's own window, else the park's. Without this a boat slip approves
+  // happily for a week in January.
+  const { data: parkRow } = await admin
+    .from("parks")
+    .select("season_open_month, season_open_day, season_close_month, season_close_day")
+    .eq("id", lotRow.park_id as string)
+    .maybeSingle();
+
+  const season = effectiveSeason(
+    {
+      openMonth:  (lotRow.season_open_month  as number | null) ?? null,
+      openDay:    (lotRow.season_open_day    as number | null) ?? null,
+      closeMonth: (lotRow.season_close_month as number | null) ?? null,
+      closeDay:   (lotRow.season_close_day   as number | null) ?? null,
+    },
+    {
+      openMonth:  (parkRow?.season_open_month  as number | null) ?? null,
+      openDay:    (parkRow?.season_open_day    as number | null) ?? null,
+      closeMonth: (parkRow?.season_close_month as number | null) ?? null,
+      closeDay:   (parkRow?.season_close_day   as number | null) ?? null,
+    },
+  );
 
   const check = canApprove(
     application,
@@ -479,6 +502,7 @@ export async function decideApplication(
       slipIncluded: !!lotRow.slip_included,
       active: !!lotRow.active,
     },
+    season,
   );
   if (!check.ok) return { ok: false, error: decideProblemText(check.problem!) };
 
