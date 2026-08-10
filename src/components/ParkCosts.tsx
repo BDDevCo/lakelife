@@ -23,7 +23,7 @@ const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const CATEGORIES: CostCategory[] = [
-  "water", "sewer", "trash", "common_electric", "grounds", "other",
+  "water", "sewer", "trash", "common_electric", "grounds", "unit_electric", "other",
 ];
 
 export function ParkCosts({

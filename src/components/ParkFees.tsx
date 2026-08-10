@@ -13,9 +13,12 @@ import {
 /**
  * FEES, AND WHETHER THEY COVER WHAT THEY CLAIM TO.
  *
- * The grounds fee is the one that matters: a single flat charge covering
- * water, sewer, trash, unmetered electric and maintenance. The resident pays a
- * number they can predict.
+ * The grounds fee is the one that matters: a single flat charge — an averaged
+ * prorated share — covering water, sewer, trash, park lighting and
+ * maintenance. The resident pays a number they can predict.
+ *
+ * Their own electricity is not in it: the utility meters each lot and bills
+ * them directly, so it never passes through the park at all.
  *
  * Which leaves one question, and it sits at the top of this screen because it
  * is the only one worth asking: IS IT SET RIGHT? A park charging $50 against
@@ -65,8 +68,13 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
       <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Fees</h2>
       <p className="mut" style={{ margin: "0 0 14px", lineHeight: 1.5, maxWidth: 640 }}>
         A flat charge on top of rent. Most parks run one grounds fee covering
-        water, sewer, trash, unmetered electric and maintenance — the resident
-        pays a number they can predict.
+        water, sewer, trash, park lighting and maintenance — the resident pays a
+        number they can predict.
+      </p>
+      <p className="mut" style={{ margin: "0 0 14px", lineHeight: 1.5, maxWidth: 640, fontSize: 13 }}>
+        A resident&apos;s own electricity isn&apos;t in here. The electric company
+        meters each lot and bills them directly, so it never passes through you —
+        the only power you pay for is on homes you own.
       </p>
 
       {/* ---- IS IT SET RIGHT. The only question worth asking. ------------- */}

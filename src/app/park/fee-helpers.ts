@@ -1,10 +1,16 @@
 /**
  * RECURRING FEES, AND WHETHER THEY ACTUALLY COVER WHAT THEY CLAIM TO.
  *
- * The owner's structure: one flat grounds fee per lot covering water, sewer,
- * trash, unmetered electricity and maintenance. A resident pays a number they
- * can predict; the park stops re-splitting twenty shares every time a bill
- * lands.
+ * The owner's structure: one flat grounds fee per lot — an averaged prorated
+ * share — covering water, sewer, trash, park lighting and maintenance. A
+ * resident pays a number they can predict; the park stops re-splitting twenty
+ * shares every time a bill lands.
+ *
+ * A RESIDENT'S OWN ELECTRICITY IS NOT IN HERE AND NEVER WAS. The electric
+ * company meters each lot and bills that household directly; the park is not
+ * in the loop. The only power the park pays for is on homes it OWNS, and that
+ * is `unit_electric` — the cost of that building, set against its rent rather
+ * than spread across everybody's fee.
  *
  * WHICH LEAVES ONE QUESTION WORTH ANSWERING, and it is the whole reason the
  * bills are still recorded: IS THE FEE SET RIGHT? A park charging $50 a lot
@@ -32,6 +38,14 @@ export interface ParkFee {
   active: boolean;
 }
 
+/**
+ * What a fee may be reconciled against.
+ *
+ * `unit_electric` is deliberately ABSENT: power for a park-owned home is the
+ * cost of that building and belongs against its rent, not spread across every
+ * lot's grounds fee. And a lot renter's own electricity never appears at all —
+ * the utility meters it and bills them directly.
+ */
 export const FEE_COVERS: CostCategory[] = [
   "water", "sewer", "trash", "common_electric", "grounds", "other",
 ];
@@ -43,7 +57,7 @@ export const COVER_LABEL: Record<string, string> = {
   water: "Water",
   sewer: "Sewer",
   trash: "Trash",
-  common_electric: "Unmetered electric",
+  common_electric: "Park lighting & common areas",
   grounds: "Grounds & mowing",
   maintenance: "Maintenance",
   snow: "Snow removal",

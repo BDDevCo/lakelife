@@ -23,14 +23,19 @@
  */
 
 export type CostCategory =
-  | "water" | "sewer" | "trash" | "common_electric" | "grounds" | "other";
+  | "water" | "sewer" | "trash" | "common_electric" | "grounds"
+  | "unit_electric" | "other";
 
 export const COST_CATEGORY_LABEL: Record<CostCategory, string> = {
   water: "Water",
   sewer: "Sewer",
   trash: "Trash",
-  common_electric: "Park lighting & common electric",
+  common_electric: "Park lighting & common areas",
   grounds: "Grounds & mowing",
+  // Power for a home the PARK owns and rents out. A lot renter's own
+  // electricity is metered and billed by the utility DIRECTLY to them — the
+  // park never sees it, and nothing here should imply otherwise.
+  unit_electric: "Electric on a home you own",
   other: "Other",
 };
 
