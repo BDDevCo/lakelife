@@ -55,6 +55,9 @@ export async function parkStreamStatuses(parkId: string): Promise<StreamStatus[]
     admin.from("park_costs").select("id").eq("park_id", parkId).limit(1),
   ]);
 
+  const { data: fees } = await admin
+    .from("park_fees").select("id").eq("park_id", parkId).eq("active", true);
+
   const all = lots ?? [];
   const live = all.filter((l) => (l.lifecycle as string) === "live");
 
@@ -79,7 +82,7 @@ export async function parkStreamStatuses(parkId: string): Promise<StreamStatus[]
       ["planned", "renovating"].includes(l.lifecycle as string)).length,
     lotsWithRates,
     costsRecorded: (costs ?? []).length,
-    feesConfigured: 0,   // fees are not built yet, and the template says so
+    feesConfigured: (fees ?? []).length,
   };
 
   return allStreamStatuses((park?.revenue_streams as string[]) ?? [], facts);

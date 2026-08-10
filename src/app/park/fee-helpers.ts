@@ -1,0 +1,183 @@
+/**
+ * RECURRING FEES, AND WHETHER THEY ACTUALLY COVER WHAT THEY CLAIM TO.
+ *
+ * The owner's structure: one flat grounds fee per lot covering water, sewer,
+ * trash, unmetered electricity and maintenance. A resident pays a number they
+ * can predict; the park stops re-splitting twenty shares every time a bill
+ * lands.
+ *
+ * WHICH LEAVES ONE QUESTION WORTH ANSWERING, and it is the whole reason the
+ * bills are still recorded: IS THE FEE SET RIGHT? A park charging $50 a lot
+ * against $71 of real cost is losing $21 per lot per month — $5,000 a year on
+ * twenty lots — and will not find out for a year unless something puts the two
+ * numbers side by side. This does that.
+ *
+ * The comparison is only possible because a fee declares WHAT IT COVERS in the
+ * same vocabulary the costs are recorded in. A fee labelled "utilities and
+ * stuff" could never be reconciled against anything.
+ */
+
+import type { CostCategory } from "./cost-helpers";
+
+export type FeeCadence = "monthly" | "per_stay" | "annual" | "one_time";
+export type FeeAppliesTo = "all_lots" | "long_term" | "short_term" | "opt_in";
+
+export interface ParkFee {
+  id: string;
+  label: string;
+  amount: number;
+  cadence: FeeCadence;
+  appliesTo: FeeAppliesTo;
+  covers: CostCategory[];
+  active: boolean;
+}
+
+export const FEE_COVERS: CostCategory[] = [
+  "water", "sewer", "trash", "common_electric", "grounds", "other",
+];
+
+/** Extra coverage words a fee may claim that are not billable cost categories. */
+export const FEE_EXTRA_COVERS = ["maintenance", "snow", "pest", "amenities"] as const;
+
+export const COVER_LABEL: Record<string, string> = {
+  water: "Water",
+  sewer: "Sewer",
+  trash: "Trash",
+  common_electric: "Unmetered electric",
+  grounds: "Grounds & mowing",
+  maintenance: "Maintenance",
+  snow: "Snow removal",
+  pest: "Pest control",
+  amenities: "Amenities",
+  other: "Other",
+};
+
+export const CADENCE_LABEL: Record<FeeCadence, string> = {
+  monthly: "a month",
+  per_stay: "per stay",
+  annual: "a year",
+  one_time: "one-off",
+};
+
+export const APPLIES_LABEL: Record<FeeAppliesTo, string> = {
+  all_lots: "every lot",
+  long_term: "lots people live on",
+  short_term: "nightly homes",
+  opt_in: "only who signs up",
+};
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * How many lots a fee actually lands on.
+ *
+ * An opt-in fee is counted from its assignments, never from the lot count —
+ * assuming everybody has a pet would overstate income by exactly the amount
+ * that makes a proforma wrong.
+ */
+export function payersFor(
+  fee: ParkFee,
+  counts: { longTerm: number; shortTerm: number; optedIn: number },
+): number {
+  switch (fee.appliesTo) {
+    case "all_lots":   return counts.longTerm + counts.shortTerm;
+    case "long_term":  return counts.longTerm;
+    case "short_term": return counts.shortTerm;
+    case "opt_in":     return counts.optedIn;
+  }
+}
+
+/** What a fee brings in per month. Non-monthly cadences are normalised. */
+export function monthlyIncome(fee: ParkFee, payers: number): number {
+  if (!fee.active) return 0;
+  const per =
+    fee.cadence === "monthly" ? fee.amount
+    : fee.cadence === "annual" ? fee.amount / 12
+    // A per-stay or one-off fee has no honest monthly figure without knowing
+    // turnover, and inventing one would quietly inflate the only number the
+    // owner is using to judge whether his fee covers his costs.
+    : 0;
+  return round2(per * payers);
+}
+
+export interface CoverageCheck {
+  /** What the fees covering this category bring in, per month. */
+  feeIncome: number;
+  /** What the park actually spent on it, per month. */
+  actualCost: number;
+  /** Positive = the fee covers it with room. Negative = the park is short. */
+  margin: number;
+  /** Categories the fee claims to cover but nothing has been spent on yet. */
+  unverified: CostCategory[];
+  /** Categories the park pays for that NO fee claims to cover. */
+  uncovered: CostCategory[];
+}
+
+/**
+ * Put the fee income and the real cost side by side.
+ *
+ * `monthsObserved` matters: three months of bills is $1,140 of water, not
+ * $1,140 a month. Getting that wrong would tell him he is losing money at four
+ * times the real rate, and a wrong alarm is worse than no alarm.
+ */
+export function checkCoverage(
+  fees: readonly ParkFee[],
+  payersByFee: ReadonlyMap<string, number>,
+  costs: readonly { category: CostCategory; amountPaid: number }[],
+  monthsObserved: number,
+): CoverageCheck {
+  const live = fees.filter((f) => f.active);
+
+  const claimed = new Set<CostCategory>();
+  for (const f of live) for (const c of f.covers) claimed.add(c);
+
+  // Only fees that cover at least one REAL cost category count toward the
+  // comparison — a fee purely for amenities has nothing here to be checked
+  // against and must not be credited against the water bill.
+  const feeIncome = round2(
+    live
+      .filter((f) => f.covers.some((c) => (FEE_COVERS as string[]).includes(c)))
+      .reduce((s, f) => s + monthlyIncome(f, payersByFee.get(f.id) ?? 0), 0),
+  );
+
+  const spentBy = new Map<CostCategory, number>();
+  for (const c of costs) {
+    spentBy.set(c.category, round2((spentBy.get(c.category) ?? 0) + c.amountPaid));
+  }
+
+  const months = Math.max(1, monthsObserved);
+  const actualCost = round2(
+    [...spentBy.entries()]
+      .filter(([cat]) => claimed.has(cat))
+      .reduce((s, [, amt]) => s + amt, 0) / months,
+  );
+
+  return {
+    feeIncome,
+    actualCost,
+    margin: round2(feeIncome - actualCost),
+    unverified: [...claimed].filter((c) => !spentBy.has(c)),
+    uncovered: [...spentBy.keys()].filter((c) => !claimed.has(c)),
+  };
+}
+
+/**
+ * The sentence that decides whether he changes the fee.
+ *
+ * Says the PER-LOT gap, not just the total — "$21 a lot short" is a number he
+ * can act on, where "$420 short" needs dividing before it means anything.
+ */
+export function coverageSummary(check: CoverageCheck, payers: number): string {
+  if (check.actualCost === 0) {
+    return check.feeIncome > 0
+      ? "No bills entered yet, so there's nothing to check this against."
+      : "No fees and no bills yet.";
+  }
+  if (payers === 0) return "Nobody is paying this yet.";
+
+  const perLot = round2(Math.abs(check.margin) / payers);
+  if (check.margin >= 0) {
+    return `Your fees bring in $${check.feeIncome.toFixed(2)} a month against $${check.actualCost.toFixed(2)} of real cost — ahead by $${perLot.toFixed(2)} a lot.`;
+  }
+  return `Your fees bring in $${check.feeIncome.toFixed(2)} a month against $${check.actualCost.toFixed(2)} of real cost — SHORT by $${perLot.toFixed(2)} a lot, $${Math.abs(check.margin).toFixed(2)} a month.`;
+}

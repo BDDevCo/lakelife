@@ -89,10 +89,13 @@ describe("The Haven, stream by stream", () => {
     expect(s.missing[0]).toMatch(/lots first/i);
   });
 
-  it("is honest that fees aren't built", () => {
+  it("points at the grounds fee as the usual first one", () => {
     const s = streamStatus("fees", true, HAVEN_DAY_ONE);
     expect(s.ready).toBe(false);
-    expect(s.missing[0]).toMatch(/aren't built/i);
+    expect(s.missing[0]).toMatch(/grounds fee/i);
+
+    // And once one exists, it is ready.
+    expect(streamStatus("fees", true, { ...HAVEN_DAY_ONE, feesConfigured: 1 }).ready).toBe(true);
   });
 });
 

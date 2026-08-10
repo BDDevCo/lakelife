@@ -165,7 +165,7 @@ export function streamStatus(
 
     case "fees":
       count = facts.feesConfigured;
-      if (count === 0) missing.push("Nothing here yet — fees aren't built");
+      if (count === 0) missing.push("Add a fee — a grounds fee covering water, sewer, trash and the rest is the usual one");
       break;
   }
 

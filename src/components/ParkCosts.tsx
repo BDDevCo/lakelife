@@ -27,11 +27,20 @@ const CATEGORIES: CostCategory[] = [
 ];
 
 export function ParkCosts({
-  parkId, rows, summary,
+  parkId, rows, summary, fees, recoveredByFee,
 }: {
   parkId: string;
   rows: CostRow[];
   summary: ReturnType<typeof recoveryByCategory>;
+  /** The fee section, rendered by the server page. */
+  fees?: React.ReactNode;
+  /**
+   * TRUE when a live fee already covers these costs. Without this the summary
+   * shouts "still yours" at a park that recovers everything through a flat
+   * grounds fee — technically true of the per-bill split, and completely
+   * misleading about the business.
+   */
+  recoveredByFee?: boolean;
 }) {
   const router = useRouter();
   const [busy, start] = useTransition();
@@ -65,11 +74,11 @@ export function ParkCosts({
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
-      <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Costs you pass on</h1>
+      <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Costs &amp; fees</h1>
       <p className="mut" style={{ marginTop: 0, lineHeight: 1.5, maxWidth: 640 }}>
-        Enter what a bill actually cost and it gets split across the lots that
-        were occupied. Nothing is estimated, nothing is marked up, and{" "}
-        <strong>you can never pass on more than you paid</strong>.
+        What the park pays, and what it charges. Enter your bills here and the
+        fee below gets checked against them — that comparison is the only
+        honest answer to &ldquo;is my grounds fee set right?&rdquo;
       </p>
 
       {/* ---- THE NUMBER THAT MATTERS: what is still yours. --------------- */}
@@ -79,7 +88,7 @@ export function ParkCosts({
             <Row label="you paid" value={money(summary.paid)} />
             <Row label="passed on" value={money(summary.recovered)} />
             <Row
-              label={summary.net < 0 ? "still yours" : "net"}
+              label={recoveredByFee ? "covered by your fee below" : summary.net < 0 ? "still yours" : "net"}
               value={money(Math.abs(summary.net))}
               strong
             />
@@ -99,9 +108,19 @@ export function ParkCosts({
             ))}
           </div>
           <p className="mut" style={{ fontSize: 13, marginTop: 12, marginBottom: 0, lineHeight: 1.5 }}>
-            A category showing the full amount as &ldquo;still yours&rdquo; is one
-            you haven&apos;t passed on — grounds and lighting are often deliberate,
-            water and trash usually aren&apos;t.
+            {recoveredByFee ? (
+              <>
+                You recover these through a flat fee rather than splitting each
+                bill, so &ldquo;back&rdquo; reads zero here on purpose. Whether
+                the fee actually covers them is the line below.
+              </>
+            ) : (
+              <>
+                A category showing the full amount as &ldquo;still yours&rdquo; is
+                one you haven&apos;t passed on — grounds and lighting are often
+                deliberate, water and trash usually aren&apos;t.
+              </>
+            )}
           </p>
         </section>
       )}
@@ -216,6 +235,8 @@ export function ParkCosts({
           )}
         </section>
       )}
+
+      {fees}
     </div>
   );
 }

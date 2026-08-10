@@ -2,9 +2,11 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { ParkNav } from "@/components/ParkNav";
 import { ParkCosts } from "@/components/ParkCosts";
+import { ParkFees } from "@/components/ParkFees";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { listCosts } from "@/app/park/cost-actions";
+import { listFees } from "@/app/park/fee-actions";
 
 export default async function ParkCostsPage() {
   if (!hasSupabaseEnv()) {
@@ -26,13 +28,22 @@ export default async function ParkCostsPage() {
     );
   }
 
-  const { rows, summary } = await listCosts(park.id);
+  const [{ rows, summary }, feesPage] = await Promise.all([
+    listCosts(park.id),
+    listFees(park.id),
+  ]);
 
   return (
     <>
       <TopBar />
       <ParkNav parkName={park.name} live={park.active} />
-      <ParkCosts parkId={park.id} rows={rows} summary={summary} />
+      <ParkCosts
+        parkId={park.id}
+        rows={rows}
+        summary={summary}
+        recoveredByFee={feesPage.fees.some((f) => f.active && f.covers.length > 0)}
+        fees={<ParkFees parkId={park.id} page={feesPage} />}
+      />
     </>
   );
 }
