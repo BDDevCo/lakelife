@@ -67,6 +67,9 @@ export default async function ParkPage() {
     currentUnit: r.current?.renterUnitId ? roll.units.get(r.current.renterUnitId)?.label ?? null : null,
     currentUntil: r.current?.range?.end ?? null,
     currentReservationId: r.current?.id ?? null,
+    currentRent: r.current?.quotedAmount ?? null,
+    currentDueDay: r.current?.dueDay ?? null,
+    currentSource: r.current?.amountSource ?? null,
     // A countdown is only true for a SHORT stay. A month-to-month tenant's end
     // date is a rolling horizon we write silently (phase 2 design §1h) — it is
     // not a lease end, and "365 nights left" reads like one. Say the honest

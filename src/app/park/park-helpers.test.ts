@@ -5,6 +5,8 @@ import {
   planBulkRates, buildTenant,
   type BulkRateTarget, type TenantInput,
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
+  buildTenantEdit,
+  type TenantEditInput,
 } from "./park-helpers";
 import { parseDaterange, toDaterange, type Lot } from "@/lib/parks";
 
@@ -641,6 +643,97 @@ describe("buildTenant — the tenant who was already there", () => {
       const res = buildTenant(input({ movedInOn: start }), "2027-01-01");
       const back = parseDaterange(toDaterange({ start: res.tenancy!.start, end: res.tenancy!.end }));
       expect(back).toEqual({ start: res.tenancy!.start, end: res.tenancy!.end });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EDITING A TENANT. The importer's receipt promises the seller-roll figure will
+// split as he confirms people at the window. This is the only thing that can
+// make that true, so the provenance rules are the test.
+// ---------------------------------------------------------------------------
+describe("buildTenantEdit", () => {
+  const TODAY = "2026-08-09";
+  const current = { rent: 385, dueDay: 1 };
+
+  it("fixes a typo without touching the money or its provenance", () => {
+    const r = buildTenantEdit(
+      { displayName: "Wexler, Donna", rent: "385", dueDay: "1", confirmedWithTenant: false },
+      current, TODAY,
+    );
+    expect(r.ok).toBe(true);
+    expect(r.renter!.display_name).toBe("Wexler, Donna");
+    expect(r.tenancy!.quoted_amount).toBe(385);
+    // THE ONE THAT MATTERS: an unchanged amount keeps its provenance. If a name
+    // edit promoted a seller's number, the "still exposed on" figure would
+    // decay to zero by accident and stop meaning anything.
+    expect(r.tenancy!.amount_source).toBeUndefined();
+    expect(r.renter!.confirmed_at).toBeNull();
+  });
+
+  it("a rent he retypes becomes HIS number, not the seller's", () => {
+    const r = buildTenantEdit(
+      { displayName: "Wexler, Donna", rent: "410", dueDay: "1", confirmedWithTenant: false },
+      current, TODAY,
+    );
+    expect(r.tenancy!.quoted_amount).toBe(410);
+    expect(r.tenancy!.amount_source).toBe("owner_knowledge");
+  });
+
+  it("confirming with the tenant is the only thing that reaches tenant_confirmed", () => {
+    const r = buildTenantEdit(
+      { displayName: "Wexler, Donna", rent: "385", dueDay: "1", confirmedWithTenant: true },
+      current, TODAY,
+    );
+    // Unchanged number, but CONFIRMED — proving the seller right is worth
+    // exactly as much as correcting him.
+    expect(r.tenancy!.quoted_amount).toBe(385);
+    expect(r.tenancy!.amount_source).toBe("tenant_confirmed");
+    expect(r.renter!.confirmed_at).toBe(TODAY);
+  });
+
+  it("confirmation beats a correction when he does both at once", () => {
+    const r = buildTenantEdit(
+      { displayName: "Wexler, Donna", rent: "410", dueDay: "1", confirmedWithTenant: true },
+      current, TODAY,
+    );
+    expect(r.tenancy!.amount_source).toBe("tenant_confirmed");
+  });
+
+  it("lets him clear a rent he doesn't actually know", () => {
+    const r = buildTenantEdit(
+      { displayName: "Wexler, Donna", rent: "", dueDay: "1", confirmedWithTenant: false },
+      current, TODAY,
+    );
+    expect(r.tenancy!.quoted_amount).toBeNull();
+    expect(r.tenancy!.amount_source).toBe("owner_knowledge");
+  });
+
+  it("accepts money the way people type it", () => {
+    for (const [typed, want] of [["$1,250.00", 1250], ["410 ", 410], ["385.50", 385.5]] as const) {
+      const r = buildTenantEdit(
+        { displayName: "X Y", rent: typed, dueDay: "", confirmedWithTenant: false },
+        current, TODAY,
+      );
+      expect(r.tenancy!.quoted_amount, typed).toBe(want);
+    }
+  });
+
+  it("refuses what the database would refuse anyway, in words", () => {
+    const bad = (over: Partial<TenantEditInput>) =>
+      buildTenantEdit(
+        { displayName: "X Y", rent: "385", dueDay: "1", confirmedWithTenant: false, ...over },
+        current, TODAY,
+      );
+    expect(bad({ displayName: "   " }).ok).toBe(false);
+    expect(bad({ displayName: "x".repeat(121) }).ok).toBe(false);
+    expect(bad({ rent: "four hundred" }).ok).toBe(false);
+    expect(bad({ rent: "-5" }).ok).toBe(false);
+    expect(bad({ dueDay: "41" }).ok).toBe(false);   // lot_res_due_day_check
+    expect(bad({ dueDay: "0" }).ok).toBe(false);
+    expect(bad({ dueDay: "2.5" }).ok).toBe(false);
+    for (const b of [{ displayName: "   " }, { rent: "four hundred" }, { dueDay: "41" }]) {
+      expect(bad(b).error, JSON.stringify(b)).toMatch(/[a-z]/);
     }
   });
 });

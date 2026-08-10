@@ -4,8 +4,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
-import { decideApplication, endTenancy, setParkLive, addTenant } from "@/app/park/actions";
-import type { TenantInput } from "@/app/park/park-helpers";
+import { decideApplication, endTenancy, setParkLive, addTenant, editTenancy } from "@/app/park/actions";
+import type { TenantInput, TenantEditInput } from "@/app/park/park-helpers";
 
 /**
  * The park owner's home screen: every lot, who is on it, and who is asking.
@@ -26,6 +26,10 @@ export interface RollRowView {
   currentUnit: string | null;
   currentUntil: string | null;
   currentReservationId: string | null;
+  currentRent: number | null;
+  currentDueDay: number | null;
+  /** 'seller_roll' until a human confirms it — the rent roll shows its work. */
+  currentSource: string | null;
   nightsLeft: number | null;
   /** A month-to-month tenancy: no real end date, so no countdown. */
   rolling?: boolean;
@@ -92,6 +96,7 @@ export function ParkRentRoll({
   const [pending, startTransition] = useTransition();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [addingTo, setAddingTo] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   function decide(id: string, decision: "approve" | "decline") {
     setBusyId(id);
@@ -278,6 +283,16 @@ export function ParkRentRoll({
                     {r.currentReservationId && (
                       <button
                         className="ll-btn ghost"
+                        onClick={() =>
+                          setEditingId(editingId === r.currentReservationId ? null : r.currentReservationId)
+                        }
+                      >
+                        {editingId === r.currentReservationId ? "Cancel" : "Edit"}
+                      </button>
+                    )}
+                    {r.currentReservationId && (
+                      <button
+                        className="ll-btn ghost"
                         onClick={() => close(r.currentReservationId!)}
                         disabled={pending && busyId === r.currentReservationId}
                       >
@@ -292,6 +307,17 @@ export function ParkRentRoll({
                     )}
                   </div>
                 </div>
+
+                {editingId && editingId === r.currentReservationId && (
+                  <EditTenant
+                    reservationId={r.currentReservationId}
+                    name={r.currentRenter ?? ""}
+                    rent={r.currentRent}
+                    dueDay={r.currentDueDay}
+                    source={r.currentSource}
+                    onDone={() => setEditingId(null)}
+                  />
+                )}
 
                 {addingTo === r.lotId && (
                   <AddTenant
@@ -399,6 +425,92 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
       <div className="mut" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</div>
       <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.1, marginTop: 2 }}>{value}</div>
       {sub && <div className="mut" style={{ fontSize: 12 }}>{sub}</div>}
+    </div>
+  );
+}
+
+/**
+ * Correcting somebody already on the roll.
+ *
+ * The tick at the bottom is the point of this form. The importer puts 79 names
+ * in off a seller's spreadsheet and the receipt tells him, honestly, that $0 of
+ * it is confirmed. This is the only thing in the product that can move that
+ * number — and it only moves when he says he actually checked.
+ */
+function EditTenant({
+  reservationId, name, rent, dueDay, source, onDone,
+}: {
+  reservationId: string;
+  name: string;
+  rent: number | null;
+  dueDay: number | null;
+  source: string | null;
+  onDone: () => void;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [form, setForm] = useState<TenantEditInput>({
+    displayName: name,
+    rent: rent == null ? "" : String(rent),
+    dueDay: dueDay == null ? "" : String(dueDay),
+    confirmedWithTenant: false,
+  });
+  const set = <K extends keyof TenantEditInput>(k: K, v: TenantEditInput[K]) =>
+    setForm((f) => ({ ...f, [k]: v }));
+
+  function save() {
+    startTransition(async () => {
+      const res = await editTenancy(reservationId, form);
+      if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
+      toast(res.signal ?? "Saved.");
+      onDone();
+      router.refresh();
+    });
+  }
+
+  return (
+    <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Name</span>
+          <input value={form.displayName} onChange={(e) => set("displayName", e.target.value)}
+            style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Rent</span>
+          <input value={form.rent} inputMode="decimal" placeholder="Not set"
+            onChange={(e) => set("rent", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Due day</span>
+          <input value={form.dueDay} inputMode="numeric" placeholder="1"
+            onChange={(e) => set("dueDay", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+      </div>
+
+      {source === "seller_roll" && (
+        <p className="mut" style={{ fontSize: 13, marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>
+          This number came off the seller&apos;s roll. It counts as unconfirmed on your
+          rent roll until you&apos;ve checked it with them.
+        </p>
+      )}
+
+      <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 12, fontSize: 14 }}>
+        <input type="checkbox" checked={form.confirmedWithTenant} style={{ marginTop: 3 }}
+          onChange={(e) => set("confirmedWithTenant", e.target.checked)} />
+        <span>
+          I&apos;ve confirmed this with them.
+          <span className="mut"> Tick this only if you&apos;ve actually asked — it&apos;s what moves
+          this off the seller&apos;s numbers.</span>
+        </span>
+      </label>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button className="ll-btn" onClick={save} disabled={pending}>
+          {pending ? "Saving…" : "Save"}
+        </button>
+        <button className="ll-btn ghost" onClick={onDone} disabled={pending}>Cancel</button>
+      </div>
     </div>
   );
 }

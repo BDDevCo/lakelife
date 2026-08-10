@@ -8,9 +8,9 @@ import { todayLakeDate } from "@/lib/booking";
 import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
-  buildLotRange, planBulkRates, buildTenant,
+  buildLotRange, planBulkRates, buildTenant, buildTenantEdit,
   type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
-  type TenantInput,
+  type TenantInput, type TenantEditInput,
 } from "./park-helpers";
 
 /**
@@ -516,4 +516,82 @@ export async function endTenancy(reservationId: string, reason: "ended" | "cance
 
   revalidatePath("/park");
   return { ok: true, signal: reason === "ended" ? "Tenancy closed out." : "Reservation cancelled." };
+}
+
+/**
+ * Correct a tenant already on the roll — the typo, the rent, the due day, and
+ * the one that matters: whether he has actually confirmed this with the person
+ * standing in front of him.
+ *
+ * Writes to two tables and they are NOT symmetric. The name lives on the
+ * renter file; the money lives on the tenancy. A failure on the second must
+ * not silently leave the first applied and report success.
+ */
+export async function editTenancy(
+  reservationId: string,
+  input: TenantEditInput,
+): Promise<ParkResult> {
+  const scope = await assertReservationIsMine(reservationId);
+  if (!scope) return { ok: false, error: DENIED };
+
+  const admin = createServiceClient();
+  const { data: res } = await admin
+    .from("lot_reservations")
+    .select("id, renter_id, quoted_amount, due_day, status")
+    .eq("id", reservationId)
+    .maybeSingle();
+  if (!res) return { ok: false, error: "That tenancy is gone." };
+
+  const built = buildTenantEdit(
+    input,
+    {
+      rent: res.quoted_amount == null ? null : Number(res.quoted_amount),
+      dueDay: (res.due_day as number | null) ?? null,
+    },
+    todayLakeDate(),
+  );
+  if (!built.ok || !built.renter || !built.tenancy) {
+    return { ok: false, error: built.error };
+  }
+
+  // The money first. If this fails we have changed nothing, which is the state
+  // that is easiest to explain and easiest to retry.
+  const tenancyPatch: Record<string, unknown> = {
+    quoted_amount: built.tenancy.quoted_amount,
+    due_day: built.tenancy.due_day,
+  };
+  if (built.tenancy.amount_source) {
+    tenancyPatch.amount_source = built.tenancy.amount_source;
+    tenancyPatch.amount_source_at = new Date().toISOString();
+  }
+
+  const { error: tErr } = await admin
+    .from("lot_reservations")
+    .update(tenancyPatch)
+    .eq("id", reservationId);
+  if (tErr) return { ok: false, error: "Couldn't save that — try again." };
+
+  const renterPatch: Record<string, unknown> = { display_name: built.renter.display_name };
+  if (built.renter.confirmed_at) renterPatch.confirmed_at = new Date().toISOString();
+  if (input.confirmedWithTenant) renterPatch.source = "tenant_confirmed";
+
+  const { error: rErr } = await admin
+    .from("park_renters")
+    .update(renterPatch)
+    .eq("id", res.renter_id as string);
+  if (rErr) {
+    // Say so rather than reporting a clean save. The money DID move.
+    return {
+      ok: false,
+      error: "The rent saved, but the name didn't. Try the name again.",
+    };
+  }
+
+  revalidatePath("/park");
+  return {
+    ok: true,
+    signal: input.confirmedWithTenant
+      ? `Confirmed with ${built.renter.display_name}. That's off the seller's roll now.`
+      : "Saved.",
+  };
 }

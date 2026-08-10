@@ -25,6 +25,10 @@ export interface RawReservation {
   during: string | null; // Postgres daterange text
   term: string;
   quoted_amount: number | null;
+  /** Optional: rows written before 0059 carry neither. */
+  due_day?: number | null;
+  /** WHERE THE NUMBER CAME FROM. The rent roll shows its work with this. */
+  amount_source?: string | null;
   status: string;
   decided_at: string | null;
   created_at: string | null;
@@ -40,6 +44,8 @@ export interface Stay {
   range: DateRange | null;
   term: Term;
   quotedAmount: number | null;
+  dueDay: number | null;
+  amountSource: string | null;
   status: string;
   decidedAt: string | null;
   createdAt: string | null;
@@ -54,6 +60,8 @@ export function toStay(r: RawReservation): Stay {
     range: parseDaterange(r.during),
     term: r.term as Term,
     quotedAmount: r.quoted_amount,
+    dueDay: r.due_day ?? null,
+    amountSource: r.amount_source ?? null,
     status: r.status,
     decidedAt: r.decided_at,
     createdAt: r.created_at,
@@ -812,4 +820,113 @@ export function previewStayValue(
 ): number | null {
   if (!range) return null;
   return quoteStay(rates, term, range);
+}
+
+// ------------------------------------------------------- editing a tenant ---
+
+/**
+ * Correcting a tenant already on the roll.
+ *
+ * WHY THIS EXISTS, beyond fixing a typo. The importer writes 79 names straight
+ * off a seller's spreadsheet and the receipt tells him the truth about them:
+ *
+ *   $9,965  expected each month
+ *       $0  confirmed by tenants
+ *   $9,965  from the seller's roll only
+ *
+ *   "As you confirm them at the window over the next month, this splits."
+ *
+ * Nothing could make that split happen. `amount_source` went in as
+ * 'seller_roll' and there was no path to any other value, so the bottom line
+ * would have read $9,965 forever and the promise on the receipt was one the
+ * software could not keep. This is that path.
+ */
+export interface TenantEditInput {
+  displayName: string;
+  rent: string;
+  dueDay: string;
+  /** He has stood in front of this person and checked the number. */
+  confirmedWithTenant: boolean;
+}
+
+export interface TenantEditResult {
+  ok: boolean;
+  error?: string;
+  renter?: { display_name: string; confirmed_at: string | null };
+  tenancy?: {
+    quoted_amount: number | null;
+    due_day: number | null;
+    /** Only set when the amount actually MOVED. */
+    amount_source?: string;
+  };
+}
+
+/**
+ * The rent's provenance follows who last touched it, and it is never upgraded
+ * for free:
+ *
+ *   he retyped it            -> 'owner_knowledge'   (better than the seller)
+ *   he confirmed it with her -> 'tenant_confirmed'  (the only one that counts)
+ *   he changed neither       -> left exactly as it was
+ *
+ * That last line is the important one. Opening a row, changing the spelling of
+ * a name and saving must NOT promote a seller's number to a confirmed one —
+ * otherwise the "still exposed on" figure decays to zero by accident and the
+ * one honest number on the rent roll becomes decorative.
+ */
+export function buildTenantEdit(
+  input: TenantEditInput,
+  current: { rent: number | null; dueDay: number | null },
+  todayISO: string,
+): TenantEditResult {
+  const displayName = input.displayName.trim();
+  if (!displayName) return { ok: false, error: "A tenant needs a name." };
+  if (displayName.length > 120) return { ok: false, error: "That name is too long." };
+
+  const rentRaw = input.rent.trim();
+  let quoted: number | null = current.rent;
+  if (rentRaw === "") {
+    // Clearing a rent is legitimate — "I don't actually know what she pays" is
+    // a truer state than a number he made up.
+    quoted = null;
+  } else {
+    const n = Number(rentRaw.replace(/[$,\s]/g, ""));
+    if (!Number.isFinite(n)) return { ok: false, error: "That rent isn't a number." };
+    if (n < 0) return { ok: false, error: "A rent can't be negative." };
+    if (n > 100000) return { ok: false, error: "That rent looks like a typo." };
+    quoted = Math.round(n * 100) / 100;
+  }
+
+  const dayRaw = input.dueDay.trim();
+  let dueDay: number | null = current.dueDay;
+  if (dayRaw === "") {
+    dueDay = null;
+  } else {
+    const d = Number(dayRaw);
+    if (!Number.isInteger(d) || d < 1 || d > 31) {
+      return { ok: false, error: "Rent is due on a day between 1 and 31." };
+    }
+    dueDay = d;
+  }
+
+  const amountMoved = quoted !== current.rent;
+
+  const tenancy: TenantEditResult["tenancy"] = { quoted_amount: quoted, due_day: dueDay };
+  if (input.confirmedWithTenant) {
+    // The only value that reduces what he is exposed on. Requires him to say
+    // he checked, and applies whether or not the number changed — confirming
+    // that the seller was RIGHT is exactly as valuable as correcting him.
+    tenancy.amount_source = "tenant_confirmed";
+  } else if (amountMoved) {
+    tenancy.amount_source = "owner_knowledge";
+  }
+
+  return {
+    ok: true,
+    renter: {
+      display_name: displayName,
+      confirmed_at: input.confirmedWithTenant ? todayISO : null,
+    },
+    tenancy,
+  };
 }
