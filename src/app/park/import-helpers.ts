@@ -182,6 +182,8 @@ export interface PlannedRow {
   amount: number | null;
   term: Term;
   range: DateRange | null;
+  /** He decided to leave this one out. Not a failure — an answer. */
+  skipped: boolean;
   /** Why this row will not be written. Empty means it will. */
   blockers: ImportBlocker[];
   /** True things worth saying, that stop nothing. */
@@ -212,6 +214,24 @@ export interface LiveStay {
   range: DateRange;
 }
 
+/**
+ * What he answered on the screen. Stored beside the parse, never over it —
+ * what we proposed and what he confirmed are different facts, and the
+ * difference is the provenance.
+ */
+export interface RowOverride {
+  /** A name he typed for a row we refused to guess at. */
+  name?: string;
+  /** A rent he typed. `null` means "there isn't one", which is legitimate. */
+  rent?: number | null;
+  /** Leave this row out entirely. A real answer, not a failure. */
+  skip?: boolean;
+  /** Create the lot this row names. */
+  createLot?: string;
+  /** Of the rows claiming one lot, this is the one who lives there now. */
+  current?: boolean;
+}
+
 export interface PlanInput {
   rows: ParsedRow[];
   lots: readonly ExistingLot[];
@@ -220,6 +240,8 @@ export interface PlanInput {
   season: SeasonWindow | null;
   /** Labels the owner explicitly asked us to create. */
   approvedNewLots?: readonly string[];
+  /** Keyed by the row's first source line. */
+  overrides?: Record<number, RowOverride>;
 }
 
 /**
@@ -245,29 +267,56 @@ export function planImport(input: PlanInput): ImportPlan {
   // called 34B" is a question with an answer ("create it"), while "we couldn't
   // find a lot on this line" is a different question entirely. Collapsing the
   // two would offer him "create lot " with nothing after it.
+  const overrides = input.overrides ?? {};
   const resolved = rows.map((r) => {
-    const rawLabel = r.lot.value ?? readableLabel(r.lot.raw);
+    const o = overrides[r.lines[0]] ?? {};
+    const rawLabel = r.lot.value ?? o.createLot ?? readableLabel(r.lot.raw);
     const real = normaliseLotLabel(rawLabel, realLabels);
-    return { row: r, rawLabel, real };
+    return { row: r, rawLabel, real, o };
   });
 
+  // ---- which rows are OUT. Two ways: he said skip, or he picked somebody
+  // else as the current tenant of a lot two rows both claimed.
+  const currentByLot = new Map<string, number>();
+  for (const r of resolved) {
+    const key = r.real ?? r.rawLabel;
+    if (key && r.o.current) currentByLot.set(key, r.row.lines[0]);
+  }
+
+  const isSkipped = (r: (typeof resolved)[number]) => {
+    if (r.o.skip) return true;
+    const key = r.real ?? r.rawLabel;
+    const winner = key ? currentByLot.get(key) : undefined;
+    // Somebody else on this lot was named current, so this row steps aside.
+    return winner != null && winner !== r.row.lines[0];
+  };
+
+  // Counted AFTER skips, so answering "Fry lives there now" actually unblocks
+  // Fry's row instead of leaving both of them stuck forever.
   const timesUsed = new Map<string, number>();
   for (const r of resolved) {
+    if (isSkipped(r)) continue;
     const key = r.real ?? r.rawLabel;
     if (key) timesUsed.set(key, (timesUsed.get(key) ?? 0) + 1);
   }
 
   // ---- pass 2: plan each row.
-  const planned: PlannedRow[] = resolved.map(({ row, rawLabel, real }) => {
+  const planned: PlannedRow[] = resolved.map((entry) => {
+    const { row, rawLabel, real, o } = entry;
     const blockers: ImportBlocker[] = [];
     const label = real ?? rawLabel;
     const term = (row.term.value ?? "monthly") as Term;
     const range = rangeForTerm(term, cutoverISO, season);
+    const skipped = isSkipped(entry);
+
+    // What he typed wins over what we read, always.
+    const name = o.name?.trim() || row.name.value;
+    const amount = o.rent !== undefined ? o.rent : row.rent.value;
 
     if (!label) blockers.push("no_lot");
     else if (label.length > MAX_LOT_LABEL) blockers.push("label_too_long");
 
-    if (!row.name.value) blockers.push("no_name");
+    if (!name) blockers.push("no_name");
 
     // A lot we do not have. NOT an error — people rent two things, and a
     // storage row for lot 34B is a real row. It is a question, and it stops
@@ -280,8 +329,12 @@ export function planImport(input: PlanInput): ImportPlan {
 
     // Present-and-refused is NOT absent. Absent rent is fine forever; a rent we
     // read and could not convert must stop the row, or "4l0.00" imports as no
-    // rent at all and $410 quietly vanishes from the roll.
-    if (row.rent.confidence === "unknown" && row.rent.raw.trim() !== "") {
+    // rent at all and $410 quietly vanishes from the roll. Answered, it clears.
+    if (
+      o.rent === undefined &&
+      row.rent.confidence === "unknown" &&
+      row.rent.raw.trim() !== ""
+    ) {
       blockers.push("bad_amount");
     }
 
@@ -305,10 +358,11 @@ export function planImport(input: PlanInput): ImportPlan {
       lotLabel: label,
       matchedLotId: lotId,
       createsLot: Boolean(label) && !real,
-      name: row.name.value,
-      amount: row.rent.value,
+      name,
+      amount,
       term,
       range,
+      skipped,
       blockers,
       // The parser's own reasons, carried verbatim. They are already sentences.
       flags: [...row.askReasons],
@@ -316,8 +370,10 @@ export function planImport(input: PlanInput): ImportPlan {
     };
   });
 
-  const ready = planned.filter((p) => p.blockers.length === 0);
-  const needsYou = planned.filter((p) => p.blockers.length > 0);
+  // A skipped row is neither ready nor a question. It is a decision he made,
+  // and it still appears in `rows` so the accounting never loses it.
+  const ready = planned.filter((p) => !p.skipped && p.blockers.length === 0);
+  const needsYou = planned.filter((p) => !p.skipped && p.blockers.length > 0);
 
   const lotsToCreate = [
     ...new Set(ready.filter((p) => p.createsLot && p.lotLabel).map((p) => p.lotLabel!)),
@@ -374,8 +430,43 @@ export interface TotalsCheck {
   computed: number;
   difference: number;
   ties: boolean;
-  /** Lots with no amount — when the gap is one lot's rent, this is the culprit. */
   lotsWithNoAmount: string[];
+  /**
+   * The lot the gap almost certainly belongs to — set ONLY when the shortfall
+   * genuinely looks like one missing rent. Null the rest of the time, and null
+   * is the honest answer.
+   *
+   * Saying "that's exactly one lot's rent" about a $100 gap, on a sheet whose
+   * rents are all $370-$410, is a confident lie that sends him to the wrong
+   * lot. The claim has to be earned by the arithmetic.
+   */
+  oneMissingRent: string | null;
+  /**
+   * A likelier explanation when his total is LOWER than his own rows: a lot
+   * appears twice, so we are counting somebody he counted once.
+   */
+  doubleCountedLots: string[];
+}
+
+/**
+ * The number the seller wrote at the bottom of his own sheet.
+ *
+ * Evidence, never authority — it is the one figure on the page we can check
+ * HIS arithmetic against, and a total that ties proves his spreadsheet adds up
+ * and nothing more. Takes the LARGEST amount on the totals lines, because a
+ * totals row often carries a lot count and a column of subtotals beside the
+ * figure that matters.
+ */
+export function statedTotalFrom(lines: readonly string[]): number | null {
+  let best: number | null = null;
+  for (const line of lines) {
+    for (const m of line.matchAll(/\$?\s*(\d[\d,]*(?:\.\d{1,2})?)/g)) {
+      const n = Number(m[1].replace(/,/g, ""));
+      // Below this it is a lot count or a page number, not a rent roll total.
+      if (Number.isFinite(n) && n >= 100 && (best == null || n > best)) best = n;
+    }
+  }
+  return best;
 }
 
 export function checkTotals(
@@ -385,11 +476,34 @@ export function checkTotals(
   if (stated == null) return null;
   const computed = rows.reduce((s, r) => s + (r.amount ?? 0), 0);
   const difference = Math.round((stated - computed) * 100) / 100;
+  const ties = Math.abs(difference) < 0.005;
+
+  const lotsWithNoAmount = rows
+    .filter((r) => r.amount == null && r.lotLabel)
+    .map((r) => r.lotLabel!);
+
+  const amounts = rows.map((r) => r.amount).filter((n): n is number => n != null);
+
+  // BOTH conditions, or we say nothing: the sheet is SHORT, and short by an
+  // amount that actually sits inside the range of rents on this very sheet.
+  let oneMissingRent: string | null = null;
+  if (!ties && difference > 0 && lotsWithNoAmount.length === 1 && amounts.length > 0) {
+    const lo = Math.min(...amounts);
+    const hi = Math.max(...amounts);
+    if (difference >= lo && difference <= hi) oneMissingRent = lotsWithNoAmount[0];
+  }
+
+  // A lot listed twice inflates OUR sum above his, which is the usual reason a
+  // total comes out "over" rather than short.
+  const perLot = new Map<string, number>();
+  for (const r of rows) {
+    if (r.lotLabel && r.amount != null) perLot.set(r.lotLabel, (perLot.get(r.lotLabel) ?? 0) + 1);
+  }
+  const doubleCountedLots =
+    difference < 0 ? [...perLot.entries()].filter(([, n]) => n > 1).map(([lot]) => lot) : [];
+
   return {
-    stated,
-    computed,
-    difference,
-    ties: Math.abs(difference) < 0.005,
-    lotsWithNoAmount: rows.filter((r) => r.amount == null && r.lotLabel).map((r) => r.lotLabel!),
+    stated, computed, difference, ties,
+    lotsWithNoAmount, oneMissingRent, doubleCountedLots,
   };
 }

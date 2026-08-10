@@ -230,11 +230,18 @@ export function ParkRentRoll({
       <h2 style={{ fontSize: 18, marginBottom: 10 }}>Lots</h2>
       {rows.length === 0 ? (
         <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
-          <h3 style={{ fontSize: 17, margin: "0 0 6px" }}>No lots yet</h3>
-          <p className="mut" style={{ fontSize: 14, marginBottom: 14 }}>
-            Add your lots and what you charge, and this becomes your rent roll.
+          <h3 style={{ fontSize: 17, margin: "0 0 6px" }}>Your rent roll starts here</h3>
+          <p className="mut" style={{ fontSize: 14, marginBottom: 14, lineHeight: 1.5 }}>
+            Paste whatever the seller gave you and we&apos;ll read what we can.
+            Or add your lots one at a time.
           </p>
-          <Link className="ll-btn" href="/park/lots">Add lots</Link>
+          {/* The paste is PRIMARY. On closing day he has a seller's rent roll
+              and a notebook, and typing 79 lots by hand is the reason the
+              notebook wins. */}
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+            <Link className="ll-btn" href="/park/import">Paste my rent roll</Link>
+            <Link className="ll-btn ghost" href="/park/lots">Add lots one by one</Link>
+          </div>
         </div>
       ) : (
         <div style={{ display: "grid", gap: 8 }}>

@@ -6,6 +6,7 @@ import {
   rangeForTerm,
   cadenceTotals,
   checkTotals,
+  statedTotalFrom,
   importBlockerText,
   MAX_LOT_LABEL,
   type ImportBlocker,
@@ -257,5 +258,160 @@ describe("the money, split by cadence", () => {
 
   it("returns nothing when the seller stated no total", () => {
     expect(checkTotals(null, [])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE ANSWERS. Without these wired through, every question on the reconcile
+// screen is decorative: he types a name, taps Save, and the row stays blocked
+// forever. This is exactly the shape of the bug the spec warns about — a
+// number he read on screen and approved that never reaches the database.
+// ---------------------------------------------------------------------------
+describe("what he answers changes the plan", () => {
+  function planWith(blob: string, overrides: Record<number, Record<string, unknown>>) {
+    const parsed = parseRentRoll(blob, { knownLots: LOTS.map((l) => l.lotNumber) });
+    return planImport({
+      rows: parsed.rows,
+      lots: LOTS,
+      liveStays: [],
+      cutoverISO: CUTOVER,
+      season: null,
+      approvedNewLots: Object.values(overrides)
+        .map((o) => o.createLot)
+        .filter((s): s is string => typeof s === "string"),
+      overrides,
+    });
+  }
+
+  it("a name he types unblocks the row", () => {
+    const blob = "Lot\tTenant\tRent\n13\tSEE NOTE\t385";
+    expect(planWith(blob, {}).ready).toHaveLength(0);
+
+    const p = planWith(blob, { 2: { name: "Rumbaugh, Delmar" } });
+    expect(p.ready).toHaveLength(1);
+    expect(p.ready[0].name).toBe("Rumbaugh, Delmar");
+    expect(p.ready[0].amount).toBe(385);
+  });
+
+  it("a rent he types unblocks a rent we refused to read", () => {
+    const blob = "Lot\tTenant\tRent\n1\tWexler, Donna\t4l0.00";
+    expect(planWith(blob, {}).needsYou[0].blockers).toContain("bad_amount");
+
+    const p = planWith(blob, { 2: { rent: 410 } });
+    expect(p.ready).toHaveLength(1);
+    expect(p.ready[0].amount).toBe(410);
+  });
+
+  it("picking the current tenant unblocks that row and stands the other down", () => {
+    const blob = "Lot\tTenant\tRent\n7\tLoren Fry\t385\n7\tCheryl Newman\t410";
+    const both = planWith(blob, {});
+    expect(both.ready).toHaveLength(0);
+    expect(both.needsYou).toHaveLength(2);
+
+    // "Fry lives there now."
+    const p = planWith(blob, { 2: { current: true } });
+    expect(p.ready).toHaveLength(1);
+    expect(p.ready[0].name).toBe("Loren Fry");
+    // Newman is neither imported nor still asking — she is a decision he made.
+    expect(p.needsYou).toHaveLength(0);
+    expect(p.rows.find((r) => r.name === "Cheryl Newman")?.skipped).toBe(true);
+    // And the accounting still holds both.
+    expect(p.rows).toHaveLength(2);
+  });
+
+  it("skipping a row removes it from both lists but never from the accounting", () => {
+    const blob = "Lot\tTenant\tRent\n1\tWexler, Donna\t385\n2\tKastner, Ray\t385";
+    const p = planWith(blob, { 2: { skip: true } });
+    expect(p.ready).toHaveLength(1);
+    expect(p.needsYou).toHaveLength(0);
+    expect(p.rows).toHaveLength(2);
+    expect(p.monthlyTotal).toBe(385);
+  });
+
+  it("a skipped row frees the lot for the other row claiming it", () => {
+    const blob = "Lot\tTenant\tRent\n7\tLoren Fry\t385\n7\tCheryl Newman\t410";
+    const p = planWith(blob, { 3: { skip: true } });
+    expect(p.ready).toHaveLength(1);
+    expect(p.ready[0].name).toBe("Loren Fry");
+  });
+
+  it("creating a lot he names lets the row through and plans the lot", () => {
+    const blob = "Lot\tTenant\tRent\n34B\tJunior Caraway\t60";
+    const p = planWith(blob, { 2: { createLot: "34B" } });
+    expect(p.ready).toHaveLength(1);
+    expect(p.lotsToCreate).toEqual(["34B"]);
+    expect(p.ready[0].createsLot).toBe(true);
+  });
+
+  it("an answer never invents a value it wasn't given", () => {
+    const blob = "Lot\tTenant\tRent\n1\tWexler, Donna\t";
+    const p = planWith(blob, { 2: { rent: null } });
+    expect(p.ready[0].amount).toBeNull();
+    expect(p.monthlyTotal).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The gap explanation has to be EARNED. Found in the browser: the screen said
+// "that's exactly one lot's rent" about a $100 gap on a sheet whose rents were
+// all $370-$410 — a confident sentence that sends him to the wrong lot. The
+// real cause was a lot listed twice.
+// ---------------------------------------------------------------------------
+describe("the seller's arithmetic, without the overclaim", () => {
+  function rowsOf(pairs: [string | null, number | null][]) {
+    return pairs.map(([lotLabel, amount], i) => ({
+      lines: [i + 1], lineNo: i + 1, source: [""],
+      lotLabel, matchedLotId: null, createsLot: false,
+      name: "Somebody", amount, term: "monthly" as const, range: null,
+      skipped: false, blockers: [], flags: [], notes: [],
+    }));
+  }
+
+  it("names the lot ONLY when the shortfall looks like a real rent", () => {
+    // Short by 385, and 385 sits right in the range of the other rents.
+    const t = checkTotals(1155, rowsOf([["1", 385], ["2", 385], ["13", null]]));
+    expect(t!.ties).toBe(false);
+    expect(t!.difference).toBe(385);
+    expect(t!.oneMissingRent).toBe("13");
+  });
+
+  it("REFUSES to name a lot when the gap is nothing like a rent", () => {
+    // Short by only $12 — that is a rounding error or a fee, not lot 13's rent.
+    const t = checkTotals(782, rowsOf([["1", 385], ["2", 385], ["13", null]]));
+    expect(t!.oneMissingRent).toBeNull();
+  });
+
+  it("REFUSES to name a lot when the sheet is OVER rather than short", () => {
+    // THE BROWSER BUG: over by 100, and it blamed the one blank lot.
+    const t = checkTotals(2280, rowsOf([
+      ["1", 385], ["2", 385], ["4", 370], ["7", 385], ["7", 410], ["13", 385], ["5", null],
+    ]));
+    expect(t!.difference).toBeLessThan(0);
+    expect(t!.oneMissingRent).toBeNull();
+    // And it offers the explanation that is actually true.
+    expect(t!.doubleCountedLots).toEqual(["7"]);
+  });
+
+  it("REFUSES to name a lot when more than one is blank", () => {
+    const t = checkTotals(1155, rowsOf([["1", 385], ["13", null], ["14", null]]));
+    expect(t!.oneMissingRent).toBeNull();
+  });
+
+  it("says nothing about double-counting when the sheet is short", () => {
+    const t = checkTotals(2000, rowsOf([["7", 385], ["7", 410]]));
+    expect(t!.doubleCountedLots).toEqual([]);
+  });
+});
+
+describe("statedTotalFrom", () => {
+  it("takes the money, not the lot count", () => {
+    expect(statedTotalFrom(["TOTAL\t24 lots\t9,965.00"])).toBe(9965);
+    expect(statedTotalFrom(["TOTAL\t\t2280"])).toBe(2280);
+    expect(statedTotalFrom(["Grand total: $10,350"])).toBe(10350);
+  });
+
+  it("returns null when there is no total to read", () => {
+    expect(statedTotalFrom([])).toBeNull();
+    expect(statedTotalFrom(["TOTAL", "Page 2 of 4"])).toBeNull();
   });
 });
