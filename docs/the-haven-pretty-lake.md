@@ -186,3 +186,67 @@ long-term tenant whatever each agreement says. Rather than hide that,
 and points at the attorney. **LakeLife takes no position on whether the
 structure achieves what it intends** — that is a legal question, not a software
 one.
+
+---
+
+## 7. Reminders, and the one-click accountant statement (Aug 11 2026)
+
+### Overdue reminders — built
+
+`park_reminders` (migration 0071) records **every attempt to tell somebody**,
+not just the successful ones. Rows carry a party (`resident` / `owner` / `ops`),
+a channel (`email` / `sms` / `paper` / `none`) and an outcome
+(`sent` / `printed` / `blocked` / `failed`), and a partial unique index on
+`(charge_id, party) where outcome in ('sent','printed')` means **nobody is
+chased twice for the same bill**.
+
+Three rules did most of the work:
+
+1. **Paper is a real outcome.** A quarter to a third of a park never goes
+   digital, and those are usually the longest-standing households. The screen
+   states the paper count out loud, and **the send button stays locked until the
+   notices have actually gone to the printer** — otherwise the log would say
+   "reminded" for people nobody ever told.
+2. **An unusable channel is never the end of the road.** Texting is off until
+   A2P 10DLC clears, so an SMS resident falls through to email, and with no
+   email, to print. The only household the planner gives up on is one that
+   asked not to be contacted — that gets "call in instead", and the block is
+   recorded with its reason rather than silently skipped. (An earlier version
+   blocked SMS outright; the screen then told the owner to "post or hand it
+   over" with no way to do so, which is how the gap was found.)
+3. **The digest goes to whoever is NOT at the screen.** Whoever clicked is
+   reading the result already; it is the absent owner of a manager-run park who
+   needs the summary. One owner row per chased charge, so "was the owner told
+   about lot 3?" has an answer per household.
+
+Nothing is on a cron. Chasing a household for money is the most consequential
+message a park sends, and firing it unattended is how somebody who paid on
+Tuesday gets a demand on Wednesday.
+
+### The accountant statement — NOT YET BUILT, and deliberately so
+
+The owner's standing ask: **one button that produces month / quarter / year
+statements for the CPA.** Recorded here so it shapes what gets built rather
+than being retrofitted.
+
+The ledger already has clean period boundaries for it:
+
+| source | gives the accountant |
+| --- | --- |
+| `park_charges` (frozen `lines` snapshot, `period_month`) | revenue **as billed**, split by line — rent vs each fee |
+| `park_payments` (`received_on`, `method`) | cash **actually collected**, and in what form |
+| `park_costs` + `lot_cost_shares` | expenses, and how much of each was recovered |
+
+Two things that must be true before it is worth building:
+
+- **Billed and collected are different numbers and must never be merged.** A
+  charge raised in August and paid in October belongs to August on an accrual
+  statement and to October on a cash one. The statement has to say which basis
+  it is on, out loud, on the page.
+- **A voided charge is not revenue.** `summarise()` already excludes it; the
+  statement must too, and should show voids separately so a year with many of
+  them is visible rather than netted away.
+
+Open question for the owner: does the CPA want **cash basis, accrual, or both
+side by side**? That answer changes the shape of the output, so it is worth
+asking before building rather than after.

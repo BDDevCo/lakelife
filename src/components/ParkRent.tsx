@@ -8,6 +8,8 @@ import {
   type LedgerPage,
 } from "@/app/park/ledger-actions";
 import { LEDGER_LABEL, ledgerHeadline, runSummary, type RunPlan } from "@/app/park/ledger-helpers";
+import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
+import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
 
 /**
  * WHO OWES, WHO PAID, WHO IS LATE.
@@ -114,6 +116,11 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
         )}
       </section>
 
+      {/* ---- reminders. Only when somebody is actually late. -------------- */}
+      {s.lateCount > 0 && (
+        <Reminders parkId={parkId} month={page.month} onSent={() => router.refresh()} />
+      )}
+
       {/* ---- the ledger --------------------------------------------------- */}
       {page.rows.length > 0 && (
         <section style={{ marginTop: 22 }}>
@@ -165,6 +172,146 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
         </section>
       )}
     </div>
+  );
+}
+
+/**
+ * REMINDING THE LATE ONES.
+ *
+ * The paper count is stated OUT LOUD and gated on: a quarter to a third of a
+ * park is not on email, and those households are usually the longest-standing
+ * ones. If printing were optional the software would quietly log "reminded"
+ * for people nobody ever told, and the first thing they'd hear about arrears is
+ * something much worse than a reminder. So the send button stays disabled until
+ * the notices have actually gone to the printer.
+ */
+function Reminders({
+  parkId, month, onSent,
+}: { parkId: string; month: string; onSent: () => void }) {
+  const [busy, start] = useTransition();
+  const [plan, setPlan] = useState<ReminderPlan | null>(null);
+  const [printed, setPrinted] = useState(false);
+
+  function preview() {
+    start(async () => {
+      const res = await previewReminders(parkId, month);
+      if (!res.ok || !res.plan) { toast(res.error ?? "Couldn't work that out."); return; }
+      setPlan(res.plan);
+      setPrinted(false);
+    });
+  }
+
+  function printNotices(p: ReminderPlan) {
+    const w = window.open("", "_blank", "width=760,height=900");
+    if (!w) { toast("Your browser blocked the print window."); return; }
+    const esc = (t: string) =>
+      t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    // One notice per page — these get folded and put through doors.
+    const pages = p.toPrint
+      .map((r) => `<section><h2>Lot ${esc(r.lotNumber)}</h2><pre>${esc(r.body)}</pre></section>`)
+      .join("");
+    w.document.write(
+      `<!doctype html><title>${esc(month)} notices</title><style>
+        body{font:15px/1.6 -apple-system,Segoe UI,sans-serif;margin:0}
+        section{padding:56px 60px;page-break-after:always}
+        h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#666;margin:0 0 28px}
+        pre{font:inherit;white-space:pre-wrap;margin:0}
+       </style>${pages}`,
+    );
+    w.document.close();
+    w.focus();
+    w.print();
+    setPrinted(true);
+  }
+
+  function send() {
+    start(async () => {
+      const res = await sendReminders(parkId, month);
+      toast(res.ok ? (res.signal ?? "Sent.") : (res.error ?? "Couldn't send those."));
+      if (res.ok) { setPlan(null); onSent(); }
+    });
+  }
+
+  if (!plan) {
+    return (
+      <section style={{ marginTop: 14 }}>
+        <button className="ll-btn ghost" onClick={preview} disabled={busy}>
+          {busy ? "Working…" : "Remind the late ones"}
+        </button>
+      </section>
+    );
+  }
+
+  const needsPrinting = plan.toPrint.length > 0;
+  // Reached, but not the way they asked. Worth seeing — a run of these says
+  // something about the park, not about one household.
+  const downgraded = plan.toSend.concat(plan.toPrint).filter((r) => r.note);
+
+  return (
+    <section style={{ marginTop: 14 }}>
+      <div className="ll-card ll-card-pad">
+        <strong>{reminderSummary(plan)}</strong>
+
+        {needsPrinting && (
+          <p className="mut" style={{ fontSize: 13, marginTop: 8, lineHeight: 1.5 }}>
+            {plan.toPrint.length === 1 ? "One household isn't" : `${plan.toPrint.length} households aren't`}{" "}
+            on email. They get a printed notice you hand over — same wording,
+            logged the same way.
+          </p>
+        )}
+
+        {(plan.blocked.length > 0 || downgraded.length > 0) && (
+          <div style={{ marginTop: 12, display: "grid", gap: 6 }}>
+            {downgraded.map((d) => (
+              <div key={d.chargeId} style={{ fontSize: 13, lineHeight: 1.5 }}>
+                <strong>Lot {d.lotNumber}</strong>{" "}
+                <span className="mut">— {d.note}</span>
+              </div>
+            ))}
+            {plan.blocked.map((b) => (
+              <div key={b.chargeId} style={{ fontSize: 13, lineHeight: 1.5 }}>
+                <strong>Lot {b.lotNumber}</strong>{" "}
+                <span className="mut">— {b.reason}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {plan.skippedAlreadyReminded > 0 && (
+          <p className="mut" style={{ fontSize: 13, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
+            {plan.skippedAlreadyReminded} already had one for {month} — nobody
+            gets chased twice for the same bill.
+          </p>
+        )}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+          {needsPrinting && (
+            <button className="ll-btn" onClick={() => printNotices(plan)} disabled={busy}>
+              Print {plan.toPrint.length} {plan.toPrint.length === 1 ? "notice" : "notices"}
+            </button>
+          )}
+          {/* Nothing left to send means the only ones outstanding are people we
+              can't reach — the blocked lines above are the whole instruction,
+              so a dead button here would just be noise. */}
+          {plan.totalChased > 0 && (
+            <button
+              className={`ll-btn${needsPrinting ? " ghost" : ""}`}
+              onClick={send}
+              disabled={busy || (needsPrinting && !printed)}
+            >
+              {needsPrinting && !printed
+                ? "Print them first"
+                : plan.toSend.length > 0
+                  ? `Send ${plan.toSend.length} and log the rest`
+                  : "Log these as handed over"}
+            </button>
+          )}
+          <button className="ll-btn ghost" onClick={() => setPlan(null)} disabled={busy}>
+            Back
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 
