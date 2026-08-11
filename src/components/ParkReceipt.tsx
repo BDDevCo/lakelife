@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { toast } from "@/components/Toast";
 import { emailReceipt, takeDropSlipSerials } from "@/app/park/ledger-actions";
 import {
-  receiptBody, dropSlipSerials, dropSlipHalf, dropSlipSummary,
+  receiptBody, receiptCounterfoil, dropSlipSerials, dropSlipHalf, dropSlipSummary,
   type ReceiptLines,
 } from "@/app/park/receipt-helpers";
 
@@ -50,7 +50,9 @@ export function ReceiptPanel({
   onClose: () => void;
 }) {
   const [busy, start] = useTransition();
-  const body = receiptBody(receipt);
+  // A URL nobody can type is worse than no URL. The printed copy drops it;
+  // the emailed copy keeps it.
+  const body = receiptBody({ ...receipt, confirmUrl: null });
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginTop: 12, background: "rgba(0,0,0,.02)" }}>
@@ -61,9 +63,15 @@ export function ReceiptPanel({
       }}>{body}</pre>
 
       <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+        {/* Both halves, always. Their copy AND the counterfoil they sign —
+            because for a household that can't open a link, that signature is
+            the only second party this record will ever have. */}
         <button className="ll-btn"
-          onClick={() => printText(`Receipt ${receipt.lotNumber}`, [body])}>
-          Print it
+          onClick={() => printText(
+            `Receipt ${receipt.lotNumber}`,
+            [body, receiptCounterfoil(receipt)],
+          )}>
+          Print both halves
         </button>
 
         {/* Only offered when there is somewhere to send it. A disabled button
@@ -84,11 +92,11 @@ export function ReceiptPanel({
         <button className="ll-btn ghost" onClick={onClose}>Done</button>
       </div>
 
-      {!renterEmail && (
-        <p className="mut" style={{ fontSize: 12, marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>
-          No email on file for them — print it and hand it over.
-        </p>
-      )}
+      <p className="mut" style={{ fontSize: 12, marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>
+        {renterEmail
+          ? "Prints two halves: their copy, and one for you to keep with their signature on it. The emailed copy carries a link they can confirm from themselves."
+          : "No email on file for them — print both halves, hand one over and get the other signed. That signature is their confirmation."}
+      </p>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  receiptRef, receiptBody, dropSlipSerials, dropSlipHalf, dropSlipSummary,
+  receiptRef, receiptBody, receiptCounterfoil,
+  dropSlipSerials, dropSlipHalf, dropSlipSummary,
   type ReceiptLines,
 } from "./receipt-helpers";
 
@@ -117,5 +118,40 @@ describe("drop slips", () => {
 
   it("says nothing to print rather than describing an empty range", () => {
     expect(dropSlipSummary(41, 0)).toBe("Nothing to print.");
+  });
+});
+
+describe("the renter's own confirmation", () => {
+  it("puts the confirm link on a receipt that has one", () => {
+    const b = receiptBody({ ...base, confirmUrl: "https://lakelife.ai/c/abc123" });
+    expect(b).toContain("https://lakelife.ai/c/abc123");
+    expect(b).toMatch(/match what you handed over/);
+  });
+
+  it("prints NO link when there is nowhere to tap one", () => {
+    // A URL nobody can type is worse than no URL — it just makes the paper
+    // household's copy look like the incomplete version.
+    const b = receiptBody({ ...base, confirmUrl: null });
+    expect(b).not.toMatch(/https?:\/\//);
+    expect(b).not.toMatch(/Say so here/);
+  });
+
+  it("gives the office a counterfoil the renter signs, same receipt number", () => {
+    const c = receiptCounterfoil(base);
+    expect(c).toContain("TH-2026-0047");
+    expect(c).toMatch(/Signed _+/);
+    expect(c).toMatch(/matches what I handed over/);
+  });
+
+  it("counterfoil carries the money facts so a signature means something", () => {
+    const c = receiptCounterfoil(base);
+    expect(c).toContain("$455.00");
+    expect(c).toContain("Lot 3");
+    expect(c).toContain("2026-08-03");
+    expect(c).toContain("ref 1042");
+  });
+
+  it("counterfoil falls back to the lot when the roll names nobody", () => {
+    expect(receiptCounterfoil({ ...base, payerName: null })).toContain("Lot 3   Lot 3");
   });
 });

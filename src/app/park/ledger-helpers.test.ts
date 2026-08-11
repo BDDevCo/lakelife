@@ -183,14 +183,29 @@ describe("a payment is a two-party event", () => {
     expect(s.billed).toBe(455);
   });
 
-  it("a claim on a bill that is already paid changes nothing", () => {
+  it("shows a dispute about an ALREADY-PAID bill — they're disputing the record", () => {
+    // Found by driving it: the renter taps "that's not what I paid" about a
+    // payment that settled the bill. Checking the balance first made that read
+    // as "Paid" and the owner never saw the disagreement at all.
     const paid = { ...charge, paidTotal: 455 };
-    expect(ledgerState(paid, "2026-07-20", 3, true)).toBe("paid");
+    expect(ledgerState(paid, "2026-07-20", 3, true)).toBe("disputed");
+    expect(ledgerState(paid, "2026-07-20", 3, false)).toBe("paid");
   });
 
-  it("a claim inside the catch-up window doesn't promote it to disputed", () => {
-    // Nothing to disagree about yet — the office simply hasn't caught up.
-    expect(ledgerState(charge, "2026-07-02", 3, true)).toBe("due");
+  it("doesn't add a settled dispute to the arrears figure", () => {
+    const paid = { ...charge, paidTotal: 455 };
+    const s = summarise(toRows([paid], "2026-07-20", 3, new Set(["c1"])));
+    expect(s.disputedCount).toBe(1);
+    expect(s.disputedAmount).toBe(0);
+    expect(s.collected).toBe(455);
+    expect(ledgerHeadline(s, 3)).toMatch(/a payment we've recorded isn't right/);
+    expect(ledgerHeadline(s, 3)).not.toContain("$0.00");
+  });
+
+  it("a claim inside the catch-up window still shows as a disagreement", () => {
+    // Even early, if they've said something we should not be silent about it.
+    expect(ledgerState(charge, "2026-07-02", 3, true)).toBe("disputed");
+    expect(ledgerState(charge, "2026-07-02", 3, false)).toBe("due");
   });
 
   it("leads the headline with the disagreement, not the arrears", () => {

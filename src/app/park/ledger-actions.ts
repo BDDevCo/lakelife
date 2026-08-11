@@ -219,6 +219,12 @@ export async function recordPayment(
 
   // The insert returns the receipt number the trigger assigned, so the renter
   // can walk away with proof of what they just handed over.
+  // Minted here, not when a receipt is sent: there is no bank in the middle of
+  // these lakes and nothing external will ever validate this record, so the
+  // renter's own confirmation is the only second party there will ever be. The
+  // token exists from the moment the payment does.
+  const confirmToken = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().slice(0, 8);
+
   const { data: written, error } = await admin.from("park_payments").insert({
     charge_id: chargeId,
     amount,
@@ -226,6 +232,7 @@ export async function recordPayment(
     reference: reference.trim() || null,
     received_on: receivedOn,
     drop_slip_no: dropSlipNo?.trim() || null,
+    confirm_token: confirmToken,
   }).select("receipt_no").single();
   if (error) return { ok: false, error: "Couldn't record that — try again." };
 
@@ -266,6 +273,7 @@ export async function recordPayment(
     periodMonth: (full?.period_month as string) ?? "",
     billAmount: Number(full?.amount ?? charge.amount),
     balanceAfter: Math.round(balance * 100) / 100,
+    confirmUrl: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/c/${confirmToken}`,
   };
 
   revalidatePath("/park/rent");

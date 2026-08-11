@@ -90,13 +90,22 @@ export function ledgerState(
 ): LedgerState {
   if (c.status === "void") return "void";
 
+  // AN OPEN DISAGREEMENT OUTRANKS THE BALANCE, including a settled one.
+  //
+  // The obvious reading is that a paid bill has nothing to argue about, and it
+  // is wrong. When a renter says "that's not what I paid" about a payment the
+  // park has already recorded, the balance is zero and the disagreement is
+  // total — they are disputing the record itself. Checking the balance first
+  // meant that case read as "Paid" and the owner never saw it.
+  if (hasOpenClaim) return "disputed";
+
   const balance = balanceOf(c);
   if (balance < 0) return "credit";
   if (balance === 0) return "paid";
 
   const overdueBy = daysBetween(c.dueOn, todayISO);
   // Not late until it is past due AND past the office's own catch-up window.
-  if (overdueBy > lagDays) return hasOpenClaim ? "disputed" : "late";
+  if (overdueBy > lagDays) return "late";
 
   return c.paidTotal > 0 ? "part_paid" : "due";
 }
@@ -160,7 +169,9 @@ export function summarise(rows: readonly LedgerRow[]): LedgerSummary {
     // notice, an eviction exhibit — asserts a debt that is still a question.
     else if (r.state === "disputed") {
       s.disputedCount += 1;
-      s.disputedAmount = round2(s.disputedAmount + r.balance);
+      // Only the OUTSTANDING part. A dispute about a settled bill adds nothing
+      // to a money total, and pretending otherwise would overstate arrears.
+      if (r.balance > 0) s.disputedAmount = round2(s.disputedAmount + r.balance);
     }
     else if (r.state === "due" || r.state === "part_paid") s.dueCount += 1;
     else if (r.state === "paid") s.paidCount += 1;
@@ -186,6 +197,12 @@ export function ledgerHeadline(s: LedgerSummary, lagDays: number): string {
     const rest = s.lateCount > 0
       ? ` ${s.lateCount} other ${s.lateCount === 1 ? "household is" : "households are"} late — $${s.lateAmount.toFixed(2)}.`
       : "";
+    // Nothing outstanding means they are disputing a payment we already
+    // recorded, not claiming an unrecorded one. Reporting "$0.00" there reads
+    // as a rounding error rather than a disagreement.
+    if (s.disputedAmount === 0) {
+      return `${n} ${n === 1 ? "household says a payment we've recorded isn't right" : "households say a payment we've recorded isn't right"}.${rest}`;
+    }
     return `${n} ${n === 1 ? "household says they've" : "households say they've"} paid and we haven't found it — $${s.disputedAmount.toFixed(2)}.${rest}`;
   }
   if (s.lateCount > 0) {

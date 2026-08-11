@@ -214,13 +214,16 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
           {s.disputedCount > 0 && (
             <p style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
               <strong>
-                {s.disputedCount === 1 ? "One household says" : `${s.disputedCount} households say`}{" "}
-                they&apos;ve paid and we haven&apos;t found it.
+                {s.disputedCount === 1 ? "One household disagrees" : `${s.disputedCount} households disagree`}{" "}
+                with what&apos;s on the ledger.
               </strong>{" "}
-              Those aren&apos;t counted as late and won&apos;t be chased until you&apos;ve
-              looked — a payment is something two people were there for, and this
-              ledger only hears your side of it. Check the drop box and the bank,
-              then either record the payment or say what you found.
+              {s.disputedAmount > 0
+                ? "They say they've paid and we haven't found it. "
+                : "They say a payment we've already recorded isn't what they handed over. "}
+              Nothing is counted as late or chased until you&apos;ve looked — a
+              payment is something two people were there for, and this ledger
+              only hears your side of it. Check the drop box and the bank, then
+              either record the payment or say what you found.
             </p>
           )}
 

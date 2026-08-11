@@ -39,6 +39,14 @@ export interface ReceiptLines {
   billAmount: number;
   /** What is left on that bill AFTER this payment. */
   balanceAfter: number;
+  /**
+   * Where the renter confirms this from their OWN phone.
+   *
+   * Null on the printed copy for a household with no way to open a link — the
+   * counterfoil they sign is their confirmation instead. Printing a URL nobody
+   * can type is worse than printing nothing.
+   */
+  confirmUrl?: string | null;
 }
 
 const money = (n: number) =>
@@ -97,8 +105,39 @@ export function receiptBody(r: ReceiptLines): string {
   }
   lines.push(r.officeLine);
   lines.push(``);
+  if (r.confirmUrl) {
+    // The renter's own act, from their own phone. The park cannot perform it,
+    // which is the whole reason it is worth anything.
+    lines.push(`Does this match what you handed over? Say so here:`);
+    lines.push(r.confirmUrl);
+    lines.push(``);
+  }
   lines.push(`Keep this. It's your record of what you handed over.`);
   return lines.join("\n");
+}
+
+/**
+ * The half the office keeps, with the renter's signature on it.
+ *
+ * For the quarter to a third of this park who cannot open a link, THIS is the
+ * second party's act: their own hand, on a numbered document, at the moment.
+ * Printed alongside their copy so both exist or neither does.
+ */
+export function receiptCounterfoil(r: ReceiptLines): string {
+  const who = r.payerName?.split(",")[0].trim() || `Lot ${r.lotNumber}`;
+  return [
+    `${r.parkName} — office copy  ·  ${receiptRef(r.parkName, r.receiptNo, r.receivedOn)}`,
+    ``,
+    `Lot ${r.lotNumber}   ${who}   ${money(r.amount)}   ${METHOD_WORD[r.method] ?? r.method}`,
+    `Taken ${r.receivedOn}${r.reference ? `   ref ${r.reference}` : ""}`,
+    ``,
+    `I received a receipt for this and it matches what I handed over.`,
+    ``,
+    `Signed ______________________________  Date ______________`,
+    ``,
+    `Keep this in the lot's file. It is the renter's own confirmation for`,
+    `anyone who can't tap a link.`,
+  ].join("\n");
 }
 
 // ------------------------------------------------------------ drop slips ---
