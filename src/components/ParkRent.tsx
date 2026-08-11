@@ -4,9 +4,10 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import {
-  previewChargeRun, runCharges, recordPayment, voidCharge, logPaymentClaim,
+  previewChargeRun, runCharges, recordPayment, voidCharge,
   type LedgerPage,
 } from "@/app/park/ledger-actions";
+import { ClaimForm } from "@/components/ClaimForm";
 import { LEDGER_LABEL, ledgerHeadline, runSummary, type RunPlan } from "@/app/park/ledger-helpers";
 import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
 import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
@@ -44,6 +45,7 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
   const [busy, start] = useTransition();
   const [plan, setPlan] = useState<RunPlan | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
 
   function preview() {
     start(async () => {
@@ -148,28 +150,31 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                       {payingId === r.id ? "Cancel" : "Record payment"}
                     </button>
                   )}
-                  {/* THE RENTER'S SIDE. Logging it does not mean agreeing with
-                      it — and it must be one tap, because most of these arrive
-                      as somebody saying it across a counter. */}
+                  {/* THE RENTER'S SIDE. Logging it does not mean agreeing
+                      with it, and most of these arrive as somebody saying it
+                      across a counter. */}
                   {r.state === "late" && (
                     <button className="ll-btn ghost"
                       onClick={() => {
-                        const note = window.prompt(
-                          `Lot ${r.lotNumber} says they've already paid this. ` +
-                          `Anything they told you — when, how, a check number? ` +
-                          `(You can leave this blank.)`,
-                        );
-                        if (note === null) return;
-                        start(async () => {
-                          const res = await logPaymentClaim(parkId, r.id, { note });
-                          toast(res.ok ? (res.signal ?? "Noted.") : (res.error ?? "Couldn't record that."));
-                          if (res.ok) router.refresh();
-                        });
+                        setClaimingId(claimingId === r.id ? null : r.id);
+                        setPayingId(null);
                       }}>
-                      They say they paid
+                      {claimingId === r.id ? "Cancel" : "They say they paid"}
                     </button>
                   )}
                 </div>
+
+                {claimingId === r.id && (
+                  <ClaimForm
+                    parkId={parkId}
+                    chargeId={r.id}
+                    lotNumber={r.lotNumber}
+                    balance={r.balance}
+                    today={page.today}
+                    onDone={() => { setClaimingId(null); router.refresh(); }}
+                    onCancel={() => setClaimingId(null)}
+                  />
+                )}
 
                 {payingId === r.id && (
                   <PaymentForm
