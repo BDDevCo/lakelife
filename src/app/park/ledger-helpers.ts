@@ -1,0 +1,215 @@
+/**
+ * WHO OWES, WHO PAID, AND WHO IS ACTUALLY LATE.
+ *
+ * The last word matters. A charge past its due date is not automatically a
+ * late payment — it is a payment nobody has RECORDED yet, and at a park where
+ * rent arrives as checks in an envelope those are very different things.
+ *
+ * THE FIRST THING THIS SOFTWARE EVER TELLS A NEW PARK OWNER MUST NOT BE A
+ * FALSE ALARM ABOUT ELEVEN HOUSEHOLDS WHO PAID ON TUESDAY. That is why
+ * `parks.office_recording_lag_days` exists — it is how far behind the office
+ * typically is, and nothing is called late until the paperwork has had time to
+ * catch up. An owner who learns the overdue list is usually wrong stops
+ * reading it, and then it is wrong when it matters.
+ */
+
+export type ChargeStatus = "open" | "paid" | "void";
+
+export interface Charge {
+  id: string;
+  lotNumber: string;
+  renterName: string | null;
+  periodMonth: string;
+  dueOn: string;
+  amount: number;
+  paidTotal: number;
+  status: ChargeStatus;
+}
+
+export type LedgerState =
+  | "paid"
+  | "part_paid"
+  | "due"        // not yet due, or inside the office's catch-up window
+  | "late"       // genuinely past due and past the grace
+  | "void"
+  | "credit";    // they paid more than the bill
+
+export const LEDGER_LABEL: Record<LedgerState, string> = {
+  paid: "Paid",
+  part_paid: "Part paid",
+  due: "Due",
+  late: "Late",
+  void: "Cancelled",
+  credit: "In credit",
+};
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** The month a charge run bills, as YYYY-MM. */
+export function currentPeriod(todayISO: string): string {
+  return todayISO.slice(0, 7);
+}
+
+export function balanceOf(c: Charge): number {
+  return round2(c.amount - c.paidTotal);
+}
+
+/** Days from `a` to `b`, negative when b is earlier. */
+export function daysBetween(a: string, b: string): number {
+  const [ay, am, ad] = a.split("-").map(Number);
+  const [by, bm, bd] = b.split("-").map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000);
+}
+
+/**
+ * What state a charge is really in.
+ *
+ * `lagDays` is the park's own estimate of how far behind its paperwork runs.
+ * Zero is a legitimate answer for an office that banks the same day.
+ */
+export function ledgerState(c: Charge, todayISO: string, lagDays: number): LedgerState {
+  if (c.status === "void") return "void";
+
+  const balance = balanceOf(c);
+  if (balance < 0) return "credit";
+  if (balance === 0) return "paid";
+
+  const overdueBy = daysBetween(c.dueOn, todayISO);
+  // Not late until it is past due AND past the office's own catch-up window.
+  if (overdueBy > lagDays) return "late";
+
+  return c.paidTotal > 0 ? "part_paid" : "due";
+}
+
+export interface LedgerRow extends Charge {
+  balance: number;
+  state: LedgerState;
+  /** Days past due. Negative means not due yet. */
+  overdueDays: number;
+}
+
+export function toRows(
+  charges: readonly Charge[],
+  todayISO: string,
+  lagDays: number,
+): LedgerRow[] {
+  return charges.map((c) => ({
+    ...c,
+    balance: balanceOf(c),
+    state: ledgerState(c, todayISO, lagDays),
+    overdueDays: daysBetween(c.dueOn, todayISO),
+  }));
+}
+
+export interface LedgerSummary {
+  billed: number;
+  collected: number;
+  outstanding: number;
+  /** Only what is genuinely late — not everything unpaid. */
+  lateAmount: number;
+  lateCount: number;
+  /** Unpaid but still inside the window. Worth seeing, not worth chasing. */
+  dueCount: number;
+  paidCount: number;
+  creditCount: number;
+}
+
+export function summarise(rows: readonly LedgerRow[]): LedgerSummary {
+  const s: LedgerSummary = {
+    billed: 0, collected: 0, outstanding: 0,
+    lateAmount: 0, lateCount: 0, dueCount: 0, paidCount: 0, creditCount: 0,
+  };
+  for (const r of rows) {
+    // A cancelled charge is not money anybody expected. Counting it as billed
+    // would overstate the roll and make every collection rate wrong.
+    if (r.state === "void") continue;
+
+    s.billed = round2(s.billed + r.amount);
+    s.collected = round2(s.collected + r.paidTotal);
+    if (r.balance > 0) s.outstanding = round2(s.outstanding + r.balance);
+
+    if (r.state === "late") { s.lateCount += 1; s.lateAmount = round2(s.lateAmount + r.balance); }
+    else if (r.state === "due" || r.state === "part_paid") s.dueCount += 1;
+    else if (r.state === "paid") s.paidCount += 1;
+    else if (r.state === "credit") s.creditCount += 1;
+  }
+  return s;
+}
+
+/**
+ * The line at the top of the ledger.
+ *
+ * Leads with LATE, because that is the only part that needs him today, and
+ * says nothing at all when nothing is late — an empty state that reads
+ * "0 late" trains an owner to skim past the number on the day it isn't zero.
+ */
+export function ledgerHeadline(s: LedgerSummary, lagDays: number): string {
+  if (s.billed === 0) return "Nothing billed yet this month.";
+
+  if (s.lateCount > 0) {
+    return `${s.lateCount} ${s.lateCount === 1 ? "household is" : "households are"} late — $${s.lateAmount.toFixed(2)}.`;
+  }
+  if (s.outstanding > 0) {
+    const grace = lagDays > 0 ? ` Nothing is late yet; you allow ${lagDays} days for the office to catch up.` : "";
+    return `$${s.collected.toFixed(2)} of $${s.billed.toFixed(2)} in.${grace}`;
+  }
+  return `Everything's in — $${s.collected.toFixed(2)}.`;
+}
+
+/**
+ * What a run WOULD do, before it does it.
+ *
+ * A charge run is the one action here that touches every household at once, so
+ * it is previewed rather than fired. `alreadyBilled` is the set of tenancies
+ * that already have a charge for the month — re-running must add nothing,
+ * which the unique constraint enforces anyway, but he should see zero rather
+ * than trust it.
+ */
+export interface RunPlan {
+  toBill: { reservationId: string; lotNumber: string; amount: number }[];
+  skippedAlreadyBilled: number;
+  skippedNoTotal: number;
+  total: number;
+}
+
+export function planRun(
+  candidates: readonly {
+    reservationId: string;
+    lotNumber: string;
+    /** Null when the statement could not be totalled — never billed as zero. */
+    amount: number | null;
+  }[],
+  alreadyBilled: ReadonlySet<string>,
+): RunPlan {
+  const toBill: RunPlan["toBill"] = [];
+  let skippedAlreadyBilled = 0;
+  let skippedNoTotal = 0;
+
+  for (const c of candidates) {
+    if (alreadyBilled.has(c.reservationId)) { skippedAlreadyBilled += 1; continue; }
+    // A statement with no total is a rent nobody set. Billing it as zero would
+    // hide the problem behind a paid charge.
+    if (c.amount == null) { skippedNoTotal += 1; continue; }
+    toBill.push({ reservationId: c.reservationId, lotNumber: c.lotNumber, amount: c.amount });
+  }
+
+  return {
+    toBill,
+    skippedAlreadyBilled,
+    skippedNoTotal,
+    total: round2(toBill.reduce((s, r) => s + r.amount, 0)),
+  };
+}
+
+export function runSummary(plan: RunPlan, month: string): string {
+  if (plan.toBill.length === 0) {
+    if (plan.skippedAlreadyBilled > 0) return `${month} is already billed — nothing to do.`;
+    return "Nothing to bill.";
+  }
+  const parts = [
+    `Bill ${plan.toBill.length} ${plan.toBill.length === 1 ? "household" : "households"} for ${month} — $${plan.total.toFixed(2)}`,
+  ];
+  if (plan.skippedAlreadyBilled > 0) parts.push(`${plan.skippedAlreadyBilled} already billed`);
+  if (plan.skippedNoTotal > 0) parts.push(`${plan.skippedNoTotal} skipped — no rent set`);
+  return parts.join(" · ");
+}
