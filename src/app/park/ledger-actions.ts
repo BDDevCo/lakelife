@@ -379,6 +379,8 @@ export async function logPaymentClaim(
     paidOn?: string;
     method?: "cash" | "check" | "card" | "ach" | "transfer" | "other";
     reference?: string;
+    /** Whatever name they wrote on it. At a takeover this is the whole answer. */
+    paidTo?: string;
     note?: string;
   },
 ): Promise<ParkResult> {
@@ -405,6 +407,7 @@ export async function logPaymentClaim(
     claimed_paid_on: input.paidOn?.trim() || null,
     method: input.method ?? null,
     reference: input.reference?.trim() || null,
+    paid_to: input.paidTo?.trim() || null,
     note: input.note?.trim() || null,
     asserted_by: "renter",
     logged_by: await currentUserId(),

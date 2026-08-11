@@ -20,6 +20,19 @@ import { logPaymentClaim } from "@/app/park/ledger-actions";
  * the bank statement. The account number adds nothing to that and carries all
  * the risk. So the fields below are the whole of it.
  *
+ * NOR DOES IT SCAN ONE. Reading only the name, date, amount and check number
+ * off a photo sounds like it avoids the problem, but it only does so if the OCR
+ * runs ON THE PHONE and the image never arrives — otherwise "we only keep five
+ * fields" is a promise that fails in request logs, crash dumps, backups and
+ * whatever the vision provider retains. And the arithmetic is against it: the
+ * check number and the payer's name are PRINTED and read well, which are the
+ * fields somebody could type in five seconds; the amount, date and payee are
+ * HANDWRITTEN, which is what OCR is worst at. Auto-filling those and asking for
+ * a confirmation produces silent wrong amounts on a payment dispute, because
+ * people confirm without reading. A scan also makes a claim look more
+ * authoritative than it is — it still proves nothing about delivery or
+ * clearing — and scanned claims would start outranking spoken ones.
+ *
  * EVERY FIELD IS OPTIONAL. A quarter to a third of this park will never touch a
  * screen, and their claims arrive as somebody saying "I paid you" across a
  * counter with nothing in their hand. A form that demands a check number before
@@ -51,6 +64,7 @@ export function ClaimForm({
   const [reference, setReference] = useState("");
   const [amount, setAmount] = useState(balance.toFixed(2));
   const [paidOn, setPaidOn] = useState("");
+  const [paidTo, setPaidTo] = useState("");
   const [note, setNote] = useState("");
 
   return (
@@ -97,6 +111,18 @@ export function ClaimForm({
           <input type="date" value={paidOn} max={today}
             onChange={(e) => setPaidOn(e.target.value)} style={{ marginTop: 4 }} />
         </label>
+
+        {/* THE TAKEOVER QUESTION. Households who paid the same name for years
+            keep writing it. A check made out to the seller is not late rent —
+            it is rent that went somewhere else, and that is a different problem
+            with a different answer. */}
+        {method !== "cash" && (
+          <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+            <span className="mut">Who they made it out to</span>
+            <input value={paidTo} onChange={(e) => setPaidTo(e.target.value)}
+              placeholder="The name they wrote" style={{ marginTop: 4 }} />
+          </label>
+        )}
       </div>
 
       <label className="ll-field" style={{ fontSize: 13, display: "block", marginTop: 10 }}>
@@ -117,7 +143,7 @@ export function ClaimForm({
           onClick={() =>
             start(async () => {
               const res = await logPaymentClaim(parkId, chargeId, {
-                amount, paidOn, method, reference, note,
+                amount, paidOn, method, reference, paidTo, note,
               });
               toast(res.ok ? (res.signal ?? "Noted.") : (res.error ?? "Couldn't record that."));
               if (res.ok) onDone();
