@@ -3,14 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
-import { toDaterange, type Lot, effectiveSeason } from "@/lib/parks";
+import { toDaterange, parseDaterange, type Lot, effectiveSeason } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
 import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
-  buildLotRange, planBulkRates, buildTenant, buildTenantEdit,
+  buildLotRange, planBulkRates, buildTenant, buildTenantEdit, buildParkDialsRow,
   type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
-  type TenantInput, type TenantEditInput,
+  type TenantInput, type TenantEditInput, type ParkDialsInput,
 } from "./park-helpers";
 
 /**
@@ -76,6 +76,88 @@ export async function saveParkProfile(
   revalidatePath("/park");
   revalidatePath("/park/setup");
   return { ok: true, signal: "Park profile saved." };
+}
+
+/** The dials as they stand, plus what a new cap would collide with. */
+export async function getParkDials(parkId: string): Promise<{
+  initial: ParkDialsInput;
+  longestStayDays: number | null;
+} | null> {
+  if (!(await assertMyPark(parkId))) return null;
+  const admin = createServiceClient();
+
+  const { data: p } = await admin
+    .from("parks")
+    .select("max_agreement_months, deposit_amount, rent_due_day, office_recording_lag_days, rent_notice_days, cutover_date")
+    .eq("id", parkId)
+    .maybeSingle();
+
+  const { data: lots } = await admin
+    .from("park_lots").select("id").eq("park_id", parkId);
+  const lotIds = (lots ?? []).map((l) => l.id as string);
+
+  let longestStayDays: number | null = null;
+  if (lotIds.length) {
+    const { data: stays } = await admin
+      .from("lot_reservations")
+      .select("during")
+      .in("park_lot_id", lotIds)
+      .in("status", ["approved", "active"]);
+    for (const s of stays ?? []) {
+      const r = parseDaterange(s.during as string);
+      if (!r) continue;
+      const days = Math.round(
+        (Date.parse(`${r.end}T00:00:00Z`) - Date.parse(`${r.start}T00:00:00Z`)) / 86_400_000,
+      );
+      if (longestStayDays == null || days > longestStayDays) longestStayDays = days;
+    }
+  }
+
+  const str = (v: unknown) => (v == null ? "" : String(v));
+  return {
+    initial: {
+      maxAgreementMonths: str(p?.max_agreement_months),
+      depositAmount: str(p?.deposit_amount),
+      rentDueDay: str(p?.rent_due_day),
+      officeRecordingLagDays: str(p?.office_recording_lag_days),
+      rentNoticeDays: str(p?.rent_notice_days),
+      cutoverOn: str(p?.cutover_date),
+    },
+    longestStayDays,
+  };
+}
+
+/**
+ * HOW THIS PARK RUNS.
+ *
+ * These columns have been read by triggers and by every money screen since
+ * 0061, and nothing has ever written them — so the owner's three-month rule
+ * sat NULL and its trigger skipped, and the notice period sat on a 30-day
+ * default he had already told us was 45.
+ */
+export async function saveParkDials(
+  parkId: string,
+  input: ParkDialsInput,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const built = buildParkDialsRow(input);
+  if (!built.ok || !built.row) return { ok: false, error: built.error };
+
+  const admin = createServiceClient();
+  const { error } = await admin.from("parks").update(built.row).eq("id", parkId);
+  if (error) return { ok: false, error: "Couldn't save that — try again." };
+
+  const cap = built.row.max_agreement_months as number | null;
+  revalidatePath("/park");
+  revalidatePath("/park/setup");
+  revalidatePath("/park/rent");
+  return {
+    ok: true,
+    signal: cap
+      ? `Saved. New agreements are capped at ${cap} ${cap === 1 ? "month" : "months"}.`
+      : "Saved.",
+  };
 }
 
 /**
@@ -357,7 +439,15 @@ export async function addTenant(
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
   if ((await assertLotIsMine(lotId)) !== parkId) return { ok: false, error: DENIED };
 
-  const built = buildTenant(input, todayLakeDate());
+  // The park's agreement cap shortens the tenancy we write. Without this the
+  // silent 365-day range collides with 0062's cap trigger and every add fails
+  // on a database error the moment the owner turns his rule on.
+  const capAdmin = createServiceClient();
+  const { data: capRow } = await capAdmin
+    .from("parks").select("max_agreement_months").eq("id", parkId).maybeSingle();
+  const cap = (capRow?.max_agreement_months as number | null) ?? null;
+
+  const built = buildTenant(input, todayLakeDate(), cap);
   if (!built.ok || !built.renter || !built.tenancy) {
     return { ok: false, error: built.error };
   }

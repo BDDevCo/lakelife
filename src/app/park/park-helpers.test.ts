@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   toStay, buildRentRoll, summarise, coversDay, canApprove,
   buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
-  planBulkRates, buildTenant,
+  planBulkRates, buildTenant, buildParkDialsRow, dialsWarning,
   type BulkRateTarget, type TenantInput,
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
   buildTenantEdit,
@@ -798,5 +798,90 @@ describe("parseLotSeason", () => {
       active: true,
     });
     expect(r.row!.season_open_month).toBeNull();
+  });
+});
+
+// ------------------------------------------------------------ park dials ---
+
+describe("park dials — the numbers nothing could write", () => {
+  const blank = {
+    maxAgreementMonths: "", depositAmount: "", rentDueDay: "",
+    officeRecordingLagDays: "", rentNoticeDays: "", cutoverOn: "",
+  };
+
+  it("writes the owner's three-month cap, which the 0062 trigger reads", () => {
+    const r = buildParkDialsRow({ ...blank, maxAgreementMonths: "3" });
+    expect(r.ok).toBe(true);
+    expect(r.row!.max_agreement_months).toBe(3);
+  });
+
+  it("treats a blank cap as NO cap rather than as zero", () => {
+    const r = buildParkDialsRow(blank);
+    expect(r.row!.max_agreement_months).toBeNull();
+  });
+
+  it("leaves a NOT NULL dial alone when the box is blank, rather than nulling it", () => {
+    // rent_due_day is NOT NULL with a default. Clearing the field must mean
+    // "don't change it", never "have no due day" — which would fail the insert.
+    const r = buildParkDialsRow(blank);
+    expect("rent_due_day" in r.row!).toBe(false);
+    expect("office_recording_lag_days" in r.row!).toBe(false);
+    expect("rent_notice_days" in r.row!).toBe(false);
+  });
+
+  it("takes the 45-day notice period he actually asked for", () => {
+    const r = buildParkDialsRow({ ...blank, rentNoticeDays: "45" });
+    expect(r.row!.rent_notice_days).toBe(45);
+  });
+
+  it("refuses a due day past the 28th — no park bills on a day February lacks", () => {
+    expect(buildParkDialsRow({ ...blank, rentDueDay: "31" }).ok).toBe(false);
+    expect(buildParkDialsRow({ ...blank, rentDueDay: "28" }).ok).toBe(true);
+  });
+
+  it("refuses junk without pretending it understood", () => {
+    expect(buildParkDialsRow({ ...blank, maxAgreementMonths: "three" }).ok).toBe(false);
+    expect(buildParkDialsRow({ ...blank, depositAmount: "lots" }).ok).toBe(false);
+    expect(buildParkDialsRow({ ...blank, cutoverOn: "December" }).ok).toBe(false);
+  });
+
+  it("takes a deposit with a dollar sign and commas", () => {
+    expect(buildParkDialsRow({ ...blank, depositAmount: "$1,200" }).row!.deposit_amount).toBe(1200);
+  });
+
+  it("warns only when the roll already runs longer than the new cap", () => {
+    expect(dialsWarning(3, 365)).toMatch(/stay exactly as they are/);
+    expect(dialsWarning(3, 90)).toBeNull();
+    expect(dialsWarning(null, 365)).toBeNull();
+  });
+});
+
+describe("adding a tenant under an agreement cap", () => {
+  const input = {
+    displayName: "Roy Amberg", movedInOn: "", term: "monthly",
+    rent: "395", mobile: "", email: "", source: "owner_knowledge",
+  };
+
+  it("writes a 365-day range when the park has NO cap", () => {
+    const r = buildTenant(input, "2026-08-11", null);
+    expect(r.tenancy!.end).toBe("2027-08-11");
+  });
+
+  it("shortens the tenancy to the cap, so the 0062 trigger cannot refuse it", () => {
+    // The trigger refuses span_days > cap*31 + 1. At a 3-month cap that is 94.
+    const r = buildTenant(input, "2026-08-11", 3);
+    expect(r.tenancy!.end).toBe("2026-11-11");
+    const span =
+      (Date.UTC(2026, 10, 11) - Date.UTC(2026, 7, 11)) / 86_400_000;
+    expect(span).toBeLessThanOrEqual(3 * 31 + 1);
+  });
+
+  it("clamps a short month instead of producing an impossible date", () => {
+    const r = buildTenant({ ...input, movedInOn: "2026-01-31" }, "2026-08-11", 1);
+    expect(r.tenancy!.end).toBe("2026-02-28");
+  });
+
+  it("a cap shortens the agreement, it never refuses the person", () => {
+    expect(buildTenant(input, "2026-08-11", 1).ok).toBe(true);
   });
 });

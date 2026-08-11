@@ -15,6 +15,8 @@ import {
   parkOpenFor,
   type ParkSeason,
 } from "@/lib/parks";
+// The agreement cap lives here already, and it clamps short months correctly.
+import { addMonths } from "./agreement-helpers";
 
 // ------------------------------------------------------------ rent roll ----
 
@@ -723,7 +725,23 @@ function addDays(iso: string, days: number): string {
  * that demands rent and a date before it will save anything is a form that
  * gets abandoned at lot 9.
  */
-export function buildTenant(input: TenantInput, todayISO: string): TenantResult {
+export function buildTenant(
+  input: TenantInput,
+  todayISO: string,
+  /**
+   * The park's agreement cap, when it has one.
+   *
+   * WITHOUT THIS, TURNING THE CAP ON BREAKS ADDING A TENANT. The silent range
+   * written below used to be a flat 365 days, while 0062's trigger refuses
+   * anything longer than `cap * 31 + 1` — so the moment the owner sets his
+   * three-month rule, every "add a tenant" failed on a database trigger and
+   * surfaced as "Couldn't put them on that lot — try again."
+   *
+   * A cap is a statement about how long ONE agreement runs, not about how long
+   * somebody may stay. So it shortens the range; it never refuses the person.
+   */
+  maxAgreementMonths: number | null = null,
+): TenantResult {
   const displayName = input.displayName.trim();
   if (!displayName) return { ok: false, error: "Who lives here? A name is enough to start." };
   if (displayName.length > 120) return { ok: false, error: "That name is too long." };
@@ -782,7 +800,12 @@ export function buildTenant(input: TenantInput, todayISO: string): TenantResult 
     },
     tenancy: {
       start,
-      end: addDays(start, TENANCY_HORIZON_DAYS),
+      // The cap when there is one, the horizon when there is not. `addMonths`
+      // clamps a short month properly — Jan 31 plus one month is Feb 28, not
+      // an invalid date.
+      end: maxAgreementMonths == null
+        ? addDays(start, TENANCY_HORIZON_DAYS)
+        : addMonths(start, maxAgreementMonths),
       term,
       quoted_amount: quoted,
     },
@@ -888,6 +911,119 @@ export function buildParkProfileRow(input: ParkProfileInput): ParkProfileResult 
       house_rules: rules || null,
     },
   };
+}
+
+// ----------------------------------------------------------- park dials ----
+
+/**
+ * HOW THIS PARK RUNS — the numbers the rest of the module has been reading all
+ * along and nothing has ever been able to write.
+ *
+ * Every one of these columns existed. `max_agreement_months` carries the
+ * owner's three-month rule and is read by a database trigger (0062, 0065);
+ * `rent_notice_days` gates every rent increase (0061); `rent_due_day` sets
+ * every bill's due date; `office_recording_lag_days` decides who is called
+ * late. Three of them sat on defaults and two sat on NULL, because the setup
+ * form writes twelve columns and none of them are these.
+ *
+ * So the cap trigger was skipping — `cap_months is null` means "no cap" — and
+ * the most explicitly stated rule in this whole project was enforced by
+ * nothing. A rule the software knows about but cannot be told is worse than no
+ * rule, because everyone assumes it is running.
+ */
+export interface ParkDialsInput {
+  /** "" clears it — a park with no cap is legitimate. */
+  maxAgreementMonths: string;
+  depositAmount: string;
+  rentDueDay: string;
+  officeRecordingLagDays: string;
+  rentNoticeDays: string;
+  /** The day he takes over. "" until a contract says otherwise. */
+  cutoverOn: string;
+}
+
+export interface ParkDialsResult {
+  ok: boolean;
+  error?: string;
+  row?: Record<string, unknown>;
+}
+
+function wholeNumber(
+  raw: string,
+  label: string,
+  min: number,
+  max: number,
+): { ok: true; value: number | null } | { ok: false; error: string } {
+  const s = raw.trim();
+  if (!s) return { ok: true, value: null };
+  if (!/^\d+$/.test(s)) return { ok: false, error: `${label} needs to be a whole number.` };
+  const n = Number(s);
+  if (n < min || n > max) {
+    return { ok: false, error: `${label} should be between ${min} and ${max}.` };
+  }
+  return { ok: true, value: n };
+}
+
+export function buildParkDialsRow(input: ParkDialsInput): ParkDialsResult {
+  const cap = wholeNumber(input.maxAgreementMonths, "The agreement cap", 1, 120);
+  if (!cap.ok) return { ok: false, error: cap.error };
+
+  const due = wholeNumber(input.rentDueDay, "The rent due day", 1, 28);
+  if (!due.ok) return { ok: false, error: due.error };
+
+  const lag = wholeNumber(input.officeRecordingLagDays, "The catch-up window", 0, 30);
+  if (!lag.ok) return { ok: false, error: lag.error };
+
+  const notice = wholeNumber(input.rentNoticeDays, "The notice period", 0, 365);
+  if (!notice.ok) return { ok: false, error: notice.error };
+
+  let deposit: number | null = null;
+  const rawDeposit = input.depositAmount.trim();
+  if (rawDeposit) {
+    const n = Number(rawDeposit.replace(/[$,]/g, ""));
+    if (!Number.isFinite(n) || n < 0) return { ok: false, error: "The deposit needs to be a dollar amount." };
+    if (n > 100_000) return { ok: false, error: "That deposit looks like a typo." };
+    deposit = Math.round(n * 100) / 100;
+  }
+
+  const cutover = input.cutoverOn.trim();
+  if (cutover && !/^\d{4}-\d{2}-\d{2}$/.test(cutover)) {
+    return { ok: false, error: "That takeover date doesn't look right." };
+  }
+
+  // NOT NULL columns with defaults keep their default rather than being
+  // nulled — clearing the box means "leave it alone", not "have no due day".
+  const row: Record<string, unknown> = {
+    max_agreement_months: cap.value,
+    deposit_amount: deposit,
+    cutover_date: cutover || null,
+  };
+  if (due.value != null) row.rent_due_day = due.value;
+  if (lag.value != null) row.office_recording_lag_days = lag.value;
+  if (notice.value != null) row.rent_notice_days = notice.value;
+
+  return { ok: true, row };
+}
+
+/**
+ * What setting a cap actually does to the roll, said before he saves.
+ *
+ * The cap is enforced by a trigger, so an existing tenancy longer than the new
+ * cap is not rewritten — it is simply refused the next time anything touches
+ * it. He should hear that from a sentence, not from a failed edit weeks later.
+ */
+export function dialsWarning(
+  capMonths: number | null,
+  longestExistingStayDays: number | null,
+): string | null {
+  if (capMonths == null || longestExistingStayDays == null) return null;
+  const capDays = capMonths * 31 + 1;
+  if (longestExistingStayDays <= capDays) return null;
+  return (
+    `Some tenancies on your roll already run longer than ${capMonths} ` +
+    `${capMonths === 1 ? "month" : "months"}. They stay exactly as they are — ` +
+    `the cap applies to agreements you write from now on.`
+  );
 }
 
 // --------------------------------------------------------- rate parsing ----

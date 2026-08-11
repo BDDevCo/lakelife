@@ -6,6 +6,8 @@ import { ParkStreams } from "@/components/ParkStreams";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { parkStreamStatuses } from "@/app/park/stream-actions";
+import { getParkDials } from "@/app/park/actions";
+import { ParkDials } from "@/components/ParkDials";
 import type { ParkProfileInput } from "@/app/park/park-helpers";
 
 const md = (m: number | null, d: number | null) =>
@@ -44,7 +46,10 @@ export default async function ParkSetupPage() {
     houseRules: park.houseRules ?? "",
   };
 
-  const statuses = await parkStreamStatuses(park.id);
+  const [statuses, dials] = await Promise.all([
+    parkStreamStatuses(park.id),
+    getParkDials(park.id),
+  ]);
 
   return (
     <>
@@ -55,6 +60,18 @@ export default async function ParkSetupPage() {
       <div className="wrap" style={{ paddingTop: 18, paddingBottom: 0 }}>
         <ParkStreams parkId={park.id} statuses={statuses} />
       </div>
+      {/* HOW IT RUNS sits above the profile: these are the numbers that
+          decide what the app will let him write, and they were unreachable
+          until now. */}
+      {dials && (
+        <div className="wrap" style={{ paddingTop: 0, paddingBottom: 0 }}>
+          <ParkDials
+            parkId={park.id}
+            initial={dials.initial}
+            longestStayDays={dials.longestStayDays}
+          />
+        </div>
+      )}
       <ParkSetup parkId={park.id} initial={initial} />
     </>
   );
