@@ -10,6 +10,8 @@ import {
   planRun, toRows, summarise, currentPeriod,
   type Charge, type LedgerRow, type LedgerSummary, type RunPlan,
 } from "./ledger-helpers";
+import { sendEmail } from "@/lib/email";
+import { receiptBody, type ReceiptLines } from "./receipt-helpers";
 import type { ParkResult } from "./actions";
 
 /**
@@ -197,7 +199,9 @@ export async function recordPayment(
   method: "cash" | "check" | "card" | "ach" | "transfer" | "other",
   reference: string,
   receivedOn: string,
-): Promise<ParkResult> {
+  /** The serial off the slip they dropped in the box, when that is how it came. */
+  dropSlipNo?: string,
+): Promise<ParkResult & { receipt?: ReceiptLines; renterEmail?: string | null }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
   if (!Number.isFinite(amount) || amount <= 0) {
     return { ok: false, error: "That payment amount isn't a number." };
@@ -213,24 +217,129 @@ export async function recordPayment(
     return { ok: false, error: "That bill was cancelled — record it against a live one." };
   }
 
-  const { error } = await admin.from("park_payments").insert({
+  // The insert returns the receipt number the trigger assigned, so the renter
+  // can walk away with proof of what they just handed over.
+  const { data: written, error } = await admin.from("park_payments").insert({
     charge_id: chargeId,
     amount,
     method,
     reference: reference.trim() || null,
     received_on: receivedOn,
-  });
+    drop_slip_no: dropSlipNo?.trim() || null,
+  }).select("receipt_no").single();
   if (error) return { ok: false, error: "Couldn't record that — try again." };
 
   const balance = Number(charge.amount) - Number(charge.paid_total) - amount;
+
+  // Everything the receipt needs, gathered once here rather than by a second
+  // round trip from the screen.
+  const [{ data: park }, { data: full }] = await Promise.all([
+    admin.from("parks").select("name, address").eq("id", parkId).maybeSingle(),
+    admin
+      .from("park_charges")
+      .select("period_month, amount, park_lot_id, renter_id")
+      .eq("id", chargeId)
+      .maybeSingle(),
+  ]);
+  const [{ data: lot }, { data: renter }] = await Promise.all([
+    full?.park_lot_id
+      ? admin.from("park_lots").select("lot_number").eq("id", full.park_lot_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    full?.renter_id
+      ? admin.from("park_renters").select("display_name, email, contact_pref")
+          .eq("id", full.renter_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+
+  const receipt: ReceiptLines = {
+    parkName: (park?.name as string) ?? "This park",
+    officeLine: park?.address
+      ? `Questions? The office — ${park.address}.`
+      : "Questions? Ask at the office.",
+    receiptNo: (written?.receipt_no as number) ?? null,
+    lotNumber: (lot?.lot_number as string) ?? "?",
+    payerName: (renter?.display_name as string) ?? null,
+    amount,
+    method,
+    reference: reference.trim() || null,
+    receivedOn,
+    periodMonth: (full?.period_month as string) ?? "",
+    billAmount: Number(full?.amount ?? charge.amount),
+    balanceAfter: Math.round(balance * 100) / 100,
+  };
+
   revalidatePath("/park/rent");
   return {
     ok: true,
+    receipt,
+    // A paper household cannot be emailed one. Say which it is so the screen
+    // offers the right thing rather than pretending both work.
+    renterEmail: (renter?.contact_pref as string) === "paper"
+      ? null
+      : ((renter?.email as string) ?? null),
     signal: balance > 0
       ? `Recorded. $${balance.toFixed(2)} still outstanding.`
       : balance < 0
         ? `Recorded. They're $${Math.abs(balance).toFixed(2)} in credit.`
         : "Recorded — that one's settled.",
+  };
+}
+
+/** Email a receipt to a renter who has an address and wants to be emailed. */
+export async function emailReceipt(
+  parkId: string,
+  to: string,
+  receipt: ReceiptLines,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
+    return { ok: false, error: "That isn't an email address." };
+  }
+  const body = receiptBody(receipt);
+  const res = await sendEmail({
+    to,
+    subject: `${receipt.parkName} — receipt for $${receipt.amount.toFixed(2)}`,
+    text: body,
+    html: `<pre style="font:14px/1.6 ui-monospace,Menlo,monospace;white-space:pre-wrap">${
+      body.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    }</pre>`,
+  });
+  if (res?.ok === false) return { ok: false, error: "That didn't send — check the address." };
+  return { ok: true, signal: "Receipt sent." };
+}
+
+/**
+ * Serials for a sheet of drop slips, and the counter advanced past them.
+ *
+ * Advancing BEFORE the paper exists is deliberate: re-issuing a serial destroys
+ * the only property that makes a slip evidence, and wasting a few numbers on a
+ * jammed printer costs nothing.
+ */
+export async function takeDropSlipSerials(
+  parkId: string,
+  count: number,
+): Promise<{ ok: boolean; error?: string; from?: number; parkName?: string; officeLine?: string }> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  if (!Number.isInteger(count) || count < 1 || count > 200) {
+    return { ok: false, error: "Print between 1 and 200 slips." };
+  }
+
+  const admin = createServiceClient();
+  const { data: park } = await admin
+    .from("parks").select("name, address, next_drop_slip_no").eq("id", parkId).maybeSingle();
+  if (!park) return { ok: false, error: "That park isn't here." };
+
+  const from = (park.next_drop_slip_no as number) ?? 1;
+  const { error } = await admin
+    .from("parks").update({ next_drop_slip_no: from + count }).eq("id", parkId);
+  if (error) return { ok: false, error: "Couldn't reserve those numbers — try again." };
+
+  revalidatePath("/park/rent");
+  return {
+    ok: true,
+    from,
+    parkName: (park.name as string) ?? "This park",
+    officeLine: park.address ? `The office — ${park.address}.` : "The office.",
   };
 }
 

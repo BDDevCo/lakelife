@@ -8,6 +8,8 @@ import {
   type LedgerPage,
 } from "@/app/park/ledger-actions";
 import { ClaimForm } from "@/components/ClaimForm";
+import { ReceiptPanel, DropSlips } from "@/components/ParkReceipt";
+import type { ReceiptLines } from "@/app/park/receipt-helpers";
 import { LEDGER_LABEL, ledgerHeadline, runSummary, type RunPlan } from "@/app/park/ledger-helpers";
 import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
 import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
@@ -46,6 +48,9 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
   const [plan, setPlan] = useState<RunPlan | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<
+    { lines: ReceiptLines; email: string | null } | null
+  >(null);
 
   function preview() {
     start(async () => {
@@ -89,12 +94,25 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
         )}
       </div>
 
+      {/* ---- the receipt, the moment a payment lands --------------------- */}
+      {receipt && (
+        <ReceiptPanel
+          parkId={parkId}
+          receipt={receipt.lines}
+          renterEmail={receipt.email}
+          onClose={() => setReceipt(null)}
+        />
+      )}
+
       {/* ---- the run ----------------------------------------------------- */}
       <section style={{ marginTop: 18 }}>
         {!plan ? (
-          <button className="ll-btn" onClick={preview} disabled={busy}>
-            {busy ? "Working…" : `Bill ${page.month}`}
-          </button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="ll-btn" onClick={preview} disabled={busy}>
+              {busy ? "Working…" : `Bill ${page.month}`}
+            </button>
+            <DropSlips parkId={parkId} />
+          </div>
         ) : (
           <div className="ll-card ll-card-pad">
             <strong>{runSummary(plan, page.month)}</strong>
@@ -182,7 +200,11 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                     chargeId={r.id}
                     balance={r.balance}
                     today={page.today}
-                    onDone={() => { setPayingId(null); router.refresh(); }}
+                    onDone={(r) => {
+                      setPayingId(null);
+                      if (r) setReceipt(r);
+                      router.refresh();
+                    }}
                   />
                 )}
               </div>
@@ -358,7 +380,8 @@ function Reminders({
 function PaymentForm({
   parkId, chargeId, balance, today, onDone,
 }: {
-  parkId: string; chargeId: string; balance: number; today: string; onDone: () => void;
+  parkId: string; chargeId: string; balance: number; today: string;
+  onDone: (receipt?: { lines: ReceiptLines; email: string | null }) => void;
 }) {
   const [busy, start] = useTransition();
   // Defaults to the full balance and to CHECK — the overwhelmingly common case
@@ -367,6 +390,9 @@ function PaymentForm({
   const [method, setMethod] = useState<(typeof METHODS)[number]["value"]>("check");
   const [reference, setReference] = useState("");
   const [receivedOn, setReceivedOn] = useState(today);
+  // Ties the payment back to the half they kept, which is the whole point of
+  // the slip existing.
+  const [dropSlipNo, setDropSlipNo] = useState("");
 
   return (
     <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
@@ -393,6 +419,11 @@ function PaymentForm({
           <input type="date" value={receivedOn}
             onChange={(e) => setReceivedOn(e.target.value)} style={{ marginTop: 4 }} />
         </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Drop slip, if there was one</span>
+          <input value={dropSlipNo} onChange={(e) => setDropSlipNo(e.target.value)}
+            placeholder="TH-00041" style={{ marginTop: 4 }} />
+        </label>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
@@ -401,10 +432,14 @@ function PaymentForm({
             start(async () => {
               const res = await recordPayment(
                 parkId, chargeId, Number(amount.replace(/[$,\s]/g, "")),
-                method, reference, receivedOn,
+                method, reference, receivedOn, dropSlipNo,
               );
               toast(res.ok ? (res.signal ?? "Recorded.") : (res.error ?? "Couldn't record that."));
-              if (res.ok) onDone();
+              if (res.ok) {
+                onDone(res.receipt
+                  ? { lines: res.receipt, email: res.renterEmail ?? null }
+                  : undefined);
+              }
             })
           }>
           Record it
