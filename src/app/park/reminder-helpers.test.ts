@@ -197,3 +197,37 @@ describe("the owner's digest", () => {
     expect(ownerDigest(plan, "The Haven", "2026-08")).toBeNull();
   });
 });
+
+describe("never chase somebody who says they already paid", () => {
+  it("skips a disputed household entirely", () => {
+    // The park is wrong about as often as the renter. A demand sent to
+    // somebody who handed over cash last week is how a clerical gap becomes
+    // a fight -- and the software would be the one that started it.
+    const rows = toRows([charge({ id: "a" })], TODAY, 3, new Set(["a"]));
+    const plan = planReminders(rows, new Map([["a", contact()]]), "2026-08", OPTS);
+    expect(plan.totalChased).toBe(0);
+    expect(plan.skippedDisputed).toBe(1);
+    expect(plan.toSend).toHaveLength(0);
+    expect(plan.toPrint).toHaveLength(0);
+    expect(plan.blocked).toHaveLength(0);
+  });
+
+  it("still chases the genuinely late ones alongside", () => {
+    const rows = toRows(
+      [charge({ id: "a" }), charge({ id: "b", lotNumber: "2" })],
+      TODAY, 3, new Set(["a"]),
+    );
+    const plan = planReminders(rows, new Map([
+      ["a", contact()], ["b", contact()],
+    ]), "2026-08", OPTS);
+    expect(plan.totalChased).toBe(1);
+    expect(plan.skippedDisputed).toBe(1);
+  });
+
+  it("says why there is nobody to chase rather than 'nobody is late'", () => {
+    const rows = toRows([charge({ id: "a" })], TODAY, 3, new Set(["a"]));
+    const plan = planReminders(rows, new Map([["a", contact()]]), "2026-08", OPTS);
+    expect(reminderSummary(plan)).toMatch(/say they've already paid/);
+    expect(reminderSummary(plan)).not.toMatch(/Nobody is late/);
+  });
+});

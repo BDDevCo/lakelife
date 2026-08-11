@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
@@ -303,6 +303,19 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
     .eq("park_id", parkId)
     .eq("period_month", period);
 
+  // UNANSWERED "I PAID THIS" claims. A charge carrying one is disputed, not
+  // late — the two parties disagree, and disagreement is a question rather
+  // than a delinquency.
+  const chargeIds = (data ?? []).map((c) => c.id as string);
+  const { data: claims } = chargeIds.length
+    ? await admin
+        .from("park_payment_claims")
+        .select("charge_id")
+        .in("charge_id", chargeIds)
+        .is("resolved_at", null)
+    : { data: [] as { charge_id: string }[] };
+  const claimed = new Set((claims ?? []).map((c) => c.charge_id as string));
+
   const lotIds = [...new Set((data ?? []).map((c) => c.park_lot_id as string))];
   const renterIds = [...new Set((data ?? []).map((c) => c.renter_id as string).filter(Boolean))];
 
@@ -329,12 +342,137 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
     status: c.status as Charge["status"],
   }));
 
-  const rows = toRows(charges, today, lagDays)
+  const rows = toRows(charges, today, lagDays, claimed)
     // Late first — it is the only part that needs him today.
     .sort((a, b) => {
-      const rank = (s: string) => (s === "late" ? 0 : s === "part_paid" ? 1 : s === "due" ? 2 : 3);
+      // Disputed first: it is the only row that says we might be wrong.
+      const rank = (s: string) =>
+        s === "disputed" ? 0 : s === "late" ? 1 : s === "part_paid" ? 2 : s === "due" ? 3 : 4;
       return rank(a.state) - rank(b.state) || a.lotNumber.localeCompare(b.lotNumber, undefined, { numeric: true });
     });
 
   return { month: period, rows, summary: summarise(rows), lagDays, today };
+}
+
+// ---------------------------------------------------- the renter's side ----
+
+/**
+ * "THEY SAY THEY PAID."
+ *
+ * The only way the renter's side of a payment ever gets into this system. Most
+ * of these arrive over a counter or on the phone, so the office logs them — and
+ * `asserted_by: 'renter'` records whose assertion it is, not who typed it.
+ *
+ * IT DOES NOT MARK THE BILL PAID. It does not move the balance by a cent. What
+ * it does is stop the software calling somebody delinquent while the two
+ * parties disagree, until a person answers the question on purpose.
+ *
+ * Logging one must never require agreeing with it. An owner who thinks the
+ * renter is mistaken should still record that they said it — that record is
+ * what makes the eventual answer defensible.
+ */
+export async function logPaymentClaim(
+  parkId: string,
+  chargeId: string,
+  input: {
+    amount?: string;
+    paidOn?: string;
+    method?: "cash" | "check" | "card" | "ach" | "transfer" | "other";
+    reference?: string;
+    note?: string;
+  },
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const admin = createServiceClient();
+  const { data: charge } = await admin
+    .from("park_charges").select("id").eq("id", chargeId).eq("park_id", parkId).maybeSingle();
+  if (!charge) return { ok: false, error: "That bill isn't here." };
+
+  // Every detail optional on purpose. "I paid you" with no amount and no date
+  // is still the renter's account of events, and demanding a check number
+  // before recording anything silences exactly the households least able to
+  // produce paperwork.
+  const raw = (input.amount ?? "").replace(/[$,\s]/g, "");
+  const amount = raw ? Number(raw) : null;
+  if (amount != null && (!Number.isFinite(amount) || amount <= 0)) {
+    return { ok: false, error: "That amount isn't a number." };
+  }
+
+  const { error } = await admin.from("park_payment_claims").insert({
+    charge_id: chargeId,
+    claimed_amount: amount,
+    claimed_paid_on: input.paidOn?.trim() || null,
+    method: input.method ?? null,
+    reference: input.reference?.trim() || null,
+    note: input.note?.trim() || null,
+    asserted_by: "renter",
+    logged_by: await currentUserId(),
+  });
+  if (error) return { ok: false, error: "Couldn't record that — try again." };
+
+  revalidatePath("/park/rent");
+  return {
+    ok: true,
+    signal: "Noted. They won't be chased or counted as late until you've checked.",
+  };
+}
+
+/**
+ * Answer the question.
+ *
+ * 'matched' happens on its own the moment a payment is recorded, so the two
+ * answers a human gives are "we looked and there's no such payment" and "they
+ * withdrew it". The first one leaves somebody owing money on the park's word
+ * alone, so the database refuses it without an explanation — the explanation is
+ * exactly what a court would ask for.
+ */
+export async function resolvePaymentClaim(
+  parkId: string,
+  claimId: string,
+  resolution: "not_found" | "withdrawn",
+  note: string,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  if (resolution === "not_found" && !note.trim()) {
+    return {
+      ok: false,
+      error: "Say what you checked. This one puts them back in arrears on your word alone.",
+    };
+  }
+
+  const admin = createServiceClient();
+  // Scope the claim to this park through its charge before touching it.
+  const { data: claim } = await admin
+    .from("park_payment_claims")
+    .select("id, charge_id, park_charges!inner(park_id)")
+    .eq("id", claimId)
+    .maybeSingle();
+  const owner = (claim as { park_charges?: { park_id?: string } } | null)?.park_charges?.park_id;
+  if (!claim || owner !== parkId) return { ok: false, error: "That isn't here." };
+
+  const { error } = await admin
+    .from("park_payment_claims")
+    .update({
+      resolved_at: new Date().toISOString(),
+      resolution,
+      resolution_note: note.trim() || null,
+      resolved_by: await currentUserId(),
+    })
+    .eq("id", claimId);
+  if (error) return { ok: false, error: "Couldn't save that — try again." };
+
+  revalidatePath("/park/rent");
+  return {
+    ok: true,
+    signal: resolution === "not_found"
+      ? "Recorded. That bill is back in arrears."
+      : "Recorded.",
+  };
+}
+
+async function currentUserId(): Promise<string | null> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  return user?.id ?? null;
 }

@@ -142,3 +142,64 @@ describe("daysBetween", () => {
     expect(daysBetween("2028-02-28", "2028-03-01")).toBe(2);   // leap year
   });
 });
+
+describe("a payment is a two-party event", () => {
+  const charge = {
+    id: "c1", lotNumber: "3", renterName: "Roy Amberg",
+    periodMonth: "2026-07", dueOn: "2026-07-01",
+    amount: 455, paidTotal: 0, status: "open" as const,
+  };
+
+  it("calls an unrecorded bill late when nobody has said otherwise", () => {
+    expect(ledgerState(charge, "2026-07-20", 3)).toBe("late");
+  });
+
+  it("calls it DISPUTED, not late, once the household says they paid", () => {
+    // The park says unpaid, the renter says paid. That is a disagreement, and a
+    // disagreement is a question rather than a delinquency.
+    expect(ledgerState(charge, "2026-07-20", 3, true)).toBe("disputed");
+  });
+
+  it("does NOT treat a claim as payment — the balance is untouched", () => {
+    const rows = toRows([charge], "2026-07-20", 3, new Set(["c1"]));
+    expect(rows[0].balance).toBe(455);
+    expect(rows[0].state).toBe("disputed");
+  });
+
+  it("keeps disputed money OUT of the arrears total", () => {
+    // The moment a disputed bill counts as arrears, every downstream total --
+    // a demand letter, a default notice, an eviction exhibit -- asserts a debt
+    // that is still an open question.
+    const s = summarise(toRows([charge], "2026-07-20", 3, new Set(["c1"])));
+    expect(s.lateCount).toBe(0);
+    expect(s.lateAmount).toBe(0);
+    expect(s.disputedCount).toBe(1);
+    expect(s.disputedAmount).toBe(455);
+  });
+
+  it("still counts it as outstanding — a claim is not proof either", () => {
+    const s = summarise(toRows([charge], "2026-07-20", 3, new Set(["c1"])));
+    expect(s.outstanding).toBe(455);
+    expect(s.billed).toBe(455);
+  });
+
+  it("a claim on a bill that is already paid changes nothing", () => {
+    const paid = { ...charge, paidTotal: 455 };
+    expect(ledgerState(paid, "2026-07-20", 3, true)).toBe("paid");
+  });
+
+  it("a claim inside the catch-up window doesn't promote it to disputed", () => {
+    // Nothing to disagree about yet — the office simply hasn't caught up.
+    expect(ledgerState(charge, "2026-07-02", 3, true)).toBe("due");
+  });
+
+  it("leads the headline with the disagreement, not the arrears", () => {
+    const rows = toRows(
+      [charge, { ...charge, id: "c2", lotNumber: "4" }],
+      "2026-07-20", 3, new Set(["c1"]),
+    );
+    const line = ledgerHeadline(summarise(rows), 3);
+    expect(line).toMatch(/says they've paid/);
+    expect(line).toMatch(/1 other household is late/);
+  });
+});

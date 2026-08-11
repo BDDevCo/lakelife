@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import {
-  previewChargeRun, runCharges, recordPayment, voidCharge,
+  previewChargeRun, runCharges, recordPayment, voidCharge, logPaymentClaim,
   type LedgerPage,
 } from "@/app/park/ledger-actions";
 import { LEDGER_LABEL, ledgerHeadline, runSummary, type RunPlan } from "@/app/park/ledger-helpers";
@@ -36,6 +36,7 @@ const METHODS = [
 
 const STATE_PILL: Record<string, string> = {
   late: "warn", part_paid: "warn", due: "slate", paid: "", void: "slate", credit: "",
+  disputed: "warn",
 };
 
 export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage }) {
@@ -147,6 +148,27 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                       {payingId === r.id ? "Cancel" : "Record payment"}
                     </button>
                   )}
+                  {/* THE RENTER'S SIDE. Logging it does not mean agreeing with
+                      it — and it must be one tap, because most of these arrive
+                      as somebody saying it across a counter. */}
+                  {r.state === "late" && (
+                    <button className="ll-btn ghost"
+                      onClick={() => {
+                        const note = window.prompt(
+                          `Lot ${r.lotNumber} says they've already paid this. ` +
+                          `Anything they told you — when, how, a check number? ` +
+                          `(You can leave this blank.)`,
+                        );
+                        if (note === null) return;
+                        start(async () => {
+                          const res = await logPaymentClaim(parkId, r.id, { note });
+                          toast(res.ok ? (res.signal ?? "Noted.") : (res.error ?? "Couldn't record that."));
+                          if (res.ok) router.refresh();
+                        });
+                      }}>
+                      They say they paid
+                    </button>
+                  )}
                 </div>
 
                 {payingId === r.id && (
@@ -161,6 +183,19 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
               </div>
             ))}
           </div>
+
+          {s.disputedCount > 0 && (
+            <p style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
+              <strong>
+                {s.disputedCount === 1 ? "One household says" : `${s.disputedCount} households say`}{" "}
+                they&apos;ve paid and we haven&apos;t found it.
+              </strong>{" "}
+              Those aren&apos;t counted as late and won&apos;t be chased until you&apos;ve
+              looked — a payment is something two people were there for, and this
+              ledger only hears your side of it. Check the drop box and the bank,
+              then either record the payment or say what you found.
+            </p>
+          )}
 
           {page.lagDays > 0 && s.lateCount === 0 && s.outstanding > 0 && (
             <p className="mut" style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>

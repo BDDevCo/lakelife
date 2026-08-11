@@ -172,6 +172,12 @@ export interface ReminderPlan {
   blocked: PlannedReminder[];
   skippedAlreadyReminded: number;
   skippedNotLate: number;
+  /**
+   * Households who say they paid. Never chased — a demand sent to somebody who
+   * handed over cash last week is how a clerical gap becomes a fight, and it is
+   * the park that will be wrong roughly as often as the renter.
+   */
+  skippedDisputed: number;
   totalChased: number;
 }
 
@@ -186,8 +192,13 @@ export function planReminders(
   const blocked: PlannedReminder[] = [];
   let skippedAlreadyReminded = 0;
   let skippedNotLate = 0;
+  let skippedDisputed = 0;
 
   for (const r of rows) {
+    // THEY SAY THEY PAID. Never chased while that is unanswered — the park is
+    // wrong about as often as the renter, and a demand sent to somebody who
+    // handed over cash last week is how a clerical gap becomes a fight.
+    if (r.state === "disputed") { skippedDisputed += 1; continue; }
     // Inside the catch-up window a bill is unrecorded, not unpaid. Chasing it
     // is the false alarm the whole ledger is built to avoid.
     if (r.state !== "late") { skippedNotLate += 1; continue; }
@@ -232,7 +243,7 @@ export function planReminders(
 
   return {
     toSend, toPrint, blocked,
-    skippedAlreadyReminded, skippedNotLate,
+    skippedAlreadyReminded, skippedNotLate, skippedDisputed,
     totalChased: toSend.length + toPrint.length,
   };
 }
@@ -246,6 +257,9 @@ export function planReminders(
  */
 export function reminderSummary(plan: ReminderPlan): string {
   if (plan.totalChased === 0 && plan.blocked.length === 0) {
+    if (plan.skippedDisputed > 0) {
+      return `Nobody to chase — ${plan.skippedDisputed} say they've already paid. Check those first.`;
+    }
     if (plan.skippedAlreadyReminded > 0) return "Everyone late has already been reminded.";
     return "Nobody is late.";
   }
@@ -257,6 +271,7 @@ export function reminderSummary(plan: ReminderPlan): string {
   }
   if (plan.blocked.length > 0) parts.push(`${plan.blocked.length} we can't reach`);
   if (plan.skippedAlreadyReminded > 0) parts.push(`${plan.skippedAlreadyReminded} already reminded`);
+  if (plan.skippedDisputed > 0) parts.push(`${plan.skippedDisputed} say they've paid — not chased`);
   return parts.join(" · ");
 }
 

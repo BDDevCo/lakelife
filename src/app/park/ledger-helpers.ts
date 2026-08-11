@@ -31,6 +31,7 @@ export type LedgerState =
   | "part_paid"
   | "due"        // not yet due, or inside the office's catch-up window
   | "late"       // genuinely past due and past the grace
+  | "disputed"   // they say they paid and we have not found it
   | "void"
   | "credit";    // they paid more than the bill
 
@@ -39,6 +40,7 @@ export const LEDGER_LABEL: Record<LedgerState, string> = {
   part_paid: "Part paid",
   due: "Due",
   late: "Late",
+  disputed: "They say they paid",
   void: "Cancelled",
   credit: "In credit",
 };
@@ -67,7 +69,25 @@ export function daysBetween(a: string, b: string): number {
  * `lagDays` is the park's own estimate of how far behind its paperwork runs.
  * Zero is a legitimate answer for an office that banks the same day.
  */
-export function ledgerState(c: Charge, todayISO: string, lagDays: number): LedgerState {
+export function ledgerState(
+  c: Charge,
+  todayISO: string,
+  lagDays: number,
+  /**
+   * The household says they paid this and nobody has found it yet.
+   *
+   * DISPUTED OUTRANKS LATE, and that ordering is the whole point. A payment is
+   * a two-party event and this ledger records one party; "they paid in cash and
+   * nobody clicked yes" and "they paid nothing" are otherwise the same row. An
+   * unanswered claim means the two parties disagree, and disagreement is not
+   * delinquency — it is a question somebody has to answer.
+   *
+   * A claim is NOT proof. It does not mark the bill paid, it does not reduce
+   * the balance, and it does not go away on its own. It stops the software
+   * asserting a default while the question is open.
+   */
+  hasOpenClaim = false,
+): LedgerState {
   if (c.status === "void") return "void";
 
   const balance = balanceOf(c);
@@ -76,7 +96,7 @@ export function ledgerState(c: Charge, todayISO: string, lagDays: number): Ledge
 
   const overdueBy = daysBetween(c.dueOn, todayISO);
   // Not late until it is past due AND past the office's own catch-up window.
-  if (overdueBy > lagDays) return "late";
+  if (overdueBy > lagDays) return hasOpenClaim ? "disputed" : "late";
 
   return c.paidTotal > 0 ? "part_paid" : "due";
 }
@@ -92,11 +112,13 @@ export function toRows(
   charges: readonly Charge[],
   todayISO: string,
   lagDays: number,
+  /** Charge ids with an unanswered "I paid this" against them. */
+  claimedChargeIds: ReadonlySet<string> = new Set(),
 ): LedgerRow[] {
   return charges.map((c) => ({
     ...c,
     balance: balanceOf(c),
-    state: ledgerState(c, todayISO, lagDays),
+    state: ledgerState(c, todayISO, lagDays, claimedChargeIds.has(c.id)),
     overdueDays: daysBetween(c.dueOn, todayISO),
   }));
 }
@@ -112,12 +134,16 @@ export interface LedgerSummary {
   dueCount: number;
   paidCount: number;
   creditCount: number;
+  /** Past due, but the household says they paid. Needs answering, not chasing. */
+  disputedCount: number;
+  disputedAmount: number;
 }
 
 export function summarise(rows: readonly LedgerRow[]): LedgerSummary {
   const s: LedgerSummary = {
     billed: 0, collected: 0, outstanding: 0,
     lateAmount: 0, lateCount: 0, dueCount: 0, paidCount: 0, creditCount: 0,
+    disputedCount: 0, disputedAmount: 0,
   };
   for (const r of rows) {
     // A cancelled charge is not money anybody expected. Counting it as billed
@@ -129,6 +155,13 @@ export function summarise(rows: readonly LedgerRow[]): LedgerSummary {
     if (r.balance > 0) s.outstanding = round2(s.outstanding + r.balance);
 
     if (r.state === "late") { s.lateCount += 1; s.lateAmount = round2(s.lateAmount + r.balance); }
+    // Deliberately NOT folded into lateAmount. The moment a disputed bill is
+    // counted as arrears, every total downstream — a demand letter, a default
+    // notice, an eviction exhibit — asserts a debt that is still a question.
+    else if (r.state === "disputed") {
+      s.disputedCount += 1;
+      s.disputedAmount = round2(s.disputedAmount + r.balance);
+    }
     else if (r.state === "due" || r.state === "part_paid") s.dueCount += 1;
     else if (r.state === "paid") s.paidCount += 1;
     else if (r.state === "credit") s.creditCount += 1;
@@ -146,6 +179,15 @@ export function summarise(rows: readonly LedgerRow[]): LedgerSummary {
 export function ledgerHeadline(s: LedgerSummary, lagDays: number): string {
   if (s.billed === 0) return "Nothing billed yet this month.";
 
+  // A disagreement leads, because it is the only line here that says the
+  // software might be wrong about somebody.
+  if (s.disputedCount > 0) {
+    const n = s.disputedCount;
+    const rest = s.lateCount > 0
+      ? ` ${s.lateCount} other ${s.lateCount === 1 ? "household is" : "households are"} late — $${s.lateAmount.toFixed(2)}.`
+      : "";
+    return `${n} ${n === 1 ? "household says they've" : "households say they've"} paid and we haven't found it — $${s.disputedAmount.toFixed(2)}.${rest}`;
+  }
   if (s.lateCount > 0) {
     return `${s.lateCount} ${s.lateCount === 1 ? "household is" : "households are"} late — $${s.lateAmount.toFixed(2)}.`;
   }
