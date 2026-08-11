@@ -248,6 +248,26 @@ export async function voidCharge(
   }
 
   const admin = createServiceClient();
+
+  // A BILL YOU HAVE TAKEN MONEY FOR IS NOT A BILL YOU CAN CANCEL.
+  //
+  // "Cancel this bill" sits next to "Record it" on the rent screen, so this is
+  // a mis-tap away. Cancelling a paid bill drops that cash out of every total
+  // while it is sitting in the bank. 0072 refuses it in the database too; this
+  // is the sentence he should see instead of an error code.
+  const { data: existing } = await admin
+    .from("park_charges").select("paid_total")
+    .eq("id", chargeId).eq("park_id", parkId).maybeSingle();
+  if (existing && Number(existing.paid_total) > 0) {
+    return {
+      ok: false,
+      error:
+        `You've already taken $${Number(existing.paid_total).toFixed(2)} against this bill. ` +
+        `Cancelling it would make that money disappear from your totals while it's ` +
+        `still in the bank — sort the payment out first.`,
+    };
+  }
+
   const { error } = await admin
     .from("park_charges")
     .update({ status: "void", voided_at: new Date().toISOString(), void_reason: reason.trim() })

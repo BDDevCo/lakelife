@@ -663,6 +663,30 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
   const renterIds = (rows ?? []).map((r) => r.created_renter_id as string | null).filter(Boolean) as string[];
   const lotIds = (rows ?? []).map((r) => r.created_lot_id as string | null).filter(Boolean) as string[];
 
+  // ONCE A BILL HAS BEEN RAISED ON THIS IMPORT'S LOTS, UNDO IS OVER.
+  //
+  // Undo exists for the first five minutes after a paste that went wrong. It is
+  // not a way to reverse a month of trading. Deleting a lot cascades its
+  // charges, and 0072 makes the database refuse that outright once cash is
+  // recorded against them — this check is here so he gets a sentence he can act
+  // on instead of a foreign-key error, and so it refuses on the BILL, before
+  // any money has even arrived.
+  if (lotIds.length) {
+    const { count } = await admin
+      .from("park_charges")
+      .select("id", { count: "exact", head: true })
+      .in("park_lot_id", lotIds);
+    if (count && count > 0) {
+      return {
+        ok: false,
+        error:
+          `You've billed rent on these lots (${count} ${count === 1 ? "bill" : "bills"}), ` +
+          `so undoing the import would take those bills and any money recorded ` +
+          `against them with it. Fix the individual tenancies instead.`,
+      };
+    }
+  }
+
   if (resIds.length) await admin.from("lot_reservations").delete().in("id", resIds);
   if (renterIds.length) await admin.from("park_renters").delete().in("id", renterIds);
 
