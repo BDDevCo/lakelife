@@ -5,6 +5,8 @@ import { ParkToday } from "@/components/ParkToday";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { getToday } from "@/app/park/today-actions";
+import { renewalsDue } from "@/app/park/renew-actions";
+import { ParkRenewals } from "@/components/ParkRenewals";
 
 export default async function ParkTodayPage() {
   if (!hasSupabaseEnv()) {
@@ -26,13 +28,24 @@ export default async function ParkTodayPage() {
     );
   }
 
-  const view = await getToday(park.id);
+  const [view, renewals] = await Promise.all([
+    getToday(park.id),
+    renewalsDue(park.id),
+  ]);
   return (
     <>
       <TopBar />
       <ParkNav parkName={park.name} live={park.active} />
       {view ? (
-        <ParkToday parkId={park.id} view={view} />
+        <>
+          <ParkToday parkId={park.id} view={view} />
+          {/* The renewal list sits under Today because that is where the task
+              card points. A to-do that links to a screen which cannot do the
+              thing is worse than no to-do. */}
+          <div className="wrap" style={{ paddingTop: 0, paddingBottom: 48 }}>
+            <ParkRenewals parkId={park.id} rows={renewals.rows ?? []} />
+          </div>
+        </>
       ) : (
         <div className="wrap" style={{ paddingTop: 24 }}>Nothing to show yet.</div>
       )}

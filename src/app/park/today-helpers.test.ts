@@ -216,6 +216,8 @@ describe("the to-do list", () => {
     }));
     expect(late[0].urgency).toBe("overdue");
     expect(late[0].detail).toMatch(/Nobody has been billed/);
+    // "the 1" reads like a truncated number wherever it appears.
+    expect(late[0].detail).toContain("due on the 1st");
   });
 
   it("never asks to bill a park with nobody in it", () => {

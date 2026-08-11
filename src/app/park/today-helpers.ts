@@ -238,7 +238,7 @@ export function generateTasks(f: TaskFacts): Task[] {
       detail: `The first ends ${soonest}. When one lapses the rent stops being billed — quietly.`,
       urgency: daysBetween(f.today, soonest) < 0 ? "overdue" : "soon",
       dueOn: soonest,
-      href: "/park",
+      href: "/park/today",
       canDismiss: true,
     });
   } else {
@@ -254,7 +254,7 @@ export function generateTasks(f: TaskFacts): Task[] {
           : "Write the next one, or the rent stops being billed.",
         urgency: d < 0 ? "overdue" : "soon",
         dueOn: a.endsOn,
-        href: "/park",
+        href: "/park/today",
         canDismiss: true,
       });
     }
@@ -269,8 +269,8 @@ export function generateTasks(f: TaskFacts): Task[] {
         key: `month_not_billed:${f.parkId}:${f.currentMonth}`,
         title: `${f.currentMonth} isn't billed yet`,
         detail: until < 0
-          ? `Rent was due on the ${f.rentDueDay}. Nobody has been billed.`
-          : `Rent is due on the ${f.rentDueDay}.`,
+          ? `Rent was due on the ${ordinal(f.rentDueDay)}. Nobody has been billed.`
+          : `Rent is due on the ${ordinal(f.rentDueDay)}.`,
         urgency: until < 0 ? "overdue" : "soon",
         dueOn,
         href: "/park/rent",
