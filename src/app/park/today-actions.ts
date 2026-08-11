@@ -1,0 +1,395 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { assertMyPark } from "./data";
+import { todayLakeDate } from "@/lib/booking";
+import { parseDaterange } from "@/lib/parks";
+import {
+  toRows, summarise, currentPeriod,
+  type Charge, type LedgerRow, type LedgerSummary,
+} from "./ledger-helpers";
+import { summariseReceipts, customPeriod, type Receipt, type Method } from "./receipts-helpers";
+import {
+  moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, preCutover,
+  type MoneyBlock, type Task, type TaskState, type OccupancySnapshot,
+} from "./today-helpers";
+import type { ParkResult } from "./actions";
+
+/**
+ * THE MORNING SCREEN — read-only.
+ *
+ * Every number here is a ROLL-UP of something another screen owns. /park/rent
+ * still owns every write; Today never records anything, and every button
+ * navigates. That rule is what stops two screens drifting apart on the meaning
+ * of "late".
+ *
+ * The one thing Today shows that nothing else CAN: arrears from earlier months.
+ * `getLedger` is scoped to a single `period_month`, so a June bill still open in
+ * August is structurally invisible to it.
+ */
+
+const DENIED = "You don't manage that park.";
+const cents = (v: unknown) => Math.round(Number(v ?? 0) * 100);
+
+export interface TodayView {
+  parkName: string;
+  today: string;
+  month: string;
+  money: MoneyBlock;
+  occupancy: { main: string; sub: string | null };
+  tasks: Task[];
+  notes: { id: string; body: string; createdAt: string }[];
+  quiet: { headline: string; checkedLine: string } | null;
+  preCutover: ReturnType<typeof preCutover> | null;
+}
+
+export async function getToday(parkId: string): Promise<TodayView | null> {
+  if (!(await assertMyPark(parkId))) return null;
+
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+  const month = currentPeriod(today);
+
+  const { data: park } = await admin
+    .from("parks")
+    .select("name, rent_due_day, office_recording_lag_days, max_agreement_months, cutover_date")
+    .eq("id", parkId)
+    .maybeSingle();
+  const parkName = (park?.name as string) ?? "Your park";
+  const lagDays = (park?.office_recording_lag_days as number) ?? 3;
+  const rentDueDay = (park?.rent_due_day as number) ?? 1;
+  const cutoverOn = (park?.cutover_date as string) ?? null;
+
+  // ---- lots and who is on them -------------------------------------------
+  const { data: lots } = await admin
+    .from("park_lots")
+    .select("id, lot_number, lifecycle")
+    .eq("park_id", parkId);
+  const liveLots = (lots ?? []).filter((l) => (l.lifecycle as string) === "live");
+  const liveIds = liveLots.map((l) => l.id as string);
+  const lotName = new Map((lots ?? []).map((l) => [l.id as string, l.lot_number as string]));
+
+  const { data: stays } = liveIds.length
+    ? await admin
+        .from("lot_reservations")
+        .select("id, park_lot_id, renter_id, during, status, agreement_chain_id, agreement_seq")
+        .in("park_lot_id", liveIds)
+        .in("status", ["approved", "active"])
+    : { data: [] as Record<string, unknown>[] };
+
+  const occupiedLotIds = new Set<string>();
+  const reservedLotIds = new Set<string>();
+  for (const s of stays ?? []) {
+    const r = parseDaterange(s.during as string);
+    if (!r) continue;
+    // Half-open: `end` is checkout morning, so today === end is NOT occupied.
+    if (r.start <= today && today < r.end) occupiedLotIds.add(s.park_lot_id as string);
+    else if (r.start > today) reservedLotIds.add(s.park_lot_id as string);
+  }
+  // A LOT IS COUNTED ONCE. Renewing somebody writes a future tenancy on a lot
+  // that already has a current one, so without this the same lot lands in both
+  // sets and every renewal inflates occupancy by a lot that did not change
+  // hands. Found by driving it: 3 lots, 1 tenant, "2 of 3 taken".
+  for (const id of occupiedLotIds) reservedLotIds.delete(id);
+
+  const vacantLots = liveLots.filter(
+    (l) => !occupiedLotIds.has(l.id as string) && !reservedLotIds.has(l.id as string),
+  );
+
+  const snapshot: OccupancySnapshot = {
+    liveLots: liveLots.length,
+    occupied: occupiedLotIds.size,
+    reserved: reservedLotIds.size,
+    vacant: vacantLots.length,
+    vacantLotNumbers: vacantLots
+      .map((l) => l.lot_number as string)
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+  };
+
+  // ---- money --------------------------------------------------------------
+  const { data: charges } = await admin
+    .from("park_charges")
+    .select("id, park_lot_id, renter_id, period_month, due_on, amount, paid_total, status")
+    .eq("park_id", parkId);
+
+  const allIds = (charges ?? []).map((c) => c.id as string);
+  const { data: claims } = allIds.length
+    ? await admin.from("park_payment_claims").select("charge_id")
+        .in("charge_id", allIds).is("resolved_at", null)
+    : { data: [] as { charge_id: string }[] };
+  const claimed = new Set((claims ?? []).map((c) => c.charge_id as string));
+
+  const toCharge = (c: Record<string, unknown>): Charge => ({
+    id: c.id as string,
+    lotNumber: lotName.get(c.park_lot_id as string) ?? "?",
+    renterName: null,
+    periodMonth: c.period_month as string,
+    dueOn: c.due_on as string,
+    amount: Number(c.amount),
+    paidTotal: Number(c.paid_total),
+    status: c.status as Charge["status"],
+  });
+
+  const monthRows = toRows(
+    (charges ?? []).filter((c) => c.period_month === month).map(toCharge),
+    today, lagDays, claimed,
+  );
+  const monthSummary: LedgerSummary = summarise(monthRows);
+
+  // Older months still open — the part /park/rent cannot see.
+  const arrears: LedgerRow[] = toRows(
+    (charges ?? [])
+      .filter((c) => (c.period_month as string) < month && c.status === "open")
+      .map(toCharge),
+    today, lagDays, claimed,
+  ).filter((r) => r.balance > 0);
+
+  // Cash in, month-to-date and today, off received_on.
+  const { data: payments } = allIds.length
+    ? await admin.from("park_payments")
+        .select("id, charge_id, amount, method, reference, received_on")
+        .in("charge_id", allIds)
+    : { data: [] as Record<string, unknown>[] };
+
+  const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
+  const receipts: Receipt[] = (payments ?? []).map((p) => {
+    const c = chargeById.get(p.charge_id as string);
+    return {
+      paymentId: p.id as string,
+      chargeId: p.charge_id as string,
+      amountCents: cents(p.amount),
+      method: (p.method as Method) ?? "other",
+      reference: (p.reference as string) ?? null,
+      receivedOn: p.received_on as string,
+      lotNumber: lotName.get(c?.park_lot_id as string) ?? "?",
+      payerName: null,
+      periodMonth: (c?.period_month as string) ?? "",
+      chargeAmountCents: cents(c?.amount),
+      chargeStatus: (c?.status as Receipt["chargeStatus"]) ?? "open",
+      chargeLines: [],
+    };
+  });
+
+  const monthStart = `${month}-01`;
+  const mtd = summariseReceipts(receipts, customPeriod(monthStart, today, today)!);
+  const cashToday = summariseReceipts(receipts, customPeriod(today, today, today)!);
+
+  const money = moneyBlock({
+    monthToDateCents: mtd.totalCents,
+    todayCents: cashToday.totalCents,
+    monthSummary,
+    lagDays,
+    arrears,
+    today,
+  });
+
+  // ---- the to-do list -----------------------------------------------------
+  const chains = new Map<string, number>();
+  for (const s of stays ?? []) {
+    const cid = (s.agreement_chain_id as string) ?? null;
+    if (!cid) continue;
+    const seq = (s.agreement_seq as number) ?? 1;
+    chains.set(cid, Math.max(chains.get(cid) ?? 0, seq));
+  }
+
+  const { data: renters } = await admin
+    .from("park_renters").select("id, display_name").eq("park_id", parkId);
+  const renterName = new Map((renters ?? []).map((r) => [r.id as string, r.display_name as string]));
+
+  const agreements = (stays ?? []).flatMap((s) => {
+    const r = parseDaterange(s.during as string);
+    if (!r) return [];
+    const cid = (s.agreement_chain_id as string) ?? null;
+    const seq = (s.agreement_seq as number) ?? 1;
+    return [{
+      reservationId: s.id as string,
+      lotNumber: lotName.get(s.park_lot_id as string) ?? "?",
+      renterName: renterName.get(s.renter_id as string) ?? null,
+      endsOn: r.end,
+      chainId: cid,
+      seq,
+      // A successor is a later link in the same chain. Without one, this
+      // tenancy simply stops being billed when it lapses.
+      hasSuccessor: cid != null && (chains.get(cid) ?? 0) > seq,
+    }];
+  });
+
+  // Rate cards, actually counted. Claiming "3 of 3" from the lot count alone
+  // would put a tick against work nobody has done.
+  const { data: rates } = liveIds.length
+    ? await admin.from("lot_rates").select("park_lot_id, term, amount")
+        .in("park_lot_id", (lots ?? []).map((l) => l.id as string))
+    : { data: [] as Record<string, unknown>[] };
+  const lotsWithRates = new Set((rates ?? []).map((r) => r.park_lot_id as string)).size;
+  const monthlyRoll = (rates ?? [])
+    .filter((r) => (r.term as string) === "monthly")
+    .reduce((s, r) => s + Number(r.amount), 0);
+
+  const [{ data: costs }, { data: rentChanges }, { data: states }, { data: noteRows }] =
+    await Promise.all([
+      admin.from("park_costs").select("id, category, amount_paid, allocated_total").eq("park_id", parkId),
+      admin.from("lot_rent_changes")
+        .select("id, park_lot_id, effective_on, notice_days_required, notice_served_on")
+        .in("park_lot_id", liveIds.length ? liveIds : ["00000000-0000-0000-0000-000000000000"]),
+      admin.from("park_task_states").select("task_key, snoozed_until, dismissed_at").eq("park_id", parkId),
+      admin.from("park_notes").select("id, body, created_at")
+        .eq("park_id", parkId).is("done_at", null).order("created_at", { ascending: false }),
+    ]);
+
+  const allTasks = generateTasks({
+    today,
+    parkId,
+    currentMonth: month,
+    rentDueDay,
+    agreements,
+    monthBilled: monthRows.length > 0,
+    liveOccupiedLots: occupiedLotIds.size,
+    lateCount: monthSummary.lateCount,
+    lateAmount: monthSummary.lateAmount,
+    disputedCount: monthSummary.disputedCount,
+    unallocatedCosts: (costs ?? [])
+      .filter((c) => Number(c.allocated_total) === 0 && Number(c.amount_paid) > 0)
+      .map((c) => ({
+        id: c.id as string,
+        label: String(c.category ?? "A cost"),
+        amount: Number(c.amount_paid),
+      })),
+    pendingRentChanges: (rentChanges ?? [])
+      .filter((rc) => (rc.effective_on as string) >= today)
+      .map((rc) => ({
+        id: rc.id as string,
+        lotNumber: lotName.get(rc.park_lot_id as string) ?? "?",
+        effectiveOn: rc.effective_on as string,
+        noticeDaysRequired: (rc.notice_days_required as number) ?? 0,
+        noticeServedOn: (rc.notice_served_on as string) ?? null,
+      })),
+  });
+
+  const tasks = visibleTasks(
+    allTasks,
+    (states ?? []).map((s) => ({
+      taskKey: s.task_key as string,
+      snoozedUntil: (s.snoozed_until as string) ?? null,
+      dismissedAt: (s.dismissed_at as string) ?? null,
+    })) as TaskState[],
+    today,
+  );
+
+  const notes = (noteRows ?? []).map((n) => ({
+    id: n.id as string,
+    body: n.body as string,
+    createdAt: n.created_at as string,
+  }));
+
+  // Only ever say "nothing needs you" when nothing does — including his own
+  // notes, which the software has no opinion about but he still wrote down.
+  const checked: string[] = [];
+  if ((charges ?? []).length) checked.push("rent");
+  if (agreements.length) checked.push("agreements");
+  if ((costs ?? []).length) checked.push("costs");
+  if ((rentChanges ?? []).length) checked.push("rent changes");
+
+  return {
+    parkName,
+    today,
+    month,
+    money,
+    occupancy: occupancyLine(snapshot),
+    tasks,
+    notes,
+    quiet: tasks.length === 0 && notes.length === 0 ? quietState(checked) : null,
+    preCutover: cutoverOn && cutoverOn >= today
+      ? preCutover({
+          today, cutoverOn, parkName,
+          lots: (lots ?? []).length,
+          lotsWithRates,
+          monthlyRoll,
+          households: (renters ?? []).length,
+          rentDueDay,
+          maxAgreementMonths: (park?.max_agreement_months as number) ?? null,
+        })
+      : null,
+  };
+}
+
+// ------------------------------------------------------------ decisions ----
+
+async function currentUserId(): Promise<string | null> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  return user?.id ?? null;
+}
+
+/** Put something off. A snooze EXPIRES — it is not a decision against it. */
+export async function snoozeTask(
+  parkId: string, taskKey: string, until: string,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return { ok: false, error: "That date doesn't look right." };
+
+  const admin = createServiceClient();
+  const { error } = await admin.from("park_task_states").upsert({
+    park_id: parkId, task_key: taskKey, snoozed_until: until,
+    dismissed_at: null, dismissed_reason: null, created_by: await currentUserId(),
+  }, { onConflict: "park_id,task_key" });
+  if (error) return { ok: false, error: "Couldn't save that — try again." };
+
+  revalidatePath("/park/today");
+  return { ok: true, signal: `Back on ${until}.` };
+}
+
+/** Decide against it. Only ever offered for things it is safe to stop showing. */
+export async function dismissTask(
+  parkId: string, taskKey: string, reason: string,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const admin = createServiceClient();
+  const { error } = await admin.from("park_task_states").upsert({
+    park_id: parkId, task_key: taskKey,
+    dismissed_at: new Date().toISOString(),
+    dismissed_reason: reason.trim() || null,
+    snoozed_until: null, created_by: await currentUserId(),
+  }, { onConflict: "park_id,task_key" });
+  if (error) return { ok: false, error: "Couldn't save that — try again." };
+
+  revalidatePath("/park/today");
+  return { ok: true, signal: "Won't mention it again." };
+}
+
+/**
+ * His own note.
+ *
+ * Half of what happens at a park is somebody telling him in the driveway. The
+ * property tax, the insurance binder, the licence renewal — none of those have
+ * a derivable column anywhere, and never will.
+ */
+export async function addNote(parkId: string, body: string): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  const text = body.trim();
+  if (!text) return { ok: false, error: "Nothing to add." };
+  if (text.length > 400) return { ok: false, error: "Keep it under 400 characters." };
+
+  const admin = createServiceClient();
+  const { error } = await admin.from("park_notes").insert({
+    park_id: parkId, body: text, created_by: await currentUserId(),
+  });
+  if (error) return { ok: false, error: "Couldn't save that — try again." };
+
+  revalidatePath("/park/today");
+  return { ok: true, signal: "Added." };
+}
+
+/** Yours stay until you tick them. Ours go when they're handled. */
+export async function doneNote(parkId: string, noteId: string): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  const admin = createServiceClient();
+  const { error } = await admin
+    .from("park_notes")
+    .update({ done_at: new Date().toISOString() })
+    .eq("id", noteId).eq("park_id", parkId);
+  if (error) return { ok: false, error: "Couldn't save that — try again." };
+  revalidatePath("/park/today");
+  return { ok: true, signal: "Ticked off." };
+}

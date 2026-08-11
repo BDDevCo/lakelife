@@ -4,6 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const TABS = [
+  // Today comes first — it is the one he opens with coffee. /park stays the
+  // default landing route until he has used both with real rows.
+  { href: "/park/today", label: "Today" },
   { href: "/park", label: "Rent roll" },
   { href: "/park/lots", label: "Lots & rates" },
   { href: "/park/rent", label: "Rent" },
