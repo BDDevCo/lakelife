@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   toStay, buildRentRoll, summarise, coversDay, canApprove,
   buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
-  planBulkRates, buildTenant, buildParkDialsRow, dialsWarning,
+  planBulkRates, buildTenant, buildParkDialsRow, dialsWarning, noticeShape,
   type BulkRateTarget, type TenantInput,
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
   buildTenantEdit,
@@ -883,5 +883,37 @@ describe("adding a tenant under an agreement cap", () => {
 
   it("a cap shortens the agreement, it never refuses the person", () => {
     expect(buildTenant(input, "2026-08-11", 1).ok).toBe(true);
+  });
+});
+
+describe("what a notice period costs, in dates", () => {
+  it("turns an abstract number into a date he can hold to a calendar", () => {
+    const s = noticeShape(45, 3, "2026-08-11");
+    expect(s.earliest).toBe("2026-09-25");
+    expect(s.line).toContain("earliest a new rent could start is 2026-09-25");
+  });
+
+  it("says a 45-day notice costs NOTHING against 3-month agreements", () => {
+    // Inside a fixed term the rent is the rent — increases land at renewal, so
+    // notice served at the halfway point of a 90-day cycle constrains nothing.
+    const s = noticeShape(45, 3, "2026-08-11");
+    expect(s.fitsInTerm).toBe(true);
+    expect(s.line).toMatch(/costs you nothing/);
+    expect(s.line).toMatch(/only bites on month-to-month/);
+  });
+
+  it("warns when the notice is LONGER than a whole term", () => {
+    // 120 days' notice against a 3-month cap means no increase can ever land
+    // inside a term — every one slips a full cycle.
+    const s = noticeShape(120, 3, "2026-08-11");
+    expect(s.fitsInTerm).toBe(false);
+    expect(s.line).toMatch(/slip a whole/);
+  });
+
+  it("still gives the date when the park has no cap at all", () => {
+    const s = noticeShape(45, null, "2026-08-11");
+    expect(s.earliest).toBe("2026-09-25");
+    expect(s.fitsInTerm).toBe(true);
+    expect(s.line).not.toMatch(/agreements/);
   });
 });

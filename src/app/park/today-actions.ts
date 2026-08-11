@@ -230,7 +230,10 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     await Promise.all([
       admin.from("park_costs").select("id, category, amount_paid, allocated_total").eq("park_id", parkId),
       admin.from("lot_rent_changes")
-        .select("id, park_lot_id, effective_on, notice_days_required, notice_served_on")
+        // notice_GIVEN_on, not notice_served_on. The wrong name is not a type
+        // error — supabase-js returns an error object and null data, so the
+        // notice-cliff task simply never fired.
+        .select("id, park_lot_id, effective_on, notice_days_required, notice_given_on")
         .in("park_lot_id", liveIds.length ? liveIds : ["00000000-0000-0000-0000-000000000000"]),
       admin.from("park_task_states").select("task_key, snoozed_until, dismissed_at").eq("park_id", parkId),
       admin.from("park_notes").select("id, body, created_at")
@@ -262,7 +265,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
         lotNumber: lotName.get(rc.park_lot_id as string) ?? "?",
         effectiveOn: rc.effective_on as string,
         noticeDaysRequired: (rc.notice_days_required as number) ?? 0,
-        noticeServedOn: (rc.notice_served_on as string) ?? null,
+        noticeServedOn: (rc.notice_given_on as string) ?? null,
       })),
   });
 

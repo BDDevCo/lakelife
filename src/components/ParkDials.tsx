@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { saveParkDials } from "@/app/park/actions";
-import { dialsWarning, type ParkDialsInput } from "@/app/park/park-helpers";
+import { dialsWarning, noticeShape, type ParkDialsInput } from "@/app/park/park-helpers";
 
 /**
  * HOW THIS PARK RUNS.
@@ -21,12 +21,13 @@ import { dialsWarning, type ParkDialsInput } from "@/app/park/park-helpers";
  * actually answerable.
  */
 export function ParkDials({
-  parkId, initial, longestStayDays,
+  parkId, initial, longestStayDays, today,
 }: {
   parkId: string;
   initial: ParkDialsInput;
   /** Longest tenancy currently on the roll, so a new cap can be explained. */
   longestStayDays: number | null;
+  today: string;
 }) {
   const router = useRouter();
   const [form, setForm] = useState<ParkDialsInput>(initial);
@@ -39,6 +40,12 @@ export function ParkDials({
     ? Number(form.maxAgreementMonths)
     : null;
   const warning = dialsWarning(capNum, longestStayDays);
+
+  // A notice period is unarguable as a number and obvious as a pair of dates.
+  const noticeNum = /^\d+$/.test(form.rentNoticeDays.trim())
+    ? Number(form.rentNoticeDays)
+    : null;
+  const notice = noticeNum == null ? null : noticeShape(noticeNum, capNum, today);
 
   function save() {
     start(async () => {
@@ -100,6 +107,13 @@ export function ParkDials({
           onChange={(v) => set("cutoverOn", v)}
         />
       </div>
+
+      {notice && (
+        <p style={{ fontSize: 13, marginTop: 14, marginBottom: 0, lineHeight: 1.5,
+                    color: notice.fitsInTerm ? undefined : "var(--warn, #b23)" }}>
+          {notice.line}
+        </p>
+      )}
 
       {warning && (
         <p style={{ fontSize: 13, marginTop: 14, marginBottom: 0, lineHeight: 1.5 }}>

@@ -82,6 +82,7 @@ export async function saveParkProfile(
 export async function getParkDials(parkId: string): Promise<{
   initial: ParkDialsInput;
   longestStayDays: number | null;
+  today: string;
 } | null> {
   if (!(await assertMyPark(parkId))) return null;
   const admin = createServiceClient();
@@ -124,6 +125,7 @@ export async function getParkDials(parkId: string): Promise<{
       cutoverOn: str(p?.cutover_date),
     },
     longestStayDays,
+    today: todayLakeDate(),
   };
 }
 

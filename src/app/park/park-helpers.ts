@@ -1006,6 +1006,57 @@ export function buildParkDialsRow(input: ParkDialsInput): ParkDialsResult {
 }
 
 /**
+ * WHAT A NOTICE PERIOD ACTUALLY COSTS YOU, in dates rather than a number.
+ *
+ * "45 days" is abstract and unarguable. "Tell them by Aug 26 for a rent that
+ * starts Oct 10" is a thing he can hold against his own calendar, and it is the
+ * only honest way to answer "is 45 too long?" — the answer depends entirely on
+ * how it lands against the agreement cycle.
+ *
+ * THE INTERACTION THAT MATTERS: inside a fixed agreement the rent is the rent.
+ * A cap of three months means increases land at renewal, roughly every 90 days,
+ * so a 45-day notice is served around the halfway point of the current term and
+ * costs nothing at all. It only bites on month-to-month tenancies — which at
+ * The Haven is the nineteen grandfathered households, and that is exactly the
+ * group facing the largest increase.
+ */
+export function noticeShape(
+  noticeDays: number,
+  capMonths: number | null,
+  todayISO: string,
+): { earliest: string; line: string; fitsInTerm: boolean } {
+  const earliest = addDays(todayISO, noticeDays);
+  const termDays = capMonths == null ? null : capMonths * 30;
+  const fitsInTerm = termDays == null ? true : noticeDays <= termDays;
+
+  const base =
+    `If you told everyone today, the earliest a new rent could start is ` +
+    `${earliest}.`;
+
+  if (termDays == null) {
+    return { earliest, fitsInTerm, line: base };
+  }
+  if (fitsInTerm) {
+    return {
+      earliest,
+      fitsInTerm,
+      line:
+        `${base} With ${capMonths}-month agreements that sits inside the term, ` +
+        `so increases land at renewal and this costs you nothing. It only bites ` +
+        `on month-to-month households.`,
+    };
+  }
+  return {
+    earliest,
+    fitsInTerm,
+    line:
+      `${base} That is LONGER than a ${capMonths}-month agreement, so you could ` +
+      `never raise a rent within one term — every increase would slip a whole ` +
+      `cycle.`,
+  };
+}
+
+/**
  * What setting a cap actually does to the roll, said before he saves.
  *
  * The cap is enforced by a trigger, so an existing tenancy longer than the new

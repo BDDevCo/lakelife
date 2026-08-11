@@ -69,6 +69,7 @@ export default async function ParkSetupPage() {
             parkId={park.id}
             initial={dials.initial}
             longestStayDays={dials.longestStayDays}
+            today={dials.today}
           />
         </div>
       )}
