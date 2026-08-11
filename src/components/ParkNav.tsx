@@ -8,6 +8,7 @@ const TABS = [
   { href: "/park/lots", label: "Lots & rates" },
   { href: "/park/rent", label: "Rent" },
   { href: "/park/costs", label: "Costs" },
+  { href: "/park/statements", label: "Statements" },
   { href: "/park/setup", label: "Park setup" },
 ];
 
