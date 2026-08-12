@@ -3,6 +3,9 @@ import { cronAuthorized } from "../auth";
 import { sendSeasonalPullReminders } from "@/lib/automation";
 
 export const dynamic = "force-dynamic";
+// Fans out over every property on a lake; a default ceiling truncates the send
+// silently, and the households past the cut simply never hear from us.
+export const maxDuration = 300;
 
 /**
  * Daily seasonal job (Vercel Cron, ~8am). Emails owners on any lake whose pull

@@ -6,6 +6,11 @@ import { runParkNightly } from "@/lib/park-machine";
 import { sweepDisputeDeadlines } from "@/lib/disputes";
 
 export const dynamic = "force-dynamic";
+// TWENTY-SEVEN SEQUENTIAL STEPS. On the default serverless ceiling this run
+// gets cut off partway through, which looks exactly like nothing happening:
+// the steps after the cut simply don't run, and the digest — the last one, and
+// the only thing that reports the night — is the first casualty.
+export const maxDuration = 300;
 
 /**
  * Nightly job (Vercel Cron, 8pm America/Indiana/Indianapolis). Builds

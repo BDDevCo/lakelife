@@ -78,11 +78,26 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
       toast(res.error ?? "Something went wrong. Please try again.");
       return;
     }
-    toast(
-      kind === "approve"
-        ? "Approved — your profile is updated and future visits are re-priced."
-        : "Declined — nothing changed."
-    );
+    // WHAT THE YES ACTUALLY DID. The old line said "future visits are
+    // re-priced" whether or not any existed — and said nothing about the visit
+    // the crew was standing on, which is usually already finished and billed by
+    // the time this gets approved. That one keeps its old numbers on both
+    // sides, and the owner should hear it from us rather than work it out from
+    // an invoice.
+    if (kind === "decline") {
+      toast("Declined — nothing changed.");
+    } else {
+      const n = res.repriced ?? 0;
+      const parts = [
+        n > 0
+          ? `Approved — profile updated and ${n} upcoming ${n === 1 ? "visit" : "visits"} re-priced.`
+          : "Approved — your profile is updated. Nothing upcoming to re-price yet.",
+      ];
+      if (res.flaggedJobAlreadyDone) {
+        parts.push("That visit is already done, so its bill stays as it was.");
+      }
+      toast(parts.join(" "));
+    }
     router.refresh();
   }
 
