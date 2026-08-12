@@ -12,6 +12,7 @@ import {
 } from "./ledger-helpers";
 import { sendEmail } from "@/lib/email";
 import { receiptBody, type ReceiptLines } from "./receipt-helpers";
+import { applyDueRentChanges } from "./rerate-actions";
 import type { ParkResult } from "./actions";
 
 /**
@@ -75,6 +76,25 @@ export async function previewChargeRun(
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active"]);
 
+  // A PREVIEW MUST SHOW WHAT THE RUN WILL ACTUALLY DO.
+  //
+  // `runCharges` now applies any properly-served increase that has come due
+  // before it bills. If this preview kept reading the old `quoted_amount`, the
+  // total he approves and the total he gets would differ — which is the one
+  // thing a confirm screen must never do. Nothing is written here: the new
+  // amounts are overlaid for the arithmetic only.
+  const { data: dueChanges } = await admin
+    .from("lot_rent_changes")
+    .select("reservation_id, to_amount")
+    .eq("park_id", parkId)
+    .lte("effective_on", todayLakeDate())
+    .is("applied_at", null)
+    .is("cancelled_at", null)
+    .not("notice_given_on", "is", null);
+  const pendingRate = new Map(
+    (dueChanges ?? []).map((c) => [c.reservation_id as string, Number(c.to_amount)]),
+  );
+
   // A VOIDED BILL IS NOT A BILL. Without this filter, cancelling a charge made
   // that household's month permanently unbillable — the row still occupied the
   // slot, `summarise` skips void charges so it didn't even read as
@@ -92,11 +112,14 @@ export async function previewChargeRun(
   const candidates = (stays ?? []).map((s) => {
     const lot = lotById.get(s.park_lot_id as string)!;
     const range = parseDaterange(s.during as string);
+    const rentNow = pendingRate.has(s.id as string)
+      ? pendingRate.get(s.id as string)!
+      : (s.quoted_amount == null ? null : Number(s.quoted_amount));
     const st = range
       ? buildStatement({
           month,
           stay: range,
-          rent: s.quoted_amount == null ? null : Number(s.quoted_amount),
+          rent: rentNow,
           // A nightly home is priced per stay, not billed a monthly fee.
           fees: (lot.rental_mode as string) === "short_term" ? [] : fees,
           dueDay,
@@ -126,6 +149,20 @@ export async function runCharges(
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
+
+  // RENT INCREASES THAT ARE DUE GET APPLIED BEFORE ANYTHING IS BILLED.
+  //
+  // `applyDueRentChanges` only ran from the nightly — 00:00 UTC, which is
+  // about 8pm in Indiana. So an owner billing on the morning of the 1st raised
+  // every bill at the OLD rate, and the increase landed twelve hours later
+  // with the statements already frozen. At 19 lots and $25 that is $475 he
+  // never collects, every time.
+  //
+  // Safe to call here: it is idempotent, scoped to this park, and the database
+  // refuses any change whose notice was not properly served — so this can only
+  // ever apply increases that were already legitimately due today.
+  const rateMoves = await applyDueRentChanges(parkId);
+
   const [{ data: park }, fees] = await Promise.all([
     admin.from("parks").select("rent_due_day").eq("id", parkId).maybeSingle(),
     feesFor(admin, parkId),
@@ -196,7 +233,12 @@ export async function runCharges(
     ok: true,
     raised: rows.length,
     total,
-    signal: `${rows.length} ${rows.length === 1 ? "bill" : "bills"} raised for ${prettyMonth(month)} — $${total.toFixed(2)}. Nobody has been told.`,
+    signal:
+      `${rows.length} ${rows.length === 1 ? "bill" : "bills"} raised for ${prettyMonth(month)} — $${total.toFixed(2)}.` +
+      (rateMoves.applied > 0
+        ? ` ${rateMoves.applied} rent ${rateMoves.applied === 1 ? "increase" : "increases"} came due today and went in first.`
+        : "") +
+      " Nobody has been told.",
   };
 }
 
