@@ -77,7 +77,7 @@ export async function buildCandidates(
   const [{ data: vendors }, { data: rates }, { data: dayJobs }, { data: blocks }, scores, { data: stays }, { data: units }] = await Promise.all([
     admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, storage_capacity_feet, storage_types, garagekeepers_expiry"),
     admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing").in("service_id", comps.map((c) => c.serviceId)),
-    admin.from("jobs").select("vendor_id, group_id, services(est_minutes), job_items(services(est_minutes))").eq("date", opts.dateISO).in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null),
+    admin.from("jobs").select("vendor_id, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))").eq("date", opts.dateISO).in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null),
     admin.from("vendor_availability").select("vendor_id").eq("date", opts.dateISO).eq("status", "blocked"),
     getVendorScores(), // real quality score (on-time + flag accuracy + volume), not a raw count
     opts.storage
@@ -101,7 +101,18 @@ export async function buildCandidates(
           return s?.est_minutes ?? null;
         })
       : null;
-    assignedMin.set(vid, (assignedMin.get(vid) ?? 0) + jobMinutesOf(svc?.est_minutes, legs));
+    // 0083: the minutes STAMPED on this job win, because they were computed
+    // from the actual property — a 12-section pier really is 255 minutes of
+    // this crew's day, not the 180 that every pier used to claim. The
+    // service's flat figure remains the fallback for jobs booked before the
+    // ladders existed, so an old day degrades to today's arithmetic rather
+    // than to zero.
+    const stamped = Number((j as { est_minutes?: number | null }).est_minutes ?? 0);
+    assignedMin.set(
+      vid,
+      (assignedMin.get(vid) ?? 0) +
+        (stamped > 0 ? stamped : jobMinutesOf(svc?.est_minutes, legs)),
+    );
   }
   const blocked = new Set((blocks ?? []).map((b) => b.vendor_id as string));
   // Fleet layer (docs/fleet-routing-design.md): with trucks, the cap is the
@@ -289,7 +300,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, services(name, pricing_model, est_minutes)")
+    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, est_minutes, services(name, pricing_model, est_minutes)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job || !job.service_id || !job.date) {
@@ -359,9 +370,15 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
 
   // Visit duration for the fleet time budget: the one service's dial, or a
   // package's legs summed (each missing dial contributes the engine default).
-  const jobMinutes = components?.length
-    ? components.reduce((s, c) => s + ((c.estMinutes ?? 0) > 0 ? (c.estMinutes as number) : DEFAULT_JOB_MINUTES), 0)
-    : Number(svc.est_minutes ?? 0) > 0 ? Number(svc.est_minutes) : DEFAULT_JOB_MINUTES;
+  // 0083 stamped the real figure onto the job at booking, from the property
+  // itself. It wins over both the package sum and the service's flat dial;
+  // those remain the fallback for jobs booked before the ladders existed.
+  const stampedMinutes = Number((job as { est_minutes?: number | null }).est_minutes ?? 0);
+  const jobMinutes = stampedMinutes > 0
+    ? stampedMinutes
+    : components?.length
+      ? components.reduce((s, c) => s + ((c.estMinutes ?? 0) > 0 ? (c.estMinutes as number) : DEFAULT_JOB_MINUTES), 0)
+      : Number(svc.est_minutes ?? 0) > 0 ? Number(svc.est_minutes) : DEFAULT_JOB_MINUTES;
 
   const decision = decideDispatch({
     date: job.date as string,
@@ -408,7 +425,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     const cap = winner?.dailyCapacity ?? 0;
     const { data: dayNow } = await admin
       .from("jobs")
-      .select("id, group_id, services(est_minutes), job_items(services(est_minutes))")
+      .select("id, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))")
       .eq("vendor_id", winnerId)
       .eq("date", job.date as string)
       .in("status", ["scheduled", "in_progress"]);
@@ -424,7 +441,10 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
             return s?.est_minutes ?? null;
           })
         : null;
-      return s + jobMinutesOf(svcEm?.est_minutes, legs);
+      // Same rule as the pre-write gate: the stamped figure wins, so the
+      // backstop and the gate can never disagree about how full a day is.
+      const stamped = Number((r as { est_minutes?: number | null }).est_minutes ?? 0);
+      return s + (stamped > 0 ? stamped : jobMinutesOf(svcEm?.est_minutes, legs));
     }, 0);
     const budget = winner?.minuteBudget ?? null;
     const busted = (cap > 0 && count > cap) || (budget != null && !fitsTimeBudget(minutesNow, 0, budget));

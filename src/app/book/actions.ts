@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getFullProfile, toPricingProfile, getActivePropertyId } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
+import { serviceMinutes } from "@/lib/duration";
 import { dayStatus, toISODate, todayLakeDate } from "@/lib/booking";
 import { rushPrice, validRushFallback } from "@/lib/rush";
 import { getPlatformSettings } from "@/lib/settings";
@@ -28,7 +29,7 @@ async function loadService(serviceId: string): Promise<ServiceRow | null> {
   const supabase = await createClient();
   const { data } = await supabase
     .from("services")
-    .select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work, daily_capacity, frequency_options, kind, active")
+    .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, is_water_work, daily_capacity, frequency_options, kind, active")
     .eq("id", serviceId)
     .eq("active", true)
     .eq("kind", "standalone") // components/add-ons book only inside packages
@@ -189,6 +190,12 @@ export async function createBooking(
   }
   const price = isRush ? rushPrice(standardPrice, settings.sameDaySurchargePct) : standardPrice;
 
+  // HOW LONG, from the same profile that decided how much (0083). Frozen onto
+  // the job the way the price is, so tuning a ladder later cannot silently
+  // rewrite a day that is already sold. A 12-section pier is 255 minutes here
+  // where it used to be a flat 180 for every pier on the lake.
+  const estMinutes = serviceMinutes(service, toPricingProfile(profile));
+
   const admin = createServiceClient();
   const { data: inserted, error } = await admin
     .from("jobs")
@@ -199,6 +206,7 @@ export async function createBooking(
       frequency,
       status: "requested",
       customer_price: price,
+      est_minutes: estMinutes,
       ...(isRush ? { is_rush: true, rush_fallback: validRushFallback(rushFallback) } : {}),
     })
     .select("id")
