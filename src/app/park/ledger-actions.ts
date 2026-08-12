@@ -273,7 +273,7 @@ export async function recordPayment(
     periodMonth: (full?.period_month as string) ?? "",
     billAmount: Number(full?.amount ?? charge.amount),
     balanceAfter: Math.round(balance * 100) / 100,
-    confirmUrl: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/c/${confirmToken}`,
+    confirmUrl: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/paid/${confirmToken}`,
   };
 
   revalidatePath("/park/rent");

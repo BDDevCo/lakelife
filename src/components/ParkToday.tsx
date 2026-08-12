@@ -44,6 +44,16 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
       <div className="mut" style={{ fontSize: 13 }}>{dow} · {view.parkName}</div>
 
+      {/* THE DEAD-MAN LINE. A dead cron and a quiet night look identical, so
+          when the check has stopped running that fact outranks everything
+          below it — including the reassuring emptiness below it. */}
+      {view.liveness.alarm && (
+        <div className="ll-card ll-card-pad"
+          style={{ marginTop: 10, background: "rgba(200,60,40,.07)" }}>
+          <strong style={{ fontSize: 15 }}>{view.liveness.alarm}</strong>
+        </div>
+      )}
+
       {/* ---- before it's his, there is no money and no occupancy ---------- */}
       {view.preCutover ? (
         <div className="ll-card ll-card-pad" style={{ marginTop: 10 }}>
@@ -103,6 +113,13 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
               {view.quiet.checkedLine}
             </p>
           </div>
+        )}
+
+        {/* Proof of life, quietly, whether or not anything needed him. */}
+        {!view.liveness.alarm && (
+          <p className="mut" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
+            {view.liveness.line}
+          </p>
         )}
       </section>
 

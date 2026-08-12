@@ -4,6 +4,12 @@ import { loadPaymentByToken, confirmByToken, disputeByToken } from "@/lib/confir
 /**
  * "DOES THIS LOOK RIGHT?" — the renter's half of the receipt.
  *
+ * Lives at /paid/, NOT /c/ — the services side already owns /c/[token]/good
+ * and /c/[token]/issue for post-job quality verdicts, and two unrelated
+ * confirmation flows in one namespace is how somebody eventually lands on the
+ * wrong page. A token printed on a receipt is a permanent URL, so this was
+ * worth moving before a single one existed.
+ *
  * GET IS SAFE and only renders buttons. Link-preview prefetchers issue GETs,
  * and a GET that confirmed a payment would have people agreeing to figures by
  * opening a text message. Same discipline as the extend-stay and
@@ -64,8 +70,8 @@ button{width:100%;min-height:48px;border:0;border-radius:12px;font-size:16px;fon
 <h1>Does this look right?</h1>
 <p>${esc(line)}</p>
 <p>If that matches what you handed over, tap the first button. If it doesn&#39;t, tap the second and the park will look into it — nothing will be chased while they do.</p>
-<form method="post" action="/c/${t}"><button class="yes" name="answer" value="yes" type="submit">Yes, that&#39;s right</button></form>
-<form method="post" action="/c/${t}"><button class="no" name="answer" value="no" type="submit">That&#39;s not what I paid</button></form>
+<form method="post" action="/paid/${t}"><button class="yes" name="answer" value="yes" type="submit">Yes, that&#39;s right</button></form>
+<form method="post" action="/paid/${t}"><button class="no" name="answer" value="no" type="submit">That&#39;s not what I paid</button></form>
 </div></body></html>`;
   return new Response(html, {
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },

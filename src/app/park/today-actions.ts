@@ -14,6 +14,7 @@ import {
   moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, preCutover,
   type MoneyBlock, type Task, type TaskState, type OccupancySnapshot,
 } from "./today-helpers";
+import { livenessLine, type RunRow, type LivenessLine } from "./machine-helpers";
 import type { ParkResult } from "./actions";
 
 /**
@@ -32,6 +33,11 @@ import type { ParkResult } from "./actions";
 const DENIED = "You don't manage that park.";
 const cents = (v: unknown) => Math.round(Number(v ?? 0) * 100);
 
+function addDaysISO(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
 export interface TodayView {
   parkName: string;
   today: string;
@@ -42,6 +48,13 @@ export interface TodayView {
   notes: { id: string; body: string; createdAt: string }[];
   quiet: { headline: string; checkedLine: string } | null;
   preCutover: ReturnType<typeof preCutover> | null;
+  /**
+   * Whether the evening check is actually running.
+   *
+   * Computed HERE, on page render, from run rows — never sent by the scheduler.
+   * An alert that the cron is dead cannot be sent by the cron.
+   */
+  liveness: LivenessLine;
 }
 
 export async function getToday(parkId: string): Promise<TodayView | null> {
@@ -250,6 +263,14 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
         .eq("park_id", parkId).is("done_at", null).order("created_at", { ascending: false }),
     ]);
 
+  // The last week of evening checks. Absence is the alarm.
+  const { data: runs } = await admin
+    .from("park_machine_runs")
+    .select("runner, run_on, ok, error, found")
+    .eq("park_id", parkId)
+    .gte("run_on", addDaysISO(today, -7))
+    .order("run_on", { ascending: false });
+
   const allTasks = generateTasks({
     today,
     parkId,
@@ -303,7 +324,16 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   if ((costs ?? []).length) checked.push("costs");
   if ((rentChanges ?? []).length) checked.push("rent changes");
 
+  const runRows: RunRow[] = (runs ?? []).map((r) => ({
+    runner: r.runner as string,
+    runOn: r.run_on as string,
+    ok: r.ok as boolean,
+    error: (r.error as string) ?? null,
+    found: (r.found as number) ?? 0,
+  }));
+
   return {
+    liveness: livenessLine(runRows, today, checked),
     parkName,
     today,
     month,
