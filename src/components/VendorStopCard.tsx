@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { navUrl } from "@/lib/navlink";
 import { uploadJobPhoto, completeJob, submitFlag, getJobPhotoUrls } from "@/app/vendor/actions";
+import { ArrivalSheet } from "@/components/ArrivalSheet";
+import { completionBlock } from "@/lib/arrival";
 import { toast } from "@/components/Toast";
 import type { VendorStop } from "@/app/vendor/data";
 
@@ -25,9 +27,21 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
   const [done, setDone] = useState(stop.status === "complete" || stop.status === "paid");
   const [completing, setCompleting] = useState(false);
   const [flagOpen, setFlagOpen] = useState(false);
+  const [arriveOpen, setArriveOpen] = useState(false);
+  // Held/no-show are shown from local state as well as the row, so the card
+  // changes the instant the crew acts rather than after a round trip.
+  const [held, setHeld] = useState<boolean>(!!stop.held_at);
+  const [noShow, setNoShow] = useState<boolean>(!!stop.no_show_at);
 
   const min = stop.min_photos;
   const enough = count >= min;
+
+  // 0084's trigger is the real gate; this is so the crew reads a sentence
+  // instead of meeting a database error with their thumb on the button.
+  const blocked = completionBlock({
+    held_at: held ? (stop.held_at ?? "held") : null,
+    no_show_at: noShow ? (stop.no_show_at ?? "noshow") : null,
+  });
 
   function navigate() {
     if (stop.lat == null || stop.lng == null) {
@@ -124,6 +138,23 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
         </div>
       ) : (
         <>
+          {/* WHERE THIS VISIT IS STUCK, IF IT IS.
+              Above the photo counter on purpose — a crew who is blocked should
+              not first read about photos they cannot usefully take yet. */}
+          {blocked && (
+            <div
+              style={{
+                marginTop: 12, padding: "10px 12px", borderRadius: 10,
+                background: noShow ? "var(--slate-soft, #eef1f4)" : "var(--sun-soft)",
+                border: `1px solid ${noShow ? "var(--line)" : "#ecd9ad"}`,
+                color: noShow ? "var(--text)" : "#7a5a1e",
+                fontSize: 13, lineHeight: 1.5,
+              }}
+            >
+              {noShow ? "🚪 " : "⏳ "}{blocked}
+            </div>
+          )}
+
           {/* photo requirement */}
           <div
             className={enough ? "" : undefined}
@@ -155,15 +186,39 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
               Open job
             </Link>
             <button className="ll-btn ghost sm" onClick={navigate}>Navigate ➤</button>
+            {/* THE FIRST TAP OF THE VISIT. Hidden once the job is held or
+                recorded as a no-show, because by then it has been answered. */}
+            {!blocked && (
+              <button className="ll-btn sm" onClick={() => setArriveOpen(true)}>
+                I&apos;m here
+              </button>
+            )}
             <button className="ll-btn ghost sm" onClick={() => setFlagOpen(true)}>Flag item</button>
             <button className="ll-btn sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
               {uploading ? "Uploading…" : "Add photos"}
             </button>
-            <button className="ll-btn gold sm" onClick={markComplete} disabled={!enough || completing}>
+            <button
+              className="ll-btn gold sm"
+              onClick={markComplete}
+              disabled={!enough || completing || !!blocked}
+              title={blocked ?? undefined}
+            >
               {completing ? "Completing…" : "Mark complete"}
             </button>
           </div>
         </>
+      )}
+
+      {arriveOpen && (
+        <ArrivalSheet
+          jobId={stop.id}
+          serviceName={stop.service_name ?? "this job"}
+          address={stop.address ?? "this stop"}
+          needsInteriorAccess={stop.needs_interior_access}
+          onClose={() => setArriveOpen(false)}
+          onHeld={() => { setArriveOpen(false); setHeld(true); router.refresh(); }}
+          onNoShow={() => { setArriveOpen(false); setNoShow(true); router.refresh(); }}
+        />
       )}
 
       {flagOpen && (

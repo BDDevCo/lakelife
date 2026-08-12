@@ -20,6 +20,16 @@ export interface VendorStop {
   photo_count: number;
   legs?: string[]; // package-visit leg NAMES ONLY (no prices) — set when job_items exist
   unit_name: string | null; // truck name (routes.unit_name), fleet vendors only — crew's own data, rule 1 safe
+  // ---- the driveway (0084/0086) ----
+  /** Set = the owner is deciding on a correction; this job cannot be closed. */
+  held_at: string | null;
+  /** Set = the crew couldn't get in. Not a completion, not a cancellation. */
+  no_show_at: string | null;
+  no_show_reason: string | null;
+  /** Decides what "nobody's answering" means for this service. */
+  needs_interior_access: boolean;
+  /** Minutes budgeted for THIS visit (0083) — how long to expect to be there. */
+  est_minutes: number | null;
 }
 
 /** Is the signed-in user a vendor? Returns their vendor id, or null. */
@@ -208,6 +218,11 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
     photo_count: counts.get(r.id) ?? 0,
     legs: legsByJob.get(r.id),
     unit_name: r.route_id ? unitNameByRoute.get(r.route_id) ?? null : null,
+    held_at: r.held_at ?? null,
+    no_show_at: r.no_show_at ?? null,
+    no_show_reason: r.no_show_reason ?? null,
+    needs_interior_access: !!r.needs_interior_access,
+    est_minutes: r.est_minutes ?? null,
   }));
 
   return { date, stops };

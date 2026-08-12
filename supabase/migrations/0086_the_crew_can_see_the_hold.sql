@@ -1,0 +1,20 @@
+-- 0086 — THE CREW CAN SEE THE HOLD.
+--
+-- 0084 gave a job three new facts a crew standing in a driveway needs: is this
+-- one held pending the owner, was it already recorded as a no-show, and does
+-- this service need somebody to let them in. `vendor_jobs` is the price-free
+-- view the crew reads, and it carried none of them — so the Today card could
+-- not have shown a hold, and a crew would have tapped Complete and met a raw
+-- database error instead of a sentence.
+--
+-- The new columns are APPENDED rather than slotted in beside their relatives:
+-- `create or replace view` matches columns by position, so inserting one in
+-- the middle renames every column after it.
+--
+-- NOTE: this migration also, wrongly, flipped the view to
+-- `security_invoker = true`. See 0087, which puts it back and explains what
+-- that broke. The column list here is correct and is what 0087 restores.
+--
+-- Rule 1 is unaffected: not one of these is a price, a cost or a margin.
+
+-- (Superseded by 0087 — kept for history. The definition that ships is 0087's.)
