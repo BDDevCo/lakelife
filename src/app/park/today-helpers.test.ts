@@ -208,7 +208,7 @@ describe("the to-do list", () => {
     const soon = generateTasks(facts({
       monthBilled: false, rentDueDay: 15, today: "2026-08-13",
     }));
-    expect(soon[0].title).toBe("2026-08 isn't billed yet");
+    expect(soon[0].title).toBe("August 2026 isn't billed yet");
     expect(soon[0].urgency).toBe("soon");
 
     // Due on the 1st and it's the 11th with nobody billed — that is overdue.

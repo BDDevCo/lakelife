@@ -65,6 +65,14 @@ export interface JobDetailMoney {
   invoiceStatus: string | null;    // draft | due | paid | refunded
   invoiceAmount: number | null;
   paidAt: string | null;
+  /**
+   * Is there actually a card to charge? The "Due" copy promised "we'll run
+   * this on your card on file" unconditionally — including to the customers
+   * who have no card, which is the exact group for whom the settle silently
+   * did nothing at all. Telling someone it is handled when it is not is how
+   * an unpaid job stays unpaid.
+   */
+  hasCardOnFile: boolean;
   refunds: JobDetailRefund[];
   refundedTotal: number;
 }
@@ -197,6 +205,14 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
     paidAt = (pay?.created_at as string) ?? null;
   }
 
+  // Only whether one EXISTS — never the token, brand or last four. This page
+  // needs to know which sentence is true, not what the card is.
+  const { count: cardCount } = await admin
+    .from("payment_methods")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", prop.owner_id as string);
+  const hasCardOnFile = (cardCount ?? 0) > 0;
+
   const refunds: JobDetailRefund[] = (refundRows ?? []).map((r) => ({
     amount: Number(r.amount ?? 0),
     at: r.created_at as string,
@@ -281,6 +297,7 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
       invoiceStatus: (invoice?.status as string) ?? null,
       invoiceAmount: invoice?.amount == null ? null : Number(invoice.amount),
       paidAt,
+      hasCardOnFile,
       refunds,
       refundedTotal: refunds.reduce((s, r) => s + r.amount, 0),
     },

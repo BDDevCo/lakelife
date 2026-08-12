@@ -29,6 +29,7 @@
  */
 
 import type { LedgerRow } from "./ledger-helpers";
+import { prettyMonth } from "./ledger-helpers";
 
 export type ReminderChannel = "email" | "sms" | "paper" | "none";
 export type ReminderOutcome = "sent" | "printed" | "blocked" | "failed";
@@ -99,7 +100,7 @@ export function reminderBody(input: {
   return [
     `Hi ${name.split(",")[0].trim() || "there"},`,
     ``,
-    `This is a reminder that $${balance.toFixed(2)} is outstanding on lot ${lotNumber} for ${month}.`,
+    `This is a reminder that $${balance.toFixed(2)} is outstanding on lot ${lotNumber} for ${prettyMonth(month)}.`,
     ``,
     `If you've already paid, thank you — nothing more to do, and it may have crossed with this.`,
     ``,
@@ -280,7 +281,7 @@ export function ownerDigest(plan: ReminderPlan, parkName: string, month: string)
   if (plan.totalChased === 0 && plan.blocked.length === 0) return null;
   const total = plan.toSend.concat(plan.toPrint).reduce((s, r) => s + r.balance, 0);
   const lines = [
-    `${parkName} — ${month} reminders`,
+    `${parkName} — ${prettyMonth(month)} reminders`,
     ``,
     `${plan.totalChased} ${plan.totalChased === 1 ? "household" : "households"} chased, $${total.toFixed(2)} outstanding.`,
   ];

@@ -28,6 +28,7 @@
 
 import type { LedgerRow, LedgerSummary } from "./ledger-helpers";
 import { ledgerHeadline } from "./ledger-helpers";
+import { prettyMonth } from "./ledger-helpers";
 
 // Notification thresholds, not pricing — so they live here rather than in the
 // database. The first time he says one of these numbers is wrong, it becomes a
@@ -272,7 +273,7 @@ export function generateTasks(f: TaskFacts): Task[] {
     if (until <= BILL_WARN_DAYS) {
       out.push({
         key: `month_not_billed:${f.parkId}:${f.currentMonth}`,
-        title: `${f.currentMonth} isn't billed yet`,
+        title: `${prettyMonth(f.currentMonth)} isn't billed yet`,
         detail: until < 0
           ? `Rent was due on the ${ordinal(f.rentDueDay)}. Nobody has been billed.`
           : `Rent is due on the ${ordinal(f.rentDueDay)}.`,

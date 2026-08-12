@@ -38,6 +38,8 @@
  * isn't is worse than no number.
  */
 
+import { prettyMonth } from "./ledger-helpers";
+
 export type Method = "cash" | "check" | "card" | "ach" | "transfer" | "other";
 
 export const METHOD_LABEL: Record<Method, string> = {
@@ -108,7 +110,10 @@ export function monthPeriod(month: string, todayISO: string): Period | null {
   if (!/^\d{4}-\d{2}$/.test(month)) return null;
   const [y, m] = month.split("-").map(Number);
   if (m < 1 || m > 12) return null;
-  return seal(`m-${month}`, month, `${month}-01`, lastDayOf(y, m), todayISO);
+  // The KEY stays machine-shaped; the LABEL is what goes on the heading of the
+  // statement the accountant reads. "Q3 2026" and "2026" were already in
+  // words; only the month was still "2026-08".
+  return seal(`m-${month}`, prettyMonth(month), `${month}-01`, lastDayOf(y, m), todayISO);
 }
 
 export function quarterPeriod(year: number, q: 1 | 2 | 3 | 4, todayISO: string): Period {

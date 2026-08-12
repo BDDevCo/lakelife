@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   ledgerState, balanceOf, toRows, summarise, ledgerHeadline,
   planRun, runSummary, daysBetween,
+  prettyMonth,
   type Charge,
 } from "./ledger-helpers";
 
@@ -131,7 +132,7 @@ describe("the charge run", () => {
 
   it("bills a clean park in one go", () => {
     const p = planRun(candidates.slice(0, 2), new Set());
-    expect(runSummary(p, "2027-03")).toBe("Bill 2 households for 2027-03 — $910.00");
+    expect(runSummary(p, "2027-03")).toBe("Bill 2 households for March 2027 — $910.00");
   });
 });
 
@@ -216,5 +217,22 @@ describe("a payment is a two-party event", () => {
     const line = ledgerHeadline(summarise(rows), 3);
     expect(line).toMatch(/says they've paid/);
     expect(line).toMatch(/1 other household is late/);
+  });
+});
+
+describe("a month as a person says it", () => {
+  it("spells the month out", () => {
+    expect(prettyMonth("2026-08")).toBe("August 2026");
+    expect(prettyMonth("2026-12")).toBe("December 2026");
+    expect(prettyMonth("2027-01")).toBe("January 2027");
+  });
+
+  // A malformed period must not become "Invalid Date" on somebody's statement.
+  it("hands back anything it doesn't recognise, unchanged", () => {
+    expect(prettyMonth("")).toBe("");
+    expect(prettyMonth("2026-13")).toBe("2026-13");
+    expect(prettyMonth("2026-00")).toBe("2026-00");
+    expect(prettyMonth("August")).toBe("August");
+    expect(prettyMonth("2026-08-01")).toBe("2026-08-01");
   });
 });

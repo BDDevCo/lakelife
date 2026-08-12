@@ -11,6 +11,7 @@ import {
   type RenterContact, type ReminderPlan,
 } from "./reminder-helpers";
 import type { ParkResult } from "./actions";
+import { prettyMonth } from "./ledger-helpers";
 
 /**
  * OVERDUE REMINDERS — the send path.
@@ -208,7 +209,7 @@ export async function sendReminders(
         if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) continue;
         const res = await sendEmail({
           to: addr,
-          subject: `${parkName} — ${plan.totalChased} reminded for ${loaded.month}`,
+          subject: `${parkName} — ${plan.totalChased} reminded for ${prettyMonth(loaded.month)}`,
           text: digest,
           html: asHtml(digest),
         });

@@ -153,7 +153,7 @@ describe("what the notice says", () => {
   it("states the amount, the month and where to pay", () => {
     expect(body).toContain("$455.00");
     expect(body).toContain("lot 1");
-    expect(body).toContain("2026-08");
+    expect(body).toContain("August 2026");
     expect(body).toContain("Drop it at the office.");
   });
 

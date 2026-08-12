@@ -244,6 +244,82 @@ export interface SettleOutcome {
 }
 
 /**
+ * A SETTLE THAT DIDN'T COLLECT, SAID OUT LOUD — to the customer and to ops.
+ *
+ * Both failure paths (no card on file, card declined) used to end in silence:
+ * the invoice sat 'due', the receipt email lived inside the success branch,
+ * and the crew's payout had already been released. The first anyone noticed
+ * was a customer seeing repeated attempts on a statement.
+ *
+ * Deliberately does NOT hold or claw back the crew's payout. The crew did the
+ * work; whether the customer's card cleared is not their problem, and taking
+ * a crew's money back for it is how you lose crews. The exposure sits with
+ * LakeLife, which is where it belongs — but it must be VISIBLE, not silent.
+ *
+ * Nothing here throws. A settle must not fail because a notification did.
+ */
+async function noteSettleFailure(
+  admin: ReturnType<typeof createServiceClient>,
+  f: {
+    jobId: string;
+    ownerId: string | null | undefined;
+    svcName: string;
+    address: string | null;
+    amount: number;
+    reason: "no_card" | "declined";
+  },
+): Promise<void> {
+  try {
+    const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+    const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(f.amount);
+    const where = f.address ?? "your property";
+
+    if (f.ownerId) {
+      const { data: owner } = await admin
+        .from("users").select("email, name").eq("id", f.ownerId).maybeSingle();
+      const email = owner?.email as string | null;
+      if (email) {
+        const why = f.reason === "no_card"
+          ? "We don't have a card on file for you yet"
+          : "Your card on file was declined";
+        await sendEmail({
+          to: email,
+          subject: `Action needed — ${amt} for your ${f.svcName}`,
+          html:
+            `<p>Hi ${(owner?.name as string) ?? "there"},</p>` +
+            `<p>Your ${f.svcName} at ${where} is done — thank you.</p>` +
+            `<p><b>${why}</b>, so the ${amt} hasn't been paid yet.</p>` +
+            `<p><a href="${site}/billing">Add or update your card</a> and we'll take care of it. ` +
+            `Nothing else is needed from you.</p>` +
+            `<p>🌊</p>`,
+        });
+      }
+    }
+
+    // Ops needs to know a completed job is unpaid, because the crew has
+    // already been paid for it and nothing else in the system will say so.
+    const { data: opsUsers } = await admin
+      .from("users").select("email").eq("role", "ops").not("email", "is", null);
+    for (const u of opsUsers ?? []) {
+      const to = u.email as string | null;
+      if (!to) continue;
+      await sendEmail({
+        to,
+        subject: `Unpaid completed job — ${amt}`,
+        html:
+          `<p>${f.svcName} at ${where} completed and did not collect.</p>` +
+          `<p>Reason: <b>${f.reason === "no_card" ? "no card on file" : "card declined"}</b>. ` +
+          `Amount: <b>${amt}</b>.</p>` +
+          `<p>The crew's payout was released as normal — they did the work. ` +
+          `<a href="${site}/ops/jobs/${f.jobId}">Open the job</a>.</p>`,
+      });
+    }
+  } catch {
+    /* A settle must never fail because an email did. */
+  }
+}
+
+/**
  * Ensure a COMPLETED job is fully settled: a payout exists, an invoice exists,
  * and (if the owner has a saved card) the customer is charged once with a
  * receipt. IDEMPOTENT and reconcilable — it checks-then-writes each row, so
@@ -439,6 +515,30 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
             html: `<p>Hi ${owner.name ?? "there"},</p><p>Your ${svcName} at ${prop?.address ?? "your property"} is complete.</p><p><b>Charged: ${amt}</b>${creditLine}${pm.brand ? ` to your ${pm.brand} ending ${pm.last4}` : ""}.</p><p>Thank you. 🌊</p>`,
           });
         }
+        // THE CARD SAID NO. The receipt above is inside `charge.ok`, so this
+        // used to be the end of it: a failed payments row, an invoice quietly
+        // left 'due', and not one word to anybody. The customer's next signal
+        // was their card being retried every night.
+        if (!charge.ok) {
+          await noteSettleFailure(admin, {
+            jobId, ownerId, svcName,
+            address: (prop?.address as string) ?? null,
+            amount: cashDue,
+            reason: "declined",
+          });
+        }
+      } else {
+        // NO CARD ON FILE AT ALL — and there was no `else` here, so this path
+        // did nothing whatsoever. The job completed, the crew's payout was
+        // already released, the invoice sat 'due' forever, and the job page
+        // cheerfully printed "We'll run this on your card on file" when there
+        // was no card on file. Nobody found out until somebody read a ledger.
+        await noteSettleFailure(admin, {
+          jobId, ownerId, svcName,
+          address: (prop?.address as string) ?? null,
+          amount: cashDue,
+          reason: "no_card",
+        });
       }
 
       // REFERRAL ACCRUALS — only after money actually COLLECTED this run, and
@@ -522,24 +622,41 @@ async function accrueReferralEarnings(
 /** Reconcile sweep: settle any job that's complete but wasn't fully billed
  *  (invoice missing, or invoice still 'due' with no captured payment). Safe to
  *  run on a schedule — settleJob is idempotent. Bounded scan of recent jobs. */
-export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: number }> {
+export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: number; capped: number }> {
   const admin = createServiceClient();
   const { data: jobs } = await admin
     .from("jobs")
-    .select("id, invoices(status)")
+    .select("id, invoices(id, status)")
     .eq("status", "complete")
     .is("correction_of", null) // $0 correction visits never invoice — don't rescan them nightly
     .limit(500);
   let settled = 0;
+  let capped = 0;
   for (const j of jobs ?? []) {
-    const inv = j.invoices as { status?: string }[] | { status?: string } | null;
+    const inv = j.invoices as { id?: string; status?: string }[] | { id?: string; status?: string } | null;
     const rows = Array.isArray(inv) ? inv : inv ? [inv] : [];
     const fullyPaid = rows.length > 0 && rows.every((r) => r.status === "paid" || r.status === "refunded");
     if (fullyPaid) continue; // already settled + charged
+
+    // RETRY CAP — the same five-night rule `retryCancellationFees` already
+    // applies, for the same reason. Without it this re-ran settleJob on every
+    // unpaid complete job EVERY NIGHT, forever, so a customer whose card was
+    // declined once got that card re-attempted nightly until they closed it.
+    // On a statement that reads as fraud, and card networks penalise it. The
+    // invoice stays visibly 'due' on their Billing page either way — the money
+    // is not forgotten, we just stop hammering the card and ask them instead.
+    const invoiceIds = rows.map((r) => r.id).filter(Boolean) as string[];
+    if (invoiceIds.length > 0) {
+      const { count: failCount } = await admin
+        .from("payments").select("id", { count: "exact", head: true })
+        .in("invoice_id", invoiceIds).eq("status", "failed");
+      if ((failCount ?? 0) >= 5) { capped++; continue; }
+    }
+
     const r = await settleJob(j.id as string);
     if (r.ok) settled++;
   }
-  return { ok: true, settled };
+  return { ok: true, settled, capped };
 }
 
 /**

@@ -19,6 +19,8 @@
  *   from whatever happened to be readable.
  */
 
+import { prettyMonth } from "./ledger-helpers";
+
 export type FindingKind =
   | "live_lot_unbilled"
   | "tenancy_expired"
@@ -89,7 +91,7 @@ export function reconcile(input: ReconcileInput): Finding[] {
       lotNumbers: names,
       line:
         `${names.length} occupied ${names.length === 1 ? "lot has" : "lots have"} ` +
-        `no bill for ${month} — ${nameList(names)}. Somebody lives there and ` +
+        `no bill for ${prettyMonth(month)} — ${nameList(names)}. Somebody lives there and ` +
         `nothing is being charged.`,
     });
   }
@@ -135,7 +137,7 @@ export function reconcile(input: ReconcileInput): Finding[] {
       urgent: false,
       lotNumbers: names,
       line:
-        `${nameList(names)} worked out to nothing for ${month}, so ` +
+        `${nameList(names)} worked out to nothing for ${prettyMonth(month)}, so ` +
         `${names.length === 1 ? "it was" : "they were"} left off the bills ` +
         `rather than charged $0.`,
     });
@@ -172,7 +174,7 @@ export function cutoverMonthNote(month: string, cutoverMonth: string | null): st
   if (cutoverMonth == null || cutoverMonth !== month) return null;
   return (
     `This is your first part-month, so nobody is being called late. The seller ` +
-    `collected part of ${month} and the roll is still going in.`
+    `collected part of ${prettyMonth(month)} and the roll is still going in.`
   );
 }
 

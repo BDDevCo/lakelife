@@ -218,7 +218,17 @@ function invoiceCopy(job: JobDetailView): { pill: string; tone: string; note: st
     };
   }
   if (s === "due") {
-    return { pill: "Due", tone: "warn", note: "We'll run this on your card on file. Manage your card on the Billing page." };
+    // The unconditional version of this told customers with NO card that we
+    // would run it on their card on file — and those are exactly the ones the
+    // settle silently did nothing for. Saying it's handled when it isn't is
+    // how an unpaid job stays unpaid.
+    return job.money.hasCardOnFile
+      ? { pill: "Due", tone: "warn", note: "We'll run this on your card on file. Manage your card on the Billing page." }
+      : {
+          pill: "Needs a card",
+          tone: "warn",
+          note: "We don't have a card on file for you yet, so this hasn't been paid. Add one on the Billing page and we'll take care of it.",
+        };
   }
   if (s === "draft") {
     return { pill: "Not billed yet", tone: "slate", note: "This invoice hasn't gone out yet." };

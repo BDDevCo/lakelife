@@ -52,6 +52,30 @@ export function currentPeriod(todayISO: string): string {
   return todayISO.slice(0, 7);
 }
 
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/**
+ * A PERIOD AS A PERSON SAYS IT: "August 2026", never "2026-08".
+ *
+ * `YYYY-MM` is the right thing to STORE — it sorts, it compares, it keys a
+ * unique index. It is the wrong thing to show a park owner on a screen, in an
+ * email, or on a receipt a resident carries away. Nobody reads a bill for
+ * "2026-08".
+ *
+ * Every human-facing month goes through here so the two can never drift.
+ * Anything that isn't a well-formed period comes back unchanged rather than
+ * becoming "Invalid Date" on somebody's statement.
+ */
+export function prettyMonth(period: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(period);
+  if (!m) return period;
+  const name = MONTH_NAMES[Number(m[2]) - 1];
+  return name ? `${name} ${m[1]}` : period;
+}
+
 export function balanceOf(c: Charge): number {
   return round2(c.amount - c.paidTotal);
 }
@@ -262,11 +286,11 @@ export function planRun(
 
 export function runSummary(plan: RunPlan, month: string): string {
   if (plan.toBill.length === 0) {
-    if (plan.skippedAlreadyBilled > 0) return `${month} is already billed — nothing to do.`;
+    if (plan.skippedAlreadyBilled > 0) return `${prettyMonth(month)} is already billed — nothing to do.`;
     return "Nothing to bill.";
   }
   const parts = [
-    `Bill ${plan.toBill.length} ${plan.toBill.length === 1 ? "household" : "households"} for ${month} — $${plan.total.toFixed(2)}`,
+    `Bill ${plan.toBill.length} ${plan.toBill.length === 1 ? "household" : "households"} for ${prettyMonth(month)} — $${plan.total.toFixed(2)}`,
   ];
   if (plan.skippedAlreadyBilled > 0) parts.push(`${plan.skippedAlreadyBilled} already billed`);
   if (plan.skippedNoTotal > 0) parts.push(`${plan.skippedNoTotal} skipped — no rent set`);

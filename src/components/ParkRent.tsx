@@ -11,7 +11,7 @@ import { ClaimForm } from "@/components/ClaimForm";
 import { ResolveClaimForm } from "@/components/ResolveClaimForm";
 import { ReceiptPanel, DropSlips } from "@/components/ParkReceipt";
 import type { ReceiptLines } from "@/app/park/receipt-helpers";
-import { LEDGER_LABEL, ledgerHeadline, runSummary, type RunPlan } from "@/app/park/ledger-helpers";
+import { LEDGER_LABEL, ledgerHeadline, runSummary, prettyMonth, type RunPlan } from "@/app/park/ledger-helpers";
 import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
 import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
 
@@ -76,7 +76,7 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
-      <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Rent — {page.month}</h1>
+      <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Rent — {prettyMonth(page.month)}</h1>
 
       {/* ---- LATE FIRST. Nothing competes with it. ----------------------- */}
       <div
@@ -111,7 +111,7 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
         {!plan ? (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="ll-btn" onClick={preview} disabled={busy}>
-              {busy ? "Working…" : `Bill ${page.month}`}
+              {busy ? "Working…" : `Bill ${prettyMonth(page.month)}`}
             </button>
             <DropSlips parkId={parkId} />
           </div>
@@ -374,7 +374,7 @@ function Reminders({
 
         {plan.skippedAlreadyReminded > 0 && (
           <p className="mut" style={{ fontSize: 13, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
-            {plan.skippedAlreadyReminded} already had one for {month} — nobody
+            {plan.skippedAlreadyReminded} already had one for {prettyMonth(month)} — nobody
             gets chased twice for the same bill.
           </p>
         )}

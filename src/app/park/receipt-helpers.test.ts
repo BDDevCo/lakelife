@@ -38,7 +38,7 @@ describe("the receipt", () => {
     const b = receiptBody({ ...base, amount: 300, balanceAfter: 155 });
     expect(b).toContain("$300.00");
     expect(b).toContain("Lot             3");
-    expect(b).toContain("2026-08 rent");
+    expect(b).toContain("August 2026 rent");
     expect(b).toContain("Still owing     $155.00");
   });
 

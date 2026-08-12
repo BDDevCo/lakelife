@@ -7,7 +7,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import { buildStatement, type StatementFee } from "./statement-helpers";
 import {
-  planRun, toRows, summarise, currentPeriod,
+  planRun, toRows, summarise, currentPeriod, prettyMonth,
   type Charge, type LedgerRow, type LedgerSummary, type RunPlan,
 } from "./ledger-helpers";
 import { sendEmail } from "@/lib/email";
@@ -174,7 +174,7 @@ export async function runCharges(
   }
 
   if (rows.length === 0) {
-    return { ok: false, error: `Nothing to bill for ${month} — it may already be done.` };
+    return { ok: false, error: `Nothing to bill for ${prettyMonth(month)} — it may already be done.` };
   }
 
   const { error } = await admin.from("park_charges").insert(rows);
@@ -187,7 +187,7 @@ export async function runCharges(
     ok: true,
     raised: rows.length,
     total,
-    signal: `${rows.length} ${rows.length === 1 ? "bill" : "bills"} raised for ${month} — $${total.toFixed(2)}. Nobody has been told.`,
+    signal: `${rows.length} ${rows.length === 1 ? "bill" : "bills"} raised for ${prettyMonth(month)} — $${total.toFixed(2)}. Nobody has been told.`,
   };
 }
 

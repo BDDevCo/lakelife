@@ -24,6 +24,8 @@
  * receipt that overstates itself is worse than none.
  */
 
+import { prettyMonth } from "./ledger-helpers";
+
 export interface ReceiptLines {
   parkName: string;
   officeLine: string;
@@ -84,7 +86,7 @@ export function receiptBody(r: ReceiptLines): string {
     `Amount          ${money(r.amount)}`,
     `How             ${METHOD_WORD[r.method] ?? r.method}${r.reference ? ` ${r.reference}` : ""}`,
     `Date taken      ${r.receivedOn}`,
-    `Against         ${r.periodMonth} rent — ${money(r.billAmount)}`,
+    `Against         ${prettyMonth(r.periodMonth)} rent — ${money(r.billAmount)}`,
   ];
 
   if (r.balanceAfter > 0) {
