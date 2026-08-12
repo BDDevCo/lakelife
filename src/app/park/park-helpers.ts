@@ -301,6 +301,20 @@ export interface LotFormInput {
    */
   seasonOpen?: string;
   seasonClose?: string;
+  /**
+   * THE THREE INVENTORY FACTS THAT HAD NO WRITER.
+   *
+   * Declared in 0065, read in seven places, set by nothing — so every lot was
+   * long_term, not park-owned, and live-since-forever. `summarise`'s
+   * short-term branch was unreachable, which made /park and /park/rent
+   * disagree about fees, and three of the six revenue streams read "not ready"
+   * forever with instructions ("Mark the lot whose home you own", "Add your
+   * storage spaces") that no screen could carry out.
+   */
+  rentalMode?: string;
+  parkOwnedHome?: boolean;
+  /** When a planned or renovating lot is expected to be live. YYYY-MM-DD. */
+  expectedLiveOn?: string;
 }
 
 export interface LotFormResult {
@@ -322,10 +336,18 @@ export interface LotFormResult {
     season_close_day: number | null;
     tier: string;
     features: string[];
+    rental_mode: string;
+    park_owned_home: boolean;
+    expected_live_on: string | null;
   };
 }
 
-const SITE_TYPES = ["rv_site", "mh_single", "mh_double", "tent", "slip"];
+// 0066 recreated `park_lots_site_type_check` WITH 'storage'; the database has
+// allowed it ever since. Only this allowlist refused, so "Add your storage
+// spaces" sat on the revenue-stream checklist as an instruction no control
+// could satisfy.
+const SITE_TYPES = ["rv_site", "mh_single", "mh_double", "tent", "slip", "storage"];
+const RENTAL_MODES = ["long_term", "short_term"];
 const TIERS = ["standard", "premium"];
 const FEATURES = [
   "waterfront", "water_view", "corner", "shade", "pull_through",
@@ -416,6 +438,22 @@ export function buildLotRow(input: LotFormInput): LotFormResult {
   // fair-housing problem gets typed.
   const features = (input.features ?? []).filter((f) => FEATURES.includes(f));
 
+  const rentalMode = input.rentalMode?.trim() || "long_term";
+  if (!RENTAL_MODES.includes(rentalMode)) {
+    return { ok: false, error: "Is this lot lived on, or booked by the night?" };
+  }
+
+  // Only meaningful for a lot that isn't live yet. Carrying a date on a live
+  // lot would put "expected to open" on something already open.
+  let expectedLiveOn: string | null = null;
+  const rawWhen = input.expectedLiveOn?.trim() ?? "";
+  if (rawWhen) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(rawWhen)) {
+      return { ok: false, error: "That date doesn't look right." };
+    }
+    expectedLiveOn = rawWhen;
+  }
+
   return {
     ok: true,
     row: {
@@ -431,6 +469,9 @@ export function buildLotRow(input: LotFormInput): LotFormResult {
       slip_included: input.slipIncluded,
       notes: notes || null,
       active: input.active,
+      rental_mode: rentalMode,
+      park_owned_home: input.parkOwnedHome ?? false,
+      expected_live_on: expectedLiveOn,
     },
   };
 }

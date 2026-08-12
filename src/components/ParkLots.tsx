@@ -58,6 +58,10 @@ export interface LotView {
    */
   lifecycle: string;
   expectedLiveOn?: string | null;
+  /** long_term (somebody lives there) | short_term (booked by the night). */
+  rentalMode?: string;
+  /** The park owns the home on this pad, not just the pad. */
+  parkOwnedHome?: boolean;
   tier?: string;
   features?: string[];
   rates: { term: string; amount: number }[];
@@ -69,6 +73,9 @@ const SITE_TYPES = [
   { value: "mh_double", label: "Double-wide pad" },
   { value: "tent", label: "Tent site" },
   { value: "slip", label: "Boat slip" },
+  // The database has allowed this since 0066; only the app's allowlist didn't,
+  // so "Add your storage spaces" was an instruction with no control behind it.
+  { value: "storage", label: "Storage space" },
 ];
 const TERMS = ["nightly", "weekly", "monthly", "seasonal", "annual"] as const;
 
@@ -92,6 +99,7 @@ const blank = (): LotFormInput => ({
   hasWater: true, hasSewer: true, slipIncluded: false, notes: "", active: true,
   seasonOpen: "", seasonClose: "",
   tier: "standard", features: [],
+  rentalMode: "long_term", parkOwnedHome: false, expectedLiveOn: "",
 });
 
 export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) {
@@ -120,6 +128,9 @@ export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) 
       active: lot.active,
       tier: lot.tier ?? "standard",
       features: lot.features ?? [],
+      rentalMode: lot.rentalMode ?? "long_term",
+      parkOwnedHome: lot.parkOwnedHome ?? false,
+      expectedLiveOn: lot.expectedLiveOn ?? "",
     });
     setEditing(lot.id);
   }
@@ -386,6 +397,38 @@ function LotForm({
           </div>
         </div>
         <Check label="In service" checked={form.active} onChange={(v) => set("active", v)} />
+      </div>
+
+      {/* ---- WHAT KIND OF INVENTORY THIS IS ------------------------------
+          All three of these columns existed since 0065 with seven readers and
+          no writer, so every lot was long-term, not park-owned and live —
+          which made the short-term branch of the roll summary unreachable and
+          left three revenue streams permanently "not ready". */}
+      <div style={{ marginTop: 16 }}>
+        <span className="mut" style={{ fontSize: 13 }}>How is this lot rented?</span>
+        <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+          {[{ v: "long_term", l: "Somebody lives here" }, { v: "short_term", l: "Booked by the night" }].map((o) => (
+            <Chip key={o.v} label={o.l} on={(form.rentalMode ?? "long_term") === o.v}
+              onClick={() => set("rentalMode", o.v)} />
+          ))}
+        </div>
+        <p className="mut" style={{ fontSize: 12, marginTop: 6, marginBottom: 0, lineHeight: 1.5 }}>
+          A nightly lot is counted differently — nineteen nights out of thirty,
+          not "somebody lives there" — so it stays out of the long-term
+          occupancy figure instead of being averaged into nonsense.
+        </p>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <Check
+          label="The home on this lot is mine"
+          checked={form.parkOwnedHome ?? false}
+          onChange={(v) => set("parkOwnedHome", v)}
+        />
+        <p className="mut" style={{ fontSize: 12, marginTop: 4, marginBottom: 0, lineHeight: 1.5 }}>
+          Tick this when you own the home as well as the pad — the rent and the
+          home payment are different money and the statements keep them apart.
+        </p>
       </div>
 
       <div style={{ marginTop: 16 }}>

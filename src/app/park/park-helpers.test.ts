@@ -962,3 +962,43 @@ describe("what a notice period costs, in dates", () => {
     expect(s.line).not.toMatch(/agreements/);
   });
 });
+
+describe("the inventory facts that had no writer", () => {
+  const base = {
+    lotNumber: "7", siteType: "rv_site", maxLengthFt: "", amperage: "",
+    hasWater: true, hasSewer: true, slipIncluded: false, notes: "", active: true,
+  };
+
+  it("defaults a lot to somebody living on it, and not park-owned", () => {
+    const r = buildLotRow({ ...base });
+    expect(r.row!.rental_mode).toBe("long_term");
+    expect(r.row!.park_owned_home).toBe(false);
+    expect(r.row!.expected_live_on).toBeNull();
+  });
+
+  it("writes a nightly lot as short_term — the branch that was unreachable", () => {
+    // `summarise` has a short-term branch that could never run, because nothing
+    // ever set this column. That made /park and /park/rent disagree about fees.
+    const r = buildLotRow({ ...base, rentalMode: "short_term" });
+    expect(r.row!.rental_mode).toBe("short_term");
+  });
+
+  it("records that the park owns the home as well as the pad", () => {
+    expect(buildLotRow({ ...base, parkOwnedHome: true }).row!.park_owned_home).toBe(true);
+  });
+
+  it("accepts a STORAGE space — the database has allowed it since 0066", () => {
+    // "Add your storage spaces" sat on the revenue checklist as an instruction
+    // no control could satisfy, because only this allowlist refused it.
+    expect(buildLotRow({ ...base, siteType: "storage" }).ok).toBe(true);
+  });
+
+  it("refuses a rental mode it doesn't know", () => {
+    expect(buildLotRow({ ...base, rentalMode: "whenever" }).ok).toBe(false);
+  });
+
+  it("keeps an expected-live date, and refuses a malformed one", () => {
+    expect(buildLotRow({ ...base, expectedLiveOn: "2027-04-01" }).row!.expected_live_on).toBe("2027-04-01");
+    expect(buildLotRow({ ...base, expectedLiveOn: "next spring" }).ok).toBe(false);
+  });
+});

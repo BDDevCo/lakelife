@@ -40,6 +40,11 @@ export default async function ParkLotsPage() {
     active: l.lot.active,
     lifecycle: l.lot.lifecycle,
     expectedLiveOn: l.lot.expectedLiveOn,
+    // Copied EXPLICITLY, because forgetting to copy `lifecycle` here is exactly
+    // how every picker ended up showing "Live" for lots the database called
+    // something else.
+    rentalMode: l.lot.rentalMode,
+    parkOwnedHome: l.lot.parkOwnedHome,
     tier: l.tier,
     features: l.features,
     rates: l.rates,
