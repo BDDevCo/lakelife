@@ -8,7 +8,7 @@ import {
 const lot = (over: Partial<Lot> = {}): Lot => ({
   id: "l1", lotNumber: "12", siteType: "rv_site",
   maxLengthFt: 40, amperage: 50,
-  hasWater: true, hasSewer: true, slipIncluded: false, active: true,
+  hasWater: true, hasSewer: true, slipIncluded: false, active: true, lifecycle: "live",
   ...over,
 });
 const unit = (over: Partial<RenterUnit> = {}): RenterUnit => ({
@@ -82,6 +82,22 @@ describe("overlaps — must agree EXACTLY with the database's exclusion constrai
 
 describe("isAvailable — only a DECIDED reservation holds the dates", () => {
   const want = r("2026-07-01", "2026-07-08");
+
+  // 0065: BOOKABLE = ACTIVE AND LIFECYCLE = LIVE. Only the first half was ever
+  // checked, so a retired pad kept listing publicly at a price and somebody
+  // could apply for it — the database refused the booking at the very end.
+  it("a RETIRED lot is not available, however empty it is", () => {
+    expect(isAvailable(lot({ lifecycle: "retired" }), want, [])).toBe(false);
+  });
+  it("a PLANNED lot is not available — it does not exist yet", () => {
+    expect(isAvailable(lot({ lifecycle: "planned" }), want, [])).toBe(false);
+  });
+  it("a lot being WORKED ON is not available", () => {
+    expect(isAvailable(lot({ lifecycle: "renovating" }), want, [])).toBe(false);
+  });
+  it("a live, active, empty lot still is", () => {
+    expect(isAvailable(lot(), want, [])).toBe(true);
+  });
   it("an approved stay blocks the lot", () => {
     expect(isAvailable(lot(), want, [{ during: r("2026-07-05", "2026-07-12"), status: "approved" }])).toBe(false);
   });

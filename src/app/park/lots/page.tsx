@@ -38,6 +38,8 @@ export default async function ParkLotsPage() {
     slipIncluded: l.lot.slipIncluded,
     notes: l.notes,
     active: l.lot.active,
+    lifecycle: l.lot.lifecycle,
+    expectedLiveOn: l.lot.expectedLiveOn,
     tier: l.tier,
     features: l.features,
     rates: l.rates,

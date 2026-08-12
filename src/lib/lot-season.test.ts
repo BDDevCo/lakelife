@@ -10,8 +10,8 @@ const lot = (over: Partial<Lot> = {}): Lot => ({
   id: "l1", lotNumber: "S1", siteType: "slip",
   maxLengthFt: null, amperage: null,
   hasWater: false, hasSewer: false, slipIncluded: false,
-  active: true, ...over,
-} as Lot);
+  active: true, lifecycle: "live", ...over,
+});
 
 describe("whose season governs a lot", () => {
   it("uses the LOT's own window when it has one", () => {

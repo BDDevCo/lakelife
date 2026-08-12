@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { saveLot, saveLotRates, generateLots, setRatesForLots } from "@/app/park/actions";
+import { saveLot, saveLotRates, generateLots, setRatesForLots, setLotLifecycle } from "@/app/park/actions";
 import { SITE_DEFAULTS, type LotFormInput, type LotRangeInput } from "@/app/park/park-helpers";
 
 /**
@@ -15,6 +15,25 @@ import { SITE_DEFAULTS, type LotFormInput, type LotRangeInput } from "@/app/park
  * way: a stay quoted against a term with no rate comes back null rather than
  * silently falling through to another term.
  */
+
+const LIFECYCLE_LABEL: Record<string, string> = {
+  planned: "Planned", renovating: "Being worked on", live: "Live", retired: "Retired",
+};
+
+/**
+ * WHAT EACH STATE DOES, in the owner's terms.
+ *
+ * `lifecycle` has had seven readers and no writer since 0065, so every lot has
+ * been live forever. The states are not cosmetic: anything not live is EXCLUDED
+ * from occupancy, which is the whole point — four homes he has not bought yet
+ * would drag a true 91% down to 77%, and that number goes to a lender.
+ */
+const LIFECYCLE_HELP: Record<string, string> = {
+  planned: "Bought or planned, not there yet. Kept out of your occupancy.",
+  renovating: "Work has started. Still out of your occupancy.",
+  live: "Real inventory — counted, billable, can be filled.",
+  retired: "Gone for good. Its history and money stay; it stops showing as something to fill.",
+};
 
 export interface LotView {
   id: string;
@@ -29,6 +48,16 @@ export interface LotView {
   seasonOpen?: string;
   seasonClose?: string;
   active: boolean;
+  /**
+   * planned | renovating | live | retired.
+   *
+   * REQUIRED, NOT OPTIONAL, ON PURPOSE. It was optional once, and the page that
+   * builds this view simply forgot to copy it — so every picker showed "Live"
+   * while the database said otherwise, and tsc had nothing to say. A field the
+   * screen reports as fact has to be one the compiler insists on.
+   */
+  lifecycle: string;
+  expectedLiveOn?: string | null;
   tier?: string;
   features?: string[];
   rates: { term: string; amount: number }[];
@@ -158,7 +187,7 @@ export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) 
               pending={pending}
             />
           ) : (
-            <LotCard key={lot.id} lot={lot} onEdit={() => openEdit(lot)} />
+            <LotCard key={lot.id} lot={lot} parkId={parkId} onEdit={() => openEdit(lot)} />
           ),
         )}
       </div>
@@ -166,7 +195,7 @@ export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) 
   );
 }
 
-function LotCard({ lot, onEdit }: { lot: LotView; onEdit: () => void }) {
+function LotCard({ lot, parkId, onEdit }: { lot: LotView; parkId: string; onEdit: () => void }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
@@ -195,8 +224,18 @@ function LotCard({ lot, onEdit }: { lot: LotView; onEdit: () => void }) {
     <div className="ll-card ll-card-pad" style={{ opacity: lot.active ? 1 : 0.6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <strong style={{ fontSize: 15 }}>Lot {lot.lotNumber}</strong>
-          {!lot.active && <span className="ll-pill slate" style={{ marginLeft: 8 }}>Off</span>}
+          {/* The explicit spaces are load-bearing: the margin separates these
+              visually, but without them the label reads "Lot 2PLANNED" to a
+              screen reader and to anyone who copies the line. */}
+          <strong style={{ fontSize: 15 }}>Lot {lot.lotNumber}</strong>{" "}
+          {!lot.active && <span className="ll-pill slate" style={{ marginLeft: 8 }}>Off</span>}{" "}
+          {/* Anything not live is said out loud, because it is deliberately
+              OUT of the occupancy figure and that has to be visible. */}
+          {lot.lifecycle !== "live" && (
+            <span className="ll-pill slate" style={{ marginLeft: 8 }}>
+              {LIFECYCLE_LABEL[lot.lifecycle] ?? lot.lifecycle}
+            </span>
+          )}
           <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
             {site}
             {lot.maxLengthFt && ` · up to ${lot.maxLengthFt} ft`}
@@ -209,7 +248,8 @@ function LotCard({ lot, onEdit }: { lot: LotView; onEdit: () => void }) {
               : priced.map((r) => `$${r.amount.toLocaleString()}/${r.term.replace("ly", "")}`).join(" · ")}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <LifecyclePicker lot={lot} parkId={parkId} />
           <button className="ll-btn ghost" onClick={() => setOpen((v) => !v)}>
             {open ? "Close" : "Rates"}
           </button>
@@ -614,5 +654,48 @@ function Chip({ label, on, onClick }: { label: string; on: boolean; onClick: () 
     >
       {label}
     </button>
+  );
+}
+
+/**
+ * Take a lot out of service, or put one back.
+ *
+ * A select rather than a delete: retiring keeps the lot's bills, payments and
+ * receipts exactly where they are. 0072 makes deleting a lot with recorded
+ * money impossible anyway, and a park that has taken money for a pad should
+ * never be able to make that pad disappear.
+ */
+function LifecyclePicker({ lot, parkId }: { lot: LotView; parkId: string }) {
+  const router = useRouter();
+  const [busy, start] = useTransition();
+  const current = lot.lifecycle ?? "live";
+
+  return (
+    <label className="ll-field" style={{ margin: 0, fontSize: 12 }}>
+      <select
+        value={current}
+        disabled={busy}
+        title={LIFECYCLE_HELP[current]}
+        onChange={(e) => {
+          const next = e.target.value as "planned" | "renovating" | "live" | "retired";
+          if (next === current) return;
+          if (next === "retired" &&
+              !window.confirm(
+                `Retire lot ${lot.lotNumber}? It stops showing as something to fill. ` +
+                `Its history and any money on it stay exactly where they are.`,
+              )) return;
+          start(async () => {
+            const res = await setLotLifecycle(parkId, lot.id, next);
+            toast(res.ok ? (res.signal ?? "Changed.") : (res.error ?? "Couldn't change that."));
+            if (res.ok) router.refresh();
+          });
+        }}
+        style={{ fontSize: 12, padding: "5px 8px" }}
+      >
+        {(["live", "planned", "renovating", "retired"] as const).map((v) => (
+          <option key={v} value={v}>{LIFECYCLE_LABEL[v]}</option>
+        ))}
+      </select>
+    </label>
   );
 }

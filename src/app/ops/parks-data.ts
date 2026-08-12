@@ -44,7 +44,7 @@ export async function getOpsParks(): Promise<OpsParkRow[]> {
     admin.from("lakes").select("id, name"),
     admin
       .from("park_lots")
-      .select("id, park_id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active")
+      .select("id, park_id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, lifecycle")
       .in("park_id", parkIds),
     admin.from("park_members").select("park_id, user_id").in("park_id", parkIds),
   ]);
@@ -76,6 +76,7 @@ export async function getOpsParks(): Promise<OpsParkRow[]> {
         siteType: l.site_type as Lot["siteType"],
         maxLengthFt: (l.max_length_ft as number | null) ?? null,
         amperage: (l.amperage as number | null) ?? null,
+        lifecycle: (l.lifecycle as string) ?? "live",
         hasWater: !!l.has_water,
         hasSewer: !!l.has_sewer,
         slipIncluded: !!l.slip_included,

@@ -31,8 +31,15 @@ export type UnitType =
   | "mobile_home" | "park_model" | "travel_trailer" | "fifth_wheel" | "motorhome" | "rv";
 
 export interface Lot {
-  /** planned | renovating | live | retired. Absent means live. */
-  lifecycle?: string;
+  /**
+   * planned | renovating | live | retired.
+   *
+   * `toLot` always supplies it (defaulting to "live"), so it is REQUIRED here —
+   * optional is what let a screen quietly drop it and report every lot as live.
+   */
+  lifecycle: string;
+  expectedLiveOn?: string | null;
+  parkOwnedHome?: boolean;
   /** long_term (somebody lives there) | short_term (booked by the night). */
   rentalMode?: string;
   id: string;
@@ -209,7 +216,14 @@ export function isAvailable(
   /** The lot's effective season. Omit for year-round. */
   season?: ParkSeason,
 ): boolean {
-  if (!lot.active || !isRealRange(want)) return false;
+  // 0065 states the contract in its own comment: BOOKABLE = ACTIVE AND
+  // LIFECYCLE = LIVE. `active` is the owner's on/off switch for a lot that
+  // exists; `lifecycle` says whether it exists at all. Only half of that was
+  // ever checked here, so a pad the owner had retired — or one that is still
+  // just a plan on paper — kept showing publicly at a price, and somebody
+  // could apply for it. The database refused the booking at the very end,
+  // which is the worst possible moment to find out.
+  if (!lot.active || lot.lifecycle !== "live" || !isRealRange(want)) return false;
   // A closed lot is not available, however empty it is. Checked BEFORE the
   // clash scan because "the slips are out of the water" is a better answer
   // than "somebody has it".

@@ -92,7 +92,9 @@ export function ParkApply({
           <div key={lot.id} className="ll-card ll-card-pad">
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
               <div>
-                <strong style={{ fontSize: 15 }}>Site {lot.lotNumber}</strong>
+                {/* The space is deliberate — without it this reads
+                    "Site 1TAKEN" to a screen reader and to anyone copying. */}
+                <strong style={{ fontSize: 15 }}>Site {lot.lotNumber}</strong>{" "}
                 <span className={`ll-pill ${lot.openNow ? "" : "slate"}`} style={{ marginLeft: 8 }}>
                   {/* Never "taken until the 14th" — that is another renter's business. */}
                   {lot.openNow ? "Open" : "Taken"}

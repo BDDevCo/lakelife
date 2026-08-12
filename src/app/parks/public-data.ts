@@ -71,9 +71,13 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
 
   const { data: lotRows } = await admin
     .from("park_lots")
-    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, season_open_month, season_open_day, season_close_month, season_close_day")
+    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, lifecycle, season_open_month, season_open_day, season_close_month, season_close_day")
     .eq("park_id", park.id)
-    .eq("active", true);
+    .eq("active", true)
+    // A lot that is planned, being worked on, or retired is not listed AT ALL
+    // — not listed-and-unavailable. The public has no business seeing a pad
+    // that does not exist yet or has been taken out of service.
+    .eq("lifecycle", "live");
   const lots = lotRows ?? [];
 
   const lotIds = lots.map((l) => l.id as string);
@@ -119,6 +123,7 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
         hasSewer: !!l.has_sewer,
         slipIncluded: !!l.slip_included,
         active: !!l.active,
+        lifecycle: (l.lifecycle as string) ?? "live",
       };
       const rates = ratesBy.get(lot.id) ?? [];
       return {

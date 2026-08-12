@@ -143,6 +143,13 @@ function toLot(row: Record<string, unknown>): Lot {
     hasSewer: !!row.has_sewer,
     slipIncluded: !!row.slip_included,
     active: !!row.active,
+    // Selected but never mapped until now, so every consumer read undefined
+    // and defaulted to 'live' — which is why the four planned homes could not
+    // be kept out of occupancy.
+    lifecycle: (row.lifecycle as string) ?? "live",
+    expectedLiveOn: (row.expected_live_on as string | null) ?? null,
+    rentalMode: (row.rental_mode as string) ?? "long_term",
+    parkOwnedHome: !!row.park_owned_home,
   };
 }
 
@@ -152,7 +159,7 @@ export async function getParkLots(parkId: string): Promise<LotWithRates[]> {
   const admin = createServiceClient();
   const { data: lotRows } = await admin
     .from("park_lots")
-    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, notes, active, tier, features, season_open_month, season_open_day, season_close_month, season_close_day")
+    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, notes, active, tier, features, season_open_month, season_open_day, season_close_month, season_close_day, lifecycle, expected_live_on, rental_mode, park_owned_home")
     .eq("park_id", parkId); // <- the scope
   const lots = lotRows ?? [];
   if (lots.length === 0) return [];

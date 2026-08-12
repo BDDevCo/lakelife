@@ -547,7 +547,7 @@ export async function decideApplication(
   // CURRENT state, not what the page rendered a few minutes ago.
   const { data: lotRow } = await admin
     .from("park_lots")
-    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, park_id, season_open_month, season_open_day, season_close_month, season_close_day")
+    .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, lifecycle, park_id, season_open_month, season_open_day, season_close_month, season_close_day")
     .eq("id", scope.lotId)
     .maybeSingle();
   if (!lotRow) return { ok: false, error: "That lot is gone." };
@@ -593,6 +593,7 @@ export async function decideApplication(
       hasSewer: !!lotRow.has_sewer,
       slipIncluded: !!lotRow.slip_included,
       active: !!lotRow.active,
+      lifecycle: (lotRow.lifecycle as string) ?? "live",
     },
     season,
   );
@@ -710,4 +711,96 @@ export async function editTenancy(
       ? `Confirmed with ${built.renter.display_name}. That's off the seller's roll now.`
       : "Saved.",
   };
+}
+
+// ------------------------------------------------------- lot lifecycle ----
+
+/**
+ * TAKE A LOT OUT OF SERVICE, OR PUT ONE BACK.
+ *
+ * `park_lots.lifecycle` has existed since 0065 with SEVEN readers and NO
+ * WRITER, so every lot has been 'live' forever and none of it did anything:
+ *
+ *   'planned'    — a home being bought, a pad being cleared. Counted apart and
+ *                  EXCLUDED from occupancy, which is the entire point: four
+ *                  unbuilt homes would take a true 91% down to 77%, and that
+ *                  number goes in front of a lender.
+ *   'renovating' — same, but the work has started.
+ *   'live'       — inventory. Billable, bookable, counted.
+ *   'retired'    — gone for good: sold off, flooded, pulled. Keeps its history
+ *                  and its ledger, and stops appearing as something to fill.
+ *
+ * RETIRING IS NOT DELETING. The lot's bills, payments and receipts stay exactly
+ * where they are — 0072 makes deleting a lot with recorded money impossible
+ * anyway, and a park that has taken money for a pad should never be able to
+ * make that pad disappear.
+ */
+export async function setLotLifecycle(
+  parkId: string,
+  lotId: string,
+  lifecycle: "planned" | "renovating" | "live" | "retired",
+  expectedLiveOn?: string | null,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  if ((await assertLotIsMine(lotId)) !== parkId) return { ok: false, error: DENIED };
+  if (!["planned", "renovating", "live", "retired"].includes(lifecycle)) {
+    return { ok: false, error: "That isn't a state a lot can be in." };
+  }
+  if (expectedLiveOn && !/^\d{4}-\d{2}-\d{2}$/.test(expectedLiveOn)) {
+    return { ok: false, error: "That date doesn't look right." };
+  }
+
+  const admin = createServiceClient();
+  const { data: lot } = await admin
+    .from("park_lots").select("lot_number, lifecycle").eq("id", lotId).maybeSingle();
+  if (!lot) return { ok: false, error: "That lot isn't here." };
+
+  // TAKING A LOT OUT FROM UNDER SOMEBODY IS NOT A STATUS CHANGE. A lot with a
+  // live tenancy is somebody's home; the guard in 0065 refuses new bookings on
+  // a non-live lot, so quietly flipping this would strand the household —
+  // billable but invisible to every screen that filters on 'live'.
+  if (lifecycle !== "live") {
+    const today = todayLakeDate();
+    const { data: stays } = await admin
+      .from("lot_reservations")
+      .select("during, status")
+      .eq("park_lot_id", lotId)
+      .in("status", ["approved", "active"]);
+    const held = (stays ?? []).some((s) => {
+      const r = parseDaterange(s.during as string);
+      return r != null && today < r.end;
+    });
+    if (held) {
+      return {
+        ok: false,
+        error:
+          `Somebody is on lot ${lot.lot_number}, or is booked onto it. End that ` +
+          `first — taking the lot out from under a live tenancy would leave them ` +
+          `billable but off every screen.`,
+      };
+    }
+  }
+
+  const row: Record<string, unknown> = { lifecycle };
+  // A date only means something while the lot is still coming.
+  if (lifecycle === "planned" || lifecycle === "renovating") {
+    row.expected_live_on = expectedLiveOn || null;
+  } else {
+    row.expected_live_on = null;
+  }
+
+  const { error } = await admin.from("park_lots").update(row).eq("id", lotId);
+  if (error) return { ok: false, error: "Couldn't change that — try again." };
+
+  revalidatePath("/park");
+  revalidatePath("/park/lots");
+  revalidatePath("/park/today");
+
+  const said: Record<string, string> = {
+    planned: `Lot ${lot.lot_number} is planned — it's out of your occupancy until it's live.`,
+    renovating: `Lot ${lot.lot_number} is being worked on — out of occupancy until it's live.`,
+    live: `Lot ${lot.lot_number} is live — it counts and can be filled.`,
+    retired: `Lot ${lot.lot_number} is retired. Its history and money stay put.`,
+  };
+  return { ok: true, signal: said[lifecycle] };
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  toStay, buildRentRoll, summarise, coversDay, canApprove,
+  toStay, buildRentRoll, summarise, coversDay, canApprove, decideProblemText,
   buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
   planBulkRates, buildTenant, buildParkDialsRow, dialsWarning, noticeShape,
   type BulkRateTarget, type TenantInput,
@@ -13,7 +13,7 @@ import { parseDaterange, toDaterange, type Lot } from "@/lib/parks";
 
 const lot = (over: Partial<Lot> = {}): Lot => ({
   id: "l1", lotNumber: "12", siteType: "rv_site", maxLengthFt: 40, amperage: 50,
-  hasWater: true, hasSewer: true, slipIncluded: false, active: true, ...over,
+  hasWater: true, hasSewer: true, slipIncluded: false, active: true, lifecycle: "live", ...over,
 });
 
 const raw = (over: Partial<RawReservation> = {}): RawReservation => ({
@@ -164,6 +164,19 @@ describe("canApprove — a friendly sentence before the database says no", () =>
   const app = stay({ id: "app", status: "applied" });
   it("approves a free lot", () => {
     expect(canApprove(app, [], lot())).toEqual({ ok: true });
+  });
+
+  // Its own reason, not "taken" — they are different problems with different
+  // fixes. One waits for a date; the other waits for the owner to put the lot
+  // back in service. Without this, 0065's trigger throws a raw database error
+  // in the owner's face at the moment they tap Approve.
+  it("refuses a lot that is not in service, and SAYS SO", () => {
+    const res = canApprove(app, [], lot({ lifecycle: "retired" }));
+    expect(res).toEqual({ ok: false, problem: "lot_not_live" });
+    expect(decideProblemText(res.problem!)).toMatch(/isn't in service/);
+  });
+  it("says the same for a lot still being worked on", () => {
+    expect(canApprove(app, [], lot({ lifecycle: "renovating" })).problem).toBe("lot_not_live");
   });
   it("refuses when a decided stay already holds those nights", () => {
     const res = canApprove(app, [stay({ id: "held", during: "[2026-07-05,2026-07-12)" })], lot());

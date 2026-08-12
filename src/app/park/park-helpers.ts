@@ -214,6 +214,7 @@ export type DecideProblem =
   | "not_pending"      // already decided — a double-tap, or two managers at once
   | "no_dates"         // the range never parsed; refuse rather than guess
   | "out_of_season"    // the lot is closed for part of those dates
+  | "lot_not_live"     // planned, being worked on, or retired
   | "lot_taken";       // another decided stay already holds these dates
 
 /**
@@ -246,6 +247,12 @@ export function canApprove(
   );
   if (conflict) return { ok: false, problem: "lot_taken" };
 
+  // Named separately from "taken" because they are different problems with
+  // different fixes: one waits for a date, the other waits for the owner to
+  // put the lot back in service. 0065's trigger refuses this write outright,
+  // so without its own reason the owner would get a raw database error.
+  if (lot.lifecycle !== "live") return { ok: false, problem: "lot_not_live" };
+
   // Belt and braces: isAvailable also refuses an inactive lot and a nonsense
   // range, so the two answers can never disagree.
   // A stay that runs outside the lot's season is refused with its own reason —
@@ -267,6 +274,7 @@ export function decideProblemText(p: DecideProblem): string {
     case "not_pending": return "This application has already been decided.";
     case "no_dates":    return "This application has no usable dates — ask the renter to re-apply.";
     case "out_of_season": return "That spot is closed for part of those dates — check the season on the lot.";
+    case "lot_not_live": return "That lot isn't in service — put it back to Live on Lots & rates first.";
     case "lot_taken":   return "That lot is already taken for some of those nights.";
   }
 }

@@ -70,10 +70,17 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
   // --- the lot, its park, and whether either is even open to the public ---
   const { data: lotRow } = await admin
     .from("park_lots")
-    .select("id, park_id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active")
+    .select("id, park_id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, lifecycle")
     .eq("id", input.lotId)
     .maybeSingle();
-  if (!lotRow || !lotRow.active) return { ok: false, error: "That lot isn't available." };
+  // Checked here as well as in the listing, because a lot can be retired
+  // between the page loading and the form being sent — and because a link to a
+  // lot can be kept, shared, or bookmarked. 0065's trigger would refuse this
+  // at approval time with a raw database error; refusing it now costs the
+  // renter a sentence instead of an application.
+  if (!lotRow || !lotRow.active || (lotRow.lifecycle as string) !== "live") {
+    return { ok: false, error: "That lot isn't available." };
+  }
 
   const { data: park } = await admin
     .from("parks")
@@ -140,6 +147,7 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
     hasSewer: !!lotRow.has_sewer,
     slipIncluded: !!lotRow.slip_included,
     active: !!lotRow.active,
+    lifecycle: (lotRow.lifecycle as string) ?? "live",
   };
   const fit = lotFits(lot, { unitType: input.unitType as UnitType, lengthFt, needsAmps: null });
 
