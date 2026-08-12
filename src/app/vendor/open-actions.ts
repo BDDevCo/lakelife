@@ -132,8 +132,14 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const [{ data: myDayJobs }, { data: blockRow }, { data: myUnits }] = await Promise.all([
     admin.from("jobs").select("id, group_id, services(est_minutes), job_items(services(est_minutes))")
       .eq("vendor_id", vendor.id as string).eq("date", job.date as string).in("status", ["scheduled", "in_progress"]),
+    // `.limit(1)`, NOT `.maybeSingle()`. Availability is stored per SLOT, so a
+    // crew who blocked two of the four legitimately has two rows that day —
+    // and maybeSingle errors on more than one, returning {error, data:null},
+    // which reads here as "not blocked". The guard inverted precisely when the
+    // crew had blocked the most.
     admin.from("vendor_availability").select("id")
-      .eq("vendor_id", vendor.id as string).eq("date", job.date as string).eq("status", "blocked").maybeSingle(),
+      .eq("vendor_id", vendor.id as string).eq("date", job.date as string)
+      .eq("status", "blocked").limit(1),
     admin.from("crew_units").select("capacity, work_start, work_end")
       .eq("vendor_id", vendor.id as string).eq("active", true),
   ]);
@@ -165,7 +171,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     workDays: (vendor.work_days as string[]) ?? [],
     dailyCapacity: fleetJobCap(units, Number(vendor.daily_capacity ?? 0)),
     assignedThatDay: (myDayJobs ?? []).length,
-    blockedThatDay: !!blockRow,
+    blockedThatDay: (blockRow?.length ?? 0) > 0,
     minuteBudget: fleetMinuteBudget(units),
     assignedMinutes,
     crewRate: myRate != null && myRate > 0 ? myRate : null,

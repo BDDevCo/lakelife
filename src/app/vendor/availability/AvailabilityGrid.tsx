@@ -106,10 +106,29 @@ export function AvailabilityGrid({ days }: { days: DayRow[] }) {
 
       {/* legend */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginTop: 16 }}>
-        <LegendItem status="booked" label="LL job (locked)" />
+        {/* "LL job (locked)" was legended and never produced: `setSlot` is the
+            only writer of this table and it writes 'open' or 'blocked'. A
+            legend describes what the crew will see, and they never saw this.
+            The guard in setSlot that reads 'booked' stays — it costs nothing
+            and it is the right refusal if that state ever exists. */}
         <LegendItem status="open" label="Open to bookings" />
         <LegendItem status="blocked" label="Blocked" />
       </div>
+
+      {/* SAYING WHAT BLOCKING ACTUALLY DOES.
+          The grid stores a block per slot, but every consumer — dispatch's
+          eligibility gate, the claim board, the customer's booking calendar —
+          collapses it to the DAY. So blocking 8am for a dentist appointment
+          takes the whole day off, while three cells beside it still read
+          "Open". A crew planning around that loses work they meant to keep.
+          The behaviour is left alone (changing the dispatch gate is not a
+          thing to do quietly); the screen stops implying otherwise. */}
+      <p className="mut" style={{ fontSize: 12.5, marginTop: 12, lineHeight: 1.5 }}>
+        Blocking any part of a day currently takes you off dispatch for that
+        <strong> whole day</strong> — we can&apos;t split a day between you and
+        another crew yet. If you only need a morning, tell dispatch and
+        they&apos;ll work around it.
+      </p>
     </div>
   );
 }
