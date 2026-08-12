@@ -166,10 +166,15 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   ).filter((r) => r.balance > 0);
 
   // Cash in, month-to-date and today, off received_on.
+  //
+  // REVERSED PAYMENTS ARE NOT CASH IN. A bounced check must not sit in the
+  // "$X has come in this month" line on the screen he reads with coffee — that
+  // is the number he plans against.
   const { data: payments } = allIds.length
     ? await admin.from("park_payments")
-        .select("id, charge_id, amount, method, reference, received_on")
+        .select("id, charge_id, amount, method, reference, received_on, reversed_at, reversed_reason")
         .in("charge_id", allIds)
+        .is("reversed_at", null)
     : { data: [] as Record<string, unknown>[] };
 
   const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
@@ -182,6 +187,8 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
       method: (p.method as Method) ?? "other",
       reference: (p.reference as string) ?? null,
       receivedOn: p.received_on as string,
+      reversedAt: (p.reversed_at as string) ?? null,
+      reversedReason: (p.reversed_reason as string) ?? null,
       lotNumber: lotName.get(c?.park_lot_id as string) ?? "?",
       payerName: null,
       periodMonth: (c?.period_month as string) ?? "",

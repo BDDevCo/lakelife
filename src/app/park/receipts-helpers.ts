@@ -76,6 +76,12 @@ export interface Receipt {
   chargeStatus: "open" | "paid" | "void";
   /** The bill's frozen breakdown. Carried, never parsed. */
   chargeLines: ChargeLine[];
+  /**
+   * Taken back — a bounced check, a transposed digit. The row survives with
+   * its receipt number; the cash did not.
+   */
+  reversedAt: string | null;
+  reversedReason: string | null;
 }
 
 export interface Period {
@@ -168,6 +174,14 @@ export interface ReceiptSummary {
    * a refund path exists this is where the mismatch will surface.
    */
   againstVoided: Receipt[];
+  /**
+   * MONEY THAT WAS RECORDED AND THEN TAKEN BACK. Kept out of every total —
+   * a bounced check is not income — and reported HERE rather than silently
+   * dropped, because a statement that quietly loses a receipt number is
+   * exactly what makes an accountant stop trusting the whole file.
+   */
+  reversed: Receipt[];
+  reversedCents: number;
   /** Paid in a different month than the bill was for. Normal; worth counting. */
   otherMonthCount: number;
   /** How much was taken above what was billed. */
@@ -185,7 +199,15 @@ function bump(map: Map<string, Bucket>, key: string, label: string, cents: numbe
 }
 
 export function summariseReceipts(all: readonly Receipt[], period: Period): ReceiptSummary {
-  const rows = all.filter((r) => inPeriod(r, period));
+  const inWindow = all.filter((r) => inPeriod(r, period));
+
+  // A REVERSED PAYMENT IS NOT CASH. It is a check that bounced or a number
+  // typed wrong, and counting it as income is how a park pays tax on money it
+  // never had. Split out rather than dropped — the receipt number still exists
+  // and a statement that quietly loses one is a statement nobody trusts.
+  const reversed = inWindow.filter((r) => r.reversedAt != null);
+  const reversedCents = reversed.reduce((n, r) => n + r.amountCents, 0);
+  const rows = inWindow.filter((r) => r.reversedAt == null);
 
   const byMethod = new Map<string, Bucket>();
   const byMonth = new Map<string, Bucket>();
@@ -232,6 +254,8 @@ export function summariseReceipts(all: readonly Receipt[], period: Period): Rece
       (a, b) => b.cents - a.cents || a.key.localeCompare(b.key, undefined, { numeric: true }),
     ),
     againstVoided,
+    reversed,
+    reversedCents,
     otherMonthCount,
     overpaidCents,
     firstOn,

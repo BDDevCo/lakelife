@@ -456,6 +456,14 @@ function PaymentForm({
   // Ties the payment back to the half they kept, which is the whole point of
   // the slip existing.
   const [dropSlipNo, setDropSlipNo] = useState("");
+  // ONE KEY PER OPENED FORM. A double-tapped "Record it" — or a retry after
+  // the office's connection stutters — used to write the money twice and burn
+  // two receipt numbers. The second attempt now collides on 0081's unique
+  // index. A genuinely second payment opens the form again and gets a new key.
+  const [idemKey] = useState(() =>
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${chargeId}:${Date.now()}:${Math.random()}`);
 
   return (
     <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
@@ -495,7 +503,7 @@ function PaymentForm({
             start(async () => {
               const res = await recordPayment(
                 parkId, chargeId, Number(amount.replace(/[$,\s]/g, "")),
-                method, reference, receivedOn, dropSlipNo,
+                method, reference, receivedOn, dropSlipNo, idemKey,
               );
               toast(res.ok ? (res.signal ?? "Recorded.") : (res.error ?? "Couldn't record that."));
               if (res.ok) {

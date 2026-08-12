@@ -16,6 +16,8 @@ function receipt(over: Partial<Receipt> = {}): Receipt {
     method: "check",
     reference: "1042",
     receivedOn: "2026-07-03",
+    reversedAt: null,
+    reversedReason: null,
     lotNumber: "3",
     payerName: "Roy Amberg",
     periodMonth: "2026-07",
@@ -263,5 +265,51 @@ describe("what it says", () => {
       unbilledFeeLabels: ["grounds fee"], anyMissingPayerName: false,
     });
     expect(some.some((l) => /grounds fee/.test(l))).toBe(true);
+  });
+});
+
+describe("a payment that was taken back is not income", () => {
+  // A bounced check and a transposed digit are the same shape, and until 0081
+  // both were permanent. Now they can be reversed — and a reversal that
+  // silently vanished from the statement would be its own problem: the receipt
+  // number still exists, and an accountant who finds a gap in the sequence
+  // stops trusting the whole file.
+  const period = monthPeriod("2026-07", TODAY)!;
+
+  it("keeps reversed cash out of the total", () => {
+    const s = summariseReceipts([
+      receipt({ paymentId: "good", amountCents: 45500 }),
+      receipt({ paymentId: "bounced", amountCents: 30000, reversedAt: "2026-07-20T12:00:00Z", reversedReason: "check bounced" }),
+    ], period);
+    expect(s.totalCents).toBe(45500);
+    expect(s.count).toBe(1);
+  });
+
+  it("reports it separately, with its own total", () => {
+    const s = summariseReceipts([
+      receipt({ paymentId: "bounced", amountCents: 30000, reversedAt: "2026-07-20T12:00:00Z", reversedReason: "check bounced" }),
+    ], period);
+    expect(s.reversed).toHaveLength(1);
+    expect(s.reversedCents).toBe(30000);
+    expect(s.reversed[0].reversedReason).toBe("check bounced");
+  });
+
+  it("keeps it out of the method and household breakdowns too", () => {
+    const s = summariseReceipts([
+      receipt({ paymentId: "bounced", amountCents: 30000, reversedAt: "2026-07-20T12:00:00Z", reversedReason: "bounced" }),
+    ], period);
+    expect(s.byMethod).toEqual([]);
+    expect(s.byHousehold).toEqual([]);
+  });
+
+  it("does not count a reversal as an overpayment", () => {
+    // Two payments that together exceed the bill, one of which bounced, is not
+    // an overpayment — it is one payment.
+    const s = summariseReceipts([
+      receipt({ paymentId: "a", amountCents: 45500, chargeAmountCents: 45500 }),
+      receipt({ paymentId: "b", amountCents: 45500, chargeAmountCents: 45500,
+                reversedAt: "2026-07-21T12:00:00Z", reversedReason: "entered twice" }),
+    ], period);
+    expect(s.overpaidCents).toBe(0);
   });
 });

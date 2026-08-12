@@ -98,7 +98,7 @@ export async function getStatement(
   const [{ data: payments }, { data: lots }, { data: renters }, { data: fees }] = await Promise.all([
     admin
       .from("park_payments")
-      .select("id, charge_id, amount, method, reference, received_on")
+      .select("id, charge_id, amount, method, reference, received_on, reversed_at, reversed_reason")
       .in("charge_id", chargeIds),
     admin.from("park_lots").select("id, lot_number").eq("park_id", parkId),
     admin.from("park_renters").select("id, display_name").eq("park_id", parkId),
@@ -134,6 +134,8 @@ export async function getStatement(
       chargeAmountCents: cents(c.amount),
       chargeStatus: c.status as Receipt["chargeStatus"],
       chargeLines,
+      reversedAt: (p.reversed_at as string) ?? null,
+      reversedReason: (p.reversed_reason as string) ?? null,
     };
   });
 

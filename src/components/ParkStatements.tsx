@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { getStatement, type StatementPage } from "@/app/park/receipts-actions";
+import { reversePayment } from "@/app/park/ledger-actions";
 import {
   money, receiptsHeadline, monthPeriod, quarterPeriod, yearPeriod, customPeriod,
   type Period,
@@ -34,6 +36,10 @@ export function ParkStatements({
   const [busy, start] = useTransition();
   const [customFrom, setCustomFrom] = useState(page.period.from);
   const [customTo, setCustomTo] = useState(page.period.to);
+  // Which receipt he is taking back, and why.
+  const [reversing, setReversing] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const router = useRouter();
 
   function load(p: Period | null) {
     if (!p) { toast("That date range doesn't work — the end has to be on or after the start."); return; }
@@ -141,7 +147,7 @@ export function ParkStatements({
       </section>
 
       {/* ---- things that need his eye ------------------------------------- */}
-      {(s.againstVoided.length > 0 || s.overpaidCents > 0 || s.otherMonthCount > 0) && (
+      {(s.againstVoided.length > 0 || s.reversed.length > 0 || s.overpaidCents > 0 || s.otherMonthCount > 0) && (
         <section style={{ marginTop: 16 }}>
           <div className="ll-card ll-card-pad">
             <strong style={{ fontSize: 15 }}>Worth a look</strong>
@@ -154,6 +160,24 @@ export function ParkStatements({
                   refund isn&apos;t recorded anywhere yet.
                 </div>
               ))}
+              {/* MONEY TAKEN BACK. Kept out of every total above — a bounced
+                  check is not income — but never silently dropped: the receipt
+                  number still exists, and a gap in the sequence is what makes
+                  an accountant stop trusting the file. */}
+              {s.reversed.map((r) => (
+                <div key={`rev-${r.paymentId}`} style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  <strong>Lot {r.lotNumber}</strong> — {money(r.amountCents)} recorded
+                  on {r.receivedOn} and then taken back
+                  {r.reversedReason ? `: ${r.reversedReason}` : ""}. It is NOT counted
+                  in the totals above.
+                </div>
+              ))}
+              {s.reversed.length > 0 && (
+                <div className="mut" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                  {money(s.reversedCents)} in total was recorded and then taken back
+                  in this window.
+                </div>
+              )}
               {s.overpaidCents > 0 && (
                 <div style={{ fontSize: 13, lineHeight: 1.5 }}>
                   {money(s.overpaidCents)} more came in than was billed — somebody
@@ -204,10 +228,51 @@ export function ParkStatements({
                   {r.method}{r.reference ? ` ${r.reference}` : ""}
                 </span>
                 {r.chargeStatus === "void" && <span className="ll-pill warn">bill cancelled</span>}
+                {r.reversedAt && <span className="ll-pill slate">taken back</span>}
                 <span style={{ minWidth: 88, textAlign: "right", fontWeight: 700,
-                               fontVariantNumeric: "tabular-nums" }}>
+                               fontVariantNumeric: "tabular-nums",
+                               textDecoration: r.reversedAt ? "line-through" : undefined,
+                               opacity: r.reversedAt ? 0.55 : 1 }}>
                   {money(r.amountCents)}
                 </span>
+                {/* A TRANSPOSED DIGIT USED TO BE PERMANENT. The row survives
+                    with its receipt number; only the money stops counting. */}
+                {!r.reversedAt && (
+                  <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
+                    onClick={() => setReversing(r.paymentId)}>
+                    Take it back
+                  </button>
+                )}
+                {reversing === r.paymentId && (
+                  <div style={{ flexBasis: "100%", marginTop: 6 }}>
+                    <input
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="What happened? A bounced check, a typo…"
+                      style={{ width: "100%", fontSize: 13 }}
+                    />
+                    <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                      <button className="ll-btn" disabled={busy || !reason.trim()}
+                        onClick={() =>
+                          start(async () => {
+                            const res = await reversePayment(parkId, r.paymentId, reason);
+                            toast(res.ok ? (res.signal ?? "Taken back.") : (res.error ?? "Couldn't do that."));
+                            if (res.ok) { setReversing(null); setReason(""); router.refresh(); }
+                          })
+                        }>
+                        {busy ? "Recording…" : "Take it back"}
+                      </button>
+                      <button className="ll-btn ghost" disabled={busy}
+                        onClick={() => { setReversing(null); setReason(""); }}>
+                        Cancel
+                      </button>
+                    </div>
+                    <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
+                      The receipt stays on the record with the reason. The bill goes
+                      back to outstanding.
+                    </p>
+                  </div>
+                )}
               </div>
             ))}
           </div>

@@ -75,11 +75,18 @@ export async function previewChargeRun(
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active"]);
 
+  // A VOIDED BILL IS NOT A BILL. Without this filter, cancelling a charge made
+  // that household's month permanently unbillable — the row still occupied the
+  // slot, `summarise` skips void charges so it didn't even read as
+  // outstanding, and they simply stopped being billed for a month as a
+  // consequence of the owner fixing a mistake. 0081 makes the unique index
+  // agree.
   const { data: existing } = await admin
     .from("park_charges")
     .select("reservation_id")
     .eq("park_id", parkId)
-    .eq("period_month", month);
+    .eq("period_month", month)
+    .neq("status", "void");
   const already = new Set((existing ?? []).map((c) => c.reservation_id as string));
 
   const candidates = (stays ?? []).map((s) => {
@@ -139,9 +146,11 @@ export async function runCharges(
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active"]);
 
+  // Same rule as the preview: a cancelled bill leaves the month billable.
   const { data: existing } = await admin
     .from("park_charges").select("reservation_id")
-    .eq("park_id", parkId).eq("period_month", month);
+    .eq("park_id", parkId).eq("period_month", month)
+    .neq("status", "void");
   const already = new Set((existing ?? []).map((c) => c.reservation_id as string));
 
   const rows: Record<string, unknown>[] = [];
@@ -201,6 +210,13 @@ export async function recordPayment(
   receivedOn: string,
   /** The serial off the slip they dropped in the box, when that is how it came. */
   dropSlipNo?: string,
+  /**
+   * Minted once when the form opens, so a double-tapped submit — or a retry
+   * after a flaky connection at the office window — collides on 0081's unique
+   * index instead of recording the money twice and burning two receipt
+   * numbers. A genuinely second payment comes from a new form and a new key.
+   */
+  idempotencyKey?: string,
 ): Promise<ParkResult & { receipt?: ReceiptLines; renterEmail?: string | null }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -233,10 +249,29 @@ export async function recordPayment(
     received_on: receivedOn,
     drop_slip_no: dropSlipNo?.trim() || null,
     confirm_token: confirmToken,
+    idempotency_key: idempotencyKey?.trim() || null,
   }).select("receipt_no").single();
-  if (error) return { ok: false, error: "Couldn't record that — try again." };
+  if (error) {
+    // 23505 on the idempotency index = this exact submit already landed. That
+    // is a success from the office's point of view, not a failure — telling
+    // them it failed is how the same money gets entered a second time.
+    if (error.code === "23505") {
+      return { ok: false, error: "That payment is already recorded — check the ledger before entering it again." };
+    }
+    return { ok: false, error: "Couldn't record that — try again." };
+  }
 
-  const balance = Number(charge.amount) - Number(charge.paid_total) - amount;
+  // THE BALANCE ON THE PIECE OF PAPER THEY WALK AWAY WITH.
+  //
+  // This used to be computed from the snapshot read BEFORE the insert, so a
+  // payment landing in between printed a "still owing" figure that was already
+  // wrong — on the only copy the renter keeps. Re-read after the trigger has
+  // recomputed the total.
+  const { data: after } = await admin
+    .from("park_charges").select("amount, paid_total").eq("id", chargeId).maybeSingle();
+  const balance = after
+    ? Number(after.amount) - Number(after.paid_total)
+    : Number(charge.amount) - Number(charge.paid_total) - amount;
 
   // Everything the receipt needs, gathered once here rather than by a second
   // round trip from the screen.
@@ -631,4 +666,71 @@ async function currentUserId(): Promise<string | null> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   return user?.id ?? null;
+}
+
+/**
+ * TAKING BACK A PAYMENT THAT SHOULDN'T HAVE BEEN RECORDED.
+ *
+ * A transposed digit and a bounced check are the same shape, and until now
+ * both were permanent: `recordPayment` was the only write to `park_payments`,
+ * 0070 forbids a zero or negative amount so a compensating row is impossible,
+ * and 0072 refuses to void a charge that has money against it. Type $4,395
+ * instead of $439.50 and that household is unfixably in credit forever — while
+ * the printed receipt promises "the bill goes back to outstanding".
+ *
+ * THE ROW IS NOT DELETED. It keeps its receipt number and its place in the
+ * sequence, and gains a reason and a timestamp. This ledger exists because a
+ * payment is something two people were there for; quietly erasing the record
+ * of one is the opposite of the point. What changes is that 0081's
+ * `sync_charge_paid` stops counting it, so the balance tells the truth again.
+ *
+ * The reason is required by the database, not just by this function. A
+ * reversal moves money against somebody, and "it was wrong" with no
+ * explanation is indistinguishable from an office covering a mistake.
+ */
+export async function reversePayment(
+  parkId: string,
+  paymentId: string,
+  reason: string,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  const why = reason.trim();
+  if (!why) {
+    return { ok: false, error: "Say what happened — a bounced check, a typo. The record has to carry the reason." };
+  }
+  if (why.length > 500) return { ok: false, error: "That's a bit long — a sentence is plenty." };
+
+  const admin = createServiceClient();
+
+  // Scope the payment to THIS park through its charge before touching it.
+  const { data: pay } = await admin
+    .from("park_payments")
+    .select("id, amount, receipt_no, reversed_at, park_charges!inner(park_id)")
+    .eq("id", paymentId)
+    .maybeSingle();
+  const owner = (pay as { park_charges?: { park_id?: string } } | null)?.park_charges?.park_id;
+  if (!pay || owner !== parkId) return { ok: false, error: "That isn't here." };
+  if (pay.reversed_at) return { ok: false, error: "That one's already been taken back." };
+
+  const { error } = await admin
+    .from("park_payments")
+    .update({
+      reversed_at: new Date().toISOString(),
+      reversed_reason: why,
+      reversed_by: await currentUserId(),
+    })
+    .eq("id", paymentId)
+    .is("reversed_at", null); // never reverse twice
+  if (error) return { ok: false, error: "Couldn't record that — try again." };
+
+  revalidatePath("/park/rent");
+  revalidatePath("/park/today");
+  revalidatePath("/park");
+  const amount = Number(pay.amount ?? 0);
+  return {
+    ok: true,
+    signal:
+      `$${amount.toFixed(2)} taken back${pay.receipt_no ? ` (receipt ${pay.receipt_no})` : ""}. ` +
+      `The bill is outstanding again, and the record shows why.`,
+  };
 }
