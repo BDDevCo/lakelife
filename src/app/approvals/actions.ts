@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getFullProfile, toPricingProfile } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
+import { serviceMinutes, type DurationBands } from "@/lib/duration";
 
 export interface ApprovalResult {
   ok: boolean;
@@ -70,8 +71,16 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
     if (profile?.hasProfile) {
       const { data: services } = await admin
         .from("services")
-        .select("id, name, pricing_model, base, unit_rate, band_pricing");
-      const byId = new Map((services ?? []).map((s) => [s.id, s as unknown as ServiceRule]));
+        .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands");
+      // Typed to INCLUDE the duration fields, not merely to carry them at
+      // runtime — a plain ServiceRule cast would still compile if the select
+      // above dropped them, and serviceMinutes would quietly return the flat
+      // figure forever. That is the failure mode this codebase keeps hitting.
+      type TimedRule = ServiceRule & {
+        est_minutes?: number | null;
+        duration_bands?: DurationBands | null;
+      };
+      const byId = new Map((services ?? []).map((s) => [s.id, s as unknown as TimedRule]));
       const pp = toPricingProfile(profile);
       const { data: openJobs } = await admin
         .from("jobs")
@@ -107,8 +116,20 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
         const rule = j.service_id ? byId.get(j.service_id) : undefined;
         if (!rule) continue;
         const price = priceService(rule, pp);
-        const update: { customer_price: number; vendor_cost?: number; margin?: number } =
-          { customer_price: price };
+
+        // THE DAY HAS TO MOVE TOO.
+        //
+        // Approving "twelve pier sections, not eight" used to change the money
+        // and nothing else. Since 0083 the job also carries the minutes it was
+        // budgeted, and twelve sections is 255 minutes where eight was 180 —
+        // so leaving the old figure would bill the owner for the bigger job
+        // and still hand the crew a day sized for the smaller one. The
+        // afternoon is where that difference gets paid.
+        const minutes = serviceMinutes(rule, pp);
+
+        const update: {
+          customer_price: number; est_minutes: number; vendor_cost?: number; margin?: number;
+        } = { customer_price: price, est_minutes: minutes };
 
         const vr = j.vendor_id && j.service_id
           ? rateByVendorService.get(`${j.vendor_id}:${j.service_id}`)
