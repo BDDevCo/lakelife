@@ -37,7 +37,14 @@ export async function buildCustomerContext(userId: string): Promise<CustomerCont
           .order("date", { ascending: false })
           .limit(12)
       : Promise.resolve({ data: [] as never[] }),
-    admin.from("autopilot_enrollments").select("services(name)").eq("owner_id", userId).limit(10),
+    // Keyed by PROPERTY, not owner — autopilot_enrollments has no owner_id
+    // column and never did. The 42703 came back as {error, data:null}, which
+    // reads exactly like "enrolled in nothing", so every draft written for a
+    // customer on autopilot said the opposite of the truth.
+    propIds.length
+      ? admin.from("autopilot_enrollments")
+          .select("services(name)").in("property_id", propIds).eq("active", true).limit(10)
+      : Promise.resolve({ data: [] as never[] }),
     admin.from("user_credits").select("amount").eq("user_id", userId),
   ]);
 

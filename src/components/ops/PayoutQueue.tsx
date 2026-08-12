@@ -8,6 +8,10 @@
  * only inside the export route handler.
  */
 
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "@/components/Toast";
+import { markBatchesPaid } from "@/app/ops/payout-actions";
 import type { PayoutQueue as PayoutQueueData } from "@/app/ops/payout-data";
 
 const money = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
@@ -32,6 +36,17 @@ const EMPTY_COPY =
 
 export function PayoutQueue({ queue }: { queue: PayoutQueueData }) {
   const { queuedCount, queuedTotal, exportedCount, exportedTotal, rows } = queue;
+  const router = useRouter();
+  const [busy, start] = useTransition();
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const exportedRows = rows.filter((r) => r.status === "exported");
+  const toggle = (id: string) =>
+    setPicked((p) => {
+      const next = new Set(p);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
@@ -42,14 +57,62 @@ export function PayoutQueue({ queue }: { queue: PayoutQueueData }) {
             The automation seam — export runs the ACH file and marks these exported until the bank API replaces it.
           </p>
         </div>
-        {(queuedCount > 0 || rows.some((r) => r.status === "exported")) && (
-          <form method="post" action="/api/ops/payout-export">
-            <button className="ll-btn gold" type="submit">
-              {queuedCount > 0 ? "Download ACH batch (CSV)" : "Re-download exported batch (CSV)"}
-            </button>
-          </form>
-        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {queuedCount > 0 && (
+            <form method="post" action="/api/ops/payout-export">
+              <button className="ll-btn gold" type="submit">Download ACH batch (CSV)</button>
+            </form>
+          )}
+          {/* A RE-DOWNLOAD IS ITS OWN BUTTON NOW. It used to be the same one,
+              and the file quietly carried every unpaid earlier batch with it. */}
+          {exportedRows.length > 0 && (
+            <form method="post" action="/api/ops/payout-export?redownload=1">
+              <button className="ll-btn" type="submit">
+                Re-download {exportedRows.length} already-exported
+              </button>
+            </form>
+          )}
+        </div>
       </div>
+
+      {/* The batches that have been in a file and never closed out. Until one
+          is marked paid it can be pulled into another export — which is how a
+          crew gets paid twice — so this says so plainly and gives ops the
+          control that was missing entirely. */}
+      {exportedRows.length > 0 && (
+        <div className="ll-card ll-card-pad" style={{ marginTop: 12, background: "rgba(200,150,40,.07)" }}>
+          <strong style={{ fontSize: 14 }}>
+            {exportedRows.length} {exportedRows.length === 1 ? "batch has" : "batches have"} been
+            exported but not marked paid
+          </strong>
+          <p className="mut" style={{ fontSize: 12.5, margin: "6px 0 10px", lineHeight: 1.5 }}>
+            Once the bank file has actually gone up, tick them here. Anything left
+            unticked can be pulled into a later export — which pays that crew twice.
+          </p>
+          <div style={{ display: "grid", gap: 5 }}>
+            {exportedRows.map((r) => (
+              <label key={r.id} style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 13 }}>
+                <input type="checkbox" checked={picked.has(r.id)} onChange={() => toggle(r.id)} />
+                <span>{r.payee} — {money(r.net)} · {prettyDate(r.created_at)}</span>
+              </label>
+            ))}
+          </div>
+          <button
+            className="ll-btn"
+            style={{ marginTop: 10 }}
+            disabled={busy || picked.size === 0}
+            onClick={() =>
+              start(async () => {
+                const res = await markBatchesPaid([...picked]);
+                toast(res.ok ? (res.signal ?? "Marked paid.") : (res.error ?? "Couldn't do that."));
+                if (res.ok) { setPicked(new Set()); router.refresh(); }
+              })
+            }
+          >
+            {busy ? "Closing…" : `Mark ${picked.size || ""} paid`.trim()}
+          </button>
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <p className="mut" style={{ fontSize: 13.5, padding: "10px 2px 2px" }}>{EMPTY_COPY}</p>

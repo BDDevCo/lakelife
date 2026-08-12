@@ -396,9 +396,28 @@ export async function voidCharge(
   return { ok: true, signal: "Cancelled." };
 }
 
+/**
+ * The renter's open assertion against a charge, carried to the screen so it
+ * can be answered. `id` is the whole point — without it the owner can see that
+ * somebody disagrees and has no way to say what they found.
+ */
+export interface OpenClaim {
+  id: string;
+  charge_id: string;
+  claimed_amount: number | null;
+  claimed_paid_on: string | null;
+  method: string | null;
+  reference: string | null;
+  note: string | null;
+  asserted_by: string;
+}
+type RawClaim = OpenClaim;
+
 export interface LedgerPage {
   month: string;
   rows: LedgerRow[];
+  /** Unanswered claims on this month's charges, keyed by charge id. */
+  claims: Record<string, OpenClaim>;
   summary: LedgerSummary;
   lagDays: number;
   today: string;
@@ -424,14 +443,20 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
   // late — the two parties disagree, and disagreement is a question rather
   // than a delinquency.
   const chargeIds = (data ?? []).map((c) => c.id as string);
+  // The claim's OWN id comes back, and what they actually said. Without the id
+  // there is nothing to resolve — which is why `resolvePaymentClaim` sat
+  // written, careful and tested, with no caller: the screen had no handle on
+  // the thing it was being asked to close.
   const { data: claims } = chargeIds.length
     ? await admin
         .from("park_payment_claims")
-        .select("charge_id")
+        .select("id, charge_id, claimed_amount, claimed_paid_on, method, reference, note, asserted_by")
         .in("charge_id", chargeIds)
         .is("resolved_at", null)
-    : { data: [] as { charge_id: string }[] };
-  const claimed = new Set((claims ?? []).map((c) => c.charge_id as string));
+    : { data: [] as RawClaim[] };
+  const openClaims = (claims ?? []) as unknown as RawClaim[];
+  const claimed = new Set(openClaims.map((c) => c.charge_id));
+  const claimByCharge = new Map(openClaims.map((c) => [c.charge_id, c]));
 
   const lotIds = [...new Set((data ?? []).map((c) => c.park_lot_id as string))];
   const renterIds = [...new Set((data ?? []).map((c) => c.renter_id as string).filter(Boolean))];
@@ -468,7 +493,14 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
       return rank(a.state) - rank(b.state) || a.lotNumber.localeCompare(b.lotNumber, undefined, { numeric: true });
     });
 
-  return { month: period, rows, summary: summarise(rows), lagDays, today };
+  return {
+    month: period,
+    rows,
+    claims: Object.fromEntries(claimByCharge),
+    summary: summarise(rows),
+    lagDays,
+    today,
+  };
 }
 
 // ---------------------------------------------------- the renter's side ----
@@ -582,7 +614,11 @@ export async function resolvePaymentClaim(
     .eq("id", claimId);
   if (error) return { ok: false, error: "Couldn't save that — try again." };
 
+  // Today carries a "somebody disagrees" card that has no dismiss of its own —
+  // answering the claim IS the dismissal, so that screen has to be rebuilt too.
   revalidatePath("/park/rent");
+  revalidatePath("/park/today");
+  revalidatePath("/park");
   return {
     ok: true,
     signal: resolution === "not_found"

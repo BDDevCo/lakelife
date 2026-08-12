@@ -6,14 +6,17 @@ import { todayLakeDate } from "@/lib/booking";
 
 /**
  * POST /api/ops/payout-export — the ACH export the bank API will eventually
- * replace. Pulls every queued batch PLUS exported-but-unpaid ones (an
- * aborted download must never strand money — the file stays re-downloadable
- * until a batch is marked paid), decrypts the payee's routing and account
+ * replace. Pulls the QUEUED batches, decrypts the payee's routing and account
  * numbers SERVER-SIDE ONLY, and flips queued→exported. POST because this
  * mutates state: a prefetcher or cross-site GET can never trigger it, and
  * the response is never cacheable (no-store, plaintext bank numbers).
  * Batches with no bank on file or an undecryptable blob are left queued
  * and counted in trailing comment lines.
+ *
+ * `?redownload=1` also pulls exported-but-unpaid batches, for an aborted
+ * download. That used to be the unconditional default, which — since nothing
+ * ever wrote `paid_at` — quietly put every earlier month's rows into every
+ * later file. Marking a batch paid (ops/payout-actions.ts) is what closes it.
  */
 
 type Embed<T> = T | T[] | null;
@@ -25,6 +28,7 @@ interface RawBatch {
   user_id: string;
   kind: string;
   net: number | string;
+  status: string;
   vendors: Embed<{ company: string | null }>;
   users: Embed<{ name: string | null }>;
 }
@@ -57,7 +61,7 @@ export async function GET() {
   return NextResponse.json({ error: "Use the download button (POST)." }, { status: 405 });
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   const ops = await assertOps();
   if (!ops) {
     return NextResponse.json({ error: "Ops access required." }, { status: 401 });
@@ -65,10 +69,22 @@ export async function POST() {
 
   const admin = createServiceClient();
 
+  // RE-INCLUDING AN ALREADY-EXPORTED BATCH IS NOW A DELIBERATE ACT.
+  //
+  // This used to always pull ['queued','exported'] where paid_at is null —
+  // and since nothing on earth wrote paid_at, that meant every month's file
+  // silently carried every previous month's rows, bank details and all.
+  // Upload that and the crews are paid twice.
+  //
+  // The default is now the queued batches only. A genuine re-download is
+  // still one click, but it says so in the file and it is asked for.
+  const redownload = new URL(req.url).searchParams.get("redownload") === "1";
+  const wanted = redownload ? ["queued", "exported"] : ["queued"];
+
   const { data: batchRows, error: batchErr } = await admin
     .from("payout_batches")
     .select("id, user_id, kind, net, status, vendors(company), users(name)")
-    .in("status", ["queued", "exported"]) // exported-unpaid stays re-downloadable
+    .in("status", wanted)
     .is("paid_at", null)
     .order("created_at", { ascending: true });
   if (batchErr) {
@@ -148,6 +164,17 @@ export async function POST() {
   }
 
   lines.push(`# skipped (no bank on file or undecryptable): ${skipped}`);
+  // SAID OUT LOUD, IN THE FILE ITSELF. Whoever uploads this needs to know it
+  // contains rows that have already been in an earlier file — that is the
+  // difference between a re-send and a double payment.
+  const alreadyExported = batches.filter((b) => b.status === "exported").length;
+  if (alreadyExported > 0) {
+    lines.push(
+      `# WARNING: ${alreadyExported} of these ${alreadyExported === 1 ? "row was" : "rows were"} ` +
+      `in an earlier export and ${alreadyExported === 1 ? "has" : "have"} not been marked paid. ` +
+      `If that money already went out, mark those batches paid in ops before uploading this.`,
+    );
+  }
 
   return new Response(lines.join("\n"), {
     headers: CSV_HEADERS(`lakelife-ach-${todayLakeDate()}.csv`),

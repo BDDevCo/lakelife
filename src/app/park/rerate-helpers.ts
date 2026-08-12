@@ -127,8 +127,14 @@ export function planReRate(input: ReRateInput): ReRatePlan {
   // Totals count ONLY the ones that will actually change, and only the ones
   // that had a number to begin with — a null rent contributes nothing to a
   // "before" figure rather than counting as zero.
-  const monthlyBefore = changing.reduce((s, l) => s + (l.from ?? 0), 0);
-  const monthlyAfter = changing.reduce((s, l) => s + l.to, 0);
+  // BOTH SIDES MUST COVER THE SAME HOUSEHOLDS. Counting a null rent as $0 in
+  // the before-total while adding its full new rent to the after-total made
+  // "$X more a month" bigger than the truth — on a decision affecting every
+  // household in the park. The unknowns are reported separately instead.
+  const known = changing.filter((l) => l.from != null);
+  const monthlyBefore = known.reduce((s, l) => s + (l.from ?? 0), 0);
+  const monthlyAfter = known.reduce((s, l) => s + l.to, 0);
+  const unknownBefore = changing.length - known.length;
 
   const pcts = changing
     .filter((l) => l.from != null && l.from > 0)

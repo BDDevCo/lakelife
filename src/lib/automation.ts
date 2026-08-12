@@ -575,6 +575,21 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
     const { count } = await admin.from("job_photos").select("id", { count: "exact", head: true }).eq("job_id", j.id as string);
     if ((count ?? 0) > 0) continue; // photos on file → not a ghost, leave for ops
 
+    // CUSTODY GUARD, BEFORE ANYTHING IS RECORDED. A sticky spring splash whose
+    // boat is physically in the assigned crew's barn is never released to the
+    // lottery and never strikes the barn holding it — only that vendor CAN do
+    // the work. This used to sit BELOW the insert, so the strike it exists to
+    // prevent was written first: `unique(job_id)` meant it never cleared, and
+    // `demoteLakeStrikes` counted it forever, eventually dropping the crew's
+    // whole lake — over a boat still in their building. The overstay meter and
+    // the ops Storage ledger carry the pressure instead.
+    if ((j as { phase?: string }).phase === "spring" && (j as { group_id?: string }).group_id) {
+      const { data: custody } = await admin
+        .from("storage_stays").select("id").eq("group_id", (j as { group_id?: string }).group_id as string)
+        .eq("status", "in_storage").limit(1);
+      if (custody && custody.length > 0) continue;
+    }
+
     // Record the no-show (idempotent), stamped with the LAKE it happened on —
     // that's what drives the per-lake auto-demotion (Phase E). If the lake_id
     // column doesn't exist yet (migration 0021 pending), fall back to the
@@ -595,17 +610,6 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
     if (insErr) continue; // unique(job_id) violation = already handled
 
     // Penalty-free release: unassign, wipe the priced amounts, back to needs-a-crew.
-    // CUSTODY GUARD (S4 review): a sticky spring splash whose boat is
-    // physically in the assigned crew's barn is never released to the
-    // lottery and never strikes the barn holding it — only that vendor
-    // CAN do the work. The overstay meter and the ops Storage ledger
-    // carry the pressure instead.
-    if ((j as { phase?: string }).phase === "spring" && (j as { group_id?: string }).group_id) {
-      const { data: custody } = await admin
-        .from("storage_stays").select("id").eq("group_id", (j as { group_id?: string }).group_id as string)
-        .eq("status", "in_storage").limit(1);
-      if (custody && custody.length > 0) continue;
-    }
     await admin.from("jobs").update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" }).eq("id", j.id);
     flagged++;
 
@@ -2404,6 +2408,13 @@ export async function sendNightlyDigest(results: {
   referrals?: { credited: number; creditedAmount?: number };
   feeReconcile?: { collected: number; collectedAmount?: number };
   refundReconcile?: { orphansCleared: number; flipsCompleted: number };
+  /**
+   * STEPS THAT THREW TONIGHT. The route guards all ~27 of its steps and used
+   * to collect the failures and drop them, so a night where a step died sent
+   * the same email as a clean one. Optional for the same reason as the money
+   * fields: a caller that hasn't been wired yet still compiles.
+   */
+  failures?: Array<{ step: string; error: string }>;
 }): Promise<{ ok: boolean; sent: number }> {
   const admin = createServiceClient();
   const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString();
@@ -2465,6 +2476,7 @@ export async function sendNightlyDigest(results: {
       ? { collected: results.feeReconcile.collected, total: results.feeReconcile.collectedAmount }
       : undefined,
     refundsReconciled: results.refundReconcile,
+    failures: results.failures,
   };
   const html = composeNightlyDigest(sections);
 
@@ -2473,7 +2485,13 @@ export async function sendNightlyDigest(results: {
   for (const u of opsUsers ?? []) {
     const email = u.email as string | null;
     if (!email) continue;
-    const res = await sendEmail({ to: email, subject: "LakeLife nightly — the machine's report", html });
+    // THE SUBJECT LINE CARRIES THE BAD NEWS. Ops reads this on a phone, in a
+    // list, at night — a broken step must be visible without opening it.
+    const broke = results.failures?.length ?? 0;
+    const subject = broke > 0
+      ? `LakeLife nightly — ${broke} step${broke === 1 ? "" : "s"} FAILED`
+      : "LakeLife nightly — the machine's report";
+    const res = await sendEmail({ to: email, subject, html });
     if (res.ok) sent++;
   }
   return { ok: true, sent };

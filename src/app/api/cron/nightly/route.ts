@@ -104,6 +104,22 @@ async function run(req: Request) {
     disputeSweep: disputeSweep ?? { fired: 0, escalated: 0 },
     routes: routes ?? {},
     gapSla: gapSla ?? { alerted: 0 },
+    // WHAT BROKE TONIGHT, FIRST. These were collected all the way down this
+    // function and then dropped on the floor: a night where a step threw
+    // produced the same email as a clean one, often literally "Quiet night —
+    // nothing needed a human." The digest is how ops finds out, so it has to
+    // survive — and report — the failure it is reporting.
+    failures,
+    // MONEY THAT MOVED TONIGHT. Every one of these was already sitting in a
+    // local, and went only into an HTTP response nobody reads — so month-end,
+    // the night the largest sum of the month leaves the account, read as a
+    // quiet night. The fields have existed on DigestSections since the
+    // two-season audit; nothing ever passed them.
+    payoutBatch: payoutBatch ?? undefined,
+    monthlyPayouts: monthlyPayouts ?? undefined,
+    referrals: referrals ?? undefined,
+    feeReconcile: feeReconcile ?? undefined,
+    refundReconcile: refundReconcile ?? undefined,
   }));
   return NextResponse.json({ ok: failures.length === 0, failures, park, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, rentChanges, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, digest });
 }

@@ -30,6 +30,14 @@ export interface DigestSections {
   referralCredits?: { granted: number; total?: number };
   cancellationFees?: { collected: number; total?: number };
   refundsReconciled?: { orphansCleared: number; flipsCompleted: number };
+  /**
+   * STEPS THAT THREW TONIGHT. The nightly wraps each of its ~27 steps in a
+   * guard so one failure cannot take the rest of the night down — but it
+   * collected the failures and then dropped them, so a night where the charge
+   * run died produced the same email as a clean one. This renders FIRST,
+   * before anything that went right.
+   */
+  failures?: Array<{ step: string; error: string }>;
 }
 
 function escHtml(s: string): string {
@@ -41,6 +49,20 @@ function escHtml(s: string): string {
 export function composeNightlyDigest(sections: DigestSections): string {
   const parts: string[] = [];
   const plural = (n: number) => (n === 1 ? "" : "s");
+
+  // WHAT BROKE, ABOVE WHAT WORKED. A digest that leads with good news while a
+  // step is dying is worse than no digest — it actively reassures.
+  if (sections.failures && sections.failures.length > 0) {
+    const n = sections.failures.length;
+    const items = sections.failures
+      .map((f) => `<li><strong>${escHtml(f.step)}</strong> — ${escHtml(f.error)}</li>`)
+      .join("");
+    parts.push(
+      `<h3>⚠️ ${n} step${plural(n)} failed tonight</h3>` +
+      `<p>The rest of the night still ran. These did not, and nothing retried them:</p>` +
+      `<ul>${items}</ul>`,
+    );
+  }
 
   if (sections.learning.changes.length > 0) {
     const n = sections.learning.changes.length;

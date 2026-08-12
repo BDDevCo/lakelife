@@ -295,8 +295,8 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
                   <b>{f.type ?? "Correction"}</b>
                   {f.note ? <span className="mut"> — {f.note}</span> : null}
                 </span>
-                <span className={`ll-pill ${f.status === "approved" ? "ok" : f.status === "rejected" ? "slate" : "warn"}`}>
-                  {f.status === "approved" ? "Owner approved" : f.status === "rejected" ? "Owner declined" : "Waiting on the owner"}
+                <span className={`ll-pill ${f.status === "approved" ? "ok" : f.status === "declined" ? "slate" : "warn"}`}>
+                  {f.status === "approved" ? "Owner approved" : f.status === "declined" ? "Owner declined" : "Waiting on the owner"}
                 </span>
               </div>
             ))}

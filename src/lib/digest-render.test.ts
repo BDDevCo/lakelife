@@ -140,3 +140,45 @@ describe("composeNightlyDigest — AI replies survive a null count (audit bug 10
     );
   });
 });
+
+describe("a night where something broke never reads as a quiet one", () => {
+  // The nightly guarded all 27 steps and then dropped the failures, so a night
+  // where the charge run died produced the same email as a clean night —
+  // often literally "Quiet night — nothing needed a human."
+  it("names the step and the error", () => {
+    const html = composeNightlyDigest({
+      ...quiet,
+      failures: [{ step: "runCharges", error: "connection terminated" }],
+    });
+    expect(html).toContain("1 step failed tonight");
+    expect(html).toContain("runCharges");
+    expect(html).toContain("connection terminated");
+    expect(html).not.toContain("Quiet night");
+  });
+
+  it("puts the failures ABOVE everything that went right", () => {
+    const html = composeNightlyDigest({
+      ...quiet,
+      failures: [{ step: "routes", error: "boom" }],
+      crewPayouts: { batches: 3, total: 4100 },
+    });
+    expect(html.indexOf("failed tonight")).toBeLessThan(html.indexOf("Crew month-end payouts"));
+  });
+
+  it("pluralises honestly", () => {
+    const html = composeNightlyDigest({
+      ...quiet,
+      failures: [{ step: "a", error: "x" }, { step: "b", error: "y" }],
+    });
+    expect(html).toContain("2 steps failed tonight");
+  });
+
+  it("escapes an error message rather than pasting it into the HTML", () => {
+    const html = composeNightlyDigest({
+      ...quiet,
+      failures: [{ step: "x", error: "<script>alert(1)</script>" }],
+    });
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+});

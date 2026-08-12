@@ -8,6 +8,7 @@ import {
   type LedgerPage,
 } from "@/app/park/ledger-actions";
 import { ClaimForm } from "@/components/ClaimForm";
+import { ResolveClaimForm } from "@/components/ResolveClaimForm";
 import { ReceiptPanel, DropSlips } from "@/components/ParkReceipt";
 import type { ReceiptLines } from "@/app/park/receipt-helpers";
 import { LEDGER_LABEL, ledgerHeadline, runSummary, type RunPlan } from "@/app/park/ledger-helpers";
@@ -48,6 +49,7 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
   const [plan, setPlan] = useState<RunPlan | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<
     { lines: ReceiptLines; email: string | null } | null
   >(null);
@@ -168,6 +170,24 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                       {payingId === r.id ? "Cancel" : "Record payment"}
                     </button>
                   )}
+                  {/* CLOSING THE DISAGREEMENT. `resolvePaymentClaim` was
+                      written, guarded and tested and then never called from
+                      anywhere — so a disputed bill stayed disputed forever,
+                      excluded from arrears and from every reminder, with the
+                      copy below telling him to "say what you found" and no
+                      control to say it with. Shown whenever a claim is open,
+                      including on a charge whose balance is already zero —
+                      that case had no exit at all, because the only other
+                      button is gated on a balance. */}
+                  {r.state === "disputed" && page.claims[r.id] && (
+                    <button className="ll-btn ghost"
+                      onClick={() => {
+                        setResolvingId(resolvingId === r.id ? null : r.id);
+                        setPayingId(null); setClaimingId(null);
+                      }}>
+                      {resolvingId === r.id ? "Cancel" : "Say what you found"}
+                    </button>
+                  )}
                   {/* THE RENTER'S SIDE. Logging it does not mean agreeing
                       with it, and most of these arrive as somebody saying it
                       across a counter. */}
@@ -181,6 +201,16 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                     </button>
                   )}
                 </div>
+
+                {resolvingId === r.id && page.claims[r.id] && (
+                  <ResolveClaimForm
+                    parkId={parkId}
+                    claim={page.claims[r.id]}
+                    lotNumber={r.lotNumber}
+                    onDone={() => { setResolvingId(null); router.refresh(); }}
+                    onCancel={() => setResolvingId(null)}
+                  />
+                )}
 
                 {claimingId === r.id && (
                   <ClaimForm
