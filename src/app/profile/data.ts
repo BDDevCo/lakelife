@@ -70,6 +70,8 @@ export interface FullProfile {
   lake?: string | null;
   address?: string | null;
   place_id?: string | null;
+  /** Self-declared park (0085). Read back so an edit cannot silently erase it. */
+  park_id?: string | null;
   gate?: string | null;
   sqft: number;
   beds: number;
@@ -113,7 +115,7 @@ export async function getFullProfile(propertyId?: string): Promise<FullProfile |
   const { data: property } = targetId
     ? await supabase
         .from("properties")
-        .select("id, address, place_id, sqft, beds, baths, gate_code_encrypted, lakes(name)")
+        .select("id, address, place_id, park_id, sqft, beds, baths, gate_code_encrypted, lakes(name)")
         .eq("owner_id", user.id)
         .eq("id", targetId)
         .maybeSingle()
@@ -172,6 +174,7 @@ export async function getFullProfile(propertyId?: string): Promise<FullProfile |
     lake: lakeName ?? null,
     address: property.address,
     place_id: (property as { place_id?: string | null }).place_id ?? null,
+    park_id: (property as { park_id?: string | null }).park_id ?? null,
     gate,
     sqft: property.sqft ?? 0,
     beds: property.beds ?? 0,

@@ -44,14 +44,18 @@ export default async function SetupPage({
     );
   }
 
-  const [{ data: lakeRows }, { data: serviceRows }, profile] = await Promise.all([
+  const [{ data: lakeRows }, { data: parkRows }, { data: serviceRows }, profile] = await Promise.all([
     supabase.from("lakes").select("name").order("name"),
+    // Published parks only — an unpublished one is still being set up and its
+    // owner has not asked to be listed anywhere.
+    supabase.from("parks").select("id, name").eq("active", true).order("name"),
     supabase.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing").eq("active", true).eq("kind", "standalone"),
     // When adding a new property, start blank; otherwise load the active one.
     addingNew ? Promise.resolve(null) : getFullProfile(),
   ]);
 
   const lakes = (lakeRows ?? []).map((l) => l.name);
+  const parks = (parkRows ?? []).map((r) => ({ id: r.id as string, name: r.name as string }));
   const services = (serviceRows ?? []) as unknown as ServiceRule[];
   const editingPropertyId = !addingNew && profile?.hasProfile ? profile.propertyId : null;
 
@@ -61,6 +65,7 @@ export default async function SetupPage({
           lake: profile.lake ?? undefined,
           address: profile.address ?? undefined,
           place_id: profile.place_id ?? undefined,
+          park_id: profile.park_id ?? undefined,
           wanted: profile.wanted_services,
           sqft: profile.sqft,
           gate: profile.gate ?? undefined,
@@ -91,7 +96,7 @@ export default async function SetupPage({
               : "Pick the services that fit your place — we'll only ask about what you choose, and every price is exact from day one."}
           </p>
         </div>
-        <ProfileWizard lakes={lakes} services={services} initial={initial} propertyId={editingPropertyId} />
+        <ProfileWizard lakes={lakes} parks={parks} services={services} initial={initial} propertyId={editingPropertyId} />
       </div>
     </>
   );

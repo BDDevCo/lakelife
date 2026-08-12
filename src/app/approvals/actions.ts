@@ -155,6 +155,19 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
     }
   }
 
+  // RELEASE THE CREW.
+  //
+  // 0084 holds an at-arrival job so it cannot be completed while the owner is
+  // deciding. Now they have decided, so the hold comes off — and it comes off
+  // whether they said yes or no, because a hold nobody can clear is a job that
+  // can never be finished and a crew that can never be paid.
+  if (ctx.flag.job_id) {
+    await admin
+      .from("jobs")
+      .update({ held_at: null, held_flag_id: null })
+      .eq("id", ctx.flag.job_id as string);
+  }
+
   // Was the job they flagged already finished? Reported, not acted on.
   let flaggedJobAlreadyDone = false;
   if (ctx.flag.job_id) {
@@ -175,5 +188,20 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
   const admin = createServiceClient();
   const { error } = await admin.from("flags").update({ status: "declined" }).eq("id", flagId);
   if (error) return { ok: false, error: error.message };
+
+  // DECLINING IS AN ANSWER, AND IT UNBLOCKS THE CREW.
+  //
+  // The hold exists so nothing is done-and-billed before the owner decides.
+  // "No" is deciding. The crew now does exactly the scope that was booked —
+  // the eight sections on file — and gets paid for it. Leaving the hold on
+  // would strand a crew in a driveway for a decision that has already been
+  // made against them.
+  if (ctx.flag.job_id) {
+    await admin
+      .from("jobs")
+      .update({ held_at: null, held_flag_id: null })
+      .eq("id", ctx.flag.job_id as string);
+  }
+
   return { ok: true };
 }

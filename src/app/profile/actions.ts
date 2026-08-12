@@ -16,6 +16,15 @@ export interface WizardInput {
   lat?: number | null;
   lng?: number | null;
   place_id?: string | null;
+  /**
+   * The park this property sits in, said by the person who lives there.
+   *
+   * Buys one thing (0085): the park office can see a crew is expected on their
+   * land — company, service, time. Never who booked it, never the price. It is
+   * optional and it is never inferred, because being visible to a landlord is
+   * not something anyone should be enrolled in by accident.
+   */
+  park_id?: string | null;
   sqft: number;
   gate: string;
   beds: number;
@@ -96,6 +105,7 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
     lat: input.lat ?? null,
     lng: input.lng ?? null,
     place_id: input.place_id ?? null,
+    park_id: input.park_id ?? null,
     sqft: input.sqft || null,
     beds: input.beds || null,
     baths: input.baths || null,

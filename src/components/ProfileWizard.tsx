@@ -69,6 +69,8 @@ interface Draft {
   lat: number | null;
   lng: number | null;
   place_id: string | null;
+  /** Self-declared: the park this place sits in, if any. */
+  park_id: string | null;
   wanted: string[];
   sqft: number;
   gate: string;
@@ -88,11 +90,14 @@ interface Draft {
 
 export function ProfileWizard({
   lakes,
+  parks = [],
   services,
   initial,
   propertyId,
 }: {
   lakes: string[];
+  /** Published parks, offered so somebody living in one can say so. */
+  parks?: Array<{ id: string; name: string }>;
   services: ServiceRule[];
   initial: Partial<Omit<Draft, "boats">> & {
     boats?: Array<{ type: string; length_ft: number; engine_type?: string | null; engine_hp?: number | null; engines?: number | null }>;
@@ -108,6 +113,7 @@ export function ProfileWizard({
     lat: initial.lat ?? null,
     lng: initial.lng ?? null,
     place_id: initial.place_id ?? null,
+    park_id: initial.park_id ?? null,
     wanted: initial.wanted ?? [],
     sqft: initial.sqft ?? 2400,
     gate: initial.gate ?? "",
@@ -220,6 +226,7 @@ export function ProfileWizard({
       lake: draft.lake === NOT_LISTED ? "" : draft.lake,
       newLakeName: draft.lake === NOT_LISTED ? draft.newLakeName.trim() : undefined,
       address: draft.address, lat: draft.lat, lng: draft.lng, place_id: draft.place_id,
+      park_id: draft.park_id,
       // The access step — square footage, bedrooms, the door code.
       sqft: keep(homeEntry, draft.sqft, initial.sqft, 0),
       gate: keep(homeEntry, draft.gate, initial.gate, ""),
@@ -308,6 +315,31 @@ export function ProfileWizard({
             onChange={(address) => set({ address })}
             onSelect={(s) => set({ address: s.address, lat: s.lat, lng: s.lng, place_id: s.placeId })}
           />
+
+          {/* LIVING IN A PARK IS SOMETHING YOU SAY, NOT SOMETHING WE WORK OUT.
+              Optional on purpose, and it buys exactly one thing: the park
+              office can see that a crew is expected on their land — the crew,
+              the service and the time. Never who booked it, never what it
+              cost. Nobody is enrolled in being visible. */}
+          {parks.length > 0 && (
+            <div className="ll-field" style={{ marginTop: 14 }}>
+              <label>In one of these parks? (optional)</label>
+              <select
+                value={draft.park_id ?? ""}
+                onChange={(e) => set({ park_id: e.target.value || null })}
+              >
+                <option value="">Not in a park</option>
+                {parks.map((pk) => (
+                  <option key={pk.id} value={pk.id}>{pk.name}</option>
+                ))}
+              </select>
+              <p className="mut" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.5 }}>
+                Only so the park office can tell our crew is meant to be there.
+                They see the company, the service and the time — never your name,
+                your lot, or what you paid.
+              </p>
+            </div>
+          )}
         </>
       )}
 

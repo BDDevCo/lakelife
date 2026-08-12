@@ -1,0 +1,187 @@
+import { describe, it, expect } from "vitest";
+import {
+  summariseCorrection, correctionMessage, humanDuration,
+  noAnswerOutcome, noAnswerExplainer, completionBlock,
+  type TimedRule,
+} from "./arrival";
+import type { PricingProfile } from "./pricing";
+
+const P = (o: Partial<PricingProfile> = {}): PricingProfile => ({
+  sqft: 2400, beds: 3, baths: 2, pier_sections: 8, boat_lifts: 1, toy_lifts: 0,
+  jet_skis: 0, pwc_lifts: 0, lawn_band: "medium", boats: [], toys: [], ...o,
+});
+
+// The real seeded rules.
+const PIER: TimedRule = {
+  name: "Pier install / removal", pricing_model: "per_section",
+  base: 220, unit_rate: 48, band_pricing: { count_field: "pier_sections" },
+  est_minutes: 180, needs_interior_access: false,
+  duration_bands: { rungs: [
+    { max: 5, minutes: 120 }, { max: 9, minutes: 180 },
+    { max: 13, minutes: 255 }, { max: null, minutes: 330 },
+  ] },
+};
+const LAWN: TimedRule = {
+  name: "Lawn mowing & trim", pricing_model: "band",
+  base: 0, unit_rate: 0, band_pricing: { small: 65, medium: 85, large: 110 },
+  est_minutes: 45, needs_interior_access: false,
+  duration_bands: { by_band: { small: 30, medium: 50, large: 90 } },
+};
+const CLEAN: TimedRule = {
+  name: "Housekeeping", pricing_model: "per_sqft_band",
+  base: 0, unit_rate: 0,
+  band_pricing: { tiers: [{ max: 1800, price: 80 }, { max: 2800, price: 95 }, { max: null, price: 120 }] },
+  est_minutes: 90, needs_interior_access: true,
+  duration_bands: { rungs: [
+    { max: 1800, minutes: 75 }, { max: 2800, minutes: 105 }, { max: null, minutes: 150 },
+  ] },
+};
+
+describe("twelve sections, not eight", () => {
+  it("states the correction in BOTH currencies — money and the crew's day", () => {
+    const s = summariseCorrection(PIER, P({ pier_sections: 8 }), { pier_sections: 12 });
+    expect(s.priceBefore).toBe(604);
+    expect(s.priceAfter).toBe(796);
+    expect(s.priceDelta).toBe(192);
+    expect(s.minutesBefore).toBe(180);
+    expect(s.minutesAfter).toBe(255);
+    expect(s.minutesDelta).toBe(75);
+  });
+
+  it("names the field the way a person says it, not the way a column does", () => {
+    const s = summariseCorrection(PIER, P(), { pier_sections: 12 });
+    expect(s.lines).toEqual([
+      { field: "pier_sections", label: "pier sections", from: "8", to: "12" },
+    ]);
+  });
+
+  it("spells out a lawn band instead of showing the raw word", () => {
+    const s = summariseCorrection(LAWN, P({ lawn_band: "medium" }), { lawn_band: "large" });
+    expect(s.lines[0].from).toBe("medium (¼–½ acre)");
+    expect(s.lines[0].to).toBe("large (over ½ acre)");
+    expect(s.priceDelta).toBe(25);
+    expect(s.minutesDelta).toBe(40);
+  });
+
+  it("a crew confirming the profile is right changes nothing", () => {
+    const s = summariseCorrection(PIER, P({ pier_sections: 8 }), { pier_sections: 8 });
+    expect(s.noChange).toBe(true);
+    expect(s.priceDelta).toBe(0);
+    expect(s.minutesDelta).toBe(0);
+  });
+
+  it("handles a correction DOWNWARD — the profile can be too generous", () => {
+    // A crew who finds four sections where eight were claimed is telling the
+    // truth too, and the owner should pay less for it.
+    const s = summariseCorrection(PIER, P({ pier_sections: 8 }), { pier_sections: 4 });
+    expect(s.priceDelta).toBe(-192);
+    expect(s.minutesDelta).toBe(-60);
+  });
+
+  it("takes more than one correction at a time", () => {
+    const s = summariseCorrection(PIER, P(), { pier_sections: 12, boat_lifts: 2 });
+    expect(s.lines.map((l) => l.field)).toEqual(["pier_sections", "boat_lifts"]);
+  });
+
+  it("ignores a field the crew didn't touch", () => {
+    const s = summariseCorrection(PIER, P(), {});
+    expect(s.noChange).toBe(true);
+  });
+});
+
+describe("the sentence on the homeowner's phone", () => {
+  it("leads with what was FOUND, not with the money", () => {
+    const s = summariseCorrection(PIER, P({ pier_sections: 8 }), { pier_sections: 12 });
+    const msg = correctionMessage(s, { serviceName: "Pier install / removal", crewName: "Miller Marine" });
+    // The fact comes before the number — being asked to confirm something
+    // about your own property reads very differently from an upsell.
+    expect(msg.indexOf("pier sections 8 → 12")).toBeLessThan(msg.indexOf("$796"));
+    expect(msg).toContain("Miller Marine is at your place");
+    expect(msg).toContain("$796.00 instead of $604.00");
+    expect(msg).toContain("up $192.00");
+    expect(msg).toContain("waiting on your yes before they start");
+  });
+
+  it("tells them how much longer the crew will be there", () => {
+    const s = summariseCorrection(PIER, P(), { pier_sections: 12 });
+    const msg = correctionMessage(s, { serviceName: "Pier install / removal", crewName: null });
+    expect(msg).toContain("an hour and a quarter longer");
+    expect(msg).toContain("Your crew is at your place");
+  });
+
+  it("says plainly when the price does not move", () => {
+    // toy_lifts is not in the pier rule, so nothing reprices.
+    const s = summariseCorrection(PIER, P({ toy_lifts: 0 }), { toy_lifts: 2 });
+    const msg = correctionMessage(s, { serviceName: "Pier install / removal" });
+    expect(msg).toContain("The price doesn't change.");
+  });
+
+  it("says a correction downward reads as DOWN, not as a hidden increase", () => {
+    const s = summariseCorrection(PIER, P(), { pier_sections: 4 });
+    const msg = correctionMessage(s, { serviceName: "Pier install / removal" });
+    expect(msg).toContain("down $192.00");
+    expect(msg).toContain("less than planned");
+  });
+});
+
+describe("durations a person can read at 7:45am", () => {
+  it("keeps small numbers exact and rounds big ones into words", () => {
+    expect(humanDuration(20)).toBe("20 minutes");
+    expect(humanDuration(60)).toBe("an hour");
+    expect(humanDuration(75)).toBe("an hour and a quarter");
+    expect(humanDuration(90)).toBe("an hour and a half");
+    expect(humanDuration(120)).toBe("2 hours");
+    expect(humanDuration(165)).toBe("2 hours and three quarters");
+  });
+
+  it("reads a negative change as a magnitude — the direction is said in words", () => {
+    expect(humanDuration(-75)).toBe("an hour and a quarter");
+  });
+});
+
+describe("THE DRIVEWAY RULE — nobody is answering", () => {
+  it("outdoor work goes ahead at the scope booked", () => {
+    expect(noAnswerOutcome(PIER)).toBe("proceed_as_booked");
+    expect(noAnswerOutcome(LAWN)).toBe("proceed_as_booked");
+  });
+
+  it("work that needs to get inside becomes a no-show", () => {
+    expect(noAnswerOutcome(CLEAN)).toBe("no_show");
+  });
+
+  it("tells the crew what to do rather than making them decide", () => {
+    expect(noAnswerExplainer(LAWN, "Lawn mowing & trim")).toContain("do the work as booked");
+    const inside = noAnswerExplainer(CLEAN, "Housekeeping");
+    expect(inside).toContain("record a no-show");
+    expect(inside).toContain("don't");            // ...mark it complete
+    expect(inside).toContain("cancellation policy");
+  });
+
+  it("a service with the flag unset is treated as outdoor work", () => {
+    // Fail toward doing the work. Refusing to mow a lawn because a column was
+    // never set would be a worse failure than mowing it.
+    expect(noAnswerOutcome({ needs_interior_access: null })).toBe("proceed_as_booked");
+    expect(noAnswerOutcome({})).toBe("proceed_as_booked");
+  });
+});
+
+describe("what the crew's Complete button does while a decision is pending", () => {
+  it("held work explains itself instead of failing at the database", () => {
+    const msg = completionBlock({ held_at: "2026-08-12T11:40:00Z" });
+    expect(msg).toContain("Waiting on the owner");
+    expect(msg).toContain("text the moment they answer");
+  });
+
+  it("a no-show cannot be completed", () => {
+    expect(completionBlock({ no_show_at: "2026-08-12T11:40:00Z" })).toContain("no-show");
+  });
+
+  it("a no-show outranks a hold — it is the more final fact", () => {
+    expect(completionBlock({ held_at: "x", no_show_at: "y" })).toContain("no-show");
+  });
+
+  it("an ordinary job is not blocked", () => {
+    expect(completionBlock({})).toBeNull();
+    expect(completionBlock({ held_at: null, no_show_at: null })).toBeNull();
+  });
+});

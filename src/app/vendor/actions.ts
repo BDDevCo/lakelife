@@ -7,6 +7,11 @@ import { sendEmail } from "@/lib/email";
 import { allowsNotification } from "@/lib/notif-gate";
 import { settleJob } from "@/lib/automation";
 import { todayLakeDate } from "@/lib/booking";
+import { getFullProfile, toPricingProfile } from "@/app/profile/data";
+import {
+  summariseCorrection, correctionMessage, noAnswerOutcome, completionBlock,
+  type TimedRule,
+} from "@/lib/arrival";
 
 // Only these profile fields may be changed by a crew flag, with safe values.
 const COUNT_FIELDS = new Set(["pier_sections", "boat_lifts", "pwc_lifts", "jet_skis", "toy_lifts"]);
@@ -41,7 +46,7 @@ async function assertVendorJob(jobId: string) {
     // Deliberately NO customer_price / vendor_cost: this is the crew code path,
     // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
     // those columns out of reach by construction (settleJob re-loads them ops-side).
-    .select("id, status, vendor_id, service_id, date, property_id, group_id, services(name, min_photos)")
+    .select("id, status, vendor_id, service_id, date, property_id, group_id, held_at, no_show_at, services(name, min_photos, needs_interior_access)")
     .eq("id", jobId)
     .maybeSingle();
   if (!data || data.vendor_id !== vendorId) return null;
@@ -99,6 +104,13 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   if (job.status === "complete" || job.status === "paid") {
     return { ok: false, error: "That job is already complete." };
   }
+
+  // 0084's trigger is the real gate and stays the real gate. This exists so a
+  // crew gets a sentence instead of a raw constraint violation — the same
+  // reason canApprove exists on the park side.
+  const blocked = completionBlock(job as { held_at?: string | null; no_show_at?: string | null });
+  if (blocked) return { ok: false, error: blocked };
+
   // A job can only be closed on or after the day it's scheduled — no closing
   // (and no payout) on work that isn't due yet.
   if (job.date && String(job.date) > todayLakeDate()) {
@@ -213,20 +225,62 @@ export async function submitFlag(
   type: string,
   note: string,
   proposedChange: Record<string, unknown> | null,
+  /**
+   * TRUE when the crew is standing on site and has not started yet.
+   *
+   * This is the difference between a note and a stop sign. An at-arrival
+   * discrepancy HOLDS the job: 0084's trigger refuses to let it complete until
+   * the owner decides, so the extra work can never be done-and-billed-later
+   * the way it used to be. An ordinary correction, filed any other time,
+   * stops nothing.
+   */
+  atArrival = false,
 ): Promise<ActionResult> {
   const job = await assertVendorJob(jobId);
   if (!job) return { ok: false, error: "That job isn't on your route." };
+  if (job.status === "complete" || job.status === "paid") {
+    return { ok: false, error: "That job is already closed out." };
+  }
 
   const admin = createServiceClient();
-  const { error } = await admin.from("flags").insert({
+  const proposed = sanitizeProposed(proposedChange);
+
+  if (atArrival && !proposed) {
+    return {
+      ok: false,
+      error: "Say what's different — the counts are what the owner approves.",
+    };
+  }
+
+  const { data: flagRow, error } = await admin.from("flags").insert({
     job_id: jobId,
     vendor_id: job.vendor_id,
     type,
     note: note.trim().slice(0, 500) || "Flagged on site by crew.",
-    proposed_change: sanitizeProposed(proposedChange),
+    proposed_change: proposed,
     status: "pending",
-  });
-  if (error) return { ok: false, error: error.message };
+    at_arrival: atArrival,
+  }).select("id").single();
+  if (error || !flagRow) return { ok: false, error: error?.message ?? "Couldn't file that." };
+
+  // HOLD THE WORK. Rule 6 said a flag changes nothing until the owner
+  // approves; what was missing is that nothing STOPPED. The crew could flag
+  // twelve sections and complete the job in the same visit, so the owner was
+  // billed for eight, the crew was paid for eight, and the approval landed
+  // afterwards with nothing left to decide.
+  if (atArrival) {
+    const { error: holdErr } = await admin
+      .from("jobs")
+      .update({ held_at: new Date().toISOString(), held_flag_id: flagRow.id })
+      .eq("id", jobId);
+    if (holdErr) {
+      // The hold is the point. Without it this is the old behaviour wearing a
+      // new label, so the flag comes back out rather than sitting there
+      // looking like it stopped something.
+      await admin.from("flags").delete().eq("id", flagRow.id);
+      return { ok: false, error: "Couldn't hold the job — try again before you start." };
+    }
+  }
 
   // TELL THE OWNER. Rule 6 means a flag reprices nothing and bills nothing
   // until they approve it — which is right, and which is exactly why it has to
@@ -254,12 +308,49 @@ export async function submitFlag(
       { id?: string; name?: string; email?: string; phone?: string } | null;
     const where = (prop?.nickname as string) || (prop?.address as string) || "your place";
 
+    // WHAT THEY ARE BEING ASKED, IN NUMBERS.
+    //
+    // The owner asked that the crew "give added pricing"; rule 1 forbids a
+    // vendor from ever seeing a customer price. Both hold at once because the
+    // CREW sends the count and the SERVER turns it into money — computed here,
+    // sent to the homeowner, and never returned to the crew's browser.
+    //
+    // The time is included too. Since 0083 a bigger job is also a longer one,
+    // and somebody deciding on their phone at 7:45 usually cares more that the
+    // crew will be there another hour and a quarter than about the money.
+    let detail = "";
+    if (atArrival && proposed) {
+      try {
+        const [{ data: rule }, profile] = await Promise.all([
+          admin.from("services")
+            .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, needs_interior_access")
+            .eq("id", job.service_id as string).maybeSingle(),
+          getFullProfile(job.property_id as string),
+        ]);
+        if (rule && profile?.hasProfile) {
+          const summary = summariseCorrection(
+            rule as unknown as TimedRule,
+            toPricingProfile(profile),
+            proposed as Parameters<typeof summariseCorrection>[2],
+          );
+          detail = correctionMessage(summary, {
+            serviceName: (rule.name as string) ?? svcName,
+            crewName: null,
+          });
+        }
+      } catch {
+        /* A message that can't be built must not lose the hold. */
+      }
+    }
+
     if (owner?.phone && (await allowsNotification(owner.id, "appr", "sms"))) {
       void sendSms(
         owner.phone,
-        `LakeLife: the crew at ${where} found something that doesn't match your ` +
-        `profile on your ${svcName}. Nothing changes and nothing is charged until ` +
-        `you say yes: ${site}/approvals 🌊`,
+        detail
+          ? `LakeLife: ${detail} ${site}/approvals 🌊`
+          : `LakeLife: the crew at ${where} found something that doesn't match your ` +
+            `profile on your ${svcName}. Nothing changes and nothing is charged until ` +
+            `you say yes: ${site}/approvals 🌊`,
       );
     }
     if (owner?.email) {
@@ -268,8 +359,10 @@ export async function submitFlag(
         subject: `A quick check on your ${svcName}`,
         html:
           `<p>Hi ${owner.name ?? "there"},</p>` +
-          `<p>The crew at ${where} found something on site that doesn't match ` +
-          `what we have on file for your ${svcName}.</p>` +
+          (detail
+            ? `<p>${detail}</p>`
+            : `<p>The crew at ${where} found something on site that doesn't match ` +
+              `what we have on file for your ${svcName}.</p>`) +
           `<p><b>Nothing has changed and nothing has been charged.</b> It waits ` +
           `for you.</p>` +
           `<p><a href="${site}/approvals">Take a look</a></p><p>🌊</p>`,
@@ -277,6 +370,87 @@ export async function submitFlag(
     }
   } catch {
     /* The flag is filed. A failed notification must never lose it. */
+  }
+
+  return { ok: true };
+}
+
+/**
+ * NOBODY IS ANSWERING.
+ *
+ * The owner's rule: "If the crew doesnt need to get into the house then do the
+ * work or it becomes a no show, reschedule if both parties agree or they get
+ * charged."
+ *
+ * So the crew never has to decide. The SERVICE already knows whether it needs
+ * to get inside (0084), and this refuses to record a no-show for work that
+ * could simply have been done — otherwise "no answer" quietly becomes the
+ * easiest way to end a hot afternoon early.
+ */
+export async function recordNoShow(jobId: string, reason: string): Promise<ActionResult> {
+  const job = await assertVendorJob(jobId);
+  if (!job) return { ok: false, error: "That job isn't on your route." };
+  if (job.status === "complete" || job.status === "paid") {
+    return { ok: false, error: "That job is already closed out." };
+  }
+
+  const why = reason.trim().slice(0, 300);
+  if (!why) {
+    // The customer may be charged for this. They are entitled to know what
+    // happened, in the words of the person who was standing there.
+    return { ok: false, error: "Say what happened — the owner may be charged for this." };
+  }
+
+  const admin = createServiceClient();
+  const { data: rule } = await admin
+    .from("services").select("name, needs_interior_access")
+    .eq("id", job.service_id as string).maybeSingle();
+
+  if (rule && noAnswerOutcome(rule as { needs_interior_access?: boolean | null }) === "proceed_as_booked") {
+    return {
+      ok: false,
+      error:
+        `${(rule.name as string) ?? "This work"} doesn't need anyone to let you in — ` +
+        `go ahead and do it as booked. If something is genuinely in the way, ` +
+        `flag it instead so the owner can sort it.`,
+    };
+  }
+
+  const { error } = await admin
+    .from("jobs")
+    .update({ no_show_at: new Date().toISOString(), no_show_reason: why })
+    .eq("id", jobId);
+  if (error) return { ok: false, error: error.message };
+
+  // Ops picks this up: a no-show is a conversation (reschedule by agreement,
+  // else the cancellation policy), never an automatic charge. Nobody is billed
+  // by a crew tapping a button on a doorstep.
+  try {
+    const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+    const { data: prop } = await admin
+      .from("properties").select("address, nickname, users(id, name, email, phone)")
+      .eq("id", job.property_id as string).maybeSingle();
+    const owner = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as
+      { id?: string; name?: string; email?: string; phone?: string } | null;
+    const where = (prop?.nickname as string) || (prop?.address as string) || "your place";
+    const svcName = (rule?.name as string) ?? "your service";
+
+    if (owner?.email) {
+      void sendEmail({
+        to: owner.email,
+        subject: `We couldn't get in for your ${svcName}`,
+        html:
+          `<p>Hi ${owner.name ?? "there"},</p>` +
+          `<p>Our crew was at ${where} today for your ${svcName} and couldn't get ` +
+          `inside to do the work.</p>` +
+          `<p><i>${why}</i></p>` +
+          `<p><b>You have not been charged.</b> Let's find another day — reply here ` +
+          `or pick a new date in your portal.</p>` +
+          `<p><a href="${site}/requests">See my visits</a></p><p>🌊</p>`,
+      });
+    }
+  } catch {
+    /* The no-show is recorded. A failed notice must not undo it. */
   }
 
   return { ok: true };

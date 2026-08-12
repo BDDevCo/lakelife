@@ -10,6 +10,9 @@ const TABS = [
   { href: "/park", label: "Rent roll" },
   { href: "/park/onboard", label: "Who lives here" },
   { href: "/park/lots", label: "Lots & rates" },
+  // Crew validation: is that truck meant to be here? Sits next to the lots
+  // because it is about the ground, not about the money.
+  { href: "/park/visits", label: "Who's on site" },
   // THE IMPORTER USED TO BE A ONE-WAY DOOR. Its only link lived inside the
   // rent roll's zero-lots empty state, so the moment a single lot existed —
   // and generating lots is the first thing an owner is told to do — the paste
