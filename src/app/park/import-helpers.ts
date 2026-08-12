@@ -436,7 +436,30 @@ export function planImport(input: PlanInput): ImportPlan {
     .filter((p) => p.term === "monthly" && p.amount != null)
     .reduce((sum, p) => sum + p.amount!, 0);
 
-  return { rows: planned, ready, needsYou, lotsToCreate, monthlyTotal, namelessRoll: false, rates: [] };
+  // A NAMED ROLL CARRIES RATES TOO.
+  //
+  // This returned `rates: []`, so importing a roll WITH names wrote 21 lots
+  // and 21 tenancies and not one rate card. The consequences were all over the
+  // app: the pre-closing checklist read "Rate cards 0 of 21", stream readiness
+  // said "Set what a lot rents for", and every lot on the public page read
+  // "Ask the park about rates" with no way to apply — for a park whose sheet
+  // stated a rent on every single line.
+  //
+  // Only MONTHLY rows with an amount. A lot's rate card is what the lot asks;
+  // the household's own figure goes on their tenancy either way, and 0059's
+  // `amount_source` keeps recording that it came off the seller's sheet. The
+  // owner can edit any of these afterwards — but starting from his own
+  // document beats starting from nothing.
+  const rates: PlannedRate[] = ready
+    .filter((p) => p.lotLabel && p.term === "monthly" && p.amount != null)
+    .map((p) => ({
+      lineNo: p.lineNo,
+      lotLabel: p.lotLabel!,
+      amount: p.amount,
+      createsLot: p.createsLot,
+    }));
+
+  return { rows: planned, ready, needsYou, lotsToCreate, monthlyTotal, namelessRoll: false, rates };
 }
 
 // ------------------------------------------------------------- the money ----

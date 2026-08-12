@@ -415,3 +415,22 @@ describe("statedTotalFrom", () => {
     expect(statedTotalFrom(["TOTAL", "Page 2 of 4"])).toBeNull();
   });
 });
+
+describe("a NAMED roll carries rate cards too", () => {
+  // The named path returned `rates: []`, so importing a roll with names wrote
+  // lots and tenancies and not one rate card — leaving "Rate cards 0 of 21" on
+  // the checklist and "Ask the park about rates" on every lot of the public
+  // page, for a park whose sheet stated a rent on every line.
+  const roll = "Lot\tTenant\tRent\n1\tAmberg, Roy\t395\n2\tBell, Dana\t410";
+
+  it("plans a rate for every ready monthly row", () => {
+    const p = plan(roll, LOTS);
+    expect(p.namelessRoll).toBe(false);
+    expect(p.rates.map((r) => [r.lotLabel, r.amount])).toEqual([["1", 395], ["2", 410]]);
+  });
+
+  it("skips a row with no amount rather than writing a rate of zero", () => {
+    const p = plan("Lot\tTenant\tRent\n1\tAmberg, Roy\t\n2\tBell, Dana\t410", LOTS);
+    expect(p.rates.map((r) => r.lotLabel)).toEqual(["2"]);
+  });
+});

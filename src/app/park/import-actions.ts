@@ -607,9 +607,43 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
       .eq("line_no", row.lineNo);
   }
 
+  // ---- the rate cards, off the same sheet ---------------------------------
+  //
+  // The named path used to write none at all, so a roll that stated a rent on
+  // every line still left "Rate cards 0 of 21" on the checklist and "Ask the
+  // park about rates" on every lot of the public page.
+  //
+  // NEVER OVERWRITES. If the owner has already set a rate on a lot, his number
+  // wins — the seller's sheet is where this started, not where it ends.
+  let ratesWritten = 0;
+  if (loaded.plan.rates.length > 0) {
+    const rateLotIds = loaded.plan.rates
+      .map((r) => lotIdByLabel.get(r.lotLabel))
+      .filter(Boolean) as string[];
+    const { data: haveRates } = rateLotIds.length
+      ? await admin.from("lot_rates").select("park_lot_id").in("park_lot_id", rateLotIds).eq("term", "monthly")
+      : { data: [] as { park_lot_id: string }[] };
+    const alreadyRated = new Set((haveRates ?? []).map((r) => r.park_lot_id as string));
+
+    for (const r of loaded.plan.rates) {
+      const lotId = lotIdByLabel.get(r.lotLabel);
+      if (!lotId || r.amount == null || alreadyRated.has(lotId)) continue;
+      const { error } = await admin
+        .from("lot_rates")
+        .upsert({ park_lot_id: lotId, term: "monthly", amount: r.amount },
+                { onConflict: "park_lot_id,term" });
+      if (error) {
+        failures.push({ lot: r.lotLabel, name: null, message: `Couldn't save the rent for lot ${r.lotLabel}.` });
+        continue;
+      }
+      ratesWritten += 1;
+    }
+  }
+
   const counts = {
     tenants: tenantsAdded,
     lots: lotsCreated,
+    rates: ratesWritten,
     failed: failures.length,
     monthly: loaded.plan.monthlyTotal,
   };
@@ -628,7 +662,11 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
     monthlyTotal: loaded.plan.monthlyTotal,
     failures,
     orphans,
-    signal: `${tenantsAdded} ${tenantsAdded === 1 ? "tenant is" : "tenants are"} in.`,
+    signal:
+      `${tenantsAdded} ${tenantsAdded === 1 ? "tenant is" : "tenants are"} in.` +
+      (ratesWritten > 0
+        ? ` ${ratesWritten} ${ratesWritten === 1 ? "lot has" : "lots have"} a rent card off your sheet — check them on Lots & rates.`
+        : ""),
   };
 }
 
