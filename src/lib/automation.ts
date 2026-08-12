@@ -1841,9 +1841,12 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
   for (const lake of lakes) {
     const { data: props } = await admin
       .from("properties")
-      .select("address, users(id, email, name)")
+      .select("id, address, users(id, email, name)")
       .eq("lake_id", lake.id);
     const seen = new Set<string>();
+    // The YEAR of the deadline we are warning about. Keyed by season, not by
+    // date, so a re-run with a different `?lead=` is still the same message.
+    const seasonYear = Number(String(lake.pull_deadline).slice(0, 4));
     for (const p of props ?? []) {
       const u = one((p as { users?: unknown }).users) as
         { id?: string; email?: string; name?: string } | null;
@@ -1852,6 +1855,16 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
       seen.add(email);
       // "Seasonal reminders" is one of the six switches. It now works.
       if (!(await allowsNotification(u?.id, "season", "email"))) continue;
+
+      // THE CLAIM ROW IS THE LEDGER. This used to fire on a date match alone,
+      // with a de-dupe set that lived for one invocation — and the route takes
+      // GET, POST and a caller-supplied `?lead=`, so anyone checking that it
+      // worked re-emailed every household on the lake. The INSERT is how a
+      // second attempt finds out it has nothing to do.
+      const { error: claimErr } = await admin
+        .from("seasonal_notice_log")
+        .insert({ property_id: (p as { id: string }).id, season_year: seasonYear });
+      if (claimErr) continue; // 23505 = already told about this season
       const deadline = prettyDate(lake.pull_deadline as string);
       void sendEmail({
         to: email,
