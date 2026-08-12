@@ -8,6 +8,7 @@ const TABS = [
   // default landing route until he has used both with real rows.
   { href: "/park/today", label: "Today" },
   { href: "/park", label: "Rent roll" },
+  { href: "/park/onboard", label: "Who lives here" },
   { href: "/park/lots", label: "Lots & rates" },
   { href: "/park/rent", label: "Rent" },
   { href: "/park/costs", label: "Costs" },
