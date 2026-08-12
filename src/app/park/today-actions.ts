@@ -14,7 +14,7 @@ import {
   moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, preCutover,
   type MoneyBlock, type Task, type TaskState, type OccupancySnapshot,
 } from "./today-helpers";
-import { livenessLine, type RunRow, type LivenessLine } from "./machine-helpers";
+import { livenessLine, lastNightsFindings, type RunRow, type LivenessLine } from "./machine-helpers";
 import type { ParkResult } from "./actions";
 
 /**
@@ -55,6 +55,13 @@ export interface TodayView {
    * An alert that the cron is dead cannot be sent by the cron.
    */
   liveness: LivenessLine;
+  /**
+   * What last night's check actually found. These were computed nightly and
+   * discarded — only the COUNT was stored, into a column nothing read — so an
+   * occupied lot with no bill against it was detected every night and shown to
+   * nobody, while the screen said "checked last night".
+   */
+  findings: { kind: string; urgent: boolean; line: string }[];
 }
 
 export async function getToday(parkId: string): Promise<TodayView | null> {
@@ -266,7 +273,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // The last week of evening checks. Absence is the alarm.
   const { data: runs } = await admin
     .from("park_machine_runs")
-    .select("runner, run_on, ok, error, found")
+    .select("runner, run_on, ok, error, found, finished_at, findings")
     .eq("park_id", parkId)
     .gte("run_on", addDaysISO(today, -7))
     .order("run_on", { ascending: false });
@@ -340,10 +347,15 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     ok: r.ok as boolean,
     error: (r.error as string) ?? null,
     found: (r.found as number) ?? 0,
+    finishedAt: (r.finished_at as string) ?? null,
+    findings: Array.isArray(r.findings)
+      ? (r.findings as { kind: string; urgent: boolean; line: string }[])
+      : [],
   }));
 
   return {
     liveness: livenessLine(runRows, today, checked),
+    findings: lastNightsFindings(runRows),
     parkName,
     today,
     month,

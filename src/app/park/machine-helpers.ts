@@ -26,6 +26,33 @@ export interface RunRow {
   ok: boolean;
   error: string | null;
   found: number;
+  /**
+   * Stamped when the run COMPLETED. Null means it claimed the night and then
+   * died partway — which is not the same as a night that went fine, even
+   * though `ok` is still sitting on its default of true.
+   */
+  finishedAt: string | null;
+  /** What that run actually noticed, in the reconciler's own words. */
+  findings: { kind: string; urgent: boolean; line: string }[];
+}
+
+/**
+ * What last night's check found, for the owner's screen.
+ *
+ * Only the MOST RECENT finished night. An unbilled lot that was fixed a week
+ * ago is history; showing it again would teach him to ignore the section.
+ */
+export function lastNightsFindings(
+  runs: readonly RunRow[],
+): { kind: string; urgent: boolean; line: string }[] {
+  const good = runs.filter((r) => r.ok && r.finishedAt != null);
+  if (good.length === 0) return [];
+  const latest = good.reduce((m, r) => (r.runOn > m ? r.runOn : m), good[0].runOn);
+  return good
+    .filter((r) => r.runOn === latest)
+    .flatMap((r) => r.findings)
+    // Urgent first: money not being collected outranks a rent nobody set.
+    .sort((a, b) => Number(b.urgent) - Number(a.urgent));
 }
 
 function daysBetween(a: string, b: string): number {
@@ -39,7 +66,12 @@ function daysBetween(a: string, b: string): number {
  * costume of one, which is worse than nothing because it looks like coverage.
  */
 export function liveness(runs: readonly RunRow[], today: string): Liveness {
-  const good = runs.filter((r) => r.ok);
+  // A run counts only if it said it was fine AND actually finished. The claim
+  // row is written BEFORE the work, so a job killed mid-flight leaves ok=true
+  // (the column default) with no finished_at — and that used to read as a
+  // clean night. Worse, the claim makes the night unrepeatable, so nothing
+  // would ever go back and do the work.
+  const good = runs.filter((r) => r.ok && r.finishedAt != null);
   if (good.length === 0) return "never_ran";
   const latest = good.reduce((m, r) => (r.runOn > m ? r.runOn : m), good[0].runOn);
   return daysBetween(latest, today) <= 1 ? "fresh" : "stale";

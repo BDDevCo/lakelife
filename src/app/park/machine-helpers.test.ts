@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { liveness, livenessLine, JOB_CEILING, mayAct, type RunRow } from "./machine-helpers";
+import { liveness, livenessLine, lastNightsFindings, JOB_CEILING, mayAct, type RunRow } from "./machine-helpers";
 import {
   reconcile, reconcileSummary, cutoverMonthNote, CLAIM_STALE_DAYS,
   type ReconcileInput,
@@ -7,7 +7,8 @@ import {
 
 const TODAY = "2026-08-11";
 const run = (o: Partial<RunRow> = {}): RunRow => ({
-  runner: "reconcile", runOn: TODAY, ok: true, error: null, found: 0, ...o,
+  runner: "reconcile", runOn: TODAY, ok: true, error: null, found: 0,
+  finishedAt: `${TODAY}T20:04:00Z`, findings: [], ...o,
 });
 
 describe("is the machine alive", () => {
@@ -197,5 +198,51 @@ describe("what the nightly read notices", () => {
   it("summarises for a subject line without inventing urgency", () => {
     const f = reconcile(input({ lots: [lot({ statementZero: true })] }));
     expect(reconcileSummary(f)).toBe("1 worth a look.");
+  });
+});
+
+describe("a run that claimed the night and never finished", () => {
+  // The claim row is written BEFORE the work, so a job killed partway leaves
+  // ok=true — the column's own default — and no finished_at. That read as a
+  // clean night, and because the claim makes the night unrepeatable, nothing
+  // ever went back and did the work.
+  it("does not count as a check, even though ok is true", () => {
+    expect(liveness([run({ finishedAt: null })], TODAY)).toBe("never_ran");
+  });
+
+  it("falls back to the last night that DID finish", () => {
+    expect(liveness([
+      run({ runOn: "2026-08-04", finishedAt: "2026-08-04T20:04:00Z" }),
+      run({ runOn: TODAY, finishedAt: null }),
+    ], TODAY)).toBe("stale");
+  });
+
+  it("a finished run is still fresh", () => {
+    expect(liveness([run()], TODAY)).toBe("fresh");
+  });
+});
+
+describe("what last night found reaches the screen", () => {
+  const f = (line: string, urgent = false) => ({ kind: "k", urgent, line });
+
+  it("returns the most recent FINISHED night's lines", () => {
+    expect(lastNightsFindings([
+      run({ runOn: "2026-08-04", findings: [f("old")] }),
+      run({ runOn: TODAY, findings: [f("today")] }),
+    ]).map((x) => x.line)).toEqual(["today"]);
+  });
+
+  it("puts money not being collected above a rent nobody set", () => {
+    expect(lastNightsFindings([
+      run({ findings: [f("a rent nobody set"), f("nobody is billing lot 4", true)] }),
+    ]).map((x) => x.line)[0]).toBe("nobody is billing lot 4");
+  });
+
+  it("ignores a run that claimed the night and died — it found nothing because it never looked", () => {
+    expect(lastNightsFindings([run({ finishedAt: null, findings: [f("x")] })])).toEqual([]);
+  });
+
+  it("is empty when the check has never run", () => {
+    expect(lastNightsFindings([])).toEqual([]);
   });
 });

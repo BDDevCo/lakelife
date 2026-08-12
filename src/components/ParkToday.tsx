@@ -54,6 +54,34 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
         </div>
       )}
 
+      {/* ---- WHAT THE EVENING CHECK FOUND --------------------------------
+          The reconciler computed these every night and threw them away — the
+          count went into a column nothing read, and the sentences went
+          nowhere. So "3 occupied lots have no bill this month" was detected
+          nightly, for as long as it stayed true, and told to no one. */}
+      {view.findings.length > 0 && (
+        <div className="ll-card ll-card-pad"
+          style={{ marginTop: 10, background: "rgba(200,150,40,.07)" }}>
+          <strong style={{ fontSize: 15 }}>
+            Last night&apos;s check turned {view.findings.length === 1 ? "something" : "some things"} up
+          </strong>
+          <div style={{ display: "grid", gap: 7, marginTop: 8 }}>
+            {view.findings.map((f, i) => (
+              <p key={`${f.kind}:${i}`} style={{
+                fontSize: 13.5, margin: 0, lineHeight: 1.5,
+                fontWeight: f.urgent ? 700 : 400,
+              }}>
+                {f.urgent ? "⚠️ " : ""}{f.line}
+              </p>
+            ))}
+          </div>
+          <p className="mut" style={{ fontSize: 12, marginTop: 9, marginBottom: 0, lineHeight: 1.5 }}>
+            Nothing was changed. These are things the check noticed and can&apos;t
+            decide for you.
+          </p>
+        </div>
+      )}
+
       {/* ---- before it's his, there is no money and no occupancy ---------- */}
       {view.preCutover ? (
         <div className="ll-card ll-card-pad" style={{ marginTop: 10 }}>

@@ -52,11 +52,23 @@ async function reconcileOnePark(
 ): Promise<{ findings: Finding[]; error: string | null }> {
   const runner = "reconcile";
 
-  // The claim. A unique violation means tonight is already taken.
+  // The claim. A UNIQUE VIOLATION — and only that — means tonight is already
+  // taken, which is not a problem and not worth reporting.
+  //
+  // This used to swallow EVERY error as "already ran". A missing table (which
+  // is exactly what a rebuilt environment had, because 0079 was never
+  // committed), a permissions change, a dropped connection — all of them
+  // reported a clean night, forever, on a screen whose whole job is to tell
+  // the owner whether anybody looked. Anything that is not 23505 is now a
+  // failure with its own reason, which is what the row's own
+  // `machine_run_failure_has_a_reason` constraint was written to insist on.
   const { error: claimErr } = await admin
     .from("park_machine_runs")
     .insert({ park_id: parkId, run_on: today, runner });
-  if (claimErr) return { findings: [], error: null }; // already ran tonight
+  if (claimErr) {
+    if (claimErr.code === "23505") return { findings: [], error: null }; // already ran tonight
+    return { findings: [], error: `couldn't claim tonight's run: ${claimErr.message}` };
+  }
 
   try {
     const month = currentPeriod(today);
@@ -154,9 +166,19 @@ async function reconcileOnePark(
       })),
     });
 
+    // THE SENTENCES, NOT JUST THE COUNT. `found` alone was written into a
+    // column nothing read, so a night that noticed an occupied lot with no
+    // bill against it — a household living here and being charged nothing —
+    // reported the number 1 to no one and told the owner "checked last night".
+    // Written in the same statement as the count, which is what 0080's
+    // constraint requires: a count that disagrees with its list lies twice.
     await admin
       .from("park_machine_runs")
-      .update({ found: findings.length, finished_at: new Date().toISOString() })
+      .update({
+        found: findings.length,
+        findings,
+        finished_at: new Date().toISOString(),
+      })
       .eq("park_id", parkId).eq("run_on", today).eq("runner", runner);
 
     return { findings, error: null };
