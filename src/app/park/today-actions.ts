@@ -86,7 +86,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const { data: stays } = liveIds.length
     ? await admin
         .from("lot_reservations")
-        .select("id, park_lot_id, renter_id, during, status, agreement_chain_id, agreement_seq")
+        .select("id, park_lot_id, renter_id, during, status, origin, agreement_chain_id, agreement_seq")
         .in("park_lot_id", liveIds)
         .in("status", ["approved", "active"])
     : { data: [] as Record<string, unknown>[] };
@@ -279,6 +279,16 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     agreements,
     monthBilled: monthRows.length > 0,
     liveOccupiedLots: occupiedLotIds.size,
+    // A holdover is a CURRENT tenancy written as grandfathered — somebody
+    // living here on the seller's terms who has not signed the new lease.
+    holdoverLots: (stays ?? [])
+      .filter((s) => (s.origin as string) === "grandfathered")
+      .filter((s) => {
+        const r = parseDaterange(s.during as string);
+        return r != null && r.start <= today && today < r.end;
+      })
+      .map((s) => lotName.get(s.park_lot_id as string) ?? "?")
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
     lateCount: monthSummary.lateCount,
     lateAmount: monthSummary.lateAmount,
     disputedCount: monthSummary.disputedCount,

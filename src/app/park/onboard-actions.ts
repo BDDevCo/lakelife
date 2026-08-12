@@ -89,17 +89,16 @@ export async function getOnboardSeeds(
 /**
  * File them.
  *
- * `grandfathered` decides two things at once, and they belong together:
- * `origin` (which the 0065 trigger reads to exempt inherited tenancies from the
- * agreement cap) and the tenancy LENGTH (the cap when it applies, the rolling
- * horizon when it does not). Passing the cap to `buildTenant` is what keeps
- * those two consistent — the same function the one-at-a-time path uses, so the
- * validation cannot drift between the two screens.
+ * `signedNewLease` decides two things at once and they belong together:
+ * `origin` (which the 0065 trigger reads to exempt a holdover from the
+ * agreement cap) and the tenancy LENGTH (the cap when an agreement exists, the
+ * rolling horizon when it does not). Passing the cap to `buildTenant` keeps them
+ * consistent — the same function the one-at-a-time path uses, so validation
+ * cannot drift between the two screens.
  */
 export async function commitOnboarding(
   parkId: string,
   rows: OnboardRow[],
-  grandfathered: boolean,
 ): Promise<ParkResult & { filed?: number; failed?: { lotNumber: string; why: string }[] }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
@@ -112,9 +111,7 @@ export async function commitOnboarding(
   const admin = createServiceClient();
   const { data: park } = await admin
     .from("parks").select("max_agreement_months").eq("id", parkId).maybeSingle();
-  // Inherited tenancies never agreed to a cap, so they are written on the
-  // rolling horizon and the trigger exempts them by origin.
-  const cap = grandfathered ? null : ((park?.max_agreement_months as number) ?? null);
+  const parkCap = (park?.max_agreement_months as number) ?? null;
 
   // Re-check what is already held, so a second submit cannot double-file.
   const { data: taken } = await admin
@@ -144,7 +141,11 @@ export async function commitOnboarding(
         source: "owner_knowledge",
       },
       today,
-      cap,
+      // Signed means a real agreement exists on paper, so it is written under
+      // the cap. Unsigned is a holdover on the rolling horizon, which the 0065
+      // trigger exempts by origin — the two must move together or the write is
+      // refused.
+      r.signedNewLease ? parkCap : null,
     );
     if (!built.ok || !built.renter || !built.tenancy) {
       failed.push({ lotNumber: r.lotNumber, why: built.error ?? "Couldn't file that one." });
@@ -172,7 +173,7 @@ export async function commitOnboarding(
       // never the tenant's — it improves only when the household confirms it.
       amount_source: "owner_knowledge",
       tenancy_began_on: r.movedInOn,
-      origin: grandfathered ? "grandfathered" : "application",
+      origin: r.signedNewLease ? "application" : "grandfathered",
     });
     if (stayErr) {
       // The renter file survives on purpose — he can put them on a lot by hand

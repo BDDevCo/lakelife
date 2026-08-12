@@ -177,6 +177,11 @@ export interface TaskFacts {
   disputedCount: number;
   /** Costs entered but never split across lots — they bill nobody. */
   unallocatedCosts: { id: string; label: string; amount: number }[];
+  /**
+   * Households still on whatever the seller agreed, with no new lease signed.
+   * Named by lot, because chasing a signature is a door-knock not a query.
+   */
+  holdoverLots: string[];
   /** Rent changes whose notice period is about to make the date impossible. */
   pendingRentChanges: {
     id: string; lotNumber: string; effectiveOn: string;
@@ -277,6 +282,24 @@ export function generateTasks(f: TaskFacts): Task[] {
         canDismiss: false,
       });
     }
+  }
+
+  // STILL ON THE SELLER'S ARRANGEMENT. Not a problem — they live here and they
+  // get billed either way — but it is the takeover's open list, and without a
+  // line for it a household can sit unsigned indefinitely with nothing saying so.
+  if (f.holdoverLots.length > 0) {
+    const n = f.holdoverLots.length;
+    out.push({
+      key: `unsigned_lease:${f.parkId}`,
+      title: `${n} ${n === 1 ? "household hasn't" : "households haven't"} signed the new lease`,
+      detail:
+        `${n === 1 ? "Lot" : "Lots"} ${f.holdoverLots.join(", ")} — still on what they had ` +
+        `with the seller, so your agreement cap doesn't apply to them yet.`,
+      urgency: "whenever",
+      dueOn: null,
+      href: "/park",
+      canDismiss: true,
+    });
   }
 
   // A COST NOBODY IS PAYING FOR. Entered, sitting there, billing nobody.

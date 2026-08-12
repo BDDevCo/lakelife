@@ -26,6 +26,7 @@ const facts = (over: Partial<TaskFacts> = {}): TaskFacts => ({
   lateAmount: 0,
   disputedCount: 0,
   unallocatedCosts: [],
+  holdoverLots: [],
   pendingRentChanges: [],
   ...over,
 });
@@ -276,6 +277,25 @@ describe("the to-do list", () => {
         endsOn: "2026-09-10", chainId: "ch1", seq: 1, hasSuccessor: false }],
     }));
     expect(ts.map((t) => t.urgency)).toEqual(["overdue", "soon", "whenever"]);
+  });
+});
+
+describe("who still hasn't signed", () => {
+  it("names the holdover lots, because chasing a signature is a door-knock", () => {
+    const [t] = generateTasks(facts({ holdoverLots: ["4", "9"] }));
+    expect(t.title).toBe("2 households haven't signed the new lease");
+    expect(t.detail).toContain("Lots 4, 9");
+    expect(t.detail).toMatch(/cap doesn't apply to them yet/);
+  });
+
+  it("says nothing at all once everybody has signed", () => {
+    expect(generateTasks(facts({ holdoverLots: [] }))).toEqual([]);
+  });
+
+  it("never outranks money owed", () => {
+    const ts = generateTasks(facts({ holdoverLots: ["4"], lateCount: 1, lateAmount: 455 }));
+    expect(ts[0].urgency).toBe("overdue");
+    expect(ts[ts.length - 1].title).toMatch(/signed the new lease/);
   });
 });
 

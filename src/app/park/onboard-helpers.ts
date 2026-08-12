@@ -1,6 +1,13 @@
 /**
  * FILING THE PEOPLE WHO WERE ALREADY THERE.
  *
+ * THE PLAN IS THAT EVERYBODY SIGNS A NEW LEASE AT TAKEOVER, so the default is a
+ * fresh agreement under the park's own cap. But on the first morning some will
+ * have signed and some will not, and BOTH still live here and still owe rent.
+ * The record says which, per household, rather than picking one story for
+ * everybody — because a row that claims an agreement nobody signed is the same
+ * class of lie as a bill nobody sent.
+ *
  * The Haven's rent roll names nobody, so the importer wrote 21 lots and 21 rate
  * cards and — correctly — ZERO tenancies: putting a name on a lot the sheet did
  * not name would be inventing a person. That leaves the real first day's work,
@@ -18,11 +25,10 @@
  *   names. He can correct any of them; a correction is still HIS knowledge, not
  *   the tenant's, so the provenance does not improve just because he retyped it.
  *
- *   THE GRANDFATHERED QUESTION IS ASKED ONCE. Nineteen people who have lived
- *   there for years never agreed to a three-month cap, and imposing one at
- *   closing by default would silently change everybody's terms on day one. So
- *   the default is 'grandfathered' — the database exempts those from the cap
- *   (0065) and they keep the rolling horizon they had.
+ *   THE SIGNING STATE IS ONE TICK PER ROW. Ticked writes a real agreement under
+ *   the cap, because one exists on paper. Clear writes a holdover on the rolling
+ *   horizon, which 0065 exempts from the cap — they are living here on whatever
+ *   the seller agreed, and until they sign, that is simply the truth.
  *
  * A BLANK ROW IS SKIPPED, NOT AN ERROR. He will not know every name on the
  * first afternoon, and a form that refuses to save until all nineteen are
@@ -38,6 +44,15 @@ export interface OnboardRow {
   rent: string;
   /** Blank means "already here", which is the common case. */
   movedInOn: string;
+  /**
+   * Have they signed the new lease yet?
+   *
+   * TRUE writes a fresh agreement under the park's cap — a real agreement,
+   * because one exists on paper. FALSE writes a holdover on the rolling
+   * horizon, exempt from the cap, because they are living here on whatever the
+   * seller agreed and nobody has changed that yet.
+   */
+  signedNewLease: boolean;
 }
 
 export interface OnboardPlan {
@@ -47,6 +62,7 @@ export interface OnboardPlan {
     displayName: string;
     rent: number | null;
     movedInOn: string;
+    signedNewLease: boolean;
   }[];
   skipped: number;
   problems: { lotNumber: string; why: string }[];
@@ -101,7 +117,10 @@ export function planOnboarding(rows: readonly OnboardRow[], todayISO: string): O
       continue;
     }
 
-    toFile.push({ lotId: r.lotId, lotNumber: r.lotNumber, displayName: name, rent, movedInOn });
+    toFile.push({
+      lotId: r.lotId, lotNumber: r.lotNumber, displayName: name, rent, movedInOn,
+      signedNewLease: r.signedNewLease,
+    });
   }
 
   return { toFile, skipped: blankLotNumbers.length, problems, blankLotNumbers };
@@ -117,7 +136,7 @@ const money = (n: number) =>
  * seller's roll, and names the lots with no rent because those are the ones
  * that will silently not be billed.
  */
-export function onboardSummary(plan: OnboardPlan, grandfathered: boolean): string {
+export function onboardSummary(plan: OnboardPlan): string {
   if (plan.toFile.length === 0) {
     return plan.problems.length > 0
       ? "Nothing to file yet — fix the lines below."
@@ -131,6 +150,20 @@ export function onboardSummary(plan: OnboardPlan, grandfathered: boolean): strin
     (withRent.length > 0 ? ` — ${money(total)} a month` : ""),
   ];
 
+  // The split he actually cares about on the first morning.
+  const signed = plan.toFile.filter((r) => r.signedNewLease).length;
+  const holdover = plan.toFile.length - signed;
+  if (signed > 0 && holdover > 0) {
+    parts.push(`${signed} on the new lease, ${holdover} still on the old arrangement`);
+  } else if (holdover > 0) {
+    parts.push(
+      `${holdover === 1 ? "Nobody has" : "None have"} signed the new lease yet — ` +
+      `filed as they are, and your three-month rule doesn't apply until they do`,
+    );
+  } else {
+    parts.push(`all on the new lease, capped by your three-month rule`);
+  }
+
   const noRent = plan.toFile.filter((r) => r.rent == null).map((r) => r.lotNumber);
   if (noRent.length > 0) {
     parts.push(
@@ -138,29 +171,19 @@ export function onboardSummary(plan: OnboardPlan, grandfathered: boolean): strin
       `those won't be billed until you set one`,
     );
   }
-  if (plan.skipped > 0) parts.push(`${plan.skipped} left for later`);
+  if (plan.skipped > 0) parts.push(`${plan.skipped} still to do`);
 
-  parts.push(
-    grandfathered
-      ? "Recorded as already living here, so your three-month rule doesn't apply to them"
-      : "Recorded as new agreements under your three-month rule",
-  );
   return parts.join(" · ");
 }
 
 /**
- * The choice, in his words, asked once.
+ * What the tick means, in his words.
  *
- * This is a real decision with a legal shape, so it is put plainly and the app
- * takes no position beyond describing what each option does.
+ * A real decision with a legal shape, so it is put plainly and the app takes no
+ * position beyond describing what each state records.
  */
-export const GRANDFATHERED_EXPLAINER =
-  "These nineteen were living here before you bought it, on whatever Michael " +
-  "agreed with them. Filing them as already here keeps their arrangement as it " +
-  "was — your three-month rule starts applying when you next write an agreement " +
-  "with them, not on day one.";
-
-export const NEW_AGREEMENT_EXPLAINER =
-  "This writes everybody a fresh three-month agreement starting now. That is a " +
-  "change to their terms, so it needs whatever notice their arrangement and " +
-  "Indiana law require — worth asking your attorney before you pick this.";
+export const SIGNING_EXPLAINER =
+  "Tick the ones who have signed your new lease — those get a fresh agreement " +
+  "under your three-month rule. Leave it clear for anyone still on whatever " +
+  "they had with the seller: they keep that arrangement, and the rule starts " +
+  "applying when they sign. Either way they're on the roll and they get billed.";

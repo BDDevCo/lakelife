@@ -5,8 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { commitOnboarding, type OnboardSeed } from "@/app/park/onboard-actions";
 import {
-  planOnboarding, onboardSummary,
-  GRANDFATHERED_EXPLAINER, NEW_AGREEMENT_EXPLAINER,
+  planOnboarding, onboardSummary, SIGNING_EXPLAINER,
   type OnboardRow,
 } from "@/app/park/onboard-helpers";
 
@@ -25,7 +24,6 @@ export function ParkOnboard({
 }: { parkId: string; seeds: OnboardSeed[]; today: string }) {
   const router = useRouter();
   const [busy, start] = useTransition();
-  const [grandfathered, setGrandfathered] = useState(true);
   const [rows, setRows] = useState<OnboardRow[]>(
     seeds.map((s) => ({
       lotId: s.lotId,
@@ -33,10 +31,13 @@ export function ParkOnboard({
       displayName: "",
       rent: s.suggestedRent,
       movedInOn: "",
+      // The plan is everybody signs, so that is the default — and the ones who
+      // haven't yet get un-ticked as he works down the sheet.
+      signedNewLease: true,
     })),
   );
 
-  const set = (i: number, k: keyof OnboardRow, v: string) =>
+  const set = (i: number, k: keyof OnboardRow, v: string | boolean) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
 
   const plan = planOnboarding(rows, today);
@@ -63,31 +64,11 @@ export function ParkOnboard({
         a row blank if you don&apos;t know yet.
       </p>
 
-      {/* ---- the choice, asked ONCE ---------------------------------------- */}
       <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
-        <strong style={{ fontSize: 15 }}>How are you filing these?</strong>
-        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-          <label style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 13, lineHeight: 1.5 }}>
-            <input type="radio" checked={grandfathered} style={{ marginTop: 3 }}
-              onChange={() => setGrandfathered(true)} />
-            <span>
-              <strong>They were already living here</strong>
-              <span className="mut" style={{ display: "block", marginTop: 3 }}>
-                {GRANDFATHERED_EXPLAINER}
-              </span>
-            </span>
-          </label>
-          <label style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 13, lineHeight: 1.5 }}>
-            <input type="radio" checked={!grandfathered} style={{ marginTop: 3 }}
-              onChange={() => setGrandfathered(false)} />
-            <span>
-              <strong>Write everyone a new agreement</strong>
-              <span className="mut" style={{ display: "block", marginTop: 3 }}>
-                {NEW_AGREEMENT_EXPLAINER}
-              </span>
-            </span>
-          </label>
-        </div>
+        <strong style={{ fontSize: 15 }}>The new lease</strong>
+        <p className="mut" style={{ fontSize: 13, marginTop: 6, marginBottom: 0, lineHeight: 1.5 }}>
+          {SIGNING_EXPLAINER}
+        </p>
       </div>
 
       {/* ---- the grid ------------------------------------------------------ */}
@@ -122,6 +103,13 @@ export function ParkOnboard({
                 title="When they moved in, if you know it"
                 style={{ flex: "0 1 150px", minWidth: 0 }}
               />
+              {/* One tick per household, because on the first morning some
+                  have signed and some have not. */}
+              <label style={{ display: "flex", gap: 5, alignItems: "center", fontSize: 12 }}>
+                <input type="checkbox" checked={r.signedNewLease}
+                  onChange={(e) => set(i, "signedNewLease", e.target.checked)} />
+                <span className="mut">signed</span>
+              </label>
               {problem && (
                 <span className="mut" style={{ fontSize: 12, flexBasis: "100%" }}>
                   {problem.why}
@@ -134,7 +122,7 @@ export function ParkOnboard({
 
       {/* ---- what is about to happen -------------------------------------- */}
       <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
-        <strong style={{ fontSize: 15 }}>{onboardSummary(plan, grandfathered)}</strong>
+        <strong style={{ fontSize: 15 }}>{onboardSummary(plan)}</strong>
         <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
           Nobody is told anything by this. It puts them on the roll so you can
           bill them — the rents are recorded as YOUR figures off the sheet, not
@@ -144,7 +132,7 @@ export function ParkOnboard({
           <button className="ll-btn" disabled={busy || plan.toFile.length === 0}
             onClick={() =>
               start(async () => {
-                const res = await commitOnboarding(parkId, rows, grandfathered);
+                const res = await commitOnboarding(parkId, rows);
                 toast(res.ok ? (res.signal ?? "Filed.") : (res.error ?? "Couldn't file those."));
                 if (res.ok) router.refresh();
               })

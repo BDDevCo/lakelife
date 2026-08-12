@@ -5,7 +5,7 @@ const TODAY = "2026-12-16";
 
 const row = (o: Partial<OnboardRow> = {}): OnboardRow => ({
   lotId: "l1", lotNumber: "3", displayName: "Amberg, Roy",
-  rent: "395", movedInOn: "", ...o,
+  rent: "395", movedInOn: "", signedNewLease: true, ...o,
 });
 
 describe("filing the households who were already there", () => {
@@ -73,7 +73,7 @@ describe("what he is told before he writes it", () => {
       row({ lotId: "a", lotNumber: "1", rent: "395" }),
       row({ lotId: "b", lotNumber: "2", rent: "410" }),
     ], TODAY);
-    expect(onboardSummary(p, true)).toContain("File 2 households — $805.00 a month");
+    expect(onboardSummary(p)).toContain("File 2 households — $805.00 a month");
   });
 
   it("NAMES the lots with no rent, because those quietly never get billed", () => {
@@ -81,28 +81,47 @@ describe("what he is told before he writes it", () => {
       row({ lotId: "a", lotNumber: "1", rent: "395" }),
       row({ lotId: "b", lotNumber: "9", rent: "" }),
     ], TODAY);
-    const s = onboardSummary(p, true);
+    const s = onboardSummary(p);
     expect(s).toContain("1 with no rent set (lot 9)");
     expect(s).toMatch(/won't be billed until you set one/);
   });
 
-  it("says which way the three-month rule is being applied", () => {
-    const p = planOnboarding([row()], TODAY);
-    expect(onboardSummary(p, true)).toMatch(/doesn't apply to them/);
-    expect(onboardSummary(p, false)).toMatch(/new agreements under your three-month rule/);
+  it("reports the SPLIT between signed and not, because both will exist", () => {
+    // On the first morning some have signed and some haven't, and both still
+    // live here and still owe rent.
+    const mixed = planOnboarding([
+      row({ lotId: "a", lotNumber: "1", signedNewLease: true }),
+      row({ lotId: "b", lotNumber: "2", signedNewLease: false }),
+    ], TODAY);
+    expect(onboardSummary(mixed)).toContain("1 on the new lease, 1 still on the old arrangement");
+  });
+
+  it("says plainly when nobody has signed yet", () => {
+    const none = planOnboarding([row({ signedNewLease: false })], TODAY);
+    expect(onboardSummary(none)).toMatch(/doesn't apply until they do/);
+  });
+
+  it("says plainly when everybody has", () => {
+    expect(onboardSummary(planOnboarding([row()], TODAY)))
+      .toMatch(/all on the new lease, capped by your three-month rule/);
+  });
+
+  it("carries the signing state through to what gets written", () => {
+    const p = planOnboarding([row({ signedNewLease: false })], TODAY);
+    expect(p.toFile[0].signedNewLease).toBe(false);
   });
 
   it("counts what was left for later without calling it a failure", () => {
     const p = planOnboarding([row(), row({ lotId: "b", lotNumber: "9", displayName: "" })], TODAY);
-    expect(onboardSummary(p, true)).toContain("1 left for later");
+    expect(onboardSummary(p)).toContain("1 still to do");
   });
 
   it("says nothing is filled in rather than reporting a zero total", () => {
-    expect(onboardSummary(planOnboarding([], TODAY), true)).toBe("Nothing filled in yet.");
+    expect(onboardSummary(planOnboarding([], TODAY))).toBe("Nothing filled in yet.");
   });
 
   it("points at the problems when every row has one", () => {
     const p = planOnboarding([row({ rent: "nope" })], TODAY);
-    expect(onboardSummary(p, true)).toMatch(/fix the lines below/);
+    expect(onboardSummary(p)).toMatch(/fix the lines below/);
   });
 });
