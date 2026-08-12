@@ -2619,6 +2619,8 @@ export async function sendNightlyDigest(results: {
    * out loud rather than sitting on a screen nobody opened.
    */
   visitFees?: { proposed: number; skipped: number };
+  /** Trip fees paid to crews, and how much of it LakeLife funded (0090). */
+  tripFees?: { paid: number; total: number; onUs: number };
 }): Promise<{ ok: boolean; sent: number }> {
   const admin = createServiceClient();
   const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString();
@@ -2687,6 +2689,7 @@ export async function sendNightlyDigest(results: {
       : undefined,
     refundsReconciled: results.refundReconcile,
     visitFees: results.visitFees,
+    tripFees: results.tripFees,
     failures: results.failures,
     homesWithNoLake: lakelessHomes ?? 0,
   };

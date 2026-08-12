@@ -153,6 +153,81 @@ export function proposedFee(
   return { fee, crewShare, free: fee <= 0 };
 }
 
+// ------------------------------------------------ paying for the trip -------
+
+/** Flat dollars owed for a documented visit that produced no work (0090). */
+export const DEFAULT_TRIP_FEE = 35;
+
+export interface TripFee {
+  owed: number;
+  /** Who ends up paying it. */
+  fundedBy: "customer" | "lakelife";
+  why: string;
+}
+
+/**
+ * WHAT THE CREW IS OWED FOR THE TRIP.
+ *
+ * One rule: for a documented trip that produced no work, the crew is never
+ * paid less than the trip fee.
+ *
+ *     owed = max(tripFee, their share of any fee the customer actually paid)
+ *
+ * A FLOOR, NOT A CAP. A small job whose 25% share is $15 still pays the full
+ * trip fee; a large one whose share is $100 pays the $100. It tops up a crew
+ * who was short-changed and never docks one who was already made whole.
+ *
+ * WHO FUNDS IT is the part that matters. When the customer pays a fee, their
+ * door and their trip — the crew's share of it is the funding. When no fee is
+ * collected, LAKELIFE pays: ops chose to waive it, or the crew was stood down
+ * because OUR profile said eight sections when there were twelve. Their fuel
+ * paid for our bad record.
+ *
+ * That placement is not generosity, it is the only seat the cost fits in
+ * without being unfair — and it puts the price of stale profile data on the
+ * party that owns the data.
+ */
+export function tripFeeFor(
+  input: {
+    outcome: AttemptOutcome;
+    /** Their share of a fee the customer ACTUALLY paid. 0 when none was. */
+    collectedCrewShare: number;
+    tripFee?: number;
+  },
+): TripFee {
+  const dial = Math.max(0, input.tripFee ?? DEFAULT_TRIP_FEE);
+  const share = Math.max(0, input.collectedCrewShare);
+
+  // A dial of zero switches the whole thing off, the same way cancelFeePct
+  // does. Then the crew simply gets whatever the customer's fee funded.
+  if (dial === 0) {
+    return {
+      owed: share,
+      fundedBy: "customer",
+      why: share > 0 ? "Their share of the fee the customer paid." : "No trip fee is set.",
+    };
+  }
+
+  if (share >= dial) {
+    return {
+      owed: share,
+      fundedBy: "customer",
+      why: "The customer's fee already covers the trip — the floor doesn't dock them.",
+    };
+  }
+
+  return {
+    owed: dial,
+    fundedBy: share > 0 ? "customer" : "lakelife",
+    why:
+      input.outcome === "stood_down"
+        ? "Our profile was wrong, so we pay for the trip it cost them."
+        : share > 0
+          ? "Topped up to the trip fee — the customer's fee didn't reach it."
+          : "No fee was collected, so LakeLife pays for the trip.",
+  };
+}
+
 /**
  * IS THE CREW OUT OF POCKET?
  *
@@ -165,7 +240,16 @@ export function proposedFee(
  * record is exactly the kind of thing that never shows up in a number until
  * the crew stops answering the phone.
  */
-export function crewIsOutOfPocket(state: RecoveryState, outcome: AttemptOutcome): boolean {
+export function crewIsOutOfPocket(
+  state: RecoveryState,
+  outcome: AttemptOutcome,
+  tripFeePaid = 0,
+): boolean {
+  // 0090: a trip fee is now raised for every documented attempt, so the answer
+  // is no longer "which branch was it" but the plain question of whether
+  // anything actually reached them. Left in place because a zeroed dial, or a
+  // trip fee that failed to raise, puts us straight back where we were.
+  if (tripFeePaid > 0) return false;
   if (outcome === "stood_down") return true;              // never fee-eligible
   return state === "fee_waived" || state === "rescheduled";
 }

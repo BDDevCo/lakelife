@@ -37,6 +37,14 @@ export interface DigestSections {
    * the customer meanwhile hears nothing at all.
    */
   visitFees?: { proposed: number; skipped: number };
+  /**
+   * TRIP FEES PAID TO CREWS for visits that produced no work (0090). `onUs` is
+   * the part LakeLife funded rather than a customer — a waived fee, or a
+   * stand-down caused by our own stale profile. It is broken out on purpose:
+   * that number IS the running cost of bad property data, and if it climbs it
+   * is telling you to go and fix profiles, not to lower the trip fee.
+   */
+  tripFees?: { paid: number; total: number; onUs: number };
   refundsReconciled?: { orphansCleared: number; flipsCompleted: number };
   /**
    * STEPS THAT THREW TONIGHT. The nightly wraps each of its ~27 steps in a
@@ -178,6 +186,14 @@ export function composeNightlyDigest(sections: DigestSections): string {
         `<li><b>${vf.proposed} missed visit${plural(vf.proposed)}</b> passed the ` +
         `reschedule window with no reply — a fee is proposed and needs your yes ` +
         `or a waive. Nothing has been charged.</li>`,
+      );
+    }
+    const tf = sections.tripFees;
+    if (tf && tf.paid > 0) {
+      const ours = tf.onUs > 0 ? ` — <b>${usd(tf.onUs)}</b> of it on us (waived fees and our own bad profiles)` : "";
+      money.push(
+        `<li>Trip fee${plural(tf.paid)} to crews for visits that produced no work: ` +
+        `${tf.paid}, ${usd(tf.total)}${ours}.</li>`,
       );
     }
     const rr = sections.refundsReconciled;

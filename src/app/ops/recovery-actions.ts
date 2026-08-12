@@ -4,7 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { todayLakeDate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
-import { proposedFee, deadlinePassed } from "@/lib/recovery";
+import { proposedFee, deadlinePassed, tripFeeFor } from "@/lib/recovery";
 import { assertOps } from "./data";
 
 /**
@@ -25,6 +25,83 @@ import { assertOps } from "./data";
  * on an ops screen. A person releases it or waives it. That is one click for
  * a rare event, and it is the click that ought to have a person behind it.
  */
+
+/**
+ * RAISE THE TRIP FEE FOR EVERY ATTEMPT THAT HASN'T HAD ONE.
+ *
+ * Runs nightly, and it accrues WITHOUT asking a person — deliberately. The
+ * worst case if it fires wrongly is that we pay a crew $35 they did not earn:
+ * small, clawback-able, and invisible to the customer. That is a different
+ * animal from putting money on somebody's card, which is why the other half of
+ * this path still waits for a human.
+ *
+ * Idempotent by construction: it only ever looks at attempts whose
+ * `trip_fee_payout_id` is null, and stamps it the moment the payout exists. A
+ * job attempted, rescheduled and attempted again is TWO trips and is paid
+ * twice — correctly — because the unit of work here is the attempt, never the
+ * job.
+ */
+export async function raiseTripFees(): Promise<{ paid: number; total: number; onUs: number }> {
+  const admin = createServiceClient();
+  const settings = await getPlatformSettings();
+
+  const { data: attempts } = await admin
+    .from("job_visit_attempts")
+    .select("id, job_id, vendor_id, outcome, jobs(recovery_state, fee_proposed_amount, vendor_cost)")
+    .is("trip_fee_payout_id", null)
+    .not("vendor_id", "is", null);
+
+  let paid = 0;
+  let total = 0;
+  let onUs = 0;
+
+  for (const a of attempts ?? []) {
+    const job = (Array.isArray(a.jobs) ? a.jobs[0] : a.jobs) as
+      { recovery_state?: string; fee_proposed_amount?: number; vendor_cost?: number } | null;
+
+    // Their share of a fee the customer ACTUALLY paid. A proposed fee is not a
+    // paid one, so only 'fee_charged' funds anything.
+    const collectedCrewShare =
+      job?.recovery_state === "fee_charged"
+        ? Math.max(0, Number(job.vendor_cost ?? 0)) * settings.cancelFeePct
+        : 0;
+
+    const t = tripFeeFor({
+      outcome: a.outcome as "no_access" | "stood_down",
+      collectedCrewShare,
+      tripFee: settings.crewTripFee,
+    });
+    if (!(t.owed > 0)) continue;
+
+    const { data: payout, error } = await admin
+      .from("payouts")
+      .insert({
+        vendor_id: a.vendor_id,
+        job_id: a.job_id,
+        amount: t.owed,
+        original_amount: t.owed,
+        // Released on sight: the trip is the deliverable and it already
+        // happened. It rides the same month-end batch as job earnings.
+        status: "released",
+        kind: "trip",
+      })
+      .select("id")
+      .single();
+    if (error || !payout) continue;
+
+    // Stamp it immediately — this is what makes a retry safe.
+    await admin
+      .from("job_visit_attempts")
+      .update({ trip_fee_payout_id: payout.id })
+      .eq("id", a.id);
+
+    paid += 1;
+    total += t.owed;
+    if (t.fundedBy === "lakelife") onUs += t.owed;
+  }
+
+  return { paid, total: Math.round(total * 100) / 100, onUs: Math.round(onUs * 100) / 100 };
+}
 
 export interface RecoveryResult {
   ok: boolean;

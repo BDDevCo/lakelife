@@ -21,6 +21,8 @@ export interface PlatformSettings {
   surgeCapPct: number;
   /** Late-cancellation fee as a share of the all-in price (0 = free always). */
   cancelFeePct: number;
+  /** Flat dollars owed to a crew for a documented visit that produced no work. */
+  crewTripFee: number;
   /** Routine services: cancelling is free until this many hours before start. */
   cancelRoutineHours: number;
   /** Water work: cancelling is free until this many days before the date. */
@@ -86,6 +88,7 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   marginFloor: 0.20, // launch setting — see docs/floor_model.py; the LIVE value is the DB dial
   surgeCapPct: 0.25,
   cancelFeePct: 0.25,
+  crewTripFee: 35,
   cancelRoutineHours: 48,
   cancelWaterDays: 7,
   lakeStrikeLimit: 2,
@@ -147,6 +150,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       marginFloor: parseSetting(byKey.get("margin_floor"), DEFAULT_SETTINGS.marginFloor, 0.05, 0.6),
       surgeCapPct: parseSetting(byKey.get("surge_cap_pct"), DEFAULT_SETTINGS.surgeCapPct, 0, 1),
       cancelFeePct: parseSetting(byKey.get("cancel_fee_pct"), DEFAULT_SETTINGS.cancelFeePct, 0, 1),
+      crewTripFee: parseSetting(byKey.get("crew_trip_fee"), DEFAULT_SETTINGS.crewTripFee, 0, 500),
       cancelRoutineHours: parseSetting(byKey.get("cancel_routine_hours"), DEFAULT_SETTINGS.cancelRoutineHours, 0, 24 * 14),
       cancelWaterDays: parseSetting(byKey.get("cancel_water_days"), DEFAULT_SETTINGS.cancelWaterDays, 0, 60),
       lakeStrikeLimit: parseSetting(byKey.get("lake_strike_limit"), DEFAULT_SETTINGS.lakeStrikeLimit, 1, 10),

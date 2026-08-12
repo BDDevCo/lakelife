@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   planRecovery, rescheduleDeadline, proposedFee, crewIsOutOfPocket,
-  deadlinePassed, recoveryHeadline, RESCHEDULE_DAYS,
+  deadlinePassed, recoveryHeadline, RESCHEDULE_DAYS, tripFeeFor,
 } from "./recovery";
 import type { CancelDials } from "./cancellation";
 
@@ -153,5 +153,61 @@ describe("the line an ops screen shows while triaging", () => {
 
   it("a job that never needed recovery says so rather than showing blank", () => {
     expect(recoveryHeadline(null, base)).toBe("No recovery needed");
+  });
+});
+
+describe("THE TRIP FEE — the crew drove there", () => {
+  it("pays the floor when the customer's fee falls short of it", () => {
+    // 25% of a $60 crew rate is $15. The trip still cost them $35 of fuel.
+    const t = tripFeeFor({ outcome: "no_access", collectedCrewShare: 15 });
+    expect(t.owed).toBe(35);
+    expect(t.fundedBy).toBe("customer");
+    expect(t.why).toContain("Topped up");
+  });
+
+  it("IS A FLOOR, NOT A CAP — a big job's share is not docked to $35", () => {
+    const t = tripFeeFor({ outcome: "no_access", collectedCrewShare: 100 });
+    expect(t.owed).toBe(100);
+    expect(t.why).toContain("doesn't dock them");
+  });
+
+  it("LAKELIFE pays when no fee was collected at all", () => {
+    const t = tripFeeFor({ outcome: "no_access", collectedCrewShare: 0 });
+    expect(t.owed).toBe(35);
+    expect(t.fundedBy).toBe("lakelife");
+  });
+
+  it("a stand-down is ALWAYS ours — our profile was wrong, their fuel", () => {
+    const t = tripFeeFor({ outcome: "stood_down", collectedCrewShare: 0 });
+    expect(t.owed).toBe(35);
+    expect(t.fundedBy).toBe("lakelife");
+    expect(t.why).toContain("Our profile was wrong");
+  });
+
+  it("honours the dial, including a park-sized one", () => {
+    expect(tripFeeFor({ outcome: "no_access", collectedCrewShare: 0, tripFee: 60 }).owed).toBe(60);
+  });
+
+  it("a zeroed dial switches it off — the crew gets only what was collected", () => {
+    const off = tripFeeFor({ outcome: "stood_down", collectedCrewShare: 0, tripFee: 0 });
+    expect(off.owed).toBe(0);
+    expect(off.why).toContain("No trip fee is set");
+  });
+
+  it("never returns a negative, whatever it is handed", () => {
+    expect(tripFeeFor({ outcome: "no_access", collectedCrewShare: -50, tripFee: -10 }).owed).toBe(0);
+  });
+});
+
+describe("out of pocket, after the trip fee exists", () => {
+  it("a crew who got a trip fee is NOT out of pocket, whatever the branch", () => {
+    expect(crewIsOutOfPocket("fee_waived", "stood_down", 35)).toBe(false);
+    expect(crewIsOutOfPocket("rescheduled", "no_access", 35)).toBe(false);
+  });
+
+  it("still says so when the dial is off and nothing reached them", () => {
+    // The check survives so a zeroed dial, or a trip fee that failed to raise,
+    // does not quietly put us back where we started.
+    expect(crewIsOutOfPocket("fee_waived", "stood_down", 0)).toBe(true);
   });
 });
