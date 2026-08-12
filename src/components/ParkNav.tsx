@@ -31,6 +31,21 @@ export function ParkNav({ parkName, live }: { parkName: string; live: boolean })
         {/* A dark park is the normal state during setup, so this reads as a
             status, not an error. */}
         <span className={`ll-pill ${live ? "" : "slate"}`}>{live ? "Live" : "Not published"}</span>
+        {/* THE PARK OWNER IS ALSO A CUSTOMER — for the common areas, the
+            grounds, and any home he owns on a lot. Nothing in the booking
+            engine ever blocked him: /book has no park check at all. The only
+            thing in his way was the portal redirect, which sends anyone with a
+            park membership straight to /park before they can reach it. That
+            redirect must STAY (its comment explains it stops a park owner who
+            also mows getting silently flipped to a crew role), so the fix is
+            simply a door out of the park screens. */}
+        <Link
+          href="/book"
+          className="ll-btn ghost"
+          style={{ fontSize: 12.5, padding: "4px 10px", marginLeft: "auto", textDecoration: "none" }}
+        >
+          Book services for the park
+        </Link>
       </div>
       <div
         style={{
