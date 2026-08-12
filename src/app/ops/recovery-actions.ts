@@ -234,3 +234,64 @@ export async function waiveProposedFee(jobId: string, why: string): Promise<Reco
   revalidatePath("/ops");
   return { ok: true, signal: "Waived. The crew is out of pocket for that trip." };
 }
+
+export interface ProposedFeeRow {
+  jobId: string;
+  serviceName: string;
+  address: string;
+  attemptedOn: string;
+  outcome: "no_access" | "stood_down";
+  reason: string;
+  fee: number;
+  crewShare: number;
+  /** What the crew has already been paid for the wasted trip (0090). */
+  tripFeePaid: number;
+}
+
+/**
+ * The fee decisions waiting on a person.
+ *
+ * The nightly PROPOSES; nobody's card is touched until somebody here says so.
+ * Each row carries what the crew already got for the trip, because that is the
+ * fact that should change how generous ops feels able to be — waiving is much
+ * easier to do kindly when the crew is not the one absorbing it.
+ */
+export async function getProposedFees(): Promise<ProposedFeeRow[]> {
+  if (!(await assertOps())) return [];
+  const admin = createServiceClient();
+
+  const { data: jobs } = await admin
+    .from("jobs")
+    .select("id, date, fee_proposed_amount, vendor_cost, no_show_at, no_show_reason, stood_down_at, stood_down_reason, services(name), properties(address)")
+    .eq("recovery_state", "fee_proposed")
+    .order("date", { ascending: true });
+  if (!jobs?.length) return [];
+
+  const settings = await getPlatformSettings();
+  const ids = jobs.map((j) => j.id as string);
+
+  // What the crew already received for each wasted trip.
+  const { data: trips } = await admin
+    .from("payouts").select("job_id, amount").in("job_id", ids).eq("kind", "trip");
+  const paidByJob = new Map<string, number>();
+  for (const t of trips ?? []) {
+    paidByJob.set(t.job_id as string, (paidByJob.get(t.job_id as string) ?? 0) + Number(t.amount ?? 0));
+  }
+
+  return jobs.map((j) => {
+    const svc = (Array.isArray(j.services) ? j.services[0] : j.services) as { name?: string } | null;
+    const prop = (Array.isArray(j.properties) ? j.properties[0] : j.properties) as { address?: string } | null;
+    const standDown = !!j.stood_down_at;
+    return {
+      jobId: j.id as string,
+      serviceName: svc?.name ?? "Service",
+      address: prop?.address ?? "—",
+      attemptedOn: (j.date as string) ?? "",
+      outcome: standDown ? "stood_down" : "no_access",
+      reason: ((standDown ? j.stood_down_reason : j.no_show_reason) as string) ?? "",
+      fee: Number(j.fee_proposed_amount ?? 0),
+      crewShare: Math.max(0, Number(j.vendor_cost ?? 0)) * settings.cancelFeePct,
+      tripFeePaid: paidByJob.get(j.id as string) ?? 0,
+    };
+  });
+}

@@ -429,7 +429,13 @@ export async function rescheduleUnworkedVisit(
   }
 
   revalidatePath("/requests");
-  return { ok: true, signal: `Booked in for ${newDateISO}. Nothing has been charged.` };
+  // Spelled out, never "2026-08-20". A date a person reads is a date in words
+  // — the T12:00:00 keeps a UTC-midnight parse from reading as the day before
+  // in Indiana.
+  const pretty = new Date(`${newDateISO}T12:00:00`).toLocaleDateString("en-US", {
+    weekday: "long", month: "long", day: "numeric",
+  });
+  return { ok: true, signal: `Booked in for ${pretty}. Nothing has been charged. 🌊` };
 }
 
 // ==========================================================================

@@ -19,6 +19,8 @@ import { resolveEscalationAction } from "./dispute-actions";
 import { getMessageThreads } from "./messages-data";
 import { getCrews, getActiveServiceNames } from "./crews-data";
 import { getNeedsAttention, getPreferredJobIds, getPropertiesWithPreferred } from "./dispatch-data";
+import { getProposedFees } from "./recovery-actions";
+import { ProposedFees } from "@/components/ops/ProposedFees";
 import { getStorageLedger } from "./storage-data";
 import { getPayoutQueue } from "./payout-data";
 import { getOpsCalendar } from "./calendar-data";
@@ -89,6 +91,16 @@ export default async function OpsPage() {
     console.error("ops: parks board unavailable", err);
   }
 
+  // Same reasoning as parks, and the comment above is why: this is the newest
+  // loader on the page, so it is the likeliest to throw, and a fee decision
+  // nobody can see is a much smaller problem than a jobs board nobody can.
+  let proposedFees: Awaited<ReturnType<typeof getProposedFees>> = [];
+  try {
+    proposedFees = await getProposedFees();
+  } catch (err) {
+    console.error("ops: proposed fees unavailable", err);
+  }
+
   const kpis = [
     { v: String(summary.requestsWaiting), l: "Requests waiting" },
     { v: String(summary.jobsThisWeek), l: "Jobs this week" },
@@ -154,6 +166,25 @@ export default async function OpsPage() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* FEE DECISIONS WAITING ON A PERSON. Sits beside the Make-It-Right
+            escalations because it is the same kind of thing: the machine did
+            everything it could and stopped at the point where money moves. */}
+        {proposedFees.length > 0 && (
+          <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--warn, #c8622a)" }}>
+            <span className="ll-pill warn">Missed visits · waiting on you</span>
+            <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+              {proposedFees.length === 1
+                ? "1 visit fee to decide"
+                : `${proposedFees.length} visit fees to decide`}
+            </h2>
+            <p className="mut" style={{ fontSize: 13, marginBottom: 12 }}>
+              Nobody was home, the customer had a week to rebook, and didn&apos;t.
+              Nothing is charged until you say so.
+            </p>
+            <ProposedFees rows={proposedFees} />
           </div>
         )}
 

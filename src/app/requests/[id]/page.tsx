@@ -7,7 +7,8 @@ import { formatPrice } from "@/lib/pricing";
 import { JobPhotoGallery } from "@/components/JobPhotoGallery";
 import { JobVerdictButtons, JobMessageComposer, DisputeAnswerButtons } from "@/components/JobDetailPanel";
 import { TipCrew } from "@/components/TipCrew";
-import { getTipView } from "@/app/requests/actions";
+import { getTipView, getRescheduleView } from "@/app/requests/actions";
+import { RescheduleVisit } from "@/components/RescheduleVisit";
 import { CancelRequestButton } from "@/components/CancelRequestButton";
 import { ScarcityOffers } from "@/components/ScarcityOffers";
 import { loadCustomerJobDetail, type JobDetailView } from "@/app/requests/job-detail-data";
@@ -92,6 +93,11 @@ export default async function JobDetailPage(ctx: { params: Promise<{ id: string 
         {job.offer && <ScarcityOffers offers={[job.offer]} />}
 
         {job.dispute && <MakeItRightCard job={job} />}
+
+        {/* THE VISIT WHERE NOTHING GOT DONE. Sits high on the page — above the
+            photos and the money — because it is the only thing on this screen
+            that is waiting on them, and it has a deadline. */}
+        <RescheduleVisit jobId={job.id} view={await getRescheduleView(job.id)} />
 
         {job.pendingConfirmationId && (
           <div className="ll-card ll-card-pad" style={{ marginBottom: 16, borderColor: "var(--teal)" }}>
