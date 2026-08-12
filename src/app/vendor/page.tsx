@@ -10,6 +10,8 @@ import { getMyVendorId, getMyVendor, getVendorDay } from "./data";
 import { getMyStanding } from "@/lib/scoring-data";
 import { tierLabel } from "@/lib/scoring";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
+import { VendorDocs } from "@/components/VendorDocs";
+import { todayLakeDate } from "@/lib/booking";
 import { TermsBody } from "@/components/TermsBody";
 import { TOS_VERSION } from "@/lib/tos";
 import { acceptTos } from "@/app/portal/tos-actions";
@@ -153,6 +155,21 @@ export default async function VendorTodayPage() {
               ))}
             </div>
           </>
+        )}
+
+        {/* PAPERWORK, FOR A CREW WHO IS ALREADY WORKING. These controls used to
+            live ONLY inside the onboarding checklist, which renders only while
+            the crew is not yet active — so the day they were approved, every
+            way to replace an expiring COI vanished, while the nightly kept
+            emailing them "Update my COI → /vendor". Quiet when everything is
+            in date; loud when it isn't. */}
+        {vendor && (
+          <VendorDocs
+            coiUrl={vendor.coi_url}
+            coiExpiry={vendor.coi_expiry}
+            w9Url={vendor.w9_url}
+            today={todayLakeDate()}
+          />
         )}
       </div>
     </>

@@ -48,9 +48,16 @@ async function assertMyVendor(): Promise<{ id: string; status: string; user_id: 
 export async function uploadVendorDoc(kind: "coi" | "w9" | "garagekeepers", form: FormData): Promise<OnboardingResult> {
   const vendor = await assertMyVendor();
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
-  if (vendor.status === "suspended") {
-    return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
-  }
+  // A PAUSED CREW MAY STILL SEND PAPERWORK.
+  //
+  // This used to refuse them, and the most common reason a crew is paused is a
+  // lapsed certificate of insurance — so the one thing that would get them
+  // working again was the one thing they were blocked from doing. `reactivateCrew`
+  // re-runs `assertRoutable`, which fails on an expired COI, so ops could not
+  // lift the pause either. It took a database edit to break the loop.
+  //
+  // Uploading changes nothing about the pause: it files a document. Only ops
+  // can reinstate, and now they have something to reinstate against.
   if (kind !== "coi" && kind !== "w9" && kind !== "garagekeepers") return { ok: false, error: "Unknown document." };
 
   // COI and garagekeepers both need a valid future expiry BEFORE we store anything.

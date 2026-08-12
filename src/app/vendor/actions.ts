@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getMyVendorId } from "./data";
 import { sendSms } from "@/lib/sms";
+import { sendEmail } from "@/lib/email";
 import { settleJob } from "@/lib/automation";
 import { todayLakeDate } from "@/lib/booking";
 
@@ -223,6 +224,58 @@ export async function submitFlag(
     status: "pending",
   });
   if (error) return { ok: false, error: error.message };
+
+  // TELL THE OWNER. Rule 6 means a flag reprices nothing and bills nothing
+  // until they approve it — which is right, and which is exactly why it has to
+  // reach them. This was a bare INSERT: the crew was told "the owner sees it in
+  // Approvals, and Ops has a copy", and no text, no email and no ops item ever
+  // went anywhere. A crew counting twelve pier sections against a profile of
+  // eight did the extra work for nothing until somebody happened to open
+  // /approvals. The 'appr' notification type has existed since the start and
+  // was declared in NOTIF_DEFS and sent by nobody.
+  //
+  // Nothing here can fail the flag. It is already filed; a notification that
+  // throws must not undo it.
+  try {
+    const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+    const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as
+      { name?: string } | null;
+    const svcName = svc?.name ?? "your service";
+
+    const { data: prop } = await admin
+      .from("properties")
+      .select("address, nickname, users(name, email, phone)")
+      .eq("id", job.property_id as string)
+      .maybeSingle();
+    const owner = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as
+      { name?: string; email?: string; phone?: string } | null;
+    const where = (prop?.nickname as string) || (prop?.address as string) || "your place";
+
+    if (owner?.phone) {
+      void sendSms(
+        owner.phone,
+        `LakeLife: the crew at ${where} found something that doesn't match your ` +
+        `profile on your ${svcName}. Nothing changes and nothing is charged until ` +
+        `you say yes: ${site}/approvals 🌊`,
+      );
+    }
+    if (owner?.email) {
+      void sendEmail({
+        to: owner.email,
+        subject: `A quick check on your ${svcName}`,
+        html:
+          `<p>Hi ${owner.name ?? "there"},</p>` +
+          `<p>The crew at ${where} found something on site that doesn't match ` +
+          `what we have on file for your ${svcName}.</p>` +
+          `<p><b>Nothing has changed and nothing has been charged.</b> It waits ` +
+          `for you.</p>` +
+          `<p><a href="${site}/approvals">Take a look</a></p><p>🌊</p>`,
+      });
+    }
+  } catch {
+    /* The flag is filed. A failed notification must never lose it. */
+  }
+
   return { ok: true };
 }
 
