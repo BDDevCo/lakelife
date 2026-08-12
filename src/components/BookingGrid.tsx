@@ -69,7 +69,12 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const [busy, setBusy] = useState(false);
   const [tosOpen, setTosOpen] = useState(false);
 
-  const today = toISODate(now);
+  // TODAY ON THE LAKE, NOT ON THIS DEVICE. The browser clock disagreed with the
+  // server for anyone outside Indiana time, so an owner in Chicago at 11:40pm
+  // was offered a date the confirm then refused as already passed. Seeded from
+  // the device so the first paint isn't blank, then replaced by the server's
+  // answer as soon as availability lands.
+  const [today, setToday] = useState(toISODate(now));
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +83,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
         setFullDates(new Set(res.fullDates));
         setFindingCrew(!!res.findingCrew);
         setRush(res.rush);
+        if (res.today) setToday(res.today);
       }
     });
     return () => { cancelled = true; };

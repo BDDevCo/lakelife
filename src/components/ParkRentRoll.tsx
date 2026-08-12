@@ -141,20 +141,45 @@ export function ParkRentRoll({
     r.pending.map((p) => ({ ...p, lotNumber: r.lotNumber, lotId: r.lotId })),
   );
 
+  // Households are on the roll, but none of their tenancies has started yet —
+  // the shape of a park imported before its closing date.
+  const notYetStarted = summary.occupied === 0 && summary.reserved > 0;
+
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
       {/* ---- the numbers a park owner actually wants ---- */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 16 }}>
-        <Stat label="Occupied" value={`${summary.occupied}`} sub={`of ${summary.lots} lots`} />
+        {/* BEFORE IT IS HIS, THIS PARK IS NOT EMPTY — IT IS NOT YET HIS.
+            Imported tenancies begin at cutover, so between the import and
+            closing day every one of them is `reserved` and none is `occupied`.
+            This read "Occupied 0 · 0% · Owed $0" for the four months leading up
+            to December 15th — on the default landing screen, about a fully let
+            park. A measured-looking zero is worse than no number. */}
+        <Stat
+          label={notYetStarted ? "Spoken for" : "Occupied"}
+          value={notYetStarted ? `${summary.reserved}` : `${summary.occupied}`}
+          sub={`of ${summary.lots} lots`}
+        />
         <Stat
           label="Occupancy"
           // A brand-new park is not "0% full" — it has nothing to be full of.
-          value={summary.occupancyPct == null ? "—" : `${summary.occupancyPct}%`}
-          sub={summary.occupancyPct == null ? "no lots yet" : ""}
+          // Neither is one whose households all start on a date in the future.
+          value={
+            notYetStarted ? "—"
+              : summary.occupancyPct == null ? "—"
+                : `${summary.occupancyPct}%`
+          }
+          sub={
+            notYetStarted ? "starts at takeover"
+              : summary.occupancyPct == null ? "no lots yet"
+                : ""
+          }
         />
         <Stat label="Vacant" value={`${summary.vacant}`} sub={summary.reserved ? `${summary.reserved} reserved` : ""} />
         <Stat label="Waiting on you" value={`${summary.pending}`} sub={summary.pending === 1 ? "application" : "applications"} />
-        {owedTotal != null && (
+        {owedTotal != null && notYetStarted ? (
+          <Stat label="Owed this month" value="—" sub="nothing is collectable yet" />
+        ) : owedTotal != null && (
           <Stat
             label="Owed this month"
             value={`$${owedTotal.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}

@@ -134,20 +134,31 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
   // service-role client (bypasses RLS; NAMES ONLY ever leave this function —
   // job_items also carries customer_price/vendor_cost, which we never select).
   const legsByJob = new Map<string, string[]>();
+  // THE GATE THE SERVER WILL ACTUALLY APPLY. `completeJob` sums every leg's
+  // minimum for a package visit — the at-dock, on-trailer, wrapped and racked
+  // shots that ARE the custody baseline. This card was reading the ANCHOR
+  // service's minimum, so it said "2 / 2 — ready to complete", the crew tapped,
+  // and the server answered "2/6 uploaded" with a counter that never moved.
+  const legGateByJob = new Map<string, number>();
   const { data: jobRows } = await admin.from("jobs").select("id, group_id").in("id", jobIds);
   const groupedJobIds = (jobRows ?? []).filter((j) => j.group_id != null).map((j) => j.id as string);
   if (groupedJobIds.length > 0) {
     const { data: items } = await admin
       .from("job_items")
-      .select("job_id, created_at, services(name)")
+      .select("job_id, created_at, services(name, min_photos)")
       .in("job_id", groupedJobIds)
       .order("created_at", { ascending: true });
     for (const it of items ?? []) {
-      const svc = (Array.isArray(it.services) ? it.services[0] : it.services) as { name?: string } | null;
+      const svc = (Array.isArray(it.services) ? it.services[0] : it.services) as
+        { name?: string; min_photos?: number } | null;
       if (!svc?.name) continue;
       const arr = legsByJob.get(it.job_id as string) ?? [];
       arr.push(svc.name);
       legsByJob.set(it.job_id as string, arr);
+      legGateByJob.set(
+        it.job_id as string,
+        (legGateByJob.get(it.job_id as string) ?? 0) + (svc.min_photos ?? 0),
+      );
     }
   }
 
@@ -182,7 +193,8 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
   const stops: VendorStop[] = rows.map((r) => ({
     id: r.id,
     service_name: r.service_name,
-    min_photos: r.min_photos ?? 0,
+    // A package visit's gate is the SUM of its legs; a single job is its own.
+    min_photos: legGateByJob.get(r.id) ?? r.min_photos ?? 0,
     date: r.date,
     status: r.status,
     sequence: r.sequence,

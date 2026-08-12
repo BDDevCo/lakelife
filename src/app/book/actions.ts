@@ -67,11 +67,20 @@ export async function getAvailability(
   year: number,
   month: number, // 0-indexed
   propertyId?: string, // defaults to the active property; used to scope by lake
-): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean; rush: RushWindow }> {
+): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean; rush: RushWindow; today: string }> {
   const settings = await getPlatformSettings();
   const rush: RushWindow = { nowHour: lakeHour(), cutoffHour: settings.sameDayCutoffHour, surchargePct: settings.sameDaySurchargePct };
   const service = await loadService(serviceId);
-  if (!service) return { fullDates: [], capacity: 0, findingCrew: false, rush };
+  // TODAY IN LAKE TIME, DECIDED SERVER-SIDE.
+  //
+  // The calendar was deriving "today" from the BROWSER clock while the confirm
+  // uses `todayLakeDate()`. A Chicago owner at 11:40pm CT — 12:40am the next
+  // day in Indiana — was shown a date the server then rejected with "That date
+  // has passed", on a screen that had just offered it. Same for anyone
+  // travelling. The server decides which day it is on the lake; the calendar
+  // draws what the server says.
+  const today = todayLakeDate();
+  if (!service) return { fullDates: [], capacity: 0, findingCrew: false, rush, today };
   // Scope capacity to crews that service THIS property's lake (Phase B): a date
   // is only bookable if a crew who works this lake has an open slot.
   const pid = propertyId ?? (await getActivePropertyId());
@@ -82,7 +91,7 @@ export async function getAvailability(
     lakeId = (data?.lake_id as string) ?? null;
   }
   const avail = await getServiceAvailability(service.name, year, month, lakeId);
-  return { ...avail, rush };
+  return { ...avail, rush, today };
 }
 
 export interface BookingResult {

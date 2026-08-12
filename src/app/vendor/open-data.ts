@@ -88,12 +88,25 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   const today = todayLakeDate();
   const settings = await getPlatformSettings();
 
+  // NARROW TO THIS CREW'S TRADES **IN THE QUERY**, not after the cap.
+  //
+  // The cap used to be applied to every open job on the platform and the trade
+  // filter ran afterwards, in memory. So a pier crew whose four pier pulls sat
+  // at rows 31-34 behind thirty mow jobs saw "No open jobs right now" — while
+  // the nightly text was actively pointing them at the board, and the work went
+  // unclaimed. The cap is meant to bound the page, not to hide the job.
+  const { data: myServices } = await admin
+    .from("services").select("id").in("name", vendor.service_types);
+  const myServiceIds = (myServices ?? []).map((s) => s.id as string);
+  if (myServiceIds.length === 0) return [];
+
   const { data: jobs } = await admin
     .from("jobs")
     .select("id, date, customer_price, service_id, property_id, is_rush, created_at, services(name, pricing_model, est_minutes), properties(lake_id, lat, lng, lakes(name))")
     .eq("status", "requested")
     .is("vendor_id", null)
     .is("group_id", null) // package visits are routed, never cold-claimed — a claim can't price multi-leg work, and custody is never a first-tap prize
+    .in("service_id", myServiceIds)
     .gte("date", today)
     .order("date", { ascending: true })
     .limit(BOARD_CAP);
