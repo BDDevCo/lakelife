@@ -38,6 +38,16 @@ export interface DigestSections {
    * before anything that went right.
    */
   failures?: Array<{ step: string; error: string }>;
+  /**
+   * Homes on the books with no lake against them.
+   *
+   * A null lake is not cosmetic: dispatch's geo gate is skipped so a crew who
+   * doesn't serve that water is eligible, the calendar's capacity is unscoped,
+   * ice-out and the pull deadline enforce nothing, and the seasonal freeze
+   * warning — which filters on lake_id — never reaches them. Crew imports
+   * minted these silently. Ops is the only thing that can fix one.
+   */
+  homesWithNoLake?: number;
 }
 
 function escHtml(s: string): string {
@@ -164,6 +174,16 @@ export function composeNightlyDigest(sections: DigestSections): string {
 
   if (sections.gapSla.alerted > 0) {
     parts.push(`<h3>Gap SLA</h3><p>${sections.gapSla.alerted} job${plural(sections.gapSla.alerted)} sat unclaimed past the SLA tonight and triggered an ops alert.</p>`);
+  }
+
+  if (sections.homesWithNoLake && sections.homesWithNoLake > 0) {
+    const n = sections.homesWithNoLake;
+    parts.push(
+      `<h3>${n} ${n === 1 ? "home has" : "homes have"} no lake set</h3>` +
+      `<p>They're invisible to the freeze warning, the crew geo gate doesn't ` +
+      `apply to them, and ice-out and the pull deadline enforce nothing on ` +
+      `their water work. Set the lake on each one in ops.</p>`,
+    );
   }
 
   if (parts.length === 0) return `<p>Quiet night — nothing needed a human. 🌊</p>`;

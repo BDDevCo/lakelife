@@ -144,6 +144,27 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
       .select("id");
     if (!won || won.length === 0) continue; // another runner already took it
 
+    // WHICH LAKE. This was left NULL on every crew-imported property, and a
+    // null lake is not a small gap:
+    //   · dispatch's geo gate is skipped entirely, so a crew who doesn't serve
+    //     that lake is eligible for the job
+    //   · the booking calendar's capacity is unscoped
+    //   · `lakeSeason` returns {null,null}, so ice-out and the pull deadline —
+    //     the two dates the whole water business runs on — enforce nothing
+    //   · `sendSeasonalPullReminders` filters on lake_id, so the household is
+    //     never warned about the freeze at all
+    //
+    // Lakes carry no coordinates, so there is nothing to match lat/lng
+    // against. The honest source is the importing crew: when they serve
+    // exactly ONE lake, that is where their customer is. When they serve
+    // several, we cannot know, and guessing would put a home on the wrong
+    // lake — so it stays null and ops sees it in the needs-attention feed
+    // rather than the system pretending it knows.
+    const { data: importingCrew } = await admin
+      .from("vendors").select("service_lakes").eq("id", imp.vendor_id as string).maybeSingle();
+    const crewLakes = ((importingCrew?.service_lakes as string[] | null) ?? []).filter(Boolean);
+    const lakeId = crewLakes.length === 1 ? crewLakes[0] : null;
+
     // Materialize the property (owner = the new user), preferred = the crew.
     const { data: prop, error: propErr } = await admin
       .from("properties")
@@ -153,6 +174,7 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
         place_id: (imp.place_id as string) ?? null,
         lat: (imp.lat as number) ?? null,
         lng: (imp.lng as number) ?? null,
+        lake_id: lakeId,
         preferred_vendor: imp.vendor_id,
       })
       .select("id")

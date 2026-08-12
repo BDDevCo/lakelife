@@ -2568,6 +2568,12 @@ export async function sendNightlyDigest(results: {
     return { service: svcName, note: ((d.customer_note as string) ?? "").slice(0, 140) };
   });
 
+  // Homes with no lake. Crew imports used to mint these on every claim; the
+  // ones already on the books can only be fixed by a person, so a person has
+  // to be told they exist.
+  const { count: lakelessHomes } = await admin
+    .from("properties").select("id", { count: "exact", head: true }).is("lake_id", null);
+
   const { data: bornRows } = await admin.from("lakes").select("name, source").gte("created_at", dayAgo);
   const lakesBorn = (bornRows ?? []).map((l) => ({ name: l.name as string, source: (l.source as string) ?? "ops" }));
 
@@ -2614,6 +2620,7 @@ export async function sendNightlyDigest(results: {
       : undefined,
     refundsReconciled: results.refundReconcile,
     failures: results.failures,
+    homesWithNoLake: lakelessHomes ?? 0,
   };
   const html = composeNightlyDigest(sections);
 

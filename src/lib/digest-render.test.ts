@@ -182,3 +182,25 @@ describe("a night where something broke never reads as a quiet one", () => {
     expect(html).toContain("&lt;script&gt;");
   });
 });
+
+describe("homes with no lake are never invisible", () => {
+  // Crew imports minted these silently. A null lake skips the crew geo gate,
+  // unscopes the calendar, makes ice-out and the pull deadline enforce
+  // nothing, and hides the household from the freeze warning entirely.
+  it("says how many and what it costs them", () => {
+    const html = composeNightlyDigest({ ...quiet, homesWithNoLake: 3 });
+    expect(html).toContain("3 homes have no lake set");
+    expect(html).toMatch(/freeze warning/);
+    expect(html).not.toContain("Quiet night");
+  });
+
+  it("stays quiet when there are none", () => {
+    expect(composeNightlyDigest({ ...quiet, homesWithNoLake: 0 }))
+      .toBe("<p>Quiet night — nothing needed a human. 🌊</p>");
+  });
+
+  it("reads properly for a single home", () => {
+    expect(composeNightlyDigest({ ...quiet, homesWithNoLake: 1 }))
+      .toContain("1 home has no lake set");
+  });
+});
