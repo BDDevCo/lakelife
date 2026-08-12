@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { approveFlag, declineFlag } from "@/app/approvals/actions";
 import { toast } from "@/components/Toast";
 import type { OwnerFlag } from "@/app/approvals/data";
+import { declineMeans } from "@/lib/arrival";
 
 /** Friendly, plain-English titles for each flag type. */
 const TYPE_LABEL: Record<string, string> = {
@@ -64,6 +65,16 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
   const router = useRouter();
   const [busy, setBusy] = useState<null | "approve" | "decline">(null);
 
+  // What "no" actually means for THIS flag — computed from what the crew said
+  // when they raised it, not assumed.
+  const declineNote = declineMeans(
+    { crew_can_proceed: flag.crew_can_proceed, crew_cannot_reason: flag.crew_cannot_reason },
+    // The booked count lives on the property profile, which this card does not
+    // load — so the generic phrase, rather than a number we would be guessing.
+    { serviceName: flag.service_name ?? "this visit" },
+  );
+  const standsDown = declineNote.outcome === "stands_down";
+
   const title = (flag.type && TYPE_LABEL[flag.type]) || "A note from the crew";
   const subline = [flag.service_name, flag.address, formatWhen(flag.created_at)]
     .filter(Boolean)
@@ -85,7 +96,11 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
     // sides, and the owner should hear it from us rather than work it out from
     // an invoice.
     if (kind === "decline") {
-      toast("Declined — nothing changed.");
+      toast(
+        standsDown
+          ? "Declined — the crew will pack up. Nothing charged; we'll be in touch about another day."
+          : "Declined — the crew will do what you booked and we'll note the rest.",
+      );
     } else {
       const n = res.repriced ?? 0;
       const parts = [
@@ -134,6 +149,24 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
 
       {pending && (
         <>
+          {/* SAYING NO HAS TWO VERY DIFFERENT OUTCOMES, AND ONLY THE CREW KNOWS
+              WHICH. Someone tapping "no" while picturing a smaller pier, when
+              what they'll actually get is a crew driving away, has not really
+              been asked. So the consequence is stated before the button. */}
+          {flag.at_arrival && (
+            <div
+              style={{
+                marginTop: 12, padding: "10px 12px", borderRadius: 10,
+                background: standsDown ? "var(--sun-soft)" : "var(--sand, #f6f3ec)",
+                border: `1px solid ${standsDown ? "#ecd9ad" : "var(--line)"}`,
+                color: standsDown ? "#7a5a1e" : "var(--text)",
+                fontSize: 13, lineHeight: 1.55,
+              }}
+            >
+              <b>The crew is at your place now.</b> {declineNote.detail}
+            </div>
+          )}
+
           <p className="mut" style={{ fontSize: 13, margin: "12px 0 0" }}>
             Approving updates your profile and re-prices future visits. Declining changes nothing.
             Nothing bills until you approve.
@@ -144,7 +177,7 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
               onClick={() => decide("decline")}
               disabled={busy !== null}
             >
-              {busy === "decline" ? "Declining…" : "Decline"}
+              {busy === "decline" ? "Declining…" : (flag.at_arrival ? declineNote.label : "Decline")}
             </button>
             <button
               className="ll-btn gold"

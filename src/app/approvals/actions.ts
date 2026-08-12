@@ -4,6 +4,8 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getFullProfile, toPricingProfile } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { serviceMinutes, type DurationBands } from "@/lib/duration";
+import { summariseCorrection, scopeNoteFor, type TimedRule } from "@/lib/arrival";
+import { todayLakeDate } from "@/lib/booking";
 
 export interface ApprovalResult {
   ok: boolean;
@@ -33,7 +35,13 @@ async function assertOwnerFlag(flagId: string) {
   const admin = createServiceClient();
   const { data } = await admin
     .from("flags")
-    .select("id, status, job_id, jobs(property_id, properties(owner_id))")
+    // `jobs!flags_job_id_fkey` NAMES THE RELATIONSHIP ON PURPOSE.
+    // 0084 added jobs.held_flag_id -> flags(id), so there are now TWO
+    // foreign keys between these tables. A bare `jobs(...)` became
+    // ambiguous and PostgREST answers 300 PGRST201 — which supabase-js
+    // surfaces as {error, data:null}, i.e. an EMPTY approvals screen with
+    // nothing logged. Naming the key is the fix and the documentation.
+    .select("id, status, job_id, proposed_change, at_arrival, crew_can_proceed, crew_cannot_reason, jobs!flags_job_id_fkey(property_id, service_id, properties(owner_id))")
     .eq("id", flagId)
     .maybeSingle();
   if (!data) return null;
@@ -180,7 +188,19 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
   return { ok: true, repriced, flaggedJobAlreadyDone };
 }
 
-/** Owner declines a flag — nothing changes, nothing reprices. */
+/**
+ * Owner declines a flag — nothing reprices. But "no" is not always a smaller
+ * job, and this is where that matters.
+ *
+ * If the crew said they could work around it, the visit goes ahead at the
+ * booked scope and the job carries a note saying exactly what was and was not
+ * done — so a completed job never silently claims more than happened.
+ *
+ * If the crew said they COULD NOT (a pier removal that would leave four
+ * sections in the water for the ice), the crew is stood down instead. No work,
+ * no charge, ops picks it up. Sending them at an impossible scope would be
+ * worse than not going.
+ */
 export async function declineFlag(flagId: string): Promise<ApprovalResult> {
   const ctx = await assertOwnerFlag(flagId);
   if (!ctx) return { ok: false, error: "That approval isn't yours." };
@@ -189,18 +209,69 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
   const { error } = await admin.from("flags").update({ status: "declined" }).eq("id", flagId);
   if (error) return { ok: false, error: error.message };
 
-  // DECLINING IS AN ANSWER, AND IT UNBLOCKS THE CREW.
-  //
-  // The hold exists so nothing is done-and-billed before the owner decides.
-  // "No" is deciding. The crew now does exactly the scope that was booked —
-  // the eight sections on file — and gets paid for it. Leaving the hold on
-  // would strand a crew in a driveway for a decision that has already been
-  // made against them.
+  // DECLINING IS AN ANSWER, AND IT UNBLOCKS THE CREW — one way or the other.
   if (ctx.flag.job_id) {
-    await admin
-      .from("jobs")
-      .update({ held_at: null, held_flag_id: null })
-      .eq("id", ctx.flag.job_id as string);
+    const jobId = ctx.flag.job_id as string;
+    const cannot = (ctx.flag as { crew_can_proceed?: boolean | null }).crew_can_proceed === false;
+
+    if (cannot) {
+      // THE CREW SAID THE BOOKED JOB IS IMPOSSIBLE. Standing them down is the
+      // honest outcome: no work happened, so the job must not be completable
+      // (0088's trigger enforces that), and nothing is charged for the visit.
+      const why =
+        ((ctx.flag as { crew_cannot_reason?: string | null }).crew_cannot_reason ?? "").trim() ||
+        "The crew could not do the job at the size on file.";
+      await admin
+        .from("jobs")
+        .update({
+          held_at: null,
+          held_flag_id: null,
+          stood_down_at: new Date().toISOString(),
+          stood_down_reason: `Owner declined the correction. ${why}`,
+        })
+        .eq("id", jobId);
+    } else {
+      // The crew can work around it, so the visit goes ahead at the booked
+      // scope — AND the job records what was left undone. Without this the
+      // invoice reads "Pier install ✓" while the owner looks at a pier ending
+      // in open water.
+      let scopeNote: string | null = null;
+      try {
+        const proposed = (ctx.flag as { proposed_change?: Record<string, unknown> | null })
+          .proposed_change ?? null;
+        const svcId = (ctx.flag.jobs as { service_id?: string } | null)?.service_id;
+        if (proposed && svcId && ctx.propertyId) {
+          const [{ data: rule }, profile] = await Promise.all([
+            admin.from("services")
+              .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands")
+              .eq("id", svcId).maybeSingle(),
+            getFullProfile(ctx.propertyId),
+          ]);
+          if (rule && profile?.hasProfile) {
+            const summary = summariseCorrection(
+              rule as unknown as TimedRule,
+              toPricingProfile(profile),
+              proposed as Parameters<typeof summariseCorrection>[2],
+            );
+            scopeNote = scopeNoteFor(summary.lines, {
+              serviceName: (rule.name as string) ?? "This visit",
+              decidedOn: todayLakeDate(),
+            });
+          }
+        }
+      } catch {
+        /* A note we cannot build must not block the crew. */
+      }
+
+      await admin
+        .from("jobs")
+        .update({
+          held_at: null,
+          held_flag_id: null,
+          ...(scopeNote ? { scope_note: scopeNote } : {}),
+        })
+        .eq("id", jobId);
+    }
   }
 
   return { ok: true };

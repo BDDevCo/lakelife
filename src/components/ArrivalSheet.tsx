@@ -102,6 +102,11 @@ export function ArrivalSheet({
   const [band, setBand] = useState("large");
   const [note, setNote] = useState("");
   const [reason, setReason] = useState("");
+  // THE QUESTION ONLY THE CREW CAN ANSWER, asked before the owner decides —
+  // not discovered afterwards. A pier REMOVAL at 8 of 12 leaves four sections
+  // in the water for the ice; "do it as booked" would be damage.
+  const [canProceed, setCanProceed] = useState(true);
+  const [cannotReason, setCannotReason] = useState("");
 
   const chosen = WHAT_CHANGED.find((w) => w.field === field) ?? options[0];
 
@@ -114,9 +119,16 @@ export function ArrivalSheet({
       toast("Put the real number in — that's what the owner approves.");
       return;
     }
+    if (!canProceed && !cannotReason.trim()) {
+      toast("Say why you can't — the owner is choosing between two outcomes.");
+      return;
+    }
     setBusy(true);
     // atArrival = true. This is the flag that STOPS the job.
-    const res = await submitFlag(jobId, chosen.field, note, proposed, true);
+    const res = await submitFlag(jobId, chosen.field, note, proposed, true, {
+      canProceed,
+      cannotReason: canProceed ? "" : cannotReason,
+    });
     setBusy(false);
     if (!res.ok) { toast(res.error ?? "Couldn't send that."); return; }
     toast("Sent. Don't start until they say yes — you'll get a text.");
@@ -222,8 +234,38 @@ export function ArrivalSheet({
                 </div>
               )}
 
+              {/* WHAT HAPPENS IF THEY SAY NO. The crew is the only person who
+                  can answer it, and they are standing there now. */}
               <div className="ll-field">
-                <label>Anything the owner should know? (optional)</label>
+                <label>If they say no, can you still do what was booked?</label>
+                <select
+                  value={canProceed ? "yes" : "no"}
+                  onChange={(e) => setCanProceed(e.target.value === "yes")}
+                  style={selectStyle}
+                >
+                  <option value="yes">Yes — I&apos;ll do the booked amount and leave the rest</option>
+                  <option value="no">No — I can&apos;t do this job without the change</option>
+                </select>
+              </div>
+
+              {!canProceed && (
+                <div className="ll-field">
+                  <label>Why not?</label>
+                  <input
+                    value={cannotReason}
+                    onChange={(e) => setCannotReason(e.target.value)}
+                    placeholder="e.g. removal — leaving 4 in the water would wreck them over winter"
+                    autoFocus
+                  />
+                  <p className="mut" style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+                    The owner reads this before deciding. If they still say no,
+                    you pack up and go — nothing is charged for the visit.
+                  </p>
+                </div>
+              )}
+
+              <div className="ll-field">
+                <label>Anything else the owner should know? (optional)</label>
                 <input
                   value={note}
                   onChange={(e) => setNote(e.target.value)}

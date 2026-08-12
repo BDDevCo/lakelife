@@ -235,6 +235,16 @@ export async function submitFlag(
    * stops nothing.
    */
   atArrival = false,
+  /**
+   * Only meaningful with `atArrival`. THE QUESTION ONLY THE CREW CAN ANSWER:
+   * if the owner says no, can the booked job still be done?
+   *
+   * "Do it as booked" assumes every job is divisible, and plenty are not — a
+   * pier REMOVAL at 8 of 12 sections leaves four in the water for the ice.
+   * When this says no, declining stands the crew down instead of sending them
+   * at an impossible scope (0088).
+   */
+  scope?: { canProceed: boolean; cannotReason?: string },
 ): Promise<ActionResult> {
   const job = await assertVendorJob(jobId);
   if (!job) return { ok: false, error: "That job isn't on your route." };
@@ -251,6 +261,11 @@ export async function submitFlag(
       error: "Say what's different — the counts are what the owner approves.",
     };
   }
+  if (atArrival && scope && !scope.canProceed && !scope.cannotReason?.trim()) {
+    // The owner is being asked to choose between two outcomes. They cannot
+    // choose blind, and 0088's check constraint would refuse the row anyway.
+    return { ok: false, error: "Say why the booked job can't be done." };
+  }
 
   const { data: flagRow, error } = await admin.from("flags").insert({
     job_id: jobId,
@@ -260,6 +275,12 @@ export async function submitFlag(
     proposed_change: proposed,
     status: "pending",
     at_arrival: atArrival,
+    ...(atArrival && scope
+      ? {
+          crew_can_proceed: scope.canProceed,
+          crew_cannot_reason: scope.canProceed ? null : (scope.cannotReason ?? "").trim(),
+        }
+      : {}),
   }).select("id").single();
   if (error || !flagRow) return { ok: false, error: error?.message ?? "Couldn't file that." };
 

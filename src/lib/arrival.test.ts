@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   summariseCorrection, correctionMessage, humanDuration,
   noAnswerOutcome, noAnswerExplainer, completionBlock,
+  declineMeans, scopeNoteFor,
   type TimedRule,
 } from "./arrival";
 import type { PricingProfile } from "./pricing";
@@ -183,5 +184,78 @@ describe("what the crew's Complete button does while a decision is pending", () 
   it("an ordinary job is not blocked", () => {
     expect(completionBlock({})).toBeNull();
     expect(completionBlock({ held_at: null, no_show_at: null })).toBeNull();
+  });
+});
+
+describe("\"no\" is not always a smaller job", () => {
+  const line = { field: "pier_sections" as const, label: "pier sections", from: "8", to: "12" };
+
+  it("a divisible job: declining means the crew does the booked amount", () => {
+    const d = declineMeans({ crew_can_proceed: true }, {
+      serviceName: "Pier install / removal", bookedLabel: "8 sections",
+    });
+    expect(d.outcome).toBe("proceeds_reduced");
+    expect(d.label).toBe("No — just do what I booked");
+    expect(d.detail).toContain("do the 8 sections and leave the rest");
+    expect(d.detail).toContain("charged the original price");
+  });
+
+  it("AN IMPOSSIBLE JOB: declining sends the crew away, and says so", () => {
+    // The case Brendon caught: a pier REMOVAL at 8 of 12 leaves four sections
+    // in the water for the ice. "Do it as booked" would be damage.
+    const d = declineMeans({
+      crew_can_proceed: false,
+      crew_cannot_reason: "Removal — leaving 4 in the water would wreck them over winter",
+    }, { serviceName: "Pier install / removal" });
+    expect(d.outcome).toBe("stands_down");
+    expect(d.label).toContain("can't do it today");
+    expect(d.detail).toContain("pack up and leave");
+    expect(d.detail).toContain("nothing charged");
+    // The crew's own words reach the owner — they are the reason it's impossible.
+    expect(d.detail).toContain("leaving 4 in the water would wreck them");
+  });
+
+  it("a flag from before this existed is treated as divisible, not as a blocker", () => {
+    // Failing the other way would strand crews over a column nobody set.
+    expect(declineMeans({}, { serviceName: "Lawn mowing & trim" }).outcome)
+      .toBe("proceeds_reduced");
+    expect(declineMeans({ crew_can_proceed: null }, { serviceName: "x" }).outcome)
+      .toBe("proceeds_reduced");
+  });
+
+  it("never says a bare 'Decline' — the button states the consequence", () => {
+    for (const f of [{ crew_can_proceed: true }, { crew_can_proceed: false, crew_cannot_reason: "r" }]) {
+      const d = declineMeans(f, { serviceName: "s" });
+      expect(d.label.toLowerCase()).not.toBe("decline");
+      expect(d.label.length).toBeGreaterThan(10);
+    }
+  });
+});
+
+describe("the record when a declined job goes ahead anyway", () => {
+  const line = { field: "pier_sections" as const, label: "pier sections", from: "8", to: "12" };
+
+  it("states what was done AND what was found, so the invoice can't overclaim", () => {
+    // Without this the crew installs 8, taps Complete, and the invoice reads
+    // "Pier install ✓" while the owner looks at a pier ending in open water.
+    const n = scopeNoteFor([line], {
+      serviceName: "Pier install / removal", decidedOn: "Aug 12",
+    });
+    expect(n).toContain("owner's decision on Aug 12");
+    expect(n).toContain("booked 8, crew found 12");
+    expect(n).toContain("NOT done and has not been charged");
+  });
+
+  it("handles a decline where nothing had actually changed", () => {
+    const n = scopeNoteFor([], { serviceName: "Housekeeping", decidedOn: "Aug 12" });
+    expect(n).toContain("done as booked");
+  });
+
+  it("lists more than one difference", () => {
+    const n = scopeNoteFor([line, { field: "boat_lifts", label: "boat lifts", from: "1", to: "2" }], {
+      serviceName: "x", decidedOn: "Aug 12",
+    });
+    expect(n).toContain("pier sections: booked 8, crew found 12");
+    expect(n).toContain("boat lifts: booked 1, crew found 2");
   });
 });

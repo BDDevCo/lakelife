@@ -191,6 +191,87 @@ export function correctionMessage(
   return parts.join(" ");
 }
 
+// ------------------------------------------- what "no" actually means --------
+
+/**
+ * DECLINING IS A CHOICE BETWEEN TWO OUTCOMES, NOT A WAY OF AVOIDING ONE.
+ *
+ * "Do the job as it was booked" assumes every job is divisible. Plenty are
+ * not. A pier REMOVAL at 8 of 12 sections leaves four in the water for the ice
+ * to destroy — that is not a smaller job, it is damage. A boat that turns out
+ * to be 26 feet does not fit a trailer sent for 19.
+ *
+ * The crew says which it is when they raise the discrepancy, and the owner is
+ * shown that answer BEFORE they decide. An owner tapping "no" while believing
+ * they will get a smaller pier, when what they will actually get is a crew
+ * driving away, has not really been asked.
+ */
+export type DeclineOutcome = "proceeds_reduced" | "stands_down";
+
+export interface DeclineMeaning {
+  outcome: DeclineOutcome;
+  /** The button, in plain words — never a bare "Decline". */
+  label: string;
+  /** What will happen, said before they tap it. */
+  detail: string;
+}
+
+export function declineMeans(
+  flag: { crew_can_proceed?: boolean | null; crew_cannot_reason?: string | null },
+  ctx: { serviceName: string; bookedLabel?: string | null },
+): DeclineMeaning {
+  // NULL means the crew was never asked (a flag raised before 0088, or one
+  // filed away from site). Assume the work can go ahead — refusing to do a mow
+  // because a column was never set is a worse failure than mowing it.
+  if (flag.crew_can_proceed === false) {
+    return {
+      outcome: "stands_down",
+      label: "No — and I understand the crew can't do it today",
+      detail:
+        `The crew has said they can't do this one at the size we had on file. ` +
+        (flag.crew_cannot_reason ? `Their words: "${flag.crew_cannot_reason}". ` : "") +
+        `If you say no, they'll pack up and leave — no work today and nothing ` +
+        `charged for the visit. We'll come back to you about another day.`,
+    };
+  }
+  return {
+    outcome: "proceeds_reduced",
+    label: "No — just do what I booked",
+    detail:
+      `The crew will do the ${ctx.bookedLabel ?? "amount you booked"} and leave ` +
+      `the rest. You'll be charged the original price, and we'll note on the ` +
+      `job what was and wasn't done.`,
+  };
+}
+
+/**
+ * THE RECORD WRITTEN WHEN A DECLINED JOB GOES AHEAD ANYWAY.
+ *
+ * Without it, the crew installs the eight that were booked, taps Complete, and
+ * the invoice reads "Pier install ✓" while the owner looks at a pier ending in
+ * open water. The record and the reality disagree, and the record is the one
+ * that gets paid.
+ *
+ * This is not an accusation of anybody. It is the owner's own decision written
+ * down, which protects the crew at least as much as the customer.
+ */
+export function scopeNoteFor(
+  lines: CorrectionLine[],
+  opts: { serviceName: string; decidedOn: string },
+): string {
+  if (lines.length === 0) {
+    return `${opts.serviceName}: done as booked. A correction was declined on ${opts.decidedOn}.`;
+  }
+  const found = lines
+    .map((l) => `${l.label}: booked ${l.from}, crew found ${l.to}`)
+    .join("; ");
+  return (
+    `Done at the booked scope by the owner's decision on ${opts.decidedOn}. ` +
+    `On site the crew reported — ${found}. ` +
+    `The difference was NOT done and has not been charged.`
+  );
+}
+
 // ---------------------------------------------- nobody is answering ---------
 
 export type NoAnswerOutcome = "proceed_as_booked" | "no_show";
