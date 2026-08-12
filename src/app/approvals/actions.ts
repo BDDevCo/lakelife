@@ -6,6 +6,7 @@ import { priceService, type ServiceRule } from "@/lib/pricing";
 import { serviceMinutes, type DurationBands } from "@/lib/duration";
 import { summariseCorrection, scopeNoteFor, type TimedRule } from "@/lib/arrival";
 import { todayLakeDate } from "@/lib/booking";
+import { planRecovery } from "@/lib/recovery";
 
 export interface ApprovalResult {
   ok: boolean;
@@ -221,6 +222,21 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
       const why =
         ((ctx.flag as { crew_cannot_reason?: string | null }).crew_cannot_reason ?? "").trim() ||
         "The crew could not do the job at the size on file.";
+      const today = todayLakeDate();
+
+      // Append-only first (0089): the crew made this trip, and rescheduling
+      // must not be able to erase that it happened.
+      await admin.from("job_visit_attempts").insert({
+        job_id: jobId,
+        attempted_on: today,
+        outcome: "stood_down",
+        reason: why,
+      });
+
+      // A stand-down is NEVER fee-eligible — the profile was ours and it was
+      // wrong. planRecovery encodes that so no screen has to remember it.
+      const plan = planRecovery("stood_down", today, { serviceName: "this visit" });
+
       await admin
         .from("jobs")
         .update({
@@ -228,6 +244,8 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
           held_flag_id: null,
           stood_down_at: new Date().toISOString(),
           stood_down_reason: `Owner declined the correction. ${why}`,
+          recovery_state: "awaiting_customer",
+          reschedule_deadline: plan.deadline,
         })
         .eq("id", jobId);
     } else {

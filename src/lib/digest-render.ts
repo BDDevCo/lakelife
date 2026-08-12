@@ -29,6 +29,14 @@ export interface DigestSections {
   crewPayouts?: { batches: number; total: number };
   referralCredits?: { granted: number; total?: number };
   cancellationFees?: { collected: number; total?: number };
+  /**
+   * VISITS WHERE NOBODY GOT ANY WORK DONE and the customer never picked
+   * another day (0089). These are PROPOSALS sitting on an ops screen waiting
+   * for a person — the one branch of the recovery path that does not resolve
+   * itself. A proposal nobody is told about is a proposal nobody actions, and
+   * the customer meanwhile hears nothing at all.
+   */
+  visitFees?: { proposed: number; skipped: number };
   refundsReconciled?: { orphansCleared: number; flipsCompleted: number };
   /**
    * STEPS THAT THREW TONIGHT. The nightly wraps each of its ~27 steps in a
@@ -159,6 +167,18 @@ export function composeNightlyDigest(sections: DigestSections): string {
     if (cf && (cf.collected > 0 || (cf.total ?? 0) > 0)) {
       const amt = cf.total != null ? ` — <b>${usd(cf.total)}</b>` : "";
       money.push(`<li>Late-cancellation fee${plural(cf.collected)} collected on retry: ${cf.collected}${amt}.</li>`);
+    }
+    // NOT money that moved — money WAITING ON A DECISION. Rendered here
+    // because it is the only branch of the recovery path that stalls without
+    // a person, and phrased as an ask rather than a total so nobody reads it
+    // as revenue already banked.
+    const vf = sections.visitFees;
+    if (vf && vf.proposed > 0) {
+      money.push(
+        `<li><b>${vf.proposed} missed visit${plural(vf.proposed)}</b> passed the ` +
+        `reschedule window with no reply — a fee is proposed and needs your yes ` +
+        `or a waive. Nothing has been charged.</li>`,
+      );
     }
     const rr = sections.refundsReconciled;
     if (rr && (rr.orphansCleared > 0 || rr.flipsCompleted > 0)) {

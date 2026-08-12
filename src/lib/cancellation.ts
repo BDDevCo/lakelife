@@ -45,6 +45,31 @@ export function hoursUntilStart(jobDateISO: string, slot: string | null, nowDate
 
 const cents = (n: number) => Math.round(n * 100) / 100;
 
+/**
+ * THE FEE FORMULA ITSELF, so it has exactly one home.
+ *
+ * A late cancellation and a visit the crew made but could not work are
+ * different events with different windows, but the same arithmetic: a share of
+ * the all-in price, and the SAME share of the crew's own rate, because the
+ * crew held the slot. LakeLife keeps the difference.
+ *
+ * Split out when the no-show path needed it (0089). That path cannot call
+ * `cancellationQuote` — it refuses anything that is not a future scheduled
+ * job, which a visit that already happened never is — and faking the clock to
+ * slip past that guard would have been a lie in the shape of reuse.
+ */
+export function lateFee(
+  feePct: number,
+  customerPrice: number,
+  vendorCost: number | null,
+): { fee: number; crewShare: number } {
+  if (!(feePct > 0)) return { fee: 0, crewShare: 0 };
+  return {
+    fee: cents(feePct * Math.max(0, customerPrice)),
+    crewShare: cents(feePct * Math.max(0, vendorCost ?? 0)),
+  };
+}
+
 export function cancellationQuote(
   input: {
     status: string;
@@ -87,8 +112,7 @@ export function cancellationQuote(
     allowed: true,
     free: false,
     feePct: dials.cancelFeePct,
-    fee: cents(dials.cancelFeePct * Math.max(0, input.customerPrice)),
-    crewShare: cents(dials.cancelFeePct * Math.max(0, input.vendorCost ?? 0)),
+    ...lateFee(dials.cancelFeePct, input.customerPrice, input.vendorCost),
     reason: "inside_window",
   };
 }

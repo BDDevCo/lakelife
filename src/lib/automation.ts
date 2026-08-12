@@ -724,7 +724,7 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
   const today = todayLakeDate();
   const { data: stale } = await admin
     .from("jobs")
-    .select("id, vendor_id, property_id, date, group_id, phase, services(name), properties(address, owner_id, lake_id), vendors(user_id)")
+    .select("id, vendor_id, property_id, date, group_id, phase, held_at, no_show_at, stood_down_at, services(name), properties(address, owner_id, lake_id), vendors(user_id)")
     .lt("date", today)
     .in("status", ["scheduled", "in_progress"])
     .not("vendor_id", "is", null);
@@ -733,6 +733,23 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
   let flagged = 0;
 
   for (const j of stale ?? []) {
+    // THE CREW DID TURN UP. THIS IS THE ONE THING THIS SWEEP MUST NOT GET
+    // WRONG, and until 0084/0088 existed there was no way for it to know.
+    //
+    // A past scheduled job with a crew and no photos looks identical whether
+    // the crew never went, or went and was locked out, or went and was stood
+    // down by the owner, or is sitting held while the owner decides. In three
+    // of those four the crew was in the driveway — and this writes a
+    // `vendor_no_shows` strike, which `demoteLakeStrikes` counts until the
+    // crew loses that lake entirely.
+    //
+    // So it would strike a crew FOR HONESTLY REPORTING that the customer
+    // wasn't there. That is the exact behaviour the whole arrival flow
+    // depends on, punished. Same shape as the custody guard below, and the
+    // same fix: check before recording, not after.
+    const arrival = j as { held_at?: string | null; no_show_at?: string | null; stood_down_at?: string | null };
+    if (arrival.no_show_at || arrival.stood_down_at || arrival.held_at) continue;
+
     const { count } = await admin.from("job_photos").select("id", { count: "exact", head: true }).eq("job_id", j.id as string);
     if ((count ?? 0) > 0) continue; // photos on file → not a ghost, leave for ops
 
@@ -2595,6 +2612,13 @@ export async function sendNightlyDigest(results: {
    * fields: a caller that hasn't been wired yet still compiles.
    */
   failures?: Array<{ step: string; error: string }>;
+  /**
+   * MISSED VISITS WAITING ON A DECISION (0089). Not money that moved — money
+   * that will not move until a person says so. It is the only branch of the
+   * reschedule-or-charge path that stalls without one, so it has to be said
+   * out loud rather than sitting on a screen nobody opened.
+   */
+  visitFees?: { proposed: number; skipped: number };
 }): Promise<{ ok: boolean; sent: number }> {
   const admin = createServiceClient();
   const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString();
@@ -2662,6 +2686,7 @@ export async function sendNightlyDigest(results: {
       ? { collected: results.feeReconcile.collected, total: results.feeReconcile.collectedAmount }
       : undefined,
     refundsReconciled: results.refundReconcile,
+    visitFees: results.visitFees,
     failures: results.failures,
     homesWithNoLake: lakelessHomes ?? 0,
   };

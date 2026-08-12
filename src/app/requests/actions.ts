@@ -1,9 +1,13 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { todayLakeDate } from "@/lib/booking";
+import { todayLakeDate, dayStatus } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { cancellationQuote, type CancelQuote } from "@/lib/cancellation";
+import { planRecovery } from "@/lib/recovery";
+import { revalidatePath } from "next/cache";
+import { autoAssignJob } from "@/app/book/dispatch";
+import { getAvailability } from "@/app/book/actions";
 import { LakeLifePayments } from "@/lib/payments";
 import { alertOpsDoubleCharge } from "@/lib/automation";
 import { sendSms } from "@/lib/sms";
@@ -31,6 +35,11 @@ interface LoadedJob {
     id: string; status: string; date: string | null; slot: string | null;
     customer_price: number; vendor_cost: number | null; vendor_id: string | null; property_id: string;
     group_id: string | null;
+    // 0084/0088/0089 — a visit that happened but produced no work.
+    no_show_at: string | null;
+    stood_down_at: string | null;
+    recovery_state: string | null;
+    reschedule_deadline: string | null;
   };
   svcName: string;
   isWaterWork: boolean;
@@ -46,7 +55,7 @@ async function loadOwnJob(jobId: string): Promise<LoadedJob | null> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, status, date, slot, customer_price, vendor_cost, vendor_id, property_id, group_id, services(name, is_water_work), properties(owner_id, address)")
+    .select("id, status, date, slot, customer_price, vendor_cost, vendor_id, property_id, group_id, no_show_at, stood_down_at, recovery_state, reschedule_deadline, services(name, is_water_work), properties(owner_id, address)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) return null;
@@ -64,6 +73,10 @@ async function loadOwnJob(jobId: string): Promise<LoadedJob | null> {
       vendor_id: (job.vendor_id as string) ?? null,
       property_id: job.property_id as string,
       group_id: (job.group_id as string) ?? null,
+      no_show_at: (job.no_show_at as string) ?? null,
+      stood_down_at: (job.stood_down_at as string) ?? null,
+      recovery_state: (job.recovery_state as string) ?? null,
+      reschedule_deadline: (job.reschedule_deadline as string) ?? null,
     },
     svcName: svc?.name ?? "service",
     isWaterWork: !!svc?.is_water_work,
@@ -272,4 +285,148 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   }
 
   return { ok: true, feeCharged: q.fee };
+}
+
+// ==========================================================================
+// THE VISIT WHERE NOBODY GOT ANY WORK DONE
+// ==========================================================================
+
+export interface RescheduleView {
+  /** Does this job need recovering at all? */
+  needed: boolean;
+  outcome: "no_access" | "stood_down" | null;
+  /** What the crew wrote at the door. */
+  reason: string | null;
+  ask: string;
+  ifNothingHappens: string;
+  deadline: string | null;
+  /** False for a stand-down — our record was wrong, so nobody is charged. */
+  feeEligible: boolean;
+}
+
+/** What the customer is looking at, and what they're being asked. */
+export async function getRescheduleView(jobId: string): Promise<RescheduleView> {
+  const empty: RescheduleView = {
+    needed: false, outcome: null, reason: null, ask: "", ifNothingHappens: "",
+    deadline: null, feeEligible: false,
+  };
+  const loaded = await loadOwnJob(jobId);
+  if (!loaded) return empty;
+
+  const { job, svcName } = loaded;
+  if (job.recovery_state !== "awaiting_customer") return empty;
+
+  const outcome: "no_access" | "stood_down" = job.stood_down_at ? "stood_down" : "no_access";
+  const attemptedOn = (job.no_show_at ?? job.stood_down_at ?? "").slice(0, 10) || todayLakeDate();
+  const plan = planRecovery(outcome, attemptedOn, { serviceName: svcName });
+
+  return {
+    needed: true,
+    outcome,
+    reason: null, // the crew's words live on the job; the customer already got them
+    ask: plan.ask,
+    ifNothingHappens: plan.ifNothingHappens,
+    deadline: job.reschedule_deadline,
+    feeEligible: plan.feeEligible,
+  };
+}
+
+/**
+ * BOTH PARTIES AGREE — the customer picks another day.
+ *
+ * This is the outcome the whole path is built to reach, so it is the easy one:
+ * one tap from the email, one date, done. No fee, no conversation, no ops.
+ *
+ * It re-runs dispatch rather than assuming the same crew is free — the
+ * original crew may already be booked solid on the new date, and silently
+ * keeping them would produce a job nobody is actually coming to.
+ */
+export async function rescheduleUnworkedVisit(
+  jobId: string,
+  newDateISO: string,
+): Promise<{ ok: boolean; error?: string; signal?: string }> {
+  const loaded = await loadOwnJob(jobId);
+  if (!loaded) return { ok: false, error: "That visit isn't yours." };
+  const { job, svcName } = loaded;
+
+  if (job.recovery_state !== "awaiting_customer") {
+    return { ok: false, error: "That one's already been sorted." };
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newDateISO)) {
+    return { ok: false, error: "Pick a date." };
+  }
+  const today = todayLakeDate();
+  if (newDateISO <= today) {
+    return { ok: false, error: "Pick a day that hasn't happened yet." };
+  }
+
+  // THE SAME GATE A FIRST BOOKING GETS. Rescheduling must not become a side
+  // door around ice-out, the pull deadline, or a crew's real capacity — those
+  // exist because a pier cannot go in through ice, not as paperwork.
+  const admin0 = createServiceClient();
+  const [{ data: svcRow }, { data: propRow }] = await Promise.all([
+    admin0.from("services").select("id, is_water_work").eq("name", svcName).maybeSingle(),
+    admin0.from("properties").select("lakes(ice_out_actual, pull_deadline)")
+      .eq("id", job.property_id).maybeSingle(),
+  ]);
+  const lake = one(propRow?.lakes) as { ice_out_actual?: string; pull_deadline?: string } | null;
+  const { fullDates } = svcRow?.id
+    ? await getAvailability(
+        svcRow.id as string,
+        Number(newDateISO.slice(0, 4)),
+        Number(newDateISO.slice(5, 7)) - 1,
+        job.property_id,
+      )
+    : { fullDates: [] as string[] };
+
+  const status = dayStatus(newDateISO, {
+    today,
+    isWaterWork: !!svcRow?.is_water_work,
+    seasonStart: lake?.ice_out_actual ?? null,
+    seasonEnd: lake?.pull_deadline ?? null,
+    fullDates: new Set(fullDates),
+    // No rush path here: a re-booked visit is a future date by the check above.
+  });
+  if (status !== "available") {
+    return {
+      ok: false,
+      error:
+        status === "off-season"
+          ? `${svcName} is outside this lake's water-work season on that date.`
+          : status === "full"
+            ? "That day's crews are full — try another."
+            : "Pick a day that hasn't happened yet.",
+    };
+  }
+
+  const admin = createServiceClient();
+  // 0089's trigger refuses this if the attempt was never written down, which
+  // is the point: recovering a visit must not erase that it happened.
+  const { error } = await admin
+    .from("jobs")
+    .update({
+      date: newDateISO,
+      no_show_at: null,
+      no_show_reason: null,
+      stood_down_at: null,
+      stood_down_reason: null,
+      recovery_state: "rescheduled",
+      reschedule_deadline: null,
+      status: "requested",   // re-dispatch: the old crew may not be free now
+      vendor_id: null,
+      vendor_cost: null,
+      margin: null,
+    })
+    .eq("id", jobId)
+    .eq("recovery_state", "awaiting_customer");   // no double-reschedule
+  if (error) return { ok: false, error: error.message };
+
+  try {
+    await autoAssignJob(jobId);
+  } catch {
+    /* Left as requested; the nightly sweeps hunt for a crew. */
+  }
+
+  revalidatePath("/requests");
+  return { ok: true, signal: `Booked in for ${newDateISO}. Nothing has been charged.` };
 }

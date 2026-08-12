@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
 import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, runFillInDigest, gapSlaAlerts, reconcileRefunds, learnServiceDurations, autoApplyPriceSuggestions, sendNightlyDigest, remindExpiringStays } from "@/lib/automation";
 import { applyDueRentChanges } from "@/app/park/rerate-actions";
+import { proposeOverdueFees } from "@/app/ops/recovery-actions";
 import { runParkNightly } from "@/lib/park-machine";
 import { sweepDisputeDeadlines } from "@/lib/disputes";
 
@@ -65,6 +66,11 @@ async function run(req: Request) {
   // database refuses any that weren't, so this can only ever apply the ones
   // with notice on the record.
   const rentChanges = await step("rentChanges", () => applyDueRentChanges());
+  // A visit where no work happened and the customer never picked another day.
+  // This PROPOSES a fee onto an ops screen; it never charges one. Charging a
+  // card because a crew tapped a button on a doorstep a week ago is not a
+  // decision a cron gets to make (0089).
+  const visitFees = await step("visitFees", () => proposeOverdueFees());
   const sweep = await step("sweep", () => sweepWaitlist());
   const overstay = await step("overstay", () => overstayNotices());
   // Self-heal assignments (re-home lapsed crews, fill stragglers), then route.
@@ -125,8 +131,9 @@ async function run(req: Request) {
     referrals: referrals ?? undefined,
     feeReconcile: feeReconcile ?? undefined,
     refundReconcile: refundReconcile ?? undefined,
+    visitFees: visitFees ?? undefined,
   }));
-  return NextResponse.json({ ok: failures.length === 0, failures, park, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, rentChanges, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, digest });
+  return NextResponse.json({ ok: failures.length === 0, failures, park, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, rentChanges, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, visitFees, digest });
 }
 
 export const GET = run; // Vercel Cron issues GET

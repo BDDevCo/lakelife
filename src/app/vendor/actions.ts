@@ -12,6 +12,7 @@ import {
   summariseCorrection, correctionMessage, noAnswerOutcome, completionBlock,
   type TimedRule,
 } from "@/lib/arrival";
+import { planRecovery } from "@/lib/recovery";
 
 // Only these profile fields may be changed by a crew flag, with safe values.
 const COUNT_FIELDS = new Set(["pier_sections", "boat_lifts", "pwc_lifts", "jet_skis", "toy_lifts"]);
@@ -437,9 +438,31 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
     };
   }
 
+  // THE ATTEMPT IS WRITTEN DOWN FIRST, and it is append-only. Rescheduling
+  // clears the job's live no-show columns so the work can run again; without
+  // this row, the trip the crew made would vanish with them (0089's trigger
+  // refuses the clear if it is missing).
+  const today = todayLakeDate();
+  await admin.from("job_visit_attempts").insert({
+    job_id: jobId,
+    vendor_id: job.vendor_id,
+    attempted_on: today,
+    outcome: "no_access",
+    reason: why,
+  });
+
+  const plan = planRecovery("no_access", today, {
+    serviceName: (rule?.name as string) ?? "your service",
+  });
+
   const { error } = await admin
     .from("jobs")
-    .update({ no_show_at: new Date().toISOString(), no_show_reason: why })
+    .update({
+      no_show_at: new Date().toISOString(),
+      no_show_reason: why,
+      recovery_state: "awaiting_customer",
+      reschedule_deadline: plan.deadline,
+    })
     .eq("id", jobId);
   if (error) return { ok: false, error: error.message };
 
@@ -465,9 +488,12 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
           `<p>Our crew was at ${where} today for your ${svcName} and couldn't get ` +
           `inside to do the work.</p>` +
           `<p><i>${why}</i></p>` +
-          `<p><b>You have not been charged.</b> Let's find another day — reply here ` +
-          `or pick a new date in your portal.</p>` +
-          `<p><a href="${site}/requests">See my visits</a></p><p>🌊</p>`,
+          `<p><b>You have not been charged.</b> ${plan.ask}</p>` +
+          `<p><a href="${site}/requests">Pick another day</a></p>` +
+          // WHAT SILENCE COSTS, SAID NOW. Finding out later that a window
+          // existed and closed is the version of this that makes people angry,
+          // and rightly.
+          `<p class="mut">${plan.ifNothingHappens}</p><p>🌊</p>`,
       });
     }
   } catch {
