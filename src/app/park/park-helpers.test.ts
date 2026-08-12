@@ -611,9 +611,36 @@ describe("buildTenant — the tenant who was already there", () => {
     // "[2019-05-01,)", a null range makes coversDay false, and the rent roll
     // would report the lot VACANT while someone lives on it.
     const res = buildTenant(input({ movedInOn: "2019-05-01" }), TODAY);
-    expect(res.tenancy!.start).toBe("2019-05-01");
-    expect(res.tenancy!.end).toBe("2020-04-30");
     expect(parseDaterange(toDaterange({ start: res.tenancy!.start, end: res.tenancy!.end }))).not.toBeNull();
+  });
+
+  it("a REAL move-in date must not write a tenancy that already expired", () => {
+    // The range used to run from the move-in date, so filing somebody who has
+    // lived here since 2019 wrote a window that closed in 2020 — inserted
+    // `active`. The screen said "filed", then the lot read vacant, the charge
+    // run skipped them, and onboarding wouldn't re-offer the lot because
+    // something already held it. An honest answer made a household vanish.
+    const res = buildTenant(input({ movedInOn: "2019-05-01" }), TODAY);
+    expect(res.tenancy!.start).toBe(TODAY);
+    expect(res.tenancy!.end > TODAY).toBe(true);
+  });
+
+  it("keeps when they ACTUALLY arrived, apart from when the agreement runs", () => {
+    const res = buildTenant(input({ movedInOn: "2019-05-01" }), TODAY);
+    expect(res.tenancy!.beganOn).toBe("2019-05-01");
+  });
+
+  it("the same date under a cap is still a live window, not an expired one", () => {
+    const res = buildTenant(input({ movedInOn: "2019-05-01" }), TODAY, 3);
+    expect(res.tenancy!.start).toBe(TODAY);
+    expect(res.tenancy!.end > TODAY).toBe(true);
+    expect(res.tenancy!.beganOn).toBe("2019-05-01");
+  });
+
+  it("someone who moved in TODAY has the two dates agree", () => {
+    const res = buildTenant(input({ movedInOn: TODAY }), TODAY);
+    expect(res.tenancy!.start).toBe(TODAY);
+    expect(res.tenancy!.beganOn).toBe(TODAY);
   });
 
   it("blank move-in means ALREADY HERE and dates the record, not the person", () => {
@@ -893,7 +920,9 @@ describe("adding a tenant under an agreement cap", () => {
   });
 
   it("clamps a short month instead of producing an impossible date", () => {
-    const r = buildTenant({ ...input, movedInOn: "2026-01-31" }, "2026-08-11", 1);
+    // Filed ON January 31st — the window starts today, so this is the only way
+    // the short-month case now arises through this path.
+    const r = buildTenant({ ...input, movedInOn: "2026-01-31" }, "2026-01-31", 1);
     expect(r.tenancy!.end).toBe("2026-02-28");
   });
 

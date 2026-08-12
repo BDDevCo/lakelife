@@ -11,7 +11,10 @@ import { ClaimForm } from "@/components/ClaimForm";
 import { ResolveClaimForm } from "@/components/ResolveClaimForm";
 import { ReceiptPanel, DropSlips } from "@/components/ParkReceipt";
 import type { ReceiptLines } from "@/app/park/receipt-helpers";
-import { LEDGER_LABEL, ledgerHeadline, runSummary, prettyMonth, type RunPlan } from "@/app/park/ledger-helpers";
+import {
+  LEDGER_LABEL, ledgerHeadline, runSummary, prettyMonth, shiftMonth, currentPeriod,
+  type RunPlan,
+} from "@/app/park/ledger-helpers";
 import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
 import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
 
@@ -76,7 +79,34 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
-      <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Rent — {prettyMonth(page.month)}</h1>
+      {/* MONTHS OTHER THAN THIS ONE.
+          `/park/rent` was hard-scoped to the current period and nothing linked
+          anywhere else — so a June bill still open in August was structurally
+          invisible, and the owner holding a July check in his hand had to type
+          `?month=2026-07` into the address bar. The page always accepted the
+          parameter; there was simply no way to click it.
+
+          Forward stops at the current month on purpose: a month that hasn't
+          happened has nothing to collect, and the Bill button on a future
+          month would raise everybody's rent early. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+        <a className="ll-btn ghost" style={{ fontSize: 13 }}
+          href={`/park/rent?month=${shiftMonth(page.month, -1)}`}>
+          ← {prettyMonth(shiftMonth(page.month, -1))}
+        </a>
+        <h1 style={{ fontSize: 24, margin: 0 }}>Rent — {prettyMonth(page.month)}</h1>
+        {page.month < currentPeriod(page.today) && (
+          <a className="ll-btn ghost" style={{ fontSize: 13 }}
+            href={`/park/rent?month=${shiftMonth(page.month, 1)}`}>
+            {prettyMonth(shiftMonth(page.month, 1))} →
+          </a>
+        )}
+        {page.month !== currentPeriod(page.today) && (
+          <a className="mut" style={{ fontSize: 13 }} href="/park/rent">
+            back to this month
+          </a>
+        )}
+      </div>
 
       {/* ---- LATE FIRST. Nothing competes with it. ----------------------- */}
       <div

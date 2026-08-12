@@ -469,6 +469,10 @@ export async function addTenant(
     during: toDaterange({ start: built.tenancy.start, end: built.tenancy.end }),
     term: built.tenancy.term,
     quoted_amount: built.tenancy.quoted_amount,
+    // WHEN THEY ACTUALLY ARRIVED, which is not when this agreement starts.
+    // This path never recorded it at all, so a household who has lived here
+    // since 2019 read as having moved in the day the office typed them in.
+    tenancy_began_on: built.tenancy.beganOn,
     // They are living there right now. `active` holds the dates, which is what
     // makes the lot read as occupied rather than vacant.
     status: "active",

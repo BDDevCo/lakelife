@@ -76,6 +76,23 @@ export function prettyMonth(period: string): string {
   return name ? `${name} ${m[1]}` : period;
 }
 
+/**
+ * The month before / after a period.
+ *
+ * `/park/rent` was hard-scoped to the current month with no way to reach any
+ * other, so a June bill still open in August was structurally invisible — the
+ * owner physically holding a July check had to hand-edit the URL. The page
+ * already accepted `?month=`; nothing ever linked to it.
+ */
+export function shiftMonth(period: string, by: number): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(period);
+  if (!m) return period;
+  const total = Number(m[1]) * 12 + (Number(m[2]) - 1) + by;
+  const y = Math.floor(total / 12);
+  const mm = (total % 12) + 1;
+  return `${String(y).padStart(4, "0")}-${String(mm).padStart(2, "0")}`;
+}
+
 export function balanceOf(c: Charge): number {
   return round2(c.amount - c.paidTotal);
 }

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   ledgerState, balanceOf, toRows, summarise, ledgerHeadline,
   planRun, runSummary, daysBetween,
-  prettyMonth,
+  prettyMonth, shiftMonth,
   type Charge,
 } from "./ledger-helpers";
 
@@ -234,5 +234,25 @@ describe("a month as a person says it", () => {
     expect(prettyMonth("2026-00")).toBe("2026-00");
     expect(prettyMonth("August")).toBe("August");
     expect(prettyMonth("2026-08-01")).toBe("2026-08-01");
+  });
+});
+
+describe("stepping between months", () => {
+  it("goes back and forward", () => {
+    expect(shiftMonth("2026-08", -1)).toBe("2026-07");
+    expect(shiftMonth("2026-08", 1)).toBe("2026-09");
+  });
+
+  it("crosses a year boundary in both directions", () => {
+    expect(shiftMonth("2026-01", -1)).toBe("2025-12");
+    expect(shiftMonth("2026-12", 1)).toBe("2027-01");
+  });
+
+  it("steps further than a year", () => {
+    expect(shiftMonth("2026-08", -14)).toBe("2025-06");
+  });
+
+  it("leaves anything it doesn't recognise alone", () => {
+    expect(shiftMonth("nonsense", 1)).toBe("nonsense");
   });
 });

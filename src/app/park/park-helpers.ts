@@ -693,7 +693,18 @@ export interface TenantResult {
     contact_pref: string;
     source: string;
   };
-  tenancy?: { start: string; end: string; term: Term; quoted_amount: number | null };
+  tenancy?: {
+    /** The AGREEMENT window. Never starts in the past — see buildTenant. */
+    start: string;
+    end: string;
+    /**
+     * When the household actually moved in, which is a different fact and
+     * often years earlier. Written to `tenancy_began_on`.
+     */
+    beganOn: string;
+    term: Term;
+    quoted_amount: number | null;
+  };
 }
 
 const TENANT_SOURCES = ["seller_roll", "owner_knowledge", "tenant_confirmed", "document"];
@@ -770,6 +781,10 @@ export function buildTenant(
     return { ok: false, error: "That move-in date is in the future — use the booking flow for someone arriving later." };
   }
 
+  // The agreement cannot have been running before today for a household we are
+  // filing today. The real arrival date is kept separately.
+  const rangeStart = start < todayISO ? todayISO : start;
+
   const term = (input.term.trim() || "monthly") as Term;
   if (!["nightly", "weekly", "monthly", "seasonal", "annual"].includes(term)) {
     return { ok: false, error: "Pick how they pay — usually monthly." };
@@ -812,13 +827,27 @@ export function buildTenant(
       source,
     },
     tenancy: {
-      start,
+      // THE AGREEMENT WINDOW STARTS TODAY AT THE EARLIEST.
+      //
+      // It used to run from the move-in date, with the end derived from it —
+      // so filing a household who has lived here since 2019 under a
+      // three-month rule wrote a range that ENDED in 2019, inserted `active`.
+      // The screen said "1 household filed" and then the lot read vacant, the
+      // charge run skipped them, and the onboarding screen wouldn't re-offer
+      // the lot because something already held it. A real move-in date — the
+      // honest answer, the one the form invites — silently made a household
+      // disappear. Without a cap it was the same story one year out.
+      //
+      // The two facts are separated instead: `during` is how long the current
+      // agreement runs, `beganOn` is when the person arrived.
+      start: rangeStart,
       // The cap when there is one, the horizon when there is not. `addMonths`
       // clamps a short month properly — Jan 31 plus one month is Feb 28, not
       // an invalid date.
       end: maxAgreementMonths == null
-        ? addDays(start, TENANCY_HORIZON_DAYS)
-        : addMonths(start, maxAgreementMonths),
+        ? addDays(rangeStart, TENANCY_HORIZON_DAYS)
+        : addMonths(rangeStart, maxAgreementMonths),
+      beganOn: start,
       term,
       quoted_amount: quoted,
     },

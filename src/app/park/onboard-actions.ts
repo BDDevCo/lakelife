@@ -172,7 +172,10 @@ export async function commitOnboarding(
       // WHERE THE NUMBER CAME FROM. Michael's sheet is the owner's knowledge,
       // never the tenant's — it improves only when the household confirms it.
       amount_source: "owner_knowledge",
-      tenancy_began_on: r.movedInOn,
+      // The real arrival date, kept apart from the agreement window that
+      // `buildTenant` now clamps forward. They are the same value only for a
+      // household who moved in today.
+      tenancy_began_on: built.tenancy.beganOn,
       origin: r.signedNewLease ? "application" : "grandfathered",
     });
     if (stayErr) {
