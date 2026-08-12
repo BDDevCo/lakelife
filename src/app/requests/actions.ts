@@ -5,6 +5,7 @@ import { todayLakeDate, dayStatus } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { cancellationQuote, type CancelQuote } from "@/lib/cancellation";
 import { planRecovery } from "@/lib/recovery";
+import { suggestTip, validateTip, tipSplit, canTip } from "@/lib/tips";
 import { revalidatePath } from "next/cache";
 import { autoAssignJob } from "@/app/book/dispatch";
 import { getAvailability } from "@/app/book/actions";
@@ -429,4 +430,123 @@ export async function rescheduleUnworkedVisit(
 
   revalidatePath("/requests");
   return { ok: true, signal: `Booked in for ${newDateISO}. Nothing has been charged.` };
+}
+
+// ==========================================================================
+// A THANK-YOU FOR THE CREW
+// ==========================================================================
+
+export interface TipView {
+  canTip: boolean;
+  why?: string;
+  options: number[];
+  typical: number;
+  maxCustom: number;
+  basis: string;
+  /** Already given, if they have. */
+  given: number | null;
+}
+
+/**
+ * What to offer on a finished job.
+ *
+ * The suggestion is built from TIME ON SITE, never from the bill — at 20% of
+ * the price, the implied tip per hour across our own services runs from $9.60
+ * to $126.67, which is nearly random with respect to effort. See src/lib/tips.ts.
+ */
+export async function getTipView(jobId: string): Promise<TipView> {
+  const blank: TipView = {
+    canTip: false, options: [], typical: 0, maxCustom: 0, basis: "", given: null,
+  };
+  const loaded = await loadOwnJob(jobId);
+  if (!loaded) return blank;
+
+  const admin = createServiceClient();
+  const { data: row } = await admin
+    .from("jobs")
+    .select("status, est_minutes, tip_amount, no_show_at, stood_down_at")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (!row) return blank;
+
+  const gate = canTip({
+    status: row.status as string,
+    tip_amount: row.tip_amount == null ? null : Number(row.tip_amount),
+    no_show_at: (row.no_show_at as string) ?? null,
+    stood_down_at: (row.stood_down_at as string) ?? null,
+  });
+  const s = suggestTip((row.est_minutes as number | null) ?? null);
+
+  return {
+    canTip: gate.ok,
+    why: gate.why,
+    options: s.options,
+    typical: s.typical,
+    maxCustom: s.maxCustom,
+    basis: s.basis,
+    given: row.tip_amount == null ? null : Number(row.tip_amount),
+  };
+}
+
+/**
+ * Add it. Zero is a real answer and is recorded as one — it stops us asking
+ * again, and it is the commonest reply.
+ *
+ * The payout is raised in the same breath, at the full amount: 0091's trigger
+ * refuses any tip payout that does not equal what the homeowner gave, so
+ * skimming a thank-you is impossible rather than merely discouraged.
+ */
+export async function addTip(
+  jobId: string,
+  raw: string | number,
+): Promise<{ ok: boolean; error?: string; signal?: string }> {
+  const loaded = await loadOwnJob(jobId);
+  if (!loaded) return { ok: false, error: "That visit isn't yours." };
+
+  const admin = createServiceClient();
+  const { data: row } = await admin
+    .from("jobs")
+    .select("status, vendor_id, tip_amount, no_show_at, stood_down_at")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (!row) return { ok: false, error: "That visit isn't yours." };
+
+  const gate = canTip({
+    status: row.status as string,
+    tip_amount: row.tip_amount == null ? null : Number(row.tip_amount),
+    no_show_at: (row.no_show_at as string) ?? null,
+    stood_down_at: (row.stood_down_at as string) ?? null,
+  });
+  if (!gate.ok) return { ok: false, error: gate.why };
+
+  const v = validateTip(raw);
+  if (!v.ok) return { ok: false, error: v.error };
+
+  const { error } = await admin
+    .from("jobs")
+    .update({ tip_amount: v.amount, tipped_at: new Date().toISOString() })
+    .eq("id", jobId)
+    .is("tip_amount", null);          // never twice
+  if (error) return { ok: false, error: error.message };
+
+  // Declining is a complete answer. Nothing more to do, and the crew is never
+  // told that somebody chose not to.
+  if (v.amount === 0) {
+    revalidatePath("/requests");
+    return { ok: true, signal: "Thanks — noted." };
+  }
+
+  if (row.vendor_id) {
+    await admin.from("payouts").insert({
+      vendor_id: row.vendor_id,
+      job_id: jobId,
+      amount: tipSplit(v.amount).toCrew,     // all of it
+      original_amount: v.amount,
+      status: "released",
+      kind: "tip",
+    });
+  }
+
+  revalidatePath("/requests");
+  return { ok: true, signal: `Sent — all $${v.amount.toFixed(2)} goes to the crew. 🌊` };
 }

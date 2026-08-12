@@ -6,6 +6,8 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
 import { JobPhotoGallery } from "@/components/JobPhotoGallery";
 import { JobVerdictButtons, JobMessageComposer, DisputeAnswerButtons } from "@/components/JobDetailPanel";
+import { TipCrew } from "@/components/TipCrew";
+import { getTipView } from "@/app/requests/actions";
 import { CancelRequestButton } from "@/components/CancelRequestButton";
 import { ScarcityOffers } from "@/components/ScarcityOffers";
 import { loadCustomerJobDetail, type JobDetailView } from "@/app/requests/job-detail-data";
@@ -96,6 +98,12 @@ export default async function JobDetailPage(ctx: { params: Promise<{ id: string 
             <JobVerdictButtons jobId={job.id} serviceName={job.serviceName} />
           </div>
         )}
+
+        {/* THE THANK-YOU, offered once and only after the work is done.
+            Placed below the photos on purpose: they should see what was
+            actually done before being asked whether they'd like to add
+            anything for it. */}
+        <TipCrew jobId={job.id} view={await getTipView(job.id)} />
 
         <PhotosCard job={job} />
 
