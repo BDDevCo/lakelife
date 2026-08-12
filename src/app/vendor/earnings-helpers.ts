@@ -196,10 +196,22 @@ export function csvRow(cells: Array<string | number | null | undefined>): string
 
 /** Human status label shared by the list, statement, and CSV. */
 export function statusLabel(status: string): string {
-  if (status === "released") return "In Friday's payout";
+  // "IN FRIDAY'S PAYOUT" WAS NOT TRUE. `runMonthlyPayoutBatches` gates on
+  // `isLastDayOfMonth` — there is no Friday cadence anywhere in the system.
+  // Telling a crew the wrong week for their own money is the fastest way to
+  // lose one.
+  if (status === "released") return "In the next month-end payout";
   if (status === "pending") return "Awaiting release";
   if (status === "held") return "On hold — make-it-right in progress";
-  return status;
+  // `refund-core` writes this when a refund claws a payout back. It used to
+  // fall through and print the literal word "clawed" — on the crew's earnings
+  // screen AND in the CSV that goes to their bookkeeper.
+  if (status === "clawed") return "Adjusted — a refund went back to the customer";
+  if (status === "paid") return "Paid";
+  if (status === "queued" || status === "exported") return "In a payout being sent";
+  // Anything genuinely unknown reads as plain English rather than a database
+  // value the crew has to guess at.
+  return "Being worked out";
 }
 
 /**

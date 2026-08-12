@@ -165,7 +165,7 @@ ${body}
     </table>
 
     <p class="note">
-      Amounts are your crew&apos;s take-home pay. Payouts release every Friday once a job&apos;s photos
+      Amounts are your crew&apos;s take-home pay. Payouts go out at month end once a job&apos;s photos
       are verified. This statement is provided for your records and your accountant — it is not a tax
       document. Questions? Contact LakeLife dispatch.
     </p>

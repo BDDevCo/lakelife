@@ -200,7 +200,12 @@ export async function setParkLive(parkId: string, active: boolean): Promise<Park
   if (error) return { ok: false, error: "Couldn't change that — try again." };
 
   revalidatePath("/park");
-  revalidatePath("/parks");
+  // THE PARK'S OWN PUBLIC PAGE, by slug. `revalidatePath("/parks")` pointed at
+  // a route that doesn't exist — there is no index page, only /parks/[slug] —
+  // so publishing left the cached public page exactly as it was.
+  const { data: published } = await admin
+    .from("parks").select("slug").eq("id", parkId).maybeSingle();
+  if (published?.slug) revalidatePath(`/parks/${published.slug}`);
   return {
     ok: true,
     signal: active ? "Your park is live. 🌊" : "Park unpublished — only you can see it now.",

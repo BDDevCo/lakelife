@@ -79,8 +79,14 @@ export default async function PublicParkPage(
                 From ${park.from.amount.toLocaleString()}/{park.from.term.replace("ly", "")}
               </span>
             )}
+            {/* A PARK WITH NO LOTS IS NOT FULL. It printed "Full right now"
+                for a park that hadn't been set up yet, which is the worst
+                possible first impression: it turns people away from a park
+                that has nothing to turn them away from. */}
             <span className={`ll-pill ${openCount ? "" : "slate"}`}>
-              {openCount ? `${openCount} open now` : "Full right now"}
+              {openCount
+                ? `${openCount} open now`
+                : park.lots.length === 0 ? "Nothing listed yet" : "Full right now"}
             </span>
             {park.ageRestricted && <span className="ll-pill slate">55+ community</span>}
           </div>

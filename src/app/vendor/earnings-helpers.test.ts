@@ -149,9 +149,20 @@ describe("csvCell / csvRow", () => {
 });
 
 describe("statusLabel", () => {
-  it("maps payout statuses to crew-facing text", () => {
-    expect(statusLabel("released")).toBe("In Friday's payout");
+  it("names the REAL cadence — batches run at month end, not on Fridays", () => {
+    // The old label promised a Friday. `runMonthlyPayoutBatches` gates on
+    // `isLastDayOfMonth`; there is no Friday cadence anywhere in the system,
+    // and telling a crew the wrong week for their own money loses crews.
+    expect(statusLabel("released")).toBe("In the next month-end payout");
     expect(statusLabel("pending")).toBe("Awaiting release");
-    expect(statusLabel("other")).toBe("other");
+  });
+
+  it("never prints a raw database word at a crew", () => {
+    // `refund-core` writes 'clawed'. It used to fall straight through and
+    // appear as the literal word — on the earnings screen AND in the CSV that
+    // goes to the crew's bookkeeper.
+    expect(statusLabel("clawed")).toMatch(/refund went back/);
+    expect(statusLabel("clawed")).not.toContain("clawed");
+    expect(statusLabel("something_new")).toBe("Being worked out");
   });
 });
