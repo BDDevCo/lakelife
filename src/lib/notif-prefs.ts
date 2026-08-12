@@ -60,3 +60,29 @@ export function mergeNotifPrefs(
   }
   return map;
 }
+
+/**
+ * THE PART OF THE SEND GATE THAT NEEDS NO DATABASE.
+ *
+ * Split out so it can be tested without one — the gate itself is a query, and
+ * a rule nobody can test is how six switches ended up wired to nothing.
+ *
+ *   "allow"   — send regardless of any stored preference
+ *   "deny"    — never send on this channel for this type
+ *   "consult" — go and look at what they chose
+ */
+export function staticGate(type: string, channel: Channel): "allow" | "deny" | "consult" {
+  const def = NOTIF_DEFS.find((d) => d.type === type);
+  // An unknown type has no switch to consult; sending is the status quo.
+  if (!def) return "allow";
+  // Not a channel this type is ever delivered on.
+  if (!channelsFor(def).includes(channel)) return "deny";
+  // Receipts and the like — a record of money, not a preference.
+  if (def.locked) return "allow";
+  return "consult";
+}
+
+/** What to do when they have never touched the settings screen. */
+export function defaultFor(type: string): boolean {
+  return NOTIF_DEFS.find((d) => d.type === type)?.defaultOn ?? true;
+}

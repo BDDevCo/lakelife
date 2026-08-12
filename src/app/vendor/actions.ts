@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getMyVendorId } from "./data";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
+import { allowsNotification } from "@/lib/notif-gate";
 import { settleJob } from "@/lib/automation";
 import { todayLakeDate } from "@/lib/booking";
 
@@ -176,10 +177,12 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   // right — never an ops queue.
   const { data: prop } = await admin
     .from("properties")
-    .select("address, users(phone)")
+    .select("address, users(id, phone)")
     .eq("id", job.property_id)
     .maybeSingle();
-  const ownerPhone = ((Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as { phone?: string } | null)?.phone;
+  const ownerUser = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as
+    { id?: string; phone?: string } | null;
+  const ownerPhone = ownerUser?.phone;
   let confirmLinks = "";
   try {
     const { data: conf } = await admin
@@ -194,7 +197,7 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   } catch {
     /* pre-migration or duplicate row — the completion text still goes out */
   }
-  if (ownerPhone) {
+  if (ownerPhone && (await allowsNotification(ownerUser?.id, "done", "sms"))) {
     void sendSms(
       ownerPhone,
       `LakeLife: ${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"} — ${photoCount} photos are in your property log.${confirmLinks} 🌊`,
@@ -244,14 +247,14 @@ export async function submitFlag(
 
     const { data: prop } = await admin
       .from("properties")
-      .select("address, nickname, users(name, email, phone)")
+      .select("address, nickname, users(id, name, email, phone)")
       .eq("id", job.property_id as string)
       .maybeSingle();
     const owner = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as
-      { name?: string; email?: string; phone?: string } | null;
+      { id?: string; name?: string; email?: string; phone?: string } | null;
     const where = (prop?.nickname as string) || (prop?.address as string) || "your place";
 
-    if (owner?.phone) {
+    if (owner?.phone && (await allowsNotification(owner.id, "appr", "sms"))) {
       void sendSms(
         owner.phone,
         `LakeLife: the crew at ${where} found something that doesn't match your ` +

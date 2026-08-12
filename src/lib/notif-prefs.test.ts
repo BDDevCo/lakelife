@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { channelsFor, mergeNotifPrefs, type SavedPref } from "./notif-prefs";
+import { channelsFor, mergeNotifPrefs, type SavedPref, staticGate, defaultFor,
+} from "./notif-prefs";
 import type { NotifDef } from "./notifications";
 
 const DEFS: NotifDef[] = [
@@ -54,5 +55,37 @@ describe("mergeNotifPrefs — defaults merged with saved rows", () => {
     const m = mergeNotifPrefs(saved, DEFS);
     expect(m.ghost).toBeUndefined();
     expect(m.day).toEqual({ sms: true });
+  });
+});
+
+describe("the send gate — six switches that used to do nothing", () => {
+  // Every one of these types has been on the settings screen since the start,
+  // and no send path ever read one. A customer who turned texts off kept
+  // getting texts, which is worse than having no switch at all.
+  it("consults the customer's choice for an ordinary notification", () => {
+    expect(staticGate("day", "sms")).toBe("consult");
+    expect(staticGate("book", "email")).toBe("consult");
+  });
+
+  it("never asks about a receipt — that's a record of money, not a preference", () => {
+    expect(staticGate("rcpt", "email")).toBe("allow");
+  });
+
+  it("refuses a channel the type is never delivered on", () => {
+    // "Approval needed from a crew flag" is a text; there is no email switch
+    // to consult, so an email path must not silently fall through to allowed.
+    expect(staticGate("appr", "email")).toBe("deny");
+    expect(staticGate("season", "sms")).toBe("deny");
+  });
+
+  it("allows a type it has never heard of rather than swallowing it", () => {
+    // A swallowed send leaves no trace, which is the exact failure class this
+    // whole gate exists to stop repeating.
+    expect(staticGate("something_new", "sms")).toBe("allow");
+  });
+
+  it("defaults to the def's own default when they've never opened settings", () => {
+    expect(defaultFor("day")).toBe(true);
+    expect(defaultFor("nonsense")).toBe(true);
   });
 });

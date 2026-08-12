@@ -7,6 +7,7 @@ import { dayStatus, toISODate, todayLakeDate } from "@/lib/booking";
 import { rushPrice, validRushFallback } from "@/lib/rush";
 import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
+import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
 import { autoAssignJob, getServiceAvailability } from "./dispatch";
 import { ensureTos } from "@/lib/tos-server";
@@ -274,7 +275,10 @@ export async function createBooking(
   const pretty = new Date(date + "T12:00:00").toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric",
   });
-  if (me?.phone) {
+  // GATED, at last. Six switches have existed on the settings screen since the
+  // start and no send path ever read one, so a customer who turned texts off
+  // kept getting them. A switch that does nothing is worse than no switch.
+  if (me?.phone && (await allowsNotification(user.id, "book", "sms"))) {
     void sendSms(
       me.phone,
       isRush
@@ -284,7 +288,7 @@ export async function createBooking(
           : `LakeLife: got it — ${service.name} for ${pretty}. We're lining up a crew now and you'll hear the moment one's locked in. You're never charged until the work is done. 🌊`,
     );
   }
-  if (me?.email) {
+  if (me?.email && (await allowsNotification(user.id, "book", "email"))) {
     void sendEmail({
       to: me.email,
       subject: `Booked: ${service.name} 🌊`,

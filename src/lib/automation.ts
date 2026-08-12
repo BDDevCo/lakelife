@@ -1,6 +1,7 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { sendSms } from "@/lib/sms";
+import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
 import { LakeLifePayments } from "@/lib/payments";
 import { revalidateJob } from "@/app/book/dispatch";
@@ -835,7 +836,7 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
   const admin = createServiceClient();
   const { data: jobs } = await admin
     .from("jobs")
-    .select("id, slot, services(name), properties(address, users(phone))")
+    .select("id, slot, services(name), properties(address, users(id, phone))")
     .eq("date", date)
     .eq("status", "scheduled");
 
@@ -844,10 +845,13 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
   let sent = 0;
   for (const j of jobs ?? []) {
     const p = one(j.properties) as { address?: string; users?: unknown } | null;
-    const phone = (one(p?.users) as { phone?: string } | null)?.phone;
+    const ownerUser = one(p?.users) as { id?: string; phone?: string } | null;
+    const phone = ownerUser?.phone;
     const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
     if (!phone || seen.has(phone)) continue;
     seen.add(phone);
+    // The 'day' switch on the settings screen finally means something.
+    if (!(await allowsNotification(ownerUser?.id, "day", "sms"))) continue;
     void sendSms(phone, `LakeLife reminder: ${svc} is scheduled tomorrow (${prettyDate(date)}) at ${p?.address ?? "your place"}. We'll text you when it's done, with photos. 🌊`);
     sent++;
   }
@@ -1837,14 +1841,17 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
   for (const lake of lakes) {
     const { data: props } = await admin
       .from("properties")
-      .select("address, users(email, name)")
+      .select("address, users(id, email, name)")
       .eq("lake_id", lake.id);
     const seen = new Set<string>();
     for (const p of props ?? []) {
-      const u = one((p as { users?: unknown }).users) as { email?: string; name?: string } | null;
+      const u = one((p as { users?: unknown }).users) as
+        { id?: string; email?: string; name?: string } | null;
       const email = u?.email;
       if (!email || seen.has(email)) continue;
       seen.add(email);
+      // "Seasonal reminders" is one of the six switches. It now works.
+      if (!(await allowsNotification(u?.id, "season", "email"))) continue;
       const deadline = prettyDate(lake.pull_deadline as string);
       void sendEmail({
         to: email,
