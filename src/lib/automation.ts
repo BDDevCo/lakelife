@@ -245,6 +245,45 @@ export interface SettleOutcome {
 }
 
 /**
+ * MONEY LEFT THE CUSTOMER AND THE LEDGER REFUSED TO RECORD IT.
+ *
+ * `payments_one_capture_per_invoice` (0024) permits exactly one captured row
+ * per invoice. Charge paths used to hit the processor first and then discard
+ * the insert's error, so a race meant a real charge with no record — and only
+ * a person can hand that back. It is the one failure that has to reach a human
+ * the same night.
+ */
+export async function alertOpsDoubleCharge(
+  admin: ReturnType<typeof createServiceClient>,
+  invoiceId: string,
+  amount: number,
+  ref: string | null,
+): Promise<void> {
+  try {
+    const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+    const { data: opsUsers } = await admin
+      .from("users").select("email").eq("role", "ops").not("email", "is", null);
+    for (const u of opsUsers ?? []) {
+      const to = u.email as string | null;
+      if (!to) continue;
+      await sendEmail({
+        to,
+        subject: `⚠️ CHARGED BUT NOT RECORDED — ${amt}`,
+        html:
+          `<p>A card was charged <b>${amt}</b> against invoice <code>${invoiceId}</code> ` +
+          `and the ledger refused the payment row — an earlier capture already ` +
+          `exists for that invoice.</p>` +
+          `<p>The money left the customer. Processor reference: ` +
+          `<code>${ref ?? "none returned"}</code>.</p>` +
+          `<p><b>This needs a refund today.</b> Nothing automatic will fix it.</p>`,
+      });
+    }
+  } catch {
+    /* nothing here may throw into a payment path */
+  }
+}
+
+/**
  * A SETTLE THAT DIDN'T COLLECT, SAID OUT LOUD — to the customer and to ops.
  *
  * Both failure paths (no card on file, card declined) used to end in silence:
@@ -498,12 +537,16 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
         }
       } else if (pm?.token) {
         const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(cashDue * 100), description: `LakeLife — ${svcName}` });
-        await admin.from("payments").insert({
+        const { error: payErr } = await admin.from("payments").insert({
           invoice_id: invoice.id,
           amount: cashDue,
           status: charge.ok ? "captured" : "failed",
           processor_ref: charge.ref ?? null,
         });
+        // Charged, and the ledger wouldn't take it. See alertOpsDoubleCharge.
+        if (payErr?.code === "23505" && charge.ok) {
+          await alertOpsDoubleCharge(admin, invoice.id as string, cashDue, charge.ref ?? null);
+        }
         await admin.from("invoices").update({ status: charge.ok ? "paid" : "due", processor_ref: charge.ref ?? null }).eq("id", invoice.id);
         charged = charge.ok;
         const owner = one((prop as { users?: unknown } | null)?.users) as { email?: string; name?: string } | null;

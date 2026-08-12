@@ -5,6 +5,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { cancellationQuote, type CancelQuote } from "@/lib/cancellation";
 import { LakeLifePayments } from "@/lib/payments";
+import { alertOpsDoubleCharge } from "@/lib/automation";
 import { sendSms } from "@/lib/sms";
 
 export interface CancelResult {
@@ -206,15 +207,35 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (pm?.token) {
+    // NEVER CHARGE A CARD FOR AN INVOICE THAT IS ALREADY PAID.
+    //
+    // `payments_one_capture_per_invoice` (0024) allows exactly one captured
+    // row per invoice. The card used to be charged FIRST and the insert's
+    // error then discarded — so if anything else had already collected this
+    // fee, the second charge went through the processor and its record was
+    // silently rejected. Money taken, nothing on file, and `processor_ref`
+    // overwritten on top.
+    const { data: alreadyCaptured } = await admin
+      .from("payments").select("id").eq("invoice_id", invoice.id)
+      .eq("status", "captured").limit(1);
+    if (alreadyCaptured && alreadyCaptured.length > 0) {
+      await admin.from("invoices").update({ status: "paid" }).eq("id", invoice.id);
+      charged = true;
+    } else if (pm?.token) {
       const charge = await LakeLifePayments.charge({
         token: pm.token as string,
         amountCents: Math.round(q.fee * 100),
         description: `LakeLife — late cancellation, ${l.svcName}`,
       });
-      await admin.from("payments").insert({
+      const { error: payErr } = await admin.from("payments").insert({
         invoice_id: invoice.id, amount: q.fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null,
       });
+      // A 23505 here means the processor took the money and the ledger refused
+      // to record it. That is the one case a human has to hear about the same
+      // night, because only a human can give it back.
+      if (payErr?.code === "23505" && charge.ok) {
+        await alertOpsDoubleCharge(admin, invoice.id as string, q.fee, charge.ref ?? null);
+      }
       if (charge.ok) await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null }).eq("id", invoice.id);
       charged = charge.ok;
     }
