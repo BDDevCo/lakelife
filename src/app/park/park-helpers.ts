@@ -792,10 +792,15 @@ export function buildTenant(
       display_name: displayName,
       mobile_e164: mobile || null,
       email: email || null,
-      // PAPER until they tell us otherwise. A tenant who never converts is a
-      // permanent, respectable state, and defaulting them to SMS would text
-      // someone who never agreed to be texted.
-      contact_pref: mobile ? "sms" : "paper",
+      // PAPER, ALWAYS, until THEY say otherwise.
+      //
+      // This used to be `mobile ? "sms" : "paper"` — so typing in a number the
+      // owner read off a seller's roll silently marked that household as
+      // wanting texts, and a nightly job then texted them. A number somebody
+      // else wrote down is not consent from the person it belongs to. The
+      // preference changes when the renter changes it, never as a side effect
+      // of the office having a phone number.
+      contact_pref: "paper",
       source,
     },
     tenancy: {

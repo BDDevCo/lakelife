@@ -193,6 +193,12 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     chains.set(cid, Math.max(chains.get(cid) ?? 0, seq));
   }
 
+  // reservation -> lot, so a rent change can name its lot without a column
+  // that does not exist.
+  const lotOfReservation = new Map(
+    (stays ?? []).map((s) => [s.id as string, s.park_lot_id as string]),
+  );
+
   const { data: renters } = await admin
     .from("park_renters").select("id, display_name").eq("park_id", parkId);
   const renterName = new Map((renters ?? []).map((r) => [r.id as string, r.display_name as string]));
@@ -229,12 +235,16 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const [{ data: costs }, { data: rentChanges }, { data: states }, { data: noteRows }] =
     await Promise.all([
       admin.from("park_costs").select("id, category, amount_paid, allocated_total").eq("park_id", parkId),
+      // lot_rent_changes keys on park_id and RESERVATION_id — it has no
+      // park_lot_id at all. Two wrong column names in one select, and neither
+      // is a type error: supabase-js returns {error, data:null}, so the notice
+      // task read an empty list and never fired. The lot number comes back
+      // through the reservation below.
       admin.from("lot_rent_changes")
-        // notice_GIVEN_on, not notice_served_on. The wrong name is not a type
-        // error — supabase-js returns an error object and null data, so the
-        // notice-cliff task simply never fired.
-        .select("id, park_lot_id, effective_on, notice_days_required, notice_given_on")
-        .in("park_lot_id", liveIds.length ? liveIds : ["00000000-0000-0000-0000-000000000000"]),
+        .select("id, reservation_id, effective_on, notice_days_required, notice_given_on")
+        .eq("park_id", parkId)
+        .is("applied_at", null)
+        .is("cancelled_at", null),
       admin.from("park_task_states").select("task_key, snoozed_until, dismissed_at").eq("park_id", parkId),
       admin.from("park_notes").select("id, body, created_at")
         .eq("park_id", parkId).is("done_at", null).order("created_at", { ascending: false }),
@@ -262,7 +272,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
       .filter((rc) => (rc.effective_on as string) >= today)
       .map((rc) => ({
         id: rc.id as string,
-        lotNumber: lotName.get(rc.park_lot_id as string) ?? "?",
+        lotNumber: lotName.get(lotOfReservation.get(rc.reservation_id as string) ?? "") ?? "?",
         effectiveOn: rc.effective_on as string,
         noticeDaysRequired: (rc.notice_days_required as number) ?? 0,
         noticeServedOn: (rc.notice_given_on as string) ?? null,

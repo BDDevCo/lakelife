@@ -612,10 +612,13 @@ describe("buildTenant — the tenant who was already there", () => {
     expect(buildTenant(input({ movedInOn: "2027-01-01" }), TODAY).ok).toBe(false);
   });
 
-  it("defaults to PAPER, and only to SMS when a number was actually given", () => {
-    // Defaulting to SMS would text someone who never agreed to be texted.
+  it("defaults to PAPER even when the owner types a phone number in", () => {
+    // This test used to assert the opposite, and that assertion was the bug:
+    // a number the OWNER read off a seller's roll flipped the household to
+    // 'sms', and remindExpiringStays then texted them from a nightly cron.
+    // A number somebody else wrote down is not consent from its owner.
     expect(buildTenant(input(), TODAY).renter!.contact_pref).toBe("paper");
-    expect(buildTenant(input({ mobile: "(260) 555-0142" }), TODAY).renter!.contact_pref).toBe("sms");
+    expect(buildTenant(input({ mobile: "(260) 555-0142" }), TODAY).renter!.contact_pref).toBe("paper");
   });
 
   it("keeps the phone number in a shape we can text", () => {

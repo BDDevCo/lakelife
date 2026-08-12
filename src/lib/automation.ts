@@ -2527,15 +2527,28 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
     });
     if (decision !== "send") continue;
 
-    // Only text somebody who gave us a number AND said texting was fine.
-    // contact_pref 'paper' is a permanent, respectable answer.
+    // NEVER TEXT WITHOUT VERIFIED CONSENT.
+    //
+    // This gate used to be `phone && contact_pref === 'sms'`, and neither half
+    // is consent. `buildTenant` sets contact_pref to 'sms' automatically
+    // whenever the OWNER types a phone number in — so a number copied off the
+    // seller's spreadsheet became a nightly send target, from a cron, with the
+    // renter never having said a word. That is precisely what
+    // `phone_on_file_with_park` exists to prevent, and the rest of the park
+    // module already enforces the real rule: a verified mobile is not
+    // permission, the operational-SMS consent is. Both, or nothing.
     const { data: renter } = await admin
       .from("park_renters")
-      .select("display_name, mobile_e164, contact_pref")
+      .select("display_name, mobile_e164, mobile_verified_at, sms_consent_operational_at, contact_pref")
       .eq("id", s.renter_id as string)
       .maybeSingle();
     const phone = renter?.mobile_e164 as string | undefined;
-    if (!phone || renter?.contact_pref !== "sms") continue;
+    if (
+      !phone ||
+      renter?.contact_pref !== "sms" ||
+      !renter?.mobile_verified_at ||
+      !renter?.sms_consent_operational_at
+    ) continue;
 
     const { data: lot } = await admin
       .from("park_lots").select("lot_number").eq("id", s.park_lot_id as string).maybeSingle();
