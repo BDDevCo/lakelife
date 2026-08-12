@@ -103,6 +103,23 @@ export function AddressAutocomplete({
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<"plain" | "google">("plain");
+  /**
+   * THE ESCAPE HATCH.
+   *
+   * When Google's box is up it is the ONLY control on screen, and it will not
+   * accept an address Google does not already know. That is fine for a lake
+   * house on a county road. It is a dead end for:
+   *   · a renter on lot 7 of a mobile-home park — Google knows the park's
+   *     entrance, not the lot, so they cannot say where they live at all
+   *   · a new build, a private drive, a seasonal cabin with no listing
+   * Worse, if they pick the park's entrance instead, the FIRST renter to do it
+   * claims that Place ID and 0006's global unique index tells every neighbour
+   * afterwards "this property already has a LakeLife profile" — a wall support
+   * cannot take down, because the row belongs to somebody else.
+   *
+   * So: keep Google as the default, and let anyone step out of it.
+   */
+  const [manual, setManual] = useState(false);
 
   useEffect(() => {
     const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -174,25 +191,44 @@ export function AddressAutocomplete({
       <label>Property address</label>
 
       {/* Google's element mounts here once Places (New) is available. */}
-      <div ref={hostRef} style={{ display: mode === "google" ? "block" : "none" }} />
+      <div ref={hostRef} style={{ display: mode === "google" && !manual ? "block" : "none" }} />
 
-      {/* Plain fallback until/if Google isn't available. */}
-      {mode === "plain" && (
+      {/* Typed entry: the fallback when Google is unavailable, AND the way out
+          when Google simply does not know the place. */}
+      {(mode === "plain" || manual) && (
         <input
           value={value}
-          placeholder="Start typing your address…"
-          onChange={(e) => onChange(e.target.value)}
+          placeholder="e.g. Lot 7, The Haven, 1234 County Road 43"
+          onChange={(e) => {
+            onChange(e.target.value);
+            // A typed address is NOT a Google place. Clearing the Place ID and
+            // the coordinates keeps us from claiming a pin we were never given
+            // — and stops one renter's typing colliding with the park's own
+            // listing under 0006's unique index.
+            onSelect({ address: e.target.value, lat: null, lng: null, placeId: null });
+          }}
           autoComplete="off"
         />
       )}
 
       <div className="mut" style={{ fontSize: 11.5, marginTop: 4 }}>
-        {mode === "google"
+        {mode === "google" && !manual
           ? "Start typing and tap your address from the list."
           : value
             ? `On file: ${value}`
-            : "Type your full property address."}
+            : "Type your full property address — include a lot or unit number if you have one."}
       </div>
+
+      {mode === "google" && (
+        <button
+          type="button"
+          className="ll-btn ghost"
+          style={{ fontSize: 12, padding: "4px 10px", marginTop: 6 }}
+          onClick={() => setManual((m) => !m)}
+        >
+          {manual ? "Search for it instead" : "Can't find it? Type it myself"}
+        </button>
+      )}
     </div>
   );
 }

@@ -185,16 +185,68 @@ export function ProfileWizard({
 
   async function finish() {
     setBusy(true);
+
+    // ONLY SEND WHAT THEY WERE ACTUALLY ASKED.
+    //
+    // The draft is pre-seeded with lake-house numbers so each step opens on a
+    // sensible figure — 2,400 sq ft, 8 pier sections, one lift with a canopy,
+    // a 24-foot Pontoon, a kayak. But the steps are CHOSEN by the services
+    // they picked (see stepKeys above), and this payload used to send every
+    // field regardless. So somebody who asked for a mow and nothing else was
+    // filed as owning an eight-section pier, a boat lift, a pontoon and a
+    // kayak — `saveProfile` inserts that boat for real, because the default
+    // length passes its `length_ft > 0` filter.
+    //
+    // Nothing told them. The booking menu hides tiles for services they did
+    // not pick, so the invented equipment stayed out of sight — until a crew
+    // turns up at a lawn-only property whose profile claims a pier.
+    //
+    // `keep` is the rule: use what they typed if they saw the step; otherwise
+    // preserve whatever was ALREADY on file, and invent nothing. The second
+    // half matters on the edit path — dropping a service from your list must
+    // not silently erase the pier you still own.
+    const keep = <T,>(shown: boolean, typed: T, onFile: T | undefined, none: T): T =>
+      shown ? typed : (onFile ?? none);
+
+    const askedLawn = wants("Lawn mowing & trim");
+    const askedPier = wants("Pier install / removal");
+    const askedLifts = wants("Boat lift set / pull");
+    const askedBoats = wants("Boat storage & winterize");
+    const askedJet = wants("Jet ski winterize & store") || wants("PWC lift set / pull");
+    const askedToys = wants("Water toy prep & storage");
+
     const payload: WizardInput = {
       propertyId: propertyId ?? null,
       lake: draft.lake === NOT_LISTED ? "" : draft.lake,
       newLakeName: draft.lake === NOT_LISTED ? draft.newLakeName.trim() : undefined,
       address: draft.address, lat: draft.lat, lng: draft.lng, place_id: draft.place_id,
-      sqft: draft.sqft, gate: draft.gate, beds: draft.beds, baths: draft.baths,
-      pier_sections: draft.pier_sections, ladder: draft.ladder, bumpers: draft.bumpers,
-      boat_lifts: draft.boat_lifts, toy_lifts: 0, jet_skis: draft.jet_skis, pwc_lifts: draft.pwc_lifts,
-      canopy: draft.canopy, lawn_band: draft.lawn_band, boats: draft.boats,
-      toys: draft.toys.map((name) => ({ name })), wanted_services: draft.wanted,
+      // The access step — square footage, bedrooms, the door code.
+      sqft: keep(homeEntry, draft.sqft, initial.sqft, 0),
+      gate: keep(homeEntry, draft.gate, initial.gate, ""),
+      beds: keep(homeEntry, draft.beds, initial.beds, 0),
+      baths: keep(homeEntry, draft.baths, initial.baths, 0),
+      pier_sections: keep(askedPier, draft.pier_sections, initial.pier_sections, 0),
+      ladder: keep(askedPier, draft.ladder, initial.ladder, false),
+      bumpers: keep(askedPier, draft.bumpers, initial.bumpers, false),
+      boat_lifts: keep(askedLifts, draft.boat_lifts, initial.boat_lifts, 0),
+      canopy: keep(askedLifts, draft.canopy, initial.canopy, false),
+      toy_lifts: 0,
+      jet_skis: keep(askedJet, draft.jet_skis, initial.jet_skis, 0),
+      pwc_lifts: keep(askedJet, draft.pwc_lifts, initial.pwc_lifts, 0),
+      lawn_band: keep(askedLawn, draft.lawn_band, initial.lawn_band, "medium"),
+      // `initial.boats` comes off the database, where the engine fields are
+      // nullable; the payload type wants them absent rather than null.
+      boats: askedBoats
+        ? draft.boats
+        : (initial.boats ?? []).map((b) => ({
+            type: b.type,
+            length_ft: b.length_ft,
+            engine_type: b.engine_type ?? undefined,
+            engine_hp: b.engine_hp ?? undefined,
+            engines: b.engines ?? undefined,
+          })),
+      toys: (askedToys ? draft.toys : (initial.toys ?? [])).map((name) => ({ name })),
+      wanted_services: draft.wanted,
     };
     const res = await saveProfile(payload);
     setBusy(false);
