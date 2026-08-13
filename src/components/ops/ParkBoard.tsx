@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { NewPark } from "./NewPark";
 import type { OpsParkRow } from "@/app/ops/parks-data";
 
 /**
@@ -11,7 +12,13 @@ import type { OpsParkRow } from "@/app/ops/parks-data";
  * What ops is actually looking for here is SERVICE demand — a 60-lot park is
  * sixty potential lawn and winterization customers reachable on one drive.
  */
-export function ParkBoard({ parks }: { parks: OpsParkRow[] }) {
+export function ParkBoard({
+  parks,
+  lakes,
+}: {
+  parks: OpsParkRow[];
+  lakes: Array<{ id: string; name: string }>;
+}) {
   if (parks.length === 0) {
     return (
       <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
@@ -20,6 +27,12 @@ export function ParkBoard({ parks }: { parks: OpsParkRow[] }) {
           When a mobile-home or RV park comes onto the platform, it shows here.
           Parks are created by ops and handed to the owner, who runs it themselves.
         </p>
+        {/* That sentence described an action that did not exist: nothing in
+            the product could insert a `parks` or `park_members` row, so every
+            owner screen answered "park owners only" forever. */}
+        <div style={{ marginTop: 12 }}>
+          <NewPark lakes={lakes} />
+        </div>
       </div>
     );
   }
@@ -81,6 +94,7 @@ export function ParkBoard({ parks }: { parks: OpsParkRow[] }) {
         Read-only. Park owners approve their own renters — we run the software and
         the services, never the housing decision.
       </p>
+      <div style={{ marginTop: 14 }}><NewPark lakes={lakes} /></div>
     </div>
   );
 }

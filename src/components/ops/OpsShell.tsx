@@ -130,7 +130,7 @@ export function OpsShell({
       {tab === "crews" && <CrewBoard crews={crews} activeServiceNames={crewServiceNames} />}
 
       {tab === "messages" && <MessageBoard threads={threads} />}
-      {tab === "parks" && <ParkBoard parks={parks} />}
+      {tab === "parks" && <ParkBoard parks={parks} lakes={lakes.map((l) => ({ id: l.id, name: l.name }))} />}
     </div>
   );
 }

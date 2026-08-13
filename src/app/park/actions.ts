@@ -189,7 +189,21 @@ export async function setParkLive(parkId: string, active: boolean): Promise<Park
       return { ok: false, error: "Add at least one lot before you publish the park." };
     }
     const { data: park } = await admin
-      .from("parks").select("slug, name").eq("id", parkId).maybeSingle();
+      .from("parks").select("slug, name, lake_id, lat, lng").eq("id", parkId).maybeSingle();
+
+    // A PARK THE CREWS CANNOT BE SENT TO. `lake_id`, `lat` and `lng` had no
+    // writer anywhere until parks could be created properly, so a park could
+    // reach this gate looking complete and still be invisible to dispatch —
+    // which decides who can serve a job by lake and by distance. That failure
+    // is silent: no crew is offered the work and nobody is told why. Publishing
+    // is the last moment it can be caught before a renter books something.
+    if (!park?.lake_id) {
+      return { ok: false, error: "Set the park's lake first — without it no crew can be dispatched here." };
+    }
+    if (park.lat == null || park.lng == null) {
+      return { ok: false, error: "Set the park's map location first — routing needs it to reach you." };
+    }
+
     if (!park?.slug) {
       const slug = await mintSlug(park?.name as string ?? "park", parkId);
       if (!slug) return { ok: false, error: "Couldn't create the park's web address — try a different name." };
