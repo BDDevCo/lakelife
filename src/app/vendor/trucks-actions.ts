@@ -63,7 +63,7 @@ async function forwardBookConflict(
   const newBudget = fleetMinuteBudget(proposedUnits);
   const { data: booked } = await admin
     .from("jobs")
-    .select("date, group_id, services(est_minutes), job_items(services(est_minutes))")
+    .select("est_minutes, date, group_id, services(est_minutes), job_items(services(est_minutes))")
     .eq("vendor_id", vendorId)
     .gte("date", todayLakeDate())
     .in("status", ["scheduled", "in_progress"]);
@@ -78,7 +78,11 @@ async function forwardBookConflict(
       : null;
     const d = byDate.get(j.date as string) ?? { count: 0, minutes: 0 };
     d.count += 1;
-    d.minutes += jobMinutesOf(svc?.est_minutes, legs);
+    // 0083: the stamped figure wins. Toggling a truck off re-checks every
+    // affected day against the smaller fleet — from the flat dial, that check
+    // passed on days that genuinely bust.
+    const stamped = Number((j as { est_minutes?: number | null }).est_minutes ?? 0);
+    d.minutes += stamped > 0 ? stamped : jobMinutesOf(svc?.est_minutes, legs);
     byDate.set(j.date as string, d);
   }
   for (const [date, d] of byDate) {

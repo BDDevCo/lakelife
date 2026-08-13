@@ -595,7 +595,14 @@ export async function revalidateJob(jobId: string): Promise<RevalidateOutcome> {
     profile,
   });
   const jobLake = (Array.isArray(job.properties) ? job.properties[0] : job.properties) as { lake_id?: string } | null;
-  const ownMinutes = Number(svc.est_minutes ?? 0) > 0 ? Number(svc.est_minutes) : DEFAULT_JOB_MINUTES;
+  // The job's OWN stamped figure (0083), not the service's flat dial. This
+  // number is subtracted from the crew's committed day when re-validating, so
+  // reading the dial credited back 180 minutes for a 255-minute pier — every
+  // night, quietly making the day look emptier than it was.
+  const ownStamped = Number((job as { est_minutes?: number | null }).est_minutes ?? 0);
+  const ownMinutes = ownStamped > 0
+    ? ownStamped
+    : Number(svc.est_minutes ?? 0) > 0 ? Number(svc.est_minutes) : DEFAULT_JOB_MINUTES;
   const input = {
     date: job.date as string,
     weekday: weekdayOf(job.date as string),

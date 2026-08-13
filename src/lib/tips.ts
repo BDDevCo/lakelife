@@ -185,8 +185,18 @@ export function canTip(job: {
   if (job.status !== "complete" && job.status !== "paid") {
     return { ok: false, why: "You can add a thank-you once the work is done." };
   }
-  if ((job.tip_amount ?? 0) > 0) {
-    return { ok: false, why: "You've already sent them one — thank you." };
+  // ZERO IS AN ANSWER, AND IT IS FINAL. `> 0` let a declined tip fall through
+  // as still-tippable: the button came back, a second tap passed every gate,
+  // and the `.is("tip_amount", null)` write matched nothing — so the action
+  // reported success while changing nothing and charging nothing. Asked and
+  // answered is answered, whichever way.
+  if (job.tip_amount != null) {
+    return {
+      ok: false,
+      why: job.tip_amount > 0
+        ? "You've already sent them one — thank you."
+        : "You've already answered this one.",
+    };
   }
   return { ok: true };
 }

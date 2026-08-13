@@ -139,4 +139,19 @@ describe("when a visit may be tipped", () => {
     expect(twice.ok).toBe(false);
     expect(twice.why).toContain("already sent");
   });
+
+  it("A DECLINE IS FINAL TOO — zero is an answer, not an absence", () => {
+    // `> 0` let a declined tip fall through as still-tippable: the button came
+    // back, a second tap passed every gate, and the `.is("tip_amount", null)`
+    // write matched nothing — so the action reported success while changing
+    // nothing and charging nothing.
+    const again = canTip({ status: "complete", tip_amount: 0 });
+    expect(again.ok).toBe(false);
+    expect(again.why).toContain("already answered");
+  });
+
+  it("a job never asked is still tippable", () => {
+    expect(canTip({ status: "complete", tip_amount: null }).ok).toBe(true);
+    expect(canTip({ status: "complete" }).ok).toBe(true);
+  });
 });

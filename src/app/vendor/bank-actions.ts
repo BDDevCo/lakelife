@@ -112,15 +112,29 @@ export async function requestEarlyPayout(): Promise<EarlyPayoutResult> {
     .eq("vendor_id", vendor.id)
     .eq("status", "released")
     .is("batch_id", null)
-    .select("amount");
+    .select("amount, kind");
   const gross = Math.round((claimed ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0) * 100) / 100;
+
+  // A TIP IS NEVER DISCOUNTED. The homeowner is told in writing "every cent
+  // goes to the crew — LakeLife doesn't take a share of a thank-you", and
+  // 0091 enforces that at the payout. Pulling it early through a 2% fee would
+  // have broken the promise on the way out of the door, quietly, in the one
+  // place nobody would look. So the early-pay fee is computed on EARNED money
+  // only; tips ride along at full value.
+  const tipCents = (claimed ?? [])
+    .filter((p) => p.kind === "tip")
+    .reduce((s, p) => s + Math.round(Number(p.amount ?? 0) * 100), 0);
+  const tipTotal = tipCents / 100;
+  const feeBase = Math.round((gross - tipTotal) * 100) / 100;
   if (!claimed || claimed.length === 0 || gross <= 0) {
     await unclaimAndDrop();
     return { ok: false, error: "Nothing released to pull right now — payouts land here the moment a job's photos clear." };
   }
 
   const settings = await getPlatformSettings();
-  const { fee, net } = earlyFee(gross, settings.earlyPayoutFeePct);
+  // Fee on the earned portion; the tip is added back whole.
+  const { fee } = earlyFee(feeBase, settings.earlyPayoutFeePct);
+  const net = Math.round((gross - fee) * 100) / 100;
   const { data: finalized, error: finErr } = await admin
     .from("payout_batches")
     .update({ gross, fee, net, status: "queued" })
@@ -136,7 +150,7 @@ export async function requestEarlyPayout(): Promise<EarlyPayoutResult> {
   try {
     const { data: u } = await admin.from("users").select("phone").eq("id", user.id).maybeSingle();
     if (u?.phone) {
-      void sendSms(u.phone as string, `LakeLife: early payout queued — $${net.toFixed(2)} to your account ····${acct.account_last4} ($${gross.toFixed(2)} − $${fee.toFixed(2)} early fee). Month-end payouts are always free. 🌊`);
+      void sendSms(u.phone as string, `LakeLife: early payout queued — $${net.toFixed(2)} to your account ····${acct.account_last4} ($${gross.toFixed(2)} − $${fee.toFixed(2)} early fee${tipTotal > 0 ? `; $${tipTotal.toFixed(2)} of tips came through in full` : ""}). Month-end payouts are always free. 🌊`);
     }
   } catch { /* best effort */ }
 

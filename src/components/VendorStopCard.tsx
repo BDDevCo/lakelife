@@ -120,7 +120,19 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
           )}
           <div className="mut" style={{ fontSize: 13 }}>{stop.address ?? "Address on file"}</div>
           <div className="mut" style={{ fontSize: 12.5 }}>
-            {[stop.lake_name, stop.facts, stop.owner_name ? `owner: ${stop.owner_name}` : null].filter(Boolean).join(" · ")}
+            {[
+              stop.lake_name,
+              stop.facts,
+              // How long this stop is budgeted (0083). It was loaded onto the
+              // card and shown nowhere — so a crew could not see that the
+              // twelve-section pier is a four-hour job until they were in it.
+              stop.est_minutes && stop.est_minutes > 0
+                ? stop.est_minutes >= 60
+                  ? `~${Math.round((stop.est_minutes / 60) * 10) / 10}h`
+                  : `~${stop.est_minutes}m`
+                : null,
+              stop.owner_name ? `owner: ${stop.owner_name}` : null,
+            ].filter(Boolean).join(" · ")}
           </div>
 
           {/* Gate code — only present for today's jobs (rule 3) */}

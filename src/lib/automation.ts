@@ -24,6 +24,7 @@ import { priceService, type ServiceRule } from "@/lib/pricing";
 import { computeMenuSuggestions } from "@/app/ops/data";
 import { executeMenuUpdate } from "@/lib/menu-core";
 import { composeNightlyDigest, type DigestSections } from "@/lib/digest-render";
+import { proposedFee, deadlinePassed, tripFeeFor } from "./recovery";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -2362,7 +2363,20 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
  * services.est_minutes dial toward reality, damped, every night — so the
  * fleet router's time budgets and hours-fit checks get truer on their own.
  * Runs BEFORE the route build so tomorrow's routes use tonight's lesson.
- */
+  *
+ * SINCE 0083 THIS TUNES THE FALLBACK, NOT THE THING BOOKING USES. A service
+ * with a `duration_bands` ladder never consults `est_minutes` at booking time,
+ * so nudging that column changes nothing for the seven size-priced services —
+ * it still matters for the three flat ones, and as the fallback for any
+ * service that has no ladder yet.
+ *
+ * Tuning the LADDERS is the real job and it is deliberately not done here:
+ * every sample would have to be bucketed by the size that job actually had,
+ * and with zero measured durations in the system there is nothing yet to
+ * bucket. Averaging a 4-section pier with a 16-section one into a single
+ * number is precisely the mistake the ladders exist to undo, and doing it
+ * automatically would undo them quietly.
+*/
 export async function learnServiceDurations(): Promise<{ ok: boolean; updated: number; changes: Array<{ service: string; from: number; to: number; samples: number }> }> {
   const admin = createServiceClient();
   const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
@@ -2828,3 +2842,182 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
 
   return { ok: true, reminded };
 }
+
+// ==========================================================================
+// UNWORKED VISITS — the nightly half
+// ==========================================================================
+//
+// These two live HERE, not in `src/app/ops/recovery-actions.ts`, and the move
+// was a security fix rather than tidying. That file carries "use server", so
+// every exported function in it is a SERVER ACTION reachable from any browser
+// that knows its id — and `raiseTripFees` releases payouts. It was idempotent,
+// so the blast radius was small, but "a stranger can make us pay crews" is not
+// a property to leave lying around because today's version happens to be safe.
+//
+// `automation.ts` is `server-only`: importable by server code, callable by
+// nobody over the wire. The nightly cron route is the only caller of either.
+// The customer-facing half — charge, waive — stays an action, because a person
+// clicks it.
+
+/**
+ * RAISE THE TRIP FEE FOR EVERY ATTEMPT THAT HASN'T HAD ONE.
+ *
+ * Runs nightly, and it accrues WITHOUT asking a person — deliberately. The
+ * worst case if it fires wrongly is that we pay a crew $35 they did not earn:
+ * small, clawback-able, and invisible to the customer. That is a different
+ * animal from putting money on somebody's card, which is why the other half of
+ * this path still waits for a human.
+ *
+ * Idempotent by construction: it only ever looks at attempts whose
+ * `trip_fee_payout_id` is null, and stamps it the moment the payout exists. A
+ * job attempted, rescheduled and attempted again is TWO trips and is paid
+ * twice — correctly — because the unit of work here is the attempt, never the
+ * job.
+ */
+export async function raiseTripFees(): Promise<{ paid: number; total: number; onUs: number }> {
+  const admin = createServiceClient();
+  const settings = await getPlatformSettings();
+
+  const { data: attempts } = await admin
+    .from("job_visit_attempts")
+    .select("id, job_id, vendor_id, outcome, jobs(recovery_state, fee_proposed_amount, vendor_cost)")
+    .is("trip_fee_payout_id", null)
+    .not("vendor_id", "is", null);
+
+  let paid = 0;
+  let total = 0;
+  let onUs = 0;
+
+  for (const a of attempts ?? []) {
+    const job = (Array.isArray(a.jobs) ? a.jobs[0] : a.jobs) as
+      { recovery_state?: string; fee_proposed_amount?: number; vendor_cost?: number } | null;
+
+    // Their share of a fee the customer ACTUALLY paid. A proposed fee is not a
+    // paid one, so only 'fee_charged' funds anything.
+    const collectedCrewShare =
+      job?.recovery_state === "fee_charged"
+        ? Math.max(0, Number(job.vendor_cost ?? 0)) * settings.cancelFeePct
+        : 0;
+
+    const t = tripFeeFor({
+      outcome: a.outcome as "no_access" | "stood_down",
+      collectedCrewShare,
+      tripFee: settings.crewTripFee,
+    });
+    if (!(t.owed > 0)) continue;
+
+    const { data: payout, error } = await admin
+      .from("payouts")
+      .insert({
+        vendor_id: a.vendor_id,
+        job_id: a.job_id,
+        amount: t.owed,
+        original_amount: t.owed,
+        // Released on sight: the trip is the deliverable and it already
+        // happened. It rides the same month-end batch as job earnings.
+        status: "released",
+        kind: "trip",
+      })
+      .select("id")
+      .single();
+    if (error || !payout) continue;
+
+    // Stamp it immediately — this is what makes a retry safe. And if the stamp
+    // FAILS, take the payout back out: an unstamped payout is one the next
+    // night pays again, so a crash between these two writes would double-pay
+    // the same trip. Losing a $35 accrual we can re-raise tomorrow is the far
+    // better failure of the two.
+    const { error: stampErr } = await admin
+      .from("job_visit_attempts")
+      .update({ trip_fee_payout_id: payout.id })
+      .eq("id", a.id)
+      .is("trip_fee_payout_id", null);
+    if (stampErr) {
+      await admin.from("payouts").delete().eq("id", payout.id);
+      continue;
+    }
+
+    paid += 1;
+    total += t.owed;
+    if (t.fundedBy === "lakelife") onUs += t.owed;
+  }
+
+  return { paid, total: Math.round(total * 100) / 100, onUs: Math.round(onUs * 100) / 100 };
+}
+
+
+/**
+ * Nightly: any unworked visit whose window has closed gets a number attached
+ * and moves to `fee_proposed`. Nothing is charged and nobody is told.
+ *
+ * A stand-down is skipped entirely — our record was wrong, and we told the
+ * customer in writing that nothing would be charged.
+ */
+export async function proposeOverdueFees(): Promise<{ proposed: number; skipped: number }> {
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+  const settings = await getPlatformSettings();
+
+  const { data: rows } = await admin
+    .from("jobs")
+    .select("id, customer_price, vendor_cost, vendor_id, reschedule_deadline, no_show_at, stood_down_at")
+    .eq("recovery_state", "awaiting_customer")
+    .not("reschedule_deadline", "is", null);
+
+  let proposed = 0;
+  let skipped = 0;
+
+  for (const j of rows ?? []) {
+    if (!deadlinePassed((j.reschedule_deadline as string) ?? null, today)) continue;
+
+    // Never fee-eligible: the profile was ours and it was wrong.
+    if (j.stood_down_at) {
+      await admin.from("jobs")
+        .update({ recovery_state: "fee_waived", reschedule_deadline: null })
+        .eq("id", j.id);
+      skipped += 1;
+      continue;
+    }
+
+    const q = proposedFee(
+      {
+        hasCrew: !!j.vendor_id,
+        customerPrice: Number(j.customer_price ?? 0),
+        vendorCost: j.vendor_cost == null ? null : Number(j.vendor_cost),
+      },
+      {
+        cancelFeePct: settings.cancelFeePct,
+        cancelRoutineHours: settings.cancelRoutineHours,
+        cancelWaterDays: settings.cancelWaterDays,
+      },
+    );
+
+    if (q.free) {
+      // The policy says nothing is owed. Close it rather than parking a $0
+      // decision on somebody's desk.
+      await admin.from("jobs")
+        .update({ recovery_state: "fee_waived", reschedule_deadline: null })
+        .eq("id", j.id);
+      skipped += 1;
+      continue;
+    }
+
+    await admin.from("jobs")
+      .update({ recovery_state: "fee_proposed", fee_proposed_amount: q.fee })
+      .eq("id", j.id);
+    proposed += 1;
+  }
+
+  return { proposed, skipped };
+}
+
+/**
+ * A person releases the fee. THIS is where money moves, and only here.
+ *
+ * Deliberately not implemented as a card charge yet: the processor keys do not
+ * exist (CLAUDE.md rule 4 — build against the mock until they do), and a
+ * half-built charge path is worse than an honest one. What this does today is
+ * record the decision and hand the amount to the existing billing pipeline the
+ * same way a late-cancellation fee is handed over.
+ */
+

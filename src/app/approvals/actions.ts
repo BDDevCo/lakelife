@@ -159,8 +159,11 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
           // margin follow the new price rather than inventing a crew number.
           update.margin = price - Number(j.vendor_cost);
         }
-        await admin.from("jobs").update(update).eq("id", j.id);
-        repriced += 1;
+        // COUNT WHAT LANDED, not what was attempted. The result was discarded
+        // and the counter incremented regardless, so a failed write reported
+        // "3 visits repriced" to somebody who then had no reason to look.
+        const { error: upErr } = await admin.from("jobs").update(update).eq("id", j.id);
+        if (!upErr) repriced += 1;
       }
     }
   }

@@ -88,7 +88,22 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
         )}
       </p>
 
+      {row.crewShare > row.tripFeePaid && (
+        <p className="mut" style={{ fontSize: 12, margin: "8px 0 0" }}>
+          Charging tops the crew up to {usd(row.crewShare)} — their share of the
+          fee, which is more than the {usd(row.tripFeePaid)} trip fee already paid.
+        </p>
+      )}
+
+      {row.fee <= 0 && (
+        <p className="mut" style={{ fontSize: 12.5, margin: "8px 0 0" }}>
+          Nothing to charge on this one — the details we had were ours to get
+          right. It is here so the trip is not invisible.
+        </p>
+      )}
+
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+        {row.fee > 0 && (
         <button
           className="ll-btn gold"
           style={{ minHeight: 44 }}
@@ -103,10 +118,13 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
         >
           {busy ? "Working…" : `Charge ${usd(row.fee)}`}
         </button>
+        )}
+        {row.fee > 0 && (
         <button className="ll-btn ghost" style={{ minHeight: 44 }} disabled={busy}
           onClick={() => setWaiving((w) => !w)}>
           Waive it
         </button>
+        )}
       </div>
 
       {waiving && (

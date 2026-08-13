@@ -35,6 +35,8 @@ interface LoadedJob {
   job: {
     id: string; status: string; date: string | null; slot: string | null;
     customer_price: number; vendor_cost: number | null; vendor_id: string | null; property_id: string;
+    /** The id, not the name — a name is a label and can be edited. */
+    service_id: string | null;
     group_id: string | null;
     // 0084/0088/0089 — a visit that happened but produced no work.
     no_show_at: string | null;
@@ -56,7 +58,7 @@ async function loadOwnJob(jobId: string): Promise<LoadedJob | null> {
   const admin = createServiceClient();
   const { data: job } = await admin
     .from("jobs")
-    .select("id, status, date, slot, customer_price, vendor_cost, vendor_id, property_id, group_id, no_show_at, stood_down_at, recovery_state, reschedule_deadline, services(name, is_water_work), properties(owner_id, address)")
+    .select("id, status, date, slot, customer_price, vendor_cost, vendor_id, property_id, service_id, group_id, no_show_at, stood_down_at, recovery_state, reschedule_deadline, services(name, is_water_work), properties(owner_id, address)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) return null;
@@ -73,6 +75,7 @@ async function loadOwnJob(jobId: string): Promise<LoadedJob | null> {
       vendor_cost: job.vendor_cost == null ? null : Number(job.vendor_cost),
       vendor_id: (job.vendor_id as string) ?? null,
       property_id: job.property_id as string,
+      service_id: (job.service_id as string) ?? null,
       group_id: (job.group_id as string) ?? null,
       no_show_at: (job.no_show_at as string) ?? null,
       stood_down_at: (job.stood_down_at as string) ?? null,
@@ -318,16 +321,29 @@ export async function getRescheduleView(jobId: string): Promise<RescheduleView> 
   if (job.recovery_state !== "awaiting_customer") return empty;
 
   const outcome: "no_access" | "stood_down" = job.stood_down_at ? "stood_down" : "no_access";
+  // `no_show_at` is a TIMESTAMP in UTC; slicing its first ten characters gives
+  // the UTC calendar day, which after 8pm in Indiana is already tomorrow. The
+  // deadline shown to the customer was therefore a day later than the one the
+  // nightly enforces off `jobs.reschedule_deadline` — and being told Monday
+  // and cut off on Sunday is exactly the kind of thing that makes a fee feel
+  // like a trick.
+  //
+  // So the stored deadline wins whenever there is one; the recomputation is
+  // only a fallback for rows written before it existed.
   const attemptedOn = (job.no_show_at ?? job.stood_down_at ?? "").slice(0, 10) || todayLakeDate();
   const plan = planRecovery(outcome, attemptedOn, { serviceName: svcName });
+  const enforced = job.reschedule_deadline ?? plan.deadline;
+  const planned = enforced === plan.deadline
+    ? plan
+    : planRecovery(outcome, enforced, { serviceName: svcName, days: 0 });
 
   return {
     needed: true,
     outcome,
     reason: null, // the crew's words live on the job; the customer already got them
     ask: plan.ask,
-    ifNothingHappens: plan.ifNothingHappens,
-    deadline: job.reschedule_deadline,
+    ifNothingHappens: planned.ifNothingHappens,
+    deadline: enforced,
     feeEligible: plan.feeEligible,
   };
 }
@@ -365,11 +381,25 @@ export async function rescheduleUnworkedVisit(
   // door around ice-out, the pull deadline, or a crew's real capacity — those
   // exist because a pier cannot go in through ice, not as paperwork.
   const admin0 = createServiceClient();
+  // BY ID, NOT BY NAME. This re-found the service with `.eq("name", svcName)`,
+  // and a name that has been edited — or a service renamed for a season —
+  // returns null. `svcRow?.id` then short-circuits `fullDates` to empty and
+  // `is_water_work` to false, so the gate FAILS OPEN: a pier could be
+  // rescheduled through ice, and a full day would read as available. The job
+  // already knows its service_id; a name is a label, not an identity.
   const [{ data: svcRow }, { data: propRow }] = await Promise.all([
-    admin0.from("services").select("id, is_water_work").eq("name", svcName).maybeSingle(),
+    job.service_id
+      ? admin0.from("services").select("id, is_water_work").eq("id", job.service_id).maybeSingle()
+      : Promise.resolve({ data: null }),
     admin0.from("properties").select("lakes(ice_out_actual, pull_deadline)")
       .eq("id", job.property_id).maybeSingle(),
   ]);
+  if (!svcRow?.id) {
+    // Without the service we cannot apply ice-out, the pull deadline or
+    // capacity. Refusing is the only safe answer — a silent pass is how a
+    // pier ends up booked into February.
+    return { ok: false, error: "Give us a call to move this one — we can't check the dates from here." };
+  }
   const lake = one(propRow?.lakes) as { ice_out_actual?: string; pull_deadline?: string } | null;
   const { fullDates } = svcRow?.id
     ? await getAvailability(

@@ -30,82 +30,6 @@ import { assertOps } from "./data";
  * a rare event, and it is the click that ought to have a person behind it.
  */
 
-/**
- * RAISE THE TRIP FEE FOR EVERY ATTEMPT THAT HASN'T HAD ONE.
- *
- * Runs nightly, and it accrues WITHOUT asking a person — deliberately. The
- * worst case if it fires wrongly is that we pay a crew $35 they did not earn:
- * small, clawback-able, and invisible to the customer. That is a different
- * animal from putting money on somebody's card, which is why the other half of
- * this path still waits for a human.
- *
- * Idempotent by construction: it only ever looks at attempts whose
- * `trip_fee_payout_id` is null, and stamps it the moment the payout exists. A
- * job attempted, rescheduled and attempted again is TWO trips and is paid
- * twice — correctly — because the unit of work here is the attempt, never the
- * job.
- */
-export async function raiseTripFees(): Promise<{ paid: number; total: number; onUs: number }> {
-  const admin = createServiceClient();
-  const settings = await getPlatformSettings();
-
-  const { data: attempts } = await admin
-    .from("job_visit_attempts")
-    .select("id, job_id, vendor_id, outcome, jobs(recovery_state, fee_proposed_amount, vendor_cost)")
-    .is("trip_fee_payout_id", null)
-    .not("vendor_id", "is", null);
-
-  let paid = 0;
-  let total = 0;
-  let onUs = 0;
-
-  for (const a of attempts ?? []) {
-    const job = (Array.isArray(a.jobs) ? a.jobs[0] : a.jobs) as
-      { recovery_state?: string; fee_proposed_amount?: number; vendor_cost?: number } | null;
-
-    // Their share of a fee the customer ACTUALLY paid. A proposed fee is not a
-    // paid one, so only 'fee_charged' funds anything.
-    const collectedCrewShare =
-      job?.recovery_state === "fee_charged"
-        ? Math.max(0, Number(job.vendor_cost ?? 0)) * settings.cancelFeePct
-        : 0;
-
-    const t = tripFeeFor({
-      outcome: a.outcome as "no_access" | "stood_down",
-      collectedCrewShare,
-      tripFee: settings.crewTripFee,
-    });
-    if (!(t.owed > 0)) continue;
-
-    const { data: payout, error } = await admin
-      .from("payouts")
-      .insert({
-        vendor_id: a.vendor_id,
-        job_id: a.job_id,
-        amount: t.owed,
-        original_amount: t.owed,
-        // Released on sight: the trip is the deliverable and it already
-        // happened. It rides the same month-end batch as job earnings.
-        status: "released",
-        kind: "trip",
-      })
-      .select("id")
-      .single();
-    if (error || !payout) continue;
-
-    // Stamp it immediately — this is what makes a retry safe.
-    await admin
-      .from("job_visit_attempts")
-      .update({ trip_fee_payout_id: payout.id })
-      .eq("id", a.id);
-
-    paid += 1;
-    total += t.owed;
-    if (t.fundedBy === "lakelife") onUs += t.owed;
-  }
-
-  return { paid, total: Math.round(total * 100) / 100, onUs: Math.round(onUs * 100) / 100 };
-}
 
 export interface RecoveryResult {
   ok: boolean;
@@ -113,80 +37,7 @@ export interface RecoveryResult {
   signal?: string;
 }
 
-/**
- * Nightly: any unworked visit whose window has closed gets a number attached
- * and moves to `fee_proposed`. Nothing is charged and nobody is told.
- *
- * A stand-down is skipped entirely — our record was wrong, and we told the
- * customer in writing that nothing would be charged.
- */
-export async function proposeOverdueFees(): Promise<{ proposed: number; skipped: number }> {
-  const admin = createServiceClient();
-  const today = todayLakeDate();
-  const settings = await getPlatformSettings();
 
-  const { data: rows } = await admin
-    .from("jobs")
-    .select("id, customer_price, vendor_cost, vendor_id, reschedule_deadline, no_show_at, stood_down_at")
-    .eq("recovery_state", "awaiting_customer")
-    .not("reschedule_deadline", "is", null);
-
-  let proposed = 0;
-  let skipped = 0;
-
-  for (const j of rows ?? []) {
-    if (!deadlinePassed((j.reschedule_deadline as string) ?? null, today)) continue;
-
-    // Never fee-eligible: the profile was ours and it was wrong.
-    if (j.stood_down_at) {
-      await admin.from("jobs")
-        .update({ recovery_state: "fee_waived", reschedule_deadline: null })
-        .eq("id", j.id);
-      skipped += 1;
-      continue;
-    }
-
-    const q = proposedFee(
-      {
-        hasCrew: !!j.vendor_id,
-        customerPrice: Number(j.customer_price ?? 0),
-        vendorCost: j.vendor_cost == null ? null : Number(j.vendor_cost),
-      },
-      {
-        cancelFeePct: settings.cancelFeePct,
-        cancelRoutineHours: settings.cancelRoutineHours,
-        cancelWaterDays: settings.cancelWaterDays,
-      },
-    );
-
-    if (q.free) {
-      // The policy says nothing is owed. Close it rather than parking a $0
-      // decision on somebody's desk.
-      await admin.from("jobs")
-        .update({ recovery_state: "fee_waived", reschedule_deadline: null })
-        .eq("id", j.id);
-      skipped += 1;
-      continue;
-    }
-
-    await admin.from("jobs")
-      .update({ recovery_state: "fee_proposed", fee_proposed_amount: q.fee })
-      .eq("id", j.id);
-    proposed += 1;
-  }
-
-  return { proposed, skipped };
-}
-
-/**
- * A person releases the fee. THIS is where money moves, and only here.
- *
- * Deliberately not implemented as a card charge yet: the processor keys do not
- * exist (CLAUDE.md rule 4 — build against the mock until they do), and a
- * half-built charge path is worse than an honest one. What this does today is
- * record the decision and hand the amount to the existing billing pipeline the
- * same way a late-cancellation fee is handed over.
- */
 export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> {
   if (!(await assertOps())) return { ok: false, error: "Ops only." };
   const admin = createServiceClient();
@@ -266,6 +117,45 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
     .update({ recovery_state: charged ? "fee_charged" : "fee_proposed" })
     .eq("id", jobId);
 
+  // THE FLOOR ACTUALLY PAYS NOW.
+  //
+  // 0090 promised the crew `max(trip fee, their share of a fee the customer
+  // actually paid)`. The share half could never happen: `raiseTripFees` runs
+  // the night after the visit and stamps the attempt, while a fee is not
+  // chargeable for another seven days — so by the time money arrived, the
+  // top-up branch had nothing left to look at. The crew always got the flat
+  // $35 and never the share, even on a job whose share is $200.
+  //
+  // So the top-up is paid HERE, at the only moment the share becomes real:
+  // when the customer's money lands.
+  if (charged) {
+    try {
+      const { data: full } = await admin
+        .from("jobs").select("vendor_id, vendor_cost").eq("id", jobId).maybeSingle();
+      const dials = await getPlatformSettings();
+      const share = Math.max(0, Number(full?.vendor_cost ?? 0)) * dials.cancelFeePct;
+
+      const { data: already } = await admin
+        .from("payouts").select("amount").eq("job_id", jobId).eq("kind", "trip");
+      const paid = (already ?? []).reduce((n, r) => n + Number(r.amount ?? 0), 0);
+
+      const topUp = Math.round((share - paid) * 100) / 100;
+      if (full?.vendor_id && topUp > 0) {
+        await admin.from("payouts").insert({
+          vendor_id: full.vendor_id,
+          job_id: jobId,
+          amount: topUp,
+          original_amount: topUp,
+          status: "released",
+          kind: "trip",
+        });
+      }
+    } catch {
+      /* The customer's charge stands. A missed top-up is ops' to chase, not a
+         reason to unwind money that has already moved. */
+    }
+  }
+
   revalidatePath("/ops");
   if (!charged) {
     return {
@@ -337,7 +227,12 @@ export async function getProposedFees(): Promise<ProposedFeeRow[]> {
   const { data: jobs } = await admin
     .from("jobs")
     .select("id, date, fee_proposed_amount, reschedule_deadline, vendor_cost, no_show_at, no_show_reason, stood_down_at, stood_down_reason, services(name), properties(address)")
-    .eq("recovery_state", "fee_proposed")
+    // BOTH STATES. A stand-down is auto-waived by the nightly (never
+    // fee-eligible), so filtering on `fee_proposed` alone meant a crew who
+    // drove out because OUR profile was wrong never appeared on anybody's
+    // screen. Nothing is charged for these — the card offers no fee — but the
+    // trip happened and somebody should see it.
+    .in("recovery_state", ["fee_proposed", "fee_waived"])
     .order("date", { ascending: true });
   if (!jobs?.length) return [];
 
@@ -347,6 +242,17 @@ export async function getProposedFees(): Promise<ProposedFeeRow[]> {
   // What the crew already received for each wasted trip.
   const { data: trips } = await admin
     .from("payouts").select("job_id, amount").in("job_id", ids).eq("kind", "trip");
+  // The real attempt dates, from the append-only record.
+  const { data: attempts } = await admin
+    .from("job_visit_attempts").select("job_id, attempted_on").in("job_id", ids)
+    .order("attempted_on", { ascending: false });
+  const attemptByJob = new Map<string, string>();
+  for (const a of attempts ?? []) {
+    if (!attemptByJob.has(a.job_id as string)) {
+      attemptByJob.set(a.job_id as string, a.attempted_on as string);
+    }
+  }
+
   const paidByJob = new Map<string, number>();
   for (const t of trips ?? []) {
     paidByJob.set(t.job_id as string, (paidByJob.get(t.job_id as string) ?? 0) + Number(t.amount ?? 0));
@@ -360,11 +266,16 @@ export async function getProposedFees(): Promise<ProposedFeeRow[]> {
       jobId: j.id as string,
       serviceName: svc?.name ?? "Service",
       address: prop?.address ?? "—",
-      attemptedOn: (j.date as string) ?? "",
+      // THE DATE THE CREW WENT, not the date the job was scheduled for. They
+      // are the same only until a job is rescheduled — after that the card
+      // said "nobody let them in on Aug 20" about a trip made on Aug 12.
+      attemptedOn: attemptByJob.get(j.id as string)
+        ?? ((standDown ? j.stood_down_at : j.no_show_at) as string | null)?.slice(0, 10)
+        ?? ((j.date as string) ?? ""),
       outcome: standDown ? "stood_down" : "no_access",
       reason: ((standDown ? j.stood_down_reason : j.no_show_reason) as string) ?? "",
       fee: Number(j.fee_proposed_amount ?? 0),
-      crewShare: Math.max(0, Number(j.vendor_cost ?? 0)) * settings.cancelFeePct,
+      crewShare: Math.round(Math.max(0, Number(j.vendor_cost ?? 0)) * settings.cancelFeePct * 100) / 100,
       tripFeePaid: paidByJob.get(j.id as string) ?? 0,
       // The one line a person triaging a list needs, and the plain statement
       // of who ends up carrying the trip. Both were written in 0089 and
