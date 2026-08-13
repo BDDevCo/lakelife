@@ -44,6 +44,22 @@ const STATUS_LABEL: Record<string, string> = {
 
 const SLOT_LABEL: Record<string, string> = { "8a": "8:00 am", "10a": "10:00 am", "1p": "1:00 pm", "3p": "3:00 pm" };
 
+/**
+ * Every kind of money that reaches a crew, named.
+ *
+ * A map rather than a ternary precisely because the ternary was the bug: a
+ * two-way `earning : "Clawback adjustment"` silently absorbed two new kinds as
+ * they were added (`trip` in 0090, `tip` in 0091) and described both as
+ * clawbacks. A lookup with a fallback to the raw kind means the next one added
+ * shows up as an unfamiliar word rather than as a confident wrong answer.
+ */
+const PAYOUT_KIND_LABEL: Record<string, string> = {
+  earning: "Crew earning",
+  adjustment: "Clawback adjustment",
+  trip: "Trip fee — the crew drove out",
+  tip: "Tip, passed on in full",
+};
+
 function prettyDay(d: string | null): string {
   if (!d) return "no date yet";
   return new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "long", day: "numeric", year: "numeric" });
@@ -399,7 +415,15 @@ export default async function OpsJobPage(ctx: { params: Promise<{ id: string }> 
               style={p.status === "held" ? { background: "var(--sun-soft)", borderRadius: 8, padding: "2px 8px", margin: "2px -8px" } : undefined}
             >
               <Row
-                label={p.kind === "earning" ? "Crew earning" : "Clawback adjustment"}
+                /* FOUR KINDS, NOT TWO. This was a two-way ternary over a
+                   four-value column: `earning` or else "Clawback adjustment".
+                   0090 added `trip` and 0091 added `tip`, so a $35 trip fee
+                   and a $50 tip both rendered as a POSITIVE-VALUED clawback —
+                   ops reading "we clawed back $50" on a job where we had in
+                   fact paid the crew $50. An omission is a gap; this was the
+                   screen stating the opposite of what happened, on the one
+                   screen that exists to settle arguments. */
+                label={PAYOUT_KIND_LABEL[p.kind] ?? p.kind}
                 sub={`${payoutStatusLine(p.status)}${p.originalAmount != null && p.originalAmount !== p.amount ? ` · originally ${money.format(p.originalAmount)}` : ""}${p.batchId ? ` · batch ${shortId(p.batchId)}${p.batchStatus ? ` (${p.batchStatus})` : ""}` : " · not batched yet"} · ${prettyStamp(p.createdAt)}`}
                 value={money.format(p.amount)}
               />

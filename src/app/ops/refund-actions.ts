@@ -17,6 +17,16 @@ export async function quoteRefund(jobId: string): Promise<{
   ok: boolean; error?: string;
   refundable?: number; capturedCash?: number; alreadyRefunded?: number;
   suggestedClawback?: number; vendorCost?: number; crewPaidOut?: boolean;
+  /**
+   * A tip charged on this job — DISCLOSURE ONLY, never part of `refundable`.
+   *
+   * A tip has no invoice (0097) and `refunds.invoice_id` is NOT NULL, so there
+   * is currently nowhere to write a tip refund even if this offered one. But
+   * the customer ringing up is looking at a card statement that includes it,
+   * and ops was deciding from a screen that did not. A number ops cannot act
+   * on is still a number ops must be able to see.
+   */
+  tipCharged?: number;
 }> {
   const ops = await assertOps();
   if (!ops) return { ok: false, error: "Ops only." };
@@ -53,9 +63,19 @@ export async function quoteRefund(jobId: string): Promise<{
   const everOwed = Number(payout?.original_amount ?? payout?.amount ?? 0);
   const clawable = Math.max(0, Math.round((everOwed - alreadyClawed) * 100) / 100);
 
+  // Disclosure only — see the field's comment. Deliberately NOT added to
+  // `capturedCash` or `refundable`: those bound what this control may hand
+  // back, and it cannot hand back a tip.
+  const { data: tipRows } = await admin
+    .from("payments").select("amount").eq("tip_job_id", jobId).eq("status", "captured");
+  const tipCharged = Math.round(
+    (tipRows ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0) * 100,
+  ) / 100;
+
   return {
     ok: true,
     refundable,
+    tipCharged,
     capturedCash: captured,
     alreadyRefunded: Math.round(already * 100) / 100,
     suggestedClawback: Math.min(clawable, defaultClawback(refundable, Number(job.customer_price ?? 0), Number(job.vendor_cost ?? 0))),

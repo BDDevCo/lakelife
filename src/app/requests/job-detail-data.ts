@@ -75,6 +75,20 @@ export interface JobDetailMoney {
   hasCardOnFile: boolean;
   refunds: JobDetailRefund[];
   refundedTotal: number;
+  /**
+   * The thank-you they added afterwards, and when.
+   *
+   * A SEPARATE CHARGE ON THE SAME CARD (0097), so leaving it off this card
+   * meant the page printed "Your invoice — $340 · Paid" directly above the
+   * words "no add-ons, no surprises" on a job where a second charge had hit
+   * that card and was named nowhere on the page. Billing lists it; this is
+   * the screen somebody actually opens when they are looking at a job.
+   *
+   * NULL means never asked or never answered; 0 means asked and declined,
+   * which is a perfectly good answer and is shown as nothing at all.
+   */
+  tipAmount: number | null;
+  tippedAt: string | null;
 }
 
 /** Customer-safe Make-It-Right state. The internal status name is deliberately
@@ -160,7 +174,7 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
     .from("jobs")
     // ONE string literal, not a concatenation — PostgREST's typings key off
     // the literal, and a `+` join degrades every field to `unknown`.
-    .select("id, status, date, slot, customer_price, property_id, group_id, vendor_id, correction_of, scope_note, services(name, min_photos), properties(owner_id, nickname, address), vendors(company)")
+    .select("id, status, date, slot, customer_price, property_id, group_id, vendor_id, correction_of, scope_note, tip_amount, tipped_at, services(name, min_photos), properties(owner_id, nickname, address), vendors(company)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) return null;
@@ -309,6 +323,8 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
       hasCardOnFile,
       refunds,
       refundedTotal: refunds.reduce((s, r) => s + r.amount, 0),
+      tipAmount: job.tip_amount == null ? null : Number(job.tip_amount),
+      tippedAt: (job.tipped_at as string) ?? null,
     },
     photos,
     siblings,

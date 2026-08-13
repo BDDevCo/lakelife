@@ -23,6 +23,8 @@ interface Quote {
   suggestedClawback: number;
   vendorCost: number;
   crewPaidOut: boolean;
+  /** Disclosure only — a tip cannot be refunded through this control. */
+  tipCharged: number;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -72,6 +74,7 @@ export function RefundModal({
         suggestedClawback: res.suggestedClawback ?? 0,
         vendorCost: res.vendorCost ?? 0,
         crewPaidOut: !!res.crewPaidOut,
+        tipCharged: res.tipCharged ?? 0,
       };
       setQuote(q);
       setAmount(q.refundable > 0 ? q.refundable.toFixed(2) : "");
@@ -133,6 +136,20 @@ export function RefundModal({
                   <div className="mut">Already refunded {money.format(quote.alreadyRefunded)}</div>
                 )}
                 <div className="mut">Refundable now up to <b>{money.format(quote.refundable)}</b></div>
+                {/* THE NUMBER ON THEIR STATEMENT THAT ISN'T ON THIS SCREEN.
+                    A tip is a separate charge with no invoice (0097), so this
+                    control cannot give it back — but a customer ringing about
+                    "you charged me $250" is reading a statement that includes
+                    it, and ops was deciding from a screen that showed $200.
+                    Said out loud rather than left as a discrepancy to
+                    discover mid-call. */}
+                {quote.tipCharged > 0 && (
+                  <div className="mut" style={{ marginTop: 6 }}>
+                    Also charged: <b>{money.format(quote.tipCharged)}</b> tip to the crew.
+                    Their card total is {money.format(quote.capturedCash + quote.tipCharged)}.
+                    A tip can&apos;t be refunded here — it went to the crew in full.
+                  </div>
+                )}
               </div>
 
               <div className="ll-field">

@@ -320,6 +320,25 @@ function MoneyCard({ job }: { job: JobDetailView }) {
         </div>
       )}
 
+      {/* A SECOND CHARGE ON THE SAME CARD, named on the same card that names
+          the first. Without this the page said "Your invoice — $340 · Paid"
+          above the words "no add-ons, no surprises" while a tip charge sat
+          unmentioned on their statement. A declined tip (0) shows nothing —
+          zero is a good answer and never gets narrated back at somebody. */}
+      {job.money.tipAmount != null && job.money.tipAmount > 0 && (
+        <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
+            <span style={{ fontWeight: 800 }}>Thank-you to the crew</span>
+            <span style={{ fontWeight: 800 }}>{formatPrice(job.money.tipAmount)}</span>
+          </div>
+          <p className="mut" style={{ fontSize: 12.5, margin: "4px 0 0" }}>
+            Charged separately{job.money.tippedAt
+              ? ` on ${new Date(job.money.tippedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+              : ""}. Every cent went to the crew — LakeLife takes no share of a thank-you.
+          </p>
+        </div>
+      )}
+
       <div style={{ marginTop: 12 }}>
         <Link className="ll-btn ghost sm" href="/billing">See all billing</Link>
       </div>

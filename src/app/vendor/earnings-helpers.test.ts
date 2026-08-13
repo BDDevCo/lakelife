@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  earningsRowLabel,
   isoWeekKey,
   isoWeekParts,
   weekStartMonday,
@@ -164,5 +165,39 @@ describe("statusLabel", () => {
     expect(statusLabel("clawed")).toMatch(/refund went back/);
     expect(statusLabel("clawed")).not.toContain("clawed");
     expect(statusLabel("something_new")).toBe("Being worked out");
+  });
+});
+
+describe("the crew's statement says what each payment IS", () => {
+  it("job pay is named by its service", () => {
+    expect(earningsRowLabel({ kind: "earning", service: "Pier install" })).toBe("Pier install");
+  });
+
+  it("a clawback stays deliberately generic", () => {
+    // Never names the service, so it can't read as "you got docked for the
+    // pier install", and never carries a customer amount.
+    expect(earningsRowLabel({ kind: "adjustment", service: "Pier install" }))
+      .toBe("Adjustment per service terms");
+  });
+
+  it("A TRIP FEE IS NOT JOB PAY", () => {
+    // It used to collapse into 'earning' and print as the service name, so a
+    // $35 fee for driving to a locked house appeared on the crew's statement
+    // and CSV as ordinary pay for a pier install that never happened.
+    const s = earningsRowLabel({ kind: "trip", service: "Pier install" });
+    expect(s).toContain("Trip fee");
+    expect(s).toContain("no work possible");
+  });
+
+  it("A TIP IS NOT JOB PAY EITHER — it is different income to a bookkeeper", () => {
+    const s = earningsRowLabel({ kind: "tip", service: "Housekeeping" });
+    expect(s).toContain("Tip from the homeowner");
+    expect(s).toContain("Housekeeping");
+  });
+
+  it("an unknown kind falls back to the service, never to a clawback", () => {
+    // The safe default for a number a crew is owed is "we paid you for this
+    // job", not "we took money off you".
+    expect(earningsRowLabel({ kind: undefined, service: "Mowing" })).toBe("Mowing");
   });
 });

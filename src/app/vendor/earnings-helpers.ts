@@ -22,7 +22,7 @@ export interface EarningRow {
   // 'earning' = job pay; 'adjustment' = a refund clawback (docs/refunds-design.md,
   // migration 0043). Optional so existing test fixtures without it still type-check
   // — treat missing as 'earning'.
-  kind?: "earning" | "adjustment";
+  kind?: "earning" | "adjustment" | "trip" | "tip";
 }
 
 /** A week bucket of payouts with its subtotal. */
@@ -223,5 +223,13 @@ export function statusLabel(status: string): string {
  */
 export function earningsRowLabel(row: Pick<EarningRow, "kind" | "service">): string {
   if (row.kind === "adjustment") return "Adjustment per service terms";
+  // A TRIP FEE AND A TIP ARE NOT JOB PAY, and this is the document a crew's
+  // bookkeeper reads. Both used to collapse into 'earning' and print as the
+  // job's service name — so a $35 fee for driving to a locked house and a $50
+  // thank-you appeared on the statement as ordinary pay for a pier install
+  // that never happened. Totals right, classification wrong, on the one
+  // artifact where classification is the whole point.
+  if (row.kind === "trip") return `Trip fee — ${row.service ?? "visit"} (no work possible)`;
+  if (row.kind === "tip") return `Tip from the homeowner — ${row.service ?? "visit"}`;
   return row.service ?? "Service";
 }

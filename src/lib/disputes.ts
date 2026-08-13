@@ -23,6 +23,32 @@ const token = () =>
 const site = () => process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
 
+/**
+ * A DISPUTE HOLDS THE JOB PAY AND NOT THE TIP — and that is now a decision
+ * rather than an accident of a filter.
+ *
+ * Both functions below key on `kind = 'earning'`. Since 0090 and 0091 added
+ * `trip` and `tip`, that has quietly meant: open a dispute on a tipped job and
+ * the crew's earning freezes while the tip payout stays released and sweeps
+ * into the next batch.
+ *
+ * Kept, deliberately, for both of them:
+ *
+ *   A TIP is not ours to freeze. The homeowner chose to give it, after the
+ *   work, to those people. Clawing it back because a later complaint arrived
+ *   would make every tip provisional — and a tip you can lose is not a tip,
+ *   it is a deposit against future satisfaction. If the work was genuinely bad
+ *   the refundable thing is what we CHARGED for the work.
+ *
+ *   A TRIP FEE is compensation for fuel and an hour already spent, on a visit
+ *   that by definition produced no work to dispute. Holding it would mean a
+ *   crew paying for our bad address data twice.
+ *
+ * The consequence is real and should be understood: a full auto-refund leaves
+ * the customer having paid the tip and the crew having kept it. If that ever
+ * needs to change, change it HERE and say why — do not widen the filter.
+ */
+
 /** held→released, guarded to the loose earning row only. */
 async function releaseHeldPayout(admin: ReturnType<typeof createServiceClient>, jobId: string): Promise<void> {
   await admin.from("payouts")

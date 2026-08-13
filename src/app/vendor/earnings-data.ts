@@ -97,7 +97,13 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
     const jobDate = (p as { kind?: string }).kind === "adjustment"
       ? String(p.created_at ?? "").slice(0, 10)
       : job?.date ?? String(p.created_at ?? "").slice(0, 10);
-    const kind = (p.kind as string) === "adjustment" ? "adjustment" : "earning";
+    // CARRY THE KIND THROUGH. This was `=== "adjustment" ? "adjustment" :
+    // "earning"`, which quietly relabelled 0090's trip fees and 0091's tips as
+    // ordinary job pay on the crew's statement and CSV. Anything unrecognised
+    // still falls back to 'earning', which is the safe default for a number a
+    // crew is owed — but the two kinds we actually have now say what they are.
+    const raw = (p.kind as string) ?? "earning";
+    const kind = raw === "adjustment" || raw === "trip" || raw === "tip" ? raw : "earning";
     return {
       id: p.id as string,
       jobDate,
