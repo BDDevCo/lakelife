@@ -137,17 +137,23 @@ export function RefundModal({
                 )}
                 <div className="mut">Refundable now up to <b>{money.format(quote.refundable)}</b></div>
                 {/* THE NUMBER ON THEIR STATEMENT THAT ISN'T ON THIS SCREEN.
-                    A tip is a separate charge with no invoice (0097), so this
-                    control cannot give it back — but a customer ringing about
-                    "you charged me $250" is reading a statement that includes
-                    it, and ops was deciding from a screen that showed $200.
-                    Said out loud rather than left as a discrepancy to
-                    discover mid-call. */}
+                    A tip is a separate charge with no invoice (0097), so a
+                    customer ringing about "you charged me $250" is reading a
+                    statement that includes it while ops was deciding from a
+                    screen showing $200. Said out loud rather than left as a
+                    discrepancy to discover mid-call.
+
+                    The wording states the POLICY, not a limit of this screen.
+                    "Can't be refunded here" invites the reasonable next
+                    question — where, then? — and there is no answer: a tip is
+                    final (0098). Ops should be able to say so on the phone
+                    without going to look. */}
                 {quote.tipCharged > 0 && (
                   <div className="mut" style={{ marginTop: 6 }}>
                     Also charged: <b>{money.format(quote.tipCharged)}</b> tip to the crew.
                     Their card total is {money.format(quote.capturedCash + quote.tipCharged)}.
-                    A tip can&apos;t be refunded here — it went to the crew in full.
+                    Tips are final — it reached the crew in full and isn&apos;t
+                    refundable. If the work was wrong, make it right below.
                   </div>
                 )}
               </div>

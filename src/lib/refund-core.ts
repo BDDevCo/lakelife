@@ -52,6 +52,24 @@ export async function executeRefund(input: {
     .from("payments").select("id, amount, status, processor_ref")
     .eq("invoice_id", invoice.id).eq("status", "captured").maybeSingle();
   if (!payment) return { ok: false, error: "Nothing captured on this job — there's no cash to send back." };
+
+  // A TIP IS NOT IN THIS NUMBER, AND MUST NOT BE PUT IN IT.
+  //
+  // `captured` bounds everything below — the refundable ceiling, the clawback
+  // band, the processor call. It is the capture against the job's INVOICE, and
+  // a tip has no invoice by design (0097), so a tip is unreachable from here by
+  // construction rather than by a filter somebody has to maintain.
+  //
+  // That is the policy, not an omission (0098): a tip releases to the crew the
+  // moment it captures, and taking it back off the person it was given to —
+  // for a decision made afterwards by somebody else — would make every tip
+  // provisional. A tip you can claw back is a deposit against future
+  // satisfaction, which is exactly the dynamic 0091 exists to prevent.
+  //
+  // If the WORK was wrong, the remedy is here: refund what we charged for the
+  // work. The ops modal states this so nobody has to reason it out mid-call.
+  // Widening this read to find tip payments would silently arm a refund path
+  // the `refunds` table cannot even record — `refunds.invoice_id` is NOT NULL.
   const captured = Number(payment.amount ?? 0);
 
   const { data: priorRows } = await admin
