@@ -207,7 +207,23 @@ export async function mintStickers(parkId: string): Promise<{
     .not("qr_token", "is", null)
     .order("lot_number");
 
-  const base = process.env.NEXT_PUBLIC_SITE_URL ?? "";
+  // A STICKER WITH A RELATIVE URL IS A DEAD STICKER, FOREVER.
+  //
+  // Without the site URL this produced "/fix/abc123" — which is a working link
+  // in a browser that is already on the site, and a meaningless string once it
+  // is a QR code screwed to a post. Nobody would find out until a report never
+  // arrived. Refuse to hand over anything printable rather than print rubbish.
+  const base = (process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(base)) {
+    return {
+      ok: false,
+      error:
+        "The site address isn't configured, so these would print as links that " +
+        "go nowhere. Set NEXT_PUBLIC_SITE_URL first — a sticker is permanent " +
+        "once it's on a post.",
+    };
+  }
+
   const rows: StickerRow[] = (after ?? []).map((l) => ({
     lotId: l.id as string,
     lotNumber: (l.lot_number as string) ?? "?",

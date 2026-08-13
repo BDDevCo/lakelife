@@ -38,12 +38,22 @@ export async function loadSticker(token: string): Promise<StickerView | null> {
 
   const { data: lot } = await admin
     .from("park_lots")
-    .select("id, lot_number, park_id, lifecycle, active")
+    .select("id, lot_number, park_id, lifecycle")
     .eq("qr_token", token)
     .maybeSingle();
   if (!lot) return null;
-  // A retired lot's sticker should not take reports — but say nothing about
-  // WHY, because that is park business.
+
+  // LIFECYCLE, AND DELIBERATELY NOT `active`.
+  //
+  // 0065 draws the line: lifecycle is whether the lot EXISTS, `active` is
+  // whether it is currently OFFERED — "bookable = active AND lifecycle =
+  // live". A lot taken off the market still has somebody living on it, and
+  // their water riser still leaks. Refusing their report because the owner is
+  // not advertising the lot would be the software enforcing a marketing
+  // decision against a resident.
+  //
+  // A retired lot's sticker takes nothing, and says nothing about WHY —
+  // that is park business, not a stranger's.
   if (lot.lifecycle && lot.lifecycle !== "live") return null;
 
   const { data: park } = await admin

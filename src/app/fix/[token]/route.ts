@@ -29,9 +29,19 @@ function page(
   view: { parkName: string; lotNumber: string },
   token: string,
   problem?: string,
+  /**
+   * What they already typed. KEPT on a failed submit — the comment in POST
+   * used to promise this and the code threw it away, which on a phone means
+   * "go back" loses the whole report and most people simply don't retype it.
+   *
+   * Every one of these is attacker-supplied and goes into hand-built HTML, so
+   * every one is escaped. React is not doing it for us here.
+   */
+  prior?: { category?: string; note?: string; name?: string; phone?: string },
 ): Response {
   const options = REQUEST_CATEGORIES
-    .map((c) => `<option value="${escapeHtml(c.value)}">${escapeHtml(c.label)}</option>`)
+    .map((c) =>
+      `<option value="${escapeHtml(c.value)}"${c.value === prior?.category ? " selected" : ""}>${escapeHtml(c.label)}</option>`)
     .join("");
   const warn = problem
     ? `<p class="warn">${escapeHtml(problem)}</p>`
@@ -65,13 +75,13 @@ ${warn}
   <select id="category" name="category">${options}</select>
 
   <label for="note">What&rsquo;s wrong?</label>
-  <textarea id="note" name="note" placeholder="e.g. the water riser is leaking under the step" required></textarea>
+  <textarea id="note" name="note" placeholder="e.g. the water riser is leaking under the step" required>${escapeHtml(prior?.note ?? "")}</textarea>
 
   <label for="name">Your name <span style="font-weight:400;color:#5d7681">(optional)</span></label>
-  <input id="name" name="name" autocomplete="name">
+  <input id="name" name="name" autocomplete="name" value="${escapeHtml(prior?.name ?? "")}">
 
   <label for="phone">Phone, if you want a call back <span style="font-weight:400;color:#5d7681">(optional)</span></label>
-  <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel">
+  <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" value="${escapeHtml(prior?.phone ?? "")}">
   <p class="hint">You don&rsquo;t have to leave either. A report with no name is
   still a report.</p>
 
@@ -115,19 +125,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
     return htmlPage("That didn't send", "Please try again, or ring the office. 🌊", false);
   }
 
-  const res = await fileRequestByToken({
-    token,
+  const sent = {
     category: String(form.get("category") ?? "other"),
     note: String(form.get("note") ?? ""),
     name: String(form.get("name") ?? ""),
     phone: String(form.get("phone") ?? ""),
-  });
+  };
+  const res = await fileRequestByToken({ token, ...sent });
 
   if (!res.ok) {
-    // Re-render the form with what went wrong rather than a dead end — on a
-    // phone, "go back" loses everything they typed.
+    // Re-render WITH WHAT THEY TYPED. This used to re-render an empty form
+    // while the comment claimed otherwise — on a phone that means the report
+    // is gone and most people do not type it again.
     const view = await loadSticker(token);
-    if (view) return page(view, token, res.error);
+    if (view) return page(view, token, res.error, sent);
     return htmlPage("That didn't send", res.error ?? "Please ring the office. 🌊", false);
   }
 
