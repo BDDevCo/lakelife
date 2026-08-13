@@ -46,16 +46,39 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
   const [busy, start] = useTransition();
   const [why, setWhy] = useState("");
   const [waiving, setWaiving] = useState(false);
+  const inFlight = row.state === "fee_charging";
+  const waived = row.state === "fee_waived";
+  const decidable = row.fee > 0 && row.state === "fee_proposed";
 
   return (
     <div className="ll-card ll-card-pad">
       <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
         <strong style={{ fontSize: 15 }}>{row.serviceName}</strong>
         <span className="mut" style={{ fontSize: 13 }}>{row.address}</span>
-        <span className="ll-pill warn" style={{ marginLeft: "auto" }}>{usd(row.fee)} proposed</span>
+        <span className={`ll-pill ${inFlight ? "bad" : "warn"}`} style={{ marginLeft: "auto" }}>
+          {inFlight ? "needs a hand" : waived ? "waived" : `${usd(row.fee)} proposed`}
+        </span>
       </div>
 
       <div className="mut" style={{ fontSize: 12.5, marginTop: 4 }}>{row.headline}</div>
+
+      {/* A CHARGE THAT DIED MID-FLIGHT. 0092 chose deliberately not to resolve
+          this automatically — a sweep would either double-charge a card or
+          write off money nobody checked — and said "a row stuck there needs a
+          human". This is that human being told. */}
+      {inFlight && (
+        <p
+          style={{
+            fontSize: 13, margin: "10px 0 0", padding: "10px 12px", borderRadius: 8,
+            background: "var(--alarm-bg, #fdecec)", lineHeight: 1.55,
+          }}
+        >
+          <b>A charge for {usd(row.fee)} was started and we never heard back.</b>{" "}
+          It may have gone through. Check the processor for this job before
+          touching it — nothing here will charge or clear it, on purpose, because
+          only the processor knows whether the customer&apos;s card was taken.
+        </p>
+      )}
 
       <p className="mut" style={{ fontSize: 13, margin: "8px 0 0", lineHeight: 1.5 }}>
         {row.outcome === "stood_down" ? "Crew stood down" : "Nobody let them in"} on{" "}
@@ -65,6 +88,16 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
       </p>
       {row.reason && (
         <p style={{ fontSize: 13, margin: "6px 0 0", fontStyle: "italic" }}>&ldquo;{row.reason}&rdquo;</p>
+      )}
+
+      {/* THE WAIVER REASON, READ BACK. Ops is required to type one — the button
+          is disabled without it — on the stated grounds that in six months the
+          only way to know why is if somebody wrote it down. Nothing read it
+          back until now, so it was written down where nobody could look. */}
+      {waived && row.waivedReason && (
+        <p className="mut" style={{ fontSize: 12.5, margin: "8px 0 0", lineHeight: 1.5 }}>
+          Waived — &ldquo;{row.waivedReason}&rdquo;
+        </p>
       )}
 
       {/* THE FACT THAT SHOULD DECIDE HOW THIS FEELS. */}
@@ -95,7 +128,7 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
         </p>
       )}
 
-      {row.fee <= 0 && (
+      {row.fee <= 0 && !inFlight && (
         <p className="mut" style={{ fontSize: 12.5, margin: "8px 0 0" }}>
           Nothing to charge on this one — the details we had were ours to get
           right. It is here so the trip is not invisible.
@@ -103,7 +136,7 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
       )}
 
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        {row.fee > 0 && (
+        {decidable && (
         <button
           className="ll-btn gold"
           style={{ minHeight: 44 }}
@@ -119,7 +152,7 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
           {busy ? "Working…" : `Charge ${usd(row.fee)}`}
         </button>
         )}
-        {row.fee > 0 && (
+        {decidable && (
         <button className="ll-btn ghost" style={{ minHeight: 44 }} disabled={busy}
           onClick={() => setWaiving((w) => !w)}>
           Waive it

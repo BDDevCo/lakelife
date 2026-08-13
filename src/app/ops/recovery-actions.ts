@@ -74,11 +74,34 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
   // — the customer was never billed a cent, the row left the queue, and every
   // screen said charged forever. Worse, `raiseTripFees` reads that state as
   // COLLECTED CASH, so it also understated what LakeLife was funding.
-  const { data: invoice } = await admin
-    .from("invoices")
-    .insert({ job_id: jobId, property_id: claimed.property_id, amount, status: "due" })
-    .select("id")
-    .single();
+  // ONE INVOICE PER JOB — `invoices_one_per_job` is a UNIQUE index, and this
+  // used to be a bare INSERT. That made the SECOND attempt impossible: the
+  // first click raises the invoice, the card declines, the state goes back to
+  // `fee_proposed` and the invoice stays. Click Charge again and the insert
+  // hits 23505, which supabase-js hands back as `{error, data:null}` — so
+  // `invoice` was null, the whole charge block was skipped, and ops was told
+  // "That card declined (or there isn't one on file)" about a card that was
+  // never presented. A customer who fixed their card could never be charged.
+  // Reuse the row, exactly as the late-cancellation path and the nightly do.
+  let { data: invoice } = await admin
+    .from("invoices").select("id, status").eq("job_id", jobId).maybeSingle();
+  if (!invoice) {
+    const { data: created, error: iErr } = await admin
+      .from("invoices")
+      .insert({ job_id: jobId, property_id: claimed.property_id, amount, status: "due" })
+      .select("id, status")
+      .single();
+    if (iErr || !created) {
+      // Put the row back on the queue rather than stranding it mid-claim.
+      await admin.from("jobs").update({ recovery_state: "fee_proposed" }).eq("id", jobId);
+      return { ok: false, error: "Couldn't raise the invoice — nothing was charged." };
+    }
+    invoice = created;
+  } else if (invoice.status === "paid") {
+    // Already settled. Charging again would be a second bite at the same card.
+    await admin.from("jobs").update({ recovery_state: "fee_charged" }).eq("id", jobId);
+    return { ok: false, error: "That one is already paid — nothing further was charged." };
+  }
 
   let charged = false;
   let ref: string | null = null;
@@ -210,6 +233,10 @@ export interface ProposedFeeRow {
   headline: string;
   /** True when nothing at all has reached the crew for this trip. */
   crewOutOfPocket: boolean;
+  /** Which of the three states this row is actually in. */
+  state: "fee_proposed" | "fee_waived" | "fee_charging";
+  /** Why ops waived it — required at the time, and now readable afterwards. */
+  waivedReason: string | null;
 }
 
 /**
@@ -226,13 +253,19 @@ export async function getProposedFees(): Promise<ProposedFeeRow[]> {
 
   const { data: jobs } = await admin
     .from("jobs")
-    .select("id, date, fee_proposed_amount, reschedule_deadline, vendor_cost, no_show_at, no_show_reason, stood_down_at, stood_down_reason, services(name), properties(address)")
-    // BOTH STATES. A stand-down is auto-waived by the nightly (never
+    .select("id, date, recovery_state, fee_proposed_amount, fee_waived_reason, reschedule_deadline, vendor_cost, no_show_at, no_show_reason, stood_down_at, stood_down_reason, services(name), properties(address)")
+    // ALL THREE STATES. A stand-down is auto-waived by the nightly (never
     // fee-eligible), so filtering on `fee_proposed` alone meant a crew who
     // drove out because OUR profile was wrong never appeared on anybody's
     // screen. Nothing is charged for these — the card offers no fee — but the
     // trip happened and somebody should see it.
-    .in("recovery_state", ["fee_proposed", "fee_waived"])
+    //
+    // AND `fee_charging`, which 0092 said in writing "needs a human" — and
+    // then no query anywhere selected it. A charge that died mid-flight was
+    // invisible to this screen, refused by both action guards and ignored by
+    // the nightly: the one row a person was told to look at was the one row
+    // nobody could see.
+    .in("recovery_state", ["fee_proposed", "fee_waived", "fee_charging"])
     .order("date", { ascending: true });
   if (!jobs?.length) return [];
 
@@ -291,6 +324,11 @@ export async function getProposedFees(): Promise<ProposedFeeRow[]> {
         standDown ? "stood_down" : "no_access",
         paidByJob.get(j.id as string) ?? 0,
       ),
+      state: (j.recovery_state as ProposedFeeRow["state"]) ?? "fee_proposed",
+      // 0095 justified this column on "in six months the only way to know why
+      // is if they wrote it down". Ops was made to type it — the button is
+      // disabled without one — and then nothing ever read it back.
+      waivedReason: (j.fee_waived_reason as string) ?? null,
     };
   });
 }
