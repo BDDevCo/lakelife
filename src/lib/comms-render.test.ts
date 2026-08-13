@@ -37,6 +37,33 @@ describe("comms context rendering — rule 1 holds at the string boundary", () =
       expect(s).not.toContain(word);
     }
   });
+  it("a tip is named as its own charge, never folded into the price", () => {
+    // A tip is a SECOND charge on the card (0097) and does not live in
+    // customer_price. Rendering "$115" would answer "what did you charge me?"
+    // with a number that appears on no receipt the customer holds; rendering
+    // "$95" alone answers it short by the tip. Both numbers, separately.
+    const withTip: CustomerContext = {
+      ...customer,
+      jobs: [{ service: "Housekeeping", date: "2026-07-10", status: "paid", price: 95, where: "The Cabin", tip: 20 }],
+    };
+    const s = renderCustomerContext(withTip);
+    expect(s).toContain("$95");
+    expect(s).toContain("$20 tip");
+    expect(s).not.toContain("$115");
+  });
+
+  it("says nothing about a tip that was declined or never asked", () => {
+    // Zero is a perfectly good answer (0091) and must never be narrated back
+    // at somebody as though it were a shortfall.
+    for (const tip of [0, null, undefined]) {
+      const s = renderCustomerContext({
+        ...customer,
+        jobs: [{ service: "Housekeeping", date: "2026-07-10", status: "paid", price: 95, where: "The Cabin", tip }],
+      });
+      expect(s).not.toContain("tip");
+    }
+  });
+
   it("crew context carries the crew's own facts including trucks/employees", () => {
     const s = renderCrewContext(crew);
     expect(s).toContain("GreenEdge");

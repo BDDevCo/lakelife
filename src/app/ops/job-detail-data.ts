@@ -189,6 +189,16 @@ export interface OpsMoneyTotals {
   crewNet: number;
   referralAccrued: number; // non-void referral money this job generated
   lakelifeNet: number; // what LakeLife keeps once everyone else is paid
+  /**
+   * The tip, charged to the customer and passed to the crew in full (0091).
+   *
+   * DELIBERATELY OUTSIDE EVERY TOTAL ABOVE. It is not billed, not captured
+   * revenue, and not LakeLife's — 0097 keeps it out of `invoices` for exactly
+   * that reason, and `crewNet` counts only earnings and adjustments. It is
+   * here so that when a customer rings up asking what we charged them, ops can
+   * see the whole card statement instead of a number that is short by the tip.
+   */
+  tipCharged: number;
 }
 
 export interface OpsJobFile {
@@ -371,7 +381,7 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
     accrued_at: string; matured_at: string | null;
   }[];
 
-  const [paymentRes, creditRes, batchRes] = await Promise.all([
+  const [paymentRes, creditRes, batchRes, tipPayRes] = await Promise.all([
     invoiceIds.length
       ? admin
           .from("payments")
@@ -385,6 +395,15 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
     batchIds.length
       ? admin.from("payout_batches").select("id, status").in("id", batchIds)
       : Promise.resolve({ data: [] as unknown[] }),
+    // A TIP HAS NO INVOICE (0097), so the payments fetch above — keyed on
+    // invoiceIds, like every other read of this table in the codebase — can
+    // never see it. Without this the tip is a card charge that appears on no
+    // ops screen at all.
+    admin
+      .from("payments")
+      .select("amount")
+      .eq("tip_job_id", jobId)
+      .eq("status", "captured"),
   ]);
 
   const creditRows = (creditRes.data ?? []) as unknown as {
@@ -590,6 +609,12 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
     crewNet,
     referralAccrued,
     lakelifeNet: round2(netCustomerCash - crewNet - referralAccrued),
+    // Not netted into anything above — see the field's comment. Passing it
+    // through `lakelifeNet` would say we kept a thank-you.
+    tipCharged: round2(
+      ((tipPayRes.data ?? []) as { amount: number | null }[])
+        .reduce((s, p) => s + Number(p.amount ?? 0), 0),
+    ),
   };
 
   return {

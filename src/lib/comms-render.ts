@@ -9,7 +9,13 @@
 export interface CustomerContext {
   name: string | null;
   properties: Array<{ label: string; lake: string | null }>;
-  jobs: Array<{ service: string; date: string; status: string; price: number | null; where: string | null }>;
+  /**
+   * `tip` is what the customer added for the crew afterwards. It is a SECOND
+   * charge on their card (0097) that lives outside `price`, so without it here
+   * the concierge answers "what did you charge me?" with a number short by the
+   * tip — and does so confidently, which is the worst version of wrong.
+   */
+  jobs: Array<{ service: string; date: string; status: string; price: number | null; where: string | null; tip?: number | null }>;
   autopilotServices: string[];
   creditBalance: number;
 }
@@ -35,7 +41,10 @@ export function renderCustomerContext(c: CustomerContext): string {
     lines.push(`Upcoming: ${j.service} on ${j.date}${j.where ? ` at ${j.where}` : ""} (${j.status}${j.price != null ? `, $${j.price}` : ""})`);
   }
   for (const j of past.slice(0, 5)) {
-    lines.push(`Done: ${j.service} on ${j.date}${j.price != null ? ` ($${j.price})` : ""}`);
+    // The tip is named as a separate charge, never folded into the price —
+    // "$95 plus a $20 tip you added" is the true sentence; "$115" is not.
+    const tip = j.tip != null && j.tip > 0 ? ` plus a $${j.tip} tip they added for the crew` : "";
+    lines.push(`Done: ${j.service} on ${j.date}${j.price != null ? ` ($${j.price})` : ""}${tip}`);
   }
   if (c.autopilotServices.length) lines.push(`Autopilot on: ${c.autopilotServices.join(", ")}`);
   if (c.creditBalance > 0) lines.push(`Credit balance: $${c.creditBalance.toFixed(2)}`);

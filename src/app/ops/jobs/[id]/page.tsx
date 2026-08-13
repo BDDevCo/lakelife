@@ -428,6 +428,19 @@ export default async function OpsJobPage(ctx: { params: Promise<{ id: string }> 
           <Row label="Crew take-home on this job" sub={t.crewAdjustments < 0 ? `earning ${money.format(t.crewNow)} less ${money.format(Math.abs(t.crewAdjustments))} in clawbacks` : undefined} value={money.format(t.crewNet)} strong />
           {t.referralAccrued > 0 && <Row label="Referral money owed out" value={money.format(t.referralAccrued)} strong />}
           <Row label="LakeLife keeps" value={money.format(t.lakelifeNet)} strong />
+          {t.tipCharged > 0 && (
+            /* OUTSIDE the totals on purpose, and said so on the screen. The
+               customer's card moved by this much, so ops must be able to see
+               it when they ring up — but it is not billed, not captured
+               revenue and not ours, so it must never be summed into the lines
+               above. A tip that appeared inside "LakeLife keeps" would be a
+               lie on the one screen that exists to settle arguments. */
+            <Row
+              label="Tip to the crew"
+              sub="charged to the customer, passed on in full — not counted in any line above"
+              value={money.format(t.tipCharged)}
+            />
+          )}
         </div>
       </div>
 

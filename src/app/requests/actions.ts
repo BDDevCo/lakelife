@@ -12,6 +12,7 @@ import { getAvailability } from "@/app/book/actions";
 import { LakeLifePayments } from "@/lib/payments";
 import { alertOpsDoubleCharge } from "@/lib/automation";
 import { sendSms } from "@/lib/sms";
+import { sendEmail } from "@/lib/email";
 
 export interface CancelResult {
   ok: boolean;
@@ -615,7 +616,7 @@ export async function addTip(
 
   const { data: pm } = await admin
     .from("payment_methods")
-    .select("token")
+    .select("token, brand, last4")
     .eq("user_id", loaded.ownerId)
     .order("is_default", { ascending: false })
     .order("created_at", { ascending: false })
@@ -625,13 +626,18 @@ export async function addTip(
     return { ok: false, error: "Add a card in Billing first and we'll pass it straight on." };
   }
 
-  const { data: invoice } = await admin
-    .from("invoices")
-    .insert({ job_id: jobId, property_id: loaded.job.property_id, amount: v.amount, status: "due" })
-    .select("id")
-    .single();
-  if (!invoice) return { ok: false, error: "Couldn't set that up — try again." };
-
+  // NO INVOICE. A tip is not money LakeLife earned — it is pass-through to the
+  // crew, in full (0091) — so 0097 gives it a `payments` row hung off the job
+  // instead, and `invoices` stays purely revenue.
+  //
+  // This also fixes a tip that could never be charged AT ALL. The old code
+  // raised an invoice here, and `invoices_one_per_job` is UNIQUE: every
+  // finished job already has one, so the insert came back 23505, supabase-js
+  // handed it over as `{error, data:null}`, and the customer was told
+  // "couldn't set that up — try again" every time, forever. Zero tips had ever
+  // been recorded. The comment above claimed this mirrored the late-cancel
+  // path; it copied that path's ORDER and not its lookup-first, which is the
+  // part that made the order survivable.
   const charge = await LakeLifePayments.charge({
     token: pm.token as string,
     amountCents: Math.round(v.amount * 100),
@@ -639,24 +645,40 @@ export async function addTip(
   });
 
   const { error: payErr } = await admin.from("payments").insert({
-    invoice_id: invoice.id,
+    tip_job_id: jobId,
     amount: v.amount,
     status: charge.ok ? "captured" : "failed",
     processor_ref: charge.ref ?? null,
   });
-  // The processor took it and the ledger refused to record it — the one case
-  // a human has to hear about tonight, because only a human can give it back.
-  if (payErr?.code === "23505" && charge.ok) {
-    await alertOpsDoubleCharge(admin, invoice.id as string, v.amount, charge.ref ?? null);
+
+  // THE PROCESSOR TOOK IT AND THE LEDGER REFUSED TO RECORD IT.
+  //
+  // ANY insert failure here, not just a duplicate. The first version of this
+  // checked `payErr?.code === "23505"` alone and let every other error fall
+  // through — so a constraint we hadn't thought of, or a dropped connection,
+  // meant the customer's card was charged, no payments row existed, and the
+  // code went straight on to release the crew's payout. Money out of a
+  // customer, money to a crew, and nothing in the books joining them.
+  //
+  // Under the old tips-as-invoices code an invoice row at least survived to
+  // hint at it. A tip's `payments` row is now the ONLY artifact of the charge,
+  // which makes this the one branch that must not be optimistic. So: stop.
+  // Nothing is stamped, no payout is released, and a human hears about it
+  // tonight — only a person can hand the money back.
+  if (payErr && charge.ok) {
+    await alertOpsDoubleCharge(admin, jobId, v.amount, charge.ref ?? null, "tip");
+    return {
+      ok: false,
+      error: "Your card was charged but we couldn't record it — we've flagged it and someone will make it right today. Please don't try again.",
+    };
   }
 
   if (!charge.ok) {
     // Nothing is stamped on the job, so they can try again with another card.
+    // The failed row stays: a declined attempt is a record of trying, and 0097
+    // only makes the CAPTURED one unique.
     return { ok: false, error: "That card was declined — nothing has been sent." };
   }
-
-  await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null })
-    .eq("id", invoice.id);
 
   const { error } = await admin
     .from("jobs")
@@ -674,6 +696,32 @@ export async function addTip(
     status: "released",
     kind: "tip",
   });
+
+  // A RECEIPT, BECAUSE A TIP IS A CHARGE. Three screens promise "Receipts &
+  // invoices always send by email so you never miss a charge", and `rcpt` is
+  // the one notification type that is LOCKED always-on — yet this path sent
+  // nothing at all. The customer's card moved and their only evidence was a
+  // grey line on one job page.
+  try {
+    const { data: owner } = await admin
+      .from("users").select("email, name").eq("id", loaded.ownerId).maybeSingle();
+    const to = (owner?.email as string) ?? null;
+    if (to) {
+      const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v.amount);
+      void sendEmail({
+        to,
+        subject: `Your LakeLife receipt — thank-you for the crew`,
+        html:
+          `<p>Hi ${(owner?.name as string) ?? "there"},</p>` +
+          `<p>Thank you for the ${amt} you added for the crew who did your ` +
+          `${loaded.svcName}${pm.brand ? `, charged to your ${pm.brand} ending ${pm.last4}` : ""}.</p>` +
+          `<p><b>Every cent goes to them</b> — LakeLife takes no share of a thank-you.</p>` +
+          `<p>🌊</p>`,
+      });
+    }
+  } catch {
+    /* a receipt must never unwind a charge that already succeeded */
+  }
 
   revalidatePath("/requests");
   revalidatePath("/billing");

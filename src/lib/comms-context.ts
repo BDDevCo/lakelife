@@ -31,7 +31,7 @@ export async function buildCustomerContext(userId: string): Promise<CustomerCont
   const [{ data: jobs }, { data: autopilot }, { data: credits }] = await Promise.all([
     propIds.length
       ? admin.from("jobs")
-          .select("date, status, customer_price, services(name), properties(nickname, address)")
+          .select("date, status, customer_price, tip_amount, services(name), properties(nickname, address)")
           .in("property_id", propIds)
           .in("status", ["requested", "scheduled", "in_progress", "complete", "paid"])
           .order("date", { ascending: false })
@@ -60,6 +60,9 @@ export async function buildCustomerContext(userId: string): Promise<CustomerCont
       status: j.status as string,
       // The ALL-IN price is the customer's own number — allowed.
       price: j.customer_price == null ? null : Number(j.customer_price),
+      // Their own tip, likewise their own number. A second charge on their
+      // card (0097), so a billing answer that omits it is simply wrong.
+      tip: j.tip_amount == null ? null : Number(j.tip_amount),
       where: (one(j.properties) as { nickname?: string; address?: string } | null)?.nickname
         ?? (one(j.properties) as { address?: string } | null)?.address ?? null,
     })),

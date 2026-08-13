@@ -264,12 +264,21 @@ export interface SettleOutcome {
  */
 export async function alertOpsDoubleCharge(
   admin: ReturnType<typeof createServiceClient>,
-  invoiceId: string,
+  subjectId: string,
   amount: number,
   ref: string | null,
+  // A tip has no invoice at all (0097) — it hangs off the job — so the email
+  // has to name the right thing or ops goes looking for an invoice that was
+  // never raised.
+  against: "invoice" | "tip" = "invoice",
 ): Promise<void> {
   try {
     const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+    const what = against === "tip"
+      ? `as a tip on visit <code>${subjectId}</code> and the ledger refused the ` +
+        `payment row — a captured tip already exists for that visit`
+      : `against invoice <code>${subjectId}</code> and the ledger refused the ` +
+        `payment row — an earlier capture already exists for that invoice`;
     const { data: opsUsers } = await admin
       .from("users").select("email").eq("role", "ops").not("email", "is", null);
     for (const u of opsUsers ?? []) {
@@ -279,9 +288,7 @@ export async function alertOpsDoubleCharge(
         to,
         subject: `⚠️ CHARGED BUT NOT RECORDED — ${amt}`,
         html:
-          `<p>A card was charged <b>${amt}</b> against invoice <code>${invoiceId}</code> ` +
-          `and the ledger refused the payment row — an earlier capture already ` +
-          `exists for that invoice.</p>` +
+          `<p>A card was charged <b>${amt}</b> ${what}.</p>` +
           `<p>The money left the customer. Processor reference: ` +
           `<code>${ref ?? "none returned"}</code>.</p>` +
           `<p><b>This needs a refund today.</b> Nothing automatic will fix it.</p>`,

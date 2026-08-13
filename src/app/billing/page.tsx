@@ -40,11 +40,55 @@ export default async function BillingPage() {
     invoiceQ = invoiceQ.eq("property_id", activeId);
   }
   const creditQ = supabase.from("user_credits").select("amount");
-  const [cards, { data: jobs }, { data: invoices }, { data: credits }] = await Promise.all([listPaymentMethods(), upcomingQ, invoiceQ, creditQ]);
+
+  // A TIP IS CHARGED BUT NEVER INVOICED (0097), so it cannot appear in the
+  // list above — and a charge the customer cannot find is the worst kind.
+  // `payments_owner_reads_own_tip` lets them read their own; the job ids come
+  // from `owner_jobs` so the active-property filter still applies, since
+  // `payments` has no property of its own.
+  const tipQ = supabase.from("payments").select("id, amount, status, created_at, tip_job_id")
+    .not("tip_job_id", "is", null)
+    .eq("status", "captured")
+    .order("created_at", { ascending: false });
+  let tippedJobsQ = supabase.from("owner_jobs").select("id, service_name, property_id");
+  if (activeId) tippedJobsQ = tippedJobsQ.eq("property_id", activeId);
+
+  const [cards, { data: jobs }, { data: invoices }, { data: credits }, { data: tipRows }, { data: tipJobs }] =
+    await Promise.all([listPaymentMethods(), upcomingQ, invoiceQ, creditQ, tipQ, tippedJobsQ]);
 
   const defaultCard = cards.find((c) => c.is_default) ?? cards[0];
   const upcoming = jobs ?? [];
   const creditBalance = (credits ?? []).reduce((sum, c) => sum + Number(c.amount ?? 0), 0);
+
+  const jobName = new Map((tipJobs ?? []).map((j) => [j.id as string, (j.service_name as string) ?? "a visit"]));
+  const tips = (tipRows ?? [])
+    // Scoped to the property being viewed. A tip whose job is not in this
+    // property's list belongs to another place they own, not to this bill.
+    .filter((t) => jobName.has(t.tip_job_id as string))
+    .map((t) => ({
+      id: t.id as string,
+      amount: Number(t.amount ?? 0),
+      created_at: t.created_at as string,
+      label: `Thank-you to the crew · ${jobName.get(t.tip_job_id as string)}`,
+    }));
+
+  const history: Array<{
+    id: string; when: string; amount: number; pill: string; label?: string;
+  }> = [
+    ...(invoices ?? []).map((inv) => ({
+      id: inv.id as string,
+      when: (inv.created_at as string) ?? "",
+      amount: Number(inv.amount ?? 0),
+      // A refund is ops-only at RLS, so this surface never queries the refunds
+      // ledger directly — it only ever reads invoice status. A FULL refund
+      // flips status to 'refunded'; a partial leaves it 'paid' with no amount
+      // shown here (v1 — see docs/refunds-design.md).
+      pill: inv.status === "refunded" ? "↩ Refunded" : ((inv.status as string) ?? ""),
+    })),
+    ...tips.map((t) => ({
+      id: t.id, when: t.created_at, amount: t.amount, pill: "tip", label: t.label,
+    })),
+  ].sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""));
 
   return (
     <>
@@ -108,31 +152,33 @@ export default async function BillingPage() {
           )}
         </div>
 
-        {/* invoice history */}
+        {/* billing history — invoices AND tips, because both were charged */}
         <div className="ll-card ll-card-pad">
-          <h3 style={{ fontSize: 16, marginBottom: 12 }}>Invoice history</h3>
-          {(!invoices || invoices.length === 0) ? (
-            <p className="mut" style={{ fontSize: 14 }}>No invoices yet — they appear here after your first completed service.</p>
+          <h3 style={{ fontSize: 16, marginBottom: 12 }}>Billing history</h3>
+          {history.length === 0 ? (
+            <p className="mut" style={{ fontSize: 14 }}>Nothing charged yet — this fills in after your first completed service.</p>
           ) : (
-            invoices.map((inv) => {
-              // A refund is ops-only at RLS, so this surface never queries the
-              // refunds ledger directly — it only ever reads invoice status.
-              // A FULL refund flips status to 'refunded' (shown below); a
-              // partial refund leaves the invoice 'paid' with no amount shown
-              // here (v1 — see docs/refunds-design.md).
-              const refunded = inv.status === "refunded";
-              return (
-                <div key={inv.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px dashed var(--line)", fontSize: 14 }}>
-                  <span className="mut">{inv.created_at ? new Date(inv.created_at).toLocaleDateString() : ""}</span>
-                  <span>
-                    <span className="ll-pill slate" style={{ marginRight: 8 }}>
-                      {refunded ? "↩ Refunded" : inv.status}
-                    </span>
-                    <b>{inv.amount != null ? formatPrice(Number(inv.amount)) : "—"}</b>
+            history.map((row) => (
+              <div key={row.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 0", borderBottom: "1px dashed var(--line)", fontSize: 14 }}>
+                <span className="mut">
+                  {row.when ? new Date(row.when).toLocaleDateString() : ""}
+                  {row.label && (
+                    <span style={{ display: "block", fontSize: 12.5 }}>{row.label}</span>
+                  )}
+                </span>
+                <span style={{ whiteSpace: "nowrap" }}>
+                  <span className={`ll-pill ${row.pill === "tip" ? "ok" : "slate"}`} style={{ marginRight: 8 }}>
+                    {row.pill}
                   </span>
-                </div>
-              );
-            })
+                  <b>{formatPrice(row.amount)}</b>
+                </span>
+              </div>
+            ))
+          )}
+          {tips.length > 0 && (
+            <p className="mut" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
+              Tips go to the crew in full — LakeLife takes no share of a thank-you.
+            </p>
           )}
         </div>
       </div>
