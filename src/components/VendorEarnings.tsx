@@ -17,6 +17,7 @@ import {
   periodRanges,
   statusLabel,
   earningsRowLabel,
+  tipsByCrew,
   type EarningRow,
 } from "@/app/vendor/earnings-helpers";
 
@@ -42,6 +43,7 @@ export function VendorEarnings({
   const groups = useMemo(() => groupByWeek(rows), [rows]);
 
   const range = ranges[period];
+  const tips = useMemo(() => tipsByCrew(rows, range), [rows, range]);
   const csvHref = `/vendor/earnings/export?from=${range.from}&to=${range.to}`;
   const statementHref = `/vendor/earnings/statement?from=${range.from}&to=${range.to}`;
 
@@ -146,6 +148,8 @@ export function VendorEarnings({
           {formatCurrency(totals.allTimeReleased)} released so far.
         </p>
       )}
+
+      {tips.count > 0 && <TipsToPassOn tips={tips} periodLabel={PERIOD_LABEL[period]} />}
     </div>
   );
 }
@@ -157,6 +161,65 @@ function TotalCard({ label, value }: { label: string; value: number }) {
       <div style={{ fontSize: 24, fontWeight: 800, color: "var(--teal-dark)", marginTop: 2 }}>
         {formatCurrency(value)}
       </div>
+    </div>
+  );
+}
+
+/**
+ * WHO GETS TIPPED OUT.
+ *
+ * LakeLife pushes money to ONE bank account per company, so every tip lands
+ * with the owner no matter who earned it. Without this the owner has a lump
+ * sum and no way to split it, and the person who was actually thanked never
+ * sees a cent — which would defeat "every cent goes to the crew" one layer
+ * below where that promise is enforced.
+ *
+ * Attribution is the truck/crew name from the route the job ran on. Tips we
+ * cannot attribute are listed SEPARATELY rather than hidden or lumped in: the
+ * owner still recognises their own job from the date and address, and a wrong
+ * name here would send money to the wrong person.
+ */
+function TipsToPassOn({
+  tips,
+  periodLabel,
+}: {
+  tips: ReturnType<typeof tipsByCrew>;
+  periodLabel: string;
+}) {
+  return (
+    <div className="ll-card" style={{ marginBottom: 24, overflow: "hidden" }}>
+      <div style={{ padding: "14px 14px 10px" }}>
+        <h2 style={{ fontSize: 16, margin: 0 }}>Tips to pass on</h2>
+        <p className="mut" style={{ fontSize: 12.5, margin: "4px 0 0", lineHeight: 1.5 }}>
+          {formatCurrency(tips.total)} from {tips.count} {tips.count === 1 ? "customer" : "customers"}
+          {" "}· {periodLabel.toLowerCase()}. This is included in your payouts — it
+          reaches your account with everything else, so the split is yours to make.
+        </p>
+      </div>
+
+      {tips.byCrew.map((c, i) => (
+        <div key={c.crew ?? "__none"} style={{ borderTop: i === 0 ? "1px solid var(--line)" : "1px solid var(--line)" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "10px 14px 4px" }}>
+            <strong style={{ fontSize: 14 }}>{c.crew ?? "Crew not recorded"}</strong>
+            <span style={{ marginLeft: "auto", fontSize: 15, fontWeight: 800 }}>{formatCurrency(c.total)}</span>
+          </div>
+          {c.crew == null && (
+            <p className="mut" style={{ fontSize: 12, margin: "0 14px 4px", lineHeight: 1.45 }}>
+              These jobs weren&apos;t on a named truck, so we can&apos;t say which
+              crew. The date and address should tell you who you sent.
+            </p>
+          )}
+          {c.rows.map((r) => (
+            <div key={r.id} style={{ display: "flex", gap: 10, padding: "3px 14px 3px", fontSize: 12.5 }}>
+              <span className="mut" style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {r.jobDate}{r.service ? ` · ${r.service}` : ""}{r.address ? ` · ${r.address}` : ""}
+              </span>
+              <span style={{ fontWeight: 700 }}>{formatCurrency(r.amount)}</span>
+            </div>
+          ))}
+          <div style={{ height: 8 }} />
+        </div>
+      ))}
     </div>
   );
 }

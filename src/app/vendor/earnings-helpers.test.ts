@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   earningsRowLabel,
+  tipsByCrew,
   isoWeekKey,
   isoWeekParts,
   weekStartMonday,
@@ -199,5 +200,71 @@ describe("the crew's statement says what each payment IS", () => {
     // The safe default for a number a crew is owed is "we paid you for this
     // job", not "we took money off you".
     expect(earningsRowLabel({ kind: undefined, service: "Mowing" })).toBe("Mowing");
+  });
+});
+
+describe("who gets tipped out — one bank account, several crews", () => {
+  const rows = [
+    { id: "1", jobDate: "2026-08-03", service: "Mowing",   address: "1 Pine", amount: 20, status: "released", kind: "tip" as const,     crew: "Truck 2" },
+    { id: "2", jobDate: "2026-08-10", service: "Cleaning", address: "2 Oak",  amount: 35, status: "released", kind: "tip" as const,     crew: "Truck 2" },
+    { id: "3", jobDate: "2026-08-11", service: "Pier",     address: "3 Elm",  amount: 50, status: "released", kind: "tip" as const,     crew: "Dave & Mike" },
+    { id: "4", jobDate: "2026-08-12", service: "Mowing",   address: "4 Ash",  amount: 10, status: "released", kind: "tip" as const,     crew: null },
+    { id: "5", jobDate: "2026-08-12", service: "Mowing",   address: "5 Bay",  amount: 400, status: "released", kind: "earning" as const, crew: "Truck 2" },
+    { id: "6", jobDate: "2026-07-02", service: "Mowing",   address: "6 Fir",  amount: 15, status: "released", kind: "tip" as const,     crew: "Truck 2" },
+  ];
+
+  it("splits the lump sum by crew so the owner can hand it on", () => {
+    const t = tipsByCrew(rows, { from: "2026-08-01", to: "2026-08-31" });
+    expect(t.total).toBe(115);
+    expect(t.count).toBe(4);
+    expect(t.byCrew.map((c) => [c.crew, c.total])).toEqual([
+      ["Truck 2", 55],
+      ["Dave & Mike", 50],
+      [null, 10],
+    ]);
+  });
+
+  it("JOB PAY IS NOT A TIP — only kind='tip' is in here", () => {
+    // The $400 earning on the same truck must never inflate what gets passed
+    // on; that money is the company's, the tip is not.
+    const t = tipsByCrew(rows, { from: "2026-08-01", to: "2026-08-31" });
+    expect(t.total).toBe(115);
+    expect(t.byCrew.find((c) => c.crew === "Truck 2")!.total).toBe(55);
+  });
+
+  it("respects the statement period — July's tip stays in July", () => {
+    const aug = tipsByCrew(rows, { from: "2026-08-01", to: "2026-08-31" });
+    const jul = tipsByCrew(rows, { from: "2026-07-01", to: "2026-07-31" });
+    expect(aug.count).toBe(4);
+    expect(jul.count).toBe(1);
+    expect(jul.total).toBe(15);
+  });
+
+  it("UNATTRIBUTED TIPS ARE REPORTED, NEVER DROPPED", () => {
+    // A job that never went on a named route has no crew on record. Hiding it
+    // would lose $10 of somebody's money; guessing would send it to the wrong
+    // person. So it is listed, last, and labelled as unknown.
+    const t = tipsByCrew(rows, { from: "2026-08-01", to: "2026-08-31" });
+    expect(t.unattributed).toBe(10);
+    expect(t.byCrew[t.byCrew.length - 1].crew).toBe(null);
+    // The sum of the parts is still the whole.
+    expect(t.byCrew.reduce((s, c) => s + c.total, 0)).toBe(t.total);
+  });
+
+  it("named crews sort before the unknown bucket, biggest share first", () => {
+    const t = tipsByCrew(rows, { from: "2026-08-01", to: "2026-08-31" });
+    const names = t.byCrew.map((c) => c.crew);
+    expect(names.indexOf(null)).toBe(names.length - 1);
+  });
+
+  it("no range means all time", () => {
+    expect(tipsByCrew(rows).count).toBe(5);
+  });
+
+  it("no tips is an empty breakdown, not a crash", () => {
+    const t = tipsByCrew([{ id: "x", jobDate: "2026-08-01", service: null, address: null, amount: 100, status: "released", kind: "earning" as const }]);
+    expect(t.count).toBe(0);
+    expect(t.total).toBe(0);
+    expect(t.byCrew).toEqual([]);
   });
 });

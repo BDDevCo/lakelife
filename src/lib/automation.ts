@@ -2651,6 +2651,8 @@ export async function sendNightlyDigest(results: {
   visitFees?: { proposed: number; skipped: number };
   /** Trip fees paid to crews, and how much of it LakeLife funded (0090). */
   tripFees?: { paid: number; total: number; onUs: number };
+  /** Tips customers gave since the last digest — pass-through, never ours. */
+  tipsCollected?: { count: number; total: number };
 }): Promise<{ ok: boolean; sent: number }> {
   const admin = createServiceClient();
   const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString();
@@ -2720,6 +2722,7 @@ export async function sendNightlyDigest(results: {
     refundsReconciled: results.refundReconcile,
     visitFees: results.visitFees,
     tripFees: results.tripFees,
+    tipsCollected: results.tipsCollected,
     failures: results.failures,
     homesWithNoLake: lakelessHomes ?? 0,
   };
@@ -2961,6 +2964,35 @@ export async function raiseTripFees(): Promise<{ paid: number; total: number; on
  * A stand-down is skipped entirely — our record was wrong, and we told the
  * customer in writing that nothing would be charged.
  */
+/**
+ * WHAT CAME IN AS TIPS SINCE THE LAST DIGEST.
+ *
+ * A 24-hour window rather than a lake-day boundary, deliberately: the nightly
+ * IS the reporting cadence, so "since we last looked" is the honest window and
+ * it needs no timezone arithmetic to be exactly right. Everything else in the
+ * money section reports what a step just did; this one has no step of its own,
+ * because a tip happens when a customer taps, not when a cron runs.
+ *
+ * Reads `payments` by `tip_job_id`, which is the ONLY place in the codebase
+ * that reads a payment without an invoice — every other read is invoice-keyed
+ * (0097). If that ever stops being true, this is the reason it was fine.
+ */
+export async function tipsCollectedSinceLastNight(): Promise<{ count: number; total: number }> {
+  const admin = createServiceClient();
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data } = await admin
+    .from("payments")
+    .select("amount")
+    .not("tip_job_id", "is", null)
+    .eq("status", "captured")
+    .gte("created_at", since);
+  const rows = data ?? [];
+  return {
+    count: rows.length,
+    total: Math.round(rows.reduce((s, r) => s + Number(r.amount ?? 0), 0) * 100) / 100,
+  };
+}
+
 export async function proposeOverdueFees(): Promise<{ proposed: number; skipped: number }> {
   const admin = createServiceClient();
   const today = todayLakeDate();

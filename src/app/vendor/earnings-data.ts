@@ -78,13 +78,39 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
   // clawback, migration 0043) rows both belong here so totals stay accurate.
   const { data: payouts } = await admin
     .from("payouts")
-    .select("id, amount, status, kind, created_at, jobs(date, services(name), properties(address))")
+    .select("id, amount, status, kind, created_at, jobs(date, route_id, services(name), properties(address))")
     .eq("vendor_id", vendorId)
     .order("created_at", { ascending: false });
 
+  // WHICH CREW WAS ON EACH JOB — fetched separately and joined in code, NOT
+  // embedded. `jobs.route_id` has no foreign key to `routes` (checked against
+  // production: the column exists, 4 of 8 jobs carry one, zero orphans, and no
+  // constraint). PostgREST can only embed across a declared relationship, so
+  // `jobs(..., routes(unit_name))` would come back as an error — which
+  // supabase-js hands over as `{error, data:null}`, i.e. an empty earnings
+  // page that looks exactly like a crew who has never worked.
+  //
+  // Adding the FK would enable the embed and is arguably the right schema, but
+  // a new FK is precisely what blanked two live screens in this codebase (see
+  // 0084/0086). Not on the same day as a feature.
+  const routeIds = [...new Set(
+    (payouts ?? [])
+      .map((p) => (one(p.jobs) as { route_id?: string | null } | null)?.route_id)
+      .filter((id): id is string => !!id),
+  )];
+  const unitByRoute = new Map<string, string>();
+  if (routeIds.length > 0) {
+    const { data: routeRows } = await admin
+      .from("routes").select("id, unit_name").in("id", routeIds);
+    for (const r of routeRows ?? []) {
+      const name = (r.unit_name as string | null)?.trim();
+      if (name) unitByRoute.set(r.id as string, name);
+    }
+  }
+
   const rows: EarningRow[] = (payouts ?? []).map((p) => {
     const job = one(p.jobs) as
-      | { date: string | null; services: unknown; properties: unknown }
+      | { date: string | null; route_id?: string | null; services: unknown; properties: unknown }
       | null;
     const service = (one(job?.services) as { name?: string } | null)?.name ?? null;
     const address = (one(job?.properties) as { address?: string } | null)?.address ?? null;
@@ -112,6 +138,7 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
       amount: Number(p.amount) || 0,
       status: (p.status as string) ?? "pending",
       kind,
+      crew: job?.route_id ? unitByRoute.get(job.route_id) ?? null : null,
     };
   });
 

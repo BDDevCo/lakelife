@@ -23,6 +23,21 @@ export interface EarningRow {
   // migration 0043). Optional so existing test fixtures without it still type-check
   // — treat missing as 'earning'.
   kind?: "earning" | "adjustment" | "trip" | "tip";
+  /**
+   * WHICH CREW WAS ON IT — the truck/crew name from the route the job was on
+   * (`routes.unit_name`), null when the job was never routed to a named unit.
+   *
+   * This exists because LakeLife pays ONE bank account per company. A tip is
+   * earned by the people who were actually in the driveway, and the company
+   * owner is the one who has to hand it on — so the statement has to tell them
+   * WHO, or a tip quietly becomes company revenue by default.
+   *
+   * `routes.unit_name` is a SNAPSHOT taken when the route was built, not a
+   * live join to `crew_units`. That is the right choice for a payout record:
+   * renaming a truck next season must not rewrite what last season's statement
+   * said.
+   */
+  crew?: string | null;
 }
 
 /** A week bucket of payouts with its subtotal. */
@@ -232,4 +247,68 @@ export function earningsRowLabel(row: Pick<EarningRow, "kind" | "service">): str
   if (row.kind === "trip") return `Trip fee — ${row.service ?? "visit"} (no work possible)`;
   if (row.kind === "tip") return `Tip from the homeowner — ${row.service ?? "visit"}`;
   return row.service ?? "Service";
+}
+
+/** One crew's share of the tips in a period. */
+export interface CrewTipShare {
+  /** The truck/crew name, or null for tips we cannot attribute. */
+  crew: string | null;
+  total: number;
+  count: number;
+  rows: EarningRow[];
+}
+
+export interface TipBreakdown {
+  byCrew: CrewTipShare[];
+  total: number;
+  count: number;
+  /** Tips we could not attribute to a named crew. Never silently dropped. */
+  unattributed: number;
+}
+
+/**
+ * WHO GETS TIPPED OUT, for one statement period.
+ *
+ * LakeLife pushes money to a single bank account per company, so every tip
+ * lands with the owner regardless of who earned it. Without this breakdown the
+ * owner has a lump sum and no way to split it — and the crew who actually got
+ * thanked never sees a cent. The whole point of `tipSplit` returning
+ * `toLakeLife: 0` is defeated one layer down if the money stops at the office.
+ *
+ * Unattributed tips are reported SEPARATELY rather than folded into a bucket
+ * or dropped. A job that was never routed to a named unit genuinely has no
+ * crew on record, and saying "we don't know which crew, here is the job" is
+ * the only honest output — the owner can still recognise their own job.
+ */
+export function tipsByCrew(rows: EarningRow[], range?: DateRange): TipBreakdown {
+  const tips = rows.filter(
+    (r) => r.kind === "tip" && (!range || withinRange(r.jobDate, range.from, range.to)),
+  );
+
+  const buckets = new Map<string, CrewTipShare>();
+  for (const r of tips) {
+    const name = r.crew ?? null;
+    const key = name ?? "\u0000unattributed";
+    const b = buckets.get(key) ?? { crew: name, total: 0, count: 0, rows: [] };
+    b.total = Math.round((b.total + r.amount) * 100) / 100;
+    b.count += 1;
+    b.rows.push(r);
+    buckets.set(key, b);
+  }
+
+  const byCrew = [...buckets.values()].sort((a, b) => {
+    // Named crews first, largest share first; the unknown bucket sits last so
+    // it reads as a loose end rather than as a crew called "unattributed".
+    if ((a.crew == null) !== (b.crew == null)) return a.crew == null ? 1 : -1;
+    return b.total - a.total;
+  });
+
+  return {
+    byCrew,
+    total: Math.round(tips.reduce((s, r) => s + r.amount, 0) * 100) / 100,
+    count: tips.length,
+    unattributed: Math.round(
+      tips.filter((r) => !r.crew).reduce((s, r) => s + r.amount, 0) * 100,
+    ) / 100,
+  };
 }

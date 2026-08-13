@@ -45,6 +45,17 @@ export interface DigestSections {
    * is telling you to go and fix profiles, not to lower the trip fee.
    */
   tripFees?: { paid: number; total: number; onUs: number };
+  /**
+   * TIPS COLLECTED FROM CUSTOMERS since the last digest (0097/0098).
+   *
+   * The section reported tip money going OUT — `runMonthlyPayoutBatches` has no
+   * kind filter, so tips ride inside "Crew month-end payouts" unlabelled — and
+   * never reported it coming IN. A "money moved" section that shows one side
+   * of a two-sided flow reads as balanced and isn't.
+   *
+   * It is stated as pass-through, not as takings: none of it is ours.
+   */
+  tipsCollected?: { count: number; total: number };
   refundsReconciled?: { orphansCleared: number; flipsCompleted: number };
   /**
    * STEPS THAT THREW TONIGHT. The nightly wraps each of its ~27 steps in a
@@ -194,6 +205,13 @@ export function composeNightlyDigest(sections: DigestSections): string {
       money.push(
         `<li>Trip fee${plural(tf.paid)} to crews for visits that produced no work: ` +
         `${tf.paid}, ${usd(tf.total)}${ours}.</li>`,
+      );
+    }
+    const tips = sections.tipsCollected;
+    if (tips && tips.count > 0) {
+      money.push(
+        `<li>Tips from customers: <b>${tips.count}</b>, ${usd(tips.total)} — ` +
+        `passed to crews in full. None of it is ours.</li>`,
       );
     }
     const rr = sections.refundsReconciled;

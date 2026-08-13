@@ -23,19 +23,23 @@ export async function GET(req: Request) {
     });
   }
 
-  const lines: string[] = [csvRow(["Date", "Service", "Property", "Amount", "Status"])];
+  // A CREW COLUMN, because this file is what the company's bookkeeper opens
+  // to split a lump payout. LakeLife pushes to ONE bank account, so without a
+  // name beside each tip the office cannot tell who to hand it to.
+  const lines: string[] = [csvRow(["Date", "Service", "Property", "Crew", "Amount", "Status"])];
   for (const r of statement.rows) {
     lines.push(
       csvRow([
         r.jobDate,
         earningsRowLabel(r),
         r.address ?? "",
+        r.crew ?? "",
         r.amount.toFixed(2), // plain number for bookkeeping import (no $) — negative for adjustments
         statusLabel(r.status),
       ]),
     );
   }
-  lines.push(csvRow(["", "", "Total", statement.periodTotal.toFixed(2), ""]));
+  lines.push(csvRow(["", "", "", "Total", statement.periodTotal.toFixed(2), ""]));
 
   // Leading BOM so Excel opens UTF-8 addresses cleanly; CRLF per RFC 4180.
   const csv = "﻿" + lines.join("\r\n") + "\r\n";

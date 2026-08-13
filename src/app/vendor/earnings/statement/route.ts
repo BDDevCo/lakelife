@@ -79,7 +79,14 @@ function renderStatement(
           .map(
             (r) => `<tr>
       <td>${esc(r.jobDate)}</td>
-      <td>${esc(earningsRowLabel(r))}</td>
+      <td>${esc(earningsRowLabel(r))}${
+        // WHO IT WAS FOR. Only on tips and trip fees: those are the rows the
+        // office has to hand on or reimburse to a particular crew, and naming
+        // the truck on ordinary job pay would just be noise.
+        (r.kind === "tip" || r.kind === "trip")
+          ? `<div class="who">${esc(r.crew ?? "crew not recorded")}</div>`
+          : ""
+      }</td>
       <td>${esc(r.address ?? "—")}</td>
       <td class="num">${esc(formatCurrency(r.amount))}</td>
       <td class="status">${esc(statusLabel(r.status))}</td>
@@ -106,6 +113,9 @@ function renderStatement(
   .meta strong { color: var(--ink); }
   h1 { font-size: 18px; margin: 0 0 2px; }
   .crew { font-size: 15px; font-weight: 700; margin-bottom: 18px; }
+  /* NOT .crew above: that class is the company-name header, and reusing it
+     would print a truck name as a 15px heading inside a table cell. */
+  .who { font-size: 11px; color: var(--sub); font-weight: 400; margin-top: 1px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   thead th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--sub); border-bottom: 2px solid var(--line); padding: 8px 10px; }
   tbody td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }

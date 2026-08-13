@@ -3,6 +3,7 @@ import { cronAuthorized } from "../auth";
 import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, runFillInDigest, gapSlaAlerts, reconcileRefunds, learnServiceDurations, autoApplyPriceSuggestions, sendNightlyDigest, remindExpiringStays,
   proposeOverdueFees,
   raiseTripFees,
+  tipsCollectedSinceLastNight,
 } from "@/lib/automation";
 import { applyDueRentChanges } from "@/app/park/rerate-actions";
 
@@ -78,6 +79,9 @@ async function run(req: Request) {
   // if it misfires is that we pay a crew $35 they didn't earn — recoverable,
   // and nowhere near a customer's card.
   const tripFees = await step("tripFees", () => raiseTripFees());
+  // Not a step that DOES anything — a read, so the digest can report the money
+  // that came in as well as the money that went out.
+  const tipsCollected = await step("tipsCollected", () => tipsCollectedSinceLastNight());
   const sweep = await step("sweep", () => sweepWaitlist());
   const overstay = await step("overstay", () => overstayNotices());
   // Self-heal assignments (re-home lapsed crews, fill stragglers), then route.
@@ -140,6 +144,7 @@ async function run(req: Request) {
     refundReconcile: refundReconcile ?? undefined,
     visitFees: visitFees ?? undefined,
     tripFees: tripFees ?? undefined,
+    tipsCollected: tipsCollected ?? undefined,
   }));
   return NextResponse.json({ ok: failures.length === 0, failures, park, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, rentChanges, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, visitFees, tripFees, digest });
 }
