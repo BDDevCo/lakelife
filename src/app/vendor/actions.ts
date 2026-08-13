@@ -47,7 +47,7 @@ async function assertVendorJob(jobId: string) {
     // Deliberately NO customer_price / vendor_cost: this is the crew code path,
     // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
     // those columns out of reach by construction (settleJob re-loads them ops-side).
-    .select("id, status, vendor_id, service_id, date, property_id, group_id, held_at, no_show_at, services(name, min_photos, needs_interior_access)")
+    .select("id, status, vendor_id, service_id, date, property_id, group_id, held_at, no_show_at, stood_down_at, services(name, min_photos, needs_interior_access)")
     .eq("id", jobId)
     .maybeSingle();
   if (!data || data.vendor_id !== vendorId) return null;
@@ -109,7 +109,9 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   // 0084's trigger is the real gate and stays the real gate. This exists so a
   // crew gets a sentence instead of a raw constraint violation — the same
   // reason canApprove exists on the park side.
-  const blocked = completionBlock(job as { held_at?: string | null; no_show_at?: string | null });
+  const blocked = completionBlock(job as {
+    held_at?: string | null; no_show_at?: string | null; stood_down_at?: string | null;
+  });
   if (blocked) return { ok: false, error: blocked };
 
   // A job can only be closed on or after the day it's scheduled — no closing

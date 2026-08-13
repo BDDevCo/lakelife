@@ -7,6 +7,7 @@ import { serviceMinutes, type DurationBands } from "@/lib/duration";
 import { summariseCorrection, scopeNoteFor, type TimedRule } from "@/lib/arrival";
 import { todayLakeDate } from "@/lib/booking";
 import { planRecovery } from "@/lib/recovery";
+import { sendSms } from "@/lib/sms";
 
 export interface ApprovalResult {
   ok: boolean;
@@ -175,6 +176,11 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
       .from("jobs")
       .update({ held_at: null, held_flag_id: null })
       .eq("id", ctx.flag.job_id as string);
+    await tellTheCrew(
+      admin,
+      ctx.flag.job_id as string,
+      "the owner approved what you found — go ahead with the corrected job. 🌊",
+    );
   }
 
   // Was the job they flagged already finished? Reported, not acted on.
@@ -187,6 +193,45 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
   }
 
   return { ok: true, repriced, flaggedJobAlreadyDone };
+}
+
+
+/**
+ * TELL THE CREW. They are standing in a driveway.
+ *
+ * Every screen in the arrival flow promises this — "you'll get a text either
+ * way", "you'll get a text the moment they answer" — and nothing sent one.
+ * Three release paths, all silent: approve, decline-and-proceed, and
+ * decline-and-stand-down. In the stand-down case the answer had already
+ * arrived and it was "go home", and the crew had no way to know.
+ *
+ * Failure-tolerant by construction: the owner's decision is already written
+ * and must never be undone by a texting problem.
+ */
+async function tellTheCrew(
+  admin: ReturnType<typeof createServiceClient>,
+  jobId: string,
+  line: string,
+): Promise<void> {
+  try {
+    const { data: job } = await admin
+      .from("jobs")
+      .select("vendor_id, vendors(user_id)")
+      .eq("id", jobId)
+      .maybeSingle();
+    const v = (Array.isArray(job?.vendors) ? job?.vendors[0] : job?.vendors) as
+      { user_id?: string } | null;
+    if (!v?.user_id) return;
+
+    const { data: u } = await admin
+      .from("users").select("phone").eq("id", v.user_id).maybeSingle();
+    const phone = (u?.phone as string) ?? "";
+    if (!phone) return;
+
+    void sendSms(phone, `LakeLife: ${line}`);
+  } catch {
+    /* The decision is recorded. A failed text must never undo it. */
+  }
 }
 
 /**
@@ -248,6 +293,12 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
           reschedule_deadline: plan.deadline,
         })
         .eq("id", jobId);
+      await tellTheCrew(
+        admin,
+        jobId,
+        "the owner said no and you can't do this one as booked — pack up and " +
+        "head to your next stop. You'll be paid for the trip.",
+      );
     } else {
       // The crew can work around it, so the visit goes ahead at the booked
       // scope — AND the job records what was left undone. Without this the
@@ -289,6 +340,12 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
           ...(scopeNote ? { scope_note: scopeNote } : {}),
         })
         .eq("id", jobId);
+      await tellTheCrew(
+        admin,
+        jobId,
+        "the owner said no to the change — do the job as it was booked and " +
+        "leave the rest. Nothing else needed from you.",
+      );
     }
   }
 

@@ -308,9 +308,18 @@ export function noAnswerExplainer(
 export function completionBlock(job: {
   held_at?: string | null;
   no_show_at?: string | null;
+  stood_down_at?: string | null;
 }): string | null {
+  // ORDER IS BY FINALITY, not by which column was added first. A visit that
+  // ended is a more useful thing to be told than a visit that is waiting.
   if (job.no_show_at) {
     return "This one is recorded as a no-show — it can't be completed. Ops will sort the reschedule.";
+  }
+  // 0088 added this and 0093 finally made it visible here. Without it the
+  // banner vanished the moment an owner declined, "Mark complete" re-enabled,
+  // and the crew could go do the partial scope the whole flow exists to stop.
+  if (job.stood_down_at) {
+    return "The owner said no and you can't do this one as booked — pack up, nothing more to do here. Nothing is charged.";
   }
   if (job.held_at) {
     return "Waiting on the owner to approve what you found. You'll get a text the moment they answer.";

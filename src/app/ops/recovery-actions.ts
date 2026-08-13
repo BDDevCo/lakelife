@@ -4,6 +4,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { todayLakeDate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
+import { LakeLifePayments } from "@/lib/payments";
+import { alertOpsDoubleCharge } from "@/lib/automation";
 import { proposedFee, deadlinePassed, tripFeeFor } from "@/lib/recovery";
 import { assertOps } from "./data";
 
@@ -200,15 +202,76 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
   const amount = Number(job.fee_proposed_amount ?? 0);
   if (!(amount > 0)) return { ok: false, error: "That fee is zero — waive it instead." };
 
-  const { error } = await admin
+  // CLAIM THE ROW FIRST. Two ops tabs, two clicks — only one may proceed past
+  // here, and it must be decided before any money moves.
+  const { data: claimed } = await admin
     .from("jobs")
-    .update({ recovery_state: "fee_charged" })
+    .update({ recovery_state: "fee_charging" })
     .eq("id", jobId)
-    .eq("recovery_state", "fee_proposed");   // no double-charge on a double-click
-  if (error) return { ok: false, error: error.message };
+    .eq("recovery_state", "fee_proposed")
+    .select("id, property_id, service_id, properties(owner_id)")
+    .maybeSingle();
+  if (!claimed) return { ok: false, error: "Somebody just decided that one." };
+
+  const ownerId = ((Array.isArray(claimed.properties) ? claimed.properties[0] : claimed.properties) as
+    { owner_id?: string } | null)?.owner_id ?? null;
+
+  // AND THEN ACTUALLY CHARGE IT. The first version of this only wrote
+  // `recovery_state = 'fee_charged'` and told ops "Fee of $151.00 recorded."
+  // — the customer was never billed a cent, the row left the queue, and every
+  // screen said charged forever. Worse, `raiseTripFees` reads that state as
+  // COLLECTED CASH, so it also understated what LakeLife was funding.
+  const { data: invoice } = await admin
+    .from("invoices")
+    .insert({ job_id: jobId, property_id: claimed.property_id, amount, status: "due" })
+    .select("id")
+    .single();
+
+  let charged = false;
+  let ref: string | null = null;
+  if (invoice && ownerId) {
+    const { data: pm } = await admin
+      .from("payment_methods").select("token").eq("user_id", ownerId)
+      .order("is_default", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(1).maybeSingle();
+    if (pm?.token) {
+      const charge = await LakeLifePayments.charge({
+        token: pm.token as string,
+        amountCents: Math.round(amount * 100),
+        description: "LakeLife — missed visit",
+      });
+      const { error: payErr } = await admin.from("payments").insert({
+        invoice_id: invoice.id, amount,
+        status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null,
+      });
+      if (payErr?.code === "23505" && charge.ok) {
+        await alertOpsDoubleCharge(admin, invoice.id as string, amount, charge.ref ?? null);
+      }
+      charged = charge.ok;
+      ref = charge.ref ?? null;
+      if (charged) {
+        await admin.from("invoices").update({ status: "paid", processor_ref: ref }).eq("id", invoice.id);
+      }
+    }
+  }
+
+  // The state must tell the truth about whether money arrived. A failed charge
+  // goes BACK to proposed so it stays on the queue rather than vanishing into
+  // a 'charged' that never happened.
+  await admin
+    .from("jobs")
+    .update({ recovery_state: charged ? "fee_charged" : "fee_proposed" })
+    .eq("id", jobId);
 
   revalidatePath("/ops");
-  return { ok: true, signal: `Fee of $${amount.toFixed(2)} recorded.` };
+  if (!charged) {
+    return {
+      ok: false,
+      error: "That card declined (or there isn't one on file). The invoice is raised and still due — it stays on your list.",
+    };
+  }
+  return { ok: true, signal: `Charged $${amount.toFixed(2)}.` };
 }
 
 /**

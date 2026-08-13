@@ -498,9 +498,11 @@ export async function getTipView(jobId: string): Promise<TipView> {
  * Add it. Zero is a real answer and is recorded as one — it stops us asking
  * again, and it is the commonest reply.
  *
- * The payout is raised in the same breath, at the full amount: 0091's trigger
- * refuses any tip payout that does not equal what the homeowner gave, so
- * skimming a thank-you is impossible rather than merely discouraged.
+ * THE CHARGE COMES FIRST, then the payout — the same order the late-cancel
+ * path uses. The crew is never promised money we have not collected, and
+ * 0091's trigger refuses any tip payout that does not equal what the homeowner
+ * actually gave, so skimming a thank-you is impossible rather than merely
+ * discouraged.
  */
 export async function addTip(
   jobId: string,
@@ -528,6 +530,78 @@ export async function addTip(
   const v = validateTip(raw);
   if (!v.ok) return { ok: false, error: v.error };
 
+  // DECLINING FIRST, because it moves no money and is the commonest answer.
+  if (v.amount === 0) {
+    const { error: zeroErr } = await admin
+      .from("jobs")
+      .update({ tip_amount: 0, tipped_at: new Date().toISOString() })
+      .eq("id", jobId)
+      .is("tip_amount", null);
+    if (zeroErr) return { ok: false, error: zeroErr.message };
+    revalidatePath("/requests");
+    return { ok: true, signal: "Thanks — noted." };
+  }
+
+  // A TIP IS A CHARGE. The first version of this stamped the job, inserted the
+  // crew's payout, and told the homeowner "Sent — all $50 goes to the crew"
+  // while billing them NOTHING. LakeLife funded every tip out of margin, and
+  // the month-end sweep paid it out the same evening. Five separate audit
+  // passes found it independently, which is what a hole that size looks like.
+  //
+  // So the order is the same as the late-cancellation path 300 lines above:
+  // invoice, card, payment row, and ONLY THEN the crew's payout. Nothing is
+  // promised to the crew out of money we have not collected.
+  if (!row.vendor_id) {
+    // No crew on the job means nobody to pay. Better to refuse than to take
+    // the money and have it land nowhere.
+    return { ok: false, error: "We can't add a thank-you to this one — give us a call." };
+  }
+
+  const { data: pm } = await admin
+    .from("payment_methods")
+    .select("token")
+    .eq("user_id", loaded.ownerId)
+    .order("is_default", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!pm?.token) {
+    return { ok: false, error: "Add a card in Billing first and we'll pass it straight on." };
+  }
+
+  const { data: invoice } = await admin
+    .from("invoices")
+    .insert({ job_id: jobId, property_id: loaded.job.property_id, amount: v.amount, status: "due" })
+    .select("id")
+    .single();
+  if (!invoice) return { ok: false, error: "Couldn't set that up — try again." };
+
+  const charge = await LakeLifePayments.charge({
+    token: pm.token as string,
+    amountCents: Math.round(v.amount * 100),
+    description: `LakeLife — thank-you for the crew, ${loaded.svcName}`,
+  });
+
+  const { error: payErr } = await admin.from("payments").insert({
+    invoice_id: invoice.id,
+    amount: v.amount,
+    status: charge.ok ? "captured" : "failed",
+    processor_ref: charge.ref ?? null,
+  });
+  // The processor took it and the ledger refused to record it — the one case
+  // a human has to hear about tonight, because only a human can give it back.
+  if (payErr?.code === "23505" && charge.ok) {
+    await alertOpsDoubleCharge(admin, invoice.id as string, v.amount, charge.ref ?? null);
+  }
+
+  if (!charge.ok) {
+    // Nothing is stamped on the job, so they can try again with another card.
+    return { ok: false, error: "That card was declined — nothing has been sent." };
+  }
+
+  await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null })
+    .eq("id", invoice.id);
+
   const { error } = await admin
     .from("jobs")
     .update({ tip_amount: v.amount, tipped_at: new Date().toISOString() })
@@ -535,24 +609,17 @@ export async function addTip(
     .is("tip_amount", null);          // never twice
   if (error) return { ok: false, error: error.message };
 
-  // Declining is a complete answer. Nothing more to do, and the crew is never
-  // told that somebody chose not to.
-  if (v.amount === 0) {
-    revalidatePath("/requests");
-    return { ok: true, signal: "Thanks — noted." };
-  }
-
-  if (row.vendor_id) {
-    await admin.from("payouts").insert({
-      vendor_id: row.vendor_id,
-      job_id: jobId,
-      amount: tipSplit(v.amount).toCrew,     // all of it
-      original_amount: v.amount,
-      status: "released",
-      kind: "tip",
-    });
-  }
+  // Now, and only now, the crew's share — which is all of it.
+  await admin.from("payouts").insert({
+    vendor_id: row.vendor_id,
+    job_id: jobId,
+    amount: tipSplit(v.amount).toCrew,
+    original_amount: v.amount,
+    status: "released",
+    kind: "tip",
+  });
 
   revalidatePath("/requests");
+  revalidatePath("/billing");
   return { ok: true, signal: `Sent — all $${v.amount.toFixed(2)} goes to the crew. 🌊` };
 }

@@ -32,6 +32,9 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
   // changes the instant the crew acts rather than after a round trip.
   const [held, setHeld] = useState<boolean>(!!stop.held_at);
   const [noShow, setNoShow] = useState<boolean>(!!stop.no_show_at);
+  // 0088's third blocking fact. Read-only here: a stand-down is the owner's
+  // decision arriving, never something the crew does from this card.
+  const stoodDown = !!stop.stood_down_at;
 
   const min = stop.min_photos;
   const enough = count >= min;
@@ -41,6 +44,7 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
   const blocked = completionBlock({
     held_at: held ? (stop.held_at ?? "held") : null,
     no_show_at: noShow ? (stop.no_show_at ?? "noshow") : null,
+    stood_down_at: stoodDown ? stop.stood_down_at : null,
   });
 
   function navigate() {
@@ -145,13 +149,13 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
             <div
               style={{
                 marginTop: 12, padding: "10px 12px", borderRadius: 10,
-                background: noShow ? "var(--slate-soft, #eef1f4)" : "var(--sun-soft)",
-                border: `1px solid ${noShow ? "var(--line)" : "#ecd9ad"}`,
-                color: noShow ? "var(--text)" : "#7a5a1e",
+                background: noShow || stoodDown ? "var(--slate-soft, #eef1f4)" : "var(--sun-soft)",
+                border: `1px solid ${noShow || stoodDown ? "var(--line)" : "#ecd9ad"}`,
+                color: noShow || stoodDown ? "var(--text)" : "#7a5a1e",
                 fontSize: 13, lineHeight: 1.5,
               }}
             >
-              {noShow ? "🚪 " : "⏳ "}{blocked}
+              {noShow ? "🚪 " : stoodDown ? "🛑 " : "⏳ "}{blocked}
             </div>
           )}
 

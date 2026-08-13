@@ -26,6 +26,9 @@ export interface VendorStop {
   /** Set = the crew couldn't get in. Not a completion, not a cancellation. */
   no_show_at: string | null;
   no_show_reason: string | null;
+  /** Set = the owner declined a correction the crew couldn't work around. */
+  stood_down_at: string | null;
+  stood_down_reason: string | null;
   /** Decides what "nobody's answering" means for this service. */
   needs_interior_access: boolean;
   /** Minutes budgeted for THIS visit (0083) — how long to expect to be there. */
@@ -221,6 +224,8 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
     held_at: r.held_at ?? null,
     no_show_at: r.no_show_at ?? null,
     no_show_reason: r.no_show_reason ?? null,
+    stood_down_at: r.stood_down_at ?? null,
+    stood_down_reason: r.stood_down_reason ?? null,
     needs_interior_access: !!r.needs_interior_access,
     est_minutes: r.est_minutes ?? null,
   }));
