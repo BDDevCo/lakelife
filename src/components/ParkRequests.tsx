@@ -26,13 +26,25 @@ import {
 export function ParkRequests({
   parkId,
   rows,
+  closed = [],
 }: {
   parkId: string;
   rows: ParkRequestRow[];
+  /**
+   * Recently closed, with what was done.
+   *
+   * `resolutionNote` was typed, mapped and rendered NOWHERE — my own version
+   * of this codebase's commonest bug, written into the same slice that
+   * demanded the note in the first place. The owner is made to say what he
+   * did; the least the screen can do is let him find it again when a household
+   * asks why nothing changed.
+   */
+  closed?: ParkRequestRow[];
 }) {
   const router = useRouter();
   const [busy, start] = useTransition();
   const [stickers, setStickers] = useState<StickerRow[] | null>(null);
+  const [showClosed, setShowClosed] = useState(false);
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
@@ -65,6 +77,34 @@ export function ParkRequests({
           {rows.map((r) => (
             <RequestLine key={r.id} row={r} parkId={parkId} busy={busy} start={start} router={router} />
           ))}
+        </div>
+      )}
+
+      {closed.length > 0 && (
+        <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+          <button
+            className="ll-btn ghost sm"
+            style={{ minHeight: 36 }}
+            onClick={() => setShowClosed((c) => !c)}
+          >
+            {showClosed ? "Hide" : `Recently sorted (${closed.length})`}
+          </button>
+          {showClosed && (
+            <div style={{ marginTop: 8 }}>
+              {closed.map((r) => (
+                <div key={r.id} style={{ padding: "7px 0", borderTop: "1px dashed var(--line)" }}>
+                  <div style={{ fontSize: 13 }}>
+                    <b>{r.lotNumber ? `Lot ${r.lotNumber}` : "Common area"}</b>
+                    <span className="mut"> · {r.category} · {r.note}</span>
+                  </div>
+                  {/* THE ANSWER TO "why has nothing happened". */}
+                  <div className="mut" style={{ fontSize: 12.5, marginTop: 2 }}>
+                    {r.resolutionNote ? `Done — “${r.resolutionNote}”` : "Closed."}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

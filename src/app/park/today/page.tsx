@@ -30,10 +30,13 @@ export default async function ParkTodayPage() {
     );
   }
 
-  const [view, renewals, requests] = await Promise.all([
+  const [view, renewals, requests, allRequests] = await Promise.all([
     getToday(park.id),
     renewalsDue(park.id),
     getParkRequests(park.id),
+    // The `includeDone` branch had no caller passing true — a parameter that
+    // existed and could never be reached.
+    getParkRequests(park.id, true),
   ]);
   return (
     <>
@@ -50,7 +53,8 @@ export default async function ParkTodayPage() {
             {/* Reported from the park. Sits on Today because it is the screen
                 he opens with coffee, and these used to arrive on his mobile
                 and live in his head. */}
-            <ParkRequests parkId={park.id} rows={requests} />
+            <ParkRequests parkId={park.id} rows={requests}
+              closed={allRequests.filter((r) => r.status === "done").slice(0, 20)} />
           </div>
         </>
       ) : (
