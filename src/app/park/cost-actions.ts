@@ -190,6 +190,8 @@ export interface CostRow {
   allocatedTotal: number;
   sourceNote: string | null;
   lots: number;
+  /** Of `allocatedTotal`, how much has actually landed on a bill (0104). */
+  billedTotal: number;
 }
 
 export async function listCosts(parkId: string): Promise<{
@@ -209,16 +211,25 @@ export async function listCosts(parkId: string): Promise<{
 
   const ids = (data ?? []).map((c) => c.id as string);
   const counts = new Map<string, number>();
+  // WHAT ACTUALLY REACHED A BILL (0104). This read used to select `cost_id`
+  // alone and count rows — the only read of `lot_cost_shares` in the whole
+  // codebase, and it answered "how many lots did I split this across", never
+  // "did any of them get asked for it".
+  const billed = new Map<string, number>();
   if (ids.length) {
     const { data: shares } = await admin
-      .from("lot_cost_shares").select("cost_id").in("cost_id", ids);
+      .from("lot_cost_shares").select("cost_id, amount, billed_on_charge_id").in("cost_id", ids);
     for (const s of shares ?? []) {
       const k = s.cost_id as string;
       counts.set(k, (counts.get(k) ?? 0) + 1);
+      if (s.billed_on_charge_id) {
+        billed.set(k, Math.round(((billed.get(k) ?? 0) + Number(s.amount ?? 0)) * 100) / 100);
+      }
     }
   }
 
   const rows: CostRow[] = (data ?? []).map((c) => ({
+    billedTotal: billed.get(c.id as string) ?? 0,
     id: c.id as string,
     category: c.category as CostCategory,
     periodStart: c.period_start as string,
@@ -234,6 +245,7 @@ export async function listCosts(parkId: string): Promise<{
     summary: recoveryByCategory(
       rows.map((r) => ({
         category: r.category, amountPaid: r.amountPaid, allocatedTotal: r.allocatedTotal,
+        billedTotal: r.billedTotal,
       })),
     ),
   };

@@ -185,24 +185,54 @@ export function allocationSummary(a: CostAllocation, category: CostCategory): st
 export interface RecoveryLine {
   category: CostCategory;
   paid: number;
-  recovered: number;
-  /** Negative is the park's cost after recovery. */
+  /**
+   * ALLOCATED, not recovered.
+   *
+   * This was named `recovered` and computed from `park_costs.allocated_total`
+   * — the amount the owner INTENDED to split. Nothing billed from it (the
+   * shares it produced had no reader at all until 0104), so the screen said
+   * "passed on $1,140" about money no household had been asked for. A number
+   * named after the outcome while measuring the intent is the worst kind of
+   * wrong: it reads as reassurance.
+   */
+  allocated: number;
+  /** What has actually landed on a household's bill (0104). */
+  billed: number;
+  /** Negative is the park's cost after what was actually billed. */
   net: number;
 }
 
 export function recoveryByCategory(
-  costs: readonly { category: CostCategory; amountPaid: number; allocatedTotal: number }[],
-): { lines: RecoveryLine[]; paid: number; recovered: number; net: number } {
+  costs: readonly {
+    category: CostCategory;
+    amountPaid: number;
+    allocatedTotal: number;
+    /** Sum of this cost's shares that have actually reached a bill (0104). */
+    billedTotal?: number;
+  }[],
+): {
+  lines: RecoveryLine[];
+  paid: number;
+  allocated: number;
+  billed: number;
+  net: number;
+} {
   const by = new Map<CostCategory, RecoveryLine>();
   for (const c of costs) {
-    const cur = by.get(c.category) ?? { category: c.category, paid: 0, recovered: 0, net: 0 };
+    const cur = by.get(c.category)
+      ?? { category: c.category, paid: 0, allocated: 0, billed: 0, net: 0 };
     cur.paid = round2(cur.paid + c.amountPaid);
-    cur.recovered = round2(cur.recovered + c.allocatedTotal);
-    cur.net = round2(cur.recovered - cur.paid);
+    cur.allocated = round2(cur.allocated + c.allocatedTotal);
+    cur.billed = round2(cur.billed + (c.billedTotal ?? 0));
+    // NET IS AGAINST WHAT WAS BILLED, not what was intended. Netting off an
+    // allocation nobody was asked for tells the owner he broke even on a bill
+    // he is still carrying in full.
+    cur.net = round2(cur.billed - cur.paid);
     by.set(c.category, cur);
   }
   const lines = [...by.values()].sort((a, b) => b.paid - a.paid);
   const paid = round2(lines.reduce((s, l) => s + l.paid, 0));
-  const recovered = round2(lines.reduce((s, l) => s + l.recovered, 0));
-  return { lines, paid, recovered, net: round2(recovered - paid) };
+  const allocated = round2(lines.reduce((s, l) => s + l.allocated, 0));
+  const billed = round2(lines.reduce((s, l) => s + l.billed, 0));
+  return { lines, paid, allocated, billed, net: round2(billed - paid) };
 }

@@ -86,7 +86,18 @@ export function ParkCosts({
         <section className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
           <div style={{ display: "grid", gap: 3, fontVariantNumeric: "tabular-nums" }}>
             <Row label="you paid" value={money(summary.paid)} />
-            <Row label="passed on" value={money(summary.recovered)} />
+            {/* THREE NUMBERS, NOT ONE. "Passed on" used to be the amount he
+                INTENDED to split, and nothing billed from it — so the screen
+                reassured him about money no household had been asked for. */}
+            <Row label="split across the lots" value={money(summary.allocated)} />
+            <Row label="actually on a bill" value={money(summary.billed)} />
+            {summary.allocated > summary.billed && (
+              <p className="mut" style={{ fontSize: 12, margin: "4px 0 0", lineHeight: 1.5 }}>
+                {money(summary.allocated - summary.billed)} is split but not yet
+                billed — it goes onto each household&apos;s next rent bill when
+                you raise the month.
+              </p>
+            )}
             <Row
               label={recoveredByFee ? "covered by your fee below" : summary.net < 0 ? "still yours" : "net"}
               value={money(Math.abs(summary.net))}
@@ -100,7 +111,10 @@ export function ParkCosts({
                 style={{ display: "flex", gap: 10, padding: "4px 0", flexWrap: "wrap", fontSize: 14 }}>
                 <span style={{ flex: 1 }}>{COST_CATEGORY_LABEL[l.category]}</span>
                 <span className="mut">{money(l.paid)} paid</span>
-                <span className="mut">{money(l.recovered)} back</span>
+                <span className="mut">
+                  {money(l.billed)} billed
+                  {l.allocated > l.billed ? ` · ${money(l.allocated - l.billed)} waiting` : ""}
+                </span>
                 <span style={{ minWidth: 92, textAlign: "right", fontWeight: 700 }}>
                   {l.net < 0 ? `−${money(Math.abs(l.net))}` : money(l.net)}
                 </span>

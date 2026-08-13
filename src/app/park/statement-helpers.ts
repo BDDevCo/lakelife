@@ -53,6 +53,21 @@ export interface Statement {
   problems: string[];
 }
 
+/**
+ * A SHARE OF A COST THE PARK ALREADY PAID — the water bill, the trash bill.
+ *
+ * Never prorated. A fee is a monthly RATE, so half a month is half of it; a
+ * cost share is an amount already worked out for a period that has closed, and
+ * cutting it by the days lived would quietly under-recover a bill the park has
+ * genuinely paid out.
+ */
+export interface StatementCostShare {
+  label: string;
+  amount: number;
+  /** "your share of July water" — the reason, in the resident's language. */
+  basis: string;
+}
+
 export interface StatementFee {
   label: string;
   amount: number;
@@ -105,10 +120,17 @@ export interface StatementInput {
   fees: readonly StatementFee[];
   /** Day of the month rent is due. */
   dueDay: number;
+  /**
+   * Costs the park paid and is passing on, already allocated to this tenancy.
+   * They arrive as lines on the bill rather than as a separate charge, which
+   * is both how a park actually bills them and how this sidesteps the
+   * one-live-charge-per-month index entirely.
+   */
+  costShares?: readonly StatementCostShare[];
 }
 
 export function buildStatement(input: StatementInput): Statement {
-  const { month, stay, rent, fees, dueDay } = input;
+  const { month, stay, rent, fees, dueDay, costShares = [] } = input;
 
   const total = daysInMonth(month);
   const days = daysCovered(stay, month);
@@ -143,6 +165,12 @@ export function buildStatement(input: StatementInput): Statement {
       amount: prorated ? share(rent) : round2(rent),
       basis: prorated ? proratedBasis : "for the month",
     });
+  }
+
+  // Cost shares first among the extras, because they are the line a resident
+  // is most likely to query and they should sit where they can be found.
+  for (const c of costShares) {
+    lines.push({ label: c.label, amount: round2(c.amount), basis: c.basis });
   }
 
   for (const f of fees) {

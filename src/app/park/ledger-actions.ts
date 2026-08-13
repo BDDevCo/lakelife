@@ -72,6 +72,58 @@ async function feesFor(
     }));
 }
 
+
+/**
+ * UNBILLED COST SHARES, per tenancy.
+ *
+ * `lot_cost_shares` had exactly two references in the codebase — one insert
+ * and one row count — so a water bill the owner split across nineteen
+ * households reached none of them. This is the reader it never had.
+ *
+ * A share is billed ONCE: the run stamps `billed_on_charge_id`, and only a
+ * void releases it again.
+ */
+async function unbilledCostShares(
+  admin: ReturnType<typeof createServiceClient>,
+  parkId: string,
+  reservationIds: string[],
+): Promise<Map<string, Array<{ id: string; label: string; amount: number; basis: string }>>> {
+  const out = new Map<string, Array<{ id: string; label: string; amount: number; basis: string }>>();
+  if (reservationIds.length === 0) return out;
+
+  const { data: shares } = await admin
+    .from("lot_cost_shares")
+    .select("id, cost_id, reservation_id, amount, basis")
+    .in("reservation_id", reservationIds)
+    .is("billed_on_charge_id", null);
+  if (!shares?.length) return out;
+
+  const costIds = [...new Set(shares.map((s) => s.cost_id as string))];
+  const { data: costs } = await admin
+    .from("park_costs")
+    .select("id, park_id, category, period_start, period_end")
+    .in("id", costIds)
+    .eq("park_id", parkId);          // never bill another park's water
+  const costById = new Map((costs ?? []).map((c) => [c.id as string, c]));
+
+  for (const sh of shares) {
+    const cost = costById.get(sh.cost_id as string);
+    if (!cost) continue;             // a cost from elsewhere, or since removed
+    const label = `${String(cost.category ?? "cost").replace(/_/g, " ")} — your share`;
+    const list = out.get(sh.reservation_id as string) ?? [];
+    list.push({
+      id: sh.id as string,
+      label: label.charAt(0).toUpperCase() + label.slice(1),
+      amount: Number(sh.amount ?? 0),
+      basis: cost.period_start && cost.period_end
+        ? `for ${cost.period_start} to ${cost.period_end}`
+        : "as allocated",
+    });
+    out.set(sh.reservation_id as string, list);
+  }
+  return out;
+}
+
 /** What a run WOULD do. Nothing is written. */
 export async function previewChargeRun(
   parkId: string,
@@ -140,6 +192,10 @@ export async function previewChargeRun(
     .neq("status", "void");
   const already = new Set((existing ?? []).map((c) => c.reservation_id as string));
 
+  // The preview must include what the run will bill (its own stated
+  // invariant, forty lines up) — and the run now bills cost shares.
+  const shareMap = await unbilledCostShares(admin, parkId, (stays ?? []).map((s) => s.id as string));
+
   const candidates = (stays ?? []).map((s) => {
     const lot = lotById.get(s.park_lot_id as string)!;
     const range = parseDaterange(s.during as string);
@@ -154,6 +210,7 @@ export async function previewChargeRun(
           // A nightly home is priced per stay, not billed a monthly fee.
           fees: (lot.rental_mode as string) === "short_term" ? [] : fees,
           dueDay,
+          costShares: shareMap.get(s.id as string) ?? [],
         })
       : null;
     return {
@@ -242,6 +299,12 @@ export async function runCharges(
     .neq("status", "void");
   const already = new Set((existing ?? []).map((c) => c.reservation_id as string));
 
+  // The money the owner already paid out and split (0104). Billed once: the
+  // stamp below is what stops a second run charging the water twice.
+  const shareMap = await unbilledCostShares(admin, parkId, (stays ?? []).map((x) => x.id as string));
+  /** reservation -> the share ids that went onto its charge, stamped after insert. */
+  const shareIdsByRes = new Map<string, string[]>();
+
   const rows: Record<string, unknown>[] = [];
   for (const s of stays ?? []) {
     if (already.has(s.id as string)) continue;
@@ -249,15 +312,18 @@ export async function runCharges(
     const range = parseDaterange(s.during as string);
     if (!range) continue;
 
+    const shares = shareMap.get(s.id as string) ?? [];
     const st = buildStatement({
       month, stay: range,
       rent: s.quoted_amount == null ? null : Number(s.quoted_amount),
       fees: (lot.rental_mode as string) === "short_term" ? [] : fees,
       dueDay,
+      costShares: shares,
     });
     // No total = a rent nobody set. Billing zero would hide it behind a paid
     // charge; skipping leaves it visible on the roll where it belongs.
     if (st.total == null || st.total === 0) continue;
+    if (shares.length) shareIdsByRes.set(s.id as string, shares.map((c) => c.id));
 
     rows.push({
       park_id: parkId,
@@ -275,8 +341,24 @@ export async function runCharges(
     return { ok: false, error: `Nothing to bill for ${prettyMonth(month)} — it may already be done.` };
   }
 
-  const { error } = await admin.from("park_charges").insert(rows);
+  const { data: raised, error } = await admin
+    .from("park_charges").insert(rows).select("id, reservation_id");
   if (error) return { ok: false, error: "Couldn't raise those — try again." };
+
+  // STAMP THE SHARES. Without this a second run bills the same water again —
+  // the unique index stops a second CHARGE, but the shares would still read as
+  // unbilled and land on the next month's bill instead.
+  let sharesBilled = 0;
+  for (const c of raised ?? []) {
+    const ids = shareIdsByRes.get(c.reservation_id as string);
+    if (!ids?.length) continue;
+    const { error: stampErr } = await admin
+      .from("lot_cost_shares")
+      .update({ billed_on_charge_id: c.id })
+      .in("id", ids)
+      .is("billed_on_charge_id", null);   // never re-stamp one already spent
+    if (!stampErr) sharesBilled += ids.length;
+  }
 
   const total = rows.reduce((s, r) => s + (r.amount as number), 0);
   revalidatePath("/park/rent");
@@ -287,6 +369,9 @@ export async function runCharges(
     total,
     signal:
       `${rows.length} ${rows.length === 1 ? "bill" : "bills"} raised for ${prettyMonth(month)} — $${total.toFixed(2)}.` +
+      (sharesBilled > 0
+        ? ` ${sharesBilled} cost ${sharesBilled === 1 ? "share" : "shares"} you'd allocated went onto those bills.`
+        : "") +
       (rateMoves.applied > 0
         ? ` ${rateMoves.applied} rent ${rateMoves.applied === 1 ? "increase" : "increases"} came due today and went in first.`
         : "") +
@@ -536,8 +621,28 @@ export async function voidCharge(
     .eq("park_id", parkId);
   if (error) return { ok: false, error: "Couldn't cancel that — try again." };
 
+  // RELEASE THE COST SHARES THIS BILL WAS CARRYING (0104).
+  //
+  // A voided charge leaves its month billable again — that is the whole point
+  // of the void filter in the run. If the water shares stayed stamped to a
+  // cancelled bill they would never reach anybody: the owner would cancel one
+  // wrong bill and silently lose that household's share of a bill the park
+  // has genuinely paid. Same lesson 0101 learned about a voided month.
+  const { data: released } = await admin
+    .from("lot_cost_shares")
+    .update({ billed_on_charge_id: null })
+    .eq("billed_on_charge_id", chargeId)
+    .select("id");
+  const n = released?.length ?? 0;
+
   revalidatePath("/park/rent");
-  return { ok: true, signal: "Cancelled." };
+  revalidatePath("/park/costs");
+  return {
+    ok: true,
+    signal: n > 0
+      ? `Cancelled. ${n} cost ${n === 1 ? "share is" : "shares are"} waiting again for the next bill.`
+      : "Cancelled.",
+  };
 }
 
 /**

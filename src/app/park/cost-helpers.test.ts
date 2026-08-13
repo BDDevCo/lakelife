@@ -126,16 +126,40 @@ describe("what the owner reads", () => {
 });
 
 describe("am I recovering what the proforma promised", () => {
-  it("nets paid against recovered, per category", () => {
+  it("ALLOCATED IS NOT RECOVERED — splitting a bill is not billing it", () => {
+    // This test used to assert net === -6115, i.e. allocated minus paid, and
+    // it was encoding the bug: nothing billed from `lot_cost_shares` at all,
+    // so the screen told the owner he had passed on $2,185 that no household
+    // had been asked for. With nothing billed, what he is carrying is the
+    // whole $8,300 — and that is the number he needs to see.
     const r = recoveryByCategory([
       { category: "water" as CostCategory, amountPaid: 1200, allocatedTotal: 1140 },
       { category: "water" as CostCategory, amountPaid: 1100, allocatedTotal: 1045 },
       { category: "grounds" as CostCategory, amountPaid: 6000, allocatedTotal: 0 },
     ]);
     expect(r.paid).toBe(8300);
-    expect(r.recovered).toBe(2185);
-    expect(r.net).toBe(-6115);          // what the park is still carrying
+    expect(r.allocated).toBe(2185);
+    expect(r.billed).toBe(0);
+    expect(r.net).toBe(-8300);          // carrying ALL of it, because none was billed
     expect(r.lines[0].category).toBe("grounds");   // biggest cost first
     expect(r.lines.find((l) => l.category === "water")!.paid).toBe(2300);
+  });
+
+  it("nets against what actually reached a bill", () => {
+    const r = recoveryByCategory([
+      { category: "water" as CostCategory, amountPaid: 1200, allocatedTotal: 1140, billedTotal: 1140 },
+      { category: "water" as CostCategory, amountPaid: 1100, allocatedTotal: 1045, billedTotal: 0 },
+    ]);
+    expect(r.allocated).toBe(2185);
+    expect(r.billed).toBe(1140);
+    // Only the billed half comes off what he is carrying.
+    expect(r.net).toBe(-1160);
+  });
+
+  it("a share allocated but not yet billed is visible as the gap", () => {
+    const r = recoveryByCategory([
+      { category: "water" as CostCategory, amountPaid: 1200, allocatedTotal: 1140, billedTotal: 600 },
+    ]);
+    expect(r.allocated - r.billed).toBe(540);
   });
 });
