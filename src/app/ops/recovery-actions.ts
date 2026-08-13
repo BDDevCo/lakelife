@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { todayLakeDate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { LakeLifePayments } from "@/lib/payments";
+import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge } from "@/lib/automation";
 import {
   proposedFee, deadlinePassed, tripFeeFor, recoveryHeadline, crewIsOutOfPocket,
@@ -115,7 +116,7 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
       const charge = await LakeLifePayments.charge({
         token: pm.token as string,
         amountCents: Math.round(amount * 100),
-        description: "LakeLife — missed visit",
+        description: statementDescriptor("visit_fee"),
       });
       const { error: payErr } = await admin.from("payments").insert({
         invoice_id: invoice.id, amount,

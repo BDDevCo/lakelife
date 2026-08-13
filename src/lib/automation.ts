@@ -4,6 +4,7 @@ import { sendSms } from "@/lib/sms";
 import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
 import { LakeLifePayments } from "@/lib/payments";
+import { statementDescriptor } from "@/lib/descriptor";
 import { revalidateJob } from "@/app/book/dispatch";
 import { todayLakeDate } from "@/lib/booking";
 import { planVendorDay, routeMapUrl } from "@/lib/router";
@@ -552,7 +553,7 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
           });
         }
       } else if (pm?.token) {
-        const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(cashDue * 100), description: `LakeLife — ${svcName}` });
+        const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(cashDue * 100), description: statementDescriptor("service") });
         const { error: payErr } = await admin.from("payments").insert({
           invoice_id: invoice.id,
           amount: cashDue,
@@ -996,7 +997,7 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
       if (!pm?.token) continue; // still no card — try again tomorrow
       retried++;
       const svc = (one(j.services) as { name?: string } | null)?.name ?? "service";
-      const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(fee * 100), description: `LakeLife — late cancellation, ${svc}` });
+      const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(fee * 100), description: statementDescriptor("cancel_fee") });
       await admin.from("payments").insert({ invoice_id: inv.id, amount: fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null });
       if (!charge.ok) continue;
       await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null }).eq("id", inv.id);

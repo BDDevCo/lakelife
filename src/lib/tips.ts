@@ -57,6 +57,28 @@ export interface TipDials {
   bands: TipBand[];
   /** Nobody may type a tip larger than this. Protects against a fat finger. */
   maxCustom: number;
+  /**
+   * How long after the visit a thank-you may still be added.
+   *
+   * Everyone who does this has a window — Uber's runs about a month, Lyft's a
+   * few days — and we had NONE: `canTip` would have accepted a tip on a job
+   * from any date, forever. Three reasons that is wrong, and none of them are
+   * about the customer:
+   *
+   *   The card on file goes stale. A tip charged against a card replaced in
+   *   the meantime declines, and the crew never learns there was one.
+   *
+   *   The crew may have moved on. 0091 pays the tip to the vendor on the job;
+   *   eight months later that may be somebody who no longer works these lakes.
+   *
+   *   The payout lands in a batch unrelated to the work. A crew's month-end
+   *   statement should be recognisable as the month they worked.
+   *
+   * Thirty days rather than Uber-tight, because our customer is often three
+   * hours away and judges the work from photos — somebody who checks in
+   * fortnightly must still get the chance.
+   */
+  windowDays: number;
 }
 
 /**
@@ -71,7 +93,37 @@ export const DEFAULT_TIP_DIALS: TipDials = {
     { maxMinutes: null, options: [20, 35, 50] },
   ],
   maxCustom: 200,
+  windowDays: 30,
 };
+
+/**
+ * Whole days between two ISO dates (`b - a`), read at NOON.
+ *
+ * Noon, not midnight, because `new Date("2026-08-12")` is UTC midnight — which
+ * in Indiana is the evening of the 11th, and a window computed from it is off
+ * by one for every customer in the state. Both ends are anchored the same way
+ * so the difference is exact whatever the offset.
+ */
+export function daysBetweenISO(a: string, b: string): number | null {
+  const ms = Date.parse(`${a}T12:00:00Z`);
+  const ns = Date.parse(`${b}T12:00:00Z`);
+  if (!Number.isFinite(ms) || !Number.isFinite(ns)) return null;
+  return Math.round((ns - ms) / 86_400_000);
+}
+
+/**
+ * Days left to add a thank-you. Null when we cannot tell, negative once shut.
+ */
+export function tipDaysLeft(
+  jobDateISO: string | null | undefined,
+  todayISO: string,
+  dials: TipDials = DEFAULT_TIP_DIALS,
+): number | null {
+  if (!jobDateISO) return null;
+  const elapsed = daysBetweenISO(jobDateISO, todayISO);
+  if (elapsed == null) return null;
+  return dials.windowDays - elapsed;
+}
 
 export interface TipSuggestion {
   options: number[];
@@ -173,12 +225,18 @@ export function tipSplit(amount: number): { toCrew: number; toLakeLife: number }
  * thing that makes tipping corrosive, and the reason a crew must never see a
  * tip (or its absence) until after they have finished.
  */
-export function canTip(job: {
-  status: string;
-  tip_amount?: number | null;
-  no_show_at?: string | null;
-  stood_down_at?: string | null;
-}): { ok: boolean; why?: string } {
+export function canTip(
+  job: {
+    status: string;
+    tip_amount?: number | null;
+    no_show_at?: string | null;
+    stood_down_at?: string | null;
+    /** The visit's own date — the clock the window runs on. */
+    date?: string | null;
+  },
+  todayISO?: string,
+  dials: TipDials = DEFAULT_TIP_DIALS,
+): { ok: boolean; why?: string } {
   if (job.no_show_at || job.stood_down_at) {
     return { ok: false, why: "No work happened on that visit." };
   }
@@ -197,6 +255,21 @@ export function canTip(job: {
         ? "You've already sent them one — thank you."
         : "You've already answered this one.",
     };
+  }
+  // THE WINDOW, CHECKED LAST — so somebody who already tipped is told that,
+  // rather than being told they are too late for a thing they already did.
+  //
+  // An unknown date does NOT close it. We would be shutting the door on the
+  // strength of our own missing data, and the same rule runs through this
+  // file: whoever did not cause the uncertainty should not pay for it.
+  if (todayISO) {
+    const left = tipDaysLeft(job.date, todayISO, dials);
+    if (left != null && left < 0) {
+      return {
+        ok: false,
+        why: `That visit was over ${dials.windowDays} days ago — give us a call if you'd still like to send the crew something.`,
+      };
+    }
   }
   return { ok: true };
 }

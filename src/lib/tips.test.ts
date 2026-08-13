@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  suggestTip, validateTip, tipSplit, canTip, DEFAULT_TIP_DIALS, type TipDials,
+  suggestTip, validateTip, tipSplit, canTip, tipDaysLeft, daysBetweenISO,
+  DEFAULT_TIP_DIALS, type TipDials,
 } from "./tips";
 
 describe("the suggestion is anchored to TIME, never to the bill", () => {
@@ -153,5 +154,68 @@ describe("when a visit may be tipped", () => {
   it("a job never asked is still tippable", () => {
     expect(canTip({ status: "complete", tip_amount: null }).ok).toBe(true);
     expect(canTip({ status: "complete" }).ok).toBe(true);
+  });
+});
+
+describe("the 30-day window", () => {
+  const done = { status: "complete", date: "2026-08-01" };
+
+  it("is open the day of the visit", () => {
+    expect(canTip(done, "2026-08-01").ok).toBe(true);
+    expect(tipDaysLeft("2026-08-01", "2026-08-01")).toBe(30);
+  });
+
+  it("is open on the LAST day, day 30", () => {
+    // A window that shuts a day early is the commonest version of this bug.
+    expect(tipDaysLeft("2026-08-01", "2026-08-31")).toBe(0);
+    expect(canTip(done, "2026-08-31").ok).toBe(true);
+  });
+
+  it("is shut on day 31", () => {
+    expect(tipDaysLeft("2026-08-01", "2026-09-01")).toBe(-1);
+    const r = canTip(done, "2026-09-01");
+    expect(r.ok).toBe(false);
+    expect(r.why).toContain("30 days");
+    expect(r.why).toContain("give us a call");
+  });
+
+  it("NOON, NOT MIDNIGHT — the Indiana off-by-one", () => {
+    // `new Date("2026-08-12")` is UTC midnight, which in Indiana is the
+    // EVENING OF THE 11TH. Anchoring both ends at noon makes the difference
+    // exact whatever the offset, and across a DST boundary.
+    expect(daysBetweenISO("2026-08-01", "2026-08-02")).toBe(1);
+    expect(daysBetweenISO("2026-03-07", "2026-03-09")).toBe(2);  // spring forward
+    expect(daysBetweenISO("2026-10-31", "2026-11-02")).toBe(2);  // fall back
+    expect(daysBetweenISO("2026-08-02", "2026-08-01")).toBe(-1);
+  });
+
+  it("AN UNKNOWN DATE DOES NOT SHUT THE DOOR", () => {
+    // Closing on the strength of our own missing data would charge the
+    // customer for our gap — the same rule as the unknown-duration band.
+    expect(canTip({ status: "complete", date: null }, "2026-09-01").ok).toBe(true);
+    expect(tipDaysLeft(null, "2026-09-01")).toBe(null);
+  });
+
+  it("with no today passed in, the window is not evaluated at all", () => {
+    // Every caller passes lake time; this only guarantees a missing clock
+    // never silently becomes "expired".
+    expect(canTip(done).ok).toBe(true);
+  });
+
+  it("ALREADY-ANSWERED OUTRANKS EXPIRED", () => {
+    // Somebody who tipped in August and opens the job in October should be
+    // thanked, not told they are too late for a thing they already did.
+    const tipped = { ...done, tip_amount: 20 };
+    expect(canTip(tipped, "2026-12-01").why).toContain("already sent");
+  });
+
+  it("a no-work visit outranks everything, expired or not", () => {
+    expect(canTip({ ...done, no_show_at: "x" }, "2026-12-01").why).toContain("No work happened");
+  });
+
+  it("honours a custom window dial", () => {
+    const tight: TipDials = { ...DEFAULT_TIP_DIALS, windowDays: 3 };
+    expect(canTip(done, "2026-08-04", tight).ok).toBe(true);
+    expect(canTip(done, "2026-08-05", tight).ok).toBe(false);
   });
 });

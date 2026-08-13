@@ -106,6 +106,20 @@ export function TipCrew({ jobId, view }: { jobId: string; view: TipView }) {
         </div>
       )}
 
+      {/* THE WINDOW, MENTIONED ONLY WHEN IT IS NEARLY UP.
+          There is a 30-day limit and somebody should not discover it by
+          finding the buttons gone. But saying "you have 29 days left" on day
+          one turns a thank-you into a deadline, and this screen's whole design
+          is that declining must feel completely fine. So it stays quiet until
+          the last week, and even then it states a fact rather than pressing. */}
+      {view.daysLeft != null && view.daysLeft >= 0 && view.daysLeft <= 7 && (
+        <p className="mut" style={{ fontSize: 11.5, marginTop: 12, marginBottom: 0, lineHeight: 1.5 }}>
+          {view.daysLeft === 0
+            ? "Today is the last day this one can be added."
+            : `Open for another ${view.daysLeft} day${view.daysLeft === 1 ? "" : "s"}.`}
+        </p>
+      )}
+
       <p className="mut" style={{ fontSize: 11.5, marginTop: 12, marginBottom: 0, lineHeight: 1.5 }}>
         Every cent goes to the crew — LakeLife doesn&apos;t take a share of a
         thank-you.

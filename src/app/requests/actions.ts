@@ -5,11 +5,12 @@ import { todayLakeDate, dayStatus } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { cancellationQuote, type CancelQuote } from "@/lib/cancellation";
 import { planRecovery } from "@/lib/recovery";
-import { suggestTip, validateTip, tipSplit, canTip } from "@/lib/tips";
+import { suggestTip, validateTip, tipSplit, canTip, tipDaysLeft } from "@/lib/tips";
 import { revalidatePath } from "next/cache";
 import { autoAssignJob } from "@/app/book/dispatch";
 import { getAvailability } from "@/app/book/actions";
 import { LakeLifePayments } from "@/lib/payments";
+import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge } from "@/lib/automation";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
@@ -243,7 +244,7 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
       const charge = await LakeLifePayments.charge({
         token: pm.token as string,
         amountCents: Math.round(q.fee * 100),
-        description: `LakeLife — late cancellation, ${l.svcName}`,
+        description: statementDescriptor("cancel_fee"),
       });
       const { error: payErr } = await admin.from("payments").insert({
         invoice_id: invoice.id, amount: q.fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null,
@@ -482,6 +483,8 @@ export interface TipView {
   basis: string;
   /** Already given, if they have. */
   given: number | null;
+  /** Days left in the window. Null when the visit has no date to run it from. */
+  daysLeft: number | null;
 }
 
 /**
@@ -494,6 +497,7 @@ export interface TipView {
 export async function getTipView(jobId: string): Promise<TipView> {
   const blank: TipView = {
     canTip: false, options: [], typical: 0, maxCustom: 0, basis: "", given: null,
+    daysLeft: null,
   };
   const loaded = await loadOwnJob(jobId);
   if (!loaded) return blank;
@@ -501,17 +505,20 @@ export async function getTipView(jobId: string): Promise<TipView> {
   const admin = createServiceClient();
   const { data: row } = await admin
     .from("jobs")
-    .select("status, est_minutes, group_id, tip_amount, no_show_at, stood_down_at, services(est_minutes), job_items(services(est_minutes))")
+    .select("status, date, est_minutes, group_id, tip_amount, no_show_at, stood_down_at, services(est_minutes), job_items(services(est_minutes))")
     .eq("id", jobId)
     .maybeSingle();
   if (!row) return blank;
 
+  const today = todayLakeDate();
   const gate = canTip({
     status: row.status as string,
     tip_amount: row.tip_amount == null ? null : Number(row.tip_amount),
     no_show_at: (row.no_show_at as string) ?? null,
     stood_down_at: (row.stood_down_at as string) ?? null,
-  });
+    date: (row.date as string) ?? null,
+  }, today);
+  const daysLeft = tipDaysLeft((row.date as string) ?? null, today);
 
   // A PACKAGE VISIT IS THE LONGEST VISIT OF THE YEAR AND WAS STAMPED WITH
   // NOTHING. Only the two standalone write paths call `serviceMinutes`; both
@@ -548,6 +555,7 @@ export async function getTipView(jobId: string): Promise<TipView> {
     maxCustom: s.maxCustom,
     basis: s.basis,
     given: row.tip_amount == null ? null : Number(row.tip_amount),
+    daysLeft,
   };
 }
 
@@ -571,17 +579,20 @@ export async function addTip(
   const admin = createServiceClient();
   const { data: row } = await admin
     .from("jobs")
-    .select("status, vendor_id, tip_amount, no_show_at, stood_down_at")
+    .select("status, date, vendor_id, tip_amount, no_show_at, stood_down_at")
     .eq("id", jobId)
     .maybeSingle();
   if (!row) return { ok: false, error: "That visit isn't yours." };
 
+  // The window is enforced HERE as well as on the screen — a stale tab is the
+  // ordinary way a closed window gets tested, not an attack.
   const gate = canTip({
     status: row.status as string,
     tip_amount: row.tip_amount == null ? null : Number(row.tip_amount),
     no_show_at: (row.no_show_at as string) ?? null,
     stood_down_at: (row.stood_down_at as string) ?? null,
-  });
+    date: (row.date as string) ?? null,
+  }, todayLakeDate());
   if (!gate.ok) return { ok: false, error: gate.why };
 
   const v = validateTip(raw);
@@ -641,7 +652,7 @@ export async function addTip(
   const charge = await LakeLifePayments.charge({
     token: pm.token as string,
     amountCents: Math.round(v.amount * 100),
-    description: `LakeLife — thank-you for the crew, ${loaded.svcName}`,
+    description: statementDescriptor("tip"),
   });
 
   const { error: payErr } = await admin.from("payments").insert({
