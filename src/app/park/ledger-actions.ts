@@ -30,6 +30,30 @@ import type { ParkResult } from "./actions";
 
 const DENIED = "You don't manage that park.";
 
+/**
+ * Mirrors 0102's `park_payments_received_on_is_sane` CHECK so a person gets a
+ * sentence naming the field instead of a constraint name — or worse, the
+ * generic retry message that never becomes true.
+ *
+ * Deliberately a touch TIGHTER than the database (729 days, not 730): the DB
+ * compares against `created_at::date` in UTC, which is the lake date or the
+ * day after it, so a JS mirror measured in lake time must stay inside the
+ * narrower window or the edge day leaks a raw 23514.
+ */
+// NOT exported: this file carries "use server", where every export must be an
+// async function — and a sync helper exported from one is both a build error
+// and a server action nobody meant to create.
+function paymentDateProblem(receivedOn: string, todayISO: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedOn)) return "Pick the day the money arrived.";
+  const day = 86_400_000;
+  const got = Date.parse(`${receivedOn}T12:00:00Z`);
+  const now = Date.parse(`${todayISO}T12:00:00Z`);
+  if (!Number.isFinite(got)) return "That date isn't a date.";
+  if (got > now + 31 * day) return "That's more than a month from now — check the year.";
+  if (got < now - 729 * day) return "That's more than two years ago — check the year.";
+  return null;
+}
+
 async function feesFor(
   admin: ReturnType<typeof createServiceClient>,
   parkId: string,
@@ -292,6 +316,13 @@ export async function recordPayment(
   if (!Number.isFinite(amount) || amount <= 0) {
     return { ok: false, error: "That payment amount isn't a number." };
   }
+  // 0102 put a sanity window on `received_on` — a mistyped year moves income
+  // into another tax year and nobody finds out until an accountant does. This
+  // form had no date check at all, so the database's refusal would have
+  // surfaced as the anonymous "Couldn't record that — try again" below,
+  // forever, with no clue which field was wrong.
+  const dateBad = paymentDateProblem(receivedOn, todayLakeDate());
+  if (dateBad) return { ok: false, error: dateBad };
 
   const admin = createServiceClient();
   // Confirm the charge belongs to this park before writing against it.

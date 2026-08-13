@@ -49,7 +49,10 @@ function dateProblem(receivedOn: string, todayISO: string): string | null {
   // A mistyped year moves income into another tax year and nobody finds out
   // until an accountant does.
   if (got > now + 31 * day) return "That's more than a month from now — check the year.";
-  if (got < now - 730 * day) return "That's more than two years ago — check the year.";
+  // 729, not 730: the DB compares against created_at::date in UTC, which is
+  // the lake date or the day after, so the JS mirror must sit strictly inside
+  // the DB window or the edge day leaks a raw constraint name to the office.
+  if (got < now - 729 * day) return "That's more than two years ago — check the year.";
   return null;
 }
 
@@ -173,6 +176,19 @@ export async function applyOnAccount(
     return { ok: false, error: "That money is a different household's — it can't pay this bill." };
   }
 
+  // AN OVER-APPLY TRAPS THE EXCESS. There is no way to split a payment, so
+  // putting $500 against a bill with $200 left leaves $300 attached to a
+  // settled charge with no way to move it to next month — while the screen
+  // says "settled". Refuse it and let the office decide, rather than swallow
+  // the difference.
+  const owing = Math.round((Number(charge.amount) - Number(charge.paid_total)) * 100) / 100;
+  if (Number(pay.amount) > owing) {
+    return {
+      ok: false,
+      error: `That bill only has $${owing.toFixed(2)} left on it and this payment is $${Number(pay.amount).toFixed(2)} — it would strand the difference. Put it against a bigger bill, or raise the one it belongs to first.`,
+    };
+  }
+
   const { data: done, error } = await admin
     .from("park_payments")
     .update({ charge_id: chargeId })
@@ -285,6 +301,16 @@ export async function returnDeposit(
   if (amount > Number(dep.amount)) {
     return { ok: false, error: `They only ever paid $${Number(dep.amount).toFixed(2)} — you can't return more.` };
   }
+  // KEEPING PART OF A DEPOSIT IS A MONEY DECISION and it was the only one in
+  // the module with nothing behind it. 0103 refuses it at the database too;
+  // this is so somebody gets a sentence rather than a constraint name.
+  const kept = Math.round((Number(dep.amount) - amount) * 100) / 100;
+  if (kept > 0 && !(note ?? "").trim()) {
+    return {
+      ok: false,
+      error: `You're keeping $${kept.toFixed(2)} of their deposit — say why. In six months that note is the only record of the reason.`,
+    };
+  }
 
   const { data: done, error } = await admin
     .from("park_payments")
@@ -295,12 +321,13 @@ export async function returnDeposit(
   if (error) return { ok: false, error: `Couldn't record that — ${error.message}` };
   if (!done?.length) return { ok: false, error: "That deposit was just returned by somebody else." };
 
-  const kept = Number(dep.amount) - amount;
   revalidatePath("/park/rent");
   return {
     ok: true,
     signal: kept > 0
-      ? `$${amount.toFixed(2)} returned. $${kept.toFixed(2)} kept — say why in the note.`
+      // The reason is now required above, so this states what was recorded
+      // rather than asking for something the office has already given.
+      ? `$${amount.toFixed(2)} returned, $${kept.toFixed(2)} kept — and the reason is on the record.`
       : `$${amount.toFixed(2)} returned in full.`,
   };
 }
@@ -320,6 +347,8 @@ export interface DepositRow extends OnAccountRow {
   returnedOn: string | null;
   returnedAmount: number | null;
   note: string | null;
+  /** Why any of it was kept. The screen asks for it; this is the read back. */
+  returnNote: string | null;
 }
 
 /** Money sitting against households, and deposits being held. */
@@ -333,13 +362,19 @@ export async function getHeldMoney(parkId: string): Promise<{
   if (!(await assertMyPark(parkId))) return empty;
 
   const admin = createServiceClient();
-  const { data: rows } = await admin
-    .from("park_payments")
-    .select("id, renter_id, amount, method, received_on, reference, receipt_no, kind, charge_id, returned_on, returned_amount, note, reversed_at")
-    .eq("park_id", parkId)
-    .is("reversed_at", null)
-    .order("received_on", { ascending: false });
-  if (!rows?.length) return empty;
+  // Two reads, each matching one of 0102's partial indexes, rather than one
+  // read of every payment the park has ever taken filtered in JavaScript.
+  const cols = "id, renter_id, amount, method, received_on, reference, receipt_no, kind, charge_id, returned_on, returned_amount, return_note, note, reversed_at";
+  const [{ data: acctRows }, { data: depRows }] = await Promise.all([
+    admin.from("park_payments").select(cols)
+      .eq("park_id", parkId).is("reversed_at", null).eq("kind", "rent").is("charge_id", null)
+      .order("received_on", { ascending: false }),
+    admin.from("park_payments").select(cols)
+      .eq("park_id", parkId).is("reversed_at", null).eq("kind", "deposit")
+      .order("received_on", { ascending: false }),
+  ]);
+  const rows = [...(acctRows ?? []), ...(depRows ?? [])];
+  if (!rows.length) return empty;
 
   const renterIds = [...new Set(rows.map((r) => r.renter_id as string).filter(Boolean))];
   const names = new Map<string, string>();
@@ -360,12 +395,13 @@ export async function getHeldMoney(parkId: string): Promise<{
     receiptNo: (r.receipt_no as number) ?? null,
   });
 
-  const onAccount = rows.filter((r) => r.kind === "rent" && !r.charge_id).map(base);
-  const deposits = rows.filter((r) => r.kind === "deposit").map((r) => ({
+  const onAccount = (acctRows ?? []).map(base);
+  const deposits = (depRows ?? []).map((r) => ({
     ...base(r),
     returnedOn: (r.returned_on as string) ?? null,
     returnedAmount: r.returned_amount == null ? null : Number(r.returned_amount),
     note: (r.note as string) ?? null,
+    returnNote: (r.return_note as string) ?? null,
   }));
 
   return {

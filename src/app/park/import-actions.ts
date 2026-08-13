@@ -725,8 +725,46 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
     }
   }
 
+  // MONEY WITH NO BILL BEHIND IT (0102). The guard above counts charges, which
+  // WAS a complete money check while every payment required one. Now a deposit
+  // taken at signing, or a cheque handed over before the first bill, hangs off
+  // the household with no charge — so it is invisible to that count, and the
+  // `park_renters` delete below then fails on `park_payments_is_anchored`
+  // (renter_id is ON DELETE SET NULL, which would leave a payment anchored to
+  // nothing). The error was never read, so the function carried on: lots
+  // deleted, `undone_at` stamped, and the toast said "your roll is back how it
+  // was" over a roll where every household file survived.
+  if (renterIds.length) {
+    const { count: held } = await admin
+      .from("park_payments")
+      .select("id", { count: "exact", head: true })
+      .in("renter_id", renterIds)
+      .is("charge_id", null)
+      .is("reversed_at", null);
+    if (held && held > 0) {
+      return {
+        ok: false,
+        error:
+          `You've taken money from ${held === 1 ? "a household" : "households"} on this import — ` +
+          `${held} ${held === 1 ? "payment is" : "payments are"} on account or held as a deposit. ` +
+          `Apply or give that money back first, then undo.`,
+      };
+    }
+  }
+
   if (resIds.length) await admin.from("lot_reservations").delete().in("id", resIds);
-  if (renterIds.length) await admin.from("park_renters").delete().in("id", renterIds);
+  if (renterIds.length) {
+    // AND STOP IF IT REFUSES. A half-undone import is worse than one that
+    // refused: the lots go, the batch is stamped undone so it cannot be
+    // retried, and the household files stay in every picker.
+    const { error: renterErr } = await admin.from("park_renters").delete().in("id", renterIds);
+    if (renterErr) {
+      return {
+        ok: false,
+        error: `Couldn't remove those household files (${renterErr.message}) — nothing else was undone, so you can try again.`,
+      };
+    }
+  }
 
   // Lots created by the import come out ONLY if nobody else has since been put
   // on them. A lot with a tenancy on it is now his inventory, not our mess.

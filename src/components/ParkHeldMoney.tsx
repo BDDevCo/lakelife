@@ -7,6 +7,7 @@ import {
   recordOnAccount, recordDeposit, returnDeposit, applyOnAccount,
   type OnAccountRow, type DepositRow,
 } from "@/app/park/money-actions";
+import { reversePayment } from "@/app/park/ledger-actions";
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
@@ -191,7 +192,10 @@ function OnAccountLine({
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "8px 0", borderTop: "1px dashed var(--line)" }}>
       <span style={{ fontSize: 13.5, flex: 1, minWidth: 160 }}>
         <b>{usd(row.amount)}</b> · {row.renterName}
-        <span className="mut"> · {row.receivedOn} · {row.method}{row.reference ? ` #${row.reference}` : ""}</span>
+        <span className="mut">
+          {" "}· {row.receivedOn} · {row.method}{row.reference ? ` #${row.reference}` : ""}
+          {row.receiptNo ? ` · receipt ${row.receiptNo}` : ""}
+        </span>
       </span>
       {mine.length > 0 ? (
         <>
@@ -211,6 +215,8 @@ function OnAccountLine({
       ) : (
         <span className="mut" style={{ fontSize: 12.5 }}>No open bill for them yet.</span>
       )}
+      <UndoMoney parkId={parkId} paymentId={row.paymentId} what="it"
+        busy={busy} start={start} router={router} />
     </div>
   );
 }
@@ -236,18 +242,36 @@ function DepositLine({
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ fontSize: 13.5, flex: 1, minWidth: 160 }}>
           <b>{usd(row.amount)}</b> · {row.renterName}
-          <span className="mut"> · taken {row.receivedOn}</span>
+          <span className="mut">
+            {" "}· taken {row.receivedOn}{row.receiptNo ? ` · receipt ${row.receiptNo}` : ""}
+          </span>
         </span>
         {row.returnedOn ? (
           <span className="ll-pill slate">
             {usd(row.returnedAmount ?? 0)} returned {row.returnedOn}
           </span>
         ) : (
-          <button className="ll-btn ghost sm" onClick={() => setOpen((o) => !o)}>
-            {open ? "Cancel" : "Give it back"}
-          </button>
+          <>
+            <button className="ll-btn ghost sm" onClick={() => setOpen((o) => !o)}>
+              {open ? "Cancel" : "Give it back"}
+            </button>
+            {/* Reversing is for a deposit recorded in ERROR. Giving it back is
+                the ordinary end of one; a deposit already returned cannot be
+                reversed at all, and the server refuses it. */}
+            <UndoMoney parkId={parkId} paymentId={row.paymentId} what="the deposit"
+              busy={busy} start={start} router={router} />
+          </>
         )}
       </div>
+
+      {/* WHY ANY OF IT WAS KEPT. The form demands this and nothing read it
+          back, so the only record of the reason lived in a column no screen
+          opened. */}
+      {row.returnedOn && row.returnNote && (
+        <p className="mut" style={{ fontSize: 12, margin: "2px 0 0", lineHeight: 1.45 }}>
+          Kept {usd(Math.max(0, row.amount - (row.returnedAmount ?? 0)))} — &ldquo;{row.returnNote}&rdquo;
+        </p>
+      )}
 
       {open && !row.returnedOn && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginTop: 8 }}>
@@ -274,6 +298,55 @@ function DepositLine({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * TAKE IT BACK. `reversePayment` was fixed to reach a payment with no charge,
+ * and then no screen offered it — a working branch with no caller, which is
+ * this codebase's most common way of shipping nothing. A reason is required
+ * by the database, so it is required here.
+ */
+function UndoMoney({
+  parkId, paymentId, what, busy, start, router,
+}: {
+  parkId: string;
+  paymentId: string;
+  what: string;
+  busy: boolean;
+  start: (fn: () => void) => void;
+  router: { refresh: () => void };
+}) {
+  const [open, setOpen] = useState(false);
+  const [why, setWhy] = useState("");
+  if (!open) {
+    return (
+      <button className="ll-btn ghost sm" disabled={busy} onClick={() => setOpen(true)}>
+        Take it back
+      </button>
+    );
+  }
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", width: "100%", marginTop: 6 }}>
+      <input
+        value={why}
+        onChange={(e) => setWhy(e.target.value)}
+        placeholder={`Why — a bounced check, a typo`}
+        style={{ flex: 1, minWidth: 180, fontSize: 13 }}
+        autoFocus
+      />
+      <button className="ll-btn sm" disabled={busy || !why.trim()}
+        onClick={() => start(async () => {
+          const res = await reversePayment(parkId, paymentId, why);
+          toast(res.ok ? (res.signal ?? "Taken back.") : (res.error ?? "Couldn't do that."));
+          if (res.ok) { setOpen(false); setWhy(""); router.refresh(); }
+        })}>
+        Reverse {what}
+      </button>
+      <button className="ll-btn ghost sm" disabled={busy} onClick={() => { setOpen(false); setWhy(""); }}>
+        Cancel
+      </button>
     </div>
   );
 }
