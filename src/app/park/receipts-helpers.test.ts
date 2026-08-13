@@ -248,7 +248,10 @@ describe("what it says", () => {
       unbilledFeeLabels: [], anyMissingPayerName: false,
     });
     expect(lines.some((l) => /Expenses aren't in here/.test(l))).toBe(true);
-    expect(lines.some((l) => /Deposits and refunds/.test(l))).toBe(true);
+    // The old line read "Deposits and refunds aren't in here either — there's
+    // nowhere in the system to record them yet." 0102 made that false.
+    expect(lines.some((l) => /Deposits and money held on account/.test(l))).toBe(true);
+    expect(lines.some((l) => /nowhere in the system/.test(l))).toBe(false);
     expect(lines.some((l) => /not money billed/.test(l))).toBe(true);
     expect(lines.some((l) => /3 days behind/.test(l))).toBe(true);
   });
@@ -311,5 +314,41 @@ describe("a payment that was taken back is not income", () => {
                 reversedAt: "2026-07-21T12:00:00Z", reversedReason: "entered twice" }),
     ], period);
     expect(s.overpaidCents).toBe(0);
+  });
+});
+
+describe("cash that came in but is not rent received", () => {
+  const base = {
+    recordsBeginOn: "2026-07-01", lagDays: 0,
+    unbilledFeeLabels: [], anyMissingPayerName: false,
+  };
+
+  it("SAYS THE AMOUNTS OUT LOUD, so the statement reconciles to a bank statement", () => {
+    // Silently omitting them is what makes a cash statement impossible to tie
+    // back to the bank — and the first person to notice is an accountant a
+    // year later.
+    const lines = exclusionLines({
+      ...base, depositsReceivedCents: 30_000, onAccountReceivedCents: 50_000,
+    });
+    const said = lines.find((l) => /NOT in the total above/.test(l));
+    expect(said).toBeTruthy();
+    expect(said).toContain("$300.00 in deposits taken");
+    expect(said).toContain("$500.00 received on account");
+  });
+
+  it("names only the one that happened", () => {
+    const dep = exclusionLines({ ...base, depositsReceivedCents: 30_000, onAccountReceivedCents: 0 });
+    const line = dep.find((l) => /NOT in the total above/.test(l))!;
+    expect(line).toContain("deposits taken");
+    expect(line).not.toContain("on account");
+  });
+
+  it("stays quiet when there is none — a zero is not a disclosure", () => {
+    const lines = exclusionLines({ ...base, depositsReceivedCents: 0, onAccountReceivedCents: 0 });
+    expect(lines.some((l) => /NOT in the total above/.test(l))).toBe(false);
+  });
+
+  it("and when the caller doesn't pass them at all", () => {
+    expect(exclusionLines(base).some((l) => /NOT in the total above/.test(l))).toBe(false);
   });
 });

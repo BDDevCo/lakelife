@@ -296,7 +296,7 @@ export async function recordPayment(
   const admin = createServiceClient();
   // Confirm the charge belongs to this park before writing against it.
   const { data: charge } = await admin
-    .from("park_charges").select("id, park_id, amount, paid_total, status")
+    .from("park_charges").select("id, park_id, renter_id, amount, paid_total, status")
     .eq("id", chargeId).eq("park_id", parkId).maybeSingle();
   if (!charge) return { ok: false, error: "That bill isn't here." };
   if (charge.status === "void") {
@@ -313,6 +313,14 @@ export async function recordPayment(
 
   const { data: written, error } = await admin.from("park_payments").insert({
     charge_id: chargeId,
+    // 0102 made `park_id` NOT NULL so money with no charge still knows which
+    // park it belongs to. This insert derived the park by joining through the
+    // charge and never carried it — without these two lines every payment
+    // recorded at the window would fail on a not-null violation.
+    park_id: parkId,
+    // Whose money it is. The first question anybody asks in a dispute, and it
+    // was only answerable by walking charge -> renter.
+    renter_id: (charge.renter_id as string) ?? null,
     amount,
     method,
     reference: reference.trim() || null,
@@ -772,15 +780,33 @@ export async function reversePayment(
 
   const admin = createServiceClient();
 
-  // Scope the payment to THIS park through its charge before touching it.
+  // SCOPE BY THE PARK ON THE PAYMENT, not through the charge.
+  //
+  // This used to read `park_charges!inner(park_id)`, and an INNER join drops
+  // any row whose charge_id is NULL — which since 0102 is every deposit and
+  // every cheque taken before the bill existed. So money recorded by mistake
+  // at the window could never be taken back, and the office was told "That
+  // isn't here" about a payment sitting on their own screen.
   const { data: pay } = await admin
     .from("park_payments")
-    .select("id, amount, receipt_no, reversed_at, park_charges!inner(park_id)")
+    .select("id, amount, receipt_no, reversed_at, park_id, kind, charge_id")
     .eq("id", paymentId)
+    .eq("park_id", parkId)
     .maybeSingle();
-  const owner = (pay as { park_charges?: { park_id?: string } } | null)?.park_charges?.park_id;
-  if (!pay || owner !== parkId) return { ok: false, error: "That isn't here." };
+  if (!pay) return { ok: false, error: "That isn't here." };
   if (pay.reversed_at) return { ok: false, error: "That one's already been taken back." };
+
+  // A DEPOSIT ALREADY GIVEN BACK CANNOT BE UNSAID. Reversing means "this never
+  // happened", and the money demonstrably did go back out — leaving a
+  // returned_amount on a reversed row would be the ledger holding two
+  // contradictory facts about the same cash.
+  if (pay.kind === "deposit") {
+    const { data: dep } = await admin
+      .from("park_payments").select("returned_on").eq("id", paymentId).maybeSingle();
+    if (dep?.returned_on) {
+      return { ok: false, error: "That deposit was already returned — reversing it would contradict the record." };
+    }
+  }
 
   const { error } = await admin
     .from("park_payments")
@@ -801,6 +827,12 @@ export async function reversePayment(
     ok: true,
     signal:
       `$${amount.toFixed(2)} taken back${pay.receipt_no ? ` (receipt ${pay.receipt_no})` : ""}. ` +
-      `The bill is outstanding again, and the record shows why.`,
+      // Money with no charge has no bill to become outstanding again — saying
+      // it does would send somebody looking for a balance that never moved.
+      (pay.charge_id
+        ? "The bill is outstanding again, and the record shows why."
+        : pay.kind === "deposit"
+          ? "That deposit is no longer held, and the record shows why."
+          : "It's off the household's account, and the record shows why."),
   };
 }

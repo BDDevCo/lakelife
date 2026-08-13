@@ -5,6 +5,8 @@ import { ParkRent } from "@/components/ParkRent";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { getLedger } from "@/app/park/ledger-actions";
+import { ParkHeldMoney } from "@/components/ParkHeldMoney";
+import { getHeldMoney, getHouseholds, getOpenChargesForApply } from "@/app/park/money-actions";
 
 export default async function ParkRentPage({
   searchParams,
@@ -32,6 +34,11 @@ export default async function ParkRentPage({
 
   const { month } = await searchParams;
   const page = await getLedger(park.id, month);
+  const [held, households, openCharges] = await Promise.all([
+    getHeldMoney(park.id),
+    getHouseholds(park.id),
+    getOpenChargesForApply(park.id),
+  ]);
   if (!page) {
     return (<><TopBar /><div className="wrap" style={{ paddingTop: 48 }}>Nothing here.</div></>);
   }
@@ -41,6 +48,18 @@ export default async function ParkRentPage({
       <TopBar />
       <ParkNav parkName={park.name} live={park.active} />
       <ParkRent parkId={park.id} page={page} />
+      <div className="wrap" style={{ maxWidth: 900, paddingBottom: 24 }}>
+        <ParkHeldMoney
+          parkId={park.id}
+          today={page.today}
+          households={households}
+          onAccount={held.onAccount}
+          deposits={held.deposits}
+          onAccountTotal={held.onAccountTotal}
+          depositsHeldTotal={held.depositsHeldTotal}
+          openCharges={openCharges}
+        />
+      </div>
     </>
   );
 }

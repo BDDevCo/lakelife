@@ -76,7 +76,33 @@ export async function getStatement(
   const parkName = (park?.name as string) ?? "This park";
   const lagDays = (park?.office_recording_lag_days as number) ?? 0;
 
-  // Charges scope the payments — park_payments has no park_id of its own.
+  // CASH THAT CAME IN BUT IS NOT RENT RECEIVED (0102). This statement is built
+  // by scoping payments through their charges, so a deposit and money on
+  // account — both real cash in the bank, neither anchored to a charge — fall
+  // out of it entirely. Silently omitting them means this cannot be reconciled
+  // against a bank statement, and the first person to notice is an accountant
+  // a year later. They stay OUT of the rent-received total, on purpose, and
+  // are counted here so the notes can say the amounts out loud.
+  //
+  // (The old comment here said park_payments has no park_id of its own. It has
+  // one now, which is why the query below can exist at all.)
+  const { data: offBook } = await admin
+    .from("park_payments")
+    .select("amount, kind, charge_id")
+    .eq("park_id", parkId)
+    .is("charge_id", null)
+    .is("reversed_at", null)
+    .gte("received_on", period.from)
+    .lte("received_on", period.to);
+  const depositsReceivedCents = Math.round(
+    (offBook ?? []).filter((p) => p.kind === "deposit")
+      .reduce((s2, p) => s2 + Number(p.amount ?? 0), 0) * 100,
+  );
+  const onAccountReceivedCents = Math.round(
+    (offBook ?? []).filter((p) => p.kind !== "deposit")
+      .reduce((s2, p) => s2 + Number(p.amount ?? 0), 0) * 100,
+  );
+
   const { data: charges } = await admin
     .from("park_charges")
     .select("id, park_lot_id, renter_id, period_month, due_on, amount, status, lines")
@@ -89,6 +115,7 @@ export async function getStatement(
       parkName, period, summary: empty, receipts: [],
       notes: exclusionLines({
         recordsBeginOn: null, lagDays, unbilledFeeLabels: [], anyMissingPayerName: false,
+        depositsReceivedCents, onAccountReceivedCents,
       }),
       recordsBeginOn: null, billedInWindowCents: 0,
       today, generatedAt: new Date().toISOString(),
@@ -173,7 +200,10 @@ export async function getStatement(
     period,
     summary,
     receipts: inWindow,
-    notes: exclusionLines({ recordsBeginOn, lagDays, unbilledFeeLabels, anyMissingPayerName }),
+    notes: exclusionLines({
+      recordsBeginOn, lagDays, unbilledFeeLabels, anyMissingPayerName,
+      depositsReceivedCents, onAccountReceivedCents,
+    }),
     recordsBeginOn,
     billedInWindowCents,
     today,

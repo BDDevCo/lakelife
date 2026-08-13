@@ -43,24 +43,38 @@ export async function loadPaymentByToken(token: string): Promise<ConfirmView | n
 
   const { data: pay } = await admin
     .from("park_payments")
-    .select("id, charge_id, amount, method, reference, received_on, receipt_no, renter_confirmed_at")
+    .select("id, charge_id, park_id, kind, amount, method, reference, received_on, receipt_no, renter_confirmed_at")
     .eq("confirm_token", token)
     .maybeSingle();
   if (!pay) return null;
 
-  const { data: charge } = await admin
-    .from("park_charges").select("park_id, park_lot_id").eq("id", pay.charge_id as string).maybeSingle();
-  if (!charge) return null;
+  // A PAYMENT NEED NOT HAVE A CHARGE ANY MORE (0102). This resolved the park by
+  // reading it OFF the charge and bailed when there wasn't one — so the
+  // confirmation link minted for a deposit, or for a cheque handed over before
+  // the bill existed, pointed at a "not found" page. The renter's own
+  // confirmation is the only second party this ledger will ever have, and it
+  // matters MOST for money with no bill to check it against.
+  const { data: charge } = pay.charge_id
+    ? await admin
+        .from("park_charges").select("park_id, park_lot_id").eq("id", pay.charge_id as string).maybeSingle()
+    : { data: null };
+
+  const parkId = (charge?.park_id as string) ?? (pay.park_id as string) ?? null;
+  if (!parkId) return null;
 
   const [{ data: park }, { data: lot }] = await Promise.all([
-    admin.from("parks").select("name").eq("id", charge.park_id as string).maybeSingle(),
-    admin.from("park_lots").select("lot_number").eq("id", charge.park_lot_id as string).maybeSingle(),
+    admin.from("parks").select("name").eq("id", parkId).maybeSingle(),
+    charge?.park_lot_id
+      ? admin.from("park_lots").select("lot_number").eq("id", charge.park_lot_id as string).maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
 
   const parkName = (park?.name as string) ?? "the park";
   return {
     parkName,
-    lotNumber: (lot?.lot_number as string) ?? "?",
+    // A deposit or a cheque with no bill has no lot on the record. Say so
+    // rather than printing "?" as though something were missing.
+    lotNumber: (lot?.lot_number as string) ?? (pay.charge_id ? "?" : "—"),
     amount: Number(pay.amount),
     method: METHOD_WORD[pay.method as string] ?? (pay.method as string),
     reference: (pay.reference as string) ?? null,
@@ -102,8 +116,20 @@ export async function disputeByToken(
 ): Promise<{ ok: boolean; error?: string }> {
   const admin = createServiceClient();
   const { data: pay } = await admin
-    .from("park_payments").select("id, charge_id, amount, received_on").eq("confirm_token", token).maybeSingle();
+    .from("park_payments").select("id, charge_id, amount, received_on, receipt_no").eq("confirm_token", token).maybeSingle();
   if (!pay) return { ok: false, error: "This link doesn't match a payment." };
+
+  // `park_payment_claims.charge_id` is NOT NULL, so a disagreement about money
+  // with no bill behind it — a deposit, or a cheque taken before the bill
+  // existed — has nowhere to be recorded. Say that plainly instead of
+  // inserting a null and telling them "that didn't save, try again" forever.
+  // Widening the claims table to hang off a payment is its own piece of work.
+  if (!pay.charge_id) {
+    return {
+      ok: false,
+      error: `Please ring the office and quote receipt ${pay.receipt_no ?? "on this page"} — this one isn't against a bill, so it can't be flagged here yet.`,
+    };
+  }
 
   const { data: open } = await admin
     .from("park_payment_claims")

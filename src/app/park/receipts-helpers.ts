@@ -374,6 +374,17 @@ export interface ExclusionContext {
   /** Fees configured but never billed — money the accountant might expect. */
   unbilledFeeLabels: string[];
   anyMissingPayerName: boolean;
+  /**
+   * CASH THAT CAME IN BUT IS NOT RENT RECEIVED, in cents, for this period.
+   *
+   * Both are real money that hit the bank and neither belongs in a rent-received
+   * figure: a deposit is a liability that goes back, and money on account has
+   * not been applied to any bill. Stated rather than silently dropped —
+   * otherwise this statement cannot be reconciled against a bank statement, and
+   * the first person to notice is an accountant a year later.
+   */
+  depositsReceivedCents?: number;
+  onAccountReceivedCents?: number;
 }
 
 /**
@@ -388,10 +399,25 @@ export function exclusionLines(ctx: ExclusionContext): string[] {
   const lines: string[] = [
     "This is money RECEIVED between these dates — not money billed. A bill you raised in August and got paid for in October counts in October.",
     "Expenses aren't in here. What you've spent isn't recorded with a date-paid yet, so give your accountant your bank and card statements for the outgoings.",
-    "Deposits and refunds aren't in here either — there's nowhere in the system to record them yet.",
+    // WAS: "Deposits and refunds aren't in here either — there's nowhere in
+    // the system to record them yet." That stopped being true the day deposits
+    // could be recorded, and a statement carrying a stale disclaimer is worse
+    // than one carrying none.
+    "Deposits and money held on account aren't counted as rent received — a deposit goes back, and money on account hasn't been put against a bill yet. Any amounts are listed below so this still reconciles to your bank.",
     "This is the day your office took the money, not the day it cleared the bank. A check taken at the end of a month may clear in the next one.",
     "Payments aren't split between rent and fees. Each one sits against a whole bill, and the file carries that bill's own breakdown so your accountant can split it.",
   ];
+  const dep = ctx.depositsReceivedCents ?? 0;
+  const acct = ctx.onAccountReceivedCents ?? 0;
+  if (dep > 0 || acct > 0) {
+    const bits: string[] = [];
+    if (dep > 0) bits.push(`$${(dep / 100).toFixed(2)} in deposits taken`);
+    if (acct > 0) bits.push(`$${(acct / 100).toFixed(2)} received on account`);
+    lines.push(
+      `Also received in this period, and NOT in the total above: ${bits.join(" and ")}. ` +
+      `It reached the bank; it just isn't rent yet.`,
+    );
+  }
   if (ctx.lagDays > 0) {
     lines.push(
       `Anything handed over in the last few days may not be keyed in yet — your office runs about ${ctx.lagDays} days behind.`,
