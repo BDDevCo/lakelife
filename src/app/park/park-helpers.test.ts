@@ -1002,3 +1002,66 @@ describe("the inventory facts that had no writer", () => {
     expect(buildLotRow({ ...base, expectedLiveOn: "next spring" }).ok).toBe(false);
   });
 });
+
+describe("how to reach a household — the thing that could not be entered", () => {
+  const current = { rent: 500, dueDay: 1 };
+  const base = { displayName: "Ada Lovelace", rent: "500", dueDay: "1", confirmedWithTenant: false };
+
+  it("takes an email and lowercases it", () => {
+    const r = buildTenantEdit({ ...base, email: "  Ada@Example.COM " }, current, "2026-08-12");
+    expect(r.ok).toBe(true);
+    expect(r.renter!.email).toBe("ada@example.com");
+  });
+
+  it("normalises a ten-digit phone to E.164", () => {
+    expect(buildTenantEdit({ ...base, mobile: "(260) 555-0134" }, current, "2026-08-12").renter!.mobile_e164)
+      .toBe("+12605550134");
+    expect(buildTenantEdit({ ...base, mobile: "1 260 555 0134" }, current, "2026-08-12").renter!.mobile_e164)
+      .toBe("+12605550134");
+  });
+
+  it("refuses a number that isn't ten digits — a wrong number on a rent notice is worse than none", () => {
+    expect(buildTenantEdit({ ...base, mobile: "555-0134" }, current, "2026-08-12").ok).toBe(false);
+    expect(buildTenantEdit({ ...base, email: "ada@" }, current, "2026-08-12").ok).toBe(false);
+  });
+
+  it("BLANK LEAVES ALONE — opening the panel to fix a rent must not wipe an email", () => {
+    const r = buildTenantEdit({ ...base, email: "", mobile: "" }, current, "2026-08-12");
+    expect(r.ok).toBe(true);
+    expect("email" in r.renter!).toBe(false);
+    expect("mobile_e164" in r.renter!).toBe(false);
+  });
+
+  it("a lone dash clears", () => {
+    const r = buildTenantEdit({ ...base, email: "-", mobile: "-" }, current, "2026-08-12");
+    expect(r.renter!.email).toBe(null);
+    expect(r.renter!.mobile_e164).toBe(null);
+  });
+
+  it("THE PREFERENCE IS NEVER INFERRED from having a contact detail", () => {
+    // buildTenant learned this the hard way: `mobile ? "sms" : "paper"` once
+    // enrolled a household in texts because the office copied a number off the
+    // seller's roll. Having an address is not the same as asking to be emailed.
+    const r = buildTenantEdit({ ...base, email: "ada@example.com" }, current, "2026-08-12");
+    expect("contact_pref" in r.renter!).toBe(false);
+  });
+
+  it("moves to email only when somebody ticks it", () => {
+    const r = buildTenantEdit(
+      { ...base, email: "ada@example.com", contactPref: "email" }, current, "2026-08-12");
+    expect(r.renter!.contact_pref).toBe("email");
+  });
+
+  it("refuses 'email' with no address — silence wearing a label nobody questions", () => {
+    expect(buildTenantEdit({ ...base, contactPref: "email" }, current, "2026-08-12").ok).toBe(false);
+    expect(buildTenantEdit({ ...base, email: "-", contactPref: "email" }, current, "2026-08-12").ok).toBe(false);
+  });
+
+  it("REFUSES 'sms' — A2P has not cleared and the consent columns have no writer", () => {
+    // Accepting it would produce a household the software believes it can text
+    // and never will: the gate that blocks the send is not the feature switch.
+    const r = buildTenantEdit({ ...base, mobile: "2605550134", contactPref: "sms" }, current, "2026-08-12");
+    expect(r.ok).toBe(true);
+    expect("contact_pref" in r.renter!).toBe(false);
+  });
+});

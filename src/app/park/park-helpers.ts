@@ -1224,12 +1224,43 @@ export interface TenantEditInput {
   dueDay: string;
   /** He has stood in front of this person and checked the number. */
   confirmedWithTenant: boolean;
+  /**
+   * HOW TO REACH THEM — the thing that could not be entered at all.
+   *
+   * The importer files every household with no email, no mobile and
+   * `contact_pref: 'paper'`, and this builder returned `{ display_name,
+   * confirmed_at }`. So there was no screen anywhere that could add a phone
+   * number or an email to a household already on the roll — which made every
+   * renter permanently unreachable by the software: the emailed receipt
+   * suppressed, the /paid confirmation link never leaving the office, and the
+   * overdue reminder degrading to paper for all nineteen.
+   *
+   * Blank means "leave it as it is", NOT "clear it". Clearing is `"-"`, so a
+   * half-filled form can never silently delete a number somebody walked the
+   * park to collect.
+   */
+  email?: string;
+  mobile?: string;
+  /** 'paper' | 'email'. Never inferred — see the note in the builder. */
+  contactPref?: string;
 }
 
 export interface TenantEditResult {
   ok: boolean;
   error?: string;
-  renter?: { display_name: string; confirmed_at: string | null };
+  /**
+   * The renter patch, ALREADY SHAPED FOR THE TABLE. Optional keys are absent
+   * when the form left them blank — absent means "leave it", which is not the
+   * same as null ("clear it"). The action must spread this rather than
+   * rebuilding it field by field, or a new field added here goes nowhere.
+   */
+  renter?: {
+    display_name: string;
+    confirmed_at: string | null;
+    email?: string | null;
+    mobile_e164?: string | null;
+    contact_pref?: string;
+  };
   tenancy?: {
     quoted_amount: number | null;
     due_day: number | null;
@@ -1298,12 +1329,65 @@ export function buildTenantEdit(
     tenancy.amount_source = "owner_knowledge";
   }
 
-  return {
-    ok: true,
-    renter: {
-      display_name: displayName,
-      confirmed_at: input.confirmedWithTenant ? todayISO : null,
-    },
-    tenancy,
+  // ---- how to reach them -------------------------------------------------
+  const renter: Record<string, unknown> = {
+    display_name: displayName,
+    confirmed_at: input.confirmedWithTenant ? todayISO : null,
   };
+
+  // A LONE "-" CLEARS. Blank leaves alone. Without that distinction, opening
+  // the edit panel to fix a rent and saving would wipe an email.
+  const email = (input.email ?? "").trim();
+  if (email === "-") {
+    renter.email = null;
+  } else if (email !== "") {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) || email.length > 200) {
+      return { ok: false, error: "That email doesn't look right." };
+    }
+    renter.email = email.toLowerCase();
+  }
+
+  const mobile = (input.mobile ?? "").trim();
+  if (mobile === "-") {
+    renter.mobile_e164 = null;
+  } else if (mobile !== "") {
+    const digits = mobile.replace(/\D/g, "");
+    // 10 digits, or 11 starting with a US country code. Anything else is a
+    // typo, and a wrong number on a rent notice is worse than none.
+    const e164 =
+      digits.length === 10 ? `+1${digits}`
+      : digits.length === 11 && digits.startsWith("1") ? `+${digits}`
+      : null;
+    if (!e164) return { ok: false, error: "That phone number doesn't look like ten digits." };
+    renter.mobile_e164 = e164;
+  }
+
+  // THE PREFERENCE IS NEVER INFERRED FROM HAVING A CONTACT DETAIL.
+  //
+  // `buildTenant` learned this the hard way — it used to read `mobile ? "sms"
+  // : "paper"`, so a number the owner copied off the seller's roll silently
+  // enrolled that household in texts. The same reasoning applies to email: an
+  // address on a file the seller handed over is not that household saying
+  // "email me". It moves only when somebody ticks it, which is a thing the
+  // owner does standing in front of them.
+  //
+  // 'sms' is deliberately not accepted here. A2P registration has not cleared,
+  // and `mobile_verified_at` / `sms_consent_operational_at` still have no
+  // writer — so setting it would produce a household the software believes it
+  // can text and never will.
+  const pref = (input.contactPref ?? "").trim();
+  if (pref === "paper" || pref === "email" || pref === "none") {
+    if (pref === "email" && renter.email === undefined && email === "") {
+      // Guard the obvious own-goal: preferring email with no address on file
+      // is the same silence as paper, wearing a label that stops anyone
+      // noticing.
+      return { ok: false, error: "Add an email address before setting them to email." };
+    }
+    if (pref === "email" && renter.email === null) {
+      return { ok: false, error: "You just cleared their email — they can't prefer email." };
+    }
+    renter.contact_pref = pref;
+  }
+
+  return { ok: true, renter: renter as TenantEditResult["renter"], tenancy };
 }

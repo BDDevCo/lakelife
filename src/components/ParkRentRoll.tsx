@@ -541,6 +541,12 @@ function EditTenant({
     rent: rent == null ? "" : String(rent),
     dueDay: dueDay == null ? "" : String(dueDay),
     confirmedWithTenant: false,
+    // Blank means "leave it alone" in the builder, so the form starts blank
+    // rather than pre-filled — a pre-filled value that fails to load would
+    // otherwise overwrite a real one with an empty string.
+    email: "",
+    mobile: "",
+    contactPref: "",
   });
   const set = <K extends keyof TenantEditInput>(k: K, v: TenantEditInput[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -574,6 +580,40 @@ function EditTenant({
             onChange={(e) => set("dueDay", e.target.value)} style={{ marginTop: 4 }} />
         </label>
       </div>
+
+      {/* HOW TO REACH THEM — the fields that did not exist.
+          The importer files every household with no email and contact_pref
+          'paper', and this panel could only change a name and a rent. So the
+          emailed receipt was suppressed, the /paid confirmation link never
+          left the office, and the overdue reminder degraded to paper for all
+          nineteen — permanently, with no screen anywhere to fix it. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginTop: 12 }}>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Email</span>
+          <input value={form.email ?? ""} inputMode="email" placeholder="none on file"
+            onChange={(e) => set("email", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Phone</span>
+          <input value={form.mobile ?? ""} inputMode="tel" placeholder="none on file"
+            onChange={(e) => set("mobile", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">How they want to hear from us</span>
+          <select value={form.contactPref ?? ""} onChange={(e) => set("contactPref", e.target.value)}
+            style={{ marginTop: 4 }}>
+            <option value="">Leave as it is</option>
+            <option value="paper">Paper at the door</option>
+            <option value="email">Email</option>
+          </select>
+        </label>
+      </div>
+      <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
+        Leave a box empty to keep what&apos;s there; type a single <b>-</b> to clear it.
+        Only set someone to email if <b>they</b> said so — an address off the
+        seller&apos;s roll isn&apos;t them asking to be emailed. Texting isn&apos;t
+        available yet, so a phone number here is one the office can ring.
+      </p>
 
       {source === "seller_roll" && (
         <p className="mut" style={{ fontSize: 13, marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>

@@ -826,8 +826,15 @@ export async function editTenancy(
     .eq("id", reservationId);
   if (tErr) return { ok: false, error: "Couldn't save that — try again." };
 
-  const renterPatch: Record<string, unknown> = { display_name: built.renter.display_name };
-  if (built.renter.confirmed_at) renterPatch.confirmed_at = new Date().toISOString();
+  // SPREAD, don't hand-pick. This used to be built field by field from
+  // `display_name` and `confirmed_at` alone, so the email, mobile and contact
+  // preference the builder now produces would have been computed, validated,
+  // and then dropped on the floor — written by nothing, which is this
+  // codebase's most common bug and the exact reason a household could never be
+  // given a phone number.
+  const { confirmed_at, ...rest } = built.renter;
+  const renterPatch: Record<string, unknown> = { ...rest };
+  if (confirmed_at) renterPatch.confirmed_at = new Date().toISOString();
   if (input.confirmedWithTenant) renterPatch.source = "tenant_confirmed";
 
   const { error: rErr } = await admin
@@ -838,7 +845,7 @@ export async function editTenancy(
     // Say so rather than reporting a clean save. The money DID move.
     return {
       ok: false,
-      error: "The rent saved, but the name didn't. Try the name again.",
+      error: "The rent saved, but their details didn't. Try those again.",
     };
   }
 
