@@ -26,10 +26,20 @@ import {
 export function ParkRequests({
   parkId,
   rows,
+  more = false,
   closed = [],
 }: {
   parkId: string;
+  /** Open reports, OLDEST FIRST — see above: age is the urgency signal. */
   rows: ParkRequestRow[];
+  /**
+   * True when the queue runs past what this screen fetched.
+   *
+   * A list that stops at two hundred looks precisely like a list of
+   * everything. Since the screen's whole claim is that nothing arrives on his
+   * phone any more, it has to admit when it is not showing all of it.
+   */
+  more?: boolean;
   /**
    * Recently closed, with what was done.
    *
@@ -77,6 +87,12 @@ export function ParkRequests({
           {rows.map((r) => (
             <RequestLine key={r.id} row={r} parkId={parkId} busy={busy} start={start} router={router} />
           ))}
+          {more && (
+            <p className="mut" style={{ fontSize: 12.5, margin: "10px 0 0", lineHeight: 1.5 }}>
+              Longest-waiting {rows.length} shown — there are more open than
+              fit here. Closing some will bring the rest up.
+            </p>
+          )}
         </div>
       )}
 
@@ -87,7 +103,11 @@ export function ParkRequests({
             style={{ minHeight: 36 }}
             onClick={() => setShowClosed((c) => !c)}
           >
-            {showClosed ? "Hide" : `Recently sorted (${closed.length})`}
+            {/* "Recently sorted", not a count of everything ever closed —
+                this is the last 20 by the date they were finished. A number
+                that looks like a total and isn't one is the same lie as a
+                list that looks complete and isn't. */}
+            {showClosed ? "Hide" : `Recently sorted — last ${closed.length}`}
           </button>
           {showClosed && (
             <div style={{ marginTop: 8 }}>

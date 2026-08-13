@@ -29,7 +29,17 @@ export interface StickerView {
   flooded: boolean;
 }
 
-/** How many open reports one lot may carry before the form stops accepting. */
+/**
+ * How many open reports one lot may carry before the form stops accepting.
+ *
+ * THIS NUMBER IS NOT THE ENFORCEMENT. 0106 holds the real one, in a trigger
+ * that locks the lot row before counting. This copy exists only so a person
+ * standing at a pedestal gets a sentence instead of a database error — the
+ * check below reads the count and then inserts, and between those two things
+ * any number of concurrent submissions can slip through.
+ *
+ * Change one, change the other.
+ */
 const OPEN_PER_LOT_CAP = 12;
 
 export async function loadSticker(token: string): Promise<StickerView | null> {
@@ -112,12 +122,14 @@ export async function fileRequestByToken(input: {
   // A PUBLIC FORM WITH NO LOGIN NEEDS A CEILING. Not to stop a determined
   // person — it cannot — but so a stuck submit button or a bored teenager
   // cannot bury the twelve real reports the owner has to work through.
-  if (view.flooded) {
-    return {
-      ok: false,
-      error: "There are already several open reports for this lot. Please ring the office so they don't get missed.",
-    };
-  }
+  //
+  // This is the COURTESY check, not the ceiling. It reads a count taken a
+  // moment ago; the ceiling itself is 0106's trigger, which locks the lot
+  // before counting and is the only thing a burst of parallel submissions
+  // actually meets.
+  const FLOODED =
+    "There are already several open reports for this lot. Please ring the office so they don't get missed.";
+  if (view.flooded) return { ok: false, error: FLOODED };
 
   const admin = createServiceClient();
   const { error } = await admin.from("park_requests").insert({
@@ -129,7 +141,16 @@ export async function fileRequestByToken(input: {
     reporter_phone: (input.phone ?? "").trim().slice(0, 40) || null,
     source: "qr",
   });
-  if (error) return { ok: false, error: "That didn't send — please ring the office." };
+  if (error) {
+    // The trigger refusing a full lot is not a failure to send — it is the
+    // same answer the check above gives, arriving a moment later because
+    // somebody else's report landed in between. Telling that person "that
+    // didn't send" would invite them to keep trying.
+    if (error.message?.includes("park_requests: lot")) {
+      return { ok: false, error: FLOODED };
+    }
+    return { ok: false, error: "That didn't send — please ring the office." };
+  }
 
   return {
     ok: true,

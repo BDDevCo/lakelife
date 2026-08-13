@@ -38,24 +38,81 @@ const CATEGORY_LABEL: Record<string, string> = {
   tree: "Tree or branch", trash: "Trash", lighting: "Lighting", other: "Something else",
 };
 
-export async function getParkRequests(
-  parkId: string,
-  includeDone = false,
-): Promise<ParkRequestRow[]> {
-  if (!(await assertMyPark(parkId))) return [];
+/** How many of the queue we will put on one screen. */
+const QUEUE_PAGE = 200;
+
+export interface ParkRequestQueue {
+  rows: ParkRequestRow[];
+  /**
+   * True when the queue is longer than one screenful.
+   *
+   * IT HAS TO BE SAID OUT LOUD. This used to be a bare `.limit(200)`: the
+   * screen listed two hundred reports and looked exactly like a screen listing
+   * all of them. 21 lots at a ceiling of 12 open each is 252 before office and
+   * common-area reports are counted, so it is reachable — and a queue that
+   * quietly drops the overflow is worse than one that admits it, because the
+   * owner stops looking for what isn't shown.
+   */
+  more: boolean;
+}
+
+/**
+ * The open queue, OLDEST FIRST.
+ *
+ * This was newest-first, which fought the screen's own argument: age is the
+ * only urgency signal here, and newest-first puts the report that has sat for
+ * six weeks at the bottom — then, once the list is longer than a page, drops
+ * it entirely. The most urgent thing in the queue was the first thing cut.
+ */
+export async function getParkRequests(parkId: string): Promise<ParkRequestQueue> {
+  const empty: ParkRequestQueue = { rows: [], more: false };
+  if (!(await assertMyPark(parkId))) return empty;
   const admin = createServiceClient();
 
-  let q = admin
+  // One more than we will show, so "is there more" is a fact rather than a
+  // guess from a full page.
+  const { data } = await admin
     .from("park_requests")
     .select("id, park_lot_id, category, note, reporter_name, reporter_phone, status, created_at, resolution_note")
     .eq("park_id", parkId)
-    .order("created_at", { ascending: false })
-    .limit(200);
-  if (!includeDone) q = q.neq("status", "done");
+    .neq("status", "done")
+    .order("created_at", { ascending: true })
+    .limit(QUEUE_PAGE + 1);
+  if (!data?.length) return empty;
 
-  const { data } = await q;
+  const more = data.length > QUEUE_PAGE;
+  return { rows: await shape(admin, data.slice(0, QUEUE_PAGE)), more };
+}
+
+/**
+ * Recently closed, with what was done.
+ *
+ * Its own query, because it used to be `getParkRequests(id, true)` filtered
+ * down to the done ones in the page — which meant the closed list was whatever
+ * survived a 200-row page shared with the open queue. Once a park has had 200
+ * reports, the answer to "what did we do about it" would have been silently
+ * empty, and the button counting them would have said so with a straight face.
+ */
+export async function getClosedRequests(parkId: string, limit = 20): Promise<ParkRequestRow[]> {
+  if (!(await assertMyPark(parkId))) return [];
+  const admin = createServiceClient();
+  const { data } = await admin
+    .from("park_requests")
+    .select("id, park_lot_id, category, note, reporter_name, reporter_phone, status, created_at, resolution_note")
+    .eq("park_id", parkId)
+    .eq("status", "done")
+    .order("resolved_at", { ascending: false, nullsFirst: false })
+    .limit(limit);
   if (!data?.length) return [];
+  return shape(admin, data);
+}
 
+type Row = Record<string, unknown>;
+
+async function shape(
+  admin: ReturnType<typeof createServiceClient>,
+  data: Row[],
+): Promise<ParkRequestRow[]> {
   const lotIds = [...new Set(data.map((r) => r.park_lot_id as string).filter(Boolean))];
   const lotNo = new Map<string, string>();
   if (lotIds.length) {

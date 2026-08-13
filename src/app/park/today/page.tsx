@@ -6,7 +6,7 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { getToday } from "@/app/park/today-actions";
 import { ParkRequests } from "@/components/ParkRequests";
-import { getParkRequests } from "@/app/park/request-actions";
+import { getParkRequests, getClosedRequests } from "@/app/park/request-actions";
 import { renewalsDue } from "@/app/park/renew-actions";
 import { ParkRenewals } from "@/components/ParkRenewals";
 
@@ -30,13 +30,13 @@ export default async function ParkTodayPage() {
     );
   }
 
-  const [view, renewals, requests, allRequests] = await Promise.all([
+  const [view, renewals, queue, closed] = await Promise.all([
     getToday(park.id),
     renewalsDue(park.id),
     getParkRequests(park.id),
-    // The `includeDone` branch had no caller passing true — a parameter that
-    // existed and could never be reached.
-    getParkRequests(park.id, true),
+    // Its own query now. Filtering the done ones out of the open queue's page
+    // meant the closed list was whatever happened to fit alongside it.
+    getClosedRequests(park.id, 20),
   ]);
   return (
     <>
@@ -53,8 +53,8 @@ export default async function ParkTodayPage() {
             {/* Reported from the park. Sits on Today because it is the screen
                 he opens with coffee, and these used to arrive on his mobile
                 and live in his head. */}
-            <ParkRequests parkId={park.id} rows={requests}
-              closed={allRequests.filter((r) => r.status === "done").slice(0, 20)} />
+            <ParkRequests parkId={park.id} rows={queue.rows} more={queue.more}
+              closed={closed} />
           </div>
         </>
       ) : (
