@@ -155,6 +155,7 @@ export default async function ParkPage() {
     currentDueDay: r.current?.dueDay ?? null,
     currentSource: r.current?.amountSource ?? null,
     owedThisMonth: owed.get(r.lot.id) ?? null,
+    expectedMoveOut: r.current?.expectedMoveOut ?? null,
     // A countdown is only true for a SHORT stay. A month-to-month tenant's end
     // date is a rolling horizon we write silently (phase 2 design §1h) — it is
     // not a lease end, and "365 nights left" reads like one. Say the honest

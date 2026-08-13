@@ -93,7 +93,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const { data: stays } = liveIds.length
     ? await admin
         .from("lot_reservations")
-        .select("id, park_lot_id, renter_id, during, status, origin, agreement_chain_id, agreement_seq")
+        .select("id, park_lot_id, renter_id, during, status, origin, agreement_chain_id, agreement_seq, notice_given_on, expected_move_out")
         .in("park_lot_id", liveIds)
         .in("status", ["approved", "active"])
     : { data: [] as Record<string, unknown>[] };
@@ -332,6 +332,21 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
         effectiveOn: rc.effective_on as string,
         noticeDaysRequired: (rc.notice_days_required as number) ?? 0,
         noticeServedOn: (rc.notice_given_on as string) ?? null,
+      })),
+    // NOTE: `notice_given_on` exists on lot_rent_changes AND on
+    // lot_reservations, and they mean different things — a rent-increase
+    // notice above, a notice to vacate here. Auditing for a reader of the
+    // second one turned up the first and nearly closed the finding.
+    //
+    // `stays` is already filtered to approved/active, so a tenancy that has
+    // actually been closed out drops off this list on its own.
+    noticed: (stays ?? [])
+      .filter((s) => s.expected_move_out)
+      .map((s) => ({
+        reservationId: s.id as string,
+        lotNumber: lotName.get(s.park_lot_id as string) ?? "?",
+        renterName: renterName.get(s.renter_id as string) ?? null,
+        leavingOn: s.expected_move_out as string,
       })),
   });
 

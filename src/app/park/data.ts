@@ -241,7 +241,7 @@ export async function getParkRoll(parkId: string): Promise<ParkRoll> {
   const lotIds = lots.map((l) => l.lot.id);
   const { data: resRows } = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, due_day, amount_source, status, decided_at, created_at")
+    .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, due_day, amount_source, status, decided_at, created_at, notice_given_on, expected_move_out")
     .in("park_lot_id", lotIds); // <- the scope: this park's lots only
 
   const stays: Stay[] = (resRows ?? []).map((r) => toStay(r as unknown as RawReservation));

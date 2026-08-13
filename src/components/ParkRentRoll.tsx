@@ -4,7 +4,10 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
-import { decideApplication, endTenancy, setParkLive, addTenant, editTenancy } from "@/app/park/actions";
+import {
+  decideApplication, endTenancy, setParkLive, addTenant, editTenancy,
+  giveNotice, clearNotice,
+} from "@/app/park/actions";
 import type { TenantInput, TenantEditInput } from "@/app/park/park-helpers";
 
 /**
@@ -32,6 +35,14 @@ export interface RollRowView {
   currentSource: string | null;
   /** What this household owes this month — or why we can't say. */
   owedThisMonth: string | null;
+  /**
+   * The day they say they are leaving, once notice has been given.
+   *
+   * They still live here and still owe rent until they actually go — this is
+   * a warning, not an ending. It is also the row's only sign that the lot will
+   * need showing, which is the entire reason notice is recorded.
+   */
+  expectedMoveOut: string | null;
   nightsLeft: number | null;
   /** A month-to-month tenancy: no real end date, so no countdown. */
   rolling?: boolean;
@@ -120,6 +131,9 @@ export function ParkRentRoll({
   // The move-out panel: which tenancy, and the last day they lived there.
   const [closingId, setClosingId] = useState<string | null>(null);
   const [lastDay, setLastDay] = useState("");
+  // The notice panel: which tenancy, and the day they SAY they are going.
+  const [noticeId, setNoticeId] = useState<string | null>(null);
+  const [leavingOn, setLeavingOn] = useState("");
 
   function decide(id: string, decision: "approve" | "decline") {
     setBusyId(id);
@@ -148,6 +162,38 @@ export function ParkRentRoll({
       toast(res.signal ?? "Done.");
       setClosingId(null);
       setLastDay("");
+      router.refresh();
+    });
+  }
+
+  // NOTICE TO VACATE — the warning, not the ending.
+  //
+  // `giveNotice` and `clearNotice` were written, validated and tested-looking,
+  // and had NO CALLER: nothing in the product could reach them, and nothing
+  // read the columns they wrote. So the answer to "who is leaving" was still
+  // "whoever's stuff is gone this morning", which is what the feature existed
+  // to prevent. This is that missing button.
+  function notice(id: string, leavingISO: string) {
+    setBusyId(id);
+    startTransition(async () => {
+      const res = await giveNotice(id, leavingISO);
+      setBusyId(null);
+      if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
+      toast(res.signal ?? "Noted.");
+      setNoticeId(null);
+      setLeavingOn("");
+      router.refresh();
+    });
+  }
+
+  /** People change their minds, and a stale notice shows a lot as leaving. */
+  function unnotice(id: string) {
+    setBusyId(id);
+    startTransition(async () => {
+      const res = await clearNotice(id);
+      setBusyId(null);
+      if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
+      toast(res.signal ?? "Cleared.");
       router.refresh();
     });
   }
@@ -386,6 +432,58 @@ export function ParkRentRoll({
                       >
                         {closingId === r.currentReservationId ? "Cancel" : "Move out"}
                       </button>
+                    )}
+                    {/* THE READER. `expected_move_out` was written by an action
+                        nothing called and shown on no screen; this pill and
+                        the Today card are the whole of its readership. */}
+                    {r.expectedMoveOut && (
+                      <span className="ll-pill warn">Leaving {pretty(r.expectedMoveOut)}</span>
+                    )}
+                    {r.currentReservationId && !r.expectedMoveOut && (
+                      <button
+                        className="ll-btn ghost"
+                        onClick={() => {
+                          setNoticeId(noticeId === r.currentReservationId ? null : r.currentReservationId);
+                          setLeavingOn("");
+                        }}
+                        disabled={pending && busyId === r.currentReservationId}
+                      >
+                        {noticeId === r.currentReservationId ? "Cancel" : "Gave notice"}
+                      </button>
+                    )}
+                    {r.currentReservationId && r.expectedMoveOut && (
+                      <button
+                        className="ll-btn ghost"
+                        onClick={() => unnotice(r.currentReservationId!)}
+                        disabled={pending && busyId === r.currentReservationId}
+                      >
+                        They&apos;re staying
+                      </button>
+                    )}
+                    {noticeId && noticeId === r.currentReservationId && (
+                      <div className="ll-field" style={{ width: "100%", marginTop: 8 }}>
+                        <label>Day they plan to leave</label>
+                        <input
+                          type="date"
+                          value={leavingOn}
+                          min={today}
+                          onChange={(e) => setLeavingOn(e.target.value)}
+                        />
+                        <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
+                          This changes nothing about the rent — they live here
+                          and get billed until they actually go. It is so the
+                          lot can be shown before it&apos;s empty, and you can
+                          take it back if they change their mind.
+                        </p>
+                        <button
+                          className="ll-btn gold"
+                          style={{ marginTop: 8, minHeight: 44 }}
+                          disabled={!leavingOn || (pending && busyId === r.currentReservationId)}
+                          onClick={() => notice(r.currentReservationId!, leavingOn)}
+                        >
+                          {pending && busyId === r.currentReservationId ? "Saving…" : "Note it"}
+                        </button>
+                      </div>
                     )}
                     {closingId && closingId === r.currentReservationId && (
                       <div className="ll-field" style={{ width: "100%", marginTop: 8 }}>

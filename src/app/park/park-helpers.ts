@@ -36,6 +36,9 @@ export interface RawReservation {
   status: string;
   decided_at: string | null;
   created_at: string | null;
+  /** Notice to vacate. Both null until somebody says they are leaving. */
+  notice_given_on?: string | null;
+  expected_move_out?: string | null;
 }
 
 export interface Stay {
@@ -53,6 +56,15 @@ export interface Stay {
   status: string;
   decidedAt: string | null;
   createdAt: string | null;
+  /**
+   * They have said they are leaving on this day, and have not yet.
+   *
+   * Does NOT shorten `range` and does not end the tenancy: they still live
+   * there and still owe rent, and people change their minds. The final bill
+   * follows `moved_out_on`, written when they actually go.
+   */
+  noticeGivenOn: string | null;
+  expectedMoveOut: string | null;
 }
 
 export function toStay(r: RawReservation): Stay {
@@ -69,6 +81,8 @@ export function toStay(r: RawReservation): Stay {
     status: r.status,
     decidedAt: r.decided_at,
     createdAt: r.created_at,
+    noticeGivenOn: r.notice_given_on ?? null,
+    expectedMoveOut: r.expected_move_out ?? null,
   };
 }
 

@@ -211,6 +211,21 @@ export interface TaskFacts {
     id: string; lotNumber: string; effectiveOn: string;
     noticeDaysRequired: number; noticeServedOn: string | null;
   }[];
+  /**
+   * Households who have said they are leaving, and haven't yet.
+   *
+   * `giveNotice` has written `expected_move_out` since 0101 and NOTHING has
+   * ever read it — the action had no caller either, so the whole feature was
+   * two columns and a validated write into the dark. Its own docstring says
+   * what it was for: "two weeks of warning is the difference between showing a
+   * lot and discovering a vacancy." This is that warning.
+   */
+  noticed: {
+    reservationId: string;
+    lotNumber: string;
+    renterName: string | null;
+    leavingOn: string;
+  }[];
 }
 
 function rank(u: TaskUrgency): number {
@@ -366,6 +381,67 @@ export function generateTasks(f: TaskFacts): Task[] {
         dueOn: serveBy,
         href: "/park/lots",
         canDismiss: false,
+      });
+    }
+  }
+
+  // GIVEN NOTICE, NOT YET GONE.
+  //
+  // Two jobs, and the second is the one with money in it. Ahead of the date
+  // this is a lot to start showing. PAST the date it is a tenancy still open
+  // on a lot somebody has already driven away from — and an open tenancy keeps
+  // billing rent every month, to a household that left. Nothing else in the
+  // product notices that, because every other check asks whether the roll is
+  // billed, not whether the roll is true.
+  const leaving = f.noticed
+    .map((n) => ({ ...n, days: daysBetween(f.today, n.leavingOn) }))
+    .filter((n) => n.days < 0 || n.days <= RENEWAL_LEAD_DAYS);
+
+  const gone = leaving.filter((n) => n.days < 0);
+  for (const n of gone) {
+    out.push({
+      key: `move_out_due:${n.reservationId}`,
+      title: `Lot ${n.lotNumber} was due to leave on ${n.leavingOn}`,
+      detail: n.renterName
+        ? `${n.renterName} gave notice for that day. If they've gone, close it out — ` +
+          `an open tenancy keeps billing rent.`
+        : "If they've gone, close it out — an open tenancy keeps billing rent.",
+      urgency: "overdue",
+      dueOn: n.leavingOn,
+      href: "/park",
+      // Not dismissible: this one silently bills somebody who no longer lives
+      // there, and the software must not offer to stop mentioning that.
+      canDismiss: false,
+    });
+  }
+
+  const upcoming = leaving.filter((n) => n.days >= 0);
+  if (upcoming.length > 3) {
+    const soonest = upcoming.reduce((m, n) => (n.leavingOn < m ? n.leavingOn : m), upcoming[0].leavingOn);
+    out.push({
+      key: `leaving_soon:${f.parkId}:${soonest}`,
+      title: `${upcoming.length} households are leaving`,
+      detail: `The first goes ${soonest}. ${upcoming.map((n) => n.lotNumber).join(", ")} — ` +
+        `time to start showing them.`,
+      urgency: "soon",
+      dueOn: soonest,
+      href: "/park",
+      canDismiss: true,
+    });
+  } else {
+    for (const n of upcoming) {
+      out.push({
+        key: `leaving:${n.reservationId}`,
+        title: n.days === 0
+          ? `Lot ${n.lotNumber} leaves today`
+          : `Lot ${n.lotNumber} leaves in ${n.days} ${n.days === 1 ? "day" : "days"}`,
+        detail: n.renterName
+          ? `${n.renterName} is out on ${n.leavingOn}. Start showing it now, not the morning after.`
+          : `Out on ${n.leavingOn}. Start showing it now, not the morning after.`,
+        urgency: "soon",
+        dueOn: n.leavingOn,
+        href: "/park",
+        canDismiss: true,
       });
     }
   }

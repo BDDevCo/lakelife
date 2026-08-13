@@ -28,6 +28,7 @@ const facts = (over: Partial<TaskFacts> = {}): TaskFacts => ({
   unallocatedCosts: [],
   holdoverLots: [],
   pendingRentChanges: [],
+  noticed: [],
   ...over,
 });
 
@@ -277,6 +278,64 @@ describe("the to-do list", () => {
         endsOn: "2026-09-10", chainId: "ch1", seq: 1, hasSuccessor: false }],
     }));
     expect(ts.map((t) => t.urgency)).toEqual(["overdue", "soon", "whenever"]);
+  });
+});
+
+describe("who is leaving", () => {
+  // 0101 added `expected_move_out`, `giveNotice` wrote it, and NOTHING read it
+  // — the action had no caller either. The feature existed as two columns and
+  // a validated write into the dark. These tests are the reader.
+  const one = (over: Record<string, unknown> = {}) => [{
+    reservationId: "r1", lotNumber: "7", renterName: "Dave Nolan",
+    leavingOn: "2026-08-30", ...over,
+  }];
+
+  it("gives the warning the whole feature was for", () => {
+    const [t] = generateTasks(facts({ noticed: one() }));
+    expect(t.title).toBe("Lot 7 leaves in 19 days");
+    expect(t.detail).toContain("Dave Nolan");
+    expect(t.urgency).toBe("soon");
+  });
+
+  it("says today, not 'in 0 days'", () => {
+    const [t] = generateTasks(facts({ noticed: one({ leavingOn: TODAY }) }));
+    expect(t.title).toBe("Lot 7 leaves today");
+  });
+
+  it("keeps quiet about a date months out", () => {
+    expect(generateTasks(facts({ noticed: one({ leavingOn: "2027-03-01" }) }))).toEqual([]);
+  });
+
+  // THE ONE WITH MONEY IN IT. A tenancy still open after the leaving date
+  // keeps billing rent every month to somebody who has gone. No other check
+  // catches it: they all ask whether the roll is billed, not whether it's true.
+  it("escalates past the date, because an open tenancy keeps billing", () => {
+    const [t] = generateTasks(facts({ noticed: one({ leavingOn: "2026-08-02" }) }));
+    expect(t.title).toBe("Lot 7 was due to leave on 2026-08-02");
+    expect(t.urgency).toBe("overdue");
+    expect(t.detail).toMatch(/keeps billing rent/);
+    expect(t.canDismiss).toBe(false);
+  });
+
+  it("can be put aside while it is still ahead, but never once it is late", () => {
+    expect(generateTasks(facts({ noticed: one() }))[0].canDismiss).toBe(true);
+    expect(generateTasks(facts({ noticed: one({ leavingOn: "2026-08-02" }) }))[0].canDismiss).toBe(false);
+  });
+
+  it("rolls up past three, and still names the lots", () => {
+    const many = ["3", "7", "9", "12"].map((lotNumber, i) => ({
+      reservationId: `r${i}`, lotNumber, renterName: null,
+      leavingOn: `2026-08-2${i}`,
+    }));
+    const ts = generateTasks(facts({ noticed: many }));
+    expect(ts).toHaveLength(1);
+    expect(ts[0].title).toBe("4 households are leaving");
+    expect(ts[0].detail).toContain("3, 7, 9, 12");
+  });
+
+  it("survives a household with no name on file", () => {
+    const [t] = generateTasks(facts({ noticed: one({ renterName: null }) }));
+    expect(t.detail).toMatch(/^Out on 2026-08-30/);
   });
 });
 
