@@ -78,7 +78,7 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
   // clawback, migration 0043) rows both belong here so totals stay accurate.
   const { data: payouts } = await admin
     .from("payouts")
-    .select("id, amount, status, kind, created_at, jobs(date, route_id, services(name), properties(address))")
+    .select("id, amount, status, kind, created_at, job_id, jobs(date, route_id, services(name), properties(address))")
     .eq("vendor_id", vendorId)
     .order("created_at", { ascending: false });
 
@@ -106,6 +106,31 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
       const name = (r.unit_name as string | null)?.trim();
       if (name) unitByRoute.set(r.id as string, name);
     }
+  }
+
+  // WHO THE CREW SAID WAS THERE (0099) — and it BEATS the truck name.
+  //
+  // The truck is an inference: it is whoever the nightly router assigned, and
+  // it is silent on a hand-assigned job. A name the crew tapped in the
+  // driveway is a statement of fact by the only people who were present. When
+  // both exist, the fact wins.
+  //
+  // Names are read from `job_workers.name` — the SNAPSHOT — not by joining the
+  // roster, so a worker renamed or removed since does not rewrite an old
+  // statement.
+  const payoutJobIds = [...new Set(
+    (payouts ?? []).map((p) => (p as { job_id?: string | null }).job_id).filter((id): id is string => !!id),
+  )];
+  const workersByJob = new Map<string, string[]>();
+  if (payoutJobIds.length > 0) {
+    const { data: jw } = await admin
+      .from("job_workers").select("job_id, name").in("job_id", payoutJobIds);
+    for (const r of jw ?? []) {
+      const list = workersByJob.get(r.job_id as string) ?? [];
+      list.push(r.name as string);
+      workersByJob.set(r.job_id as string, list);
+    }
+    for (const [, list] of workersByJob) list.sort((a, b) => a.localeCompare(b));
   }
 
   const rows: EarningRow[] = (payouts ?? []).map((p) => {
@@ -138,7 +163,12 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
       amount: Number(p.amount) || 0,
       status: (p.status as string) ?? "pending",
       kind,
-      crew: job?.route_id ? unitByRoute.get(job.route_id) ?? null : null,
+      crew: (() => {
+        const jid = (p as { job_id?: string | null }).job_id ?? null;
+        const named = jid ? workersByJob.get(jid) : undefined;
+        if (named && named.length > 0) return named.join(" & ");
+        return job?.route_id ? unitByRoute.get(job.route_id) ?? null : null;
+      })(),
     };
   });
 

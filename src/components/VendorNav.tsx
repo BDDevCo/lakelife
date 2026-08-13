@@ -12,6 +12,7 @@ const TABS = [
   { href: "/vendor/open", label: "Open jobs" },
   { href: "/vendor/availability", label: "Availability" },
   { href: "/vendor/rates", label: "Rates" },
+  { href: "/vendor/crew", label: "Crew" },
   { href: "/vendor/earnings", label: "Earnings" },
   { href: "/vendor/import", label: "Customers" },
 ];

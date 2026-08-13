@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { navUrl } from "@/lib/navlink";
 import { uploadJobPhoto, completeJob, submitFlag, getJobPhotoUrls } from "@/app/vendor/actions";
+import { WhoWasHere } from "@/components/WhoWasHere";
 import { ArrivalSheet } from "@/components/ArrivalSheet";
 import { completionBlock } from "@/lib/arrival";
 import { toast } from "@/components/Toast";
@@ -221,6 +222,11 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
             >
               {completing ? "Completing…" : "Mark complete"}
             </button>
+            {/* OPTIONAL, AND OFF THE COMPLETION PATH. It saves itself; nothing
+                above waits on it. Renders as a single quiet button until
+                somebody taps it, and vanishes entirely for a vendor who keeps
+                no roster. */}
+            {!blocked && <WhoWasHere jobId={stop.id} />}
           </div>
         </>
       )}
