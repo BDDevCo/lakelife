@@ -192,3 +192,37 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
     return DEFAULT_SETTINGS;
   }
 });
+
+/**
+ * THE HOURS LAKELIFE WILL SELL WORK INTO. One row, `platform_dials` (0083).
+ *
+ * Kept separate from `platform_settings` because it is not a pricing dial —
+ * it is the shape of a working day, and it is read on the write path that
+ * sets a crew's hours rather than on any pricing path.
+ *
+ * `sell_end_hour` had NO reader anywhere until this existed: 0083 created the
+ * table, wrote 7 and 16 into it, and every screen and action ignored it. The
+ * truck form meanwhile pre-filled 17 and wrote it explicitly, so the column
+ * default never fired either and the first truck anybody created was sold an
+ * hour past the cutoff.
+ */
+export async function getSellableDay(): Promise<{ startHour: number; endHour: number }> {
+  const fallback = { startHour: 7, endHour: 16 };
+  try {
+    const admin = createServiceClient();
+    const { data } = await admin
+      .from("platform_dials")
+      .select("sell_start_hour, sell_end_hour")
+      .maybeSingle();
+    if (!data) return fallback;
+    const startHour = Number(data.sell_start_hour);
+    const endHour = Number(data.sell_end_hour);
+    if (!Number.isFinite(startHour) || !Number.isFinite(endHour) || endHour <= startHour) {
+      return fallback;
+    }
+    return { startHour, endHour };
+  } catch {
+    // A dial we cannot read must never stop a crew saving their truck.
+    return fallback;
+  }
+}

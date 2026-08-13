@@ -130,7 +130,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
 
   // Re-check the full claim gate server-side (fresh counts — the board may be stale).
   const [{ data: myDayJobs }, { data: blockRow }, { data: myUnits }] = await Promise.all([
-    admin.from("jobs").select("id, group_id, services(est_minutes), job_items(services(est_minutes))")
+    admin.from("jobs").select("id, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))")
       .eq("vendor_id", vendor.id as string).eq("date", job.date as string).in("status", ["scheduled", "in_progress"]),
     // `.limit(1)`, NOT `.maybeSingle()`. Availability is stored per SLOT, so a
     // crew who blocked two of the four legitimately has two rows that day —
@@ -157,11 +157,18 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
       const legs = (r as { group_id?: string | null }).group_id
         ? ((r as { job_items?: Array<{ services?: unknown }> }).job_items ?? []).map((it) => (one(it.services) as { est_minutes?: number } | null)?.est_minutes ?? null)
         : null;
-      return s + jobMinutesOf(em, legs);
+      // 0083: the minutes stamped on the job win. This is the path where an
+      // overstuffed day is actually CREATED — a crew claiming work — so
+      // reading the flat dial here understates a big job by hours.
+      const stamped = Number((r as { est_minutes?: number | null }).est_minutes ?? 0);
+      return s + (stamped > 0 ? stamped : jobMinutesOf(em, legs));
     }, 0);
   const assignedMinutes = dayJobMinutes(myDayJobs);
+  const stampedMinutes = Number((job as { est_minutes?: number | null }).est_minutes ?? 0);
   const svcMinutes = Number((svc as { est_minutes?: number }).est_minutes ?? 0);
-  const jobMinutes = svcMinutes > 0 ? svcMinutes : DEFAULT_JOB_MINUTES;
+  const jobMinutes = stampedMinutes > 0
+    ? stampedMinutes
+    : svcMinutes > 0 ? svcMinutes : DEFAULT_JOB_MINUTES;
   const candidate: CrewCandidate = {
     vendorId: vendor.id as string,
     status: vendor.status as string,
@@ -250,7 +257,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const cap = fleetJobCap(units, Number(vendor.daily_capacity ?? 0));
   const { data: afterJobs } = await admin
     .from("jobs")
-    .select("id, group_id, services(est_minutes), job_items(services(est_minutes))")
+    .select("id, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))")
     .eq("vendor_id", vendor.id as string).eq("date", job.date as string).in("status", ["scheduled", "in_progress"]);
   const afterCount = (afterJobs ?? []).length;
   const budget = fleetMinuteBudget(units);

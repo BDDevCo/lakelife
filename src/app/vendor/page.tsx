@@ -15,6 +15,8 @@ import { todayLakeDate } from "@/lib/booking";
 import { TermsBody } from "@/components/TermsBody";
 import { TOS_VERSION } from "@/lib/tos";
 import { acceptTos } from "@/app/portal/tos-actions";
+import { getSellableDay } from "@/lib/settings";
+import { sellableMinutes, fitsInDay, clockLabel } from "@/lib/duration";
 
 export default async function VendorTodayPage() {
   if (!hasSupabaseEnv()) {
@@ -118,6 +120,25 @@ export default async function VendorTodayPage() {
   // exactly as clean as before.
   const showTrucks = stops.some((s) => s.unit_name);
 
+  // HOW FULL THE DAY IS, IN THE CREW'S OWN TERMS.
+  //
+  // 0083 put 7am-4pm in the database and wrote `sellableMinutes` and
+  // `fitsInDay` to reason about it — then rendered neither, so the rule
+  // existed and nobody it protects could see it. The sum uses each job's
+  // STAMPED minutes, which is why a twelve-section pier now shows as the
+  // four-hour stop it is rather than the three-hour one the flat dial claimed.
+  const sellDay = await getSellableDay();
+  const bookedMinutes = stops.reduce((n, st) => n + Math.max(0, st.est_minutes ?? 0), 0);
+  const capacity = sellableMinutes(sellDay);
+  const fit = fitsInDay(sellDay, 0, bookedMinutes);
+  const hrs = (m: number) => (m % 60 === 0 ? `${m / 60}h` : `${Math.floor(m / 60)}h ${m % 60}m`);
+  const dayFill =
+    bookedMinutes > 0 && capacity > 0
+      ? fit.fits
+        ? `About ${hrs(bookedMinutes)} of work — finishing around ${clockLabel(fit.endsAtMinutes)}.`
+        : `About ${hrs(bookedMinutes)} of work — that runs ${hrs(fit.overBy)} past ${clockLabel(sellDay.endHour * 60)}. Tell us if it's too much.`
+      : null;
+
   return (
     <>
       <TopBar />
@@ -126,6 +147,7 @@ export default async function VendorTodayPage() {
         <h1 style={{ fontSize: 26 }}>Today&apos;s route</h1>
         <p className="mut" style={{ fontSize: 14, marginBottom: 4 }}>
           {prettyDay} — stops in drive order.
+          {dayFill && <>{" "}{dayFill}</>}
         </p>
         <p style={{ fontSize: 13, fontWeight: 700, color: "var(--warn)", marginBottom: 16 }}>
           Photos are required on every job — no photos, no completion, no payout.

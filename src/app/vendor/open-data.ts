@@ -102,7 +102,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
 
   const { data: jobs } = await admin
     .from("jobs")
-    .select("id, date, customer_price, service_id, property_id, is_rush, created_at, services(name, pricing_model, est_minutes), properties(lake_id, lat, lng, lakes(name))")
+    .select("id, date, customer_price, service_id, property_id, is_rush, est_minutes, created_at, services(name, pricing_model, est_minutes), properties(lake_id, lat, lng, lakes(name))")
     .eq("status", "requested")
     .is("vendor_id", null)
     .is("group_id", null) // package visits are routed, never cold-claimed — a claim can't price multi-leg work, and custody is never a first-tap prize
@@ -126,7 +126,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   const dates = [...new Set(doable.map((j) => j.date as string))];
   const [{ data: rates }, { data: myJobs }, { data: myBlocks }, { data: myPauses }, { data: myUnits }] = await Promise.all([
     admin.from("vendor_rates").select("service_id, base, unit_rate, band_pricing").eq("vendor_id", vendor.id),
-    admin.from("jobs").select("date, group_id, services(est_minutes), job_items(services(est_minutes))").eq("vendor_id", vendor.id).in("status", ["scheduled", "in_progress"]).in("date", dates),
+    admin.from("jobs").select("date, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))").eq("vendor_id", vendor.id).in("status", ["scheduled", "in_progress"]).in("date", dates),
     admin.from("vendor_availability").select("date").eq("vendor_id", vendor.id).eq("status", "blocked").in("date", dates),
     admin.from("vendor_lake_demotions").select("lake_id, demoted_at").eq("vendor_id", vendor.id),
     admin.from("crew_units").select("capacity, work_start, work_end").eq("vendor_id", vendor.id).eq("active", true),
@@ -155,7 +155,15 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
     const legs = (j as { group_id?: string | null }).group_id
       ? ((j as { job_items?: Array<{ services?: unknown }> }).job_items ?? []).map((it) => (one(it.services) as { est_minutes?: number } | null)?.est_minutes ?? null)
       : null;
-    assignedMinByDate.set(j.date as string, (assignedMinByDate.get(j.date as string) ?? 0) + jobMinutesOf(s?.est_minutes, legs));
+    // 0083: the minutes stamped on the job win. This is the path where an
+    // overstuffed day can actually be CREATED — a crew claiming work — so
+    // reading the flat dial here understates a big job by hours.
+    const stamped = Number((j as { est_minutes?: number | null }).est_minutes ?? 0);
+    assignedMinByDate.set(
+      j.date as string,
+      (assignedMinByDate.get(j.date as string) ?? 0) +
+        (stamped > 0 ? stamped : jobMinutesOf(s?.est_minutes, legs)),
+    );
   }
   const blockedDates = new Set((myBlocks ?? []).map((b) => b.date as string));
 
@@ -193,7 +201,10 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
     }
 
     const jobMinutes = (() => {
-      const m = Number((svc as { est_minutes?: number } | null)?.est_minutes ?? 0);
+      // Prefer what this job was actually budgeted (0083) over the service's
+      // flat dial, so the claim board shows a 5.5-hour pier as 5.5 hours.
+      const stampedM = Number((j as { est_minutes?: number | null }).est_minutes ?? 0);
+      const m = stampedM > 0 ? stampedM : Number((svc as { est_minutes?: number } | null)?.est_minutes ?? 0);
       return m > 0 ? m : DEFAULT_JOB_MINUTES;
     })();
     const candidate: CrewCandidate = {

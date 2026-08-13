@@ -6,7 +6,9 @@ import { todayLakeDate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { LakeLifePayments } from "@/lib/payments";
 import { alertOpsDoubleCharge } from "@/lib/automation";
-import { proposedFee, deadlinePassed, tripFeeFor } from "@/lib/recovery";
+import {
+  proposedFee, deadlinePassed, tripFeeFor, recoveryHeadline, crewIsOutOfPocket,
+} from "@/lib/recovery";
 import { assertOps } from "./data";
 
 /**
@@ -288,7 +290,12 @@ export async function waiveProposedFee(jobId: string, why: string): Promise<Reco
     .update({
       recovery_state: "fee_waived",
       reschedule_deadline: null,
-      scope_note: `Visit fee waived: ${why.trim()}`,
+      // NOT `scope_note`. That column means one thing — what the crew did
+      // versus what they found on a job that went ahead at a reduced scope —
+      // and a waiver reason is a different fact about a job where NO work
+      // happened. Two meanings in one column is how a screen ends up printing
+      // "Visit fee waived: goodwill" where it promised to say what was done.
+      fee_waived_reason: why.trim(),
     })
     .eq("id", jobId)
     .in("recovery_state", ["fee_proposed", "awaiting_customer"]);
@@ -309,6 +316,10 @@ export interface ProposedFeeRow {
   crewShare: number;
   /** What the crew has already been paid for the wasted trip (0090). */
   tripFeePaid: number;
+  /** The at-a-glance state line for a list somebody is triaging. */
+  headline: string;
+  /** True when nothing at all has reached the crew for this trip. */
+  crewOutOfPocket: boolean;
 }
 
 /**
@@ -325,7 +336,7 @@ export async function getProposedFees(): Promise<ProposedFeeRow[]> {
 
   const { data: jobs } = await admin
     .from("jobs")
-    .select("id, date, fee_proposed_amount, vendor_cost, no_show_at, no_show_reason, stood_down_at, stood_down_reason, services(name), properties(address)")
+    .select("id, date, fee_proposed_amount, reschedule_deadline, vendor_cost, no_show_at, no_show_reason, stood_down_at, stood_down_reason, services(name), properties(address)")
     .eq("recovery_state", "fee_proposed")
     .order("date", { ascending: true });
   if (!jobs?.length) return [];
@@ -355,6 +366,20 @@ export async function getProposedFees(): Promise<ProposedFeeRow[]> {
       fee: Number(j.fee_proposed_amount ?? 0),
       crewShare: Math.max(0, Number(j.vendor_cost ?? 0)) * settings.cancelFeePct,
       tripFeePaid: paidByJob.get(j.id as string) ?? 0,
+      // The one line a person triaging a list needs, and the plain statement
+      // of who ends up carrying the trip. Both were written in 0089 and
+      // rendered nowhere until now.
+      headline: recoveryHeadline("fee_proposed", {
+        outcome: standDown ? "stood_down" : "no_access",
+        deadline: (j.reschedule_deadline as string) ?? null,
+        todayISO: todayLakeDate(),
+        fee: Number(j.fee_proposed_amount ?? 0),
+      }),
+      crewOutOfPocket: crewIsOutOfPocket(
+        "fee_proposed",
+        standDown ? "stood_down" : "no_access",
+        paidByJob.get(j.id as string) ?? 0,
+      ),
     };
   });
 }

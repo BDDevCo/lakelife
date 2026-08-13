@@ -470,7 +470,7 @@ export async function getTipView(jobId: string): Promise<TipView> {
   const admin = createServiceClient();
   const { data: row } = await admin
     .from("jobs")
-    .select("status, est_minutes, tip_amount, no_show_at, stood_down_at")
+    .select("status, est_minutes, group_id, tip_amount, no_show_at, stood_down_at, services(est_minutes), job_items(services(est_minutes))")
     .eq("id", jobId)
     .maybeSingle();
   if (!row) return blank;
@@ -481,7 +481,33 @@ export async function getTipView(jobId: string): Promise<TipView> {
     no_show_at: (row.no_show_at as string) ?? null,
     stood_down_at: (row.stood_down_at as string) ?? null,
   });
-  const s = suggestTip((row.est_minutes as number | null) ?? null);
+
+  // A PACKAGE VISIT IS THE LONGEST VISIT OF THE YEAR AND WAS STAMPED WITH
+  // NOTHING. Only the two standalone write paths call `serviceMinutes`; both
+  // group-job creators insert with no est_minutes. Reading the column alone
+  // therefore handed `suggestTip` a null for a full fall haul-out — wrap,
+  // rack, the lot — and null takes the SMALLEST band, $5/$10/$20.
+  //
+  // So fall back to the sum of the legs, which is what the visit actually is:
+  // one truck, one driveway, all the work.
+  const stamped = Number((row.est_minutes as number | null) ?? 0);
+  let minutes: number | null = stamped > 0 ? stamped : null;
+  if (minutes == null) {
+    const legs = ((row as { job_items?: Array<{ services?: unknown }> }).job_items ?? [])
+      .map((it) => {
+        const sv = Array.isArray(it.services) ? it.services[0] : it.services;
+        return Number((sv as { est_minutes?: number } | null)?.est_minutes ?? 0);
+      })
+      .filter((n) => n > 0);
+    if (legs.length > 0) {
+      minutes = legs.reduce((a, b) => a + b, 0);
+    } else {
+      const sv = Array.isArray(row.services) ? row.services[0] : row.services;
+      const flat = Number((sv as { est_minutes?: number } | null)?.est_minutes ?? 0);
+      minutes = flat > 0 ? flat : null;
+    }
+  }
+  const s = suggestTip(minutes);
 
   return {
     canTip: gate.ok,

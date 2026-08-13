@@ -18,7 +18,12 @@ import { addTruck, updateTruck, setTruckActive, type TruckInput } from "@/app/ve
 import type { MyTruck } from "@/app/vendor/trucks-types";
 
 const HOURS_START = Array.from({ length: 24 }, (_, i) => i); // 0..23
-const HOURS_END = Array.from({ length: 24 }, (_, i) => i + 1); // 1..24
+// 1..16. LakeLife sells work into 7am-4pm, so offering a later close is
+// offering something the server will clamp anyway — and the first truck
+// anybody created used to pre-fill 17 and be quietly sold an hour past four.
+// A crew may still close EARLIER; that is theirs to choose.
+const SELL_END_HOUR = 16;
+const HOURS_END = Array.from({ length: SELL_END_HOUR }, (_, i) => i + 1); // 1..16
 
 /** 7 -> "7am", 17 -> "5pm", 0 -> "12am", 24 -> "12am" (end-of-day midnight). */
 function hourLabel(h: number): string {
@@ -211,7 +216,7 @@ function TruckForm({
   const [phone, setPhone] = useState(initial?.phone ?? "");
   const [capacity, setCapacity] = useState(String(initial?.capacity ?? 3));
   const [workStart, setWorkStart] = useState(initial?.workStart ?? 7);
-  const [workEnd, setWorkEnd] = useState(initial?.workEnd ?? 17);
+  const [workEnd, setWorkEnd] = useState(Math.min(initial?.workEnd ?? SELL_END_HOUR, SELL_END_HOUR));
 
   function submit() {
     if (!name.trim()) {

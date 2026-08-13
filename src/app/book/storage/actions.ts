@@ -9,6 +9,7 @@ import { sendEmail } from "@/lib/email";
 import { autoAssignJob } from "@/app/book/dispatch";
 import { getPackageViews } from "./data";
 import { ensureTos } from "@/lib/tos-server";
+import { visitMinutes } from "@/lib/duration";
 
 export interface PackageBookingResult {
   ok: boolean;
@@ -90,7 +91,9 @@ export async function createPackageBooking(input: {
   const lake = (Array.isArray(propRow?.lakes) ? propRow?.lakes[0] : propRow?.lakes) as
     | { name?: string; ice_out_actual?: string; pull_deadline?: string } | undefined;
   const { data: fallSvcRows } = await admin
-    .from("services").select("id, is_water_work").in("id", sel.fall);
+    .from("services")
+    .select("id, is_water_work, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands")
+    .in("id", sel.fall);
   const touchesWater = (fallSvcRows ?? []).some((s) => s.is_water_work);
   // Compare against the EFFECTIVE window, not the raw stored dates. A lake row
   // holds one season's absolute dates and nothing writes a rolled year back to
@@ -136,6 +139,18 @@ export async function createPackageBooking(input: {
       frequency: "One-time (fall)",
       status: "requested",
       customer_price: sel.fallTotal,
+      // A PACKAGE VISIT IS THE LONGEST VISIT OF THE YEAR AND WAS STAMPED WITH
+      // NOTHING. Only the two standalone paths called serviceMinutes, so a
+      // full haul-out — wrap, rack, the lot — carried a null, and every reader
+      // fell back to a single service's flat dial or to the smallest tip band.
+      // `visitMinutes` was written in 0083 to sum a multi-leg visit and had no
+      // caller until now: one truck, one driveway, all the work.
+      est_minutes: visitMinutes(
+        (fallSvcRows ?? []).map((r) => ({
+          rule: r as unknown as Parameters<typeof visitMinutes>[0][number]["rule"],
+          profile: toPricingProfile(profile),
+        })),
+      ),
       group_id: group.id,
       phase: "fall",
     })

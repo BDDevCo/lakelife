@@ -129,6 +129,21 @@ function HeaderCard({ job, where }: { job: JobDetailView; where: string }) {
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <span className={`ll-pill ${job.statusPill}`}>{job.statusLabel}</span>
         {job.isCorrection && <span className="ll-pill teal">Make-it-right visit · no charge</span>}
+
+        {/* THE PROMISE, KEPT. At the moment they declined we said "we'll note
+            on the job what was and wasn't done" — this is the job, so this is
+            where it has to appear. */}
+        {job.scopeNote && (
+          <div
+            className="ll-card ll-card-pad"
+            style={{ marginTop: 14, borderLeft: "4px solid var(--line)" }}
+          >
+            <strong style={{ fontSize: 14 }}>What was done</strong>
+            <p className="mut" style={{ fontSize: 13, marginTop: 6, marginBottom: 0, lineHeight: 1.55 }}>
+              {job.scopeNote}
+            </p>
+          </div>
+        )}
         {job.money.legs.length > 0 && <span className="ll-pill teal">🧊 package</span>}
       </div>
 

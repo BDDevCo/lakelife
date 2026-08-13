@@ -55,6 +55,8 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
         <span className="ll-pill warn" style={{ marginLeft: "auto" }}>{usd(row.fee)} proposed</span>
       </div>
 
+      <div className="mut" style={{ fontSize: 12.5, marginTop: 4 }}>{row.headline}</div>
+
       <p className="mut" style={{ fontSize: 13, margin: "8px 0 0", lineHeight: 1.5 }}>
         {row.outcome === "stood_down" ? "Crew stood down" : "Nobody let them in"} on{" "}
         {row.attemptedOn ? new Date(`${row.attemptedOn}T12:00:00`).toLocaleDateString("en-US", {
@@ -73,7 +75,7 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
           background: "var(--sand, #f6f3ec)", lineHeight: 1.5,
         }}
       >
-        {row.tripFeePaid > 0 ? (
+        {!row.crewOutOfPocket ? (
           <>
             The crew has already been paid <b>{usd(row.tripFeePaid)}</b> for the
             trip. Waiving this costs them nothing — it comes off us.

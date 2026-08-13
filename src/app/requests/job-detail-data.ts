@@ -107,6 +107,14 @@ export interface JobDetailView {
   propertyAddress: string | null;
   crewCompany: string | null;
   isCorrection: boolean;
+  /**
+   * What was done versus what the crew found, when a correction was declined
+   * and the visit went ahead at the booked scope (0088). The owner is promised
+   * this in writing at the moment they decline — until now it was written to
+   * the job and rendered nowhere, so the invoice said "Pier install" while
+   * they looked at a pier ending in open water.
+   */
+  scopeNote: string | null;
   money: JobDetailMoney;
   photos: JobPhoto[];
   siblings: JobDetailSibling[];
@@ -152,7 +160,7 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
     .from("jobs")
     // ONE string literal, not a concatenation — PostgREST's typings key off
     // the literal, and a `+` join degrades every field to `unknown`.
-    .select("id, status, date, slot, customer_price, property_id, group_id, vendor_id, correction_of, services(name, min_photos), properties(owner_id, nickname, address), vendors(company)")
+    .select("id, status, date, slot, customer_price, property_id, group_id, vendor_id, correction_of, scope_note, services(name, min_photos), properties(owner_id, nickname, address), vendors(company)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) return null;
@@ -290,6 +298,7 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
     propertyAddress: prop?.address ?? null,
     crewCompany: crew?.company ?? null, // company name ONLY — never a rate
     isCorrection: job.correction_of != null,
+    scopeNote: (job.scope_note as string) ?? null,
     money: {
       customerPrice: Number(job.customer_price ?? 0),
       legs: breakdown?.legs ?? [],

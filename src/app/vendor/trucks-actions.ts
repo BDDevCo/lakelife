@@ -5,6 +5,8 @@ import { toE164 } from "@/lib/phone";
 import { fleetJobCap, fleetMinuteBudget, fitsTimeBudget, jobMinutesOf } from "@/lib/fleet";
 import { todayLakeDate } from "@/lib/booking";
 import { sendSms } from "@/lib/sms";
+import { getSellableDay } from "@/lib/settings";
+import { sellableWindow } from "@/lib/duration";
 
 export interface TruckResult {
   ok: boolean;
@@ -171,8 +173,13 @@ function normalizedPhone(raw: string): { ok: true; value: string | null } | { ok
   return { ok: true, value: e164 };
 }
 
-/** Validate one truck's fields into a DB-ready row, or a friendly error. */
-function buildRow(input: TruckInput): { row: TruckRow } | { error: string } {
+/**
+ * Validate one truck's fields into a DB-ready row, or a friendly error.
+ *
+ * Async since 0083's cutoff became real: the sellable day is a dial in the
+ * database, so clamping a crew's closing time needs a read.
+ */
+async function buildRow(input: TruckInput): Promise<{ row: TruckRow } | { error: string }> {
   const name = validName(input?.name);
   if (!name) {
     return { error: "Give the truck a name, 1–60 characters — \"Truck 2 — Mike\" works great." };
@@ -184,9 +191,26 @@ function buildRow(input: TruckInput): { row: TruckRow } | { error: string } {
   }
 
   const workStart = validHour(input?.workStart, 0, 23);
-  const workEnd = validHour(input?.workEnd, 1, 24);
-  if (workStart == null || workEnd == null || workEnd <= workStart) {
-    return { error: "Work hours need to be whole hours, with the end later than the start — like 7 to 17." };
+  const workEndRaw = validHour(input?.workEnd, 1, 24);
+  if (workStart == null || workEndRaw == null || workEndRaw <= workStart) {
+    return { error: "Work hours need to be whole hours, with the end later than the start — like 7 to 4." };
+  }
+
+  // THE CUTOFF IS ENFORCED HERE, at the write, because this is the only place
+  // a crew's sellable day is actually set. 0083 put 7am-4pm in platform_dials
+  // and nothing read `sell_end_hour` — meanwhile the truck form pre-filled 17
+  // and always wrote it explicitly, so the column default never fired and the
+  // first truck anybody created was sold an hour past four.
+  //
+  // A crew may still close EARLIER; they may not push the close later. That is
+  // exactly the comparison `sellableWindow` was written to perform, so it is
+  // used rather than re-implemented.
+  const day = await getSellableDay();
+  const win = sellableWindow(day, { workStart, workEnd: workEndRaw });
+  const workEnd = win.endHour;
+  if (workEnd <= workStart) {
+    const close = day.endHour > 12 ? `${day.endHour - 12}pm` : `${day.endHour}am`;
+    return { error: `Work hours have to start before ${close}.` };
   }
 
   const phoneResult = normalizedPhone(input?.phone);
@@ -208,7 +232,7 @@ export async function addTruck(input: TruckInput): Promise<TruckResult> {
     return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
   }
 
-  const built = buildRow(input);
+  const built = await buildRow(input);
   if ("error" in built) return { ok: false, error: built.error };
 
   const admin = createServiceClient();
@@ -260,7 +284,7 @@ export async function updateTruck(unitId: string, input: TruckInput): Promise<Tr
   const admin = createServiceClient();
   if (!(await assertOwnUnit(admin, vendor.id, unitId))) return { ok: false, error: "Unknown truck." };
 
-  const built = buildRow(input);
+  const built = await buildRow(input);
   if ("error" in built) return { ok: false, error: built.error };
 
   // Transition guard: shrinking an ACTIVE truck's capacity or hours must

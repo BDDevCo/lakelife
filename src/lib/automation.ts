@@ -74,7 +74,7 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
   let jobsQuery = admin
     .from("jobs")
     .select(
-      "id, vendor_id, group_id, properties(lat, lng, lakes(name)), vendors(daily_capacity, company, user_id, status, coi_expiry, base_lat, base_lng), services(est_minutes), job_items(services(est_minutes))",
+      "id, vendor_id, group_id, est_minutes, properties(lat, lng, lakes(name)), vendors(daily_capacity, company, user_id, status, coi_expiry, base_lat, base_lng), services(est_minutes), job_items(services(est_minutes))",
     )
     .eq("date", date)
     .eq("status", "scheduled")
@@ -115,7 +115,15 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
       lat: p?.lat ?? null,
       lng: p?.lng ?? null,
       lake_name: lake?.name ?? null,
-      estMinutes: jobMinutesOf(svc?.est_minutes, legs),
+      // 0083 stamps the REAL figure on the job at booking; dispatch already
+      // prefers it. The router did not, so a 12-section pier was 255 minutes
+      // to the gate that admitted it and 180 to the builder that laid out the
+      // day. That does not oversell a day — dispatch used the larger number —
+      // but it costs truck-to-truck balance and suppresses the crew's "this
+      // day runs past your hours" text on a day that genuinely does.
+      estMinutes: Number((j as { est_minutes?: number | null }).est_minutes ?? 0) > 0
+        ? Number((j as { est_minutes?: number | null }).est_minutes)
+        : jobMinutesOf(svc?.est_minutes, legs),
     });
   }
 
