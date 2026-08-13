@@ -86,6 +86,7 @@ export function ParkRentRoll({
   slug,
   rows,
   summary,
+  today,
   owedTotal,
   owedBlocked,
   owedMonth,
@@ -96,6 +97,8 @@ export function ParkRentRoll({
   slug: string | null;
   rows: RollRowView[];
   summary: RollSummaryView;
+  /** Lake date from the server. A client component must never guess it. */
+  today: string;
   owedTotal?: number;
   owedBlocked?: number;
   owedMonth?: string;
@@ -105,6 +108,9 @@ export function ParkRentRoll({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The move-out panel: which tenancy, and the last day they lived there.
+  const [closingId, setClosingId] = useState<string | null>(null);
+  const [lastDay, setLastDay] = useState("");
 
   function decide(id: string, decision: "approve" | "decline") {
     setBusyId(id);
@@ -117,13 +123,22 @@ export function ParkRentRoll({
     });
   }
 
-  function close(id: string) {
+  // A MOVE-OUT IS A DATE, NOT A CLICK.
+  //
+  // This used to fire `endTenancy(id, "ended")` with no date at all, which
+  // left the tenancy's range untrimmed — so the final month was either billed
+  // whole with no way to correct it, or never billed for the days they were
+  // actually here. The date is now required, and the panel says what it does
+  // to the bill so nobody has to guess.
+  function close(id: string, lastDayISO: string) {
     setBusyId(id);
     startTransition(async () => {
-      const res = await endTenancy(id, "ended");
+      const res = await endTenancy(id, "ended", lastDayISO);
       setBusyId(null);
       if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
       toast(res.signal ?? "Done.");
+      setClosingId(null);
+      setLastDay("");
       router.refresh();
     });
   }
@@ -338,11 +353,38 @@ export function ParkRentRoll({
                     {r.currentReservationId && (
                       <button
                         className="ll-btn ghost"
-                        onClick={() => close(r.currentReservationId!)}
+                        onClick={() => {
+                          setClosingId(closingId === r.currentReservationId ? null : r.currentReservationId);
+                          setLastDay(today);
+                        }}
                         disabled={pending && busyId === r.currentReservationId}
                       >
-                        Move out
+                        {closingId === r.currentReservationId ? "Cancel" : "Move out"}
                       </button>
+                    )}
+                    {closingId && closingId === r.currentReservationId && (
+                      <div className="ll-field" style={{ width: "100%", marginTop: 8 }}>
+                        <label>Last day they lived here</label>
+                        <input
+                          type="date"
+                          value={lastDay}
+                          max={today}
+                          onChange={(e) => setLastDay(e.target.value)}
+                        />
+                        <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
+                          Their final month bills for the days they were here —
+                          not the whole month. Get this right now: it is what
+                          the last bill is calculated from.
+                        </p>
+                        <button
+                          className="ll-btn gold"
+                          style={{ marginTop: 8, minHeight: 44 }}
+                          disabled={!lastDay || (pending && busyId === r.currentReservationId)}
+                          onClick={() => close(r.currentReservationId!, lastDay)}
+                        >
+                          {pending && busyId === r.currentReservationId ? "Closing…" : "Close it out"}
+                        </button>
+                      </div>
                     )}
                     {r.state === "vacant" && (
                       <button className="ll-btn ghost"

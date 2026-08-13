@@ -70,11 +70,18 @@ export async function previewChargeRun(
   const lotById = new Map((lots ?? []).map((l) => [l.id as string, l]));
   if (lotById.size === 0) return { ok: true, plan: planRun([], new Set()) };
 
-  const { data: stays } = await admin
+  // Same rule as the run (0101): an ended tenancy with a recorded move-out is
+  // billed for the days it covered. Leaving it out here would break this
+  // function's own stated invariant, two comments below — the preview would
+  // omit a final part-month the run then charges.
+  const { data: staysRaw } = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, during, quoted_amount, status")
+    .select("id, park_lot_id, during, quoted_amount, status, moved_out_on")
     .in("park_lot_id", [...lotById.keys()])
-    .in("status", ["approved", "active"]);
+    .in("status", ["approved", "active", "ended"]);
+  const stays = (staysRaw ?? []).filter(
+    (s) => s.status !== "ended" || s.moved_out_on != null,
+  );
 
   // A PREVIEW MUST SHOW WHAT THE RUN WILL ACTUALLY DO.
   //
@@ -177,11 +184,32 @@ export async function runCharges(
   const lotById = new Map((lots ?? []).map((l) => [l.id as string, l]));
   if (lotById.size === 0) return { ok: false, error: "No live lots to bill." };
 
-  const { data: stays } = await admin
+  // ENDED TENANCIES ARE BILLED FOR THEIR LAST PART-MONTH (0101).
+  //
+  // This filtered to approved/active, which meant a household that moved out
+  // on the 20th dropped out of every future run — so their twenty days were
+  // either inside a full-month charge nobody could correct (voiding it made
+  // the month permanently unbillable) or were never billed at all, silently.
+  //
+  // Including 'ended' is safe without a date filter, because `buildStatement`
+  // returns a total of 0 for a stay that covers none of the month and the loop
+  // below already skips a zero. A tenancy that ended in July simply
+  // contributes nothing to August.
+  //
+  // 'cancelled' stays OUT: nobody ever lived there.
+  const { data: staysRaw } = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_id, during, quoted_amount")
+    .select("id, park_lot_id, renter_id, during, quoted_amount, status, moved_out_on")
     .in("park_lot_id", [...lotById.keys()])
-    .in("status", ["approved", "active"]);
+    .in("status", ["approved", "active", "ended"]);
+
+  // An 'ended' row with no `moved_out_on` was closed by the old one-click
+  // path, so its range was never trimmed and still runs to the end of the
+  // agreement. Billing from that range would charge a departed household for
+  // months they were not here. No move-out date, no bill.
+  const stays = (staysRaw ?? []).filter(
+    (s) => s.status !== "ended" || s.moved_out_on != null,
+  );
 
   // Same rule as the preview: a cancelled bill leaves the month billable.
   const { data: existing } = await admin

@@ -9,6 +9,7 @@ import { pendingReRates } from "@/app/park/rerate-actions";
 import { buildStatement, rollUp, statementLine, type StatementFee } from "@/app/park/statement-helpers";
 import { getMyPark, getParkLots, getParkRoll, type ParkUnitView } from "@/app/park/data";
 import { lotFits, fitProblemText, type Lot } from "@/lib/parks";
+import { todayLakeDate } from "@/lib/booking";
 
 /**
  * The park owner's home screen — the rent roll. Everything here is scoped to
@@ -177,6 +178,7 @@ export default async function ParkPage() {
         owedTotal={owedSummary.total}
         owedBlocked={owedSummary.blocked}
         owedMonth={thisMonth}
+        today={todayLakeDate()}
       />
     </>
   );

@@ -5,6 +5,8 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { toDaterange, parseDaterange, type Lot, effectiveSeason } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
+// Pure date maths, already used by the re-rate path — no need for a second copy.
+import { addDays as addDaysISO } from "./rerate-helpers";
 import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
@@ -643,19 +645,132 @@ export async function decideApplication(
 
 /** End a tenancy early, or close one out. Frees the dates for the next renter
  *  — the exclusion constraint only holds `approved` and `active` rows. */
-export async function endTenancy(reservationId: string, reason: "ended" | "cancelled"): Promise<ParkResult> {
+export async function endTenancy(
+  reservationId: string,
+  reason: "ended" | "cancelled",
+  /** The LAST DAY they lived there. Required for 'ended' — see below. */
+  moveOutISO?: string | null,
+): Promise<ParkResult> {
   if (!(await assertReservationIsMine(reservationId))) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
-  const { error } = await admin
+  const { data: stay } = await admin
     .from("lot_reservations")
-    .update({ status: reason })
+    .select("id, during, status")
     .eq("id", reservationId)
-    .in("status", ["approved", "active"]);
-  if (error) return { ok: false, error: "Couldn't update that — try again." };
+    .maybeSingle();
+  if (!stay) return { ok: false, error: "That tenancy isn't there any more." };
+  if (stay.status !== "approved" && stay.status !== "active") {
+    return { ok: false, error: "That one is already closed." };
+  }
+
+  // A CANCELLATION IS NOT A MOVE-OUT. Nobody ever lived there, so there is no
+  // last day, nothing to prorate and nothing to bill. The range is left alone.
+  if (reason === "cancelled") {
+    const { data: done, error } = await admin
+      .from("lot_reservations")
+      .update({ status: "cancelled" })
+      .eq("id", reservationId)
+      .in("status", ["approved", "active"])
+      .select("id");
+    if (error) return { ok: false, error: "Couldn't update that — try again." };
+    if (!done?.length) return { ok: false, error: "Somebody just changed that one." };
+    revalidatePath("/park");
+    return { ok: true, signal: "Reservation cancelled." };
+  }
+
+  // A MOVE-OUT IS A DATE, and this is the whole point of the change.
+  //
+  // This used to write `{ status }` alone. The range was never trimmed and the
+  // charge run bills only approved/active, so a household leaving on the 20th
+  // was either billed the whole month with no way back — voiding made the
+  // month permanently unbillable, because an ended tenancy drops out of every
+  // future run — or never billed for the twenty days, silently.
+  const range = parseDaterange(stay.during as string);
+  if (!range) return { ok: false, error: "That tenancy has no dates on it — call us." };
+
+  const lastDay = (moveOutISO ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(lastDay)) {
+    return { ok: false, error: "Pick the last day they lived there." };
+  }
+  if (lastDay < range.start) {
+    return { ok: false, error: `They moved in on ${range.start} — the last day can't be before that.` };
+  }
+
+  // `during` is half-open: a last day of the 20th means the range ends on the
+  // 21st. Storing the human date separately (moved_out_on) keeps every screen
+  // out of that arithmetic.
+  const newEnd = addDaysISO(lastDay, 1);
+
+  const { data: done, error } = await admin
+    .from("lot_reservations")
+    .update({
+      status: "ended",
+      during: toDaterange({ start: range.start, end: newEnd }),
+      moved_out_on: lastDay,
+    })
+    .eq("id", reservationId)
+    .in("status", ["approved", "active"])   // one closer wins a double-tap
+    .select("id");
+  if (error) return { ok: false, error: `Couldn't close that out — ${error.message}` };
+  if (!done?.length) return { ok: false, error: "Somebody just closed that one." };
 
   revalidatePath("/park");
-  return { ok: true, signal: reason === "ended" ? "Tenancy closed out." : "Reservation cancelled." };
+  return {
+    ok: true,
+    signal: `Closed out — last day ${lastDay}. Their final month bills for the days they were here.`,
+  };
+}
+
+/**
+ * NOTICE TO VACATE — who is leaving, before the day it happens.
+ *
+ * Without it "who is leaving" could only be answered on the morning somebody
+ * drove away. Two weeks of warning is the difference between showing a lot and
+ * discovering a vacancy.
+ *
+ * Deliberately does NOT end the tenancy or touch the range: they still live
+ * there, still owe rent, and may yet change their minds. The bill follows
+ * `moved_out_on`, which is set when they actually go.
+ */
+export async function giveNotice(
+  reservationId: string,
+  expectedMoveOutISO: string,
+  noticeGivenISO?: string,
+): Promise<ParkResult> {
+  if (!(await assertReservationIsMine(reservationId))) return { ok: false, error: DENIED };
+
+  const leaving = (expectedMoveOutISO ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(leaving)) return { ok: false, error: "Pick the day they plan to leave." };
+  const given = (noticeGivenISO ?? "").trim() || todayLakeDate();
+  if (leaving < given) return { ok: false, error: "That day is before the notice — check the dates." };
+
+  const admin = createServiceClient();
+  const { data: done, error } = await admin
+    .from("lot_reservations")
+    .update({ notice_given_on: given, expected_move_out: leaving })
+    .eq("id", reservationId)
+    .in("status", ["approved", "active"])
+    .select("id");
+  if (error) return { ok: false, error: `Couldn't record that — ${error.message}` };
+  if (!done?.length) return { ok: false, error: "That tenancy is already closed." };
+
+  revalidatePath("/park");
+  return { ok: true, signal: `Noted — they plan to leave on ${leaving}.` };
+}
+
+/** Take the notice back. People change their minds, and a stale one shows a lot as leaving. */
+export async function clearNotice(reservationId: string): Promise<ParkResult> {
+  if (!(await assertReservationIsMine(reservationId))) return { ok: false, error: DENIED };
+  const admin = createServiceClient();
+  const { error } = await admin
+    .from("lot_reservations")
+    .update({ notice_given_on: null, expected_move_out: null })
+    .eq("id", reservationId)
+    .in("status", ["approved", "active"]);
+  if (error) return { ok: false, error: "Couldn't clear that — try again." };
+  revalidatePath("/park");
+  return { ok: true, signal: "Notice cleared — they're staying." };
 }
 
 /**
