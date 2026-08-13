@@ -106,6 +106,39 @@ export default async function ParkPage() {
   }
   const owedSummary = rollUp(statements);
 
+  // WHAT IS ACTUALLY OWED, from the ledger — not what rent WOULD be.
+  //
+  // `rollUp(statements)` above simulates this month's bills from the roll and
+  // reads neither `park_charges` nor `park_payments`. So on the 28th, with
+  // every household paid, this tile still said "$8,645 owed": it was answering
+  // "what does a month here cost" while wearing the label of what people owe.
+  // That is the number the owner plans against.
+  //
+  // A DISPUTED BILL IS NOT ARREARS. It is counted separately below, because
+  // "they say they paid and we haven't found it" is a thing to go and settle,
+  // not money to chase.
+  const { data: liveCharges } = await sb
+    .from("park_charges")
+    .select("id, amount, paid_total, status, period_month")
+    .eq("park_id", park.id)
+    .eq("period_month", thisMonth)
+    .neq("status", "void");
+  const { data: openClaims } = await sb
+    .from("park_payment_claims")
+    .select("charge_id")
+    .is("resolved_at", null);
+  const disputedIds = new Set((openClaims ?? []).map((c) => c.charge_id as string));
+
+  const billedThisMonth = (liveCharges ?? []).length;
+  let outstanding = 0;
+  let disputedAmount = 0;
+  for (const c of liveCharges ?? []) {
+    const bal = Math.round((Number(c.amount ?? 0) - Number(c.paid_total ?? 0)) * 100) / 100;
+    if (bal <= 0) continue;
+    if (disputedIds.has(c.id as string)) disputedAmount = Math.round((disputedAmount + bal) * 100) / 100;
+    else outstanding = Math.round((outstanding + bal) * 100) / 100;
+  }
+
   const lotById = new Map(lots.map((l) => [l.lot.id, l]));
 
   const rows: RollRowView[] = roll.rows.map((r) => ({
@@ -175,9 +208,12 @@ export default async function ParkPage() {
         slug={park.slug}
         rows={rows}
         summary={roll.summary}
-        owedTotal={owedSummary.total}
+        owedTotal={outstanding}
         owedBlocked={owedSummary.blocked}
         owedMonth={thisMonth}
+        billedThisMonth={billedThisMonth}
+        disputedAmount={disputedAmount}
+        wouldBill={owedSummary.total}
         today={todayLakeDate()}
       />
     </>

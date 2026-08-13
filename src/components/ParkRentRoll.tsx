@@ -90,6 +90,9 @@ export function ParkRentRoll({
   owedTotal,
   owedBlocked,
   owedMonth,
+  billedThisMonth,
+  disputedAmount,
+  wouldBill,
 }: {
   parkId: string;
   isOwner: boolean;
@@ -102,6 +105,12 @@ export function ParkRentRoll({
   owedTotal?: number;
   owedBlocked?: number;
   owedMonth?: string;
+  /** How many bills exist for this month. Zero means nothing is owed YET. */
+  billedThisMonth?: number;
+  /** Outstanding on bills somebody is disputing — never counted as arrears. */
+  disputedAmount?: number;
+  /** What a full month here would come to, for the not-yet-billed case. */
+  wouldBill?: number;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -192,15 +201,31 @@ export function ParkRentRoll({
         />
         <Stat label="Vacant" value={`${summary.vacant}`} sub={summary.reserved ? `${summary.reserved} reserved` : ""} />
         <Stat label="Waiting on you" value={`${summary.pending}`} sub={summary.pending === 1 ? "application" : "applications"} />
+        {/* OWED MEANS BILLED AND NOT PAID.
+            This tile used to roll up what rent WOULD be for every current
+            tenancy — it read neither charges nor payments — so on the 28th,
+            with every household paid, it still said "$8,645 owed". A disputed
+            bill is shown separately: "they say they paid and we haven't found
+            it" is something to go and settle, not money to chase. */}
         {owedTotal != null && notYetStarted ? (
           <Stat label="Owed this month" value="—" sub="nothing is collectable yet" />
+        ) : !billedThisMonth ? (
+          <Stat
+            label="Owed this month"
+            value="—"
+            sub={wouldBill ? `not billed yet · about $${wouldBill.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "not billed yet"}
+          />
         ) : owedTotal != null && (
           <Stat
             label="Owed this month"
             value={`$${owedTotal.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
             // A blocked row is a rent nobody set. Surfaced here rather than
             // quietly missing from the total.
-            sub={owedBlocked ? `${owedBlocked} can't be totalled` : (owedMonth ?? "")}
+            sub={
+              disputedAmount
+                ? `plus $${disputedAmount.toLocaleString("en-US", { maximumFractionDigits: 0 })} disputed`
+                : owedBlocked ? `${owedBlocked} can't be totalled` : (owedMonth ?? "")
+            }
           />
         )}
       </div>

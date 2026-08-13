@@ -12,7 +12,10 @@ import {
 } from "./ledger-helpers";
 import { sendEmail } from "@/lib/email";
 import { receiptBody, type ReceiptLines } from "./receipt-helpers";
-import { applyDueRentChanges } from "./rerate-actions";
+// The ENGINE, not the action: runCharges has already asserted membership
+// twenty lines up, so going back through the authorized wrapper would just
+// re-ask the same question.
+import { applyDueRentChangesFor } from "@/lib/rent-changes";
 import type { ParkResult } from "./actions";
 
 /**
@@ -249,7 +252,7 @@ export async function runCharges(
   // Safe to call here: it is idempotent, scoped to this park, and the database
   // refuses any change whose notice was not properly served — so this can only
   // ever apply increases that were already legitimately due today.
-  const rateMoves = await applyDueRentChanges(parkId);
+  const rateMoves = await applyDueRentChangesFor(parkId);
 
   const [{ data: park }, fees] = await Promise.all([
     admin.from("parks").select("rent_due_day").eq("id", parkId).maybeSingle(),
@@ -659,6 +662,13 @@ export interface OpenClaim {
   reference: string | null;
   note: string | null;
   asserted_by: string;
+  /**
+   * WHO THEY SAY THEY PAID. Collected on the claim form and written since it
+   * shipped, and selected by nothing — so the screen that decides the claim
+   * could not see it. In a takeover month "I paid Ron" is the single most
+   * likely thing a household says, and it is the whole explanation.
+   */
+  paid_to: string | null;
 }
 type RawClaim = OpenClaim;
 
@@ -699,7 +709,7 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
   const { data: claims } = chargeIds.length
     ? await admin
         .from("park_payment_claims")
-        .select("id, charge_id, claimed_amount, claimed_paid_on, method, reference, note, asserted_by")
+        .select("id, charge_id, claimed_amount, claimed_paid_on, method, reference, note, asserted_by, paid_to")
         .in("charge_id", chargeIds)
         .is("resolved_at", null)
     : { data: [] as RawClaim[] };

@@ -113,6 +113,14 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
               <strong>{view.money.arrearsLine}</strong>
             </div>
           )}
+          {/* Not bold, and not beside the arrears total. A disputed bill used
+              to be INSIDE that figure, which made "go and chase this" include
+              money a household says they already handed over. */}
+          {view.money.disputedLine && (
+            <div className="mut" style={{ fontSize: 13.5, marginTop: 6, lineHeight: 1.5 }}>
+              {view.money.disputedLine}
+            </div>
+          )}
           <div className="mut" style={{ fontSize: 14, marginTop: 12, lineHeight: 1.5 }}>
             {view.occupancy.main}
             {view.occupancy.sub ? ` ${view.occupancy.sub}` : ""}

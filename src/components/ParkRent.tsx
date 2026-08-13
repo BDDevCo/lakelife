@@ -220,8 +220,17 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                   )}
                   {/* THE RENTER'S SIDE. Logging it does not mean agreeing
                       with it, and most of these arrive as somebody saying it
-                      across a counter. */}
-                  {r.state === "late" && (
+                      across a counter.
+
+                      NOT ONLY WHEN THE SOFTWARE ALREADY CALLS IT LATE. This
+                      was gated on `state === "late"`, so a household saying "I
+                      paid that" about a bill still inside the office's
+                      catch-up window — which is exactly when they'd say it,
+                      the month a new owner takes over — had nowhere to be
+                      recorded. Any live bill without an open claim can carry
+                      one; a paid one can be disputed too, because the argument
+                      may be about the record itself. */}
+                  {r.state !== "void" && !page.claims[r.id] && (
                     <button className="ll-btn ghost"
                       onClick={() => {
                         setClaimingId(claimingId === r.id ? null : r.id);

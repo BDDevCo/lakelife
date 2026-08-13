@@ -558,12 +558,20 @@ export async function decideApplication(
   const application = toStay(appRow as unknown as RawReservation);
 
   if (decision === "decline") {
-    const { error } = await admin
+    // A NO-OP IS NOT A SUCCESS. The `.eq("status","applied")` below makes a
+    // stale tap change nothing — which is right — but this then reported
+    // "Application declined." anyway. Two people in the office, or one with
+    // two tabs, and the second is told they did something they did not do.
+    const { data: done, error } = await admin
       .from("lot_reservations")
       .update({ status: "declined", decided_by: user.id, decided_at: new Date().toISOString() })
       .eq("id", reservationId)
-      .eq("status", "applied"); // no-op if someone already decided it
+      .eq("status", "applied")
+      .select("id");
     if (error) return { ok: false, error: "Couldn't record that — try again." };
+    if (!done?.length) {
+      return { ok: false, error: "Somebody already decided that one — refresh to see what happened." };
+    }
     revalidatePath("/park");
     return { ok: true, signal: "Application declined." };
   }
@@ -624,11 +632,12 @@ export async function decideApplication(
   );
   if (!check.ok) return { ok: false, error: decideProblemText(check.problem!) };
 
-  const { error } = await admin
+  const { data: approved, error } = await admin
     .from("lot_reservations")
     .update({ status: "approved", decided_by: user.id, decided_at: new Date().toISOString() })
     .eq("id", reservationId)
-    .eq("status", "applied");
+    .eq("status", "applied")
+    .select("id");
 
   if (error) {
     // 23P01 = the exclusion constraint. Someone approved a conflicting stay
@@ -637,6 +646,11 @@ export async function decideApplication(
       return { ok: false, error: "Someone just took those nights on that lot. Nothing was changed." };
     }
     return { ok: false, error: "Couldn't approve that — try again." };
+  }
+  // Same rule as the decline branch: changing no rows is not an approval, and
+  // "the lot is held for those dates" would be a promise nothing is keeping.
+  if (!approved?.length) {
+    return { ok: false, error: "Somebody already decided that one — refresh to see what happened." };
   }
 
   revalidatePath("/park");

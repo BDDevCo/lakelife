@@ -158,12 +158,22 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const monthSummary: LedgerSummary = summarise(monthRows);
 
   // Older months still open — the part /park/rent cannot see.
-  const arrears: LedgerRow[] = toRows(
+  //
+  // A DISPUTED BILL IS NOT ARREARS. `toRows` already computes state 'disputed'
+  // when a claim is open against a charge, and this filtered on the balance
+  // alone — so "they say they paid and we haven't found it" was being counted
+  // as money to chase, inflating the one figure on the morning screen that is
+  // supposed to mean "go and get this". It is separated out below, where it
+  // reads as what it is: something to settle, not something to pursue.
+  const olderOpen: LedgerRow[] = toRows(
     (charges ?? [])
       .filter((c) => (c.period_month as string) < month && c.status === "open")
       .map(toCharge),
     today, lagDays, claimed,
   ).filter((r) => r.balance > 0);
+
+  const arrears: LedgerRow[] = olderOpen.filter((r) => r.state !== "disputed");
+  const disputedOlder: LedgerRow[] = olderOpen.filter((r) => r.state === "disputed");
 
   // Cash in, month-to-date and today, off received_on.
   //
@@ -208,6 +218,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     monthSummary,
     lagDays,
     arrears,
+    disputedOlder,
     today,
   });
 

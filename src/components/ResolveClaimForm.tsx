@@ -61,6 +61,16 @@ export function ResolveClaimForm({
         {claim.method ? ` by ${claim.method}` : ""}
         {claim.reference ? `, ref ${claim.reference}` : ""}.
         {claim.note ? ` “${claim.note}”` : ""}
+        {/* THE LINE THAT USUALLY EXPLAINS IT. "I paid Ron" — the seller — is
+            the likeliest claim of the takeover month, and this screen could
+            not see it: `paid_to` was collected, written, and selected by
+            nothing. */}
+        {claim.paid_to ? (
+          <>
+            {" "}
+            <b>They say they paid it to {claim.paid_to}.</b>
+          </>
+        ) : ""}
       </p>
 
       <div style={{ display: "grid", gap: 7, marginBottom: 10 }}>

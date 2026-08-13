@@ -412,3 +412,46 @@ describe("a lot is counted once", () => {
     expect(l.main).toBe("1 of 3 lots taken.");
   });
 });
+
+describe("a disputed bill is not arrears", () => {
+  const TODAY2 = "2026-08-13";
+  const empty2 = { billed: 0, collected: 0, outstanding: 0, late: 0, paid: 0, disputed: 0 } as never;
+  const row = (id: string, balance: number, state: string) => ({
+    id, lotNumber: id, renterName: "Someone", periodMonth: "2026-07",
+    dueOn: "2026-07-01", amount: balance, paidTotal: 0,
+    status: "open", balance, state, overdueDays: 43,
+  }) as never;
+
+  it("chases what is owed, and SETTLES what is disputed — separately", () => {
+    // The arrears figure is the one number on the morning screen that means
+    // "go and get this". Money a household says they already handed over does
+    // not belong in it; it belongs in a conversation.
+    const b = moneyBlock({
+      monthToDateCents: 0, todayCents: 0, monthSummary: empty2, lagDays: 3,
+      arrears: [row("Lot 4", 500, "late")],
+      disputedOlder: [row("Lot 9", 450, "disputed")],
+      today: TODAY2,
+    });
+    expect(b.arrearsLine).toContain("$500.00");
+    expect(b.arrearsLine).not.toContain("$950.00");   // never the sum of both
+    expect(b.disputedLine).toContain("$450.00");
+    expect(b.disputedLine).toContain("not arrears");
+  });
+
+  it("stays silent about disputes when there are none", () => {
+    const b = moneyBlock({
+      monthToDateCents: 0, todayCents: 0, monthSummary: empty2, lagDays: 3,
+      arrears: [row("Lot 4", 500, "late")], today: TODAY2,
+    });
+    expect(b.disputedLine).toBeNull();
+  });
+
+  it("A DISPUTE ALONE IS NOT ARREARS AT ALL — no chase line", () => {
+    const b = moneyBlock({
+      monthToDateCents: 0, todayCents: 0, monthSummary: empty2, lagDays: 3,
+      arrears: [], disputedOlder: [row("Lot 9", 450, "disputed")], today: TODAY2,
+    });
+    expect(b.arrearsLine).toBeNull();
+    expect(b.disputedLine).toContain("$450.00");
+  });
+});

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { applyDueRentChangesFor } from "@/lib/rent-changes";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
@@ -195,52 +196,27 @@ export async function recordNotice(
  * Called by the nightly, and available to ops. Per-row, so one failure does not
  * strand the rest.
  */
-export async function applyDueRentChanges(parkId?: string): Promise<{
+/**
+ * The browser-reachable version — AUTHORIZED.
+ *
+ * The engine moved to `src/lib/rent-changes.ts` (server-only). This file
+ * carries "use server", so every export here is a server action any browser
+ * can call with an id it guessed; this one had NO membership check while every
+ * sibling in the file had one, and its `parkId` was optional, so a call with no
+ * argument swept every park in the system.
+ *
+ * A park is now REQUIRED and membership is asserted. The nightly's
+ * all-parks sweep calls the engine directly and is cron-authenticated.
+ */
+export async function applyDueRentChanges(parkId: string): Promise<{
   applied: number; skipped: number; errors: string[];
 }> {
-  const admin = createServiceClient();
-  const today = todayLakeDate();
-
-  let q = admin
-    .from("lot_rent_changes")
-    .select("id, reservation_id, to_amount, effective_on, notice_given_on")
-    .lte("effective_on", today)
-    .is("applied_at", null)
-    .is("cancelled_at", null)
-    .not("notice_given_on", "is", null);
-  if (parkId) q = q.eq("park_id", parkId);
-
-  const { data: due } = await q;
-  const errors: string[] = [];
-  let applied = 0;
-  let skipped = 0;
-
-  for (const c of due ?? []) {
-    const { error: resErr } = await admin
-      .from("lot_reservations")
-      .update({
-        quoted_amount: c.to_amount,
-        // HE set this number, and he set it before anyone confirmed it. A
-        // re-rate is never 'tenant_confirmed' — that has to be earned at the
-        // window, one household at a time.
-        amount_source: "owner_knowledge",
-        amount_source_at: new Date().toISOString(),
-      })
-      .eq("id", c.reservation_id as string);
-
-    if (resErr) { skipped += 1; errors.push(`reservation ${c.reservation_id}`); continue; }
-
-    const { error: chErr } = await admin
-      .from("lot_rent_changes")
-      .update({ applied_at: new Date().toISOString() })
-      .eq("id", c.id as string);
-    if (chErr) { skipped += 1; errors.push(`change ${c.id}`); continue; }
-
-    applied += 1;
+  if (!parkId || !(await assertMyPark(parkId))) {
+    return { applied: 0, skipped: 0, errors: ["not your park"] };
   }
-
-  if (applied > 0) revalidatePath("/park");
-  return { applied, skipped, errors };
+  const res = await applyDueRentChangesFor(parkId);
+  if (res.applied > 0) revalidatePath("/park");
+  return res;
 }
 
 /** Call it off. Only while it has not taken effect. */

@@ -5,7 +5,9 @@ import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeRem
   raiseTripFees,
   tipsCollectedSinceLastNight,
 } from "@/lib/automation";
-import { applyDueRentChanges } from "@/app/park/rerate-actions";
+// The all-parks sweep calls the ENGINE, not the authorized wrapper: this
+// route is cron-authenticated and deliberately has no single park.
+import { applyDueRentChangesFor } from "@/lib/rent-changes";
 
 import { runParkNightly } from "@/lib/park-machine";
 import { sweepDisputeDeadlines } from "@/lib/disputes";
@@ -69,7 +71,7 @@ async function run(req: Request) {
   // Scheduled rent changes that have come due AND were properly served. The
   // database refuses any that weren't, so this can only ever apply the ones
   // with notice on the record.
-  const rentChanges = await step("rentChanges", () => applyDueRentChanges());
+  const rentChanges = await step("rentChanges", () => applyDueRentChangesFor());
   // A visit where no work happened and the customer never picked another day.
   // This PROPOSES a fee onto an ops screen; it never charges one. Charging a
   // card because a crew tapped a button on a doorstep a week ago is not a

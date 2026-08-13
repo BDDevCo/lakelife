@@ -57,6 +57,13 @@ export interface MoneyBlock {
   ledgerLine: string;
   /** Older months still open. The single-month ledger structurally can't see these. */
   arrearsLine: string | null;
+  /**
+   * Old bills somebody is DISPUTING. Deliberately its own line: these used to
+   * be inside the arrears figure, which made "go and chase this" include money
+   * a household says they already handed over. Taking them out of arrears
+   * without saying so would be the opposite mistake — they would vanish.
+   */
+  disputedLine: string | null;
 }
 
 export function moneyBlock(input: {
@@ -64,11 +71,16 @@ export function moneyBlock(input: {
   todayCents: number;
   monthSummary: LedgerSummary;
   lagDays: number;
-  /** Open charges from months BEFORE this one. */
+  /** Open charges from months BEFORE this one, EXCLUDING disputed ones. */
   arrears: readonly LedgerRow[];
+  /** Older open charges with an unanswered "I paid this" against them. */
+  disputedOlder?: readonly LedgerRow[];
   today: string;
 }): MoneyBlock {
-  const { monthToDateCents, todayCents, monthSummary, lagDays, arrears, today } = input;
+  const {
+    monthToDateCents, todayCents, monthSummary, lagDays, arrears,
+    disputedOlder = [], today,
+  } = input;
 
   const headline = monthToDateCents === 0
     ? "Nothing has come in yet this month."
@@ -89,11 +101,22 @@ export function moneyBlock(input: {
       `(${daysBetween(oldest, today)} days).`;
   }
 
+  let disputedLine: string | null = null;
+  if (disputedOlder.length > 0) {
+    const total = disputedOlder.reduce((s2, r) => s2 + r.balance, 0);
+    const n = new Set(disputedOlder.map((r) => r.lotNumber)).size;
+    disputedLine =
+      `${money(total)} from earlier months is disputed — ` +
+      `${n} ${n === 1 ? "household says they" : "households say they"} already paid. ` +
+      `That is a conversation, not arrears.`;
+  }
+
   return {
     headline,
     todayLine,
     ledgerLine: ledgerHeadline(monthSummary, lagDays),
     arrearsLine,
+    disputedLine,
   };
 }
 
