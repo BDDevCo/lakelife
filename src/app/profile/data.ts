@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { decryptGate } from "@/lib/gate";
 
 const ACTIVE_PROPERTY_COOKIE = "ll_active_property";
@@ -103,22 +103,52 @@ export interface PricedService {
  * Load one of the owner's property profiles. Pass a propertyId to target a
  * specific home; otherwise the active (switcher) property is used.
  */
-export async function getFullProfile(propertyId?: string): Promise<FullProfile | null> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
+export async function getFullProfile(
+  propertyId?: string,
+  /**
+   * READ A PROPERTY THE CALLER DOES NOT OWN.
+   *
+   * The default path is owner-scoped: a session client plus
+   * `.eq("owner_id", user.id)`. That is right for every screen — and wrong for
+   * the one server path that needs a profile on somebody else's behalf.
+   *
+   * `submitFlag` calls this to price a crew's correction for the HOMEOWNER'S
+   * message. The caller there is the crew, so the owner filter matched nothing
+   * and it returned `{hasProfile:false}` — a TRUTHY object, so the surrounding
+   * try/catch never fired and nothing was logged. Every owner got the generic
+   * "found something that doesn't match your profile" instead of "8 → 12,
+   * $796 instead of $604, about an hour and a quarter longer", and approved a
+   * reprice having never seen a number.
+   *
+   * Rule 1 is not implicated: the priced string is composed server-side and
+   * sent to the OWNER. It is never returned to the crew's browser.
+   */
+  opts?: { asService?: boolean },
+): Promise<FullProfile | null> {
+  const supabase = opts?.asService ? createServiceClient() : await createClient();
 
-  const targetId = propertyId ?? (await getActivePropertyId());
+  let ownerId: string | null = null;
+  if (!opts?.asService) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return null;
+    ownerId = user.id;
+  }
 
-  const { data: property } = targetId
-    ? await supabase
+  // The service path must be given its target — there is no "active property"
+  // without a session to own one.
+  const targetId = propertyId ?? (opts?.asService ? null : await getActivePropertyId());
+
+  const base = targetId
+    ? supabase
         .from("properties")
         .select("id, address, place_id, park_id, sqft, beds, baths, gate_code_encrypted, lakes(name)")
-        .eq("owner_id", user.id)
         .eq("id", targetId)
-        .maybeSingle()
+    : null;
+
+  const { data: property } = base
+    ? await (ownerId ? base.eq("owner_id", ownerId) : base).maybeSingle()
     : { data: null };
 
   if (!property) {

@@ -349,7 +349,10 @@ export async function submitFlag(
           admin.from("services")
             .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, needs_interior_access")
             .eq("id", job.service_id as string).maybeSingle(),
-          getFullProfile(job.property_id as string),
+          // asService: the caller is the CREW, and the default path is owner-scoped.
+          // Without this it returned {hasProfile:false} — truthy, so no throw,
+          // no log — and every owner got the generic message with no numbers.
+          getFullProfile(job.property_id as string, { asService: true }),
         ]);
         if (rule && profile?.hasProfile) {
           const summary = summariseCorrection(
@@ -416,6 +419,14 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
   if (!job) return { ok: false, error: "That job isn't on your route." };
   if (job.status === "complete" || job.status === "paid") {
     return { ok: false, error: "That job is already closed out." };
+  }
+  // ONE TRIP, ONE RECORD. Two crew on one login — phone and tablet, both with
+  // the route open — could each tap "Nobody's answering" and mint a second
+  // attempt row, a second $35 trip payout, and a second "we couldn't get in"
+  // email to the homeowner. Every other money path in this file uses a
+  // conditional write that exactly one caller wins; this insert did not.
+  if (job.no_show_at) {
+    return { ok: false, error: "Already recorded as a no-show — nothing more to do here." };
   }
 
   const why = reason.trim().slice(0, 300);

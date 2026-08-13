@@ -43,7 +43,7 @@ async function assertOwnerFlag(flagId: string) {
     // ambiguous and PostgREST answers 300 PGRST201 — which supabase-js
     // surfaces as {error, data:null}, i.e. an EMPTY approvals screen with
     // nothing logged. Naming the key is the fix and the documentation.
-    .select("id, status, job_id, proposed_change, at_arrival, crew_can_proceed, crew_cannot_reason, jobs!flags_job_id_fkey(property_id, service_id, properties(owner_id))")
+    .select("id, status, job_id, vendor_id, proposed_change, at_arrival, crew_can_proceed, crew_cannot_reason, jobs!flags_job_id_fkey(property_id, service_id, properties(owner_id))")
     .eq("id", flagId)
     .maybeSingle();
   if (!data) return null;
@@ -271,8 +271,17 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
 
       // Append-only first (0089): the crew made this trip, and rescheduling
       // must not be able to erase that it happened.
+      // VENDOR_ID OR THE CREW IS NEVER PAID. `raiseTripFees` filters
+      // `.not("vendor_id","is",null)`, so an attempt without it is skipped
+      // every night forever, silently — and this is the exact branch 0090
+      // exists for: the crew drove out because OUR profile was wrong.
+      // `recordNoShow` passed it, which is why no-shows worked and
+      // stand-downs did not. It has to come off the FLAG (selected above);
+      // reading it from a field that was never fetched would write undefined
+      // and look identical.
       await admin.from("job_visit_attempts").insert({
         job_id: jobId,
+        vendor_id: (ctx.flag as { vendor_id?: string | null }).vendor_id ?? null,
         attempted_on: today,
         outcome: "stood_down",
         reason: why,
