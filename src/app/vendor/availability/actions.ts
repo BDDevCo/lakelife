@@ -78,16 +78,31 @@ export async function setStorageSettings(input: StorageSettingsInput): Promise<S
 }
 
 /**
- * Add or remove a day from the signed-in vendor's `work_days`. Vendor-only —
- * the RLS policy on `vendors` already scopes the row to this vendor, and the
- * user-session client carries their auth, so no service role is needed.
+ * Add or remove a day from the signed-in vendor's `work_days`.
+ *
+ * THIS WAS BROKEN, AND HAD BEEN SINCE IT SHIPPED. The comment here used to
+ * read "the RLS policy on `vendors` already scopes the row to this vendor …
+ * so no service role is needed", which is half of the requirement. Postgres
+ * needs BOTH a table GRANT and an RLS policy to let a write through, and
+ * `authenticated` holds INSERT, DELETE and SELECT on `vendors` — never UPDATE.
+ * So `vendor_updates_self` permitted a write the grant refused, and every tap
+ * of a work-day chip came back "permission denied for table vendors".
+ *
+ * Found by a post-condition in 0100 asserting that tables written by the
+ * session client still hold their grants: `vendors` failed the assertion, and
+ * the assertion was right.
+ *
+ * Fixed the way the other ~50 tables do it — service role, scoped in code by
+ * `getMyVendorId()`, which is a session read and cannot be spoofed from a
+ * browser. `vendors` therefore needs no client write grant at all, and 0100
+ * takes the leftover INSERT/DELETE away with the rest.
  */
 export async function toggleWorkDay(day: string): Promise<SlotResult> {
   const vendorId = await getMyVendorId();
   if (!vendorId) return { ok: false, error: "This is the vendor area." };
 
-  const supabase = await createClient();
-  const { data: vendor } = await supabase
+  const admin = createServiceClient();
+  const { data: vendor } = await admin
     .from("vendors")
     .select("work_days")
     .eq("id", vendorId)
@@ -98,7 +113,10 @@ export async function toggleWorkDay(day: string): Promise<SlotResult> {
     ? current.filter((d) => d !== day)
     : [...current, day];
 
-  const { error } = await supabase.from("vendors").update({ work_days: next }).eq("id", vendorId);
+  // `.eq("id", vendorId)` is the scope, and vendorId came from the SESSION —
+  // never from an argument — so the service role can only ever reach this
+  // vendor's own row.
+  const { error } = await admin.from("vendors").update({ work_days: next }).eq("id", vendorId);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
