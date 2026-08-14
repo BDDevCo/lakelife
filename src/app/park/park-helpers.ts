@@ -1405,3 +1405,68 @@ export function buildTenantEdit(
 
   return { ok: true, renter: renter as TenantEditResult["renter"], tenancy };
 }
+
+
+/**
+ * A RANGE OF NEW PADS, as labels.
+ *
+ * "22 to 25" is four lots, not a sentence to be parsed at commit time. The
+ * range is expanded here so the screen can show exactly what will be created
+ * before anything is, and so a fat-fingered "22 to 2200" is refused rather
+ * than inserting two thousand rows.
+ */
+export const MAX_LOTS_AT_ONCE = 40;
+
+export function lotLabelRange(
+  from: string,
+  to: string,
+  prefix = "LOT",
+): { labels: string[]; error?: string } {
+  const a = Number(String(from).replace(/\D/g, ""));
+  const b = Number(String(to ?? from).replace(/\D/g, ""));
+  if (!Number.isFinite(a) || a <= 0) return { labels: [], error: "Give the first lot a number." };
+  const end = Number.isFinite(b) && b > 0 ? b : a;
+  if (end < a) return { labels: [], error: "The last number is lower than the first." };
+  const n = end - a + 1;
+  if (n > MAX_LOTS_AT_ONCE) {
+    return { labels: [], error: `That is ${n} lots. Add them in batches of ${MAX_LOTS_AT_ONCE} or fewer.` };
+  }
+  const labels: string[] = [];
+  for (let i = a; i <= end; i++) labels.push(`${prefix}${i}`);
+  return { labels };
+}
+
+/**
+ * WHAT BRINGING A LOT ONLINE DOES TO EVERYBODY'S BILL.
+ *
+ * A new RENTABLE lot enlarges the denominator, so every household's share of a
+ * shared cost DROPS — and the park picks up the new lot's share until somebody
+ * is on it. That is correct, and it is also a real monthly cost of holding
+ * empty inventory, so he should see it before he taps rather than discover it
+ * on the next statement.
+ *
+ * Returns null when there is nothing to compare against.
+ */
+export function denominatorImpact(input: {
+  monthlyShared: number;
+  /** Lots the cost is DIVIDED BY today. */
+  rentableNow: number;
+  /** Lots that actually have somebody to bill. Never more than rentableNow. */
+  payersNow: number;
+  adding: number;
+}): { eachNow: number; eachAfter: number; carryNow: number; carryAfter: number } | null {
+  const { monthlyShared, rentableNow, payersNow, adding } = input;
+  if (!(monthlyShared > 0) || rentableNow <= 0 || adding <= 0) return null;
+  if (payersNow < 0 || payersNow > rentableNow) return null;
+
+  const floor2 = (n: number) => Math.floor(n * 100) / 100;
+  const eachNow = floor2(monthlyShared / rentableNow);
+  // New pads start EMPTY, so the payer count does not move — only the divisor.
+  const eachAfter = floor2(monthlyShared / (rentableNow + adding));
+  return {
+    eachNow,
+    eachAfter,
+    carryNow: Math.round((monthlyShared - eachNow * payersNow) * 100) / 100,
+    carryAfter: Math.round((monthlyShared - eachAfter * payersNow) * 100) / 100,
+  };
+}

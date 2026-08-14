@@ -12,7 +12,7 @@ import {
   decideProblemText, toStay,
   buildLotRange, planBulkRates, buildTenant, buildTenantEdit, buildParkDialsRow,
   type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
-  type TenantInput, type TenantEditInput, type ParkDialsInput,
+  type TenantInput, type TenantEditInput, type ParkDialsInput, lotLabelRange, SITE_DEFAULTS,
 } from "./park-helpers";
 
 /**
@@ -962,4 +962,85 @@ export async function setLotLifecycle(
     retired: `Lot ${lot.lot_number} is retired. Its history and money stay put.`,
   };
   return { ok: true, signal: said[lifecycle] };
+}
+
+// ------------------------------------------------------ growing the park ----
+
+/**
+ * ADD LOTS AS THEY COME ONLINE.
+ *
+ * Brendon: "that should be apart of the park protal and park set up where I
+ * can increase lots and add RV slots as they com online where the back end
+ * should adjust accordingly for proper allocation of expenses."
+ *
+ * The back end already does. `allocateCost` counts rentable lots at the moment
+ * of each split, and 0112 snapshots the denominator onto the cost — so a lot
+ * added today changes every FUTURE split and rewrites no closed month. This is
+ * the missing half: nothing could create a lot outside the importer, so a park
+ * could only ever be as big as the seller's roll.
+ *
+ * NEW LOTS DEFAULT TO `planned`, NOT `live`. A pad that is poured but has no
+ * pedestal is not rentable, and making it rentable is what moves everybody's
+ * utility share — so that is a second, deliberate tap (`setLotLifecycle`)
+ * rather than a side effect of typing a number.
+ */
+export async function addLots(
+  parkId: string,
+  input: {
+    from: string;
+    to?: string;
+    siteType: string;
+    /** True only when the pads are finished and rentable today. */
+    liveNow?: boolean;
+    rentalMode?: "long_term" | "short_term";
+  },
+): Promise<ParkResult & { created?: number; skipped?: string[] }> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const { labels, error } = lotLabelRange(input.from, input.to ?? input.from);
+  if (error) return { ok: false, error };
+  if (labels.length === 0) return { ok: false, error: "Nothing to add." };
+
+  const admin = createServiceClient();
+
+  // Never renumber or overwrite an existing pad. A lot number is what a
+  // resident, a crew and a utility all use to find the place.
+  const { data: have } = await admin
+    .from("park_lots").select("lot_number").eq("park_id", parkId);
+  const existing = new Set((have ?? []).map((l) => String(l.lot_number).toLowerCase()));
+  const fresh = labels.filter((l) => !existing.has(l.toLowerCase()));
+  const skipped = labels.filter((l) => existing.has(l.toLowerCase()));
+  if (fresh.length === 0) {
+    return { ok: false, error: "Those lot numbers already exist.", skipped };
+  }
+
+  const defaults = SITE_DEFAULTS[input.siteType] ?? { hasWater: true, hasSewer: false };
+  const { error: insErr, data: made } = await admin
+    .from("park_lots")
+    .insert(fresh.map((label) => ({
+      park_id: parkId,
+      lot_number: label,
+      site_type: input.siteType,
+      has_water: defaults.hasWater,
+      has_sewer: defaults.hasSewer,
+      rental_mode: input.rentalMode ?? "long_term",
+      // See the header: rentable is a separate decision, because it is the one
+      // that moves every household's share of a shared cost.
+      lifecycle: input.liveNow ? "live" : "planned",
+      active: Boolean(input.liveNow),
+    })))
+    .select("id");
+  if (insErr) return { ok: false, error: `Couldn't add those — ${insErr.message}` };
+
+  revalidatePath("/park/lots");
+  revalidatePath("/park");
+  const n = made?.length ?? fresh.length;
+  return {
+    ok: true,
+    created: n,
+    skipped,
+    signal: input.liveNow
+      ? `${n} ${n === 1 ? "lot" : "lots"} added and rentable — they now share the park's costs.`
+      : `${n} ${n === 1 ? "lot" : "lots"} added as not-yet-built. Mark one live when its pedestal is in.`,
+  };
 }

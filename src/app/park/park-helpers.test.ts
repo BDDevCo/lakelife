@@ -7,7 +7,7 @@ import {
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
   buildTenantEdit,
   type TenantEditInput,
-  parseLotSeason,
+  parseLotSeason, lotLabelRange, denominatorImpact,
 } from "./park-helpers";
 import { parseDaterange, toDaterange, type Lot } from "@/lib/parks";
 
@@ -1063,5 +1063,64 @@ describe("how to reach a household — the thing that could not be entered", () 
     const r = buildTenantEdit({ ...base, mobile: "2605550134", contactPref: "sms" }, current, "2026-08-12");
     expect(r.ok).toBe(true);
     expect("contact_pref" in r.renter!).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GROWING THE PARK.
+//
+// The allocator counts rentable lots at the moment of each split, so adding a
+// lot adjusts every future split by itself. What it cannot do is tell him what
+// that costs while the new pads sit empty — which is the number he needs
+// BEFORE he taps, not on next month's statement.
+// ---------------------------------------------------------------------------
+describe("adding lots as they come online", () => {
+  it("expands a range into the labels that will be created", () => {
+    expect(lotLabelRange("22", "25").labels).toEqual(["LOT22","LOT23","LOT24","LOT25"]);
+  });
+
+  it("treats a single lot as a range of one", () => {
+    expect(lotLabelRange("22", "22").labels).toEqual(["LOT22"]);
+    expect(lotLabelRange("7", "").labels).toEqual(["LOT7"]);
+  });
+
+  it("refuses a fat-fingered range rather than inserting two thousand rows", () => {
+    const r = lotLabelRange("22", "2200");
+    expect(r.labels).toEqual([]);
+    expect(r.error).toMatch(/batches of 40/i);
+  });
+
+  it("refuses a backwards range", () => {
+    expect(lotLabelRange("25", "22").error).toMatch(/lower than the first/i);
+  });
+
+  it("reads a number out of a typed label", () => {
+    expect(lotLabelRange("Lot 22", "Lot 24").labels).toEqual(["LOT22","LOT23","LOT24"]);
+  });
+});
+
+describe("what bringing a lot online costs", () => {
+  // The Haven: $1,140 of shared cost, 21 rentable, 19 paying. Bringing the
+  // four proforma pads online empty drops each household's share and hands the
+  // park the difference — the real monthly cost of holding empty inventory.
+  it("shows the share falling and the park's carry rising", () => {
+    const i = denominatorImpact({ monthlyShared: 1140, rentableNow: 21, payersNow: 19, adding: 4 })!;
+    expect(i.eachNow).toBe(54.28);
+    expect(i.eachAfter).toBe(45.6);
+    expect(i.carryNow).toBeCloseTo(108.68, 2);
+    expect(i.carryAfter).toBeCloseTo(273.6, 2);
+  });
+
+  it("refuses a payer count larger than the divisor", () => {
+    // Would mean allocating more than was paid — the thing 0112 refuses.
+    expect(denominatorImpact({
+      monthlyShared: 1140, rentableNow: 5, payersNow: 9, adding: 1,
+    })).toBeNull();
+  });
+
+  it("says nothing rather than inventing a comparison", () => {
+    expect(denominatorImpact({ monthlyShared: 0, rentableNow: 21, payersNow: 19, adding: 4 })).toBeNull();
+    expect(denominatorImpact({ monthlyShared: 1140, rentableNow: 0, payersNow: 0, adding: 4 })).toBeNull();
+    expect(denominatorImpact({ monthlyShared: 1140, rentableNow: 21, payersNow: 19, adding: 0 })).toBeNull();
   });
 });
