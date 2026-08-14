@@ -67,6 +67,61 @@ describe("which days a guest is offered", () => {
     expect(JSON.stringify(states)).not.toMatch(/lot|Lot/i);
   });
 
+  it("says YOU have it, not 'someone', about her own day", () => {
+    // The page looked like it had lost her booking: she tapped Saturday, and
+    // Saturday came back "Someone has it that day."
+    const states = offer({
+      held: [{ unitId: "u1", during: { start: "2026-07-15", end: "2026-07-16" }, mine: true }],
+    });
+    const d = states.find((x) => x.day === "2026-07-15")!;
+    expect(d.open).toBe(false);
+    expect(d.open === false && d.why).toBe("You have it.");
+    expect(d.open === false && d.mine).toBe(true);
+  });
+
+  it("still keeps another guest anonymous", () => {
+    const states = offer({
+      held: [{ unitId: "u1", during: { start: "2026-07-15", end: "2026-07-16" }, mine: false }],
+    });
+    const d = states.find((x) => x.day === "2026-07-15")!;
+    expect(d.open === false && d.why).toBe("Someone has it that day.");
+  });
+
+  it("stops offering days once she has her allowance", () => {
+    // FOUND ON SCREEN. She held two of a two-day cap and Monday still said
+    // "Take it" — a button for something the database would always refuse.
+    const states = offer({
+      amenity: { ...BOAT, maxDays: 2 },
+      held: [
+        { unitId: "u1", during: { start: "2026-07-14", end: "2026-07-15" }, mine: true },
+        { unitId: "u1", during: { start: "2026-07-15", end: "2026-07-16" }, mine: true },
+      ],
+    });
+    const free = states.find((d) => d.day === "2026-07-16")!;
+    expect(free.open).toBe(false);
+    expect(free.open === false && free.why).toContain("give one back to swap");
+  });
+
+  it("keeps offering while she is under it", () => {
+    const states = offer({
+      amenity: { ...BOAT, maxDays: 2 },
+      held: [{ unitId: "u1", during: { start: "2026-07-14", end: "2026-07-15" }, mine: true }],
+    });
+    expect(states.filter((d) => d.open).map((d) => d.day))
+      .toEqual(["2026-07-15", "2026-07-16"]);
+  });
+
+  it("does not count another guest's days against her allowance", () => {
+    const states = offer({
+      amenity: { ...BOAT, maxDays: 2 },
+      held: [
+        { unitId: "u1", during: { start: "2026-07-14", end: "2026-07-15" }, mine: false },
+        { unitId: "u1", during: { start: "2026-07-15", end: "2026-07-16" }, mine: false },
+      ],
+    });
+    expect(states.find((d) => d.day === "2026-07-16")!.open).toBe(true);
+  });
+
   it("ignores a hold on a different unit", () => {
     // Four kayaks: somebody having kayak 2 says nothing about kayak 1.
     const states = offer({

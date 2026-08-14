@@ -44,6 +44,9 @@ export interface AmenityUnit {
 export interface HeldWindow {
   unitId: string;
   during: DateRange;
+  /** True when the asker holds it. "Someone has it" about your own boat day
+   *  reads as a refusal, and it made the page look like it had lost her. */
+  mine?: boolean;
 }
 
 /**
@@ -87,7 +90,7 @@ export function dayWindow(iso: string): DateRange {
 
 export type DayState =
   | { day: string; open: true }
-  | { day: string; open: false; why: string };
+  | { day: string; open: false; why: string; mine?: boolean };
 
 /**
  * WHICH DAYS OF THIS STAY THIS PERSON CAN ACTUALLY HAVE — and, for the rest, a
@@ -117,6 +120,15 @@ export function offerDays(opts: {
 }): DayState[] {
   const { amenity, unit, stay, held, today, parkSeason, isShortStay } = opts;
 
+  // HOW MUCH OF HER ALLOWANCE IS GONE. `max_days` is counted across everything
+  // this party already holds on this unit (0120), because a two-day cap a guest
+  // can defeat with four separate taps is not a cap. The database enforces it;
+  // this stops the page offering days it knows will be refused.
+  const heldDays = held
+    .filter((h) => h.unitId === unit.id && h.mine)
+    .reduce((n, h) => n + daysIn(h.during).length, 0);
+  const atCap = amenity.maxDays != null && heldDays >= amenity.maxDays;
+
   // WHOLE-AMENITY REFUSALS come first and answer for every day at once. Saying
   // "someone has it" for a boat that is out of the water would be a lie about
   // the wrong thing.
@@ -140,7 +152,17 @@ export function offerDays(opts: {
     if (!parkOpenFor(season, w)) {
       return { day, open: false, why: "It's out of the water then." };
     }
-    if (mine.some((h) => overlaps(w, h.during))) {
+    const hit = mine.find((h) => overlaps(w, h.during));
+    if (!hit && atCap) {
+      return {
+        day, open: false,
+        why: `You've got your ${amenity.maxDays} ${amenity.maxDays === 1 ? "day" : "days"} — give one back to swap.`,
+      };
+    }
+    if (hit) {
+      // HERS READS DIFFERENTLY. Telling somebody "someone has it" about the day
+      // she just booked makes the page look like it lost her booking.
+      if (hit.mine) return { day, open: false, why: "You have it.", mine: true };
       // Deliberately not "booked by Lot 7". Who has it is the park's business
       // and the next guest's curiosity, not their right.
       return { day, open: false, why: "Someone has it that day." };

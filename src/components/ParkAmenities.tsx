@@ -220,8 +220,8 @@ function AmenityCard({
                 display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap",
                 padding: "8px 0", borderTop: "1px solid var(--line)", fontSize: 13,
               }}>
-                <span style={{ fontWeight: 700, minWidth: 130 }}>
-                  {h.from}{h.to > nextDay(h.from) ? ` → ${prevDay(h.to)}` : ""}
+                <span style={{ fontWeight: 700, minWidth: 150 }}>
+                  {pretty(h.from)}{h.to > nextDay(h.from) ? ` → ${pretty(prevDay(h.to))}` : ""}
                 </span>
                 <span className="mut" style={{ minWidth: 150 }}>
                   {h.status === "blackout"
@@ -274,6 +274,17 @@ function AmenityCard({
       />
     </section>
   );
+}
+
+/** A date a person reads is "Sat, Aug 15" — never "2026-08-15". The guest's
+ *  page has always said it this way; the owner's was still printing the
+ *  database's format at him. */
+function pretty(iso: string): string {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
+    weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
+  });
 }
 
 function nextDay(iso: string) {
