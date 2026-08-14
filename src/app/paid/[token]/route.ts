@@ -36,7 +36,13 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
   const line =
     `${view.parkName} recorded $${view.amount.toFixed(2)} from lot ${view.lotNumber}, ` +
     `paid by ${view.method}${view.reference ? ` ${view.reference}` : ""} ` +
-    `on ${pretty(view.receivedOn)}. Receipt ${view.ref}.`;
+    `on ${pretty(view.receivedOn)}. Receipt ${view.ref}.` +
+    // ASKING "DOES THIS MATCH?" AGAINST THE WRONG NUMBER MANUFACTURES A
+    // DISPUTE. Their bank shows rent + fee; this page showed rent alone, so a
+    // careful resident comparing the two would honestly answer "no".
+    (view.fee && view.fee > 0
+      ? ` A card fee of $${view.fee.toFixed(2)} was charged on top, so $${(view.amount + view.fee).toFixed(2)} left your card. The fee isn't rent and isn't credited against your bill.`
+      : "");
 
   if (view.alreadyConfirmedAt) {
     return htmlPage("Already confirmed 🌊", `${line}\n\nYou've confirmed this one — nothing more to do.`);

@@ -13,6 +13,7 @@ function receipt(over: Partial<Receipt> = {}): Receipt {
     paymentId: "p1",
     chargeId: "c1",
     amountCents: 45500,
+    feeCents: 0,
     method: "check",
     reference: "1042",
     receivedOn: "2026-07-03",
@@ -350,5 +351,85 @@ describe("cash that came in but is not rent received", () => {
 
   it("and when the caller doesn't pass them at all", () => {
     expect(exclusionLines(base).some((l) => /NOT in the total above/.test(l))).toBe(false);
+  });
+});
+
+
+describe("the card fee on a statement", () => {
+  /**
+   * 0109 wrote `park_payments.fee_amount` and NOTHING read it. A resident's
+   * card was debited rent + fee while every screen, receipt and CPA file showed
+   * rent alone — so the processor's deposit and the park's books disagreed by
+   * exactly the fee, with nothing on any page to explain the gap.
+   *
+   * The fee is real money that arrived and is NOT the park's income. These pin
+   * the shape that makes both of those true at once.
+   */
+  const period = monthPeriod("2026-07", TODAY)!;
+  const card = (over: Partial<Receipt> = {}) =>
+    receipt({ method: "card", feeCents: 1365, ...over });
+
+  it("keeps the fee out of the rent total", () => {
+    const s = summariseReceipts([card()], period);
+    expect(s.totalCents).toBe(45500);
+    expect(s.cardFeesCents).toBe(1365);
+  });
+
+  it("keeps the by-method rows summing to the total", () => {
+    // The property that makes a statement reconcilable against itself. If a fee
+    // leaked into a bucket, the breakdown would exceed the headline and an
+    // accountant would be the one to find it.
+    const s = summariseReceipts([card(), receipt({ paymentId: "p2", chargeId: "c2" })], period);
+    const bucketed = s.byMethod.reduce((n, b) => n + b.cents, 0);
+    expect(bucketed).toBe(s.totalCents);
+    expect(s.cardFeesCents).toBe(1365);
+  });
+
+  it("does not let a fee make a household look overpaid", () => {
+    // Overpayment is paid-vs-billed. A fee is neither.
+    const s = summariseReceipts([card()], period);
+    expect(s.overpaidCents).toBe(0);
+  });
+
+  it("does not count the fee on a payment that was reversed", () => {
+    // A bounced card payment took the fee back with it.
+    const s = summariseReceipts(
+      [card({ reversedAt: "2026-07-09", reversedReason: "chargeback" })],
+      period,
+    );
+    expect(s.totalCents).toBe(0);
+    expect(s.cardFeesCents).toBe(0);
+    expect(s.reversed).toHaveLength(1);
+  });
+
+  it("carries both figures into the CSV so the bank can be reconciled", () => {
+    const csv = receiptsCsv([card()], { parkName: "The Haven", generatedAt: "2026-08-11T12:00:00Z" });
+    const [head, row] = csv.split("\r\n");
+    expect(head).toContain("Card fee");
+    expect(head).toContain("Charged total");
+    expect(row).toContain("455.00");   // rent — the park's income
+    expect(row).toContain("13.65");    // the fee — not the park's income
+    expect(row).toContain("468.65");   // what actually left the resident's card
+  });
+
+  it("says out loud that the bank deposit will be bigger than the total", () => {
+    const said = exclusionLines({
+      recordsBeginOn: "2026-01-01", lagDays: 0, unbilledFeeLabels: [],
+      anyMissingPayerName: false, cardFeesReceivedCents: 1365,
+    });
+    const line = said.find((l) => l.includes("card fees"));
+    expect(line).toBeTruthy();
+    expect(line).toContain("13.65");
+    expect(line).toContain("not your income");
+  });
+
+  it("says nothing at all when no card fee was taken", () => {
+    // A statement that carries a disclaimer about money nobody paid is noise,
+    // and noise is how a reader learns to skip the notes.
+    const said = exclusionLines({
+      recordsBeginOn: "2026-01-01", lagDays: 0, unbilledFeeLabels: [],
+      anyMissingPayerName: false, cardFeesReceivedCents: 0,
+    });
+    expect(said.some((l) => l.includes("card fees"))).toBe(false);
   });
 });

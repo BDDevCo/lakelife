@@ -1470,3 +1470,98 @@ export function denominatorImpact(input: {
     carryAfter: Math.round((monthlyShared - eachAfter * payersNow) * 100) / 100,
   };
 }
+
+
+// ------------------------------------------------ taking rent online ----
+
+/**
+ * THE ONLINE-RENT SWITCH AND WHAT A CARD COSTS.
+ *
+ * `parks.accepts_online_rent` (0108) and `parks.card_fee_pct` (0109) have been
+ * read by `payRent` and by the renter's portal since the day they were added,
+ * and nothing has ever written either one. The switch defaults FALSE, `payRent`
+ * refuses when it is false, and there was no editor — so online rent was off
+ * for every park, permanently, and the only reason the scratch fixture worked is
+ * that I set the flag by hand in SQL.
+ *
+ * Kept out of `buildParkDialsRow` on purpose. Everything in there is a number
+ * that shapes a ledger; this one moves money off a resident's card, it is
+ * owner-only, and it carries a live legal hazard (see below). It deserves its
+ * own decision, not a slot in a grid of six.
+ */
+export interface OnlineRentInput {
+  /** "" is not a state here — the switch is a real boolean. */
+  accepting: boolean;
+  /** Percent added to a CARD payment. "" means "don't surcharge at all". */
+  cardFeePct: string;
+}
+
+export interface OnlineRentResult {
+  ok: boolean;
+  error?: string;
+  row?: { accepts_online_rent: boolean; card_fee_pct: number };
+}
+
+/** Visa's surcharge ceiling, and therefore everyone's — 0116 moved the CHECK. */
+export const CARD_FEE_CEILING = 3;
+
+export function buildOnlineRentRow(input: OnlineRentInput): OnlineRentResult {
+  const raw = input.cardFeePct.trim().replace(/[%\s]/g, "");
+
+  // Blank means zero, not "leave it alone". Unlike the dials, there is no
+  // useful default to fall back to: a fee is either charged or it is not, and
+  // an owner who clears the box has told us which.
+  const pct = raw === "" ? 0 : Number(raw);
+  if (!Number.isFinite(pct)) {
+    return { ok: false, error: "The card fee needs to be a percentage — or blank for none." };
+  }
+  if (pct < 0) return { ok: false, error: "A card fee can't be negative." };
+  if (pct > CARD_FEE_CEILING) {
+    return {
+      ok: false,
+      error: `${pct}% is above what the card networks allow. Visa caps a surcharge at ${CARD_FEE_CEILING}%, and you can't tell which network a card rides before you charge it.`,
+    };
+  }
+
+  // Two decimals: the column is numeric(4,2) and would round anyway. Rounding
+  // here means the number he is shown back is the number that was stored.
+  //
+  // The epsilon is not superstition. `1.005` is really 1.00499999999999989 in a
+  // float, so the plain `Math.round(pct * 100) / 100` gives 1.00 where Postgres
+  // numeric — which rounds the exact decimal — gives 1.01. Nudging first makes
+  // JS agree with the column, so the value cannot change on its way to disk.
+  return {
+    ok: true,
+    row: {
+      accepts_online_rent: input.accepting,
+      card_fee_pct: Math.round((pct + Number.EPSILON) * 100) / 100,
+    },
+  };
+}
+
+/**
+ * WHAT TURNING THIS ON ACTUALLY EXPOSES HIM TO, in his own words.
+ *
+ * Not a disclaimer — a list of things that are true right now and that he is
+ * the one on the hook for. Surcharging a DEBIT card is forbidden at any rate in
+ * every state, and `payment_methods` records a brand but not a funding type, so
+ * a fee above zero cannot currently be applied safely. Saying so is the whole
+ * point; a switch that hides this is a switch that gets somebody fined.
+ */
+export function onlineRentCautions(feePct: number): string[] {
+  const out: string[] = [];
+  if (feePct > 0) {
+    out.push(
+      `We can't yet tell a debit card from a credit card — the processor has to tell us, and it doesn't yet. Surcharging debit is against network rules at any rate, so while the fee is ${feePct}% some residents would be charged something they shouldn't be. Set it to 0 until that's answered.`,
+    );
+    out.push(
+      "Surcharging also means registering with the networks about 30 days ahead. The screens disclose the fee before and after payment; the registration is yours to file.",
+    );
+  } else {
+    out.push(
+      "No card fee — a card payment costs you roughly 3% and you're absorbing it. That's a legitimate choice and the safest one until the processor can tell a debit card from a credit card.",
+    );
+  }
+  out.push("Bank transfer is always free to the resident and costs you cents. It's the rail to push people toward.");
+  return out;
+}

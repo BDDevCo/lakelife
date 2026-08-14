@@ -62,8 +62,22 @@ export interface ChargeLine {
 export interface Receipt {
   paymentId: string;
   chargeId: string;
-  /** Integer cents. */
+  /** Integer cents. RENT ONLY — never includes the card fee below. */
   amountCents: number;
+  /**
+   * THE CARD CONVENIENCE FEE CHARGED ON TOP, in cents. 0 for every other rail.
+   *
+   * Required, not optional: 0109 wrote this column and NOTHING read it, so a
+   * resident's card was debited `amount + fee` while every screen, receipt and
+   * CPA statement showed `amount`. The processor deposits one number and the
+   * books carried another. Making it required means no future constructor can
+   * quietly drop it again.
+   *
+   * It is never added to amountCents, never bucketed by method, and never
+   * counted toward what a household has paid — it is not rent and it is not the
+   * park's money. It is reported BESIDE the total so the file reconciles.
+   */
+  feeCents: number;
   method: Method;
   reference: string | null;
   /** YYYY-MM-DD — the day the office took the money. THE cash date. */
@@ -161,6 +175,12 @@ export interface Bucket {
 export interface ReceiptSummary {
   totalCents: number;
   count: number;
+  /**
+   * CARD FEES COLLECTED IN THIS WINDOW, in cents. Deliberately outside
+   * `totalCents` and outside every bucket — the by-method rows must still sum
+   * to the total, or the statement stops reconciling against itself.
+   */
+  cardFeesCents: number;
   byMethod: Bucket[];
   byMonth: Bucket[];
   byHousehold: Bucket[];
@@ -215,6 +235,7 @@ export function summariseReceipts(all: readonly Receipt[], period: Period): Rece
   const againstVoided: Receipt[] = [];
 
   let totalCents = 0;
+  let cardFeesCents = 0;
   let otherMonthCount = 0;
   let overpaidCents = 0;
   let firstOn: string | null = null;
@@ -226,6 +247,9 @@ export function summariseReceipts(all: readonly Receipt[], period: Period): Rece
 
   for (const r of rows) {
     totalCents += r.amountCents;
+    // Accumulated here, after reversed rows were partitioned out above: a fee
+    // on a bounced payment came back too. Kept out of totalCents on purpose.
+    cardFeesCents += r.feeCents;
     bump(byMethod, r.method, METHOD_LABEL[r.method] ?? r.method, r.amountCents);
     bump(byMonth, r.receivedOn.slice(0, 7), r.receivedOn.slice(0, 7), r.amountCents);
     bump(byHousehold, r.lotNumber, `Lot ${r.lotNumber}`, r.amountCents);
@@ -247,6 +271,7 @@ export function summariseReceipts(all: readonly Receipt[], period: Period): Rece
 
   return {
     totalCents,
+    cardFeesCents,
     count: rows.length,
     byMethod: METHOD_ORDER.map((m) => byMethod.get(m)).filter((b): b is Bucket => !!b),
     byMonth: [...byMonth.values()].sort((a, b) => a.key.localeCompare(b.key)),
@@ -320,7 +345,7 @@ export function linesCell(lines: readonly ChargeLine[]): string {
 
 const HEADERS = [
   "Park", "Generated at", "Basis",
-  "Date received", "Amount", "Method", "Reference",
+  "Date received", "Amount", "Card fee", "Charged total", "Method", "Reference",
   "Lot", "Payer", "Bill month", "Bill total", "Bill status", "Bill breakdown",
   "Payment ID", "Charge ID",
 ] as const;
@@ -345,6 +370,11 @@ export function receiptsCsv(
       csvText("cash"),
       csvText(r.receivedOn),
       csvText(decimal(r.amountCents)),
+      // Both, because an accountant reconciling to a bank statement needs the
+      // figure that actually left the resident's card, and the park's income
+      // needs the figure that did not include the fee.
+      csvText(decimal(r.feeCents)),
+      csvText(decimal(r.amountCents + r.feeCents)),
       csvText(METHOD_LABEL[r.method] ?? r.method),
       csvText(r.reference),
       csvText(r.lotNumber),
@@ -385,6 +415,14 @@ export interface ExclusionContext {
    */
   depositsReceivedCents?: number;
   onAccountReceivedCents?: number;
+  /**
+   * CARD FEES COLLECTED, in cents. Money that hit the processor on top of the
+   * rent and is not the park's income — it covers the cost of the rail. Named
+   * for the same reason deposits are: without it, this statement cannot be
+   * reconciled against a bank deposit, and the person who notices is an
+   * accountant a year later.
+   */
+  cardFeesReceivedCents?: number;
 }
 
 /**
@@ -416,6 +454,14 @@ export function exclusionLines(ctx: ExclusionContext): string[] {
     lines.push(
       `Also received in this period, and NOT in the total above: ${bits.join(" and ")}. ` +
       `It reached the bank; it just isn't rent yet.`,
+    );
+  }
+  const fees = ctx.cardFeesReceivedCents ?? 0;
+  if (fees > 0) {
+    lines.push(
+      `Residents also paid $${(fees / 100).toFixed(2)} in card fees on top of their rent. ` +
+      `That is NOT in the total above and it is not your income — it covers what the card costs. ` +
+      `Your bank deposits will be higher than this total by that amount.`,
     );
   }
   if (ctx.lagDays > 0) {

@@ -8,6 +8,7 @@ import {
   buildTenantEdit,
   type TenantEditInput,
   parseLotSeason, lotLabelRange, denominatorImpact,
+  buildOnlineRentRow, onlineRentCautions,
 } from "./park-helpers";
 import { parseDaterange, toDaterange, type Lot } from "@/lib/parks";
 
@@ -1122,5 +1123,76 @@ describe("what bringing a lot online costs", () => {
     expect(denominatorImpact({ monthlyShared: 0, rentableNow: 21, payersNow: 19, adding: 4 })).toBeNull();
     expect(denominatorImpact({ monthlyShared: 1140, rentableNow: 0, payersNow: 0, adding: 4 })).toBeNull();
     expect(denominatorImpact({ monthlyShared: 1140, rentableNow: 21, payersNow: 19, adding: 0 })).toBeNull();
+  });
+});
+
+describe("taking rent online", () => {
+  /**
+   * Both columns were read since 0108/0109 and written by nothing, so online
+   * rent was off for every park with no way to turn it on. These pin the
+   * validator that now stands between the switch and the database.
+   */
+  it("turns the switch on with no fee at all", () => {
+    const r = buildOnlineRentRow({ accepting: true, cardFeePct: "" });
+    expect(r.ok).toBe(true);
+    expect(r.row).toEqual({ accepts_online_rent: true, card_fee_pct: 0 });
+  });
+
+  it("reads a blank fee as zero, not as 'leave it alone'", () => {
+    // Unlike the dials, where clearing a box keeps a NOT NULL default: a fee is
+    // either charged or it is not, and an owner who clears it has said which.
+    const r = buildOnlineRentRow({ accepting: true, cardFeePct: "   " });
+    expect(r.row?.card_fee_pct).toBe(0);
+  });
+
+  it("accepts the ceiling and refuses a hair above it", () => {
+    expect(buildOnlineRentRow({ accepting: true, cardFeePct: "3" }).ok).toBe(true);
+    const over = buildOnlineRentRow({ accepting: true, cardFeePct: "3.01" });
+    expect(over.ok).toBe(false);
+    expect(over.error).toContain("Visa");
+  });
+
+  it("refuses the 4% that used to be the default", () => {
+    // 0109 shipped 4.00 as the default for every park because it was Brendon's
+    // preference for The Haven. 0116 moved the ceiling; this is the code half.
+    const r = buildOnlineRentRow({ accepting: true, cardFeePct: "4" });
+    expect(r.ok).toBe(false);
+  });
+
+  it("tolerates a typed percent sign and stray spaces", () => {
+    expect(buildOnlineRentRow({ accepting: true, cardFeePct: " 2.5 % " }).row?.card_fee_pct).toBe(2.5);
+  });
+
+  it("refuses a negative fee and a non-number", () => {
+    expect(buildOnlineRentRow({ accepting: true, cardFeePct: "-1" }).ok).toBe(false);
+    expect(buildOnlineRentRow({ accepting: true, cardFeePct: "three" }).ok).toBe(false);
+  });
+
+  it("rounds the way the numeric(4,2) column does, not the way a float does", () => {
+    // Found by this test failing: `1.005` is 1.00499999999999989 in a float, so
+    // a plain Math.round gave 1.00 while Postgres would have stored 1.01. The
+    // value must not change on its way to disk.
+    expect(buildOnlineRentRow({ accepting: true, cardFeePct: "2.999" }).row?.card_fee_pct).toBe(3);
+    expect(buildOnlineRentRow({ accepting: true, cardFeePct: "1.005" }).row?.card_fee_pct).toBe(1.01);
+    expect(buildOnlineRentRow({ accepting: true, cardFeePct: "0.115" }).row?.card_fee_pct).toBe(0.12);
+  });
+
+  it("never rounds its way past the ceiling", () => {
+    // 3.001 must be refused outright rather than quietly rounded down to a
+    // legal 3.00 — he asked for something the networks forbid and should be
+    // told so, not silently corrected.
+    expect(buildOnlineRentRow({ accepting: true, cardFeePct: "3.001" }).ok).toBe(false);
+  });
+
+  it("can be switched off while keeping the rate on file", () => {
+    const r = buildOnlineRentRow({ accepting: false, cardFeePct: "3" });
+    expect(r.row).toEqual({ accepts_online_rent: false, card_fee_pct: 3 });
+  });
+
+  it("warns about debit cards whenever a fee is charged, and not when it isn't", () => {
+    // The hazard is real today: payment_methods records a brand but not a
+    // funding type, and surcharging debit is forbidden at any rate.
+    expect(onlineRentCautions(3).some((c) => c.includes("debit"))).toBe(true);
+    expect(onlineRentCautions(0).some((c) => c.includes("absorbing"))).toBe(true);
   });
 });

@@ -364,7 +364,9 @@ export async function getHeldMoney(parkId: string): Promise<{
   const admin = createServiceClient();
   // Two reads, each matching one of 0102's partial indexes, rather than one
   // read of every payment the park has ever taken filtered in JavaScript.
-  const cols = "id, renter_id, amount, method, received_on, reference, receipt_no, kind, charge_id, returned_on, returned_amount, return_note, note, reversed_at";
+  // ONE literal string. A `+`-joined select turns every column into a
+  // GenericStringError at the type level and silently into nothing at runtime.
+  const cols = "id, renter_id, amount, fee_amount, method, received_on, reference, receipt_no, kind, charge_id, returned_on, returned_amount, return_note, note, reversed_at";
   const [{ data: acctRows }, { data: depRows }] = await Promise.all([
     admin.from("park_payments").select(cols)
       .eq("park_id", parkId).is("reversed_at", null).eq("kind", "rent").is("charge_id", null)

@@ -173,6 +173,15 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                     #{p.receiptNo}
                   </span>
                 )}
+                {/* WHAT THE CARD WAS ACTUALLY CHARGED. The bold number above is
+                    the rent, because that is what the ledger credits. Their bank
+                    shows the sum, and until this line existed the difference was
+                    a phone call to the office. */}
+                {p.fee != null && p.fee > 0 && (
+                  <span className="mut" style={{ flexBasis: "100%", fontSize: 12, lineHeight: 1.4 }}>
+                    plus {usd(p.fee)} card fee &mdash; {usd(p.amount + p.fee)} left your card
+                  </span>
+                )}
               </div>
             ))}
           </div>

@@ -62,7 +62,13 @@ export interface RenterHome {
   /** Deposit still held. Null when there has never been one. */
   deposit: { amount: number; since: string } | null;
 
-  payments: { on: string; amount: number; method: string; receiptNo: number | null }[];
+  /**
+   * `amount` is the RENT. `fee` is the card convenience fee charged on top and
+   * is null on every other rail. Two figures because the card statement shows
+   * their sum and the rent ledger shows only the first — a resident comparing
+   * the two deserves to find the difference here rather than ring the office.
+   */
+  payments: { on: string; amount: number; fee: number | null; method: string; receiptNo: number | null }[];
 
   /** Reported from their lot, during their tenancy. */
   reported: { note: string; status: string; resolutionNote: string | null; ageDays: number }[];
@@ -133,7 +139,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // ---- money in -----------------------------------------------------------
   const { data: pays } = await admin
     .from("park_payments")
-    .select("amount, method, received_on, receipt_no, kind, returned_on, reversed_at")
+    .select("amount, fee_amount, method, received_on, receipt_no, kind, returned_on, reversed_at")
     .eq("renter_id", file.id as string)
     .order("received_on", { ascending: false })
     .limit(24);
@@ -218,6 +224,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       .map((p) => ({
         on: p.received_on as string,
         amount: Number(p.amount ?? 0),
+        fee: p.fee_amount == null ? null : Number(p.fee_amount),
         method: (p.method as string) ?? "payment",
         receiptNo: (p.receipt_no as number) ?? null,
       })),

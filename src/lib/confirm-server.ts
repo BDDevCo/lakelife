@@ -29,7 +29,10 @@ import { receiptRef, METHOD_WORD } from "@/app/park/receipt-helpers";
 export interface ConfirmView {
   parkName: string;
   lotNumber: string;
+  /** The RENT. What the card was actually charged is amount + fee. */
   amount: number;
+  /** Card convenience fee charged on top, or null. */
+  fee: number | null;
   method: string;
   reference: string | null;
   receivedOn: string;
@@ -43,7 +46,7 @@ export async function loadPaymentByToken(token: string): Promise<ConfirmView | n
 
   const { data: pay } = await admin
     .from("park_payments")
-    .select("id, charge_id, park_id, kind, amount, method, reference, received_on, receipt_no, renter_confirmed_at")
+    .select("id, charge_id, park_id, kind, amount, fee_amount, method, reference, received_on, receipt_no, renter_confirmed_at")
     .eq("confirm_token", token)
     .maybeSingle();
   if (!pay) return null;
@@ -76,6 +79,9 @@ export async function loadPaymentByToken(token: string): Promise<ConfirmView | n
     // rather than printing "?" as though something were missing.
     lotNumber: (lot?.lot_number as string) ?? (pay.charge_id ? "?" : "—"),
     amount: Number(pay.amount),
+    // Asking "does this match what you handed over?" while showing a figure
+    // smaller than the one on their bank statement invites a dispute we caused.
+    fee: pay.fee_amount == null ? null : Number(pay.fee_amount),
     method: METHOD_WORD[pay.method as string] ?? (pay.method as string),
     reference: (pay.reference as string) ?? null,
     receivedOn: pay.received_on as string,

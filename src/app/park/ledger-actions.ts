@@ -457,7 +457,7 @@ export async function recordPayment(
     drop_slip_no: dropSlipNo?.trim() || null,
     confirm_token: confirmToken,
     idempotency_key: idempotencyKey?.trim() || null,
-  }).select("receipt_no").single();
+  }).select("receipt_no, fee_amount").single();
   if (error) {
     // 23505 on the idempotency index = this exact submit already landed. That
     // is a success from the office's point of view, not a failure — telling
@@ -506,6 +506,11 @@ export async function recordPayment(
       ? `Questions? The office — ${park.address}.`
       : "Questions? Ask at the office.",
     receiptNo: (written?.receipt_no as number) ?? null,
+    // Always null on this path — the office keying a card at the window does
+    // not surcharge, only the resident's own online payment does. Read back
+    // from the row anyway rather than hard-coded, so the receipt tells the
+    // truth if that ever stops being so.
+    feeAmount: written?.fee_amount == null ? null : Number(written.fee_amount),
     lotNumber: (lot?.lot_number as string) ?? "?",
     payerName: (renter?.display_name as string) ?? null,
     amount,

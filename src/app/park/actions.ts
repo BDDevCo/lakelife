@@ -13,7 +13,9 @@ import {
   buildLotRange, planBulkRates, buildTenant, buildTenantEdit, buildParkDialsRow,
   type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
   type TenantInput, type TenantEditInput, type ParkDialsInput, lotLabelRange, SITE_DEFAULTS,
+  buildOnlineRentRow, onlineRentCautions, CARD_FEE_CEILING, type OnlineRentInput,
 } from "./park-helpers";
+import { canEnableParkServices } from "./service-helpers";
 
 /**
  * The park owner's write path. Every action asserts membership of the park it
@@ -1042,5 +1044,102 @@ export async function addLots(
     signal: input.liveNow
       ? `${n} ${n === 1 ? "lot" : "lots"} added and rentable — they now share the park's costs.`
       : `${n} ${n === 1 ? "lot" : "lots"} added as not-yet-built. Mark one live when its pedestal is in.`,
+  };
+}
+
+
+// ------------------------------------------------ taking rent online ----
+
+/**
+ * WHETHER RESIDENTS CAN PAY RENT ONLINE, AND WHAT A CARD COSTS THEM.
+ *
+ * Read since 0108/0109 by `payRent` and the renter's portal; written by nothing
+ * until now. `accepts_online_rent` defaults FALSE and `payRent` refuses when it
+ * is false, so online rent has been off for every park with no way to turn it
+ * on. The scratch fixture only ever worked because I set the flag in SQL by
+ * hand — which is exactly how a column with no writer stays hidden: the demo
+ * looks right.
+ */
+export async function getOnlineRent(parkId: string): Promise<{
+  accepting: boolean;
+  cardFeePct: string;
+  ceiling: number;
+  cautions: string[];
+  canChange: boolean;
+  /** Live tenancies that could actually use it — a switch with nobody behind it. */
+  households: number;
+} | null> {
+  const membership = await assertMyPark(parkId);
+  if (!membership) return null;
+
+  const admin = createServiceClient();
+  const { data: park } = await admin
+    .from("parks")
+    .select("accepts_online_rent, card_fee_pct")
+    .eq("id", parkId)
+    .maybeSingle();
+  if (!park) return null;
+
+  const { data: lots } = await admin.from("park_lots").select("id").eq("park_id", parkId);
+  const lotIds = (lots ?? []).map((l) => l.id as string);
+  let households = 0;
+  if (lotIds.length) {
+    const { count } = await admin
+      .from("lot_reservations")
+      .select("id", { count: "exact", head: true })
+      .in("park_lot_id", lotIds)
+      .in("status", ["approved", "active"]);
+    households = count ?? 0;
+  }
+
+  const pct = Number(park.card_fee_pct ?? 0);
+  return {
+    accepting: Boolean(park.accepts_online_rent),
+    // Trailing ".00" reads like a machine wrote it. 3 and 2.5 both survive.
+    cardFeePct: pct === 0 ? "" : String(Number(pct.toFixed(2))),
+    ceiling: CARD_FEE_CEILING,
+    cautions: onlineRentCautions(pct),
+    canChange: canEnableParkServices(membership.role),
+    households,
+  };
+}
+
+export async function saveOnlineRent(
+  parkId: string,
+  input: OnlineRentInput,
+): Promise<ParkResult> {
+  const membership = await assertMyPark(parkId);
+  if (!membership) return { ok: false, error: DENIED };
+  // A manager runs the park day to day. Deciding that residents' cards get
+  // charged, and at what rate, is the owner's — the same line `setParkLive`
+  // and the service desk draw.
+  if (!canEnableParkServices(membership.role)) {
+    return { ok: false, error: "Only the park's owner can change how rent is taken." };
+  }
+
+  const built = buildOnlineRentRow(input);
+  if (!built.ok || !built.row) return { ok: false, error: built.error };
+
+  const admin = createServiceClient();
+  const { error } = await admin.from("parks").update(built.row).eq("id", parkId);
+  if (error) {
+    // 0116 refuses anything above 3% at the database, so a bad rate lands here
+    // rather than being stored. Say which number was refused.
+    return { ok: false, error: `Couldn't save that — ${error.message}` };
+  }
+
+  revalidatePath("/park/setup");
+  revalidatePath("/park/rent");
+  revalidatePath("/parks/my");
+
+  const pct = built.row.card_fee_pct;
+  if (!built.row.accepts_online_rent) {
+    return { ok: true, signal: "Off. Residents pay you the way they do now — cash, check, or the office." };
+  }
+  return {
+    ok: true,
+    signal: pct > 0
+      ? `On. Bank transfer is free; a card adds ${pct}%.`
+      : "On. Bank transfer and card both, with no fee to the resident.",
   };
 }

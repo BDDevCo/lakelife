@@ -125,6 +125,23 @@ export function ParkStatements({
             <div style={{ borderTop: "1px solid var(--line)", marginTop: 6, paddingTop: 6 }}>
               <Row label="received" value={money(s.totalCents)} strong />
             </div>
+            {/* CARD FEES SIT BELOW THE TOTAL, NEVER INSIDE IT. The by-method
+                rows above must keep summing to `received` or the statement
+                stops reconciling against itself — but the bank deposit is
+                larger by exactly this, and an accountant who cannot see why
+                stops trusting the file. */}
+            {s.cardFeesCents > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <Row
+                  label="card fees on top — not yours, not in the total"
+                  value={money(s.cardFeesCents)}
+                />
+                <Row
+                  label="so your bank should show"
+                  value={money(s.totalCents + s.cardFeesCents)}
+                />
+              </div>
+            )}
             {page.billedInWindowCents > 0 && (
               <div style={{ marginTop: 6 }}>
                 <Row label="billed as due in this window" value={money(page.billedInWindowCents)} />

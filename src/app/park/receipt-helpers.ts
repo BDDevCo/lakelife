@@ -32,7 +32,16 @@ export interface ReceiptLines {
   receiptNo: number | null;
   lotNumber: string;
   payerName: string | null;
+  /** The RENT. Never includes the card fee. */
   amount: number;
+  /**
+   * The card convenience fee charged on top, or null/0 when there wasn't one.
+   *
+   * 0109's own header notes that the card networks require a surcharge to be
+   * disclosed at the point of sale AND on the receipt. The screen did the first
+   * and nothing did the second, because nothing read the column.
+   */
+  feeAmount?: number | null;
   method: string;
   reference: string | null;
   receivedOn: string;
@@ -84,10 +93,29 @@ export function receiptBody(r: ReceiptLines): string {
     `Received from   ${who}`,
     `Lot             ${r.lotNumber}`,
     `Amount          ${money(r.amount)}`,
+  ];
+
+  // THE FEE, ON THE RECEIPT, BECAUSE THE NETWORKS REQUIRE IT THERE. Also
+  // because a resident holding a card statement for $412 and a receipt for
+  // $400 has no way to tell which one is wrong.
+  const fee = r.feeAmount ?? 0;
+  if (fee > 0) {
+    lines.push(`Card fee        ${money(fee)}`);
+    lines.push(`Charged total   ${money(r.amount + fee)}`);
+  }
+
+  lines.push(
     `How             ${METHOD_WORD[r.method] ?? r.method}${r.reference ? ` ${r.reference}` : ""}`,
     `Date taken      ${r.receivedOn}`,
     `Against         ${prettyMonth(r.periodMonth)} rent — ${money(r.billAmount)}`,
-  ];
+  );
+
+  if (fee > 0) {
+    // Said in words as well as in the column, so it cannot be read as rent.
+    lines.push(``);
+    lines.push(`The card fee is what the card costs to accept. It is not rent`);
+    lines.push(`and it is not credited against your bill.`);
+  }
 
   if (r.balanceAfter > 0) {
     lines.push(`Still owing     ${money(r.balanceAfter)}`);
@@ -130,8 +158,12 @@ export function receiptCounterfoil(r: ReceiptLines): string {
   return [
     `${r.parkName} — office copy  ·  ${receiptRef(r.parkName, r.receiptNo, r.receivedOn)}`,
     ``,
-    `Lot ${r.lotNumber}   ${who}   ${money(r.amount)}   ${METHOD_WORD[r.method] ?? r.method}`,
-    `Taken ${r.receivedOn}${r.reference ? `   ref ${r.reference}` : ""}`,
+    // The signed half must name the figure that actually left their card, or
+    // the signature attests to a number their bank never shows.
+    `Lot ${r.lotNumber}   ${who}   ${money(r.amount + (r.feeAmount ?? 0))}   ${METHOD_WORD[r.method] ?? r.method}`,
+    (r.feeAmount ?? 0) > 0
+      ? `Taken ${r.receivedOn}   ${money(r.amount)} rent + ${money(r.feeAmount ?? 0)} card fee${r.reference ? `   ref ${r.reference}` : ""}`
+      : `Taken ${r.receivedOn}${r.reference ? `   ref ${r.reference}` : ""}`,
     ``,
     `I received a receipt for this and it matches what I handed over.`,
     ``,

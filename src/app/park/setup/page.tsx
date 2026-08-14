@@ -6,8 +6,9 @@ import { ParkStreams } from "@/components/ParkStreams";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { parkStreamStatuses } from "@/app/park/stream-actions";
-import { getParkDials } from "@/app/park/actions";
+import { getParkDials, getOnlineRent } from "@/app/park/actions";
 import { ParkDials } from "@/components/ParkDials";
+import { ParkOnlineRent } from "@/components/ParkOnlineRent";
 import type { ParkProfileInput } from "@/app/park/park-helpers";
 
 const md = (m: number | null, d: number | null) =>
@@ -46,9 +47,10 @@ export default async function ParkSetupPage() {
     houseRules: park.houseRules ?? "",
   };
 
-  const [statuses, dials] = await Promise.all([
+  const [statuses, dials, online] = await Promise.all([
     parkStreamStatuses(park.id),
     getParkDials(park.id),
+    getOnlineRent(park.id),
   ]);
 
   return (
@@ -70,6 +72,21 @@ export default async function ParkSetupPage() {
             initial={dials.initial}
             longestStayDays={dials.longestStayDays}
             today={dials.today}
+          />
+        </div>
+      )}
+      {/* HOW RENT COMES IN sits with the dials because it is the same kind of
+          decision — a number the rest of the module reads — but on its own card
+          because it is the only one that charges somebody's card. */}
+      {online && (
+        <div className="wrap" style={{ paddingTop: 0, paddingBottom: 0 }}>
+          <ParkOnlineRent
+            parkId={park.id}
+            initialAccepting={online.accepting}
+            initialFeePct={online.cardFeePct}
+            ceiling={online.ceiling}
+            canChange={online.canChange}
+            households={online.households}
           />
         </div>
       )}

@@ -183,7 +183,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // is the number he plans against.
   const { data: payments } = allIds.length
     ? await admin.from("park_payments")
-        .select("id, charge_id, amount, method, reference, received_on, reversed_at, reversed_reason")
+        .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason")
         .in("charge_id", allIds)
         .is("reversed_at", null)
     : { data: [] as Record<string, unknown>[] };
@@ -195,6 +195,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
       paymentId: p.id as string,
       chargeId: p.charge_id as string,
       amountCents: cents(p.amount),
+      feeCents: cents(p.fee_amount),
       method: (p.method as Method) ?? "other",
       reference: (p.reference as string) ?? null,
       receivedOn: p.received_on as string,

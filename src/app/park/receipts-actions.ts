@@ -125,7 +125,7 @@ export async function getStatement(
   const [{ data: payments }, { data: lots }, { data: renters }, { data: fees }] = await Promise.all([
     admin
       .from("park_payments")
-      .select("id, charge_id, amount, method, reference, received_on, reversed_at, reversed_reason")
+      .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason")
       .in("charge_id", chargeIds),
     admin.from("park_lots").select("id, lot_number").eq("park_id", parkId),
     admin.from("park_renters").select("id, display_name").eq("park_id", parkId),
@@ -152,6 +152,8 @@ export async function getStatement(
       paymentId: p.id as string,
       chargeId: p.charge_id as string,
       amountCents: cents(p.amount),
+      // The card fee, kept beside the rent rather than folded into it (0109).
+      feeCents: cents(p.fee_amount),
       method: (p.method as Method) ?? "other",
       reference: (p.reference as string) ?? null,
       receivedOn: p.received_on as string,
@@ -203,6 +205,9 @@ export async function getStatement(
     notes: exclusionLines({
       recordsBeginOn, lagDays, unbilledFeeLabels, anyMissingPayerName,
       depositsReceivedCents, onAccountReceivedCents,
+      // Summarised over the SAME window the total is, so the sentence and the
+      // number can never disagree.
+      cardFeesReceivedCents: summary.cardFeesCents,
     }),
     recordsBeginOn,
     billedInWindowCents,
