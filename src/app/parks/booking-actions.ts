@@ -129,17 +129,42 @@ export async function enableBookingForMyLot(): Promise<BookingSetupResult> {
     toy_lifts: 0,
     jet_skis: 0,
     pwc_lifts: 0,
-    // WHAT A LOT CAN SENSIBLY BUY, and nothing else.
+    // WHAT A LOT RESIDENT IS ACTUALLY OFFERED.
     //
-    // Pricing alone gets most of the way — anything counting equipment prices
-    // to $0 for a lot and is filtered off the menu. It cannot get the rest:
-    // "Spring opening" and "Fall winterization" are FLAT rules that count
-    // nothing, so they apply to everything, and a lot resident was being
-    // offered a $430 opening priced for a lake house with a boat and a water
-    // system. wanted_services is the existing fence for exactly this, and it
-    // is a starting list rather than a cage — they can add more from their
-    // property profile whenever the park offers it.
-    wanted_services: ["Lawn mowing & trim", "Housekeeping"],
+    // Brendon's list, and the reasoning behind each exclusion matters more
+    // than the list itself:
+    //
+    //   PIER IS THE PARK'S. Not a pricing question — an ownership one. A
+    //   resident cannot buy work on somebody else's structure. (It was already
+    //   unbookable at $0 with no pier sections; this says why.)
+    //
+    //   THE SEASONS ARE THE MOBILE HOME'S, NOT A LAKE HOUSE'S. 0110 added the
+    //   smaller job. The $485/$430 lake-house pair stays off this list —
+    //   pricing cannot exclude them because they count nothing, so this list
+    //   is the only fence there is.
+    //
+    //   THE BOATS ARE THEIRS. These are lake parks; a resident on a lot may
+    //   well own a boat. Boat work prices per FOOT off `boats`, so it costs
+    //   the right thing for whoever has one and prices to $0 — vanishing from
+    //   the menu — for whoever does not. No special casing needed.
+    //
+    // A STARTING LIST, NOT A CAGE: they can add any active service from their
+    // property profile.
+    //
+    // Two of these are switched OFF platform-wide today ("Spring de-winterize
+    // & test run", "Winter storage"). Naming them here is harmless — an
+    // inactive service never renders — and they appear the day they are
+    // switched on, rather than needing this list edited again.
+    wanted_services: [
+      "Mobile home winterization",
+      "Mobile home de-winterization",
+      "Housekeeping",
+      "Boat storage & winterize",
+      "Boat winterization (shop)",
+      "Spring de-winterize & test run",
+      "Winter storage — indoor",
+      "Winter storage — outdoor",
+    ],
   });
 
   // NOTHING POINTS BACK FROM THE TENANCY, deliberately. 0107 dropped
