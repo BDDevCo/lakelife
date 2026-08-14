@@ -30,13 +30,15 @@ const CATEGORIES: CostCategory[] = [
 ];
 
 export function ParkCosts({
-  parkId, rows, summary, fees, recoveredByFee, billable = [],
+  parkId, rows, summary, fees, schedules, recoveredByFee, billable = [],
 }: {
   parkId: string;
   rows: CostRow[];
   summary: ReturnType<typeof recoveryByCategory>;
   /** The fee section, rendered by the server page. */
   fees?: React.ReactNode;
+  /** The recurring-bill reminders, same composition as `fees`. */
+  schedules?: React.ReactNode;
   /**
    * TRUE when a live fee already covers these costs. Without this the summary
    * shouts "still yours" at a park that recovers everything through a flat
@@ -372,6 +374,10 @@ export function ParkCosts({
           )}
         </section>
       )}
+
+      {/* The reminders sit between the bills and the fees: they are about the
+          same bills above, and they are what puts one on the morning screen. */}
+      {schedules}
 
       {fees}
     </div>

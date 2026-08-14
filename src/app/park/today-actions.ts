@@ -297,13 +297,36 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     admin.from("park_cost_schedules")
       .select("id, category, due_day, typical_amount, label")
       .eq("park_id", parkId).eq("active", true),
+    // WHAT COUNTS AS "DEALT WITH" — and the first version of this could never
+    // be satisfied.
+    //
+    // It matched costs with `period_start >= ${month}-01`. But the sewer bill
+    // that ARRIVES on 1 August is the bill FOR JULY, and the period he types is
+    // 2026-07-01 to 2026-07-31. period_start is then before the window, the
+    // category never lands in `billedCategories`, and "Sewer for August 2026
+    // still isn't entered" stays on his morning screen after he entered it.
+    // A reminder that will not clear is what teaches a person to stop reading
+    // the screen — which costs more than the reminder was ever worth.
+    //
+    // So two ways to satisfy it, and either is real evidence: he RECORDED a
+    // bill of that category this month (`created_at`, which is NOT NULL and set
+    // by the database), or the bill's period overlaps this month at all.
     admin.from("park_costs")
-      .select("category, period_start")
+      .select("category, period_start, period_end, created_at")
       .eq("park_id", parkId)
-      .gte("period_start", `${month}-01`),
+      .or(`created_at.gte.${month}-01,period_end.gte.${month}-01`),
   ]);
+  const monthEnd = `${month}-31`;
   const billedCategories = new Set(
-    (monthCosts ?? []).map((c) => c.category as string),
+    (monthCosts ?? [])
+      .filter((c) => {
+        const enteredThisMonth = String(c.created_at ?? "").slice(0, 7) === month;
+        const periodTouchesMonth =
+          String(c.period_start ?? "") <= monthEnd &&
+          String(c.period_end ?? "") >= `${month}-01`;
+        return enteredThisMonth || periodTouchesMonth;
+      })
+      .map((c) => c.category as string),
   );
 
   // The last week of evening checks. Absence is the alarm.

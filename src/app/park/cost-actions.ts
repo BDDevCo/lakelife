@@ -1,12 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { ordinal } from "./today-helpers";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { parseDaterange, overlaps } from "@/lib/parks";
 import {
   allocateCost, recoveryByCategory, canSplit, whyNotSplit,
   type CostCategory, type CostLot, type CostAllocation,
+  buildCostScheduleRow, type CostScheduleInput, COST_CATEGORY_LABEL,
 } from "./cost-helpers";
 import type { ParkResult } from "./actions";
 
@@ -517,4 +519,161 @@ export async function getSharedCostBaseline(parkId: string): Promise<{
   ).length;
 
   return { monthlyShared: Math.round(monthlyShared * 100) / 100, payersNow };
+}
+
+// ------------------------------------------- bills that arrive every month --
+
+/**
+ * THE SHAPE OF A RECURRING BILL — the writer 0114 was missing.
+ *
+ * The table has been read by /park/today since the day it was created and
+ * written by nothing, so the reminder feature existed entirely in the reader.
+ * The owner had no way to say "the sewer bill lands on the 1st and runs about
+ * $1,430", which is the only input the whole mechanism takes.
+ */
+export interface CostScheduleRow {
+  id: string;
+  category: CostCategory;
+  dueDay: number;
+  typicalAmount: number | null;
+  label: string | null;
+  active: boolean;
+}
+
+export async function listCostSchedules(parkId: string): Promise<CostScheduleRow[]> {
+  if (!(await assertMyPark(parkId))) return [];
+  const admin = createServiceClient();
+  const { data } = await admin
+    .from("park_cost_schedules")
+    .select("id, category, due_day, typical_amount, label, active")
+    .eq("park_id", parkId)
+    .order("due_day", { ascending: true });
+
+  // Switched-off rows come back too. They render greyed with a "switch on"
+  // button — the same shape as fees — so retiring a reminder is reversible and
+  // visible rather than a deletion he has to remember.
+  return (data ?? []).map((r) => ({
+    id: r.id as string,
+    category: r.category as CostCategory,
+    dueDay: Number(r.due_day ?? 5),
+    typicalAmount: r.typical_amount == null ? null : Number(r.typical_amount),
+    label: (r.label as string) ?? null,
+    active: Boolean(r.active),
+  }));
+}
+
+export async function saveCostSchedule(
+  parkId: string,
+  input: CostScheduleInput,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const built = buildCostScheduleRow(input);
+  if (!built.ok || !built.row) return { ok: false, error: built.error };
+  const row = built.row;
+
+  const admin = createServiceClient();
+
+  // SELECT FIRST — NOT UPSERT, AND NOT A BARE INSERT.
+  //
+  // The index is `(park_id, category) WHERE active`. Postgres only infers a
+  // PARTIAL index as an ON CONFLICT arbiter when the statement carries the
+  // matching predicate, and PostgREST's on_conflict takes column names with no
+  // predicate — so `.upsert(row, { onConflict: "park_id,category" })` comes
+  // back 42P10, which supabase-js hands over as {error, data:null}, which the
+  // usual `if (error) return "try again"` turns into "try again" offered for a
+  // path that can never work.
+  //
+  // A bare insert has the same ending one step later: he adds sewer, forgets,
+  // adds it again, and 23505 reads as the same generic failure. Selecting
+  // first turns the second add into an edit, which is what he meant.
+  const { data: existing } = await admin
+    .from("park_cost_schedules")
+    .select("id")
+    .eq("park_id", parkId)
+    .eq("category", row.category)
+    .maybeSingle();
+
+  const { error } = existing?.id
+    ? await admin.from("park_cost_schedules")
+        .update(row).eq("id", existing.id as string).eq("park_id", parkId)
+    : await admin.from("park_cost_schedules").insert({ park_id: parkId, ...row });
+
+  if (error) {
+    // Only reachable now from two tabs racing. Name the reminder that already
+    // exists rather than saying "try again" about something that never will.
+    if (error.code === "23505") {
+      return {
+        ok: false,
+        error: `You already have a ${COST_CATEGORY_LABEL[row.category as CostCategory].toLowerCase()} reminder — edit that one instead.`,
+      };
+    }
+    if (error.code === "23514") {
+      return { ok: false, error: "That reminder has a day or an amount we can't store." };
+    }
+    return { ok: false, error: "Couldn't save that reminder — try again." };
+  }
+
+  // Edited on one screen, read on another. Revalidating only /park/costs would
+  // leave the morning screen showing a reminder he just changed.
+  revalidatePath("/park/costs");
+  revalidatePath("/park/today");
+
+  // HIS WORDS, VERBATIM. Lower-casing is only right for our own category label
+  // mid-sentence ("Sewer" -> "sewer"); applied to a name he typed it turned
+  // "LaGrange County sewer" into "lagrange county sewer" on screen.
+  const name = row.label ?? COST_CATEGORY_LABEL[row.category as CostCategory].toLowerCase();
+  return {
+    ok: true,
+    signal: `We'll look for the ${name} bill around the ${ordinal(row.due_day)}.`,
+  };
+}
+
+export async function setCostScheduleActive(
+  parkId: string,
+  scheduleId: string,
+  active: boolean,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  const admin = createServiceClient();
+
+  if (active) {
+    // Switching one back on can collide with a newer reminder for the same
+    // bill. Check before the partial index throws, so the message can name it.
+    const { data: mine } = await admin
+      .from("park_cost_schedules")
+      .select("category").eq("id", scheduleId).eq("park_id", parkId).maybeSingle();
+    if (!mine) return { ok: false, error: "That reminder isn't there any more." };
+
+    const { data: clash } = await admin
+      .from("park_cost_schedules")
+      .select("id")
+      .eq("park_id", parkId)
+      .eq("category", mine.category as string)
+      .eq("active", true)
+      .neq("id", scheduleId)
+      .maybeSingle();
+    if (clash) {
+      return {
+        ok: false,
+        error: `There's already a live ${COST_CATEGORY_LABEL[mine.category as CostCategory].toLowerCase()} reminder — switch that one off first.`,
+      };
+    }
+  }
+
+  const { error } = await admin
+    .from("park_cost_schedules")
+    .update({ active })
+    .eq("id", scheduleId)
+    .eq("park_id", parkId);
+  if (error) return { ok: false, error: "Couldn't change that — try again." };
+
+  revalidatePath("/park/costs");
+  revalidatePath("/park/today");
+  return {
+    ok: true,
+    signal: active
+      ? "Back on — we'll mention it each month."
+      : "Switched off — nothing deleted.",
+  };
 }

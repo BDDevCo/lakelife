@@ -3,6 +3,7 @@ import {
   allocateCost, allocationSummary, recoveryByCategory,
   type CostLot, type CostCategory, canSplit, whyNotSplit,
   carriedLine,
+  buildCostScheduleRow, SCHEDULABLE_CATEGORIES, type CostScheduleInput,
 } from "./cost-helpers";
 
 /** The Haven: 19 occupied lots, 2 empty (3 and 22). */
@@ -300,6 +301,15 @@ describe("what the park carried", () => {
     expect(line).not.toContain("carried nothing");
   });
 
+  it("puts the thousands separator in, like the rest of the screen", () => {
+    // Rendered "$1433.17" directly under a column reading "$1,433.17".
+    const line = carriedLine({
+      allocatedTotal: 0, amountPaid: 1433.17, absorbed: 1433.17,
+      denominatorLots: 21, payerLots: 0, carry: "split",
+    });
+    expect(line).toContain("$1,433.17");
+  });
+
   it("says he carried all of it when there was nobody to bill", () => {
     const line = carriedLine({
       allocatedTotal: 0, amountPaid: 380, absorbed: 380,
@@ -333,5 +343,74 @@ describe("what the park carried", () => {
       { category: "water", amountPaid: 380, allocatedTotal: 343.71, billedTotal: 343.71, absorbed: 36.29 },
     ]);
     expect(r.net).toBeCloseTo(343.71 - 380, 2);
+  });
+});
+
+describe("a reminder for a bill that arrives every month", () => {
+  /**
+   * 0114 created park_cost_schedules, /park/today read it, and NOTHING wrote a
+   * row — so the list was empty for every park and always would be. These pin
+   * the validator that now stands between the form and the table, including the
+   * two categories 0117 refuses at the database.
+   */
+  const input = (over: Partial<CostScheduleInput> = {}): CostScheduleInput => ({
+    category: "sewer", dueDay: "5", typicalAmount: "1430", label: "", ...over,
+  });
+
+  it("builds the row the reader expects", () => {
+    const r = buildCostScheduleRow(input());
+    expect(r.ok).toBe(true);
+    expect(r.row).toEqual({
+      category: "sewer", due_day: 5, typical_amount: 1430,
+      label: null, cadence: "monthly", active: true,
+    });
+  });
+
+  it("refuses a day February does not have, in a sentence", () => {
+    // The DB CHECK would refuse 31 too; this is so he reads English, not a
+    // constraint name.
+    const r = buildCostScheduleRow(input({ dueDay: "31" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("February");
+  });
+
+  it("takes a blank amount and refuses a zero one", () => {
+    // Blank is an honest "I don't know yet". Zero is not an amount, and the
+    // column's CHECK agrees.
+    expect(buildCostScheduleRow(input({ typicalAmount: "" })).row?.typical_amount).toBe(null);
+    expect(buildCostScheduleRow(input({ typicalAmount: "0" })).ok).toBe(false);
+  });
+
+  it("strips the dollar sign and commas a person actually types", () => {
+    expect(buildCostScheduleRow(input({ typicalAmount: "$1,430.17" })).row?.typical_amount).toBe(1430.17);
+  });
+
+  it("refuses unit_electric — recordCost would refuse the bill it asks for", () => {
+    // A reminder pointing at /park/costs, where the category is not in the
+    // dropdown and the action declines it, is a door that does not open.
+    const r = buildCostScheduleRow(input({ category: "unit_electric" }));
+    expect(r.ok).toBe(false);
+    expect(canSplit("unit_electric")).toBe(false);
+  });
+
+  it("refuses 'other' — two of them would satisfy each other's reminder", () => {
+    // One active row per category. The property tax and the insurance binder
+    // would share a single reminder, and either would clear it.
+    expect(buildCostScheduleRow(input({ category: "other" })).ok).toBe(false);
+  });
+
+  it("only offers categories recordCost can actually write", () => {
+    // The invariant behind 0117: if these ever drift, the reminder leads
+    // somewhere the costs screen cannot follow.
+    for (const c of SCHEDULABLE_CATEGORIES) {
+      expect(canSplit(c)).toBe(true);
+      expect(buildCostScheduleRow(input({ category: c })).ok).toBe(true);
+    }
+  });
+
+  it("keeps a long name out of the table", () => {
+    expect(buildCostScheduleRow(input({ label: "x".repeat(61) })).ok).toBe(false);
+    expect(buildCostScheduleRow(input({ label: "  LaGrange County sewer  " })).row?.label)
+      .toBe("LaGrange County sewer");
   });
 });

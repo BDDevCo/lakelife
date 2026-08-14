@@ -365,7 +365,10 @@ export function carriedLine(r: {
   payerLots: number | null;
   carry: "split" | "covered_by_fee" | "unrecorded";
 }): string {
-  const money = (n: number) => `$${n.toFixed(2)}`;
+  // Thousands separators, like every other figure on the screen. `toFixed`
+  // alone rendered "$1433.17" one line under a column reading "$1,433.17".
+  const money = (n: number) =>
+    `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   if (r.carry === "unrecorded") {
     return "Recorded before we started keeping track of who carried what — the split is right, but we can't say what you covered.";
@@ -387,4 +390,99 @@ export function carriedLine(r: {
   }
   const empties = denom - payers;
   return `${money(r.allocatedTotal)} across ${payers} of ${denom} ${lot(denom)} — you carried ${money(absorbed)} for the ${empties} with nobody in ${empties === 1 ? "it" : "them"}.`;
+}
+
+
+// ------------------------------------------- bills that arrive every month --
+
+/**
+ * THE CATEGORIES A REMINDER MAY BE SET FOR — narrower than CostCategory, and
+ * the narrowing is the point. 0117 holds the same list at the database.
+ *
+ * `unit_electric` is out because `recordCost` refuses it (see `canSplit`): the
+ * reminder would send him to a screen where it is not in the dropdown and the
+ * action would decline it. `other` is out because the one-active-row-per-
+ * category index cannot tell two 'other' bills apart — the property tax and
+ * the insurance binder would share one reminder and each would falsely satisfy
+ * it. A wrong reassurance is worse than no reminder at all.
+ */
+export const SCHEDULABLE_CATEGORIES: CostCategory[] = [
+  "water", "sewer", "trash", "common_electric", "grounds",
+];
+
+export interface CostScheduleInput {
+  category: string;
+  /** Day of the month, 1-28. */
+  dueDay: string;
+  /** Blank is allowed and means "I don't know what it usually comes to". */
+  typicalAmount: string;
+  label: string;
+}
+
+export interface CostScheduleResult {
+  ok: boolean;
+  error?: string;
+  row?: {
+    category: string;
+    due_day: number;
+    typical_amount: number | null;
+    label: string | null;
+    cadence: string;
+    active: boolean;
+  };
+}
+
+/**
+ * Every rule the database holds, re-checked here so a mistake comes back as a
+ * sentence instead of a Postgres constraint name.
+ */
+export function buildCostScheduleRow(input: CostScheduleInput): CostScheduleResult {
+  const category = (input.category ?? "").trim();
+  if (!SCHEDULABLE_CATEGORIES.includes(category as CostCategory)) {
+    return { ok: false, error: "Pick which bill this is." };
+  }
+
+  const rawDay = (input.dueDay ?? "").trim();
+  if (!/^\d{1,2}$/.test(rawDay)) {
+    return { ok: false, error: "Give a day of the month — just the number." };
+  }
+  const dueDay = Number(rawDay);
+  if (dueDay < 1 || dueDay > 28) {
+    return {
+      ok: false,
+      // The 28 is not arbitrary and saying why stops it reading as a bug.
+      error: "Pick a day between 1 and 28 — we stop at the 28th so every month has one, February included.",
+    };
+  }
+
+  let typical: number | null = null;
+  const rawAmount = (input.typicalAmount ?? "").trim();
+  if (rawAmount) {
+    const n = Number(rawAmount.replace(/[$,\s]/g, ""));
+    if (!Number.isFinite(n)) return { ok: false, error: "That amount isn't a number." };
+    if (n <= 0) {
+      return { ok: false, error: "Leave it blank if you don't know what it usually comes to — 0 isn't an amount." };
+    }
+    if (n > 1_000_000) return { ok: false, error: "That amount looks like a typo." };
+    typical = Math.round(n * 100) / 100;
+  }
+
+  const label = (input.label ?? "").trim();
+  if (label.length > 60) {
+    return { ok: false, error: "That name is a bit long — keep it under 60 characters." };
+  }
+
+  return {
+    ok: true,
+    row: {
+      category,
+      due_day: dueDay,
+      typical_amount: typical,
+      label: label || null,
+      // Explicit rather than leaning on the column default: 0114 allows only
+      // 'monthly', and quarterly/annual have no reader.
+      cadence: "monthly",
+      active: true,
+    },
+  };
 }

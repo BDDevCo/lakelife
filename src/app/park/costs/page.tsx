@@ -3,9 +3,10 @@ import { TopBar } from "@/components/Brand";
 import { ParkNav } from "@/components/ParkNav";
 import { ParkCosts } from "@/components/ParkCosts";
 import { ParkFees } from "@/components/ParkFees";
+import { ParkCostSchedules } from "@/components/ParkCostSchedules";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
-import { listCosts, getBillableParkJobs } from "@/app/park/cost-actions";
+import { listCosts, getBillableParkJobs, listCostSchedules } from "@/app/park/cost-actions";
 import { listFees } from "@/app/park/fee-actions";
 
 export default async function ParkCostsPage() {
@@ -28,10 +29,11 @@ export default async function ParkCostsPage() {
     );
   }
 
-  const [{ rows, summary }, feesPage, billable] = await Promise.all([
+  const [{ rows, summary }, feesPage, billable, schedules] = await Promise.all([
     listCosts(park.id),
     listFees(park.id),
     getBillableParkJobs(park.id),
+    listCostSchedules(park.id),
   ]);
 
   return (
@@ -44,6 +46,7 @@ export default async function ParkCostsPage() {
         rows={rows}
         summary={summary}
         recoveredByFee={feesPage.fees.some((f) => f.active && f.covers.length > 0)}
+        schedules={<ParkCostSchedules parkId={park.id} rows={schedules} />}
         fees={<ParkFees parkId={park.id} page={feesPage} />}
       />
     </>
