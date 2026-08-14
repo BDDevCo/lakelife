@@ -4,8 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatPrice } from "@/lib/pricing";
 import { dayStatus, toISODate, isRecurring, type DayStatus } from "@/lib/booking";
-import { rushPrice } from "@/lib/rush";
-import { getAvailability, createBooking, type RushWindow } from "@/app/book/actions";
+import { MAX_BATCH_DATES, shortDay } from "@/lib/batch-booking";
+import { RUSH_OPEN_HOUR, rushPrice } from "@/lib/rush";
+import { getAvailability, createBookingBatch, type RushWindow } from "@/app/book/actions";
 import { toast } from "@/components/Toast";
 import { TosAgreeModal } from "@/components/TosAgreeModal";
 
@@ -61,13 +62,22 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   // year + month kept together so functional updates handle year-boundary crossings.
   const [cal, setCal] = useState({ year: now.getFullYear(), month: now.getMonth() });
   const { year, month } = cal;
-  const [picked, setPicked] = useState<string | null>(null);
+  // SEVERAL DAYS AT ONCE (owner, 2026-08-14). The selection is a list even in
+  // one-day mode, so the calendar, the summary and the confirm all read from
+  // one place; single mode simply never lets it hold two.
+  const [multi, setMulti] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
   const [fullDates, setFullDates] = useState<Set<string>>(new Set());
   const [findingCrew, setFindingCrew] = useState(false);
   const [rush, setRush] = useState<RushWindow | null>(null);
   const [rushFallback, setRushFallback] = useState<"roll" | "cancel">("roll");
   const [busy, setBusy] = useState(false);
   const [tosOpen, setTosOpen] = useState(false);
+  /** What came back from a batch that only partly landed — stays on screen
+   *  (a toast fades, and a visit nobody booked must not fade with it). */
+  const [outcome, setOutcome] = useState<{ headline: string; lines: string[] } | null>(null);
+  /** Bumped after a booking so the calendar re-reads which days are now full. */
+  const [reload, setReload] = useState(0);
 
   // TODAY ON THE LAKE, NOT ON THIS DEVICE. The browser clock disagreed with the
   // server for anyone outside Indiana time, so an owner in Chicago at 11:40pm
@@ -87,7 +97,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
       }
     });
     return () => { cancelled = true; };
-  }, [service.id, year, month]);
+  }, [service.id, year, month, reload]);
 
   const cells = useMemo(() => {
     const first = new Date(year, month, 1).getDay();
@@ -111,7 +121,9 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   }, [year, month, fullDates, service.is_water_work, season.start, season.end, today, rush]);
 
   function move(delta: number) {
-    setPicked(null);
+    // Only one-day mode forgets: a multi-day pick that spans June and July has
+    // to survive turning the page, or it can't span anything.
+    if (!multi) setPicked([]);
     setCal((c) => {
       let m = c.month + delta, y = c.year;
       if (m < 0) { m = 11; y--; }
@@ -120,14 +132,42 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
     });
   }
 
-  // Is the picked date today's rush slot? (Status lives on the cell.)
-  const pickedIsRush = picked != null && cells.some((c) => c?.iso === picked && c.status === "rush");
+  function toggleDay(iso: string) {
+    setOutcome(null);
+    setPicked((prev) => {
+      if (!multi) return [iso];
+      if (prev.includes(iso)) return prev.filter((d) => d !== iso);
+      if (prev.length >= MAX_BATCH_DATES) {
+        toast(`${MAX_BATCH_DATES} visits is the most you can lock in at once — book the rest right after.`);
+        return prev;
+      }
+      return [...prev, iso].sort();
+    });
+  }
+
+  function setMode(on: boolean) {
+    setMulti(on);
+    setOutcome(null);
+    // Leaving multi-day mode keeps the earliest day rather than silently
+    // booking five the customer can no longer see.
+    setPicked((prev) => (on ? prev : prev.slice(0, 1)));
+  }
+
+  // TODAY is the only day that can be a rush job, and only inside the window.
+  // Derived from the server's clock (not the cell) so it survives paging to
+  // another month with today still selected.
+  const rushOpen = rush != null && rush.nowHour >= RUSH_OPEN_HOUR && rush.nowHour < rush.cutoffHour;
+  const pickedIsRush = rushOpen && picked.includes(today);
   const rushAllIn = rush ? rushPrice(service.price, rush.surchargePct) : service.price;
+  const totalPrice = picked.length === 0
+    ? 0
+    : service.price * (picked.length - (pickedIsRush ? 1 : 0)) + (pickedIsRush ? rushAllIn : 0);
 
   async function confirm(tosAccepted?: boolean) {
-    if (!picked) return;
+    if (picked.length === 0) return;
+    const asked = picked.length;
     setBusy(true);
-    const res = await createBooking(
+    const res = await createBookingBatch(
       service.id,
       picked,
       service.frequency_options[freq] ?? "",
@@ -136,15 +176,39 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
     );
     setBusy(false);
     if (res.needsTos) { setTosOpen(true); return; }
-    if (!res.ok) { toast(res.error ?? "Couldn't book that."); return; }
     setTosOpen(false);
-    toast(`${service.name} booked — see “My requests.”`);
+    const bookedCount = res.booked?.length ?? 0;
+    const lines = res.lines ?? [];
+
+    // NOTHING LANDED. One date has one sentence; several get the panel, which
+    // stays put — a toast that fades can't be the only record of a visit that
+    // was refused.
+    if (bookedCount === 0) {
+      if (lines.length > 0 && asked > 1) setOutcome({ headline: res.headline ?? "", lines });
+      else toast(res.error ?? "Couldn't book that.");
+      setReload((n) => n + 1);
+      return;
+    }
+
+    // PART OF IT LANDED. Keep the modal open, say which days did not, drop the
+    // stale selection and re-read the calendar so the full days now look full.
+    if (lines.length > 0) {
+      setOutcome({ headline: res.headline ?? "", lines });
+      setPicked([]);
+      setReload((n) => n + 1);
+      router.refresh();
+      return;
+    }
+
+    toast(asked === 1 ? `${service.name} booked — see “My requests.”` : (res.headline ?? "Booked."));
     onClose();
     router.refresh();
   }
 
   const recurring = isRecurring(service.frequency_options[freq] ?? "");
-  const prettyPicked = picked ? new Date(picked + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }) : null;
+  const prettyPicked = picked.length === 1
+    ? new Date(picked[0] + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })
+    : null;
 
   return (
     <div className="ll-overlay" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -173,12 +237,31 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
             </div>
           )}
 
+          {/* what actually happened to a batch that only partly landed */}
+          {outcome && (
+            <div
+              role="status"
+              style={{
+                border: "1.5px solid var(--gold, #d9a441)", borderRadius: 12, padding: "10px 14px",
+                marginBottom: 14, fontSize: 13.5, lineHeight: 1.5, background: "#FBF3E1",
+              }}
+            >
+              <b>{outcome.headline}</b>
+              {outcome.lines.map((l, i) => (
+                <div key={i} style={{ marginTop: 4 }}>{l}</div>
+              ))}
+              <div className="mut" style={{ marginTop: 6, fontSize: 12.5 }}>
+                Pick other days below — the visits that did book are already on their way.
+              </div>
+            </div>
+          )}
+
           {/* frequency */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
             {service.frequency_options.map((f, i) => (
               <button
                 key={f}
-                onClick={() => { setFreq(i); setPicked(null); }}
+                onClick={() => { setFreq(i); setPicked([]); setOutcome(null); }}
                 style={{
                   padding: "8px 13px", borderRadius: 99, fontWeight: 700, fontSize: 13, cursor: "pointer",
                   border: `1.5px solid ${i === freq ? "var(--teal)" : "var(--line)"}`,
@@ -190,10 +273,35 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
             ))}
           </div>
 
-          <div className="mut" style={{ fontSize: 12.5, marginBottom: 8 }}>
-            {recurring
-              ? "Pick your first visit — we'll line up the repeats with you once it's confirmed."
-              : "Pick your date."}
+          {/* one day, or several — the rung between a one-off and Autopilot */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }} role="radiogroup" aria-label="How many days">
+            {([
+              { on: false, label: "One day" },
+              { on: true, label: "Several days" },
+            ]).map((opt) => (
+              <button
+                key={opt.label}
+                role="radio"
+                aria-checked={multi === opt.on}
+                onClick={() => setMode(opt.on)}
+                style={{
+                  padding: "8px 13px", borderRadius: 99, fontWeight: 700, fontSize: 13, cursor: "pointer",
+                  border: `1.5px solid ${multi === opt.on ? "var(--ink, #20343d)" : "var(--line)"}`,
+                  background: multi === opt.on ? "var(--ink, #20343d)" : "#fff",
+                  color: multi === opt.on ? "#fff" : "var(--text)",
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mut" style={{ fontSize: 12.5, marginBottom: 8, lineHeight: 1.5 }}>
+            {multi
+              ? `Tap every day you want — up to ${MAX_BATCH_DATES}, across as many months as you like. Each visit is booked and priced on its own, and nothing repeats after them: this is not Autopilot.`
+              : recurring
+                ? "Pick your first visit — we'll line up the repeats with you once it's confirmed."
+                : "Pick your date."}
           </div>
 
           {/* calendar */}
@@ -210,7 +318,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
               if (!c) return <div key={i} />;
               const isRushDay = c.status === "rush";
               const clickable = c.status === "available" || isRushDay;
-              const sel = picked === c.iso;
+              const sel = picked.includes(c.iso);
               const bg = sel
                 ? (isRushDay ? "var(--gold, #d9a441)" : "var(--teal)")
                 : isRushDay ? "#FBF3E1"
@@ -226,9 +334,10 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
               return (
                 <button
                   key={i}
-                  onClick={() => clickable && setPicked(c.iso)}
+                  onClick={() => clickable && toggleDay(c.iso)}
                   disabled={!clickable && !sel}
-                  title={title}
+                  aria-pressed={sel}
+                  title={sel && multi ? "Tap again to remove" : title}
                   style={{
                     aspectRatio: "1", borderRadius: 8, fontSize: 13, fontWeight: 600,
                     border: `${isRushDay ? "1.5px" : "1px"} solid ${border}`,
@@ -254,7 +363,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
           {prettyPicked && (
             <div style={{ marginTop: 14, padding: "12px 14px", background: pickedIsRush ? "#FBF3E1" : "#F2F9FA", borderRadius: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
-                <span className="mut">{recurring ? "First visit" : "Date"}</span><b>{prettyPicked}</b>
+                <span className="mut">{recurring && !multi ? "First visit" : "Date"}</span><b>{prettyPicked}</b>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
                 <b>Your price</b><b>{pickedIsRush ? formatPrice(rushAllIn) : formatPrice(service.price)}</b>
@@ -264,6 +373,38 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
                   ⚡ Same-day rush — includes the rush premium
                 </div>
               )}
+            </div>
+          )}
+
+          {/* several days: every one named, every one removable, one total */}
+          {picked.length > 1 && (
+            <div style={{ marginTop: 14, padding: "12px 14px", background: "#F2F9FA", borderRadius: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 8 }}>
+                <span className="mut">Your visits</span><b>{picked.length} days</b>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                {picked.map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => toggleDay(d)}
+                    aria-label={`Remove ${shortDay(d)}`}
+                    style={{
+                      padding: "5px 9px", borderRadius: 99, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                      border: `1px solid ${d === today && rushOpen ? "var(--gold, #d9a441)" : "var(--line)"}`,
+                      background: "#fff", color: "var(--text)",
+                    }}
+                  >
+                    {shortDay(d)}{d === today && rushOpen ? " ⚡" : ""} ✕
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
+                <b>Your total</b><b>{formatPrice(totalPrice)}</b>
+              </div>
+              <div className="mut" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
+                {formatPrice(service.price)} per visit{pickedIsRush ? ` · today is ${formatPrice(rushAllIn)} at the rush rate` : ""}. Each
+                one is charged only after it&apos;s done — and cancelling one visit never touches the others.
+              </div>
             </div>
           )}
 
@@ -301,12 +442,19 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
           )}
 
           <p className="mut" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
-            Confirming creates a request. Autopay charges only after the service is
-            completed and its photos are uploaded — never before.
+            {picked.length > 1
+              ? `Confirming creates ${picked.length} separate requests — no standing schedule, nothing repeats. Autopay charges each one only after that visit is completed and its photos are uploaded, never before.`
+              : "Confirming creates a request. Autopay charges only after the service is completed and its photos are uploaded — never before."}
           </p>
 
-          <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={() => confirm()} disabled={!picked || busy}>
-            {busy ? "Booking…" : pickedIsRush ? `Book today ⚡ — ${formatPrice(rushAllIn)}` : "Confirm booking"}
+          <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={() => confirm()} disabled={picked.length === 0 || busy}>
+            {busy
+              ? "Booking…"
+              : picked.length > 1
+                ? `Book ${picked.length} visits — ${formatPrice(totalPrice)}`
+                : pickedIsRush
+                  ? `Book today ⚡ — ${formatPrice(rushAllIn)}`
+                  : "Confirm booking"}
           </button>
         </div>
       </div>

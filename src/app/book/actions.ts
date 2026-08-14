@@ -6,7 +6,14 @@ import { loadParkRates } from "@/app/park/rate-data";
 import { getFullProfile, toPricingProfile, getActivePropertyId } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { serviceMinutes } from "@/lib/duration";
-import { dayStatus, toISODate, todayLakeDate } from "@/lib/booking";
+import { todayLakeDate } from "@/lib/booking";
+import {
+  batchOutcomeCopy,
+  normalizeBatchDates,
+  planBatchDates,
+  prettyDateList,
+  type PlannedDate,
+} from "@/lib/batch-booking";
 import { rushPrice, validRushFallback } from "@/lib/rush";
 import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
@@ -106,13 +113,19 @@ export interface BookingResult {
   needsTos?: boolean;
 }
 
+export interface BatchBookingResult extends BookingResult {
+  /** The days that became jobs, ascending. */
+  booked?: string[];
+  /** The days that did NOT, each carrying the sentence explaining why. */
+  refused?: PlannedDate[];
+  /** Ready-made copy for the toast — headline plus one line per reason. */
+  headline?: string;
+  lines?: string[];
+}
+
 /**
- * Confirm a booking. Enforces rule 5 (verified email + SMS-verified mobile
- * before first booking), re-prices server-side (never trusts a client price),
- * re-validates the season window + capacity against the property's OWN lake,
- * then creates a `requested` job and fires the booking-confirmed text + email.
- * The insert runs with the service role — direct owner inserts into jobs are
- * closed at the RLS layer, so this action is the only door, and it validates.
+ * Confirm ONE booking. Thin wrapper over the batch path so a single date and
+ * six dates can never drift into validating, pricing, or refusing differently.
  */
 export async function createBooking(
   serviceId: string,
@@ -121,6 +134,88 @@ export async function createBooking(
   rushFallback?: string, // same-day only: 'roll' (tomorrow at standard price) | 'cancel'
   tosAccepted?: boolean, // set by the agree modal's retry — stamps and proceeds
 ): Promise<BookingResult> {
+  const res = await createBookingBatch(serviceId, [date], frequency, rushFallback, tosAccepted);
+  if (res.ok) return { ok: true };
+  return {
+    ok: false,
+    // A one-date batch has exactly one story to tell: the batch-level error if
+    // the whole thing was refused, else that date's own reason.
+    error: res.error ?? res.refused?.[0]?.reason ?? "Could not book that.",
+    ...(res.needsVerification ? { needsVerification: true } : {}),
+    ...(res.needsTos ? { needsTos: true } : {}),
+  };
+}
+
+/**
+ * ⚡ Blast the crews best placed to say yes to a same-day job: anyone already
+ * working THIS lake today (they're physically there — a rush job fills a gap
+ * in their route). If nobody's out there today, fall back to every active crew
+ * serving the lake. Content is rule-1 clean: no prices, just the board.
+ * Best-effort — the board itself is the source of truth.
+ */
+async function blastRushToCrews(
+  admin: ReturnType<typeof createServiceClient>,
+  opts: { propertyId: string; serviceName: string; date: string },
+): Promise<void> {
+  try {
+    const { data: propRow } = await admin.from("properties").select("lake_id, lakes(name)").eq("id", opts.propertyId).maybeSingle();
+    const jobLake = (propRow?.lake_id as string) ?? null;
+    const lakeName = ((Array.isArray(propRow?.lakes) ? propRow?.lakes[0] : propRow?.lakes) as { name?: string } | null)?.name ?? "your lake";
+    if (!jobLake) return;
+    const { data: outToday } = await admin
+      .from("jobs")
+      .select("vendor_id, properties!inner(lake_id)")
+      .eq("date", opts.date)
+      .eq("properties.lake_id", jobLake)
+      .in("status", ["scheduled", "in_progress"])
+      .not("vendor_id", "is", null);
+    let crewIds = [...new Set((outToday ?? []).map((r) => r.vendor_id as string))];
+    if (crewIds.length === 0) {
+      const { data: lakeCrews } = await admin
+        .from("vendors")
+        .select("id")
+        .eq("status", "active")
+        .contains("service_lakes", [jobLake]);
+      crewIds = (lakeCrews ?? []).map((v) => v.id as string);
+    }
+    if (crewIds.length === 0) return;
+    const { data: crewRows } = await admin.from("vendors").select("user_id").in("id", crewIds).not("user_id", "is", null);
+    const userIds = (crewRows ?? []).map((v) => v.user_id as string);
+    if (userIds.length === 0) return;
+    const { data: phones } = await admin.from("users").select("phone").in("id", userIds).not("phone", "is", null);
+    const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+    for (const p of phones ?? []) {
+      void sendSms(p.phone as string, `LakeLife ⚡ same-day ${opts.serviceName} just posted on ${lakeName} — fits a gap in your day, first crew to claim gets it: ${site}/vendor/open 🌊`);
+    }
+  } catch {
+    /* the board itself is the source of truth; the blast is best-effort */
+  }
+}
+
+/**
+ * Confirm ONE OR SEVERAL bookings in a single motion — the middle rung between
+ * a one-off and Autopilot (owner, 2026-08-14). Every date is validated on its
+ * own, priced on its own, and dispatched on its own; the jobs are INDEPENDENT
+ * rows with no group, so cancelling one Tuesday leaves the rest standing.
+ *
+ * Enforces rule 5 (verified email + SMS-verified mobile before first booking),
+ * re-prices server-side (never trusts a client price), re-validates the season
+ * window + capacity against the property's OWN lake, then creates `requested`
+ * jobs and fires ONE booking-confirmed text + email for the whole batch — not
+ * six. The agreement gate likewise fires once. The inserts run with the
+ * service role: direct owner inserts into jobs are closed at the RLS layer, so
+ * this action is the only door, and it validates.
+ *
+ * PARTIAL SUCCESS IS EXPECTED. Days fill independently, so the answer is book
+ * what can be booked and name every day that could not.
+ */
+export async function createBookingBatch(
+  serviceId: string,
+  dates: string[], // YYYY-MM-DD, any order
+  frequency: string,
+  rushFallback?: string, // same-day only: 'roll' (tomorrow at standard price) | 'cancel'
+  tosAccepted?: boolean, // set by the agree modal's retry — stamps and proceeds
+): Promise<BatchBookingResult> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -159,27 +254,48 @@ export async function createBooking(
   const service = await loadService(serviceId);
   if (!service) return { ok: false, error: "That service isn't available." };
 
-  // Re-validate the day server-side, against THIS property's lake and Indiana time.
+  // Nothing vanishes: garbage dates and anything past the batch cap come back
+  // NAMED, alongside whatever the calendar itself refuses below.
+  const { dates: wanted, refused } = normalizeBatchDates(dates);
+  if (wanted.length === 0 && refused.length === 0) {
+    return { ok: false, error: "Pick at least one date." };
+  }
+
+  // Re-validate EVERY day server-side, against THIS property's lake and
+  // Indiana time — a batch is never waved through on its first date. Capacity
+  // is read once per calendar month the batch touches, then every date is
+  // judged against it individually.
   const settings = await getPlatformSettings();
   const season = await loadSeason(profile.propertyId);
-  const { fullDates } = await getAvailability(serviceId, Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, profile.propertyId);
-  const status = dayStatus(date, {
+  const months = [...new Set(wanted.map((d) => d.slice(0, 7)))];
+  const monthFulls = await Promise.all(
+    months.map((m) => getAvailability(serviceId, Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, profile.propertyId)),
+  );
+  const fullDates = new Set(monthFulls.flatMap((a) => a.fullDates));
+  const plan = planBatchDates(wanted, {
     today: todayLakeDate(),
     isWaterWork: service.is_water_work,
     seasonStart: season.start,
     seasonEnd: season.end,
-    fullDates: new Set(fullDates),
+    fullDates,
     rushNowHour: lakeHour(),
     rushCutoffHour: settings.sameDayCutoffHour,
   });
-  if (status !== "available" && status !== "rush") {
-    const why =
-      status === "past" ? "That date has passed." :
-      status === "off-season" ? "That date is outside this lake's water-work season." :
-      "That day's crew is full — pick another.";
-    return { ok: false, error: why };
+  refused.push(...plan.filter((p) => !p.ok));
+  const bookable = plan.filter((p) => p.ok);
+  if (bookable.length === 0) {
+    const copy = batchOutcomeCopy(service.name, [], refused);
+    return {
+      ok: false,
+      booked: [],
+      refused,
+      headline: copy.headline,
+      lines: copy.lines,
+      // One refused date has one story; several have a list, so let the caller
+      // render the lines rather than flattening them into a single sentence.
+      error: refused.length === 1 ? refused[0].reason : copy.headline,
+    };
   }
-  const isRush = status === "rush";
 
   // Price it here — the client's number is never trusted. Rush pays the
   // premium; the crew side gets its fill-in discount at claim time.
@@ -202,7 +318,7 @@ export async function createBooking(
         : `${service.name} prices to $0 for your place — your profile shows none of the equipment it covers. Update your property profile and the real price appears.`,
     };
   }
-  const price = isRush ? rushPrice(standardPrice, settings.sameDaySurchargePct) : standardPrice;
+  const rushAllIn = rushPrice(standardPrice, settings.sameDaySurchargePct);
 
   // HOW LONG, from the same profile that decided how much (0083). Frozen onto
   // the job the way the price is, so tuning a ladder later cannot silently
@@ -211,116 +327,127 @@ export async function createBooking(
   const estMinutes = serviceMinutes(priceRule, toPricingProfile(profile));
 
   const admin = createServiceClient();
-  const { data: inserted, error } = await admin
-    .from("jobs")
-    .insert({
-      property_id: profile.propertyId,
-      service_id: serviceId,
-      date,
-      frequency,
-      status: "requested",
-      customer_price: price,
-      est_minutes: estMinutes,
-      ...(isRush ? { is_rush: true, rush_fallback: validRushFallback(rushFallback) } : {}),
-    })
-    .select("id")
-    .single();
-  if (error || !inserted) return { ok: false, error: error?.message ?? "Could not book that." };
+  const booked: Array<{ date: string; price: number; isRush: boolean }> = [];
+  // Only meaningful for a one-date booking, where the text says whether a crew
+  // is already locked in. A batch's text speaks for the whole list instead.
+  let soloAssigned = false;
 
-  // Auto-dispatch: pick the crew now (preferred first, else best-ranked eligible).
-  // RUSH jobs are the exception — they NEVER auto-dispatch. Same-day push is
-  // unsafe (today's capacity math can't see a crew's real remaining day), so a
-  // rush job is born on the claim board: picking it up is the crew's consent.
-  // If the day genuinely filled between page-load and submit (every eligible
-  // crew is now full/blocked), back the booking out and ask for another date.
-  // Any OTHER no-fit reason (no crew does it yet, or none clears the margin
-  // floor) still confirms the booking as a "Finding a crew" waitlist row —
-  // the customer isn't blocked, the claim board and nightly sweeps hunt for
-  // a crew, and the demand itself is the recruiting signal.
-  let assigned = false;
-  if (!isRush) {
-    try {
-      const outcome = await autoAssignJob(inserted.id);
-      assigned = outcome.assigned;
-      if (!outcome.assigned && outcome.decision.reasonNoFit === "all_full_or_blocked") {
-        await admin.from("jobs").delete().eq("id", inserted.id);
-        return { ok: false, error: "That day just filled up — pick another date." };
-      }
-    } catch {
-      /* leave as requested; the waitlist sweeps will keep hunting */
+  // ONE DATE AT A TIME. Each day is its own job, its own price, its own crew
+  // question — and its own refusal if it loses the race. Nothing here is
+  // transactional across dates ON PURPOSE: five visits that landed are worth
+  // more to the customer than an all-or-nothing rollback because the sixth
+  // Tuesday filled up while they were choosing.
+  for (const day of bookable) {
+    const price = day.isRush ? rushAllIn : standardPrice;
+    const { data: inserted, error } = await admin
+      .from("jobs")
+      .insert({
+        property_id: profile.propertyId,
+        service_id: serviceId,
+        date: day.date,
+        frequency,
+        status: "requested",
+        customer_price: price,
+        est_minutes: estMinutes,
+        ...(day.isRush ? { is_rush: true, rush_fallback: validRushFallback(rushFallback) } : {}),
+      })
+      .select("id")
+      .single();
+    if (error || !inserted) {
+      refused.push({ ...day, ok: false, reason: error?.message ?? "Could not book that day." });
+      continue;
     }
-  } else {
-    // ⚡ Blast the crews best placed to say yes: anyone already working THIS
-    // lake today (they're physically there — a rush job fills a gap in their
-    // route). If nobody's out there today, fall back to every active crew
-    // serving the lake. Content is rule-1 clean: no prices, just the board.
-    try {
-      const { data: propRow } = await admin.from("properties").select("lake_id, lakes(name)").eq("id", profile.propertyId).maybeSingle();
-      const jobLake = (propRow?.lake_id as string) ?? null;
-      const lakeName = ((Array.isArray(propRow?.lakes) ? propRow?.lakes[0] : propRow?.lakes) as { name?: string } | null)?.name ?? "your lake";
-      if (jobLake) {
-        const { data: outToday } = await admin
-          .from("jobs")
-          .select("vendor_id, properties!inner(lake_id)")
-          .eq("date", date)
-          .eq("properties.lake_id", jobLake)
-          .in("status", ["scheduled", "in_progress"])
-          .not("vendor_id", "is", null);
-        let crewIds = [...new Set((outToday ?? []).map((r) => r.vendor_id as string))];
-        if (crewIds.length === 0) {
-          const { data: lakeCrews } = await admin
-            .from("vendors")
-            .select("id")
-            .eq("status", "active")
-            .contains("service_lakes", [jobLake]);
-          crewIds = (lakeCrews ?? []).map((v) => v.id as string);
+
+    // Auto-dispatch: pick the crew now (preferred first, else best-ranked eligible).
+    // RUSH jobs are the exception — they NEVER auto-dispatch. Same-day push is
+    // unsafe (today's capacity math can't see a crew's real remaining day), so a
+    // rush job is born on the claim board: picking it up is the crew's consent.
+    // If the day genuinely filled between page-load and submit (every eligible
+    // crew is now full/blocked), back THAT day's booking out and name it — the
+    // other days in the batch are untouched.
+    // Any OTHER no-fit reason (no crew does it yet, or none clears the margin
+    // floor) still confirms the booking as a "Finding a crew" waitlist row —
+    // the customer isn't blocked, the claim board and nightly sweeps hunt for
+    // a crew, and the demand itself is the recruiting signal.
+    if (!day.isRush) {
+      try {
+        const outcome = await autoAssignJob(inserted.id);
+        soloAssigned = outcome.assigned;
+        if (!outcome.assigned && outcome.decision.reasonNoFit === "all_full_or_blocked") {
+          await admin.from("jobs").delete().eq("id", inserted.id);
+          refused.push({ ...day, ok: false, reason: "That day just filled up — pick another date." });
+          continue;
         }
-        if (crewIds.length > 0) {
-          const { data: crewRows } = await admin.from("vendors").select("user_id").in("id", crewIds).not("user_id", "is", null);
-          const userIds = (crewRows ?? []).map((v) => v.user_id as string);
-          if (userIds.length > 0) {
-            const { data: phones } = await admin.from("users").select("phone").in("id", userIds).not("phone", "is", null);
-            const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
-            for (const p of phones ?? []) {
-              void sendSms(p.phone as string, `LakeLife ⚡ same-day ${service.name} just posted on ${lakeName} — fits a gap in your day, first crew to claim gets it: ${site}/vendor/open 🌊`);
-            }
-          }
-        }
+      } catch {
+        /* leave as requested; the waitlist sweeps will keep hunting */
       }
-    } catch {
-      /* the board itself is the source of truth; the blast is best-effort */
+    } else {
+      await blastRushToCrews(admin, { propertyId: profile.propertyId, serviceName: service.name, date: day.date });
     }
+    booked.push({ date: day.date, price, isRush: day.isRush });
   }
 
-  // Notifications — best effort, never block the booking. Be HONEST about
-  // whether a crew is locked in or we're still hunting one down.
-  const pretty = new Date(date + "T12:00:00").toLocaleDateString("en-US", {
+  refused.sort((a, b) => a.date.localeCompare(b.date));
+  const bookedDates = booked.map((b) => b.date);
+  const copy = batchOutcomeCopy(service.name, bookedDates, refused);
+  if (booked.length === 0) {
+    return {
+      ok: false,
+      booked: [],
+      refused,
+      headline: copy.headline,
+      lines: copy.lines,
+      error: refused.length === 1 ? refused[0].reason : copy.headline,
+    };
+  }
+
+  // Notifications — best effort, never block the booking. ONE message for the
+  // batch, not one per visit: six texts for one decision is spam, and the
+  // person who just booked six days already knows they booked six days.
+  // Be HONEST about whether a crew is locked in or we're still hunting one.
+  const solo = booked.length === 1 && refused.length === 0;
+  const only = booked[0];
+  const pretty = new Date(only.date + "T12:00:00").toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric",
   });
+  const cutoffLabel = settings.sameDayCutoffHour > 12 ? settings.sameDayCutoffHour - 12 + "pm" : settings.sameDayCutoffHour + "am";
+  const total = booked.reduce((sum, b) => sum + b.price, 0);
+  const visits = `${booked.length} visit${booked.length === 1 ? "" : "s"}`;
+  const missed = refused.length > 0 ? ` We couldn't get ${prettyDateList(refused.map((r) => r.date), 3)} — pick those again anytime.` : "";
+
   // GATED, at last. Six switches have existed on the settings screen since the
   // start and no send path ever read one, so a customer who turned texts off
   // kept getting them. A switch that does nothing is worse than no switch.
   if (me?.phone && (await allowsNotification(user.id, "book", "sms"))) {
     void sendSms(
       me.phone,
-      isRush
-        ? `LakeLife ⚡: got it — same-day ${service.name} at the rush rate ($${price}). We're offering it to crews already out on your lake right now. If nobody frees up by ${settings.sameDayCutoffHour > 12 ? settings.sameDayCutoffHour - 12 + "pm" : settings.sameDayCutoffHour + "am"}, we'll ${validRushFallback(rushFallback) === "roll" ? "move it to tomorrow at the standard price" : "cancel it — no charge"}. 🌊`
-        : assigned
-          ? `LakeLife: ${service.name} is booked for ${pretty}. We'll text you when a crew is on the way. 🌊`
-          : `LakeLife: got it — ${service.name} for ${pretty}. We're lining up a crew now and you'll hear the moment one's locked in. You're never charged until the work is done. 🌊`,
+      solo
+        ? only.isRush
+          ? `LakeLife ⚡: got it — same-day ${service.name} at the rush rate ($${only.price}). We're offering it to crews already out on your lake right now. If nobody frees up by ${cutoffLabel}, we'll ${validRushFallback(rushFallback) === "roll" ? "move it to tomorrow at the standard price" : "cancel it — no charge"}. 🌊`
+          : soloAssigned
+            ? `LakeLife: ${service.name} is booked for ${pretty}. We'll text you when a crew is on the way. 🌊`
+            : `LakeLife: got it — ${service.name} for ${pretty}. We're lining up a crew now and you'll hear the moment one's locked in. You're never charged until the work is done. 🌊`
+        : `LakeLife: ${visits} of ${service.name} locked in — ${prettyDateList(bookedDates, 6)}.${missed} We'll text you before each one, and you're never charged until the work is done. 🌊`,
     );
   }
   if (me?.email && (await allowsNotification(user.id, "book", "email"))) {
     void sendEmail({
       to: me.email,
-      subject: `Booked: ${service.name} 🌊`,
+      subject: solo ? `Booked: ${service.name} 🌊` : `Booked: ${visits} of ${service.name} 🌊`,
       html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#20343d">
           <h2>You're booked, ${profile.address ?? "friend"}.</h2>
-          <p><b>${service.name}</b> — ${frequency}<br>${pretty}</p>
-          <p style="color:#5D7681">Your price: <b>$${price.toLocaleString()}</b>. You're only charged after the service is completed and photos are uploaded.</p>
+          ${solo
+            ? `<p><b>${service.name}</b> — ${frequency}<br>${pretty}</p>
+          <p style="color:#5D7681">Your price: <b>$${only.price.toLocaleString()}</b>. You're only charged after the service is completed and photos are uploaded.</p>`
+            : `<p><b>${service.name}</b> — ${visits}</p>
+          <ul style="color:#20343d;padding-left:18px">${booked
+            .map((b) => `<li>${new Date(b.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })} — $${b.price.toLocaleString()}${b.isRush ? " (same-day rush)" : ""}</li>`)
+            .join("")}</ul>
+          <p style="color:#5D7681">Total across ${visits}: <b>$${total.toLocaleString()}</b>. Each visit is charged only after it's completed and its photos are uploaded — never before, and cancelling one visit never touches the others.</p>
+          ${refused.length > 0 ? `<p style="color:#8a6d3b">We couldn't book ${prettyDateList(refused.map((r) => r.date))}: ${copy.lines.join(" ")} Pick those days again anytime.</p>` : ""}`}
         </div>`,
     });
   }
 
-  return { ok: true };
+  return { ok: true, booked: bookedDates, refused, headline: copy.headline, lines: copy.lines };
 }
