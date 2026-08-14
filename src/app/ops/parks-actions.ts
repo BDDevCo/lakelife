@@ -82,7 +82,9 @@ export async function createPark(input: NewParkInput): Promise<ParkCreateResult>
   if (!owner) return { ok: false, error: "No user with that id — they need an account first." };
 
   const { data: lake } = await admin
-    .from("lakes").select("id, name").eq("id", input.lakeId).maybeSingle();
+    .from("lakes").select("id, name").eq("id", input.lakeId)
+    .eq("is_fixture", false) // 0124 — this writes parks.lake_id
+    .maybeSingle();
   if (!lake) return { ok: false, error: "That lake isn't on the list." };
 
   // A slug is claimed even before publishing, because the public page is the
@@ -161,6 +163,7 @@ export async function findUserByEmail(
 export async function listLakes(): Promise<Array<{ id: string; name: string }>> {
   if (!(await assertOps())) return [];
   const admin = createServiceClient();
-  const { data } = await admin.from("lakes").select("id, name").order("name");
+  // 0124 — the form must never offer what the create above would refuse.
+  const { data } = await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name");
   return (data ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
 }

@@ -65,7 +65,11 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
 
   let lakeName: string | null = null;
   if (park.lake_id) {
-    const { data: lake } = await admin.from("lakes").select("name").eq("id", park.lake_id).maybeSingle();
+    // 0124. Degrades correctly: the caller already omits the label when this
+    // is null, so a fixture lake costs a line rather than printing a fake
+    // place name on a public page.
+    const { data: lake } = await admin.from("lakes").select("name")
+      .eq("id", park.lake_id).eq("is_fixture", false).maybeSingle();
     lakeName = (lake?.name as string | null) ?? null;
   }
 
@@ -192,7 +196,8 @@ export async function listPublicParks(): Promise<{ slug: string; name: string; l
   const lakeIds = [...new Set(rows.map((p) => p.lake_id as string | null).filter((x): x is string => !!x))];
   const names = new Map<string, string>();
   if (lakeIds.length) {
-    const { data: lakes } = await admin.from("lakes").select("id, name").in("id", lakeIds);
+    const { data: lakes } = await admin.from("lakes").select("id, name")
+      .in("id", lakeIds).eq("is_fixture", false); // 0124 — born correct
     for (const l of lakes ?? []) names.set(l.id as string, l.name as string);
   }
 

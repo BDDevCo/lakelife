@@ -75,6 +75,11 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
       .from("lakes")
       .select("id")
       .eq("name", input.lake)
+      // 0124. This writes properties.lake_id, and that binding is what every
+      // season gate reads — a real house attached to a fixture inherits its
+      // ice-out and pull deadline, so what the owner can book is decided by a
+      // scratch row's dates.
+      .eq("is_fixture", false)
       .maybeSingle();
     lakeId = (lake?.id as string | undefined) ?? null;
   }

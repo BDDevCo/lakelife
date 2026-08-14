@@ -1931,7 +1931,13 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
 export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: boolean; lakes: number; emailed: number }> {
   const target = addDays(todayLakeDate(), leadDays);
   const admin = createServiceClient();
-  const { data: lakes } = await admin.from("lakes").select("id, name, pull_deadline").eq("pull_deadline", target);
+  // 0124: fixtures excluded. This is a SEND — it fans out over every property
+  // on the matched lake and emails each owner by name. A born fixture inherits
+  // real-looking season dates from lake-birth, so its pull_deadline genuinely
+  // lands on the target day; nothing about the date says "this lake is fake".
+  const { data: lakes } = await admin
+    .from("lakes").select("id, name, pull_deadline")
+    .eq("is_fixture", false).eq("pull_deadline", target);
   if (!lakes || lakes.length === 0) return { ok: true, lakes: 0, emailed: 0 };
 
   let emailed = 0;

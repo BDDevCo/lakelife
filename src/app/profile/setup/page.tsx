@@ -45,7 +45,7 @@ export default async function SetupPage({
   }
 
   const [{ data: lakeRows }, { data: parkRows }, { data: serviceRows }, profile] = await Promise.all([
-    supabase.from("lakes").select("name").order("name"),
+    supabase.from("lakes").select("name").eq("is_fixture", false).order("name"),
     // Published parks only — an unpublished one is still being set up and its
     // owner has not asked to be listed anywhere.
     supabase.from("parks").select("id, name").eq("active", true).order("name"),

@@ -60,7 +60,7 @@ export default async function VendorAvailabilityPage() {
 
   // All lakes on the platform, for the "Lakes I service" editor.
   const admin = createServiceClient();
-  const { data: lakeRows } = await admin.from("lakes").select("id, name").order("name");
+  const { data: lakeRows } = await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name");
   const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
 
   // The next 5 days the vendor actually works, starting today (lake time).

@@ -65,7 +65,7 @@ export default async function VendorTodayPage() {
     const admin = createServiceClient();
     const { data: svcs } = await admin.from("services").select("name").eq("active", true).order("name");
     const activeServices = (svcs ?? []).map((s) => s.name as string);
-    const { data: lakeRows } = await admin.from("lakes").select("id, name").order("name");
+    const { data: lakeRows } = await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name");
     const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
     return (
       <>

@@ -178,7 +178,11 @@ export async function setServiceLakes(lakeIds: string[]): Promise<OnboardingResu
   if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
 
   const admin = createServiceClient();
-  const { data: lakes } = await admin.from("lakes").select("id, name");
+  // 0124. This whitelist is what stops a crew claiming a lake that isn't real
+  // — and a fixture IS real as far as an id check goes, so it passed. Fencing
+  // it here is what lets the downstream reads of vendors.service_lakes stay
+  // unfenced: nothing can get into the column in the first place.
+  const { data: lakes } = await admin.from("lakes").select("id, name").eq("is_fixture", false);
   const allowed = new Set((lakes ?? []).map((l) => l.id as string));
 
   const wanted = Array.isArray(lakeIds) ? lakeIds : [];

@@ -41,9 +41,16 @@ export async function findOrCreateLake(
   const slugNoLake = slugify(name.replace(/\s*Lake\s*$/i, ""));
 
   // Dedup: match on either slug form or a case-insensitive name hit.
+  //
+  // FIXTURES ARE NOT CANDIDATES (0124). Being deduped into a scratch row is
+  // not cosmetic — the id goes on properties.lake_id, which is what the season
+  // gates read, what the router clusters by, and what the seasonal pull email
+  // names back to the owner. The customer would be joined to a fake market and
+  // nothing on their screen would say so.
   const { data: existing } = await admin
     .from("lakes")
     .select("id, name, slug")
+    .eq("is_fixture", false)
     .or(`slug.eq.${slug},slug.eq.${slugNoLake},name.ilike.${name}`)
     .limit(1)
     .maybeSingle();
@@ -92,7 +99,19 @@ export async function findOrCreateLake(
     // A concurrent birth of the same lake loses to the unique slug — hand
     // back the winner instead of an error.
     if (insErr && /duplicate|unique/i.test(insErr.message)) {
-      const { data: winner } = await admin.from("lakes").select("id, name").eq("slug", slug).maybeSingle();
+      const { data: winner } = await admin
+        .from("lakes").select("id, name, is_fixture").eq("slug", slug).maybeSingle();
+      // AND THE RETRY HAS TO KNOW TOO (0124). Fencing the dedupe above without
+      // fencing this would only move the bug one step down: the fixture stops
+      // matching at the top, the insert then collides with the very slug it
+      // holds, and this line hands the customer that scratch row anyway — with
+      // `created: false`, so the path that was supposed to protect them is the
+      // path that delivers them. Refuse instead. A squatted lake name is a
+      // human problem and ops can rename the fixture in seconds; silently
+      // seating somebody on a fake lake is not recoverable by anybody.
+      if (winner?.is_fixture === true) {
+        return { ok: false, error: "We can't add that lake just now — call dispatch and we'll sort it out." };
+      }
       if (winner) return { ok: true, lakeId: winner.id as string, lakeName: winner.name as string, created: false };
     }
     return { ok: false, error: insErr?.message ?? "Couldn't add that lake just now." };
