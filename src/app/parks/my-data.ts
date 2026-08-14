@@ -36,8 +36,15 @@ export interface RenterHome {
   /** Set once they have given notice. */
   leavingOn: string | null;
 
+  /** True when the park has agreed to take rent through LakeLife (0108). */
+  acceptsOnlineRent: boolean;
+  /** They need a card before any pay button is worth showing. */
+  hasCard: boolean;
+
   /** This month's bill, or null when the park has not raised it yet. */
   bill: {
+    /** Needed by payRent — the only id this screen hands back to the server. */
+    id: string;
     monthLabel: string;
     dueOn: string;
     amount: number;
@@ -90,9 +97,10 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   const file = files.find((f) => f.id === stay.renter_id) ?? files[0];
   const range = parseDaterange(stay.during as string);
 
-  const [{ data: lot }, { data: park }] = await Promise.all([
+  const [{ data: lot }, { data: park }, { count: cards }] = await Promise.all([
     admin.from("park_lots").select("lot_number").eq("id", stay.park_lot_id as string).maybeSingle(),
-    admin.from("parks").select("name").eq("id", file.park_id as string).maybeSingle(),
+    admin.from("parks").select("name, accepts_online_rent").eq("id", file.park_id as string).maybeSingle(),
+    admin.from("payment_methods").select("id", { count: "exact", head: true }).eq("user_id", user.id),
   ]);
 
   // ---- the bill -----------------------------------------------------------
@@ -164,6 +172,8 @@ export async function getRenterHome(): Promise<RenterHome | null> {
 
   return {
     parkName: (park?.name as string) ?? "your park",
+    acceptsOnlineRent: Boolean(park?.accepts_online_rent),
+    hasCard: (cards ?? 0) > 0,
     lotNumber: (lot?.lot_number as string) ?? "—",
     displayName: (file.display_name as string) ?? "Resident",
     since: range?.start ?? null,
@@ -171,6 +181,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     leavingOn: (stay.expected_move_out as string) ?? null,
     bill: charge
       ? {
+          id: charge.id as string,
           monthLabel: prettyMonth(charge.period_month as string),
           dueOn: charge.due_on as string,
           amount,

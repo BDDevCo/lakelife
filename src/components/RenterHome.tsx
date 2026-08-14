@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { RenterHome as RenterHomeView } from "@/app/parks/my-data";
+import { PayRentButton } from "@/components/PayRentButton";
 
 /**
  * WHAT THE RESIDENT SEES.
@@ -86,6 +87,20 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
               <div className="mut" style={{ fontSize: 13 }}>
                 {b.paidTotal > 0 ? `${usd(b.paidTotal)} received so far.` : "Not paid yet."}
               </div>
+            )}
+
+            {/* PAY IT. Only when the park has switched online rent on — the
+                software must not offer a payment the landlord has not agreed
+                to take. A disputed bill hides it: nothing is being chased
+                until somebody looks, so nothing should be collected either. */}
+            {view.acceptsOnlineRent && b.outstanding > 0 && (
+              <PayRentButton
+                chargeId={b.id}
+                amount={b.outstanding}
+                parkName={view.parkName}
+                hasCard={view.hasCard}
+                disabled={b.disputed}
+              />
             )}
 
             {b.lines.length > 0 && (

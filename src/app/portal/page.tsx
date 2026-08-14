@@ -61,6 +61,40 @@ export default async function PortalPage() {
     if (claimed) role = "vendor";
   }
 
+  // A RESIDENT HAS ONE DOOR, NOT TWO.
+  //
+  // Someone renting a lot was landing on /book — the lake-house booking page —
+  // with no route to their rent, their deposit or the repair they reported.
+  // Their own screen carries all of it AND the way through to booking, so this
+  // is the whole portal for them rather than a second one.
+  //
+  // AFTER the crew check above, deliberately: a resident who also mows for a
+  // living is a crew first, because that is the account that decides what they
+  // are shown all day. Before the homeowner fallback, because a lot is a more
+  // specific answer to "where does this person live" than "somewhere".
+  if (role !== "vendor" && role !== "ops") {
+    const admin = createServiceClient();
+    const { data: file } = await admin
+      .from("park_renters")
+      .select("id")
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle();
+    if (file) {
+      const { data: stay } = await admin
+        .from("lot_reservations")
+        .select("id")
+        .eq("renter_id", file.id as string)
+        .in("status", ["approved", "active"])
+        .limit(1)
+        .maybeSingle();
+      // A claimed file with no live tenancy is an applicant, not a resident —
+      // they carry on to the ordinary customer door rather than being sent to
+      // a screen that would only tell them they have no lot.
+      if (stay) redirect("/parks/my");
+    }
+  }
+
   // Homeowners: materialize any crew-imported properties (crew stays preferred).
   if (role !== "vendor" && role !== "ops") {
     await claimCustomerImports(user.id, user.email);

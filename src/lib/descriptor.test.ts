@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sanitiseDescriptor, statementDescriptor, DESCRIPTOR_MAX } from "./descriptor";
+import { sanitiseDescriptor, statementDescriptor, rentDescriptor, DESCRIPTOR_MAX } from "./descriptor";
 
 describe("every descriptor fits on a statement", () => {
   it("all four are within the limit", () => {
@@ -63,5 +63,33 @@ describe("truncation never reads as a glitch", () => {
   it("survives junk without throwing", () => {
     expect(sanitiseDescriptor("")).toBe("");
     expect(sanitiseDescriptor("<<<***>>>")).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0108 — RENT CARRIES THE PARK'S NAME.
+//
+// Every other descriptor says LAKELIFE because LakeLife is the merchant. Rent
+// is the park's money and we only move it; a resident who pays "The Haven" and
+// sees LAKELIFE SERVICE on their statement does not recognise it, and an
+// unrecognised line is how a chargeback starts.
+// ---------------------------------------------------------------------------
+describe("rent on a bank statement", () => {
+  it("says the park, not us", () => {
+    expect(rentDescriptor("The Haven")).toBe("THE HAVEN RENT");
+  });
+
+  it("stays inside the descriptor limit for a long park name", () => {
+    const d = rentDescriptor("Pretty Lake Mobile Home Community");
+    expect(d.length).toBeLessThanOrEqual(DESCRIPTOR_MAX);
+    expect(d.endsWith("?")).toBe(false);
+  });
+
+  it("falls back rather than sending a blank descriptor", () => {
+    // Some processors reject an empty descriptor outright, so a name that
+    // sanitises to nothing must still produce something.
+    expect(rentDescriptor("")).toBe("LAKELIFE RENT");
+    expect(rentDescriptor(null)).toBe("LAKELIFE RENT");
+    expect(rentDescriptor("!!!")).toBe("LAKELIFE RENT");
   });
 });

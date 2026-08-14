@@ -67,3 +67,20 @@ export function sanitiseDescriptor(raw: string, max: number = DESCRIPTOR_MAX): s
 export function statementDescriptor(kind: ChargeKind): string {
   return sanitiseDescriptor(DESCRIPTORS[kind]);
 }
+
+/**
+ * RENT CARRIES THE PARK'S NAME, NOT OURS.
+ *
+ * Every other descriptor here says LAKELIFE because LakeLife is the merchant.
+ * Rent is the opposite: it is the park's money and we only move it. A resident
+ * who pays "The Haven" and sees LAKELIFE SERVICE on their statement does not
+ * recognise it, and an unrecognised line is how a chargeback starts.
+ *
+ * Falls back to LAKELIFE RENT when a park's name sanitises to nothing (all
+ * punctuation, or empty) — an unrecognisable descriptor is still better than
+ * a blank one, which some processors reject outright.
+ */
+export function rentDescriptor(parkName: string | null | undefined): string {
+  const park = sanitiseDescriptor(`${parkName ?? ""} RENT`);
+  return park.replace(/^RENT$/, "") ? park : sanitiseDescriptor("LAKELIFE RENT");
+}
