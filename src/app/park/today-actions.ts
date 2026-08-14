@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
-import { todayLakeDate } from "@/lib/booking";
+import { todayLakeDate, lakeDateOf } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import {
   toRows, summarise, currentPeriod,
@@ -320,7 +320,16 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const billedCategories = new Set(
     (monthCosts ?? [])
       .filter((c) => {
-        const enteredThisMonth = String(c.created_at ?? "").slice(0, 7) === month;
+        // LAKE TIME, NOT UTC. `created_at` comes back as UTC, so a bill entered
+        // at 10:30pm Indiana on 31 August is stamped 2026-09-01T02:30Z and
+        // slices to "2026-09". Two consequences, and the second is the bad one:
+        // August's reminder would not clear, and SEPTEMBER'S WOULD — a bill
+        // nobody had entered yet, silently marked done for the whole month.
+        // The window is the last four or five hours of every month, which is
+        // exactly when evening paperwork gets done. `lakeDateOf` exists for
+        // this; its own docstring was written about the same mistake.
+        const enteredThisMonth =
+          (lakeDateOf(String(c.created_at ?? "")) ?? "").slice(0, 7) === month;
         const periodTouchesMonth =
           String(c.period_start ?? "") <= monthEnd &&
           String(c.period_end ?? "") >= `${month}-01`;

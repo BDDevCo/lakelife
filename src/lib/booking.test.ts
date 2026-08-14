@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dayStatus, toISODate, isRecurring, todayLakeDate, type DayContext } from "./booking";
+import { dayStatus, toISODate, isRecurring, todayLakeDate, type DayContext , lakeDateOf} from "./booking";
 
 // Big Long Lake 2026: ice-out Mar 21, pull deadline Nov 14.
 const waterCtx = (fullDates: string[] = []): DayContext => ({
@@ -85,5 +85,33 @@ describe("dayStatus — same-day rush (⚡)", () => {
 
   it("future days are untouched by rush context", () => {
     expect(dayStatus("2026-07-23", { ...base, rushNowHour: 9, rushCutoffHour: 14 })).toBe("available");
+  });
+});
+
+describe("the last evening of a month", () => {
+  /**
+   * FOUND BY AUDITING THE REMINDER LOOP. `park_costs.created_at` comes back
+   * from Postgres in UTC. A bill entered at 10:30pm Indiana on 31 August is
+   * stamped 2026-09-01T02:30Z, so a raw `.slice(0, 7)` reads "2026-09".
+   *
+   * The harmful direction is not the missed clear — it is that SEPTEMBER'S
+   * reminder would be satisfied by a bill entered in August, marking a bill
+   * nobody had entered as done for the whole month. The window is the last
+   * four or five hours of every month, which is when evening paperwork
+   * actually happens.
+   */
+  it("puts a late-evening August entry in August, not September", () => {
+    const stamped = "2026-09-01T02:30:00+00:00";   // 10:30pm 31 Aug, Indiana
+    expect(stamped.slice(0, 7)).toBe("2026-09");             // the bug
+    expect(lakeDateOf(stamped)?.slice(0, 7)).toBe("2026-08"); // the fix
+  });
+
+  it("still reads a midday timestamp the obvious way", () => {
+    expect(lakeDateOf("2026-08-14T16:00:00+00:00")).toBe("2026-08-14");
+  });
+
+  it("handles the winter offset too", () => {
+    // Indiana is UTC-5 in January, so the window is an hour wider.
+    expect(lakeDateOf("2026-02-01T04:30:00+00:00")?.slice(0, 7)).toBe("2026-01");
   });
 });
