@@ -424,3 +424,56 @@ async function feeCovering(parkId: string, category: CostCategory): Promise<stri
     ((f.covers as string[]) ?? []).includes(category));
   return hit ? ((hit.label as string) ?? "recurring") : null;
 }
+
+/**
+ * A TYPICAL MONTH OF SHARED COST, and who is actually billed for it.
+ *
+ * Feeds the "what does adding a lot do" line on /park/lots. Uses the most
+ * recent month that HAS costs rather than the current one — the water bill for
+ * August arrives in September, so asking about today would show $0 for the
+ * first three weeks of every month and make the impact line silently vanish.
+ *
+ * Returns 0 when he has recorded nothing yet, and the screen then says nothing
+ * rather than inventing a comparison.
+ */
+export async function getSharedCostBaseline(parkId: string): Promise<{
+  monthlyShared: number;
+  payersNow: number;
+}> {
+  if (!(await assertMyPark(parkId))) return { monthlyShared: 0, payersNow: 0 };
+  const admin = createServiceClient();
+
+  const [{ data: costs }, { data: lots }] = await Promise.all([
+    admin.from("park_costs")
+      .select("category, amount_paid, period_start")
+      .eq("park_id", parkId)
+      .order("period_start", { ascending: false })
+      .limit(40),
+    admin.from("park_lots")
+      .select("id, lifecycle, park_owned_home").eq("park_id", parkId),
+  ]);
+
+  // Only what actually gets split. `unit_electric` is a park-owned home's own
+  // power and never touches a resident (0069, enforced by canSplit).
+  const splittable = (costs ?? []).filter((c) => canSplit(c.category as CostCategory));
+  const latest = splittable[0]?.period_start as string | undefined;
+  const monthlyShared = latest
+    ? splittable
+        .filter((c) => String(c.period_start).slice(0, 7) === latest.slice(0, 7))
+        .reduce((sum, c) => sum + Number(c.amount_paid ?? 0), 0)
+    : 0;
+
+  const live = (lots ?? []).filter((l) => (l.lifecycle as string ?? "live") === "live");
+  const liveIds = live.map((l) => l.id as string);
+  const { data: stays } = liveIds.length
+    ? await admin.from("lot_reservations").select("park_lot_id")
+        .in("park_lot_id", liveIds).in("status", ["approved", "active"])
+    : { data: [] as Record<string, unknown>[] };
+  const occupied = new Set((stays ?? []).map((s) => s.park_lot_id as string));
+
+  const payersNow = live.filter(
+    (l) => occupied.has(l.id as string) && !l.park_owned_home,
+  ).length;
+
+  return { monthlyShared: Math.round(monthlyShared * 100) / 100, payersNow };
+}

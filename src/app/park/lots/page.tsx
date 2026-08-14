@@ -2,6 +2,8 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { ParkNav } from "@/components/ParkNav";
 import { ParkLots, type LotView } from "@/components/ParkLots";
+import { AddLots } from "@/components/AddLots";
+import { getSharedCostBaseline } from "@/app/park/cost-actions";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark, getParkLots } from "@/app/park/data";
 
@@ -54,11 +56,26 @@ export default async function ParkLotsPage() {
       ? `${String(l.season.closeMonth).padStart(2, "0")}-${String(l.season.closeDay).padStart(2, "0")}` : "",
   }));
 
+  // THE NUMBERS THE IMPACT LINE NEEDS. Rentable is what a cost is divided BY;
+  // payers are the lots that actually have somebody to bill. Conflating them
+  // is the mistake both the allocator and my own helper made, so they are
+  // counted separately and named separately here too.
+  const rentableNow = lots.filter((l) => (l.lot.lifecycle ?? "live") === "live").length;
+  const { monthlyShared, payersNow } = await getSharedCostBaseline(park.id);
+
   return (
     <>
       <TopBar />
       <ParkNav parkName={park.name} live={park.active} />
       <ParkLots parkId={park.id} lots={view} />
+      <div className="wrap" style={{ paddingTop: 0, paddingBottom: 40 }}>
+        <AddLots
+          parkId={park.id}
+          rentableNow={rentableNow}
+          payersNow={payersNow}
+          monthlyShared={monthlyShared}
+        />
+      </div>
     </>
   );
 }
