@@ -7,6 +7,7 @@ import { fleetJobCap, fleetMinuteBudget, fitsTimeBudget, jobMinutesOf, DEFAULT_J
 import { getVendorScores } from "@/lib/scoring-data";
 import { toISODate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
+import { groundsFor } from "@/app/park/rate-data";
 
 // The margin floor now lives in the DATABASE (platform_settings, rule 8) —
 // read via getPlatformSettings(); owner-tunable from the ops dashboard.
@@ -30,7 +31,17 @@ export async function loadPricingProfileById(
     admin.from("toys").select("name").eq("property_id", propertyId),
   ]);
   if (!prop) return null;
+
+  // A PARK'S GROUNDS HAS LOTS, and every park price counts them. Without this
+  // the profile carried no `lots` key at all, so `base + unit_rate x lots`
+  // collapsed to `base` on every surface that prices through this loader: the
+  // crew's rate on the open board, the fill-in claim, the vendor cost written
+  // at assignment (which is the margin), autopilot's locked price, and the
+  // nightly repricing. A lake house has no lots and is unaffected.
+  const grounds = await groundsFor(propertyId);
+
   return {
+    ...(grounds ? { lots: grounds.lots } : {}),
     sqft: Number(prop.sqft ?? 0),
     beds: Number(prop.beds ?? 0),
     baths: Number(prop.baths ?? 0),

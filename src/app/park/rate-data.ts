@@ -31,3 +31,31 @@ export async function loadParkRates(parkId: string): Promise<ParkRates> {
     ]),
   );
 }
+
+/**
+ * IS THIS PROPERTY A PARK'S GROUNDS, AND HOW MANY LOTS?
+ *
+ * Every park price is `base + unit_rate x live lots`, so a pricing profile
+ * without `lots` prices a park service at its base and nothing else. That is
+ * how a crew's $4-a-lot mow rate became a flat $16 on the open board, and how
+ * autopilot told a park owner to "check your property profile" about a service
+ * the previous screen priced at $100.
+ */
+export async function groundsFor(
+  propertyId: string,
+): Promise<{ parkId: string; lots: number } | null> {
+  const admin = createServiceClient();
+  const { data: park } = await admin
+    .from("parks")
+    .select("id")
+    .eq("service_property_id", propertyId)
+    .maybeSingle();
+  if (!park?.id) return null;
+
+  const { count } = await admin
+    .from("park_lots")
+    .select("id", { count: "exact", head: true })
+    .eq("park_id", park.id as string)
+    .eq("lifecycle", "live");
+  return { parkId: park.id as string, lots: count ?? 0 };
+}

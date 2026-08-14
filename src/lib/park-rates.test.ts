@@ -109,3 +109,36 @@ describe("the screen and the invoice agree", () => {
     expect(Number.isInteger(engine)).toBe(true);
   });
 });
+
+describe("a pricing profile that forgot the lot count", () => {
+  /**
+   * THE AUDIT FINDING, pinned. `loadPricingProfileById` — the loader behind the
+   * crew's rate on the open board, the fill-in claim, the vendor cost written at
+   * assignment, autopilot's locked price and the nightly repricing — returned no
+   * `lots` key at all.
+   *
+   * `serviceApplies` counts `lots` first, so the result was not a low price: it
+   * was NOTHING. And because dispatch reads a rate of 0 as "no rate set"
+   * (dispatch.ts:214, :283), every park job was unassignable with a blocker that
+   * blamed the crew for a rate the crew had entered. No money was mispriced —
+   * no crew could win at $0 — but no park job could ever be filled either, and
+   * autopilot refused outright, telling a park owner to check a property profile
+   * a park's grounds does not have.
+   */
+  const rule = () => withParkRate({ ...MOW, id: "s" }, rates([["s", 16, 4]]));
+
+  it("prices a park rate at NOTHING, not at its base", () => {
+    const noLots = {} as unknown as PricingProfile;
+    expect(priceService(rule(), noLots)).toBe(0);
+  });
+
+  it("is right once the count is there", () => {
+    expect(priceService(rule(), park(21))).toBe(100);
+  });
+
+  it("cannot be told apart from a park with no live lots", () => {
+    // Both read $0. That is exactly why this survived: the wrong answer was
+    // indistinguishable from a legitimate one, and neither raises an error.
+    expect(priceService(rule(), park(0))).toBe(0);
+  });
+});

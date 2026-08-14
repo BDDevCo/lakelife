@@ -3,6 +3,8 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { loadPricingProfileById } from "@/app/book/dispatch";
+import { groundsFor, loadParkRates } from "@/app/park/rate-data";
+import { withParkRate } from "@/lib/park-rates";
 
 /**
  * AUTOPILOT enrollment (§8d) — a PER-SERVICE toggle, never a bundle. Turning a
@@ -64,17 +66,31 @@ export async function setAutopilot(propertyId: string, serviceId: string, on: bo
   if (!svc || svc.active === false) return { ok: false, error: "That service isn't available." };
   const profile = await loadPricingProfileById(admin, propertyId);
   if (!profile) return { ok: false, error: "Set up your property profile first." };
+
+  // A PARK PAYS ITS OWN RATE (0115). The global row for a grounds service
+  // carries no price, so without this a park owner tapping "Autopilot this" on
+  // a mow the previous screen priced at $100 was told to check a property
+  // profile a park's grounds does not have.
+  const grounds = await groundsFor(propertyId);
+  const rule: ServiceRule = {
+    name: svc.name as string,
+    pricing_model: svc.pricing_model as ServiceRule["pricing_model"],
+    base: Number(svc.base ?? 0),
+    unit_rate: Number(svc.unit_rate ?? 0),
+    band_pricing: (svc.band_pricing as ServiceRule["band_pricing"]) ?? null,
+  };
   const locked = priceService(
-    {
-      name: svc.name as string,
-      pricing_model: svc.pricing_model as ServiceRule["pricing_model"],
-      base: Number(svc.base ?? 0),
-      unit_rate: Number(svc.unit_rate ?? 0),
-      band_pricing: (svc.band_pricing as ServiceRule["band_pricing"]) ?? null,
-    },
+    grounds ? withParkRate({ ...rule, id: serviceId }, await loadParkRates(grounds.parkId)) : rule,
     profile,
   );
-  if (!(locked > 0)) return { ok: false, error: "We couldn't price this service for your place — check your property profile." };
+  if (!(locked > 0)) {
+    return {
+      ok: false,
+      error: grounds
+        ? `We can't lock a price for ${svc.name} — set what your park pays for it on the park's Services page first.`
+        : "We couldn't price this service for your place — check your property profile.",
+    };
+  }
 
   const { error } = await admin
     .from("autopilot_enrollments")
