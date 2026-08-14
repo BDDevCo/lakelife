@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseRentRoll } from "@/lib/roll-parse";
-import { planImport, checkTotals, statedTotalFrom } from "./import-helpers";
+import { planImport, checkTotals, statedTotalFrom, emptyLotsFrom } from "./import-helpers";
+import { allocateCost, type CostLot } from "./cost-helpers";
 
 /**
  * THE HAVEN @ PRETTY LAKE — the real rent roll for the park being bought.
@@ -95,5 +96,96 @@ describe("The Haven — the real roll", () => {
     });
     const t = checkTotals(5200, plan.rows.filter((r) => !r.skipped));
     expect(t!.ties).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// END TO END: THE REAL ROLL PRODUCES A REAL DENOMINATOR.
+//
+// Everything built in 0112 hangs on this. "Divide a cost by every rentable lot
+// and let the park carry the empties" is inert unless the empties EXIST — and
+// until now the importer wrote them down as notes and created nothing, so The
+// Haven would have come in as 20 lots with nothing to carry.
+// ---------------------------------------------------------------------------
+describe("The Haven — the roll becomes a denominator", () => {
+  const parsed = parseRentRoll(HAVEN);
+
+  const empties = emptyLotsFrom(
+    [...parsed.vacantDeclared, ...parsed.silentLots],
+    [],
+    parsed.rows.map((r) => r.lot?.value ?? "").filter(Boolean),
+  );
+
+  it("separates the gap in the numbering from the pads he has not built", () => {
+    expect(empties.filter((e) => e.rentable).map((e) => e.label)).toEqual(["LOT3"]);
+    expect(empties.filter((e) => !e.rentable).map((e) => e.label))
+      .toEqual(["LOT22", "LOT23", "LOT24", "LOT25"]);
+  });
+
+  it("creates all five, so nothing is invisible on the reconcile screen", () => {
+    const plan = planImport({
+      rows: parsed.rows,
+      lots: [],
+      liveStays: [],
+      cutoverISO: CUTOVER,
+      season: null,
+      namelessRoll: !parsed.shape.hasNameColumn,
+      emptyLots: empties,
+    });
+    for (const label of ["LOT3", "LOT22", "LOT23", "LOT24", "LOT25"]) {
+      expect(plan.lotsToCreate).toContain(label);
+    }
+  });
+
+  // LOT 7 HAS A ROW AND NO READABLE LABEL. "Lot 7 - Double Wide Owned" is his
+  // own home on the roll at "- $", and the parser will not guess a lot number
+  // out of a sentence — so it becomes a question rather than a silent lot.
+  // That is right, and it is also why the denominator is 20 until he answers
+  // it and 21 after. Asserted so nobody later "fixes" the parser into
+  // inventing lots out of prose.
+  it("asks about the double-wide rather than inventing a lot from prose", () => {
+    const billed = parsed.rows.map((r) => r.lot?.value ?? "").filter(Boolean);
+    expect(billed).toHaveLength(19);
+    expect(billed).not.toContain("LOT7");
+    expect(parsed.rows).toHaveLength(20);          // the row exists; the label does not
+  });
+
+  // THE NUMBER THE WHOLE CHANGE RESTS ON. 19 labelled + the gap at Lot 3 + the
+  // double-wide once he confirms it = 21. The four on the proforma are not
+  // lots yet: counting them would divide every resident's water bill by 25 —
+  // a 16% cut in each share and roughly $217 a month absorbed for pads that
+  // do not exist.
+  it("lands on 21 rentable lots, not 25", () => {
+    const billed = parsed.rows.map((r) => r.lot?.value ?? "").filter(Boolean);
+    const rentable = billed.length + empties.filter((e) => e.rentable).length;
+    expect(rentable).toBe(20);                     // before he answers Lot 7
+    expect(rentable + 1).toBe(21);                 // after
+    expect(empties.filter((e) => !e.rentable)).toHaveLength(4);
+  });
+
+  // And the arithmetic that denominator produces, on his own water bill.
+  it("gives every household the same share, and the park the empties", () => {
+    const billed = parsed.rows.map((r) => r.lot?.value ?? "").filter(Boolean);
+    // Lot 7 is his own double-wide — billed on the roll at "- $", so it is a
+    // lot he owns rather than a household. 19 households pay.
+    const lots: CostLot[] = [
+      // The 19 households the roll bills.
+      ...billed.map((label, i) => ({
+        lotId: `l${label}`, lotNumber: label, reservationId: `r${i}`,
+      })),
+      // The gap at Lot 3 — a real pad with nobody on it.
+      { lotId: "lLOT3", lotNumber: "LOT3", reservationId: null },
+      // His own double-wide, once he has answered the importer's question.
+      // In the divisor, never a payer.
+      { lotId: "lLOT7", lotNumber: "LOT7", reservationId: null, parkOwned: true },
+    ];
+    const a = allocateCost({ amountPaid: 1140, method: "per_lot", lots });
+
+    expect(a.denominatorLots).toBe(21);
+    expect(a.payerLots).toBe(19);
+    expect(a.shares[0].amount).toBe(54.28);
+    expect(a.shares[0].basis).toBe("1 of 21 rentable lots");
+    expect(a.allocated).toBe(1031.32);
+    expect(a.parkAbsorbs).toBe(108.68);   // his empty pad + his own double-wide
   });
 });

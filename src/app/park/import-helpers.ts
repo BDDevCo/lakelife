@@ -208,6 +208,8 @@ export interface ImportPlan {
   needsYou: PlannedRow[];
   /** Lot labels that do not exist yet and would be created. */
   lotsToCreate: string[];
+  /** The pads the roll named but did not bill, and whether each exists yet. */
+  emptyLots?: EmptyLot[];
   /** What the rent roll will say, if he commits exactly this. */
   monthlyTotal: number;
   /**
@@ -273,7 +275,7 @@ export interface PlanInput {
    * by every RENTABLE lot, and the park carries the empties. A lot that was
    * never created cannot be carried, so the whole rule silently did nothing.
    */
-  emptyLotLabels?: readonly string[];
+  emptyLots?: readonly EmptyLot[];
 }
 
 /**
@@ -428,10 +430,11 @@ export function planImport(input: PlanInput): ImportPlan {
       needsYou: [],
       lotsToCreate: [...new Set([
         ...rates.filter((r) => r.createsLot).map((r) => r.lotLabel),
-        ...(input.emptyLotLabels ?? []),
+        ...(input.emptyLots ?? []).map((e) => e.label),
       ])],
       monthlyTotal: rates.reduce((sum, r) => sum + (r.amount ?? 0), 0),
       namelessRoll: true,
+      emptyLots: [...(input.emptyLots ?? [])],
       rates,
     };
   }
@@ -445,7 +448,7 @@ export function planImport(input: PlanInput): ImportPlan {
   const lotsToCreate = [
     ...new Set([
       ...ready.filter((p) => p.createsLot && p.lotLabel).map((p) => p.lotLabel!),
-      ...(input.emptyLotLabels ?? []),
+      ...(input.emptyLots ?? []).map((e) => e.label),
     ]),
   ];
 
@@ -479,7 +482,7 @@ export function planImport(input: PlanInput): ImportPlan {
       createsLot: p.createsLot,
     }));
 
-  return { rows: planned, ready, needsYou, lotsToCreate, monthlyTotal, namelessRoll: false, rates };
+  return { rows: planned, ready, needsYou, lotsToCreate, monthlyTotal, namelessRoll: false, emptyLots: [...(input.emptyLots ?? [])], rates };
 }
 
 // ------------------------------------------------------------- the money ----
@@ -610,23 +613,68 @@ export function checkTotals(
  * rather than guessed at: inventing a lot is worse than missing one, because
  * a phantom lot silently dilutes every resident's utility share.
  */
-export function emptyLotLabelsFrom(
+export interface EmptyLot {
+  label: string;
+  /**
+   * Is this a pad that EXISTS and is empty, or one that does not exist yet?
+   *
+   * The difference is money. An existing empty lot belongs in the denominator
+   * and the park carries its share. A future one must not: on The Haven's real
+   * roll, lots 22-25 are pads he has not built, and counting them would divide
+   * every resident's water bill by 25 instead of 21 — cutting each share 16%
+   * and handing the park roughly $217 a month it does not owe.
+   */
+  rentable: boolean;
+}
+
+/**
+ * THE PADS THE ROLL DID NOT BILL.
+ *
+ * "Lot 22", "Lot 22 — vacant", "#7", a bare "3" — all name a pad with nobody
+ * on it. Anything with no readable number is skipped rather than guessed at:
+ * a phantom lot silently dilutes every resident's share, so missing one is
+ * better than inventing one.
+ *
+ * IN-RANGE OR BEYOND. A silent lot numbered BELOW the highest lot the roll
+ * actually billed is a gap in a real row of pedestals — Lot 3 sitting between
+ * a billed 2 and a billed 4. One numbered above it is inventory that does not
+ * exist yet. Both are created, so he can see and correct them; only the
+ * in-range ones are rentable.
+ *
+ * A non-numeric label (an "A" block) cannot be placed on that line, so it is
+ * treated as EXISTING — the conservative reading, since a lot he has to
+ * un-tick is safer than one he never sees.
+ */
+export function emptyLotsFrom(
   lines: readonly { text: string }[],
   existing: readonly { lotNumber: string }[] = [],
-): string[] {
+  billedLabels: readonly string[] = [],
+): EmptyLot[] {
+  const numOf = (label: string): number | null => {
+    const m = /(\d{1,4})/.exec(label);
+    return m ? Number(m[1]) : null;
+  };
+  const billedNums = billedLabels.map(numOf).filter((n): n is number => n != null);
+  const highestBilled = billedNums.length ? Math.max(...billedNums) : null;
+
   const have = new Set(existing.map((l) => l.lotNumber.trim().toLowerCase()));
-  const out: string[] = [];
+  const out: EmptyLot[] = [];
   const seen = new Set<string>();
 
   for (const { text } of lines) {
     const m = /^\s*(?:#\s*|(?:lot|site|space|unit|stall|pad)\s+)?([A-Za-z]{0,2}\d{1,4}[A-Za-z]?)\b/i
       .exec(text ?? "");
     if (!m) continue;
-    const label = m[1].trim();
+    // THE SAME SHAPE THE PARSER EMITS for a billed lot ("LOT1"), so a park
+    // does not end up with "LOT1" and "3" as lot numbers in the same roll.
+    const label = `LOT${m[1].trim().toUpperCase()}`.replace(/^LOTLOT/, "LOT");
     const key = label.toLowerCase();
     if (have.has(key) || seen.has(key)) continue;
     seen.add(key);
-    out.push(label);
+
+    const n = numOf(label);
+    const rentable = highestBilled == null || n == null || n <= highestBilled;
+    out.push({ label, rentable });
   }
   return out;
 }

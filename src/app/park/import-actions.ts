@@ -9,7 +9,7 @@ import { SITE_DEFAULTS } from "./park-helpers";
 import {
   planImport,
   statedTotalFrom,
-  emptyLotLabelsFrom,
+  emptyLotsFrom,
   type ImportPlan,
   type RowOverride,
   type SeasonWindow,
@@ -300,9 +300,13 @@ export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
     // The Haven came in as 19 lots instead of 21. A cost is divided by every
     // RENTABLE lot and the park carries the empties; a lot that does not exist
     // cannot be carried, and the rule silently did nothing.
-    emptyLotLabels: emptyLotLabelsFrom(
+    emptyLots: emptyLotsFrom(
       [...parsed.vacantDeclared, ...parsed.silentLots],
       lots.map((l) => ({ lotNumber: l.lotNumber })),
+      // The lots the sheet actually billed, so a silent pad numbered beyond
+      // them is read as inventory that does not exist yet rather than an empty
+      // one the park should be carrying.
+      parsed.rows.map((r) => r.lot?.value ?? "").filter(Boolean),
     ),
   });
 
@@ -438,7 +442,15 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
     if (row.matchedLotId && row.lotLabel) lotIdByLabel.set(row.lotLabel, row.matchedLotId);
   }
 
+  // A pad the roll named but never billed, and whether it exists yet. Beyond
+  // the highest billed lot means inventory he has not built — created so he
+  // can see it, but NOT rentable, so it stays out of every cost denominator.
+  const futureLots = new Set(
+    (loaded.plan.emptyLots ?? []).filter((e) => !e.rentable).map((e) => e.label),
+  );
+
   for (const label of loaded.plan.lotsToCreate) {
+    const planned = futureLots.has(label);
     const { data: created, error } = await admin
       .from("park_lots")
       .insert({
@@ -447,7 +459,8 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
         site_type: defaultSiteType,
         has_water: defaults.hasWater,
         has_sewer: defaults.hasSewer,
-        active: true,
+        active: !planned,
+        lifecycle: planned ? "planned" : "live",
       })
       .select("id")
       .single();

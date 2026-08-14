@@ -9,7 +9,7 @@ import {
   statedTotalFrom,
   importBlockerText,
   MAX_LOT_LABEL,
-  type ImportBlocker, emptyLotLabelsFrom,
+  type ImportBlocker, emptyLotsFrom,
 } from "./import-helpers";
 
 const CUTOVER = "2026-08-01";
@@ -445,19 +445,19 @@ describe("a NAMED roll carries rate cards too", () => {
 // ---------------------------------------------------------------------------
 describe("the lots nobody is on", () => {
   it("reads a label out of every way a roll names an empty pad", () => {
-    expect(emptyLotLabelsFrom([
+    expect(emptyLotsFrom([
       { text: "Lot 3" },
       { text: "Lot 22 — vacant" },
       { text: "#7" },
       { text: "12" },
       { text: "Site 9  (needs skirting)" },
-    ])).toEqual(["3", "22", "7", "12", "9"]);
+    ]).map((e) => e.label)).toEqual(["LOT3","LOT22","LOT7","LOT12","LOT9"]);
   });
 
   it("never invents one it cannot read", () => {
     // A phantom lot silently dilutes every resident's utility share, which is
     // worse than missing one.
-    expect(emptyLotLabelsFrom([
+    expect(emptyLotsFrom([
       { text: "vacant" },
       { text: "— see notes —" },
       { text: "" },
@@ -465,15 +465,60 @@ describe("the lots nobody is on", () => {
   });
 
   it("does not re-create a lot the park already has", () => {
-    expect(emptyLotLabelsFrom(
+    expect(emptyLotsFrom(
       [{ text: "Lot 3" }, { text: "Lot 22" }],
-      [{ lotNumber: "3" }],
-    )).toEqual(["22"]);
+      [{ lotNumber: "LOT3" }],
+    ).map((e) => e.label)).toEqual(["LOT22"]);
   });
 
   it("says each one once, however many times the sheet mentions it", () => {
-    expect(emptyLotLabelsFrom([
+    expect(emptyLotsFrom([
       { text: "Lot 22" }, { text: "lot 22" }, { text: "Lot 22 — vacant" },
-    ])).toEqual(["22"]);
+    ]).map((e) => e.label)).toEqual(["LOT22"]);
+  });
+});
+
+describe("a pad that exists versus one that does not yet", () => {
+  // THE HAVEN'S REAL ROLL. Lots 1-21 are billed (3 is a gap); 22-25 are pads
+  // he has not built. Counting those four would divide every resident's water
+  // bill by 25 instead of 21 — a 16% cut in each share, and about $217 a month
+  // the park would absorb for lots that do not exist.
+  const billed = ["1","2","4","5","6","7","8","9","10","11","12","13","14",
+                  "15","16","17","18","19","20","21"];
+
+  it("treats a gap inside the numbering as a real empty pad", () => {
+    const [three] = emptyLotsFrom([{ text: "Lot 3" }], [], billed);
+    expect(three).toEqual({ label: "LOT3", rentable: true });
+  });
+
+  it("treats pads beyond the last billed lot as not built yet", () => {
+    const future = emptyLotsFrom(
+      [{ text: "Lot 22" }, { text: "Lot 23" }, { text: "Lot 24" }, { text: "Lot 25" }],
+      [], billed,
+    );
+    expect(future.every((e) => e.rentable === false)).toBe(true);
+    expect(future.map((e) => e.label)).toEqual(["LOT22","LOT23","LOT24","LOT25"]);
+  });
+
+  it("keeps The Haven at 21 rentable lots, not 25", () => {
+    const all = emptyLotsFrom(
+      [{ text: "Lot 3" }, { text: "Lot 22" }, { text: "Lot 23" },
+       { text: "Lot 24" }, { text: "Lot 25" }],
+      [], billed,
+    );
+    expect(billed.length + all.filter((e) => e.rentable).length).toBe(21);
+  });
+
+  // A label with no digit at all ("Lot A") is not read as a lot — same rule as
+  // "never invents one it cannot read". A phantom pad dilutes every share.
+  it("does not invent a lot from a label with no number in it", () => {
+    expect(emptyLotsFrom([{ text: "Lot A" }], [], billed)).toEqual([]);
+  });
+
+  // A lettered pad that DOES carry a number sits on the line normally.
+  it("places a lettered pad by its number", () => {
+    expect(emptyLotsFrom([{ text: "Lot 12A" }], [], billed)[0])
+      .toEqual({ label: "LOT12A", rentable: true });
+    expect(emptyLotsFrom([{ text: "Lot 30B" }], [], billed)[0].rentable).toBe(false);
   });
 });
