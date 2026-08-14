@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   allocateCost, allocationSummary, recoveryByCategory,
   type CostLot, type CostCategory, canSplit, whyNotSplit,
+  carriedLine,
 } from "./cost-helpers";
 
 /** The Haven: 19 occupied lots, 2 empty (3 and 22). */
@@ -249,5 +250,88 @@ describe("what may be split at all", () => {
       expect(canSplit(c)).toBe(true);
       expect(whyNotSplit(c)).toBe("");
     }
+  });
+});
+
+describe("what the park carried", () => {
+  /**
+   * 0112 wrote park_absorbed / denominator_lots / payer_lots and NOTHING read
+   * them. The row said "$343.71 across 19 lots" — true, and it hides both the
+   * 21-lot denominator and the $36.29 the owner paid for the two empty pads.
+   * He saw that figure once, in the preview before saving, and never again.
+   */
+  const HAVEN = {
+    allocatedTotal: 343.71, amountPaid: 380,
+    absorbed: 36.29, denominatorLots: 21, payerLots: 19,
+    carry: "split" as const,
+  };
+
+  it("names the denominator, the payers, and the money", () => {
+    const line = carriedLine(HAVEN);
+    expect(line).toContain("$343.71");
+    expect(line).toContain("19 of 21");
+    expect(line).toContain("$36.29");
+  });
+
+  it("adds up: what was split plus what he carried is what he paid", () => {
+    expect(HAVEN.allocatedTotal + HAVEN.absorbed).toBeCloseTo(HAVEN.amountPaid, 2);
+  });
+
+  it("says nothing about dollars for a row with no snapshot", () => {
+    // THE ONE THAT MATTERS. `park_absorbed` is NOT NULL DEFAULT 0, so a bill
+    // written before 0112 reads exactly 0.00 — indistinguishable from a bill
+    // that genuinely recovered in full if you test on the amount. Announcing
+    // "$0.00 carried" about something nobody measured is the confident wrong
+    // number this whole module exists to avoid.
+    const line = carriedLine({
+      ...HAVEN, absorbed: null, denominatorLots: null, payerLots: null,
+      carry: "unrecorded",
+    });
+    expect(line).not.toMatch(/\$/);
+    expect(line).toContain("can't say");
+  });
+
+  it("explains a bill a fee already covers instead of calling it unsplit", () => {
+    const line = carriedLine({
+      allocatedTotal: 0, amountPaid: 380, absorbed: 380,
+      denominatorLots: null, payerLots: null, carry: "covered_by_fee",
+    });
+    expect(line).toContain("already covers");
+    expect(line).not.toContain("carried nothing");
+  });
+
+  it("says he carried all of it when there was nobody to bill", () => {
+    const line = carriedLine({
+      allocatedTotal: 0, amountPaid: 380, absorbed: 380,
+      denominatorLots: 21, payerLots: 0, carry: "split",
+    });
+    expect(line).toContain("nobody to bill");
+    expect(line).toContain("$380.00");
+  });
+
+  it("says he carried nothing when every lot paid", () => {
+    const line = carriedLine({
+      allocatedTotal: 380, amountPaid: 380, absorbed: 0,
+      denominatorLots: 21, payerLots: 21, carry: "split",
+    });
+    expect(line).toContain("all 21 lots");
+    expect(line).toContain("carried nothing");
+  });
+
+  it("counts unmeasured rows instead of totalling them as zero", () => {
+    const r = recoveryByCategory([
+      { category: "water", amountPaid: 380, allocatedTotal: 343.71, billedTotal: 343.71, absorbed: 36.29 },
+      { category: "water", amountPaid: 400, allocatedTotal: 400, billedTotal: 400, absorbed: null },
+    ]);
+    expect(r.absorbed).toBeCloseTo(36.29, 2);
+    // Not 0 — a count, so the screen can say the total is understated.
+    expect(r.absorbedUnknown).toBe(1);
+  });
+
+  it("leaves `net` alone — absorbed decomposes paid, not billed", () => {
+    const r = recoveryByCategory([
+      { category: "water", amountPaid: 380, allocatedTotal: 343.71, billedTotal: 343.71, absorbed: 36.29 },
+    ]);
+    expect(r.net).toBeCloseTo(343.71 - 380, 2);
   });
 });

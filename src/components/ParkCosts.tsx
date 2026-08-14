@@ -6,7 +6,7 @@ import { toast } from "@/components/Toast";
 import { previewCostSplit, recordCost, removeCost, type CostRow, type BillableParkJob } from "@/app/park/cost-actions";
 import {
   COST_CATEGORY_LABEL, allocationSummary,
-  type CostCategory, type CostAllocation,
+  type CostCategory, type CostAllocation, carriedLine,
 } from "@/app/park/cost-helpers";
 import type { recoveryByCategory } from "@/app/park/cost-helpers";
 
@@ -123,11 +123,26 @@ export function ParkCosts({
                 reassured him about money no household had been asked for. */}
             <Row label="split across the lots" value={money(summary.allocated)} />
             <Row label="actually on a bill" value={money(summary.billed)} />
+            {/* 0112's whole point, and until now it lived only in the preview:
+                the empty pads are the owner's to pay for. */}
+            {summary.absorbed > 0 && (
+              <Row label="you carried for the empty lots" value={money(summary.absorbed)} />
+            )}
+            {summary.absorbedUnknown > 0 && (
+              <p className="mut" style={{ fontSize: 12, margin: "4px 0 0", lineHeight: 1.5 }}>
+                {summary.absorbedUnknown === 1
+                  ? "One older bill was recorded before we started tracking who carried what, so the figure above is lower than the truth."
+                  : `${summary.absorbedUnknown} older bills were recorded before we started tracking who carried what, so the figure above is lower than the truth.`}
+              </p>
+            )}
             {summary.allocated > summary.billed && (
               <p className="mut" style={{ fontSize: 12, margin: "4px 0 0", lineHeight: 1.5 }}>
-                {money(summary.allocated - summary.billed)} is split but not yet
-                billed — it goes onto each household&apos;s next rent bill when
-                you raise the month.
+                {/* The explicit space is load-bearing: JSX drops the one after
+                    a line-leading interpolation, and this rendered
+                    "$443.71is split but not yet billed" on screen. */}
+                {money(summary.allocated - summary.billed)}{" "}is split but not
+                yet billed — it goes onto each household&apos;s next rent bill
+                when you raise the month.
               </p>
             )}
             <Row
@@ -288,17 +303,29 @@ export function ParkCosts({
               <p style={{ margin: "0 0 10px", fontSize: 16 }}>
                 {allocationSummary(preview, category)}
               </p>
+              {/* THE PER-LOT BREAKDOWN only exists when somebody is being
+                  billed. The DECISION always does. */}
               {preview.shares.length > 0 && (
-                <>
-                  <div style={{ display: "grid", gap: 2, fontVariantNumeric: "tabular-nums", marginBottom: 12 }}>
-                    <Row label="you paid" value={money(amountNum())} />
-                    <Row label="passed on" value={money(preview.allocated)} />
-                    <Row label="you carry" value={money(preview.parkAbsorbs)} strong />
-                  </div>
-                  <button className="ll-btn" onClick={save} disabled={busy}>
-                    Save it and split it
-                  </button>
-                </>
+                <div style={{ display: "grid", gap: 2, fontVariantNumeric: "tabular-nums", marginBottom: 12 }}>
+                  <Row label="you paid" value={money(amountNum())} />
+                  <Row label="passed on" value={money(preview.allocated)} />
+                  <Row label="you carry" value={money(preview.parkAbsorbs)} strong />
+                </div>
+              )}
+
+              {/* SAVING WAS GATED ON THERE BEING SOMEBODY TO BILL.
+                  A park with no tenancies on the roll — The Haven until
+                  closing, and every park on its first day — got the sentence
+                  "nobody is on a lot, so you carry all $380.00" and no button.
+                  The server has supported this since 0112 ("an empty park is no
+                  longer a refusal: the bill is recorded and the park carries
+                  all of it"); only the screen refused. A bill he cannot record
+                  is a bill missing from his books and from his own fee
+                  comparison, which is the one thing this page is for. */}
+              {preview.problem == null && (
+                <button className="ll-btn" onClick={save} disabled={busy}>
+                  {preview.shares.length > 0 ? "Save it and split it" : "Record it — I carry this one"}
+                </button>
               )}
             </div>
           )}
@@ -318,8 +345,11 @@ export function ParkCosts({
                   {r.periodStart} → {r.periodEnd}
                 </span>
                 <span style={{ flex: 1 }}>{money(r.amountPaid)}</span>
-                <span className="mut">
-                  {money(r.allocatedTotal)} across {r.lots} {r.lots === 1 ? "lot" : "lots"}
+                {/* WHAT HE CARRIED, on the row, not just in the preview he saw
+                    once before saving. "across 19 lots" was true and hid the
+                    denominator of 21 and the money that difference cost him. */}
+                <span className="mut" style={{ flex: 1, minWidth: 240 }}>
+                  {carriedLine(r)}
                 </span>
                 <button className="ll-btn ghost" disabled={busy}
                   onClick={() =>

@@ -274,7 +274,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
 
   const [{ data: costs }, { data: rentChanges }, { data: states }, { data: noteRows }] =
     await Promise.all([
-      admin.from("park_costs").select("id, category, amount_paid, allocated_total").eq("park_id", parkId),
+      admin.from("park_costs").select("id, category, amount_paid, allocated_total, park_absorbed, denominator_lots, payer_lots").eq("park_id", parkId),
       // lot_rent_changes keys on park_id and RESERVATION_id — it has no
       // park_lot_id at all. Two wrong column names in one select, and neither
       // is a type error: supabase-js returns {error, data:null}, so the notice
@@ -335,8 +335,17 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     lateCount: monthSummary.lateCount,
     lateAmount: monthSummary.lateAmount,
     disputedCount: monthSummary.disputedCount,
+    // A BILL THAT WAS NEVER SPLIT — but only the ones he can actually do
+    // something about. Two shapes land on `allocated_total === 0` and are
+    // exactly right, and both would have sat here as a permanent chore he
+    // could not clear, which is how a person learns to stop reading this list:
+    //   * a recurring fee already covers the category, so recordCost
+    //     deliberately did not split it (it says so in the toast at the time)
+    //   * the park had no paying lots at all, so there was nobody to bill
     unallocatedCosts: (costs ?? [])
       .filter((c) => Number(c.allocated_total) === 0 && Number(c.amount_paid) > 0)
+      .filter((c) => !(c.denominator_lots == null && Number(c.park_absorbed ?? 0) > 0))
+      .filter((c) => !(c.denominator_lots != null && Number(c.payer_lots ?? 0) === 0))
       .map((c) => ({
         id: c.id as string,
         label: String(c.category ?? "A cost"),

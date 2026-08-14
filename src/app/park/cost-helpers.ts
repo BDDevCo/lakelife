@@ -266,6 +266,22 @@ export interface RecoveryLine {
   category: CostCategory;
   paid: number;
   /**
+   * WHAT THE PARK CARRIED, because a lot was empty or park-owned (0112).
+   *
+   * A decomposition of `paid`, not of `billed`: for every measured row
+   * `allocated + absorbed === amountPaid`. Deliberately NOT folded into `net`,
+   * which answers a different question — net is billed minus paid.
+   */
+  absorbed: number;
+  /**
+   * HOW MANY ROWS IN THIS CATEGORY HAVE NO SNAPSHOT, so `absorbed` above is
+   * understated by an unknown amount. Counted rather than guessed: a bill
+   * recorded before 0112 reads park_absorbed = 0.00 because that is the column
+   * default, and treating that as "carried nothing" is exactly the confident
+   * wrong number this module exists to avoid.
+   */
+  absorbedUnknown: number;
+  /**
    * ALLOCATED, not recovered.
    *
    * This was named `recovered` and computed from `park_costs.allocated_total`
@@ -289,6 +305,8 @@ export function recoveryByCategory(
     allocatedTotal: number;
     /** Sum of this cost's shares that have actually reached a bill (0104). */
     billedTotal?: number;
+    /** null = this row carries no snapshot; see RecoveryLine.absorbedUnknown. */
+    absorbed?: number | null;
   }[],
 ): {
   lines: RecoveryLine[];
@@ -296,14 +314,21 @@ export function recoveryByCategory(
   allocated: number;
   billed: number;
   net: number;
+  absorbed: number;
+  absorbedUnknown: number;
 } {
   const by = new Map<CostCategory, RecoveryLine>();
   for (const c of costs) {
     const cur = by.get(c.category)
-      ?? { category: c.category, paid: 0, allocated: 0, billed: 0, net: 0 };
+      ?? { category: c.category, paid: 0, allocated: 0, billed: 0, net: 0,
+           absorbed: 0, absorbedUnknown: 0 };
     cur.paid = round2(cur.paid + c.amountPaid);
     cur.allocated = round2(cur.allocated + c.allocatedTotal);
     cur.billed = round2(cur.billed + (c.billedTotal ?? 0));
+    // An unmeasured row adds to the COUNT, never to the total — adding 0 would
+    // make an unknown look like a zero.
+    if (c.absorbed == null) cur.absorbedUnknown += 1;
+    else cur.absorbed = round2(cur.absorbed + c.absorbed);
     // NET IS AGAINST WHAT WAS BILLED, not what was intended. Netting off an
     // allocation nobody was asked for tells the owner he broke even on a bill
     // he is still carrying in full.
@@ -314,5 +339,52 @@ export function recoveryByCategory(
   const paid = round2(lines.reduce((s, l) => s + l.paid, 0));
   const allocated = round2(lines.reduce((s, l) => s + l.allocated, 0));
   const billed = round2(lines.reduce((s, l) => s + l.billed, 0));
-  return { lines, paid, allocated, billed, net: round2(billed - paid) };
+  const absorbed = round2(lines.reduce((s, l) => s + l.absorbed, 0));
+  const absorbedUnknown = lines.reduce((s, l) => s + l.absorbedUnknown, 0);
+  return { lines, paid, allocated, billed, net: round2(billed - paid), absorbed, absorbedUnknown };
+}
+
+/**
+ * ONE BILL, IN A SENTENCE — including what the park carried.
+ *
+ * The row used to read "$343.71 across 19 lots", which is true and hides the
+ * thing 0112 was built to make visible: the denominator is 21, and the $36.29
+ * difference is the owner's, because two pads are empty. He saw that number
+ * once, in the preview before saving, and never again.
+ *
+ * Branch order matters. "We did not record it" must win over any arithmetic,
+ * and it must carry NO dollar figure at all — `park_absorbed` is NOT NULL
+ * DEFAULT 0, so a pre-0112 row would otherwise announce "$0.00 carried" with
+ * complete confidence about something nobody measured.
+ */
+export function carriedLine(r: {
+  allocatedTotal: number;
+  amountPaid: number;
+  absorbed: number | null;
+  denominatorLots: number | null;
+  payerLots: number | null;
+  carry: "split" | "covered_by_fee" | "unrecorded";
+}): string {
+  const money = (n: number) => `$${n.toFixed(2)}`;
+
+  if (r.carry === "unrecorded") {
+    return "Recorded before we started keeping track of who carried what — the split is right, but we can't say what you covered.";
+  }
+  if (r.carry === "covered_by_fee") {
+    return `${money(r.amountPaid)} — your recurring fee already covers this, so it wasn't split again.`;
+  }
+
+  const denom = r.denominatorLots ?? 0;
+  const payers = r.payerLots ?? 0;
+  const absorbed = r.absorbed ?? 0;
+  const lot = (n: number) => (n === 1 ? "lot" : "lots");
+
+  if (payers === 0) {
+    return `${money(r.amountPaid)} — nobody to bill, so you carried all of it.`;
+  }
+  if (absorbed === 0) {
+    return `${money(r.allocatedTotal)} across all ${denom} ${lot(denom)} — you carried nothing.`;
+  }
+  const empties = denom - payers;
+  return `${money(r.allocatedTotal)} across ${payers} of ${denom} ${lot(denom)} — you carried ${money(absorbed)} for the ${empties} with nobody in ${empties === 1 ? "it" : "them"}.`;
 }

@@ -126,6 +126,20 @@ export async function recordCost(
    */
   sourceJobId?: string | null,
 ): Promise<ParkResult & { perLot?: number; parkAbsorbs?: number }> {
+  // WHOSE PARK IS THIS. Found by an audit, and it was exploitable.
+  //
+  // Every other exported action in this file asserts membership on its first
+  // line; this one did not. The split path was safe by accident — it inherits
+  // the check from `previewCostSplit` below — but the fee-covered branch
+  // returns BEFORE reaching it, having already inserted a park_costs row with
+  // the service-role client for whatever park_id the browser sent. This file
+  // is "use server", so every export is a public endpoint.
+  //
+  // The damage was not a resident's bill (that branch writes no shares); it was
+  // false expenses in somebody else's books, their CPA statement, and the "is
+  // my fee covering my costs" comparison the whole screen is built around.
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
   // NEVER SPLIT A HOME THE PARK OWNS. Guarded here as well as hidden from the
   // dropdown, because the dropdown is a courtesy and this is the rule — and a
   // category arrives from a browser.
@@ -270,6 +284,20 @@ export interface CostRow {
   lots: number;
   /** Of `allocatedTotal`, how much has actually landed on a bill (0104). */
   billedTotal: number;
+  /**
+   * WHAT THE PARK CARRIED because a lot was empty or park-owned (0112).
+   *
+   * NULL means "no snapshot on this row", which is NOT the same as zero.
+   * `park_absorbed` is NOT NULL DEFAULT 0, so a row written before 0112 reads
+   * exactly 0.00 and is indistinguishable from a bill that genuinely recovered
+   * in full. `denominator_lots` is the only nullable one of the three and is
+   * therefore the only honest test for "was this ever measured".
+   */
+  absorbed: number | null;
+  denominatorLots: number | null;
+  payerLots: number | null;
+  /** How this bill came to rest, so the screen never has to re-derive it. */
+  carry: "split" | "covered_by_fee" | "unrecorded";
 }
 
 export async function listCosts(parkId: string): Promise<{
@@ -282,7 +310,7 @@ export async function listCosts(parkId: string): Promise<{
   const admin = createServiceClient();
   const { data } = await admin
     .from("park_costs")
-    .select("id, category, period_start, period_end, amount_paid, allocated_total, source_note")
+    .select("id, category, period_start, period_end, amount_paid, allocated_total, source_note, park_absorbed, denominator_lots, payer_lots")
     .eq("park_id", parkId)
     .order("period_start", { ascending: false })
     .limit(120);
@@ -306,24 +334,37 @@ export async function listCosts(parkId: string): Promise<{
     }
   }
 
-  const rows: CostRow[] = (data ?? []).map((c) => ({
-    billedTotal: billed.get(c.id as string) ?? 0,
-    id: c.id as string,
-    category: c.category as CostCategory,
-    periodStart: c.period_start as string,
-    periodEnd: c.period_end as string,
-    amountPaid: Number(c.amount_paid),
-    allocatedTotal: Number(c.allocated_total),
-    sourceNote: (c.source_note as string) ?? null,
-    lots: counts.get(c.id as string) ?? 0,
-  }));
+  const rows: CostRow[] = (data ?? []).map((c) => {
+    // Derived ONCE, here, so the screen and the sentence-builder can never
+    // disagree about which kind of row this is.
+    const measured = c.denominator_lots != null;
+    const raw = Number(c.park_absorbed ?? 0);
+    const carry: CostRow["carry"] =
+      measured ? "split" : raw > 0 ? "covered_by_fee" : "unrecorded";
+
+    return {
+      billedTotal: billed.get(c.id as string) ?? 0,
+      id: c.id as string,
+      category: c.category as CostCategory,
+      periodStart: c.period_start as string,
+      periodEnd: c.period_end as string,
+      amountPaid: Number(c.amount_paid),
+      allocatedTotal: Number(c.allocated_total),
+      sourceNote: (c.source_note as string) ?? null,
+      lots: counts.get(c.id as string) ?? 0,
+      absorbed: carry === "unrecorded" ? null : raw,
+      denominatorLots: measured ? Number(c.denominator_lots) : null,
+      payerLots: measured ? Number(c.payer_lots) : null,
+      carry,
+    };
+  });
 
   return {
     rows,
     summary: recoveryByCategory(
       rows.map((r) => ({
         category: r.category, amountPaid: r.amountPaid, allocatedTotal: r.allocatedTotal,
-        billedTotal: r.billedTotal,
+        billedTotal: r.billedTotal, absorbed: r.absorbed,
       })),
     ),
   };
