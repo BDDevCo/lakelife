@@ -305,7 +305,12 @@ export function recoveryByCategory(
     allocatedTotal: number;
     /** Sum of this cost's shares that have actually reached a bill (0104). */
     billedTotal?: number;
-    /** null = this row carries no snapshot; see RecoveryLine.absorbedUnknown. */
+    /**
+     * VACANCY CARRY ONLY, or null when the row has no snapshot. A bill the
+     * park carries on purpose, or one a fee already covers, contributes 0 —
+     * `park_absorbed` on those rows is the whole bill and means something else
+     * entirely.
+     */
     absorbed?: number | null;
   }[],
 ): {
@@ -327,6 +332,12 @@ export function recoveryByCategory(
     cur.billed = round2(cur.billed + (c.billedTotal ?? 0));
     // An unmeasured row adds to the COUNT, never to the total — adding 0 would
     // make an unknown look like a zero.
+    // An unmeasured row adds to the COUNT, never to the total — adding 0 would
+    // make an unknown look like a zero. `listCosts` is the single place that
+    // decides what counts as vacancy carry: it sends 0 for a bill the park
+    // carries on purpose or one a fee covers, and null ONLY for a row with no
+    // snapshot at all. Re-deciding it here would give the two rules somewhere
+    // to drift apart.
     if (c.absorbed == null) cur.absorbedUnknown += 1;
     else cur.absorbed = round2(cur.absorbed + c.absorbed);
     // NET IS AGAINST WHAT WAS BILLED, not what was intended. Netting off an
@@ -393,6 +404,16 @@ export function carriedLine(r: {
     return `${money(r.allocatedTotal)} across all ${denom} ${lot(denom)} — you carried nothing.`;
   }
   const empties = denom - payers;
+
+  // EVERY LOT IS LET AND THERE IS STILL A REMAINDER. `allocateCost` floors each
+  // share to the cent on purpose, so a bill that does not divide evenly leaves
+  // the park a few cents even at full occupancy — and the sentence below would
+  // have blamed that on "the 0 with nobody in them". $1,433.17 across 21 lots
+  // is 13 cents of rounding, not a vacancy.
+  if (empties === 0) {
+    return `${money(r.allocatedTotal)} across all ${denom} ${lot(denom)} — you carried ${money(absorbed)}, which is what wouldn't divide evenly.`;
+  }
+
   return `${money(r.allocatedTotal)} across ${payers} of ${denom} ${lot(denom)} — you carried ${money(absorbed)} for the ${empties} with nobody in ${empties === 1 ? "it" : "them"}.`;
 }
 

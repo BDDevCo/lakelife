@@ -23,14 +23,17 @@ import { onlineRentCautions } from "@/app/park/park-helpers";
  * at zero today.
  */
 export function ParkOnlineRent({
-  parkId, initialAccepting, initialFeePct, ceiling, canChange, households,
+  parkId, initialAccepting, initialFeePct, ceiling, canChange, households, unclaimed,
 }: {
   parkId: string;
   initialAccepting: boolean;
   initialFeePct: string;
   ceiling: number;
   canChange: boolean;
+  /** Households with a CLAIMED portal account — the only ones who can pay. */
   households: number;
+  /** On the roll, no account yet. The switch does nothing for these. */
+  unclaimed: number;
 }) {
   const router = useRouter();
   const [accepting, setAccepting] = useState(initialAccepting);
@@ -49,7 +52,18 @@ export function ParkOnlineRent({
   const example = 400;
   const exampleFee = badFee ? 0 : Math.round(example * pct) / 100;
 
-  const dirty = accepting !== initialAccepting || raw !== initialFeePct.trim();
+  // COMPARE THE NUMBERS, NOT THE STRINGS.
+  //
+  // `getOnlineRent` normalises a stored 0 to "", so typing the 0 this card's
+  // own copy recommends left `raw === "0"` against `initialFeePct === ""`.
+  // router.refresh() re-renders without remounting, so the typed state
+  // survives while the prop changes and the button read "Save how rent comes
+  // in" forever — after a save that had already worked. Same for "3.0" or
+  // "03" against a stored 3.
+  const initialPct = initialFeePct.trim() === "" ? 0 : Number(initialFeePct);
+  const dirty =
+    accepting !== initialAccepting ||
+    (!badFee && Math.abs(pct - initialPct) > 0.0001);
 
   function save() {
     start(async () => {
@@ -92,9 +106,15 @@ export function ParkOnlineRent({
           {accepting ? (
             <>
               <b>Residents can pay rent in the app.</b>{" "}
-              {households === 0
+              {/* THE COUNT IS OF ACCOUNTS, NOT TENANCIES. Every tenancy the
+                  office keys in starts unclaimed, and paying online needs a
+                  claimed file — so "19 households can use it" was true of the
+                  roll and false of every single one of them. */}
+              {households === 0 && unclaimed === 0
                 ? "Nobody is on the roll yet, so nothing will happen until there is."
-                : `${households} ${households === 1 ? "household" : "households"} on the roll can use it.`}
+                : households === 0
+                  ? `Nobody can use it yet — all ${unclaimed} ${unclaimed === 1 ? "household has" : "households have"} a file but no account. They each need to claim theirs before they can pay.`
+                  : `${households} of ${households + unclaimed} ${households + unclaimed === 1 ? "household" : "households"} have claimed an account and can use it.`}
             </>
           ) : (
             <>

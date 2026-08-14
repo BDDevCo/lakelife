@@ -338,8 +338,16 @@ export function ParkCosts({
 
           {/* A cost the park carries has no split to preview — the decision IS
               the whole thing, so it goes straight to the button. */}
+          {/* THE DATES ARE NOT OPTIONAL ON THIS PATH EITHER. The split path
+              gates on !from || !to; this one gated on the amount alone, and
+              recordCost's parkCarries branch returns before previewCostSplit —
+              the only thing that validates the period. So an empty date
+              reached Postgres as "" against a `date not null` column, came
+              back 22007, and the toast said "try again" about a path that
+              could never work. */}
           {parkCarries && (
-            <button className="ll-btn" onClick={save} disabled={busy || !(amountNum() > 0)}
+            <button className="ll-btn" onClick={save}
+                    disabled={busy || !from || !to || !(amountNum() > 0)}
                     style={{ marginTop: 14 }}>
               {busy ? "Saving…" : "Record it — I carry this one"}
             </button>

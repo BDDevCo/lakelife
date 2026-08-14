@@ -463,3 +463,50 @@ describe("a cost the park carries on purpose", () => {
     expect(carryFromRow({ denominator_lots: null, park_absorbed: 0 })).toBe("unrecorded");
   });
 });
+
+describe("the audit's confirmed wrong numbers", () => {
+  /**
+   * Six independent lenses, each finding adversarially refuted by three
+   * skeptics. These are the ones that survived.
+   */
+
+  it("does not blame a rounding remainder on lots that are all let", () => {
+    // allocateCost floors each share to the cent on purpose, so a bill that
+    // does not divide evenly leaves the park a few cents even at FULL
+    // occupancy. The old sentence read "you carried $0.13 for the 0 with
+    // nobody in them" — a vacancy explanation for arithmetic.
+    const line = carriedLine({
+      allocatedTotal: 1433.04, amountPaid: 1433.17, absorbed: 0.13,
+      denominatorLots: 21, payerLots: 21, carry: "split",
+    });
+    expect(line).not.toContain("the 0 with");
+    expect(line).toContain("wouldn't divide evenly");
+    expect(line).toContain("$0.13");
+  });
+
+  it("keeps a park-carried and a fee-covered bill out of the vacancy total", () => {
+    // THE ONE THAT MATTERED MOST. park_absorbed on those rows is the WHOLE
+    // bill, not a share of empty pads — so the guest boat and a fee-covered
+    // mow were being totalled under "you carried for the empty lots", the
+    // number he uses to judge what vacancy costs him.
+    const asListCostsSends = (absorbed: number, carry: string) =>
+      ({ category: "water" as const, amountPaid: 640, allocatedTotal: 0, billedTotal: 0,
+         absorbed: carry === "split" ? absorbed : 0 });
+
+    const r = recoveryByCategory([
+      { category: "water", amountPaid: 380, allocatedTotal: 343.71, billedTotal: 343.71, absorbed: 36.29 },
+      asListCostsSends(640, "park_only"),      // the guest boat
+      asListCostsSends(658, "covered_by_fee"), // a mow the grounds fee covers
+    ]);
+    expect(r.absorbed).toBeCloseTo(36.29, 2);   // was $1,334.29
+    expect(r.absorbedUnknown).toBe(0);
+  });
+
+  it("still counts a row with no snapshot as unknown, not as zero", () => {
+    const r = recoveryByCategory([
+      { category: "water", amountPaid: 400, allocatedTotal: 400, billedTotal: 400, absorbed: null },
+    ]);
+    expect(r.absorbed).toBe(0);
+    expect(r.absorbedUnknown).toBe(1);
+  });
+});

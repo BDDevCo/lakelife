@@ -1066,8 +1066,10 @@ export async function getOnlineRent(parkId: string): Promise<{
   ceiling: number;
   cautions: string[];
   canChange: boolean;
-  /** Live tenancies that could actually use it — a switch with nobody behind it. */
+  /** Households with a CLAIMED portal account — the only ones who can pay. */
   households: number;
+  /** On the roll but with no account yet, so the switch does nothing for them. */
+  unclaimed: number;
 } | null> {
   const membership = await assertMyPark(parkId);
   if (!membership) return null;
@@ -1080,16 +1082,32 @@ export async function getOnlineRent(parkId: string): Promise<{
     .maybeSingle();
   if (!park) return null;
 
+  // WHO COULD ACTUALLY USE IT — not how many tenancies exist.
+  //
+  // Paying online needs a CLAIMED renter file: `payRent` matches
+  // park_renters on `user_id = <signed-in user>`, and /portal only routes to
+  // /parks/my for a file with one. Every tenancy the office keys in is created
+  // UNCLAIMED, so counting tenancies told The Haven's owner "19 households can
+  // use it" when the true answer was none of them.
   const { data: lots } = await admin.from("park_lots").select("id").eq("park_id", parkId);
   const lotIds = (lots ?? []).map((l) => l.id as string);
   let households = 0;
+  let unclaimed = 0;
   if (lotIds.length) {
-    const { count } = await admin
+    const { data: stays } = await admin
       .from("lot_reservations")
-      .select("id", { count: "exact", head: true })
+      .select("renter_id")
       .in("park_lot_id", lotIds)
       .in("status", ["approved", "active"]);
-    households = count ?? 0;
+    const renterIds = [...new Set((stays ?? []).map((r) => r.renter_id as string).filter(Boolean))];
+    if (renterIds.length) {
+      const { data: files } = await admin
+        .from("park_renters")
+        .select("id, user_id")
+        .in("id", renterIds);
+      households = (files ?? []).filter((f) => f.user_id != null).length;
+      unclaimed = (files ?? []).length - households;
+    }
   }
 
   const pct = Number(park.card_fee_pct ?? 0);
@@ -1101,6 +1119,7 @@ export async function getOnlineRent(parkId: string): Promise<{
     cautions: onlineRentCautions(pct),
     canChange: canEnableParkServices(membership.role),
     households,
+    unclaimed,
   };
 }
 

@@ -26,6 +26,8 @@ import { computeMenuSuggestions } from "@/app/ops/data";
 import { executeMenuUpdate } from "@/lib/menu-core";
 import { composeNightlyDigest, type DigestSections } from "@/lib/digest-render";
 import { proposedFee, deadlinePassed, tripFeeFor } from "./recovery";
+import { withParkRate } from "@/lib/park-rates";
+import { groundsFor, loadParkRates } from "@/app/park/rate-data";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -1708,6 +1710,7 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
     // Roll: tomorrow at the STANDARD menu price, recomputed server-side.
     let standard = Number(j.customer_price ?? 0); // fallback: keep rush price only if repricing fails
     const profile = await loadPricingProfileById(admin, j.property_id as string);
+    let repriced = false;
     if (svcRow?.name && profile) {
       const rule: ServiceRule = {
         name: svcRow.name,
@@ -1716,9 +1719,26 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
         unit_rate: Number(svcRow.unit_rate ?? 0),
         band_pricing: (svcRow.band_pricing as ServiceRule["band_pricing"]) ?? null,
       };
-      const p = priceService(rule, profile);
-      if (p > 0) standard = p;
+      // A PARK PAYS ITS OWN RATE (0115). Without the overlay the global row is
+      // base 0 / unit_rate 0, priceService returns 0, the `p > 0` guard below
+      // declines to use it, and `standard` stays at the RUSH price — so the
+      // rolled job keeps its 25% same-day premium and the text that follows
+      // calls that number "the standard price". The guard that was meant to
+      // fail safe is what makes it charge more.
+      const grounds = await groundsFor(j.property_id as string);
+      const p = priceService(
+        grounds ? withParkRate({ ...rule, id: j.service_id as string }, await loadParkRates(grounds.parkId)) : rule,
+        profile,
+      );
+      if (p > 0) { standard = p; repriced = true; }
     }
+
+    // COULD NOT WORK OUT THE STANDARD PRICE. Rolling anyway would move the day
+    // AND keep the premium, then tell him it is standard. Leave it for the
+    // waitlist sweep and say nothing false.
+    // Every job that reaches here is a rush job (rush_fallback 'roll'), so
+    // `standard` is still carrying the same-day premium.
+    if (!repriced) continue;
     const { data: moved } = await admin
       .from("jobs")
       .update({ date: tomorrow, customer_price: standard, is_rush: false, rush_fallback: null })

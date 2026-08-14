@@ -87,6 +87,7 @@ export default async function ParkSetupPage() {
             ceiling={online.ceiling}
             canChange={online.canChange}
             households={online.households}
+            unclaimed={online.unclaimed}
           />
         </div>
       )}

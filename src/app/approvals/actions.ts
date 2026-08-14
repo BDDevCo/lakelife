@@ -8,6 +8,8 @@ import { summariseCorrection, scopeNoteFor, type TimedRule } from "@/lib/arrival
 import { todayLakeDate } from "@/lib/booking";
 import { planRecovery } from "@/lib/recovery";
 import { sendSms } from "@/lib/sms";
+import { withParkRate } from "@/lib/park-rates";
+import { loadParkRates } from "@/app/park/rate-data";
 
 export interface ApprovalResult {
   ok: boolean;
@@ -92,6 +94,15 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
       };
       const byId = new Map((services ?? []).map((s) => [s.id, s as unknown as TimedRule]));
       const pp = toPricingProfile(profile);
+
+      // A PARK PAYS ITS OWN RATE (0115), and this path did not know it. The
+      // global row for a park_only service carries base 0 / unit_rate 0 on
+      // purpose, so approving a crew's correction on a park's grounds repriced
+      // a $100 mow to $0 — the crew files "the lawn is large, not medium", the
+      // owner taps Approve, and the job silently becomes free.
+      const parkRates = profile.groundsForParkId
+        ? await loadParkRates(profile.groundsForParkId)
+        : null;
       const { data: openJobs } = await admin
         .from("jobs")
         .select("id, service_id, vendor_id, vendor_cost")
@@ -123,9 +134,19 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
       }
 
       for (const j of openJobs ?? []) {
-        const rule = j.service_id ? byId.get(j.service_id) : undefined;
-        if (!rule) continue;
+        const raw = j.service_id ? byId.get(j.service_id) : undefined;
+        if (!raw) continue;
+        const rule = parkRates ? withParkRate(raw, parkRates) : raw;
         const price = priceService(rule, pp);
+
+        // NEVER REPRICE A SOLD JOB TO NOTHING.
+        //
+        // The backstop for this whole class, not just for parks: any future
+        // path that loses a rule's numbers produces 0 here, and 0 is a job the
+        // dispatcher will not fill and the owner is not charged for. Leaving
+        // the agreed price alone and moving on is always safer than writing a
+        // zero nobody chose.
+        if (!(price > 0)) continue;
 
         // THE DAY HAS TO MOVE TOO.
         //

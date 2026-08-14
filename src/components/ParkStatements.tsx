@@ -136,8 +136,15 @@ export function ParkStatements({
                   label="card fees on top — not yours, not in the total"
                   value={money(s.cardFeesCents)}
                 />
+                {/* NOT A BANK TOTAL. Deposits and money on account also
+                    reached the bank in this window — the notes below this card
+                    say so in as many words — and they are deliberately outside
+                    `received`. Claiming a bank figure here that omits them put
+                    two numbers on one page that cannot both be true, and the
+                    person who finds that is an accountant. Say only what this
+                    line actually knows. */}
                 <Row
-                  label="so your bank should show"
+                  label="rent plus those fees"
                   value={money(s.totalCents + s.cardFeesCents)}
                 />
               </div>

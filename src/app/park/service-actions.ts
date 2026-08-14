@@ -267,9 +267,37 @@ export async function setParkServiceRate(
   }
 
   const admin = createServiceClient();
+
+  // WHICH SERVICE — the guards above answer WHO, and nothing answered WHAT.
+  //
+  // `serviceId` arrives from a browser and was written straight into
+  // park_service_rates. `createBooking` overlays this park's whole rate map
+  // onto WHATEVER service is being booked whenever the active property is the
+  // grounds, so a park owner could have set a rate of $1 against "Fall
+  // winterization" and then booked a $485 lake-house service for a dollar.
+  // That is LakeLife's price list, not his.
+  const { data: svc } = await admin
+    .from("services")
+    .select("id, name, park_only, active")
+    .eq("id", serviceId)
+    .maybeSingle();
+  if (!svc) return { ok: false, error: "That service isn't there any more." };
+  if (svc.park_only !== true) {
+    return { ok: false, error: "That isn't one of your park's grounds services — its price is set by LakeLife." };
+  }
+  if (svc.active === false) {
+    return { ok: false, error: `${svc.name} isn't offered at the moment, so there's nothing to price.` };
+  }
   const { error } = await admin
     .from("park_service_rates")
     .upsert({ park_id: parkId, service_id: serviceId, base, unit_rate: unitRate,
+              // CLEARED ON EVERY EDIT. PostgREST only SETs the columns in the
+              // payload, so the seeded note — "From the seller: $100/week for
+              // the park (21 lots)" — survived a rate change and sat under a
+              // different number, asserting a provenance that had stopped
+              // being true. A note explains a price; change the price and the
+              // explanation is gone until somebody writes a new one.
+              note: null,
               updated_at: new Date().toISOString() },
             { onConflict: "park_id,service_id" });
   if (error) return { ok: false, error: `Couldn't save that — ${error.message}` };

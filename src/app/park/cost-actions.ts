@@ -167,6 +167,18 @@ export async function recordCost(
   // covering "grounds" says nothing about a boat, and asking him to choose and
   // then overriding him would make the choice a lie.
   if (parkCarries) {
+    // The screen gates on these, but the screen is a courtesy and this is a
+    // public endpoint. `previewCostSplit` validates the period for the split
+    // path; this branch returns before reaching it.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(periodStart) || !/^\d{4}-\d{2}-\d{2}$/.test(periodEnd)) {
+      return { ok: false, error: "Give the dates this bill covers." };
+    }
+    if (periodEnd <= periodStart) {
+      return { ok: false, error: "The period has to end after it starts — for a one-day job, use the next day as the end." };
+    }
+    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+      return { ok: false, error: "That amount isn't a number." };
+    }
     const admin1 = createServiceClient();
     const { error: e1 } = await admin1.from("park_costs").insert({
       park_id: parkId,
@@ -412,7 +424,13 @@ export async function listCosts(parkId: string): Promise<{
     summary: recoveryByCategory(
       rows.map((r) => ({
         category: r.category, amountPaid: r.amountPaid, allocatedTotal: r.allocatedTotal,
-        billedTotal: r.billedTotal, absorbed: r.absorbed,
+        billedTotal: r.billedTotal,
+        // ONLY VACANCY CARRY. `park_absorbed` on a park_only or fee_covered
+        // row is the WHOLE bill, not a share of empty pads — feeding those in
+        // put the guest boat and a fee-covered mow under the label "you
+        // carried for the empty lots", which is the number he uses to judge
+        // what vacancy costs him and whether his fee is set right.
+        absorbed: r.carry === "split" ? r.absorbed : 0,
       })),
     ),
   };
