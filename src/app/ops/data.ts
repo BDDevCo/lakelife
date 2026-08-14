@@ -389,13 +389,17 @@ export interface LakeCondition {
   hard_freeze_est: string | null;
   pull_deadline: string | null;
   active_properties: number;
+  /** 0124. Ops deliberately still SEES fixtures — somebody has to be able to
+   *  set a scratch lake's season dates — so this is carried, not filtered on
+   *  here. The header decides what to show; the editor shows everything. */
+  is_fixture: boolean;
 }
 
 export async function getLakeConditions(): Promise<LakeCondition[]> {
   const admin = createServiceClient();
   const { data: lakes } = await admin
     .from("lakes")
-    .select("id, name, ice_out_actual, hard_freeze_est, pull_deadline")
+    .select("id, name, ice_out_actual, hard_freeze_est, pull_deadline, is_fixture")
     .order("name", { ascending: true });
 
   const { data: props } = await admin.from("properties").select("lake_id");
@@ -409,6 +413,7 @@ export async function getLakeConditions(): Promise<LakeCondition[]> {
     hard_freeze_est: (l.hard_freeze_est as string) ?? null,
     pull_deadline: (l.pull_deadline as string) ?? null,
     active_properties: byLake.get(l.id as string) ?? 0,
+    is_fixture: l.is_fixture === true,
   }));
 }
 

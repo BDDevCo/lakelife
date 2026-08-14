@@ -17,7 +17,9 @@ export default async function LakesIndexPage() {
   const admin = createServiceClient();
   const today = new Date().toISOString().slice(0, 10);
   const [{ data: lakes }, { data: crews }] = await Promise.all([
-    admin.from("lakes").select("id, name, slug").not("slug", "ilike", "zz-%").order("name"),
+    // 0124: the column, not the slug. This guard used to read `slug`, and a
+    // fixture with a NULL slug was excluded only because NOT(NULL) is NULL.
+    admin.from("lakes").select("id, name, slug").eq("is_fixture", false).order("name"),
     admin.from("vendors").select("service_lakes, coi_expiry").eq("status", "active"),
   ]);
   const insured = (crews ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today);

@@ -118,7 +118,7 @@ export default async function OpsPage() {
             <h1 style={{ fontSize: 26 }}>The logistics brain</h1>
             {/* Dynamic — a new lakes row shows up here (and everywhere) with zero code changes. */}
             <p className="mut" style={{ fontSize: 14 }}>
-              {lakes.filter((l) => !l.name.startsWith("zz-")).map((l) => l.name.replace(/ Lake$/, "")).join(" · ") || "No lakes yet"}
+              {lakes.filter((l) => !l.is_fixture).map((l) => l.name.replace(/ Lake$/, "")).join(" · ") || "No lakes yet"}
             </p>
           </div>
           <span className="ll-pill teal">30% platform margin · hidden from customers &amp; crews</span>

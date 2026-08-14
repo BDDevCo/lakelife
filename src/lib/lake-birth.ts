@@ -55,7 +55,7 @@ export async function findOrCreateLake(
   const { data: donor } = await admin
     .from("lakes")
     .select("ice_out_actual, hard_freeze_est, pull_deadline")
-    .not("name", "ilike", "zz-%")
+    .eq("is_fixture", false) // 0124 — never inherit a season from a fixture
     .eq("season_confirmed", true)
     .order("created_at", { ascending: false })
     .limit(1)

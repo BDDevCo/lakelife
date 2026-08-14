@@ -67,9 +67,11 @@ export async function inviteCrew(input: {
 
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
   // Lake list is DYNAMIC — an invite sent the day a new lake launches must
-  // name it (zz-% test lakes excluded, same rule as the public pages).
+  // name it. Fixtures excluded by lakes.is_fixture (0124): this list goes out
+  // in a real email to a real crew, so a scratch lake here is not a cosmetic
+  // slip, it is a fake place named in correspondence.
   const { data: lakeRows } = await admin
-    .from("lakes").select("name").not("name", "ilike", "zz-%").order("name");
+    .from("lakes").select("name").eq("is_fixture", false).order("name");
   const shortNames = (lakeRows ?? []).map((l) => (l.name as string).replace(/ Lake$/, ""));
   const lakeList = shortNames.length > 1
     ? `${shortNames.slice(0, -1).join(", ")} &amp; ${shortNames[shortNames.length - 1]}`

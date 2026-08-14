@@ -11,7 +11,10 @@ export function normalizeLakeName(raw: string): string | null {
   let s = (raw ?? "").trim().replace(/\s+/g, " ");
   if (s.length < 3 || s.length > 60) return null;
   if (!/[a-zA-Z]/.test(s)) return null;
-  if (/^zz-/i.test(s)) return null; // reserved for test fixtures
+  // Reserved for test fixtures. Stays a NAME check because this function is
+  // pure and runs before any row exists — it stops a customer typing their way
+  // into the fixture namespace. The fence itself is lakes.is_fixture (0124).
+  if (/^zz-/i.test(s)) return null;
   s = s
     .toLowerCase()
     .split(" ")

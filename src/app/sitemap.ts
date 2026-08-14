@@ -11,7 +11,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   ];
   try {
     const admin = createServiceClient();
-    const { data: lakes } = await admin.from("lakes").select("slug").not("slug", "ilike", "zz-%");
+    // 0124: fixtures are excluded by the column. This is the surface that
+    // matters most — a crawled URL outlives the fixture that created it.
+    const { data: lakes } = await admin.from("lakes").select("slug").eq("is_fixture", false);
     for (const l of lakes ?? []) {
       if (l.slug) entries.push({ url: `${site}/lakes/${l.slug}`, changeFrequency: "daily", priority: 0.8 });
     }

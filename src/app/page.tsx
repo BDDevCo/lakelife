@@ -14,7 +14,8 @@ export default async function Home() {
   let signedIn = false;
   // The lake list is DYNAMIC (new lakes row = new copy, zero code changes);
   // the founding three stay as the env-less fallback so the page never
-  // renders empty. zz-% test lakes excluded, same rule as /lakes.
+  // renders empty. Fixtures excluded by lakes.is_fixture — the column, not the
+  // name (0124); this list is the one a scratch lake actually reached.
   let shortNames = ["Big Long", "Pretty", "Big Turkey"];
   if (supaOk) {
     const supabase = await createClient();
@@ -23,7 +24,7 @@ export default async function Home() {
     } = await supabase.auth.getUser();
     signedIn = !!user;
     const { data: lakeRows } = await supabase
-      .from("lakes").select("name").not("name", "ilike", "zz-%").order("name");
+      .from("lakes").select("name").eq("is_fixture", false).order("name");
     if (lakeRows && lakeRows.length > 0) {
       shortNames = lakeRows.map((l) => (l.name as string).replace(/ Lake$/, ""));
     }

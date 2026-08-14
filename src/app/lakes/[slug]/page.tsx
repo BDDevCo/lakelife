@@ -34,6 +34,13 @@ async function loadLake(slug: string): Promise<LakeRow | null> {
     .from("lakes")
     .select("id, name, slug, ice_out_actual, pull_deadline, hoa_user_id, hoa_name")
     .eq("slug", slug)
+    // A FIXTURE IS A 404 TO THE WORLD (0124). The old zz- convention never
+    // reached this route: the directory and the sitemap both filtered it out,
+    // so nobody noticed that the URL itself still rendered — a full landing
+    // page for a fake lake, complete with its own SEO title and description,
+    // to anyone who typed or was linked the slug. Same posture parks already
+    // take in parks/public-data.ts, where an inactive park is a 404.
+    .eq("is_fixture", false)
     .maybeSingle();
   return (data as LakeRow | null) ?? null;
 }
