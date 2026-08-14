@@ -10,6 +10,19 @@ import { allocateCost, type CostLot } from "./cost-helpers";
  * ones, a pole barn, a trailing unlabelled total, and NOT ONE TENANT NAME.
  * Every earlier fixture in this repo was invented by me; this one is the
  * document, and it found four bugs that eleven hundred invented tests did not.
+ *
+ * IT IS NOT THE 2024 RENT ROLL. The DD packet's handwritten roll is a
+ * different, later document, and the two disagree about the park:
+ *
+ *   - the real lots are 1, 2, 6, 7, 9, 10, 11, 14-24, 26, 27, 28 — NOT a
+ *     contiguous 1-21. Numbers 3, 4, 5, 8, 12, 13 and 25 do not exist.
+ *   - the park-owned home is LOT 11 (2019 28x60 Shult, $1,500/mo), not Lot 7.
+ *   - Lot 6 is the vacant one.
+ *
+ * This fixture stays because it is still a real document that exercises the
+ * parser hard — a nameless roll, a prose lot label, silent lots, a trailing
+ * total. It is a PARSER fixture, not a description of The Haven. Anything
+ * asserting what the park actually is belongs against the 2024 roll.
  */
 const HAVEN = [
   "Current Monthly",
