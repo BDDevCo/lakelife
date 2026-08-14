@@ -13,6 +13,9 @@ const TABS = [
   // Crew validation: is that truck meant to be here? Sits next to the lots
   // because it is about the ground, not about the money.
   { href: "/park/visits", label: "Who's on site" },
+  // Work the PARK buys for its own ground. Next to "Who's on site" because
+  // that is where the visits it creates show up.
+  { href: "/park/services", label: "Park services" },
   // THE IMPORTER USED TO BE A ONE-WAY DOOR. Its only link lived inside the
   // rent roll's zero-lots empty state, so the moment a single lot existed —
   // and generating lots is the first thing an owner is told to do — the paste
@@ -43,7 +46,7 @@ export function ParkNav({ parkName, live }: { parkName: string; live: boolean })
             also mows getting silently flipped to a crew role), so the fix is
             simply a door out of the park screens. */}
         <Link
-          href="/book"
+          href="/park/services"
           className="ll-btn ghost"
           style={{ fontSize: 12.5, padding: "4px 10px", marginLeft: "auto", textDecoration: "none" }}
         >

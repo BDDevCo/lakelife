@@ -32,6 +32,16 @@ export type PricingModel =
 
 /** A profile field that can be counted or multiplied in a pricing rule. */
 export type CountableField =
+  /**
+   * A PARK'S LIVE LOT COUNT — the only countable that is not equipment.
+   *
+   * A 21-lot park is a different day's work from a 60-lot one, so grounds work
+   * is priced off the count the same way a pier is priced off its sections.
+   * OPTIONAL on the profile: a lake house has no `lots` key at all, which
+   * `profileValue` reads as 0, which makes `serviceApplies` false, which keeps
+   * every park service off a lake house's menu without a single extra branch.
+   */
+  | "lots"
   | "pier_sections"
   | "boat_lifts"
   | "toy_lifts"
@@ -87,6 +97,8 @@ export interface ServiceRule {
 
 /** The property inputs that drive pricing. */
 export interface PricingProfile {
+  /** Present only on a park's grounds property. See CountableField. */
+  lots?: number;
   sqft: number;
   beds: number;
   baths: number;

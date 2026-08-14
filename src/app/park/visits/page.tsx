@@ -42,14 +42,23 @@ export default async function ParkVisitsPage() {
 
         {/* SAY WHAT IS AND ISN'T HERE, ONCE, PLAINLY.
             A park owner who thinks this is every visit would draw wrong
-            conclusions from a quiet week — and a resident who books a cleaner
-            has not agreed to have it listed for their landlord. */}
+            conclusions from a quiet week.
+
+            0107 ADDED THE LOT, and this sentence had to change with it: it
+            used to promise "never ... which lot it's for", which the screen
+            now contradicts three rows below. A landlord always needs to know
+            who is on his property and where — that is a liability fact, and a
+            van parked at Lot 7 is visible from his window anyway. What stays
+            out is the money and the name: those he could never learn by
+            standing there. */}
         <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
           <strong style={{ fontSize: 14 }}>What this does and doesn&apos;t show</strong>
           <p className="mut" style={{ fontSize: 13, marginTop: 6, marginBottom: 0, lineHeight: 1.55 }}>
             Work you booked, and work booked by residents who told us they live
-            here. It never shows <b>who</b> booked it, which lot it&apos;s for, or
-            what it cost — that&apos;s between them and us, the same as it would be
+            here. You see the crew, the job, the day and <b>where on your
+            property</b> — because a contractor on your land is your liability
+            whoever called them. It never shows <b>who</b>{" "}booked it or what
+            they paid: that is between them and us, the same as it would be
             anywhere else. Residents choose whether to say they&apos;re here, so
             this won&apos;t be every visit.
           </p>
@@ -67,7 +76,7 @@ export default async function ParkVisitsPage() {
               <p className="mut" style={{ fontSize: 12.5, marginTop: 18, lineHeight: 1.5 }}>
                 Nobody has told us they live here yet, and you haven&apos;t booked
                 anything for the park itself — so there&apos;s nothing to show.{" "}
-                <Link href="/book">Book something for the grounds</Link> and it
+                <Link href="/park/services">Book something for the grounds</Link> and it
                 appears here.
               </p>
             )}
@@ -105,6 +114,12 @@ function Section({ title, rows, empty }: { title: string; rows: SiteVisit[]; emp
             >
               <strong style={{ fontSize: 14, minWidth: 130 }}>{prettyDate(v.date)}</strong>
               <span style={{ fontSize: 14, flex: "1 1 160px" }}>{v.service}</span>
+              {/* WHERE ON THE PROPERTY. The liability answer: a landlord
+                  always needs to know who is on his land and where. Null is
+                  the common ground, not missing data. */}
+              <span className="ll-pill slate" style={{ fontSize: 12 }}>
+                {v.lotNumber ? `Lot ${v.lotNumber}` : "Grounds"}
+              </span>
               <span className="mut" style={{ fontSize: 13 }}>{v.crew}</span>
               {v.window && (
                 <span className="mut" style={{ fontSize: 12, flexBasis: "100%" }}>{v.window}</span>

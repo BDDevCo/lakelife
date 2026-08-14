@@ -308,3 +308,63 @@ describe("per_engine_hp_tiers — engines refine the price, per-foot still matte
     expect(priceService(bare, p)).toBe(288);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0107 — THE PARK IS A CUSTOMER, PRICED OFF ITS LOT COUNT.
+//
+// `lots` is the first countable that is not equipment. It is OPTIONAL on the
+// profile, and that optionality is the whole safety mechanism: a lake house
+// has no `lots` key, `profileValue` reads it as 0, `serviceApplies` returns
+// false, and every park service prices to $0 — which createBooking refuses.
+// No extra branch anywhere.
+// ---------------------------------------------------------------------------
+describe("park grounds pricing", () => {
+  const mow: ServiceRule = {
+    name: "Park grounds mowing & trim",
+    pricing_model: "per_section",
+    base: 140,
+    unit_rate: 22,
+    band_pricing: { count_field: "lots" },
+  };
+  const cleanup: ServiceRule = {
+    name: "Common-area spring cleanup",
+    pricing_model: "per_section",
+    base: 380,
+    unit_rate: 12,
+    band_pricing: { count_field: "lots" },
+  };
+  // A park's grounds: no pier, no lifts, no boats. Only lots.
+  const grounds = { ...PROFILE, lots: 21, pier_sections: 0, boat_lifts: 0,
+    toy_lifts: 0, jet_skis: 0, pwc_lifts: 0, boats: [], toys: [] };
+
+  it("prices The Haven's mow off 21 live lots", () => {
+    expect(priceService(mow, grounds)).toBe(602);       // 140 + 22 × 21
+    expect(priceService(cleanup, grounds)).toBe(632);   // 380 + 12 × 21
+  });
+
+  it("a park with no live lots is not a job — it is $0, and unbookable", () => {
+    expect(serviceApplies(mow, { ...grounds, lots: 0 })).toBe(false);
+    expect(priceService(mow, { ...grounds, lots: 0 })).toBe(0);
+  });
+
+  // THE FENCE THAT NEEDS NO CODE. A lake house never carries `lots` at all.
+  it("prices to zero for a lake house, which has no lots key whatsoever", () => {
+    expect("lots" in PROFILE).toBe(false);
+    expect(serviceApplies(mow, PROFILE)).toBe(false);
+    expect(priceService(mow, PROFILE)).toBe(0);
+  });
+
+  it("adding lots to a profile perturbs no existing rule", () => {
+    const withLots = { ...PROFILE, lots: 21 };
+    expect(priceService(RULES.pier, withLots)).toBe(priceService(RULES.pier, PROFILE));
+    expect(priceService(RULES.lift, withLots)).toBe(priceService(RULES.lift, PROFILE));
+    expect(priceService(RULES.opening, withLots)).toBe(priceService(RULES.opening, PROFILE));
+  });
+
+  // Why `park_only` exists as a column rather than being inferred from pricing:
+  // a flat rule counts nothing, so it applies to EVERYTHING — including a field
+  // of grass. Pricing cannot keep a lake-house winterization off a park menu.
+  it("a flat lake-house service still prices against a park — the flag is the fence, not the maths", () => {
+    expect(priceService(RULES.opening, grounds)).toBe(430);
+  });
+});

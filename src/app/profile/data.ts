@@ -72,6 +72,14 @@ export interface FullProfile {
   place_id?: string | null;
   /** Self-declared park (0085). Read back so an edit cannot silently erase it. */
   park_id?: string | null;
+  /**
+   * A PARK'S LIVE LOT COUNT — set only when this property IS a park's grounds
+   * (parks.service_property_id points at it). Undefined everywhere else, which
+   * is what prices every park service at $0 for an ordinary property.
+   */
+  lots?: number;
+  /** The park whose grounds this property is, when it is one. Drives the menu. */
+  groundsForParkId?: string | null;
   gate?: string | null;
   sqft: number;
   beds: number;
@@ -173,11 +181,36 @@ export async function getFullProfile(
     };
   }
 
-  const [{ data: profile }, { data: boats }, { data: toys }] = await Promise.all([
+  // IS THIS PROPERTY A PARK'S GROUNDS? Asked of `parks`, not of `properties`,
+  // because the park is what owns the relationship — properties.park_id is the
+  // renter-facing "I live in this park" flag from 0085 and means something
+  // else entirely. Service-role: a park owner reading his own park is fine,
+  // but the answer must not depend on which client is asking.
+  const admin = createServiceClient();
+  const groundsQ = admin
+    .from("parks")
+    .select("id, service_property_id")
+    .eq("service_property_id", property.id)
+    .maybeSingle();
+
+  const [{ data: profile }, { data: boats }, { data: toys }, { data: grounds }] = await Promise.all([
     supabase.from("property_profile").select("*").eq("property_id", property.id).maybeSingle(),
     supabase.from("boats").select("type, length_ft, engine_type, engine_hp, engines").eq("property_id", property.id),
     supabase.from("toys").select("name").eq("property_id", property.id),
+    groundsQ,
   ]);
+
+  // The live lot count is the price of every park service, so it is read here
+  // rather than passed in — a stale count is a wrong invoice.
+  let lots: number | undefined;
+  if (grounds?.id) {
+    const { count } = await admin
+      .from("park_lots")
+      .select("id", { count: "exact", head: true })
+      .eq("park_id", grounds.id as string)
+      .eq("lifecycle", "live");
+    lots = count ?? 0;
+  }
 
   let gate: string | null = null;
   try {
@@ -205,6 +238,8 @@ export async function getFullProfile(
     address: property.address,
     place_id: (property as { place_id?: string | null }).place_id ?? null,
     park_id: (property as { park_id?: string | null }).park_id ?? null,
+    lots,
+    groundsForParkId: (grounds?.id as string | undefined) ?? null,
     gate,
     sqft: property.sqft ?? 0,
     beds: property.beds ?? 0,
@@ -228,6 +263,9 @@ export async function getFullProfile(
 /** Turn a FullProfile into the shape the pricing engine expects. */
 export function toPricingProfile(p: FullProfile): PricingProfile {
   return {
+    // Undefined on every ordinary property, which is what keeps park services
+    // priced at $0 — and therefore unbookable — for a lake house.
+    lots: p.lots,
     sqft: p.sqft,
     beds: p.beds,
     baths: p.baths,
@@ -245,10 +283,21 @@ export function toPricingProfile(p: FullProfile): PricingProfile {
 /** Load all active services and price each one against a profile. */
 export async function getPricedServices(p: FullProfile): Promise<PricedService[]> {
   const supabase = await createClient();
+  // A GROUNDS PROPERTY SEES ONLY PARK SERVICES; EVERY OTHER PROPERTY SEES ONLY
+  // THE REST. Two menus that never overlap, decided by one boolean, so a lake
+  // homeowner is never offered a 21-lot mow and a park is never offered a pier.
+  //
+  // Pricing alone would ALMOST do this — park services count `lots`, which a
+  // lake house does not have, so they price to $0 and vanish. But it would not
+  // work the other way: "Fall winterization" is flat $485 and counts nothing,
+  // so it applies to everything, and a park's grounds menu would carry a
+  // lake-house winterization at a lake-house price. The flag is the fence.
+  const isGrounds = p.groundsForParkId != null;
   const { data: services } = await supabase
     .from("services")
-    .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work")
+    .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work, park_only")
     .eq("active", true)
+    .eq("park_only", isGrounds)
     .eq("kind", "standalone"); // components/add-ons price inside packages, never as menu tiles
 
   const pp = toPricingProfile(p);

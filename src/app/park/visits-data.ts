@@ -27,6 +27,20 @@ export interface SiteVisit {
   status: string;
   /** "7:00am–9:30am", when we know how long it takes. */
   window: string | null;
+  /**
+   * WHICH LOT — or null for the common ground.
+   *
+   * 0085 deliberately withheld this: "THE LINK IS TO THE PARK, NEVER TO THE
+   * LOT." 0107 reverses it on the owner's decision, for liability: a crew on
+   * Lot 7 is on land the park owns, on utilities it maintains, under its
+   * insurance. It also passes 0085's own test — a van parked at Lot 7 is
+   * visible from the window, and the rent roll already says who lives there.
+   *
+   * What stays out permanently: price, margin, the household's name, and the
+   * profile. Those are not visible from the window and are not liability
+   * facts. This is a log of who is on the land, never of what anyone bought.
+   */
+  lotNumber: string | null;
 }
 
 export interface VisitBoard {
@@ -62,7 +76,7 @@ export async function getSiteVisits(parkId: string): Promise<VisitBoard | null> 
   const [{ data: rows }, { data: dials }, { count: linked }] = await Promise.all([
     admin
       .from("park_site_visits")
-      .select("visit_date, crew, service, status, est_minutes")
+      .select("visit_date, crew, service, status, est_minutes, lot_number")
       .eq("park_id", parkId)
       .order("visit_date", { ascending: true }),
     admin.from("platform_dials").select("sell_start_hour").maybeSingle(),
@@ -80,6 +94,7 @@ export async function getSiteVisits(parkId: string): Promise<VisitBoard | null> 
     crew: (r.crew as string) ?? "Crew to be assigned",
     service: (r.service as string) ?? "Work",
     status: (r.status as string) ?? "scheduled",
+    lotNumber: (r.lot_number as string) ?? null,
     window: windowFor((r.est_minutes as number | null) ?? null, startHour),
   }));
 
