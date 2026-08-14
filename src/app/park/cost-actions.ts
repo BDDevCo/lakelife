@@ -133,6 +133,41 @@ export async function recordCost(
     return { ok: false, error: whyNotSplit(category) };
   }
 
+  // A FEE AND A SPLIT MUST NOT BILL THE SAME THING.
+  //
+  // `buildStatement` pushes cost-share lines and fee lines onto one statement
+  // with no check that they overlap. A $70 "Park services" fee that covers
+  // grounds, plus a live grounds split, bills a resident $70 + $71 against
+  // $74.74 of real per-head cost — 189% recovery. The never-over-recover
+  // constraint never sees it, because it guards lot_cost_shares alone and
+  // knows nothing about fees.
+  //
+  // The bill is still RECORDED — he needs it in his books and on the "is my
+  // fee covering my costs" comparison — it is simply not split again.
+  const covering = await feeCovering(parkId, category);
+  if (covering) {
+    const admin0 = createServiceClient();
+    const { error: e0 } = await admin0.from("park_costs").insert({
+      park_id: parkId,
+      category,
+      period_start: periodStart,
+      period_end: periodEnd,
+      amount_paid: amountPaid,
+      source_note: sourceNote.trim() || null,
+      source_job_id: sourceJobId ?? null,
+      park_absorbed: amountPaid,
+      allocated_at: new Date().toISOString(),
+    });
+    if (e0) return { ok: false, error: "Couldn't save that bill — try again." };
+    revalidatePath("/park/costs");
+    return {
+      ok: true,
+      signal: `Recorded. Your "${covering}" fee already covers this, so it is not split again — it shows in the comparison below.`,
+      perLot: 0,
+      parkAbsorbs: amountPaid,
+    };
+  }
+
   const pre = await previewCostSplit(parkId, category, periodStart, periodEnd, amountPaid);
   if (!pre.ok || !pre.preview) return { ok: false, error: pre.error };
 
@@ -369,4 +404,23 @@ export async function getBillableParkJobs(parkId: string): Promise<BillableParkJ
         note: `${svc ?? "Park work"} — LakeLife, ${date}`,
       };
     });
+}
+
+
+/**
+ * Is an ACTIVE fee already charging residents for this category?
+ *
+ * Returns the fee's label so the message can name it — "your Park services fee
+ * already covers this" is actionable; "this is covered" is not.
+ */
+async function feeCovering(parkId: string, category: CostCategory): Promise<string | null> {
+  const admin = createServiceClient();
+  const { data: fees } = await admin
+    .from("park_fees")
+    .select("label, covers, active")
+    .eq("park_id", parkId)
+    .eq("active", true);
+  const hit = (fees ?? []).find((f) =>
+    ((f.covers as string[]) ?? []).includes(category));
+  return hit ? ((hit.label as string) ?? "recurring") : null;
 }

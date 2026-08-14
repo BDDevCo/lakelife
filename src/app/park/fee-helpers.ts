@@ -89,12 +89,25 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  * assuming everybody has a pet would overstate income by exactly the amount
  * that makes a proforma wrong.
  */
+/**
+ * How many lots actually pay this fee.
+ *
+ * COUNTS OCCUPIED LOTS ONLY. A fee is a line on a rent bill, and an empty lot
+ * gets no rent bill — so counting live-but-empty lots inflated the "my fee
+ * covers my costs" number by exactly the vacancy the park is carrying. Same
+ * mistake the cost allocator made in the other direction, on the same screen.
+ */
 export function payersFor(
   fee: ParkFee,
   counts: { longTerm: number; shortTerm: number; optedIn: number },
 ): number {
   switch (fee.appliesTo) {
-    case "all_lots":   return counts.longTerm + counts.shortTerm;
+    // "ALL LOTS" MEANS EVERY LOT THAT IS ACTUALLY BILLED A FEE, and the charge
+    // run bills a short-term lot NONE (ledger-actions: `fees: rental_mode ===
+    // "short_term" ? [] : fees`). Counting them here credited the park income
+    // from lots that are never invoiced, on the very screen built to answer
+    // "is my fee covering my costs?".
+    case "all_lots":   return counts.longTerm;
     case "long_term":  return counts.longTerm;
     case "short_term": return counts.shortTerm;
     case "opt_in":     return counts.optedIn;

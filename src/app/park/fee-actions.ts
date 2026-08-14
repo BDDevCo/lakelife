@@ -53,10 +53,25 @@ export async function listFees(parkId: string): Promise<FeesPage> {
   ]);
 
   const live = (lots ?? []).filter((l) => (l.lifecycle as string) === "live");
+
+  // WHO IS ACTUALLY BILLED. A fee rides on a rent bill, and an empty lot gets
+  // none — so counting every live lot overstated fee income by exactly the
+  // vacancy the park now carries on the cost side, and the two halves of this
+  // screen disagreed by the amount it exists to make visible.
+  const { data: liveStays } = live.length
+    ? await admin
+        .from("lot_reservations")
+        .select("park_lot_id")
+        .in("park_lot_id", live.map((l) => l.id as string))
+        .in("status", ["approved", "active"])
+    : { data: [] as Record<string, unknown>[] };
+  const occupied = new Set((liveStays ?? []).map((s) => s.park_lot_id as string));
+
   const counts = {
     longTerm: live.filter(
       (l) => (l.rental_mode as string) !== "short_term"
-        && !["slip", "storage"].includes(l.site_type as string),
+        && !["slip", "storage"].includes(l.site_type as string)
+        && occupied.has(l.id as string),
     ).length,
     shortTerm: live.filter((l) => (l.rental_mode as string) === "short_term").length,
     optedIn: 0,

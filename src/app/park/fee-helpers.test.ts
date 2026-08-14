@@ -30,8 +30,13 @@ describe("who pays a fee", () => {
     expect(payersFor(pet, COUNTS)).toBe(3);
   });
 
-  it("can land on everything, including nightly homes", () => {
-    expect(payersFor({ ...GROUNDS, appliesTo: "all_lots" }, COUNTS)).toBe(24);
+  // WAS: "can land on everything, including nightly homes" — asserting 24.
+  // That encoded a disagreement with the charge run, which bills a short-term
+  // lot no fees at all (`ledger-actions`: fees: rental_mode === "short_term"
+  // ? [] : fees). The screen credited income from lots that are never
+  // invoiced, on the one screen built to answer "is my fee covering my costs".
+  it("does not credit nightly homes, which are billed no fee at all", () => {
+    expect(payersFor({ ...GROUNDS, appliesTo: "all_lots" }, COUNTS)).toBe(20);
   });
 });
 
@@ -135,5 +140,39 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
   it("is honest when there is nothing to compare", () => {
     const c = checkCoverage([GROUNDS], payers, [], 1);
     expect(coverageSummary(c, 20)).toMatch(/no bills entered/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHO ACTUALLY PAYS A FEE.
+//
+// A fee rides on a rent bill. A short-term lot is billed none at all
+// (`ledger-actions`: `fees: rental_mode === "short_term" ? [] : fees`), and an
+// empty lot gets no rent bill to ride on. Counting either inflated the one
+// number this screen exists to produce — "is my fee covering my costs?" —
+// and by exactly the vacancy the cost side now makes the park carry.
+// ---------------------------------------------------------------------------
+describe("who a flat fee is actually billed to", () => {
+  const fee = (appliesTo: ParkFee["appliesTo"]): ParkFee => ({
+    id: "f1", label: "Park services", amount: 70, cadence: "monthly",
+    appliesTo, covers: ["grounds", "common_electric", "water"], active: true,
+  });
+
+  it("never credits a short-term lot, which is billed no fee at all", () => {
+    const counts = { longTerm: 19, shortTerm: 4, optedIn: 0 };
+    expect(payersFor(fee("all_lots"), counts)).toBe(19);
+    expect(payersFor(fee("long_term"), counts)).toBe(19);
+  });
+
+  it("is the same number whichever way round the park is described", () => {
+    // 'all_lots' and 'long_term' can only differ by lots that are never
+    // billed, so on this product they are the same answer.
+    const counts = { longTerm: 12, shortTerm: 9, optedIn: 3 };
+    expect(payersFor(fee("all_lots"), counts))
+      .toBe(payersFor(fee("long_term"), counts));
+  });
+
+  it("still counts an opt-in fee by who opted in", () => {
+    expect(payersFor(fee("opt_in"), { longTerm: 19, shortTerm: 4, optedIn: 6 })).toBe(6);
   });
 });
