@@ -118,10 +118,32 @@ async function stageOne(
  * staged row into a real property they own, with the importing crew pre-set as
  * preferred. Called from the portal front door (same place as crew-invite claim).
  * Idempotent + safe: only materializes rows still 'pending'.
+ *
+ * THE STAGED EMAIL IS THE CREDENTIAL, SO IT HAS TO COME FROM THE SESSION.
+ *
+ * Same hole as `claimCrewInvite`, and the same fix. This file carries
+ * "use server", so this export is a POST endpoint and both arguments came from
+ * the caller. Passing somebody else's staged address with your OWN user id
+ * materialized THEIR house — street address, coordinates, their crew — as a
+ * property owned by you, visible in your portal, and burned the staged row so
+ * the person it was actually meant for could never claim it.
+ *
+ * The session decides. The arguments must agree with it; the portal passes
+ * exactly these two values from its own getUser(), so the real path is
+ * unchanged.
  */
 export async function claimCustomerImports(userId: string, userEmail: string | null | undefined): Promise<number> {
   if (!userId || !userEmail) return 0;
-  const email = userEmail.trim().toLowerCase();
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user || user.id !== userId) return 0;
+
+  const email = (user.email ?? "").trim().toLowerCase();
+  if (!email || email !== userEmail.trim().toLowerCase()) return 0;
+
   const admin = createServiceClient();
 
   const { data: imports } = await admin

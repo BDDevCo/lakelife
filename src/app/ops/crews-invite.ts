@@ -1,6 +1,6 @@
 "use server";
 
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/email";
 import { assertOps } from "./data";
 
@@ -97,10 +97,35 @@ export async function inviteCrew(input: {
  * equal the invite email. On claim: vendors.user_id is set and users.role
  * flips to 'vendor' (guard_role_change allows the service role as of 0013).
  * Idempotent: no pending invite -> no-op.
+ *
+ * THE EMAIL IS THE CREDENTIAL, SO IT HAS TO COME FROM THE SESSION.
+ *
+ * "Called from the portal router, not the browser directly" was a description
+ * of the intended caller, not a property of the code. This file carries
+ * "use server", so this export is a POST endpoint like any other, and both
+ * arguments arrived from whoever called it. `inviteCrew` above says plainly
+ * that the invited address IS the credential — and this took that credential
+ * as a parameter. Anyone signed in could pass an invited crew's email with
+ * their OWN user id, attach themselves to that vendors row, and be flipped to
+ * role='vendor': the crew's route, their jobs, their payout account.
+ *
+ * So the session decides who is claiming and which address they hold. The
+ * arguments must AGREE with it or the claim is refused — the portal passes
+ * exactly these two values from its own getUser(), so nothing legitimate
+ * changes, and there is no longer a caller-supplied path to somebody else's
+ * invite.
  */
 export async function claimCrewInvite(userId: string, userEmail: string | null | undefined): Promise<boolean> {
   if (!userId || !userEmail) return false;
-  const email = userEmail.trim().toLowerCase();
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user || user.id !== userId) return false;
+
+  const email = (user.email ?? "").trim().toLowerCase();
+  if (!email || email !== userEmail.trim().toLowerCase()) return false;
   if (!EMAIL_RE.test(email)) return false;
 
   const admin = createServiceClient();
