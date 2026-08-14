@@ -9,7 +9,8 @@ import {
   allocateCost, recoveryByCategory, canSplit, whyNotSplit,
   type CostCategory, type CostLot, type CostAllocation,
   buildCostScheduleRow, type CostScheduleInput, COST_CATEGORY_LABEL,
-} from "./cost-helpers";
+
+  carryFromRow, type CostCarry,} from "./cost-helpers";
 import type { ParkResult } from "./actions";
 
 /**
@@ -127,6 +128,19 @@ export async function recordCost(
    * one mowing — the database refuses the second insert.
    */
   sourceJobId?: string | null,
+  /**
+   * WHO PAYS FOR THIS ONE.
+   *
+   * Default false — everything on this screen has always been shared, and a
+   * silent change of that would be worse than the bug it fixes.
+   *
+   * True means THE PARK CARRIES IT: recorded, in the books, in the fee
+   * comparison, divided to nobody. The Haven's guest boat is why this exists —
+   * it is bookable by short-stay guests only, so winterizing it is a cost of
+   * the nightly business, not of living on lot 14. Without this it would go in
+   * as `other` and land on all twenty-one rentable lots.
+   */
+  parkCarries?: boolean,
 ): Promise<ParkResult & { perLot?: number; parkAbsorbs?: number }> {
   // WHOSE PARK IS THIS. Found by an audit, and it was exploitable.
   //
@@ -145,8 +159,37 @@ export async function recordCost(
   // NEVER SPLIT A HOME THE PARK OWNS. Guarded here as well as hidden from the
   // dropdown, because the dropdown is a courtesy and this is the rule — and a
   // category arrives from a browser.
-  if (!canSplit(category)) {
+  if (!parkCarries && !canSplit(category)) {
     return { ok: false, error: whyNotSplit(category) };
+  }
+
+  // THE PARK'S OWN COST. Taken before the fee check on purpose: a grounds fee
+  // covering "grounds" says nothing about a boat, and asking him to choose and
+  // then overriding him would make the choice a lie.
+  if (parkCarries) {
+    const admin1 = createServiceClient();
+    const { error: e1 } = await admin1.from("park_costs").insert({
+      park_id: parkId,
+      category,
+      period_start: periodStart,
+      period_end: periodEnd,
+      amount_paid: amountPaid,
+      source_note: sourceNote.trim() || null,
+      source_job_id: sourceJobId ?? null,
+      allocation_method: "park_only",
+      allocated_total: 0,
+      park_absorbed: amountPaid,
+      allocated_at: new Date().toISOString(),
+    });
+    if (e1) return { ok: false, error: "Couldn't save that bill — try again." };
+    revalidatePath("/park/costs");
+    revalidatePath("/park/today");
+    return {
+      ok: true,
+      signal: "Recorded as yours. It's in your books and in the fee comparison, and nobody was billed a share.",
+      perLot: 0,
+      parkAbsorbs: amountPaid,
+    };
   }
 
   // A FEE AND A SPLIT MUST NOT BILL THE SAME THING.
@@ -171,6 +214,10 @@ export async function recordCost(
       amount_paid: amountPaid,
       source_note: sourceNote.trim() || null,
       source_job_id: sourceJobId ?? null,
+      // NAMED, not inferred (0118). The screen used to work this out by
+      // comparing park_absorbed against zero, which cannot tell a fee-covered
+      // bill from one recorded before we tracked any of this.
+      allocation_method: "fee_covered",
       park_absorbed: amountPaid,
       allocated_at: new Date().toISOString(),
     });
@@ -298,8 +345,8 @@ export interface CostRow {
   absorbed: number | null;
   denominatorLots: number | null;
   payerLots: number | null;
-  /** How this bill came to rest, so the screen never has to re-derive it. */
-  carry: "split" | "covered_by_fee" | "unrecorded";
+  /** How this bill came to rest — stored on the row since 0118. */
+  carry: CostCarry;
 }
 
 export async function listCosts(parkId: string): Promise<{
@@ -312,7 +359,7 @@ export async function listCosts(parkId: string): Promise<{
   const admin = createServiceClient();
   const { data } = await admin
     .from("park_costs")
-    .select("id, category, period_start, period_end, amount_paid, allocated_total, source_note, park_absorbed, denominator_lots, payer_lots")
+    .select("id, category, period_start, period_end, amount_paid, allocated_total, source_note, park_absorbed, denominator_lots, payer_lots, allocation_method")
     .eq("park_id", parkId)
     .order("period_start", { ascending: false })
     .limit(120);
@@ -337,12 +384,11 @@ export async function listCosts(parkId: string): Promise<{
   }
 
   const rows: CostRow[] = (data ?? []).map((c) => {
-    // Derived ONCE, here, so the screen and the sentence-builder can never
-    // disagree about which kind of row this is.
+    // READ, not re-derived (0118). `allocation_method` says how the bill came
+    // to rest; the numbers no longer have to be interrogated for a reason.
+    const carry = carryFromRow(c);
     const measured = c.denominator_lots != null;
     const raw = Number(c.park_absorbed ?? 0);
-    const carry: CostRow["carry"] =
-      measured ? "split" : raw > 0 ? "covered_by_fee" : "unrecorded";
 
     return {
       billedTotal: billed.get(c.id as string) ?? 0,

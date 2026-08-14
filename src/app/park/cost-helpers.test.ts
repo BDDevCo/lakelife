@@ -4,7 +4,8 @@ import {
   type CostLot, type CostCategory, canSplit, whyNotSplit,
   carriedLine,
   buildCostScheduleRow, SCHEDULABLE_CATEGORIES, type CostScheduleInput,
-} from "./cost-helpers";
+
+  carryFromRow,} from "./cost-helpers";
 
 /** The Haven: 19 occupied lots, 2 empty (3 and 22). */
 const HAVEN: CostLot[] = [
@@ -412,5 +413,53 @@ describe("a reminder for a bill that arrives every month", () => {
     expect(buildCostScheduleRow(input({ label: "x".repeat(61) })).ok).toBe(false);
     expect(buildCostScheduleRow(input({ label: "  LaGrange County sewer  " })).row?.label)
       .toBe("LaGrange County sewer");
+  });
+});
+
+describe("a cost the park carries on purpose", () => {
+  /**
+   * THE HAVEN COMES WITH A BOAT, and it is bookable by short-stay guests only.
+   * Winterizing it is a cost of the nightly business, not of living on lot 14.
+   * Before 0118 it would have been entered as `other` — which `canSplit`
+   * allows — and divided across all twenty-one rentable lots, billing nineteen
+   * households a share of a boat they cannot book.
+   */
+  it("reads park_only off the row rather than guessing from the numbers", () => {
+    expect(carryFromRow({ allocation_method: "park_only", denominator_lots: null, park_absorbed: 640 }))
+      .toBe("park_only");
+  });
+
+  it("says it is his, without calling it a failure to split", () => {
+    const line = carriedLine({
+      allocatedTotal: 0, amountPaid: 640, absorbed: 640,
+      denominatorLots: null, payerLots: null, carry: "park_only",
+    });
+    expect(line).toContain("$640.00");
+    expect(line).toContain("carrying this one");
+    expect(line).not.toContain("nobody to bill");   // that is a different fact
+  });
+
+  it("tells a fee-covered bill from one recorded before we tracked any of it", () => {
+    // THE INFERENCE THIS REPLACES. Both shapes have a NULL denominator; the old
+    // code separated them by asking whether park_absorbed was above zero, which
+    // collides on a $0 bill and says nothing about intent.
+    expect(carryFromRow({ allocation_method: "fee_covered", denominator_lots: null, park_absorbed: 380 }))
+      .toBe("covered_by_fee");
+    expect(carryFromRow({ allocation_method: "per_lot", denominator_lots: null, park_absorbed: 0 }))
+      .toBe("unrecorded");
+    // The case that used to be ambiguous: a $0 fee-covered bill.
+    expect(carryFromRow({ allocation_method: "fee_covered", denominator_lots: null, park_absorbed: 0 }))
+      .toBe("covered_by_fee");
+  });
+
+  it("still calls a real split a split", () => {
+    expect(carryFromRow({ allocation_method: "per_lot", denominator_lots: 21, park_absorbed: 36.29 }))
+      .toBe("split");
+  });
+
+  it("defaults a row with no method at all to the old inference", () => {
+    // Rows predate the column's meaning; absent must not become "park_only".
+    expect(carryFromRow({ denominator_lots: 21, park_absorbed: 0 })).toBe("split");
+    expect(carryFromRow({ denominator_lots: null, park_absorbed: 0 })).toBe("unrecorded");
   });
 });

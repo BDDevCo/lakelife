@@ -363,7 +363,7 @@ export function carriedLine(r: {
   absorbed: number | null;
   denominatorLots: number | null;
   payerLots: number | null;
-  carry: "split" | "covered_by_fee" | "unrecorded";
+  carry: CostCarry;
 }): string {
   // Thousands separators, like every other figure on the screen. `toFixed`
   // alone rendered "$1433.17" one line under a column reading "$1,433.17".
@@ -375,6 +375,10 @@ export function carriedLine(r: {
   }
   if (r.carry === "covered_by_fee") {
     return `${money(r.amountPaid)} — your recurring fee already covers this, so it wasn't split again.`;
+  }
+  if (r.carry === "park_only") {
+    // THE ONE THE BOAT NEEDED. Not a failure to split — a decision not to.
+    return `${money(r.amountPaid)} — you're carrying this one. Nobody was billed a share.`;
   }
 
   const denom = r.denominatorLots ?? 0;
@@ -406,6 +410,31 @@ export function carriedLine(r: {
  * the insurance binder would share one reminder and each would falsely satisfy
  * it. A wrong reassurance is worse than no reminder at all.
  */
+/**
+ * HOW A BILL CAME TO REST. A stored fact since 0118, not an inference.
+ *
+ * `park_only` is the one The Haven's boat forced into existence: the guest
+ * boat is bookable by SHORT-STAY guests only, so winterizing it is a cost of
+ * the nightly business and not of living on lot 14. Before this it would have
+ * gone in as `other` and divided across all twenty-one rentable lots.
+ */
+export type CostCarry = "split" | "park_only" | "covered_by_fee" | "unrecorded";
+
+/** What the DB stores in park_costs.allocation_method, mapped to the above. */
+export function carryFromRow(row: {
+  allocation_method?: string | null;
+  denominator_lots?: number | null;
+  park_absorbed?: number | string | null;
+}): CostCarry {
+  const method = row.allocation_method ?? "per_lot";
+  if (method === "park_only") return "park_only";
+  if (method === "fee_covered") return "covered_by_fee";
+  if (row.denominator_lots != null) return "split";
+  // Pre-0112: no snapshot at all. `park_absorbed` is NOT NULL DEFAULT 0, so a
+  // row like this reads 0.00 and must NOT be reported as "carried nothing".
+  return "unrecorded";
+}
+
 export const SCHEDULABLE_CATEGORIES: CostCategory[] = [
   "water", "sewer", "trash", "common_electric", "grounds",
 ];

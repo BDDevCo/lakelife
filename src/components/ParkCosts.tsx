@@ -55,6 +55,8 @@ export function ParkCosts({
 }) {
   const router = useRouter();
   const [busy, start] = useTransition();
+  /** True = the park pays this one and nobody is billed a share (0118). */
+  const [parkCarries, setParkCarries] = useState(false);
   const [open, setOpen] = useState(false);
   const [category, setCategory] = useState<CostCategory>("water");
   const [from, setFrom] = useState("");
@@ -98,7 +100,7 @@ export function ParkCosts({
 
   function save() {
     start(async () => {
-      const res = await recordCost(parkId, category, from, to, amountNum(), note);
+      const res = await recordCost(parkId, category, from, to, amountNum(), note, null, parkCarries);
       if (!res.ok) { toast(res.error ?? "Couldn't save that."); return; }
       toast(res.signal ?? "Saved.");
       setOpen(false); setPreview(null); setAmount(""); setNote("");
@@ -291,8 +293,11 @@ export function ParkCosts({
           </label>
 
           <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+            {/* No split to show when he is carrying it — offering the button
+                anyway would preview an allocation that is never going to
+                happen. */}
             <button className="ll-btn ghost" onClick={doPreview}
-              disabled={busy || !from || !to || !amount}>
+              disabled={busy || parkCarries || !from || !to || !amount}>
               {busy ? "Working…" : "Show me the split"}
             </button>
             <button className="ll-btn ghost" onClick={() => { setOpen(false); setPreview(null); }}>
@@ -300,7 +305,47 @@ export function ParkCosts({
             </button>
           </div>
 
-          {preview && (
+          {/* WHO PAYS FOR THIS ONE.
+              Everything on this screen has always been shared, so shared stays
+              the default — but the guest boat is bookable by short-stay guests
+              only, and winterizing it is not a cost of living on lot 14. Left
+              unasked it would have gone in as "other" and landed on all
+              twenty-one rentable lots. */}
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Who pays for it</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className={parkCarries ? "ll-btn ghost sm" : "ll-btn sm"}
+                onClick={() => { setParkCarries(false); setPreview(null); }}
+              >
+                Split it across the lots
+              </button>
+              <button
+                type="button"
+                className={parkCarries ? "ll-btn sm" : "ll-btn ghost sm"}
+                onClick={() => { setParkCarries(true); setPreview(null); }}
+              >
+                I carry this one
+              </button>
+            </div>
+            <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
+              {parkCarries
+                ? "Recorded in your books and counted in the fee comparison — just not divided. For things that serve your side of the business: the guest boat, a home you own, a repair you've decided to eat."
+                : "The normal way. Every rentable lot takes an equal share, and you carry the empty ones."}
+            </p>
+          </div>
+
+          {/* A cost the park carries has no split to preview — the decision IS
+              the whole thing, so it goes straight to the button. */}
+          {parkCarries && (
+            <button className="ll-btn" onClick={save} disabled={busy || !(amountNum() > 0)}
+                    style={{ marginTop: 14 }}>
+              {busy ? "Saving…" : "Record it — I carry this one"}
+            </button>
+          )}
+
+          {!parkCarries && preview && (
             <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
               <p style={{ margin: "0 0 10px", fontSize: 16 }}>
                 {allocationSummary(preview, category)}

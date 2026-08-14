@@ -274,7 +274,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
 
   const [{ data: costs }, { data: rentChanges }, { data: states }, { data: noteRows }] =
     await Promise.all([
-      admin.from("park_costs").select("id, category, amount_paid, allocated_total, park_absorbed, denominator_lots, payer_lots").eq("park_id", parkId),
+      admin.from("park_costs").select("id, category, amount_paid, allocated_total, park_absorbed, denominator_lots, payer_lots, allocation_method").eq("park_id", parkId),
       // lot_rent_changes keys on park_id and RESERVATION_id — it has no
       // park_lot_id at all. Two wrong column names in one select, and neither
       // is a type error: supabase-js returns {error, data:null}, so the notice
@@ -367,6 +367,9 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     //   * the park had no paying lots at all, so there was nobody to bill
     unallocatedCosts: (costs ?? [])
       .filter((c) => Number(c.allocated_total) === 0 && Number(c.amount_paid) > 0)
+      //   * he chose to carry it himself (0118) — not an oversight, a decision
+      .filter((c) => c.allocation_method !== "park_only")
+      .filter((c) => c.allocation_method !== "fee_covered")
       .filter((c) => !(c.denominator_lots == null && Number(c.park_absorbed ?? 0) > 0))
       .filter((c) => !(c.denominator_lots != null && Number(c.payer_lots ?? 0) === 0))
       .map((c) => ({
