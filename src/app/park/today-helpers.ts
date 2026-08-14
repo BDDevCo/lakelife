@@ -226,6 +226,22 @@ export interface TaskFacts {
     renterName: string | null;
     leavingOn: string;
   }[];
+  /**
+   * Bills that arrive every month and have not been entered for this one.
+   *
+   * The Haven's sewer is 82% of everything the park spends on its residents'
+   * behalf, and it arrives monthly. Miss it and nineteen households are never
+   * billed their share — invisibly, because a cost nobody entered leaves no
+   * trace. `typical` is a HINT so a wrong invoice is noticeable; it is never
+   * billed and never written to park_costs.
+   */
+  billsDue: {
+    scheduleId: string;
+    category: string;
+    label: string;
+    dueOn: string;
+    typical: number | null;
+  }[];
 }
 
 function rank(u: TaskUrgency): number {
@@ -383,6 +399,30 @@ export function generateTasks(f: TaskFacts): Task[] {
         canDismiss: false,
       });
     }
+  }
+
+  // A BILL THAT ARRIVES EVERY MONTH AND HAS NOT ARRIVED HERE.
+  //
+  // Never dismissible: the software must not offer to stop mentioning a bill
+  // that nineteen households are waiting to be charged their share of. It is
+  // 'soon' before the due day and 'overdue' after, because a sewer bill
+  // entered three weeks late still bills correctly — it is only the FORGOTTEN
+  // one that costs money.
+  for (const b of f.billsDue) {
+    const late = daysBetween(f.today, b.dueOn) < 0;
+    out.push({
+      key: `bill_due:${b.scheduleId}:${f.currentMonth}`,
+      title: late
+        ? `${b.label} for ${prettyMonth(f.currentMonth)} still isn't entered`
+        : `${b.label} for ${prettyMonth(f.currentMonth)} is due about now`,
+      detail: b.typical != null
+        ? `Usually about ${money(b.typical)}. Enter the real figure and it splits across the lots — until it is in, nobody is billed for it.`
+        : "Enter it and it splits across the lots — until it is in, nobody is billed for it.",
+      urgency: late ? "overdue" : "soon",
+      dueOn: b.dueOn,
+      href: "/park/costs",
+      canDismiss: false,
+    });
   }
 
   // GIVEN NOTICE, NOT YET GONE.

@@ -29,6 +29,7 @@ const facts = (over: Partial<TaskFacts> = {}): TaskFacts => ({
   holdoverLots: [],
   pendingRentChanges: [],
   noticed: [],
+  billsDue: [],
   ...over,
 });
 
@@ -512,5 +513,57 @@ describe("a disputed bill is not arrears", () => {
     });
     expect(b.arrearsLine).toBeNull();
     expect(b.disputedLine).toContain("$450.00");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A BILL THAT ARRIVES EVERY MONTH.
+//
+// The Haven's sewer is 82% of everything the park spends on its residents'
+// behalf and it arrives monthly. Miss it and nineteen households are never
+// billed their share — invisibly, because a cost nobody entered leaves no
+// trace anywhere.
+// ---------------------------------------------------------------------------
+describe("bills that arrive every month", () => {
+  const sewer = (over: Record<string, unknown> = {}) => [{
+    scheduleId: "s1", category: "sewer", label: "Sewer",
+    dueOn: "2026-08-05", typical: 1433.17, ...over,
+  }];
+
+  it("says what to expect, so a wrong invoice is noticeable", () => {
+    const [t] = generateTasks(facts({ billsDue: sewer({ dueOn: "2026-08-20" }) }));
+    expect(t.title).toBe("Sewer for August 2026 is due about now");
+    expect(t.detail).toContain("$1,433.17");
+    expect(t.urgency).toBe("soon");
+  });
+
+  it("escalates once the day has passed", () => {
+    const [t] = generateTasks(facts({ billsDue: sewer({ dueOn: "2026-08-05" }) }));
+    expect(t.title).toBe("Sewer for August 2026 still isn't entered");
+    expect(t.urgency).toBe("overdue");
+  });
+
+  // NEVER DISMISSIBLE. The software must not offer to stop mentioning a bill
+  // nineteen households are waiting to be charged their share of.
+  it("cannot be dismissed", () => {
+    expect(generateTasks(facts({ billsDue: sewer() }))[0].canDismiss).toBe(false);
+  });
+
+  it("says the month in words, not 2026-08", () => {
+    const [t] = generateTasks(facts({ billsDue: sewer() }));
+    expect(t.title).toContain("August 2026");
+    expect(t.title).not.toContain("2026-08");
+  });
+
+  it("manages without a typical amount rather than inventing one", () => {
+    const [t] = generateTasks(facts({ billsDue: sewer({ typical: null }) }));
+    expect(t.detail).not.toMatch(/\$/);
+    expect(t.detail).toMatch(/splits across the lots/);
+  });
+
+  // A NEW PARK HAS NO SCHEDULES AND SEES NOTHING. Nothing about The Haven is
+  // a default for somebody else's park.
+  it("is silent for a park that has set none up", () => {
+    expect(generateTasks(facts({ billsDue: [] }))).toEqual([]);
   });
 });

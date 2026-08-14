@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
+import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import {
@@ -288,6 +289,22 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
         .eq("park_id", parkId).is("done_at", null).order("created_at", { ascending: false }),
     ]);
 
+  // What recurs here, and what has already been entered for this month. A
+  // category with a cost inside the month is done — matched on category rather
+  // than amount, because two identical bills are two bills.
+  const [{ data: schedules }, { data: monthCosts }] = await Promise.all([
+    admin.from("park_cost_schedules")
+      .select("id, category, due_day, typical_amount, label")
+      .eq("park_id", parkId).eq("active", true),
+    admin.from("park_costs")
+      .select("category, period_start")
+      .eq("park_id", parkId)
+      .gte("period_start", `${month}-01`),
+  ]);
+  const billedCategories = new Set(
+    (monthCosts ?? []).map((c) => c.category as string),
+  );
+
   // The last week of evening checks. Absence is the alarm.
   const { data: runs } = await admin
     .from("park_machine_runs")
@@ -340,6 +357,21 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     //
     // `stays` is already filtered to approved/active, so a tenancy that has
     // actually been closed out drops off this list on its own.
+    // A BILL THAT ARRIVES EVERY MONTH AND HAS NOT ARRIVED HERE.
+    //
+    // Per-park and owner-created: a new park has no schedules and sees nothing,
+    // which is the point. Nothing about The Haven is a default.
+    billsDue: (schedules ?? [])
+      .filter((sc) => !billedCategories.has(sc.category as string))
+      .map((sc) => ({
+        scheduleId: sc.id as string,
+        category: sc.category as string,
+        label: (sc.label as string)
+          || COST_CATEGORY_LABEL[sc.category as CostCategory]
+          || (sc.category as string),
+        dueOn: `${month}-${String(Math.min(Number(sc.due_day ?? 5), 28)).padStart(2, "0")}`,
+        typical: sc.typical_amount == null ? null : Number(sc.typical_amount),
+      })),
     noticed: (stays ?? [])
       .filter((s) => s.expected_move_out)
       .map((s) => ({
