@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   allocateCost, allocationSummary, recoveryByCategory,
-  type CostLot, type CostCategory,
+  type CostLot, type CostCategory, canSplit, whyNotSplit,
 } from "./cost-helpers";
 
 /** The Haven: 19 occupied lots, 2 empty (3 and 22). */
@@ -161,5 +161,27 @@ describe("am I recovering what the proforma promised", () => {
       { category: "water" as CostCategory, amountPaid: 1200, allocatedTotal: 1140, billedTotal: 600 },
     ]);
     expect(r.allocated - r.billed).toBe(540);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A HOME THE PARK OWNS IS NOT THE RESIDENTS' COST.
+//
+// `unit_electric` was live in the costs dropdown and split across every
+// long-term resident — roughly $7,200–$10,800/yr at five park-owned homes,
+// moving off the park's short-term-rental P&L and onto nineteen households.
+// Its own column comment had warned against exactly this since 0069.
+// ---------------------------------------------------------------------------
+describe("what may be split at all", () => {
+  it("refuses to divide a park-owned home's power across the lots", () => {
+    expect(canSplit("unit_electric")).toBe(false);
+    expect(whyNotSplit("unit_electric")).toMatch(/belongs against that home/i);
+  });
+
+  it("still splits everything the whole park uses", () => {
+    for (const c of ["water", "sewer", "trash", "common_electric", "grounds", "other"] as const) {
+      expect(canSplit(c)).toBe(true);
+      expect(whyNotSplit(c)).toBe("");
+    }
   });
 });

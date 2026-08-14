@@ -26,6 +26,37 @@ export type CostCategory =
   | "water" | "sewer" | "trash" | "common_electric" | "grounds"
   | "unit_electric" | "other";
 
+/**
+ * MAY THIS COST BE SPLIT ACROSS THE LOTS AT ALL?
+ *
+ * `unit_electric` is power for a home the PARK owns and rents out. Its own
+ * column comment has said since 0069 that a lot renter's electricity is
+ * metered and billed by the utility DIRECTLY to them, and that nothing should
+ * imply otherwise — and then the costs screen offered it in the same dropdown
+ * as the water bill and split it across every long-term resident.
+ *
+ * At five park-owned homes that is roughly $7,200–$10,800 a year moving off
+ * the park's short-term-rental P&L and onto nineteen households, which is
+ * several times larger than the vacancy question and points the wrong way.
+ *
+ * Brendon, settling it: "electrical is seperately metered and will be billed
+ * directly to renter (park take the STR bills directly but not allocated to
+ * rest of the renters)."
+ *
+ * So it stays recordable — he needs it in his own books and against that
+ * unit's income — and it is never divided by anybody else.
+ */
+export function canSplit(category: CostCategory): boolean {
+  return category !== "unit_electric";
+}
+
+/** Why a resident is not being asked for a share of this one. */
+export function whyNotSplit(category: CostCategory): string {
+  return category === "unit_electric"
+    ? "Power for a home you own is metered to that home. It belongs against that home's income, not split across the lots."
+    : "";
+}
+
 export const COST_CATEGORY_LABEL: Record<CostCategory, string> = {
   water: "Water",
   sewer: "Sewer",

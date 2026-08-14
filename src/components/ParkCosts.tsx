@@ -22,8 +22,11 @@ import type { recoveryByCategory } from "@/app/park/cost-helpers";
 const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+// `unit_electric` is deliberately absent: power for a home the PARK owns is
+// metered to that home and billed directly, never divided across the lots.
+// `canSplit` in cost-helpers is the rule; this list is the courtesy.
 const CATEGORIES: CostCategory[] = [
-  "water", "sewer", "trash", "common_electric", "grounds", "unit_electric", "other",
+  "water", "sewer", "trash", "common_electric", "grounds", "other",
 ];
 
 export function ParkCosts({

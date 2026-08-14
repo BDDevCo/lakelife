@@ -5,7 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { parseDaterange, overlaps } from "@/lib/parks";
 import {
-  allocateCost, recoveryByCategory,
+  allocateCost, recoveryByCategory, canSplit, whyNotSplit,
   type CostCategory, type CostLot, type CostAllocation,
 } from "./cost-helpers";
 import type { ParkResult } from "./actions";
@@ -115,6 +115,13 @@ export async function recordCost(
    */
   sourceJobId?: string | null,
 ): Promise<ParkResult & { perLot?: number; parkAbsorbs?: number }> {
+  // NEVER SPLIT A HOME THE PARK OWNS. Guarded here as well as hidden from the
+  // dropdown, because the dropdown is a courtesy and this is the rule — and a
+  // category arrives from a browser.
+  if (!canSplit(category)) {
+    return { ok: false, error: whyNotSplit(category) };
+  }
+
   const pre = await previewCostSplit(parkId, category, periodStart, periodEnd, amountPaid);
   if (!pre.ok || !pre.preview) return { ok: false, error: pre.error };
 
