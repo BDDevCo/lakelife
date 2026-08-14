@@ -62,7 +62,7 @@ export async function payRent(chargeId: string): Promise<PayResult> {
   // ---- the park has to have agreed to take money this way ----------------
   const { data: park } = await admin
     .from("parks")
-    .select("accepts_online_rent, name")
+    .select("accepts_online_rent, name, card_fee_pct")
     .eq("id", charge.park_id as string)
     .maybeSingle();
   if (!park?.accepts_online_rent) {
@@ -97,10 +97,24 @@ export async function payRent(chargeId: string): Promise<PayResult> {
     .maybeSingle();
   if (!pm?.token) return { ok: false, error: "Add a payment method first." };
 
+  // ---- the card costs more than a bank transfer --------------------------
+  // A percentage of the rent, charged ON TOP and never added to `amount`, so
+  // paid_total, the receipt and the arrears maths keep meaning what they meant
+  // before online payments existed. ACH is not surcharged; 0109 refuses it at
+  // the database.
+  //
+  // NOT SAFE ON A DEBIT CARD. Network rules forbid surcharging debit at any
+  // rate, and payment_methods records a brand but not a funding type — so
+  // until the processor tells us which it is, a park that has set a fee is
+  // taking a risk this code cannot see.
+  const feePct = Number(park.card_fee_pct ?? 0);
+  const fee = feePct > 0 ? Math.round(owed * feePct) / 100 : 0;
+  const total = Math.round((owed + fee) * 100) / 100;
+
   // ---- take it -----------------------------------------------------------
   const charged = await LakeLifePayments.charge({
     token: pm.token as string,
-    amountCents: Math.round(owed * 100),
+    amountCents: Math.round(total * 100),
     // The park's name on the statement, not LakeLife's — it is their rent, and
     // an unrecognised line on a bank statement is a chargeback.
     description: rentDescriptor(park.name as string),
@@ -120,6 +134,7 @@ export async function payRent(chargeId: string): Promise<PayResult> {
     received_on: todayLakeDate(),
     reference: charged.ref,
     kind: "rent",
+    fee_amount: fee > 0 ? fee : null,
   });
   if (error) {
     // The money left their account and the ledger did not record it. This is
@@ -131,5 +146,10 @@ export async function payRent(chargeId: string): Promise<PayResult> {
   }
 
   revalidatePath("/parks/my");
-  return { ok: true, signal: `Paid — thank you. It's on your ledger straight away.` };
+  return {
+    ok: true,
+    signal: fee > 0
+      ? `Paid — ${owed.toFixed(2)} rent plus a ${feePct}% card fee of ${fee.toFixed(2)}.`
+      : `Paid — thank you. It's on your ledger straight away.`,
+  };
 }

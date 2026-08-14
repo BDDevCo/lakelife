@@ -40,6 +40,10 @@ export interface RenterHome {
   acceptsOnlineRent: boolean;
   /** They need a card before any pay button is worth showing. */
   hasCard: boolean;
+  /** True once their lot has been minted as a bookable place. */
+  bookingReady: boolean;
+  /** Percent added if they pay rent by card. 0 = no fee. */
+  cardFeePct: number;
 
   /** This month's bill, or null when the park has not raised it yet. */
   bill: {
@@ -99,7 +103,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
 
   const [{ data: lot }, { data: park }, { count: cards }] = await Promise.all([
     admin.from("park_lots").select("lot_number").eq("id", stay.park_lot_id as string).maybeSingle(),
-    admin.from("parks").select("name, accepts_online_rent").eq("id", file.park_id as string).maybeSingle(),
+    admin.from("parks").select("name, accepts_online_rent, card_fee_pct").eq("id", file.park_id as string).maybeSingle(),
     admin.from("payment_methods").select("id", { count: "exact", head: true }).eq("user_id", user.id),
   ]);
 
@@ -167,6 +171,14 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     }));
   }
 
+  // Their lot as a bookable place. Found by OWNER, never by a pointer on the
+  // tenancy — 0107 dropped that column and 0062's renewal chain is why.
+  const { count: lotProps } = await admin
+    .from("properties")
+    .select("id", { count: "exact", head: true })
+    .eq("owner_id", user.id)
+    .eq("park_id", file.park_id as string);
+
   const amount = Number(charge?.amount ?? 0);
   const paidTotal = Number(charge?.paid_total ?? 0);
 
@@ -174,6 +186,8 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     parkName: (park?.name as string) ?? "your park",
     acceptsOnlineRent: Boolean(park?.accepts_online_rent),
     hasCard: (cards ?? 0) > 0,
+    bookingReady: (lotProps ?? 0) > 0,
+    cardFeePct: Number(park?.card_fee_pct ?? 0),
     lotNumber: (lot?.lot_number as string) ?? "—",
     displayName: (file.display_name as string) ?? "Resident",
     since: range?.start ?? null,

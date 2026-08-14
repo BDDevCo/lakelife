@@ -1,6 +1,6 @@
-import Link from "next/link";
 import type { RenterHome as RenterHomeView } from "@/app/parks/my-data";
 import { PayRentButton } from "@/components/PayRentButton";
+import { EnableLotBooking } from "@/components/EnableLotBooking";
 
 /**
  * WHAT THE RESIDENT SEES.
@@ -99,6 +99,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 amount={b.outstanding}
                 parkName={view.parkName}
                 hasCard={view.hasCard}
+                cardFeePct={view.cardFeePct}
                 disabled={b.disputed}
               />
             )}
@@ -219,16 +220,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
           can see that a crew came to your lot, but not what you booked or what
           you paid.
         </p>
-        <div className="ll-card ll-card-pad">
-          <p className="mut" style={{ fontSize: 13, margin: 0, lineHeight: 1.55 }}>
-            Booking for your lot isn&apos;t switched on yet. When it is,
-            it&apos;ll work the same way it does for any lake home — pick a
-            service, pick a day.
-          </p>
-          <Link className="ll-btn ghost sm" href="/portal" style={{ marginTop: 10, display: "inline-block" }}>
-            Go to my LakeLife portal
-          </Link>
-        </div>
+        <EnableLotBooking ready={view.bookingReady} />
       </div>
     </div>
   );

@@ -103,10 +103,25 @@ export default async function BookPage() {
     .from("service_packages")
     .select("id", { count: "exact", head: true })
     .eq("active", true);
+  // A $0 TILE IS A TILE THAT CANNOT BE BOOKED.
+  //
+  // `priceService` returns exactly 0 when a service does not apply to this
+  // property at all — no pier, no lifts, no boat — and `createBooking` then
+  // refuses it outright ("prices to $0 for your place"). Rendering it anyway
+  // gave every customer a row of dead Schedule buttons, and the audit that
+  // added `serviceApplies` fixed the arithmetic without ever removing the
+  // tile.
+  //
+  // It only became obvious when a park resident's lot was minted: their menu
+  // led with "Pier install / removal — $0" on a mobile home. Filtering here
+  // fixes it for lake homeowners too — anyone without a boat has been looking
+  // at unbookable boat services since the day this page shipped.
+  const applicable = priced.filter((s) => s.price > 0);
+
   // Show the services this customer chose (fall back to all if none chosen).
   const wanted = profile.wanted_services.length
-    ? priced.filter((s) => profile.wanted_services.includes(s.name))
-    : priced;
+    ? applicable.filter((s) => profile.wanted_services.includes(s.name))
+    : applicable;
 
   // Lake season window for the active property (water-work blocking).
   const { data: prop } = await supabase

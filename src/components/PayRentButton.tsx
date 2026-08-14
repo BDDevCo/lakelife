@@ -20,12 +20,14 @@ import { payRent } from "@/app/parks/pay-actions";
  * behalf.
  */
 export function PayRentButton({
-  chargeId, amount, parkName, hasCard, disabled,
+  chargeId, amount, parkName, hasCard, cardFeePct, disabled,
 }: {
   chargeId: string;
   amount: number;
   parkName: string;
   hasCard: boolean;
+  /** Percent added for paying by card. Disclosed BEFORE the tap, never after. */
+  cardFeePct: number;
   /** A disputed bill — the screen explains why; this stays out of the way. */
   disabled?: boolean;
 }) {
@@ -43,7 +45,13 @@ export function PayRentButton({
     );
   }
 
-  const usd = amount.toLocaleString(undefined, { style: "currency", currency: "USD" });
+  const money = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+  const usd = money(amount);
+  // DISCLOSED AT THE POINT OF SALE, which the card networks require and which
+  // is anyway the only honest way to charge somebody extra. Rounded the same
+  // way the server rounds it, so the confirm and the receipt agree.
+  const fee = cardFeePct > 0 ? Math.round(amount * cardFeePct) / 100 : 0;
+  const total = Math.round((amount + fee) * 100) / 100;
 
   return (
     <div style={{ marginTop: 12 }}>
@@ -54,8 +62,14 @@ export function PayRentButton({
       ) : (
         <div className="ll-field">
           <p style={{ fontSize: 13.5, margin: "0 0 8px", lineHeight: 1.55 }}>
-            Pay <strong>{usd}</strong> to {parkName} from your saved card?
+            Pay <strong>{money(total)}</strong> to {parkName} from your saved card?
           </p>
+          {fee > 0 && (
+            <p className="mut" style={{ fontSize: 12.5, margin: "0 0 8px", lineHeight: 1.5 }}>
+              {usd} rent plus a {cardFeePct}% card fee of {money(fee)}. Paying
+              by bank transfer costs nothing extra.
+            </p>
+          )}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               className="ll-btn gold"
