@@ -38,11 +38,14 @@ async function lotsForPeriod(
   periodStart: string,
   periodEnd: string,
 ): Promise<CostLot[]> {
+  // EVERY LOT, and the flags decide. Filtering here is what made the
+  // denominator wrong: `.eq("active", true)` dropped a lot switched off for
+  // repairs, which still has a live tap and a sewer connection, and the
+  // occupied-only divisor dropped the empties the park is supposed to carry.
   const { data: lots } = await admin
     .from("park_lots")
-    .select("id, lot_number, active")
-    .eq("park_id", parkId)
-    .eq("active", true);
+    .select("id, lot_number, active, lifecycle, park_owned_home")
+    .eq("park_id", parkId);
 
   const ids = (lots ?? []).map((l) => l.id as string);
   if (ids.length === 0) return [];
@@ -69,6 +72,14 @@ async function lotsForPeriod(
     lotId: l.id as string,
     lotNumber: l.lot_number as string,
     reservationId: byLot.get(l.id as string) ?? null,
+    // RENTABLE = the pedestal exists. `lifecycle` is whether the lot EXISTS
+    // (0065); `active` is only whether it is being advertised, and a lot taken
+    // off the market for a month still draws on the well. Deliberately NOT
+    // `active && live`, which is the rule for BOOKING, not for a water bill.
+    rentable: ((l.lifecycle as string) ?? "live") === "live",
+    // In the denominator, never a payer: its guests use the well, and a
+    // three-night guest is not sent a month of park water. The park carries it.
+    parkOwned: Boolean(l.park_owned_home),
   }));
 }
 
@@ -126,8 +137,13 @@ export async function recordCost(
   if (!pre.ok || !pre.preview) return { ok: false, error: pre.error };
 
   const { allocation } = pre.preview;
-  if (allocation.problem === "no_occupied_lots") {
-    return { ok: false, error: "Nobody was on a lot for that period, so there's nothing to split." };
+  // An empty park is no longer a refusal: the bill is recorded and the park
+  // carries all of it. Only having nothing to DIVIDE BY is a refusal.
+  if (allocation.problem === "no_rentable_lots") {
+    return { ok: false, error: "There are no rentable lots for that period, so there is nothing to divide it by." };
+  }
+  if (allocation.problem === "over_recovery") {
+    return { ok: false, error: "That split would recover more than you paid, so nothing was recorded." };
   }
 
   const admin = createServiceClient();
@@ -142,6 +158,11 @@ export async function recordCost(
       allocation_method: "per_lot",
       source_note: sourceNote.trim() || null,
       source_job_id: sourceJobId ?? null,
+      // THE SNAPSHOT. park_lots has no history, so without these three the
+      // same closed month re-splits differently once a lot goes live.
+      park_absorbed: allocation.parkAbsorbs,
+      denominator_lots: allocation.denominatorLots,
+      payer_lots: allocation.payerLots,
       allocated_at: new Date().toISOString(),
     })
     .select("id")

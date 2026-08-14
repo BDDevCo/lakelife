@@ -74,8 +74,24 @@ export const COST_CATEGORY_LABEL: Record<CostCategory, string> = {
 export interface CostLot {
   lotId: string;
   lotNumber: string;
-  /** Null when nobody was on it — those pay nothing. */
+  /** Null when nobody was on it. Those lots are still in the DENOMINATOR. */
   reservationId: string | null;
+  /**
+   * Could this lot be rented at all? A live pad with a water tap counts even
+   * when it is empty or switched off for repairs. A lot that is planned,
+   * being renovated or retired does not — there is no pedestal to serve.
+   *
+   * Defaults TRUE so an older caller that has not been taught the difference
+   * behaves as it always did, rather than silently emptying the denominator
+   * and handing one household the entire bill.
+   */
+  rentable?: boolean;
+  /**
+   * A home the PARK owns and rents short-term. In the denominator — its guests
+   * use the well and the roads — but never a payer: a three-night guest is not
+   * sent a month of park water. Its share is what the park carries.
+   */
+  parkOwned?: boolean;
   /** For a metered split: this lot's reading for the period. */
   reading?: number | null;
 }
@@ -99,9 +115,13 @@ export interface CostAllocation {
    */
   parkAbsorbs: number;
   occupiedCount: number;
+  /** Every lot the bill was divided BY. */
+  denominatorLots: number;
+  /** How many of those had somebody to bill. */
+  payerLots: number;
   vacantCount: number;
   /** Set when the split could not be done at all. */
-  problem?: "no_occupied_lots" | "no_readings";
+  problem?: "no_rentable_lots" | "no_readings" | "over_recovery";
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -117,33 +137,47 @@ export interface AllocateInput {
 export function allocateCost(input: AllocateInput): CostAllocation {
   const { amountPaid, method, lots } = input;
 
-  const occupied = lots.filter((l) => l.reservationId != null);
-  const vacantCount = lots.length - occupied.length;
+  // THE DENOMINATOR IS EVERY LOT THAT COULD BE RENTED — occupied or not,
+  // park-owned or not. Dividing by OCCUPIED lots, which is what this did,
+  // means a household's share rises when their neighbours leave: the same
+  // $1,140 water bill is $60.00 each at 19 occupied and $76.00 at 15, and
+  // $1,140 to the last tenant standing. Vacancy is the landlord's risk.
+  //
+  // The predicate is a FLAG ON EACH LOT rather than a filter on the query, so
+  // `payers` is a subset of `rentable` by construction. Filtering in two
+  // places is how you end up allocating more than you were billed.
+  const rentable = lots.filter((l) => l.rentable !== false);
+  const payers = rentable.filter((l) => l.reservationId != null && !l.parkOwned);
+  const vacantCount = rentable.length - payers.length;
 
   const nothing = (problem: CostAllocation["problem"]): CostAllocation => ({
     shares: [],
     allocated: 0,
     parkAbsorbs: round2(amountPaid),
-    occupiedCount: occupied.length,
+    occupiedCount: payers.length,
+    denominatorLots: rentable.length,
+    payerLots: payers.length,
     vacantCount,
     problem,
   });
 
-  if (amountPaid <= 0 || occupied.length === 0) {
-    return nothing(occupied.length === 0 ? "no_occupied_lots" : undefined);
-  }
+  // No rentable lots at all is a problem — there is nothing to divide BY.
+  // Rentable lots with nobody on them is NOT a problem: the bill is recorded
+  // and the park carries all of it, which is the whole point.
+  if (rentable.length === 0) return nothing("no_rentable_lots");
+  if (amountPaid <= 0) return nothing(undefined);
 
   let shares: CostShare[];
 
   if (method === "metered") {
-    const total = occupied.reduce((s, l) => s + (l.reading ?? 0), 0);
+    const total = payers.reduce((s, l) => s + (l.reading ?? 0), 0);
     // No readings means no basis for a metered split. Refuse rather than
     // silently falling back to an equal one — the owner chose "metered"
     // because he believed there were meters, and quietly changing the method
     // would produce a bill nobody could explain.
     if (total <= 0) return nothing("no_readings");
 
-    shares = occupied.map((l) => {
+    shares = payers.map((l) => {
       const reading = l.reading ?? 0;
       return {
         lotId: l.lotId,
@@ -154,28 +188,33 @@ export function allocateCost(input: AllocateInput): CostAllocation {
       };
     });
   } else {
-    const each = floor2(amountPaid / occupied.length);
-    shares = occupied.map((l) => ({
+    // Divided by RENTABLE, paid by PAYERS. The gap is the park's.
+    const each = floor2(amountPaid / rentable.length);
+    shares = payers.map((l) => ({
       lotId: l.lotId,
       lotNumber: l.lotNumber,
       reservationId: l.reservationId!,
       amount: each,
-      basis: `1 of ${occupied.length} occupied ${occupied.length === 1 ? "lot" : "lots"}`,
+      basis: `1 of ${rentable.length} rentable ${rentable.length === 1 ? "lot" : "lots"}`,
     }));
   }
 
   const allocated = round2(shares.reduce((s, x) => s + x.amount, 0));
 
-  // Belt and braces. Rounding down cannot overshoot, but the invariant is
-  // important enough that it gets asserted rather than assumed — and if it
-  // ever did, dropping the excess is safer than sending the bill.
-  const safeAllocated = Math.min(allocated, amountPaid);
+  // REFUSE, DO NOT CLAMP. This used to Math.min the total down to the amount
+  // paid, which turns a real bug — more payers than the denominator — into a
+  // silently wrong split that still looks tidy. It cannot happen while payers
+  // is derived from rentable, and if it ever does the honest answer is to
+  // stop rather than to send the bill.
+  if (allocated > amountPaid) return nothing("over_recovery");
 
   return {
     shares,
-    allocated: round2(safeAllocated),
-    parkAbsorbs: round2(amountPaid - safeAllocated),
-    occupiedCount: occupied.length,
+    allocated,
+    parkAbsorbs: round2(amountPaid - allocated),
+    occupiedCount: payers.length,
+    denominatorLots: rentable.length,
+    payerLots: payers.length,
     vacantCount,
   };
 }
@@ -188,13 +227,20 @@ export function allocateCost(input: AllocateInput): CostAllocation {
  * it should be visible rather than absorbed silently.
  */
 export function allocationSummary(a: CostAllocation, category: CostCategory): string {
-  if (a.problem === "no_occupied_lots") {
-    return "Nobody is on a lot for that period, so there's nothing to split.";
+  if (a.problem === "no_rentable_lots") {
+    return "There are no rentable lots for that period, so there is nothing to divide it by.";
+  }
+  if (a.problem === "over_recovery") {
+    return "That split would recover more than you paid — nothing has been recorded. Tell us, this is a bug.";
   }
   if (a.problem === "no_readings") {
     return "No meter readings for that period — enter them, or split it evenly instead.";
   }
-  if (a.shares.length === 0) return "Nothing to split.";
+  // NOBODY TO BILL IS NOT AN ERROR. The bill is real and the park carries all
+  // of it — which is the sentence he most needs to see on an empty park.
+  if (a.shares.length === 0) {
+    return `${COST_CATEGORY_LABEL[category]}: nobody is on a lot, so you carry all $${a.parkAbsorbs.toFixed(2)} — ${a.denominatorLots} rentable ${a.denominatorLots === 1 ? "lot" : "lots"}.`;
+  }
 
   const each = a.shares[0].amount;
   const same = a.shares.every((s) => s.amount === each);
@@ -206,7 +252,10 @@ export function allocationSummary(a: CostAllocation, category: CostCategory): st
     ? ` You carry $${a.parkAbsorbs.toFixed(2)}${a.vacantCount ? ` — ${a.vacantCount} empty ${a.vacantCount === 1 ? "lot" : "lots"}` : ""}.`
     : "";
 
-  return `${COST_CATEGORY_LABEL[category]}: ${per} across ${a.occupiedCount} ${a.occupiedCount === 1 ? "lot" : "lots"}.${absorbed}`;
+  // NAMES THE DENOMINATOR. "across 19 lots" was ambiguous the moment the
+  // divisor stopped being the number of payers — he has to be able to walk the
+  // park and count pedestals against this sentence.
+  return `${COST_CATEGORY_LABEL[category]}: ${per} across ${a.payerLots} of ${a.denominatorLots} rentable ${a.denominatorLots === 1 ? "lot" : "lots"}.${absorbed}`;
 }
 
 /**

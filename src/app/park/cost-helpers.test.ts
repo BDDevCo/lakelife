@@ -55,22 +55,45 @@ describe("THE CARDINAL RULE: never recover more than was paid", () => {
   });
 });
 
-describe("who pays", () => {
-  it("splits The Haven's water bill across the 19 occupied lots only", () => {
+describe("who pays, and who carries the rest", () => {
+  // THE DENOMINATOR IS EVERY RENTABLE LOT. $380 / 21 = $18.09 each (floored),
+  // 19 payers = $343.71, and the park carries $36.29 for its two empties.
+  // This test used to assert $20.00 each and $0.00 carried — dividing by the
+  // 19 OCCUPIED lots, which quietly made vacancy the neighbours' problem.
+  it("divides by every rentable lot, not just the occupied ones", () => {
     const a = allocateCost({ amountPaid: 380, method: "per_lot", lots: HAVEN });
-    expect(a.occupiedCount).toBe(19);
-    expect(a.vacantCount).toBe(2);
+    expect(a.denominatorLots).toBe(21);
+    expect(a.payerLots).toBe(19);
     expect(a.shares).toHaveLength(19);
-    expect(a.shares[0].amount).toBe(20);
-    expect(a.allocated).toBe(380);
-    expect(a.parkAbsorbs).toBe(0);
+    expect(a.shares[0].amount).toBe(18.09);
+    expect(a.allocated).toBe(343.71);
+    expect(a.parkAbsorbs).toBe(36.29);
   });
 
-  it("makes the cost of an empty lot visible", () => {
-    const a = allocateCost({ amountPaid: 210, method: "per_lot", lots: HAVEN.slice(0, 21) });
-    // 19 occupied of 21 → the two empties are the park's to carry.
+  // THE ONE THE RESIDENT NOTICES. Same bill, same month, same water — four
+  // neighbours leave. Under the old divisor their share went $60.00 -> $76.00.
+  it("does not move a household's share when their neighbours leave", () => {
+    const full = allocateCost({ amountPaid: 1140, method: "per_lot", lots: HAVEN });
+    const emptier = allocateCost({
+      amountPaid: 1140, method: "per_lot",
+      lots: HAVEN.map((l, i) => (i < 4 ? { ...l, reservationId: null } : l)),
+    });
+    expect(full.shares[0].amount).toBe(54.28);
+    expect(emptier.shares[0].amount).toBe(54.28);
+    // The difference lands on the park, which is where the risk sits.
+    expect(full.parkAbsorbs).toBe(108.68);
+    expect(emptier.parkAbsorbs).toBe(325.8);
+  });
+
+  // The old version of this asserted only `parkAbsorbs > 0`, which passed for
+  // a ONE-CENT rounding reason while the vacancy cost was in fact zero. That
+  // looseness is how the bug survived being tested.
+  it("carries exactly the empty lots' share, not a rounding crumb", () => {
+    const a = allocateCost({ amountPaid: 210, method: "per_lot", lots: HAVEN });
+    expect(a.shares[0].amount).toBe(10);
+    expect(a.allocated).toBe(190);
+    expect(a.parkAbsorbs).toBe(20);       // 2 empty lots x $10, to the penny
     expect(a.vacantCount).toBe(2);
-    expect(a.parkAbsorbs).toBeGreaterThan(0);
   });
 
   it("charges a vacant lot nothing at all", () => {
@@ -80,19 +103,60 @@ describe("who pays", () => {
     expect(ids).not.toContain("l22");
   });
 
-  it("splits nothing when the park is empty", () => {
+  // A HOME THE PARK OWNS IS IN THE DENOMINATOR AND NEVER A PAYER. Its guests
+  // use the well; a three-night guest is not sent a month of park water. So
+  // the park carries it — which is what stops the long-term residents
+  // subsidising the short-term business.
+  it("counts a park-owned home in the divisor but never bills it", () => {
+    const withStr: CostLot[] = [
+      ...HAVEN,
+      { lotId: "str1", lotNumber: "30", reservationId: "g1", parkOwned: true },
+      { lotId: "str2", lotNumber: "31", reservationId: "g2", parkOwned: true },
+    ];
+    const a = allocateCost({ amountPaid: 1150, method: "per_lot", lots: withStr });
+    expect(a.denominatorLots).toBe(23);
+    expect(a.payerLots).toBe(19);
+    expect(a.shares.map((x) => x.lotId)).not.toContain("str1");
+    expect(a.shares[0].amount).toBe(50);          // 1150 / 23
+    expect(a.parkAbsorbs).toBe(200);              // 4 lots x $50
+  });
+
+  // A pad that is planned, being renovated or retired has no pedestal to
+  // serve, so it cannot dilute anybody's share.
+  it("leaves lots that are not rentable out of the divisor entirely", () => {
+    const withDead: CostLot[] = [
+      ...HAVEN,
+      { lotId: "d1", lotNumber: "40", reservationId: null, rentable: false },
+      { lotId: "d2", lotNumber: "41", reservationId: null, rentable: false },
+    ];
+    const a = allocateCost({ amountPaid: 380, method: "per_lot", lots: withDead });
+    expect(a.denominatorLots).toBe(21);
+    expect(a.shares[0].amount).toBe(18.09);
+  });
+
+  // NOT AN ERROR ANY MORE. The bill is real and the park carries all of it —
+  // which is the sentence he most needs on a park nobody lives in yet.
+  it("records the bill and carries all of it when nobody is on a lot", () => {
     const a = allocateCost({
       amountPaid: 100, method: "per_lot",
       lots: [{ lotId: "x", lotNumber: "1", reservationId: null }],
     });
-    expect(a.problem).toBe("no_occupied_lots");
+    expect(a.problem).toBeUndefined();
     expect(a.shares).toHaveLength(0);
     expect(a.parkAbsorbs).toBe(100);
   });
 
+  // Having nothing to divide BY is still a refusal.
+  it("refuses when there is no rentable lot at all", () => {
+    const a = allocateCost({
+      amountPaid: 100, method: "per_lot",
+      lots: [{ lotId: "x", lotNumber: "1", reservationId: null, rentable: false }],
+    });
+    expect(a.problem).toBe("no_rentable_lots");
+    expect(a.parkAbsorbs).toBe(100);
+  });
+
   it("REFUSES a metered split with no readings rather than quietly splitting evenly", () => {
-    // He chose "metered" because he believed there were meters. Silently
-    // changing the method produces a bill nobody can explain.
     const a = allocateCost({
       amountPaid: 100, method: "metered",
       lots: [{ lotId: "a", lotNumber: "1", reservationId: "r1", reading: 0 }],
@@ -101,29 +165,31 @@ describe("who pays", () => {
     expect(a.shares).toHaveLength(0);
   });
 
-  it("records a basis a resident can read", () => {
+  it("records a basis a resident can read, naming the denominator", () => {
     const a = allocateCost({ amountPaid: 380, method: "per_lot", lots: HAVEN });
-    expect(a.shares[0].basis).toBe("1 of 19 occupied lots");
+    expect(a.shares[0].basis).toBe("1 of 21 rentable lots");
   });
 });
 
 describe("what the owner reads", () => {
-  it("leads with the per-lot number and names what he carries", () => {
+  it("names the divisor he can walk the park and count", () => {
     const a = allocateCost({ amountPaid: 400, method: "per_lot", lots: HAVEN });
-    const s = allocationSummary(a, "water");
-    expect(s).toContain("Water");
-    expect(s).toContain("across 19 lots");
-    expect(s).toMatch(/\$\d+\.\d{2} each/);
+    expect(allocationSummary(a, "water")).toBe(
+      "Water: $19.04 each across 19 of 21 rentable lots. You carry $38.24 — 2 empty lots.",
+    );
   });
 
-  it("says so plainly when there is nobody to split across", () => {
+  it("says plainly that he carries the lot when nobody is on it", () => {
     const a = allocateCost({
       amountPaid: 100, method: "per_lot",
       lots: [{ lotId: "x", lotNumber: "1", reservationId: null }],
     });
-    expect(allocationSummary(a, "water")).toMatch(/nothing to split/i);
+    expect(allocationSummary(a, "water")).toBe(
+      "Water: nobody is on a lot, so you carry all $100.00 — 1 rentable lot.",
+    );
   });
 });
+
 
 describe("am I recovering what the proforma promised", () => {
   it("ALLOCATED IS NOT RECOVERED — splitting a bill is not billing it", () => {
