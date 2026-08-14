@@ -6,6 +6,7 @@ import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import { buildStatement, type StatementFee } from "./statement-helpers";
+import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
 import {
   planRun, toRows, summarise, currentPeriod, prettyMonth,
   type Charge, type LedgerRow, type LedgerSummary, type RunPlan,
@@ -112,11 +113,20 @@ async function unbilledCostShares(
   for (const sh of shares) {
     const cost = costById.get(sh.cost_id as string);
     if (!cost) continue;             // a cost from elsewhere, or since removed
-    const label = `${String(cost.category ?? "cost").replace(/_/g, " ")} — your share`;
+    // THE SAME WORDS THE OWNER SEES, from the one label map.
+    //
+    // This built the label by de-underscoring the raw enum, so a resident's
+    // bill read "grounds — your share" while the costs screen called it
+    // "Grounds & mowing", and "unit electric — your share" — which means
+    // nothing to anybody — against "Electric on a home you own". A bill line
+    // is the most-read sentence in the whole product and it was the only one
+    // written by a regex.
+    const cat = String(cost.category ?? "other") as CostCategory;
+    const label = `${COST_CATEGORY_LABEL[cat] ?? "Cost"} — your share`;
     const list = out.get(sh.reservation_id as string) ?? [];
     list.push({
       id: sh.id as string,
-      label: label.charAt(0).toUpperCase() + label.slice(1),
+      label,
       amount: Number(sh.amount ?? 0),
       basis: cost.period_start && cost.period_end
         ? `for ${cost.period_start} to ${cost.period_end}`
