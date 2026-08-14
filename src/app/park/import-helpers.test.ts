@@ -9,7 +9,7 @@ import {
   statedTotalFrom,
   importBlockerText,
   MAX_LOT_LABEL,
-  type ImportBlocker,
+  type ImportBlocker, emptyLotLabelsFrom,
 } from "./import-helpers";
 
 const CUTOVER = "2026-08-01";
@@ -432,5 +432,48 @@ describe("a NAMED roll carries rate cards too", () => {
   it("skips a row with no amount rather than writing a rate of zero", () => {
     const p = plan("Lot\tTenant\tRent\n1\tAmberg, Roy\t\n2\tBell, Dana\t410", LOTS);
     expect(p.rates.map((r) => r.lotLabel)).toEqual(["2"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE EMPTY PADS ARE LOTS.
+//
+// A roll's vacant and silent lines were recorded as import NOTES and created
+// nothing, so The Haven imported as 19 lots instead of 21 — and a cost split
+// "across every rentable lot, with the park carrying the empties" divided by
+// 19 and carried nothing, because the empties did not exist to be carried.
+// ---------------------------------------------------------------------------
+describe("the lots nobody is on", () => {
+  it("reads a label out of every way a roll names an empty pad", () => {
+    expect(emptyLotLabelsFrom([
+      { text: "Lot 3" },
+      { text: "Lot 22 — vacant" },
+      { text: "#7" },
+      { text: "12" },
+      { text: "Site 9  (needs skirting)" },
+    ])).toEqual(["3", "22", "7", "12", "9"]);
+  });
+
+  it("never invents one it cannot read", () => {
+    // A phantom lot silently dilutes every resident's utility share, which is
+    // worse than missing one.
+    expect(emptyLotLabelsFrom([
+      { text: "vacant" },
+      { text: "— see notes —" },
+      { text: "" },
+    ])).toEqual([]);
+  });
+
+  it("does not re-create a lot the park already has", () => {
+    expect(emptyLotLabelsFrom(
+      [{ text: "Lot 3" }, { text: "Lot 22" }],
+      [{ lotNumber: "3" }],
+    )).toEqual(["22"]);
+  });
+
+  it("says each one once, however many times the sheet mentions it", () => {
+    expect(emptyLotLabelsFrom([
+      { text: "Lot 22" }, { text: "lot 22" }, { text: "Lot 22 — vacant" },
+    ])).toEqual(["22"]);
   });
 });

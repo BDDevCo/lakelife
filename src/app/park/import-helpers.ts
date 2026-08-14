@@ -263,6 +263,17 @@ export interface PlanInput {
    * living anywhere, because the list does not say who does.
    */
   namelessRoll?: boolean;
+  /**
+   * EMPTY LOTS THE SHEET NAMES — declared vacant, or implied by a gap in the
+   * numbering. They become real lots with nobody on them.
+   *
+   * They used to be recorded as import NOTES and nothing else, so The Haven
+   * imported as 19 lots instead of 21 and the two empties did not exist. That
+   * makes them invisible to the thing they matter most to: a cost is divided
+   * by every RENTABLE lot, and the park carries the empties. A lot that was
+   * never created cannot be carried, so the whole rule silently did nothing.
+   */
+  emptyLotLabels?: readonly string[];
 }
 
 /**
@@ -415,7 +426,10 @@ export function planImport(input: PlanInput): ImportPlan {
       rows: planned,
       ready: [],
       needsYou: [],
-      lotsToCreate: [...new Set(rates.filter((r) => r.createsLot).map((r) => r.lotLabel))],
+      lotsToCreate: [...new Set([
+        ...rates.filter((r) => r.createsLot).map((r) => r.lotLabel),
+        ...(input.emptyLotLabels ?? []),
+      ])],
       monthlyTotal: rates.reduce((sum, r) => sum + (r.amount ?? 0), 0),
       namelessRoll: true,
       rates,
@@ -425,8 +439,14 @@ export function planImport(input: PlanInput): ImportPlan {
   const ready = planned.filter((p) => !p.skipped && p.blockers.length === 0);
   const needsYou = planned.filter((p) => !p.skipped && p.blockers.length > 0);
 
+  // The empties are lots too. See PlanInput.emptyLotLabels: without them the
+  // denominator for every split cost is wrong by exactly the vacancy the park
+  // is supposed to carry.
   const lotsToCreate = [
-    ...new Set(ready.filter((p) => p.createsLot && p.lotLabel).map((p) => p.lotLabel!)),
+    ...new Set([
+      ...ready.filter((p) => p.createsLot && p.lotLabel).map((p) => p.lotLabel!),
+      ...(input.emptyLotLabels ?? []),
+    ]),
   ];
 
   // Only monthly rows, only rows that will actually be written. Adding a season
@@ -579,4 +599,34 @@ export function checkTotals(
     stated, computed, difference, ties,
     lotsWithNoAmount, oneMissingRent, doubleCountedLots,
   };
+}
+
+
+/**
+ * THE LOT LABEL INSIDE A LINE THE ROLL DID NOT BILL.
+ *
+ * "Lot 22", "Lot 22 — vacant", "#7", a bare "3" — all of them name a pad that
+ * exists and has nobody on it. Anything with no readable number is skipped
+ * rather than guessed at: inventing a lot is worse than missing one, because
+ * a phantom lot silently dilutes every resident's utility share.
+ */
+export function emptyLotLabelsFrom(
+  lines: readonly { text: string }[],
+  existing: readonly { lotNumber: string }[] = [],
+): string[] {
+  const have = new Set(existing.map((l) => l.lotNumber.trim().toLowerCase()));
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  for (const { text } of lines) {
+    const m = /^\s*(?:#\s*|(?:lot|site|space|unit|stall|pad)\s+)?([A-Za-z]{0,2}\d{1,4}[A-Za-z]?)\b/i
+      .exec(text ?? "");
+    if (!m) continue;
+    const label = m[1].trim();
+    const key = label.toLowerCase();
+    if (have.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+  }
+  return out;
 }

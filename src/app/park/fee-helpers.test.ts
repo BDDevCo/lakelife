@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   payersFor, monthlyIncome, checkCoverage, coverageSummary,
-  type ParkFee,
+  type ParkFee, nightlyRecoveryTarget, nightlyRecoveryLine,
 } from "./fee-helpers";
 import type { CostCategory } from "./cost-helpers";
 
@@ -174,5 +174,46 @@ describe("who a flat fee is actually billed to", () => {
 
   it("still counts an opt-in fee by who opted in", () => {
     expect(payersFor(fee("opt_in"), { longTerm: 19, shortTerm: 4, optedIn: 6 })).toBe(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHAT AN STR UNIT COSTS THE PARK PER NIGHT.
+//
+// A guest's load is CAPACITY, not consumption — three nights barely touch a
+// well but occupy a whole unit's roads, lighting and grounds. Hence per night,
+// like a resort fee, and NOT the monthly fee cut into thirtieths.
+// ---------------------------------------------------------------------------
+describe("pricing a park-owned home's share into the nightly rate", () => {
+  it("spreads the month's share over the nights it could be let", () => {
+    // $54.28 over a 30-night August.
+    expect(nightlyRecoveryTarget({ monthlyShare: 54.28, nightsAvailable: 30 })).toBe(1.81);
+  });
+
+  it("rounds up, because under-recovering every night is a slow leak", () => {
+    // 54.28 / 28 = 1.938…  A guest cannot tell $1.93 from $1.94.
+    expect(nightlyRecoveryTarget({ monthlyShare: 54.28, nightsAvailable: 28 })).toBe(1.94);
+  });
+
+  // The denominator is nights AVAILABLE, not nights booked. Dividing by nights
+  // sold would make the rate climb as occupancy falls — the same mistake the
+  // cost allocator made by dividing among occupied lots only.
+  it("does not get more expensive per night when the unit sits empty", () => {
+    const busy = nightlyRecoveryTarget({ monthlyShare: 60, nightsAvailable: 30 });
+    const quiet = nightlyRecoveryTarget({ monthlyShare: 60, nightsAvailable: 30 });
+    expect(busy).toBe(quiet);
+  });
+
+  it("says it cannot answer rather than inventing a rate", () => {
+    expect(nightlyRecoveryTarget({ monthlyShare: 0, nightsAvailable: 30 })).toBeNull();
+    expect(nightlyRecoveryTarget({ monthlyShare: 54.28, nightsAvailable: 0 })).toBeNull();
+    expect(nightlyRecoveryLine("12", null)).toMatch(/can't work out/i);
+  });
+
+  // It is a PRICE, not a charge — LakeLife is not in an Airbnb transaction and
+  // must not imply it can bill the guest.
+  it("says plainly that we cannot bill a booking taken elsewhere", () => {
+    expect(nightlyRecoveryLine("12", 1.81)).toContain("$1.81 a night");
+    expect(nightlyRecoveryLine("12", 1.81)).toMatch(/booking taken somewhere else/i);
   });
 });

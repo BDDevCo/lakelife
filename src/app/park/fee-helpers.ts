@@ -208,3 +208,49 @@ export function coverageSummary(check: CoverageCheck, payers: number): string {
   }
   return `Your fees bring in $${check.feeIncome.toFixed(2)} a month against $${check.actualCost.toFixed(2)} of real cost — SHORT by $${perLot.toFixed(2)} a lot, $${Math.abs(check.margin).toFixed(2)} a month.`;
 }
+
+
+/**
+ * WHAT A PARK-OWNED HOME COSTS THE PARK, PER NIGHT IT COULD BE BOOKED.
+ *
+ * Brendon: "lets think about STR and assessing a Park Fee during their stay.
+ * only fair."
+ *
+ * It is fair, and a guest's load is CAPACITY, not consumption. Three nights
+ * barely touch a well, but they occupy a whole unit's worth of road, lighting,
+ * trash and grounds — which is why hotels charge a resort fee per night rather
+ * than prorating a monthly figure. Dividing the long-term fee by 30 and
+ * multiplying by three nights is the wrong instinct: it recovers almost
+ * nothing while the unit sat empty the other 27.
+ *
+ * SO THIS IS A PRICE, NOT AN INVOICE LINE — and deliberately so. The stay is
+ * booked on somebody else's platform; LakeLife is not in that transaction and
+ * cannot add a line to it. What it CAN do is tell him what the unit costs him
+ * per available night so he sets a nightly rate that covers it. It becomes a
+ * real billed line the day LakeLife hosts the booking, and not before: a fee
+ * nothing can charge is a number that lies.
+ *
+ * `nightsAvailable` is the honest denominator — nights the unit could be let,
+ * not nights it was. Dividing by nights actually booked would make the rate
+ * rise as occupancy falls, which is the same mistake the cost allocator made
+ * with vacant lots.
+ */
+export function nightlyRecoveryTarget(input: {
+  /** The park's monthly cost for this lot — its share of the split. */
+  monthlyShare: number;
+  /** Nights the unit could be let this month. */
+  nightsAvailable: number;
+}): number | null {
+  const { monthlyShare, nightsAvailable } = input;
+  if (!(monthlyShare > 0) || !(nightsAvailable > 0)) return null;
+  // Rounded UP to the cent: under-recovering every night of the season is a
+  // slow leak, and a guest cannot tell $1.81 from $1.82.
+  return Math.ceil((monthlyShare / nightsAvailable) * 100) / 100;
+}
+
+/** "$1.82 a night covers what Lot 12 costs the park." */
+export function nightlyRecoveryLine(lotNumber: string, target: number | null): string {
+  return target == null
+    ? `We can't work out a nightly figure for lot ${lotNumber} yet — it needs a park cost split first.`
+    : `Lot ${lotNumber}: $${target.toFixed(2)} a night covers its share of running the park. Build it into the nightly rate — we can't add it to a booking taken somewhere else.`;
+}

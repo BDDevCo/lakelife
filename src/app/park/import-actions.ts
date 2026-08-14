@@ -9,6 +9,7 @@ import { SITE_DEFAULTS } from "./park-helpers";
 import {
   planImport,
   statedTotalFrom,
+  emptyLotLabelsFrom,
   type ImportPlan,
   type RowOverride,
   type SeasonWindow,
@@ -294,6 +295,15 @@ export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
     approvedNewLots,
     overrides,
     namelessRoll: !parsed.shape.hasNameColumn,
+    // THE EMPTY PADS ARE LOTS. Declared vacant, or implied by a gap in the
+    // numbering — both were recorded as import notes and created nothing, so
+    // The Haven came in as 19 lots instead of 21. A cost is divided by every
+    // RENTABLE lot and the park carries the empties; a lot that does not exist
+    // cannot be carried, and the rule silently did nothing.
+    emptyLotLabels: emptyLotLabelsFrom(
+      [...parsed.vacantDeclared, ...parsed.silentLots],
+      lots.map((l) => ({ lotNumber: l.lotNumber })),
+    ),
   });
 
   const others = (rowRecords ?? [])
