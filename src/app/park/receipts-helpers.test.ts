@@ -433,3 +433,40 @@ describe("the card fee on a statement", () => {
     expect(said.some((l) => l.includes("card fees"))).toBe(false);
   });
 });
+
+describe("money from things the park rents out", () => {
+  /**
+   * The park's first boat day would have printed on the CPA statement as
+   * "received on account" — the off-book bucket was `kind !== 'deposit'`, so
+   * amenity money fell straight into it. "On account" means money not yet put
+   * against a bill; a boat day is paid in full and is never going to reach a
+   * rent bill, because it is not rent.
+   */
+  it("names amenity income as income, and not as rent", () => {
+    const said = exclusionLines({
+      recordsBeginOn: "2026-01-01", lagDays: 0, unbilledFeeLabels: [],
+      anyMissingPayerName: false, amenityReceivedCents: 30000,
+    });
+    const line = said.find((l) => l.includes("rent out"));
+    expect(line).toBeTruthy();
+    expect(line).toContain("300.00");
+    expect(line).toContain("IS your income");
+    expect(line).toContain("not rent");
+  });
+
+  it("does not confuse it with money held on account", () => {
+    const said = exclusionLines({
+      recordsBeginOn: "2026-01-01", lagDays: 0, unbilledFeeLabels: [],
+      anyMissingPayerName: false, amenityReceivedCents: 30000,
+    });
+    expect(said.some((l) => l.includes("rent out") && l.includes("on account"))).toBe(false);
+  });
+
+  it("says nothing when the park rents nothing out", () => {
+    const said = exclusionLines({
+      recordsBeginOn: "2026-01-01", lagDays: 0, unbilledFeeLabels: [],
+      anyMissingPayerName: false, amenityReceivedCents: 0,
+    });
+    expect(said.some((l) => l.includes("rent out"))).toBe(false);
+  });
+});

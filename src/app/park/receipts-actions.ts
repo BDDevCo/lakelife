@@ -98,8 +98,17 @@ export async function getStatement(
     (offBook ?? []).filter((p) => p.kind === "deposit")
       .reduce((s2, p) => s2 + Number(p.amount ?? 0), 0) * 100,
   );
+  // "ON ACCOUNT" MEANS MONEY NOT YET PUT AGAINST A BILL. An amenity payment is
+  // not that — it is a boat day, paid in full, and it is never going to reach a
+  // rent bill because it is not rent. Bucketing it here (the old `!== deposit`)
+  // would have printed the park's first boat money as "received on account",
+  // which is the kind of line an accountant queries a year later.
   const onAccountReceivedCents = Math.round(
-    (offBook ?? []).filter((p) => p.kind !== "deposit")
+    (offBook ?? []).filter((p) => p.kind !== "deposit" && p.kind !== "amenity")
+      .reduce((s2, p) => s2 + Number(p.amount ?? 0), 0) * 100,
+  );
+  const amenityReceivedCents = Math.round(
+    (offBook ?? []).filter((p) => p.kind === "amenity")
       .reduce((s2, p) => s2 + Number(p.amount ?? 0), 0) * 100,
   );
 
@@ -115,7 +124,7 @@ export async function getStatement(
       parkName, period, summary: empty, receipts: [],
       notes: exclusionLines({
         recordsBeginOn: null, lagDays, unbilledFeeLabels: [], anyMissingPayerName: false,
-        depositsReceivedCents, onAccountReceivedCents,
+        depositsReceivedCents, onAccountReceivedCents, amenityReceivedCents,
       }),
       recordsBeginOn: null, billedInWindowCents: 0,
       today, generatedAt: new Date().toISOString(),
@@ -204,7 +213,7 @@ export async function getStatement(
     receipts: inWindow,
     notes: exclusionLines({
       recordsBeginOn, lagDays, unbilledFeeLabels, anyMissingPayerName,
-      depositsReceivedCents, onAccountReceivedCents,
+      depositsReceivedCents, onAccountReceivedCents, amenityReceivedCents,
       // Summarised over the SAME window the total is, so the sentence and the
       // number can never disagree.
       cardFeesReceivedCents: summary.cardFeesCents,

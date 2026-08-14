@@ -423,6 +423,12 @@ export interface ExclusionContext {
    * accountant a year later.
    */
   cardFeesReceivedCents?: number;
+  /**
+   * WHAT THE PARK EARNED RENTING ITS OWN THINGS — the boat, the pavilion, a
+   * cart. Real income, and NOT rent, so it is named rather than folded into a
+   * rent total or mislabelled "on account".
+   */
+  amenityReceivedCents?: number;
 }
 
 /**
@@ -454,6 +460,13 @@ export function exclusionLines(ctx: ExclusionContext): string[] {
     lines.push(
       `Also received in this period, and NOT in the total above: ${bits.join(" and ")}. ` +
       `It reached the bank; it just isn't rent yet.`,
+    );
+  }
+  const amenity = ctx.amenityReceivedCents ?? 0;
+  if (amenity > 0) {
+    lines.push(
+      `Also received: $${(amenity / 100).toFixed(2)} for things you rent out — the boat, the pavilion and so on. ` +
+      `That IS your income, but it is not rent, so it sits outside the total above and should be its own line in your books.`,
     );
   }
   const fees = ctx.cardFeesReceivedCents ?? 0;
