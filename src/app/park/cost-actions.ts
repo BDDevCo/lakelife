@@ -108,6 +108,12 @@ export async function recordCost(
   periodEnd: string,
   amountPaid: number,
   sourceNote: string,
+  /**
+   * The LakeLife job this came from, when it was filled in rather than typed.
+   * 0111 makes it unique, so a double-tap cannot bill 21 households twice for
+   * one mowing — the database refuses the second insert.
+   */
+  sourceJobId?: string | null,
 ): Promise<ParkResult & { perLot?: number; parkAbsorbs?: number }> {
   const pre = await previewCostSplit(parkId, category, periodStart, periodEnd, amountPaid);
   if (!pre.ok || !pre.preview) return { ok: false, error: pre.error };
@@ -128,11 +134,20 @@ export async function recordCost(
       amount_paid: amountPaid,
       allocation_method: "per_lot",
       source_note: sourceNote.trim() || null,
+      source_job_id: sourceJobId ?? null,
       allocated_at: new Date().toISOString(),
     })
     .select("id")
     .single();
-  if (costErr || !cost) return { ok: false, error: "Couldn't save that bill — try again." };
+  if (costErr || !cost) {
+    // 23505 on the unique index: this job is already a cost. Two owners with
+    // the screen open, or one impatient double-tap — either way the honest
+    // answer is that it is already done, not that it failed.
+    if (costErr?.code === "23505") {
+      return { ok: false, error: "That job has already been recorded as a cost." };
+    }
+    return { ok: false, error: "Couldn't save that bill — try again." };
+  }
 
   if (allocation.shares.length > 0) {
     const { error: shareErr } = await admin.from("lot_cost_shares").insert(
@@ -249,4 +264,81 @@ export async function listCosts(parkId: string): Promise<{
       })),
     ),
   };
+}
+
+
+export interface BillableParkJob {
+  jobId: string;
+  service: string;
+  date: string;
+  amount: number;
+  periodStart: string;
+  periodEnd: string;
+  note: string;
+}
+
+/**
+ * WORK THE PARK HAS PAID FOR AND NOT YET PASSED ON.
+ *
+ * The last manual step in the loop: the owner read a figure off the jobs
+ * screen and typed it into the costs form. That is where a digit gets
+ * dropped, and the household whose share is wrong has no way to know.
+ *
+ * ONLY WORK ON THE PARK'S OWN GROUNDS. Scoped through
+ * `parks.service_property_id`, so a job at a RESIDENT'S lot can never appear
+ * here — that is their private purchase, and offering the park a button to
+ * bill it back to them would invert every privacy rule in the module.
+ *
+ * ONLY WORK THAT IS DONE. A scheduled mow is not a cost yet; passing on money
+ * before a crew has turned up is how a park bills for a visit that then gets
+ * rained off.
+ */
+export async function getBillableParkJobs(parkId: string): Promise<BillableParkJob[]> {
+  if (!(await assertMyPark(parkId))) return [];
+  const admin = createServiceClient();
+
+  const { data: park } = await admin
+    .from("parks").select("service_property_id").eq("id", parkId).maybeSingle();
+  const propertyId = (park?.service_property_id as string) ?? null;
+  if (!propertyId) return [];
+
+  const { data: jobs } = await admin
+    .from("jobs")
+    .select("id, date, customer_price, status, services(name)")
+    .eq("property_id", propertyId)
+    .in("status", ["complete", "paid"])
+    .order("date", { ascending: false })
+    .limit(24);
+  if (!jobs?.length) return [];
+
+  // Already passed on? `source_job_id` is the only honest answer — a match on
+  // amount and date would treat two identical mows as one.
+  const { data: taken } = await admin
+    .from("park_costs")
+    .select("source_job_id")
+    .eq("park_id", parkId)
+    .not("source_job_id", "is", null);
+  const done = new Set((taken ?? []).map((c) => c.source_job_id as string));
+
+  return jobs
+    .filter((j) => !done.has(j.id as string))
+    .filter((j) => Number(j.customer_price ?? 0) > 0)
+    .map((j) => {
+      const svc = Array.isArray(j.services)
+        ? (j.services[0] as { name?: string } | undefined)?.name
+        : (j.services as { name?: string } | null)?.name;
+      const date = j.date as string;
+      return {
+        jobId: j.id as string,
+        service: svc ?? "Park work",
+        date,
+        amount: Number(j.customer_price ?? 0),
+        // The period a mow covers is the month it happened in — that is what
+        // decides WHO is billed, because the allocator splits across whoever
+        // was on a lot during it.
+        periodStart: `${date.slice(0, 7)}-01`,
+        periodEnd: date,
+        note: `${svc ?? "Park work"} — LakeLife, ${date}`,
+      };
+    });
 }

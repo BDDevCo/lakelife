@@ -5,7 +5,7 @@ import { ParkCosts } from "@/components/ParkCosts";
 import { ParkFees } from "@/components/ParkFees";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
-import { listCosts } from "@/app/park/cost-actions";
+import { listCosts, getBillableParkJobs } from "@/app/park/cost-actions";
 import { listFees } from "@/app/park/fee-actions";
 
 export default async function ParkCostsPage() {
@@ -28,9 +28,10 @@ export default async function ParkCostsPage() {
     );
   }
 
-  const [{ rows, summary }, feesPage] = await Promise.all([
+  const [{ rows, summary }, feesPage, billable] = await Promise.all([
     listCosts(park.id),
     listFees(park.id),
+    getBillableParkJobs(park.id),
   ]);
 
   return (
@@ -38,6 +39,7 @@ export default async function ParkCostsPage() {
       <TopBar />
       <ParkNav parkName={park.name} live={park.active} />
       <ParkCosts
+        billable={billable}
         parkId={park.id}
         rows={rows}
         summary={summary}

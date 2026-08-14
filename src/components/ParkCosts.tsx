@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { previewCostSplit, recordCost, removeCost, type CostRow } from "@/app/park/cost-actions";
+import { previewCostSplit, recordCost, removeCost, type CostRow, type BillableParkJob } from "@/app/park/cost-actions";
 import {
   COST_CATEGORY_LABEL, allocationSummary,
   type CostCategory, type CostAllocation,
@@ -27,7 +27,7 @@ const CATEGORIES: CostCategory[] = [
 ];
 
 export function ParkCosts({
-  parkId, rows, summary, fees, recoveredByFee,
+  parkId, rows, summary, fees, recoveredByFee, billable = [],
 }: {
   parkId: string;
   rows: CostRow[];
@@ -41,6 +41,12 @@ export function ParkCosts({
    * misleading about the business.
    */
   recoveredByFee?: boolean;
+  /**
+   * Work the park has paid LakeLife for and not yet passed on. Rendered as
+   * one-tap prefills — the last step in the loop that was still a person
+   * reading a figure off one screen and typing it into another.
+   */
+  billable?: BillableParkJob[];
 }) {
   const router = useRouter();
   const [busy, start] = useTransition();
@@ -51,6 +57,8 @@ export function ParkCosts({
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [preview, setPreview] = useState<CostAllocation | null>(null);
+  // Which prefill is being saved, so only its own button says "Splitting…".
+  const [fillingId, setFillingId] = useState<string | null>(null);
 
   const amountNum = () => Number(amount.replace(/[$,\s]/g, ""));
 
@@ -59,6 +67,27 @@ export function ParkCosts({
       const res = await previewCostSplit(parkId, category, from, to, amountNum());
       if (!res.ok || !res.preview) { toast(res.error ?? "Couldn't work that out."); return; }
       setPreview(res.preview.allocation);
+    });
+  }
+
+  /**
+   * ONE TAP: take the job's own figures and split them.
+   *
+   * It does NOT open the form pre-filled. A form asking him to confirm numbers
+   * he did not type is a form he stops reading, and the whole point is that
+   * nobody retypes the amount. The split is previewed on the row before he
+   * commits.
+   */
+  function fillFrom(j: BillableParkJob) {
+    setFillingId(j.jobId);
+    start(async () => {
+      const res = await recordCost(
+        parkId, "grounds", j.periodStart, j.periodEnd, j.amount, j.note, j.jobId,
+      );
+      setFillingId(null);
+      if (!res.ok) { toast(res.error ?? "Couldn't save that."); return; }
+      toast(res.signal ?? "Split across the lots.");
+      router.refresh();
     });
   }
 
@@ -138,6 +167,67 @@ export function ParkCosts({
           </p>
         </section>
       )}
+
+      {/* WORK ALREADY PAID FOR, WAITING TO BE PASSED ON.
+
+          Above the manual form deliberately: the figures are already exact,
+
+          and the form below exists for the water bill that arrives on paper. */}
+
+      {billable.length > 0 && (
+
+        <div style={{ marginTop: 12 }}>
+
+          <div style={{ fontSize: 13.5, fontWeight: 800, marginBottom: 4 }}>
+
+            Paid to LakeLife, not yet passed on
+
+          </div>
+
+          <p className="mut" style={{ fontSize: 12.5, margin: "0 0 8px", lineHeight: 1.5 }}>
+
+            Work on the common ground. One tap splits it across the lots the
+
+            same way a water bill splits — nothing to retype.
+
+          </p>
+
+          {billable.map((j) => (
+
+            <div key={j.jobId} style={{
+
+              display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap",
+
+              padding: "8px 0", borderTop: "1px solid var(--line)",
+
+            }}>
+
+              <span style={{ fontSize: 13.5, fontWeight: 700 }}>{j.service}</span>
+
+              <span className="mut" style={{ fontSize: 12.5 }}>{j.date}</span>
+
+              <span style={{ fontSize: 14, fontWeight: 800, marginLeft: "auto" }}>
+
+                {j.amount.toLocaleString(undefined, { style: "currency", currency: "USD" })}
+
+              </span>
+
+              <button className="ll-btn ghost sm" disabled={busy}
+
+                onClick={() => fillFrom(j)}>
+
+                {fillingId === j.jobId ? "Splitting…" : "Split across the lots"}
+
+              </button>
+
+            </div>
+
+          ))}
+
+        </div>
+
+      )}
+
 
       {!open ? (
         <button className="ll-btn" style={{ marginTop: 16 }} onClick={() => setOpen(true)}>
