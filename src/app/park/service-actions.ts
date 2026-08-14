@@ -4,6 +4,8 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { assertMyPark } from "./data";
+import { withParkRate } from "@/lib/park-rates";
+import { loadParkRates } from "./rate-data";
 import {
   buildParkBlockers, buildGroundsPropertyRow, canEnableParkServices,
   type ParkReadiness,
@@ -179,7 +181,20 @@ export async function focusParkProperty(parkId: string): Promise<ServiceDeskResu
 export interface ParkServiceRow {
   id: string;
   name: string;
-  price: number;
+  /** Null when THIS park has not set a rate. Never another park's number. */
+  price: number | null;
+  /** The two dials behind that price, so the editor shows what is there now. */
+  base: number | null;
+  unitRate: number | null;
+  note: string | null;
+  /**
+   * THE RULE'S SHAPE, so the editor can preview with the SAME engine the
+   * invoice uses. It previewed $277.50 for a rate that charged $278 — half a
+   * dollar, and the whole point of showing the arithmetic is that the number on
+   * screen is the number he pays. Carries no margin and no customer price.
+   */
+  pricingModel: string;
+  bandPricing: Record<string, unknown> | null;
   frequencyOptions: string[];
   minPhotos: number;
 }
@@ -189,26 +204,76 @@ export async function getParkServiceMenu(parkId: string): Promise<ParkServiceRow
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
 
-  const [{ count: lots }, { data: services }] = await Promise.all([
+  const [{ count: lots }, { data: services }, rates] = await Promise.all([
     admin.from("park_lots").select("id", { count: "exact", head: true })
       .eq("park_id", parkId).eq("lifecycle", "live"),
     admin.from("services")
       .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, min_photos")
       .eq("active", true).eq("park_only", true),
+    loadParkRates(parkId),
   ]);
 
+  // THIS PARK'S OWN NUMBERS, or none at all.
+  //
+  // 0115 zeroed the global price on every park_only service precisely so a
+  // missing rate cannot quietly become somebody else's. A service with no row
+  // here comes back priced `null`, and the screen asks for a number instead of
+  // showing a confident wrong one.
   const { priceService } = await import("@/lib/pricing");
   const n = lots ?? 0;
-  return (services ?? []).map((s) => ({
-    id: s.id as string,
-    name: s.name as string,
-    // The SAME engine the customer path uses. A second pricing path here is
-    // how the number on the screen and the number on the invoice drift.
-    price: priceService(
-      s as unknown as Parameters<typeof priceService>[0],
-      { lots: n } as unknown as Parameters<typeof priceService>[1],
-    ),
-    frequencyOptions: (s.frequency_options as string[]) ?? [],
-    minPhotos: (s.min_photos as number) ?? 0,
-  }));
+
+  return (services ?? []).map((s) => {
+    const own = rates.get(s.id as string);
+    return {
+      id: s.id as string,
+      name: s.name as string,
+      price: own
+        // The SAME engine the customer path uses, with this park's numbers
+        // overlaid onto the service's shape. A second pricing path here is how
+        // the screen and the invoice drift apart.
+        ? priceService(
+            withParkRate(s as unknown as Parameters<typeof priceService>[0] & { id: string }, rates),
+            { lots: n } as unknown as Parameters<typeof priceService>[1],
+          )
+        : null,
+      pricingModel: s.pricing_model as string,
+      bandPricing: (s.band_pricing as Record<string, unknown> | null) ?? null,
+      base: own?.base ?? null,
+      unitRate: own?.unit_rate ?? null,
+      note: own?.note ?? null,
+      frequencyOptions: (s.frequency_options as string[]) ?? [],
+      minPhotos: (s.min_photos as number) ?? 0,
+    };
+  });
+}
+
+/** Set what THIS park pays for one of its grounds services. */
+export async function setParkServiceRate(
+  parkId: string,
+  serviceId: string,
+  base: number,
+  unitRate: number,
+): Promise<ServiceDeskResult> {
+  const membership = await assertMyPark(parkId);
+  if (!membership) return { ok: false, error: DENIED };
+  if (!canEnableParkServices(membership.role)) {
+    return { ok: false, error: "Only the park's owner can set prices." };
+  }
+  if (!(base >= 0) || !(unitRate >= 0)) {
+    return { ok: false, error: "A price can't be negative." };
+  }
+  if (base === 0 && unitRate === 0) {
+    return { ok: false, error: "That prices to nothing — give it a base, a per-lot rate, or both." };
+  }
+
+  const admin = createServiceClient();
+  const { error } = await admin
+    .from("park_service_rates")
+    .upsert({ park_id: parkId, service_id: serviceId, base, unit_rate: unitRate,
+              updated_at: new Date().toISOString() },
+            { onConflict: "park_id,service_id" });
+  if (error) return { ok: false, error: `Couldn't save that — ${error.message}` };
+
+  revalidatePath("/park/services");
+  return { ok: true, signal: "Saved. That's this park's price." };
 }

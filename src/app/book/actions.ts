@@ -1,6 +1,8 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { withParkRate } from "@/lib/park-rates";
+import { loadParkRates } from "@/app/park/rate-data";
 import { getFullProfile, toPricingProfile, getActivePropertyId } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { serviceMinutes } from "@/lib/duration";
@@ -181,12 +183,24 @@ export async function createBooking(
 
   // Price it here — the client's number is never trusted. Rush pays the
   // premium; the crew side gets its fill-in discount at claim time.
-  const standardPrice = priceService(service, toPricingProfile(profile));
+  //
+  // A PARK PAYS ITS OWN RATE (0115). The global row for a grounds service
+  // carries no price at all, so without this overlay a mow books at $0 and the
+  // refusal below fires with a message about boat lifts.
+  const priceRule = profile.groundsForParkId
+    ? withParkRate(service, await loadParkRates(profile.groundsForParkId))
+    : service;
+  const standardPrice = priceService(priceRule, toPricingProfile(profile));
   // SIM-FOUND (Wave 1): a $0 price means the profile has none of what this
   // service counts (0 PWC lifts booking a PWC pull). A $0 job can never
   // assign and sits as phantom "demand" — refuse with the honest fix.
   if (standardPrice <= 0) {
-    return { ok: false, error: `${service.name} prices to $0 for your place — your profile shows none of the equipment it covers. Update your property profile and the real price appears.` };
+    return {
+      ok: false,
+      error: profile.groundsForParkId
+        ? `${service.name} has no price for your park yet. Set what you pay for it on your park's Services page and it becomes bookable.`
+        : `${service.name} prices to $0 for your place — your profile shows none of the equipment it covers. Update your property profile and the real price appears.`,
+    };
   }
   const price = isRush ? rushPrice(standardPrice, settings.sameDaySurchargePct) : standardPrice;
 
@@ -194,7 +208,7 @@ export async function createBooking(
   // the job the way the price is, so tuning a ladder later cannot silently
   // rewrite a day that is already sold. A 12-section pier is 255 minutes here
   // where it used to be a flat 180 for every pier on the lake.
-  const estMinutes = serviceMinutes(service, toPricingProfile(profile));
+  const estMinutes = serviceMinutes(priceRule, toPricingProfile(profile));
 
   const admin = createServiceClient();
   const { data: inserted, error } = await admin

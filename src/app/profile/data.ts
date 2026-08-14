@@ -2,6 +2,9 @@ import "server-only";
 import { cookies } from "next/headers";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { decryptGate } from "@/lib/gate";
+import { withParkRate, type ParkRates } from "@/lib/park-rates";
+import { loadParkRates } from "@/app/park/rate-data";
+
 
 const ACTIVE_PROPERTY_COOKIE = "ll_active_property";
 
@@ -300,11 +303,22 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
     .eq("park_only", isGrounds)
     .eq("kind", "standalone"); // components/add-ons price inside packages, never as menu tiles
 
+  // A PARK SERVICE IS PRICED BY THE PARK THAT BUYS IT (0115).
+  //
+  // The global rows carry base 0 / unit_rate 0 on purpose, so a park with no
+  // rate of its own prices to $0 and /book's `price > 0` filter drops it —
+  // rather than quoting this owner the rate another owner negotiated in a
+  // different county. /park/services is where he sets the number, and it says
+  // so out loud.
+  const rates = isGrounds
+    ? await loadParkRates(p.groundsForParkId as string)
+    : (new Map() as ParkRates);
+
   const pp = toPricingProfile(p);
   return (services ?? []).map((s) => ({
     id: s.id,
     name: s.name,
-    price: priceService(s as unknown as ServiceRule, pp),
+    price: priceService(withParkRate(s, rates) as unknown as ServiceRule, pp),
     frequency_options: s.frequency_options ?? [],
     is_water_work: s.is_water_work ?? false,
   }));
