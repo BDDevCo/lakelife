@@ -1,0 +1,201 @@
+import "server-only";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { prettyMonth } from "@/app/park/ledger-helpers";
+import { parseDaterange } from "@/lib/parks";
+
+/**
+ * THE RESIDENT'S OWN SCREEN.
+ *
+ * Everything the park knows about THEM, and nothing about anybody else. The
+ * park owner has had a rent roll, a ledger, a visits board and a task list
+ * since the module shipped; the person actually paying the rent has had
+ * nothing at all.
+ *
+ * WHO THIS IS FOR. A resident whose `park_renters` file is CLAIMED — user_id
+ * set. Applying through a park's public page already does that
+ * (`apply-actions.ts` writes user_id, claimed_at and source='self_signup'), so
+ * anybody who came in through the website has one. The households the owner
+ * typed in are unclaimed and see nothing here; inviting them is a separate
+ * problem about flip phones and is not solved by this file.
+ *
+ * TWO LEDGERS THAT NEVER TOUCH. Rent is owed to the PARK — LakeLife only
+ * administers it. A service booking is owed to LAKELIFE. They are rendered
+ * apart and they are never netted, because a platform that withheld a mow over
+ * late rent would have quietly become a collections tool.
+ */
+
+export interface BillLine { label: string; amount: number }
+
+export interface RenterHome {
+  parkName: string;
+  lotNumber: string;
+  displayName: string;
+  /** Their tenancy's start, for "living here since". */
+  since: string | null;
+  term: string;
+  /** Set once they have given notice. */
+  leavingOn: string | null;
+
+  /** This month's bill, or null when the park has not raised it yet. */
+  bill: {
+    monthLabel: string;
+    dueOn: string;
+    amount: number;
+    paidTotal: number;
+    outstanding: number;
+    status: string;
+    disputed: boolean;
+    lines: BillLine[];
+  } | null;
+
+  /** Deposit still held. Null when there has never been one. */
+  deposit: { amount: number; since: string } | null;
+
+  payments: { on: string; amount: number; method: string; receiptNo: number | null }[];
+
+  /** Reported from their lot, during their tenancy. */
+  reported: { note: string; status: string; resolutionNote: string | null; ageDays: number }[];
+}
+
+export async function getRenterHome(): Promise<RenterHome | null> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const admin = createServiceClient();
+
+  // THE FILE MUST BE CLAIMED BY THIS ACCOUNT. Everything below is scoped
+  // through it, so this single check is what keeps one resident out of
+  // another's ledger.
+  const { data: files } = await admin
+    .from("park_renters")
+    .select("id, park_id, display_name")
+    .eq("user_id", user.id);
+  if (!files?.length) return null;
+
+  const renterIds = files.map((f) => f.id as string);
+
+  // The tenancy they are actually living in. `ended` rows are deliberately
+  // excluded: a former resident is not owed a live screen about a lot
+  // somebody else now lives on.
+  const { data: stays } = await admin
+    .from("lot_reservations")
+    .select("id, park_lot_id, renter_id, during, term, status, expected_move_out")
+    .in("renter_id", renterIds)
+    .in("status", ["approved", "active"])
+    .order("created_at", { ascending: false });
+  const stay = stays?.[0];
+  if (!stay) return null;
+
+  const file = files.find((f) => f.id === stay.renter_id) ?? files[0];
+  const range = parseDaterange(stay.during as string);
+
+  const [{ data: lot }, { data: park }] = await Promise.all([
+    admin.from("park_lots").select("lot_number").eq("id", stay.park_lot_id as string).maybeSingle(),
+    admin.from("parks").select("name").eq("id", file.park_id as string).maybeSingle(),
+  ]);
+
+  // ---- the bill -----------------------------------------------------------
+  // The LATEST charge, not "this month's". A month the park has not billed yet
+  // has no row, and showing $0.00 for it would read as "you are square" when
+  // the truth is "the bill has not been sent".
+  const { data: charges } = await admin
+    .from("park_charges")
+    .select("id, period_month, due_on, amount, paid_total, status, lines")
+    .eq("reservation_id", stay.id as string)
+    .neq("status", "void")
+    .order("period_month", { ascending: false })
+    .limit(1);
+  const charge = charges?.[0];
+
+  let disputed = false;
+  if (charge) {
+    const { count } = await admin
+      .from("park_payment_claims")
+      .select("id", { count: "exact", head: true })
+      .eq("charge_id", charge.id as string)
+      .is("resolved_at", null);
+    disputed = (count ?? 0) > 0;
+  }
+
+  // ---- money in -----------------------------------------------------------
+  const { data: pays } = await admin
+    .from("park_payments")
+    .select("amount, method, received_on, receipt_no, kind, returned_on, reversed_at")
+    .eq("renter_id", file.id as string)
+    .order("received_on", { ascending: false })
+    .limit(24);
+
+  const live = (pays ?? []).filter((p) => p.reversed_at == null);
+
+  // A deposit is money of theirs the park is holding — the single most
+  // disputed number in this business, eighteen months later at move-out. It
+  // sits on the front page all year so that argument never happens.
+  const heldDeposits = live.filter((p) => p.kind === "deposit" && p.returned_on == null);
+  const depositTotal = heldDeposits.reduce((s, p) => s + Number(p.amount ?? 0), 0);
+  const depositSince = heldDeposits
+    .map((p) => p.received_on as string)
+    .sort()[0] ?? null;
+
+  // ---- what they reported -------------------------------------------------
+  // Scoped to their tenancy's start: park_requests key on the LOT, not the
+  // renter, so without this a new resident would be shown the last one's
+  // broken step.
+  let reported: RenterHome["reported"] = [];
+  if (range?.start) {
+    const { data: reqs } = await admin
+      .from("park_requests")
+      .select("note, status, resolution_note, created_at")
+      .eq("park_lot_id", stay.park_lot_id as string)
+      .gte("created_at", `${range.start}T00:00:00Z`)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    const now = Date.now();
+    reported = (reqs ?? []).map((r) => ({
+      note: (r.note as string) ?? "",
+      status: (r.status as string) ?? "new",
+      resolutionNote: (r.resolution_note as string) ?? null,
+      ageDays: Math.max(0, Math.floor((now - Date.parse(r.created_at as string)) / 86_400_000)),
+    }));
+  }
+
+  const amount = Number(charge?.amount ?? 0);
+  const paidTotal = Number(charge?.paid_total ?? 0);
+
+  return {
+    parkName: (park?.name as string) ?? "your park",
+    lotNumber: (lot?.lot_number as string) ?? "—",
+    displayName: (file.display_name as string) ?? "Resident",
+    since: range?.start ?? null,
+    term: (stay.term as string) ?? "monthly",
+    leavingOn: (stay.expected_move_out as string) ?? null,
+    bill: charge
+      ? {
+          monthLabel: prettyMonth(charge.period_month as string),
+          dueOn: charge.due_on as string,
+          amount,
+          paidTotal,
+          outstanding: Math.round((amount - paidTotal) * 100) / 100,
+          status: (charge.status as string) ?? "open",
+          disputed,
+          lines: ((charge.lines as { label?: string; amount?: number }[]) ?? []).map((l) => ({
+            label: String(l.label ?? "Rent"),
+            amount: Number(l.amount ?? 0),
+          })),
+        }
+      : null,
+    deposit: depositTotal > 0 && depositSince
+      ? { amount: depositTotal, since: depositSince }
+      : null,
+    payments: live
+      .filter((p) => p.kind !== "deposit")
+      .slice(0, 6)
+      .map((p) => ({
+        on: p.received_on as string,
+        amount: Number(p.amount ?? 0),
+        method: (p.method as string) ?? "payment",
+        receiptNo: (p.receipt_no as number) ?? null,
+      })),
+    reported,
+  };
+}
