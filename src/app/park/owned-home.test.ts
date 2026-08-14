@@ -49,6 +49,20 @@ describe("how big is the home", () => {
     expect(priceService(HOUSEKEEPING, home(big.row!.sqft))).toBe(95);
   });
 
+  it("records an unknown bed count as unknown, not as zero", () => {
+    // Nothing prices on beds or baths — housekeeping reads sqft, mowing reads
+    // lawn_band, and that is the whole list. Writing 0 because a field was
+    // skipped would put a false fact about somebody's house in the record.
+    const r = buildOwnedHomeRow({ widthFt: "28", lengthFt: "60", beds: "", baths: "" });
+    expect(r.ok).toBe(true);
+    expect(r.row).toEqual({ sqft: 1680, beds: null, baths: null });
+  });
+
+  it("still refuses a bed count that is nonsense rather than blank", () => {
+    expect(buildOwnedHomeRow({ widthFt: "28", lengthFt: "60", beds: "99", baths: "" }).ok).toBe(false);
+    expect(buildOwnedHomeRow({ widthFt: "28", lengthFt: "60", beds: "lots", baths: "" }).ok).toBe(false);
+  });
+
   it("catches inches typed as feet", () => {
     // 336 by 720 is a 28x60 in inches. Left alone it would price at $120 and
     // look like a mansion.
@@ -68,7 +82,6 @@ describe("how big is the home", () => {
   it("refuses nonsense rather than storing it", () => {
     expect(buildOwnedHomeRow({ widthFt: "-28", lengthFt: "60", beds: "3", baths: "2" }).ok).toBe(false);
     expect(buildOwnedHomeRow({ widthFt: "wide", lengthFt: "60", beds: "3", baths: "2" }).ok).toBe(false);
-    expect(buildOwnedHomeRow({ widthFt: "28", lengthFt: "60", beds: "99", baths: "2" }).ok).toBe(false);
   });
 
   it("gives the crew an address they can put in a map", () => {

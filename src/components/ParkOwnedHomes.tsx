@@ -62,6 +62,7 @@ export function ParkOwnedHomes({
                 {h.sqft?.toLocaleString()} sq ft
                 {h.beds != null && ` · ${h.beds} bed`}
                 {h.baths != null && ` · ${h.baths} bath`}
+                {h.beds == null && h.baths == null && " · beds & baths not recorded"}
                 {/* WHY IT MATTERS THAT SOMEBODY IS IN IT. Interior work on an
                     occupied home is arranged with the resident, not just
                     scheduled — the crew cannot get in otherwise. */}
@@ -153,12 +154,12 @@ function SizeForm({
                  onChange={(e) => setL(e.target.value)} />
         </div>
         <div className="ll-field" style={{ margin: 0, width: 84 }}>
-          <label htmlFor={`b-${lotId}`}>Beds</label>
+          <label htmlFor={`b-${lotId}`}>Beds (opt.)</label>
           <input id={`b-${lotId}`} inputMode="numeric" value={beds} placeholder="3"
                  onChange={(e) => setBeds(e.target.value)} />
         </div>
         <div className="ll-field" style={{ margin: 0, width: 84 }}>
-          <label htmlFor={`ba-${lotId}`}>Baths</label>
+          <label htmlFor={`ba-${lotId}`}>Baths (opt.)</label>
           <input id={`ba-${lotId}`} inputMode="decimal" value={baths} placeholder="2"
                  onChange={(e) => setBaths(e.target.value)} />
         </div>
@@ -166,7 +167,7 @@ function SizeForm({
 
       <p className="mut" style={{ fontSize: 12, margin: "6px 0 8px", lineHeight: 1.5 }}>
         {sqft > 0
-          ? `${sqft.toLocaleString()} sq ft — that's what cleaning is priced from.`
+          ? `${sqft.toLocaleString()} sq ft — that's what cleaning is priced from. Beds and baths change no price; leave them blank if you're not sure.`
           : "Cleaning is priced by size, so this can't be a guess. It's on the title."}
       </p>
 

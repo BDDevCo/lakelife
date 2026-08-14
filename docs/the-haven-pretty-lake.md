@@ -8,6 +8,27 @@ Source: the acquisition credit memorandum (Aug 7 2026) and the conventional
 proforma, both in OneDrive under
 `BD DevCo Asset Management / The Haven - Pretty Lake Mobile Homes`.
 
+> ## ⚠ SUPERSEDED IN PART — read this first (added 2026-08-14)
+>
+> This page is the **credit memo and pro-forma**: what the deal was modelled to
+> look like. The **due-diligence packet that arrived later carries the seller's
+> actual handwritten rent roll**, and where the two disagree, the roll wins. It
+> reconciles to the dollar ($6,700/mo total, $5,200/mo of lot rent), which is
+> what makes it trustworthy.
+>
+> Corrections that matter, because code was written against the wrong ones:
+>
+> | This page says | The roll says |
+> |---|---|
+> | Lots numbered 1–21, with 22–25 "silent" | **21 lots numbered 1, 2, 6, 7, 9, 10, 11, 14–24, 26, 27, 28.** 3, 4, 5, 8, 12, 13 and 25 do not exist |
+> | The park-owned double-wide is **lot 7** | It is **Lot 11** — a 2019 28×60 Shult |
+> | That home rents at $1,200/mo | **$1,500/mo** |
+> | Lot rent $650 / $500, 24 lots | Actual lot rents are roughly **$250–$300**; 19 of 21 lots pay, Lot 6 is vacant |
+>
+> The revenue table below is a PROJECTION — Airbnb mini-homes, twenty boat
+> slips, RUBS, laundry — not a description of the park as it stands. Treat any
+> number here as a target to be argued with, not a fact to build on.
+
 ---
 
 ## 1. What is being bought

@@ -113,7 +113,14 @@ export interface OwnedHomeInput {
 export interface OwnedHomeResult {
   ok: boolean;
   error?: string;
-  row?: { sqft: number; beds: number; baths: number };
+  /**
+   * `beds`/`baths` are NULL when he did not say. Nothing prices on them today —
+   * only `sqft` (housekeeping) and `lawn_band` (mowing) reach the engine — so a
+   * blank is recorded as "not known" rather than as zero. A home with 0
+   * bedrooms is a false fact, and false facts are the thing this codebase keeps
+   * having to dig back out.
+   */
+  row?: { sqft: number; beds: number | null; baths: number | null };
 }
 
 /**
@@ -141,18 +148,35 @@ export function buildOwnedHomeRow(input: OwnedHomeInput): OwnedHomeResult {
     return { ok: false, error: "Those look like inches — give it in feet, like 28 by 60." };
   }
 
-  const beds = num(input.beds);
-  const baths = num(input.baths);
-  if (!Number.isFinite(beds) || beds < 0 || beds > 12) {
-    return { ok: false, error: "How many bedrooms?" };
-  }
-  if (!Number.isFinite(baths) || baths < 0 || baths > 12) {
-    return { ok: false, error: "How many bathrooms? A half counts as 0.5." };
-  }
+  // BEDS AND BATHS ARE OPTIONAL, and the size is not. Nothing prices on them:
+  // housekeeping reads sqft and mowing reads lawn_band, and that is the whole
+  // list. Left blank they stay NULL — "we didn't ask" — instead of being
+  // written as 0, which would be a false fact about somebody's house recorded
+  // by a form he skipped.
+  const optCount = (raw: string, label: string):
+    { ok: true; value: number | null } | { ok: false; error: string } => {
+    const s = (raw ?? "").trim();
+    if (!s) return { ok: true, value: null };
+    const n = num(s);
+    if (!Number.isFinite(n) || n < 0 || n > 12) {
+      return { ok: false, error: `${label} doesn't look right — leave it blank if you're not sure.` };
+    }
+    return { ok: true, value: n };
+  };
+
+  const beds = optCount(input.beds, "That bedroom count");
+  if (!beds.ok) return { ok: false, error: beds.error };
+  const baths = optCount(input.baths, "That bathroom count");
+  if (!baths.ok) return { ok: false, error: baths.error };
 
   return {
     ok: true,
-    row: { sqft: Math.round(w * l), beds: Math.round(beds), baths: Math.round(baths * 2) / 2 },
+    row: {
+      sqft: Math.round(w * l),
+      beds: beds.value == null ? null : Math.round(beds.value),
+      // A half bath is a half; nothing finer is a thing anybody says.
+      baths: baths.value == null ? null : Math.round(baths.value * 2) / 2,
+    },
   };
 }
 
