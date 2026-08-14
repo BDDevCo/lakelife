@@ -3,8 +3,9 @@ import { TopBar } from "@/components/Brand";
 import { ParkNav } from "@/components/ParkNav";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
-import { getParkServiceDesk, getParkServiceMenu } from "@/app/park/service-actions";
+import { getParkServiceDesk, getParkServiceMenu, getOwnedHomes } from "@/app/park/service-actions";
 import { ParkServices } from "@/components/ParkServices";
+import { ParkOwnedHomes } from "@/components/ParkOwnedHomes";
 
 /**
  * WHERE "Book services for the park" FINALLY LEADS.
@@ -35,9 +36,10 @@ export default async function ParkServicesPage() {
     );
   }
 
-  const [desk, menu] = await Promise.all([
+  const [desk, menu, homes] = await Promise.all([
     getParkServiceDesk(park.id),
     getParkServiceMenu(park.id),
+    getOwnedHomes(park.id),
   ]);
 
   return (
@@ -59,6 +61,14 @@ export default async function ParkServicesPage() {
           <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
             Nothing to show yet.
           </div>
+        )}
+
+        {/* HOMES YOU OWN sit under the grounds because they are the other half
+            of the same question — what LakeLife can do for you here. The
+            grounds get park-only work; a house gets house work; neither list
+            ever shows the other's. */}
+        {desk && (
+          <ParkOwnedHomes parkId={park.id} homes={homes} canEnable={desk.canEnable} />
         )}
       </div>
     </>

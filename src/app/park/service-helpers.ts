@@ -99,3 +99,64 @@ export function priceLine(lots: number, price: number): string {
   const lotWord = lots === 1 ? "lot" : "lots";
   return `${lots} live ${lotWord} · $${price.toFixed(2)} a visit`;
 }
+
+// ------------------------------------------------- a home the park owns ----
+
+export interface OwnedHomeInput {
+  /** How a mobile home is actually described: "28 by 60". */
+  widthFt: string;
+  lengthFt: string;
+  beds: string;
+  baths: string;
+}
+
+export interface OwnedHomeResult {
+  ok: boolean;
+  error?: string;
+  row?: { sqft: number; beds: number; baths: number };
+}
+
+/**
+ * HOW BIG IS IT — and this is not optional, for one specific reason.
+ *
+ * Housekeeping is `per_sqft_band`, and `priceService` picks the first tier
+ * whose `max` exceeds the property's sqft. A property with sqft 0 therefore
+ * prices at the SMALLEST band — $80 — which is also what a real 1,680 sq ft
+ * double-wide prices at. The wrong answer and the right answer are the same
+ * number, so nothing on any screen could ever reveal the mistake.
+ *
+ * Asked as width x length because that is how a mobile home is described on
+ * every title and in every listing. Nobody knows their square footage; everyone
+ * knows they have a 28 by 60.
+ */
+export function buildOwnedHomeRow(input: OwnedHomeInput): OwnedHomeResult {
+  const num = (raw: string) => Number((raw ?? "").trim().replace(/[,\s]/g, ""));
+
+  const w = num(input.widthFt);
+  const l = num(input.lengthFt);
+  if (!Number.isFinite(w) || !Number.isFinite(l) || w <= 0 || l <= 0) {
+    return { ok: false, error: "How wide and how long is it? A single-wide is about 14 by 70." };
+  }
+  if (w > 60 || l > 100) {
+    return { ok: false, error: "Those look like inches — give it in feet, like 28 by 60." };
+  }
+
+  const beds = num(input.beds);
+  const baths = num(input.baths);
+  if (!Number.isFinite(beds) || beds < 0 || beds > 12) {
+    return { ok: false, error: "How many bedrooms?" };
+  }
+  if (!Number.isFinite(baths) || baths < 0 || baths > 12) {
+    return { ok: false, error: "How many bathrooms? A half counts as 0.5." };
+  }
+
+  return {
+    ok: true,
+    row: { sqft: Math.round(w * l), beds: Math.round(beds), baths: Math.round(baths * 2) / 2 },
+  };
+}
+
+/** "Lot 11, The Haven, 1 Haven Rd, Angola IN" — what a crew types into a map. */
+export function ownedHomeAddress(lotNumber: string, parkName: string, parkAddress: string): string {
+  return `Lot ${lotNumber}, ${parkName}, ${parkAddress}`;
+}

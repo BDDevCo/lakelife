@@ -8,7 +8,8 @@ import { withParkRate } from "@/lib/park-rates";
 import { loadParkRates } from "./rate-data";
 import {
   buildParkBlockers, buildGroundsPropertyRow, canEnableParkServices,
-  type ParkReadiness,
+  buildOwnedHomeRow, ownedHomeAddress,
+  type ParkReadiness, type OwnedHomeInput,
 } from "./service-helpers";
 
 /**
@@ -304,4 +305,196 @@ export async function setParkServiceRate(
 
   revalidatePath("/park/services");
   return { ok: true, signal: "Saved. That's this park's price." };
+}
+
+// ------------------------------------------------- homes the park owns ----
+
+/**
+ * A HOME THE PARK OWNS IS STILL A HOME.
+ *
+ * The Haven's Lot 11 is a 28x60 the park owns and rents out. It needs cleaning
+ * between tenants and winterizing in October — ordinary house work, from the
+ * ordinary menu, at ordinary prices. It could not be booked because it was not
+ * a PROPERTY, only a boolean on a lot.
+ *
+ * Nothing about the `park_only` fence changes. Once the home has a property of
+ * its own, `getPricedServices` already gives it the whole house menu, because
+ * its `groundsForParkId` is null — it is not the common ground, it is a house.
+ */
+export interface OwnedHomeRow {
+  lotId: string;
+  lotNumber: string;
+  propertyId: string | null;
+  sqft: number | null;
+  beds: number | null;
+  baths: number | null;
+  /** Somebody is living in it right now — interior work needs arranging. */
+  occupied: boolean;
+}
+
+export async function getOwnedHomes(parkId: string): Promise<OwnedHomeRow[]> {
+  if (!(await assertMyPark(parkId))) return [];
+  const admin = createServiceClient();
+
+  const { data: lots } = await admin
+    .from("park_lots")
+    .select("id, lot_number, service_property_id")
+    .eq("park_id", parkId)
+    .eq("park_owned_home", true)
+    .eq("lifecycle", "live");
+  if (!lots?.length) return [];
+
+  const propIds = lots.map((l) => l.service_property_id as string).filter(Boolean);
+  const lotIds = lots.map((l) => l.id as string);
+
+  const [{ data: props }, { data: stays }] = await Promise.all([
+    propIds.length
+      ? admin.from("properties").select("id, sqft, beds, baths").in("id", propIds)
+      : Promise.resolve({ data: [] as Array<{ id: string; sqft: number | null; beds: number | null; baths: number | null }> }),
+    admin.from("lot_reservations")
+      .select("park_lot_id").in("park_lot_id", lotIds).in("status", ["approved", "active"]),
+  ]);
+
+  const propById = new Map((props ?? []).map((p) => [p.id as string, p]));
+  const occupied = new Set((stays ?? []).map((s) => s.park_lot_id as string));
+
+  return lots
+    .map((l): OwnedHomeRow => {
+      const p = l.service_property_id ? propById.get(l.service_property_id as string) : null;
+      return {
+        lotId: l.id as string,
+        lotNumber: l.lot_number as string,
+        propertyId: (l.service_property_id as string) ?? null,
+        sqft: p?.sqft ?? null,
+        beds: p?.beds ?? null,
+        baths: p?.baths ?? null,
+        occupied: occupied.has(l.id as string),
+      };
+    })
+    .sort((a, b) => a.lotNumber.localeCompare(b.lotNumber, undefined, { numeric: true }));
+}
+
+export async function enableHomeServices(
+  parkId: string, lotId: string, input: OwnedHomeInput,
+): Promise<ServiceDeskResult> {
+  const membership = await assertMyPark(parkId);
+  if (!membership) return { ok: false, error: DENIED };
+  if (!canEnableParkServices(membership.role)) {
+    return { ok: false, error: "Only the park's owner can set a home up for service." };
+  }
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Please sign in again." };
+
+  // HOW BIG IT IS, BEFORE ANYTHING IS MINTED. Housekeeping is priced by square
+  // footage in bands, and an unset size lands in the SMALLEST band — the same
+  // $80 a real 1,680 sq ft double-wide costs. The right answer and the wrong
+  // one are the same number, so nothing downstream could ever catch it.
+  const built = buildOwnedHomeRow(input);
+  if (!built.ok || !built.row) return { ok: false, error: built.error };
+
+  const admin = createServiceClient();
+  const { data: lot } = await admin
+    .from("park_lots")
+    .select("id, lot_number, park_id, park_owned_home, service_property_id")
+    .eq("id", lotId).eq("park_id", parkId).maybeSingle();
+  if (!lot) return { ok: false, error: DENIED };
+  if (lot.park_owned_home !== true) {
+    return { ok: false, error: "That lot's home isn't yours — their house is their business." };
+  }
+  if (lot.service_property_id) {
+    return { ok: true, signal: `Lot ${lot.lot_number} is already set up.` };
+  }
+
+  const { data: park } = await admin
+    .from("parks").select("name, address, lake_id, lat, lng").eq("id", parkId).maybeSingle();
+  if (!park) return { ok: false, error: "That park is gone." };
+
+  const { data: prop, error: propErr } = await admin
+    .from("properties")
+    .insert({
+      owner_id: user.id,
+      lake_id: park.lake_id,
+      address: ownedHomeAddress(lot.lot_number as string, park.name as string, park.address as string),
+      park_id: parkId,
+      lat: park.lat ?? null,
+      lng: park.lng ?? null,
+      nickname: `Lot ${lot.lot_number} — yours`,
+      ...built.row,
+    })
+    .select("id")
+    .single();
+  if (propErr || !prop) {
+    return { ok: false, error: `Couldn't set that up — ${propErr?.message ?? "try again"}.` };
+  }
+
+  // WHAT A HOME LIKE THIS IS ACTUALLY OFFERED — and this list is the ONLY
+  // fence there is.
+  //
+  // "Fall winterization" is flat $485 and counts nothing, so it applies to
+  // everything, including a mobile home on a pad. 0110 added the $185 job that
+  // is actually right for one. Pricing cannot tell them apart, because a flat
+  // service has no profile field to be wrong about, so `wanted_services` is
+  // what keeps a lake-house price off a mobile home's menu — the same
+  // reasoning the lot-resident path already carries.
+  //
+  // A STARTING LIST, NOT A CAGE: he can add any active service from the
+  // property profile. Water work stays off by arithmetic rather than by this
+  // list — no pier sections and no boats means `serviceApplies` refuses it.
+  await admin.from("property_profile").insert({
+    property_id: prop.id,
+    // A pad's yard is small by definition of a pad, and the park already mows
+    // the common ground around it. Cheaper band, so erring here never
+    // overcharges him.
+    lawn_band: "small",
+    pier_sections: 0,
+    boat_lifts: 0,
+    toy_lifts: 0,
+    jet_skis: 0,
+    pwc_lifts: 0,
+    wanted_services: [
+      "Housekeeping",
+      "Mobile home winterization",
+      "Mobile home de-winterization",
+    ],
+  });
+
+  const { error: linkErr } = await admin
+    .from("park_lots")
+    .update({ service_property_id: prop.id })
+    .eq("id", lotId)
+    .is("service_property_id", null);   // one mint wins a double-tap
+  if (linkErr) {
+    // Roll the orphan back rather than leave a property nothing points at — it
+    // would sit in his switcher as a second, nameless place.
+    await admin.from("property_profile").delete().eq("property_id", prop.id);
+    await admin.from("properties").delete().eq("id", prop.id);
+    return { ok: false, error: `Couldn't set that up — ${linkErr.message}` };
+  }
+
+  revalidatePath("/park/services");
+  revalidatePath("/park/lots");
+  return {
+    ok: true,
+    signal: `Lot ${lot.lot_number} is set up — ${built.row.sqft.toLocaleString()} sq ft. It's in your property list now.`,
+  };
+}
+
+/** Point the booking screen at one of his own homes. */
+export async function focusOwnedHome(parkId: string, lotId: string): Promise<ServiceDeskResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const admin = createServiceClient();
+  const { data: lot } = await admin
+    .from("park_lots").select("service_property_id, lot_number")
+    .eq("id", lotId).eq("park_id", parkId).maybeSingle();
+  const propertyId = (lot?.service_property_id as string) ?? null;
+  if (!propertyId) return { ok: false, error: "Set that home up for service first." };
+
+  const jar = await cookies();
+  jar.set(ACTIVE_PROPERTY_COOKIE, propertyId, {
+    httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 365,
+  });
+  return { ok: true, signal: `Booking for Lot ${lot?.lot_number}.` };
 }
