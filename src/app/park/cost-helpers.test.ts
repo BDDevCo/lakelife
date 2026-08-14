@@ -4,8 +4,8 @@ import {
   type CostLot, type CostCategory, canSplit, whyNotSplit,
   carriedLine,
   buildCostScheduleRow, SCHEDULABLE_CATEGORIES, type CostScheduleInput,
-
-  carryFromRow,} from "./cost-helpers";
+  carryFromRow, billPeriod,
+} from "./cost-helpers";
 
 /** The Haven: 19 occupied lots, 2 empty (3 and 22). */
 const HAVEN: CostLot[] = [
@@ -355,14 +355,15 @@ describe("a reminder for a bill that arrives every month", () => {
    * two categories 0117 refuses at the database.
    */
   const input = (over: Partial<CostScheduleInput> = {}): CostScheduleInput => ({
-    category: "sewer", dueDay: "5", typicalAmount: "1430", label: "", ...over,
+    category: "sewer", cadence: "monthly", dueMonth: "",
+    dueDay: "5", typicalAmount: "1430", label: "", ...over,
   });
 
   it("builds the row the reader expects", () => {
     const r = buildCostScheduleRow(input());
     expect(r.ok).toBe(true);
     expect(r.row).toEqual({
-      category: "sewer", due_day: 5, typical_amount: 1430,
+      category: "sewer", due_day: 5, due_month: null, typical_amount: 1430,
       label: null, cadence: "monthly", active: true,
     });
   });
@@ -508,5 +509,117 @@ describe("the audit's confirmed wrong numbers", () => {
     ]);
     expect(r.absorbed).toBe(0);
     expect(r.absorbedUnknown).toBe(1);
+  });
+});
+
+describe("bills that don't come every month", () => {
+  /**
+   * 0114 allowed one cadence. The Haven's biggest non-sewer bills are annual —
+   * property tax $3,559, insurance $797 — and the trash invoice is quarterly.
+   * The whole point of `billPeriod` is that a task keyed on the calendar month
+   * nags twelve times a year about a bill that arrives once.
+   */
+
+  it("gives a monthly bill the month", () => {
+    const p = billPeriod("monthly", null, 5, "2026-08-14");
+    expect(p.key).toBe("2026-08");
+    expect(p.label).toBe("August 2026");
+    expect(p.dueOn).toBe("2026-08-05");
+    expect([p.from, p.to]).toEqual(["2026-08-01", "2026-09-01"]);
+  });
+
+  it("rolls a monthly window over the year end", () => {
+    const p = billPeriod("monthly", null, 5, "2026-12-20");
+    expect([p.from, p.to]).toEqual(["2026-12-01", "2027-01-01"]);
+  });
+
+  it("gives an annual bill ONE key for the whole year", () => {
+    // The property tax lands in November. Asked in March, in November and in
+    // December, it must be the SAME task — otherwise it is twelve tasks.
+    const march = billPeriod("annual", 11, 10, "2026-03-02");
+    const nov = billPeriod("annual", 11, 10, "2026-11-30");
+    const dec = billPeriod("annual", 11, 10, "2026-12-31");
+    expect(march.key).toBe("2026");
+    expect(nov.key).toBe("2026");
+    expect(dec.key).toBe("2026");
+    expect(nov.label).toBe("2026");
+    expect(nov.dueOn).toBe("2026-11-10");
+    // ...and the window is the whole year, so a bill entered in December
+    // still answers November's reminder.
+    expect([nov.from, nov.to]).toEqual(["2026-01-01", "2027-01-01"]);
+  });
+
+  it("starts a new task in the new year", () => {
+    expect(billPeriod("annual", 11, 10, "2027-01-02").key).toBe("2027");
+  });
+
+  it("anchors a quarterly cycle to the month it starts in", () => {
+    // Trash, first invoice in February: Feb, May, Aug, Nov.
+    const feb = billPeriod("quarterly", 2, 10, "2026-02-14");
+    const mar = billPeriod("quarterly", 2, 10, "2026-03-31");
+    const apr = billPeriod("quarterly", 2, 10, "2026-04-01");
+    const may = billPeriod("quarterly", 2, 10, "2026-05-01");
+
+    // February, March and April are ONE quarter — one task, one key.
+    expect(feb.key).toBe(mar.key);
+    expect(mar.key).toBe(apr.key);
+    expect([feb.from, feb.to]).toEqual(["2026-02-01", "2026-05-01"]);
+    // May starts the next one.
+    expect(may.key).not.toBe(feb.key);
+    expect([may.from, may.to]).toEqual(["2026-05-01", "2026-08-01"]);
+  });
+
+  it("rolls a quarterly window backwards over the year end", () => {
+    // Anchored to February, January belongs to the November quarter.
+    const jan = billPeriod("quarterly", 2, 10, "2027-01-15");
+    expect([jan.from, jan.to]).toEqual(["2026-11-01", "2027-02-01"]);
+  });
+
+  it("never asks for a day February does not have", () => {
+    // The column caps at 28 and so does this — a due day of 31 must not
+    // produce 2026-02-31, which is not a date.
+    expect(billPeriod("monthly", null, 31, "2026-02-10").dueOn).toBe("2026-02-28");
+    expect(billPeriod("annual", 2, 31, "2026-06-10").dueOn).toBe("2026-02-28");
+  });
+
+  it("survives a leap year", () => {
+    expect(billPeriod("monthly", null, 28, "2028-02-29").dueOn).toBe("2028-02-28");
+    expect(billPeriod("monthly", null, 5, "2028-02-29").key).toBe("2028-02");
+  });
+});
+
+describe("saying how often a bill comes", () => {
+  const base = { category: "tax", dueDay: "10", typicalAmount: "", label: "" };
+
+  it("takes the property tax once a year, in its month", () => {
+    const r = buildCostScheduleRow({ ...base, cadence: "annual", dueMonth: "11" });
+    expect(r.ok).toBe(true);
+    expect(r.row).toMatchObject({ category: "tax", cadence: "annual", due_month: 11, due_day: 10 });
+  });
+
+  it("refuses an annual bill with no month — that is a shrug, not a reminder", () => {
+    const r = buildCostScheduleRow({ ...base, cadence: "annual", dueMonth: "" });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("Which month");
+  });
+
+  it("refuses a month on a monthly bill", () => {
+    // Every month is the month; storing one would be a fact with two readings.
+    const r = buildCostScheduleRow({ ...base, cadence: "monthly", dueMonth: "3" });
+    expect(r.ok).toBe(false);
+  });
+
+  it("refuses a cadence nobody wrote a reader for", () => {
+    expect(buildCostScheduleRow({ ...base, cadence: "fortnightly", dueMonth: "1" }).ok).toBe(false);
+  });
+
+  it("lets tax and insurance be scheduled at all, which they could not be", () => {
+    // They lived in `other`, and one reminder slot per category meant the tax
+    // bill and the insurance premium could not both be watched for.
+    for (const c of ["tax", "insurance"]) {
+      expect(SCHEDULABLE_CATEGORIES).toContain(c);
+      expect(buildCostScheduleRow({ ...base, category: c, cadence: "annual", dueMonth: "6" }).ok).toBe(true);
+      expect(canSplit(c as never)).toBe(true);
+    }
   });
 });

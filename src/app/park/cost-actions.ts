@@ -598,6 +598,9 @@ export async function getSharedCostBaseline(parkId: string): Promise<{
 export interface CostScheduleRow {
   id: string;
   category: CostCategory;
+  cadence: string;
+  /** Null for a monthly bill — every month is the month. */
+  dueMonth: number | null;
   dueDay: number;
   typicalAmount: number | null;
   label: string | null;
@@ -609,7 +612,7 @@ export async function listCostSchedules(parkId: string): Promise<CostScheduleRow
   const admin = createServiceClient();
   const { data } = await admin
     .from("park_cost_schedules")
-    .select("id, category, due_day, typical_amount, label, active")
+    .select("id, category, cadence, due_day, due_month, typical_amount, label, active")
     .eq("park_id", parkId)
     .order("due_day", { ascending: true });
 
@@ -619,6 +622,8 @@ export async function listCostSchedules(parkId: string): Promise<CostScheduleRow
   return (data ?? []).map((r) => ({
     id: r.id as string,
     category: r.category as CostCategory,
+    cadence: (r.cadence as string) ?? "monthly",
+    dueMonth: r.due_month == null ? null : Number(r.due_month),
     dueDay: Number(r.due_day ?? 5),
     typicalAmount: r.typical_amount == null ? null : Number(r.typical_amount),
     label: (r.label as string) ?? null,
@@ -687,10 +692,13 @@ export async function saveCostSchedule(
   // mid-sentence ("Sewer" -> "sewer"); applied to a name he typed it turned
   // "LaGrange County sewer" into "lagrange county sewer" on screen.
   const name = row.label ?? COST_CATEGORY_LABEL[row.category as CostCategory].toLowerCase();
-  return {
-    ok: true,
-    signal: `We'll look for the ${name} bill around the ${ordinal(row.due_day)}.`,
-  };
+  const MONTHS = ["January","February","March","April","May","June",
+                  "July","August","September","October","November","December"];
+  const when =
+    row.cadence === "monthly" ? `every month around the ${ordinal(row.due_day)}`
+    : row.cadence === "annual" ? `every ${MONTHS[(row.due_month ?? 1) - 1]}, around the ${ordinal(row.due_day)}`
+    : `every three months from ${MONTHS[(row.due_month ?? 1) - 1]}, around the ${ordinal(row.due_day)}`;
+  return { ok: true, signal: `We'll look for the ${name} bill ${when}.` };
 }
 
 export async function setCostScheduleActive(

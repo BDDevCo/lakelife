@@ -524,9 +524,10 @@ describe("a disputed bill is not arrears", () => {
 // billed their share — invisibly, because a cost nobody entered leaves no
 // trace anywhere.
 // ---------------------------------------------------------------------------
-describe("bills that arrive every month", () => {
+describe("bills that come round again", () => {
   const sewer = (over: Record<string, unknown> = {}) => [{
     scheduleId: "s1", category: "sewer", label: "Sewer",
+    periodKey: "2026-08", periodLabel: "August 2026",
     dueOn: "2026-08-05", typical: 1433.17, ...over,
   }];
 

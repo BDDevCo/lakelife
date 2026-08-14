@@ -213,9 +213,13 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
           </div>
         ) : (
           <p className="mut" style={{ fontSize: 13, marginTop: 0, lineHeight: 1.5 }}>
-            Anything the app can&apos;t know about — the tax bill, the insurance
-            renewal, what somebody told you in the driveway. Yours stay until you
-            tick them; ours go when they&apos;re handled.
+            {/* The tax bill and the insurance renewal used to be the examples
+                here. 0123 made both schedulable, so pointing him at a note for
+                them would send him the long way round for something the
+                software now watches. */}
+            Anything the app can&apos;t know about — the licence renewal, the
+            quote you&apos;re waiting on, what somebody told you in the driveway.
+            Yours stay until you tick them; ours go when they&apos;re handled.
           </p>
         )}
       </section>

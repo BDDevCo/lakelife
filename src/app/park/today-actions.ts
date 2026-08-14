@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
-import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
+import { COST_CATEGORY_LABEL, type CostCategory , billPeriod, type Cadence} from "./cost-helpers";
 import { todayLakeDate, lakeDateOf } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import {
@@ -71,6 +71,9 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const admin = createServiceClient();
   const today = todayLakeDate();
   const month = currentPeriod(today);
+  // The widest window any bill cadence can need (0123): a property tax entered
+  // in March must still answer November's reminder.
+  const year = today.slice(0, 4);
 
   const { data: park } = await admin
     .from("parks")
@@ -295,48 +298,29 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // than amount, because two identical bills are two bills.
   const [{ data: schedules }, { data: monthCosts }] = await Promise.all([
     admin.from("park_cost_schedules")
-      .select("id, category, due_day, typical_amount, label")
+      .select("id, category, cadence, due_day, due_month, typical_amount, label")
       .eq("park_id", parkId).eq("active", true),
-    // WHAT COUNTS AS "DEALT WITH" — and the first version of this could never
-    // be satisfied.
+    // WHAT COUNTS AS "DEALT WITH", and this has been wrong twice.
     //
-    // It matched costs with `period_start >= ${month}-01`. But the sewer bill
-    // that ARRIVES on 1 August is the bill FOR JULY, and the period he types is
-    // 2026-07-01 to 2026-07-31. period_start is then before the window, the
-    // category never lands in `billedCategories`, and "Sewer for August 2026
-    // still isn't entered" stays on his morning screen after he entered it.
-    // A reminder that will not clear is what teaches a person to stop reading
-    // the screen — which costs more than the reminder was ever worth.
+    // FIRST it matched `period_start >= this-month`. But the sewer bill that
+    // ARRIVES on 1 August is the bill FOR JULY, so the period he types starts
+    // before the window and "Sewer for August still isn't entered" stayed up
+    // after he entered it. A reminder that will not clear teaches a person to
+    // stop reading the screen, which costs more than the reminder was worth.
     //
-    // So two ways to satisfy it, and either is real evidence: he RECORDED a
-    // bill of that category this month (`created_at`, which is NOT NULL and set
-    // by the database), or the bill's period overlaps this month at all.
+    // THEN the window stayed a MONTH after 0123 gave bills a quarterly and an
+    // annual rhythm. A property tax entered in March would not be fetched at
+    // all when November's reminder asked, so the year's biggest bill would
+    // have nagged from the day it was paid.
+    //
+    // So the fetch spans the widest period any cadence can need — the year —
+    // and `billPeriod` narrows it per schedule below.
     admin.from("park_costs")
       .select("category, period_start, period_end, created_at")
       .eq("park_id", parkId)
-      .or(`created_at.gte.${month}-01,period_end.gte.${month}-01`),
+      .or(`created_at.gte.${year}-01-01,period_end.gte.${year}-01-01`),
   ]);
-  const monthEnd = `${month}-31`;
-  const billedCategories = new Set(
-    (monthCosts ?? [])
-      .filter((c) => {
-        // LAKE TIME, NOT UTC. `created_at` comes back as UTC, so a bill entered
-        // at 10:30pm Indiana on 31 August is stamped 2026-09-01T02:30Z and
-        // slices to "2026-09". Two consequences, and the second is the bad one:
-        // August's reminder would not clear, and SEPTEMBER'S WOULD — a bill
-        // nobody had entered yet, silently marked done for the whole month.
-        // The window is the last four or five hours of every month, which is
-        // exactly when evening paperwork gets done. `lakeDateOf` exists for
-        // this; its own docstring was written about the same mistake.
-        const enteredThisMonth =
-          (lakeDateOf(String(c.created_at ?? "")) ?? "").slice(0, 7) === month;
-        const periodTouchesMonth =
-          String(c.period_start ?? "") <= monthEnd &&
-          String(c.period_end ?? "") >= `${month}-01`;
-        return enteredThisMonth || periodTouchesMonth;
-      })
-      .map((c) => c.category as string),
-  );
+  const allCosts = monthCosts ?? [];
 
   // The last week of evening checks. Absence is the alarm.
   const { data: runs } = await admin
@@ -406,15 +390,41 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     //
     // Per-park and owner-created: a new park has no schedules and sees nothing,
     // which is the point. Nothing about The Haven is a default.
+    // A BILL IS DUE FOR ITS OWN PERIOD, not for the calendar month.
+    //
+    // A property tax reminder keyed on the month would nag twelve times a year
+    // about a bill that arrives once, and go quiet only in the month it was
+    // entered. `billPeriod` gives each cadence its own window and its own key,
+    // so the tax bill is one task called "Property tax for 2026" and it stays
+    // quiet from the moment it is entered until next November.
     billsDue: (schedules ?? [])
-      .filter((sc) => !billedCategories.has(sc.category as string))
-      .map((sc) => ({
+      .map((sc) => {
+        const p = billPeriod(
+          (sc.cadence as Cadence) ?? "monthly",
+          sc.due_month == null ? null : Number(sc.due_month),
+          Number(sc.due_day ?? 5),
+          today,
+        );
+        return { sc, p };
+      })
+      // Cleared by a cost of that category ANYWHERE IN THE PERIOD — recorded
+      // in it, or covering a stretch that overlaps it. Same two honest signals
+      // the monthly window already used, widened to the period.
+      .filter(({ sc, p }) => !allCosts.some((c) => {
+        if (c.category !== sc.category) return false;
+        const entered = lakeDateOf(String(c.created_at ?? "")) ?? "";
+        if (entered >= p.from && entered < p.to) return true;
+        return String(c.period_start ?? "") < p.to && String(c.period_end ?? "") >= p.from;
+      }))
+      .map(({ sc, p }) => ({
         scheduleId: sc.id as string,
         category: sc.category as string,
         label: (sc.label as string)
           || COST_CATEGORY_LABEL[sc.category as CostCategory]
           || (sc.category as string),
-        dueOn: `${month}-${String(Math.min(Number(sc.due_day ?? 5), 28)).padStart(2, "0")}`,
+        periodKey: p.key,
+        periodLabel: p.label,
+        dueOn: p.dueOn,
         typical: sc.typical_amount == null ? null : Number(sc.typical_amount),
       })),
     noticed: (stays ?? [])
@@ -537,7 +547,7 @@ export async function dismissTask(
  * His own note.
  *
  * Half of what happens at a park is somebody telling him in the driveway. The
- * property tax, the insurance binder, the licence renewal — none of those have
+ * licence renewal, the quote he is waiting on — none of those have
  * a derivable column anywhere, and never will.
  */
 export async function addNote(parkId: string, body: string): Promise<ParkResult> {

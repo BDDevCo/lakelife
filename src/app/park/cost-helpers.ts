@@ -24,7 +24,7 @@
 
 export type CostCategory =
   | "water" | "sewer" | "trash" | "common_electric" | "grounds"
-  | "unit_electric" | "other";
+  | "unit_electric" | "other" | "tax" | "insurance";
 
 /**
  * MAY THIS COST BE SPLIT ACROSS THE LOTS AT ALL?
@@ -67,6 +67,12 @@ export const COST_CATEGORY_LABEL: Record<CostCategory, string> = {
   // electricity is metered and billed by the utility DIRECTLY to them — the
   // park never sees it, and nothing here should imply otherwise.
   unit_electric: "Electric on a home you own",
+  // Both are shared park costs — they sit in the pool every rentable lot
+  // carries a share of, exactly like sewer. They lived in `other` until 0123,
+  // where a single reminder slot meant the tax bill and the insurance premium
+  // could not both be watched for.
+  tax: "Property tax",
+  insurance: "Insurance",
   other: "Other",
 };
 
@@ -457,16 +463,89 @@ export function carryFromRow(row: {
 }
 
 export const SCHEDULABLE_CATEGORIES: CostCategory[] = [
-  "water", "sewer", "trash", "common_electric", "grounds",
+  "water", "sewer", "trash", "common_electric", "grounds", "tax", "insurance",
 ];
+
+export type Cadence = "monthly" | "quarterly" | "annual";
 
 export interface CostScheduleInput {
   category: string;
+  cadence: string;
   /** Day of the month, 1-28. */
   dueDay: string;
+  /** WHICH month, for quarterly and annual. Empty for monthly. */
+  dueMonth: string;
   /** Blank is allowed and means "I don't know what it usually comes to". */
   typicalAmount: string;
   label: string;
+}
+
+/**
+ * WHICH PERIOD A BILL IS CURRENTLY DUE FOR, and what to call it.
+ *
+ * The whole reason this exists: a task keyed on the calendar month nags twelve
+ * times a year about a bill that arrives once. A property tax reminder must be
+ * one task with one name — "Property tax for 2026" — and it must go quiet the
+ * moment the bill is entered and stay quiet until next November.
+ *
+ * `from`/`to` are the window a matching cost must fall in, half-open like every
+ * other window here. `key` goes in the task id, so the same bill in the same
+ * period is the same task no matter how many mornings he opens the screen.
+ */
+export function billPeriod(
+  cadence: Cadence,
+  dueMonth: number | null,
+  dueDay: number,
+  todayISO: string,
+): { key: string; label: string; dueOn: string; from: string; to: string } {
+  const [y, m] = todayISO.split("-").map(Number);
+  // Capped at 28 so February always has the day — the same clamp the column's
+  // CHECK makes structural.
+  const day = String(Math.min(Math.max(dueDay, 1), 28)).padStart(2, "0");
+  const iso = (yy: number, mm: number) => `${yy}-${String(mm).padStart(2, "0")}-01`;
+
+  if (cadence === "monthly") {
+    const key = `${y}-${String(m).padStart(2, "0")}`;
+    return {
+      key, label: prettyMonthName(y, m), dueOn: `${key}-${day}`,
+      from: iso(y, m), to: m === 12 ? iso(y + 1, 1) : iso(y, m + 1),
+    };
+  }
+
+  if (cadence === "quarterly") {
+    // The cycle is anchored to due_month: an anchor of 2 means Feb, May, Aug,
+    // Nov. Find the anchor month of the quarter TODAY sits in.
+    const anchor = ((dueMonth ?? 1) - 1) % 3;          // 0, 1 or 2 within a quarter
+    const since = (m - 1 - anchor + 12) % 3;           // months into the current cycle
+    const startMonth = m - since;
+    const sy = startMonth < 1 ? y - 1 : y;
+    const sm = startMonth < 1 ? startMonth + 12 : startMonth;
+    const em = sm + 3;
+    const ey = em > 12 ? sy + 1 : sy;
+    const emm = em > 12 ? em - 12 : em;
+    return {
+      key: `${sy}-Q${sm}`,
+      label: `the ${prettyMonthName(sy, sm)} quarter`,
+      dueOn: `${sy}-${String(sm).padStart(2, "0")}-${day}`,
+      from: iso(sy, sm), to: iso(ey, emm),
+    };
+  }
+
+  // ANNUAL. The year it is due in is THIS year if the due month has not passed
+  // by more than its window, and the window is the whole year — a tax bill
+  // entered in December still answers November's reminder.
+  return {
+    key: String(y),
+    label: String(y),
+    dueOn: `${y}-${String(dueMonth ?? 1).padStart(2, "0")}-${day}`,
+    from: iso(y, 1), to: iso(y + 1, 1),
+  };
+}
+
+function prettyMonthName(y: number, m: number): string {
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-US", {
+    month: "long", year: "numeric", timeZone: "UTC",
+  });
 }
 
 export interface CostScheduleResult {
@@ -475,6 +554,7 @@ export interface CostScheduleResult {
   row?: {
     category: string;
     due_day: number;
+    due_month: number | null;
     typical_amount: number | null;
     label: string | null;
     cadence: string;
@@ -490,6 +570,31 @@ export function buildCostScheduleRow(input: CostScheduleInput): CostScheduleResu
   const category = (input.category ?? "").trim();
   if (!SCHEDULABLE_CATEGORIES.includes(category as CostCategory)) {
     return { ok: false, error: "Pick which bill this is." };
+  }
+
+  const cadence = (input.cadence ?? "monthly").trim() as Cadence;
+  if (!["monthly", "quarterly", "annual"].includes(cadence)) {
+    return { ok: false, error: "How often does it come — monthly, quarterly or once a year?" };
+  }
+
+  // WHICH MONTH is required for anything that is not monthly, and forbidden for
+  // anything that is. "Some time this year" is not a reminder, it is a shrug —
+  // and a month stored against a monthly bill is a fact with two readings.
+  let dueMonth: number | null = null;
+  const rawMonth = (input.dueMonth ?? "").trim();
+  if (cadence === "monthly") {
+    if (rawMonth) return { ok: false, error: "A monthly bill comes every month — no need to pick one." };
+  } else {
+    if (!/^\d{1,2}$/.test(rawMonth)) {
+      return {
+        ok: false,
+        error: cadence === "annual"
+          ? "Which month does it land in?"
+          : "Which month does the first one land in? The rest follow every three months.",
+      };
+    }
+    dueMonth = Number(rawMonth);
+    if (dueMonth < 1 || dueMonth > 12) return { ok: false, error: "That isn't a month." };
   }
 
   const rawDay = (input.dueDay ?? "").trim();
@@ -527,11 +632,10 @@ export function buildCostScheduleRow(input: CostScheduleInput): CostScheduleResu
     row: {
       category,
       due_day: dueDay,
+      due_month: dueMonth,
       typical_amount: typical,
       label: label || null,
-      // Explicit rather than leaning on the column default: 0114 allows only
-      // 'monthly', and quarterly/annual have no reader.
-      cadence: "monthly",
+      cadence,
       active: true,
     },
   };

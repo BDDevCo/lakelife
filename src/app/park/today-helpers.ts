@@ -239,6 +239,9 @@ export interface TaskFacts {
     scheduleId: string;
     category: string;
     label: string;
+    /** The period this is due FOR — a month, a quarter, or a year. */
+    periodKey: string;
+    periodLabel: string;
     dueOn: string;
     typical: number | null;
   }[];
@@ -401,7 +404,11 @@ export function generateTasks(f: TaskFacts): Task[] {
     }
   }
 
-  // A BILL THAT ARRIVES EVERY MONTH AND HAS NOT ARRIVED HERE.
+  // A BILL THAT ARRIVES ON A RHYTHM AND HAS NOT ARRIVED HERE.
+  //
+  // Monthly, quarterly or once a year (0123) — the sewer bill, the trash
+  // invoice, the property tax. Each is due for its OWN period, so an annual
+  // bill is one task a year rather than twelve.
   //
   // Never dismissible: the software must not offer to stop mentioning a bill
   // that nineteen households are waiting to be charged their share of. It is
@@ -411,10 +418,13 @@ export function generateTasks(f: TaskFacts): Task[] {
   for (const b of f.billsDue) {
     const late = daysBetween(f.today, b.dueOn) < 0;
     out.push({
-      key: `bill_due:${b.scheduleId}:${f.currentMonth}`,
+      // KEYED ON THE BILL'S OWN PERIOD, not the calendar month. A tax bill is
+      // one task called "Property tax for 2026" — keying it on the month made
+      // it twelve tasks a year for something that arrives once.
+      key: `bill_due:${b.scheduleId}:${b.periodKey}`,
       title: late
-        ? `${b.label} for ${prettyMonth(f.currentMonth)} still isn't entered`
-        : `${b.label} for ${prettyMonth(f.currentMonth)} is due about now`,
+        ? `${b.label} for ${b.periodLabel} still isn't entered`
+        : `${b.label} for ${b.periodLabel} is due about now`,
       detail: b.typical != null
         ? `Usually about ${money(b.typical)}. Enter the real figure and it splits across the lots — until it is in, nobody is billed for it.`
         : "Enter it and it splits across the lots — until it is in, nobody is billed for it.",

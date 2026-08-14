@@ -9,11 +9,16 @@ import {
 import { COST_CATEGORY_LABEL, SCHEDULABLE_CATEGORIES } from "@/app/park/cost-helpers";
 import { ordinal } from "@/app/park/today-helpers";
 
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
 const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /**
- * BILLS THAT ARRIVE EVERY MONTH.
+ * BILLS THAT COME ROUND AGAIN.
  *
  * Migration 0114 created the table and /park/today has read it since; nothing
  * has ever written a row. The reminder mechanism existed entirely in the
@@ -30,19 +35,22 @@ export function ParkCostSchedules({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [category, setCategory] = useState<string>("");
+  const [cadence, setCadence] = useState("monthly");
+  const [dueMonth, setDueMonth] = useState("");
   const [dueDay, setDueDay] = useState("");
   const [typical, setTypical] = useState("");
   const [label, setLabel] = useState("");
   const [busy, start] = useTransition();
 
   function reset() {
-    setCategory(""); setDueDay(""); setTypical(""); setLabel(""); setOpen(false);
+    setCategory(""); setCadence("monthly"); setDueMonth("");
+    setDueDay(""); setTypical(""); setLabel(""); setOpen(false);
   }
 
   function save() {
     start(async () => {
       const res = await saveCostSchedule(parkId, {
-        category, dueDay, typicalAmount: typical, label,
+        category, cadence, dueMonth, dueDay, typicalAmount: typical, label,
       });
       toast(res.ok ? (res.signal ?? "Saved.") : (res.error ?? "Couldn't save that."));
       if (res.ok) { reset(); router.refresh(); }
@@ -59,10 +67,11 @@ export function ParkCostSchedules({
 
   return (
     <section style={{ marginTop: 24 }}>
-      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Bills that arrive every month</h2>
+      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Bills that come round again</h2>
       <p className="mut" style={{ fontSize: 13, margin: "0 0 12px", lineHeight: 1.55 }}>
-        Tell us the shape of a bill and it goes on your morning screen when
-        it&apos;s due. We never guess the amount — you read that off the invoice.
+        Tell us the shape of a bill — monthly, quarterly, or once a year — and
+        it goes on your morning screen when it&apos;s due. We never guess the
+        amount; you read that off the invoice.
       </p>
 
       <div className="ll-card">
@@ -71,9 +80,9 @@ export function ParkCostSchedules({
             <p className="mut" style={{ fontSize: 13, margin: 0, lineHeight: 1.55 }}>
               {/* SAYS WHAT IT CHECKED. An empty list that just says "none" is
                   indistinguishable from one that never looked. */}
-              No monthly reminders set up. If a bill like sewer or trash lands
-              every month, tell us roughly when and it&apos;ll be waiting for you
-              on the day.
+              No reminders set up. Sewer every month, trash every quarter, the
+              property tax once a year — tell us roughly when each one lands and
+              it&apos;ll be waiting for you on the day.
             </p>
           </div>
         ) : (
@@ -86,9 +95,13 @@ export function ParkCostSchedules({
               <strong style={{ minWidth: 170 }}>
                 {r.label || COST_CATEGORY_LABEL[r.category]}
               </strong>
-              <span className="mut" style={{ minWidth: 140 }}>
+              <span className="mut" style={{ minWidth: 190 }}>
                 {/* "the 5" reads like a truncated number; "the 5th" is a date. */}
-                around the {ordinal(r.dueDay)}
+                {r.cadence === "monthly"
+                  ? `monthly, around the ${ordinal(r.dueDay)}`
+                  : r.cadence === "annual"
+                    ? `every ${MONTHS[(r.dueMonth ?? 1) - 1]}, around the ${ordinal(r.dueDay)}`
+                    : `every 3 months from ${MONTHS[(r.dueMonth ?? 1) - 1]}, around the ${ordinal(r.dueDay)}`}
               </span>
               <span className="mut" style={{ flex: 1, minWidth: 150 }}>
                 {r.typicalAmount != null
@@ -121,6 +134,27 @@ export function ParkCostSchedules({
             </label>
 
             <label className="ll-field" style={{ margin: 0 }}>
+              <span>How often</span>
+              <select value={cadence} onChange={(e) => { setCadence(e.target.value); setDueMonth(""); }}>
+                <option value="monthly">Every month</option>
+                <option value="quarterly">Every three months</option>
+                <option value="annual">Once a year</option>
+              </select>
+            </label>
+
+            {/* WHICH MONTH only exists for the two cadences that need it. Shown
+                for a monthly bill it would be a question with no answer. */}
+            {cadence !== "monthly" && (
+              <label className="ll-field" style={{ margin: 0 }}>
+                <span>{cadence === "annual" ? "Which month" : "First one lands in"}</span>
+                <select value={dueMonth} onChange={(e) => setDueMonth(e.target.value)}>
+                  <option value="">Pick a month…</option>
+                  {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+                </select>
+              </label>
+            )}
+
+            <label className="ll-field" style={{ margin: 0 }}>
               <span>Roughly what day it lands</span>
               <input inputMode="numeric" value={dueDay} placeholder="5"
                      onChange={(e) => setDueDay(e.target.value)} />
@@ -140,6 +174,9 @@ export function ParkCostSchedules({
           </div>
 
           <p className="mut" style={{ fontSize: 12, margin: "4px 0 12px", lineHeight: 1.5 }}>
+            The property tax and the insurance come once a year — set those to
+            &ldquo;once a year&rdquo; and they&apos;ll be one reminder each,
+            not twelve.{" "}
             {/* 0114's column comment, on screen. This is the one field a reader
                 could misunderstand, so it says so where the field is. */}
             The amount is only so the reminder can say what to expect — it is
