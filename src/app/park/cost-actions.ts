@@ -156,6 +156,40 @@ export async function recordCost(
   // my fee covering my costs" comparison the whole screen is built around.
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
+  // AND WHOSE JOB IS THIS? The guard above proves the PARK is yours. It says
+  // nothing about the second id, and this one was never checked at all.
+  //
+  // 0111 makes `source_job_id` unique ACROSS THE WHOLE TABLE — one cost per
+  // job, globally. That is the right shape, because a job belongs to exactly
+  // one park. But nothing verified that the job being attached belongs to the
+  // park doing the attaching, so an owner holding another park's job id could
+  // spend that job's only slot inside their own books.
+  //
+  // What that does to the victim is the ugly part: their screen still OFFERS
+  // the mow, because `getBillableParkJobs` builds its "already taken" set with
+  // `.eq("park_id", parkId)` and so cannot see a row filed under another park.
+  // They tap it, hit the global unique index, and read "That job has already
+  // been recorded as a cost" — for that job, forever. Nothing in the app can
+  // clear it, and the honest-looking message tells them nothing about why.
+  //
+  // A job is this park's when it ran at the park's own service property, which
+  // is precisely how getBillableParkJobs decides what to offer in the first
+  // place. Same rule, now enforced on the WRITE rather than only on the read.
+  if (sourceJobId) {
+    const gate = createServiceClient();
+    const { data: park } = await gate
+      .from("parks").select("service_property_id").eq("id", parkId).maybeSingle();
+    const propertyId = (park?.service_property_id as string) ?? null;
+    const { data: job } = propertyId
+      ? await gate
+          .from("jobs").select("id")
+          .eq("id", sourceJobId)
+          .eq("property_id", propertyId)
+          .maybeSingle()
+      : { data: null };
+    if (!job) return { ok: false, error: "That job isn't one of this park's." };
+  }
+
   // NEVER SPLIT A HOME THE PARK OWNS. Guarded here as well as hidden from the
   // dropdown, because the dropdown is a courtesy and this is the rule — and a
   // category arrives from a browser.
