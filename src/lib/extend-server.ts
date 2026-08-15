@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange, toDaterange, type DateRange, type Term } from "@/lib/parks";
 import { canExtend, refusalText, type ExtendRefusal } from "@/lib/extend-stay";
+import { isExtendToken } from "@/lib/token-format";
 
 /**
  * The server half of the one-tap extend. Pure decisions live in
@@ -34,7 +35,10 @@ export interface ExtendView {
  * link-preview prefetchers issue GETs.
  */
 export async function loadExtendByToken(token: string): Promise<ExtendView | null> {
-  if (!token || token.length < 16) return null;
+  // Was `token.length < 16`, which let any 16-character string reach `.eq()`.
+  // NOT `isBearerToken`: this token is minted as 'x' + 32 hex, so a hex-only
+  // rule would refuse every extend link already sitting in somebody's texts.
+  if (!isExtendToken(token)) return null;
   const admin = createServiceClient();
 
   const { data: res } = await admin

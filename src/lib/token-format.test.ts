@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { isBearerToken, BEARER_TOKEN } from "@/lib/token-format";
+import {
+  isBearerToken, BEARER_TOKEN, isExtendToken, EXTEND_TOKEN, DEFAULT_MIN, STICKER_MIN,
+} from "@/lib/token-format";
 
 /**
  * A TOKEN IS A CREDENTIAL, SO THE THINGS IT MUST REFUSE ARE THE POINT.
@@ -82,11 +84,43 @@ describe("every bearer-token loader validates before it queries", () => {
   });
 
   it("the guest link and the dispute link share ONE definition", () => {
-    expect(code("lib/amenity-guest-server.ts")).toMatch(/BEARER_TOKEN/);
+    // amenity-guest-server went from `BEARER_TOKEN.test()` to `isBearerToken`
+    // when the regex floor dropped to 20 for the sticker: matching the bare
+    // regex would have silently taken its minimum from 32 down with it.
+    expect(code("lib/amenity-guest-server.ts")).toMatch(/isBearerToken/);
     expect(code("lib/disputes.ts")).toMatch(/isBearerToken/);
     // Neither may re-declare its own copy — that is how the two drift.
     expect(code("lib/amenity-guest-server.ts")).not.toMatch(/=\s*\/\^\[0-9a-f\]/);
     expect(code("lib/disputes.ts")).not.toMatch(/=\s*\/\^\[0-9a-f\]/);
+  });
+
+  /**
+   * THE THREE THAT CHECKED A LENGTH AND CALLED IT VALIDATION.
+   *
+   * confirm-server, extend-server and park-request-server each had a bare
+   * `token.length < N` in front of `.eq()`. A length is not a shape: every
+   * input the suite above enumerates — the or-filter, the traversal, the
+   * trailing newline — is long enough to sail past a length floor.
+   */
+  const migrated: Array<[string, string, RegExp]> = [
+    ["confirm-server.ts", "loadPaymentByToken", /isBearerToken/],
+    ["extend-server.ts", "loadExtendByToken", /isExtendToken/],
+    ["park-request-server.ts", "loadSticker", /isBearerToken/],
+  ];
+
+  it.each(migrated)("%s validates the token shape in %s", (file, fn, guard) => {
+    const src = read(`lib/${file}`);
+    const body = src.match(new RegExp(`export async function ${fn}[\\s\\S]*?\\n}`))?.[0] ?? "";
+    expect(body, `${fn} must reject a malformed token`).toMatch(guard);
+    expect(body.search(guard), "the guard must run BEFORE the query")
+      .toBeLessThan(body.indexOf(".from("));
+  });
+
+  it("no loader is left validating a credential by its length alone", () => {
+    for (const [file] of migrated) {
+      expect(code(`lib/${file}`), `${file} still has a bare length check`)
+        .not.toMatch(/token\.length\s*<\s*\d+/);
+    }
   });
 
   it("dispute tokens are minted from crypto, never Math.random", () => {
@@ -95,6 +129,75 @@ describe("every bearer-token loader validates before it queries", () => {
     const src = code("lib/disputes.ts");
     expect(src, "a bearer credential must not come from a seeded PRNG").not.toMatch(/Math\.random/);
     expect(src).toMatch(/randomUUID/);
+  });
+});
+
+/**
+ * FOUR SHAPES, BECAUSE THE APP MINTS FOUR — and the old single rule silently
+ * refused two of them. These assert against the REAL mint expressions, copied
+ * from their source files, so a change to either side shows up here.
+ */
+describe("every credential the app actually mints is accepted by its own rule", () => {
+  const hex32 = () => randomUUID().replace(/-/g, "");
+
+  it("dispute token: randomUUID with the dashes out (disputes.ts)", () => {
+    expect(isBearerToken(hex32())).toBe(true);
+  });
+
+  it("payment confirm token: 32 hex + 8 hex (park/ledger-actions.ts)", () => {
+    expect(isBearerToken(hex32() + randomUUID().slice(0, 8))).toBe(true);
+  });
+
+  it("QR sticker: randomUUID cut to 20 (park/request-actions.ts)", () => {
+    const sticker = hex32().slice(0, 20);
+    // The point of the whole exercise: 20 hex is a real credential that the
+    // 32-floor rule refused, and it is accepted only when asked for by name.
+    expect(isBearerToken(sticker)).toBe(false);
+    expect(isBearerToken(sticker, STICKER_MIN)).toBe(true);
+  });
+
+  it("extend token: 'x' + 32 hex (automation.ts) — never hex-only", () => {
+    const extend = `x${hex32()}`;
+    expect(isExtendToken(extend)).toBe(true);
+    // This is why extend-server does NOT use isBearerToken. If it did, every
+    // extend link already sitting in somebody's texts would 404.
+    expect(isBearerToken(extend)).toBe(false);
+  });
+
+  it("the extend rule refuses a bare hex token and a different prefix", () => {
+    expect(isExtendToken(hex32())).toBe(false);
+    expect(isExtendToken(`y${hex32()}`)).toBe(false);
+    expect(isExtendToken(`x${hex32()}extra`)).toBe(false);
+    expect(isExtendToken(null)).toBe(false);
+  });
+});
+
+describe("widening the floor for the sticker did not weaken anybody else", () => {
+  it("the default minimum is still 32, not the regex floor of 20", () => {
+    expect(DEFAULT_MIN).toBe(32);
+    expect(STICKER_MIN).toBe(20);
+    // The regex admits 20 so the sticker can opt in...
+    expect(BEARER_TOKEN.test("a".repeat(20))).toBe(true);
+    // ...but a caller that names no length still gets 32.
+    expect(isBearerToken("a".repeat(20))).toBe(false);
+    expect(isBearerToken("a".repeat(31))).toBe(false);
+    expect(isBearerToken("a".repeat(32))).toBe(true);
+  });
+
+  it("a caller cannot ask for a floor the shape does not allow", () => {
+    // Below the regex floor the length argument cannot rescue it.
+    expect(isBearerToken("a".repeat(19), 8)).toBe(false);
+    expect(isBearerToken("abc", 1)).toBe(false);
+  });
+
+  it("the extend regex is anchored, case-insensitive and not stateful", () => {
+    expect(EXTEND_TOKEN.flags).toContain("i");
+    expect(EXTEND_TOKEN.flags).not.toContain("g");
+    expect(EXTEND_TOKEN.source.startsWith("^")).toBe(true);
+    expect(EXTEND_TOKEN.source.endsWith("$")).toBe(true);
+    const t = `x${"a".repeat(32)}`;
+    expect(EXTEND_TOKEN.test(t)).toBe(true);
+    expect(EXTEND_TOKEN.test(t)).toBe(true);
   });
 });
 
