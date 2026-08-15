@@ -78,7 +78,10 @@ function InviteCard({ serviceNames }: { serviceNames: string[] }) {
     const res = await inviteCrew({ company: company.trim(), email: email.trim(), serviceTypes: types });
     setBusy(false);
     if (!res.ok) return toast(res.error ?? "Couldn't send that invite.");
-    toast("Invite sent — they'll get a join email. 🌊");
+    // "Invite sent" must not be said when it wasn't. The crew row exists
+    // either way, and a second attempt is refused as a duplicate, so this
+    // toast is ops' only chance to learn the email never left.
+    toast(res.warning ?? "Invite sent — they'll get a join email. 🌊");
     setCompany("");
     setEmail("");
     setTypes([]);

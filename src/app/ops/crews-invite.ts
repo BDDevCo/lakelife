@@ -8,6 +8,8 @@ import { assertOps } from "./data";
 export interface InviteResult {
   ok: boolean;
   error?: string;
+  /** Set when the crew row was created but the invitation email did not go. */
+  warning?: string;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -79,7 +81,7 @@ export async function inviteCrew(input: {
   const lakeList = shortNames.length > 1
     ? `${shortNames.slice(0, -1).join(", ")} &amp; ${shortNames[shortNames.length - 1]}`
     : shortNames[0] ?? "your local lakes";
-  void sendEmail({
+  const sent = await sendEmail({
     to: email,
     subject: `${company} — you're invited to LakeLife crews`,
     html: `<p>Hi ${company},</p>
@@ -92,6 +94,19 @@ export async function inviteCrew(input: {
 </ol>
 <p>No insurance on file, no jobs — it's how we keep every dock covered. 🌊</p>`,
   });
+
+  // THE SEND USED TO BE `void`ed, WHICH STOPPED BEING SAFE AT 0126. The invite
+  // IS the email — the crew row is unreachable until somebody signs in with
+  // that address — so a refused send leaves an invite nobody can claim and an
+  // ops screen saying "invited". Worse, the row now blocks a second attempt:
+  // inviteCrew above refuses a duplicate open invite. Ops has to hear it here
+  // or not at all.
+  if (!sent.ok) {
+    return {
+      ok: true,
+      warning: `Crew added, but the invite email didn't send (${sent.error ?? "unknown"}). Send them the link yourself: ${site}`,
+    };
+  }
 
   return { ok: true };
 }

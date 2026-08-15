@@ -183,6 +183,33 @@ describe("both doors call the gate before they send", () => {
     expect(src.indexOf("emailRefusal")).toBeLessThan(src.indexOf("EMAIL_FROM"));
   });
 
+  it("both senders also ask the ROW, not just the string (0126)", () => {
+    // The shape gate cannot see a fixture wearing jane.doe@gmail.com. If this
+    // ever disappears, the column exists with nothing reading it — the single
+    // most common bug in this codebase.
+    expect(code("lib/email.ts")).toMatch(/recipientIsFixture/);
+    expect(code("lib/sms.ts")).toMatch(/recipientIsFixture/);
+  });
+
+  it("NO CALLER SILENTLY DISCARDS A SEND THAT CAN NOW BE REFUSED", () => {
+    // `void sendEmail(...)` was harmless while the only failure was a
+    // transport error. Once the send could be REFUSED, two callers turned
+    // that into a lie on screen: the crew importer counted a refused address
+    // as "invited", and the crew invite said "Invite sent". Both awaited now.
+    for (const f of ["app/vendor/import-actions.ts", "app/ops/crews-invite.ts"]) {
+      expect(code(f), `${f} must not fire-and-forget a refusable send`)
+        .not.toMatch(/void\s+sendEmail\(/);
+    }
+  });
+
+  it("and the importer reports who was never written to", () => {
+    // Counted separately from `invited`, because a staged customer nobody
+    // emailed cannot claim their account — and a retry says "already
+    // invited", so this is the crew's only chance to learn it.
+    expect(code("app/vendor/import-actions.ts")).toMatch(/notEmailed/);
+    expect(code("components/VendorImport.tsx")).toMatch(/notEmailed/);
+  });
+
   it("sendSms checks the recipient BEFORE the credentials", () => {
     // Not cosmetic. Behind the config check, the rule could only be proven by
     // running with live Twilio credentials — i.e. by risking the exact send it
@@ -223,5 +250,40 @@ describe("sendSms, actually called", () => {
     // Past the recipient gate, stopped by the absent transport. That is the
     // proof the gate is not simply refusing everything.
     expect(res.error).toBe("SMS not configured");
+  });
+});
+
+/**
+ * THE ROW GATE FAILS OPEN, AND THAT HAS TO BE TRUE UNDER TEST TOO.
+ *
+ * With no database configured it must return false — "no evidence" — so the
+ * send proceeds. The alternative is that an unreachable database silences
+ * every receipt, confirmation and dispatch text at once. It is safe because
+ * the shape gate has already run and cannot fail open: it is pure.
+ */
+describe("recipientIsFixture with no database", () => {
+  it("allows rather than blocks, on both kinds", async () => {
+    const { recipientIsFixture } = await import("@/lib/recipient-gate");
+    expect(await recipientIsFixture("email", "someone@gmail.com")).toBe(false);
+    expect(await recipientIsFixture("phone", "+12604631234")).toBe(false);
+  });
+
+  it("and treats an empty value as nothing to look up", async () => {
+    const { recipientIsFixture } = await import("@/lib/recipient-gate");
+    expect(await recipientIsFixture("email", "")).toBe(false);
+    expect(await recipientIsFixture("email", null)).toBe(false);
+    expect(await recipientIsFixture("phone", undefined)).toBe(false);
+  });
+
+  it("escapes the address before it becomes a LIKE pattern", async () => {
+    // users.email is case-uncertain (synced from auth) so the lookup must be
+    // ilike — which makes the address a PATTERN. Unescaped, `_` is a wildcard
+    // and one fixture's flag could suppress a real customer's mail. This is
+    // the same class d5fe0d9 fixed nine times over.
+    const src = readFileSync(join(process.cwd(), "src/lib/recipient-gate.ts"), "utf8");
+    expect(src).toMatch(/likeLiteral/);
+    expect(src).toMatch(/\.ilike\("email", likeLiteral/);
+    // The phone side must NOT be a pattern at all — we write that column.
+    expect(src).toMatch(/\.eq\("phone"/);
   });
 });

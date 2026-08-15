@@ -1,5 +1,6 @@
 import "server-only";
 import { emailRefusal } from "@/lib/contactable";
+import { recipientIsFixture } from "@/lib/recipient-gate";
 
 /**
  * Send a transactional email via Resend (welcome recap, booking confirmations,
@@ -71,6 +72,15 @@ export async function sendEmail(opts: {
   if (refusal) {
     console.warn(`[email] refused: ${refusal.why}`);
     return { ok: false, error: `unsendable recipient (${refusal.code})` };
+  }
+
+  // AND THE SECOND GATE: a fixture wearing a plausible address (0126). The
+  // shape check above cannot see this one — jane.doe@gmail.com is a real
+  // mailbox belonging to a real stranger, and only the row knows nobody is
+  // behind it. Fails open by design; see recipient-gate.ts.
+  if (await recipientIsFixture("email", opts.to)) {
+    console.warn(`[email] refused: ${opts.to} belongs to an account marked not-a-person`);
+    return { ok: false, error: "unsendable recipient (fixture)" };
   }
 
   const from = opts.from ?? process.env.EMAIL_FROM ?? SANDBOX_FROM;

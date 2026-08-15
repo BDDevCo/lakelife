@@ -11,6 +11,8 @@ export interface ImportResult {
   invited?: number;
   skipped?: number;
   skippedReasons?: string[];
+  /** Staged fine, but the invitation email was refused — see stageOne. */
+  notEmailed?: string[];
 }
 
 /** Assert the caller owns a vendors row; return {id, company, status}. */
@@ -54,11 +56,17 @@ export async function importMyCustomers(pasted: string): Promise<ImportResult> {
 
   let invited = 0;
   const skippedReasons: string[] = [];
+  const notEmailed: string[] = [];
 
   for (const c of rows) {
-    const skip = await stageOne(admin, vendor.id, crewName, site, c);
-    if (skip) skippedReasons.push(`${c.email}: ${skip}`);
-    else invited++;
+    const r = await stageOne(admin, vendor.id, crewName, site, c);
+    if (r.skip) skippedReasons.push(`${c.email}: ${r.skip}`);
+    else {
+      invited++;
+      // Staged, but nobody was told. Counted separately rather than folded
+      // into `invited`, because the crew's next question is "who do I chase".
+      if (!r.emailed) notEmailed.push(c.email);
+    }
   }
 
   return {
@@ -66,22 +74,37 @@ export async function importMyCustomers(pasted: string): Promise<ImportResult> {
     invited,
     skipped: skippedReasons.length + parsed.invalid.length,
     skippedReasons: [...skippedReasons, ...parsed.invalid.map((x) => `${x.raw}: ${x.reason}`)].slice(0, 20),
+    notEmailed,
   };
 }
 
-/** Stage one customer; returns a skip-reason string, or null on success. */
+/**
+ * Stage one customer.
+ *
+ * Returns `{ skip }` when the row did not stage at all, and `{ emailed }` for
+ * one that did — because since 0126 those are different failures and only one
+ * of them used to be visible.
+ *
+ * THE SEND USED TO BE `void`ed. That was harmless while sendEmail could only
+ * fail on a transport error, and stopped being harmless the moment it grew a
+ * recipient gate: a refused address returns {ok:false}, the row still staged
+ * fine, and the crew was told "50 invited" while some number of those people
+ * were never written to. A staged customer who never got the email cannot
+ * claim their account and has no idea they were meant to — and a retry says
+ * "already invited", so it is not self-correcting either.
+ */
 async function stageOne(
   admin: ReturnType<typeof createServiceClient>,
   vendorId: string,
   crewName: string,
   site: string,
   c: ParsedCustomer,
-): Promise<string | null> {
+): Promise<{ skip?: string; emailed?: boolean }> {
   // Already a LakeLife account? Don't re-invite; ops can bind them by hand.
   // users.email comes from Supabase auth, so case is not ours to promise:
   // case-insensitive, wildcards escaped.
   const { data: existingUser } = await admin.from("users").select("id").ilike("email", likeLiteral(c.email)).maybeSingle();
-  if (existingUser) return "already a LakeLife account";
+  if (existingUser) return { skip: "already a LakeLife account" };
 
   // Already staged (by anyone)? The open-email unique index also guards this.
   const { data: openImport } = await admin
@@ -90,7 +113,7 @@ async function stageOne(
     .eq("invite_email", c.email)
     .eq("status", "pending")
     .maybeSingle();
-  if (openImport) return "already invited";
+  if (openImport) return { skip: "already invited" };
 
   const { error: insErr } = await admin.from("customer_imports").insert({
     vendor_id: vendorId,
@@ -100,10 +123,10 @@ async function stageOne(
     phone: c.phone || null,
     status: "pending",
   });
-  if (insErr) return insErr.message.includes("duplicate") ? "already invited" : insErr.message;
+  if (insErr) return { skip: insErr.message.includes("duplicate") ? "already invited" : insErr.message };
 
   const first = (c.name || "there").split(/\s+/)[0];
-  void sendEmail({
+  const sent = await sendEmail({
     to: c.email,
     subject: `${crewName} is now booking through LakeLife`,
     html: `<p>Hi ${first},</p>
@@ -113,7 +136,7 @@ async function stageOne(
 <p style="color:#889;font-size:12px">Didn't expect this? You can ignore this email.</p>`,
   });
 
-  return null;
+  return { emailed: sent.ok };
 }
 
 /**

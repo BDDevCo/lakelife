@@ -1,5 +1,6 @@
 import twilio from "twilio";
 import { phoneRefusal } from "@/lib/contactable";
+import { recipientIsFixture } from "@/lib/recipient-gate";
 
 /**
  * Send an alert SMS via Twilio Messaging (booking confirmations, reminders,
@@ -35,6 +36,14 @@ export async function sendSms(to: string, body: string): Promise<{ ok: boolean; 
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_PHONE_NUMBER;
   if (!sid || !token || !from) return { ok: false, error: "SMS not configured" };
+
+  // AND THE SECOND GATE: a fixture holding a plausible number (0126). Placed
+  // after the configuration check on purpose — it costs a database round trip,
+  // and there is nothing to protect anybody from when the transport is absent.
+  if (await recipientIsFixture("phone", to)) {
+    console.warn(`[sms] refused: ${to} belongs to an account marked not-a-person`);
+    return { ok: false, error: "unsendable recipient (fixture)" };
+  }
 
   try {
     const client = twilio(sid, token);

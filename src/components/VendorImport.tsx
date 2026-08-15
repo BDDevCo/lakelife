@@ -101,6 +101,24 @@ export function VendorImport() {
             <p style={{ fontSize: 15, fontWeight: 700, margin: 0, color: "var(--teal-dark)" }}>
               ✓ Invited {result.invited ?? 0} customer{(result.invited ?? 0) === 1 ? "" : "s"}
             </p>
+
+            {/* NAMES THE ONES NOBODY WAS TOLD ABOUT.
+                These staged fine and are counted above, so "invited" is true
+                of the record and not of the person — their email was refused
+                and they have no idea they were meant to claim anything. A
+                retry says "already invited", so this is the only moment the
+                crew can find out. Named, not counted: the next question is
+                always "which ones". */}
+            {(result.notEmailed?.length ?? 0) > 0 && (
+              <div style={{ marginTop: 10, padding: "10px 12px", background: "var(--sand, #fdf6ec)", borderRadius: 8 }}>
+                <p style={{ fontSize: 13, fontWeight: 700, margin: "0 0 4px" }}>
+                  {result.notEmailed!.length} couldn&apos;t be emailed — reach out yourself
+                </p>
+                <p className="mut" style={{ fontSize: 13, margin: 0, lineHeight: 1.55 }}>
+                  {result.notEmailed!.join(", ")}
+                </p>
+              </div>
+            )}
             {(result.skipped ?? 0) > 0 && (
               <>
                 <button
