@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { isBearerToken } from "@/lib/token-format";
 import { receiptRef, METHOD_WORD } from "@/app/park/receipt-helpers";
 
 /**
@@ -41,7 +42,11 @@ export interface ConfirmView {
 }
 
 export async function loadPaymentByToken(token: string): Promise<ConfirmView | null> {
-  if (!token || token.length < 12) return null;
+  // Was `token.length < 12` — a length floor is not a shape check, so any
+  // 12-character string reached `.eq()`. park_payments.confirm_token is minted
+  // as 32 hex + 8 hex (park/ledger-actions.ts, park/money-actions.ts), so the
+  // shared 32-char default fits it with room to spare.
+  if (!isBearerToken(token)) return null;
   const admin = createServiceClient();
 
   const { data: pay } = await admin

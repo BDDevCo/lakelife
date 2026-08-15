@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { isBearerToken, STICKER_MIN } from "@/lib/token-format";
 
 /**
  * THE QR STICKER'S OWN SERVER SIDE — no login, no account, no session.
@@ -43,7 +44,12 @@ export interface StickerView {
 const OPEN_PER_LOT_CAP = 12;
 
 export async function loadSticker(token: string): Promise<StickerView | null> {
-  if (!token || token.length < 6) return null;
+  // Was `token.length < 6` — six characters of anything reached `.eq()`.
+  // STICKER_MIN by name, not the default: qr_token is minted as randomUUID cut
+  // to 20 (park/request-actions.ts), so this is the one caller that genuinely
+  // holds a shorter credential, and it says so rather than lowering the floor
+  // for everybody else.
+  if (!isBearerToken(token, STICKER_MIN)) return null;
   const admin = createServiceClient();
 
   const { data: lot } = await admin

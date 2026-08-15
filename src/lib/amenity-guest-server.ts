@@ -1,5 +1,5 @@
 import "server-only";
-import { BEARER_TOKEN } from "@/lib/token-format";
+import { isBearerToken } from "@/lib/token-format";
 import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange, toDaterange, type ParkSeason } from "@/lib/parks";
@@ -51,9 +51,11 @@ export interface GuestView {
   nothing: string | null;
 }
 
-// 0125-era: the shape moved to token-format.ts so /use and /d cannot drift
-// apart. Alias kept so the three call sites below read as they always did.
-const TOKEN = BEARER_TOKEN;
+// The shape lives in token-format.ts so /use and /d cannot drift apart. The
+// bare-regex alias that used to sit here is gone on purpose: once BEARER_TOKEN
+// was widened to 20 so the QR sticker could use it, `BEARER_TOKEN.test()` no
+// longer meant what this file needs. `isBearerToken` defaults to 32, so the
+// guest link keeps the floor it always had — and gets it from one place.
 
 /** A date a guest reads is "Saturday, August 15" — never "2026-08-15". */
 function readable(iso: string): string {
@@ -64,7 +66,7 @@ function readable(iso: string): string {
 }
 
 export async function loadGuestView(token: string): Promise<GuestView | null> {
-  if (!token || !TOKEN.test(token)) return null;
+  if (!isBearerToken(token)) return null;
   const admin = createServiceClient();
 
   const { data: stay } = await admin
@@ -227,7 +229,7 @@ export async function loadGuestView(token: string): Promise<GuestView | null> {
 export async function bookDayByToken(
   token: string, unitId: string, day: string,
 ): Promise<{ ok: boolean; error?: string; signal?: string }> {
-  if (!token || !TOKEN.test(token)) return { ok: false, error: "This link isn't right." };
+  if (!isBearerToken(token)) return { ok: false, error: "This link isn't right." };
   if (!/^[0-9a-f-]{36}$/i.test(unitId) || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
     return { ok: false, error: "Something about that didn't look right. Try again from the link." };
   }
@@ -318,7 +320,7 @@ export async function bookDayByToken(
 export async function cancelDayByToken(
   token: string, bookingId: string,
 ): Promise<{ ok: boolean; error?: string; signal?: string }> {
-  if (!token || !TOKEN.test(token)) return { ok: false, error: "This link isn't right." };
+  if (!isBearerToken(token)) return { ok: false, error: "This link isn't right." };
   if (!/^[0-9a-f-]{36}$/i.test(bookingId)) return { ok: false, error: "That didn't look right." };
 
   const admin = createServiceClient();
