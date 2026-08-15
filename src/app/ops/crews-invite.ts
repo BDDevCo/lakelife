@@ -2,6 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/email";
+import { likeLiteral } from "@/lib/sql-like";
 import { assertOps } from "./data";
 
 export interface InviteResult {
@@ -38,7 +39,9 @@ export async function inviteCrew(input: {
   const serviceTypes = [...new Set((input.serviceTypes ?? []).filter((t) => valid.has(t)))];
 
   // One account per email, one open invite per email.
-  const { data: existingUser } = await admin.from("users").select("id").ilike("email", email).maybeSingle();
+  // users.email is synced from Supabase auth (0003), so this repo cannot
+  // promise its case — it stays case-insensitive and escapes the wildcards.
+  const { data: existingUser } = await admin.from("users").select("id").ilike("email", likeLiteral(email)).maybeSingle();
   if (existingUser) {
     const { data: alreadyVendor } = await admin.from("vendors").select("id").eq("user_id", existingUser.id).maybeSingle();
     return {
@@ -51,7 +54,7 @@ export async function inviteCrew(input: {
   const { data: openInvite } = await admin
     .from("vendors")
     .select("id")
-    .ilike("invite_email", email)
+    .eq("invite_email", email)
     .is("user_id", null)
     .maybeSingle();
   if (openInvite) return { ok: false, error: "There's already an open invite for that email." };
@@ -131,10 +134,23 @@ export async function claimCrewInvite(userId: string, userEmail: string | null |
   if (!EMAIL_RE.test(email)) return false;
 
   const admin = createServiceClient();
+  // `.eq`, NOT `.ilike`. THIS IS THE LINE THE TAKEOVER RAN THROUGH.
+  //
+  // `.ilike` sends the address to Postgres as a PATTERN, and `_` matches any
+  // single character. Invite `crew.mow@outlook.com`, and a stranger who
+  // registers the real address `crew_mow@outlook.com` matches it, claims the
+  // vendors row, and is flipped to role='vendor' — the crew's route, jobs and
+  // payout account. Deriving the email from the session (the fix above) proves
+  // who they are; it does not stop them being a wildcard.
+  //
+  // No escaping needed here: `invite_email` is ours and written lower-cased
+  // (inviteCrew above, inviteMyContractor in book/contractor-actions.ts), and
+  // `email` is lower-cased on the line above, so exact match is correct AND
+  // strictly safer than any pattern.
   const { data: invite } = await admin
     .from("vendors")
     .select("id")
-    .ilike("invite_email", email)
+    .eq("invite_email", email)
     .is("user_id", null)
     .maybeSingle();
   if (!invite) return false;

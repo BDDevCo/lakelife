@@ -2,6 +2,7 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { likeLiteral } from "@/lib/sql-like";
 import { getMyVendorId } from "./data";
 
 /**
@@ -95,7 +96,11 @@ export async function addWorker(rawName: string): Promise<WorkerResult> {
         .from("crew_workers")
         .select("id, active")
         .eq("vendor_id", vendorId)
-        .ilike("name", name)
+        // Escaped like every other user-supplied value: a worker called
+        // "Jo_Ann" would otherwise match "JoAnn" and reactivate the wrong
+        // person. Scoped to this vendor's own roster, so the blast radius is
+        // small — but an exception is how a rule stops being a rule.
+        .ilike("name", likeLiteral(name))
         .maybeSingle();
       if (existing && !existing.active) {
         await admin.from("crew_workers").update({ active: true }).eq("id", existing.id);

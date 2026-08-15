@@ -2,6 +2,7 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { likeLiteral } from "@/lib/sql-like";
 import { assertOps } from "./data";
 
 /**
@@ -149,8 +150,13 @@ export async function findUserByEmail(
   if (!clean) return { ok: false, error: "Type an email." };
 
   const admin = createServiceClient();
+  // Escaped: this result is what ops binds a park to. An address with an `_`
+  // in it would match a DIFFERENT account, and the label on screen shows the
+  // matched email — so the wrong person could be made a park owner by somebody
+  // reading the confirmation too quickly. users.email is auth's, so case stays
+  // insensitive; only the wildcards go.
   const { data } = await admin
-    .from("users").select("id, email, name, role").ilike("email", clean).maybeSingle();
+    .from("users").select("id, email, name, role").ilike("email", likeLiteral(clean)).maybeSingle();
   if (!data) return { ok: false, error: `No account for ${clean} — they need to sign up first.` };
   return {
     ok: true,

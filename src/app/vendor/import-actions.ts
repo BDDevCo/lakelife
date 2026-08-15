@@ -2,6 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/email";
+import { likeLiteral } from "@/lib/sql-like";
 import { parseCustomers, type ParsedCustomer } from "./import-helpers";
 
 export interface ImportResult {
@@ -77,14 +78,16 @@ async function stageOne(
   c: ParsedCustomer,
 ): Promise<string | null> {
   // Already a LakeLife account? Don't re-invite; ops can bind them by hand.
-  const { data: existingUser } = await admin.from("users").select("id").ilike("email", c.email).maybeSingle();
+  // users.email comes from Supabase auth, so case is not ours to promise:
+  // case-insensitive, wildcards escaped.
+  const { data: existingUser } = await admin.from("users").select("id").ilike("email", likeLiteral(c.email)).maybeSingle();
   if (existingUser) return "already a LakeLife account";
 
   // Already staged (by anyone)? The open-email unique index also guards this.
   const { data: openImport } = await admin
     .from("customer_imports")
     .select("id")
-    .ilike("invite_email", c.email)
+    .eq("invite_email", c.email)
     .eq("status", "pending")
     .maybeSingle();
   if (openImport) return "already invited";
@@ -146,10 +149,20 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
 
   const admin = createServiceClient();
 
+  // `.eq`, NOT `.ilike` — same hole as claimCrewInvite, and worse here because
+  // this returns a LIST. A stranger registering `john_smith@outlook.com` swept
+  // up every staged row whose address differs by one character: each becomes a
+  // property they own, carrying the real customer's street address, with that
+  // customer's crew pre-set as preferred — so the stranger can book a job and
+  // send that crew to a house that isn't theirs. The real customer's row is
+  // marked claimed, so they get nothing when they sign up.
+  //
+  // `customer_imports.invite_email` is written from parseCustomers, which
+  // lower-cases (import-helpers.ts), and `email` is lower-cased above.
   const { data: imports } = await admin
     .from("customer_imports")
     .select("id, vendor_id, address, place_id, lat, lng")
-    .ilike("invite_email", email)
+    .eq("invite_email", email)
     .eq("status", "pending");
   if (!imports || imports.length === 0) return 0;
 

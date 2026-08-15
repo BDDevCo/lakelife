@@ -2,6 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/email";
+import { likeLiteral } from "@/lib/sql-like";
 import { getActivePropertyId } from "@/app/profile/data";
 
 export interface InviteContractorResult {
@@ -49,7 +50,8 @@ export async function inviteMyContractor(company: string, email: string): Promis
   if (!prop || prop.owner_id !== user.id) return { ok: false, error: "That property isn't yours." };
 
   // One account per email; one open invite per email (same guard as ops invites).
-  const { data: existingUser } = await admin.from("users").select("id").ilike("email", addr).maybeSingle();
+  // users.email is auth's, not ours — case-insensitive, wildcards escaped.
+  const { data: existingUser } = await admin.from("users").select("id").ilike("email", likeLiteral(addr)).maybeSingle();
   if (existingUser) {
     const { data: alreadyVendor } = await admin.from("vendors").select("id").eq("user_id", existingUser.id).maybeSingle();
     return {
@@ -62,7 +64,7 @@ export async function inviteMyContractor(company: string, email: string): Promis
   const { data: openInvite } = await admin
     .from("vendors")
     .select("id")
-    .ilike("invite_email", addr)
+    .eq("invite_email", addr)
     .is("user_id", null)
     .maybeSingle();
   if (openInvite) return { ok: false, error: "There's already an open invite out to that email." };
