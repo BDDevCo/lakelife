@@ -51,6 +51,26 @@ revoke all on public.park_service_rates from anon, authenticated;
 
 -- THE HAVEN'S OWN NUMBERS, moved out of the global row and into its own.
 -- $100 a week for the whole park at 21 lots, which is his actual contract.
+--
+-- ⚠ THIS BLOCK IS INERT AS OF 0125 AND WAS ALWAYS INERT ON A REBUILD.
+-- It matches on `p.slug = 'scratch-haven'`, and 0125 renamed that slug to
+-- 'the-haven', so it now selects zero rows here too. Left exactly as it ran
+-- rather than edited, because rewriting an applied migration to match today's
+-- data makes the file lie about what it did.
+--
+-- The deeper point, for whoever seeds the next park: A CUSTOMER'S NEGOTIATED
+-- RATE DOES NOT BELONG IN A SCHEMA MIGRATION. This row only ever existed
+-- because the park was created by hand in production, so the select matched
+-- exactly one database in the world and silently matched nothing anywhere
+-- else — no error, no warning, just an absent rate. It is runtime data and
+-- survives by being backed up, not by being replayed.
+--
+-- What that costs if it is ever lost: park_rates.ts has NO fallback by
+-- design, so an unpriced park_only service comes back at 0, and every surface
+-- treats 0 as "not applicable" and refuses to book it. So the failure is a
+-- mow that cannot be booked and says "needs your price" — loud, not silent,
+-- and not a mow given away free. Recovering it means re-entering $100/week on
+-- the park's own service desk, which is where it should have been set.
 insert into public.park_service_rates (park_id, service_id, base, unit_rate, note)
 select p.id, s.id, 16, 4, 'From the seller: $100/week for the park (21 lots).'
 from public.parks p
