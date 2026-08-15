@@ -1,4 +1,5 @@
 import "server-only";
+import { emailRefusal } from "@/lib/contactable";
 
 /**
  * Send a transactional email via Resend (welcome recap, booking confirmations,
@@ -59,7 +60,18 @@ export async function sendEmail(opts: {
   text?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const key = process.env.RESEND_API_KEY;
-  if (!key || !opts.to) return { ok: false, error: "email not configured" };
+  if (!key) return { ok: false, error: "email not configured" };
+
+  // THE RECIPIENT GATE, and it goes BEFORE the sender resolution on purpose:
+  // whether we may write to this person does not depend on which address we
+  // would write from. Today an unset EMAIL_FROM means the sandbox swallows a
+  // scratch send; the day that variable is set in Vercel the swallowing stops,
+  // with no code change. This check is what makes that day uneventful.
+  const refusal = emailRefusal(opts.to);
+  if (refusal) {
+    console.warn(`[email] refused: ${refusal.why}`);
+    return { ok: false, error: `unsendable recipient (${refusal.code})` };
+  }
 
   const from = opts.from ?? process.env.EMAIL_FROM ?? SANDBOX_FROM;
   if (from === SANDBOX_FROM) warnSandboxSender();
