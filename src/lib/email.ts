@@ -16,6 +16,41 @@ import "server-only";
  * account owner). So flipping every app email to the branded domain is a single
  * env var, no code change.
  */
+/**
+ * Resend's shared sandbox sender. It only ever delivers to the Resend account
+ * owner, which has quietly been doing a job nobody assigned it: every email
+ * this app has sent to a scratch address bounced off it harmlessly.
+ *
+ * THAT SAFETY IS AN ACCIDENT AND IT ENDS WITHOUT A DEPLOY. `EMAIL_FROM` is
+ * absent from .env.local and sitting ready in .env.local.example. Setting that
+ * one variable in Vercel is a legitimate, expected step — and the moment it
+ * lands, every send in the codebase starts reaching real inboxes, with no code
+ * change, no migration and nothing on screen to mark the transition.
+ *
+ * So the fallback says so. Not an error — using the sandbox is correct today,
+ * and refusing to send would break the app for a configuration that is right.
+ * Just no longer INVISIBLE: whoever reads the logs before flipping it can see
+ * which state they are in, and the log line names the switch.
+ *
+ * The real protection for the other side of that switch is a recipient gate —
+ * something that knows a scratch address from a customer's. That is its own
+ * piece of work with its own question ("what proves a recipient is real?") and
+ * this comment is not a substitute for it.
+ */
+const SANDBOX_FROM = "LakeLife <onboarding@resend.dev>";
+
+let warnedSandbox = false;
+function warnSandboxSender() {
+  if (warnedSandbox) return; // once per process, not once per email
+  warnedSandbox = true;
+  console.warn(
+    "[email] EMAIL_FROM is unset — sending as Resend's sandbox address, which " +
+    "only delivers to the Resend account owner. Set EMAIL_FROM (see " +
+    ".env.local.example) to send from lakelife.ai. Doing so makes every send " +
+    "in this app reach its real recipient.",
+  );
+}
+
 export async function sendEmail(opts: {
   to: string;
   subject: string;
@@ -26,7 +61,8 @@ export async function sendEmail(opts: {
   const key = process.env.RESEND_API_KEY;
   if (!key || !opts.to) return { ok: false, error: "email not configured" };
 
-  const from = opts.from ?? process.env.EMAIL_FROM ?? "LakeLife <onboarding@resend.dev>";
+  const from = opts.from ?? process.env.EMAIL_FROM ?? SANDBOX_FROM;
+  if (from === SANDBOX_FROM) warnSandboxSender();
 
   try {
     const res = await fetch("https://api.resend.com/emails", {

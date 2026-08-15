@@ -1,4 +1,6 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
+import { isBearerToken } from "@/lib/token-format";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getPlatformSettings } from "@/lib/settings";
 import { decideDisputeOutcome, respondByFrom, DISPUTE_ACCEPTABLE_STATUSES, DISPUTE_ESCALATABLE_STATUSES } from "@/lib/dispute-policy";
@@ -17,8 +19,30 @@ import { sendSms } from "@/lib/sms";
  * only the escalations, in the nightly digest.
  */
 
-const token = () =>
-  (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, "") : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+/**
+ * A DISPUTE TOKEN IS A BEARER CREDENTIAL. Whoever holds it can act as the crew
+ * or as the customer on that dispute — book a correction visit, accept the
+ * evidence, trigger a refund. Two things follow from that.
+ *
+ * IT IS MINTED FROM crypto, NEVER FROM Math.random. This used to fall back to
+ * `Math.random().toString(36)` twice when `crypto.randomUUID` was missing,
+ * which would have handed out a guessable credential from a seeded PRNG. It
+ * was unreachable — this file is server-only and every runtime it loads in has
+ * had randomUUID for years — and that is precisely why it survived. A fallback
+ * that never runs is a fallback nobody notices is wrong. Importing from
+ * `node:crypto` makes the guarantee explicit instead of conditional.
+ */
+const token = () => randomUUID().replace(/-/g, "");
+
+/**
+ * AND IT IS VALIDATED BEFORE IT REACHES A QUERY, against the shared shape in
+ * token-format.ts. This loader was the only one in the app passing a raw path
+ * segment straight into `.eq()` — /use, /a, /c and /api/ics all check first.
+ *
+ * The concrete hole was narrow: an empty segment matched any dispute whose
+ * token column was literally '', and nothing mints an empty token. But "narrow
+ * today" is an argument about the data, not about the code.
+ */
 
 const site = () => process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
@@ -119,6 +143,7 @@ export interface DisputeRow {
 }
 
 export async function loadDisputeByToken(kind: "crew" | "customer", tok: string): Promise<DisputeRow | null> {
+  if (!isBearerToken(tok)) return null;
   const admin = createServiceClient();
   const { data } = await admin
     .from("disputes")

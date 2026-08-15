@@ -1,4 +1,5 @@
 import "server-only";
+import { BEARER_TOKEN } from "@/lib/token-format";
 import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange, toDaterange, type ParkSeason } from "@/lib/parks";
@@ -50,7 +51,9 @@ export interface GuestView {
   nothing: string | null;
 }
 
-const TOKEN = /^[0-9a-f]{32,96}$/i;
+// 0125-era: the shape moved to token-format.ts so /use and /d cannot drift
+// apart. Alias kept so the three call sites below read as they always did.
+const TOKEN = BEARER_TOKEN;
 
 /** A date a guest reads is "Saturday, August 15" — never "2026-08-15". */
 function readable(iso: string): string {
