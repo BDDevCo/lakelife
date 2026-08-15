@@ -167,3 +167,55 @@ export async function listLakes(): Promise<Array<{ id: string; name: string }>> 
   const { data } = await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name");
   return (data ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
 }
+
+/**
+ * THE LAUNCH SWITCH NEEDED A SWITCH.
+ *
+ * `parks.active` has been the launch switch since 0052 and the ops board has
+ * shown it as a Live/Dark pill ever since — but nothing in `src` ever wrote
+ * `true` to it. The create above hard-codes `active: false`, and that was the
+ * only writer. The one live park got switched on by hand in SQL, which is the
+ * [[the-column-with-no-writer]] shape wearing a slightly different hat: not a
+ * column nobody reads, a state nobody can leave.
+ *
+ * That mattered the moment there was a reason to go dark again. The Haven's
+ * page was public four months before Brendon owns it, and taking it down
+ * without this action would have left him in a state only a migration could
+ * undo.
+ *
+ * OPS-ONLY, and deliberately NOT on the owner's side. It is the same boundary
+ * the board already draws: the owner runs the park and every housing decision
+ * in it, ops runs whether the park has a marketing page on lakelife.ai. This
+ * writes no tenancy, touches no rent, and hides no money from anybody — the
+ * owner's portal, the rent ledger and the ops board all read a dark park
+ * exactly as they read a live one (0052's RLS says so in as many words).
+ */
+export async function setParkActive(
+  parkId: string,
+  active: boolean,
+): Promise<{ ok: boolean; error?: string; signal?: string }> {
+  if (!(await assertOps())) return { ok: false, error: "Ops only." };
+
+  const admin = createServiceClient();
+  const { data: park } = await admin
+    .from("parks").select("id, name, slug, active").eq("id", parkId).maybeSingle();
+  if (!park) return { ok: false, error: "No park with that id." };
+  if (Boolean(park.active) === active) {
+    return { ok: true, signal: active ? "Already live." : "Already dark." };
+  }
+
+  const { error } = await admin.from("parks").update({ active }).eq("id", parkId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/ops");
+  revalidatePath("/parks");
+  if (park.slug) revalidatePath(`/parks/${park.slug}`);
+
+  // Says what changed for the PUBLIC, because that is the only thing that did.
+  return {
+    ok: true,
+    signal: active
+      ? `${park.name as string} is live at /parks/${park.slug as string}.`
+      : `${park.name as string} is dark — its page is a 404 to the world. Your portal is unchanged.`,
+  };
+}

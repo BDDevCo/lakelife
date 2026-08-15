@@ -1,8 +1,61 @@
 "use client";
 
 import Link from "next/link";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "@/components/Toast";
 import { NewPark } from "./NewPark";
+import { setParkActive } from "@/app/ops/parks-actions";
 import type { OpsParkRow } from "@/app/ops/parks-data";
+
+/**
+ * Publish / unpublish a park's PUBLIC PAGE. Nothing else.
+ *
+ * Taking a park dark asks twice, because the thing it does is invisible from
+ * here — the page stops resolving for everyone who is not signed in, and the
+ * person clicking is signed in, so a mis-click looks like nothing happened.
+ * Publishing does not ask: it is the reversible direction.
+ */
+function PublishSwitch({ park }: { park: OpsParkRow }) {
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, start] = useTransition();
+
+  function go(active: boolean) {
+    start(async () => {
+      const res = await setParkActive(park.id, active);
+      toast(res.ok ? (res.signal ?? "Done.") : (res.error ?? "Couldn't change that."));
+      setConfirming(false);
+      if (res.ok) router.refresh();
+    });
+  }
+
+  if (!park.active) {
+    return (
+      <button className="ll-btn ghost" disabled={busy} onClick={() => go(true)}>
+        {busy ? "Publishing…" : "Publish page"}
+      </button>
+    );
+  }
+  if (!confirming) {
+    return (
+      <button className="ll-btn ghost" disabled={busy} onClick={() => setConfirming(true)}>
+        Take page offline
+      </button>
+    );
+  }
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <span className="mut" style={{ fontSize: 12 }}>Hide from the public?</span>
+      <button className="ll-btn" disabled={busy} onClick={() => go(false)}>
+        {busy ? "Hiding…" : "Take it offline"}
+      </button>
+      <button className="ll-btn ghost" disabled={busy} onClick={() => setConfirming(false)}>
+        Keep it up
+      </button>
+    </div>
+  );
+}
 
 /**
  * Ops' view of the parks on the platform. Read-only on purpose: a park owner
@@ -82,17 +135,22 @@ export function ParkBoard({
                   {p.pending > 0 && ` · ${p.pending} waiting on the owner`}
                 </div>
               </div>
-              {p.slug && p.active && (
-                <Link className="ll-btn ghost" href={`/parks/${p.slug}`}>Public page</Link>
-              )}
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+                {p.slug && p.active && (
+                  <Link className="ll-btn ghost" href={`/parks/${p.slug}`}>Public page</Link>
+                )}
+                <PublishSwitch park={p} />
+              </div>
             </div>
           </div>
         ))}
       </div>
 
       <p className="mut" style={{ fontSize: 12, marginTop: 16 }}>
-        Read-only. Park owners approve their own renters — we run the software and
-        the services, never the housing decision.
+        Park owners approve their own renters — we run the software and the
+        services, never the housing decision. The only thing switchable here is
+        whether a park has a public page; taking one dark changes nothing for
+        its owner, its renters or its rent.
       </p>
       <div style={{ marginTop: 14 }}><NewPark lakes={lakes} /></div>
     </div>
