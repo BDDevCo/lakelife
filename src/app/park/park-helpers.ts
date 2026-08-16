@@ -762,7 +762,7 @@ export interface TenantResult {
   };
 }
 
-const TENANT_SOURCES = ["seller_roll", "owner_knowledge", "tenant_confirmed", "document"];
+const TENANT_SOURCES = ["prior_roll", "owner_knowledge", "tenant_confirmed", "document"];
 
 /**
  * How far out a sitting tenancy is written.
@@ -1223,14 +1223,15 @@ export function previewStayValue(
  *
  *   $9,965  expected each month
  *       $0  confirmed by tenants
- *   $9,965  from the seller's roll only
+ *   $9,965  from the old roll only
  *
  *   "As you confirm them at the window over the next month, this splits."
  *
  * Nothing could make that split happen. `amount_source` went in as
- * 'seller_roll' and there was no path to any other value, so the bottom line
- * would have read $9,965 forever and the promise on the receipt was one the
- * software could not keep. This is that path.
+ * 'prior_roll' (named 'seller_roll' until 0127) and there was no path to any
+ * other value, so the bottom line would have read $9,965 forever and the
+ * promise on the receipt was one the software could not keep. This is that
+ * path.
  */
 export interface TenantEditInput {
   displayName: string;

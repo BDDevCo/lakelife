@@ -602,7 +602,7 @@ function Receipt({ view }: { view: ReadView }) {
         <div style={{ display: "grid", gap: 6, fontVariantNumeric: "tabular-nums" }}>
           <Row label="expected each month" value={money(monthly)} strong />
           <Row label="confirmed by tenants" value={money(0)} />
-          <Row label="from the seller's roll only" value={money(monthly)} strong />
+          <Row label="from the old roll only" value={money(monthly)} strong />
         </div>
         <p className="mut" style={{ marginTop: 14, marginBottom: 0, lineHeight: 1.5 }}>
           Every one of those came off his spreadsheet. As you confirm them at the

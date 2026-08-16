@@ -21,7 +21,7 @@
 export interface ParkRate {
   base: number;
   unit_rate: number;
-  /** Why this number — "From the seller: $100/week". Shown back to the owner. */
+  /** Why this number — "Their contract: $100/week". Shown back to the owner. */
   note?: string | null;
 }
 

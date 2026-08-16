@@ -595,7 +595,7 @@ describe("buildTenant — the tenant who was already there", () => {
   const TODAY = "2026-08-09";
   const input = (over: Partial<TenantInput> = {}): TenantInput => ({
     displayName: "Donna Reyes", mobile: "", email: "",
-    movedInOn: "", term: "monthly", rent: "", source: "seller_roll", ...over,
+    movedInOn: "", term: "monthly", rent: "", source: "prior_roll", ...over,
   });
 
   it("a NAME alone is enough to start", () => {
@@ -668,7 +668,11 @@ describe("buildTenant — the tenant who was already there", () => {
   });
 
   it("carries PROVENANCE, so the roll can later show its work", () => {
-    expect(buildTenant(input({ source: "seller_roll" }), TODAY).renter!.source).toBe("seller_roll");
+    expect(buildTenant(input({ source: "prior_roll" }), TODAY).renter!.source).toBe("prior_roll");
+    // 0127 renamed it. The OLD name must now be refused like any other
+    // invented value — otherwise the importer could keep writing a word a
+    // park owner who never bought their park should never read.
+    expect(buildTenant(input({ source: "seller_roll" }), TODAY).ok).toBe(false);
     expect(buildTenant(input({ source: "owner_knowledge" }), TODAY).renter!.source).toBe("owner_knowledge");
     expect(buildTenant(input({ source: "invented" }), TODAY).ok).toBe(false);
   });

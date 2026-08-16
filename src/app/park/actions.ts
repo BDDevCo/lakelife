@@ -869,7 +869,7 @@ export async function editTenancy(
   return {
     ok: true,
     signal: input.confirmedWithTenant
-      ? `Confirmed with ${built.renter.display_name}. That's off the seller's roll now.`
+      ? `Confirmed with ${built.renter.display_name}. That's confirmed with them now, not just on the old roll.`
       : "Saved.",
   };
 }

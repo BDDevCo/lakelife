@@ -559,7 +559,7 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
       .insert({
         park_id: loaded.parkId,
         display_name: row.name,          // VERBATIM. Never reordered.
-        source: "seller_roll",
+        source: "prior_roll",
         // user_id stays null — unclaimed, which is the whole point of the table.
         // mobile_e164 stays null — a pasted number has no consent behind it.
         notes: row.notes.length ? row.notes.join("\n") : null,
@@ -584,7 +584,7 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
         origin: "grandfathered",
         // No decision happened, and the database refuses to let one be
         // recorded here — decided_by and decided_at stay null.
-        amount_source: "seller_roll",
+        amount_source: "prior_roll",
         amount_source_at: new Date().toISOString(),
         due_day: parkDueDay,
         import_batch_id: batchId,

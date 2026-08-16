@@ -31,7 +31,7 @@ export interface RollRowView {
   currentReservationId: string | null;
   currentRent: number | null;
   currentDueDay: number | null;
-  /** 'seller_roll' until a human confirms it — the rent roll shows its work. */
+  /** 'prior_roll' until a human confirms it — the rent roll shows its work. */
   currentSource: string | null;
   /** What this household owes this month — or why we can't say. */
   owedThisMonth: string | null;
@@ -565,7 +565,7 @@ function AddTenant({
   const [pending, startTransition] = useTransition();
   const [form, setForm] = useState<TenantInput>({
     displayName: "", mobile: "", email: "",
-    movedInOn: "", term: "monthly", rent: "", source: "seller_roll",
+    movedInOn: "", term: "monthly", rent: "", source: "prior_roll",
   });
   const set = <K extends keyof TenantInput>(k: K, v: TenantInput[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -738,7 +738,7 @@ function EditTenant({
         available yet, so a phone number here is one the office can ring.
       </p>
 
-      {source === "seller_roll" && (
+      {source === "prior_roll" && (
         <p className="mut" style={{ fontSize: 13, marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>
           This number came off the seller&apos;s roll. It counts as unconfirmed on your
           rent roll until you&apos;ve checked it with them.
