@@ -23,11 +23,18 @@ import { claimMyFile } from "@/app/parks/claim-actions";
  *     third of a park never converts. That must not read as her falling at a
  *     hurdle.
  */
-export function ClaimMyLot({ parkSlug, parkName }: { parkSlug?: string; parkName?: string }) {
+export function ClaimMyLot({
+  parkSlug, parkName, presetCode,
+}: {
+  parkSlug?: string;
+  parkName?: string;
+  /** Carried by the QR square on the slip, so only the lot number is left. */
+  presetCode?: string;
+}) {
   const router = useRouter();
   const [slug, setSlug] = useState(parkSlug ?? "");
   const [lot, setLot] = useState("");
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(presetCode ?? "");
   const [said, setSaid] = useState<{ ok: boolean; message: string; reprintable?: boolean } | null>(null);
   const [busy, start] = useTransition();
   const [optedOut, setOptedOut] = useState(false);
@@ -107,7 +114,9 @@ export function ClaimMyLot({ parkSlug, parkName }: { parkSlug?: string; parkName
         />
       </label>
       <p className="mut" style={{ fontSize: 12.5, margin: "0 0 16px" }}>
-        Upper or lower case is fine, and the dash is optional.
+        {presetCode
+          ? "That came from the square you scanned — just your lot number to go."
+          : "Upper or lower case is fine, and the dash is optional."}
       </p>
 
       {said && (

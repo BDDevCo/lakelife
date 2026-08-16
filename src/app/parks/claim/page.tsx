@@ -20,9 +20,9 @@ export const metadata = { title: "See your lot — LakeLife" };
 export default async function ClaimPage({
   searchParams,
 }: {
-  searchParams: Promise<{ park?: string }>;
+  searchParams: Promise<{ park?: string; c?: string }>;
 }) {
-  const { park } = await searchParams;
+  const { park, c } = await searchParams;
 
   if (!hasSupabaseEnv()) {
     return (<><TopBar /><div className="wrap" style={{ paddingTop: 48 }}>Add your Supabase keys first.</div></>);
@@ -69,7 +69,11 @@ export default async function ClaimPage({
             </p>
           </div>
         ) : (
-          <ClaimMyLot parkSlug={slug || undefined} parkName={parkName} />
+          // The code arrives pre-filled when she scanned the square on the
+          // slip, so all that is left is her lot number. Typed entry still
+          // works identically — the field is editable and starts empty when
+          // there is nothing in the link.
+          <ClaimMyLot parkSlug={slug || undefined} parkName={parkName} presetCode={c} />
         )}
 
         {/* THE ANTI-SCAM SENTENCE, on the page rather than only on the slip.

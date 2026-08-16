@@ -5,6 +5,8 @@ import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "@/app/park/data";
 import { sendEmail } from "@/lib/email";
+import { sendSms } from "@/lib/sms";
+import { planChannels, inviteSmsBody, smsHoldSays, type SmsHold } from "@/lib/invite-channels";
 import {
   mintInviteToken, inviteTokenHash, inviteUrl, inviteCopy,
   inviteIssueSays, inviteClaimSays, inviteWorked, officeCanReissue,
@@ -30,6 +32,10 @@ export interface InviteResult {
   message: string;
   outcome: string;
   reissuable?: boolean;
+  /** True when the same link also went out as a text. */
+  texted?: boolean;
+  /** Why it didn't, when it didn't. */
+  smsHold?: SmsHold | null;
 }
 
 /** Where the link points. Behind a proxy the Host header is what the browser saw. */
@@ -59,7 +65,7 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
   const admin = createServiceClient();
   const { data: file } = await admin
     .from("park_renters")
-    .select("id, park_id, display_name, email, user_id, claim_declined_at")
+    .select("id, park_id, display_name, email, user_id, claim_declined_at, mobile_e164, mobile_verified_at, sms_consent_operational_at, phone_on_file_with_park")
     .eq("id", renterId)
     .maybeSingle();
   if (!file) return { ok: false, outcome: "invite_no_file", message: inviteIssueSays("invite_no_file") };
@@ -72,7 +78,17 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
     return { ok: false, outcome: "invite_not_your_park", message: inviteIssueSays("invite_not_your_park") };
   }
 
-  const email = (file.email as string | null)?.trim();
+  // WHICH DOORS ARE OPEN. Email is the one that works today; the text door is
+  // built and held shut until a resident gives us their own number.
+  const channels = planChannels({
+    email: (file.email as string | null) ?? null,
+    mobileE164: (file.mobile_e164 as string | null) ?? null,
+    mobileVerifiedAt: (file.mobile_verified_at as string | null) ?? null,
+    smsConsentAt: (file.sms_consent_operational_at as string | null) ?? null,
+    phoneOnFile: (file.phone_on_file_with_park as string | null) ?? null,
+  });
+
+  const email = channels.email;
   if (!email) {
     return {
       ok: false,
@@ -125,6 +141,26 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
   // the bug in the crew invites, where `void sendEmail(...)` turned a refusal
   // into "50 invited".
   const sent = await sendEmail({ to: email, subject: copy.subject, html: copy.html, text: copy.text });
+
+  // THE SAME LINK, IN THE OTHER PLACE. Sent alongside rather than instead: one
+  // token, two deliveries, either one works and the first she taps spends it.
+  //
+  // A failed TEXT is not a failed invite — the email is the channel we rely on,
+  // and the text is redundancy. So this is reported, never fatal.
+  let texted = false;
+  if (channels.sms) {
+    const t = await sendSms(
+      channels.sms,
+      inviteSmsBody({
+        parkName: (park?.name as string) ?? "Your park",
+        lotNumber,
+        url: inviteUrl(await originFromRequest(), token),
+      }),
+    );
+    texted = t.ok;
+    if (!t.ok) console.warn(`[invite] text to ${channels.sms} failed: ${t.error}`);
+  }
+
   if (!sent.ok) {
     // UNDO THE STAMP. The mint happened first so a send could never be
     // recorded twice — but leaving it set after a REFUSED send is worse than
@@ -153,12 +189,23 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
   }
 
   revalidatePath("/park");
-  return { ok: true, outcome, message: `Emailed ${email}.` };
+  return {
+    ok: true,
+    outcome,
+    texted,
+    smsHold: channels.smsHold,
+    message: texted
+      ? `Emailed and texted ${email}.`
+      : `Emailed ${email}.` +
+        (channels.smsHold ? ` No text — ${smsHoldSays(channels.smsHold)}.` : ""),
+  };
 }
 
 export interface BulkInviteResult {
   ok: boolean;
   sent: number;
+  /** How many of those also went out as a text. */
+  texted: number;
   /**
    * Named, because these are the ones he must now do on paper — and each says
    * WHY. "No address on file" is a gap to fill when he next sees them; "we
@@ -190,7 +237,7 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
   const admin = createServiceClient();
 
   if (!(await assertMyPark(parkId))) {
-    return { ok: false, sent: 0, needSlips: [], skipped: 0, message: "You don't manage that park." };
+    return { ok: false, sent: 0, texted: 0, needSlips: [], skipped: 0, message: "You don't manage that park." };
   }
 
   const { data: rows } = await admin
@@ -217,6 +264,7 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
   }
 
   let sent = 0;
+  let texted = 0;
   let skipped = 0;
   const needSlips: BulkInviteResult["needSlips"] = [];
 
@@ -233,17 +281,17 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
     }
 
     const res = await inviteHousehold(r.id as string);
-    if (res.ok) sent++;
+    if (res.ok) { sent++; if (res.texted) texted++; }
     // A send that failed still needs reaching — it belongs on the paper list
     // rather than in a silence.
     else needSlips.push({ ...label, why: "send_failed" });
   }
 
   revalidatePath("/park");
-  const parts = [`${sent} emailed`];
+  const parts = [texted > 0 ? `${sent} emailed (${texted} also texted)` : `${sent} emailed`];
   if (needSlips.length) parts.push(`${needSlips.length} need a slip`);
   if (skipped) parts.push(`${skipped} already invited`);
-  return { ok: true, sent, needSlips, skipped, message: parts.join(" · ") };
+  return { ok: true, sent, texted, needSlips, skipped, message: parts.join(" · ") };
 }
 
 /** The resident follows the link. */

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
+import QRCode from "qrcode";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { issueClaimSlip, declineClaim } from "@/app/parks/claim-actions";
@@ -43,6 +44,15 @@ export function ClaimSlip({
 }) {
   const router = useRouter();
   const [code, setCode] = useState<string | null>(null);
+  /**
+   * The square, STAMPED WITH THE CODE IT DRAWS.
+   *
+   * Not a bare data URL: pairing it with its code means a square left over from
+   * a previous mint can never be shown beside a new one. That window is small
+   * and would be invisible in testing, and somebody would scan a slip that took
+   * them to a code the office had already replaced.
+   */
+  const [qr, setQr] = useState<{ forCode: string; dataUrl: string } | null>(null);
   const [busy, start] = useTransition();
   const [confirmDecline, setConfirmDecline] = useState(false);
 
@@ -72,6 +82,32 @@ export function ClaimSlip({
     });
   }
 
+  // THE SQUARE ON THE PAPER.
+  //
+  // It encodes the claim link WITH the code in it, which is not a weakening:
+  // the slip is already the credential — anyone holding it can read the eight
+  // characters and type them. The QR just spares an 82-year-old from typing
+  // K7QM-3XR9 with a thumb, which is the single most likely place this whole
+  // path loses somebody.
+  //
+  // Signing in is still required, so a photographed slip is worth exactly what
+  // a photographed code was worth before.
+  const claimHref = code
+    ? `/parks/claim?park=${encodeURIComponent(parkSlug)}&c=${encodeURIComponent(code)}`
+    : null;
+
+  useEffect(() => {
+    if (!code || !claimHref) return;
+    let live = true;
+    const abs = `${window.location.origin}${claimHref}`;
+    QRCode.toDataURL(abs, { margin: 1, width: 320, errorCorrectionLevel: "M" })
+      .then((dataUrl) => { if (live) setQr({ forCode: code, dataUrl }); })
+      // A slip without a square is still a working slip — the code is printed
+      // right above it. Never block the print on the picture.
+      .catch(() => {});
+    return () => { live = false; };
+  }, [code, claimHref]);
+
   // THE SLIP ITSELF — shown once, then gone.
   if (code) {
     const url = `${typeof window !== "undefined" ? window.location.origin : ""}/parks/claim?park=${parkSlug}`;
@@ -94,9 +130,26 @@ export function ClaimSlip({
             fontSize: 34, fontWeight: 800, letterSpacing: "0.14em",
             fontVariantNumeric: "tabular-nums", color: "var(--teal-dark)",
           }}>{code}</div>
+
+          {qr?.forCode === code && (
+            <div style={{ marginTop: 12 }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={qr.dataUrl}
+                alt={`Scan to open lot ${lotNumber}`}
+                width={148}
+                height={148}
+                style={{ display: "block", margin: "0 auto" }}
+              />
+              <div className="mut" style={{ fontSize: 12.5, marginTop: 6 }}>
+                Point your phone camera at this square
+              </div>
+            </div>
+          )}
+
           <div className="mut" style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
-            Go to <strong>{url.replace(/^https?:\/\//, "")}</strong><br />
-            Enter your lot number and this code.
+            Or go to <strong>{url.replace(/^https?:\/\//, "")}</strong><br />
+            and enter your lot number and this code.
           </div>
           <div className="mut" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
             LakeLife will never ring or text you asking for this code, and never
