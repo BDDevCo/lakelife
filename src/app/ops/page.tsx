@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { getOpsParks } from "@/app/ops/parks-data";
+import { getStuckHouseholds, getClaimTally } from "@/app/ops/claims-data";
+import { OpsStuckClaims } from "@/components/OpsStuckClaims";
 import { OpsShell } from "@/components/ops/OpsShell";
 import { JobSearch } from "@/components/ops/JobSearch";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -84,6 +86,16 @@ export default async function OpsPage() {
   // all-or-nothing: one loader throwing 500s the entire operations dashboard.
   // A brand-new module is the likeliest thing to throw, and losing the jobs
   // board over an empty parks table would be a self-inflicted outage.
+  // WHO CANNOT GET IN. Read defensively, like parks below: a claim-log query
+  // that throws must not take the whole console down with it.
+  let stuck: Awaited<ReturnType<typeof getStuckHouseholds>> = [];
+  let tally = { invitesSent: 0, slipsPrinted: 0, claimed: 0, refused: 0, declined: 0, empty: true };
+  try {
+    [stuck, tally] = await Promise.all([getStuckHouseholds(), getClaimTally()]);
+  } catch (e) {
+    console.error("[ops] claim surface failed", e instanceof Error ? e.message : e);
+  }
+
   let parks: Awaited<ReturnType<typeof getOpsParks>> = [];
   try {
     parks = await getOpsParks();
@@ -140,6 +152,8 @@ export default async function OpsPage() {
         </div>
 
         <JobSearch />
+
+        <OpsStuckClaims stuck={stuck} tally={tally} />
 
         {escalations.length > 0 && (
           <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--gold, #d9a441)" }}>
