@@ -5,6 +5,7 @@ import QRCode from "qrcode";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { issueClaimSlip, declineClaim } from "@/app/parks/claim-actions";
+import { releaseClaim } from "@/app/parks/claim-actions";
 import { inviteHousehold } from "@/app/parks/invite-actions";
 
 /**
@@ -55,6 +56,7 @@ export function ClaimSlip({
   const [qr, setQr] = useState<{ forCode: string; dataUrl: string } | null>(null);
   const [busy, start] = useTransition();
   const [confirmDecline, setConfirmDecline] = useState(false);
+  const [confirmRelease, setConfirmRelease] = useState(false);
 
   function issue() {
     start(async () => {
@@ -69,6 +71,15 @@ export function ClaimSlip({
     start(async () => {
       const res = await inviteHousehold(renterId);
       toast(res.message);
+      if (res.ok) router.refresh();
+    });
+  }
+
+  function release() {
+    start(async () => {
+      const res = await releaseClaim(renterId);
+      toast(res.message);
+      setConfirmRelease(false);
       if (res.ok) router.refresh();
     });
   }
@@ -168,8 +179,44 @@ export function ClaimSlip({
     );
   }
 
+  // SET UP — AND UNDOABLE.
+  //
+  // The claim screen already tells a resident "if that wasn't you, tell the
+  // office and they'll sort it". Until now the office had nothing to sort it
+  // WITH: `releaseClaim` existed, wrapped a working database function, and had
+  // no caller anywhere. A wrong account on a household file was permanent, and
+  // the promise on the resident's screen was a promise about a button that did
+  // not exist.
+  //
+  // Releasing now also spends every key (0134), so the account just detached
+  // cannot walk back in through an old email link.
   if (status === "used") {
-    return <span className="ll-pill ok">Set up</span>;
+    return (
+      <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span className="ll-pill ok">Set up</span>
+        {!confirmRelease ? (
+          <button
+            className="mut"
+            onClick={() => setConfirmRelease(true)}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, textDecoration: "underline" }}
+          >
+            Wrong person?
+          </button>
+        ) : (
+          <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <span className="mut" style={{ fontSize: 13 }}>
+              Detach that account? They lose access and any link they hold stops working.
+            </span>
+            <button className="ll-btn sm" disabled={busy} onClick={release} style={{ minHeight: 36 }}>
+              {busy ? "…" : "Yes"}
+            </button>
+            <button className="ll-btn ghost sm" onClick={() => setConfirmRelease(false)} style={{ minHeight: 36 }}>
+              No
+            </button>
+          </span>
+        )}
+      </span>
+    );
   }
 
   if (status === "declined") {
