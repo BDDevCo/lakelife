@@ -11,6 +11,8 @@ import { buildStatement, rollUp, statementLine, type StatementFee } from "@/app/
 import { getMyPark, getParkLots, getParkRoll, type ParkUnitView } from "@/app/park/data";
 import { lotFits, fitProblemText, type Lot } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
+import { periodIsBillable, firstBillablePeriod } from "@/lib/billing-start";
+import { prettyMonth } from "@/app/park/ledger-helpers";
 
 /**
  * The park owner's home screen — the rent roll. Everything here is scoped to
@@ -71,7 +73,7 @@ export default async function ParkPage() {
   const sb = await createClient();
   const { data: parkRow } = await sb
     .from("parks")
-    .select("rent_notice_days, rent_due_day")
+    .select("rent_notice_days, rent_due_day, cutover_date")
     .eq("id", park.id)
     .maybeSingle();
   const noticeDays = (parkRow?.rent_notice_days as number) ?? 30;
@@ -91,9 +93,25 @@ export default async function ParkPage() {
     }));
 
   const thisMonth = roll.today.slice(0, 7);
+
+  // IS THIS MONTH EVEN OURS?
+  //
+  // The tile below simulates what every household would owe and prorates from
+  // the day each tenancy was filed. File nineteen households on the afternoon
+  // you take over on the 15th, and it reads "about $2,834 owed this month" —
+  // for a month the previous owner collected on the 1st and settled with you
+  // at the closing table. The residents paid it. Nobody owes it.
+  //
+  // The nightly reconciler already understood this and goes quiet in the
+  // go-live month; this screen did not, and this screen is the one he reads on
+  // his first afternoon.
+  const cutoverDate = (parkRow?.cutover_date as string | null) ?? null;
+  const monthIsOurs = periodIsBillable(thisMonth, cutoverDate);
+  const firstOurs = firstBillablePeriod(cutoverDate);
+
   const owed = new Map<string, string>();
   const statements = [];
-  for (const r of roll.rows) {
+  for (const r of monthIsOurs ? roll.rows : []) {
     if (!r.current?.range) continue;
     const st = buildStatement({
       month: thisMonth,
@@ -227,6 +245,11 @@ export default async function ParkPage() {
         billedThisMonth={billedThisMonth}
         disputedAmount={disputedAmount}
         wouldBill={owedSummary.total}
+        preGoLive={
+          monthIsOurs || firstOurs == null
+            ? undefined
+            : { firstMonth: firstOurs, label: prettyMonth(firstOurs) }
+        }
         today={todayLakeDate()}
       />
     </>

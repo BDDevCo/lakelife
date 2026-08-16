@@ -117,6 +117,7 @@ export function ParkRentRoll({
   billedThisMonth,
   disputedAmount,
   wouldBill,
+  preGoLive,
 }: {
   parkId: string;
   isOwner: boolean;
@@ -136,6 +137,12 @@ export function ParkRentRoll({
   disputedAmount?: number;
   /** What a full month here would come to, for the not-yet-billed case. */
   wouldBill?: number;
+  /**
+   * Set when TODAY'S month began before the park went live, carrying the first
+   * month that is ours. Distinct from `notYetStarted`, which is about lots
+   * being reserved rather than lived in — this is about the calendar.
+   */
+  preGoLive?: { firstMonth: string; label: string };
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -254,7 +261,7 @@ export function ParkRentRoll({
                 : `${summary.occupancyPct}%`
           }
           sub={
-            notYetStarted ? "starts at takeover"
+            notYetStarted ? "starts at go-live"
               : summary.occupancyPct == null ? "no lots yet"
                 : ""
           }
@@ -267,7 +274,16 @@ export function ParkRentRoll({
             with every household paid, it still said "$8,645 owed". A disputed
             bill is shown separately: "they say they paid and we haven't found
             it" is something to go and settle, not money to chase. */}
-        {owedTotal != null && notYetStarted ? (
+        {/* THIS MONTH IS NOT OURS. It began before the park went live, so
+            whoever was collecting rent then keeps it — and projecting a total
+            here would be inviting the owner to bill for it. */}
+        {preGoLive ? (
+          <Stat
+            label="Owed this month"
+            value="—"
+            sub={`not ours to bill · LakeLife starts ${preGoLive.label}`}
+          />
+        ) : owedTotal != null && notYetStarted ? (
           <Stat label="Owed this month" value="—" sub="nothing is collectable yet" />
         ) : !billedThisMonth ? (
           <Stat

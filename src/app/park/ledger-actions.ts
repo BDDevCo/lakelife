@@ -11,6 +11,7 @@ import {
   planRun, toRows, summarise, currentPeriod, prettyMonth,
   type Charge, type LedgerRow, type LedgerSummary, type RunPlan,
 } from "./ledger-helpers";
+import { preCutoverRefusal } from "@/lib/billing-start";
 import { sendEmail } from "@/lib/email";
 import { receiptBody, type ReceiptLines } from "./receipt-helpers";
 // The ENGINE, not the action: runCharges has already asserted membership
@@ -146,10 +147,17 @@ export async function previewChargeRun(
 
   const admin = createServiceClient();
   const [{ data: park }, fees] = await Promise.all([
-    admin.from("parks").select("rent_due_day").eq("id", parkId).maybeSingle(),
+    admin.from("parks").select("rent_due_day, cutover_date").eq("id", parkId).maybeSingle(),
     feesFor(admin, parkId),
   ]);
   const dueDay = (park?.rent_due_day as number) ?? 1;
+
+  // NOT OURS TO BILL. A month that began before the park went live belongs to
+  // whoever was collecting rent then. The preview refuses first so the owner
+  // reads the reason, rather than seeing an empty plan and wondering.
+  const tooEarly = preCutoverRefusal(
+    month, (park?.cutover_date as string | null) ?? null, prettyMonth);
+  if (tooEarly) return { ok: false, error: tooEarly };
 
   const { data: lots } = await admin
     .from("park_lots")
@@ -265,10 +273,19 @@ export async function runCharges(
   const rateMoves = await applyDueRentChangesFor(parkId);
 
   const [{ data: park }, fees] = await Promise.all([
-    admin.from("parks").select("rent_due_day").eq("id", parkId).maybeSingle(),
+    admin.from("parks").select("rent_due_day, cutover_date").eq("id", parkId).maybeSingle(),
     feesFor(admin, parkId),
   ]);
   const dueDay = (park?.rent_due_day as number) ?? 1;
+
+  // The same refusal as the preview, checked again here rather than trusted.
+  // These are two exported server actions and either can be called on its own;
+  // a gate that only lives in the one the button happens to call first is not
+  // a gate. The database refuses this too (0131) — three layers, because the
+  // failure is nineteen real bills for rent somebody else already collected.
+  const tooEarly = preCutoverRefusal(
+    month, (park?.cutover_date as string | null) ?? null, prettyMonth);
+  if (tooEarly) return { ok: false, error: tooEarly };
 
   const { data: lots } = await admin
     .from("park_lots")
