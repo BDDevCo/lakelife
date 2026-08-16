@@ -1,5 +1,6 @@
 import type { RenterHome as RenterHomeView } from "@/app/parks/my-data";
 import { PayRentButton } from "@/components/PayRentButton";
+import { TextOptIn } from "@/components/TextOptIn";
 import { EnableLotBooking } from "@/components/EnableLotBooking";
 
 /**
@@ -231,6 +232,11 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
         </p>
         <EnableLotBooking ready={view.bookingReady} />
       </div>
+
+      {/* HER NUMBER, HER CHOICE, BELOW HER RENT. The park has had a phone
+          number for this household all along and the software has never been
+          allowed to use it. This is the only door that changes that. */}
+      <TextOptIn parkName={view.parkName} on={view.textsOn} number={view.textNumber} />
     </div>
   );
 }

@@ -32,6 +32,15 @@ export interface RenterHome {
   displayName: string;
   /** Their tenancy's start, for "living here since". */
   since: string | null;
+  /**
+   * Whether THEY have turned texts on, and the number they gave.
+   *
+   * `textsOn` reads consent, not the number: a verified mobile with no consent
+   * is still a number we may not use, and the send path reads consent. The
+   * number off the park's old records never appears here at all.
+   */
+  textsOn: boolean;
+  textNumber: string | null;
   term: string;
   /** Set once they have given notice. */
   leavingOn: string | null;
@@ -86,7 +95,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // another's ledger.
   const { data: files } = await admin
     .from("park_renters")
-    .select("id, park_id, display_name")
+    .select("id, park_id, display_name, mobile_e164, sms_consent_operational_at")
     .eq("user_id", user.id);
   if (!files?.length) return null;
 
@@ -204,6 +213,8 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     // false, and false in a way she notices immediately. Unknown now renders as
     // nothing at all, which is what we actually know.
     since: (stay.tenancy_began_on as string | null) ?? null,
+    textsOn: file.sms_consent_operational_at != null,
+    textNumber: (file.mobile_e164 as string | null) ?? null,
     term: (stay.term as string) ?? "monthly",
     leavingOn: (stay.expected_move_out as string) ?? null,
     bill: charge
