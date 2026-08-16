@@ -188,7 +188,6 @@ describe("what the crew's Complete button does while a decision is pending", () 
 });
 
 describe("\"no\" is not always a smaller job", () => {
-  const line = { field: "pier_sections" as const, label: "pier sections", from: "8", to: "12" };
 
   it("a divisible job: declining means the crew does the booked amount", () => {
     const d = declineMeans({ crew_can_proceed: true }, {

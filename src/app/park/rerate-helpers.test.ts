@@ -112,6 +112,42 @@ describe("the day-one re-rate", () => {
     expect(p.monthlyBefore).toBe(0);
     // A null "before" must not become a 100%-increase headline.
     expect(p.biggestIncreasePct).toBeNull();
+    // AND IT SAYS SO. Excluding it from the money is only half the job: the
+    // household count still includes it, so leaving the exclusion unreported
+    // makes "1 household — $0 more a month" out of a lot whose rent is about
+    // to be set to $400.
+    expect(p.unknownBefore).toBe(1);
+  });
+
+  it("counts the households the totals leave out, so the two can be reconciled", () => {
+    // Two lots priced, two with nothing on file. The money covers the first
+    // two; the sentence counts all four. The screen can only be honest about
+    // that if the gap is a number it can read.
+    const p = planReRate({
+      targets: [
+        { reservationId: "a", lotLabel: "1", currentAmount: 300, term: "monthly", endsOn: null },
+        { reservationId: "b", lotLabel: "2", currentAmount: 300, term: "monthly", endsOn: null },
+        { reservationId: "c", lotLabel: "3", currentAmount: null, term: "monthly", endsOn: null },
+        { reservationId: "d", lotLabel: "4", currentAmount: null, term: "monthly", endsOn: null },
+      ],
+      toAmount: 400, effectiveOn: "2027-01-14", noticeGivenOn: CLOSING, noticeDays: 30,
+    });
+    expect(p.changing).toHaveLength(4);
+    expect(p.unknownBefore).toBe(2);
+    // Both sides of the money cover the SAME two households — 600 -> 800.
+    expect(p.monthlyBefore).toBe(600);
+    expect(p.monthlyAfter).toBe(800);
+    expect(p.monthlyDelta).toBe(200);
+    // The count and the money disagree by exactly the number now reported.
+    expect(p.changing.length - p.unknownBefore).toBe(2);
+  });
+
+  it("reports no unknowns when every lot has a rent", () => {
+    const p = planReRate({
+      targets: [{ reservationId: "a", lotLabel: "1", currentAmount: 300, term: "monthly", endsOn: null }],
+      toAmount: 400, effectiveOn: "2027-01-14", noticeGivenOn: CLOSING, noticeDays: 30,
+    });
+    expect(p.unknownBefore).toBe(0);
   });
 
   it("says the thing he needs, not just the thing he wants", () => {

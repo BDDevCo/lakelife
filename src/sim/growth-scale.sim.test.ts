@@ -726,7 +726,7 @@ describe("crew-referral lifetime cap under concurrency", () => {
     // settles of a $900-margin job pay $250 + 2×$60 = $370 on a $250 cap.
     expect(worstK, S("worst race width")).toBeGreaterThan(2);
     expect(worstOvershoot, S(`concurrent overshoot only one share? got ${worstOvershoot}`)).toBeGreaterThan(60);
-    // eslint-disable-next-line no-console
+
     console.log(`  [cap race] worst overshoot $${worstOvershoot} over the $${DIALS.crewCap} cap at k=${worstK} concurrent settles`);
   });
 });
@@ -1084,7 +1084,7 @@ describe("autopilot at scale — the confirm/skip conversation", () => {
     expect(lawn, S(`skip re-nag texts: ${lawn}`)).toBeGreaterThan(100);
     const pier = simulateEnrollment("Pier install / removal", true, "skip");
     expect(pier, S(`water-work skip re-nag texts: ${pier}`)).toBeGreaterThan(1);
-    // eslint-disable-next-line no-console
+
     console.log(`  [autopilot skip] texts after ONE skip over 170 days — lawn: ${lawn}, pier: ${pier}`);
   });
 
@@ -1177,7 +1177,7 @@ describe("scale side-effects the owner should know about", () => {
       ["growth nudge emails", p1000(M.bySeason[2].nudges)],
       ["stuck-no-bank ops chases", p1000(M.bySeason[2].stuckNoBank)],
     ];
-    // eslint-disable-next-line no-console
+
     console.log(`\n=== ORGANIC GROWTH SIM [SEED=${SEED}] ===\n` + rows.map(([k, v]) => `  ${k}: ${v}`).join("\n") + "\n");
     expect(rows.length).toBeGreaterThan(0);
   });

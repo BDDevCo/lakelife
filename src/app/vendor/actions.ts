@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { getMyVendorId } from "./data";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";

@@ -1349,7 +1349,7 @@ describe("sim coverage", () => {
   it("exercised a real population, not a handful of examples", () => {
     expect(PROPERTIES.length).toBe(1100);
     expect(CASES).toBeGreaterThan(100_000);
-    // eslint-disable-next-line no-console
+
     console.log(`[pricing-scale.sim] seed=${SEED} properties=${PROPERTIES.length} engine calls=${CASES}`);
   });
 });

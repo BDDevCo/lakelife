@@ -63,6 +63,19 @@ export interface ReRatePlan {
   monthlyBefore: number;
   monthlyAfter: number;
   monthlyDelta: number;
+  /**
+   * How many of `changing` had NO rent on file, and so are absent from the
+   * three figures above.
+   *
+   * This was computed and then dropped — the comment beside the calculation
+   * promised "the unknowns are reported separately instead" and nothing
+   * returned them, so nothing could report them. That left the summary saying
+   * "19 households — $2,432 more a month" where the count includes lots the
+   * money does not: a headline that is not wrong about either number and is
+   * wrong about the two together, on the screen where he decides what to
+   * charge nineteen households.
+   */
+  unknownBefore: number;
   /** The soonest date this change may legally take effect. */
   earliestEffective: string;
   /** True when the date he picked is inside the notice window. */
@@ -146,6 +159,7 @@ export function planReRate(input: ReRateInput): ReRatePlan {
     monthlyBefore,
     monthlyAfter,
     monthlyDelta: Math.round((monthlyAfter - monthlyBefore) * 100) / 100,
+    unknownBefore,
     earliestEffective,
     tooSoon,
     biggestIncreasePct: pcts.length ? Math.round(Math.max(...pcts)) : null,

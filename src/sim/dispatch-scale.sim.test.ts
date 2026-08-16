@@ -361,7 +361,6 @@ interface Booked {
 }
 
 const MARGIN_FLOOR = 0.3; // live floor per the brief; the dial range is exercised separately
-const SURGE_CAP = 0.25;
 
 const violations = {
   floor: [] as string[],
@@ -449,7 +448,6 @@ function candidatesFor(
 
 /** One booking run through the REAL engine + every per-assignment invariant. */
 function runOne(season: 1 | 2, jobNo: number): void {
-  const openLakes = LAKES.filter((l) => l.bornSeason <= season);
   const prop = props[Math.floor(rnd() * props.length)];
   const lake = LAKES.find((l) => l.id === prop.lakeId)!;
   if (lake.bornSeason > season) return; // lake not born yet
@@ -1272,7 +1270,7 @@ describe("crew standing at scale", () => {
     // strike — 3 strikes over the limit ⇒ ~4 months off a lake they have
     // since worked cleanly.
     const deep = nights(3, 2, 30, true);
-    // eslint-disable-next-line no-console
+
     console.log(
       `[SIM SEED ${SEED}] lake-demotion cooldown cost (limit=2, cooldown=30d): ` +
         `no-work-on-return → ${stuck.falseRedemotions} false re-demotions / ${stuck.daysOffLake} days off; ` +
@@ -1441,7 +1439,7 @@ describe("ops recruiting signal (human touchpoints)", () => {
     const top4 = ranked.slice(0, 4).reduce((s, x) => s + x[1], 0);
     lines.push(`  crew concentration: top 4 crews took ${top4}/${stats.assigned} jobs (${((top4 / stats.assigned) * 100).toFixed(0)}%); ${zero}/${routable.length} fully-routable crews got ZERO auto-dispatched work in two seasons`);
     lines.push(`  score spread of routable crews: ${routable.map((c) => c.score).sort((a, b) => b - a).join(",")}`);
-    // eslint-disable-next-line no-console
+
     console.log(`\n[SIM SEED ${SEED}] dispatch scale report\n` + lines.join("\n") + "\n");
     expect(stats.decisions).toBeGreaterThan(0);
   });

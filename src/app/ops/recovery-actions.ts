@@ -8,7 +8,7 @@ import { LakeLifePayments } from "@/lib/payments";
 import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge } from "@/lib/automation";
 import {
-  proposedFee, deadlinePassed, tripFeeFor, recoveryHeadline, crewIsOutOfPocket,
+  recoveryHeadline, crewIsOutOfPocket,
 } from "@/lib/recovery";
 import { assertOps } from "./data";
 

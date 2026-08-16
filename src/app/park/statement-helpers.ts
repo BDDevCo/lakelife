@@ -91,9 +91,6 @@ function monthRange(month: string): DateRange {
   return { start, end };
 }
 
-function dayOf(iso: string): number {
-  return Number(iso.split("-")[2]);
-}
 
 /**
  * How many days of this month the tenancy actually covers.

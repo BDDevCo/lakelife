@@ -58,7 +58,7 @@ export function VerifyPanel({ initialPhone }: { initialPhone?: string }) {
     autoSent.current = true;
     try { sessionStorage.setItem("ll_code_autosent", "1"); } catch {}
     void sendCode(number);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [initialPhone, sent]);
 
   async function sendCode(toNumber: string) {

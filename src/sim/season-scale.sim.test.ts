@@ -40,14 +40,10 @@ import {
   todayLakeDate,
   isRecurring,
   effectiveSeason,
-  validateSeasonDates,
-  isRealDate,
-  PULL_BUFFER_DAYS as ENGINE_PULL_BUFFER_DAYS,
-  pullDeadlineFrom,
   type DayContext,
   type DayStatus,
 } from "../lib/booking";
-import { warningDue, isExpired, DEFAULT_WARNING_CATCHUP_DAYS, WAITLIST_WARNING_KIND } from "../lib/waitlist";
+import { warningDue, isExpired, DEFAULT_WARNING_CATCHUP_DAYS } from "../lib/waitlist";
 import { learnedEstimate, median, MIN_REAL_MINUTES, MAX_REAL_MINUTES, MIN_SAMPLES } from "../lib/learning";
 import { seasonEndFor, overstayDays, perdiemCharge, trueLegsToQuote } from "../lib/storage";
 import { shouldDemote, isCoolingDown, healBase } from "../lib/lake-standing";
@@ -696,7 +692,7 @@ describe("LADDER · waitlist warning + expiry over two seasons", () => {
     jitterRatios.sort((a, b) => a - b);
     const p50 = jitterRatios[Math.floor(jitterRatios.length * 0.5)];
     const p95 = jitterRatios[Math.floor(jitterRatios.length * 0.95)];
-    // eslint-disable-next-line no-console
+
     console.log(`\n[learning] settled-dial night-to-night swing: median ${(p50 * 100).toFixed(1)}% of true duration, p95 ${(p95 * 100).toFixed(1)}%`);
     expect(p95, S("dial jitter should stay inside the 15% damping step, roughly")).toBeLessThan(0.45);
   });
@@ -1266,7 +1262,7 @@ describe("MEASURE · weekly human workload across two seasons", () => {
       `human items/wk avg ${run.perWeekAvg.toFixed(1).padStart(7)} peak ${String(run.perWeekPeak).padStart(5)} | ` +
       `quiet nights ${String(run.quietNights).padStart(3)}/730 | customer texts ${run.customerTouches}`;
 
-    /* eslint-disable no-console */
+
     console.log("\n=== WEEKLY HUMAN WORKLOAD — crew supply recruits with demand ===");
     for (const run of runs) {
       console.log(line(run));
@@ -1286,7 +1282,7 @@ describe("MEASURE · weekly human workload across two seasons", () => {
     }
     const cappedRatio = capped[3].perWeekAvg / capped[0].perWeekAvg;
     console.log(`  ${custRatio}x the customers -> ${cappedRatio.toFixed(2)}x the weekly human load (SUPERLINEAR)\n`);
-    /* eslint-enable no-console */
+
 
     // The load must be BOUNDED, not zero — a ladder that never asks for a
     // human is lying, and one that scales 1:1 with customers is a hiring plan.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { learnedEstimate, median, MIN_SAMPLES } from "./learning";
+import { learnedEstimate, median } from "./learning";
 
 describe("learnedEstimate — dials walk toward reality, damped", () => {
   it("stands still under the sample minimum", () => {

@@ -998,7 +998,6 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
         .maybeSingle();
       if (!pm?.token) continue; // still no card — try again tomorrow
       retried++;
-      const svc = (one(j.services) as { name?: string } | null)?.name ?? "service";
       const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(fee * 100), description: statementDescriptor("cancel_fee") });
       await admin.from("payments").insert({ invoice_id: inv.id, amount: fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null });
       if (!charge.ok) continue;

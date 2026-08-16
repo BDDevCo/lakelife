@@ -180,6 +180,20 @@ export function ParkReRate({
                     <Row label="they'd pay" value={money(plan.monthlyAfter)} strong />
                   </div>
 
+                  {/* SAYS WHICH HOUSEHOLDS THE MONEY DOES NOT COVER.
+                      The sentence above counts every household that changes;
+                      these totals only count the ones with a rent on file. Both
+                      are right on their own and misleading side by side, so the
+                      gap between them gets named rather than left for him to
+                      work out from the list. */}
+                  {plan.unknownBefore > 0 && (
+                    <p className="mut" style={{ margin: "-6px 0 12px", fontSize: 13, lineHeight: 1.5 }}>
+                      {plan.unknownBefore === 1
+                        ? "One of these lots has no rent on file, so it isn't in those totals — it'll still be set to the new amount."
+                        : `${plan.unknownBefore} of these lots have no rent on file, so they aren't in those totals — they'll still be set to the new amount.`}
+                    </p>
+                  )}
+
                   {plan.changing.length > 0 && (
                     <div className="ll-card" style={{ marginBottom: 12 }}>
                       {plan.changing.map((l) => (
