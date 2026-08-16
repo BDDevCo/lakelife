@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { ClaimSlip } from "@/components/ClaimSlip";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
@@ -29,6 +30,17 @@ export interface RollRowView {
   currentUnit: string | null;
   currentUntil: string | null;
   currentReservationId: string | null;
+  /** The FILE, not the tenancy — a slip is issued against the household. */
+  currentRenterId: string | null;
+  /**
+   * What the office may know about this household's slip: 'none' | 'open' |
+   * 'used' | 'expired' | 'locked' | 'declined'.
+   *
+   * A fact about the CODE, never a fact about the person. The refusal log is
+   * ops-only on purpose — a failed attempt must not become a durable record
+   * about a resident rendered on their landlord's screen.
+   */
+  claimStatus: string | null;
   currentRent: number | null;
   currentDueDay: number | null;
   /** 'prior_roll' until a human confirms it — the rent roll shows its work. */
@@ -95,6 +107,7 @@ export function ParkRentRoll({
   isOwner,
   live,
   slug,
+  parkName,
   rows,
   summary,
   today,
@@ -109,6 +122,7 @@ export function ParkRentRoll({
   isOwner: boolean;
   live: boolean;
   slug: string | null;
+  parkName: string;
   rows: RollRowView[];
   summary: RollSummaryView;
   /** Lake date from the server. A client component must never guess it. */
@@ -409,8 +423,24 @@ export function ParkRentRoll({
                       {r.state === "inactive" && <span className="mut">Not in service</span>}
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
                     <span className={`ll-pill ${s.pill}`}>{s.label}</span>
+                    {/* CAN THIS HOUSEHOLD REACH THEIR OWN RECORDS?
+                        Until 0128/0129 the honest answer was "no, and there is
+                        no way to change that" — the file was created unclaimed
+                        and nothing could ever claim it. This is the button
+                        that ends that, and the states it shows are facts about
+                        a CODE, never about the person. */}
+                    {r.state === "occupied" && r.currentRenterId && slug && (
+                      <ClaimSlip
+                        renterId={r.currentRenterId}
+                        displayName={r.currentRenter ?? "This household"}
+                        lotNumber={r.lotNumber}
+                        parkName={parkName}
+                        parkSlug={slug}
+                        status={r.claimStatus ?? "none"}
+                      />
+                    )}
                     {r.currentReservationId && (
                       <button
                         className="ll-btn ghost"

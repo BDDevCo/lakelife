@@ -3,6 +3,7 @@ import { TopBar } from "@/components/Brand";
 import { ParkNav } from "@/components/ParkNav";
 import { ParkReRate } from "@/components/ParkReRate";
 import { ParkRentRoll, type RollRowView } from "@/components/ParkRentRoll";
+import { claimStatusFor } from "@/app/parks/claim-actions";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { pendingReRates } from "@/app/park/rerate-actions";
@@ -141,6 +142,14 @@ export default async function ParkPage() {
 
   const lotById = new Map(lots.map((l) => [l.lot.id, l]));
 
+  // WHETHER EACH HOUSEHOLD CAN REACH THEIR OWN RECORDS. A fact about their
+  // slip, never about them — the refusal log behind it is ops-only, because a
+  // failed attempt must not become a durable note about a resident on their
+  // landlord's screen.
+  const claimStatuses = await claimStatusFor(
+    roll.rows.map((r) => r.current?.renterId).filter((x): x is string => !!x),
+  );
+
   const rows: RollRowView[] = roll.rows.map((r) => ({
     lotId: r.lot.id,
     lotNumber: r.lot.lotNumber,
@@ -151,6 +160,8 @@ export default async function ParkPage() {
     currentUnit: r.current?.renterUnitId ? roll.units.get(r.current.renterUnitId)?.label ?? null : null,
     currentUntil: r.current?.range?.end ?? null,
     currentReservationId: r.current?.id ?? null,
+    currentRenterId: r.current?.renterId ?? null,
+    claimStatus: r.current?.renterId ? claimStatuses[r.current.renterId] ?? "none" : null,
     currentRent: r.current?.quotedAmount ?? null,
     currentDueDay: r.current?.dueDay ?? null,
     currentSource: r.current?.amountSource ?? null,
@@ -207,6 +218,7 @@ export default async function ParkPage() {
         isOwner={park.role === "owner"}
         live={park.active}
         slug={park.slug}
+        parkName={park.name}
         rows={rows}
         summary={roll.summary}
         owedTotal={outstanding}
