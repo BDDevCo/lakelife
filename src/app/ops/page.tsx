@@ -3,6 +3,8 @@ import { TopBar } from "@/components/Brand";
 import { getOpsParks } from "@/app/ops/parks-data";
 import { getStuckHouseholds, getClaimTally } from "@/app/ops/claims-data";
 import { OpsStuckClaims } from "@/components/OpsStuckClaims";
+import { getSmsHealth, type SmsHealth } from "@/app/ops/sms-health";
+import { OpsSmsHealth } from "@/components/OpsSmsHealth";
 import { OpsShell } from "@/components/ops/OpsShell";
 import { JobSearch } from "@/components/ops/JobSearch";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -88,6 +90,18 @@ export default async function OpsPage() {
   // board over an empty parks table would be a self-inflicted outage.
   // WHO CANNOT GET IN. Read defensively, like parks below: a claim-log query
   // that throws must not take the whole console down with it.
+  // WHETHER THE TEXTS ARE ARRIVING. Defensive like the rest: a Twilio hiccup
+  // must not take the console down, and it must not read as healthy either —
+  // a null window renders as "we couldn't check".
+  let smsHealth: SmsHealth = {
+    configured: false, window: null, reasons: [], oldest: null, newest: null,
+  };
+  try {
+    smsHealth = await getSmsHealth();
+  } catch (e) {
+    console.error("[ops] sms health failed", e instanceof Error ? e.message : e);
+  }
+
   let stuck: Awaited<ReturnType<typeof getStuckHouseholds>> = [];
   let tally = { invitesSent: 0, slipsPrinted: 0, claimed: 0, refused: 0, declined: 0, empty: true };
   try {
@@ -152,6 +166,8 @@ export default async function OpsPage() {
         </div>
 
         <JobSearch />
+
+        <OpsSmsHealth health={smsHealth} />
 
         <OpsStuckClaims stuck={stuck} tally={tally} />
 

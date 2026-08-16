@@ -2547,12 +2547,16 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number }> 
     // the Margin Health board to say. Every ops phone hears it; the one-shot
     // dedupe row is only written after at least one SMS actually went out —
     // a Twilio hiccup must not burn the job's single lifetime alert.
-    let delivered = false;
+    // NAMED FOR WHAT IT IS. This was `delivered`, which it never was — it
+    // meant Twilio accepted the message. The dedupe below burns the job's one
+    // lifetime alert on that basis, so calling it delivery is how an ops alert
+    // gets marked "sent" and never reaches anybody.
+    let queuedAny = false;
     for (const o of ops) {
       const res = await sendSms(o.phone as string, `LakeLife OPS: ${svcName} on ${lk?.name ?? "a lake"} has sat ${overSla ? `${settings.gapSlaHours}h+` : "into the pull-deadline window"} unclaimed — no crew has taken it at card or fill-in rates. Exits: recruit, logged override, or rebook the customer. Job ${j.id}.`);
-      if (res.ok) delivered = true;
+      if (res.queued) queuedAny = true;
     }
-    if (delivered) {
+    if (queuedAny) {
       await admin.from("nudge_log").insert({ user_id: ops[0].id, kind: `gap_sla:${j.id}` });
       alerted++;
     }

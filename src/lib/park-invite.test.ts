@@ -173,7 +173,18 @@ describe("the send path", () => {
     const s = source();
     expect(s).not.toMatch(/void\s+sendEmail/);
     expect(s).toMatch(/const\s+sent\s*=\s*await\s+sendEmail/);
-    expect(s).toMatch(/if\s*\(!sent\.ok\)/);
+    // The guard now also weighs the text: an invite only unwinds when NOTHING
+    // reached her, so a bounced email can't kill a link already on her phone.
+    expect(s).toMatch(/if\s*\(!sent\.ok && !textQueued\)/);
+  });
+
+  it("never tells the office a resident was TEXTED", () => {
+    // 81 sent since July, 0 delivered. Twilio accepting a message is not the
+    // carrier delivering it, and the office must not print slips on the
+    // strength of a text nobody received.
+    const s = source();
+    expect(s).not.toMatch(/Emailed and texted/);
+    expect(s).toMatch(/A text was sent too/);
   });
 
   it("mints in the database BEFORE sending", () => {

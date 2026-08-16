@@ -147,7 +147,7 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
   //
   // A failed TEXT is not a failed invite — the email is the channel we rely on,
   // and the text is redundancy. So this is reported, never fatal.
-  let texted = false;
+  let textQueued = false;
   if (channels.sms) {
     const t = await sendSms(
       channels.sms,
@@ -157,11 +157,24 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
         url: inviteUrl(await originFromRequest(), token),
       }),
     );
-    texted = t.ok;
-    if (!t.ok) console.warn(`[invite] text to ${channels.sms} failed: ${t.error}`);
+    // QUEUED, NOT DELIVERED, and the variable says so. As of today NOTHING
+    // this app texts is being delivered — 81 sent since July, 0 arrived,
+    // rejected by the carrier as an unregistered A2P sender. The office must
+    // not be told a resident was texted on the strength of Twilio taking it.
+    textQueued = t.queued;
+    if (!t.queued) console.warn(`[invite] text to ${channels.sms} not queued: ${t.error}`);
   }
 
-  if (!sent.ok) {
+  // A TEXT THAT LANDED IS AN INVITE THAT WORKS.
+  //
+  // The undo below was written when email was the only channel. With two, it
+  // was about to throw away a token that had ALREADY gone out by text: the
+  // email bounces, the stamp is cleared, `invite_token_hash` goes null — and
+  // the link sitting on her phone is dead before she taps it. She would be
+  // looking at a message from her park that does nothing.
+  //
+  // So the invite only unwinds when NOTHING reached her.
+  if (!sent.ok && !textQueued) {
     // UNDO THE STAMP. The mint happened first so a send could never be
     // recorded twice — but leaving it set after a REFUSED send is worse than
     // the problem it solved: the roll shows "Emailed" for somebody who was
@@ -188,16 +201,31 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
     };
   }
 
+  // Email failed but the text got through: the invite stands, and the office
+  // should know the address is bad rather than assume both landed.
+  if (!sent.ok && textQueued) {
+    revalidatePath("/park");
+    return {
+      ok: true,
+      outcome,
+      texted: true,
+      smsHold: null,
+      message: `${email} didn't work. A text went to the carrier, but texts aren't `
+        + `arriving yet — print them a slip.`,
+    };
+  }
+
   revalidatePath("/park");
   return {
     ok: true,
     outcome,
-    texted,
+    texted: textQueued,
     smsHold: channels.smsHold,
-    message: texted
-      ? `Emailed and texted ${email}.`
-      : `Emailed ${email}.` +
-        (channels.smsHold ? ` No text — ${smsHoldSays(channels.smsHold)}.` : ""),
+    // NEVER "and texted". A text handed to the carrier is not a text that
+    // arrived, and until registration clears none of them are.
+    message: `Emailed ${email}.` +
+      (textQueued ? " A text was sent too." : "") +
+      (channels.smsHold ? ` No text — ${smsHoldSays(channels.smsHold)}.` : ""),
   };
 }
 
@@ -288,7 +316,7 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
   }
 
   revalidatePath("/park");
-  const parts = [texted > 0 ? `${sent} emailed (${texted} also texted)` : `${sent} emailed`];
+  const parts = [texted > 0 ? `${sent} emailed (${texted} also sent a text)` : `${sent} emailed`];
   if (needSlips.length) parts.push(`${needSlips.length} need a slip`);
   if (skipped) parts.push(`${skipped} already invited`);
   return { ok: true, sent, texted, needSlips, skipped, message: parts.join(" · ") };

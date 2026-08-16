@@ -231,7 +231,7 @@ describe("sendSms, actually called", () => {
   it("refuses a fixture number by reason, with no credentials present", async () => {
     const { sendSms } = await import("@/lib/sms");
     const res = await sendSms("+12605551212", "this must never leave the process");
-    expect(res.ok).toBe(false);
+    expect(res.queued).toBe(false);
     expect(res.error).toContain("unsendable recipient");
     expect(res.error).toContain("reserved-number");
     expect(res.error).not.toContain("not configured");
@@ -246,7 +246,7 @@ describe("sendSms, actually called", () => {
     // sends a real text. A real EXCHANGE (260-463, Wolcottville) with an
     // invented line proves the gate opens without ever addressing a person.
     const res = await sendSms("+12604631234", "still sends nothing — no credentials here");
-    expect(res.ok).toBe(false);
+    expect(res.queued).toBe(false);
     // Past the recipient gate, stopped by the absent transport. That is the
     // proof the gate is not simply refusing everything.
     expect(res.error).toBe("SMS not configured");

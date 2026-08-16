@@ -12,7 +12,30 @@ import { recipientIsFixture } from "@/lib/recipient-gate";
  *
  * SERVER ONLY.
  */
-export async function sendSms(to: string, body: string): Promise<{ ok: boolean; error?: string }> {
+/**
+ * THIS RETURNS `queued`, NOT `ok`, AND THE NAME IS THE WHOLE POINT.
+ *
+ * It used to return `{ ok: true }` the moment Twilio accepted the message.
+ * Acceptance is not delivery: the carrier decides seconds later, out of band,
+ * and nothing in this app ever looked. On 16 Aug 2026 the Twilio log said 81
+ * messages sent since July and ZERO delivered — 66 of them rejected with error
+ * 30034, an unregistered A2P 10DLC sender. Booking confirmations, crew
+ * dispatch, Autopilot reminders, a crew reporting pier damage. All accepted,
+ * none delivered, for a month, silently.
+ *
+ * `ok` was the word that hid it. A caller reading `ok` reasonably believes the
+ * person got the message. `queued` cannot be misread that way: it says the
+ * message is with the carrier and says nothing about arrival.
+ *
+ * NOTHING HERE CAN TELL YOU IT ARRIVED. Delivery truth lives in Twilio's own
+ * message log, which is what the ops SMS-health panel reads — see
+ * src/app/ops/sms-health.ts. Do not add a "delivered" boolean to this function;
+ * it would have to lie.
+ */
+export async function sendSms(
+  to: string,
+  body: string,
+): Promise<{ queued: boolean; error?: string; sid?: string; status?: string }> {
   // THE RECIPIENT GATE, AND IT COMES FIRST — before the credentials check.
   //
   // "We must not contact this person" is true whether or not Twilio happens to
@@ -29,27 +52,40 @@ export async function sendSms(to: string, body: string): Promise<{ ok: boolean; 
   const refusal = phoneRefusal(to);
   if (refusal) {
     console.warn(`[sms] refused: ${refusal.why}`);
-    return { ok: false, error: `unsendable recipient (${refusal.code})` };
+    return { queued: false, error: `unsendable recipient (${refusal.code})` };
   }
 
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_PHONE_NUMBER;
-  if (!sid || !token || !from) return { ok: false, error: "SMS not configured" };
+  if (!sid || !token || !from) return { queued: false, error: "SMS not configured" };
 
   // AND THE SECOND GATE: a fixture holding a plausible number (0126). Placed
   // after the configuration check on purpose — it costs a database round trip,
   // and there is nothing to protect anybody from when the transport is absent.
   if (await recipientIsFixture("phone", to)) {
     console.warn(`[sms] refused: ${to} belongs to an account marked not-a-person`);
-    return { ok: false, error: "unsendable recipient (fixture)" };
+    return { queued: false, error: "unsendable recipient (fixture)" };
   }
 
   try {
     const client = twilio(sid, token);
-    await client.messages.create({ from, to, body });
-    return { ok: true };
+    const msg = await client.messages.create({ from, to, body });
+
+    // Some failures are known immediately — a blocked or unroutable number
+    // comes back already final. Those are not queued by any honest reading, so
+    // they are reported as failures rather than as hopeful silence.
+    if (msg.status === "failed" || msg.status === "undelivered") {
+      console.error(`[sms] ${to} rejected at once: ${msg.status} ${msg.errorCode ?? ""}`);
+      return {
+        queued: false,
+        error: `${msg.status}${msg.errorCode ? ` (${msg.errorCode})` : ""}`,
+        sid: msg.sid,
+        status: msg.status,
+      };
+    }
+    return { queued: true, sid: msg.sid, status: msg.status };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "send failed" };
+    return { queued: false, error: e instanceof Error ? e.message : "send failed" };
   }
 }

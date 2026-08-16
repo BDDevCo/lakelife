@@ -118,7 +118,11 @@ describe("the send path sends both", () => {
     const s = source();
     expect(s).toMatch(/const t = await sendSms\(/);
     expect(s).not.toMatch(/void\s+sendSms/);
-    expect(s).toMatch(/texted = t\.ok/);
+    // QUEUED, NOT OK. `sendSms` returns `queued` now — Twilio accepting a
+    // message is not the carrier delivering it, and 81 sent / 0 delivered is
+    // what the old name hid.
+    expect(s).toMatch(/textQueued = t\.queued/);
+    expect(s).not.toMatch(/\bt\.ok\b/);
   });
 
   it("decides the channels from planChannels, not from an inline check", () => {
