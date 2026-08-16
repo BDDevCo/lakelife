@@ -469,7 +469,7 @@ describe(`money ledger — two-season scale simulation (seed ${SEED})`, () => {
           // ---- PRICE: the real pricing engine against the real profile.
           let customerPrice = priceService(svc, prop.profile);
           if (customerPrice <= 0) continue;
-          let vendorCost = R2(customerPrice * crew.rateFactor);
+          const vendorCost = R2(customerPrice * crew.rateFactor);
 
           // ---- REACHABLE BAD DATA: an owner-approved downward flag
           // correction reprices customer_price and PRESERVES vendor_cost

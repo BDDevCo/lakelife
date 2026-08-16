@@ -414,8 +414,8 @@ function LotForm({
         </div>
         <p className="mut" style={{ fontSize: 12, marginTop: 6, marginBottom: 0, lineHeight: 1.5 }}>
           A nightly lot is counted differently — nineteen nights out of thirty,
-          not "somebody lives there" — so it stays out of the long-term
-          occupancy figure instead of being averaged into nonsense.
+          not &ldquo;somebody lives there&rdquo; — so it stays out of the
+          long-term occupancy figure instead of being averaged into nonsense.
         </p>
       </div>
 

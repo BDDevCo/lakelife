@@ -14,11 +14,29 @@ export function VerifyPanel({ initialPhone }: { initialPhone?: string }) {
   const boxes = useRef<Array<HTMLInputElement | null>>([]);
 
   // Pull the number saved during email signup, if any.
+  //
+  // THIS ONE STAYS AN EFFECT, and the rule is wrong about it. sessionStorage
+  // does not exist on the server, so this cannot move into initial state or
+  // into render without either crashing the server render or producing markup
+  // that disagrees with the browser's. Reading browser storage after mount is
+  // what an effect is for.
+  //
+  // Nor is useSyncExternalStore the answer here, as it was for the map button:
+  // this read decides TWO pieces of state and only when `initialPhone` is
+  // absent, which is a conditional side effect rather than an external value
+  // to subscribe to.
+  //
+  // A one-render delay costs nothing visible: the field is empty either way,
+  // and the customer is reading the sentence above it.
   useEffect(() => {
     if (!initialPhone) {
       try {
         const saved = sessionStorage.getItem("ll_pending_phone");
         if (saved) {
+          // The disable sits HERE, on the call the rule actually reports,
+          // rather than on the useEffect above it. Put it on the effect and it
+          // silences nothing — which looks like a fix until the next lint run.
+          // eslint-disable-next-line react-hooks/set-state-in-effect
           setPhone(saved);
           setNeedsPhone(false);
         }

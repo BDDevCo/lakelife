@@ -1058,7 +1058,7 @@ describe("autopilot at scale — the confirm/skip conversation", () => {
     const iceOut = isoOf(80), pull = isoOf(317);
     let openSince: number | null = null;
     let texts = 0;
-    let lastCompleted: string | null = isoOf(20);
+    const lastCompleted: string | null = isoOf(20);
     for (let day = 30; day <= 200; day++) {
       if (openSince != null) {
         if (decision === "skip" && day - openSince >= 1) openSince = null; // customer tapped Skip

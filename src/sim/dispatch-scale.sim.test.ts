@@ -1226,7 +1226,7 @@ describe("crew standing at scale", () => {
      * return, get swept that same night, and never get a chance.
      */
     function nights(netStrikesOverLimit: number, limit: number, cooldown: number, worksOnReturn: boolean) {
-      let strikes = limit + netStrikesOverLimit;
+      const strikes = limit + netStrikesOverLimit;
       let completions = 0;
       let onLake = true;
       let demotedAt: string | null = null;

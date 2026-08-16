@@ -11,7 +11,7 @@
  * we roll the cell back and toast why.
  */
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
 import { setSlot } from "./actions";
 import { toast } from "@/components/Toast";
@@ -37,9 +37,23 @@ export function AvailabilityGrid({ days }: { days: DayRow[] }) {
   const [pending, setPending] = useState<Record<string, SlotStatus>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
-  useEffect(() => {
+  // ADJUSTED DURING RENDER, NOT IN AN EFFECT.
+  //
+  // Same intent as before — drop the optimistic overrides the moment fresh
+  // server data arrives — but an effect did it one render too late: React
+  // painted the new `days` WITH the stale overrides still on top, then ran the
+  // effect, then painted again. On a slow phone that is a visible flicker of
+  // the crew's old answer over the server's new one.
+  //
+  // This is the pattern React documents for exactly this case: compare against
+  // the previous prop during render and set state immediately. React discards
+  // the in-progress render and redoes it before touching the DOM, so the wrong
+  // frame is never shown.
+  const [prevDays, setPrevDays] = useState(days);
+  if (days !== prevDays) {
+    setPrevDays(days);
     setPending({});
-  }, [days]);
+  }
 
   async function tap(date: string, slot: string, status: SlotStatus) {
     if (status === "booked") return; // locked

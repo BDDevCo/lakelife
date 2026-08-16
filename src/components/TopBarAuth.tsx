@@ -13,15 +13,20 @@ import { hasSupabaseEnv } from "@/lib/env";
  */
 export function TopBarAuth() {
   const router = useRouter();
-  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  // `null` means "still asking"; false means "definitely signed out". With no
+  // Supabase configured there is nothing to ask, so that answer is known at
+  // first render and does not need an effect to deliver it a beat later.
+  //
+  // Safe as initial state precisely BECAUSE it is env: hasSupabaseEnv() reads
+  // NEXT_PUBLIC_ variables, which Next inlines at build time, so the server
+  // and the browser compute the same value and there is no hydration mismatch.
+  // The same trick would be a bug for anything read off `window`.
+  const [signedIn, setSignedIn] = useState<boolean | null>(hasSupabaseEnv() ? null : false);
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"signin" | "signup">("signin");
 
   useEffect(() => {
-    if (!hasSupabaseEnv()) {
-      setSignedIn(false);
-      return;
-    }
+    if (!hasSupabaseEnv()) return;
     const supabase = createClient();
     supabase.auth.getUser().then(({ data }) => setSignedIn(!!data.user));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {

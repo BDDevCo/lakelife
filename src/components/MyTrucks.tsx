@@ -11,7 +11,7 @@
  * single-route, count-based-capacity path — this card is purely additive.
  */
 
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { addTruck, updateTruck, setTruckActive, type TruckInput } from "@/app/vendor/trucks-actions";
@@ -48,12 +48,18 @@ export function MyTrucks({ trucks: initialTrucks }: { trucks: MyTruck[] }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  // Re-sync to server truth whenever fresh data arrives (after refresh).
-  useEffect(() => {
+  // Re-sync to server truth whenever fresh data arrives (after refresh),
+  // adjusted during render rather than in an effect. This one mattered most of
+  // the three: closing the editor a render late meant the just-saved truck
+  // appeared in the list while its edit form was still open above it, which
+  // reads as "it didn't save" to the person looking at it.
+  const [prevTrucks, setPrevTrucks] = useState(initialTrucks);
+  if (initialTrucks !== prevTrucks) {
+    setPrevTrucks(initialTrucks);
     setTrucks(initialTrucks);
     setEditingId(null);
     setAdding(false);
-  }, [initialTrucks]);
+  }
 
   function saved(message: string) {
     setEditingId(null);

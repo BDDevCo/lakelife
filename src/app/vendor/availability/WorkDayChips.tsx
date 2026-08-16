@@ -6,7 +6,7 @@
  * the chip flips instantly, then we save and let router.refresh() reconcile.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ToggleChips } from "@/components/wizard-controls";
 import { toggleWorkDay } from "./actions";
@@ -19,10 +19,15 @@ export function WorkDayChips({ workDays }: { workDays: string[] }) {
   const [selected, setSelected] = useState<string[]>(workDays);
   const [busy, setBusy] = useState(false);
 
-  // Re-sync to server truth whenever fresh data arrives (after refresh).
-  useEffect(() => {
+  // Re-sync to server truth whenever fresh data arrives (after refresh),
+  // adjusted during render rather than in an effect. An effect re-synced one
+  // render late, so a failed toggle showed the crew their own rejected choice
+  // for a frame before snapping back to what the server actually holds.
+  const [prevWorkDays, setPrevWorkDays] = useState(workDays);
+  if (workDays !== prevWorkDays) {
+    setPrevWorkDays(workDays);
     setSelected(workDays);
-  }, [workDays]);
+  }
 
   async function onToggle(day: string) {
     if (busy) return;
