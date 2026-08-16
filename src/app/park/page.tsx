@@ -2,9 +2,10 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { ParkNav } from "@/components/ParkNav";
 import { ParkReRate } from "@/components/ParkReRate";
+import { InviteEveryone } from "@/components/InviteEveryone";
 import { ParkRentRoll, type RollRowView } from "@/components/ParkRentRoll";
 import { claimStatusFor } from "@/app/parks/claim-actions";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { pendingReRates } from "@/app/park/rerate-actions";
 import { buildStatement, rollUp, statementLine, type StatementFee } from "@/app/park/statement-helpers";
@@ -160,13 +161,58 @@ export default async function ParkPage() {
 
   const lotById = new Map(lots.map((l) => [l.lot.id, l]));
 
+  // Declared here and computed once the contact map is built, below.
+  let canReachNow = 0;
+  let needPaperNow = 0;
+
   // WHETHER EACH HOUSEHOLD CAN REACH THEIR OWN RECORDS. A fact about their
   // slip, never about them — the refusal log behind it is ops-only, because a
   // failed attempt must not become a durable note about a resident on their
   // landlord's screen.
-  const claimStatuses = await claimStatusFor(
-    roll.rows.map((r) => r.current?.renterId).filter((x): x is string => !!x),
-  );
+  const renterIds = roll.rows
+    .map((r) => r.current?.renterId)
+    .filter((x): x is string => !!x);
+  const claimStatuses = await claimStatusFor(renterIds);
+
+  // CAN WE EMAIL THEM, AND HAVE WE ALREADY? Two facts, and the row needs both:
+  // the first decides whether "Email them" appears at all, the second is what
+  // makes "one invite, then silence" visible rather than merely enforced.
+  // SERVICE ROLE, HAND-SCOPED — like every other read in the park module.
+  //
+  // The first version used the session client and came back empty with no
+  // error on screen. `park_renters` has an RLS policy that WOULD let an owner
+  // read it, and no table grant to `authenticated` at all, so the policy never
+  // gets a chance to allow anything. supabase-js hands that back as
+  // `{ data: null }`, which is indistinguishable from "this park has nobody on
+  // it" — the button simply never appeared and nothing said why.
+  //
+  // `.eq("park_id", park.id)` is the security boundary here, spelled out
+  // rather than assumed, exactly as data.ts does it.
+  const contact = new Map<string, { email: string | null; invitedAt: string | null }>();
+  {
+    const { data: contactRows, error: contactErr } = await createServiceClient()
+      .from("park_renters")
+      .select("id, email, invite_sent_at, user_id, claim_declined_at")
+      .eq("park_id", park.id);
+
+    // Not swallowed. An error here reads as "nobody is reachable", which is a
+    // quiet, wrong answer to the question this whole screen exists to ask.
+    if (contactErr) console.error("[park] contact read failed", contactErr.message);
+
+    for (const c of contactRows ?? []) {
+      contact.set(c.id as string, {
+        email: (c.email as string | null) ?? null,
+        invitedAt: (c.invite_sent_at as string | null) ?? null,
+      });
+
+      // Only households still to be reached: anyone already claimed, already
+      // invited, or who has said no thanks is nobody's job any more.
+      if (c.user_id != null || c.claim_declined_at != null) continue;
+      if (c.invite_sent_at != null) continue;
+      if ((c.email as string | null)?.trim()) canReachNow++;
+      else needPaperNow++;
+    }
+  }
 
   const rows: RollRowView[] = roll.rows.map((r) => ({
     lotId: r.lot.id,
@@ -180,6 +226,8 @@ export default async function ParkPage() {
     currentReservationId: r.current?.id ?? null,
     currentRenterId: r.current?.renterId ?? null,
     claimStatus: r.current?.renterId ? claimStatuses[r.current.renterId] ?? "none" : null,
+    renterEmail: r.current?.renterId ? contact.get(r.current.renterId)?.email ?? null : null,
+    invitedAt: r.current?.renterId ? contact.get(r.current.renterId)?.invitedAt ?? null : null,
     currentRent: r.current?.quotedAmount ?? null,
     currentDueDay: r.current?.dueDay ?? null,
     currentSource: r.current?.amountSource ?? null,
@@ -221,6 +269,15 @@ export default async function ParkPage() {
           Dec 15 cutover, so gating on `occupied` would hide the re-rate panel
           on precisely the park it was built for — and on every park during the
           window between signing and closing. */}
+      {/* THE BULK INVITE, ABOVE THE ROLL. Counted from the same two facts the
+          rows use, so the button and the rows can never disagree about who is
+          reachable. */}
+      {(canReachNow > 0 || needPaperNow > 0) && (
+        <div className="wrap" style={{ paddingTop: 14, paddingBottom: 0 }}>
+          <InviteEveryone parkId={park.id} canReach={canReachNow} needPaper={needPaperNow} />
+        </div>
+      )}
+
       {roll.summary.occupied + roll.summary.reserved > 0 && (
         <div className="wrap" style={{ paddingTop: 14, paddingBottom: 0 }}>
           <ParkReRate

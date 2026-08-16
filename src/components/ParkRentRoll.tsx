@@ -41,6 +41,9 @@ export interface RollRowView {
    * about a resident rendered on their landlord's screen.
    */
   claimStatus: string | null;
+  /** The address on file, and whether the one invite has gone. */
+  renterEmail: string | null;
+  invitedAt: string | null;
   currentRent: number | null;
   currentDueDay: number | null;
   /** 'prior_roll' until a human confirms it — the rent roll shows its work. */
@@ -455,6 +458,8 @@ export function ParkRentRoll({
                         parkName={parkName}
                         parkSlug={slug}
                         status={r.claimStatus ?? "none"}
+                        email={r.renterEmail}
+                        invitedAt={r.invitedAt}
                       />
                     )}
                     {r.currentReservationId && (

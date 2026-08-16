@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { issueClaimSlip, declineClaim } from "@/app/parks/claim-actions";
+import { inviteHousehold } from "@/app/parks/invite-actions";
 
 /**
  * THE OFFICE END: printing one slip for one household.
@@ -27,6 +28,8 @@ export function ClaimSlip({
   parkName,
   parkSlug,
   status,
+  email,
+  invitedAt,
 }: {
   renterId: string;
   displayName: string;
@@ -34,6 +37,9 @@ export function ClaimSlip({
   parkName: string;
   parkSlug: string;
   status: string;
+  /** The address on file, if any. Its absence is why paper exists. */
+  email: string | null;
+  invitedAt: string | null;
 }) {
   const router = useRouter();
   const [code, setCode] = useState<string | null>(null);
@@ -46,6 +52,14 @@ export function ClaimSlip({
       if (!res.ok) { toast(res.message); return; }
       setCode(res.code ?? null);
       router.refresh();
+    });
+  }
+
+  function invite() {
+    start(async () => {
+      const res = await inviteHousehold(renterId);
+      toast(res.message);
+      if (res.ok) router.refresh();
     });
   }
 
@@ -114,6 +128,17 @@ export function ClaimSlip({
 
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      {/* EMAIL FIRST WHEN WE CAN. One tap for her, no printer for him. The
+          slip stays right beside it, because a household with no address is
+          not a lesser household — it is the ordinary case at a park that has
+          been running on paper for thirty years. */}
+      {email && !invitedAt && (
+        <button className="ll-btn sm" disabled={busy} onClick={invite} style={{ minHeight: 40 }}>
+          {busy ? "…" : "Email them"}
+        </button>
+      )}
+      {invitedAt && <span className="ll-pill teal">Emailed</span>}
+
       {status === "open" && <span className="ll-pill">Slip out</span>}
       {status === "expired" && <span className="ll-pill slate">Slip expired</span>}
       {status === "locked" && <span className="ll-pill slate">Locked till tomorrow</span>}
