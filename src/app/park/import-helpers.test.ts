@@ -362,7 +362,8 @@ describe("the seller's arithmetic, without the overclaim", () => {
     return pairs.map(([lotLabel, amount], i) => ({
       lines: [i + 1], lineNo: i + 1, source: [""],
       lotLabel, matchedLotId: null, createsLot: false,
-      name: "Somebody", amount, term: "monthly" as const, range: null,
+      name: "Somebody", email: null, phone: null,
+      amount, term: "monthly" as const, range: null,
       skipped: false, blockers: [], flags: [], notes: [],
     }));
   }

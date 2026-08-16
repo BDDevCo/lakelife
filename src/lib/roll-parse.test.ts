@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   parseRentRoll, parseMoney, parseLot, parseName, detectDelimiter, contentHash,
-  isPlaceholderName,
+  isPlaceholderName, redactSensitive,
 } from "@/lib/roll-parse";
 
 /** Every parse must satisfy the never-drop guarantee. A dropped line is a
@@ -282,17 +283,92 @@ describe("nothing is ever defaulted", () => {
     expect(res.rows[0].name.raw).toBe("Donna Reyes");
   });
   it("carries unmapped columns to notes rather than discarding them", () => {
-    const res = parseRentRoll("Lot\tTenant\tRent\tPhone\tBalance\n1\tDonna\t340\t260-555-0142\t25");
-    const notes = res.rows[0].notes.join(" | ");
-    expect(notes).toMatch(/Phone/);
-    expect(notes).toMatch(/Balance/);
+    const res = parseRentRoll("Lot\tTenant\tRent\tBalance\n1\tDonna\t340\t25");
+    expect(res.rows[0].notes.join(" | ")).toMatch(/Balance/);
   });
-  it("a phone is NEVER written to a field — only carried", () => {
-    // A phone written to mobile_e164 is a text message to a stranger who
-    // never consented.
+
+  it("reads a phone into its own field, tidied to one spelling", () => {
+    // It used to go to notes as free text, so the office could read it but
+    // nothing could show it as a field. It now has a home — one the software
+    // still cannot dial (see below).
+    const res = parseRentRoll("Lot\tTenant\tRent\tPhone\n1\tDonna\t340\t2605550142");
+    expect(res.rows[0].phone.value).toBe("(260) 555-0142");
+    const other = parseRentRoll("Lot\tTenant\tRent\tCell\n1\tDonna\t340\t1 (260) 555.0142");
+    expect(other.rows[0].phone.value).toBe("(260) 555-0142");   // same number, one spelling
+  });
+
+  it("a phone NEVER lands anywhere the software could text", () => {
+    // The rule has not changed, only where the number is kept. It goes to
+    // `phone_on_file_with_park` — a column the reminder engine is built to be
+    // unable to read — and never to `mobile_e164`, which means a number the
+    // person gave US and verified.
     const res = parseRentRoll("Lot\tTenant\tRent\tPhone\n1\tDonna\t340\t2605550142");
     expect(JSON.stringify(res.rows[0].lot)).not.toContain("2605550142");
-    expect(res.rows[0].notes.join(" ")).toContain("2605550142");
+    expect(JSON.stringify(res.rows[0].name)).not.toContain("2605550142");
+    // And the write path keeps it out of mobile_e164.
+    const commit = readFileSync(
+      new URL("../app/park/import-actions.ts", import.meta.url), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(commit).toMatch(/phone_on_file_with_park:\s*row\.phone/);
+    expect(commit).not.toMatch(/mobile_e164:\s*row\.phone/);
+    expect(commit).toMatch(/contact_pref:\s*"paper"/);
+  });
+
+  it("reads an email into its own field, lower-cased", () => {
+    // `email` was already a recognised HEADER — it landed in the column map and
+    // the value was then dropped, because the row had nowhere to put it.
+    const res = parseRentRoll("Lot\tTenant\tRent\tEmail\n1\tDonna\t340\tDonna.R@Example.COM");
+    expect(res.rows[0].email.value).toBe("donna.r@example.com");
+  });
+
+  it("refuses to pick between two addresses in one cell", () => {
+    // Park software exports a couple's addresses comma-separated. Taking the
+    // first silently picks a spouse at random.
+    const res = parseRentRoll("Lot\tTenant\tRent\tEmail\n1\tDonna\t340\ta@x.com, b@y.com");
+    expect(res.rows[0].email.value).toBeNull();
+    expect(res.rows[0].email.candidates).toEqual(["a@x.com", "b@y.com"]);
+  });
+
+  it("finds an address or a number in a column nobody labelled", () => {
+    // Rolls arrive with "Contact", "Info", or no header at all. An address in
+    // an unnamed column is not ambiguous — read it, but mark it as a guess.
+    const res = parseRentRoll("Lot\tTenant\tRent\tContact\n1\tDonna\t340\tdonna@x.com");
+    expect(res.rows[0].email.value).toBe("donna@x.com");
+    expect(res.rows[0].email.confidence).toBe("inferred");
+  });
+
+  it("REFUSES a social security column outright, and does not keep it as a note", () => {
+    // We administer tenancies; we are never a screening bureau. The safest
+    // place for an SSN is nowhere, and a refused column must not fall through
+    // to the notes field where every other unrecognised column lands.
+    const res = parseRentRoll("Lot\tTenant\tRent\tSSN\n1\tDonna\t340\t123-45-6789");
+    expect(res.columns.refused).toContain("SSN");
+    expect(JSON.stringify(res.rows[0])).not.toContain("123-45-6789");
+  });
+
+  it("catches an SSN pasted under an innocent header", () => {
+    // The header list catches "SSN". This catches the one filed under "Ref" —
+    // nine digits grouped 3-2-4 is not a rent, a lot, or a phone.
+    const res = parseRentRoll("Lot\tTenant\tRent\tRef\n1\tDonna\t340\t123-45-6789");
+    expect(res.rows[0].notes.join(" ")).toMatch(/not imported/);
+    // INCLUDING THE VERBATIM SOURCE LINE. Refusing the field while keeping the
+    // raw line — which is what gets stored — would be a cosmetic refusal.
+    expect(JSON.stringify(res.rows[0])).not.toContain("123-45-6789");
+  });
+
+  it("keeps a zip+4 and a phone, which are the same shape at a glance", () => {
+    // Over-redacting would empty the addresses out of the reconcile screen.
+    // A ZIP is 5-4 and a phone is 10 digits; only 3-2-4 is a social.
+    const res = parseRentRoll(
+      "Lot\tTenant\tRent\tAddress\tPhone\n1\tDonna\t340\t12 Elm, Angola 46703-1234\t260-555-0142");
+    const blob = JSON.stringify(res.rows[0]);
+    expect(blob).toContain("46703-1234");
+    expect(res.rows[0].phone.value).toBe("(260) 555-0142");
+  });
+
+  it("redacts the blob the batch stores, not just the parsed copy", () => {
+    expect(redactSensitive("Donna\t123-45-6789\t340")).toBe("Donna\t[not imported]\t340");
+    expect(redactSensitive("Angola 46703-1234")).toBe("Angola 46703-1234");
   });
 });
 

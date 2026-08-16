@@ -43,6 +43,7 @@ export interface ReadView {
   others: { lineNo: number; text: string; verdict: string; why: string | null }[];
   blockQuestions: { code: string; question: string }[];
   counts: Record<string, number>;
+  refusedColumns: string[];
   statedTotal: number | null;
 }
 
@@ -125,8 +126,8 @@ export function ParkImportRead({ view }: { view: ReadView }) {
             ))}
           </ul>
           <p className="mut" style={{ margin: 0, lineHeight: 1.5 }}>
-            Walk these on Saturday. An empty lot and a cash tenant the seller
-            forgot look exactly the same on paper.
+            Walk these on Saturday. An empty lot and a cash tenant nobody
+            wrote down look exactly the same on paper.
           </p>
         </section>
       )}
@@ -159,7 +160,8 @@ export function ParkImportRead({ view }: { view: ReadView }) {
             <strong>{money(cadence.byTerm[0].total)}</strong> {perTerm(cadence.byTerm[0].term)},
             across {cadence.byTerm[0].count} {cadence.byTerm[0].count === 1 ? "row" : "rows"}.{" "}
             <span className="mut">
-              These are the seller&apos;s numbers, not yours. Your rent roll will say so.
+              These came off the list, not from anyone confirming them. Your rent
+              roll will say so.
             </span>
           </p>
         )}
@@ -180,11 +182,11 @@ export function ParkImportRead({ view }: { view: ReadView }) {
             ) : (
               <>
                 <p style={{ margin: "0 0 8px", fontWeight: 700 }}>
-                  The seller&apos;s total doesn&apos;t match his own rows.
+                  The total at the bottom doesn&apos;t match the rows above it.
                 </p>
                 <div style={{ display: "grid", gap: 2, fontVariantNumeric: "tabular-nums" }}>
-                  <Row label="his total says" value={money(totals.stated)} />
-                  <Row label="his rows add up to" value={money(totals.computed)} />
+                  <Row label="the total says" value={money(totals.stated)} />
+                  <Row label="the rows add up to" value={money(totals.computed)} />
                   <Row
                     label={totals.difference > 0 ? "short" : "over"}
                     value={money(Math.abs(totals.difference))}
@@ -232,6 +234,23 @@ export function ParkImportRead({ view }: { view: ReadView }) {
             <AskCard key={r.lineNo} row={r} onAnswer={answer} busy={pending} />
           ))}
         </section>
+      )}
+
+      {/* ---- WHAT WE REFUSED TO KEEP ------------------------------------- */}
+      {view.refusedColumns.length > 0 && (
+        <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
+          <strong style={{ fontSize: 15 }}>
+            We didn&apos;t import{" "}
+            {view.refusedColumns.map((c) => `"${c}"`).join(", ")}
+          </strong>
+          <p className="mut" style={{ fontSize: 13.5, margin: "6px 0 0", lineHeight: 1.55 }}>
+            Socials, dates of birth and bank details aren&apos;t kept here — not in
+            the records, and not in the copy of what you pasted. We administer
+            your park; we&apos;re not a screening bureau, and the safest place for
+            that information is nowhere. Everything else on those lines came
+            through.
+          </p>
+        </div>
       )}
 
       {/* ---- The NAMELESS ROLL. His sheet has lots and rents and nobody on
@@ -294,6 +313,7 @@ export function ParkImportRead({ view }: { view: ReadView }) {
                   <span className="mut" style={{ fontSize: 13 }}>{r.term}</span>
                   {r.createsLot && <span className="ll-pill slate">new lot</span>}
                 </div>
+                <ContactLine email={r.email} phone={r.phone} />
                 {expanded === r.lineNo && (
                   <div style={{ marginTop: 10, fontSize: 14 }}>
                     <div className="mut" style={{ marginBottom: 6 }}>
@@ -426,8 +446,8 @@ export function ParkImportRead({ view }: { view: ReadView }) {
               </p>
               <p className="mut" style={{ lineHeight: 1.5 }}>
                 Nothing gets texted, emailed, or charged to anybody. Rent amounts
-                come in as the seller&apos;s numbers, not yours — the rent roll
-                will say so.
+                come in as the list&apos;s numbers — not as anything a household
+                has confirmed — and the rent roll will say so.
               </p>
               <p className="mut" style={{ lineHeight: 1.5 }}>
                 You can undo the whole thing afterwards.
@@ -461,6 +481,28 @@ function perTerm(term: string): string {
  * One question, stated in his words, showing the line it came from, offering
  * the smallest set of real choices. Never a free-form "fix this".
  */
+/**
+ * WHAT WE PICKED UP TO REACH THEM WITH.
+ *
+ * On both the ready rows and the ones still needing an answer — a household
+ * stuck behind "create this lot" has an email just as much as a clean one
+ * does, and this line is how the owner sees, before committing, which of his
+ * residents can be invited with one message and which need a slip printing.
+ *
+ * Neither is permission. The email is stored and used only for the invite he
+ * chooses to send; the number goes where nothing automated can reach it.
+ */
+function ContactLine({ email, phone }: { email: string | null; phone: string | null }) {
+  if (!email && !phone) return null;
+  return (
+    <div className="mut" style={{ fontSize: 13, marginTop: 3 }}>
+      {email && <span>✉ {email}</span>}
+      {email && phone && <span> · </span>}
+      {phone && <span>☎ {phone}</span>}
+    </div>
+  );
+}
+
 function AskCard({
   row, onAnswer, busy,
 }: {
@@ -489,7 +531,11 @@ function AskCard({
         <span className="ll-pill warn">{shortReason(primary)}</span>
       </div>
 
-      <div className="mut" style={{ margin: "10px 0 4px", fontSize: 13 }}>His sheet says:</div>
+      <ContactLine email={row.email} phone={row.phone} />
+
+      {/* "His sheet" assumed a seller. Most parks were never bought, and the
+          list is often the owner's own. */}
+      <div className="mut" style={{ margin: "10px 0 4px", fontSize: 13 }}>The list says:</div>
       <pre
         style={{
           margin: 0, padding: 8, fontSize: 12, overflowX: "auto",

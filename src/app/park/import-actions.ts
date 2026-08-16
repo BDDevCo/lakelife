@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { toDaterange, parseDaterange, type Term } from "@/lib/parks";
-import { parseRentRoll, contentHash, type ParseResult } from "@/lib/roll-parse";
+import { parseRentRoll, contentHash, redactSensitive, type ParseResult } from "@/lib/roll-parse";
 import { SITE_DEFAULTS } from "./park-helpers";
 import {
   planImport,
@@ -107,7 +107,10 @@ export async function readPaste(
     .from("park_import_batches")
     .insert({
       park_id: parkId,
-      raw_text: rawText,
+      // The blob is stored so an import can be shown and undone. It is stored
+      // REDACTED: refusing the SSN column left the number sitting here in full,
+      // which made the refusal cosmetic.
+      raw_text: redactSensitive(rawText),
       content_hash: hash,
       cutover_date: cutoverISO,
       lines_total: parsed.accounting.totalLines,
@@ -169,7 +172,7 @@ function rowsForStorage(batchId: string, parsed: ParseResult) {
       out.push({
         batch_id: batchId,
         line_no: o.lines[0],
-        raw_line: o.text,
+        raw_line: redactSensitive(o.text),
         parsed: { why: o.why ?? null, lines: o.lines },
         verdict,
         flags: o.why ? [o.why] : [],
@@ -216,6 +219,13 @@ export interface LoadedBatch {
   counts: Record<string, number>;
   /** What the seller wrote at the bottom of his own sheet. Evidence, not truth. */
   statedTotal: number | null;
+  /**
+   * Columns we refused on purpose — socials, dates of birth, bank details.
+   * Named on screen because quietly discarding something somebody pasted is
+   * its own kind of lie, and because the owner should know we will not hold it
+   * before he goes looking for it later.
+   */
+  refusedColumns: string[];
 }
 
 /**
@@ -334,6 +344,7 @@ export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
     blockQuestions: parsed.blockQuestions,
     counts: (batch.counts as Record<string, number>) ?? {},
     statedTotal: statedTotalFrom(parsed.totals.map((t) => t.text)),
+    refusedColumns: parsed.columns.refused,
   };
 }
 
@@ -561,7 +572,26 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
         display_name: row.name,          // VERBATIM. Never reordered.
         source: "prior_roll",
         // user_id stays null — unclaimed, which is the whole point of the table.
-        // mobile_e164 stays null — a pasted number has no consent behind it.
+        //
+        // THE TWO CONTACT COLUMNS, AND WHY THEY ARE DIFFERENT.
+        //
+        // `email` is stored so the office never retypes it, and so the one
+        // invite the owner chooses to send has somewhere to go. Storing it is
+        // not consent to use it: `contact_pref` below stays paper, so nothing
+        // automated will ever mail this address.
+        //
+        // `phone_on_file_with_park` is where a pasted number goes — NEVER
+        // `mobile_e164`. That column means "a number this person gave US and
+        // verified"; this one means "a number written on somebody else's
+        // sheet". The reminder engine reads the first and is built to be
+        // unable to read the second, so the office can see the number while
+        // the software cannot dial it.
+        email: row.email,
+        phone_on_file_with_park: row.phone,
+        // PAPER, ALWAYS, until they say otherwise. Having an address is not
+        // being asked. This is the same rule buildTenant learned the hard way
+        // when `mobile ? "sms" : "paper"` enrolled a park in text messages.
+        contact_pref: "paper",
         notes: row.notes.length ? row.notes.join("\n") : null,
       })
       .select("id")

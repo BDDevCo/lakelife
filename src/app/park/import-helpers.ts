@@ -179,6 +179,14 @@ export interface PlannedRow {
   /** True when committing this row will create the lot. */
   createsLot: boolean;
   name: string | null;
+  /**
+   * ADDRESSES OF RECORD, carried through so the office does not retype them.
+   * Neither is permission: the email is stored and only ever used for the one
+   * invite the owner chooses to send, and the phone goes to
+   * `phone_on_file_with_park`, which nothing in the app can send to.
+   */
+  email: string | null;
+  phone: string | null;
   amount: number | null;
   term: Term;
   range: DateRange | null;
@@ -393,6 +401,11 @@ export function planImport(input: PlanInput): ImportPlan {
       matchedLotId: lotId,
       createsLot: Boolean(label) && !real,
       name,
+      // Only a value we are confident in. A field the parser came back unsure
+      // about (two addresses in one cell, a nine-digit "phone") arrives null
+      // and stays the office's to fill in by hand.
+      email: row.email.value ?? null,
+      phone: row.phone.value ?? null,
       amount,
       term,
       range,

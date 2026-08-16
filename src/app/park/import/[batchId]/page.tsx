@@ -54,6 +54,7 @@ export default async function ParkImportBatchPage({
     blockQuestions: batch.blockQuestions,
     counts: batch.counts,
     statedTotal: batch.statedTotal,
+    refusedColumns: batch.refusedColumns,
   };
 
   return (

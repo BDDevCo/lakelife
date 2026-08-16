@@ -55,7 +55,7 @@ export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO
 
       <h1 style={{ fontSize: 26, margin: "14px 0 8px" }}>Your rent roll starts here</h1>
       <p className="mut" style={{ marginTop: 0, lineHeight: 1.5 }}>
-        Paste whatever the seller gave you — his spreadsheet, the page from the
+        Paste whatever you&apos;ve got — a spreadsheet, the page from the
         lawyer, the list you keep in your phone. We&apos;ll read what we can and
         be straight with you about the rest.
       </p>

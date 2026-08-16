@@ -52,15 +52,22 @@ const inferred = <T,>(value: T, raw: string, why: string): Field<T> =>
 export type Delimiter = "tab" | "multispace" | "comma" | "pipe" | "none";
 export type Verdict = "import" | "ask";
 
-export type Target = "lot" | "name" | "rent" | "term" | "dueDay" | "moveIn" | "email";
+export type Target = "lot" | "name" | "rent" | "term" | "dueDay" | "moveIn" | "email" | "phone";
 
 export interface ColumnMap {
   /** One entry per column, in order. */
   roles: ({ kind: "field"; target: Target; term?: Term }
         | { kind: "carry"; label: string }
+        | { kind: "refused"; label: string }
         | { kind: "unrecognised"; label: string })[];
   index: Partial<Record<Target, number>>;
   unrecognised: string[];
+  /**
+   * Columns dropped on purpose — SSNs, dates of birth, bank details. Named so
+   * the screen can say "we did not import this", because silently discarding
+   * data somebody pasted is its own kind of lie.
+   */
+  refused: string[];
 }
 
 export interface ParsedRow {
@@ -71,7 +78,23 @@ export interface ParsedRow {
   name: Field<string>;
   rent: Field<number>;
   term: Field<Term>;
-  /** Phones, balances, deposits, marginalia — carried, never mapped. */
+  /**
+   * AN ADDRESS OF RECORD, NOT PERMISSION.
+   *
+   * `email` was already a recognised header — it landed in `columns.index` and
+   * the VALUE was then dropped on the floor, because ParsedRow had nowhere to
+   * put it. A target with no field.
+   *
+   * `phone` used to be carried to `notes` as free text, deliberately: a number
+   * off somebody else's sheet written to `mobile_e164` is a text message to a
+   * stranger who never agreed to one. That reasoning stands. It now lands in
+   * `park_renters.phone_on_file_with_park` instead — a column that exists for
+   * exactly this and which the reminder engine is built never to send to — so
+   * the office can SEE the number without the software being able to use it.
+   */
+  email: Field<string>;
+  phone: Field<string>;
+  /** Balances, deposits, marginalia — carried, never mapped. */
   notes: string[];
   verdict: Verdict;
   askReasons: string[];
@@ -137,13 +160,31 @@ const SYN: Record<Target, string[]> = {
   dueDay: ["due", "due day", "due date", "rent due"],
   moveIn: ["move in", "move-in", "moved in", "start", "start date", "lease start", "since"],
   email:  ["email", "e-mail", "email address"],
+  phone:  ["phone", "cell", "mobile", "telephone", "phone number", "cell phone",
+           "contact number", "tel"],
 };
 
+/**
+ * COLUMNS WE REFUSE OUTRIGHT.
+ *
+ * A rent roll assembled from lease documents often carries a social security
+ * number or a date of birth. We are an administrator and never a screening
+ * bureau, and the safest place to hold data like that is nowhere. Refusing the
+ * whole column — rather than quietly carrying it to notes, which is where every
+ * unrecognised column goes — keeps that a property of the software instead of a
+ * habit somebody has to remember.
+ */
+const REFUSE = [
+  "ssn", "social security", "social", "sin", "tax id", "tin",
+  "dob", "date of birth", "birth date", "birthdate", "birthday",
+  "drivers license", "driver s license", "license number", "passport",
+  "bank account", "routing", "account number", "card number",
+];
+
 /** Columns we deliberately carry to notes rather than map — they are real data
- *  the owner may want, but nothing here writes them to a field. A phone written
- *  to mobile_e164 is a text message to a stranger who never consented. */
+ *  the owner may want, but nothing here writes them to a field of their own. */
 const CARRY = [
-  "phone", "cell", "mobile", "telephone", "balance", "past due", "deposit",
+  "balance", "past due", "deposit",
   "security", "pet", "pets", "notes", "note", "comment", "status", "address",
   "meter", "water", "electric", "utility", "vehicle", "make", "model", "year",
   "lease", "paid thru", "paid through", "last paid",
@@ -151,9 +192,13 @@ const CARRY = [
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-function targetFor(header: string): { target: Target; term?: Term } | "carry" | null {
+function targetFor(header: string): { target: Target; term?: Term } | "carry" | "refuse" | null {
   const h = norm(header);
   if (!h) return null;
+
+  // FIRST, before any synonym can claim it. "SSN" must never fall through to
+  // the carry list and end up in a notes field.
+  if (REFUSE.some((r) => h.includes(norm(r)))) return "refuse";
 
   // A synonym that normalises to nothing — "#" is the one — would make
   // `h.includes("")` true for EVERY header, so the first line of the paste
@@ -477,6 +522,81 @@ export function isPlaceholderName(s: string): boolean {
 
 /** A name is taken VERBATIM. We never reorder "Reyes, Donna" — guessing which
  *  half is the surname is how a whole park imports backwards. */
+/**
+ * AN EMAIL, OR NOTHING.
+ *
+ * No cleverness: an address we half-guessed is an invite sent to a stranger, or
+ * to nobody. Anything that does not read as an address comes back unknown with
+ * the raw text preserved, and the reconcile screen shows it to the owner.
+ */
+export function parseEmail(raw: string): Field<string> {
+  const s = (raw ?? "").trim();
+  if (!s || /^(n\/?a|-|—|none|tbd|\?)$/i.test(s)) return unknownField<string>(s);
+
+  // Rolls exported from park software often carry two, comma-separated. Taking
+  // the first silently would pick a spouse at random; ask instead.
+  const parts = s.split(/[,;/]| or /i).map((x) => x.trim()).filter(Boolean);
+  if (parts.length > 1) {
+    const valid = parts.filter((x) => EMAIL_RE.test(x));
+    return unknownField<string>(s, "There's more than one address here — which one?", valid);
+  }
+
+  if (!EMAIL_RE.test(s)) {
+    return unknownField<string>(s, "That doesn't look like an email address.");
+  }
+  return stated(s.toLowerCase(), s);
+}
+
+/**
+ * A PHONE NUMBER THE PARK HAS ON FILE.
+ *
+ * Stored so the office can read it. NEVER normalised into `mobile_e164` and
+ * never dialled or texted by anything — see `phone_on_file_with_park`. Kept as
+ * ten digits so two spellings of the same number are one number.
+ */
+export function parsePhone(raw: string): Field<string> {
+  const s = (raw ?? "").trim();
+  if (!s || /^(n\/?a|-|—|none|tbd|\?)$/i.test(s)) return unknownField<string>(s);
+
+  const digits = s.replace(/\D/g, "");
+  // A leading 1 is the country code, not an area code.
+  const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+
+  if (ten.length !== 10) {
+    return unknownField<string>(s, "That doesn't look like a ten-digit phone number.");
+  }
+  return stated(`(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}`, s);
+}
+
+const EMAIL_RE = /^[^@\s,;]+@[^@\s,;]+\.[a-z]{2,}$/i;
+/** A whole cell that is nine digits grouped 3-2-4, separators optional. */
+const SSN_RE = /^\d{3}[-. ]?\d{2}[-. ]?\d{4}$/;
+
+/**
+ * SSN-shaped runs ANYWHERE IN A LINE, for redaction before storage.
+ *
+ * Both separators are required here, unlike the whole-cell test. A bare nine
+ * digits inside a longer line is too often a zip+4 or an account number, and a
+ * ZIP written 46703-1234 matches a lax 3-2-4 pattern — redacting addresses
+ * would make the reconcile screen useless.
+ */
+const SSN_IN_LINE = /\b\d{3}[-. ]\d{2}[-. ]\d{4}\b/g;
+
+/**
+ * WHAT WE REFUSE TO KEEP, REMOVED BEFORE ANYTHING IS WRITTEN DOWN.
+ *
+ * Refusing the SSN COLUMN was not enough. `park_import_batches.raw_text` stores
+ * the pasted blob verbatim and every row keeps its own source line, so a social
+ * security number was dropped from the parsed fields and then filed twice in
+ * full. A rule that only removes a value from the tidy copy, while the untidy
+ * copy is what actually gets stored, is not a rule.
+ *
+ * Applied to every line as it is read and to the blob before it is saved.
+ */
+export function redactSensitive(text: string): string {
+  return text.replace(SSN_IN_LINE, "[not imported]");
+}
+
 export function parseName(raw: string): Field<string> {
   const s = (raw ?? "").trim().replace(/\s+/g, " ");
   if (!s) return unknownField<string>(raw ?? "");
@@ -524,9 +644,12 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
   const roles: ColumnMap["roles"] = [];
   const index: Partial<Record<Target, number>> = {};
   const unrecognised: string[] = [];
+  const refused: string[] = [];
   headerCells.forEach((label, i) => {
     const t = targetFor(label);
     if (t === null) { roles.push({ kind: "unrecognised", label }); unrecognised.push(label); return; }
+    // Not carried, not mapped, not kept. The cell is never read again.
+    if (t === "refuse") { roles.push({ kind: "refused", label }); refused.push(label); return; }
     if (t === "carry") { roles.push({ kind: "carry", label }); return; }
     roles.push({ kind: "field", target: t.target, ...(t.term ? { term: t.term } : {}) });
     if (index[t.target] === undefined) index[t.target] = i;
@@ -547,7 +670,7 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     }
   }
 
-  const columns: ColumnMap = { roles, index, unrecognised };
+  const columns: ColumnMap = { roles, index, unrecognised, refused };
 
   // THE BLOCK QUESTIONS. Asked ONCE for the whole paste, not silently per row.
   // The attack run's worst finding: a header reading "Unit" instead of "Lot"
@@ -656,19 +779,55 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
       term = inferred(impliedTerm, "", `The rent column said "${impliedTerm}".`);
     }
 
+    let email = index.email === undefined
+      ? unknownField<string>("") : parseEmail(cellAt("email"));
+    let phone = index.phone === undefined
+      ? unknownField<string>("") : parsePhone(cellAt("phone"));
+
     // Everything mapped to carry, plus every unrecognised cell, becomes a note.
-    // Nothing is thrown away silently.
+    // Nothing is thrown away silently — EXCEPT a refused column, which is
+    // dropped on purpose and never touches a note.
     const notes: string[] = [];
     roles.forEach((r, ci) => {
       const v = (cells[ci] ?? "").trim();
       if (!v) return;
+      if (r.kind === "refused") return;
+
+      // AN SSN CAN ARRIVE IN A COLUMN CALLED ANYTHING. The header list catches
+      // "SSN"; this catches the one pasted under "Notes" or "Ref". Nine digits
+      // grouped 3-2-4 is not a rent, a lot, or a phone, and we would rather
+      // lose a genuine reference number than keep somebody's social.
+      if (SSN_RE.test(v.trim())) {
+        const where = r.kind === "field" ? `column ${ci + 1}` : (r.label || `column ${ci + 1}`);
+        notes.push(`${where}: [not imported]`);
+        return;
+      }
+
+      // A HEADER WE DIDN'T RECOGNISE STILL HAS A SHAPE. Rolls arrive with
+      // "Contact", "Info", or no header at all, and an address or a ten-digit
+      // number in an unnamed column is not ambiguous. Inferred, never stated,
+      // so the screen shows it as a guess the owner can undo.
+      if (r.kind === "unrecognised") {
+        if (email.value == null && EMAIL_RE.test(v)) {
+          email = inferred(v.toLowerCase(), v, `Read as an email address from "${r.label || `column ${ci + 1}`}".`);
+          return;
+        }
+        if (phone.value == null) {
+          const p = parsePhone(v);
+          if (p.value != null) {
+            phone = inferred(p.value, v, `Read as a phone number from "${r.label || `column ${ci + 1}`}".`);
+            return;
+          }
+        }
+      }
+
       if (r.kind === "carry") notes.push(`${r.label}: ${v}`);
       else if (r.kind === "unrecognised") notes.push(`${r.label || `column ${ci + 1}`}: ${v}`);
     });
 
     rows.push({
-      lines: [lineNo], source: [line],
-      lot, name, rent, term, notes,
+      lines: [lineNo], source: [redactSensitive(line)],
+      lot, name, rent, term, email, phone, notes,
       verdict: "import", askReasons: [],
     });
   }
