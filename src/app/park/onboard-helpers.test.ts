@@ -1,21 +1,28 @@
 import { describe, it, expect } from "vitest";
-import { planOnboarding, onboardSummary, type OnboardRow } from "./onboard-helpers";
+import { readFileSync } from "node:fs";
+import { planOnboarding, onboardSummary, signingExplainer, type OnboardRow } from "./onboard-helpers";
 
 const TODAY = "2026-12-16";
 
 const row = (o: Partial<OnboardRow> = {}): OnboardRow => ({
   lotId: "l1", lotNumber: "3", displayName: "Amberg, Roy",
-  rent: "395", movedInOn: "", signedNewLease: true, ...o,
+  rent: "395", movedInOn: "", signedNewLease: false, ...o,
 });
 
 describe("filing the households who were already there", () => {
-  it("files a row with a name, and defaults the date to today", () => {
-    // "Already here" is the common case and a true answer — today is when the
-    // RECORD starts, not when the person did.
+  it("files a row with a name, and leaves an unknown move-in date UNKNOWN", () => {
+    // This used to default the date to today. "I don't know when they moved in"
+    // then became "they moved in today", and the resident's own screen greeted
+    // a household of eleven years with "living here since" this morning.
     const p = planOnboarding([row()], TODAY);
     expect(p.toFile).toHaveLength(1);
-    expect(p.toFile[0].movedInOn).toBe(TODAY);
+    expect(p.toFile[0].movedInOn).toBe("");
     expect(p.toFile[0].rent).toBe(395);
+  });
+
+  it("keeps a move-in date the owner DOES know", () => {
+    const p = planOnboarding([row({ movedInOn: "2015-04-02" })], TODAY);
+    expect(p.toFile[0].movedInOn).toBe("2015-04-02");
   });
 
   it("SKIPS a blank name in silence and names the lot for later", () => {
@@ -73,7 +80,7 @@ describe("what he is told before he writes it", () => {
       row({ lotId: "a", lotNumber: "1", rent: "395" }),
       row({ lotId: "b", lotNumber: "2", rent: "410" }),
     ], TODAY);
-    expect(onboardSummary(p)).toContain("File 2 households — $805.00 a month");
+    expect(onboardSummary(p, null)).toContain("File 2 households — $805.00 a month");
   });
 
   it("NAMES the lots with no rent, because those quietly never get billed", () => {
@@ -81,7 +88,7 @@ describe("what he is told before he writes it", () => {
       row({ lotId: "a", lotNumber: "1", rent: "395" }),
       row({ lotId: "b", lotNumber: "9", rent: "" }),
     ], TODAY);
-    const s = onboardSummary(p);
+    const s = onboardSummary(p, null);
     expect(s).toContain("1 with no rent set (lot 9)");
     expect(s).toMatch(/won't be billed until you set one/);
   });
@@ -93,17 +100,60 @@ describe("what he is told before he writes it", () => {
       row({ lotId: "a", lotNumber: "1", signedNewLease: true }),
       row({ lotId: "b", lotNumber: "2", signedNewLease: false }),
     ], TODAY);
-    expect(onboardSummary(mixed)).toContain("1 on the new lease, 1 still on the old arrangement");
+    expect(onboardSummary(mixed, 3))
+      .toContain("1 on the new lease, 1 on the arrangement they already had");
   });
 
-  it("says plainly when nobody has signed yet", () => {
+  it("treats nobody-has-signed as the ORDINARY state, not a chore outstanding", () => {
+    // Onboarding an occupied park means exactly this: everyone is on whatever
+    // they already had. It read "None have signed the new lease YET".
     const none = planOnboarding([row({ signedNewLease: false })], TODAY);
-    expect(onboardSummary(none)).toMatch(/doesn't apply until they do/);
+    expect(onboardSummary(none, null)).toContain("all on the arrangement they already had");
+    expect(onboardSummary(none, null)).not.toMatch(/yet/i);
   });
 
   it("says plainly when everybody has", () => {
-    expect(onboardSummary(planOnboarding([row()], TODAY)))
-      .toMatch(/all on the new lease, capped by your three-month rule/);
+    const all = planOnboarding([row({ signedNewLease: true })], TODAY);
+    expect(onboardSummary(all, null)).toMatch(/all on the new lease/);
+  });
+
+  // ---- the cap the park may not have ---------------------------------------
+
+  it("never invents an agreement cap the park has not set", () => {
+    // THE BUG: three sentences said "your three-month rule" as flat fact.
+    // `max_agreement_months` is a per-park dial and NO park in the database has
+    // ever set one — including The Haven. The screen was quoting a policy back
+    // at owners who had never written it.
+    const all = planOnboarding([row({ signedNewLease: true })], TODAY);
+    const none = planOnboarding([row({ signedNewLease: false })], TODAY);
+    for (const line of [onboardSummary(all, null), onboardSummary(none, null),
+                        signingExplainer(null)]) {
+      expect(line).not.toMatch(/three-month/);
+      expect(line).not.toMatch(/\d+-month rule/);
+    }
+  });
+
+  it("names the park's OWN cap when it has one", () => {
+    const all = planOnboarding([row({ signedNewLease: true })], TODAY);
+    expect(onboardSummary(all, 6)).toContain("capped by your 6-month rule");
+    expect(signingExplainer(6)).toContain("6-month rule");
+    expect(signingExplainer(1)).toContain("one-month rule");
+  });
+
+  // ---- park-agnostic -------------------------------------------------------
+
+  it("mentions no seller anywhere, because most parks were never bought", () => {
+    // Most parks joining already own themselves and have had the same
+    // households for years. A screen that invents a seller reads as software
+    // written for somebody else's deal.
+    const p = planOnboarding([
+      row({ lotId: "a", lotNumber: "1", signedNewLease: true }),
+      row({ lotId: "b", lotNumber: "2", signedNewLease: false }),
+    ], TODAY);
+    for (const line of [onboardSummary(p, null), onboardSummary(p, 3),
+                        signingExplainer(null), signingExplainer(3)]) {
+      expect(line).not.toMatch(/seller|closing|purchase|takeover/i);
+    }
   });
 
   it("carries the signing state through to what gets written", () => {
@@ -113,15 +163,49 @@ describe("what he is told before he writes it", () => {
 
   it("counts what was left for later without calling it a failure", () => {
     const p = planOnboarding([row(), row({ lotId: "b", lotNumber: "9", displayName: "" })], TODAY);
-    expect(onboardSummary(p)).toContain("1 still to do");
+    expect(onboardSummary(p, null)).toContain("1 still to do");
   });
 
   it("says nothing is filled in rather than reporting a zero total", () => {
-    expect(onboardSummary(planOnboarding([], TODAY))).toBe("Nothing filled in yet.");
+    expect(onboardSummary(planOnboarding([], TODAY), null)).toBe("Nothing filled in yet.");
   });
 
   it("points at the problems when every row has one", () => {
     const p = planOnboarding([row({ rent: "nope" })], TODAY);
-    expect(onboardSummary(p)).toMatch(/fix the lines below/);
+    expect(onboardSummary(p, null)).toMatch(/fix the lines below/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the tick that claims a lease exists", () => {
+  // THE WORST FINDING OF THE GO-LIVE REHEARSAL, and it is not in a pure
+  // function — it is one word in a component's initial state, which is why it
+  // survived every test up to now.
+  //
+  // Every checkbox defaulted to TICKED. The instruction above them reads "tick
+  // anyone who has signed your new lease", which only makes sense from a clear
+  // baseline. An owner who followed that instruction, ticked nobody because on
+  // day one nobody has signed, and pressed File wrote a signed agreement for
+  // every household in the park — and the summary line called it "all on the
+  // new lease" as though describing his own work.
+  const source = () => {
+    const raw = readFileSync(
+      new URL("../../components/ParkOnboard.tsx", import.meta.url), "utf8");
+    // Comments are stripped, because the comment explaining this fix names the
+    // old value and a naive grep would match it and pass forever.
+    return raw
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "")
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "");
+  };
+
+  it("finds the initial state it is scanning, so a rename cannot make this vacuous", () => {
+    expect(source()).toMatch(/signedNewLease\s*:/);
+  });
+
+  it("starts every household CLEAR of the new lease", () => {
+    expect(source()).toMatch(/signedNewLease\s*:\s*false/);
+    expect(source()).not.toMatch(/signedNewLease\s*:\s*true/);
   });
 });

@@ -1,17 +1,20 @@
 /**
  * FILING THE PEOPLE WHO WERE ALREADY THERE.
  *
- * THE PLAN IS THAT EVERYBODY SIGNS A NEW LEASE AT TAKEOVER, so the default is a
- * fresh agreement under the park's own cap. But on the first morning some will
- * have signed and some will not, and BOTH still live here and still owe rent.
- * The record says which, per household, rather than picking one story for
- * everybody — because a row that claims an agreement nobody signed is the same
- * class of lie as a bill nobody sent.
+ * NOBODY HAS SIGNED ANYTHING YET, so that is the default: a holdover on the
+ * arrangement they already had. Some parks will sign everyone onto a new lease
+ * on day one and some will never ask, and BOTH kinds of household live here and
+ * owe rent. The record says which, per household, rather than picking one story
+ * for everybody — because a row that claims an agreement nobody signed is the
+ * same class of lie as a bill nobody sent. The tick starts clear for exactly
+ * that reason: it is a claim about a piece of paper, and only the person
+ * holding the paper may make it.
  *
- * The Haven's rent roll names nobody, so the importer wrote 21 lots and 21 rate
- * cards and — correctly — ZERO tenancies: putting a name on a lot the sheet did
- * not name would be inventing a person. That leaves the real first day's work,
- * which is sitting down after closing and filing nineteen households.
+ * A rent roll is a list of lots and amounts; it usually names nobody. So the
+ * importer writes lots and rate cards and — correctly — ZERO tenancies, because
+ * putting a name on a lot the sheet did not name would be inventing a person.
+ * That leaves the real first day's work, which is sitting down and filing the
+ * households one screen at a time.
  *
  * The existing path is one lot at a time: pick a lot, fill a form, save, go
  * back. Nineteen rounds of that is how half of them end up unfiled, and an
@@ -20,15 +23,17 @@
  * TWO THINGS MAKE THIS FAST, AND BOTH ARE ABOUT NOT RETYPING WHAT WE ALREADY
  * KNOW:
  *
- *   THE RENT IS ALREADY ON FILE. The importer wrote each lot's monthly rate off
- *   the seller's roll, so every row arrives pre-filled and he is mostly typing
- *   names. He can correct any of them; a correction is still HIS knowledge, not
- *   the tenant's, so the provenance does not improve just because he retyped it.
+ *   THE RENT IS ALREADY ON FILE. Each lot's monthly rate is on the lot already,
+ *   so every row arrives pre-filled and he is mostly typing names. He can
+ *   correct any of them; a correction is still HIS knowledge, not the tenant's,
+ *   so the provenance does not improve just because he retyped it.
  *
  *   THE SIGNING STATE IS ONE TICK PER ROW. Ticked writes a real agreement under
  *   the cap, because one exists on paper. Clear writes a holdover on the rolling
- *   horizon, which 0065 exempts from the cap — they are living here on whatever
- *   the seller agreed, and until they sign, that is simply the truth.
+ *   horizon, which 0065 exempts from the cap — they are living here on the
+ *   arrangement they already had, and until they sign, that is simply the
+ *   truth. Clear is the default, because on the first morning it is true of
+ *   everybody.
  *
  * A BLANK ROW IS SKIPPED, NOT AN ERROR. He will not know every name on the
  * first afternoon, and a form that refuses to save until all nineteen are
@@ -49,8 +54,8 @@ export interface OnboardRow {
    *
    * TRUE writes a fresh agreement under the park's cap — a real agreement,
    * because one exists on paper. FALSE writes a holdover on the rolling
-   * horizon, exempt from the cap, because they are living here on whatever the
-   * seller agreed and nobody has changed that yet.
+   * horizon, exempt from the cap, because they are living here on the
+   * arrangement they already had and nobody has changed that yet.
    */
   signedNewLease: boolean;
 }
@@ -104,17 +109,24 @@ export function planOnboarding(rows: readonly OnboardRow[], todayISO: string): O
       rent = Math.round(n * 100) / 100;
     }
 
-    const movedInOn = r.movedInOn.trim() || todayISO;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(movedInOn)) {
-      problems.push({ lotNumber: r.lotNumber, why: "That move-in date doesn't look right." });
-      continue;
-    }
-    if (movedInOn > todayISO) {
-      problems.push({
-        lotNumber: r.lotNumber,
-        why: "That move-in date is in the future — these are people already here.",
-      });
-      continue;
+    // BLANK STAYS BLANK. This used to default to today, which turned "I don't
+    // know when they moved in" into "they moved in today" — and the resident's
+    // own screen then greeted a household of eleven years with "living here
+    // since August 15, 2026". An unknown date is recorded as unknown; the
+    // column is nullable precisely so it can be.
+    const movedInOn = r.movedInOn.trim();
+    if (movedInOn) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(movedInOn)) {
+        problems.push({ lotNumber: r.lotNumber, why: "That move-in date doesn't look right." });
+        continue;
+      }
+      if (movedInOn > todayISO) {
+        problems.push({
+          lotNumber: r.lotNumber,
+          why: "That move-in date is in the future — these are people already here.",
+        });
+        continue;
+      }
     }
 
     toFile.push({
@@ -132,11 +144,11 @@ const money = (n: number) =>
 /**
  * What he is about to write, before he writes it.
  *
- * Names the monthly total because that is the number he will check against the
- * seller's roll, and names the lots with no rent because those are the ones
- * that will silently not be billed.
+ * Names the monthly total because that is the number he will check against his
+ * own roll, and names the lots with no rent because those are the ones that
+ * will silently not be billed.
  */
-export function onboardSummary(plan: OnboardPlan): string {
+export function onboardSummary(plan: OnboardPlan, capMonths: number | null): string {
   if (plan.toFile.length === 0) {
     return plan.problems.length > 0
       ? "Nothing to file yet — fix the lines below."
@@ -154,14 +166,21 @@ export function onboardSummary(plan: OnboardPlan): string {
   const signed = plan.toFile.filter((r) => r.signedNewLease).length;
   const holdover = plan.toFile.length - signed;
   if (signed > 0 && holdover > 0) {
-    parts.push(`${signed} on the new lease, ${holdover} still on the old arrangement`);
+    parts.push(`${signed} on the new lease, ${holdover} on the arrangement they already had`);
   } else if (holdover > 0) {
+    // THE ORDINARY CASE, AND NOT A FAILING. On the first morning nobody has
+    // signed anything — that is what onboarding an occupied park means. This
+    // used to read "None have signed the new lease YET", which turns the normal
+    // state into a chore outstanding.
     parts.push(
-      `${holdover === 1 ? "Nobody has" : "None have"} signed the new lease yet — ` +
-      `filed as they are, and your three-month rule doesn't apply until they do`,
+      `all on the arrangement they already had` +
+      (capMonths == null ? "" : `, so your ${capRule(capMonths)} doesn't apply until they sign`),
     );
   } else {
-    parts.push(`all on the new lease, capped by your three-month rule`);
+    parts.push(
+      `all on the new lease` +
+      (capMonths == null ? "" : `, capped by your ${capRule(capMonths)}`),
+    );
   }
 
   const noRent = plan.toFile.filter((r) => r.rent == null).map((r) => r.lotNumber);
@@ -177,13 +196,38 @@ export function onboardSummary(plan: OnboardPlan): string {
 }
 
 /**
+ * THE AGREEMENT CAP, IN WORDS, ONLY WHEN ONE EXISTS.
+ *
+ * `parks.max_agreement_months` is a per-park dial and it is frequently unset —
+ * as of today NO park in the database has one. Three separate sentences used to
+ * say "your three-month rule" as a flat fact, which was a rule the reader had
+ * never set, on a screen asking them to file nineteen real households. Copy
+ * that states a policy the park does not have teaches the owner to stop
+ * believing the screen.
+ */
+function capRule(months: number): string {
+  return `${months === 1 ? "one" : months}-month rule`;
+}
+
+/**
  * What the tick means, in his words.
  *
  * A real decision with a legal shape, so it is put plainly and the app takes no
  * position beyond describing what each state records.
+ *
+ * PARK-AGNOSTIC. This used to say "whatever they had with the seller", which is
+ * only true for a park that just changed hands. Most parks joining LakeLife
+ * already own themselves and have had the same households for years — there is
+ * no seller anywhere in their story, and a screen that invents one reads as
+ * software written for somebody else.
  */
-export const SIGNING_EXPLAINER =
-  "Tick the ones who have signed your new lease — those get a fresh agreement " +
-  "under your three-month rule. Leave it clear for anyone still on whatever " +
-  "they had with the seller: they keep that arrangement, and the rule starts " +
-  "applying when they sign. Either way they're on the roll and they get billed.";
+export function signingExplainer(capMonths: number | null): string {
+  return (
+    "Tick anyone who has signed your new lease — those get a fresh agreement" +
+    (capMonths == null ? ". " : ` under your ${capRule(capMonths)}. `) +
+    "Leave it clear for everyone still on the arrangement they already had: " +
+    "that carries on exactly as it is" +
+    (capMonths == null ? "" : ", and the rule starts applying when they sign") +
+    ". Either way they're on the roll and they get billed."
+  );
+}

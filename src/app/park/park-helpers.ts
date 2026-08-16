@@ -756,7 +756,15 @@ export interface TenantResult {
      * When the household actually moved in, which is a different fact and
      * often years earlier. Written to `tenancy_began_on`.
      */
-    beganOn: string;
+    /**
+     * When the person actually arrived, or NULL when nobody knows.
+     *
+     * Not defaulted to today. An owner filing a household who has lived on the
+     * lot for eleven years usually cannot supply the date, and writing today's
+     * date in that gap made the resident's own screen tell her she moved in
+     * this morning. Unknown is a real answer and it is stored as one.
+     */
+    beganOn: string | null;
     term: Term;
     quoted_amount: number | null;
   };
@@ -902,7 +910,7 @@ export function buildTenant(
       end: maxAgreementMonths == null
         ? addDays(rangeStart, TENANCY_HORIZON_DAYS)
         : addMonths(rangeStart, maxAgreementMonths),
-      beganOn: start,
+      beganOn: input.movedInOn.trim() || null,
       term,
       quoted_amount: quoted,
     },

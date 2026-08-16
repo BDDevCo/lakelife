@@ -10,11 +10,12 @@ import { planOnboarding, type OnboardRow } from "./onboard-helpers";
 import type { ParkResult } from "./actions";
 
 /**
- * THE FIRST AFTERNOON AFTER CLOSING.
+ * THE FIRST AFTERNOON ON THE SYSTEM.
  *
- * The importer wrote the lots and the rate cards off the seller's sheet and no
- * tenancies at all, because that sheet names nobody. This is the screen that
- * puts the nineteen households onto them.
+ * However a park arrives — bought last week, or owned for thirty years — it
+ * arrives with lots and rates and no tenancies, because a rent roll is a list
+ * of lots and amounts and typically names nobody. This is the screen that puts
+ * the households onto them.
  *
  * IT WRITES ROW BY ROW, NOT AS ONE BATCH. Eighteen good rows must not be lost
  * to one bad one — and at nineteen households a failed all-or-nothing save is a
@@ -29,7 +30,7 @@ const DENIED = "You don't manage that park.";
 export interface OnboardSeed {
   lotId: string;
   lotNumber: string;
-  /** The monthly rate the importer took off the seller's roll. */
+  /** The monthly rate already recorded against the lot, if any. */
   suggestedRent: string;
 }
 
@@ -39,11 +40,18 @@ export interface OnboardSeed {
  * Pre-filling the rent is most of the speed here: he confirms numbers and types
  * names, rather than typing both. It is still HIS knowledge either way —
  * `amount_source` stays 'owner_knowledge' whether he accepts the roll's figure
- * or retypes it, because a seller's sheet does not become true by being copied.
+ * or retypes it, because a sheet does not become true by being copied.
  */
 export async function getOnboardSeeds(
   parkId: string,
-): Promise<{ ok: boolean; error?: string; seeds?: OnboardSeed[]; today?: string }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  seeds?: OnboardSeed[];
+  today?: string;
+  capMonths?: number | null;
+  rentsFromImport?: boolean;
+}> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
@@ -83,7 +91,34 @@ export async function getOnboardSeeds(
     }))
     .sort((a, b) => a.lotNumber.localeCompare(b.lotNumber, undefined, { numeric: true }));
 
-  return { ok: true, seeds, today };
+  // TWO FACTS THE SCREEN USED TO ASSUME.
+  //
+  // The cap: `max_agreement_months` is a per-park dial and is usually unset —
+  // no park in the database has one today — yet three sentences asserted "your
+  // three-month rule" to everybody.
+  //
+  // The import: the screen told every owner their rents "came off the sheet you
+  // imported", including parks that never pasted a roll in. Both are now read
+  // rather than assumed.
+  const [{ data: parkRow }, { count: importCount }] = await Promise.all([
+    admin.from("parks").select("max_agreement_months").eq("id", parkId).maybeSingle(),
+    // Committed and not since undone. There is no `status` column here — the
+    // batch's life is recorded as two timestamps.
+    admin
+      .from("park_import_batches")
+      .select("id", { count: "exact", head: true })
+      .eq("park_id", parkId)
+      .not("committed_at", "is", null)
+      .is("undone_at", null),
+  ]);
+
+  return {
+    ok: true,
+    seeds,
+    today,
+    capMonths: (parkRow?.max_agreement_months as number | null) ?? null,
+    rentsFromImport: (importCount ?? 0) > 0,
+  };
 }
 
 /**
@@ -169,8 +204,8 @@ export async function commitOnboarding(
       status: "active",
       term: "monthly",
       quoted_amount: built.tenancy.quoted_amount,
-      // WHERE THE NUMBER CAME FROM. Michael's sheet is the owner's knowledge,
-      // never the tenant's — it improves only when the household confirms it.
+      // WHERE THE NUMBER CAME FROM. The office's sheet is the owner's
+      // knowledge, never the tenant's — it improves only when they confirm it.
       amount_source: "owner_knowledge",
       // The real arrival date, kept apart from the agreement window that
       // `buildTenant` now clamps forward. They are the same value only for a

@@ -202,8 +202,9 @@ export interface TaskFacts {
   /** Costs entered but never split across lots — they bill nobody. */
   unallocatedCosts: { id: string; label: string; amount: number }[];
   /**
-   * Households still on whatever the seller agreed, with no new lease signed.
-   * Named by lot, because chasing a signature is a door-knock not a query.
+   * Households still on the arrangement they already had, with no new lease
+   * signed. Named by lot, because chasing a signature is a door-knock not a
+   * query.
    */
   holdoverLots: string[];
   /** Rent changes whose notice period is about to make the date impossible. */
@@ -351,8 +352,8 @@ export function generateTasks(f: TaskFacts): Task[] {
       key: `unsigned_lease:${f.parkId}`,
       title: `${n} ${n === 1 ? "household hasn't" : "households haven't"} signed the new lease`,
       detail:
-        `${n === 1 ? "Lot" : "Lots"} ${f.holdoverLots.join(", ")} — still on what they had ` +
-        `with the seller, so your agreement cap doesn't apply to them yet.`,
+        `${n === 1 ? "Lot" : "Lots"} ${f.holdoverLots.join(", ")} — still on the ` +
+        `arrangement they already had, so your agreement cap doesn't apply to them yet.`,
       urgency: "whenever",
       dueOn: null,
       href: "/park",
@@ -550,7 +551,7 @@ export function quietState(checked: readonly string[]): { headline: string; chec
   };
 }
 
-// -------------------------------------------------------- before closing ---
+// --------------------------------------------------------- before go-live ---
 
 export interface ReadinessItem { label: string; value: string; done: boolean }
 
@@ -582,10 +583,14 @@ export function preCutover(input: {
   return {
     headline: days === 0
       ? `${input.parkName} — today is the day.`
-      : `${input.parkName} — ${days} ${days === 1 ? "day" : "days"} to closing.`,
+      // PARK-AGNOSTIC. Most parks joining already own themselves — there is no
+      // closing and no seller in their story, only the day they start running
+      // the park on this system. "Go-live" is true of a purchase AND of a park
+      // that has been in the family for thirty years.
+      : `${input.parkName} — ${days} ${days === 1 ? "day" : "days"} to go-live.`,
     sub: days === 0
       ? "Money and occupancy start now."
-      : `You take over on ${input.cutoverOn}. Nothing is collectable until then.`,
+      : `You go live on ${input.cutoverOn}. Nothing is collectable until then.`,
     items: [
       { label: "Lots on file", value: String(input.lots), done: input.lots > 0 },
       {

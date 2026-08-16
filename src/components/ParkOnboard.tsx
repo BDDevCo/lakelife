@@ -5,23 +5,31 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { commitOnboarding, type OnboardSeed } from "@/app/park/onboard-actions";
 import {
-  planOnboarding, onboardSummary, SIGNING_EXPLAINER,
+  planOnboarding, onboardSummary, signingExplainer,
   type OnboardRow,
 } from "@/app/park/onboard-helpers";
 
 /**
  * NINETEEN HOUSEHOLDS IN ONE SITTING.
  *
- * One row per empty lot, rent already filled in off the seller's roll, so he is
- * mostly typing names. Tab moves along the row and down the list, because this
- * is a keyboard job done once with a piece of paper next to the laptop.
+ * One row per empty lot, rent already filled in from whatever is on the lot, so
+ * he is mostly typing names. Tab moves along the row and down the list, because
+ * this is a keyboard job done once with a piece of paper next to the laptop.
  *
  * Nothing here demands completeness. He will not know every name on the first
  * afternoon, and a blank row is left for later rather than blocking the save.
  */
 export function ParkOnboard({
-  parkId, seeds, today,
-}: { parkId: string; seeds: OnboardSeed[]; today: string }) {
+  parkId, seeds, today, capMonths, rentsFromImport,
+}: {
+  parkId: string;
+  seeds: OnboardSeed[];
+  today: string;
+  /** The park's own agreement cap, or null when it has not set one. */
+  capMonths: number | null;
+  /** Did a roll actually get pasted in? The rent hint is a lie otherwise. */
+  rentsFromImport: boolean;
+}) {
   const router = useRouter();
   const [busy, start] = useTransition();
   const [rows, setRows] = useState<OnboardRow[]>(
@@ -31,9 +39,17 @@ export function ParkOnboard({
       displayName: "",
       rent: s.suggestedRent,
       movedInOn: "",
-      // The plan is everybody signs, so that is the default — and the ones who
-      // haven't yet get un-ticked as he works down the sheet.
-      signedNewLease: true,
+      // NOBODY HAS SIGNED ANYTHING YET. This defaulted to true, on the theory
+      // that everyone signs at takeover — so an owner who read the instruction
+      // ("tick anyone who has signed"), ticked nobody because nobody had, and
+      // pressed File wrote a fresh signed agreement for every household in the
+      // park. Nineteen records asserting a lease that does not exist on paper,
+      // created by a default, with the summary line calling it "all on the new
+      // lease" as though it were describing his own work.
+      //
+      // The tick is a claim about a piece of paper. It starts false and only
+      // the person holding the paper may make it true.
+      signedNewLease: false,
     })),
   );
 
@@ -60,14 +76,20 @@ export function ParkOnboard({
         {seeds.length === 1
           ? "One lot has nobody on it yet."
           : `${seeds.length} lots have nobody on them yet.`}{" "}
-        The rents came off the sheet you imported — check them as you go. Leave
-        a row blank if you don&apos;t know yet.
+        {/* ONLY CLAIM AN IMPORT THAT HAPPENED. This said "the rents came off
+            the sheet you imported" to every park, including one that never
+            pasted a roll — so the first thing the screen told them about their
+            own data was wrong. */}
+        {rentsFromImport
+          ? "The rents came off the roll you pasted in — check them as you go."
+          : "Any rent already on the lot is filled in for you — check them as you go."}{" "}
+        Leave a row blank if you don&apos;t know yet.
       </p>
 
       <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
         <strong style={{ fontSize: 15 }}>The new lease</strong>
         <p className="mut" style={{ fontSize: 13, marginTop: 6, marginBottom: 0, lineHeight: 1.5 }}>
-          {SIGNING_EXPLAINER}
+          {signingExplainer(capMonths)}
         </p>
       </div>
 
@@ -122,11 +144,11 @@ export function ParkOnboard({
 
       {/* ---- what is about to happen -------------------------------------- */}
       <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
-        <strong style={{ fontSize: 15 }}>{onboardSummary(plan)}</strong>
+        <strong style={{ fontSize: 15 }}>{onboardSummary(plan, capMonths)}</strong>
         <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
           Nobody is told anything by this. It puts them on the roll so you can
-          bill them — the rents are recorded as YOUR figures off the sheet, not
-          as anything they&apos;ve confirmed.
+          bill them — the rents are recorded as YOUR figures, not as anything
+          they&apos;ve confirmed.
         </p>
         <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
           <button className="ll-btn" disabled={busy || plan.toFile.length === 0}

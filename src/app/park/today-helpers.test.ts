@@ -398,17 +398,24 @@ describe("the quiet state — which is most days", () => {
   });
 });
 
-describe("before the park is his", () => {
+describe("before the park goes live", () => {
   const base = {
     today: TODAY, cutoverOn: "2026-12-15", parkName: "The Haven",
     lots: 21, lotsWithRates: 21, monthlyRoll: 5200, households: 0,
     rentDueDay: 1, maxAgreementMonths: 3,
   };
 
-  it("counts down to closing rather than showing an empty park", () => {
+  it("counts down to go-live rather than showing an empty park", () => {
     const p = preCutover(base);
-    expect(p.headline).toBe("The Haven — 126 days to closing.");
+    expect(p.headline).toBe("The Haven — 126 days to go-live.");
     expect(p.sub).toMatch(/Nothing is collectable/);
+  });
+
+  it("counts down without assuming the park was BOUGHT", () => {
+    // Most parks joining already own themselves: no closing, no seller, no
+    // purchase — just the day they start running the place on this system.
+    const p = preCutover(base);
+    expect(`${p.headline} ${p.sub}`).not.toMatch(/closing|seller|purchase|take over/i);
   });
 
   it("measures readiness against lots and rates, which exist", () => {

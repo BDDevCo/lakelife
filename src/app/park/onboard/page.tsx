@@ -31,7 +31,13 @@ export default async function ParkOnboardPage() {
     <>
       <TopBar />
       <ParkNav parkName={park.name} live={park.active} />
-      <ParkOnboard parkId={park.id} seeds={res.seeds ?? []} today={res.today ?? ""} />
+      <ParkOnboard
+        parkId={park.id}
+        seeds={res.seeds ?? []}
+        today={res.today ?? ""}
+        capMonths={res.capMonths ?? null}
+        rentsFromImport={res.rentsFromImport ?? false}
+      />
     </>
   );
 }

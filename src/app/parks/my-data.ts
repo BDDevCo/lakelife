@@ -97,7 +97,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // somebody else now lives on.
   const { data: stays } = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_id, during, term, status, expected_move_out")
+    .select("id, park_lot_id, renter_id, during, term, status, expected_move_out, tenancy_began_on")
     .in("renter_id", renterIds)
     .in("status", ["approved", "active"])
     .order("created_at", { ascending: false });
@@ -196,7 +196,14 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     cardFeePct: Number(park?.card_fee_pct ?? 0),
     lotNumber: (lot?.lot_number as string) ?? "—",
     displayName: (file.display_name as string) ?? "Resident",
-    since: range?.start ?? null,
+    // WHEN SHE ARRIVED, NOT WHEN THE PAPERWORK STARTED. This read the
+    // agreement window's start and labelled it "living here since" — two facts
+    // the schema deliberately keeps apart (see buildTenant). A household filed
+    // on their first day in the system was greeted with "living here since"
+    // today, which for someone who has been on the lot eleven years is simply
+    // false, and false in a way she notices immediately. Unknown now renders as
+    // nothing at all, which is what we actually know.
+    since: (stay.tenancy_began_on as string | null) ?? null,
     term: (stay.term as string) ?? "monthly",
     leavingOn: (stay.expected_move_out as string) ?? null,
     bill: charge
