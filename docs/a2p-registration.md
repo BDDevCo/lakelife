@@ -1,6 +1,6 @@
 # A2P 10DLC registration — what to fill in, and what to bring back
 
-**Status: BLOCKED on this, and it has been blocking silently since July.**
+**Status: the entity gate CLEARED 17 Aug 2026. Registration itself still open.**
 Not a future limitation — a live outage nobody could see.
 
 Written 2026-08-16, after texting a real handset for the first time.
@@ -34,19 +34,28 @@ slip already assume that.
 
 ---
 
-## Step zero: the entity. This is the real gate.
+## Step zero: the entity. DONE — 17 August 2026.
+
+**LAKELIFE AI, LLC**, Indiana domestic single-member LLC, Business ID
+202608172029158, effective 17 August 2026. EIN assigned the same day; the
+CP-575 is in OneDrive under LakeLife/Corporate Docs.
+
+**Use "LAKELIFE AI" — with no "LLC" — wherever a form asks for the name as it
+appears with the IRS.** The state registered "LAKELIFE AI, LLC" and the IRS
+assigned the EIN to "LAKELIFE AI". The warning below was written before the
+entity existed and it now has a specific answer: copy the name off the CP-575,
+character for character. The IRS name control is LAKE.
 
 Registration is a **business** registration. It needs a legal entity name and an
 **EIN that matches IRS records exactly**.
 
-The launch plan (§ weeks 1–2) still lists "form the LakeLife entity, open the
-bank account, start processor underwriting" as open. **That same entity + EIN is
-what the payment processor underwrites.** Forming it unblocks both of the
-externally-blocked items at once — texting and card processing. Nothing below
-can start without it.
+The entity and EIN were the gate for BOTH externally-blocked items — texting
+and card processing — and they are now done. What remains open from the launch
+plan's week 1–2 list is the **bank account** and **processor underwriting**;
+see `banking-questions.md`.
 
-Sole-proprietor registration is possible and is a worse deal: materially lower
-throughput and more restrictions. With an EIN, register as the company.
+Register as the company, not as a sole proprietor: sole-proprietor registration
+carries materially lower throughput and more restrictions.
 
 ---
 

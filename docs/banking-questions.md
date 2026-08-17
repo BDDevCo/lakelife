@@ -1,6 +1,84 @@
 # Banker meeting — what to ask, and what disqualifies a bank
 
-Written 17 August 2026, for the meeting after the entity and EIN landed.
+Written 17 August 2026, from the filed formation documents and the CP-575.
+
+---
+
+## The entity, as filed
+
+| | |
+|---|---|
+| Legal name (State of Indiana) | **LAKELIFE AI, LLC** |
+| Legal name (IRS, on the CP-575) | **LAKELIFE AI** — *no "LLC"; see below* |
+| IRS name control | LAKE |
+| Type | Domestic LLC, **single member**, member-managed |
+| Indiana Business ID | 202608172029158 · Filing No 11480911 |
+| Effective | 17 August 2026, perpetual duration |
+| Principal office | 1506 Wall St, Fort Wayne, IN 46802 (Allen County) |
+| IRS mailing address | PO Box 171, South Milford, IN 46786 |
+| Registered agent | BD DevCo Asset Management, LLC, 5465 S 930 E, Wolcottville |
+| Responsible party | Brendon Lochert, sole member |
+| IRS business activity | "OTHER", principal product/service **"TECH AI"** |
+| W-2 employees | None declared |
+
+**The EIN is deliberately not written in this file.** This repository is public
+on GitHub. Take the CP-575 itself to the meeting.
+
+---
+
+## Three things in those documents to deal with first
+
+### 1. The IRS name has no "LLC", and that is the string that must match
+
+The state registered **LAKELIFE AI, LLC**. The IRS assigned the EIN to
+**LAKELIFE AI**. That difference is not cosmetic for two of the things
+currently blocked:
+
+- **A2P 10DLC texting registration** rejects far more brands for a name that
+  does not match IRS records exactly than for any other reason — it is the
+  first warning in `a2p-registration.md`, written before this entity existed.
+- **Processor underwriting** runs the same TIN-matching check.
+
+So when a form says "legal business name as it appears with the IRS", the answer
+is **LAKELIFE AI**, copied off the CP-575, not "LakeLife AI, LLC" and not
+"LakeLife". Where a form asks for the name as registered with the state, it is
+**LAKELIFE AI, LLC**. Read which one each form is asking for.
+
+### 2. Every customer-facing thing says "LakeLife", and no entity is called that
+
+The website, the hero, the emails, the printed slip and both user-agreement
+drafts all say **LakeLife**. The company is **LakeLife AI, LLC**. Contracts,
+invoices and the terms of service should either use the full legal name or the
+business should file an **assumed business name certificate** in Indiana so
+"LakeLife" is formally a name the LLC trades under.
+
+Worth asking the attorney at the same time as the ToS. It costs very little now
+and is awkward to fix after nineteen residents and a handful of crews have
+signed things.
+
+### 3. "TECH AI" will raise an eyebrow in underwriting
+
+The EIN application describes the business as *OTHER / TECH AI*. What the bank
+and the processor will actually see is a company collecting card and ACH
+payments for lawn mowing, dock installation and rent. Those are not the same
+story.
+
+Nothing is wrong — it is an AI-built platform — but **be ready to describe the
+business the same way to everyone**: the bank, the processor, and The Campaign
+Registry. Inconsistency between what the IRS record says and what the merchant
+application says is a common reason underwriting stalls. The description in the
+thirty-second explainer below is the one to use everywhere.
+
+### And one for the CPA, because it is time-sensitive
+
+A single-member LLC is a **disregarded entity** by default — taxed on the
+personal return. If an **S-corporation election** is wanted for the 2026 tax
+year, Form 2553 generally has to be filed within roughly 75 days of the
+formation date, which was 17 August. I am not a tax adviser and this is not
+tax advice; it is a date worth putting in front of an accountant this month
+rather than in January.
+
+---
 
 **I am not a lawyer and this is not legal advice.** One question below (money
 transmission) is genuinely a counsel question, and it is marked. Everything
