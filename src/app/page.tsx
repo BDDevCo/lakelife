@@ -42,28 +42,40 @@ export default async function Home() {
       <main>
         <section className="ll-hero">
           <div className="ll-hero-inner">
-            {/* THE PROTOTYPE'S OWN LINE, PUT BACK.
-                lakelife.html's <title> is "LakeLife — Your lake house, ready
-                when you are." This page had drifted to "Lake life, handled." —
-                a nice phrase that describes a mood rather than a promise, and
-                then spent its paragraph listing services.
+            {/* WHAT WE DO, IN THE FIRST BREATH — and Brendon had to say it
+                three times before I fixed the right thing.
 
-                The gap was that nothing named the SITUATION. Everyone landing
-                here owns a place they are not standing in. Until the copy says
-                that, every feature below it reads as a menu from a company
-                that could be anywhere. */}
+                Two earlier versions circled the product. "Lake life, handled."
+                describes a mood. "Your lake house, ready when you are" is a
+                feeling, and the paragraph under it opened on the reader NOT
+                BEING THERE — which excluded the full-timers and, worse, still
+                never said what kind of company this is. A stranger could not
+                tell a service business from a rental manager from software.
+
+                THE CUSTOMER IS THE SEASONAL OWNER, deliberately. A full-timer
+                mows their own lawn, has their own dock guy and is there to let
+                anyone in; they buy one job a year. A seasonal owner buys the
+                whole chain — spring open, dock and lift in, mowing all summer,
+                cleaning before each visit, boat out, winterize, dock out, fall
+                close. Eight or ten jobs. The page should be written for them.
+
+                AND THE THING WE ACTUALLY DO FOR THEM WAS NOT ON THE PAGE AT
+                ALL. Autopilot: turn a service on once, the all-in price locks
+                at today's level, each season we propose it and one tap
+                confirms or skips, skipping always free. That is a season
+                arranged once — and the homepage was selling single bookings,
+                which is the same product with the point removed.
+
+                Deliberately channel-neutral: "we ask you first", never "we
+                text you". No SMS this app has sent since 19 July has been
+                delivered, and the front page must not promise a dead channel. */}
             <div className="ll-eyebrow">Welcome to LakeLife</div>
-            <h1>Your lake house, ready when you are.</h1>
-            {/* THREE SENTENCES, and no locale — the chip immediately below
-                already says "Lakefront or near it — Big Long · Big Turkey ·
-                Pretty". Saying it twice cost two lines of an eight-line
-                paragraph on a 375px screen, which is the whole hero before
-                the reader reaches anything they can tap. */}
+            <h1>Set your lake season once.</h1>
             <p>
-              You&apos;re not there most of the time — but the lawn still grows and
-              the dock still has to come out before the freeze. Pick your
-              services and your dates; we send the crew, and you get the
-              photos. Every price all-in.
+              Dock and lift in for spring, mowing and cleaning all summer, boat
+              winterized and the dock out before the freeze. Choose the jobs
+              once — we schedule each one, hold the price, and send photos when
+              it&apos;s done. Skip anything, any time, free.
             </p>
             <div className="ll-hero-chips">
               <span className="ll-chip">📍 <b>Lakefront or near it — {lakeChips}</b></span>
@@ -115,19 +127,23 @@ export default async function Home() {
                 never answered the only question a photo answers: did it
                 actually happen, and do I have to drive out to find out. */}
             <FeatureCard
-              pill="You're in charge"
-              title="Pick the services and the dates"
-              body="You decide what gets done and when — a mow every two weeks, a clean before the family arrives, the pier out before the freeze. One request each time; we find the crew, fit it around the weather, and turn up. No calling four contractors and hoping."
+              pill="Set it once"
+              title="The season keeps itself"
+              body="Turn on the jobs your place needs and each one comes round in its own season, fitted around the weather — dock in after the ice goes, mowing through the summer, everything out before the freeze. We ask before every visit, and skipping one is free."
             />
             <FeatureCard
               pill="No quotes to chase"
-              title="One all-in price, before you book"
-              body="The price you see is the whole price — crew, coordination and scheduling included. You approve it before anything is scheduled, and it doesn't grow afterwards."
+              title="One all-in price, and we hold it"
+              body="The price you see is the whole price — crew, coordination and scheduling included. Turn a job on and that price is locked at today's level, so next spring costs what this spring did."
             />
+            {/* "See it was done — WITHOUT DRIVING OUT" carried the same
+                absence assumption as the old hero paragraph. The benefit
+                survives without asserting where the reader lives: "even if you
+                weren't there to watch" is an offer, not a premise. */}
             <FeatureCard
               pill="Proof, not promises"
-              title="See it was done — without driving out"
-              body="Every visit ends with photos of the actual work, sent to you. And it isn't a courtesy: a crew can't mark a job finished, or get paid, until the photos are in."
+              title="Photos of the actual work, every visit"
+              body="Not a courtesy — a crew can't mark a job finished, or get paid, until the photos are in. So you know the dock really came out, even if you weren't there to watch."
             />
           </div>
         </section>

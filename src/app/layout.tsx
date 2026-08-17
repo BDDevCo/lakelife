@@ -20,12 +20,12 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  // The prototype's own <title>, which this had drifted from. It is also the
-  // line that does the most work in a search result, where the reader is a
-  // stranger and gets one sentence.
-  title: "LakeLife — Your lake house, ready when you are",
+  // The one sentence a stranger gets in a search result, so it carries the
+  // same promise as the hero rather than a mood. NOT the prototype's line any
+  // more: "ready when you are" is a feeling, and this has to say what we do.
+  title: "LakeLife — Set your lake season once",
   description:
-    "You're not there most of the time. Pick your services and your dates — we send the crew and you get the photos. Seasonal opening & closing, piers, lifts, boats, mowing and housekeeping on Big Long, Pretty & Big Turkey Lakes.",
+    "Dock and lift in for spring, mowing and cleaning all summer, boat winterized and the dock out before the freeze. Choose the jobs once — we schedule each one, hold the price, and send photos when it's done. Big Long, Pretty & Big Turkey Lakes.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
