@@ -2,6 +2,7 @@ import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 import { parseDaterange } from "@/lib/parks";
+import { todayLakeDate } from "@/lib/booking";
 
 /**
  * THE RESIDENT'S OWN SCREEN.
@@ -53,6 +54,12 @@ export interface RenterHome {
   bookingReady: boolean;
   /** Percent added if they pay rent by card. 0 = no fee. */
   cardFeePct: number;
+  /**
+   * Lake-local today, so "when did you pay it?" cannot offer tomorrow. Taken
+   * from the server rather than the handset — a phone left on the wrong
+   * timezone would otherwise widen the window by a day.
+   */
+  today: string;
 
   /** This month's bill, or null when the park has not raised it yet. */
   bill: {
@@ -64,7 +71,10 @@ export interface RenterHome {
     paidTotal: number;
     outstanding: number;
     status: string;
+    /** An unanswered "I already paid this" is open against this bill. */
     disputed: boolean;
+    /** The day they said they paid, when they gave one. */
+    claimedPaidOn: string | null;
     lines: BillLine[];
   } | null;
 
@@ -135,14 +145,21 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     .limit(1);
   const charge = charges?.[0];
 
+  // THE OPEN CLAIM, not just whether there is one. `park_payment_claims` is
+  // specifically "I already paid this" — the date is the thing the resident
+  // most wants read back to them, and a screen that says only "you disputed
+  // it" describes something they never did.
   let disputed = false;
+  let claimedPaidOn: string | null = null;
   if (charge) {
-    const { count } = await admin
+    const { data: claims } = await admin
       .from("park_payment_claims")
-      .select("id", { count: "exact", head: true })
+      .select("id, claimed_paid_on")
       .eq("charge_id", charge.id as string)
-      .is("resolved_at", null);
-    disputed = (count ?? 0) > 0;
+      .is("resolved_at", null)
+      .limit(1);
+    disputed = (claims?.length ?? 0) > 0;
+    claimedPaidOn = (claims?.[0]?.claimed_paid_on as string | null) ?? null;
   }
 
   // ---- money in -----------------------------------------------------------
@@ -203,6 +220,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     hasCard: (cards ?? 0) > 0,
     bookingReady: (lotProps ?? 0) > 0,
     cardFeePct: Number(park?.card_fee_pct ?? 0),
+    today: todayLakeDate(),
     lotNumber: (lot?.lot_number as string) ?? "—",
     displayName: (file.display_name as string) ?? "Resident",
     // WHEN SHE ARRIVED, NOT WHEN THE PAPERWORK STARTED. This read the
@@ -227,6 +245,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
           outstanding: Math.round((amount - paidTotal) * 100) / 100,
           status: (charge.status as string) ?? "open",
           disputed,
+          claimedPaidOn,
           lines: ((charge.lines as { label?: string; amount?: number }[]) ?? []).map((l) => ({
             label: String(l.label ?? "Rent"),
             amount: Number(l.amount ?? 0),

@@ -1,5 +1,6 @@
 import type { RenterHome as RenterHomeView } from "@/app/parks/my-data";
 import { PayRentButton } from "@/components/PayRentButton";
+import { IPaidForm } from "@/components/IPaidForm";
 import { TextOptIn } from "@/components/TextOptIn";
 import { EnableLotBooking } from "@/components/EnableLotBooking";
 
@@ -76,9 +77,16 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 the ledger is wrong, nothing is being chased until somebody
                 looks — and this screen must say so rather than nag. */}
             {b.disputed ? (
+              /* SAY BACK WHAT THEY ACTUALLY TOLD US. This once read "you've
+                 told the office this doesn't look right" — written when the
+                 office was the only one who could open a claim, and wrong the
+                 moment a resident could. `park_payment_claims` is not a
+                 general dispute: it is "I already paid this", and the date is
+                 the detail they want to see repeated back. */
               <div style={{ fontSize: 13, color: "var(--ink-warn)" }}>
-                You&apos;ve told the office this doesn&apos;t look right. Nothing
-                is being chased until they&apos;ve checked.
+                You&apos;ve told the office you paid this
+                {b.claimedPaidOn ? ` on ${pretty(b.claimedPaidOn)}` : ""}.
+                Nothing is being chased until they&apos;ve confirmed it.
               </div>
             ) : b.outstanding <= 0 ? (
               <div style={{ fontSize: 13, color: "var(--ink-good)" }}>
@@ -102,6 +110,21 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 hasCard={view.hasCard}
                 cardFeePct={view.cardFeePct}
                 disabled={b.disputed}
+              />
+            )}
+
+            {/* "I ALREADY PAID THIS", AND IT IS NOT GATED ON acceptsOnlineRent.
+                The pay button above is — a resident must never be offered a
+                payment their landlord hasn't agreed to take. This is the
+                opposite case: the park that takes no card at all is exactly
+                the park where every payment is cash or a cheque, so it is the
+                park that needs this MOST. Hidden once a claim is open, because
+                the sentence above already says nothing is being chased. */}
+            {b.outstanding > 0 && !b.disputed && (
+              <IPaidForm
+                chargeId={b.id}
+                monthLabel={b.monthLabel}
+                today={view.today}
               />
             )}
 

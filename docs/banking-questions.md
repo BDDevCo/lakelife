@@ -152,6 +152,14 @@ statement. Ask the banker for the right vehicle and ask the attorney what
 Indiana actually requires. The software already treats a deposit as held money
 that can be returned or kept — the bank should agree with the software.
 
+**3. There is a fifth kind of money, and it never reaches a bank of ours at
+all: cash.** **LakeLife does not handle cash. At all.** A resident paying cash
+or by cheque pays the park owner directly, hand to hand. LakeLife's only job is
+to make sure the ledger says what actually happened — the resident records that
+they paid, the owner confirms they collected it, and nothing counts as received
+until both have said so. No LakeLife account ever sees that money, so no branch,
+no deposit limit and no cash-handling fee schedule is part of this decision.
+
 ---
 
 ## What to ask
@@ -179,32 +187,26 @@ that can be returned or kept — the bank should agree with the software.
 7. **Dual control** on ACH origination and **positive pay / ACH debit block** on
    the operating account. I want both on from day one.
 
-### C. Cash and cheques — only if LakeLife handles them
-8. Residents at the first park pay in **cash and cheques** — about nineteen
-   households, monthly, in Wolcottville. **Decide first whether LakeLife ever
-   touches that money.** Today the software only RECORDS a cash payment; the
-   owner takes it. If it stays that way, skip this section entirely.
-9. If LakeLife is going to take it in on the owner's behalf: what are the
-   monthly cash deposit limits before fees, where is the nearest branch that
-   takes business deposits, and is remote deposit capture included?
+### C. Underwriting, so nothing surprises us later
+8. What will you need for estimated monthly volume, average ticket and largest
+   single transaction? *(Have numbers ready: The Haven is about $5,200/month
+   in rent; services are seasonal and spike at spring open and fall close.)*
+9. Does the bank have any restriction on **marketplace or platform** business
+   models, or on **property management / rent collection**?
 
-This is the one place the fintech-bank answer and the real-world answer pull
-against each other, so make it a decision rather than something discovered in
-January at a branch that turns out to be fifty minutes away.
+**Say this unprompted, because it simplifies his answer:** LakeLife handles **no
+cash, ever**. Not a phase-one limitation — a rule. No cash deposits, no branch
+requirement, no night drop, no armoured pickup, no cash-handling fees to quote.
+Every dollar that reaches a LakeLife account arrives electronically. A resident
+who pays their park owner in cash or by cheque hands it to that owner directly;
+the software only records that it happened, and both sides have to agree it did.
 
-### D. Underwriting, so nothing surprises us later
-10. What will you need for estimated monthly volume, average ticket and largest
-    single transaction? *(Have numbers ready: The Haven is about $5,200/month
-    in rent; services are seasonal and spike at spring open and fall close.)*
-11. Does the bank have any restriction on **marketplace or platform** business
-    models, or on **property management / rent collection**?
-
-### E. Plumbing
-12. Can we get transactions programmatically — a real API, or at least clean
+### D. Plumbing
+10. Can we get transactions programmatically — a real API, or at least clean
     Plaid connectivity? The accounting and the statements are automated and
     hand-keying defeats the point.
-13. Fee schedule in writing: monthly maintenance, per-ACH, wire in/out, cash
-    handling, returned item.
+11. Fee schedule in writing: monthly maintenance, per-ACH, wire in/out,
+    returned item.
 
 ---
 
@@ -306,13 +308,11 @@ and **Thread Bank** (the banks behind a lot of fintech FBO arrangements),
 **Live Oak** and **Grasshopper**. **Mercury** and **Relay** are good operating
 accounts but are **not** the answer for holding other people's money.
 
-One practical note that survives the simplification: **the cash still has to go
-somewhere.** Nineteen households at the first park pay in cash and cheques. If
-LakeLife is the one taking that in on the owner's behalf, it needs a branch
-within sensible distance of Wolcottville, and a fintech bank with no branches
-cannot do it. If instead the owner keeps taking cash directly and LakeLife only
-records it — which is what the software does today — then this does not apply,
-and that is worth deciding on purpose rather than by accident.
+**A branchless bank is fine.** That used to be the open question in this
+document; it is now closed. Because LakeLife handles no cash, there is nothing
+that has to be carried into a lobby, so proximity to Wolcottville buys us
+nothing and should not cost us the FBO capability. Judge every name above on
+custodial capability and API quality alone.
 
 The single question that sorts them: **"Can you open an FBO account for a
 platform that holds funds for third parties, and what is your experience

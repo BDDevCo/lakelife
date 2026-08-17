@@ -918,6 +918,75 @@ export async function resolvePaymentClaim(
   };
 }
 
+/**
+ * "YES — I COLLECTED IT." THE THIRD ANSWER, AND THE ONLY HAPPY ONE.
+ *
+ * The claim screen shipped with two endings, both of them bad news: "there's no
+ * such payment" and "they took it back". The ordinary case — the resident is
+ * right, the cash is in the drawer — had no button on the claim at all. It was
+ * reachable, but only by leaving this form, finding the Record-payment button
+ * and typing the amount and date again from memory. The affirmative answer was
+ * the slowest one, which is backwards.
+ *
+ * IT IS THE CONFIRMATION THAT MOVES THE MONEY, AND ONLY IT. LakeLife handles no
+ * cash: the resident says they paid, and nothing is credited, no receipt number
+ * is minted and the accountant's income figure does not move until the person
+ * who actually took the money says they took it. That is the whole two-sided
+ * record — one statement from each side, and the ledger only believes both.
+ *
+ * This writes an ordinary payment through `recordPayment`, so the receipt
+ * number, the date sanity window and the idempotency index all apply unchanged,
+ * and 0074's trigger closes the claim as `matched` on the insert — "it closes
+ * the disagreement by conceding it, not by overruling it."
+ */
+export async function confirmClaimCollected(
+  parkId: string,
+  claimId: string,
+  /** Prefilled from the claim, editable — he may have been handed less. */
+  amount: number,
+  receivedOn: string,
+  idempotencyKey?: string,
+): Promise<ParkResult & { receipt?: ReceiptLines; renterEmail?: string | null }> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const admin = createServiceClient();
+  // Scope the claim to this park through its charge, the same join
+  // resolvePaymentClaim uses.
+  const { data: claim } = await admin
+    .from("park_payment_claims")
+    .select("id, charge_id, method, reference, resolved_at, park_charges!inner(park_id)")
+    .eq("id", claimId)
+    .maybeSingle();
+  const owner = (claim as { park_charges?: { park_id?: string } } | null)?.park_charges?.park_id;
+  if (!claim || owner !== parkId) return { ok: false, error: "That isn't here." };
+  if (claim.resolved_at) return { ok: false, error: "That one's already been answered." };
+
+  // A claim can name any method, but the two that settle through a processor
+  // cannot be confirmed by hand — 0108 refuses a card or ACH row with no
+  // reference, and a confirmation is not where a processor reference comes
+  // from. Say so plainly rather than letting the database's refusal surface as
+  // "couldn't record that".
+  const claimed = (claim.method as string) ?? "cash";
+  if ((claimed === "card" || claimed === "ach") && !(claim.reference as string)?.trim()) {
+    return {
+      ok: false,
+      error: "That one came in on a card or bank rail — record it from the payment form with its reference.",
+    };
+  }
+  const method = claimed as Parameters<typeof recordPayment>[3];
+
+  return recordPayment(
+    parkId,
+    claim.charge_id as string,
+    amount,
+    method,
+    (claim.reference as string) ?? "",
+    receivedOn,
+    undefined,
+    idempotencyKey,
+  );
+}
+
 async function currentUserId(): Promise<string | null> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();

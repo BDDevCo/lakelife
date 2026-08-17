@@ -246,6 +246,7 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                     parkId={parkId}
                     claim={page.claims[r.id]}
                     lotNumber={r.lotNumber}
+                    today={page.today}
                     onDone={() => { setResolvingId(null); router.refresh(); }}
                     onCancel={() => setResolvingId(null)}
                   />

@@ -5,6 +5,8 @@ import { revalidatePath } from "next/cache";
 import { LakeLifePayments } from "@/lib/payments";
 import { rentDescriptor } from "@/lib/descriptor";
 import { todayLakeDate } from "@/lib/booking";
+import { sendEmail } from "@/lib/email";
+import { prettyMonth } from "@/app/park/ledger-helpers";
 
 /**
  * PAYING RENT FROM THE RESIDENT'S OWN SCREEN.
@@ -81,7 +83,7 @@ export async function payRent(chargeId: string): Promise<PayResult> {
   if ((openClaims ?? 0) > 0) {
     return {
       ok: false,
-      error: "You've told the office this bill doesn't look right, so we're not taking payment until they've checked.",
+      error: "You've told the office you've already paid this, so we're not taking payment until they've confirmed it.",
     };
   }
 
@@ -152,4 +154,203 @@ export async function payRent(chargeId: string): Promise<PayResult> {
       ? `Paid — ${owed.toFixed(2)} rent plus a ${feePct}% card fee of ${fee.toFixed(2)}.`
       : `Paid — thank you. It's on your ledger straight away.`,
   };
+}
+
+/**
+ * "I ALREADY PAID THIS" — THE RESIDENT'S OWN END OF THE RECORD.
+ *
+ * ============================================================================
+ * LAKELIFE HANDLES NO CASH. NOT A PHASE-ONE LIMIT — A RULE.
+ * ============================================================================
+ * A resident paying cash or by cheque hands it to the park owner directly,
+ * hand to hand. No LakeLife account ever sees that money. What LakeLife owes
+ * both of them is a record they AGREE ON, which takes two statements and not
+ * one: the resident says they paid, the owner confirms they collected it, and
+ * nothing counts as received until the owner has said so.
+ *
+ * This is the half that was missing. 0074 built the table — a bare "I paid
+ * you" with no amount and no date is recordable on purpose, an unanswered
+ * claim stops the chase, and the office cannot dismiss one without writing
+ * down why. But the only writer was `logPaymentClaim`, which sits behind
+ * `assertMyPark` on the OFFICE's screen. The office typed in what the resident
+ * said. A row stamped `asserted_by: 'renter'` could only be created by
+ * somebody who was not the renter.
+ *
+ * WHAT THIS DOES NOT DO, DELIBERATELY:
+ *
+ * - It does not credit the bill. `paid_total` does not move, no receipt number
+ *   is minted, and the accountant's income figure does not change. Only the
+ *   owner confirming — which records a real payment — does that.
+ * - It does not let anyone mark themselves paid. The strongest thing a
+ *   resident can do here is stop being chased while a human looks, which is
+ *   the correct outcome when the ledger and the kitchen drawer disagree.
+ */
+export async function sayIPaid(
+  chargeId: string,
+  input: {
+    /** ISO date. Optional — "I paid you" with no date is still their account. */
+    paidOn?: string;
+    method?: "cash" | "check" | "transfer" | "other";
+    /** A cheque number, or a slip serial. */
+    reference?: string;
+    /** Whatever name they handed it to. At a takeover this is the whole answer. */
+    paidTo?: string;
+    note?: string;
+  },
+): Promise<PayResult> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Please sign in again." };
+
+  const admin = createServiceClient();
+
+  // ---- is this bill actually theirs? -------------------------------------
+  // Same gate as payRent: the path from the signed-in account to the bill runs
+  // through the CLAIMED renter file. The charge id came from a browser.
+  const { data: charge } = await admin
+    .from("park_charges")
+    .select("id, park_id, renter_id, amount, paid_total, status, period_month")
+    .eq("id", chargeId)
+    .maybeSingle();
+  if (!charge) return { ok: false, error: "We can't find that bill." };
+
+  const { data: file } = await admin
+    .from("park_renters")
+    .select("id, display_name")
+    .eq("id", charge.renter_id as string)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!file) return { ok: false, error: "That isn't your bill." };
+
+  if ((charge.status as string) === "void") {
+    return { ok: false, error: "That bill was cancelled — there's nothing to record against it." };
+  }
+
+  // ---- the date, lightly ---------------------------------------------------
+  // Lightly on purpose. 0074's whole posture is that demanding paperwork before
+  // recording anything silences exactly the households least able to produce
+  // it. The one thing worth refusing is a date that hasn't happened yet.
+  const paidOn = (input.paidOn ?? "").trim();
+  if (paidOn) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) {
+      return { ok: false, error: "That date didn't come through — pick it again." };
+    }
+    if (paidOn > todayLakeDate()) {
+      return { ok: false, error: "That's a date in the future. Pick the day you actually handed it over." };
+    }
+  }
+
+  // ---- one open claim at a time -------------------------------------------
+  // A second claim on the same bill tells the office nothing the first didn't,
+  // and every open claim is a household not being chased. One is the record;
+  // more than one is a way to never be asked for rent again.
+  const { count: open } = await admin
+    .from("park_payment_claims")
+    .select("id", { count: "exact", head: true })
+    .eq("charge_id", charge.id as string)
+    .is("resolved_at", null);
+  if ((open ?? 0) > 0) {
+    return {
+      ok: false,
+      error: "You've already told the office about this bill. They'll confirm once they've checked.",
+    };
+  }
+
+  const owed = Math.round((Number(charge.amount ?? 0) - Number(charge.paid_total ?? 0)) * 100) / 100;
+
+  const { error } = await admin.from("park_payment_claims").insert({
+    charge_id: charge.id,
+    // The balance is what they'd have handed over, and it makes the owner's
+    // confirmation one button instead of a form. Null is legal here (0074) and
+    // the office can still record a different figure — this is a starting
+    // point for a human, never an assertion about what is owed.
+    claimed_amount: owed > 0 ? owed : null,
+    claimed_paid_on: paidOn || null,
+    method: input.method ?? null,
+    reference: input.reference?.trim() || null,
+    paid_to: input.paidTo?.trim() || null,
+    note: input.note?.trim() || null,
+    // The assertion is theirs, and now so is the row. This is the first code
+    // path where those two facts are the same person.
+    asserted_by: "renter",
+    logged_by: user.id,
+  });
+  if (error) {
+    return { ok: false, error: "We couldn't record that — try again, or ring the office." };
+  }
+
+  await tellTheOffice(charge.park_id as string, {
+    who: (file.display_name as string) ?? "A resident",
+    month: prettyMonth(charge.period_month as string),
+    amount: owed,
+    paidOn,
+    method: input.method ?? null,
+    reference: input.reference?.trim() || "",
+    paidTo: input.paidTo?.trim() || "",
+    note: input.note?.trim() || "",
+  });
+
+  revalidatePath("/parks/my");
+  return {
+    ok: true,
+    signal: "Told the office. You won't be chased on this bill until they've confirmed it.",
+  };
+}
+
+/**
+ * Mail every owner of the park. SMS is a dead channel until A2P clears, so
+ * email carries this on its own — and a claim nobody is told about is just a
+ * silence that stops the chase, which is the worst of both worlds for the
+ * owner. A send that fails must NOT fail the claim: the record is the point,
+ * the notification is the courtesy.
+ */
+async function tellTheOffice(
+  parkId: string,
+  c: {
+    who: string; month: string; amount: number; paidOn: string;
+    method: string | null; reference: string; paidTo: string; note: string;
+  },
+): Promise<void> {
+  try {
+    const admin = createServiceClient();
+    const [{ data: park }, { data: members }] = await Promise.all([
+      admin.from("parks").select("name").eq("id", parkId).maybeSingle(),
+      admin.from("park_members").select("user_id").eq("park_id", parkId).eq("role", "owner"),
+    ]);
+    const ids = (members ?? []).map((m) => m.user_id as string).filter(Boolean);
+    if (ids.length === 0) return;
+
+    const { data: people } = await admin.from("users").select("id, email").in("id", ids);
+    const parkName = (park?.name as string) ?? "Your park";
+
+    const lines = [
+      `${c.who} says they've already paid ${c.month}.`,
+      "",
+      c.amount > 0 ? `Amount on the bill:  $${c.amount.toFixed(2)}` : "",
+      c.paidOn ? `They say they paid:  ${c.paidOn}` : "They didn't give a date.",
+      c.method ? `How:                 ${c.method}` : "",
+      c.reference ? `Reference:           ${c.reference}` : "",
+      c.paidTo ? `Handed to:           ${c.paidTo}` : "",
+      c.note ? `They added:          ${c.note}` : "",
+      "",
+      "Nothing has been credited and they are NOT being chased until you answer.",
+      "Confirm it on the Rent screen if you collected it — that's what records the payment.",
+    ].filter((l) => l !== "");
+    const body = lines.join("\n");
+
+    for (const p of people ?? []) {
+      const addr = (p.email as string) ?? "";
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) continue;
+      await sendEmail({
+        to: addr,
+        subject: `${parkName} — ${c.who} says they've paid ${c.month}`,
+        text: body,
+        html: `<pre style="font:14px/1.6 ui-monospace,Menlo,monospace;white-space:pre-wrap">${
+          body.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        }</pre>`,
+      });
+    }
+  } catch {
+    // Swallowed on purpose — see the doc comment. The claim is already written.
+  }
 }
