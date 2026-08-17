@@ -5,7 +5,15 @@ import path from "node:path";
 // other the same way the app does (Next resolves it; vitest needs this).
 export default defineConfig({
   resolve: {
-    alias: { "@": path.resolve(__dirname, "src") },
+    alias: {
+      "@": path.resolve(__dirname, "src"),
+      // `import "server-only"` throws the moment it is loaded outside a server
+      // component, which is exactly what it is for — and it also blocks unit
+      // testing the modules that carry it. Aliasing it to an empty module lets
+      // a pure helper like `must-read` be exercised directly; the real guard
+      // still applies in every Next build, which is the only place it matters.
+      "server-only": path.resolve(__dirname, "src/test/server-only-stub.ts"),
+    },
   },
   test: {
     // Vitest's default excludes cover node_modules but NOT .claude/worktrees,

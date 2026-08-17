@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 import { parseDaterange } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
+import { mustRead, mustCount, softRead } from "@/lib/must-read";
 
 /**
  * THE RESIDENT'S OWN SCREEN.
@@ -91,6 +92,12 @@ export interface RenterHome {
 
   /** Reported from their lot, during their tenancy. */
   reported: { note: string; status: string; resolutionNote: string | null; ageDays: number }[];
+  /**
+   * True when that list could not be READ — as opposed to being empty. The
+   * screen must distinguish them: "nothing yet" and "we couldn't look" are
+   * different sentences and only one of them is ever a fact.
+   */
+  reportedFailed: boolean;
 }
 
 export async function getRenterHome(): Promise<RenterHome | null> {
@@ -100,13 +107,27 @@ export async function getRenterHome(): Promise<RenterHome | null> {
 
   const admin = createServiceClient();
 
+  // ===========================================================================
+  // EVERY READ BELOW EITHER ANSWERS OR THROWS. See `mustRead`.
+  //
+  // This loader returns `null` to mean "you have no tenancy here", and the page
+  // renders a full paragraph telling the reader their file isn't linked and to
+  // ring the office. That sentence used to be reachable two ways: because it
+  // was true, or because a read failed. Told to a household who has paid rent
+  // for eleven years, the second one is a lie the software has no business
+  // telling. `null` now means exactly one thing.
+  // ===========================================================================
+
   // THE FILE MUST BE CLAIMED BY THIS ACCOUNT. Everything below is scoped
   // through it, so this single check is what keeps one resident out of
   // another's ledger.
-  const { data: files } = await admin
-    .from("park_renters")
-    .select("id, park_id, display_name, mobile_e164, sms_consent_operational_at")
-    .eq("user_id", user.id);
+  const files = mustRead(
+    "your file",
+    await admin
+      .from("park_renters")
+      .select("id, park_id, display_name, mobile_e164, sms_consent_operational_at")
+      .eq("user_id", user.id),
+  );
   if (!files?.length) return null;
 
   const renterIds = files.map((f) => f.id as string);
@@ -114,35 +135,53 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // The tenancy they are actually living in. `ended` rows are deliberately
   // excluded: a former resident is not owed a live screen about a lot
   // somebody else now lives on.
-  const { data: stays } = await admin
-    .from("lot_reservations")
-    .select("id, park_lot_id, renter_id, during, term, status, expected_move_out, tenancy_began_on")
-    .in("renter_id", renterIds)
-    .in("status", ["approved", "active"])
-    .order("created_at", { ascending: false });
+  const stays = mustRead(
+    "your tenancy",
+    await admin
+      .from("lot_reservations")
+      .select("id, park_lot_id, renter_id, during, term, status, expected_move_out, tenancy_began_on")
+      .in("renter_id", renterIds)
+      .in("status", ["approved", "active"])
+      .order("created_at", { ascending: false }),
+  );
   const stay = stays?.[0];
   if (!stay) return null;
 
   const file = files.find((f) => f.id === stay.renter_id) ?? files[0];
   const range = parseDaterange(stay.during as string);
 
-  const [{ data: lot }, { data: park }, { count: cards }] = await Promise.all([
+  // All three feed something a person acts on: the lot number they'd quote to
+  // the office, the park's name, whether a Pay button appears at all, and the
+  // percentage added if they use it. A failed read here used to render "your
+  // park", hide the button, and quote a 0% fee — three plausible falsehoods
+  // from one dropped connection.
+  const [lotRes, parkRes, cardsRes] = await Promise.all([
     admin.from("park_lots").select("lot_number").eq("id", stay.park_lot_id as string).maybeSingle(),
     admin.from("parks").select("name, accepts_online_rent, card_fee_pct").eq("id", file.park_id as string).maybeSingle(),
     admin.from("payment_methods").select("id", { count: "exact", head: true }).eq("user_id", user.id),
   ]);
+  const lot = mustRead("your lot", lotRes);
+  const park = mustRead("your park", parkRes);
+  const cards = mustCount("your saved cards", cardsRes);
 
   // ---- the bill -----------------------------------------------------------
   // The LATEST charge, not "this month's". A month the park has not billed yet
   // has no row, and showing $0.00 for it would read as "you are square" when
   // the truth is "the bill has not been sent".
-  const { data: charges } = await admin
-    .from("park_charges")
-    .select("id, period_month, due_on, amount, paid_total, status, lines")
-    .eq("reservation_id", stay.id as string)
-    .neq("status", "void")
-    .order("period_month", { ascending: false })
-    .limit(1);
+  //
+  // AND A FAILED READ MUST NOT LOOK LIKE AN UNSENT BILL. `bill: null` renders
+  // no rent card at all, which reads as "nothing is owed" — the most expensive
+  // wrong impression on the screen.
+  const charges = mustRead(
+    "your bill",
+    await admin
+      .from("park_charges")
+      .select("id, period_month, due_on, amount, paid_total, status, lines")
+      .eq("reservation_id", stay.id as string)
+      .neq("status", "void")
+      .order("period_month", { ascending: false })
+      .limit(1),
+  );
   const charge = charges?.[0];
 
   // THE OPEN CLAIM, not just whether there is one. `park_payment_claims` is
@@ -152,23 +191,38 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   let disputed = false;
   let claimedPaidOn: string | null = null;
   if (charge) {
-    const { data: claims } = await admin
-      .from("park_payment_claims")
-      .select("id, claimed_paid_on")
-      .eq("charge_id", charge.id as string)
-      .is("resolved_at", null)
-      .limit(1);
+    // A swallowed error here says "no open claim", which un-says the "nothing
+    // is being chased" banner and puts the Pay button back on a bill they have
+    // already told the office they paid. `payRent` would still refuse it
+    // server-side, so no money moves — but the screen would be inviting a
+    // second payment, which is not a thing to be relaxed about.
+    const claims = mustRead(
+      "what you've told the office",
+      await admin
+        .from("park_payment_claims")
+        .select("id, claimed_paid_on")
+        .eq("charge_id", charge.id as string)
+        .is("resolved_at", null)
+        .limit(1),
+    );
     disputed = (claims?.length ?? 0) > 0;
     claimedPaidOn = (claims?.[0]?.claimed_paid_on as string | null) ?? null;
   }
 
   // ---- money in -----------------------------------------------------------
-  const { data: pays } = await admin
-    .from("park_payments")
-    .select("amount, fee_amount, method, received_on, receipt_no, kind, returned_on, reversed_at")
-    .eq("renter_id", file.id as string)
-    .order("received_on", { ascending: false })
-    .limit(24);
+  // This one read produces BOTH the receipt list and the deposit figure. An
+  // error swallowed here prints "Nothing recorded yet" to somebody holding a
+  // receipt, and "None held" to somebody whose deposit is $500 — and the
+  // deposit is, in this business, the single most argued-about number there is.
+  const pays = mustRead(
+    "your payments",
+    await admin
+      .from("park_payments")
+      .select("amount, fee_amount, method, received_on, receipt_no, kind, returned_on, reversed_at")
+      .eq("renter_id", file.id as string)
+      .order("received_on", { ascending: false })
+      .limit(24),
+  );
 
   const live = (pays ?? []).filter((p) => p.reversed_at == null);
 
@@ -185,15 +239,31 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // Scoped to their tenancy's start: park_requests key on the LOT, not the
   // renter, so without this a new resident would be shown the last one's
   // broken step.
+  //
+  // THE ONE READ ON THIS SCREEN THAT DEGRADES INSTEAD OF FAILING. Everything
+  // above is identity or money and is worth withholding the page over. A list
+  // of things they reported about the lot is not — nobody should lose sight of
+  // their rent balance because a maintenance query timed out.
+  //
+  // But "Nothing yet" is still a lie when the truth is "we couldn't look", so
+  // the flag travels to the screen and the screen has to say so. `softRead`
+  // returns a pair rather than a bare fallback precisely so that ignoring the
+  // failure would mean writing code that visibly ignores it.
   let reported: RenterHome["reported"] = [];
+  let reportedFailed = false;
   if (range?.start) {
-    const { data: reqs } = await admin
-      .from("park_requests")
-      .select("note, status, resolution_note, created_at")
-      .eq("park_lot_id", stay.park_lot_id as string)
-      .gte("created_at", `${range.start}T00:00:00Z`)
-      .order("created_at", { ascending: false })
-      .limit(10);
+    const [reqs, failed] = softRead(
+      "what you've reported",
+      await admin
+        .from("park_requests")
+        .select("note, status, resolution_note, created_at")
+        .eq("park_lot_id", stay.park_lot_id as string)
+        .gte("created_at", `${range.start}T00:00:00Z`)
+        .order("created_at", { ascending: false })
+        .limit(10),
+      null,
+    );
+    reportedFailed = failed;
     const now = Date.now();
     reported = (reqs ?? []).map((r) => ({
       note: (r.note as string) ?? "",
@@ -205,11 +275,14 @@ export async function getRenterHome(): Promise<RenterHome | null> {
 
   // Their lot as a bookable place. Found by OWNER, never by a pointer on the
   // tenancy — 0107 dropped that column and 0062's renewal chain is why.
-  const { count: lotProps } = await admin
-    .from("properties")
-    .select("id", { count: "exact", head: true })
-    .eq("owner_id", user.id)
-    .eq("park_id", file.park_id as string);
+  const lotProps = mustCount(
+    "your lot's service setup",
+    await admin
+      .from("properties")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", user.id)
+      .eq("park_id", file.park_id as string),
+  );
 
   const amount = Number(charge?.amount ?? 0);
   const paidTotal = Number(charge?.paid_total ?? 0);
@@ -266,5 +339,6 @@ export async function getRenterHome(): Promise<RenterHome | null> {
         receiptNo: (p.receipt_no as number) ?? null,
       })),
     reported,
+    reportedFailed,
   };
 }

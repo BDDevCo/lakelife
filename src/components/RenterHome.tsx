@@ -215,7 +215,21 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
       {/* --------------------------------------------- what you reported --- */}
       <div className="ll-card ll-card-pad" style={{ marginTop: 12 }}>
         <h3 style={{ fontSize: 15, margin: 0 }}>What you reported</h3>
-        {view.reported.length === 0 ? (
+        {/* "NOTHING YET" AND "WE COULDN'T LOOK" ARE DIFFERENT SENTENCES, and
+            only one of them is ever a fact. Every other read on this screen
+            fails the page rather than guess; this list degrades instead,
+            because nobody should lose sight of their rent balance over a
+            maintenance query — but it has to admit what happened. */}
+        {view.reportedFailed ? (
+          <p style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.55, color: "var(--ink-warn)" }}>
+            {/* Explicit {" "} — JSX trims each line's leading whitespace, so
+                the space after </em> at a line break is eaten and this renders
+                "nota list". Caught in the DOM, not by reading. */}
+            We couldn&apos;t load this just now — so this is <em>not</em>{" "}
+            a list of nothing, it&apos;s a list we failed to fetch. Everything
+            else on this page is current. Try reloading in a moment.
+          </p>
+        ) : view.reported.length === 0 ? (
           <p className="mut" style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.55 }}>
             Nothing yet. The sticker on your pedestal opens a form — no login,
             no app.
