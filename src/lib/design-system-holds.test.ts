@@ -233,3 +233,31 @@ describe("the .ll-field labels actually get their styling", () => {
     }
   });
 });
+
+describe("every control has a box", () => {
+  it("styles bare inputs, not only the ones inside a .ll-field", () => {
+    // Tailwind v4's preflight resets controls to `border:0; padding:0;
+    // background:transparent`, and the only input rule here was scoped to
+    // `.ll-field input`. Measured on /park/onboard — the screen where a new
+    // owner types in every household by hand — twelve fields rendered with
+    // computed border 0px, padding 0px, transparent background, 23px tall.
+    // Nothing on screen said they were fields.
+    const base = CSS.slice(CSS.indexOf("input:not([type=\"checkbox\"])"));
+    expect(CSS).toMatch(/^input:not\(\[type="checkbox"\]\)/m);
+    expect(base).toMatch(/border: 1\.5px solid var\(--line\)/);
+    expect(base).toMatch(/font-size: 16px/);   // the same iOS-zoom floor
+  });
+
+  it("leaves checkboxes and radios alone", () => {
+    // A bordered, padded checkbox is worse than a bare one.
+    const sel = CSS.slice(CSS.indexOf("input:not("), CSS.indexOf("select,\ntextarea {"));
+    for (const t of ["checkbox", "radio", "range", "file"]) {
+      expect(sel, t).toContain(`:not([type="${t}"])`);
+    }
+  });
+
+  it("keeps the code box's own size — the base padding would squeeze the digit", () => {
+    const block = CSS.slice(CSS.indexOf(".ll-code-box {"), CSS.indexOf(".ll-code-box:focus"));
+    expect(block).toMatch(/padding: 0/);
+  });
+});

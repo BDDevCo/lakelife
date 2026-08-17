@@ -112,6 +112,34 @@ button {
   cursor: pointer;
 }
 
+/* ---------------- every control gets a box ----------------
+   Tailwind v4's preflight resets controls to `border: 0; padding: 0;
+   background: transparent`, and the only input styling in this file was
+   scoped to `.ll-field input`. So any control NOT wrapped in a .ll-field
+   rendered as bare placeholder text floating on the page background — no
+   border, no padding, 23px tall, nothing to aim a cursor at.
+
+   Measured on /park/onboard, the screen where a new owner types in every
+   household by hand: twelve invisible fields, computed
+   `border: 0px`, `padding: 0px`, `background: rgba(0,0,0,0)`.
+
+   Element selectors, so `.ll-field input` (0,1,1) and `.ll-code-box` (0,1,0)
+   both still win, and any inline style wins over everything. Checkboxes,
+   radios and the rest keep their native rendering — a bordered, padded
+   checkbox is worse than a bare one. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="submit"]):not([type="button"]),
+select,
+textarea {
+  padding: 9px 11px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  /* Same 16px floor as .ll-field: anything smaller zooms iOS Safari on focus. */
+  font-size: 16px;
+  font-family: inherit;
+  color: var(--text);
+  background: #fff;
+}
+
 :focus-visible {
   outline: 3px solid var(--sun);
   outline-offset: 2px;
@@ -339,6 +367,9 @@ textarea {
   min-width: 0;
   width: 46px;
   height: 56px;
+  /* Explicit: the base control rule adds 9px 11px, which would squeeze the
+     digit inside a box whose size is fixed. */
+  padding: 0;
   text-align: center;
   font-size: 24px;
   font-weight: 800;
