@@ -96,13 +96,22 @@ else is operational and a competent business banker can answer it.
 
 ## Explain it to him in thirty seconds
 
-> LakeLife is a platform. A lake-house owner books a service at one all-in
-> price; we take roughly 30% and pay an independent crew the rest. Separately,
-> LakeLife administers rent for a mobile-home park that a **different** company
-> of mine owns — I collect rent on that park's behalf, and I hold its residents'
-> security deposits. So money flows through the business that is not the
-> business's money, and I need the account structure to reflect that from day
-> one.
+> LakeLife AI is a management platform. **We never own anything** — not a park,
+> not a home, not a lot. Park owners and lake-house owners are our customers;
+> crews are our contractors; residents are the people we serve on the owners'
+> behalf.
+>
+> Two money flows. A lake-house owner books a service at one all-in price; we
+> take roughly 30% and pay an independent crew the rest. And we collect rent
+> from park residents and **pass it through to the park owner's own bank
+> account** — the park owner banks wherever they bank; we never hold their
+> property or their business.
+>
+> So money moves through this account that is not ours, and the structure has
+> to say so from day one.
+
+**This account is for LAKELIFE AI, LLC only.** No other entity's operating
+account is being opened here.
 
 If his eyes light up at "platform" and he starts talking about escrow schemes,
 slow down — see *"Do not let the bank solve this"* below.
@@ -119,17 +128,23 @@ paperwork.
 | Our margin (~30%) and card fees | **LakeLife's** | Operating account |
 | Crew payables (~70% of every job) | The crew's, until paid | Not commingled |
 | Tips | The crew's, entirely — never our revenue | Not commingled |
-| Park rent collected online | **BD DevCo Asset Management, LLC's** | That entity's account |
+| Park rent collected online | **The park owner's**, from the moment it is paid | Held, then passed through |
 | Residents' security deposits | **The resident's**, held in trust | Segregated, and see below |
 
 Two things follow from that table:
 
-**1. LakeLife and BD DevCo Asset Management need separate banking.** The Haven
-is owned by BD DevCo Asset Management, LLC; LakeLife is the administrator. Rent
-belongs to the park-owning entity the moment a resident pays it. If it lands in
-LakeLife's operating account, the two companies are commingled and the
-third-party-administrator position we have built the whole product around stops
-being true in the one place it matters most — the bank statement.
+**1. Rent is a PASS-THROUGH, and it is never ours for a second.** A resident
+pays; the money belongs to that park's owner immediately; we move it to the
+owner's own account at the owner's own bank. That is the whole relationship —
+we are the administrator, not a party to the tenancy.
+
+The first park is owned by BD DevCo Asset Management, LLC, which is Brendon's
+other company. **That changes nothing here.** BD DevCo is customer number one
+and banks wherever it banks; LakeLife treats it exactly as it will treat park
+owner number two, who will be a stranger. If rent were ever to settle into
+LakeLife's own operating balance, the administrator position the entire product
+is built on would stop being true on the one document that would matter in a
+dispute — the bank statement.
 
 **2. Security deposits are not income and never were.** Indiana has specific
 rules on holding and returning them, including a deadline and an itemised
@@ -141,14 +156,18 @@ that can be returned or kept — the bank should agree with the software.
 
 ## What to ask
 
-### A. Account structure
-1. What do you recommend for a platform that collects money on behalf of third
-   parties — a **FBO ("for benefit of") account**, a custodial account, or a
-   trust account? Which of those can you actually open here?
-2. Can BD DevCo Asset Management, LLC hold its own operating account here, with
-   LakeLife having **view and deposit rights but not withdrawal rights**?
-3. If you cannot do FBO or custodial, say so plainly — that is not a criticism,
-   it just tells me where this has to go.
+### A. Account structure — this is the whole meeting
+1. We need an operating account for LakeLife AI, LLC, and **separately** a way
+   to hold money that belongs to other people while it is in transit: rent on
+   its way to a park owner, a crew's share of a job, a resident's deposit. What
+   do you recommend — an **FBO ("for benefit of") account**, custodial, or
+   trust? Which can you actually open here?
+2. Can the FBO account carry **sub-ledgers per park owner**, or does that
+   accounting live in our software with one pooled balance at the bank? Either
+   can work; we need to know which, because it decides what we build.
+3. If you cannot do FBO or custodial at all, say so plainly. That is not a
+   criticism — it tells me where this has to go, and it is better said now than
+   after the account is open.
 
 ### B. Moving money
 4. **ACH origination** — can we originate credits (paying crews) and debits
@@ -160,16 +179,18 @@ that can be returned or kept — the bank should agree with the software.
 7. **Dual control** on ACH origination and **positive pay / ACH debit block** on
    the operating account. I want both on from day one.
 
-### C. Cash and cheques — do not skip this
-8. The park collects rent in **cash and cheques** from about nineteen
-   households, every month, in Wolcottville. What are the monthly cash deposit
-   limits before fees kick in, and where is the nearest branch that takes
-   business deposits?
-9. Remote deposit capture for cheques — included, or extra?
+### C. Cash and cheques — only if LakeLife handles them
+8. Residents at the first park pay in **cash and cheques** — about nineteen
+   households, monthly, in Wolcottville. **Decide first whether LakeLife ever
+   touches that money.** Today the software only RECORDS a cash payment; the
+   owner takes it. If it stays that way, skip this section entirely.
+9. If LakeLife is going to take it in on the owner's behalf: what are the
+   monthly cash deposit limits before fees, where is the nearest branch that
+   takes business deposits, and is remote deposit capture included?
 
-This one is easy to forget and it is the part that touches real life every
-month. A great platform bank with no branch within forty minutes of the park is
-the wrong bank for the park entity.
+This is the one place the fintech-bank answer and the real-world answer pull
+against each other, so make it a decision rather than something discovered in
+January at a branch that turns out to be fifty minutes away.
 
 ### D. Underwriting, so nothing surprises us later
 10. What will you need for estimated monthly volume, average ticket and largest
@@ -187,10 +208,29 @@ the wrong bank for the park entity.
 
 ---
 
-## THE COUNSEL QUESTION — ask, but do not rely on his answer
+## THE COUNSEL QUESTIONS — ask the banker, but do not rely on his answer
 
-**"Does taking a customer's money and paying an independent crew make us a
-money transmitter?"**
+### (a) Does collecting rent for owners we have no stake in need a licence?
+
+**This is the one that got bigger, not smaller, when the model was clarified.**
+
+LakeLife never owns a park, a lot or a home. It collects rent from residents
+and passes it to the owner's account. In a lot of states, doing that for
+somebody else's property — for a fee — is regulated activity: it can require a
+**real estate broker or property manager licence**, and the usual exemptions
+are written for employees of the owner, which we are not.
+
+I do not know Indiana's specific rule and will not guess at it. What I can say
+is that "we never own it, we just collect and pass through" is exactly the fact
+pattern those rules are written about, so **it belongs at the top of the
+attorney list — above the assumed-name question and above the ToS wording.**
+
+It also cannot be answered once and forgotten: the answer is per state, and the
+product is designed for park owner number two, three and ten. Ask what it takes
+in Indiana now, and what changes at the state line.
+
+### (b) Does taking a customer's money and paying an independent crew make us a
+money transmitter?
 
 It can. Money transmission is licensed state by state and the penalties are not
 commercial. There are two standard structural answers:
@@ -205,9 +245,16 @@ commercial. There are two standard structural answers:
   Platforms), where the processor is the regulated party and onboards the crews
   as sub-merchants.
 
-Ask the banker whether underwriting will flag it. Then ask the attorney which
-structure we are actually in, and get that in writing. A banker's reassurance
-is not a legal opinion.
+Note the rent flow does **not** fit the merchant-of-record answer. We do not
+buy rent and resell it — it is somebody else's money moving through, which is
+the textbook description of the thing money-transmission rules govern. The
+service flow and the rent flow may well need different answers, and that is
+worth saying to the attorney explicitly rather than asking about "the
+business" as one thing.
+
+Ask the banker whether underwriting will flag either. Then ask the attorney
+which structure each flow is actually in, and get it in writing. A banker's
+reassurance is not a legal opinion.
 
 ---
 
@@ -250,22 +297,26 @@ processor is handling it.
 Not a reflection on him — most community bankers have never underwritten a
 marketplace, and honest "I don't know" beats a confident wrong answer.
 
-**Split it in two, which is what I would recommend regardless:**
+LakeLife AI needs a bank that is **fintech-literate**, because the hard part is
+holding other people's money properly. The park owners' own banking is their
+problem, not ours — including the first one. Names worth calling, roughly in
+order of how often they turn up behind products like this:
+**Column** (a chartered bank with a real API and FBO capability), **Lead Bank**
+and **Thread Bank** (the banks behind a lot of fintech FBO arrangements),
+**Live Oak** and **Grasshopper**. **Mercury** and **Relay** are good operating
+accounts but are **not** the answer for holding other people's money.
 
-- **The park entity** (BD DevCo Asset Management, LLC) belongs at a **local
-  north-east Indiana bank or credit union with a branch near Wolcottville**.
-  Its needs are unglamorous: take cash and cheques, pay contractors, keep
-  deposits separate. Proximity beats features.
-- **LakeLife the platform** belongs somewhere fintech-literate. Names worth
-  calling, roughly in order of how often they turn up behind products like
-  this: **Column** (a chartered bank with a real API and FBO capability),
-  **Lead Bank** and **Thread Bank** (the banks behind a lot of fintech FBO
-  arrangements), **Live Oak**, **Grasshopper**, and **Mercury** or **Relay** for
-  a straightforward operating account — noting Mercury and Relay are good
-  operating accounts but are **not** the answer for holding other people's
-  money.
+One practical note that survives the simplification: **the cash still has to go
+somewhere.** Nineteen households at the first park pay in cash and cheques. If
+LakeLife is the one taking that in on the owner's behalf, it needs a branch
+within sensible distance of Wolcottville, and a fintech bank with no branches
+cannot do it. If instead the owner keeps taking cash directly and LakeLife only
+records it — which is what the software does today — then this does not apply,
+and that is worth deciding on purpose rather than by accident.
 
 The single question that sorts them: **"Can you open an FBO account for a
 platform that holds funds for third parties, and what is your experience
-underwriting marketplaces?"** If the answer is no or vague, thank them, keep
-them for the park, and go elsewhere for the platform.
+underwriting marketplaces?"** If the answer is no or vague, thank them and keep
+looking. Opening an ordinary business checking account and hoping to sort the
+custodial side out later is how the rent ends up sitting in the operating
+balance, which is the one outcome this whole document exists to prevent.
