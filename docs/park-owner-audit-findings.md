@@ -18,9 +18,22 @@ Written 16 August 2026, verified against `main`.
 - **The seller's-arithmetic panel went blank** on a park with no lots yet —
   "no amounts on this list" while holding $8,500 of them. Fixed in `4dbad7a`.
 - **Invisible form fields** across the park module, including the twelve on
-  "Who lives here". Fixed in `e5fab6e`. This closes the auditor's item on
-  bare inputs; **A5 (the paste box zooming iOS) went with it**, since the
-  16px floor now applies to every control.
+  "Who lives here". Fixed in `e5fab6e`.
+- **A1 — rows that didn't take are now NAMED**, and it was worse than
+  reported: a row blocked between the read and the commit left `plan.ready`
+  silently and was not counted as a failure at all. Staged the race; the
+  receipt said "2 tenants are in ✓" with `failed: 0` and a household was gone
+  without trace. Fixed in `1f04471`, persisted so it survives a reload.
+- **A3 — the fee form no longer offers what the biller ignores**, and the
+  coverage panel no longer credits income against a bill that is never
+  raised. `1f04471`.
+- **A4 — the add-a-tenant form stopped promising texts.** `1f04471`.
+- **A5 — 28 controls (not 5) zoomed iOS on focus.** All fixed in `1f04471`;
+  a test now fails if any control gets an inline size under 16px.
+
+**Still open from section A: A2** — "Print a slip" is not drawn on reserved
+rows, which is every row between import and closing, so the paper channel is
+unreachable for exactly the households that have no email.
 
 ## How to read the rest
 
