@@ -174,7 +174,7 @@ function PackageConfigurator({ pkg, boatLabel }: { pkg: PackageView; boatLabel: 
     return (
       <div
         style={{
-          border: "1.5px solid var(--gold, #d9a441)", borderRadius: 12, padding: "14px 16px",
+          border: "1.5px solid var(--gold)", borderRadius: 12, padding: "14px 16px",
           fontSize: 13.5, lineHeight: 1.5,
         }}
       >

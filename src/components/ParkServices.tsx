@@ -203,7 +203,7 @@ function RateRow({
 
       {open && (
         <div style={{
-          marginTop: 8, background: "var(--sand, #f6f3ec)",
+          marginTop: 8, background: "var(--sand)",
           borderRadius: 10, padding: "10px 12px",
         }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -262,7 +262,7 @@ function RateRow({
 function Blockers({ rows }: { rows: string[] }) {
   return (
     <div style={{
-      marginTop: 10, background: "var(--sand, #f6f3ec)",
+      marginTop: 10, background: "var(--sand)",
       borderRadius: 10, padding: "10px 12px",
     }}>
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>

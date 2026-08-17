@@ -81,7 +81,7 @@ export function CancelRequestButton({ jobId, serviceName }: { jobId: string; ser
                 className="ll-btn"
                 onClick={confirmCancel}
                 disabled={pending}
-                style={{ minHeight: 44, ...(quote.free ? {} : { background: "var(--danger, #b23c2e)" }) }}
+                style={{ minHeight: 44, ...(quote.free ? {} : { background: "var(--danger)" }) }}
               >
                 {pending
                   ? "Cancelling…"

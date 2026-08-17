@@ -227,7 +227,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
           {findingCrew && (
             <div
               style={{
-                border: "1.5px solid var(--gold, #d9a441)", borderRadius: 12, padding: "10px 14px",
+                border: "1.5px solid var(--gold)", borderRadius: 12, padding: "10px 14px",
                 marginBottom: 14, fontSize: 13.5, lineHeight: 1.45,
               }}
             >
@@ -242,7 +242,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
             <div
               role="status"
               style={{
-                border: "1.5px solid var(--gold, #d9a441)", borderRadius: 12, padding: "10px 14px",
+                border: "1.5px solid var(--gold)", borderRadius: 12, padding: "10px 14px",
                 marginBottom: 14, fontSize: 13.5, lineHeight: 1.5, background: "#FBF3E1",
               }}
             >
@@ -286,8 +286,8 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
                 onClick={() => setMode(opt.on)}
                 style={{
                   padding: "8px 13px", borderRadius: 99, fontWeight: 700, fontSize: 13, cursor: "pointer",
-                  border: `1.5px solid ${multi === opt.on ? "var(--ink, #20343d)" : "var(--line)"}`,
-                  background: multi === opt.on ? "var(--ink, #20343d)" : "#fff",
+                  border: `1.5px solid ${multi === opt.on ? "var(--ink)" : "var(--line)"}`,
+                  background: multi === opt.on ? "var(--ink)" : "#fff",
                   color: multi === opt.on ? "#fff" : "var(--text)",
                 }}
               >
@@ -320,13 +320,13 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
               const clickable = c.status === "available" || isRushDay;
               const sel = picked.includes(c.iso);
               const bg = sel
-                ? (isRushDay ? "var(--gold, #d9a441)" : "var(--teal)")
+                ? (isRushDay ? "var(--gold)" : "var(--teal)")
                 : isRushDay ? "#FBF3E1"
                 : c.status === "available" ? "#fff" : c.status === "full" ? "#F4EDE4" : "#f0f3f4";
               const color = sel ? "#fff" : clickable ? "var(--text)" : "#aab6ba";
               const border = sel
-                ? (isRushDay ? "var(--gold, #d9a441)" : "var(--teal)")
-                : isRushDay ? "var(--gold, #d9a441)" : "var(--line)";
+                ? (isRushDay ? "var(--gold)" : "var(--teal)")
+                : isRushDay ? "var(--gold)" : "var(--line)";
               const title = c.status === "off-season" ? "Outside the water-work season"
                 : c.status === "full" ? "Crew at capacity"
                 : c.status === "past" ? ""
@@ -390,7 +390,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
                     aria-label={`Remove ${shortDay(d)}`}
                     style={{
                       padding: "5px 9px", borderRadius: 99, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
-                      border: `1px solid ${d === today && rushOpen ? "var(--gold, #d9a441)" : "var(--line)"}`,
+                      border: `1px solid ${d === today && rushOpen ? "var(--gold)" : "var(--line)"}`,
                       background: "#fff", color: "var(--text)",
                     }}
                   >

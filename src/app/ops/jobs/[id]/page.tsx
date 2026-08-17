@@ -277,7 +277,7 @@ export default async function OpsJobPage(ctx: { params: Promise<{ id: string }> 
 
       {/* ---- MAKE-IT-RIGHT ---- */}
       {latestDispute && (
-        <div className="ll-card ll-card-pad" style={{ marginTop: 14, borderLeft: "4px solid var(--gold, #d9a441)" }}>
+        <div className="ll-card ll-card-pad" style={{ marginTop: 14, borderLeft: "4px solid var(--gold)" }}>
           <SectionHead
             pill="Make-It-Right"
             title={DISPUTE_LABEL[latestDispute.status] ?? latestDispute.status}

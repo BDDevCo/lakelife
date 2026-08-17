@@ -157,7 +157,7 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
             <div
               style={{
                 marginTop: 12, padding: "10px 12px", borderRadius: 10,
-                background: standsDown ? "var(--sun-soft)" : "var(--sand, #f6f3ec)",
+                background: standsDown ? "var(--sun-soft)" : "var(--sand)",
                 border: `1px solid ${standsDown ? "#ecd9ad" : "var(--line)"}`,
                 color: standsDown ? "#7a5a1e" : "var(--text)",
                 fontSize: 13, lineHeight: 1.55,

@@ -425,7 +425,7 @@ function BookForSomebody({
   const overCap = a.maxDays != null && nights > a.maxDays;
 
   return (
-    <div style={{ marginTop: 10, background: "var(--sand, #f6f3ec)", borderRadius: 10, padding: "10px 12px" }}>
+    <div style={{ marginTop: 10, background: "var(--sand)", borderRadius: 10, padding: "10px 12px" }}>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
         <label className="ll-field" style={{ margin: 0, width: 150 }}>
           <span>From</span>

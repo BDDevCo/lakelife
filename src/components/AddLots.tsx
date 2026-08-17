@@ -93,7 +93,7 @@ export function AddLots({
       </div>
 
       {range.error && from.trim() ? (
-        <p style={{ fontSize: 13, color: "var(--ink-warn, #9a6b15)", margin: "8px 0 0" }}>
+        <p style={{ fontSize: 13, color: "var(--ink-warn)", margin: "8px 0 0" }}>
           {range.error}
         </p>
       ) : n > 0 ? (
@@ -107,7 +107,7 @@ export function AddLots({
       {/* WHAT IT COSTS HIM. Only shown when it is actually true. */}
       {impact && (
         <div style={{
-          marginTop: 10, background: "var(--sand, #f6f3ec)",
+          marginTop: 10, background: "var(--sand)",
           borderRadius: 10, padding: "10px 12px",
         }}>
           <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>

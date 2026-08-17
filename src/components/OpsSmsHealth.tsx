@@ -24,7 +24,7 @@ export function OpsSmsHealth({ health }: { health: SmsHealth }) {
   // COULD NOT ASK ≠ ALL WELL. Rendered as a warning, never as silence.
   if (!health.window) {
     return (
-      <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--warn, #c8622a)" }}>
+      <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--warn)" }}>
         <span className="ll-pill warn">Texts · unknown</span>
         <p style={{ fontSize: 14, margin: "10px 0 0", lineHeight: 1.55 }}>
           We couldn&apos;t reach Twilio to check whether texts are arriving.
@@ -55,7 +55,7 @@ export function OpsSmsHealth({ health }: { health: SmsHealth }) {
       className="ll-card ll-card-pad"
       style={{
         marginTop: 18,
-        borderLeft: `4px solid ${allFailing ? "var(--warn, #c8622a)" : "var(--teal-dark, #0f6d7d)"}`,
+        borderLeft: `4px solid ${allFailing ? "var(--warn)" : "var(--teal-dark)"}`,
       }}
     >
       <span className={`ll-pill ${allFailing ? "warn" : "ok"}`}>

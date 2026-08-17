@@ -392,7 +392,7 @@ export function ParkImportRead({ view }: { view: ReadView }) {
       <div
         style={{
           position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 20,
-          background: "var(--card, #fff)", borderTop: "1px solid rgba(0,0,0,.12)",
+          background: "var(--card)", borderTop: "1px solid rgba(0,0,0,.12)",
           padding: "12px 16px",
         }}
       >

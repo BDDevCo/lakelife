@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { startTextOptIn, confirmTextOptIn, stopTexts } from "@/app/parks/consent-actions";
 import { smsConsentText, SMS_OPT_IN_BLURB } from "@/lib/sms-consent";
+import { CodeBoxes } from "@/components/CodeBoxes";
 
 /**
  * WHERE A RESIDENT GIVES US A NUMBER, ON PURPOSE.
@@ -54,9 +55,12 @@ export function TextOptIn({
     });
   }
 
-  function confirm() {
+  // Takes the code rather than reading it — see the same note in VerifyPanel.
+  // onComplete fires in the tick that sets it, so the state here is one
+  // keystroke behind.
+  function confirm(submitted?: string) {
     start(async () => {
-      const r = await confirmTextOptIn(phone, code);
+      const r = await confirmTextOptIn(phone, submitted ?? code);
       setSaid(r.message);
       if (r.ok) { setStep("idle"); setCode(""); router.refresh(); }
     });
@@ -141,20 +145,23 @@ export function TextOptIn({
         </>
       ) : (
         <>
-          <label className="ll-field" style={{ marginBottom: 10, maxWidth: 220 }}>
-            <span>The six digits we just texted</span>
-            <input
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="123456"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              style={{ fontSize: 22, letterSpacing: "0.16em", fontVariantNumeric: "tabular-nums" }}
-              onKeyDown={(e) => { if (e.key === "Enter" && code.trim()) confirm(); }}
-            />
-          </label>
+          {/* THE SAME SIX BOXES THE SIGN-UP CHECK USES.
+              This was one plain input with a "123456" placeholder — the same
+              person, doing the same thing two screens apart, got the worse
+              version here: no spreading of an iOS auto-fill, no paste
+              handling, and a caret to manage by thumb. */}
+          <p className="mut" style={{ fontSize: 14, margin: "0 0 4px" }}>
+            The six digits we just texted
+          </p>
+          <CodeBoxes
+            value={code}
+            onChange={setCode}
+            onComplete={(c) => confirm(c)}
+            label="The six digits we just texted"
+            disabled={busy}
+          />
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="ll-btn" disabled={busy || !code.trim()} onClick={confirm} style={{ minHeight: 44 }}>
+            <button className="ll-btn" disabled={busy || code.length !== 6} onClick={() => confirm()} style={{ minHeight: 44 }}>
               {busy ? "Checking…" : "Turn texts on"}
             </button>
             <button className="ll-btn ghost" disabled={busy} onClick={() => { setStep("idle"); setSaid(null); }} style={{ minHeight: 44 }}>

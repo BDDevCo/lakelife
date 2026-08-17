@@ -76,12 +76,12 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 the ledger is wrong, nothing is being chased until somebody
                 looks — and this screen must say so rather than nag. */}
             {b.disputed ? (
-              <div style={{ fontSize: 13, color: "var(--ink-warn, #9a6b15)" }}>
+              <div style={{ fontSize: 13, color: "var(--ink-warn)" }}>
                 You&apos;ve told the office this doesn&apos;t look right. Nothing
                 is being chased until they&apos;ve checked.
               </div>
             ) : b.outstanding <= 0 ? (
-              <div style={{ fontSize: 13, color: "var(--ink-good, #0e7a6a)" }}>
+              <div style={{ fontSize: 13, color: "var(--ink-good)" }}>
                 Paid in full — thank you.
               </div>
             ) : (

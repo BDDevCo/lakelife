@@ -43,7 +43,7 @@ function OfferCard({ offer }: { offer: ScarcityOfferView }) {
   }
 
   return (
-    <div className="ll-card ll-card-pad" style={{ borderColor: "var(--gold, #d9a441)" }}>
+    <div className="ll-card ll-card-pad" style={{ borderColor: "var(--gold)" }}>
       <span className="ll-pill warn">Crews are tight</span>
       <div style={{ fontWeight: 800, fontSize: 16, margin: "10px 0 4px" }}>
         {offer.serviceName} — {prettyDate(offer.date)}

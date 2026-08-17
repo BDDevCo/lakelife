@@ -134,7 +134,7 @@ export function JobSearch() {
                 href={`/ops/jobs/${r.id}`}
                 style={{
                   display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
-                  padding: "9px 11px", borderRadius: 10, background: "var(--sand-light, #f7f4ec)",
+                  padding: "9px 11px", borderRadius: 10, background: "var(--sand-light)",
                   textDecoration: "none", color: "inherit",
                 }}
               >

@@ -110,7 +110,7 @@ export function VendorImport() {
                 crew can find out. Named, not counted: the next question is
                 always "which ones". */}
             {(result.notEmailed?.length ?? 0) > 0 && (
-              <div style={{ marginTop: 10, padding: "10px 12px", background: "var(--sand, #fdf6ec)", borderRadius: 8 }}>
+              <div style={{ marginTop: 10, padding: "10px 12px", background: "var(--sand)", borderRadius: 8 }}>
                 <p style={{ fontSize: 13, fontWeight: 700, margin: "0 0 4px" }}>
                   {result.notEmailed!.length} couldn&apos;t be emailed — reach out yourself
                 </p>

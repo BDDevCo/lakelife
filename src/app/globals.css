@@ -22,6 +22,34 @@
   --ok: #2e8b57;
   --warn: #c7772a;
   --danger: #b34a3a;
+
+  /* ---- the nine that were used everywhere and defined nowhere ----
+     Every one of these was already on screen, as a hardcoded fallback inside
+     `var(--name, #hex)` at 31 call sites. Because the name was never defined,
+     the fallback ALWAYS won — so the code read like it was using the design
+     system while the design system had no say in it. The values below are the
+     ones that were rendering, so nothing moves; what changes is that there is
+     now one place to change them.
+
+     The cost of the old arrangement, concretely: `--sand` was written with two
+     different fallbacks, #f6f3ec at seven sites and #fdf6ec at two, so two
+     notice panels meant to match did not. One name can only hold one value,
+     which is the point of having the name. */
+  --mint: #eaf7f0;        /* a settled, good-news wash */
+  --sand: #f6f3ec;        /* a notice wash — the seven-site value wins */
+  --sand-light: #f7f4ec;  /* the same wash, one step paler */
+  --teal-wash: #e6f5f4;   /* a highlighted-row wash */
+  --slate-soft: #eef1f4;  /* a neutral, nothing-is-wrong wash */
+  --slate: #8a99a0;       /* calendar rules and other quiet furniture */
+  --gold: #d9a441;        /* the deeper buoy gold, for text and rules on white
+                             where --sun (#e9b44c) has too little contrast */
+  --ink-good: #0e7a6a;    /* good news as TEXT — darker than --ok, which is
+                             mixed for fills rather than for reading */
+  --ink-warn: #9a6b15;    /* the same idea for a caution word */
+  --alarm-bg: #fdecec;    /* the loudest wash we have. One user: the ops panel
+                             for a charge that was started and never came back,
+                             which is real money in an unknown state. */
+
   --r: 14px;
   --shadow: 0 1px 2px rgba(10, 36, 48, 0.05),
     0 8px 24px -12px rgba(10, 36, 48, 0.18);
@@ -44,6 +72,16 @@
   --color-ok: var(--ok);
   --color-warn: var(--warn);
   --color-danger: var(--danger);
+  --color-mint: var(--mint);
+  --color-sand: var(--sand);
+  --color-sand-light: var(--sand-light);
+  --color-teal-wash: var(--teal-wash);
+  --color-slate: var(--slate);
+  --color-slate-soft: var(--slate-soft);
+  --color-gold: var(--gold);
+  --color-ink-good: var(--ink-good);
+  --color-ink-warn: var(--ink-warn);
+  --color-alarm-bg: var(--alarm-bg);
   --font-display: var(--font-display), "Bricolage Grotesque", serif;
   --font-body: var(--font-body), "Manrope", system-ui, sans-serif;
 }
@@ -276,6 +314,20 @@ textarea {
 }
 
 /* ---------------- 6-box SMS code input ---------------- */
+/* SIX BOXES THAT HAVE TO FIT A PHONE.
+   Measured at 375px: six 46px boxes and five 8px gaps want 316px, and the
+   modal body offers 283. The boxes did not shrink — an <input> has an
+   intrinsic minimum width and `flex-shrink` cannot cross it — so the row laid
+   out from x=30 to x=346 inside a card whose content runs x=46 to x=329, and
+   the first and last digit sat OUTSIDE the card on every iPhone.
+
+   This is the mobile-verification screen, which rule 5 puts in front of every
+   account before its first booking, so the answer is "all of them".
+
+   `min-width: 0` is the load-bearing line: it releases the intrinsic minimum
+   so `flex: 0 1 46px` can actually shrink. They land at ~40px on a 375px
+   screen, still a comfortable thumb target, and stay 46px wherever there is
+   room. */
 .ll-code-row {
   display: flex;
   gap: 8px;
@@ -283,6 +335,8 @@ textarea {
   margin: 8px 0 18px;
 }
 .ll-code-box {
+  flex: 0 1 46px;
+  min-width: 0;
   width: 46px;
   height: 56px;
   text-align: center;

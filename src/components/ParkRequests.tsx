@@ -226,7 +226,7 @@ function StickerSheet({ rows }: { rows: StickerRow[] }) {
       </p>
       <div style={{
         fontFamily: "ui-monospace, monospace", fontSize: 12, lineHeight: 1.7,
-        background: "var(--sand, #f6f3ec)", borderRadius: 8, padding: "10px 12px",
+        background: "var(--sand)", borderRadius: 8, padding: "10px 12px",
         maxHeight: 260, overflowY: "auto",
       }}>
         {rows.map((s) => (

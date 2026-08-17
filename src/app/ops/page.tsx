@@ -172,7 +172,7 @@ export default async function OpsPage() {
         <OpsStuckClaims stuck={stuck} tally={tally} />
 
         {escalations.length > 0 && (
-          <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--gold, #d9a441)" }}>
+          <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--gold)" }}>
             <span className="ll-pill gold">Make-It-Right · waiting on you</span>
             <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
               {escalations.length === 1 ? "1 dispute needs a human call" : `${escalations.length} disputes need a human call`}
@@ -182,7 +182,7 @@ export default async function OpsPage() {
             </p>
             <div style={{ display: "grid", gap: 10 }}>
               {escalations.map((e) => (
-                <div key={e.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, padding: "10px 12px", background: "var(--sand-light, #f7f4ec)", borderRadius: 12 }}>
+                <div key={e.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, padding: "10px 12px", background: "var(--sand-light)", borderRadius: 12 }}>
                   <div style={{ flex: "1 1 260px", minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>{e.service} · {e.where} · {money.format(e.customerPrice)}</div>
                     {e.note && <div className="mut" style={{ fontSize: 12.5 }}>Customer: &ldquo;{e.note}&rdquo;</div>}
@@ -203,7 +203,7 @@ export default async function OpsPage() {
             escalations because it is the same kind of thing: the machine did
             everything it could and stopped at the point where money moves. */}
         {proposedFees.length > 0 && (
-          <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--warn, #c8622a)" }}>
+          <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--warn)" }}>
             <span className="ll-pill warn">Missed visits · waiting on you</span>
             <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
               {proposedFees.length === 1

@@ -150,7 +150,7 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
         </div>
 
         {lake.hoa_user_id && (
-          <div className="ll-card ll-card-pad" style={{ marginBottom: 16, borderColor: "var(--gold, #d9a441)" }}>
+          <div className="ll-card ll-card-pad" style={{ marginBottom: 16, borderColor: "var(--gold)" }}>
             <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>🎆 The {lake.hoa_name ?? `${lake.name} Association`} fund</h3>
             <p style={{ fontSize: 20, fontWeight: 800, color: "var(--teal-dark)", margin: "0 0 4px" }}>
               ${hoaTotal.toFixed(2)} raised so far

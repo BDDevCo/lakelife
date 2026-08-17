@@ -29,7 +29,7 @@ const STATUS_COLORS: Record<StatusKey, { dot: string; bg: string; fg: string; la
   scheduled: { dot: "var(--teal)", bg: "#e0f0f3", fg: "var(--teal-dark)", label: "Scheduled" },
   in_progress: { dot: "var(--teal-dark)", bg: "#cfe6ea", fg: "var(--teal-dark)", label: "In progress" },
   complete: { dot: "var(--ok)", bg: "#e4f2ea", fg: "var(--ok)", label: "Complete" },
-  paid: { dot: "var(--slate, #8a99a0)", bg: "#e9eff1", fg: "var(--sub)", label: "Paid" },
+  paid: { dot: "var(--slate)", bg: "#e9eff1", fg: "var(--sub)", label: "Paid" },
 };
 const LEGEND_ORDER: StatusKey[] = ["requested", "scheduled", "in_progress", "complete", "paid"];
 

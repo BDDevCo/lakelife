@@ -135,7 +135,7 @@ export function ClaimMyLot({
           role="status"
           style={{
             margin: "0 0 14px", padding: "12px 14px", borderRadius: 10,
-            background: said.ok ? "var(--mint, #eaf7f0)" : "var(--sand, #fdf6ec)",
+            background: said.ok ? "var(--mint)" : "var(--sand)",
             fontSize: 15, lineHeight: 1.55,
           }}
         >

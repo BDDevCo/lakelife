@@ -58,7 +58,7 @@ export function OpsStuckClaims({
   return (
     <div
       className="ll-card ll-card-pad"
-      style={{ marginTop: 18, borderLeft: "4px solid var(--teal-dark, #0f6d7d)" }}
+      style={{ marginTop: 18, borderLeft: "4px solid var(--teal-dark)" }}
     >
       <span className="ll-pill teal">Getting residents in · worth a call</span>
       <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
@@ -78,7 +78,7 @@ export function OpsStuckClaims({
             key={s.renterId}
             style={{
               display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10,
-              padding: "9px 12px", background: "var(--sand-light, #f7f4ec)", borderRadius: 10,
+              padding: "9px 12px", background: "var(--sand-light)", borderRadius: 10,
             }}
           >
             <strong style={{ fontSize: 14, flex: "1 1 220px", minWidth: 0 }}>

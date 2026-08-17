@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
+import { CodeBoxes } from "@/components/CodeBoxes";
 import { safeNext } from "@/lib/safe-next";
 
 export function VerifyPanel({
@@ -15,11 +16,12 @@ export function VerifyPanel({
 }) {
   const router = useRouter();
   const [phone, setPhone] = useState(initialPhone ?? "");
-  const [digits, setDigits] = useState(["", "", "", "", "", ""]);
+  // ONE STRING, NOT SIX SLOTS. CodeBoxes owns the boxes and the focus; this
+  // only ever holds what gets sent.
+  const [code, setCode] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [needsPhone, setNeedsPhone] = useState(!initialPhone);
-  const boxes = useRef<Array<HTMLInputElement | null>>([]);
 
   // Pull the number saved during email signup, if any.
   //
@@ -92,42 +94,14 @@ export function VerifyPanel({
     toast("Code texted. Enter the 6 digits below.");
   }
 
-  function onDigit(i: number, val: string) {
-    const cleaned = val.replace(/\D/g, "");
-    // iOS SMS auto-fill (or a paste) can drop the whole code into one box —
-    // spread it across all six instead of losing it.
-    if (cleaned.length > 1) {
-      fillCode(cleaned);
-      return;
-    }
-    const next = [...digits];
-    next[i] = cleaned;
-    setDigits(next);
-    if (cleaned && i < 5) boxes.current[i + 1]?.focus();
-  }
 
-  function fillCode(codeDigits: string) {
-    const six = codeDigits.slice(0, 6).split("");
-    const next = ["", "", "", "", "", ""].map((_, i) => six[i] ?? "");
-    setDigits(next);
-    boxes.current[Math.min(six.length, 5)]?.focus();
-  }
-
-  function onPaste(e: React.ClipboardEvent<HTMLInputElement>) {
-    const pasted = e.clipboardData.getData("text").replace(/\D/g, "");
-    if (pasted.length >= 2) {
-      e.preventDefault();
-      fillCode(pasted);
-    }
-  }
-
-  function onKeyDown(i: number, e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Backspace" && !digits[i] && i > 0) boxes.current[i - 1]?.focus();
-  }
-
-  async function verify() {
-    const code = digits.join("");
-    if (code.length !== 6) {
+  // TAKES THE CODE, RATHER THAN READING IT.
+  // CodeBoxes fires onComplete in the same tick it calls onChange, so `code`
+  // in this closure is still the five digits from before the last keystroke.
+  // Auto-submit would have sent a short code and reported it as wrong.
+  async function verify(submitted?: string) {
+    const entered = submitted ?? code;
+    if (entered.length !== 6) {
       toast("Enter all 6 digits.");
       return;
     }
@@ -135,7 +109,7 @@ export function VerifyPanel({
     const res = await fetch("/api/verify/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, code }),
+      body: JSON.stringify({ phone, code: entered }),
     });
     const body = await res.json().catch(() => ({}));
     setBusy(false);
@@ -190,29 +164,17 @@ export function VerifyPanel({
           </button>
         ) : (
           <>
-            <div className="ll-code-row">
-              {digits.map((d, i) => (
-                <input
-                  key={i}
-                  ref={(el) => {
-                    boxes.current[i] = el;
-                  }}
-                  className="ll-code-box"
-                  inputMode="numeric"
-                  maxLength={i === 0 ? 6 : 1}
-                  autoComplete={i === 0 ? "one-time-code" : "off"}
-                  value={d}
-                  onChange={(e) => onDigit(i, e.target.value)}
-                  onKeyDown={(e) => onKeyDown(i, e)}
-                  onPaste={onPaste}
-                  aria-label={`Digit ${i + 1}`}
-                />
-              ))}
-            </div>
+            <CodeBoxes
+              value={code}
+              onChange={setCode}
+              onComplete={(c) => verify(c)}
+              label="The six digits we just texted"
+              disabled={busy}
+            />
             <button
               className="ll-btn"
               style={{ width: "100%" }}
-              onClick={verify}
+              onClick={() => verify()}
               disabled={busy}
             >
               {busy ? "Verifying…" : "Verify & continue"}
@@ -230,7 +192,7 @@ export function VerifyPanel({
                 onClick={() => {
                   setSent(false);
                   setNeedsPhone(true);
-                  setDigits(["", "", "", "", "", ""]);
+                  setCode("");
                 }}
                 disabled={busy}
               >

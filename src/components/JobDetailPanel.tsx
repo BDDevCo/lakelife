@@ -88,7 +88,7 @@ export function JobVerdictButtons({ jobId, serviceName }: { jobId: string; servi
               className="ll-btn"
               onClick={() => send("issue")}
               disabled={pending}
-              style={{ minHeight: 44, background: "var(--danger, #b34a3a)" }}
+              style={{ minHeight: 44, background: "var(--danger)" }}
             >
               {pending ? "Sending…" : "Send it — flag the issue"}
             </button>

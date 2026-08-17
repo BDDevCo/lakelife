@@ -190,7 +190,7 @@ function HeaderCard({ job, where }: { job: JobDetailView; where: string }) {
 function MakeItRightCard({ job }: { job: JobDetailView }) {
   const d = job.dispute!;
   return (
-    <div className="ll-card ll-card-pad" style={{ marginBottom: 16, borderColor: "var(--gold, #d9a441)" }}>
+    <div className="ll-card ll-card-pad" style={{ marginBottom: 16, borderColor: "var(--gold)" }}>
       <span className="ll-pill warn">{`Make it right · ${d.pill}`}</span>
       <p style={{ fontSize: 14.5, margin: "10px 0 0", lineHeight: 1.5 }}>{d.line}</p>
       {d.needsCustomer && <DisputeAnswerButtons jobId={job.id} />}

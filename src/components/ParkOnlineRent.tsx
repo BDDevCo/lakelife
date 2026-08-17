@@ -147,7 +147,7 @@ export function ParkOnlineRent({
         </label>
 
         {badFee ? (
-          <p style={{ fontSize: 12.5, marginTop: 8, marginBottom: 0, color: "var(--warn, #b23)", lineHeight: 1.45 }}>
+          <p style={{ fontSize: 12.5, marginTop: 8, marginBottom: 0, color: "var(--warn)", lineHeight: 1.45 }}>
             That has to be a number between 0 and {ceiling}.
           </p>
         ) : (

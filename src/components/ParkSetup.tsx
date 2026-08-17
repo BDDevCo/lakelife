@@ -188,7 +188,7 @@ function Chip({ label, on, onClick }: { label: string; on: boolean; onClick: () 
       style={{
         padding: "8px 14px", borderRadius: 999, fontSize: 14, fontWeight: 600, cursor: "pointer",
         border: `2px solid ${on ? "var(--teal)" : "var(--line)"}`,
-        background: on ? "var(--teal-wash, #e6f5f4)" : "transparent",
+        background: on ? "var(--teal-wash)" : "transparent",
         color: on ? "var(--teal-dark)" : "var(--sub)",
       }}
     >

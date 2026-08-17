@@ -162,7 +162,7 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
             <div
               style={{
                 marginTop: 12, padding: "10px 12px", borderRadius: 10,
-                background: noShow || stoodDown ? "var(--slate-soft, #eef1f4)" : "var(--sun-soft)",
+                background: noShow || stoodDown ? "var(--slate-soft)" : "var(--sun-soft)",
                 border: `1px solid ${noShow || stoodDown ? "var(--line)" : "#ecd9ad"}`,
                 color: noShow || stoodDown ? "var(--text)" : "#7a5a1e",
                 fontSize: 13, lineHeight: 1.5,

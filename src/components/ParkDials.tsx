@@ -110,7 +110,7 @@ export function ParkDials({
 
       {notice && (
         <p style={{ fontSize: 13, marginTop: 14, marginBottom: 0, lineHeight: 1.5,
-                    color: notice.fitsInTerm ? undefined : "var(--warn, #b23)" }}>
+                    color: notice.fitsInTerm ? undefined : "var(--warn)" }}>
           {notice.line}
         </p>
       )}

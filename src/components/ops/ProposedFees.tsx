@@ -70,7 +70,7 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
         <p
           style={{
             fontSize: 13, margin: "10px 0 0", padding: "10px 12px", borderRadius: 8,
-            background: "var(--alarm-bg, #fdecec)", lineHeight: 1.55,
+            background: "var(--alarm-bg)", lineHeight: 1.55,
           }}
         >
           <b>A charge for {usd(row.fee)} was started and we never heard back.</b>{" "}
@@ -105,7 +105,7 @@ function FeeCard({ row }: { row: ProposedFeeRow }) {
         className="mut"
         style={{
           fontSize: 12.5, margin: "10px 0 0", padding: "8px 10px", borderRadius: 8,
-          background: "var(--sand, #f6f3ec)", lineHeight: 1.5,
+          background: "var(--sand)", lineHeight: 1.5,
         }}
       >
         {!row.crewOutOfPocket ? (
