@@ -42,45 +42,22 @@ export default async function Home() {
       <main>
         <section className="ll-hero">
           <div className="ll-hero-inner">
-            {/* WHAT WE DO, IN THE FIRST BREATH — and Brendon had to say it
-                three times before I fixed the right thing.
-
-                Two earlier versions circled the product. "Lake life, handled."
-                describes a mood. "Your lake house, ready when you are" is a
-                feeling, and the paragraph under it opened on the reader NOT
-                BEING THERE — which excluded the full-timers and, worse, still
-                never said what kind of company this is. A stranger could not
-                tell a service business from a rental manager from software.
-
-                THE CUSTOMER IS THE SEASONAL OWNER, deliberately. A full-timer
-                mows their own lawn, has their own dock guy and is there to let
-                anyone in; they buy one job a year. A seasonal owner buys the
-                whole chain — spring open, dock and lift in, mowing all summer,
-                cleaning before each visit, boat out, winterize, dock out, fall
-                close. Eight or ten jobs. The page should be written for them.
-
-                AND THE THING WE ACTUALLY DO FOR THEM WAS NOT ON THE PAGE AT
-                ALL. Autopilot: turn a service on once, the all-in price locks
-                at today's level, each season we propose it and one tap
-                confirms or skips, skipping always free. That is a season
-                arranged once — and the homepage was selling single bookings,
-                which is the same product with the point removed.
-
-                Deliberately channel-neutral: "we ask you first", never "we
-                text you". No SMS this app has sent since 19 July has been
-                delivered, and the front page must not promise a dead channel. */}
-            <div className="ll-eyebrow">Welcome to LakeLife</div>
-            <h1>Set your lake season once.</h1>
+            {/* Copy set by Brendon, verbatim. The em dash in
+                "complete—season after season" is closed up (no spaces) as
+                specified; `.ll-eyebrow` and `.ll-pill` uppercase in CSS, so
+                the strings below are written the way they render. */}
+            <div className="ll-eyebrow">WELCOME TO LAKELIFE</div>
+            <h1>Your LakeLife, Automated.</h1>
             <p>
-              Dock and lift in for spring, mowing and cleaning all summer, boat
-              winterized and the dock out before the freeze. Choose the jobs
-              once — we schedule each one, hold the price, and send photos when
-              it&apos;s done. Skip anything, any time, free.
+              House, lawn, dock, lift, boat and toys. Choose what you need
+              once. LakeLife automates scheduling and payments, keeps pricing
+              clear, and provides photo proof when each job is
+              complete&mdash;season after season.
             </p>
             <div className="ll-hero-chips">
-              <span className="ll-chip">📍 <b>Lakefront or near it — {lakeChips}</b></span>
-              <span className="ll-chip">Home · housekeeping · lawn &amp; seasonal</span>
-              <span className="ll-chip">Boats · jet skis · piers · lifts · storage</span>
+              <span className="ll-chip">📍 <b>Lakefront or nearby — {lakeChips}</b></span>
+              <span className="ll-chip">Home · housekeeping · lawn · seasonal</span>
+              <span className="ll-chip">Boats · jet skis · docks · lifts · storage</span>
               {signedIn ? (
                 <Link
                   className="ll-chip"
@@ -94,7 +71,7 @@ export default async function Home() {
                     textDecoration: "none",
                   }}
                 >
-                  Welcome back — open my portal →
+                  Welcome back&mdash;open my portal →
                 </Link>
               ) : (
                 <GetStarted configured={supaOk} />
@@ -112,38 +89,25 @@ export default async function Home() {
               gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
             }}
           >
-            {/* THREE CARDS THAT SAY WHAT CHANGES FOR HIM, not what we built.
-                All three used to be written from the inside:
-
-                "Only the services you want" — a menu. Every contractor in
-                Indiana says this.
-                "Built around ice-out & freeze" — our scheduler's cleverest
-                trick, described in our own vocabulary. A stranger does not
-                know what a pull deadline is, and "ice-out" is jargon even
-                locally. The behaviour is real and worth keeping; it belongs
-                inside "we fit it around the weather", where it is a relief
-                rather than a feature.
-                "Photos with every visit" — an artifact, not a benefit. It
-                never answered the only question a photo answers: did it
-                actually happen, and do I have to drive out to find out. */}
+            {/* Copy set by Brendon, verbatim. `.ll-pill` uppercases in CSS;
+                the labels are written uppercase so the source reads as the
+                page does. Note the em dashes in the BODY strings are the
+                character, not `&mdash;` — an entity in a string prop is not
+                JSX text and would render literally. */}
             <FeatureCard
-              pill="Set it once"
-              title="The season keeps itself"
-              body="Turn on the jobs your place needs and each one comes round in its own season, fitted around the weather — dock in after the ice goes, mowing through the summer, everything out before the freeze. We ask before every visit, and skipping one is free."
+              pill="SET IT ONCE"
+              title="Choose the services your LakeLife needs"
+              body="Select the work once, and each job is automatically scheduled in the right season. Change or skip a service anytime."
             />
             <FeatureCard
-              pill="No quotes to chase"
-              title="One all-in price, and we hold it"
-              body="The price you see is the whole price — crew, coordination and scheduling included. Turn a job on and that price is locked at today's level, so next spring costs what this spring did."
+              pill="SIMPLE FROM START TO FINISH"
+              title="Pricing, scheduling and payments in one place"
+              body="See the full price upfront, know when the work is scheduled, and handle payment through LakeLife."
             />
-            {/* "See it was done — WITHOUT DRIVING OUT" carried the same
-                absence assumption as the old hero paragraph. The benefit
-                survives without asserting where the reader lives: "even if you
-                weren't there to watch" is an offer, not a premise. */}
             <FeatureCard
-              pill="Proof, not promises"
-              title="Photos of the actual work, every visit"
-              body="Not a courtesy — a crew can't mark a job finished, or get paid, until the photos are in. So you know the dock really came out, even if you weren't there to watch."
+              pill="PHOTO PROOF"
+              title="See when every job is complete"
+              body="Receive photos after each visit, so you know the work was completed—even when you aren’t there."
             />
           </div>
         </section>

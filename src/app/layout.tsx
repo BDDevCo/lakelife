@@ -20,12 +20,11 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  // The one sentence a stranger gets in a search result, so it carries the
-  // same promise as the hero rather than a mood. NOT the prototype's line any
-  // more: "ready when you are" is a feeling, and this has to say what we do.
-  title: "LakeLife — Set your lake season once",
+  // Kept in step with the hero — the brand name already sits inside the
+  // headline, so it is not repeated in front of it.
+  title: "Your LakeLife, Automated",
   description:
-    "Dock and lift in for spring, mowing and cleaning all summer, boat winterized and the dock out before the freeze. Choose the jobs once — we schedule each one, hold the price, and send photos when it's done. Big Long, Pretty & Big Turkey Lakes.",
+    "House, lawn, dock, lift, boat and toys. Choose what you need once. LakeLife automates scheduling and payments, keeps pricing clear, and provides photo proof when each job is complete—season after season. Big Long, Pretty & Big Turkey Lakes.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,

@@ -36,7 +36,7 @@ export function GetStarted({ configured }: { configured: boolean }) {
         }}
         onClick={start}
       >
-        New here? Create a profile →
+        Set up my LakeLife →
       </button>
       {open && <AuthModal onClose={() => setOpen(false)} />}
     </>
