@@ -338,9 +338,68 @@ textarea {
   padding-left: 14px;
   letter-spacing: 0.02em;
 }
+/* ---- the buttons in the bar ----
+   These were five inline style objects in TopBarAuth, which meant no media
+   query could reach them: at 375px the signed-out pair overflowed the bar by
+   25px and pushed "Get set up →" a pixel off the right edge of the phone,
+   while the signed-in pair — lacking the `nowrap` its sibling had — wrapped
+   to three lines inside a 64px bar. Both are the same bug wearing different
+   clothes, and both are unreachable from CSS while the styles live in JS. */
+.ll-navbtn {
+  font-weight: 700;
+  font-size: 13.5px;
+  padding: 8px 16px;
+  border-radius: 99px;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  line-height: 1.2;
+}
+.ll-navbtn.signin {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+.ll-navbtn.join {
+  background: var(--sun);
+  border: 1px solid var(--sun);
+  color: var(--ink);
+  font-weight: 800;
+}
+.ll-navbtn.portal {
+  background: var(--teal);
+  border: 1px solid var(--teal);
+  color: #fff;
+  padding: 8px 14px;
+}
+.ll-navbtn.ghost {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #9fc0cb;
+  padding: 8px 14px;
+}
+
 @media (max-width: 640px) {
   .ll-tagline {
     display: none;
+  }
+  /* A phone has 375px and the wordmark takes 126 of them. Tightening the
+     gutter, the gap and the pill padding is what buys the room back — the
+     bar measures 185px of buttons against 217px of space after this, with
+     the 24px gutter on the right restored. */
+  .ll-topbar {
+    padding: 0 16px;
+  }
+  .ll-topbar-inner {
+    gap: 8px;
+  }
+  .ll-navbtn {
+    font-size: 13px;
+    padding: 8px 12px;
+  }
+  .ll-navbtn.portal,
+  .ll-navbtn.ghost {
+    padding: 8px 11px;
   }
 }
 

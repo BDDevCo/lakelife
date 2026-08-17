@@ -5,7 +5,15 @@ import { VerifyPanel } from "@/components/VerifyPanel";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 
-export default async function VerifyPage() {
+export default async function VerifyPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string }>;
+}) {
+  // Handed straight to VerifyPanel, which validates it. A park resident who
+  // created her account from an invite link finishes the mobile check and
+  // goes back to that link rather than into the lake-services wizard.
+  const { next } = await searchParams;
   if (!hasSupabaseEnv()) {
     return (
       <>
@@ -65,7 +73,7 @@ export default async function VerifyPage() {
     <>
       <TopBar />
       <div className="wrap" style={{ paddingTop: 48, maxWidth: 440 }}>
-        <VerifyPanel initialPhone={initialPhone} />
+        <VerifyPanel initialPhone={initialPhone} next={next} />
       </div>
     </>
   );

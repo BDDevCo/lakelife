@@ -1,9 +1,9 @@
-import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import { FollowInvite } from "@/components/FollowInvite";
 import { INVITE_TOKEN_RE } from "@/lib/park-invite";
+import { SignInHere } from "@/components/SignInHere";
 
 export const metadata = { title: "See your lot — LakeLife" };
 
@@ -35,6 +35,8 @@ export default async function WelcomePage({
   const { data: { user } } = await supabase.auth.getUser();
 
   const shaped = INVITE_TOKEN_RE.test(token);
+  // Rebuilt from the token we just shape-checked, never from a request header.
+  const selfUrl = `/parks/welcome?t=${encodeURIComponent(token)}`;
 
   return (
     <>
@@ -62,15 +64,17 @@ export default async function WelcomePage({
               Use <strong>the same email address this message was sent to</strong>.
               Your lot is kept under your own account, so nobody else can see it.
             </p>
-            <Link className="ll-btn" href="/" style={{ display: "inline-block", minHeight: 48 }}>
-              Sign in
-            </Link>
+            {/* THE MODAL OPENS HERE AND HANDS HER BACK. The old button went
+                to "/" and the sentence under it had to say "then come back to
+                this page" — which, on a phone, means switching to Mail and
+                finding the link a second time. */}
+            <SignInHere next={selfUrl} />
             <p className="mut" style={{ fontSize: 13, marginTop: 14, lineHeight: 1.55 }}>
-              Then come back to this page — the link stays good for 30 days.
+              You&apos;ll come straight back here. The link stays good for 30 days.
             </p>
           </div>
         ) : (
-          <FollowInvite token={token} />
+          <FollowInvite token={token} selfUrl={selfUrl} />
         )}
 
         <p className="mut" style={{ fontSize: 13, lineHeight: 1.6, marginTop: 22 }}>

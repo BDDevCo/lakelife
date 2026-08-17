@@ -30,6 +30,19 @@ export function TextOptIn({
   const [busy, start] = useTransition();
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
+  /**
+   * THE TICK. It starts unticked, and it gates the button.
+   *
+   * There wasn't one. The consent sentence was rendered at 12.5px in the muted
+   * grey — the faintest thing on the card — under the phone field and above a
+   * button labelled "Send me a code", and tapping that button was the whole of
+   * the affirmative act. Meanwhile `docs/a2p-registration.md` tells The
+   * Campaign Registry, in a filing we have to be able to defend, that
+   * "residents additionally tick an explicit consent line". Nobody ticked
+   * anything. Either the sentence in the filing had to go or the tick had to
+   * exist, and the tick is the one that makes the consent unarguable.
+   */
+  const [agreed, setAgreed] = useState(false);
   const [step, setStep] = useState<"idle" | "code_sent">("idle");
   const [said, setSaid] = useState<string | null>(null);
 
@@ -95,13 +108,34 @@ export function TextOptIn({
               onKeyDown={(e) => { if (e.key === "Enter" && phone.trim()) send(); }}
             />
           </label>
-          {/* THE SENTENCE THAT GETS RECORDED, SHOWN BEFORE THE TAP. Same
-              string, from the same constant, so the record can never describe
-              something she wasn't shown. */}
-          <p className="mut" style={{ fontSize: 12.5, margin: "0 0 12px", lineHeight: 1.5, maxWidth: 460 }}>
-            {smsConsentText(parkName)}
-          </p>
-          <button className="ll-btn" disabled={busy || !phone.trim()} onClick={send} style={{ minHeight: 44 }}>
+          {/* THE SENTENCE THAT GETS RECORDED, SHOWN BEFORE THE TAP, WITH THE
+              BOX THAT MAKES AGREEING TO IT AN ACT. Same string, from the same
+              constant, so the record can never describe something she wasn't
+              shown — and now at 14px in the body colour rather than 12.5px
+              grey, because the legally operative sentence on the card should
+              not be the hardest one on it to read. */}
+          <label
+            style={{
+              display: "flex", gap: 10, alignItems: "flex-start",
+              margin: "0 0 14px", maxWidth: 460, cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+              // 22px, not the 13px default: this is the target a
+              // seventy-year-old has to hit with a thumb.
+              style={{ width: 22, height: 22, marginTop: 1, flexShrink: 0, accentColor: "var(--teal)" }}
+            />
+            <span style={{ fontSize: 14, lineHeight: 1.5 }}>{smsConsentText(parkName)}</span>
+          </label>
+          <button
+            className="ll-btn"
+            disabled={busy || !phone.trim() || !agreed}
+            onClick={send}
+            style={{ minHeight: 44 }}
+          >
             {busy ? "Sending…" : "Send me a code"}
           </button>
         </>

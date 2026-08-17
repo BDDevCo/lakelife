@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { claimByInvite } from "@/app/parks/invite-actions";
+import { SwitchAccount } from "@/components/SignInHere";
 
 /**
  * THE ONE TAP THAT ISN'T ONE.
@@ -17,9 +18,11 @@ import { claimByInvite } from "@/app/parks/invite-actions";
  * StrictMode's double-render is guarded, because two calls would make the
  * second one report "already set up" about her own first one.
  */
-export function FollowInvite({ token }: { token: string }) {
+export function FollowInvite({ token, selfUrl }: { token: string; selfUrl: string }) {
   const router = useRouter();
-  const [said, setSaid] = useState<{ ok: boolean; message: string; reissuable?: boolean } | null>(null);
+  const [said, setSaid] = useState<{
+    ok: boolean; message: string; reissuable?: boolean; outcome?: string;
+  } | null>(null);
   const [busy, start] = useTransition();
   const fired = useRef(false);
 
@@ -60,6 +63,13 @@ export function FollowInvite({ token }: { token: string }) {
       <p role="status" style={{ fontSize: 15, lineHeight: 1.6, margin: 0 }}>
         {said.message}
       </p>
+      {/* THE ONE FAILURE SHE CAN FIX HERSELF GETS A BUTTON.
+          Wrong account is the likeliest refusal — a shared tablet, a spouse's
+          login, a Google session she forgot about — and the message told her
+          to sign out and back in without offering a way to. The only sign-out
+          on the page was the top bar's, which navigates to "/" and takes the
+          invite link with it, so following the instruction lost her place. */}
+      {said.outcome === "invite_wrong_account" && <SwitchAccount next={selfUrl} />}
       {said.reissuable && (
         <p className="mut" style={{ fontSize: 13.5, marginTop: 10, lineHeight: 1.55 }}>
           Nothing is wrong at your end — a new one takes the office a moment.

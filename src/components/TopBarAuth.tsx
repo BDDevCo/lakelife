@@ -48,8 +48,8 @@ export function TopBarAuth() {
   if (signedIn) {
     return (
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <Link href="/portal" style={linkBtn}>My portal</Link>
-        <button onClick={signOut} style={ghostBtn}>Sign out</button>
+        <Link href="/portal" className="ll-navbtn portal">My portal</Link>
+        <button onClick={signOut} className="ll-navbtn ghost">Sign out</button>
       </div>
     );
   }
@@ -57,52 +57,16 @@ export function TopBarAuth() {
   return (
     <>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <button onClick={() => { setMode("signin"); setOpen(true); }} style={signInBtn}>Sign in</button>
-        <button onClick={() => { setMode("signup"); setOpen(true); }} style={joinBtn}>Get set up →</button>
+        <button onClick={() => { setMode("signin"); setOpen(true); }} className="ll-navbtn signin">Sign in</button>
+        <button onClick={() => { setMode("signup"); setOpen(true); }} className="ll-navbtn join">Get set up →</button>
       </div>
       {open && <AuthModal initialMode={mode} onClose={() => setOpen(false)} />}
     </>
   );
 }
 
-const signInBtn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.12)",
-  border: "1px solid rgba(255,255,255,0.22)",
-  color: "#fff",
-  fontWeight: 700,
-  fontSize: 13.5,
-  padding: "8px 16px",
-  borderRadius: 99,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
-const joinBtn: React.CSSProperties = {
-  background: "var(--sun)",
-  border: "1px solid var(--sun)",
-  color: "var(--ink)",
-  fontWeight: 800,
-  fontSize: 13.5,
-  padding: "8px 16px",
-  borderRadius: 99,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
-const linkBtn: React.CSSProperties = {
-  color: "#fff",
-  fontWeight: 700,
-  fontSize: 13.5,
-  textDecoration: "none",
-  padding: "8px 14px",
-  borderRadius: 99,
-  background: "var(--teal)",
-};
-const ghostBtn: React.CSSProperties = {
-  background: "transparent",
-  border: "1px solid rgba(255,255,255,0.22)",
-  color: "#9fc0cb",
-  fontWeight: 700,
-  fontSize: 13.5,
-  padding: "8px 14px",
-  borderRadius: 99,
-  cursor: "pointer",
-};
+/* The five pill styles that used to live here are now `.ll-navbtn` in
+   globals.css. They moved because a style object in JS is unreachable from a
+   media query, and at 375px this bar needed one: the signed-out pair ran a
+   pixel past the right edge of the phone and the signed-in pair wrapped to
+   three lines inside a 64px bar. */

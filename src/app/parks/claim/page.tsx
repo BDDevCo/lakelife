@@ -2,7 +2,7 @@ import { TopBar } from "@/components/Brand";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { ClaimMyLot } from "@/components/ClaimMyLot";
-import Link from "next/link";
+import { SignInHere } from "@/components/SignInHere";
 
 export const metadata = { title: "See your lot — LakeLife" };
 
@@ -36,13 +36,39 @@ export default async function ClaimPage({
   // because an anonymous visitor legitimately reaches this page before they
   // sign in, and parks_read would hide even an active park from them.
   let parkName: string | undefined;
+  // WHICH KEYBOARD HER LOT NUMBER NEEDS.
+  //
+  // The field asked for `inputMode="numeric"`, which on iOS is a keypad with
+  // no letters on it. Every lot in the system today is a plain number so it
+  // has never bitten, but `lot_number` is text and the importer stores
+  // whatever the roll says — the first park with a lot "12A" or "B-3" hands
+  // its residents a keyboard that cannot type their own address. Ask the park
+  // rather than assume, and default to letters when we can't (a full keyboard
+  // can type digits; a keypad cannot type letters).
+  let lotsAreNumeric = false;
   const slug = (park ?? "").trim().toLowerCase();
   if (slug) {
     const admin = createServiceClient();
     const { data } = await admin
-      .from("parks").select("name").eq("slug", slug).eq("active", true).maybeSingle();
+      .from("parks").select("id, name").eq("slug", slug).eq("active", true).maybeSingle();
     parkName = (data?.name as string) ?? undefined;
+    if (data?.id) {
+      const { data: lots } = await admin
+        .from("park_lots").select("lot_number").eq("park_id", data.id as string);
+      lotsAreNumeric =
+        (lots?.length ?? 0) > 0 &&
+        lots!.every((l) => /^\d+$/.test(String(l.lot_number ?? "")));
+    }
   }
+
+  // The exact screen she is on, to be handed back to her after the sign-in.
+  // Rebuilt from the params we already validated rather than read off a header,
+  // so nothing a proxy sets can steer where the sign-in lands.
+  const q = new URLSearchParams();
+  if (slug) q.set("park", slug);
+  if (c) q.set("c", c);
+  const qs = q.toString();
+  const selfUrl = `/parks/claim${qs ? `?${qs}` : ""}`;
 
   return (
     <>
@@ -61,9 +87,11 @@ export default async function ClaimPage({
               it. Sign in or create an account, then come straight back here
               with your slip.
             </p>
-            <Link className="ll-btn" href="/" style={{ display: "inline-block", minHeight: 48 }}>
-              Sign in
-            </Link>
+            {/* IN PLACE, AND IT COMES BACK HERE. This used to link to "/",
+                where signing in ended at /portal — a services portal that has
+                nothing to do with the slip in her hand — and she had to find
+                her way back to this page on her own. */}
+            <SignInHere next={selfUrl} />
             <p className="mut" style={{ fontSize: 13, marginTop: 14, lineHeight: 1.55 }}>
               Keep the slip — you&apos;ll need the code on it in a moment.
             </p>
@@ -73,7 +101,12 @@ export default async function ClaimPage({
           // slip, so all that is left is her lot number. Typed entry still
           // works identically — the field is editable and starts empty when
           // there is nothing in the link.
-          <ClaimMyLot parkSlug={slug || undefined} parkName={parkName} presetCode={c} />
+          <ClaimMyLot
+            parkSlug={slug || undefined}
+            parkName={parkName}
+            presetCode={c}
+            lotsAreNumeric={lotsAreNumeric}
+          />
         )}
 
         {/* THE ANTI-SCAM SENTENCE, on the page rather than only on the slip.

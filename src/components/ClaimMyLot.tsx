@@ -24,12 +24,20 @@ import { claimMyFile } from "@/app/parks/claim-actions";
  *     hurdle.
  */
 export function ClaimMyLot({
-  parkSlug, parkName, presetCode,
+  parkSlug, parkName, presetCode, lotsAreNumeric = false,
 }: {
   parkSlug?: string;
   parkName?: string;
   /** Carried by the QR square on the slip, so only the lot number is left. */
   presetCode?: string;
+  /**
+   * True only when EVERY lot in this park is a plain number, as read off the
+   * park's own lots. It decides between a keypad and a keyboard, and it fails
+   * to the keyboard: a keyboard can type digits, a keypad cannot type letters,
+   * so the wrong answer costs a little thumb work one way and locks somebody
+   * out of their own lot the other.
+   */
+  lotsAreNumeric?: boolean;
 }) {
   const router = useRouter();
   const [slug, setSlug] = useState(parkSlug ?? "");
@@ -94,7 +102,10 @@ export function ClaimMyLot({
         <input
           value={lot}
           placeholder="14"
-          inputMode="numeric"
+          inputMode={lotsAreNumeric ? "numeric" : "text"}
+          autoCapitalize="characters"
+          autoCorrect="off"
+          spellCheck={false}
           onChange={(e) => setLot(e.target.value)}
         />
       </label>

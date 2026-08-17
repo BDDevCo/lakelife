@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { siteUrl } from "@/lib/env";
+import { safeNext } from "@/lib/safe-next";
 import { toast } from "@/components/Toast";
 
 function AppleIcon() {
@@ -28,11 +29,29 @@ function GoogleIcon() {
 export function AuthModal({
   onClose,
   initialMode = "signup",
+  next,
 }: {
   onClose: () => void;
   initialMode?: "signup" | "signin";
+  /**
+   * WHERE SHE WAS GOING BEFORE WE INTERRUPTED HER.
+   *
+   * Signing in used to land everybody on /portal regardless of what they were
+   * doing, which is fine for a lake homeowner who came to book a mow and
+   * useless for a park resident holding a slip or an invite link: she arrived
+   * at /parks/claim with a code in her hand, was sent to the front page to
+   * sign in, and came out the other side in a services portal that means
+   * nothing to her. The welcome page's own copy had to say "then come back to
+   * this page" — an instruction that, on a phone, means going back to the
+   * email and finding the link again.
+   *
+   * Same-origin paths only. It reaches an OAuth `redirectTo`, so anything that
+   * could carry an absolute URL would be an open redirect.
+   */
+  next?: string;
 }) {
   const router = useRouter();
+  const dest = safeNext(next);
   const supabase = createClient();
   const [mode, setMode] = useState<"signup" | "signin">(initialMode);
   const [name, setName] = useState("");
@@ -60,7 +79,7 @@ export function AuthModal({
       return;
     }
     toast("Welcome back!");
-    router.push("/portal");
+    router.push(dest ?? "/portal");
     router.refresh();
   }
 
@@ -92,11 +111,14 @@ export function AuthModal({
   async function ssoSignIn(provider: "google" | "apple") {
     setBusy(true);
     // New customers continue to mobile verification; returning customers go
-    // straight to booking (verify/welcome will still catch stragglers).
-    const next = mode === "signup" ? "/verify" : "/portal";
+    // straight to booking (verify/welcome will still catch stragglers). A
+    // resident who came from a slip or an invite link goes back to it instead.
+    const next = dest ?? (mode === "signup" ? "/verify" : "/portal");
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: `${siteUrl()}/auth/callback?next=${next}` },
+      options: {
+        redirectTo: `${siteUrl()}/auth/callback?next=${encodeURIComponent(next)}`,
+      },
     });
     if (error) {
       toast(error.message);
@@ -134,7 +156,11 @@ export function AuthModal({
     if (data.session) {
       // Email confirmation is OFF — we're logged straight in.
       toast("Account created — email on file. Now verify your mobile.");
-      router.push("/verify");
+      // The destination survives the mobile check rather than being dropped
+      // at it: a resident creating an account FROM her invite link would
+      // otherwise verify her phone and land in the lake-services welcome
+      // wizard, with the link she came in on nowhere on screen.
+      router.push(dest ? `/verify?next=${encodeURIComponent(dest)}` : "/verify");
     } else {
       // Email confirmation is ON — they must click the link first.
       toast("Account created! Check your email to confirm, then verify your mobile.");

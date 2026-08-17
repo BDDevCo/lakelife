@@ -80,8 +80,9 @@ be defended if they ask:
 > Recipients are existing customers, contracted service crews, and residents of
 > mobile-home parks we administer. Every number is provided by the person
 > themselves and verified with a one-time code sent to that handset before any
-> message is sent. Residents additionally tick an explicit consent line, which
-> is stored verbatim with a timestamp against their record. Numbers obtained
+> message is sent. Residents additionally tick an explicit consent line — the
+> box is unticked by default and the button will not send without it — and that
+> line is stored verbatim with a timestamp against their record. Numbers obtained
 > from third-party records — for example a rent roll supplied by a park — are
 > stored in a separate field and are never used for messaging. Consent can be
 > withdrawn in one tap in the app or by replying STOP.
@@ -91,10 +92,23 @@ Where each claim lives, if they want proof:
 | Claim | Enforced by |
 |---|---|
 | Number verified by one-time code | `startTextOptIn` / `confirmTextOptIn`, Twilio Verify |
+| An unticked box, which gates the button | `TextOptIn`, `agreed` state — a screen check, not a server one |
 | Explicit consent line, stored verbatim | `park_renters.sms_consent_text` (0133) |
 | Third-party numbers never messaged | `phone_on_file_with_park`, never a send target; `planChannels` |
 | A changed number loses its proof | trigger `park_renters_claim_stamp` (0135/0136) |
 | One tap to withdraw | `stopTexts`, clears consent immediately |
+
+The tick is on the screen, not in the database, and the row above says so
+deliberately. The thing the database enforces is stronger and separate: consent
+is written only after a code sent to that handset comes back approved, and only
+against the file belonging to the signed-in account. A person cannot tick a box
+into somebody else's consent — the worst they can do is agree on their own
+behalf, which is what the box is for.
+
+**One thing this table cannot say yet.** `/api/verify/start` — the sign-up
+route, not this one — still lacks the reserved-number guard that
+`startTextOptIn` has. It is a separate path and does not affect the resident
+opt-in described above, but do not claim otherwise if asked.
 
 **Sample messages — use these, they are real traffic.** Reviewers compare
 samples against what actually sends, so invented ones are a risk:

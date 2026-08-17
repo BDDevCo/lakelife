@@ -3,8 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
+import { safeNext } from "@/lib/safe-next";
 
-export function VerifyPanel({ initialPhone }: { initialPhone?: string }) {
+export function VerifyPanel({
+  initialPhone,
+  next,
+}: {
+  initialPhone?: string;
+  /** Where they were headed before the account existed. Same-origin only. */
+  next?: string;
+}) {
   const router = useRouter();
   const [phone, setPhone] = useState(initialPhone ?? "");
   const [digits, setDigits] = useState(["", "", "", "", "", ""]);
@@ -139,7 +147,7 @@ export function VerifyPanel({ initialPhone }: { initialPhone?: string }) {
       sessionStorage.removeItem("ll_pending_phone");
     } catch {}
     toast("Mobile verified — you're all set!");
-    router.push("/welcome");
+    router.push(safeNext(next) ?? "/welcome");
   }
 
   return (
