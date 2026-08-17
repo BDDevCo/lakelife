@@ -105,7 +105,7 @@ function BankCard({ state }: { state: PayoutState }) {
                 value={bankName}
                 onChange={(e) => setBankName(e.target.value)}
                 placeholder="Lake Community Bank"
-                style={{ display: "block", marginTop: 6, fontSize: 15, minHeight: 44, width: "100%" }}
+                style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
               />
             </label>
             <label className="ll-field" style={{ display: "block" }}>
@@ -116,7 +116,7 @@ function BankCard({ state }: { state: PayoutState }) {
                 onChange={(e) => setRouting(e.target.value)}
                 placeholder="•••••••••"
                 maxLength={9}
-                style={{ display: "block", marginTop: 6, fontSize: 15, minHeight: 44, width: "100%" }}
+                style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
               />
             </label>
             <label className="ll-field" style={{ display: "block" }}>
@@ -126,7 +126,7 @@ function BankCard({ state }: { state: PayoutState }) {
                 value={account}
                 onChange={(e) => setAccount(e.target.value)}
                 placeholder="••••••••"
-                style={{ display: "block", marginTop: 6, fontSize: 15, minHeight: 44, width: "100%" }}
+                style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
               />
             </label>
           </div>

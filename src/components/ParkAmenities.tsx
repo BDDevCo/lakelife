@@ -177,7 +177,7 @@ function AmenityCard({
         <input
           className="ll-input" value={unitLabel} placeholder="Add another — 'Kayak 2'"
           onChange={(e) => setUnitLabel(e.target.value)}
-          style={{ fontSize: 13, padding: "8px 10px", maxWidth: 220 }}
+          style={{ padding: "8px 10px", maxWidth: 220 }}
         />
         <button
           className="ll-btn ghost sm" disabled={busy || !unitLabel.trim()}

@@ -588,3 +588,53 @@ describe("committing an import records the go-live date", () => {
     expect(src).toMatch(/park\.cutover_date == null/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE HOUSEHOLD THAT VANISHED BETWEEN THE READ AND THE COMMIT.
+//
+// `loadBatch` re-plans against LIVE tenancies every time — correct, since
+// somebody may fill a lot in another tab. But `commitImport` iterates
+// `plan.ready`, so a row that picks up a blocker in between leaves `ready`
+// silently: not written, and not counted as a failure either.
+//
+// Reproduced end to end: three rows pasted, lot 2 taken by somebody else in
+// between, receipt read "2 tenants are in ✓" with failed: 0, and Earl was gone
+// — no tenancy, no renter file, no line anywhere. From then on an unfiled
+// household and an empty lot look identical on every screen, and he is never
+// billed again.
+// ---------------------------------------------------------------------------
+describe("a row lost between the read and the commit is NAMED", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("./import-actions.ts", import.meta.url)), "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("finds the file it is scanning", () => {
+    expect(src).toMatch(/export async function commitImport/);
+  });
+
+  it("sweeps every non-skipped blocked row into failures after the loop", () => {
+    expect(src).toMatch(/const written = new Set\(loaded\.plan\.ready\.map/);
+    expect(src).toMatch(/for \(const row of loaded\.plan\.rows\)/);
+    expect(src).toMatch(/if \(row\.skipped \|\| written\.has\(row\.lineNo\) \|\| row\.blockers\.length === 0\) continue;/);
+  });
+
+  it("uses the blocker's own sentence, not a generic one", () => {
+    expect(src).toMatch(/message: importBlockerText\(row\.blockers\[0\]/);
+  });
+
+  it("does not double-report a row the write loop already named", () => {
+    // The 23P01 path pushes its own failure; this sweep must not add a second.
+    expect(src).toMatch(/const named = new Set/);
+    expect(src).toMatch(/if \(named\.has\(`\$\{row\.lotLabel\}\|\$\{row\.name\}`\)\) continue;/);
+  });
+
+  it("treats a row he STOOD DOWN as an answer, not a loss", () => {
+    expect(src).toMatch(/row\.skipped \|\|/);
+  });
+
+  it("persists the list, so it survives a reload", () => {
+    // Client state would have lost it on refresh — and the receipt is a page
+    // he comes back to.
+    expect(src).toMatch(/failed: failures\.length,[\s\S]{0,120}?failures,/);
+  });
+});

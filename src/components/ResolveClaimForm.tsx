@@ -99,7 +99,7 @@ export function ResolveClaimForm({
         placeholder={needsNote
           ? "What you checked — drop box, bank statement, the dates you looked at"
           : "Anything worth remembering (optional)"}
-        style={{ width: "100%", fontSize: 13 }}
+        style={{ width: "100%" }}
       />
       {needsNote && (
         <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>

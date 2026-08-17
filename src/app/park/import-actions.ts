@@ -8,6 +8,7 @@ import { parseRentRoll, contentHash, redactSensitive, type ParseResult } from "@
 import { SITE_DEFAULTS } from "./park-helpers";
 import {
   planImport,
+  importBlockerText,
   statedTotalFrom,
   emptyLotsFrom,
   type ImportPlan,
@@ -216,7 +217,12 @@ export interface LoadedBatch {
   /** Lines that are not tenancies, for the never-hidden footer. */
   others: { lineNo: number; text: string; verdict: string; why: string | null }[];
   blockQuestions: { code: string; question: string }[];
-  counts: Record<string, number>;
+  /**
+   * jsonb, so it holds the failure LIST as well as the tallies. It was typed
+   * `Record<string, number>`, which is why "3 rows didn't take" could only
+   * ever be a number.
+   */
+  counts: Record<string, unknown>;
   /** What the seller wrote at the bottom of his own sheet. Evidence, not truth. */
   statedTotal: number | null;
   /**
@@ -342,7 +348,7 @@ export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
     plan,
     others,
     blockQuestions: parsed.blockQuestions,
-    counts: (batch.counts as Record<string, number>) ?? {},
+    counts: (batch.counts as Record<string, unknown>) ?? {},
     statedTotal: statedTotalFrom(parsed.totals.map((t) => t.text)),
     refusedColumns: parsed.columns.refused,
   };
@@ -528,7 +534,10 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
         .eq("line_no", r.lineNo);
     }
 
-    const counts = { tenants: 0, lots: lotsCreated, rates: ratesWritten, failed: failures.length, monthly: loaded.plan.monthlyTotal };
+    // THE LIST, NOT JUST THE TALLY. "3 rows didn't take" sent him to hunt
+    // three households across a 79-row roll where a lost one and an empty lot
+    // look identical.
+    const counts = { tenants: 0, lots: lotsCreated, rates: ratesWritten, failed: failures.length, monthly: loaded.plan.monthlyTotal, failures };
     await admin
       .from("park_import_batches")
       .update({ committed_at: new Date().toISOString(), counts })
@@ -693,12 +702,43 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
     }
   }
 
+  // THE ROWS THAT NEVER REACHED THE LOOP AT ALL.
+  //
+  // `loadBatch` re-plans against LIVE tenancies every time it runs, which is
+  // right — somebody may have filled a lot in another tab since he read the
+  // sheet. But the commit iterates `plan.ready`, so a row that picked up a
+  // blocker between the read and the commit is not written AND not counted:
+  // it silently leaves `ready` and nothing downstream ever mentions it.
+  //
+  // Reproduced: three rows pasted, lot 2 taken by somebody else in between,
+  // and the receipt said "2 tenants are in ✓" with `failed: 0`. Earl was gone
+  // — no tenancy, no renter file, no line anywhere. An unfiled household and
+  // an empty lot look identical on every screen from that moment on, and he
+  // is never billed again.
+  //
+  // A row he explicitly stood down is not this: `skipped` is an answer. These
+  // are rows the sheet named, he did not stand down, and nothing was written
+  // for — each with the blocker's own sentence.
+  const written = new Set(loaded.plan.ready.map((r) => r.lineNo));
+  const named = new Set((failures ?? []).map((f) => `${f.lot}|${f.name}`));
+  for (const row of loaded.plan.rows) {
+    if (row.skipped || written.has(row.lineNo) || row.blockers.length === 0) continue;
+    if (named.has(`${row.lotLabel}|${row.name}`)) continue;
+    failures.push({
+      lot: row.lotLabel,
+      name: row.name,
+      message: importBlockerText(row.blockers[0], row.lotLabel ?? undefined),
+    });
+  }
+
   const counts = {
     tenants: tenantsAdded,
     lots: lotsCreated,
     rates: ratesWritten,
     failed: failures.length,
     monthly: loaded.plan.monthlyTotal,
+    // Kept so the receipt can NAME them, and still name them after a reload.
+    failures,
   };
   await admin
     .from("park_import_batches")

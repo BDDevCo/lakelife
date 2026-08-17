@@ -279,3 +279,39 @@ describe("every control has a box", () => {
     expect(block).toMatch(/padding: 0/);
   });
 });
+
+describe("no control can zoom iOS on focus", () => {
+  it("has no inline fontSize under 16 on an input, select or textarea", () => {
+    // The 16px floor lives in globals.css, and an INLINE style beats it. 28
+    // controls carried one — the paste box a buyer uses at a closing table,
+    // every field in the vendor portal a crew fills in on a phone, the ops
+    // message board. Under 16px, Safari zooms the page on focus and does not
+    // zoom back, so the next tap is aimed at the wrong place.
+    //
+    // Walks back from each fontSize to the tag that owns it, because the
+    // number usually sits several lines below the `<input`.
+    const offenders: string[] = [];
+    for (const p of SOURCES) {
+      const src = readFileSync(p, "utf8");
+      for (const m of src.matchAll(/fontSize:\s*([\d.]+)/g)) {
+        if (Number(m[1]) >= 16) continue;
+        const start = src.lastIndexOf("<", m.index);
+        if (start < 0) continue;
+        const tag = /^<(\w+)/.exec(src.slice(start));
+        if (!tag || !["input", "textarea", "select"].includes(tag[1])) continue;
+        // .ll-code-box is a fixed-size digit box, not a field you type prose in
+        if (src.slice(start, m.index).includes("ll-code-box")) continue;
+        offenders.push(`${p.replace(/.*\/src\//, "src/")}: <${tag[1]}> fontSize:${m[1]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("would notice one — the scanner is not vacuously passing", () => {
+    const src = 'x\n<input\n  value={v}\n  style={{ fontSize: 13 }}\n/>';
+    const m = /fontSize:\s*([\d.]+)/.exec(src)!;
+    const start = src.lastIndexOf("<", m.index);
+    expect(/^<(\w+)/.exec(src.slice(start))![1]).toBe("input");
+    expect(Number(m[1])).toBeLessThan(16);
+  });
+});

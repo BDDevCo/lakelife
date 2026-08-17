@@ -273,7 +273,7 @@ export function ParkStatements({
                       value={reason}
                       onChange={(e) => setReason(e.target.value)}
                       placeholder="What happened? A bounced check, a typo…"
-                      style={{ width: "100%", fontSize: 13 }}
+                      style={{ width: "100%" }}
                     />
                     <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
                       <button className="ll-btn" disabled={busy || !reason.trim()}

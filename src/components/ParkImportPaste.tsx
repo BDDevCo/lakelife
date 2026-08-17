@@ -68,7 +68,7 @@ export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO
             onChange={(e) => { setText(e.target.value); setDup(null); }}
             rows={12}
             placeholder={"Lot\tTenant\tRent\n1\tWexler, Donna\t385\n2\tKastner, Ray\t385"}
-            style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13 }}
+            style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
           />
         </label>
         {lineCount > 0 && (

@@ -121,7 +121,7 @@ export function MyLakesEditor({
             aria-label="Lake name"
             style={{
               padding: "9px 12px", border: "1.5px solid var(--line)", borderRadius: 10,
-              fontSize: 15, fontWeight: 700, fontFamily: "inherit", color: "var(--text)",
+              fontWeight: 700, fontFamily: "inherit", color: "var(--text)",
               background: "#fff", minHeight: 44, width: 200, maxWidth: "100%",
             }}
           />

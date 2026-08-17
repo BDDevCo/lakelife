@@ -199,7 +199,7 @@ function OnAccountLine({
       </span>
       {mine.length > 0 ? (
         <>
-          <select value={chargeId} onChange={(e) => setChargeId(e.target.value)} style={{ fontSize: 13 }}>
+          <select value={chargeId} onChange={(e) => setChargeId(e.target.value)}>
             <option value="">Put against…</option>
             {mine.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
@@ -333,7 +333,7 @@ function UndoMoney({
         value={why}
         onChange={(e) => setWhy(e.target.value)}
         placeholder={`Why — a bounced check, a typo`}
-        style={{ flex: 1, minWidth: 180, fontSize: 13 }}
+        style={{ flex: 1, minWidth: 180 }}
         autoFocus
       />
       <button className="ll-btn sm" disabled={busy || !why.trim()}

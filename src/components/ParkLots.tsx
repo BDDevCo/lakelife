@@ -733,7 +733,7 @@ function LifecyclePicker({ lot, parkId }: { lot: LotView; parkId: string }) {
             if (res.ok) router.refresh();
           });
         }}
-        style={{ fontSize: 12, padding: "5px 8px" }}
+        style={{ padding: "5px 8px" }}
       >
         {(["live", "planned", "renovating", "retired"] as const).map((v) => (
           <option key={v} value={v}>{LIFECYCLE_LABEL[v]}</option>

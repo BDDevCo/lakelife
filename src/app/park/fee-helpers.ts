@@ -109,17 +109,39 @@ export function payersFor(
     // "is my fee covering my costs?".
     case "all_lots":   return counts.longTerm;
     case "long_term":  return counts.longTerm;
-    case "short_term": return counts.shortTerm;
-    case "opt_in":     return counts.optedIn;
+
+    // THE SAME RULE THE all_lots CASE ABOVE ALREADY STATES, applied to the two
+    // it missed. Both credit income from a bill that is never raised:
+    //
+    //   short_term — the charge run hands a short-term lot NO fees at all
+    //     (ledger-actions.ts:232 and :349, `fees: rental_mode ===
+    //     "short_term" ? [] : fees`), so every payer counted here is a lot
+    //     that cannot be invoiced for it.
+    //   opt_in     — `lot_fee_assignments` has exactly one reader in the whole
+    //     codebase and NO writer, and no screen can sign anybody up. The count
+    //     is structurally zero, but returning 0 by rule rather than by
+    //     accident is what stops it silently coming back if a writer appears
+    //     before the biller does (ledger-actions.ts:72 also drops opt_in).
+    case "short_term": return 0;
+    case "opt_in":     return 0;
   }
 }
 
-/** What a fee brings in per month. Non-monthly cadences are normalised. */
+/** What a fee brings in per month. Only the cadence the biller actually bills. */
 export function monthlyIncome(fee: ParkFee, payers: number): number {
   if (!fee.active) return 0;
   const per =
     fee.cadence === "monthly" ? fee.amount
-    : fee.cadence === "annual" ? fee.amount / 12
+    // ANNUAL WAS CREDITED AT amount/12 AND BILLED AT NOTHING.
+    // `buildStatement` (statement-helpers.ts:176) skips every cadence that is
+    // not monthly, so a $120-a-year road fee on 19 lots read "$190.00/mo" on
+    // the costs screen, folded $190 into the margin he uses to set the rent,
+    // and raised $0 across twelve charge runs — $2,280 a year he believed he
+    // was collecting. park_fees has no due_month column, so there is nowhere
+    // to record when an annual fee even falls due; teaching the biller about
+    // it is a real slice of work, not a patch, and until then the money screen
+    // must not claim it.
+    //
     // A per-stay or one-off fee has no honest monthly figure without knowing
     // turnover, and inventing one would quietly inflate the only number the
     // owner is using to judge whether his fee covers his costs.

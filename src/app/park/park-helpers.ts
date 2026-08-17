@@ -726,8 +726,17 @@ export function planBulkRates(
 
 export interface TenantInput {
   displayName: string;
-  /** The park-scoped number. No account needed — this is what buys her rent
-   *  receipts and freeze warnings without installing anything. */
+  /**
+   * A number the OFFICE can ring. It buys nothing automated.
+   *
+   * This said it was "what buys her rent receipts and freeze warnings without
+   * installing anything", which was the intent and has never been true: no
+   * text this app has sent since 19 July was delivered, and `buildTenant`
+   * writes `contact_pref: "paper"` unconditionally, so nothing would go to it
+   * even if the channel worked. It lands in `phone_on_file_with_park`, which
+   * the reminder engine is built to be unable to read — a number a seller
+   * wrote down is not that household asking to be contacted.
+   */
   mobile: string;
   email: string;
   /** Blank means "already here", which is the common case. */

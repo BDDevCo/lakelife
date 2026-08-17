@@ -80,8 +80,7 @@ export function JobVerdictButtons({ jobId, serviceName }: { jobId: string; servi
             aria-label="What went wrong"
             style={{
               width: "100%", boxSizing: "border-box", minHeight: 88, padding: "10px 12px",
-              border: "1.5px solid var(--line)", borderRadius: 10, fontFamily: "inherit", fontSize: 14,
-            }}
+              border: "1.5px solid var(--line)", borderRadius: 10, fontFamily: "inherit", }}
           />
           <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
             <button
@@ -128,7 +127,7 @@ export function JobMessageComposer({ jobId }: { jobId: string }) {
       <input
         style={{
           flex: 1, padding: "11px 13px", border: "1.5px solid var(--line)", borderRadius: 10,
-          fontFamily: "inherit", fontSize: 14, minWidth: 0,
+          fontFamily: "inherit", minWidth: 0,
         }}
         placeholder="Add a comment about this job…"
         value={body}

@@ -42,9 +42,36 @@ export interface ReadView {
   rates: { lineNo: number; lotLabel: string; amount: number | null; createsLot: boolean }[];
   others: { lineNo: number; text: string; verdict: string; why: string | null }[];
   blockQuestions: { code: string; question: string }[];
-  counts: Record<string, number>;
+  /** jsonb — tallies AND, since the failures fix, the list of rows that
+   *  didn't take. Read through `num()` / `commitFailures()` below. */
+  counts: Record<string, unknown>;
   refusedColumns: string[];
   statedTotal: number | null;
+}
+
+/** A tally out of the jsonb bag, or 0. */
+const num = (c: Record<string, unknown>, k: string): number =>
+  typeof c[k] === "number" ? (c[k] as number) : 0;
+
+export interface CommitFailure { lot: string | null; name: string | null; message: string }
+
+/**
+ * The rows the commit could not write, BY NAME.
+ *
+ * `commitImport` has always returned these — per row, in his words, never a
+ * rollback of what worked — and the receipt threw them away and printed
+ * "3 rows didn't take. Open the rent roll to see where the gaps are." On a
+ * 79-row roll that is not a task anybody finishes: a household that failed to
+ * file and a genuinely empty lot look identical on every screen, and the one
+ * that failed is never billed and never surfaces again.
+ */
+function commitFailures(counts: Record<string, unknown>): CommitFailure[] {
+  const raw = counts.failures;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (f): f is CommitFailure =>
+      !!f && typeof f === "object" && typeof (f as CommitFailure).message === "string",
+  );
 }
 
 const money = (n: number) =>
@@ -661,8 +688,10 @@ function shortReason(b: ImportBlocker | undefined): string {
 function Receipt({ view }: { view: ReadView }) {
   const [pending, start] = useTransition();
   const router = useRouter();
-  const tenants = view.counts.tenants ?? 0;
-  const monthly = view.counts.monthly ?? 0;
+  const tenants = num(view.counts, "tenants");
+  const monthly = num(view.counts, "monthly");
+  const failed = num(view.counts, "failed");
+  const failures = commitFailures(view.counts);
 
   return (
     <div className="wrap" style={{ paddingTop: 24, paddingBottom: 60, maxWidth: 640 }}>
@@ -683,14 +712,44 @@ function Receipt({ view }: { view: ReadView }) {
         </p>
       </div>
 
-      {(view.counts.failed ?? 0) > 0 && (
-        <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
+      {failed > 0 && (
+        <div
+          className="ll-card ll-card-pad"
+          style={{ marginTop: 14, borderLeft: "4px solid var(--warn)" }}
+        >
           <strong>
-            {view.counts.failed} {view.counts.failed === 1 ? "row" : "rows"} didn&apos;t take
+            {/* {" "} explicitly: the DOM came back ["1"," ","row","didn't take"]
+                — JSX dropped the space after the ternary and it read
+                "1 rowdidn't take". Pre-dates this card; visible now that the
+                card actually appears. */}
+            {failed} {failed === 1 ? "row" : "rows"}{" "}didn&apos;t take
           </strong>
-          <p className="mut" style={{ margin: "6px 0 0", lineHeight: 1.5 }}>
-            Everything else went in. Open the rent roll to see where the gaps are.
-          </p>
+          {failures.length > 0 ? (
+            <>
+              {/* NAMED, because "open the rent roll and look" is not a task
+                  anybody completes on a 79-row park — and an unfiled
+                  household is never billed and never appears again. */}
+              <ul style={{ margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.7 }}>
+                {failures.map((f, i) => (
+                  <li key={i}>
+                    <strong>
+                      {f.lot ? `Lot ${f.lot}` : "No lot"}
+                      {f.name ? ` — ${f.name}` : ""}
+                    </strong>
+                    <span className="mut"> · {f.message}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mut" style={{ margin: "10px 0 0", lineHeight: 1.5 }}>
+                Everything else went in. Add these by hand on the rent roll, or
+                fix the line and paste the list again.
+              </p>
+            </>
+          ) : (
+            <p className="mut" style={{ margin: "6px 0 0", lineHeight: 1.5 }}>
+              Everything else went in. Open the rent roll to see where the gaps are.
+            </p>
+          )}
         </div>
       )}
 

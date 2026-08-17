@@ -35,8 +35,7 @@ export function MessageComposer({ propertyId }: { propertyId: string }) {
           border: "1.5px solid var(--line)",
           borderRadius: 10,
           fontFamily: "inherit",
-          fontSize: 14,
-        }}
+          }}
         placeholder="Message LakeLife dispatch…"
         value={body}
         onChange={(e) => setBody(e.target.value)}

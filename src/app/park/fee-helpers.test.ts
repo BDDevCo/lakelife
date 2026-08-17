@@ -23,11 +23,16 @@ describe("who pays a fee", () => {
     expect(payersFor(GROUNDS, COUNTS)).toBe(20);
   });
 
-  it("counts an OPT-IN fee from sign-ups, never from the lot count", () => {
-    // Assuming everybody has a pet overstates income by exactly the amount
-    // that makes a proforma wrong.
+  it("counts NO payers for an opt-in fee, because nothing can sign anybody up", () => {
+    // WAS: asserting 3 — "counts an opt-in fee from sign-ups, never from the
+    // lot count". The reasoning was right and the premise was false:
+    // `lot_fee_assignments` has one reader in the whole codebase and no
+    // writer, and no screen offers a picker. So the sign-up count is
+    // structurally zero, and crediting income against it put money on the
+    // coverage panel that no charge run can ever raise. Returning 0 by rule
+    // keeps it that way if a writer ever lands before the biller does.
     const pet: ParkFee = { ...GROUNDS, id: "f2", appliesTo: "opt_in", amount: 25, covers: [] };
-    expect(payersFor(pet, COUNTS)).toBe(3);
+    expect(payersFor(pet, COUNTS)).toBe(0);
   });
 
   // WAS: "can land on everything, including nightly homes" — asserting 24.
@@ -45,8 +50,15 @@ describe("what a fee brings in", () => {
     expect(monthlyIncome(GROUNDS, 20)).toBe(1100);
   });
 
-  it("spreads an annual fee across the year", () => {
-    expect(monthlyIncome({ ...GROUNDS, cadence: "annual", amount: 600 }, 20)).toBe(1000);
+  it("credits NOTHING for an annual fee, because nothing bills one", () => {
+    // WAS: asserting 1000 — "spreads an annual fee across the year". That is
+    // honest arithmetic about a bill that never goes out: `buildStatement`
+    // (statement-helpers.ts:176) skips every cadence that is not monthly. A
+    // $120/yr road fee on 19 lots read "$190.00/mo" on the costs screen and
+    // raised $0 across twelve charge runs — $2,280 he thought he was
+    // collecting. park_fees has no due_month column, so there is nowhere to
+    // record when one falls due either.
+    expect(monthlyIncome({ ...GROUNDS, cadence: "annual", amount: 600 }, 20)).toBe(0);
   });
 
   it("refuses to invent a monthly figure for a per-stay fee", () => {
@@ -172,8 +184,12 @@ describe("who a flat fee is actually billed to", () => {
       .toBe(payersFor(fee("long_term"), counts));
   });
 
-  it("still counts an opt-in fee by who opted in", () => {
-    expect(payersFor(fee("opt_in"), { longTerm: 19, shortTerm: 4, optedIn: 6 })).toBe(6);
+  it("counts nobody for an opt-in fee, even when a count is handed in", () => {
+    // The count is ignored on purpose: there is no writer for
+    // lot_fee_assignments and the charge run drops opt_in fees anyway
+    // (ledger-actions.ts:72). A number arriving here would be a number from
+    // somewhere that cannot bill.
+    expect(payersFor(fee("opt_in"), { longTerm: 19, shortTerm: 4, optedIn: 6 })).toBe(0);
   });
 });
 

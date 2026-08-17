@@ -251,7 +251,7 @@ function TruckForm({
             onChange={(e) => setName(e.target.value)}
             placeholder="Truck 2 — Mike"
             maxLength={60}
-            style={{ display: "block", marginTop: 6, fontSize: 15, minHeight: 44, width: "100%" }}
+            style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
           />
         </label>
 
@@ -263,7 +263,7 @@ function TruckForm({
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             placeholder="(260) 555-0100"
-            style={{ display: "block", marginTop: 6, fontSize: 15, minHeight: 44, width: "100%" }}
+            style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
           />
         </label>
 
@@ -277,7 +277,7 @@ function TruckForm({
             step="1"
             value={capacity}
             onChange={(e) => setCapacity(e.target.value)}
-            style={{ display: "block", marginTop: 6, fontSize: 15, minHeight: 44, width: "100%" }}
+            style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
           />
         </label>
 
@@ -287,7 +287,7 @@ function TruckForm({
             <select
               value={workStart}
               onChange={(e) => setWorkStart(Number(e.target.value))}
-              style={{ display: "block", marginTop: 6, fontSize: 15, minHeight: 44, width: "100%" }}
+              style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
             >
               {HOURS_START.map((h) => (
                 <option key={h} value={h}>{hourLabel(h)}</option>
@@ -299,7 +299,7 @@ function TruckForm({
             <select
               value={workEnd}
               onChange={(e) => setWorkEnd(Number(e.target.value))}
-              style={{ display: "block", marginTop: 6, fontSize: 15, minHeight: 44, width: "100%" }}
+              style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
             >
               {HOURS_END.map((h) => (
                 <option key={h} value={h}>{hourLabel(h)}</option>

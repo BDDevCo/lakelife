@@ -665,9 +665,18 @@ function AddTenant({
         </label>
       </div>
 
+      {/* WHAT A NUMBER HERE ACTUALLY BUYS.
+          This promised "rent receipts and freeze warnings by text". Nothing
+          sends them: no text this app has issued since 19 July has been
+          delivered (error 30034, A2P registration outstanding), and
+          `buildTenant` writes contact_pref "paper" unconditionally regardless.
+          The Edit panel a hundred lines below says the true thing already —
+          this is that sentence, so the same screen stops saying both. It
+          matters because he repeats it out loud, at the window, to nineteen
+          households, in his first month as their landlord. */}
       <p className="mut" style={{ fontSize: 12.5, marginTop: 10 }}>
-        Give us a number and they get rent receipts and freeze warnings by text —
-        no app, no password, nothing to install.
+        Texting isn&apos;t available yet, so a number here is one the office can
+        ring. Nothing is sent to it.
       </p>
 
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>

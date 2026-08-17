@@ -162,7 +162,6 @@ function DocUpload({
         ref={fileRef}
         type="file"
         accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
-        style={{ fontSize: 13 }}
       />
       {kind === "coi" && (
         <label className="ll-field" style={{ display: "block", marginTop: 8 }}>

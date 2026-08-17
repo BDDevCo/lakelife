@@ -29,8 +29,23 @@ import {
 const money = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const ALL_COVERS = [...FEE_COVERS, ...FEE_EXTRA_COVERS];
-const CADENCES: FeeCadence[] = ["monthly", "annual", "per_stay", "one_time"];
-const APPLIES: FeeAppliesTo[] = ["long_term", "all_lots", "short_term", "opt_in"];
+/**
+ * ONLY WHAT THE BILLER WILL ACTUALLY BILL.
+ *
+ * The form offered four cadences and four audiences; the charge run honours
+ * one of each. `buildStatement` skips every non-monthly cadence, and `feesFor`
+ * keeps only `all_lots` and `long_term` — so a fee saved as annual, per-stay,
+ * one-off, short-term or opt-in appeared in the list, was counted as income on
+ * the coverage panel, and was never charged to anybody.
+ *
+ * A setting the software cannot honour is worse than no setting: he chooses it
+ * in December, sets his rent against the number it shows him, and finds out in
+ * March. The schema still allows all of them — this only stops the form
+ * offering what nothing downstream can deliver, and these lines come back the
+ * day a biller does.
+ */
+const CADENCES: FeeCadence[] = ["monthly"];
+const APPLIES: FeeAppliesTo[] = ["long_term", "all_lots"];
 
 export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
   const router = useRouter();

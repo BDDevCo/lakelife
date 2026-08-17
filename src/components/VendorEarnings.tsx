@@ -77,7 +77,7 @@ export function VendorEarnings({
             <select
               value={period}
               onChange={(e) => setPeriod(e.target.value as PeriodKey)}
-              style={{ display: "block", marginTop: 6, minHeight: 44, fontSize: 15, width: "100%" }}
+              style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
             >
               {(Object.keys(PERIOD_LABEL) as PeriodKey[]).map((k) => (
                 <option key={k} value={k}>

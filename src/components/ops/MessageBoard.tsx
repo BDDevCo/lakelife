@@ -161,8 +161,7 @@ function Thread({ thread, open, onToggle }: { thread: OpsThread; open: boolean; 
             <input
               style={{
                 flex: 1, padding: "11px 13px", border: "1.5px solid var(--line)",
-                borderRadius: 10, fontFamily: "inherit", fontSize: 14,
-              }}
+                borderRadius: 10, fontFamily: "inherit", }}
               placeholder="Reply to this homeowner…"
               value={body}
               onChange={(e) => setBody(e.target.value)}

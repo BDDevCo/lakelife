@@ -216,7 +216,7 @@ function GaragekeepersUpload({
           ref={fileRef}
           type="file"
           accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
-          style={{ display: "block", marginTop: 6, fontSize: 15, minHeight: 44, width: "100%" }}
+          style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
         />
       </label>
 
@@ -226,7 +226,7 @@ function GaragekeepersUpload({
           type="date"
           value={expiry}
           onChange={(e) => setExpiry(e.target.value)}
-          style={{ display: "block", marginTop: 6, fontSize: 15, minHeight: 44, width: "100%" }}
+          style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
         />
       </label>
 
