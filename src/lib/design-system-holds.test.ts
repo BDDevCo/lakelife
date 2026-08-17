@@ -146,3 +146,90 @@ describe("there is ONE six-digit code entry", () => {
     }
   });
 });
+
+describe("the slip prints alone", () => {
+  const slip = read("../components/ClaimSlip.tsx");
+
+  it("has a print stylesheet at all — there was none anywhere in the app", () => {
+    expect(CSS).toMatch(/@media print/);
+  });
+
+  it("hides the page and keeps the slip", () => {
+    // WHAT THIS PREVENTS: ClaimSlip renders per-lot INSIDE the rent roll, so a
+    // bare window.print() printed the whole park dashboard — every household's
+    // name, rent state and arrears — and the office hands that stack to one
+    // resident. Verified in the browser after the fix: no other household's
+    // name survives, and the QR still renders.
+    const block = CSS.slice(CSS.indexOf("@media print"));
+    expect(block).toMatch(/body \*\s*\{\s*visibility: hidden/);
+    expect(block).toMatch(/\.ll-slip,\s*\n?\s*\.ll-slip \*\s*\{\s*visibility: visible/);
+    // visibility, NOT display, for the hiding — the slip's ancestors have to
+    // keep their boxes or the slip has nothing to lay out inside.
+    expect(block).not.toMatch(/body \*\s*\{\s*display: none/);
+    expect(block).toMatch(/page-break-inside: avoid/);
+  });
+
+  it("marks the slip and strips the on-screen-only furniture", () => {
+    expect(slip).toMatch(/className="ll-card ll-card-pad ll-slip"/);
+    // The buttons, the "shown once" guidance and the expiry note are for the
+    // office at the screen, not for the resident holding the paper.
+    expect((slip.match(/ll-noprint/g) ?? []).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("lets the printed URL wrap instead of running off the paper", () => {
+    expect(slip).toMatch(/overflowWrap: "anywhere"/);
+  });
+});
+
+describe("what a button says while it works", () => {
+  it("no button anywhere says only an ellipsis", () => {
+    // Four did. ClaimSlip shares one useTransition, so pressing either
+    // "Email them" or "Print a slip" collapsed BOTH to one character and
+    // nothing on screen said which was running.
+    const bare = SOURCES.filter((p) => /\? "…"/.test(readFileSync(p, "utf8")))
+      .map((p) => p.replace(/.*\/src\//, "src/"));
+    expect(bare).toEqual([]);
+  });
+});
+
+describe("a phone number shown to a person", () => {
+  it("never appears in the +1 machine form the database stores", () => {
+    // She typed "(260) 555-0142" and was told so; the card that confirmed it
+    // then read "We'll text +12605550142". The only such place in the product.
+    expect(read("../components/TextOptIn.tsx")).toMatch(/prettyPhone\(number\)/);
+  });
+});
+
+describe("a long address in a toast", () => {
+  it("can break — it is white on the page background once it escapes", () => {
+    const block = CSS.slice(CSS.indexOf(".ll-toast {"), CSS.indexOf("@media print"));
+    expect(block).toMatch(/overflow-wrap: anywhere/);
+    // break-all would chop ordinary words in every other toast in the app.
+    expect(block).not.toMatch(/word-break: break-all/);
+  });
+});
+
+describe("the .ll-field labels actually get their styling", () => {
+  it("declares display:block, because the rule they rely on needs a NESTED label", () => {
+    // globals.css styles `.ll-field label`. On these screens the label IS the
+    // .ll-field, so the rule never matched: the captions rendered at 15px body
+    // ink and every marginBottom/maxWidth on the label was silently dropped,
+    // because an inline element ignores both.
+    for (const p of ["../components/ClaimMyLot.tsx", "../components/TextOptIn.tsx"]) {
+      const s = read(p);
+      const labels = s.match(/<label className="ll-field"[^>]*>/g) ?? [];
+      expect(labels.length, p).toBeGreaterThan(0);
+      for (const l of labels) expect(l, `${p}: ${l}`).toMatch(/display: "block"/);
+    }
+  });
+
+  it("puts the caption in the muted grey the other 85 captions use", () => {
+    for (const p of ["../components/ClaimMyLot.tsx", "../components/TextOptIn.tsx"]) {
+      const s = read(p);
+      const idx = s.indexOf('className="ll-field"');
+      expect(idx, p).toBeGreaterThan(-1);
+      // no bare <span> caption directly inside a .ll-field label
+      expect(s, p).not.toMatch(/className="ll-field"[^>]*>\s*\n?\s*<span>/);
+    }
+  });
+});

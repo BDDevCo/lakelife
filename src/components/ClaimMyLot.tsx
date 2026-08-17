@@ -18,7 +18,7 @@ import { claimMyFile } from "@/app/parks/claim-actions";
  *   * NO COUNTDOWN, NO ATTEMPT COUNTER ON SCREEN. The database locks after
  *     five tries; showing "2 of 5" turns a form into a test she can fail.
  *   * A WAY OUT THAT IS NOT FAILURE. "I'd rather not do this" is a real
- *     answer, on the screen, in the same size type as the button. 0055 is
+ *     answer, on the screen, no smaller than anything else on the card. 0055 is
  *     explicit that paper is permanent and respectable, and a quarter to a
  *     third of a park never converts. That must not read as her falling at a
  *     hurdle.
@@ -86,19 +86,20 @@ export function ClaimMyLot({
       </p>
 
       {!parkSlug && (
-        <label className="ll-field" style={{ marginBottom: 12 }}>
-          <span>Park</span>
+        <label className="ll-field" style={{ display: "block", fontSize: 13, marginBottom: 12 }}>
+          <span className="mut">Park</span>
           <input
             value={slug}
             placeholder="the-haven"
             autoCapitalize="none"
+            style={{ marginTop: 4 }}
             onChange={(e) => setSlug(e.target.value)}
           />
         </label>
       )}
 
-      <label className="ll-field" style={{ marginBottom: 12 }}>
-        <span>Your lot number</span>
+      <label className="ll-field" style={{ display: "block", fontSize: 13, marginBottom: 12 }}>
+        <span className="mut">Your lot number</span>
         <input
           value={lot}
           placeholder="14"
@@ -106,12 +107,13 @@ export function ClaimMyLot({
           autoCapitalize="characters"
           autoCorrect="off"
           spellCheck={false}
+          style={{ marginTop: 4 }}
           onChange={(e) => setLot(e.target.value)}
         />
       </label>
 
-      <label className="ll-field" style={{ marginBottom: 6 }}>
-        <span>The code on your slip</span>
+      <label className="ll-field" style={{ display: "block", fontSize: 13, marginBottom: 6 }}>
+        <span className="mut">The code on your slip</span>
         <input
           value={code}
           placeholder="K7QM-3XR9"
@@ -119,7 +121,7 @@ export function ClaimMyLot({
           autoCorrect="off"
           spellCheck={false}
           // Big and spaced: this is read off paper and typed with a thumb.
-          style={{ fontSize: 22, letterSpacing: "0.12em", fontVariantNumeric: "tabular-nums" }}
+          style={{ marginTop: 4, fontSize: 22, letterSpacing: "0.12em", fontVariantNumeric: "tabular-nums" }}
           onChange={(e) => setCode(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
         />
@@ -150,7 +152,7 @@ export function ClaimMyLot({
 
       <button
         className="ll-btn"
-        style={{ width: "100%", minHeight: 52, fontSize: 17 }}
+        style={{ width: "100%", minHeight: 48 }}
         disabled={busy || !lot.trim() || !code.trim() || (!parkSlug && !slug.trim())}
         onClick={submit}
       >

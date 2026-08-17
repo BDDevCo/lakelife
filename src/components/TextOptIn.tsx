@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { startTextOptIn, confirmTextOptIn, stopTexts } from "@/app/parks/consent-actions";
 import { smsConsentText, SMS_OPT_IN_BLURB } from "@/lib/sms-consent";
 import { CodeBoxes } from "@/components/CodeBoxes";
+import { prettyPhone } from "@/lib/phone";
 
 /**
  * WHERE A RESIDENT GIVES US A NUMBER, ON PURPOSE.
@@ -79,13 +80,13 @@ export function TextOptIn({
       <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
         <strong style={{ fontSize: 15 }}>Texts are on</strong>
         <p className="mut" style={{ fontSize: 14, margin: "6px 0 12px", lineHeight: 1.55 }}>
-          We&apos;ll text {number ?? "your mobile"} about your lot and your rent.
+          We&apos;ll text {number ? prettyPhone(number) : "your mobile"} about your lot and your rent.
         </p>
         {/* AS EASY TO STOP AS IT WAS TO START. One tap, no reason asked, no
             "are you sure" — a consent you have to argue your way out of was
             never really consent. */}
         <button className="ll-btn ghost sm" disabled={busy} onClick={off} style={{ minHeight: 40 }}>
-          {busy ? "…" : "Stop texting me"}
+          {busy ? "Stopping…" : "Stop texting me"}
         </button>
         {said && <p className="mut" role="status" style={{ fontSize: 13.5, marginTop: 10 }}>{said}</p>}
       </div>
@@ -101,14 +102,15 @@ export function TextOptIn({
 
       {step === "idle" ? (
         <>
-          <label className="ll-field" style={{ marginBottom: 10, maxWidth: 300 }}>
-            <span>Your mobile number</span>
+          <label className="ll-field" style={{ display: "block", fontSize: 13, marginBottom: 10, maxWidth: 300 }}>
+            <span className="mut">Your mobile number</span>
             <input
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="(260) 555-0142"
               inputMode="tel"
               autoComplete="tel"
+              style={{ marginTop: 4 }}
               onKeyDown={(e) => { if (e.key === "Enter" && phone.trim()) send(); }}
             />
           </label>
@@ -163,6 +165,9 @@ export function TextOptIn({
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="ll-btn" disabled={busy || code.length !== 6} onClick={() => confirm()} style={{ minHeight: 44 }}>
               {busy ? "Checking…" : "Turn texts on"}
+            </button>
+            <button className="ll-btn ghost" disabled={busy} onClick={send} style={{ minHeight: 44 }}>
+              Resend code
             </button>
             <button className="ll-btn ghost" disabled={busy} onClick={() => { setStep("idle"); setSaid(null); }} style={{ minHeight: 44 }}>
               Use a different number

@@ -625,4 +625,47 @@ textarea {
   z-index: 200;
   max-width: 90vw;
   text-align: center;
+  /* Toasts carry email addresses — "We couldn't email {address}. Print a slip
+     for them instead." — and a long one has no break opportunity, so it paints
+     out of both sides of a centred pill in white on the page background and is
+     simply gone. `anywhere` rather than `break-all`, which would also chop
+     ordinary words in every other toast. */
+  overflow-wrap: anywhere;
+}
+
+/* ---------------- print ----------------
+   THE ONE THING HERE THAT EXISTS TO BECOME PAPER.
+
+   The claim slip is rendered per-lot INSIDE the rent roll (ParkRentRoll), and
+   there was no print rule anywhere in the app — so the Print button on the
+   slip printed the whole /park dashboard: every household's name, their rent
+   state and their arrears, several sheets of it, with the one slip loose in
+   the middle. The office then hands that stack to a resident.
+
+   `visibility`, not `display`, for the hiding: the slip's ancestors have to
+   keep their boxes or the slip has nothing to lay out inside. `.ll-noprint`
+   does use display:none, because the Print and Done buttons should take up no
+   room at all. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .ll-slip,
+  .ll-slip * {
+    visibility: visible;
+  }
+  .ll-slip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    border: none;
+    box-shadow: none;
+    /* The code and the square must not land on different sheets. */
+    page-break-inside: avoid;
+  }
+  .ll-noprint,
+  .ll-noprint * {
+    display: none !important;
+  }
 }

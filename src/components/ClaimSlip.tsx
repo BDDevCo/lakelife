@@ -123,9 +123,12 @@ export function ClaimSlip({
   if (code) {
     const url = `${typeof window !== "undefined" ? window.location.origin : ""}/parks/claim?park=${parkSlug}`;
     return (
-      <div className="ll-card ll-card-pad" style={{ borderColor: "var(--teal-dark)" }}>
-        <p className="ll-pill teal" style={{ marginBottom: 10 }}>Print this now</p>
-        <p style={{ fontSize: 14, margin: "0 0 14px", lineHeight: 1.55 }}>
+      // `ll-slip` is what the print stylesheet keeps; everything else on the
+      // rent roll is hidden. Without it, printing this hands a resident every
+      // other household's name and balance.
+      <div className="ll-card ll-card-pad ll-slip" style={{ borderColor: "var(--teal-dark)" }}>
+        <p className="ll-pill teal ll-noprint" style={{ marginBottom: 10 }}>Print this now</p>
+        <p className="ll-noprint" style={{ fontSize: 14, margin: "0 0 14px", lineHeight: 1.55 }}>
           This code is shown <strong>once</strong>. We keep only a scrambled
           copy, so nobody — including us — can look it up again. If it&apos;s
           lost, just print another.
@@ -159,7 +162,9 @@ export function ClaimSlip({
           )}
 
           <div className="mut" style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
-            Or go to <strong>{url.replace(/^https?:\/\//, "")}</strong><br />
+            {/* An unbroken string — on paper it can run past the dashed box,
+                on a phone past the card. */}
+            Or go to <strong style={{ overflowWrap: "anywhere" }}>{url.replace(/^https?:\/\//, "")}</strong><br />
             and enter your lot number and this code.
           </div>
           <div className="mut" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
@@ -168,11 +173,11 @@ export function ClaimSlip({
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="ll-noprint" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className="ll-btn" onClick={() => window.print()}>Print</button>
           <button className="ll-btn ghost" onClick={() => setCode(null)}>Done</button>
         </div>
-        <p className="mut" style={{ fontSize: 12.5, marginTop: 12 }}>
+        <p className="mut ll-noprint" style={{ fontSize: 12.5, marginTop: 12 }}>
           Good for 30 days, and it stops working the moment they use it.
         </p>
       </div>
@@ -208,7 +213,7 @@ export function ClaimSlip({
               Detach that account? They lose access and any link they hold stops working.
             </span>
             <button className="ll-btn sm" disabled={busy} onClick={release} style={{ minHeight: 36 }}>
-              {busy ? "…" : "Yes"}
+              {busy ? "Detaching…" : "Yes"}
             </button>
             <button className="ll-btn ghost sm" onClick={() => setConfirmRelease(false)} style={{ minHeight: 36 }}>
               No
@@ -234,7 +239,7 @@ export function ClaimSlip({
           been running on paper for thirty years. */}
       {email && !invitedAt && (
         <button className="ll-btn sm" disabled={busy} onClick={invite} style={{ minHeight: 40 }}>
-          {busy ? "…" : "Email them"}
+          {busy ? "Emailing…" : "Email them"}
         </button>
       )}
       {invitedAt && <span className="ll-pill teal">Emailed</span>}
@@ -244,7 +249,7 @@ export function ClaimSlip({
       {status === "locked" && <span className="ll-pill slate">Locked till tomorrow</span>}
 
       <button className="ll-btn ghost sm" disabled={busy} onClick={issue} style={{ minHeight: 40 }}>
-        {busy ? "…" : status === "none" ? "Print a slip" : "Print a new slip"}
+        {busy ? "Preparing…" : status === "none" ? "Print a slip" : "Print a new slip"}
       </button>
 
       {!confirmDecline ? (
