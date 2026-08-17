@@ -9,7 +9,7 @@ Written 17 August 2026, from the filed formation documents and the CP-575.
 | | |
 |---|---|
 | Legal name (State of Indiana) | **LAKELIFE AI, LLC** |
-| Legal name (IRS, on the CP-575) | **LAKELIFE AI** — *no "LLC"; see below* |
+| Legal name (IRS, on the CP-575) | **LAKELIFE AI** — no designator, which is normal for an online EIN application |
 | IRS name control | LAKE |
 | Type | Domestic LLC, **single member**, member-managed |
 | Indiana Business ID | 202608172029158 · Filing No 11480911 |
@@ -26,23 +26,31 @@ on GitHub. Take the CP-575 itself to the meeting.
 
 ---
 
-## Three things in those documents to deal with first
+## Three things in those documents worth knowing
 
-### 1. The IRS name has no "LLC", and that is the string that must match
+The first is normal and just needs care on forms. The other two are real.
 
-The state registered **LAKELIFE AI, LLC**. The IRS assigned the EIN to
-**LAKELIFE AI**. That difference is not cosmetic for two of the things
-currently blocked:
+### 1. Two correct names, and each form wants a specific one
 
-- **A2P 10DLC texting registration** rejects far more brands for a name that
-  does not match IRS records exactly than for any other reason — it is the
-  first warning in `a2p-registration.md`, written before this entity existed.
-- **Processor underwriting** runs the same TIN-matching check.
+The state registered **LAKELIFE AI, LLC**. The CP-575 says **LAKELIFE AI**.
 
-So when a form says "legal business name as it appears with the IRS", the answer
-is **LAKELIFE AI**, copied off the CP-575, not "LakeLife AI, LLC" and not
-"LakeLife". Where a form asks for the name as registered with the state, it is
-**LAKELIFE AI, LLC**. Read which one each form is asking for.
+**This is normal, not a mistake.** The online EIN application constrains the
+name field — commas and periods are not accepted — so an entity designator
+routinely does not survive into the IRS record. A CP-575 without "LLC" is the
+ordinary result of applying online, and the verification services that check
+these names are used to seeing it.
+
+It still matters operationally, because two things ahead run a TIN match
+against the IRS record rather than the state one:
+
+- **A2P 10DLC** rejects more brands for a name mismatch than for anything else
+  — the first warning in `a2p-registration.md`.
+- **Processor underwriting** does the same check.
+
+So: where a form asks for the name **as it appears with the IRS**, it is
+**LAKELIFE AI**, copied off the CP-575. Where it asks for the name **as
+registered with the state**, it is **LAKELIFE AI, LLC**. Read which one is
+being asked for, and do not "helpfully" add the LLC to the first.
 
 ### 2. Every customer-facing thing says "LakeLife", and no entity is called that
 

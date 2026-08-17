@@ -41,10 +41,15 @@ slip already assume that.
 CP-575 is in OneDrive under LakeLife/Corporate Docs.
 
 **Use "LAKELIFE AI" — with no "LLC" — wherever a form asks for the name as it
-appears with the IRS.** The state registered "LAKELIFE AI, LLC" and the IRS
-assigned the EIN to "LAKELIFE AI". The warning below was written before the
-entity existed and it now has a specific answer: copy the name off the CP-575,
-character for character. The IRS name control is LAKE.
+appears with the IRS.** The state registered "LAKELIFE AI, LLC"; the CP-575
+says "LAKELIFE AI". That is the ordinary result of applying online — the EIN
+application's name field does not accept commas or periods, so the entity
+designator routinely does not reach the IRS record — and the services that
+verify these names expect it.
+
+The warning below was written before the entity existed and now has a specific
+answer: copy the name off the CP-575, character for character, and do not add
+the "LLC" back. The IRS name control is LAKE.
 
 Registration is a **business** registration. It needs a legal entity name and an
 **EIN that matches IRS records exactly**.
