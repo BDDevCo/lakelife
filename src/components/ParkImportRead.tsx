@@ -578,14 +578,14 @@ function AskCard({
       {(wantsName || wantsRent) && (
         <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
           {wantsName && (
-            <label className="ll-field">
-              <span>Who&apos;s on {row.lotLabel ? `lot ${row.lotLabel}` : "it"}?</span>
+            <label className="ll-field" style={{ fontSize: 13 }}>
+              <span className="mut">Who&apos;s on {row.lotLabel ? `lot ${row.lotLabel}` : "it"}?</span>
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
             </label>
           )}
           {wantsRent && (
-            <label className="ll-field">
-              <span>Rent {has("bad_amount") ? "" : "(optional)"}</span>
+            <label className="ll-field" style={{ fontSize: 13 }}>
+              <span className="mut">Rent {has("bad_amount") ? "" : "(optional)"}</span>
               <input
                 value={rent}
                 onChange={(e) => setRent(e.target.value)}

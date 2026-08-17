@@ -280,6 +280,17 @@ textarea {
 
 /* ---------------- form field ---------------- */
 .ll-field {
+  /* THE CLASS IS ON A <label> MORE OFTEN THAN ON A WRAPPER.
+     Counted: 115 of the 187 uses put `className="ll-field"` on the <label>
+     itself; 72 use a <div> wrapper with a nested <label>. A <label> is inline
+     by default, and an inline box DISCARDS vertical margin and max-width — so
+     on those 115 the rule below did nothing, and neither did any marginBottom
+     or maxWidth the component set in its own style object. TextOptIn asked for
+     a 300px-wide mobile field and got one the full width of the card.
+     88 of them had no `display` of their own; 27 had already worked it out and
+     said `display: "block"` inline. This is that fix, once, for all of them —
+     and a no-op for the <div> wrappers, which are block already. */
+  display: block;
   margin-bottom: 14px;
 }
 .ll-field label {

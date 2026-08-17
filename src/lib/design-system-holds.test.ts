@@ -210,27 +210,45 @@ describe("a long address in a toast", () => {
 });
 
 describe("the .ll-field labels actually get their styling", () => {
-  it("declares display:block, because the rule they rely on needs a NESTED label", () => {
-    // globals.css styles `.ll-field label`. On these screens the label IS the
-    // .ll-field, so the rule never matched: the captions rendered at 15px body
-    // ink and every marginBottom/maxWidth on the label was silently dropped,
-    // because an inline element ignores both.
-    for (const p of ["../components/ClaimMyLot.tsx", "../components/TextOptIn.tsx"]) {
-      const s = read(p);
-      const labels = s.match(/<label className="ll-field"[^>]*>/g) ?? [];
-      expect(labels.length, p).toBeGreaterThan(0);
-      for (const l of labels) expect(l, `${p}: ${l}`).toMatch(/display: "block"/);
-    }
+  it("is DISPLAY:BLOCK in the stylesheet, so no component has to remember", () => {
+    // 115 of 187 uses put `className="ll-field"` on the <label> itself, and a
+    // <label> is inline by default. An inline box discards vertical margin and
+    // max-width — so `.ll-field { margin-bottom: 14px }` did nothing on those,
+    // and neither did any marginBottom or maxWidth the component asked for.
+    // TextOptIn wanted a 300px mobile field and got one the full card width.
+    // 27 components had worked this out and said display:"block" inline; the
+    // other 88 had not. It belongs in the class.
+    const block = CSS.slice(CSS.indexOf(".ll-field {"), CSS.indexOf(".ll-field label"));
+    expect(block).toMatch(/display: block/);
+    expect(block).toMatch(/margin-bottom: 14px/);
   });
 
-  it("puts the caption in the muted grey the other 85 captions use", () => {
-    for (const p of ["../components/ClaimMyLot.tsx", "../components/TextOptIn.tsx"]) {
-      const s = read(p);
-      const idx = s.indexOf('className="ll-field"');
-      expect(idx, p).toBeGreaterThan(-1);
-      // no bare <span> caption directly inside a .ll-field label
-      expect(s, p).not.toMatch(/className="ll-field"[^>]*>\s*\n?\s*<span>/);
+  it("has NO bare <span> caption left on a .ll-field label, app-wide", () => {
+    // `.ll-field label { font-size: 12.5px; font-weight: 700; color: var(--sub) }`
+    // needs a NESTED label. Where the label IS the .ll-field the rule can never
+    // match, so a caption in a classless <span> rendered as plain body text —
+    // 15px, full dark ink, indistinguishable from content. Measured on
+    // /park/amenities before the fix: 15px / 400 / rgb(32,52,61).
+    // 22 of them, across ParkAmenities, ParkCostSchedules, ParkImportPaste and
+    // ParkImportRead. The other 89 captions already carried className="mut".
+    const offenders: string[] = [];
+    for (const p of SOURCES) {
+      const s = readFileSync(p, "utf8");
+      for (const m of s.matchAll(/<label[^>]*className="ll-field[^"]*"[^>]*>\s*<span>/g)) {
+        offenders.push(`${p.replace(/.*\/src\//, "src/")}: ${m[0].slice(0, 60)}`);
+      }
     }
+    expect(offenders).toEqual([]);
+  });
+
+  it("does NOT blanket-style every direct span — three of them are not captions", () => {
+    // The tempting one-line fix is `.ll-field label, .ll-field > span { … }`.
+    // It is wrong: ParkDials and ParkOnlineRent put THREE direct spans in the
+    // label — the caption, a flex row that CONTAINS THE INPUT, and a hint. The
+    // selector would make the input's wrapper 12.5px bold grey with a 6px
+    // bottom margin, and turn every hint bold. Measured before rejecting it.
+    expect(CSS).not.toMatch(/\.ll-field\s*>\s*span\s*\{/);
+    expect(CSS).not.toMatch(/\.ll-field label,\s*\.ll-field\s*>\s*span/);
   });
 });
 

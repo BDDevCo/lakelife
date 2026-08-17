@@ -317,33 +317,33 @@ function AmenityForm({
   return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-        <label className="ll-field" style={{ margin: 0 }}>
-          <span>What guests call it</span>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">What guests call it</span>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="The pontoon" />
         </label>
-        <label className="ll-field" style={{ margin: 0 }}>
-          <span>What sort of thing</span>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">What sort of thing</span>
           <select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
             {KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </label>
-        <label className="ll-field" style={{ margin: 0 }}>
-          <span>Who can book it</span>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Who can book it</span>
           <select value={who} onChange={(e) => setWho(e.target.value as typeof who)}>
             {WHO.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </label>
-        <label className="ll-field" style={{ margin: 0 }}>
-          <span>Longest booking (optional)</span>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Longest booking (optional)</span>
           <input inputMode="numeric" value={maxDays} placeholder="no limit"
                  onChange={(e) => setMaxDays(e.target.value)} />
         </label>
-        <label className="ll-field" style={{ margin: 0 }}>
-          <span>In the water from (optional)</span>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">In the water from (optional)</span>
           <input value={open} placeholder="05-01" onChange={(e) => setOpen(e.target.value)} />
         </label>
-        <label className="ll-field" style={{ margin: 0 }}>
-          <span>Out again</span>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Out again</span>
           <input value={close} placeholder="10-15" onChange={(e) => setClose(e.target.value)} />
         </label>
       </div>
@@ -374,8 +374,8 @@ function AmenityForm({
         </div>
       </div>
 
-      <label className="ll-field" style={{ marginTop: 12, marginBottom: 0 }}>
-        <span>Your rules, in your words — this prints above their button</span>
+      <label className="ll-field" style={{ fontSize: 13, marginTop: 12, marginBottom: 0 }}>
+        <span className="mut">Your rules, in your words — this prints above their button</span>
         <textarea rows={2} value={rules} onChange={(e) => setRules(e.target.value)}
                   placeholder="Life jackets are in the dock box. Back by six, please." />
       </label>
@@ -427,17 +427,17 @@ function BookForSomebody({
   return (
     <div style={{ marginTop: 10, background: "var(--sand)", borderRadius: 10, padding: "10px 12px" }}>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-        <label className="ll-field" style={{ margin: 0, width: 150 }}>
-          <span>From</span>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0, width: 150 }}>
+          <span className="mut">From</span>
           <input type="date" value={from} onChange={(e) => { setFrom(e.target.value); setStays(null); }} />
         </label>
-        <label className="ll-field" style={{ margin: 0, width: 150 }}>
-          <span>Back on</span>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0, width: 150 }}>
+          <span className="mut">Back on</span>
           <input type="date" value={to} onChange={(e) => { setTo(e.target.value); setStays(null); }} />
         </label>
         {a.units.length > 1 && (
-          <label className="ll-field" style={{ margin: 0, width: 170 }}>
-            <span>Which one</span>
+          <label className="ll-field" style={{ fontSize: 13, margin: 0, width: 170 }}>
+            <span className="mut">Which one</span>
             <select value={unitId} onChange={(e) => setUnitId(e.target.value)}>
               {a.units.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
             </select>
@@ -521,12 +521,12 @@ function HoldBackDays({
 
   return open ? (
     <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-      <label className="ll-field" style={{ margin: 0, width: 150 }}>
-        <span>Hold back from</span>
+      <label className="ll-field" style={{ fontSize: 13, margin: 0, width: 150 }}>
+        <span className="mut">Hold back from</span>
         <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
       </label>
-      <label className="ll-field" style={{ margin: 0, width: 150 }}>
-        <span>Free again on</span>
+      <label className="ll-field" style={{ fontSize: 13, margin: 0, width: 150 }}>
+        <span className="mut">Free again on</span>
         <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
       </label>
       <button

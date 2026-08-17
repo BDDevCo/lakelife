@@ -61,8 +61,8 @@ export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO
       </p>
 
       <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
-        <label className="ll-field">
-          <span>Paste here</span>
+        <label className="ll-field" style={{ fontSize: 13 }}>
+          <span className="mut">Paste here</span>
           <textarea
             value={text}
             onChange={(e) => { setText(e.target.value); setDup(null); }}
@@ -77,8 +77,8 @@ export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO
           </p>
         )}
 
-        <label className="ll-field" style={{ marginTop: 16 }}>
-          <span>Which month do you take over?</span>
+        <label className="ll-field" style={{ fontSize: 13, marginTop: 16 }}>
+          <span className="mut">Which month do you take over?</span>
           <select value={cutover} onChange={(e) => setCutover(e.target.value)}>
             {months.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>

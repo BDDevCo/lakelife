@@ -123,8 +123,8 @@ export function ParkCostSchedules({
       ) : (
         <div className="ll-card ll-card-pad" style={{ marginTop: 10 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-            <label className="ll-field" style={{ margin: 0 }}>
-              <span>Which bill</span>
+            <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+              <span className="mut">Which bill</span>
               <select value={category} onChange={(e) => setCategory(e.target.value)}>
                 <option value="">Pick one…</option>
                 {SCHEDULABLE_CATEGORIES.map((c) => (
@@ -133,8 +133,8 @@ export function ParkCostSchedules({
               </select>
             </label>
 
-            <label className="ll-field" style={{ margin: 0 }}>
-              <span>How often</span>
+            <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+              <span className="mut">How often</span>
               <select value={cadence} onChange={(e) => { setCadence(e.target.value); setDueMonth(""); }}>
                 <option value="monthly">Every month</option>
                 <option value="quarterly">Every three months</option>
@@ -145,8 +145,8 @@ export function ParkCostSchedules({
             {/* WHICH MONTH only exists for the two cadences that need it. Shown
                 for a monthly bill it would be a question with no answer. */}
             {cadence !== "monthly" && (
-              <label className="ll-field" style={{ margin: 0 }}>
-                <span>{cadence === "annual" ? "Which month" : "First one lands in"}</span>
+              <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+                <span className="mut">{cadence === "annual" ? "Which month" : "First one lands in"}</span>
                 <select value={dueMonth} onChange={(e) => setDueMonth(e.target.value)}>
                   <option value="">Pick a month…</option>
                   {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
@@ -154,20 +154,20 @@ export function ParkCostSchedules({
               </label>
             )}
 
-            <label className="ll-field" style={{ margin: 0 }}>
-              <span>Roughly what day it lands</span>
+            <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+              <span className="mut">Roughly what day it lands</span>
               <input inputMode="numeric" value={dueDay} placeholder="5"
                      onChange={(e) => setDueDay(e.target.value)} />
             </label>
 
-            <label className="ll-field" style={{ margin: 0 }}>
-              <span>What it usually comes to (optional)</span>
+            <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+              <span className="mut">What it usually comes to (optional)</span>
               <input inputMode="decimal" value={typical} placeholder="1,430.00"
                      onChange={(e) => setTypical(e.target.value)} />
             </label>
 
-            <label className="ll-field" style={{ margin: 0 }}>
-              <span>Call it something (optional)</span>
+            <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+              <span className="mut">Call it something (optional)</span>
               <input value={label} placeholder="LaGrange County sewer"
                      onChange={(e) => setLabel(e.target.value)} />
             </label>
