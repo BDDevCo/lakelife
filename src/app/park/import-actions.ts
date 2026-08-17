@@ -705,6 +705,36 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
     .update({ committed_at: new Date().toISOString(), counts })
     .eq("id", batchId);
 
+  // THE ANSWER TO "WHICH MONTH DO YOU TAKE OVER?" HAD NOWHERE TO LAND.
+  //
+  // The importer asks that question, writes it to `park_import_batches
+  // .cutover_date`, and dates every tenancy from it — but `parks.cutover_date`
+  // is a DIFFERENT column on a different table, and the only thing that ever
+  // wrote it was the Park setup form. So an owner who onboarded the documented
+  // way — paste a roll, answer the takeover question — ended up with
+  // parks.cutover_date NULL.
+  //
+  // NULL means "no handover, no restriction" (0131), by design and correctly
+  // for the parks that join with no takeover at all. But here he ANSWERED. The
+  // consequence: `park_charge_not_before_go_live` waves everything through and
+  // `preCutoverRefusal` returns nothing, so a run for a month that belongs to
+  // the SELLER bills the residents and lands the money on the wrong side of
+  // the closing. That is the rule the whole go-live gate exists to enforce,
+  // switched off for exactly the parks that used the onboarding flow.
+  //
+  // Only when it is null. If he set a date on Park setup that is his answer,
+  // and an import must not quietly move his ledger's start.
+  if (loaded.cutover) {
+    const { data: park } = await admin
+      .from("parks").select("cutover_date").eq("id", loaded.parkId).maybeSingle();
+    if (park && park.cutover_date == null) {
+      await admin
+        .from("parks")
+        .update({ cutover_date: loaded.cutover })
+        .eq("id", loaded.parkId);
+    }
+  }
+
   revalidatePath("/park");
   revalidatePath(`/park/import/${batchId}`);
 

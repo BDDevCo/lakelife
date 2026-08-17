@@ -3,6 +3,7 @@ import {
   type DateRange,
   type Term,
 } from "@/lib/parks";
+import { parseLot } from "@/lib/roll-parse";
 import type { ParsedRow } from "@/lib/roll-parse";
 
 /**
@@ -658,6 +659,17 @@ export interface EmptyLot {
  * treated as EXISTING — the conservative reading, since a lot he has to
  * un-tick is safer than one he never sees.
  */
+/**
+ * One key for every way a roll can write the same pad.
+ *
+ * "Lot 6", "LOT6", "lot 6", "#6" and "6" are one pedestal with one bill. The
+ * dedupe compared raw strings, so a stored "6" and a sheet's "Lot 6" read as
+ * two lots and the park grew inventory it does not have.
+ */
+export function lotKey(raw: string): string {
+  return (raw ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/^LOT(?=.)/, "");
+}
+
 export function emptyLotsFrom(
   lines: readonly { text: string }[],
   existing: readonly { lotNumber: string }[] = [],
@@ -670,18 +682,38 @@ export function emptyLotsFrom(
   const billedNums = billedLabels.map(numOf).filter((n): n is number => n != null);
   const highestBilled = billedNums.length ? Math.max(...billedNums) : null;
 
-  const have = new Set(existing.map((l) => l.lotNumber.trim().toLowerCase()));
+  const have = new Set(existing.map((l) => lotKey(l.lotNumber)));
   const out: EmptyLot[] = [];
   const seen = new Set<string>();
 
   for (const { text } of lines) {
-    const m = /^\s*(?:#\s*|(?:lot|site|space|unit|stall|pad)\s+)?([A-Za-z]{0,2}\d{1,4}[A-Za-z]?)\b/i
+    const m = /^\s*((?:#\s*|(?:lot|site|space|unit|stall|pad)\s+)?([A-Za-z]{0,2}\d{1,4}[A-Za-z]?))\b/i
       .exec(text ?? "");
     if (!m) continue;
-    // THE SAME SHAPE THE PARSER EMITS for a billed lot ("LOT1"), so a park
-    // does not end up with "LOT1" and "3" as lot numbers in the same roll.
-    const label = `LOT${m[1].trim().toUpperCase()}`.replace(/^LOTLOT/, "LOT");
-    const key = label.toLowerCase();
+
+    // THE SAME LABEL THIS TEXT WOULD GET AS A BILLED ROW.
+    //
+    // This used to force `LOT` onto the front of every empty pad, on the
+    // stated grounds that it matched "the shape the parser emits for a billed
+    // lot". That is true of The Haven's roll, whose every line reads "Lot 4",
+    // and false of every roll that writes a bare number — including the one
+    // in this app's own paste-box placeholder. parseLot("Lot 4") is "LOT4";
+    // parseLot("4") is "4".
+    //
+    // So a bare-number roll produced billed lots 1..21 and empty pads LOT6 and
+    // LOT19, and the park ended up with 23 lots for 21 pads. Occupancy read
+    // 18/23, and — the reason this file exists at all — every shared cost was
+    // divided by 23 rentable lots instead of 21, quietly absorbing the
+    // difference on pads that do not exist.
+    //
+    // Asking parseLot means the two sides cannot disagree again: whatever a
+    // billed row would be called, an empty one with the same text is called.
+    // The fallback covers what parseLot declines to read ("Site 9"), where the
+    // bare number is the honest answer rather than an invented prefix.
+    const label = parseLot(m[1].trim()).value ?? m[2].trim().toUpperCase();
+
+    // CANONICAL, so "Lot 6" on the sheet cannot re-create a stored "6".
+    const key = lotKey(label);
     if (have.has(key) || seen.has(key)) continue;
     seen.add(key);
 

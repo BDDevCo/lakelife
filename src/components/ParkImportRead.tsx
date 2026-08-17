@@ -65,12 +65,30 @@ export function ParkImportRead({ view }: { view: ReadView }) {
   const walk = view.others.filter((o) => o.verdict === "vacant");
   const skipped = view.others.filter((o) => o.verdict !== "vacant");
 
-  const cadence = cadenceTotals(view.ready);
+  // WHAT THE LIST SAYS, NOT WHAT IS READY TO WRITE.
+  //
+  // This read `view.ready`, and on a park that does not have its lots yet —
+  // which is every park pasting a roll for the first time — EVERY row carries
+  // the `lot_unknown` blocker, so `ready` is empty and the panel below said
+  // "No amounts on this list yet" while holding nineteen amounts the parser
+  // had read as `stated`.
+  //
+  // It said that at the exact moment the number matters most: a buyer at
+  // closing, checking the roll against the figure the seller quoted him.
+  // Whether a lot record exists yet has nothing to do with what the sheet
+  // claims he collects.
+  //
+  // Same population as `totals` on the next line, which had it right all
+  // along — the rows he has NOT stood down.
+  const live = view.rows.filter((r) => !r.skipped);
+  const cadence = cadenceTotals(live);
+  /** Of the rows in that figure, how many still need an answer from him. */
+  const pendingInCadence = view.needsYou.filter((r) => r.amount != null).length;
   // Against the rows he has NOT stood down. Once he answers "Fry lives there
   // now", Newman's $410 stops being part of what this sheet claims — so the
   // comparison has to move with his answers, or the section keeps arguing a
   // point he already settled.
-  const totals = checkTotals(view.statedTotal, view.rows.filter((r) => !r.skipped));
+  const totals = checkTotals(view.statedTotal, live);
 
   function answer(lineNo: number, resolved: Record<string, unknown>) {
     start(async () => {
@@ -162,6 +180,14 @@ export function ParkImportRead({ view }: { view: ReadView }) {
             <span className="mut">
               These came off the list, not from anyone confirming them. Your rent
               roll will say so.
+              {pendingInCadence > 0 && (
+                <>
+                  {" "}
+                  {pendingInCadence} of those {pendingInCadence === 1 ? "row is" : "rows are"}{" "}
+                  still waiting on an answer below, so the figure is what the
+                  sheet claims rather than what will be written.
+                </>
+              )}
             </span>
           </p>
         )}

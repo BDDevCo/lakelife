@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { parseRentRoll } from "@/lib/roll-parse";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { parseRentRoll, parseLot } from "@/lib/roll-parse";
 import {
   planImport,
   normaliseLotLabel,
@@ -445,14 +447,48 @@ describe("a NAMED roll carries rate cards too", () => {
 // 19 and carried nothing, because the empties did not exist to be carried.
 // ---------------------------------------------------------------------------
 describe("the lots nobody is on", () => {
-  it("reads a label out of every way a roll names an empty pad", () => {
+  it("gives an empty pad the label its text would get as a BILLED row", () => {
+    // This asserted "LOT3","LOT22","LOT7","LOT12","LOT9" — every empty pad
+    // forced into a LOT-prefixed shape, on the stated grounds that it matched
+    // "the shape the parser emits for a billed lot".
+    //
+    // That is true of The Haven's roll, where every line reads "Lot 4", and
+    // FALSE of any roll written as bare numbers — including the one in this
+    // app's own paste-box placeholder. parseLot("Lot 3") is "LOT3";
+    // parseLot("12") is "12". So a bare-number roll billed lots 1..21 and
+    // then created empty pads LOT6 and LOT19 beside the real 6 and 19: 23
+    // lots for 21 pedestals, occupancy reading 18/23, and every shared cost
+    // divided by 23 — which is the exact arithmetic this whole file exists to
+    // get right.
     expect(emptyLotsFrom([
       { text: "Lot 3" },
       { text: "Lot 22 — vacant" },
       { text: "#7" },
       { text: "12" },
       { text: "Site 9  (needs skirting)" },
-    ]).map((e) => e.label)).toEqual(["LOT3","LOT22","LOT7","LOT12","LOT9"]);
+    ]).map((e) => e.label)).toEqual(["LOT3", "LOT22", "7", "12", "9"]);
+  });
+
+  it("cannot disagree with the billed side, whichever way the roll is written", () => {
+    // The property that matters, stated directly: for any text, the empty-pad
+    // label equals what a billed row with that lot cell would be called.
+    for (const [cell, expected] of [
+      ["Lot 3", "LOT3"], ["LOT 3", "LOT3"], ["3", "3"], ["#3", "3"], ["12A", "12A"],
+    ] as const) {
+      const [only] = emptyLotsFrom([{ text: cell }]);
+      expect(only?.label, cell).toBe(expected);
+      expect(only?.label, `${cell} must match parseLot`).toBe(parseLot(cell).value ?? expected);
+    }
+  });
+
+  it("will not re-create a pad the park already has, however the sheet spells it", () => {
+    // "Lot 6" on the sheet against a stored "6" compared raw strings and
+    // missed, so the import added a second pedestal for lot 6.
+    for (const spelling of ["Lot 6", "LOT 6", "#6", "6", "lot 6 — vacant"]) {
+      expect(emptyLotsFrom([{ text: spelling }], [{ lotNumber: "6" }]), spelling).toEqual([]);
+    }
+    // and the reverse: a stored "LOT6" against a bare "6" on the sheet
+    expect(emptyLotsFrom([{ text: "6" }], [{ lotNumber: "LOT6" }])).toEqual([]);
   });
 
   it("never invents one it cannot read", () => {
@@ -521,5 +557,34 @@ describe("a pad that exists versus one that does not yet", () => {
     expect(emptyLotsFrom([{ text: "Lot 12A" }], [], billed)[0])
       .toEqual({ label: "LOT12A", rentable: true });
     expect(emptyLotsFrom([{ text: "Lot 30B" }], [], billed)[0].rentable).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE ANSWER THAT HAD NOWHERE TO LAND.
+//
+// The importer asks "Which month do you take over?" and wrote it to
+// `park_import_batches.cutover_date` — a different column on a different table
+// from `parks.cutover_date`, which only the Park setup form ever wrote. So an
+// owner who onboarded the documented way left parks.cutover_date NULL, and
+// NULL means "no handover, no restriction" (0131): the go-live gate waved
+// through a charge run for a month that still belonged to the seller.
+// ---------------------------------------------------------------------------
+describe("committing an import records the go-live date", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("./import-actions.ts", import.meta.url)), "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("finds the file it is scanning", () => {
+    expect(src).toMatch(/export async function commitImport/);
+  });
+
+  it("writes parks.cutover_date, not just the batch's", () => {
+    expect(src).toMatch(/\.from\("parks"\)\s*\n?\s*\.update\(\{ cutover_date: loaded\.cutover \}\)/);
+  });
+
+  it("only when the park has none — an import must not move his ledger's start", () => {
+    // If he set a closing date on Park setup, that is his answer.
+    expect(src).toMatch(/park\.cutover_date == null/);
   });
 });
