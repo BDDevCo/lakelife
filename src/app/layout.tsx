@@ -20,9 +20,12 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "LakeLife — Lake life, handled. House, boat & toy care every season",
+  // The prototype's own <title>, which this had drifted from. It is also the
+  // line that does the most work in a search result, where the reader is a
+  // stranger and gets one sentence.
+  title: "LakeLife — Your lake house, ready when you are",
   description:
-    "One request, one price, one crew at your door. Seasonal opening & closing, piers, lifts, boats, mowing and housekeeping on Big Long, Pretty & Big Turkey Lakes.",
+    "You're not there most of the time. Pick your services and your dates — we send the crew and you get the photos. Seasonal opening & closing, piers, lifts, boats, mowing and housekeeping on Big Long, Pretty & Big Turkey Lakes.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
