@@ -3,6 +3,7 @@ import { TopBar } from "@/components/Brand";
 import { VendorNav } from "@/components/VendorNav";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
+import { mustRead } from "@/lib/must-read";
 import { getMyVendorId } from "@/app/vendor/data";
 import { todayLakeDate, toISODate } from "@/lib/booking";
 import { AvailabilityGrid, type DayRow, type SlotStatus } from "./AvailabilityGrid";
@@ -46,11 +47,14 @@ export default async function VendorAvailabilityPage() {
   }
 
   const supabase = await createClient();
-  const { data: vendor } = await supabase
-    .from("vendors")
-    .select("work_days, service_lakes, storage_capacity_feet, storage_types, garagekeepers_url, garagekeepers_expiry")
-    .eq("id", vendorId)
-    .maybeSingle();
+  const vendor = mustRead(
+    "your crew profile",
+    await supabase
+      .from("vendors")
+      .select("work_days, service_lakes, storage_capacity_feet, storage_types, garagekeepers_url, garagekeepers_expiry")
+      .eq("id", vendorId)
+      .maybeSingle(),
+  );
   const workDays: string[] = (vendor?.work_days as string[] | null) ?? [];
   const serviceLakes: string[] = (vendor?.service_lakes as string[] | null) ?? [];
   const storageCapacityFeet: number = (vendor?.storage_capacity_feet as number | null) ?? 0;
@@ -60,7 +64,7 @@ export default async function VendorAvailabilityPage() {
 
   // All lakes on the platform, for the "Lakes I service" editor.
   const admin = createServiceClient();
-  const { data: lakeRows } = await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name");
+  const lakeRows = mustRead("the lake list", await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name"));
   const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
 
   // The next 5 days the vendor actually works, starting today (lake time).
@@ -78,11 +82,14 @@ export default async function VendorAvailabilityPage() {
   // Existing rows for those days -> lookup; absence of a row means "open".
   const statusByKey = new Map<string, SlotStatus>();
   if (workingDays.length > 0) {
-    const { data: avail } = await supabase
-      .from("vendor_availability")
-      .select("date, slot, status")
-      .eq("vendor_id", vendorId)
-      .in("date", workingDays.map((d) => d.date));
+    const avail = mustRead(
+      "your blocked slots",
+      await supabase
+        .from("vendor_availability")
+        .select("date, slot, status")
+        .eq("vendor_id", vendorId)
+        .in("date", workingDays.map((d) => d.date)),
+    );
     for (const r of avail ?? []) {
       statusByKey.set(`${r.date}|${r.slot}`, r.status as SlotStatus);
     }

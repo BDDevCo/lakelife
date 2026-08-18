@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, mustCount, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { toDaterange } from "@/lib/parks";
@@ -57,27 +58,36 @@ export async function getOnboardSeeds(
   const admin = createServiceClient();
   const today = todayLakeDate();
 
-  const { data: lots } = await admin
+  // An empty list here means "this park has no live lots" and the screen says
+  // so. A failed read said the same thing to a park with seventy-nine of them.
+  const lots = mustRead("your lots", await admin
     .from("park_lots")
     .select("id, lot_number")
     .eq("park_id", parkId)
-    .eq("lifecycle", "live");
+    .eq("lifecycle", "live"));
   const lotIds = (lots ?? []).map((l) => l.id as string);
   if (lotIds.length === 0) return { ok: true, seeds: [], today };
 
   // Anything already held is not on offer — this screen only fills gaps.
-  const { data: taken } = await admin
+  //
+  // FAILS OPEN, AND THE GAP IT LEAVES IS THE WHOLE POINT OF THE SCREEN.
+  // `taken ?? []` cannot tell a dropped read from a park where nobody lives, so
+  // a failure offers every OCCUPIED lot as an empty row to fill in — which is
+  // how one afternoon files a second household onto somebody's home.
+  const taken = mustRead("who is already on your lots", await admin
     .from("lot_reservations")
     .select("park_lot_id")
     .in("park_lot_id", lotIds)
-    .in("status", ["approved", "active"]);
+    .in("status", ["approved", "active"]));
   const takenIds = new Set((taken ?? []).map((r) => r.park_lot_id as string));
 
-  const { data: rates } = await admin
+  // The pre-filled rent is a number he confirms rather than types. A failed
+  // read blanks every one of them and reads as "no rent on file anywhere".
+  const rates = mustRead("the rents already on your lots", await admin
     .from("lot_rates")
     .select("park_lot_id, amount")
     .in("park_lot_id", lotIds)
-    .eq("term", "monthly");
+    .eq("term", "monthly"));
   const rateByLot = new Map((rates ?? []).map((r) => [r.park_lot_id as string, Number(r.amount)]));
 
   const seeds = (lots ?? [])
@@ -99,8 +109,10 @@ export async function getOnboardSeeds(
   //
   // The import: the screen told every owner their rents "came off the sheet you
   // imported", including parks that never pasted a roll in. Both are now read
-  // rather than assumed.
-  const [{ data: parkRow }, { count: importCount }] = await Promise.all([
+  // rather than assumed — and neither may be assumed by FAILING either, which
+  // is what `?? null` and `(count ?? 0) > 0` quietly did: a dropped read put
+  // the screen straight back on the two sentences this paragraph removed.
+  const [parkRes, importRes] = await Promise.all([
     admin.from("parks").select("max_agreement_months").eq("id", parkId).maybeSingle(),
     // Committed and not since undone. There is no `status` column here — the
     // batch's life is recorded as two timestamps.
@@ -111,13 +123,15 @@ export async function getOnboardSeeds(
       .not("committed_at", "is", null)
       .is("undone_at", null),
   ]);
+  const parkRow = mustRead("your park's agreement cap", parkRes);
+  const importCount = mustCount("whether you imported a rent roll", importRes);
 
   return {
     ok: true,
     seeds,
     today,
     capMonths: (parkRow?.max_agreement_months as number | null) ?? null,
-    rentsFromImport: (importCount ?? 0) > 0,
+    rentsFromImport: importCount > 0,
   };
 }
 
@@ -144,17 +158,34 @@ export async function commitOnboarding(
   }
 
   const admin = createServiceClient();
-  const { data: park } = await admin
+  // Null means he HAS no cap, and the rolling horizon is written instead. A
+  // failed read means we don't know his — and the silent rolling range against
+  // a park that has one is refused by 0065, once per household, as nineteen
+  // unexplained failures at the end of the afternoon. Same guard the
+  // one-at-a-time path (`addTenant`) already makes.
+  const parkRes = await admin
     .from("parks").select("max_agreement_months").eq("id", parkId).maybeSingle();
-  const parkCap = (park?.max_agreement_months as number) ?? null;
+  if (parkRes.error) {
+    return { ok: false, error: readFailedMessage("your park's agreement cap", parkRes.error) };
+  }
+  const parkCap = (parkRes.data?.max_agreement_months as number) ?? null;
 
   // Re-check what is already held, so a second submit cannot double-file.
-  const { data: taken } = await admin
+  //
+  // FAILS OPEN. `taken ?? []` on a dropped read holds nobody, so the check
+  // below never fires and a second tap files the whole list again — a second
+  // household written onto a lot somebody already lives on. The exclusion
+  // constraint refuses only the rows whose DATES overlap; this is the guard
+  // that refuses the rest.
+  const takenRes = await admin
     .from("lot_reservations")
     .select("park_lot_id")
     .in("park_lot_id", plan.toFile.map((r) => r.lotId))
     .in("status", ["approved", "active"]);
-  const takenIds = new Set((taken ?? []).map((r) => r.park_lot_id as string));
+  if (takenRes.error) {
+    return { ok: false, error: readFailedMessage("who is already on your lots", takenRes.error) };
+  }
+  const takenIds = new Set((takenRes.data ?? []).map((r) => r.park_lot_id as string));
 
   let filed = 0;
   const failed: { lotNumber: string; why: string }[] = [];

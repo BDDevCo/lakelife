@@ -6,6 +6,7 @@ import { VendorRouteButton } from "@/components/VendorRouteButton";
 import { VendorStanding } from "@/components/VendorStanding";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
+import { mustRead } from "@/lib/must-read";
 import { getMyVendorId, getMyVendor, getVendorDay } from "./data";
 import { getMyStanding } from "@/lib/scoring-data";
 import { tierLabel } from "@/lib/scoring";
@@ -63,9 +64,9 @@ export default async function VendorTodayPage() {
   const vendor = await getMyVendor();
   if (vendor && vendor.status !== "active") {
     const admin = createServiceClient();
-    const { data: svcs } = await admin.from("services").select("name").eq("active", true).order("name");
+    const svcs = mustRead("the service list", await admin.from("services").select("name").eq("active", true).order("name"));
     const activeServices = (svcs ?? []).map((s) => s.name as string);
-    const { data: lakeRows } = await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name");
+    const lakeRows = mustRead("the lake list", await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name"));
     const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
     return (
       <>
@@ -80,7 +81,10 @@ export default async function VendorTodayPage() {
   // existed) accept once here, gating the route until they do. New crews
   // accept at go-live instead — this only fires for accounts already active.
   if (vendor && vendor.status === "active") {
-    const { data: meRow } = await supabase.from("users").select("tos_version").eq("id", user.id).maybeSingle();
+    const meRow = mustRead(
+      "your terms acceptance",
+      await supabase.from("users").select("tos_version").eq("id", user.id).maybeSingle(),
+    );
     if ((meRow?.tos_version as string | null) !== TOS_VERSION) {
       return (
         <>
@@ -104,11 +108,12 @@ export default async function VendorTodayPage() {
   }
 
   const admin2 = createServiceClient();
-  const [day, standing, { data: confRows }] = await Promise.all([
+  const [day, standing, confRes] = await Promise.all([
     getVendorDay(),
     getMyStanding(vendorId),
     admin2.from("job_confirmations").select("verdict").eq("vendor_id", vendorId).not("verdict", "is", null),
   ]);
+  const confRows = mustRead("your customer feedback", confRes);
   const thumbsUp = (confRows ?? []).filter((c) => c.verdict === "good").length;
   const thumbsDown = (confRows ?? []).filter((c) => c.verdict === "issue").length;
   const standingLabels = standing ? tierLabel(standing.tier) : null;

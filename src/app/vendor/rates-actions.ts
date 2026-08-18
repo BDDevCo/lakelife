@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import type { PricingModel, PricingParams } from "@/lib/pricing";
 import { computeRateRow, type RatePayload } from "./rates-helpers";
+import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 export interface RateResult {
   ok: boolean;
@@ -27,11 +28,18 @@ async function assertMyVendor(): Promise<{ id: string; status: string; serviceTy
   } = await supabase.auth.getUser();
   if (!user) return null;
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("vendors")
-    .select("id, status, service_types")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  // THROWS on a failed read. `null` from here means "you have no crew account",
+  // and setMyRate says exactly that — never something a dropped connection gets
+  // to tell a crew mid-way through pricing their work. setMyRate converts the
+  // throw into its own RateResult.
+  const data = mustRead(
+    "your crew account",
+    await admin
+      .from("vendors")
+      .select("id, status, service_types")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+  );
   if (!data) return null;
   return {
     id: data.id as string,
@@ -54,7 +62,16 @@ async function assertMyVendor(): Promise<{ id: string; status: string; serviceTy
  * menu.
  */
 export async function setMyRate(serviceId: string, payload: RatePayload): Promise<RateResult> {
-  const vendor = await assertMyVendor();
+  // assertMyVendor THROWS when the read fails rather than answer "no crew
+  // account". A rejection out of a "use server" action is a blank failure on the
+  // crew's phone, so it becomes this action's own RateResult. Nothing written.
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>> = null;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") {
     return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
@@ -62,11 +79,16 @@ export async function setMyRate(serviceId: string, payload: RatePayload): Promis
   if (typeof serviceId !== "string" || !serviceId) return { ok: false, error: "Unknown service." };
 
   const admin = createServiceClient();
-  const { data: svc } = await admin
+  const svcRes = await admin
     .from("services")
     .select("id, name, pricing_model, band_pricing, active, kind")
     .eq("id", serviceId)
     .maybeSingle();
+  // The refusal below asserts a fact about the crew's own trade — "that service
+  // isn't one you do" — to somebody who was just shown it and tapped it. A
+  // failed read had no such fact. Nothing is written at this point.
+  if (svcRes.error) return { ok: false, error: readFailedMessage("that service", svcRes.error) };
+  const svc = svcRes.data;
   if (!svc) return { ok: false, error: "That service isn't one you do." };
 
   // Component/addon legs (winter & storage) are priceable regardless of the
@@ -89,12 +111,18 @@ export async function setMyRate(serviceId: string, payload: RatePayload): Promis
 
   // Relational-only signal: did this crew already have a rate here? (own history,
   // never the menu). Used purely to word the confirmation.
-  const { data: prev } = await admin
+  const prevRes = await admin
     .from("vendor_rates")
     .select("id")
     .eq("vendor_id", vendor.id)
     .eq("service_id", serviceId)
     .maybeSingle();
+  // DELIBERATELY SWALLOWED, BUT NEVER SILENTLY. This read decides one word of
+  // the confirmation and nothing else, so losing a crew's rate over it would be
+  // out of all proportion. On failure `prev` is null and the sentence is
+  // "Saved — you'll be considered for matching jobs", which is true either way.
+  if (prevRes.error) console.error("[read failed] your previous rate for this service:", prevRes.error);
+  const prev = prevRes.data;
 
   const { error } = await admin.from("vendor_rates").upsert(
     {

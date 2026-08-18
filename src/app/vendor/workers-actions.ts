@@ -4,7 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { likeLiteral } from "@/lib/sql-like";
 import { getMyVendorId } from "./data";
-import { ReadFailed, readFailedMessage } from "@/lib/must-read";
+import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 /**
  * WHO WAS ACTUALLY HERE — the vendor's own roster, and who was on a job.
@@ -35,13 +35,20 @@ async function myJob(jobId: string): Promise<{ id: string; property_id: string |
   const vendorId = await getMyVendorId();
   if (!vendorId || !jobId) return null;
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("jobs")
-    // No customer_price / vendor_cost — rule 1 keeps price and margin out of
-    // reach on the crew path by construction, not by remembering.
-    .select("id, vendor_id, property_id")
-    .eq("id", jobId)
-    .maybeSingle();
+  // THROWS on a failed read: `null` from here is "that job isn't on your route",
+  // which a dropped connection must never be able to say about a job the crew is
+  // standing in front of. setJobWorkers catches it; the two loaders below let it
+  // reach getWhoWasHere, which is documented as throwing.
+  const data = mustRead(
+    "your job",
+    await admin
+      .from("jobs")
+      // No customer_price / vendor_cost — rule 1 keeps price and margin out of
+      // reach on the crew path by construction, not by remembering.
+      .select("id, vendor_id, property_id")
+      .eq("id", jobId)
+      .maybeSingle(),
+  );
   if (!data || data.vendor_id !== vendorId) return null;
   return { id: data.id as string, property_id: (data.property_id as string) ?? null };
 }
@@ -66,12 +73,15 @@ export async function listWorkers(): Promise<Worker[]> {
   const vendorId = await getMyVendorId();
   if (!vendorId) return [];
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("crew_workers")
-    .select("id, name, active")
-    .eq("vendor_id", vendorId)
-    .order("active", { ascending: false })
-    .order("name", { ascending: true });
+  const data = mustRead(
+    "your crew list",
+    await admin
+      .from("crew_workers")
+      .select("id, name, active")
+      .eq("vendor_id", vendorId)
+      .order("active", { ascending: false })
+      .order("name", { ascending: true }),
+  );
   return (data ?? []).map((w) => ({
     id: w.id as string,
     name: w.name as string,
@@ -106,7 +116,7 @@ export async function addWorker(rawName: string): Promise<WorkerResult> {
   // INACTIVE, which is the likelier reason somebody is re-adding a name.
   if (error) {
     if (error.code === "23505") {
-      const { data: existing } = await admin
+      const existingRes = await admin
         .from("crew_workers")
         .select("id, active")
         .eq("vendor_id", vendorId)
@@ -116,6 +126,15 @@ export async function addWorker(rawName: string): Promise<WorkerResult> {
         // small — but an exception is how a rule stops being a rule.
         .ilike("name", likeLiteral(name))
         .maybeSingle();
+      // The unique index has already proved the name is on the list; this read
+      // is the only thing that knows whether the row is switched OFF. Failed, it
+      // read as "already on your list" — the refusal — to a crew re-adding
+      // somebody who is merely inactive, and the one tap that brings them back
+      // never happened.
+      if (existingRes.error) {
+        return { ok: false, error: readFailedMessage("your crew list", existingRes.error) };
+      }
+      const existing = existingRes.data;
       if (existing && !existing.active) {
         await admin.from("crew_workers").update({ active: true }).eq("id", existing.id);
         revalidatePath("/vendor/crew");
@@ -171,11 +190,17 @@ export async function setWorkerActive(workerId: string, active: boolean): Promis
 export async function getJobWorkers(jobId: string): Promise<Worker[]> {
   if (!(await myJob(jobId))) return [];
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("job_workers")
-    .select("worker_id, name")
-    .eq("job_id", jobId)
-    .order("name", { ascending: true });
+  // Throws rather than return `[]`, which the picker renders as "nobody recorded
+  // on this job" — and it then SAVES that emptiness on the next tap. Its only
+  // caller is getWhoWasHere, which is documented as throwing.
+  const data = mustRead(
+    "who's already recorded on this job",
+    await admin
+      .from("job_workers")
+      .select("worker_id, name")
+      .eq("job_id", jobId)
+      .order("name", { ascending: true }),
+  );
   return (data ?? []).map((r) => ({
     id: (r.worker_id as string) ?? "",
     name: r.name as string,
@@ -216,11 +241,18 @@ export async function setJobWorkers(jobId: string, workerIds: string[]): Promise
   const ids = [...new Set((workerIds ?? []).filter(Boolean))].slice(0, 12);
   let rows: Array<{ job_id: string; worker_id: string; name: string }> = [];
   if (ids.length > 0) {
-    const { data: roster } = await admin
+    const rosterRes = await admin
       .from("crew_workers")
       .select("id, name")
       .eq("vendor_id", vendorId)
       .in("id", ids);
+    // A failed read resolved to no names, which came back to the driveway as
+    // "We couldn't find those names on your list" about people who are on it.
+    // Returned BEFORE the delete below, so the existing record is untouched.
+    if (rosterRes.error) {
+      return { ok: false, error: readFailedMessage("your crew list", rosterRes.error) };
+    }
+    const roster = rosterRes.data;
     rows = (roster ?? []).map((w) => ({
       job_id: jobId,
       worker_id: w.id as string,
@@ -266,22 +298,28 @@ export async function lastWorkersAtProperty(jobId: string): Promise<string[]> {
   const admin = createServiceClient();
 
   // The vendor's own recent jobs at this property, newest first.
-  const { data: priorJobs } = await admin
-    .from("jobs")
-    .select("id, date")
-    .eq("property_id", job.property_id)
-    .eq("vendor_id", vendorId)
-    .neq("id", jobId)
-    .order("date", { ascending: false })
-    .limit(10);
+  const priorJobs = mustRead(
+    "your earlier visits to this property",
+    await admin
+      .from("jobs")
+      .select("id, date")
+      .eq("property_id", job.property_id)
+      .eq("vendor_id", vendorId)
+      .neq("id", jobId)
+      .order("date", { ascending: false })
+      .limit(10),
+  );
   const priorIds = (priorJobs ?? []).map((j) => j.id as string);
   if (priorIds.length === 0) return [];
 
-  const { data: recorded } = await admin
-    .from("job_workers")
-    .select("job_id, worker_id")
-    .in("job_id", priorIds)
-    .not("worker_id", "is", null);
+  const recorded = mustRead(
+    "who came last time",
+    await admin
+      .from("job_workers")
+      .select("job_id, worker_id")
+      .in("job_id", priorIds)
+      .not("worker_id", "is", null),
+  );
   if (!recorded?.length) return [];
 
   // Take the most recent job that actually has names on it, not a blend of

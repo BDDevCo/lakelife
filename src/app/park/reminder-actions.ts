@@ -12,7 +12,7 @@ import {
 } from "./reminder-helpers";
 import type { ParkResult } from "./actions";
 import { prettyMonth } from "./ledger-helpers";
-import { ReadFailed, readFailedMessage } from "@/lib/must-read";
+import { mustRead, softRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 /**
  * OVERDUE REMINDERS — the send path.
@@ -45,23 +45,26 @@ async function loadPlan(
   if (!page) return null;
 
   const admin = createServiceClient();
-  const { data: park } = await admin
-    .from("parks").select("name, address").eq("id", parkId).maybeSingle();
+  // The park's name and address are printed INSIDE the demand itself. A failed
+  // read falls through to "your park" and drops the office address out of the
+  // line telling somebody where to take their money.
+  const park = mustRead("your park", await admin
+    .from("parks").select("name, address").eq("id", parkId).maybeSingle());
 
   // Contacts, keyed by CHARGE id so the planner never has to join.
-  const { data: charges } = await admin
+  const charges = mustRead("this month's bills", await admin
     .from("park_charges")
     .select("id, renter_id")
     .eq("park_id", parkId)
-    .eq("period_month", page.month);
+    .eq("period_month", page.month));
 
   const renterIds = [...new Set((charges ?? []).map((c) => c.renter_id as string).filter(Boolean))];
-  const { data: renters } = renterIds.length
+  const renters = mustRead("the names on your roll", renterIds.length
     ? await admin
         .from("park_renters")
         .select("id, display_name, email, mobile_e164, mobile_verified_at, sms_consent_operational_at, contact_pref")
         .in("id", renterIds)
-    : { data: [] as Record<string, unknown>[] };
+    : { data: [] as Record<string, unknown>[], error: null });
 
   const byRenter = new Map<string, RenterContact>();
   for (const r of renters ?? []) {
@@ -83,12 +86,20 @@ async function loadPlan(
     if (rc) contacts.set(c.id as string, rc);
   }
 
-  const { data: sent } = await admin
+  // THE GUARD THAT FAILS OPEN. This is the only thing standing between a
+  // second click and a second demand: every charge in here has already been
+  // chased, and `planReminders` drops it. Read the usual way, a dropped
+  // connection resolves to null, `alreadyReminded` becomes an EMPTY SET, and
+  // the guard passes for everybody — so the whole park is chased again for
+  // money it was already asked for, including the households who paid on
+  // Tuesday. An empty set has to mean "nobody has been reminded", never "we
+  // couldn't find out".
+  const sent = mustRead("who's already been reminded", await admin
     .from("park_reminders")
     .select("charge_id")
     .eq("park_id", parkId)
     .eq("party", "resident")
-    .in("outcome", ["sent", "printed"]);
+    .in("outcome", ["sent", "printed"]));
 
   const parkName = (park?.name as string) ?? "your park";
   const plan = planReminders(page.rows, contacts, page.month, {
@@ -164,8 +175,20 @@ export async function sendReminders(
   let sent = 0;
 
   for (const r of plan.toSend) {
-    const contactEmail = await emailFor(admin, r.renterId);
-    if (!contactEmail) {
+    const contact = await emailFor(admin, r.renterId);
+    // "No email address on file." is a fact about their record, and it was
+    // being written into a permanent log row at the exact moment we could not
+    // read that record. The owner reads this list to decide who to post a
+    // notice to; it has to say which of the two happened.
+    if (contact.failed) {
+      log.push({
+        park_id: parkId, charge_id: r.chargeId, party: "resident",
+        channel: "email", outcome: "failed",
+        reason: "We couldn't look up their contact details, so nothing was sent to them. Try them again.",
+      });
+      continue;
+    }
+    if (!contact.email) {
       log.push({
         park_id: parkId, charge_id: r.chargeId, party: "resident",
         channel: "email", outcome: "failed", reason: "No email address on file.",
@@ -173,7 +196,7 @@ export async function sendReminders(
       continue;
     }
     const res = await sendEmail({
-      to: contactEmail,
+      to: contact.email,
       subject: `${parkName} — $${r.balance.toFixed(2)} outstanding on lot ${r.lotNumber}`,
       text: r.body,
       html: asHtml(r.body),
@@ -217,17 +240,32 @@ export async function sendReminders(
   // is noise. It's the absent owner of a manager-run park who needs this.
   const digest = ownerDigest(plan, parkName, loaded.month);
   let toldOwners = 0;
+  // NEITHER OF THESE MAY THROW. By the time we get here the residents have
+  // already been emailed and `log` is not yet written; unwinding now would
+  // leave the park chased with no record of it, and the next click would chase
+  // them all over again. So these degrade — but they degrade OUT LOUD, in the
+  // sentence at the bottom, because "no owner was told" and "we couldn't find
+  // out who to tell" are not the same thing.
+  let ownerLookupFailed = false;
   if (digest) {
     const actor = await currentUserId();
-    const { data: members } = await admin
-      .from("park_members").select("user_id").eq("park_id", parkId).eq("role", "owner");
+    const [members, membersFailed] = softRead(
+      "who else owns this park",
+      await admin.from("park_members").select("user_id").eq("park_id", parkId).eq("role", "owner"),
+      [] as { user_id: string | null }[],
+    );
+    ownerLookupFailed ||= membersFailed;
     const others = (members ?? [])
       .map((m) => m.user_id as string)
       .filter((id) => id && id !== actor);
 
     if (others.length > 0) {
-      const { data: people } = await admin
-        .from("users").select("id, email").in("id", others);
+      const [people, peopleFailed] = softRead(
+        "the other owners' addresses",
+        await admin.from("users").select("id, email").in("id", others),
+        [] as { id: string; email: string | null }[],
+      );
+      ownerLookupFailed ||= peopleFailed;
       const chased = plan.toSend.concat(plan.toPrint);
       for (const p of people ?? []) {
         const addr = (p.email as string) ?? "";
@@ -253,7 +291,20 @@ export async function sendReminders(
     }
   }
 
-  if (log.length > 0) await admin.from("park_reminders").insert(log);
+  // This log IS the already-reminded guard, read back at the top of `loadPlan`.
+  // If it doesn't land, the next click chases everybody a second time — so a
+  // failure here is said out loud rather than swallowed under "20 emailed".
+  let logSaved = true;
+  if (log.length > 0) {
+    const logRes = await admin.from("park_reminders").insert(log);
+    if (logRes.error) {
+      console.error(
+        "[write failed] the record of these reminders:",
+        logRes.error.code ?? "", logRes.error.message ?? logRes.error,
+      );
+      logSaved = false;
+    }
+  }
 
   revalidatePath("/park/rent");
   return {
@@ -266,6 +317,8 @@ export async function sendReminders(
       (plan.toPrint.length ? `, ${plan.toPrint.length} to print` : "") +
       (plan.blocked.length ? `, ${plan.blocked.length} couldn't be reached` : "") +
       (toldOwners > 0 ? `. ${toldOwners === 1 ? "The owner was" : "Owners were"} sent a summary` : "") +
+      (ownerLookupFailed ? ". We couldn't check who else to send a summary to, so assume they weren't told" : "") +
+      (logSaved ? "" : ". These sends didn't get recorded, so don't send again until that's checked — they'd be chased twice") +
       ".",
   };
 }
@@ -288,17 +341,34 @@ function asHtml(body: string): string {
   return `<div style="font:15px/1.6 -apple-system,Segoe UI,sans-serif;white-space:pre-wrap">${esc}</div>`;
 }
 
+/**
+ * Returns the failure separately from the absence, because the two get written
+ * into `park_reminders` as different sentences and the row is permanent. This
+ * cannot throw: it runs inside the send loop, after earlier households have
+ * already been emailed, and one unreadable renter must not strand the batch
+ * half-sent with nothing logged.
+ */
 async function emailFor(
   admin: ReturnType<typeof createServiceClient>,
   renterId: string | null,
-): Promise<string | null> {
-  if (!renterId) return null;
-  const { data } = await admin
+): Promise<{ email: string | null; failed: boolean }> {
+  if (!renterId) return { email: null, failed: false };
+  const res = await admin
     .from("park_renters").select("email").eq("id", renterId).maybeSingle();
-  const email = (data?.email as string) ?? null;
+  if (res.error) {
+    console.error(
+      "[read failed] that household's email:",
+      res.error.code ?? "", res.error.message ?? res.error,
+    );
+    return { email: null, failed: true };
+  }
+  const email = (res.data?.email as string) ?? null;
   // A string with an @ and a dot after it. Anything less is not an address,
   // and sending to it burns the domain's reputation for nothing.
-  return email && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : null;
+  return {
+    email: email && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : null,
+    failed: false,
+  };
 }
 
 /** The printable sheet — the notices the office hands over. */
@@ -307,7 +377,18 @@ export async function printableNotices(
   month?: string,
 ): Promise<{ ok: boolean; notices?: { lotNumber: string; name: string; body: string }[] }> {
   if (!(await assertMyPark(parkId))) return { ok: false };
-  const loaded = await loadPlan(parkId, month);
+  // loadPlan throws now, and this is a "use server" export. It has no caller
+  // today — but flagged twice across two review passes as the trap it is: wire
+  // it to a Print button and a dropped read becomes a blank failure instead of
+  // a sentence, on a sheet of paper somebody is about to hand to nineteen
+  // households. Closing it now costs four lines.
+  let loaded;
+  try {
+    loaded = await loadPlan(parkId, month);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false };
+  }
   if (!loaded) return { ok: false };
   return {
     ok: true,
@@ -323,7 +404,16 @@ export async function ownerReminderDigest(
   month?: string,
 ): Promise<string | null> {
   if (!(await assertMyPark(parkId))) return null;
-  const loaded = await loadPlan(parkId, month);
+  // Same trap, and this one returns `string | null` so a ReadFailed cannot even
+  // be expressed in its type. Null is the honest answer: no digest, rather than
+  // a digest built from a park it could not read.
+  let loaded;
+  try {
+    loaded = await loadPlan(parkId, month);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return null;
+  }
   if (!loaded) return null;
   return ownerDigest(loaded.plan, loaded.parkName, loaded.month);
 }

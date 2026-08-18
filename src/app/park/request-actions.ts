@@ -1,6 +1,7 @@
 "use server";
 
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { revalidatePath } from "next/cache";
 import { assertMyPark } from "./data";
 
@@ -71,13 +72,19 @@ export async function getParkRequests(parkId: string): Promise<ParkRequestQueue>
 
   // One more than we will show, so "is there more" is a fact rather than a
   // guess from a full page.
-  const { data } = await admin
+  //
+  // AND `empty` IS A SENTENCE, NOT A BLANK. The screen renders "Nothing
+  // reported" over an empty queue — told to an owner whose residents have been
+  // filing water and sewer reports all week, that is the whole queue hidden
+  // behind a calm line saying there is nothing to look at. A failed read
+  // throws to the boundary instead; the page has no error channel of its own.
+  const data = mustRead("what's been reported from your park", await admin
     .from("park_requests")
     .select("id, park_lot_id, category, note, reporter_name, reporter_phone, status, created_at, resolution_note")
     .eq("park_id", parkId)
     .neq("status", "done")
     .order("created_at", { ascending: true })
-    .limit(QUEUE_PAGE + 1);
+    .limit(QUEUE_PAGE + 1));
   if (!data?.length) return empty;
 
   const more = data.length > QUEUE_PAGE;
@@ -96,13 +103,15 @@ export async function getParkRequests(parkId: string): Promise<ParkRequestQueue>
 export async function getClosedRequests(parkId: string, limit = 20): Promise<ParkRequestRow[]> {
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
-  const { data } = await admin
+  // Same rule as the open queue: an empty list here is the screen's answer to
+  // "what did we do about it", and a dropped read makes it "nothing".
+  const data = mustRead("what's been closed", await admin
     .from("park_requests")
     .select("id, park_lot_id, category, note, reporter_name, reporter_phone, status, created_at, resolution_note")
     .eq("park_id", parkId)
     .eq("status", "done")
     .order("resolved_at", { ascending: false, nullsFirst: false })
-    .limit(limit);
+    .limit(limit));
   if (!data?.length) return [];
   return shape(admin, data);
 }
@@ -116,8 +125,12 @@ async function shape(
   const lotIds = [...new Set(data.map((r) => r.park_lot_id as string).filter(Boolean))];
   const lotNo = new Map<string, string>();
   if (lotIds.length) {
-    const { data: lots } = await admin
-      .from("park_lots").select("id, lot_number").in("id", lotIds);
+    // Called only from the two loaders above, both of which already throw. A
+    // failed read here would print "?" against every report on the screen —
+    // the same mark a genuinely unknown lot gets, so nothing distinguishes a
+    // whole queue whose lot numbers we could not read.
+    const lots = mustRead("the lot numbers", await admin
+      .from("park_lots").select("id, lot_number").in("id", lotIds));
     for (const l of lots ?? []) lotNo.set(l.id as string, (l.lot_number as string) ?? "?");
   }
 
@@ -196,9 +209,15 @@ export async function logRequestForLot(
   const admin = createServiceClient();
   if (lotId) {
     // The lot must be in THIS park — the id comes from a browser.
-    const { data: lot } = await admin
+    // "That lot isn't in this park" is a flat assertion about his own
+    // inventory, and a failed read has no fact behind it — he would retype the
+    // report against a lot that is sitting right there on his screen.
+    const lotRes = await admin
       .from("park_lots").select("id").eq("id", lotId).eq("park_id", parkId).maybeSingle();
-    if (!lot) return { ok: false, error: "That lot isn't in this park." };
+    if (lotRes.error) {
+      return { ok: false, error: readFailedMessage("that lot", lotRes.error) };
+    }
+    if (!lotRes.data) return { ok: false, error: "That lot isn't in this park." };
   }
 
   const { error } = await admin.from("park_requests").insert({
@@ -236,12 +255,19 @@ export async function mintStickers(parkId: string): Promise<{
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
   const admin = createServiceClient();
 
-  const { data: lots } = await admin
+  // "No live lots to make stickers for" told to a park with twenty-one of them
+  // is a sentence he cannot argue with from where he is standing — and it is
+  // the only thing between him and the stickers.
+  const lotsRes = await admin
     .from("park_lots")
     .select("id, lot_number, qr_token, lifecycle")
     .eq("park_id", parkId)
     .eq("lifecycle", "live")
     .order("lot_number");
+  if (lotsRes.error) {
+    return { ok: false, error: readFailedMessage("your live lots", lotsRes.error) };
+  }
+  const lots = lotsRes.data;
   if (!lots?.length) return { ok: false, error: "No live lots to make stickers for." };
 
   let minted = 0;
@@ -256,13 +282,29 @@ export async function mintStickers(parkId: string): Promise<{
     if (!error) minted += 1;
   }
 
-  const { data: after } = await admin
+  const afterRes = await admin
     .from("park_lots")
     .select("id, lot_number, qr_token")
     .eq("park_id", parkId)
     .eq("lifecycle", "live")
     .not("qr_token", "is", null)
     .order("lot_number");
+  // A DROPPED READ HERE PRINTS A SHORT SHEET. `rows` would come back empty
+  // under a signal that says the stickers are ready — or, worse, partial:
+  // he prints what came back, screws them to those posts, and the lots that
+  // were missing from the read have no sticker and nobody ever finds out.
+  // Minting is idempotent (a token is never overwritten), so refusing costs
+  // nothing but a retry.
+  if (afterRes.error) {
+    console.error("[read failed] the stickers on your lots:", afterRes.error);
+    return {
+      ok: false,
+      error:
+        "We couldn't read your stickers back just now, so there's nothing to " +
+        "print yet. Any already made are kept — try again in a moment.",
+    };
+  }
+  const after = afterRes.data;
 
   // A STICKER WITH A RELATIVE URL IS A DEAD STICKER, FOREVER.
   //

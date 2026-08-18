@@ -56,20 +56,29 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Sign in first." };
   const admin = createServiceClient();
-  const { data: vendor } = await admin
+  const vendorRes = await admin
     .from("vendors")
     .select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, company")
     .eq("user_id", user.id)
     .maybeSingle();
+  // "Your crew account isn't set up yet" is a sentence about their account, and
+  // a dropped read has nothing to say about their account. Nothing is written
+  // until the guarded UPDATE far below, so the job stays on the board.
+  if (vendorRes.error) return { ok: false, error: readFailedMessage("your crew account", vendorRes.error) };
+  const vendor = vendorRes.data;
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet." };
   if (!jobId) return { ok: false, error: "No job selected." };
 
   const today = todayLakeDate();
-  const { data: job } = await admin
+  const jobRes = await admin
     .from("jobs")
     .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model, est_minutes), properties(lake_id, address, users(phone))")
     .eq("id", jobId)
     .maybeSingle();
+  // "That job was already taken" is the one sentence that walks a crew away
+  // from work. It has to mean taken — not unread.
+  if (jobRes.error) return { ok: false, error: readFailedMessage("this job", jobRes.error) };
+  const job = jobRes.data;
   // Package visits are routed, never claimed: a claim can only price ONE
   // service, and custody must clear the storage gates — the board already
   // hides these, but the ACTION is the security boundary, not the UI.
@@ -86,24 +95,39 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const jobLakeId = (one(job.properties) as { lake_id?: string } | null)?.lake_id ?? null;
   if (jobLakeId) {
     const settingsEarly = await getPlatformSettings();
-    const { data: pause } = await admin
+    const pauseRes = await admin
       .from("vendor_lake_demotions")
       .select("demoted_at")
       .eq("vendor_id", vendor.id as string)
       .eq("lake_id", jobLakeId)
       .maybeSingle();
+    // FAILS OPEN IF SWALLOWED, and this is the guard's whole job: `pause` null
+    // reads as "not paused", so a crew serving out a lake cooldown claims
+    // there — and claiming a lake auto-opts them back into it a few lines
+    // down, which is precisely what the cooldown exists to stop.
+    if (pauseRes.error) {
+      return { ok: false, error: readFailedMessage("your standing on this lake", pauseRes.error) };
+    }
+    const pause = pauseRes.data;
     if (pause && isCoolingDown(pause.demoted_at as string, settingsEarly.lakeDemotionCooldownDays, Date.now())) {
       return { ok: false, error: BLOCKER_MSG.lake_paused };
     }
   }
 
   // Price the job at THIS crew's standing rate (no bidding, ever).
-  const { data: vr } = await admin
+  const vrRes = await admin
     .from("vendor_rates")
     .select("base, unit_rate, band_pricing")
     .eq("vendor_id", vendor.id as string)
     .eq("service_id", job.service_id as string)
     .maybeSingle();
+  // An unread rate card left myRate null, which canClaim reports as `no_rate`:
+  // "Set your rate for this service first" — to a crew whose rate is set, and
+  // who will go and set it again to no effect.
+  if (vrRes.error) {
+    return { ok: false, error: readFailedMessage("your rate for this service", vrRes.error) };
+  }
+  const vr = vrRes.data;
   let myRate: number | null = null;
   if (vr) {
     const rule: ServiceRule = {
@@ -142,7 +166,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   }
 
   // Re-check the full claim gate server-side (fresh counts — the board may be stale).
-  const [{ data: myDayJobs }, { data: blockRow }, { data: myUnits }] = await Promise.all([
+  const [dayRes, blockRes, unitsRes] = await Promise.all([
     admin.from("jobs").select("id, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))")
       .eq("vendor_id", vendor.id as string).eq("date", job.date as string).in("status", ["scheduled", "in_progress"]),
     // `.limit(1)`, NOT `.maybeSingle()`. Availability is stored per SLOT, so a
@@ -156,6 +180,23 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     admin.from("crew_units").select("capacity, work_start, work_end")
       .eq("vendor_id", vendor.id as string).eq("active", true),
   ]);
+  // ALL THREE FAIL OPEN IF SWALLOWED, and between them they ARE the claim gate:
+  //   · unread day jobs → assignedThatDay 0 and assignedMinutes 0, so a day
+  //     already full reads as empty and both the job cap and the minute budget
+  //     wave the claim through
+  //   · unread blocks   → `(blockRow?.length ?? 0) > 0` is false, so a day the
+  //     crew deliberately blocked off reads as open. Same inversion the
+  //     `.limit(1)` note above is about, arriving by the other road
+  //   · unread trucks   → no units, so fleetMinuteBudget returns null and the
+  //     time gate quietly switches itself off
+  // The consequence is a crew standing in two places at once on a Saturday, and
+  // a customer whose job nobody arrives for. Nothing is written yet.
+  if (dayRes.error) return { ok: false, error: readFailedMessage("your jobs that day", dayRes.error) };
+  if (blockRes.error) return { ok: false, error: readFailedMessage("your blocked days", blockRes.error) };
+  if (unitsRes.error) return { ok: false, error: readFailedMessage("your trucks", unitsRes.error) };
+  const myDayJobs = dayRes.data;
+  const blockRow = blockRes.data;
+  const myUnits = unitsRes.data;
   // Fleet layer: trucks sum the cap + arm the minute budget; no trucks =
   // legacy vendor numbers, gate off (the invariant).
   const units = (myUnits ?? []).map((u) => ({
@@ -274,7 +315,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   // THE CLAIM — atomic, first valid claim wins. Price-aware: if a scarcity
   // offer bumped the customer price mid-flight, this claim loses cleanly
   // instead of writing a stale margin (hardens the pre-existing race too).
-  const { data: won } = await admin
+  const claimRes = await admin
     .from("jobs")
     .update({ vendor_id: vendor.id, vendor_cost: rate, margin, status: "scheduled", ...(isGapClaim ? { gap_claim: true } : {}) })
     .eq("id", jobId)
@@ -282,6 +323,11 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     .eq("customer_price", priceAtRead)
     .is("vendor_id", null)
     .select("id");
+  // An errored UPDATE wrote nothing — no vendor_id, no vendor_cost, no margin —
+  // so the job is still sitting on the board. Losing the race and never having
+  // run are different events, and only one of them means "grab the next one".
+  if (claimRes.error) return { ok: false, error: readFailedMessage("this claim", claimRes.error) };
+  const won = claimRes.data;
   if (!won || won.length === 0) return { ok: false, error: "That job was already taken — grab the next one. 🌊" };
 
   // Capacity backstop (same as autoAssignJob): if a concurrent claim pushed us
@@ -289,10 +335,21 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   // simultaneous long claims can each pass the pre-write time gate) —
   // release this one back rather than overbook the day.
   const cap = fleetJobCap(units, Number(vendor.daily_capacity ?? 0));
-  const { data: afterJobs } = await admin
+  const afterRes = await admin
     .from("jobs")
     .select("id, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))")
     .eq("vendor_id", vendor.id as string).eq("date", job.date as string).in("status", ["scheduled", "in_progress"]);
+  // FAILS OPEN IF SWALLOWED: an unread day is an empty day, so the backstop
+  // simply doesn't run — on the one path where an overbooked day is actually
+  // created. Unlike every other read here the claim has already LANDED, so
+  // failing closed means putting it back: the crew is told plainly, the job
+  // returns to the board, and nobody is holding work we can't prove they can
+  // do. Same release the busted branch below performs, for the same reason.
+  if (afterRes.error) {
+    await admin.from("jobs").update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" }).eq("id", jobId);
+    return { ok: false, error: readFailedMessage("the rest of your day", afterRes.error) };
+  }
+  const afterJobs = afterRes.data;
   const afterCount = (afterJobs ?? []).length;
   const budget = fleetMinuteBudget(units);
   const bustedHours = budget != null && !fitsTimeBudget(dayJobMinutes(afterJobs), 0, budget);

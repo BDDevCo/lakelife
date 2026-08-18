@@ -5,6 +5,7 @@ import { OpenJobsBoard } from "@/components/OpenJobsBoard";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
+import { mustRead } from "@/lib/must-read";
 import { getMyVendorId, getMyVendor } from "@/app/vendor/data";
 import { getOpenJobs } from "@/app/vendor/open-data";
 
@@ -53,9 +54,9 @@ export default async function VendorOpenJobsPage() {
   const vendor = await getMyVendor();
   if (vendor && vendor.status !== "active") {
     const admin = createServiceClient();
-    const { data: svcs } = await admin.from("services").select("name").eq("active", true).order("name");
+    const svcs = mustRead("the service list", await admin.from("services").select("name").eq("active", true).order("name"));
     const activeServices = (svcs ?? []).map((s) => s.name as string);
-    const { data: lakeRows } = await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name");
+    const lakeRows = mustRead("the lake list", await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name"));
     const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
     return (
       <>

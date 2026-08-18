@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/email";
 import { likeLiteral } from "@/lib/sql-like";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { parseCustomers, type ParsedCustomer } from "./import-helpers";
 
 export interface ImportResult {
@@ -15,7 +16,14 @@ export interface ImportResult {
   notEmailed?: string[];
 }
 
-/** Assert the caller owns a vendors row; return {id, company, status}. */
+/**
+ * Assert the caller owns a vendors row; return {id, company, status}.
+ *
+ * `null` means ONE thing: there is no crew account. A failed read THROWS
+ * instead — "Your crew account isn't set up yet — call dispatch" said to a crew
+ * who has been working these lakes all season sends them to the phone over a
+ * dropped connection. importMyCustomers turns the throw into a sentence.
+ */
 async function assertMyVendor(): Promise<{ id: string; company: string | null; status: string } | null> {
   const supabase = await createClient();
   const {
@@ -23,7 +31,10 @@ async function assertMyVendor(): Promise<{ id: string; company: string | null; s
   } = await supabase.auth.getUser();
   if (!user) return null;
   const admin = createServiceClient();
-  const { data } = await admin.from("vendors").select("id, company, status").eq("user_id", user.id).maybeSingle();
+  const data = mustRead(
+    "your crew account",
+    await admin.from("vendors").select("id, company, status").eq("user_id", user.id).maybeSingle(),
+  );
   if (!data) return null;
   return { id: data.id as string, company: (data.company as string) ?? null, status: data.status as string };
 }
@@ -40,7 +51,12 @@ const MAX_IMPORT = 200;
  * Dedup: skips emails that already have an account or an open import elsewhere.
  */
 export async function importMyCustomers(pasted: string): Promise<ImportResult> {
-  const vendor = await assertMyVendor();
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>>;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("your crew account", e) };
+  }
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
 
@@ -103,16 +119,32 @@ async function stageOne(
   // Already a LakeLife account? Don't re-invite; ops can bind them by hand.
   // users.email comes from Supabase auth, so case is not ours to promise:
   // case-insensitive, wildcards escaped.
-  const { data: existingUser } = await admin.from("users").select("id").ilike("email", likeLiteral(c.email)).maybeSingle();
+  const existingRes = await admin.from("users").select("id").ilike("email", likeLiteral(c.email)).maybeSingle();
+  // BOTH DEDUP READS FAIL OPEN IF SWALLOWED — `null` reads as "no account" and
+  // "not staged", so the insert below runs anyway. For this one there is no
+  // backstop: it stages a row against somebody who already has a LakeLife
+  // account and emails them "claim your account", while the crew is told they
+  // were invited. Skipping leaves the customer untouched, so simply re-running
+  // the import picks them up.
+  if (existingRes.error) {
+    console.error("[read failed] whether this customer already has an account:", existingRes.error);
+    return { skip: "couldn't check this one just now — not invited, try again" };
+  }
+  const existingUser = existingRes.data;
   if (existingUser) return { skip: "already a LakeLife account" };
 
   // Already staged (by anyone)? The open-email unique index also guards this.
-  const { data: openImport } = await admin
+  const openRes = await admin
     .from("customer_imports")
     .select("id")
     .eq("invite_email", c.email)
     .eq("status", "pending")
     .maybeSingle();
+  if (openRes.error) {
+    console.error("[read failed] whether this customer is already staged:", openRes.error);
+    return { skip: "couldn't check this one just now — not invited, try again" };
+  }
+  const openImport = openRes.data;
   if (openImport) return { skip: "already invited" };
 
   const { error: insErr } = await admin.from("customer_imports").insert({
@@ -182,11 +214,23 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
   //
   // `customer_imports.invite_email` is written from parseCustomers, which
   // lower-cases (import-helpers.ts), and `email` is lower-cased above.
-  const { data: imports } = await admin
+  const importsRes = await admin
     .from("customer_imports")
     .select("id, vendor_id, address, place_id, lat, lng")
     .eq("invite_email", email)
     .eq("status", "pending");
+  // Swallowed on purpose, because the alternative is worse: this returns a
+  // COUNT the portal discards, and throwing would take out the whole front
+  // door — a homeowner locked out of their portal by a read that failed while
+  // materializing a property. Nothing is written on this path, so the staged
+  // rows are still 'pending' and the next sign-in claims them. Logged, because
+  // "nothing staged" and "we couldn't look" claim exactly the same number of
+  // properties.
+  if (importsRes.error) {
+    console.error("[read failed] your staged properties:", importsRes.error);
+    return 0;
+  }
+  const imports = importsRes.data;
   if (!imports || imports.length === 0) return 0;
 
   let claimed = 0;
@@ -194,12 +238,20 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
     // CLAIM THE ROW FIRST (atomic): flip pending -> claiming, guarded on the row
     // still being 'pending'. Only the runner whose update returns a row proceeds,
     // so a double-invocation (prefetch + navigation) can't create two properties.
-    const { data: won } = await admin
+    const wonRes = await admin
       .from("customer_imports")
       .update({ status: "claiming" })
       .eq("id", imp.id)
       .eq("status", "pending")
       .select("id");
+    // An errored UPDATE flipped nothing, so skipping is the right direction —
+    // but it is not the same event as losing the race, and only one of the two
+    // is worth anybody's attention.
+    if (wonRes.error) {
+      console.error("[read failed] claiming your staged property:", wonRes.error);
+      continue;
+    }
+    const won = wonRes.data;
     if (!won || won.length === 0) continue; // another runner already took it
 
     // WHICH LAKE. This was left NULL on every crew-imported property, and a
@@ -218,8 +270,20 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
     // several, we cannot know, and guessing would put a home on the wrong
     // lake — so it stays null and ops sees it in the needs-attention feed
     // rather than the system pretending it knows.
-    const { data: importingCrew } = await admin
+    const crewRes = await admin
       .from("vendors").select("service_lakes").eq("id", imp.vendor_id as string).maybeSingle();
+    // A DROPPED READ LOOKED EXACTLY LIKE "this crew serves several lakes".
+    // Empty service_lakes gives a null lake_id, which is the deliberate
+    // we-cannot-know outcome above — reached here by not having looked, and
+    // paid for by the household: no geo gate, no capacity scope, no ice-out,
+    // no freeze warning. Nothing has been materialized yet, so the row goes
+    // back to 'pending' and the next sign-in tries again with a real answer.
+    if (crewRes.error) {
+      console.error("[read failed] the importing crew's lakes:", crewRes.error);
+      await admin.from("customer_imports").update({ status: "pending" }).eq("id", imp.id);
+      continue;
+    }
+    const importingCrew = crewRes.data;
     const crewLakes = ((importingCrew?.service_lakes as string[] | null) ?? []).filter(Boolean);
     const lakeId = crewLakes.length === 1 ? crewLakes[0] : null;
 
@@ -245,7 +309,14 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
     // Referral attribution (§8b cross-sell arm) BEFORE the final status flip —
     // a crash after 'claimed' would otherwise lose the crew's attribution
     // forever (the loop only ever processes 'pending' rows).
-    const { data: crewRow } = await admin.from("vendors").select("user_id").eq("id", imp.vendor_id as string).maybeSingle();
+    const crewRowRes = await admin.from("vendors").select("user_id").eq("id", imp.vendor_id as string).maybeSingle();
+    // Swallowed, and it has to be: the property exists now, so releasing the
+    // row would materialize a second one on the retry. The attribution is the
+    // thing lost, and the comment above is about exactly how permanent that
+    // loss is — so it is logged rather than left to be inferred from a crew
+    // asking why a referral never showed up.
+    if (crewRowRes.error) console.error("[read failed] the crew to credit for this referral:", crewRowRes.error);
+    const crewRow = crewRowRes.data;
     if (crewRow?.user_id && crewRow.user_id !== userId) {
       await admin.from("users").update({ referred_by: crewRow.user_id }).eq("id", userId).is("referred_by", null);
     }

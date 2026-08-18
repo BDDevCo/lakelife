@@ -5,6 +5,7 @@ import { todayLakeDate } from "@/lib/booking";
 import {
   DOC_TYPES, MAX_DOC_BYTES, safeExt, validExpiry, validLatLng, activationGaps,
 } from "./onboarding-helpers";
+import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 export interface OnboardingResult {
   ok: boolean;
@@ -26,11 +27,18 @@ async function assertMyVendor(): Promise<{ id: string; status: string; user_id: 
   } = await supabase.auth.getUser();
   if (!user) return null;
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("vendors")
-    .select("id, status, user_id")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  // THROWS on a failed read. `null` from here means "you have no crew account",
+  // and every caller below says exactly that out loud — a sentence a dropped
+  // connection must never be able to put in front of a crew who has worked
+  // these lakes all season. Each caller converts the throw into its own result.
+  const data = mustRead(
+    "your crew account",
+    await admin
+      .from("vendors")
+      .select("id, status, user_id")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+  );
   if (!data) return null;
   return { id: data.id as string, status: data.status as string, user_id: (data.user_id as string) ?? null };
 }
@@ -46,7 +54,16 @@ async function assertMyVendor(): Promise<{ id: string; status: string; user_id: 
  * — never status, capacity or payout (those are the service role's / ops' to set).
  */
 export async function uploadVendorDoc(kind: "coi" | "w9" | "garagekeepers", form: FormData): Promise<OnboardingResult> {
-  const vendor = await assertMyVendor();
+  // assertMyVendor THROWS when the read fails rather than answer "no crew
+  // account". A rejection out of a "use server" action is a blank failure on the
+  // crew's phone, so it becomes this action's own result. Nothing written yet.
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>> = null;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   // A PAUSED CREW MAY STILL SEND PAPERWORK.
   //
@@ -97,20 +114,33 @@ export async function uploadVendorDoc(kind: "coi" | "w9" | "garagekeepers", form
 
 /** A short-lived signed URL to view a stored vendor doc (own row only). */
 export async function getVendorDocUrl(kind: "coi" | "w9" | "garagekeepers"): Promise<string | null> {
-  const vendor = await assertMyVendor();
-  if (!vendor) return null;
-  const admin = createServiceClient();
-  const { data } = await admin
-    .from("vendors")
-    .select("coi_url, w9_url, garagekeepers_url")
-    .eq("id", vendor.id)
-    .maybeSingle();
-  const path = (
-    kind === "coi" ? data?.coi_url : kind === "garagekeepers" ? data?.garagekeepers_url : data?.w9_url
-  ) as string | null;
-  if (!path) return null;
-  const { data: signed } = await admin.storage.from("vendor-docs").createSignedUrl(path, 3600);
-  return signed?.signedUrl ?? null;
+  // DELIBERATELY NOT RETHROWN. This hands a bare `string | null` to an onClick
+  // in VendorDocs.tsx that has no catch, so a rejection would be an unhandled
+  // one and the crew would see nothing happen at all. The failure is logged by
+  // mustRead and becomes `null`, which that button already renders as
+  // "Couldn't open that one" — which stays true when the read is what failed.
+  try {
+    const vendor = await assertMyVendor();
+    if (!vendor) return null;
+    const admin = createServiceClient();
+    const data = mustRead(
+      "the document on file",
+      await admin
+        .from("vendors")
+        .select("coi_url, w9_url, garagekeepers_url")
+        .eq("id", vendor.id)
+        .maybeSingle(),
+    );
+    const path = (
+      kind === "coi" ? data?.coi_url : kind === "garagekeepers" ? data?.garagekeepers_url : data?.w9_url
+    ) as string | null;
+    if (!path) return null;
+    const { data: signed } = await admin.storage.from("vendor-docs").createSignedUrl(path, 3600);
+    return signed?.signedUrl ?? null;
+  } catch (e) {
+    if (e instanceof ReadFailed) return null;
+    throw e;
+  }
 }
 
 /**
@@ -119,15 +149,30 @@ export async function getVendorDocUrl(kind: "coi" | "w9" | "garagekeepers"): Pro
  * work types. Writes vendors.service_types only — nothing else.
  */
 export async function setServiceTypes(types: string[]): Promise<OnboardingResult> {
-  const vendor = await assertMyVendor();
+  // assertMyVendor THROWS when the read fails rather than answer "no crew
+  // account". A rejection out of a "use server" action is a blank failure on the
+  // crew's phone, so it becomes this action's own result. Nothing written yet.
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>> = null;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") {
     return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
   }
 
   const admin = createServiceClient();
-  const { data: svcs } = await admin.from("services").select("name").eq("active", true);
-  const allowed = new Set((svcs ?? []).map((s) => s.name as string));
+  // A FAILED WHITELIST READ IS NOT AN EMPTY ONE. `svcs ?? []` allowed nothing,
+  // so every service the crew had just ticked was filtered away and the update
+  // below wrote `service_types: []` and returned ok — the crew read "saved" and
+  // silently dropped out of matching for every kind of work they do. Refuse
+  // instead: nothing is written at this point.
+  const svcsRes = await admin.from("services").select("name").eq("active", true);
+  if (svcsRes.error) return { ok: false, error: readFailedMessage("the list of services", svcsRes.error) };
+  const allowed = new Set((svcsRes.data ?? []).map((s) => s.name as string));
 
   const wanted = Array.isArray(types) ? types : [];
   const clean = [...new Set(wanted.filter((t) => typeof t === "string" && allowed.has(t)))];
@@ -154,7 +199,16 @@ function validCapacity(n: unknown): number | null {
  * setCrewCapacity for the onboarding path.
  */
 export async function setDailyCapacity(n: number): Promise<OnboardingResult> {
-  const vendor = await assertMyVendor();
+  // assertMyVendor THROWS when the read fails rather than answer "no crew
+  // account". A rejection out of a "use server" action is a blank failure on the
+  // crew's phone, so it becomes this action's own result. Nothing written yet.
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>> = null;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
 
@@ -173,7 +227,16 @@ export async function setDailyCapacity(n: number): Promise<OnboardingResult> {
  * claim one that doesn't exist. Writes vendors.service_lakes only.
  */
 export async function setServiceLakes(lakeIds: string[]): Promise<OnboardingResult> {
-  const vendor = await assertMyVendor();
+  // assertMyVendor THROWS when the read fails rather than answer "no crew
+  // account". A rejection out of a "use server" action is a blank failure on the
+  // crew's phone, so it becomes this action's own result. Nothing written yet.
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>> = null;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
 
@@ -182,7 +245,12 @@ export async function setServiceLakes(lakeIds: string[]): Promise<OnboardingResu
   // — and a fixture IS real as far as an id check goes, so it passed. Fencing
   // it here is what lets the downstream reads of vendors.service_lakes stay
   // unfenced: nothing can get into the column in the first place.
-  const { data: lakes } = await admin.from("lakes").select("id, name").eq("is_fixture", false);
+  const lakesRes = await admin.from("lakes").select("id, name").eq("is_fixture", false);
+  // Same shape as setServiceTypes: an unread whitelist allowed nothing, so the
+  // crew's chosen lakes all filtered out and they were told "Choose at least one
+  // lake you service" having just chosen several. Nothing is written yet.
+  if (lakesRes.error) return { ok: false, error: readFailedMessage("the list of lakes", lakesRes.error) };
+  const lakes = lakesRes.data;
   const allowed = new Set((lakes ?? []).map((l) => l.id as string));
 
   const wanted = Array.isArray(lakeIds) ? lakeIds : [];
@@ -194,10 +262,19 @@ export async function setServiceLakes(lakeIds: string[]): Promise<OnboardingResu
   try {
     const { isCoolingDown } = await import("@/lib/lake-standing");
     const { getPlatformSettings } = await import("@/lib/settings");
-    const [{ data: pauses }, settings] = await Promise.all([
+    const [pausesRes, settings] = await Promise.all([
       admin.from("vendor_lake_demotions").select("lake_id, demoted_at").eq("vendor_id", vendor.id),
       getPlatformSettings(),
     ]);
+    // THE GUARD PASSED BECAUSE IT COULDN'T RUN. `pauses ?? []` meant "no pauses",
+    // so a crew cooling down off a lake was silently re-added to it and back in
+    // the routing pool. A MISSING TABLE still means what the note above says —
+    // no pauses exist pre-migration — so 42P01 alone keeps that allowance and
+    // every other error refuses. Nothing is written at this point.
+    if (pausesRes.error && pausesRes.error.code !== "42P01") {
+      return { ok: false, error: readFailedMessage("your lake standing", pausesRes.error) };
+    }
+    const pauses = pausesRes.data;
     const cooling = new Set(
       (pauses ?? [])
         .filter((p) => isCoolingDown(p.demoted_at as string, settings.lakeDemotionCooldownDays, Date.now()))
@@ -236,7 +313,16 @@ export interface AddLakeResult {
  * instead of a silent re-add.
  */
 export async function addLakeAndServe(rawName: string): Promise<AddLakeResult> {
-  const vendor = await assertMyVendor();
+  // assertMyVendor THROWS when the read fails rather than answer "no crew
+  // account". A rejection out of a "use server" action is a blank failure on the
+  // crew's phone, so it becomes this action's own result. Nothing written yet.
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>> = null;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
 
@@ -245,7 +331,13 @@ export async function addLakeAndServe(rawName: string): Promise<AddLakeResult> {
   if (!born.ok || !born.lakeId) return { ok: false, error: born.error ?? "Couldn't add that lake just now." };
 
   const admin = createServiceClient();
-  const { data: v } = await admin.from("vendors").select("service_lakes").eq("id", vendor.id).maybeSingle();
+  // THIS READ IS THE WHOLE LIST, AND THE WRITE BELOW REPLACES IT. On a failed
+  // read `current` was `[]`, so adding one lake sent setServiceLakes an array of
+  // exactly one — ERASING every other lake the crew serves, and reporting
+  // success. Nothing is written at this point.
+  const vRes = await admin.from("vendors").select("service_lakes").eq("id", vendor.id).maybeSingle();
+  if (vRes.error) return { ok: false, error: readFailedMessage("the lakes you already serve", vRes.error) };
+  const v = vRes.data;
   const current: string[] = (v?.service_lakes as string[] | null) ?? [];
   if (current.includes(born.lakeId)) {
     return { ok: true, lakeName: born.lakeName }; // already served — nothing to change
@@ -262,7 +354,16 @@ export async function addLakeAndServe(rawName: string): Promise<AddLakeResult> {
  * sanity-bounded (rejects 0,0 and out-of-region typos) before storing.
  */
 export async function setBaseLocation(lat: number, lng: number): Promise<OnboardingResult> {
-  const vendor = await assertMyVendor();
+  // assertMyVendor THROWS when the read fails rather than answer "no crew
+  // account". A rejection out of a "use server" action is a blank failure on the
+  // crew's phone, so it becomes this action's own result. Nothing written yet.
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>> = null;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
 
@@ -288,7 +389,16 @@ export async function setBaseLocation(lat: number, lng: number): Promise<Onboard
  * yearly re-attest + a future third-party verification callback.
  */
 export async function finishOnboarding(tosAccepted?: boolean): Promise<OnboardingResult> {
-  const vendor = await assertMyVendor();
+  // assertMyVendor THROWS when the read fails rather than answer "no crew
+  // account". A rejection out of a "use server" action is a blank failure on the
+  // crew's phone, so it becomes this action's own result. Nothing written yet.
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>> = null;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
   if (vendor.status === "active") return { ok: true }; // already live — idempotent
@@ -301,11 +411,16 @@ export async function finishOnboarding(tosAccepted?: boolean): Promise<Onboardin
   }
 
   const admin = createServiceClient();
-  const { data: v } = await admin
+  const vRes = await admin
     .from("vendors")
     .select("coi_url, coi_expiry, w9_url, service_types, service_lakes, daily_capacity")
     .eq("id", vendor.id)
     .maybeSingle();
+  // The refusal below asserts the account does not exist. On a failed read it
+  // said that on the last screen of onboarding to a crew whose paperwork is
+  // complete and filed. Nothing is written until the status flip further down.
+  if (vRes.error) return { ok: false, error: readFailedMessage("your onboarding paperwork", vRes.error) };
+  const v = vRes.data;
   if (!v) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
 
   const gaps = activationGaps(

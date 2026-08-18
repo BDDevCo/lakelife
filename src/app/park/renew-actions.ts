@@ -10,6 +10,7 @@ import {
   type PlannedRenewal, type AgreementTerms,
 } from "./agreement-helpers";
 import type { ParkResult } from "./actions";
+import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 /**
  * WRITING THE NEXT AGREEMENT — from the owner's side.
@@ -55,7 +56,7 @@ async function loadTerms(
   lotId: string,
   startISO: string,
 ): Promise<AgreementTerms> {
-  const [{ data: park }, { data: lot }] = await Promise.all([
+  const [parkRes, lotRes] = await Promise.all([
     admin.from("parks")
       .select("max_agreement_months, deposit_amount, season_open_month, season_open_day, season_close_month, season_close_day")
       .eq("id", parkId).maybeSingle(),
@@ -63,6 +64,18 @@ async function loadTerms(
       .select("season_open_month, season_open_day, season_close_month, season_close_day")
       .eq("id", lotId).maybeSingle(),
   ]);
+
+  // A FAILED READ IS NOT AN ABSENT SETTING, and here that distinction writes
+  // itself into an agreement. A null park makes `maxAgreementMonths` null,
+  // which planRenewal reads as "this park doesn't write fixed-length
+  // agreements" and refuses — telling the owner a fact about his own park that
+  // we did not have. A null LOT is worse, because it does not refuse: the lot's
+  // own earlier season close silently disappears, effectiveSeason falls back to
+  // the park's, and the agreement is written running past the morning the slip
+  // comes out of the water. The clamp exists precisely to stop that, and a
+  // dropped read must not be able to lift it.
+  const park = mustRead("your park's agreement terms", parkRes);
+  const lot = mustRead("that lot's season", lotRes);
 
   // A lot may close before its park does — a slip comes out of the water while
   // the pads stay open. effectiveSeason takes the LOT's season only when all
@@ -94,25 +107,39 @@ async function loadTerms(
   };
 }
 
-/** What the next agreement WOULD be. Nothing is written. */
-export async function previewRenewal(
+type PreviewResult = { ok: boolean; error?: string; preview?: RenewalPreview };
+
+/**
+ * What the next agreement WOULD be. Nothing is written.
+ *
+ * THROWS `ReadFailed` rather than reporting a missing tenancy. Two callers want
+ * two different things from that: the exported action below turns it into a
+ * sentence for the button that is awaiting one, and `renewalsDue` lets it go up
+ * to the page boundary, because a household quietly dropped out of the "write
+ * the next one" list is the failure this whole file exists to prevent.
+ */
+async function planNextAgreement(
   parkId: string,
   reservationId: string,
   startFrom?: string,
-): Promise<{ ok: boolean; error?: string; preview?: RenewalPreview }> {
+): Promise<PreviewResult> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
-  const { data: res } = await admin
+  // "That tenancy isn't here." and "You don't manage that park." are both
+  // statements of fact, and a dropped read has no facts to state. The first
+  // sends the owner hunting for a row sitting in front of him; the second tells
+  // him something false about his own access.
+  const res = mustRead("that tenancy", await admin
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id, during, quoted_amount, term, agreement_chain_id, agreement_seq, status")
     .eq("id", reservationId)
-    .maybeSingle();
+    .maybeSingle());
   if (!res) return { ok: false, error: "That tenancy isn't here." };
 
-  const { data: lot } = await admin
+  const lot = mustRead("that lot", await admin
     .from("park_lots").select("id, lot_number, park_id")
-    .eq("id", res.park_lot_id as string).maybeSingle();
+    .eq("id", res.park_lot_id as string).maybeSingle());
   if (!lot || lot.park_id !== parkId) return { ok: false, error: DENIED };
 
   const range = parseDaterange(res.during as string);
@@ -136,10 +163,11 @@ export async function previewRenewal(
     startFrom,
   );
 
-  const { data: renter } = res.renter_id
-    ? await admin.from("park_renters").select("display_name")
-        .eq("id", res.renter_id as string).maybeSingle()
-    : { data: null };
+  const renter = res.renter_id
+    ? mustRead("the name on that tenancy", await admin
+        .from("park_renters").select("display_name")
+        .eq("id", res.renter_id as string).maybeSingle())
+    : null;
 
   return {
     ok: true,
@@ -155,6 +183,25 @@ export async function previewRenewal(
       chainNote: plan.totalMonthsAfter ? chainNotice(plan.totalMonthsAfter) : null,
     },
   };
+}
+
+/**
+ * The same thing, in the shape a button can read.
+ *
+ * A rejected promise inside a transition surfaces as a blank failure with no
+ * sentence attached, so this catches and answers in its own result shape.
+ */
+export async function previewRenewal(
+  parkId: string,
+  reservationId: string,
+  startFrom?: string,
+): Promise<PreviewResult> {
+  try {
+    return await planNextAgreement(parkId, reservationId, startFrom);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("that tenancy", e) };
+  }
 }
 
 /**
@@ -187,10 +234,18 @@ export async function renewAgreement(
   }
 
   const admin = createServiceClient();
-  const { data: prior } = await admin
+  const priorRes = await admin
     .from("lot_reservations")
     .select("park_lot_id, renter_id, renter_unit_id, term, agreement_chain_id, origin")
     .eq("id", reservationId).maybeSingle();
+  // This is the row the successor is copied FROM — its lot, its renter, its
+  // chain. A failed read here reaching the insert below would write an
+  // agreement attached to nobody, so it stops, and it says so rather than
+  // claiming the tenancy is gone.
+  if (priorRes.error) {
+    return { ok: false, error: readFailedMessage("that tenancy", priorRes.error, { money: true }) };
+  }
+  const prior = priorRes.data;
   if (!prior) return { ok: false, error: "That tenancy isn't here." };
 
   // A SUCCESSOR ROW, never an edit. Last term's dates and rent are what the
@@ -233,7 +288,16 @@ export async function renewAgreement(
   };
 }
 
-/** Everything ending soon, so a whole cycle can be worked in one sitting. */
+/**
+ * Everything ending soon, so a whole cycle can be worked in one sitting.
+ *
+ * THROWS `ReadFailed`. Its one caller is `/park/today`, a server component
+ * under the root error boundary, and that is deliberate: the caller renders
+ * `rows ?? []`, and `ParkRenewals` renders NOTHING for an empty list. So a
+ * dropped read used to remove the entire "Agreements to write" section from the
+ * owner's morning screen without a mark — which is indistinguishable from a
+ * quiet quarter, and ends with a tenancy lapsing and the rent stopping.
+ */
 export async function renewalsDue(
   parkId: string,
   withinDays = 45,
@@ -243,16 +307,19 @@ export async function renewalsDue(
   const admin = createServiceClient();
   const today = todayLakeDate();
 
-  const { data: lots } = await admin
-    .from("park_lots").select("id").eq("park_id", parkId).eq("lifecycle", "live");
+  const lots = mustRead("your lots", await admin
+    .from("park_lots").select("id").eq("park_id", parkId).eq("lifecycle", "live"));
   const ids = (lots ?? []).map((l) => l.id as string);
   if (!ids.length) return { ok: true, rows: [] };
 
-  const { data: stays } = await admin
+  // The maxSeq map below decides which agreements ALREADY have a successor
+  // written. Built from a failed read it would be empty, and every chain would
+  // look unrenewed — so this read has to answer or stop.
+  const stays = mustRead("who is on your lots", await admin
     .from("lot_reservations")
     .select("id, park_lot_id, during, agreement_chain_id, agreement_seq")
     .in("park_lot_id", ids)
-    .in("status", ["approved", "active"]);
+    .in("status", ["approved", "active"]));
 
   // A chain with a later link already has its next agreement written.
   const maxSeq = new Map<string, number>();
@@ -275,7 +342,10 @@ export async function renewalsDue(
 
   const rows: RenewalPreview[] = [];
   for (const s of due) {
-    const p = await previewRenewal(parkId, s.id as string);
+    // The THROWING core, not the button-shaped wrapper. `if (p.ok)` would drop
+    // a household whose read failed straight out of the list, silently, which
+    // is the one outcome this list exists to make impossible.
+    const p = await planNextAgreement(parkId, s.id as string);
     if (p.ok && p.preview) rows.push(p.preview);
   }
   rows.sort((a, b) => a.priorEnd.localeCompare(b.priorEnd));

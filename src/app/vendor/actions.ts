@@ -250,11 +250,15 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   const ownerPhone = ownerUser?.phone;
   let confirmLinks = "";
   try {
-    const { data: conf } = await admin
+    const { data: conf, error: confErr } = await admin
       .from("job_confirmations")
       .insert({ job_id: jobId, property_id: job.property_id, vendor_id: job.vendor_id })
       .select("confirm_token")
       .single();
+    // Swallowed on purpose — the completion text still goes out without the
+    // links — but logged: no token means the customer-as-auditor check quietly
+    // isn't on this job, and the crew's trust record never hears about it.
+    if (confErr) console.error("[read failed] this job's confirmation link:", confErr);
     if (conf?.confirm_token) {
       const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
       confirmLinks = ` All good? ${site}/c/${conf.confirm_token}/good — something off? ${site}/c/${conf.confirm_token}/issue`;

@@ -7,6 +7,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { sendSms } from "@/lib/sms";
 import { getSellableDay } from "@/lib/settings";
 import { sellableWindow } from "@/lib/duration";
+import { readFailedMessage } from "@/lib/must-read";
 
 export interface TruckResult {
   ok: boolean;
@@ -26,22 +27,32 @@ function addDays(iso: string, n: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+type MyVendor = { id: string; status: string; company: string | null; daily_capacity: number };
+
 /**
  * Confirm the signed-in user owns a vendors row. Identity is asserted with
  * the SESSION client (auth.getUser); the row is read with the SERVICE client
  * so RLS can't hide a still-onboarding record. Mirrors assertMyVendor in
  * rates-actions.ts / availability/actions.ts.
+ *
+ * Returns the READ FAILURE separately from the absence, because the three
+ * callers turn `null` into "Your crew account isn't set up yet — call
+ * dispatch", and a dropped connection has no business saying that to a
+ * contractor with six trucks on the road. Actions RETURN here rather than
+ * throw: a rejection out of a "use server" call is a blank failure on a phone.
  */
-async function assertMyVendor(): Promise<{ id: string; status: string; company: string | null; daily_capacity: number } | null> {
+async function assertMyVendor(): Promise<{ vendor: MyVendor | null; readError?: unknown }> {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return null;
+  if (!user) return { vendor: null };
   const admin = createServiceClient();
-  const { data } = await admin.from("vendors").select("id, status, company, daily_capacity").eq("user_id", user.id).maybeSingle();
-  if (!data) return null;
-  return { id: data.id as string, status: data.status as string, company: (data.company as string) ?? null, daily_capacity: Number(data.daily_capacity ?? 0) };
+  const res = await admin.from("vendors").select("id, status, company, daily_capacity").eq("user_id", user.id).maybeSingle();
+  if (res.error) return { vendor: null, readError: res.error };
+  const data = res.data;
+  if (!data) return { vendor: null };
+  return { vendor: { id: data.id as string, status: data.status as string, company: (data.company as string) ?? null, daily_capacity: Number(data.daily_capacity ?? 0) } };
 }
 
 /**
@@ -61,12 +72,21 @@ async function forwardBookConflict(
 ): Promise<string | null> {
   const newCap = fleetJobCap(proposedUnits, legacyCapacity);
   const newBudget = fleetMinuteBudget(proposedUnits);
-  const { data: booked } = await admin
+  const bookedRes = await admin
     .from("jobs")
     .select("est_minutes, date, group_id, services(est_minutes), job_items(services(est_minutes))")
     .eq("vendor_id", vendorId)
     .gte("date", todayLakeDate())
     .in("status", ["scheduled", "in_progress"]);
+  // THE GUARD PASSED BECAUSE IT COULDN'T RUN. `booked ?? []` is an empty
+  // calendar, so every date check below was skipped and the fleet change went
+  // through — and then the nightly self-heal quietly stripped the scheduled
+  // jobs the shrunken fleet could no longer cover, which is the exact outcome
+  // this function exists to prevent. A refusal is what every caller already
+  // does with a returned string, so failure comes back as one; the writes are
+  // all downstream of it.
+  if (bookedRes.error) return readFailedMessage("the work already on your calendar", bookedRes.error);
+  const booked = bookedRes.data;
   const byDate = new Map<string, { count: number; minutes: number }>();
   for (const j of booked ?? []) {
     const svc = (Array.isArray(j.services) ? j.services[0] : j.services) as { est_minutes?: number } | null;
@@ -97,22 +117,35 @@ async function forwardBookConflict(
   return null;
 }
 
-/** The vendor's active fleet as plain numbers (for the transition guard). */
+type FleetUnit = { id: string; capacity: number; workStart: number; workEnd: number };
+
+/**
+ * The vendor's active fleet as plain numbers (for the transition guard).
+ *
+ * A FAILED READ HERE IS NOT AN EMPTY FLEET, and an empty fleet is a load-bearing
+ * value in three separate ways: the MAX_ACTIVE_TRUCKS cap can never be reached,
+ * `isActive` says the truck being edited is switched off (skipping the
+ * transition guard entirely), and `proposed` reverts the vendor to their legacy
+ * capacity. So the failure is returned alongside, and the callers refuse.
+ */
 async function activeFleet(
   admin: ReturnType<typeof createServiceClient>,
   vendorId: string,
-): Promise<{ id: string; capacity: number; workStart: number; workEnd: number }[]> {
-  const { data } = await admin
+): Promise<{ units: FleetUnit[]; readError?: unknown }> {
+  const res = await admin
     .from("crew_units")
     .select("id, capacity, work_start, work_end")
     .eq("vendor_id", vendorId)
     .eq("active", true);
-  return (data ?? []).map((u) => ({
-    id: u.id as string,
-    capacity: Number(u.capacity ?? 0),
-    workStart: Number(u.work_start ?? 0),
-    workEnd: Number(u.work_end ?? 0),
-  }));
+  if (res.error) return { units: [], readError: res.error };
+  return {
+    units: (res.data ?? []).map((u) => ({
+      id: u.id as string,
+      capacity: Number(u.capacity ?? 0),
+      workStart: Number(u.work_start ?? 0),
+      workEnd: Number(u.work_end ?? 0),
+    })),
+  };
 }
 
 /**
@@ -124,14 +157,18 @@ async function assertOwnUnit(
   admin: ReturnType<typeof createServiceClient>,
   vendorId: string,
   unitId: string,
-): Promise<boolean> {
-  const { data } = await admin
+): Promise<{ mine: boolean; readError?: unknown }> {
+  const res = await admin
     .from("crew_units")
     .select("id")
     .eq("id", unitId)
     .eq("vendor_id", vendorId)
     .maybeSingle();
-  return !!data;
+  // `false` from here means "that truck isn't yours", which is a refusal aimed
+  // at a tampered unitId. A failed read said it to a vendor looking at their
+  // own truck, so the failure is carried out separately.
+  if (res.error) return { mine: false, readError: res.error };
+  return { mine: !!res.data };
 }
 
 export interface TruckInput {
@@ -230,7 +267,9 @@ async function buildRow(input: TruckInput): Promise<{ row: TruckRow } | { error:
  * the active cap is checked here too.
  */
 export async function addTruck(input: TruckInput): Promise<TruckResult> {
-  const vendor = await assertMyVendor();
+  const me = await assertMyVendor();
+  if (me.readError) return { ok: false, error: readFailedMessage("your crew account", me.readError) };
+  const vendor = me.vendor;
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") {
     return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
@@ -240,7 +279,9 @@ export async function addTruck(input: TruckInput): Promise<TruckResult> {
   if ("error" in built) return { ok: false, error: built.error };
 
   const admin = createServiceClient();
-  const fleet = await activeFleet(admin, vendor.id);
+  const fleetRes = await activeFleet(admin, vendor.id);
+  if (fleetRes.readError) return { ok: false, error: readFailedMessage("your trucks", fleetRes.readError) };
+  const fleet = fleetRes.units;
   if (fleet.length >= MAX_ACTIVE_TRUCKS) {
     return {
       ok: false,
@@ -260,7 +301,14 @@ export async function addTruck(input: TruckInput): Promise<TruckResult> {
 
   // Post-write cap recheck (check-then-insert race): if a parallel add
   // slipped past the read, flip THIS row off rather than run 11 trucks.
-  const after = await activeFleet(admin, vendor.id);
+  const afterRes = await activeFleet(admin, vendor.id);
+  // DELIBERATELY SWALLOWED, BUT NEVER SILENTLY. The insert has already landed,
+  // so there is no refusal left to make here — and unwinding a truck the vendor
+  // successfully added because a recheck couldn't run would be the worse trade.
+  // The cap is a sanity ceiling, not a money rule; the nightly self-heal and the
+  // next add both re-apply it.
+  if (afterRes.readError) console.error("[read failed] the truck cap recheck after adding:", afterRes.readError);
+  const after = afterRes.units;
   if (after.length > MAX_ACTIVE_TRUCKS) {
     const newest = after[after.length - 1];
     await admin.from("crew_units").update({ active: false }).eq("id", newest.id).eq("vendor_id", vendor.id);
@@ -278,7 +326,9 @@ export async function addTruck(input: TruckInput): Promise<TruckResult> {
 
 /** Edit an existing truck's name/phone/capacity/hours. Active state is a separate toggle (setTruckActive). */
 export async function updateTruck(unitId: string, input: TruckInput): Promise<TruckResult> {
-  const vendor = await assertMyVendor();
+  const me = await assertMyVendor();
+  if (me.readError) return { ok: false, error: readFailedMessage("your crew account", me.readError) };
+  const vendor = me.vendor;
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") {
     return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
@@ -286,14 +336,21 @@ export async function updateTruck(unitId: string, input: TruckInput): Promise<Tr
   if (typeof unitId !== "string" || !unitId) return { ok: false, error: "Unknown truck." };
 
   const admin = createServiceClient();
-  if (!(await assertOwnUnit(admin, vendor.id, unitId))) return { ok: false, error: "Unknown truck." };
+  const own = await assertOwnUnit(admin, vendor.id, unitId);
+  if (own.readError) return { ok: false, error: readFailedMessage("your trucks", own.readError) };
+  if (!own.mine) return { ok: false, error: "Unknown truck." };
 
   const built = await buildRow(input);
   if ("error" in built) return { ok: false, error: built.error };
 
   // Transition guard: shrinking an ACTIVE truck's capacity or hours must
   // still cover the booked calendar (inactive trucks don't change the fleet).
-  const fleet = await activeFleet(admin, vendor.id);
+  const fleetRes = await activeFleet(admin, vendor.id);
+  // An unread fleet is an empty one, and an empty one makes `isActive` false —
+  // which skips the transition guard below altogether, letting a vendor shrink
+  // a working truck below the calendar it already has to cover.
+  if (fleetRes.readError) return { ok: false, error: readFailedMessage("your trucks", fleetRes.readError) };
+  const fleet = fleetRes.units;
   const isActive = fleet.some((u) => u.id === unitId);
   if (isActive) {
     const proposed = fleet.map((u) =>
@@ -303,7 +360,13 @@ export async function updateTruck(unitId: string, input: TruckInput): Promise<Tr
     if (conflict) return { ok: false, error: conflict };
   }
 
-  const { data: prev } = await admin.from("crew_units").select("phone").eq("id", unitId).maybeSingle();
+  const prevRes = await admin.from("crew_units").select("phone").eq("id", unitId).maybeSingle();
+  // This read is the only thing that knows whether the number actually CHANGED,
+  // and the enrolment text below is conditioned on it. Failed, it read as "no
+  // number before", so an unchanged truck phone was re-texted every save.
+  // Nothing is written at this point.
+  if (prevRes.error) return { ok: false, error: readFailedMessage("this truck's current details", prevRes.error) };
+  const prev = prevRes.data;
   const { error } = await admin.from("crew_units").update(built.row).eq("id", unitId).eq("vendor_id", vendor.id);
   if (error) return { ok: false, error: error.message };
   if (built.row.phone && built.row.phone !== ((prev?.phone as string) ?? null)) {
@@ -314,7 +377,9 @@ export async function updateTruck(unitId: string, input: TruckInput): Promise<Tr
 
 /** Deactivate (or reactivate) a truck. Reactivating re-checks the active cap. */
 export async function setTruckActive(unitId: string, active: boolean): Promise<TruckResult> {
-  const vendor = await assertMyVendor();
+  const me = await assertMyVendor();
+  if (me.readError) return { ok: false, error: readFailedMessage("your crew account", me.readError) };
+  const vendor = me.vendor;
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") {
     return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
@@ -322,9 +387,13 @@ export async function setTruckActive(unitId: string, active: boolean): Promise<T
   if (typeof unitId !== "string" || !unitId) return { ok: false, error: "Unknown truck." };
 
   const admin = createServiceClient();
-  if (!(await assertOwnUnit(admin, vendor.id, unitId))) return { ok: false, error: "Unknown truck." };
+  const own = await assertOwnUnit(admin, vendor.id, unitId);
+  if (own.readError) return { ok: false, error: readFailedMessage("your trucks", own.readError) };
+  if (!own.mine) return { ok: false, error: "Unknown truck." };
 
-  const fleet = await activeFleet(admin, vendor.id);
+  const fleetRes = await activeFleet(admin, vendor.id);
+  if (fleetRes.readError) return { ok: false, error: readFailedMessage("your trucks", fleetRes.readError) };
+  const fleet = fleetRes.units;
   if (active && fleet.length >= MAX_ACTIVE_TRUCKS) {
     return {
       ok: false,
@@ -338,8 +407,14 @@ export async function setTruckActive(unitId: string, active: boolean): Promise<T
   // cover the booked calendar.
   let proposed = fleet.filter((u) => u.id !== unitId);
   if (active) {
-    const { data: row } = await admin
+    const rowRes = await admin
       .from("crew_units").select("capacity, work_start, work_end").eq("id", unitId).maybeSingle();
+    // The `?? 0` fallbacks below turn a failed read into a truck with no
+    // capacity and no hours — a fleet the transition guard then measures the
+    // booked calendar against, refusing days that in fact fit fine. Nothing is
+    // written at this point.
+    if (rowRes.error) return { ok: false, error: readFailedMessage("this truck's details", rowRes.error) };
+    const row = rowRes.data;
     proposed = [...proposed, {
       id: unitId,
       capacity: Number(row?.capacity ?? 0),
@@ -375,7 +450,12 @@ export async function setTruckActive(unitId: string, active: boolean): Promise<T
 
   // Post-write cap recheck (check-then-write race), same rail as addTruck.
   if (active) {
-    const after = await activeFleet(admin, vendor.id);
+    const afterRes = await activeFleet(admin, vendor.id);
+    // Swallowed for the same reason as addTruck's recheck — the toggle has
+    // already landed and turning the vendor's truck back off because a recheck
+    // couldn't run is the worse outcome — but logged, never silent.
+    if (afterRes.readError) console.error("[read failed] the truck cap recheck after toggling on:", afterRes.readError);
+    const after = afterRes.units;
     if (after.length > MAX_ACTIVE_TRUCKS) {
       await admin.from("crew_units").update({ active: false }).eq("id", unitId).eq("vendor_id", vendor.id);
       return { ok: false, error: `You're at ${MAX_ACTIVE_TRUCKS} active trucks — that's the cap for now.` };

@@ -2,7 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getMyVendorId } from "@/app/vendor/data";
-import { ReadFailed, readFailedMessage } from "@/lib/must-read";
+import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 export interface SlotResult {
   ok: boolean;
@@ -23,11 +23,18 @@ async function assertMyVendor(): Promise<{ id: string; status: string } | null> 
   } = await supabase.auth.getUser();
   if (!user) return null;
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("vendors")
-    .select("id, status")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  // THROWS on a failed read, exactly like getMyVendorId in ../data.ts. `null`
+  // from here means "you have no crew account", which the caller says out loud
+  // — never something a dropped connection gets to say. The caller converts the
+  // throw into its own SlotResult.
+  const data = mustRead(
+    "your crew account",
+    await admin
+      .from("vendors")
+      .select("id, status")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+  );
   if (!data) return null;
   return { id: data.id as string, status: data.status as string };
 }
@@ -55,7 +62,16 @@ export interface StorageSettingsInput {
  * and vendors.storage_types ONLY (own row).
  */
 export async function setStorageSettings(input: StorageSettingsInput): Promise<SlotResult> {
-  const vendor = await assertMyVendor();
+  // assertMyVendor THROWS when the read fails rather than answer "no crew
+  // account". A rejection out of a "use server" action is a blank failure on the
+  // crew's phone, so it becomes a SlotResult here. Nothing has been written.
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>> = null;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
   if (vendor.status === "suspended") {
     return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
@@ -114,11 +130,17 @@ export async function toggleWorkDay(day: string): Promise<SlotResult> {
   if (!vendorId) return { ok: false, error: "This is the vendor area." };
 
   const admin = createServiceClient();
-  const { data: vendor } = await admin
+  // THIS READ IS THE WHOLE WEEK, AND THE UPDATE BELOW REPLACES IT. On a failed
+  // read `current` was `[]`, so tapping one chip wrote a work_days of exactly
+  // that one day — WIPING the rest of the crew's working week, and reporting
+  // success. Every other day would then look unavailable to the router.
+  const vRes = await admin
     .from("vendors")
     .select("work_days")
     .eq("id", vendorId)
     .maybeSingle();
+  if (vRes.error) return { ok: false, error: readFailedMessage("your working days", vRes.error) };
+  const vendor = vRes.data;
 
   const current: string[] = (vendor?.work_days as string[] | null) ?? [];
   const next = current.includes(day)
@@ -158,13 +180,23 @@ export async function setSlot(date: string, slot: string, blocked: boolean): Pro
   const supabase = await createClient();
 
   // Re-read status — never let the vendor change a booked slot.
-  const { data: existing } = await supabase
+  //
+  // THE GUARD PASSED BECAUSE IT COULDN'T RUN. `existing` is `null` on a failed
+  // read just as it is when no row exists, so a dropped read skipped the check
+  // entirely and the upsert below overwrote a 'booked' slot with 'blocked' —
+  // a scheduled crew moved off a real job by a stale grid. Nothing is written
+  // at this point, so refusing costs a retry and nothing else.
+  const existingRes = await supabase
     .from("vendor_availability")
     .select("status")
     .eq("vendor_id", vendorId)
     .eq("date", date)
     .eq("slot", slot)
     .maybeSingle();
+  if (existingRes.error) {
+    return { ok: false, error: readFailedMessage("that day's slots", existingRes.error) };
+  }
+  const existing = existingRes.data;
   if (existing?.status === "booked") {
     return { ok: false, error: "That slot has a LakeLife job — message dispatch to move it." };
   }
