@@ -155,8 +155,10 @@ Two shapes, and the difference matters:
 3. **The park owner's rent screens** before January billing.
 4. The rest, as each area is touched.
 
-## Still unknown
+## The 502s themselves — answered
 
-Why the 502s are happening — database tier, cold start, or genuine flakiness.
-Now that these reads log by name, the rate is measurable. That number is worth
-watching the way the SMS-health panel is.
+Not the database, not capacity, not the plan, and not production: every failure
+came from the dev machine's long path to us-east-1, and on the request that
+failed the origin had already answered 200. Production (Vercel iad1 → Supabase
+us-east-1) logged 297 requests and zero errors. Reads now retry a transport
+blip; writes never do. Full diagnosis in `the-502s.md`.

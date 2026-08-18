@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { supabaseAnonKey, supabaseUrl } from "@/lib/env";
+import { createRetryingFetch } from "./retrying-fetch";
 
 /**
  * Supabase client for the server (server components, route handlers).
@@ -10,6 +11,8 @@ export async function createClient() {
   const cookieStore = await cookies();
 
   return createServerClient(supabaseUrl(), supabaseAnonKey(), {
+    // Reads retry a transport blip; writes never do. See retrying-fetch.
+    global: { fetch: createRetryingFetch() },
     cookies: {
       getAll() {
         return cookieStore.getAll();
@@ -36,6 +39,7 @@ export async function createClient() {
 export function createServiceClient() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
   return createServerClient(supabaseUrl(), key, {
+    global: { fetch: createRetryingFetch() },
     cookies: { getAll: () => [], setAll: () => {} },
   });
 }
