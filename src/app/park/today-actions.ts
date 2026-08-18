@@ -16,6 +16,7 @@ import {
   type MoneyBlock, type Task, type TaskState, type OccupancySnapshot,
 } from "./today-helpers";
 import { livenessLine, lastNightsFindings, type RunRow, type LivenessLine } from "./machine-helpers";
+import { mustRead } from "@/lib/must-read";
 import type { ParkResult } from "./actions";
 
 /**
@@ -75,32 +76,46 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // in March must still answer November's reminder.
   const year = today.slice(0, 4);
 
-  const { data: park } = await admin
-    .from("parks")
-    .select("name, rent_due_day, office_recording_lag_days, max_agreement_months, cutover_date")
-    .eq("id", parkId)
-    .maybeSingle();
+  // EVERY READ IN THIS LOADER EITHER ANSWERS OR THROWS. Today is the screen he
+  // opens with coffee, and every branch below has a calm empty-case sentence
+  // written for the day nothing is happening: "Your park", "$0 owed",
+  // "nothing needs you", "the evening check hasn't run". A swallowed failure
+  // reaches all of them at once and the morning looks quiet.
+  const park = mustRead(
+    "your park",
+    await admin
+      .from("parks")
+      .select("name, rent_due_day, office_recording_lag_days, max_agreement_months, cutover_date")
+      .eq("id", parkId)
+      .maybeSingle(),
+  );
   const parkName = (park?.name as string) ?? "Your park";
   const lagDays = (park?.office_recording_lag_days as number) ?? 3;
   const rentDueDay = (park?.rent_due_day as number) ?? 1;
   const cutoverOn = (park?.cutover_date as string) ?? null;
 
   // ---- lots and who is on them -------------------------------------------
-  const { data: lots } = await admin
-    .from("park_lots")
-    .select("id, lot_number, lifecycle")
-    .eq("park_id", parkId);
+  const lots = mustRead(
+    "your lots",
+    await admin
+      .from("park_lots")
+      .select("id, lot_number, lifecycle")
+      .eq("park_id", parkId),
+  );
   const liveLots = (lots ?? []).filter((l) => (l.lifecycle as string) === "live");
   const liveIds = liveLots.map((l) => l.id as string);
   const lotName = new Map((lots ?? []).map((l) => [l.id as string, l.lot_number as string]));
 
-  const { data: stays } = liveIds.length
-    ? await admin
-        .from("lot_reservations")
-        .select("id, park_lot_id, renter_id, during, status, origin, agreement_chain_id, agreement_seq, notice_given_on, expected_move_out")
-        .in("park_lot_id", liveIds)
-        .in("status", ["approved", "active"])
-    : { data: [] as Record<string, unknown>[] };
+  const stays = liveIds.length
+    ? mustRead(
+        "who's on your lots",
+        await admin
+          .from("lot_reservations")
+          .select("id, park_lot_id, renter_id, during, status, origin, agreement_chain_id, agreement_seq, notice_given_on, expected_move_out")
+          .in("park_lot_id", liveIds)
+          .in("status", ["approved", "active"]),
+      )
+    : ([] as Record<string, unknown>[]);
 
   const occupiedLotIds = new Set<string>();
   const reservedLotIds = new Set<string>();
@@ -132,16 +147,24 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   };
 
   // ---- money --------------------------------------------------------------
-  const { data: charges } = await admin
-    .from("park_charges")
-    .select("id, park_lot_id, renter_id, period_month, due_on, amount, paid_total, status")
-    .eq("park_id", parkId);
+  const charges = mustRead(
+    "the bills you've raised",
+    await admin
+      .from("park_charges")
+      .select("id, park_lot_id, renter_id, period_month, due_on, amount, paid_total, status")
+      .eq("park_id", parkId),
+  );
 
   const allIds = (charges ?? []).map((c) => c.id as string);
-  const { data: claims } = allIds.length
-    ? await admin.from("park_payment_claims").select("charge_id")
-        .in("charge_id", allIds).is("resolved_at", null)
-    : { data: [] as { charge_id: string }[] };
+  // Swallowed, every disputed bill downgrades to plain arrears and lands in
+  // the "go and get this" figure.
+  const claims = allIds.length
+    ? mustRead(
+        "what households have told you about paying",
+        await admin.from("park_payment_claims").select("charge_id")
+          .in("charge_id", allIds).is("resolved_at", null),
+      )
+    : ([] as { charge_id: string }[]);
   const claimed = new Set((claims ?? []).map((c) => c.charge_id as string));
 
   const toCharge = (c: Record<string, unknown>): Charge => ({
@@ -184,12 +207,15 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // REVERSED PAYMENTS ARE NOT CASH IN. A bounced check must not sit in the
   // "$X has come in this month" line on the screen he reads with coffee — that
   // is the number he plans against.
-  const { data: payments } = allIds.length
-    ? await admin.from("park_payments")
-        .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason")
-        .in("charge_id", allIds)
-        .is("reversed_at", null)
-    : { data: [] as Record<string, unknown>[] };
+  const payments = allIds.length
+    ? mustRead(
+        "the money that's come in",
+        await admin.from("park_payments")
+          .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason")
+          .in("charge_id", allIds)
+          .is("reversed_at", null),
+      )
+    : ([] as Record<string, unknown>[]);
 
   const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
   const receipts: Receipt[] = (payments ?? []).map((p) => {
@@ -242,8 +268,10 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     (stays ?? []).map((s) => [s.id as string, s.park_lot_id as string]),
   );
 
-  const { data: renters } = await admin
-    .from("park_renters").select("id, display_name").eq("park_id", parkId);
+  const renters = mustRead(
+    "the households",
+    await admin.from("park_renters").select("id, display_name").eq("park_id", parkId),
+  );
   const renterName = new Map((renters ?? []).map((r) => [r.id as string, r.display_name as string]));
 
   const agreements = (stays ?? []).flatMap((s) => {
@@ -266,16 +294,19 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
 
   // Rate cards, actually counted. Claiming "3 of 3" from the lot count alone
   // would put a tick against work nobody has done.
-  const { data: rates } = liveIds.length
-    ? await admin.from("lot_rates").select("park_lot_id, term, amount")
-        .in("park_lot_id", (lots ?? []).map((l) => l.id as string))
-    : { data: [] as Record<string, unknown>[] };
+  const rates = liveIds.length
+    ? mustRead(
+        "your rate cards",
+        await admin.from("lot_rates").select("park_lot_id, term, amount")
+          .in("park_lot_id", (lots ?? []).map((l) => l.id as string)),
+      )
+    : ([] as Record<string, unknown>[]);
   const lotsWithRates = new Set((rates ?? []).map((r) => r.park_lot_id as string)).size;
   const monthlyRoll = (rates ?? [])
     .filter((r) => (r.term as string) === "monthly")
     .reduce((s, r) => s + Number(r.amount), 0);
 
-  const [{ data: costs }, { data: rentChanges }, { data: states }, { data: noteRows }] =
+  const [costsRes, rentChangesRes, statesRes, noteRes] =
     await Promise.all([
       admin.from("park_costs").select("id, category, amount_paid, allocated_total, park_absorbed, denominator_lots, payer_lots, allocation_method").eq("park_id", parkId),
       // lot_rent_changes keys on park_id and RESERVATION_id — it has no
@@ -292,11 +323,17 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
       admin.from("park_notes").select("id, body, created_at")
         .eq("park_id", parkId).is("done_at", null).order("created_at", { ascending: false }),
     ]);
+  const costs = mustRead("your costs", costsRes);
+  const rentChanges = mustRead("the rent changes you've scheduled", rentChangesRes);
+  // A failed task-state read reads as "nothing snoozed or dismissed", which
+  // brings back every chore he has already decided against.
+  const states = mustRead("the tasks you've put off", statesRes);
+  const noteRows = mustRead("your notes", noteRes);
 
   // What recurs here, and what has already been entered for this month. A
   // category with a cost inside the month is done — matched on category rather
   // than amount, because two identical bills are two bills.
-  const [{ data: schedules }, { data: monthCosts }] = await Promise.all([
+  const [schedulesRes, monthCostsRes] = await Promise.all([
     admin.from("park_cost_schedules")
       .select("id, category, cadence, due_day, due_month, typical_amount, label")
       .eq("park_id", parkId).eq("active", true),
@@ -320,15 +357,25 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
       .eq("park_id", parkId)
       .or(`created_at.gte.${year}-01-01,period_end.gte.${year}-01-01`),
   ]);
+  const schedules = mustRead("the bills that recur here", schedulesRes);
+  // This one decides whether a bill reminder CLEARS. An empty read makes every
+  // recurring bill look unpaid, which is the reminder that will not go away.
+  const monthCosts = mustRead("the costs already entered", monthCostsRes);
   const allCosts = monthCosts ?? [];
 
   // The last week of evening checks. Absence is the alarm.
-  const { data: runs } = await admin
-    .from("park_machine_runs")
-    .select("runner, run_on, ok, error, found, finished_at, findings")
-    .eq("park_id", parkId)
-    .gte("run_on", addDaysISO(today, -7))
-    .order("run_on", { ascending: false });
+  // ABSENCE IS THE ALARM HERE, which is exactly why a failed read must not
+  // look like absence — it would report the nightly check as dead on a night
+  // it ran fine.
+  const runs = mustRead(
+    "last night's check",
+    await admin
+      .from("park_machine_runs")
+      .select("runner, run_on, ok, error, found, finished_at, findings")
+      .eq("park_id", parkId)
+      .gte("run_on", addDaysISO(today, -7))
+      .order("run_on", { ascending: false }),
+  );
 
   const allTasks = generateTasks({
     today,

@@ -1,5 +1,6 @@
 import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
 import {
   buildRentRoll, summarise, toStay,
@@ -55,21 +56,23 @@ export async function getMyPark(): Promise<MyPark | null> {
   if (!user) return null;
 
   const admin = createServiceClient();
-  const { data: memberships } = await admin
+  // A DROPPED READ IS NOT "YOU HAVE NO PARK". Every caller of this treats null
+  // as "this person doesn't run a park" and shows them the door.
+  const memberships = mustRead("your park", await admin
     .from("park_members")
     .select("park_id, role")
-    .eq("user_id", user.id);
+    .eq("user_id", user.id));
   if (!memberships || memberships.length === 0) return null;
 
   const parkIds = memberships.map((m) => m.park_id as string);
-  const { data: parks } = await admin
+  const parks = mustRead("your park", await admin
     .from("parks")
     // One string literal, deliberately: supabase-js parses the select at the
     // TYPE level, and a concatenated string widens to `string`, which collapses
     // every column to GenericStringError.
     .select("id, name, slug, address, lake_id, park_type, age_restricted, approval_required, season_open_month, season_open_day, season_close_month, season_close_day, included_utilities, house_rules, active")
     .in("id", parkIds)
-    .order("name");
+    .order("name"));
   const park = parks?.[0];
   if (!park) return null;
 
@@ -77,8 +80,8 @@ export async function getMyPark(): Promise<MyPark | null> {
 
   let lakeName: string | null = null;
   if (park.lake_id) {
-    const { data: lake } = await admin
-      .from("lakes").select("name").eq("id", park.lake_id).maybeSingle();
+    const lake = mustRead("your park's lake", await admin
+      .from("lakes").select("name").eq("id", park.lake_id).maybeSingle());
     lakeName = (lake?.name as string | null) ?? null;
   }
 
@@ -110,13 +113,26 @@ export async function assertMyPark(parkId: string): Promise<{ role: string } | n
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
   const admin = createServiceClient();
-  const { data } = await admin
+  const res = await admin
     .from("park_members")
     .select("role")
     .eq("park_id", parkId)
     .eq("user_id", user.id)
     .maybeSingle();
-  return data ? { role: data.role as string } : null;
+  // A FAILED READ IS NOT "NOT YOUR PARK" — but this function cannot yet say
+  // which it was. Its answer is `null` and every one of its ~120 callers turns
+  // that into "You don't manage that park.", which is a false statement about
+  // somebody's account made at the exact moment we had no idea. Throwing here
+  // would reject inside actions that are awaiting { ok, error } and would
+  // surface as a blank button, so for now the failure is at least LOGGED
+  // rather than silent. Fixing the sentence means giving this a third answer.
+  if (res.error) {
+    console.error(
+      "[read failed] whether this park is yours:",
+      res.error.code ?? "", res.error.message ?? res.error,
+    );
+  }
+  return res.data ? { role: res.data.role as string } : null;
 }
 
 // ------------------------------------------------------------- the roll ----
@@ -157,17 +173,17 @@ function toLot(row: Record<string, unknown>): Lot {
  *  a park: lot 2 before lot 10, not "10" before "2". */
 export async function getParkLots(parkId: string): Promise<LotWithRates[]> {
   const admin = createServiceClient();
-  const { data: lotRows } = await admin
+  const lotRows = mustRead("your lots", await admin
     .from("park_lots")
     .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, notes, active, tier, features, season_open_month, season_open_day, season_close_month, season_close_day, lifecycle, expected_live_on, rental_mode, park_owned_home")
-    .eq("park_id", parkId); // <- the scope
+    .eq("park_id", parkId)); // <- the scope
   const lots = lotRows ?? [];
   if (lots.length === 0) return [];
 
-  const { data: rateRows } = await admin
+  const rateRows = mustRead("your rate cards", await admin
     .from("lot_rates")
     .select("park_lot_id, term, amount")
-    .in("park_lot_id", lots.map((l) => l.id as string));
+    .in("park_lot_id", lots.map((l) => l.id as string)));
 
   const ratesBy = new Map<string, RateCard[]>();
   for (const r of rateRows ?? []) {
@@ -239,10 +255,12 @@ export async function getParkRoll(parkId: string): Promise<ParkRoll> {
   }
 
   const lotIds = lots.map((l) => l.lot.id);
-  const { data: resRows } = await admin
+  // A failed read here empties the rent roll, which reads as a park where
+  // nobody lives and nobody owes anything.
+  const resRows = mustRead("your rent roll", await admin
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, due_day, amount_source, status, decided_at, created_at, notice_given_on, expected_move_out")
-    .in("park_lot_id", lotIds); // <- the scope: this park's lots only
+    .in("park_lot_id", lotIds)); // <- the scope: this park's lots only
 
   const stays: Stay[] = (resRows ?? []).map((r) => toStay(r as unknown as RawReservation));
   const rows = buildRentRoll(lots.map((l) => l.lot), stays, today);
@@ -272,7 +290,9 @@ async function loadRenterNames(stays: Stay[]): Promise<Map<string, string>> {
   const ids = [...new Set(stays.map((s) => s.renterId))];
   if (ids.length === 0) return new Map();
   const admin = createServiceClient();
-  const { data } = await admin.from("park_renters").select("id, display_name").in("id", ids);
+  // Without this a dropped read renames every household on the roll "Renter".
+  const data = mustRead("the names on your roll", await admin
+    .from("park_renters").select("id, display_name").in("id", ids));
   return new Map(
     (data ?? []).map((r) => [r.id as string, (r.display_name as string | null) || "Renter"]),
   );
@@ -284,10 +304,10 @@ async function loadUnits(stays: Stay[]): Promise<Map<string, ParkUnitView>> {
   const ids = [...new Set(stays.map((s) => s.renterUnitId).filter((x): x is string => !!x))];
   if (ids.length === 0) return new Map();
   const admin = createServiceClient();
-  const { data } = await admin
+  const data = mustRead("the rigs on your lots", await admin
     .from("renter_units")
     .select("id, unit_type, make, model, year, length_ft")
-    .in("id", ids);
+    .in("id", ids));
   return new Map(
     (data ?? []).map((u) => {
       const unitType = (u.unit_type as RenterUnit["unitType"]) ?? "rv";

@@ -141,13 +141,23 @@ export function parseSetting(raw: unknown, fallback: number, min: number, max: n
 export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => {
   try {
     const admin = createServiceClient();
-    const { data } = await admin
+    const res = await admin
       .from("platform_settings")
       .select("key, value")
       .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days", "nudge_credit_threshold", "nudge_cooldown_days", "storage_perdiem_daily", "storage_season_end_month", "storage_season_end_day", "early_payout_fee_pct", "gap_anchor_pct", "gap_min_offer", "gap_sla_hours", "fillin_digest_min", "fillin_digest_cooldown_days", "dispute_response_hours", "dispute_auto_refund_max", "dispute_fix_days", "price_autoapply_max_pct", "ai_autoreply_enabled",
       "crew_trip_fee",
     ]);
-    const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]));
+    // THE FALLBACK STAYS — it is the whole design of this loader, and the one
+    // dial where falling back is dangerous (aiAutoreplyEnabled) already points
+    // the safe way. What was missing is the LOG: a failed read arrived as
+    // `data: null`, silently swapped every live dial for the launch defaults,
+    // and left nothing behind saying so. Pricing quietly running on the wrong
+    // margin floor is worth knowing about.
+    if (res.error) {
+      console.error("[read failed, degraded] the pricing dials:", res.error.code ?? "", res.error.message ?? res.error);
+      return DEFAULT_SETTINGS;
+    }
+    const byKey = new Map((res.data ?? []).map((r) => [r.key as string, r.value]));
     return {
       marginFloor: parseSetting(byKey.get("margin_floor"), DEFAULT_SETTINGS.marginFloor, 0.05, 0.6),
       surgeCapPct: parseSetting(byKey.get("surge_cap_pct"), DEFAULT_SETTINGS.surgeCapPct, 0, 1),
@@ -210,10 +220,18 @@ export async function getSellableDay(): Promise<{ startHour: number; endHour: nu
   const fallback = { startHour: 7, endHour: 16 };
   try {
     const admin = createServiceClient();
-    const { data } = await admin
+    const res = await admin
       .from("platform_dials")
       .select("sell_start_hour, sell_end_hour")
       .maybeSingle();
+    // Swallowed on purpose (see the catch), but no longer silently: a failed
+    // read is indistinguishable from a missing row, and 7–16 is not necessarily
+    // what this platform sells.
+    if (res.error) {
+      console.error("[read failed, degraded] the sellable day:", res.error.code ?? "", res.error.message ?? res.error);
+      return fallback;
+    }
+    const data = res.data;
     if (!data) return fallback;
     const startHour = Number(data.sell_start_hour);
     const endHour = Number(data.sell_end_hour);

@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { renderCustomerContext, renderCrewContext, type CustomerContext, type CrewContext } from "@/lib/comms-render";
 
 /**
@@ -19,16 +20,21 @@ const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null :
 
 export async function buildCustomerContext(userId: string): Promise<CustomerContext | null> {
   const admin = createServiceClient();
-  const { data: user } = await admin.from("users").select("id, name, email").eq("id", userId).maybeSingle();
+  // EVERY READ IN THIS FILE ENDS UP IN A SENTENCE SENT TO A CUSTOMER. The
+  // autopilot bug noted below is the shape of the whole class — the read failed,
+  // the empty case looked ordinary, and the draft asserted the opposite of the
+  // truth to somebody's face. A draft written on a failed read is worse than no
+  // draft, so these throw rather than degrade.
+  const user = mustRead("the customer", await admin.from("users").select("id, name, email").eq("id", userId).maybeSingle());
   if (!user) return null;
 
-  const { data: props } = await admin
+  const props = mustRead("their properties", await admin
     .from("properties")
     .select("id, address, nickname, lakes(name)")
-    .eq("owner_id", userId);
+    .eq("owner_id", userId));
   const propIds = (props ?? []).map((p) => p.id as string);
 
-  const [{ data: jobs }, { data: autopilot }, { data: credits }] = await Promise.all([
+  const [jobsRes, autopilotRes, creditsRes] = await Promise.all([
     propIds.length
       ? admin.from("jobs")
           .select("date, status, customer_price, tip_amount, services(name), properties(nickname, address)")
@@ -36,7 +42,7 @@ export async function buildCustomerContext(userId: string): Promise<CustomerCont
           .in("status", ["requested", "scheduled", "in_progress", "complete", "paid"])
           .order("date", { ascending: false })
           .limit(12)
-      : Promise.resolve({ data: [] as never[] }),
+      : Promise.resolve({ data: [] as never[], error: null }),
     // Keyed by PROPERTY, not owner — autopilot_enrollments has no owner_id
     // column and never did. The 42703 came back as {error, data:null}, which
     // reads exactly like "enrolled in nothing", so every draft written for a
@@ -44,9 +50,14 @@ export async function buildCustomerContext(userId: string): Promise<CustomerCont
     propIds.length
       ? admin.from("autopilot_enrollments")
           .select("services(name)").in("property_id", propIds).eq("active", true).limit(10)
-      : Promise.resolve({ data: [] as never[] }),
+      : Promise.resolve({ data: [] as never[], error: null }),
     admin.from("user_credits").select("amount").eq("user_id", userId),
   ]);
+  const jobs = mustRead("their job history", jobsRes);
+  // Fixing the column was only half of it: any OTHER failure of this same read
+  // still reads as "enrolled in nothing". This is the half that closes it.
+  const autopilot = mustRead("what they're on autopilot for", autopilotRes);
+  const credits = mustRead("their credit balance", creditsRes);
 
   return {
     name: (user.name as string) ?? null,
@@ -73,14 +84,14 @@ export async function buildCustomerContext(userId: string): Promise<CustomerCont
 
 export async function buildCrewContext(vendorId: string): Promise<CrewContext | null> {
   const admin = createServiceClient();
-  const { data: v } = await admin
+  const v = mustRead("the crew", await admin
     .from("vendors")
     .select("id, company, service_types, service_lakes, coi_expiry, garagekeepers_expiry")
     .eq("id", vendorId)
-    .maybeSingle();
+    .maybeSingle());
   if (!v) return null;
 
-  const [{ data: lakes }, { data: trucks }, { data: payouts }, { data: upcoming }] = await Promise.all([
+  const [lakesRes, trucksRes, payoutsRes, upcomingRes] = await Promise.all([
     admin.from("lakes").select("id, name").in("id", (v.service_lakes as string[]) ?? []),
     admin.from("crew_units").select("name, capacity, work_start, work_end, active").eq("vendor_id", vendorId),
     // The crew's OWN take-home ledger — their numbers, allowed.
@@ -88,6 +99,12 @@ export async function buildCrewContext(vendorId: string): Promise<CrewContext | 
     admin.from("jobs").select("date, services(name)").eq("vendor_id", vendorId)
       .in("status", ["scheduled", "in_progress"]).order("date", { ascending: true }).limit(8),
   ]);
+  const lakes = mustRead("the crew's lakes", lakesRes);
+  const trucks = mustRead("the crew's trucks", trucksRes);
+  // `pendingTakeHome` sums this. A failed read is $0.00 owed, told to the crew
+  // in the company's own voice — the sentence most likely to cost a crew.
+  const payouts = mustRead("the crew's take-home", payoutsRes);
+  const upcoming = mustRead("the crew's upcoming jobs", upcomingRes);
 
   const released = (payouts ?? []).filter((p) => p.status === "released").reduce((s, p) => s + Number(p.amount ?? 0), 0);
   return {

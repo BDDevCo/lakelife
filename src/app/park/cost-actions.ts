@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { ordinal } from "./today-helpers";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { parseDaterange, overlaps } from "@/lib/parks";
 import {
@@ -34,30 +35,48 @@ export interface CostPreview {
   amountPaid: number;
 }
 
-/** Who was on a lot during the billing period. */
+/**
+ * Who was on a lot during the billing period.
+ *
+ * NULL means we could not find out — never [] and never "nobody". Both halves
+ * of this decide money: a dropped LOTS read empties the denominator and the
+ * caller says "there are no rentable lots", and a dropped STAYS read is worse
+ * and quieter — every lot reads as empty, so the split writes no resident
+ * shares at all and files the whole bill as one the park chose to carry.
+ */
 async function lotsForPeriod(
   admin: ReturnType<typeof createServiceClient>,
   parkId: string,
   periodStart: string,
   periodEnd: string,
-): Promise<CostLot[]> {
+): Promise<CostLot[] | null> {
   // EVERY LOT, and the flags decide. Filtering here is what made the
   // denominator wrong: `.eq("active", true)` dropped a lot switched off for
   // repairs, which still has a live tap and a sewer connection, and the
   // occupied-only divisor dropped the empties the park is supposed to carry.
-  const { data: lots } = await admin
+  const lotsRes = await admin
     .from("park_lots")
     .select("id, lot_number, active, lifecycle, park_owned_home")
     .eq("park_id", parkId);
+  if (lotsRes.error) {
+    console.error("[read failed] your lots:", lotsRes.error);
+    return null;
+  }
+  const lots = lotsRes.data;
 
   const ids = (lots ?? []).map((l) => l.id as string);
   if (ids.length === 0) return [];
 
-  const { data: stays } = await admin
+  const staysRes = await admin
     .from("lot_reservations")
     .select("id, park_lot_id, during, status")
     .in("park_lot_id", ids)
     .in("status", ["approved", "active"]);
+  if (staysRes.error) {
+    console.error("[read failed] who was on a lot that month:", staysRes.error);
+    return null;
+  }
+  const stays = staysRes.data;
 
   // A lot counts as occupied if somebody held it at ANY point in the period.
   // Billing only the lots occupied on the last day would let a mid-month
@@ -104,6 +123,13 @@ export async function previewCostSplit(
 
   const admin = createServiceClient();
   const lots = await lotsForPeriod(admin, parkId, periodStart, periodEnd);
+  if (lots === null) {
+    // Which of the two reads failed is already on the log line above this one.
+    return {
+      ok: false,
+      error: readFailedMessage("your lots", "see the read above", { money: true }),
+    };
+  }
   const allocation = allocateCost({ amountPaid, method: "per_lot", lots });
   return { ok: true, preview: { allocation, category, amountPaid } };
 }
@@ -177,17 +203,26 @@ export async function recordCost(
   // place. Same rule, now enforced on the WRITE rather than only on the read.
   if (sourceJobId) {
     const gate = createServiceClient();
-    const { data: park } = await gate
+    // And a failed read is not "that job isn't yours" — that sentence accuses
+    // him of touching another park's job when all that happened is that we
+    // could not look.
+    const parkRes = await gate
       .from("parks").select("service_property_id").eq("id", parkId).maybeSingle();
-    const propertyId = (park?.service_property_id as string) ?? null;
-    const { data: job } = propertyId
+    if (parkRes.error) {
+      return { ok: false, error: readFailedMessage("your park", parkRes.error, { money: true }) };
+    }
+    const propertyId = (parkRes.data?.service_property_id as string) ?? null;
+    const jobRes = propertyId
       ? await gate
           .from("jobs").select("id")
           .eq("id", sourceJobId)
           .eq("property_id", propertyId)
           .maybeSingle()
-      : { data: null };
-    if (!job) return { ok: false, error: "That job isn't one of this park's." };
+      : { data: null, error: null };
+    if (jobRes.error) {
+      return { ok: false, error: readFailedMessage("that job", jobRes.error, { money: true }) };
+    }
+    if (!jobRes.data) return { ok: false, error: "That job isn't one of this park's." };
   }
 
   // NEVER SPLIT A HOME THE PARK OWNS. Guarded here as well as hidden from the
@@ -249,8 +284,15 @@ export async function recordCost(
   //
   // The bill is still RECORDED — he needs it in his books and on the "is my
   // fee covering my costs" comparison — it is simply not split again.
+  // FAILS OPEN IF IT IS NOT CHECKED. A dropped read here used to read exactly
+  // like "no fee covers this", and the difference is a second bill: the split
+  // below runs, and a household pays their fee AND their share of the same
+  // water — 189% recovery, which no constraint in the database can see.
   const covering = await feeCovering(parkId, category);
-  if (covering) {
+  if (covering.failed) {
+    return { ok: false, error: readFailedMessage("your fees", covering.error, { money: true }) };
+  }
+  if (covering.label) {
     const admin0 = createServiceClient();
     const { error: e0 } = await admin0.from("park_costs").insert({
       park_id: parkId,
@@ -271,7 +313,7 @@ export async function recordCost(
     revalidatePath("/park/costs");
     return {
       ok: true,
-      signal: `Recorded. Your "${covering}" fee already covers this, so it is not split again — it shows in the comparison below.`,
+      signal: `Recorded. Your "${covering.label}" fee already covers this, so it is not split again — it shows in the comparison below.`,
       perLot: 0,
       parkAbsorbs: amountPaid,
     };
@@ -403,12 +445,12 @@ export async function listCosts(parkId: string): Promise<{
   if (!(await assertMyPark(parkId))) return empty;
 
   const admin = createServiceClient();
-  const { data } = await admin
+  const data = mustRead("your bills", await admin
     .from("park_costs")
     .select("id, category, period_start, period_end, amount_paid, allocated_total, source_note, park_absorbed, denominator_lots, payer_lots, allocation_method")
     .eq("park_id", parkId)
     .order("period_start", { ascending: false })
-    .limit(120);
+    .limit(120));
 
   const ids = (data ?? []).map((c) => c.id as string);
   const counts = new Map<string, number>();
@@ -418,8 +460,8 @@ export async function listCosts(parkId: string): Promise<{
   // "did any of them get asked for it".
   const billed = new Map<string, number>();
   if (ids.length) {
-    const { data: shares } = await admin
-      .from("lot_cost_shares").select("cost_id, amount, billed_on_charge_id").in("cost_id", ids);
+    const shares = mustRead("who was billed a share", await admin
+      .from("lot_cost_shares").select("cost_id, amount, billed_on_charge_id").in("cost_id", ids));
     for (const s of shares ?? []) {
       const k = s.cost_id as string;
       counts.set(k, (counts.get(k) ?? 0) + 1);
@@ -501,27 +543,30 @@ export async function getBillableParkJobs(parkId: string): Promise<BillableParkJ
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
 
-  const { data: park } = await admin
-    .from("parks").select("service_property_id").eq("id", parkId).maybeSingle();
+  const park = mustRead("your park", await admin
+    .from("parks").select("service_property_id").eq("id", parkId).maybeSingle());
   const propertyId = (park?.service_property_id as string) ?? null;
   if (!propertyId) return [];
 
-  const { data: jobs } = await admin
+  const jobs = mustRead("the work done at your park", await admin
     .from("jobs")
     .select("id, date, customer_price, status, services(name)")
     .eq("property_id", propertyId)
     .in("status", ["complete", "paid"])
     .order("date", { ascending: false })
-    .limit(24);
+    .limit(24));
   if (!jobs?.length) return [];
 
   // Already passed on? `source_job_id` is the only honest answer — a match on
   // amount and date would treat two identical mows as one.
-  const { data: taken } = await admin
+  // A failed read here is not "nothing has been passed on yet": it re-offers
+  // work already recorded, and 0111's global unique index then refuses the
+  // second insert with a message about a job he has never billed.
+  const taken = mustRead("what you've already passed on", await admin
     .from("park_costs")
     .select("source_job_id")
     .eq("park_id", parkId)
-    .not("source_job_id", "is", null);
+    .not("source_job_id", "is", null));
   const done = new Set((taken ?? []).map((c) => c.source_job_id as string));
 
   return jobs
@@ -553,17 +598,24 @@ export async function getBillableParkJobs(parkId: string): Promise<BillableParkJ
  *
  * Returns the fee's label so the message can name it — "your Park services fee
  * already covers this" is actionable; "this is covered" is not.
+ *
+ * `failed` is separate from a null label on purpose: "no fee covers this" and
+ * "we could not read your fees" are the same value to a caller that only looks
+ * at the label, and the caller's next move is to bill nineteen households.
  */
-async function feeCovering(parkId: string, category: CostCategory): Promise<string | null> {
+async function feeCovering(
+  parkId: string, category: CostCategory,
+): Promise<{ label: string | null; failed: boolean; error?: unknown }> {
   const admin = createServiceClient();
-  const { data: fees } = await admin
+  const res = await admin
     .from("park_fees")
     .select("label, covers, active")
     .eq("park_id", parkId)
     .eq("active", true);
-  const hit = (fees ?? []).find((f) =>
+  if (res.error) return { label: null, failed: true, error: res.error };
+  const hit = (res.data ?? []).find((f) =>
     ((f.covers as string[]) ?? []).includes(category));
-  return hit ? ((hit.label as string) ?? "recurring") : null;
+  return { label: hit ? ((hit.label as string) ?? "recurring") : null, failed: false };
 }
 
 /**
@@ -584,7 +636,7 @@ export async function getSharedCostBaseline(parkId: string): Promise<{
   if (!(await assertMyPark(parkId))) return { monthlyShared: 0, payersNow: 0 };
   const admin = createServiceClient();
 
-  const [{ data: costs }, { data: lots }] = await Promise.all([
+  const [costsRes, lotsRes] = await Promise.all([
     admin.from("park_costs")
       .select("category, amount_paid, period_start")
       .eq("park_id", parkId)
@@ -593,6 +645,11 @@ export async function getSharedCostBaseline(parkId: string): Promise<{
     admin.from("park_lots")
       .select("id, lifecycle, park_owned_home").eq("park_id", parkId),
   ]);
+  // "Returns 0 when he has recorded nothing yet" is only honest while 0 can
+  // ONLY mean that — a failed read would take the impact line off the screen
+  // with the same silence.
+  const costs = mustRead("your bills", costsRes);
+  const lots = mustRead("your lots", lotsRes);
 
   // Only what actually gets split. `unit_electric` is a park-owned home's own
   // power and never touches a resident (0069, enforced by canSplit).
@@ -606,10 +663,10 @@ export async function getSharedCostBaseline(parkId: string): Promise<{
 
   const live = (lots ?? []).filter((l) => (l.lifecycle as string ?? "live") === "live");
   const liveIds = live.map((l) => l.id as string);
-  const { data: stays } = liveIds.length
+  const stays = mustRead("who is on your lots", liveIds.length
     ? await admin.from("lot_reservations").select("park_lot_id")
         .in("park_lot_id", liveIds).in("status", ["approved", "active"])
-    : { data: [] as Record<string, unknown>[] };
+    : { data: [] as Record<string, unknown>[], error: null });
   const occupied = new Set((stays ?? []).map((s) => s.park_lot_id as string));
 
   const payersNow = live.filter(
@@ -644,11 +701,11 @@ export interface CostScheduleRow {
 export async function listCostSchedules(parkId: string): Promise<CostScheduleRow[]> {
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
-  const { data } = await admin
+  const data = mustRead("your bill reminders", await admin
     .from("park_cost_schedules")
     .select("id, category, cadence, due_day, due_month, typical_amount, label, active")
     .eq("park_id", parkId)
-    .order("due_day", { ascending: true });
+    .order("due_day", { ascending: true }));
 
   // Switched-off rows come back too. They render greyed with a "switch on"
   // button — the same shape as fees — so retiring a reminder is reversible and
@@ -690,12 +747,18 @@ export async function saveCostSchedule(
   // A bare insert has the same ending one step later: he adds sewer, forgets,
   // adds it again, and 23505 reads as the same generic failure. Selecting
   // first turns the second add into an edit, which is what he meant.
-  const { data: existing } = await admin
+  // ...and a failed select is not "there isn't one". It would fall through to
+  // the insert this paragraph exists to avoid.
+  const existingRes = await admin
     .from("park_cost_schedules")
     .select("id")
     .eq("park_id", parkId)
     .eq("category", row.category)
     .maybeSingle();
+  if (existingRes.error) {
+    return { ok: false, error: readFailedMessage("your reminders", existingRes.error) };
+  }
+  const existing = existingRes.data;
 
   const { error } = existing?.id
     ? await admin.from("park_cost_schedules")
@@ -746,12 +809,19 @@ export async function setCostScheduleActive(
   if (active) {
     // Switching one back on can collide with a newer reminder for the same
     // bill. Check before the partial index throws, so the message can name it.
-    const { data: mine } = await admin
+    const mineRes = await admin
       .from("park_cost_schedules")
       .select("category").eq("id", scheduleId).eq("park_id", parkId).maybeSingle();
+    if (mineRes.error) {
+      return { ok: false, error: readFailedMessage("that reminder", mineRes.error) };
+    }
+    const mine = mineRes.data;
     if (!mine) return { ok: false, error: "That reminder isn't there any more." };
 
-    const { data: clash } = await admin
+    // And a failed clash check is not "no clash" — it hands the collision to
+    // the partial index, which answers with "try again" about a switch that
+    // will never go on until the other reminder goes off.
+    const clashRes = await admin
       .from("park_cost_schedules")
       .select("id")
       .eq("park_id", parkId)
@@ -759,7 +829,10 @@ export async function setCostScheduleActive(
       .eq("active", true)
       .neq("id", scheduleId)
       .maybeSingle();
-    if (clash) {
+    if (clashRes.error) {
+      return { ok: false, error: readFailedMessage("your other reminders", clashRes.error) };
+    }
+    if (clashRes.data) {
       return {
         ok: false,
         error: `There's already a live ${COST_CATEGORY_LABEL[mine.category as CostCategory].toLowerCase()} reminder — switch that one off first.`,

@@ -11,6 +11,7 @@ import {
   recoveryHeadline, crewIsOutOfPocket,
 } from "@/lib/recovery";
 import { assertOps } from "./data";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 
 /**
  * THE OTHER HALF OF "RESCHEDULE OR THEY GET CHARGED".
@@ -43,11 +44,15 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
   if (!(await assertOps())) return { ok: false, error: "Ops only." };
   const admin = createServiceClient();
 
-  const { data: job } = await admin
+  const jobRes = await admin
     .from("jobs")
     .select("id, recovery_state, fee_proposed_amount, vendor_id, vendor_cost")
     .eq("id", jobId)
     .maybeSingle();
+  // "No such visit." asserts the row is gone. On a failed read we know nothing
+  // of the sort, and this button is about to put a fee on somebody's card.
+  if (jobRes.error) return { ok: false, error: readFailedMessage("that visit", jobRes.error, { money: true }) };
+  const job = jobRes.data;
   if (!job) return { ok: false, error: "No such visit." };
   if (job.recovery_state !== "fee_proposed") {
     return { ok: false, error: "There's no fee waiting on that one." };
@@ -58,13 +63,18 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
 
   // CLAIM THE ROW FIRST. Two ops tabs, two clicks — only one may proceed past
   // here, and it must be decided before any money moves.
-  const { data: claimed } = await admin
+  const claimRes = await admin
     .from("jobs")
     .update({ recovery_state: "fee_charging" })
     .eq("id", jobId)
     .eq("recovery_state", "fee_proposed")
     .select("id, property_id, service_id, properties(owner_id)")
     .maybeSingle();
+  // A failed claim reads back exactly like a lost race — `data: null`. Telling
+  // ops "somebody just decided that one" when nobody did sends them looking for
+  // a colleague who never touched it, and hides that the fee is still waiting.
+  if (claimRes.error) return { ok: false, error: readFailedMessage("that visit's fee", claimRes.error, { money: true }) };
+  const claimed = claimRes.data;
   if (!claimed) return { ok: false, error: "Somebody just decided that one." };
 
   const ownerId = ((Array.isArray(claimed.properties) ? claimed.properties[0] : claimed.properties) as
@@ -84,8 +94,19 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
   // "That card declined (or there isn't one on file)" about a card that was
   // never presented. A customer who fixed their card could never be charged.
   // Reuse the row, exactly as the late-cancellation path and the nightly do.
-  let { data: invoice } = await admin
+  const invoiceRes = await admin
     .from("invoices").select("id, status").eq("job_id", jobId).maybeSingle();
+  // A FAILED READ HERE IS NOT "THERE IS NO INVOICE". Falling through on null
+  // walks straight into the insert branch this whole comment block exists to
+  // fix, and — worse — skips the `status === 'paid'` guard below, which is the
+  // only thing standing between a settled fee and a second bite at the card.
+  // The unique index would still refuse it, but "refused by an index" is not a
+  // safety property anyone should be relying on. Put the row back and stop.
+  if (invoiceRes.error) {
+    await admin.from("jobs").update({ recovery_state: "fee_proposed" }).eq("id", jobId);
+    return { ok: false, error: readFailedMessage("that visit's invoice", invoiceRes.error, { money: true }) };
+  }
+  let invoice = invoiceRes.data;
   if (!invoice) {
     const { data: created, error: iErr } = await admin
       .from("invoices")
@@ -107,11 +128,21 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
   let charged = false;
   let ref: string | null = null;
   if (invoice && ownerId) {
-    const { data: pm } = await admin
+    const pmRes = await admin
       .from("payment_methods").select("token").eq("user_id", ownerId)
       .order("is_default", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(1).maybeSingle();
+    // THE SENTENCE AT THE BOTTOM OF THIS FUNCTION IS A CLAIM ABOUT THEIR CARD
+    // — "That card declined (or there isn't one on file)". A failed read here
+    // takes the same branch as a customer with no card, so ops rings somebody
+    // to say their card bounced about a card that was never presented. Put the
+    // row back on the queue and say what actually happened.
+    if (pmRes.error) {
+      await admin.from("jobs").update({ recovery_state: "fee_proposed" }).eq("id", jobId);
+      return { ok: false, error: readFailedMessage("the card on file", pmRes.error, { money: true }) };
+    }
+    const pm = pmRes.data;
     if (pm?.token) {
       const charge = await LakeLifePayments.charge({
         token: pm.token as string,
@@ -154,13 +185,31 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
   // when the customer's money lands.
   if (charged) {
     try {
-      const { data: full } = await admin
+      const fullRes = await admin
         .from("jobs").select("vendor_id, vendor_cost").eq("id", jobId).maybeSingle();
+      if (fullRes.error) {
+        // Reading a `vendor_cost` of 0 out of a failed read makes the share 0
+        // and pays the crew nothing, silently. Skip and let ops chase it.
+        console.error("[read failed] the crew's cost on that visit:", fullRes.error);
+        throw fullRes.error;
+      }
+      const full = fullRes.data;
       const dials = await getPlatformSettings();
       const share = Math.max(0, Number(full?.vendor_cost ?? 0)) * dials.cancelFeePct;
 
-      const { data: already } = await admin
+      // FAILS OPEN, AND IT PAYS TWICE. This read is the ONLY thing that knows
+      // the crew already had the flat trip fee. `data: null` on a dropped
+      // connection reduces to `paid = 0`, so the top-up below is computed as
+      // the WHOLE share and inserted on top of a payout that already exists —
+      // real money, out the door, with nothing on any screen to say so. A
+      // failed read here must skip the top-up, never assume nothing was paid.
+      const alreadyRes = await admin
         .from("payouts").select("amount").eq("job_id", jobId).eq("kind", "trip");
+      if (alreadyRes.error) {
+        console.error("[read failed] what the crew was already paid for that trip:", alreadyRes.error);
+        throw alreadyRes.error;
+      }
+      const already = alreadyRes.data;
       const paid = (already ?? []).reduce((n, r) => n + Number(r.amount ?? 0), 0);
 
       const topUp = Math.round((share - paid) * 100) / 100;
@@ -252,34 +301,51 @@ export async function getProposedFees(): Promise<ProposedFeeRow[]> {
   if (!(await assertOps())) return [];
   const admin = createServiceClient();
 
-  const { data: jobs } = await admin
-    .from("jobs")
-    .select("id, date, recovery_state, fee_proposed_amount, fee_waived_reason, reschedule_deadline, vendor_cost, no_show_at, no_show_reason, stood_down_at, stood_down_reason, services(name), properties(address)")
-    // ALL THREE STATES. A stand-down is auto-waived by the nightly (never
-    // fee-eligible), so filtering on `fee_proposed` alone meant a crew who
-    // drove out because OUR profile was wrong never appeared on anybody's
-    // screen. Nothing is charged for these — the card offers no fee — but the
-    // trip happened and somebody should see it.
-    //
-    // AND `fee_charging`, which 0092 said in writing "needs a human" — and
-    // then no query anywhere selected it. A charge that died mid-flight was
-    // invisible to this screen, refused by both action guards and ignored by
-    // the nightly: the one row a person was told to look at was the one row
-    // nobody could see.
-    .in("recovery_state", ["fee_proposed", "fee_waived", "fee_charging"])
-    .order("date", { ascending: true });
+  // A LOADER, not a button — it returns rows, so it throws like every other
+  // loader rather than returning a message nothing here could render. /ops
+  // already wraps this call in its own try/catch (deliberately: a fee nobody
+  // can see beats a console nobody can), so the throw is caught there and the
+  // failure finally shows up in the log instead of as an empty list.
+  const jobs = mustRead(
+    "the fee decisions waiting on a person",
+    await admin
+      .from("jobs")
+      .select("id, date, recovery_state, fee_proposed_amount, fee_waived_reason, reschedule_deadline, vendor_cost, no_show_at, no_show_reason, stood_down_at, stood_down_reason, services(name), properties(address)")
+      // ALL THREE STATES. A stand-down is auto-waived by the nightly (never
+      // fee-eligible), so filtering on `fee_proposed` alone meant a crew who
+      // drove out because OUR profile was wrong never appeared on anybody's
+      // screen. Nothing is charged for these — the card offers no fee — but the
+      // trip happened and somebody should see it.
+      //
+      // AND `fee_charging`, which 0092 said in writing "needs a human" — and
+      // then no query anywhere selected it. A charge that died mid-flight was
+      // invisible to this screen, refused by both action guards and ignored by
+      // the nightly: the one row a person was told to look at was the one row
+      // nobody could see.
+      .in("recovery_state", ["fee_proposed", "fee_waived", "fee_charging"])
+      .order("date", { ascending: true }),
+  );
   if (!jobs?.length) return [];
 
   const settings = await getPlatformSettings();
   const ids = jobs.map((j) => j.id as string);
 
-  // What the crew already received for each wasted trip.
-  const { data: trips } = await admin
-    .from("payouts").select("job_id, amount").in("job_id", ids).eq("kind", "trip");
+  // What the crew already received for each wasted trip. On a failed read this
+  // would come back 0 for every row, and 0 is what drives `crewOutOfPocket` —
+  // i.e. the card would tell the person deciding whether to waive that the crew
+  // got nothing, which is the single fact this screen exists to put in front of
+  // them. It must be true or it must not render.
+  const trips = mustRead(
+    "what the crews were already paid for those trips",
+    await admin.from("payouts").select("job_id, amount").in("job_id", ids).eq("kind", "trip"),
+  );
   // The real attempt dates, from the append-only record.
-  const { data: attempts } = await admin
-    .from("job_visit_attempts").select("job_id, attempted_on").in("job_id", ids)
-    .order("attempted_on", { ascending: false });
+  const attempts = mustRead(
+    "the dates the crews actually went",
+    await admin
+      .from("job_visit_attempts").select("job_id, attempted_on").in("job_id", ids)
+      .order("attempted_on", { ascending: false }),
+  );
   const attemptByJob = new Map<string, string>();
   for (const a of attempts ?? []) {
     if (!attemptByJob.has(a.job_id as string)) {

@@ -71,7 +71,19 @@ export default async function VendorEarningsPage() {
 
   const earnings = await getMyEarnings();
   const today = todayLakeDate();
-  const referral = await (await import("@/lib/referral-data")).getMyReferralTicker();
+  // THE TICKER IS NOT WORTH THE EARNINGS PAGE. getMyReferralTicker throws on a
+  // failed read now, and unguarded that took a crew's whole earnings screen to
+  // the error boundary over a referral total. Caught here it stays null, and
+  // the card below is only rendered when there IS a total — so nothing is
+  // claimed about their referral money either way. mustRead already logged it.
+  const { getMyReferralTicker } = await import("@/lib/referral-data");
+  const { ReadFailed } = await import("@/lib/must-read");
+  let referral: Awaited<ReturnType<typeof getMyReferralTicker>> = null;
+  try {
+    referral = await getMyReferralTicker();
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+  }
   const payoutState = await getMyPayoutState();
 
   return (

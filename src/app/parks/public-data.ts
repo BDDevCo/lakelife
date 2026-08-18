@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
 import {
   fromPrice, isAvailable, parseDaterange, parkOpenFor,
@@ -56,11 +57,13 @@ export interface PublicPark {
 export async function getPublicPark(slug: string): Promise<PublicPark | null> {
   const admin = createServiceClient();
 
-  const { data: park } = await admin
+  // `return null` here is a 404 for the whole park. A failed read must not be
+  // able to un-publish somebody's park page.
+  const park = mustRead("the park", await admin
     .from("parks")
     .select("id, slug, name, address, lake_id, park_type, age_restricted, approval_required, included_utilities, house_rules, season_open_month, season_open_day, season_close_month, season_close_day, active")
     .eq("slug", slug)
-    .maybeSingle();
+    .maybeSingle());
   if (!park || !park.active) return null;
 
   let lakeName: string | null = null;
@@ -68,12 +71,12 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
     // 0124. Degrades correctly: the caller already omits the label when this
     // is null, so a fixture lake costs a line rather than printing a fake
     // place name on a public page.
-    const { data: lake } = await admin.from("lakes").select("name")
-      .eq("id", park.lake_id).eq("is_fixture", false).maybeSingle();
+    const lake = mustRead("the lake", await admin.from("lakes").select("name")
+      .eq("id", park.lake_id).eq("is_fixture", false).maybeSingle());
     lakeName = (lake?.name as string | null) ?? null;
   }
 
-  const { data: lotRows } = await admin
+  const lotRows = mustRead("the park's lots", await admin
     .from("park_lots")
     .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, lifecycle, season_open_month, season_open_day, season_close_month, season_close_day")
     .eq("park_id", park.id)
@@ -81,18 +84,23 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
     // A lot that is planned, being worked on, or retired is not listed AT ALL
     // — not listed-and-unavailable. The public has no business seeing a pad
     // that does not exist yet or has been taken out of service.
-    .eq("lifecycle", "live");
+    .eq("lifecycle", "live"));
   const lots = lotRows ?? [];
 
   const lotIds = lots.map((l) => l.id as string);
-  const [{ data: rateRows }, { data: resRows }] = await Promise.all([
+  const [rateRes, resRes] = await Promise.all([
     lotIds.length
       ? admin.from("lot_rates").select("park_lot_id, term, amount").in("park_lot_id", lotIds)
-      : Promise.resolve({ data: [] as { park_lot_id: string; term: string; amount: number }[] }),
+      : Promise.resolve({ data: [] as { park_lot_id: string; term: string; amount: number }[], error: null }),
     lotIds.length
       ? admin.from("lot_reservations").select("park_lot_id, during, status").in("park_lot_id", lotIds)
-      : Promise.resolve({ data: [] as { park_lot_id: string; during: string; status: string }[] }),
+      : Promise.resolve({ data: [] as { park_lot_id: string; during: string; status: string }[], error: null }),
   ]);
+  const rateRows = mustRead("the lot rates", rateRes);
+  // FAILS OPEN IF LEFT ALONE. No reservations reads as nothing held, so every
+  // lot in the park would publish `openNow: true` — and somebody would drive
+  // out to a pad another household is living on.
+  const resRows = mustRead("what's already taken", resRes);
 
   const ratesBy = new Map<string, RateCard[]>();
   for (const r of rateRows ?? []) {
@@ -185,19 +193,21 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
 /** Every published park, for the directory page. */
 export async function listPublicParks(): Promise<{ slug: string; name: string; lakeName: string | null }[]> {
   const admin = createServiceClient();
-  const { data } = await admin
+  // An empty directory is a real state (no park published yet); a failed read
+  // must not be able to impersonate it and tell the world we have no parks.
+  const data = mustRead("the park directory", await admin
     .from("parks")
     .select("slug, name, lake_id")
     .eq("active", true)
-    .order("name");
+    .order("name"));
   const rows = (data ?? []).filter((p) => !!p.slug);
   if (rows.length === 0) return [];
 
   const lakeIds = [...new Set(rows.map((p) => p.lake_id as string | null).filter((x): x is string => !!x))];
   const names = new Map<string, string>();
   if (lakeIds.length) {
-    const { data: lakes } = await admin.from("lakes").select("id, name")
-      .in("id", lakeIds).eq("is_fixture", false); // 0124 — born correct
+    const lakes = mustRead("the lakes", await admin.from("lakes").select("id, name")
+      .in("id", lakeIds).eq("is_fixture", false)); // 0124 — born correct
     for (const l of lakes ?? []) names.set(l.id as string, l.name as string);
   }
 

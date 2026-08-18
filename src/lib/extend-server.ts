@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange, toDaterange, type DateRange, type Term } from "@/lib/parks";
 import { canExtend, refusalText, type ExtendRefusal } from "@/lib/extend-stay";
@@ -41,20 +42,24 @@ export async function loadExtendByToken(token: string): Promise<ExtendView | nul
   if (!isExtendToken(token)) return null;
   const admin = createServiceClient();
 
-  const { data: res } = await admin
+  // `return null` becomes "This link doesn't match a stay" on the renter's
+  // phone. That sentence is only true if the lookup actually ran.
+  const res = mustRead("your stay", await admin
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id, during, term, status, extended_count, agreement_chain_id, agreement_seq, quoted_amount")
     .eq("extend_token", token)
-    .maybeSingle();
+    .maybeSingle());
   if (!res) return null;
 
-  const [{ data: lot }, { data: renter }] = await Promise.all([
+  const [lotRes, renterRes] = await Promise.all([
     admin.from("park_lots").select("lot_number, park_id").eq("id", res.park_lot_id as string).maybeSingle(),
     admin.from("park_renters").select("display_name").eq("id", res.renter_id as string).maybeSingle(),
   ]);
+  const lot = mustRead("your lot", lotRes);
+  const renter = mustRead("your name", renterRes);
   if (!lot) return null;
 
-  const [{ data: park }, { data: rateRows }, { data: others }] = await Promise.all([
+  const [parkRes, rateRes, othersRes] = await Promise.all([
     admin.from("parks").select("name, max_agreement_months, deposit_amount")
       .eq("id", lot.park_id as string).maybeSingle(),
     admin.from("lot_rates").select("term, amount").eq("park_lot_id", res.park_lot_id as string),
@@ -64,6 +69,14 @@ export async function loadExtendByToken(token: string): Promise<ExtendView | nul
       .eq("park_lot_id", res.park_lot_id as string)
       .in("status", ["approved", "active"]),
   ]);
+  // FAILS OPEN IF LEFT ALONE, twice over. A failed `parks` read leaves
+  // capMonths null, which switches the agreement cap OFF and turns a renewal
+  // into a silent open-ended extension; a failed `others` read leaves otherHeld
+  // empty, so canExtend sees no clash and offers a period the lot is already
+  // sold for. Both end in money and a double-booked pad.
+  const park = mustRead("the park", parkRes);
+  const rateRows = mustRead("the rate for your lot", rateRes);
+  const others = mustRead("what else is booked on your lot", othersRes);
 
   const range = parseDaterange(res.during as string);
   const term = res.term as Term;
@@ -121,18 +134,30 @@ export async function loadExtendByToken(token: string): Promise<ExtendView | nul
 export async function extendByToken(
   token: string,
 ): Promise<{ ok: boolean; newEnd?: string; error?: string }> {
-  const view = await loadExtendByToken(token);
+  // The loader THROWS on a failed read (a page can render an honest error; a
+  // button awaiting { ok, error } cannot), so this is where that is turned
+  // back into a sentence. `not_found` here would be the loader's lie repeated.
+  let view: ExtendView | null;
+  try {
+    view = await loadExtendByToken(token);
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("your stay", e, { money: true }) };
+  }
   if (!view) return { ok: false, error: refusalText("not_found") };
   if (view.refusal || !view.newEnd) {
     return { ok: false, error: view.message ?? refusalText("not_extendable") };
   }
 
   const admin = createServiceClient();
-  const { data: current } = await admin
+  const currentRes = await admin
     .from("lot_reservations")
     .select("during, extended_count, park_lot_id, renter_id, term, quoted_amount, agreement_chain_id, agreement_seq")
     .eq("id", view.reservationId)
     .maybeSingle();
+  if (currentRes.error) {
+    return { ok: false, error: readFailedMessage("your stay", currentRes.error, { money: true }) };
+  }
+  const current = currentRes.data;
   const range = parseDaterange(current?.during as string);
   if (!range) return { ok: false, error: refusalText("not_found") };
 

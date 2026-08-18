@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { isBearerToken } from "@/lib/token-format";
 import { receiptRef, METHOD_WORD } from "@/app/park/receipt-helpers";
 
@@ -49,11 +50,13 @@ export async function loadPaymentByToken(token: string): Promise<ConfirmView | n
   if (!isBearerToken(token)) return null;
   const admin = createServiceClient();
 
-  const { data: pay } = await admin
+  // `return null` renders "This link doesn't match a payment" — a flat denial
+  // that their receipt exists. Only say it when we actually looked.
+  const pay = mustRead("your receipt", await admin
     .from("park_payments")
     .select("id, charge_id, park_id, kind, amount, fee_amount, method, reference, received_on, receipt_no, renter_confirmed_at")
     .eq("confirm_token", token)
-    .maybeSingle();
+    .maybeSingle());
   if (!pay) return null;
 
   // A PAYMENT NEED NOT HAVE A CHARGE ANY MORE (0102). This resolved the park by
@@ -62,20 +65,25 @@ export async function loadPaymentByToken(token: string): Promise<ConfirmView | n
   // the bill existed, pointed at a "not found" page. The renter's own
   // confirmation is the only second party this ledger will ever have, and it
   // matters MOST for money with no bill to check it against.
-  const { data: charge } = pay.charge_id
+  const charge = mustRead("the bill behind it", pay.charge_id
     ? await admin
         .from("park_charges").select("park_id, park_lot_id").eq("id", pay.charge_id as string).maybeSingle()
-    : { data: null };
+    : { data: null, error: null });
 
   const parkId = (charge?.park_id as string) ?? (pay.park_id as string) ?? null;
   if (!parkId) return null;
 
-  const [{ data: park }, { data: lot }] = await Promise.all([
+  const [parkRes, lotRes] = await Promise.all([
     admin.from("parks").select("name").eq("id", parkId).maybeSingle(),
     charge?.park_lot_id
       ? admin.from("park_lots").select("lot_number").eq("id", charge.park_lot_id as string).maybeSingle()
-      : Promise.resolve({ data: null }),
+      : Promise.resolve({ data: null, error: null }),
   ]);
+  // "the park" and "?" are the fallbacks for rows that genuinely carry neither.
+  // A failed read reaching them would print a receipt with the park's name
+  // rubbed off, and ask somebody to agree to it.
+  const park = mustRead("the park", parkRes);
+  const lot = mustRead("the lot", lotRes);
 
   const parkName = (park?.name as string) ?? "the park";
   return {
@@ -100,8 +108,10 @@ export async function confirmByToken(
   token: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const admin = createServiceClient();
-  const { data: pay } = await admin
+  const payRes = await admin
     .from("park_payments").select("id, renter_confirmed_at").eq("confirm_token", token).maybeSingle();
+  if (payRes.error) return { ok: false, error: readFailedMessage("your receipt", payRes.error) };
+  const pay = payRes.data;
   if (!pay) return { ok: false, error: "This link doesn't match a payment." };
   // Confirming twice is not an error — people tap links twice.
   if (pay.renter_confirmed_at) return { ok: true };
@@ -126,8 +136,10 @@ export async function disputeByToken(
   token: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const admin = createServiceClient();
-  const { data: pay } = await admin
+  const payRes = await admin
     .from("park_payments").select("id, charge_id, amount, received_on, receipt_no").eq("confirm_token", token).maybeSingle();
+  if (payRes.error) return { ok: false, error: readFailedMessage("your receipt", payRes.error) };
+  const pay = payRes.data;
   if (!pay) return { ok: false, error: "This link doesn't match a payment." };
 
   // `park_payment_claims.charge_id` is NOT NULL, so a disagreement about money
@@ -142,12 +154,17 @@ export async function disputeByToken(
     };
   }
 
-  const { data: open } = await admin
+  const openRes = await admin
     .from("park_payment_claims")
     .select("id")
     .eq("charge_id", pay.charge_id as string)
     .is("resolved_at", null)
     .maybeSingle();
+  // FAILS OPEN IF LEFT ALONE. This is the don't-stack-duplicates guard, and a
+  // failed read looks exactly like "nothing flagged yet" — so a dropped
+  // connection files a second claim against the same bill.
+  if (openRes.error) return { ok: false, error: readFailedMessage("what's already flagged", openRes.error) };
+  const open = openRes.data;
   if (open) return { ok: true }; // already flagged; don't stack duplicates
 
   const { error } = await admin.from("park_payment_claims").insert({

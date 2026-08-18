@@ -1,6 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead, mustCount } from "@/lib/must-read";
 import { decryptGate } from "@/lib/gate";
 import { withParkRate, type ParkRates } from "@/lib/park-rates";
 import { loadParkRates } from "@/app/park/rate-data";
@@ -22,11 +23,16 @@ export async function listProperties(): Promise<PropertySummary[]> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return [];
-  const { data } = await supabase
-    .from("properties")
-    .select("id, address, nickname, lakes(name)")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: true });
+  // A failed read here would read as "you own nothing" — and getActivePropertyId
+  // below turns that into no active property for the whole portal.
+  const data = mustRead(
+    "your properties",
+    await supabase
+      .from("properties")
+      .select("id, address, nickname, lakes(name)")
+      .eq("owner_id", user.id)
+      .order("created_at", { ascending: true }),
+  );
   return (data ?? []).map((p) => {
     const lk = Array.isArray(p.lakes) ? p.lakes[0] : p.lakes;
     return {
@@ -45,7 +51,10 @@ export async function getMyCalendarUrl(): Promise<string | null> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
-  const { data } = await supabase.from("users").select("ics_token").eq("id", user.id).maybeSingle();
+  const data = mustRead(
+    "your calendar link",
+    await supabase.from("users").select("ics_token").eq("id", user.id).maybeSingle(),
+  );
   if (!data?.ics_token) return null;
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
   return `${site}/api/ics/${data.ics_token}`;
@@ -158,9 +167,12 @@ export async function getFullProfile(
         .eq("id", targetId)
     : null;
 
-  const { data: property } = base
+  // A failed read must not become `hasProfile: false` — that sends an owner who
+  // has a property to "Set up your place to see prices".
+  const propertyRes = base
     ? await (ownerId ? base.eq("owner_id", ownerId) : base).maybeSingle()
-    : { data: null };
+    : null;
+  const property = propertyRes ? mustRead("your property", propertyRes) : null;
 
   if (!property) {
     return {
@@ -196,23 +208,31 @@ export async function getFullProfile(
     .eq("service_property_id", property.id)
     .maybeSingle();
 
-  const [{ data: profile }, { data: boats }, { data: toys }, { data: grounds }] = await Promise.all([
+  const [profileRes, boatsRes, toysRes, groundsRes] = await Promise.all([
     supabase.from("property_profile").select("*").eq("property_id", property.id).maybeSingle(),
     supabase.from("boats").select("type, length_ft, engine_type, engine_hp, engines").eq("property_id", property.id),
     supabase.from("toys").select("name").eq("property_id", property.id),
     groundsQ,
   ]);
+  // Every one of these is a price input. A failed read would quietly zero the
+  // pier sections / lifts / boats and quote a number for a different house.
+  const profile = mustRead("your property profile", profileRes);
+  const boats = mustRead("your boats", boatsRes);
+  const toys = mustRead("your toys", toysRes);
+  const grounds = mustRead("the park this property belongs to", groundsRes);
 
   // The live lot count is the price of every park service, so it is read here
   // rather than passed in — a stale count is a wrong invoice.
   let lots: number | undefined;
   if (grounds?.id) {
-    const { count } = await admin
-      .from("park_lots")
-      .select("id", { count: "exact", head: true })
-      .eq("park_id", grounds.id as string)
-      .eq("lifecycle", "live");
-    lots = count ?? 0;
+    lots = mustCount(
+      "the park's lot count",
+      await admin
+        .from("park_lots")
+        .select("id", { count: "exact", head: true })
+        .eq("park_id", grounds.id as string)
+        .eq("lifecycle", "live"),
+    );
   }
 
   let gate: string | null = null;
@@ -296,12 +316,15 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
   // so it applies to everything, and a park's grounds menu would carry a
   // lake-house winterization at a lake-house price. The flag is the fence.
   const isGrounds = p.groundsForParkId != null;
-  const { data: services } = await supabase
-    .from("services")
-    .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work, park_only")
-    .eq("active", true)
-    .eq("park_only", isGrounds)
-    .eq("kind", "standalone"); // components/add-ons price inside packages, never as menu tiles
+  const services = mustRead(
+    "the service menu",
+    await supabase
+      .from("services")
+      .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work, park_only")
+      .eq("active", true)
+      .eq("park_only", isGrounds)
+      .eq("kind", "standalone"), // components/add-ons price inside packages, never as menu tiles
+  );
 
   // A PARK SERVICE IS PRICED BY THE PARK THAT BUYS IT (0115).
   //
@@ -331,7 +354,10 @@ export async function getMyReferralLink(): Promise<string | null> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
-  const { data } = await supabase.from("users").select("referral_code").eq("id", user.id).maybeSingle();
+  const data = mustRead(
+    "your referral link",
+    await supabase.from("users").select("referral_code").eq("id", user.id).maybeSingle(),
+  );
   if (!data?.referral_code) return null;
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
   return `${site}/?ref=${data.referral_code}`;

@@ -7,6 +7,7 @@ import { decideDisputeOutcome, respondByFrom, DISPUTE_ACCEPTABLE_STATUSES, DISPU
 import { executeRefund } from "@/lib/refund-core";
 import { refundableRemaining } from "@/lib/refunds";
 import { sendSms } from "@/lib/sms";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 
 /**
  * Make-It-Right disputes (Autonomy Ladder, 2026-07-23) — the machine runs
@@ -95,8 +96,15 @@ async function holdPayout(admin: ReturnType<typeof createServiceClient>, jobId: 
 export async function openDisputeForJob(jobId: string, note: string | null): Promise<{ ok: boolean; crewLinks?: { fix: string; verify: string; talk: string } }> {
   const admin = createServiceClient();
   const settings = await getPlatformSettings();
-  const { data: job } = await admin
+  const { data: job, error: jobErr } = await admin
     .from("jobs").select("id, vendor_id, status").eq("id", jobId).maybeSingle();
+  // This result carries no sentence — the caller only learns ok/not — so the
+  // log IS the record. Refusing is right: the sweep's reconcile pass re-opens
+  // any 👎 whose dispute row never got written.
+  if (jobErr) {
+    console.error("[read failed] the job behind this complaint:", jobErr);
+    return { ok: false };
+  }
   if (!job || !job.vendor_id) return { ok: false };
 
   const crewToken = token();
@@ -110,11 +118,15 @@ export async function openDisputeForJob(jobId: string, note: string | null): Pro
   });
   if (error) {
     // Open dispute already exists (unique index) — reuse its links.
-    const { data: existing } = await admin
+    const { data: existing, error: existingErr } = await admin
       .from("disputes").select("crew_token")
       .eq("job_id", jobId)
       .in("status", ["crew_review", "fixing", "verifying", "talk", "escalated"])
       .maybeSingle();
+    if (existingErr) {
+      console.error("[read failed] the dispute already open on this job:", existingErr);
+      return { ok: false };
+    }
     if (!existing) return { ok: false };
     const t = existing.crew_token as string;
     return { ok: true, crewLinks: linksFor(t) };
@@ -142,29 +154,54 @@ export interface DisputeRow {
   correction_job_id: string | null;
 }
 
+/**
+ * A FAILED READ IS NOT AN UNKNOWN TOKEN. Every caller turns `null` into "That
+ * link isn't valid anymore" — told, on a dropped connection, to a crew member
+ * holding a link that is perfectly valid, about a dispute that is holding their
+ * pay. So the read throws instead; `disputeForAction` below converts the throw
+ * back into an honest sentence for the tapped-link paths.
+ */
 export async function loadDisputeByToken(kind: "crew" | "customer", tok: string): Promise<DisputeRow | null> {
   if (!isBearerToken(tok)) return null;
   const admin = createServiceClient();
-  const { data } = await admin
+  const res = await admin
     .from("disputes")
     .select("id, job_id, status, customer_note, customer_token, crew_token, correction_job_id")
     .eq(kind === "crew" ? "crew_token" : "customer_token", tok)
     .maybeSingle();
-  return (data as DisputeRow) ?? null;
+  return (mustRead("this request", res) as DisputeRow) ?? null;
+}
+
+/**
+ * The same load, for the functions below: they answer a tapped link and their
+ * callers render `error`, where a rejected promise is a blank page with no
+ * sentence on it. `null` still means the token genuinely matches nothing.
+ */
+async function disputeForAction(
+  kind: "crew" | "customer",
+  tok: string,
+): Promise<{ d: DisputeRow | null; readError?: string }> {
+  try {
+    return { d: await loadDisputeByToken(kind, tok) };
+  } catch (e) {
+    return { d: null, readError: readFailedMessage("this request", e) };
+  }
 }
 
 /** Crew taps "I'll fix it" and picks a date → $0 photo-gated correction visit. */
 export async function crewChooseFix(crewToken: string, dateISO: string): Promise<{ ok: boolean; error?: string }> {
   const admin = createServiceClient();
-  const d = await loadDisputeByToken("crew", crewToken);
+  const { d, readError } = await disputeForAction("crew", crewToken);
+  if (readError) return { ok: false, error: readError };
   if (!d) return { ok: false, error: "That link isn't valid anymore." };
   if (!["crew_review", "talk", "verifying"].includes(d.status)) return { ok: false, error: "This one's already moving — check your Today list." };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) return { ok: false, error: "Pick a day." };
 
-  const { data: job } = await admin
+  const { data: job, error: jobErr } = await admin
     .from("jobs")
     .select("id, property_id, service_id, vendor_id, properties(address, nickname, users(phone)), services(name)")
     .eq("id", d.job_id).maybeSingle();
+  if (jobErr) return { ok: false, error: readFailedMessage("this job", jobErr) };
   if (!job) return { ok: false, error: "Job not found." };
 
   // The make-it-right visit: $0, same crew, photo gate still applies —
@@ -203,15 +240,21 @@ export async function crewChooseFix(crewToken: string, dateISO: string): Promise
 /** Crew stands by the work → customer decides against the photo evidence. */
 export async function crewChooseVerify(crewToken: string): Promise<{ ok: boolean; error?: string }> {
   const admin = createServiceClient();
-  const d = await loadDisputeByToken("crew", crewToken);
+  const { d, readError } = await disputeForAction("crew", crewToken);
+  if (readError) return { ok: false, error: readError };
   if (!d) return { ok: false, error: "That link isn't valid anymore." };
   const { data: flipped } = await admin
     .from("disputes").update({ status: "verifying" })
     .eq("id", d.id).eq("status", "crew_review").select("id");
   if (!flipped || flipped.length === 0) return { ok: false, error: "This one's already moving." };
 
-  const { data: job } = await admin
+  // The flip already happened, so this cannot refuse — but a failed read means
+  // the customer never gets the text that hands them the decision. Log it: the
+  // sweep closes a quiet 'verifying' in the crew's favour, and it must be
+  // findable if the customer was never actually asked.
+  const { data: job, error: jobErr } = await admin
     .from("jobs").select("properties(users(phone)), services(name)").eq("id", d.job_id).maybeSingle();
+  if (jobErr) console.error(`[read failed] the customer's number for dispute ${d.id}:`, jobErr);
   const ownerPhone = (one((one(job?.properties) as { users?: unknown } | null)?.users) as { phone?: string } | null)?.phone;
   const svcName = (one(job?.services) as { name?: string } | null)?.name ?? "the work";
   if (ownerPhone) {
@@ -223,17 +266,23 @@ export async function crewChooseVerify(crewToken: string): Promise<{ ok: boolean
 /** Crew wants to talk → opens the existing message thread, no ops needed. */
 export async function crewChooseTalk(crewToken: string): Promise<{ ok: boolean; error?: string }> {
   const admin = createServiceClient();
-  const d = await loadDisputeByToken("crew", crewToken);
+  const { d, readError } = await disputeForAction("crew", crewToken);
+  if (readError) return { ok: false, error: readError };
   if (!d) return { ok: false, error: "That link isn't valid anymore." };
   const { data: flipped } = await admin
     .from("disputes").update({ status: "talk" })
     .eq("id", d.id).eq("status", "crew_review").select("id");
   if (!flipped || flipped.length === 0) return { ok: false, error: "This one's already moving." };
 
-  const { data: job } = await admin
+  // Same as verify: the status is already 'talk'. A failed read here costs the
+  // customer both the crew's message and the SMS carrying their two levers, and
+  // the quiet-close sweep will later read that silence as agreement — so this
+  // failure has to be on the record.
+  const { data: job, error: jobErr } = await admin
     .from("jobs")
     .select("property_id, vendor_id, vendors(user_id), properties(users(id, phone)), services(name)")
     .eq("id", d.job_id).maybeSingle();
+  if (jobErr) console.error(`[read failed] the people on dispute ${d.id}:`, jobErr);
   const svcName = (one(job?.services) as { name?: string } | null)?.name ?? "the work";
   const crewUserId = (one(job?.vendors) as { user_id?: string } | null)?.user_id;
   const owner = one((one(job?.properties) as { users?: unknown } | null)?.users) as { id?: string; phone?: string } | null;
@@ -259,24 +308,42 @@ export async function crewChooseTalk(crewToken: string): Promise<{ ok: boolean; 
 }
 
 /** Customer accepts (photos convinced them / fix satisfied them informally). */
-export async function customerResolved(customerToken: string): Promise<{ ok: boolean; error?: string }> {
+export async function customerResolved(customerToken: string): Promise<{ ok: boolean; error?: string; readFailed?: boolean }> {
   const admin = createServiceClient();
-  const d = await loadDisputeByToken("customer", customerToken);
+  const { d, readError } = await disputeForAction("customer", customerToken);
+  // Flagged, not just worded: /d/<token>/resolved headlines a refusal as
+  // "Already settled ✓", which is a claim about the dispute this read never saw.
+  if (readError) return { ok: false, readFailed: true, error: readError };
   if (!d) return { ok: false, error: "That link isn't valid anymore." };
-  const { data: flipped } = await admin
+  // THE COMPARE-AND-SET HAS THREE ANSWERS, NOT TWO. `flipped` empty means
+  // somebody else moved this dispute first — genuinely "already settled". A
+  // failed WRITE also arrives as empty, and answering that with "Already
+  // settled — thank you." is the same lie this whole change set exists to
+  // remove, one layer down from the read that started it: the customer is told
+  // it is closed, `releaseHeldPayout` below never runs, and the crew's pay
+  // stays held with nobody told. The error is the third answer.
+  const { data: flipped, error: flipErr } = await admin
     .from("disputes")
     .update({ status: "resolved_verified", resolved_at: new Date().toISOString(), resolution: "customer accepted" })
     .eq("id", d.id)
     .in("status", ["crew_review", "verifying", "talk", "fixing"])
     .select("id");
+  if (flipErr) {
+    console.error("[write failed] closing the dispute:", flipErr);
+    return { ok: false, readFailed: true, error: readFailedMessage("this dispute", flipErr) };
+  }
   if (!flipped || flipped.length === 0) return { ok: false, error: "Already settled — thank you." };
   await releaseHeldPayout(admin, d.job_id);
   return { ok: true };
 }
 
 /** Customer says it's STILL not right → the policy decides, no humans unless big. */
-export async function customerStill(customerToken: string): Promise<{ ok: boolean; error?: string; refunded?: boolean }> {
-  const d = await loadDisputeByToken("customer", customerToken);
+export async function customerStill(customerToken: string): Promise<{ ok: boolean; error?: string; refunded?: boolean; readFailed?: boolean }> {
+  const { d, readError } = await disputeForAction("customer", customerToken);
+  // Same flag, same reason: /d/<token>/still headlines a refusal as "Already
+  // settled", and firePolicy below has seven refusals of its own that mean
+  // "we couldn't check the money", not "this is closed".
+  if (readError) return { ok: false, readFailed: true, error: readError };
   if (!d) return { ok: false, error: "That link isn't valid anymore." };
   if (!["verifying", "talk", "fixing", "crew_review"].includes(d.status)) return { ok: false, error: "Already settled." };
   return firePolicy(d, "customer says still unresolved");
@@ -295,15 +362,21 @@ export async function customerStill(customerToken: string): Promise<{ ok: boolea
  * AUTH IS STILL THE CALLER'S JOB: the portal action must prove the signed-in
  * user owns the property behind this job BEFORE calling either of these.
  */
-async function openDisputeTokenForJob(jobId: string, statuses: string[]): Promise<string | null> {
+/** Returns the error alongside the token: both callers below turn a missing
+ *  token into a confident sentence about this customer's dispute, and neither
+ *  of those sentences is true when the read simply didn't happen. */
+async function openDisputeTokenForJob(
+  jobId: string,
+  statuses: string[],
+): Promise<{ token: string | null; error: unknown | null }> {
   const admin = createServiceClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from("disputes")
     .select("customer_token")
     .eq("job_id", jobId)
     .in("status", statuses)
     .maybeSingle();
-  return (data?.customer_token as string) ?? null;
+  return { token: (data?.customer_token as string) ?? null, error };
 }
 
 // The two status lists live in lib/dispute-policy.ts (pure + unit-tested):
@@ -313,14 +386,18 @@ async function openDisputeTokenForJob(jobId: string, statuses: string[]): Promis
 
 /** "That settles it" from the portal — same path as the SMS link. */
 export async function customerResolvedForJob(jobId: string): Promise<{ ok: boolean; error?: string }> {
-  const tok = await openDisputeTokenForJob(jobId, [...DISPUTE_ACCEPTABLE_STATUSES]);
+  const { token: tok, error } = await openDisputeTokenForJob(jobId, [...DISPUTE_ACCEPTABLE_STATUSES]);
+  if (error) return { ok: false, error: readFailedMessage("the open request on this job", error) };
   if (!tok) return { ok: false, error: "There's nothing open on this job." };
   return customerResolved(tok);
 }
 
 /** "Still not right" from the portal — fires the same policy engine. */
 export async function customerStillForJob(jobId: string): Promise<{ ok: boolean; error?: string; refunded?: boolean }> {
-  const tok = await openDisputeTokenForJob(jobId, [...DISPUTE_ESCALATABLE_STATUSES]);
+  const { token: tok, error } = await openDisputeTokenForJob(jobId, [...DISPUTE_ESCALATABLE_STATUSES]);
+  // "Your crew is still working on this one" is a statement about the crew.
+  // Don't make it on behalf of a read that failed.
+  if (error) return { ok: false, error: readFailedMessage("the open request on this job", error) };
   if (!tok) {
     return { ok: false, error: "Your crew is still working on this one — give them a chance to make it right, and you'll get a yes/no from us as soon as they respond." };
   }
@@ -330,11 +407,18 @@ export async function customerStillForJob(jobId: string): Promise<{ ok: boolean;
 /** Correction visit's fresh 👍/👎 closes the loop. */
 export async function resolveFromCorrection(correctionJobId: string, good: boolean): Promise<void> {
   const admin = createServiceClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from("disputes")
     .select("id, job_id, status, customer_note, customer_token, crew_token, correction_job_id")
     .eq("correction_job_id", correctionJobId)
     .maybeSingle();
+  // Returns void — nobody is waiting on a sentence. Treating a failed read as
+  // "no dispute on this correction" would drop the verdict on the free return
+  // visit entirely; skip instead, and the nightly sweep still owns this row.
+  if (error) {
+    console.error("[read failed] the dispute behind this correction visit:", error);
+    return;
+  }
   if (!data) return;
   const d = data as DisputeRow;
   if (d.status !== "fixing") return;
@@ -355,36 +439,59 @@ export async function resolveFromCorrection(correctionJobId: string, good: boole
  * complete. The HOLD must release BEFORE the refund so the clawback's
  * reduce path sees a 'released' row — conservation depends on it.
  */
-async function firePolicy(d: DisputeRow, why: string): Promise<{ ok: boolean; error?: string; refunded?: boolean }> {
+// `readFailed` on a refusal marks the ones below that mean "we couldn't look",
+// as opposed to "we looked, and it's already settled". The two read identically
+// to a caller holding only `{ ok:false, error }`, and the customer-facing pages
+// headline the second — so the flag is what keeps a dropped read from being
+// announced as a settlement.
+async function firePolicy(d: DisputeRow, why: string): Promise<{ ok: boolean; error?: string; refunded?: boolean; readFailed?: boolean }> {
   const admin = createServiceClient();
   const settings = await getPlatformSettings();
 
-  const { data: job } = await admin
+  // EVERY READ IN THIS FUNCTION DECIDES MONEY, AND NOBODY IS WATCHING.
+  // A failed read here reads as $0 captured, $0 already refunded and a
+  // spotless customer history — which walks straight into the "nothing left
+  // to refund" branch below: dispute closed, held pay released, customer
+  // never refunded, no error anywhere. Refuse the whole pass instead; the
+  // caller either shows the sentence or (in the sweep) skips this row until
+  // tomorrow.
+  const { data: job, error: jobErr } = await admin
     .from("jobs").select("id, customer_price, properties(owner_id)").eq("id", d.job_id).maybeSingle();
+  if (jobErr) return { ok: false, readFailed: true, error: readFailedMessage("this job", jobErr, { money: true }) };
   const ownerId = (one(job?.properties) as { owner_id?: string } | null)?.owner_id ?? null;
-  const { data: invoice } = await admin
+  const { data: invoice, error: invoiceErr } = await admin
     .from("invoices").select("id").eq("job_id", d.job_id).maybeSingle();
-  const { data: payment } = invoice
+  if (invoiceErr) return { ok: false, readFailed: true, error: readFailedMessage("the bill on this job", invoiceErr, { money: true }) };
+  const { data: payment, error: paymentErr } = invoice
     ? await admin.from("payments").select("amount").eq("invoice_id", invoice.id).eq("status", "captured").maybeSingle()
-    : { data: null };
+    : { data: null, error: null };
+  if (paymentErr) return { ok: false, readFailed: true, error: readFailedMessage("the payment on this bill", paymentErr, { money: true }) };
   const captured = Number(payment?.amount ?? 0);
-  const { data: priorRefRows } = invoice
+  const { data: priorRefRows, error: priorRefErr } = invoice
     ? await admin.from("refunds").select("amount").eq("invoice_id", invoice.id)
-    : { data: [] as Array<{ amount: number }> };
+    : { data: [] as Array<{ amount: number }>, error: null };
+  if (priorRefErr) return { ok: false, readFailed: true, error: readFailedMessage("the refunds already on this bill", priorRefErr, { money: true }) };
   const alreadyRefunded = (priorRefRows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
 
   let priorDisputes = 0;
   if (ownerId) {
     const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString();
-    const { data: props } = await admin.from("properties").select("id").eq("owner_id", ownerId);
+    const { data: props, error: propsErr } = await admin.from("properties").select("id").eq("owner_id", ownerId);
+    if (propsErr) return { ok: false, readFailed: true, error: readFailedMessage("this customer's properties", propsErr, { money: true }) };
     const propIds = (props ?? []).map((p) => p.id as string);
     if (propIds.length) {
-      const { data: priorJobs } = await admin.from("jobs").select("id").in("property_id", propIds);
+      const { data: priorJobs, error: priorJobsErr } = await admin.from("jobs").select("id").in("property_id", propIds);
+      if (priorJobsErr) return { ok: false, readFailed: true, error: readFailedMessage("this customer's past jobs", priorJobsErr, { money: true }) };
       const jobIds = (priorJobs ?? []).map((j) => j.id as string);
       if (jobIds.length) {
-        const { count } = await admin
+        // FAILS OPEN IF IGNORED: a failed count is null, `count ?? 0` reads as
+        // a first-time complaint, and the repeat-refund escalation — the one
+        // check standing between a serial refunder and an automatic payout —
+        // never fires.
+        const { count, error: countErr } = await admin
           .from("disputes").select("id", { count: "exact", head: true })
           .in("job_id", jobIds).eq("status", "resolved_refunded").gte("opened_at", yearAgo);
+        if (countErr) return { ok: false, readFailed: true, error: readFailedMessage("this customer's earlier refunds", countErr, { money: true }) };
         priorDisputes = count ?? 0;
       }
     }
@@ -442,9 +549,15 @@ async function firePolicy(d: DisputeRow, why: string): Promise<{ ok: boolean; er
     // If the crew claimed early payout in the release→refund window, the
     // re-hold no-ops on the now-batched row — say so in the resolution so
     // the human knows the recovery is an adjustment, not a release.
-    const { data: earning } = await admin
+    const { data: earning, error: earningErr } = await admin
       .from("payouts").select("batch_id").eq("job_id", d.job_id).eq("kind", "earning").maybeSingle();
-    const batchedNote = earning?.batch_id != null ? " — crew pay already claimed into a batch; recover via adjustment" : "";
+    // Escalating is the safe move either way, so this doesn't refuse — but the
+    // note tells a human whether the recovery is a release or an adjustment,
+    // and "not batched" is not something we can claim from a failed read.
+    if (earningErr) console.error(`[read failed] the crew's earning on dispute ${d.id}:`, earningErr);
+    const batchedNote = earningErr
+      ? " — couldn't check whether crew pay was already claimed into a batch"
+      : earning?.batch_id != null ? " — crew pay already claimed into a batch; recover via adjustment" : "";
     const { data: reEscalated } = await admin.from("disputes")
       .update({ status: "escalated", resolution: `auto-refund failed: ${res.error ?? "unknown"}${batchedNote}` })
       .eq("id", d.id)
@@ -473,21 +586,28 @@ export async function opsResolveEscalated(
   resolvedBy: string | null,
 ): Promise<{ ok: boolean; error?: string; refunded?: number }> {
   const admin = createServiceClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from("disputes")
     .select("id, job_id, status, customer_note, customer_token, crew_token, correction_job_id")
     .eq("id", disputeId)
     .maybeSingle();
+  if (error) return { ok: false, error: readFailedMessage("this dispute", error, { money: true }) };
   if (!data) return { ok: false, error: "Dispute not found." };
   const d = data as DisputeRow;
   if (d.status !== "escalated") return { ok: false, error: "Only escalated disputes land here — this one already resolved." };
 
   if (outcome === "close") {
-    const { data: flipped } = await admin
+    // Same three answers. A failed write told ops "Already resolved by another
+    // path", so the dispute stays escalated and nobody goes back to it.
+    const { data: flipped, error: flipErr } = await admin
       .from("disputes")
       .update({ status: "resolved_closed", resolved_at: new Date().toISOString(), resolution: "ops closed in crew's favor" })
       .eq("id", d.id).eq("status", "escalated")
       .select("id");
+    if (flipErr) {
+      console.error("[write failed] closing the escalated dispute:", flipErr);
+      return { ok: false, error: readFailedMessage("this dispute", flipErr) };
+    }
     if (!flipped || flipped.length === 0) return { ok: false, error: "Already resolved by another path." };
     await releaseHeldPayout(admin, d.job_id);
     return { ok: true };
@@ -495,14 +615,21 @@ export async function opsResolveEscalated(
 
   // refund: remaining cash back, clawback reduces the HELD earning in place
   // (planClawback is held-aware), then the crew's remainder releases.
-  const { data: invoice } = await admin.from("invoices").select("id").eq("job_id", d.job_id).maybeSingle();
-  const { data: payment } = invoice
+  // Same shape as firePolicy, same stakes: a failed read here reads as $0
+  // captured, which lands on "nothing left to refund" — the dispute closes,
+  // the crew's held pay releases, and the customer ops just promised a refund
+  // to never gets one. Refuse; the dispute stays escalated and re-clickable.
+  const { data: invoice, error: invoiceErr } = await admin.from("invoices").select("id").eq("job_id", d.job_id).maybeSingle();
+  if (invoiceErr) return { ok: false, error: readFailedMessage("the bill on this job", invoiceErr, { money: true }) };
+  const { data: payment, error: paymentErr } = invoice
     ? await admin.from("payments").select("amount").eq("invoice_id", invoice.id).eq("status", "captured").maybeSingle()
-    : { data: null };
+    : { data: null, error: null };
+  if (paymentErr) return { ok: false, error: readFailedMessage("the payment on this bill", paymentErr, { money: true }) };
   const captured = Number(payment?.amount ?? 0);
-  const { data: priorRows } = invoice
+  const { data: priorRows, error: priorErr } = invoice
     ? await admin.from("refunds").select("amount").eq("invoice_id", invoice.id)
-    : { data: [] as Array<{ amount: number }> };
+    : { data: [] as Array<{ amount: number }>, error: null };
+  if (priorErr) return { ok: false, error: readFailedMessage("the refunds already on this bill", priorErr, { money: true }) };
   const already = (priorRows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
   const amount = refundableRemaining(captured, already);
   if (!(amount > 0)) {
@@ -546,45 +673,83 @@ const CORRECTION_QUIET_DAYS = 3;
  * never got created (transient insert failure burned the once-ever
  * verdict) is reconciled with a fresh dispute + crew SMS.
  */
-export async function sweepDisputeDeadlines(): Promise<{ ok: boolean; fired: number; escalated: number; quietCloses: number; reconciled: number }> {
+export async function sweepDisputeDeadlines(): Promise<{ ok: boolean; fired: number; escalated: number; quietCloses: number; reconciled: number; couldNotRead: string[] }> {
   const admin = createServiceClient();
   const settings = await getPlatformSettings();
   const now = new Date().toISOString();
   let fired = 0, escalated = 0, quietCloses = 0, reconciled = 0;
+  // WHAT THIS RUN COULD NOT LOOK AT, in human words. Without it the counts are
+  // the only thing that leaves this function, and a section that failed to read
+  // contributes 0 — indistinguishable from a section where nothing was due.
+  // Every count below is therefore a FLOOR whenever this list is non-empty, and
+  // `ok` is false so a caller cannot read the run as clean. (The nightly digest
+  // renders only fired/escalated/quietCloses/reconciled today; wiring this list
+  // into it is the remaining half.)
+  const couldNotRead: string[] = [];
 
-  const { data: overdue } = await admin
+  // NOBODY IS WATCHING THIS RUN, so the rule here is: log and skip, never
+  // abort the night. A failed list read leaves its section empty for one
+  // night — the rows are still there tomorrow — and it is named in
+  // `couldNotRead` so it can never be mistaken for "nothing was due".
+  const { data: overdue, error: overdueErr } = await admin
     .from("disputes")
     .select("id, job_id, status, customer_note, customer_token, crew_token, correction_job_id, opened_at")
     .eq("status", "crew_review")
     .lt("respond_by", now)
     .limit(50);
+  if (overdueErr) {
+    console.error("[read failed] the disputes past their cure window:", overdueErr);
+    couldNotRead.push("the disputes past their cure window");
+  }
   for (const row of overdue ?? []) {
     const r = await firePolicy(row as DisputeRow, "crew did not respond in the cure window");
+    // Logged inside the policy; named here too, so the run's own result says a
+    // row was skipped rather than reporting one fewer refund as a quiet night.
+    if (!r.ok) { couldNotRead.push(`the money behind dispute ${row.id}`); continue; } // retry tomorrow
     if (r.refunded) fired++; else escalated++;
   }
 
   const fixCutoff = new Date(Date.now() - settings.disputeFixDays * 86_400_000).toISOString();
   const confQuietCutoff = new Date(Date.now() - CORRECTION_QUIET_DAYS * 86_400_000).toISOString();
-  const { data: fixing } = await admin
+  const { data: fixing, error: fixingErr } = await admin
     .from("disputes")
     .select("id, job_id, status, customer_note, customer_token, crew_token, correction_job_id, opened_at")
     .eq("status", "fixing")
     .limit(50);
+  if (fixingErr) {
+    console.error("[read failed] the disputes waiting on a correction visit:", fixingErr);
+    couldNotRead.push("the disputes waiting on a correction visit");
+  }
   for (const row of fixing ?? []) {
-    const { data: fix } = row.correction_job_id
+    const { data: fix, error: fixErr } = row.correction_job_id
       ? await admin.from("jobs").select("status").eq("id", row.correction_job_id).maybeSingle()
-      : { data: null };
+      : { data: null, error: null };
+    // Falling through would read "couldn't look" as "the visit never happened"
+    // and fire the policy — a refund, on a crew that may well have shown up.
+    if (fixErr) {
+      console.error(`[read failed] the correction visit on dispute ${row.id}:`, fixErr);
+      couldNotRead.push(`the correction visit on dispute ${row.id}`);
+      continue;
+    }
     if (fix && ["complete", "paid"].includes(fix.status as string)) {
       // The cure happened and was photo-gated. The customer got a fresh
       // 👍/👎 link at completion — if they've sat on it CORRECTION_QUIET_DAYS,
       // the evidence wins: resolve fixed, release the crew's pay. Without
       // this, customer apathy (the common case) strands held pay forever
       // on a crew that did the free cure (review finding).
-      const { data: conf } = await admin
+      const { data: conf, error: confErr } = await admin
         .from("job_confirmations")
         .select("id, verdict, created_at")
         .eq("job_id", row.correction_job_id as string)
         .maybeSingle();
+      // FAILS OPEN IF IGNORED: a failed read reads as "no verdict yet", and the
+      // quiet-close below would resolve in the crew's favour and release the
+      // held pay over a 👎 that is sitting right there unread.
+      if (confErr) {
+        console.error(`[read failed] the customer's verdict on the correction visit for dispute ${row.id}:`, confErr);
+        couldNotRead.push(`the customer's verdict on the correction visit for dispute ${row.id}`);
+        continue;
+      }
       if (conf?.verdict) continue; // outcome path owns it (resolveFromCorrection)
       if (conf && (conf.created_at as string) > confQuietCutoff) continue; // still in the quiet window
       const { data: flipped } = await admin
@@ -601,16 +766,21 @@ export async function sweepDisputeDeadlines(): Promise<{ ok: boolean; fired: num
     // A scheduled-but-never-completed fix past the window is a broken promise.
     if ((row.opened_at as string) < fixCutoff) {
       const r = await firePolicy(row as DisputeRow, "correction visit never happened in the window");
+      if (!r.ok) { couldNotRead.push(`the money behind dispute ${row.id}`); continue; } // logged in the policy — retry tomorrow
       if (r.refunded) fired++; else escalated++;
     }
   }
 
-  const { data: stalledConvos } = await admin
+  const { data: stalledConvos, error: stalledErr } = await admin
     .from("disputes")
     .select("id, job_id, status, customer_note, customer_token, crew_token, correction_job_id, opened_at")
     .in("status", ["talk", "verifying"])
     .lt("opened_at", fixCutoff)
     .limit(50);
+  if (stalledErr) {
+    console.error("[read failed] the stalled dispute conversations:", stalledErr);
+    couldNotRead.push("the stalled dispute conversations");
+  }
   for (const row of stalledConvos ?? []) {
     // The crew responded (talked / stood by the work) and the CUSTOMER went
     // quiet — silence after a cure offer resolves in the crew's favor: the
@@ -633,26 +803,45 @@ export async function sweepDisputeDeadlines(): Promise<{ ok: boolean; fired: num
   // retry path (the verdict is burned). Re-open any recent 'issue' verdict
   // on a normal job that has NO dispute row at all, and re-text the crew.
   const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
-  const { data: issues } = await admin
+  const { data: issues, error: issuesErr } = await admin
     .from("job_confirmations")
     .select("job_id, note, vendor_id, jobs(correction_of, services(name))")
     .eq("verdict", "issue")
     .gte("responded_at", weekAgo)
     .limit(100);
+  // This pass exists BECAUSE a transient failure can lose a complaint. Losing
+  // it again to a silent read failure — reported as "0 reconciled" — is the
+  // same bug one level up.
+  if (issuesErr) {
+    console.error("[read failed] this week's 👎 verdicts:", issuesErr);
+    couldNotRead.push("this week's 👎 verdicts");
+  }
   for (const c of issues ?? []) {
     const job = one((c as { jobs?: unknown }).jobs) as { correction_of?: string | null; services?: unknown } | null;
     if (job?.correction_of) continue; // correction 👎s belong to resolveFromCorrection
-    const { count } = await admin
+    // FAILS OPEN IF IGNORED: a failed count is null, `(count ?? 0) > 0` is
+    // false, and this opens a SECOND dispute on a job that already has one —
+    // re-holding the crew's pay and re-texting them about a complaint they
+    // already answered.
+    const { count, error: countErr } = await admin
       .from("disputes").select("id", { count: "exact", head: true })
       .eq("job_id", c.job_id as string);
+    if (countErr) {
+      console.error(`[read failed] the disputes already on job ${c.job_id}:`, countErr);
+      couldNotRead.push(`the disputes already on job ${c.job_id}`);
+      continue;
+    }
     if ((count ?? 0) > 0) continue; // dispute exists (any status) — nothing lost
     const r = await openDisputeForJob(c.job_id as string, (c.note as string) ?? null);
     if (r.ok && r.crewLinks && c.vendor_id) {
       const svcName = (one(job?.services) as { name?: string } | null)?.name ?? "a recent job";
-      const { data: v } = await admin.from("vendors").select("user_id").eq("id", c.vendor_id as string).maybeSingle();
-      const { data: cu } = v?.user_id
+      const { data: v, error: vErr } = await admin.from("vendors").select("user_id").eq("id", c.vendor_id as string).maybeSingle();
+      const { data: cu, error: cuErr } = v?.user_id
         ? await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle()
-        : { data: null };
+        : { data: null, error: null };
+      // The dispute is open and the pay is held either way — but a crew that is
+      // never told why has no way to use its cure window.
+      if (vErr || cuErr) console.error(`[read failed] the crew's number for job ${c.job_id}:`, vErr ?? cuErr);
       if (cu?.phone) {
         void sendSms(
           cu.phone as string,
@@ -663,5 +852,5 @@ export async function sweepDisputeDeadlines(): Promise<{ ok: boolean; fired: num
     }
   }
 
-  return { ok: true, fired, escalated, quietCloses, reconciled };
+  return { ok: couldNotRead.length === 0, fired, escalated, quietCloses, reconciled, couldNotRead };
 }

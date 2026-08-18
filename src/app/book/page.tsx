@@ -8,6 +8,7 @@ import { ShareLakeLife } from "@/components/ShareLakeLife";
 import { getMyReferralTicker } from "@/lib/referral-data";
 import { getPlatformSettings } from "@/lib/settings";
 import { createClient } from "@/lib/supabase/server";
+import { mustRead, mustCount, softRead, ReadFailed } from "@/lib/must-read";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyReferralLink, getFullProfile, getPricedServices } from "@/app/profile/data";
 
@@ -44,11 +45,16 @@ export default async function BookPage() {
 
   // RULE 5 nudge: booking needs a confirmed email + SMS-verified mobile.
   // Surface it here as a friendly step, not as a failure at confirm time.
-  const { data: me } = await supabase
-    .from("users")
-    .select("email_verified, phone_verified")
-    .eq("id", user.id)
-    .maybeSingle();
+  // A failed read would show a verified customer the "verify your mobile"
+  // wall, on a number they verified months ago.
+  const me = mustRead(
+    "your account",
+    await supabase
+      .from("users")
+      .select("email_verified, phone_verified")
+      .eq("id", user.id)
+      .maybeSingle(),
+  );
   const emailOk = (me?.email_verified ?? false) || Boolean(user.email_confirmed_at);
   const phoneOk = me?.phone_verified ?? false;
   if (!emailOk || !phoneOk) {
@@ -76,7 +82,18 @@ export default async function BookPage() {
 
   const profile = await getFullProfile();
   const referralLink = await getMyReferralLink();
-  const referralTicker = await getMyReferralTicker();
+  // THE TICKER IS NOT WORTH THE BOOKING SCREEN. getMyReferralTicker throws on
+  // a failed read now, and unguarded that took the whole page to the error
+  // boundary over a share-a-friend total. Caught here it stays null, and the
+  // card below already hides the figure entirely when there isn't one — so
+  // nothing is asserted about their earnings, the screen just doesn't claim a
+  // number it couldn't read. mustRead has already logged which read failed.
+  let referralTicker: Awaited<ReturnType<typeof getMyReferralTicker>> = null;
+  try {
+    referralTicker = await getMyReferralTicker();
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+  }
   const dials = await getPlatformSettings();
 
   if (!profile?.hasProfile) {
@@ -99,10 +116,13 @@ export default async function BookPage() {
   }
 
   const priced = await getPricedServices(profile);
-  const { count: packageCount } = await supabase
-    .from("service_packages")
-    .select("id", { count: "exact", head: true })
-    .eq("active", true);
+  const packageCount = mustCount(
+    "the storage packages",
+    await supabase
+      .from("service_packages")
+      .select("id", { count: "exact", head: true })
+      .eq("active", true),
+  );
   // A $0 TILE IS A TILE THAT CANNOT BE BOOKED.
   //
   // `priceService` returns exactly 0 when a service does not apply to this
@@ -124,12 +144,17 @@ export default async function BookPage() {
     : applicable;
 
   // Lake season window for the active property (water-work blocking).
-  const { data: prop } = await supabase
-    .from("properties")
-    .select("lakes(name, ice_out_actual, pull_deadline)")
-    .eq("owner_id", user.id)
-    .eq("id", profile.propertyId!)
-    .maybeSingle();
+  // FAILS OPEN if left alone: no lake row means start/end null, and rule 7's
+  // ice-out / pull-deadline gate simply isn't applied to the calendar.
+  const prop = mustRead(
+    "your lake's season dates",
+    await supabase
+      .from("properties")
+      .select("lakes(name, ice_out_actual, pull_deadline)")
+      .eq("owner_id", user.id)
+      .eq("id", profile.propertyId!)
+      .maybeSingle(),
+  );
   const lake = (Array.isArray(prop?.lakes) ? prop?.lakes[0] : prop?.lakes) as
     | { name?: string; ice_out_actual?: string; pull_deadline?: string }
     | undefined;
@@ -137,10 +162,16 @@ export default async function BookPage() {
   // Autopilot enrollment state — RLS means owners only ever see their own
   // rows. The table may not exist yet (migration pending): a query error just
   // means "not enrolled", never a crash.
-  const { data: autopilotRows } = await supabase
-    .from("autopilot_enrollments")
-    .select("service_id, active, locked_price")
-    .eq("property_id", profile.propertyId!);
+  // Swallowed on purpose (see above), but no longer silently: softRead logs the
+  // failure before degrading to "not enrolled".
+  const [autopilotRows] = softRead(
+    "your Autopilot settings",
+    await supabase
+      .from("autopilot_enrollments")
+      .select("service_id, active, locked_price")
+      .eq("property_id", profile.propertyId!),
+    null,
+  );
   const enrollments = (autopilotRows ?? []).map((r) => ({
     service_id: String(r.service_id),
     active: Boolean(r.active),

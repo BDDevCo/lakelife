@@ -101,10 +101,19 @@ export async function POST(req: Request) {
   }
 
   const userIds = batches.map((b) => b.user_id);
-  const { data: acctRows } = await admin
+  const acctRes = await admin
     .from("payout_accounts")
     .select("user_id, bank_name, routing_encrypted, account_encrypted")
     .in("user_id", userIds);
+  // A FAILED READ IS NOT "NOBODY HAS A BANK ON FILE". Falling through on null
+  // empties this map, every batch takes the `!acct` skip below, and ops is
+  // handed a header-only CSV whose trailing line says the skips were for a
+  // missing bank account — about crews who are set up and waiting to be paid.
+  // Same 500 the batch read above returns, for the same reason.
+  if (acctRes.error) {
+    return NextResponse.json({ error: acctRes.error.message }, { status: 500 });
+  }
+  const acctRows = acctRes.data;
   const accountsByUser = new Map<string, RawAccount>(
     ((acctRows ?? []) as unknown as RawAccount[]).map((a) => [a.user_id, a]),
   );

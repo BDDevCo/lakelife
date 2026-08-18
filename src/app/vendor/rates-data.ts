@@ -1,6 +1,7 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { PricingModel, PricingParams } from "@/lib/pricing";
+import { mustRead } from "@/lib/must-read";
 import { getMyVendorId } from "./data";
 import { buildRateForm, type RateForm } from "./rates-helpers";
 
@@ -34,17 +35,26 @@ export async function getMyRates(): Promise<MyRate[]> {
   if (!vendorId) return [];
 
   const admin = createServiceClient();
-  const { data: vendor } = await admin
-    .from("vendors")
-    .select("service_types")
-    .eq("id", vendorId)
-    .maybeSingle();
+  // A failed read here empties `myServices`, and the filter below then hides
+  // every standalone service the crew actually does — the rates screen would
+  // show only the winter legs and read as "you're not set up for this work".
+  const vendor = mustRead(
+    "the work you signed up for",
+    await admin
+      .from("vendors")
+      .select("service_types")
+      .eq("id", vendorId)
+      .maybeSingle(),
+  );
   const myServices = new Set((vendor?.service_types as string[] | null) ?? []);
 
-  const { data: svcs } = await admin
-    .from("services")
-    .select("id, name, pricing_model, band_pricing, kind, active")
-    .order("name");
+  const svcs = mustRead(
+    "the services you can price",
+    await admin
+      .from("services")
+      .select("id, name, pricing_model, band_pricing, kind, active")
+      .order("name"),
+  );
   const services = (svcs ?? []).filter((s) => {
     const kind = ((s.kind as string | null) ?? "standalone") as MyRate["kind"];
     if (kind === "component" || kind === "addon") return true; // legs: always priceable
@@ -52,10 +62,16 @@ export async function getMyRates(): Promise<MyRate[]> {
   });
   if (services.length === 0) return [];
 
-  const { data: rates } = await admin
-    .from("vendor_rates")
-    .select("service_id, base, unit_rate, band_pricing")
-    .eq("vendor_id", vendorId);
+  // A failed read empties every rate box and sets hasRate false — the crew is
+  // shown a blank card for work they priced months ago, and the obvious next
+  // move is to type a number in and save over the rate they can no longer see.
+  const rates = mustRead(
+    "your saved rates",
+    await admin
+      .from("vendor_rates")
+      .select("service_id, base, unit_rate, band_pricing")
+      .eq("vendor_id", vendorId),
+  );
   const rateBy = new Map((rates ?? []).map((r) => [r.service_id as string, r]));
 
   return services.map((s) => {

@@ -7,6 +7,7 @@ import {
 } from "@/lib/refunds";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
+import { readFailedMessage } from "@/lib/must-read";
 
 export interface RefundResult {
   ok: boolean;
@@ -38,19 +39,26 @@ export async function executeRefund(input: {
   if (!(amount > 0)) return { ok: false, error: "Refund amount must be positive." };
   if (!reason) return { ok: false, error: "Give the refund a reason — it's the audit trail." };
 
-  const { data: job } = await admin
+  // A FAILED READ IS NOT AN EMPTY ONE. Every refusal below asserts a fact
+  // about this job — "no invoice", "nothing captured" — and a dropped
+  // connection would have ops repeating those facts to a customer on the
+  // phone. Nothing has moved at this point, so say only that.
+  const { data: job, error: jobErr } = await admin
     .from("jobs")
     .select("id, customer_price, vendor_cost, vendor_id, property_id, services(name), properties(address, users(id, phone, email))")
     .eq("id", input.jobId)
     .maybeSingle();
+  if (jobErr) return { ok: false, error: readFailedMessage("this job", jobErr, { money: true }) };
   if (!job) return { ok: false, error: "Job not found." };
 
-  const { data: invoice } = await admin
+  const { data: invoice, error: invoiceErr } = await admin
     .from("invoices").select("id, amount, status").eq("job_id", input.jobId).maybeSingle();
+  if (invoiceErr) return { ok: false, error: readFailedMessage("the bill on this job", invoiceErr, { money: true }) };
   if (!invoice) return { ok: false, error: "No invoice on this job yet." };
-  const { data: payment } = await admin
+  const { data: payment, error: paymentErr } = await admin
     .from("payments").select("id, amount, status, processor_ref")
     .eq("invoice_id", invoice.id).eq("status", "captured").maybeSingle();
+  if (paymentErr) return { ok: false, error: readFailedMessage("the payment on this bill", paymentErr, { money: true }) };
   if (!payment) return { ok: false, error: "Nothing captured on this job — there's no cash to send back." };
 
   // A TIP IS NOT IN THIS NUMBER, AND MUST NOT BE PUT IN IT.
@@ -72,8 +80,12 @@ export async function executeRefund(input: {
   // the `refunds` table cannot even record — `refunds.invoice_id` is NOT NULL.
   const captured = Number(payment.amount ?? 0);
 
-  const { data: priorRows } = await admin
+  // FAILS OPEN IF IGNORED: a failed read here reads as "nothing refunded
+  // yet", so the ceiling check below passes at the FULL captured amount and
+  // a second refund goes out on money already sent back.
+  const { data: priorRows, error: priorErr } = await admin
     .from("refunds").select("amount, crew_clawback").eq("invoice_id", invoice.id);
+  if (priorErr) return { ok: false, error: readFailedMessage("the refunds already on this bill", priorErr, { money: true }) };
   const already = (priorRows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
   const alreadyClawed = (priorRows ?? []).reduce((s, r) => s + Number(r.crew_clawback ?? 0), 0);
   if (amount > refundableRemaining(captured, already)) {
@@ -85,9 +97,13 @@ export async function executeRefund(input: {
   // paid the crew their fee share, never vendor_cost) minus what earlier
   // refunds already clawed. Two "full crew cut" overrides can never
   // recover the crew's pay twice (review findings, 2026-07-23).
-  const { data: earningRow } = await admin
+  const { data: earningRow, error: earningErr } = await admin
     .from("payouts").select("id, amount, original_amount, status, batch_id")
     .eq("job_id", job.id).eq("kind", "earning").maybeSingle();
+  // A failed read would read as "the crew was never owed anything" and silently
+  // clamp every clawback to zero — the customer's refund goes out entirely at
+  // LakeLife's expense, with nothing on the record saying why.
+  if (earningErr) return { ok: false, error: readFailedMessage("the crew's earning on this job", earningErr, { money: true }) };
   const everOwed = Number(earningRow?.original_amount ?? earningRow?.amount ?? 0);
   const clawable = Math.max(0, Math.round((everOwed - alreadyClawed) * 100) / 100);
   const clawback = input.clawback == null
@@ -113,8 +129,16 @@ export async function executeRefund(input: {
     return { ok: false, error: insErr?.message ?? "Couldn't record the refund." };
   }
 
-  const { data: afterRows } = await admin
+  const { data: afterRows, error: afterErr } = await admin
     .from("refunds").select("id, amount, crew_clawback").eq("invoice_id", invoice.id);
+  // FAILS OPEN IF IGNORED: this re-read IS the lock. A failed read reads as an
+  // empty ledger, so the over-refund check below passes and the processor is
+  // called anyway. Nothing external has happened yet — drop our own claim, the
+  // same way a lost race does, and stop.
+  if (afterErr) {
+    await admin.from("refunds").delete().eq("id", claim.id);
+    return { ok: false, error: readFailedMessage("the refunds already on this bill", afterErr, { money: true }) };
+  }
   const totalAfter = (afterRows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
   if (totalAfter > captured + 0.001) {
     await admin.from("refunds").delete().eq("id", claim.id);
@@ -152,9 +176,14 @@ export async function executeRefund(input: {
   // absolute write clobbering someone else's clawback (review findings).
   let clawbackWarning: string | undefined;
   if (effectiveClawback > 0 && job.vendor_id) {
-    const { data: payoutRow } = await admin
+    const { data: payoutRow, error: payoutErr } = await admin
       .from("payouts").select("id, amount, status, batch_id")
       .eq("job_id", job.id).eq("kind", "earning").maybeSingle();
+    // The cash is already gone; this can no longer refuse. A failed read is NOT
+    // "no payout" — but the no-snapshot plan is the conservative one (a negative
+    // adjustment the next batch nets, never a stale absolute write), so it is
+    // safe to recover forward. It just must not do so silently.
+    if (payoutErr) console.error(`[read failed] the crew's earning on this job (refund ${claim.id}):`, payoutErr);
     const snapshot: PayoutSnapshot | null = payoutRow
       ? { id: payoutRow.id as string, amount: Number(payoutRow.amount ?? 0), status: payoutRow.status as string, batchId: (payoutRow.batch_id as string) ?? null }
       : null;
@@ -192,7 +221,8 @@ export async function executeRefund(input: {
         console.error(`[refund ${claim.id}] adjustment insert failed:`, adjErr.message);
         clawbackWarning = `Refund sent, but the crew adjustment of $${adjustMagnitude.toFixed(2)} FAILED to record — fix manually (refund ${claim.id}).`;
         try {
-          const { data: opsUsers } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null).limit(3);
+          const { data: opsUsers, error: opsErr } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null).limit(3);
+          if (opsErr) console.error("[read failed] the ops phone list:", opsErr);
           for (const o of opsUsers ?? []) void sendSms(o.phone as string, `LakeLife OPS: ${clawbackWarning}`);
         } catch { /* best effort */ }
       }
@@ -203,10 +233,19 @@ export async function executeRefund(input: {
   // concurrent claim that later fails its processor call and self-deletes
   // must not have flipped the invoice or voided referrals on its way down
   // (review finding). Durable = a refund the processor actually honored.
-  const { data: durableRows } = await admin
+  const { data: durableRows, error: durableErr } = await admin
     .from("refunds").select("amount").eq("invoice_id", invoice.id).not("processor_ref", "is", null);
+  // Post-processor: the money is on its way back, so this cannot refuse. But a
+  // failed read reads as "nothing honored yet", which decides "partial" — and a
+  // fully refunded bill would keep saying `paid` with referral credit still
+  // live. Don't decide from a read that didn't happen; tell ops instead.
+  if (durableErr) {
+    const note = `Refund sent, but we couldn't re-read this bill's refunds — if that was the last of the money, the invoice still reads paid and any referral credit is still live (refund ${claim.id}).`;
+    console.error(`[read failed] the refunds already honored on this bill (refund ${claim.id}):`, durableErr);
+    clawbackWarning = clawbackWarning ? `${clawbackWarning} ${note}` : note;
+  }
   const durableTotal = (durableRows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
-  const isFull = invoiceStatusAfter(captured, durableTotal) === "refunded";
+  const isFull = !durableErr && invoiceStatusAfter(captured, durableTotal) === "refunded";
   if (isFull) {
     await admin.from("referral_earnings")
       .update({ status: "void" })
@@ -231,10 +270,13 @@ export async function executeRefund(input: {
       });
     }
     if (effectiveClawback > 0 && job.vendor_id) {
-      const { data: v } = await admin.from("vendors").select("user_id").eq("id", job.vendor_id).maybeSingle();
-      const { data: vu } = v?.user_id
+      const { data: v, error: vErr } = await admin.from("vendors").select("user_id").eq("id", job.vendor_id).maybeSingle();
+      const { data: vu, error: vuErr } = v?.user_id
         ? await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle()
-        : { data: null };
+        : { data: null, error: null };
+      // Best effort by design — the money moved regardless. But a crew whose pay
+      // just dropped and who was never told must not be a silent event.
+      if (vErr || vuErr) console.error(`[read failed] the crew's number for the clawback notice (refund ${claim.id}):`, vErr ?? vuErr);
       if (vu?.phone) {
         void sendSms(vu.phone as string, `LakeLife: a customer refund on your ${svcName} job adjusted your pay by −$${effectiveClawback.toFixed(2)} per the service terms. Details in Earnings. Reply here with questions.`);
       }

@@ -403,14 +403,20 @@ export async function rescheduleUnworkedVisit(
     return { ok: false, error: "Give us a call to move this one — we can't check the dates from here." };
   }
   const lake = one(propRow?.lakes) as { ice_out_actual?: string; pull_deadline?: string } | null;
-  const { fullDates } = svcRow?.id
+  const { fullDates, unavailable } = svcRow?.id
     ? await getAvailability(
         svcRow.id as string,
         Number(newDateISO.slice(0, 4)),
         Number(newDateISO.slice(5, 7)) - 1,
         job.property_id,
       )
-    : { fullDates: [] as string[] };
+    : { fullDates: [] as string[], unavailable: false };
+  // getAvailability now says "we couldn't look" instead of throwing. Its empty
+  // fullDates would fail this gate OPEN — the same way a missing service did
+  // above — so refuse the move rather than book onto a day we never checked.
+  if (unavailable) {
+    return { ok: false, error: "We couldn't check that day's calendar just now, so nothing has been changed. Try again in a moment." };
+  }
 
   const status = dayStatus(newDateISO, {
     today,

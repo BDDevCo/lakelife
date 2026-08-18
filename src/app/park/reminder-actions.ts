@@ -12,6 +12,7 @@ import {
 } from "./reminder-helpers";
 import type { ParkResult } from "./actions";
 import { prettyMonth } from "./ledger-helpers";
+import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 /**
  * OVERDUE REMINDERS — the send path.
@@ -108,7 +109,17 @@ export async function previewReminders(
   month?: string,
 ): Promise<{ ok: boolean; error?: string; plan?: ReminderPlan; month?: string }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
-  const loaded = await loadPlan(parkId, month);
+  // `loadPlan` reads the ledger, which THROWS on a failed read rather than
+  // reporting a month with nobody behind. This is an action awaited by a
+  // button, so it catches and answers in that button's shape — "Nothing to
+  // work from." would claim we looked and found nobody late.
+  let loaded: Awaited<ReturnType<typeof loadPlan>>;
+  try {
+    loaded = await loadPlan(parkId, month);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("this month's bills", e) };
+  }
   if (!loaded) return { ok: false, error: "Nothing to work from." };
   return { ok: true, plan: loaded.plan, month: loaded.month };
 }
@@ -126,7 +137,21 @@ export async function sendReminders(
   month?: string,
 ): Promise<ParkResult & { sent?: number; printed?: number; blocked?: number }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
-  const loaded = await loadPlan(parkId, month);
+  // Same catch as the preview, and the sentence answers the owner's first
+  // question out loud: the ledger read failed BEFORE any email was addressed,
+  // so nobody has been chased.
+  let loaded: Awaited<ReturnType<typeof loadPlan>>;
+  try {
+    loaded = await loadPlan(parkId, month);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    // `mustRead` has already logged which read it was; this only has to say it
+    // in words the owner can act on.
+    return {
+      ok: false,
+      error: "We couldn't load this month's bills just now, so nothing has been sent. Try again in a moment.",
+    };
+  }
   if (!loaded) return { ok: false, error: "Nothing to work from." };
 
   const { plan, parkName } = loaded;

@@ -44,7 +44,20 @@ export function ParkStatements({
   function load(p: Period | null) {
     if (!p) { toast("That date range doesn't work — the end has to be on or after the start."); return; }
     start(async () => {
-      const next = await getStatement(parkId, p.from, p.to);
+      // `getStatement` THROWS on a failed read now rather than reporting an
+      // empty window, and a rejection inside a transition surfaces as a blank
+      // failure with no sentence — so it is caught here and said out loud, and
+      // the screen keeps showing the window it already had. A server action's
+      // rejection arrives on the client as an opaque Error, so this cannot
+      // narrow to ReadFailed; either way we have no statement to show.
+      let next: StatementPage | null;
+      try {
+        next = await getStatement(parkId, p.from, p.to);
+      } catch (e) {
+        console.error("[LakeLife] statement failed to load:", e);
+        toast("We couldn't build that just now, so nothing has changed. Try again in a moment.");
+        return;
+      }
       if (!next) { toast("Couldn't build that."); return; }
       setPage(next);
       setCustomFrom(next.period.from);

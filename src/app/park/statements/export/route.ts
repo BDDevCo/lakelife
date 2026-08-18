@@ -1,6 +1,7 @@
 import { getMyPark } from "@/app/park/data";
 import { getStatement } from "@/app/park/receipts-actions";
 import { receiptsCsv, receiptsFilename } from "@/app/park/receipts-helpers";
+import { ReadFailed } from "@/lib/must-read";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,21 @@ export async function GET(request: Request) {
   const from = searchParams.get("from") ?? "";
   const to = searchParams.get("to") ?? "";
 
-  const page = await getStatement(park.id, from, to);
+  // `getStatement` THROWS on a failed read now, and a Route Handler has no
+  // error boundary above it — an escape here is a bare 500 where a CSV was
+  // expected. Refused the same plain way the bad dates below are refused, and
+  // deliberately NOT as an empty file: a short statement filed with an
+  // accountant is worse than no statement.
+  let page: Awaited<ReturnType<typeof getStatement>>;
+  try {
+    page = await getStatement(park.id, from, to);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return new Response(
+      "We couldn't build that statement just now, so nothing has been downloaded. Try again in a moment.",
+      { status: 503 },
+    );
+  }
   if (!page) return new Response("Those dates don't work.", { status: 400 });
 
   const csv = receiptsCsv(page.receipts, {

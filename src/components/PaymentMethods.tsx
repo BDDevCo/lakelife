@@ -20,7 +20,17 @@ export function PaymentMethods({ initial }: { initial: SavedCard[] }) {
   const [name, setName] = useState("");
 
   async function refresh() {
-    setCards(await listPaymentMethods());
+    // listPaymentMethods THROWS on a failed read rather than handing back an
+    // empty wallet. A rejection here would be unhandled inside a click handler
+    // and would leave this list silently stale, so catch it, say so, and KEEP
+    // the cards we already have — clearing them would claim they have none on
+    // file. (Nothing narrower is possible: a server action's rejection reaches
+    // the browser as an opaque error, so ReadFailed cannot be told apart here.)
+    try {
+      setCards(await listPaymentMethods());
+    } catch {
+      toast("We couldn't refresh your saved cards just now — reload the page to see the latest.");
+    }
   }
 
   async function addCard() {

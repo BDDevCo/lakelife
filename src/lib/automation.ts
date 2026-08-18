@@ -28,6 +28,7 @@ import { composeNightlyDigest, type DigestSections } from "@/lib/digest-render";
 import { proposedFee, deadlinePassed, tripFeeFor } from "./recovery";
 import { withParkRate } from "@/lib/park-rates";
 import { groundsFor, loadParkRates } from "@/app/park/rate-data";
+import { mustRead, ReadFailed } from "@/lib/must-read";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -169,7 +170,10 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
 
   const vendorPhoneFor = async (userId: string | null): Promise<string | null> => {
     if (!userId) return null;
-    const { data: u } = await admin.from("users").select("phone").eq("id", userId).maybeSingle();
+    const { data: u, error: uPhoneErr } = await admin.from("users").select("phone").eq("id", userId).maybeSingle();
+    // A failed read is not "no phone on file". Say so, or a crew silently
+    // never gets tomorrow's route and nothing anywhere records why.
+    if (uPhoneErr) { console.error("[read failed] the crew's phone number:", uPhoneErr); return null; }
     return (u?.phone as string) ?? null;
   };
 
@@ -282,8 +286,11 @@ export async function alertOpsDoubleCharge(
         `payment row — a captured tip already exists for that visit`
       : `against invoice <code>${subjectId}</code> and the ledger refused the ` +
         `payment row — an earlier capture already exists for that invoice`;
-    const { data: opsUsers } = await admin
+    const { data: opsUsers, error: opsErr } = await admin
       .from("users").select("email").eq("role", "ops").not("email", "is", null);
+    // Nothing retries this, so the log is the last line of defence: a real
+    // charge, no ledger row, and now nobody told either.
+    if (opsErr) console.error("[read failed] the ops emails for a CHARGED-BUT-NOT-RECORDED alert:", opsErr);
     for (const u of opsUsers ?? []) {
       const to = u.email as string | null;
       if (!to) continue;
@@ -334,8 +341,9 @@ async function noteSettleFailure(
     const where = f.address ?? "your property";
 
     if (f.ownerId) {
-      const { data: owner } = await admin
+      const { data: owner, error: ownerErr } = await admin
         .from("users").select("email, name").eq("id", f.ownerId).maybeSingle();
+      if (ownerErr) console.error("[read failed] the owner's email for an uncollected job:", ownerErr);
       const email = owner?.email as string | null;
       if (email) {
         const why = f.reason === "no_card"
@@ -357,8 +365,9 @@ async function noteSettleFailure(
 
     // Ops needs to know a completed job is unpaid, because the crew has
     // already been paid for it and nothing else in the system will say so.
-    const { data: opsUsers } = await admin
+    const { data: opsUsers, error: opsErr } = await admin
       .from("users").select("email").eq("role", "ops").not("email", "is", null);
+    if (opsErr) console.error("[read failed] the ops emails for an unpaid completed job:", opsErr);
     for (const u of opsUsers ?? []) {
       const to = u.email as string | null;
       if (!to) continue;
@@ -389,11 +398,17 @@ async function noteSettleFailure(
  */
 export async function settleJob(jobId: string): Promise<SettleOutcome> {
   const admin = createServiceClient();
-  const { data: job } = await admin
+  const { data: job, error: jobErr } = await admin
     .from("jobs")
     .select("id, status, customer_price, vendor_cost, vendor_id, property_id, margin, group_id, phase, price_finalized, correction_of, services(name)")
     .eq("id", jobId)
     .maybeSingle();
+  // "job not found" is a FACT about the database. A failed read knows no such
+  // fact, and everything below it moves money — so it stops instead of guessing.
+  if (jobErr) {
+    console.error(`[read failed] the job being settled (${jobId}):`, jobErr);
+    return { ok: false, error: "couldn't read the job" };
+  }
   if (!job) return { ok: false, error: "job not found" };
   if (!["complete", "paid"].includes(job.status as string)) return { ok: false, error: "job not complete" };
   // Make-It-Right correction visits are FREE by design: no invoice, no
@@ -410,9 +425,16 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
   // failed finalize ABORTS the settle (the reconcile rail retries), so
   // the card can never be charged the unfinalized number.
   if (job.phase === "spring" && job.group_id && job.price_finalized === false) {
-    const { data: stay } = await admin
+    const { data: stay, error: stayErr } = await admin
       .from("storage_stays").select("id, intake_at, status").eq("group_id", job.group_id as string)
       .eq("status", "in_storage").maybeSingle();
+    // No stay reads as no overstay meter, and the price finalizes exactly ONCE:
+    // a failed read here would bill the bare quote and close that number
+    // forever. Abort, exactly as a failed finalize does — the rail retries.
+    if (stayErr) {
+      console.error(`[read failed] the boat's storage stay (${jobId}):`, stayErr);
+      return { ok: false, error: "couldn't read the storage stay" };
+    }
     let addOn = 0;
     if (stay?.intake_at) {
       const { seasonEndFor, overstayDays, perdiemCharge } = await import("@/lib/storage");
@@ -436,8 +458,11 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
       job.customer_price = finalPrice; // the number every step below bills
       if (addOn > 0) {
         // The meter as its own honest line (items must sum to the bill).
-        const { data: meterSvc } = await admin
+        const { data: meterSvc, error: meterErr } = await admin
           .from("services").select("id").eq("name", "Storage overstay (per-diem)").maybeSingle();
+        // The bill is already right; a failed read costs only the line that
+        // explains it — but items that don't sum is exactly what gets queried.
+        if (meterErr) console.error(`[read failed] the overstay line item (${jobId}):`, meterErr);
         if (meterSvc) {
           await admin.from("job_items").insert({
             job_id: jobId, service_id: meterSvc.id, customer_price: addOn, vendor_cost: 0,
@@ -460,12 +485,25 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
   // days after completion, possibly right before an auto-refund, is
   // processor fees both ways and reads terribly (review finding). The
   // reconcile rail retries the charge after resolution.
-  const { data: openDispute } = await admin
+  const { data: openDispute, error: disputeErr } = await admin
     .from("disputes").select("id").eq("job_id", jobId)
     .in("status", ["crew_review", "fixing", "verifying", "talk", "escalated"]).maybeSingle();
+  // FAILS OPEN IF IGNORED: a failed read reads as "no dispute", which releases
+  // the payout and charges the card mid-dispute — the two things this read
+  // exists to prevent. Stop; the reconcile rail retries after resolution.
+  if (disputeErr) {
+    console.error(`[read failed] any open dispute on this job (${jobId}):`, disputeErr);
+    return { ok: false, error: "couldn't check for an open dispute" };
+  }
 
   // 1) Payout — release once (photo-verified completion already happened).
-  const { data: existingPayout } = await admin.from("payouts").select("id").eq("job_id", jobId).eq("kind", "earning").maybeSingle();
+  const { data: existingPayout, error: payoutReadErr } = await admin.from("payouts").select("id").eq("job_id", jobId).eq("kind", "earning").maybeSingle();
+  // FAILS OPEN IF IGNORED: null reads as "no payout yet" and pays the crew a
+  // second time for the same job.
+  if (payoutReadErr) {
+    console.error(`[read failed] the crew's existing payout (${jobId}):`, payoutReadErr);
+    return { ok: false, error: "couldn't check the crew's payout" };
+  }
   if (!existingPayout) {
     const { error: pErr } = await admin.from("payouts").insert({
       vendor_id: job.vendor_id,
@@ -478,7 +516,14 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
   }
 
   // 2) Invoice — one per job. Reuse an existing row rather than creating a second.
-  let { data: invoice } = await admin.from("invoices").select("id, status").eq("job_id", jobId).maybeSingle();
+  const { data: invoiceRow, error: invoiceReadErr } = await admin.from("invoices").select("id, status").eq("job_id", jobId).maybeSingle();
+  // FAILS OPEN IF IGNORED: null reads as "no invoice yet" and raises a second
+  // bill for the same job.
+  if (invoiceReadErr) {
+    console.error(`[read failed] this job's invoice (${jobId}):`, invoiceReadErr);
+    return { ok: false, error: "couldn't read the invoice" };
+  }
+  let invoice = invoiceRow;
   if (!invoice) {
     const { data: created, error: iErr } = await admin
       .from("invoices")
@@ -497,31 +542,52 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
   let charged = false;
   const price = job.customer_price == null ? 0 : Number(job.customer_price);
   if (invoice.status !== "paid" && price > 0 && job.property_id && !openDispute) {
-    const { data: prop } = await admin
+    const { data: prop, error: propErr } = await admin
       .from("properties")
       .select("address, owner_id, users(email, name)")
       .eq("id", job.property_id)
       .maybeSingle();
+    // A failed read looks exactly like a property with no owner, which skips
+    // the charge in silence and still returns "settled".
+    if (propErr) {
+      console.error(`[read failed] the property and its owner (${jobId}):`, propErr);
+      return { ok: false, error: "couldn't read the property" };
+    }
     const ownerId = (prop?.owner_id as string) ?? null;
-    const { data: paid } = await admin
+    const { data: paid, error: paidErr } = await admin
       .from("payments")
       .select("id")
       .eq("invoice_id", invoice.id)
       .eq("status", "captured")
       .maybeSingle();
+    // FAILS OPEN IF IGNORED: null reads as "not paid yet" and charges a card
+    // that has already been charged for this invoice.
+    if (paidErr) {
+      console.error(`[read failed] whether this invoice was already paid (${jobId}):`, paidErr);
+      return { ok: false, error: "couldn't check whether this was already paid" };
+    }
     if (!paid && ownerId) {
       // SERVICE CREDITS first (§8b: homeowner referral rewards are credits, not
       // cash — no 1099s, and the money comes home as bookings). Idempotent:
       // exactly one application row per invoice (partial unique index); a
       // re-run reuses the existing application instead of double-spending.
       let creditApplied = 0;
+      // A failed credits read is NOT a zero balance: it charges the full price
+      // to a card that should have been reduced, or not charged at all. The
+      // grant staying a bonus is unchanged — what moves is the CHARGE, by one
+      // night, because the reconcile rail comes back for it.
+      let creditReadFailed = false;
       try {
-        const { data: existingApp } = await admin
+        const { data: existingApp, error: appErr } = await admin
           .from("user_credits").select("amount").eq("invoice_id", invoice.id).maybeSingle();
+        // A READ. This one blocks the settle — see the catch below.
+        if (appErr) { creditReadFailed = true; throw appErr; }
         if (existingApp) {
           creditApplied = Math.abs(Number(existingApp.amount ?? 0));
         } else {
-          const { data: creditRows } = await admin.from("user_credits").select("amount").eq("user_id", ownerId);
+          const { data: creditRows, error: creditErr } = await admin.from("user_credits").select("amount").eq("user_id", ownerId);
+          // Also a READ — the balance that decides what the card is charged.
+          if (creditErr) { creditReadFailed = true; throw creditErr; }
           const balance = (creditRows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
           const apply = creditToApply(balance, price);
           if (apply > 0) {
@@ -531,10 +597,22 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
             if (!capErr) creditApplied = apply;
           }
         }
-      } catch { /* credits are a bonus — never block a settle */ }
+      } catch (e) {
+        // A failed GRANT is still just a bonus lost — credits never block a
+        // settle. Not knowing the BALANCE is a different thing: it decides what
+        // the card is charged, so the charge waits a night rather than billing
+        // the full price to somebody whose credits covered it.
+        //
+        // NARROWED: the flag is now set at the two READS above, not here. This
+        // catch also receives a rejected promise from the credit APPLICATION
+        // insert, and setting the flag for that blocked the settle — which the
+        // paragraph above says never happens.
+        console.error(`[read failed] this customer's service credits (${jobId}):`, e);
+      }
+      if (creditReadFailed) return { ok: false, error: "couldn't read the customer's credits" };
       const cashDue = Math.round((price - creditApplied) * 100) / 100;
 
-      const { data: pm } = await admin
+      const { data: pm, error: pmErr } = await admin
         .from("payment_methods")
         .select("token, last4, brand")
         .eq("user_id", ownerId)
@@ -542,6 +620,13 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
+      // THE LIE THIS PREVENTS: a failed read is indistinguishable from an empty
+      // wallet, and the final `else` below emails the customer "We don't have a
+      // card on file for you yet" — to somebody whose card is on file.
+      if (pmErr) {
+        console.error(`[read failed] the customer's saved card (${jobId}):`, pmErr);
+        return { ok: false, error: "couldn't read the customer's saved card" };
+      }
       if (cashDue <= 0 && creditApplied > 0) {
         // Fully covered by credits — no card involved, invoice settles clean.
         await admin.from("invoices").update({ status: "paid", processor_ref: "credits" }).eq("id", invoice.id);
@@ -633,13 +718,21 @@ async function accrueReferralEarnings(
   // Arm 1+2: the customer was referred — by a neighbor (customer_referral)
   // or by the crew who imported them (cross_sell, only when someone ELSE did
   // this job; the importer is already paid their rate when they do the work).
-  const { data: refUser } = await admin.from("users").select("id, referred_by, created_at").eq("id", p.ownerId).maybeSingle();
+  const { data: refUser, error: refUserErr } = await admin.from("users").select("id, referred_by, created_at").eq("id", p.ownerId).maybeSingle();
+  // Reads as "nobody referred them" and quietly loses a reward that only ever
+  // accrues once, at settle. Nothing can retry it, so at least it is on record.
+  if (refUserErr) console.error(`[read failed] who referred this customer (${p.jobId}):`, refUserErr);
   const referrerId = (refUser?.referred_by as string) ?? null;
   if (referrerId && withinSunset((refUser?.created_at as string) ?? null, Date.now(), settings.referralSunsetDays)) {
-    const { data: refVendor } = await admin.from("vendors").select("id").eq("user_id", referrerId).maybeSingle();
+    const { data: refVendor, error: refVendorErr } = await admin.from("vendors").select("id").eq("user_id", referrerId).maybeSingle();
     let kind: "customer_referral" | "cross_sell" | null = null;
     let pct = 0;
-    if (!refVendor) {
+    // FAILS OPEN IF IGNORED: null reads as "the referrer is not a crew", which
+    // pays a CREW at the customer rate, or pays them for their own job. Leaving
+    // `kind` null skips this arm only — the crew-referral arm below still runs.
+    if (refVendorErr) {
+      console.error(`[read failed] whether the referrer is a crew (${p.jobId}):`, refVendorErr);
+    } else if (!refVendor) {
       kind = "customer_referral";
       pct = settings.referralCustomerPct;
     } else if (p.vendorId && refVendor.id !== p.vendorId) {
@@ -660,16 +753,23 @@ async function accrueReferralEarnings(
   // Arm 3: this job's crew was BROUGHT by someone — share of collected margin
   // until the lifetime cap for that (bringer, crew) pair. Self-financing.
   if (p.vendorId && p.margin > 0) {
-    const { data: crew } = await admin.from("vendors").select("invited_by").eq("id", p.vendorId).maybeSingle();
+    const { data: crew, error: crewErr } = await admin.from("vendors").select("invited_by").eq("id", p.vendorId).maybeSingle();
+    if (crewErr) console.error(`[read failed] who brought this crew aboard (${p.jobId}):`, crewErr);
     const bringer = (crew?.invited_by as string) ?? null;
     if (bringer && bringer !== p.ownerId) { // no earning on your own bills
-      const { data: prior } = await admin
+      const { data: prior, error: priorErr } = await admin
         .from("referral_earnings")
         .select("amount")
         .eq("beneficiary", bringer)
         .eq("source_vendor", p.vendorId)
         .eq("kind", "crew_referral")
         .neq("status", "void");
+      // FAILS OPEN IF IGNORED: a failed read reads as "nothing accrued yet",
+      // which restarts the lifetime cap at zero and overpays the bringer.
+      if (priorErr) {
+        console.error(`[read failed] this bringer's prior earnings (${p.jobId}):`, priorErr);
+        return;
+      }
       const already = (prior ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
       const amount = crewShareAccrual(p.margin * cashRatio, settings.referralCrewSharePct, settings.referralCrewCap, already);
       if (amount > 0) {
@@ -687,12 +787,15 @@ async function accrueReferralEarnings(
  *  run on a schedule — settleJob is idempotent. Bounded scan of recent jobs. */
 export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: number; capped: number }> {
   const admin = createServiceClient();
-  const { data: jobs } = await admin
+  // A failed read here reports "0 settled" for a night the reconcile never
+  // looked. The nightly route catches this and names the step in the digest,
+  // which is the only place anybody would ever find out.
+  const jobs = mustRead("completed jobs that may still be unsettled", await admin
     .from("jobs")
     .select("id, invoices(id, status)")
     .eq("status", "complete")
     .is("correction_of", null) // $0 correction visits never invoice — don't rescan them nightly
-    .limit(500);
+    .limit(500));
   let settled = 0;
   let capped = 0;
   for (const j of jobs ?? []) {
@@ -710,9 +813,16 @@ export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: 
     // is not forgotten, we just stop hammering the card and ask them instead.
     const invoiceIds = rows.map((r) => r.id).filter(Boolean) as string[];
     if (invoiceIds.length > 0) {
-      const { count: failCount } = await admin
+      const { count: failCount, error: failErr } = await admin
         .from("payments").select("id", { count: "exact", head: true })
         .in("invoice_id", invoiceIds).eq("status", "failed");
+      // FAILS OPEN IF IGNORED: an errored count is null, `(null ?? 0) >= 5` is
+      // false, and the cap the comment above describes simply does not apply —
+      // the card gets hammered a sixth night. A night not retried costs nothing.
+      if (failErr) {
+        console.error(`[read failed] this invoice's failed attempts (job ${j.id}):`, failErr);
+        continue;
+      }
       if ((failCount ?? 0) >= 5) { capped++; continue; }
     }
 
@@ -741,12 +851,12 @@ export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: 
 export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }> {
   const admin = createServiceClient();
   const today = todayLakeDate();
-  const { data: stale } = await admin
+  const stale = mustRead("yesterday's still-scheduled jobs", await admin
     .from("jobs")
     .select("id, vendor_id, property_id, date, group_id, phase, held_at, no_show_at, stood_down_at, services(name), properties(address, owner_id, lake_id), vendors(user_id)")
     .lt("date", today)
     .in("status", ["scheduled", "in_progress"])
-    .not("vendor_id", "is", null);
+    .not("vendor_id", "is", null));
 
   const one = <T>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
   let flagged = 0;
@@ -769,7 +879,15 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
     const arrival = j as { held_at?: string | null; no_show_at?: string | null; stood_down_at?: string | null };
     if (arrival.no_show_at || arrival.stood_down_at || arrival.held_at) continue;
 
-    const { count } = await admin.from("job_photos").select("id", { count: "exact", head: true }).eq("job_id", j.id as string);
+    const { count, error: photoErr } = await admin.from("job_photos").select("id", { count: "exact", head: true }).eq("job_id", j.id as string);
+    // FAILS OPEN IF IGNORED: an errored count is null, `(null ?? 0) > 0` is
+    // false, and a crew who DID the work and photographed it takes a permanent
+    // no-show strike (unique(job_id) — it never clears) while their finished
+    // job is unassigned and repriced. Skip it; tomorrow's sweep looks again.
+    if (photoErr) {
+      console.error(`[read failed] the job's photos (${j.id}):`, photoErr);
+      continue;
+    }
     if ((count ?? 0) > 0) continue; // photos on file → not a ghost, leave for ops
 
     // CUSTODY GUARD, BEFORE ANYTHING IS RECORDED. A sticky spring splash whose
@@ -781,9 +899,15 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
     // whole lake — over a boat still in their building. The overstay meter and
     // the ops Storage ledger carry the pressure instead.
     if ((j as { phase?: string }).phase === "spring" && (j as { group_id?: string }).group_id) {
-      const { data: custody } = await admin
+      const { data: custody, error: custodyErr } = await admin
         .from("storage_stays").select("id").eq("group_id", (j as { group_id?: string }).group_id as string)
         .eq("status", "in_storage").limit(1);
+      // FAILS OPEN IF IGNORED: null reads as "no boat in the barn" — precisely
+      // the strike this guard was written to prevent, and it never clears.
+      if (custodyErr) {
+        console.error(`[read failed] whether the boat is still in the barn (${j.id}):`, custodyErr);
+        continue;
+      }
       if (custody && custody.length > 0) continue;
     }
 
@@ -816,13 +940,15 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
 
     // Owner: no charge, easy reschedule.
     if (prop?.owner_id) {
-      const { data: owner } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+      const { data: owner, error: ownerErr } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+      if (ownerErr) console.error(`[read failed] the owner's phone number (job ${j.id}):`, ownerErr);
       if (owner?.phone) void sendSms(owner.phone as string, `LakeLife: your crew couldn't make ${svc} at ${prop?.address ?? "your place"} — no charge. Pick any open day to rebook: ${site}/book 🌊`);
     }
     // Crew: reliability warning (standing-based, no fine).
     const crewUser = (one(j.vendors) as { user_id?: string } | null)?.user_id;
     if (crewUser) {
-      const { data: cu } = await admin.from("users").select("phone").eq("id", crewUser).maybeSingle();
+      const { data: cu, error: cuErr } = await admin.from("users").select("phone").eq("id", crewUser).maybeSingle();
+      if (cuErr) console.error(`[read failed] the crew's phone number (job ${j.id}):`, cuErr);
       if (cu?.phone) void sendSms(cu.phone as string, `LakeLife: a scheduled job was marked missed and affects your standing. If something came up, block the day ahead next time — no penalty for advance notice.`);
     }
   }
@@ -846,7 +972,7 @@ export async function revalidateAssignments(
     const from = addDays(todayLakeDate(), 1);
     query = query.gte("date", from).lte("date", addDays(from, 60));
   }
-  const { data: jobs } = await query;
+  const jobs = mustRead("the jobs to re-validate", await query);
   let rehomed = 0;
   const unfilledIds: string[] = [];
   for (const j of jobs ?? []) {
@@ -863,10 +989,15 @@ export async function revalidateAssignments(
   const unfilled = unfilledIds.length;
   if (broadcast && unfilled > 0) {
     const today = todayLakeDate();
-    const [{ data: openJobs }, { data: crews }] = await Promise.all([
+    const [openJobsRes, crewsRes] = await Promise.all([
       admin.from("jobs").select("id, services(name)").in("id", unfilledIds),
       admin.from("vendors").select("id, user_id, service_types, coi_expiry").eq("status", "active").not("user_id", "is", null),
     ]);
+    // Either read failing empties `notifiable`, and the dead-end branch at the
+    // bottom then texts ops "no crew on the platform can claim open jobs" — a
+    // statement about the whole marketplace, made from a dropped connection.
+    const openJobs = mustRead("the open jobs to broadcast", openJobsRes);
+    const crews = mustRead("the crews who could claim them", crewsRes);
     const openServices = new Set(
       (openJobs ?? []).map((j) => (one(j.services) as { name?: string } | null)?.name).filter((n): n is string => !!n),
     );
@@ -878,11 +1009,11 @@ export async function revalidateAssignments(
       return mine.length > 0;
     });
     if (notifiable.length > 0) {
-      const { data: users } = await admin
+      const users = mustRead("the crews' phone numbers", await admin
         .from("users")
         .select("id, phone")
         .in("id", notifiable.map((v) => v.user_id as string))
-        .not("phone", "is", null);
+        .not("phone", "is", null));
       const phoneByUser = new Map((users ?? []).map((u) => [u.id as string, u.phone as string]));
       const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
       for (const v of notifiable) {
@@ -895,7 +1026,8 @@ export async function revalidateAssignments(
     // True dead end: a service nobody on the platform offers ⇒ recruit signal.
     const deadEnd = [...openServices].filter((s) => !claimersByService.has(s));
     if (deadEnd.length > 0 || crewsTexted === 0) {
-      const { data: ops } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
+      const { data: ops, error: opsErr } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
+      if (opsErr) console.error("[read failed] the ops phone numbers for a dead-end alert:", opsErr);
       const pretty = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO)
         ? new Date(dateISO + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
         : "the coming days";
@@ -913,11 +1045,11 @@ export async function revalidateAssignments(
 export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: boolean; sent: number }> {
   const date = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : addDays(todayLakeDate(), 1);
   const admin = createServiceClient();
-  const { data: jobs } = await admin
+  const jobs = mustRead("tomorrow's scheduled jobs", await admin
     .from("jobs")
     .select("id, slot, services(name), properties(address, users(id, phone))")
     .eq("date", date)
-    .eq("status", "scheduled");
+    .eq("status", "scheduled"));
 
   // De-dupe by phone so an owner with two jobs tomorrow gets one text.
   const seen = new Set<string>();
@@ -949,13 +1081,13 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
   // Inner-join on UNPAID invoices so paid/free-cancelled rows never occupy the
   // scan window (expired-waitlist cancels accumulate forever — an unfiltered
   // limit could starve real fee invoices out of the batch permanently).
-  const { data: jobs } = await admin
+  const jobs = mustRead("cancelled jobs with an unpaid fee", await admin
     .from("jobs")
     .select("id, customer_price, vendor_cost, vendor_id, property_id, created_at, services(name), invoices!inner(id, status, amount, created_at), properties(owner_id)")
     .eq("status", "cancelled")
     .neq("invoices.status", "paid")
     .order("created_at", { ascending: false })
-    .limit(200);
+    .limit(200));
 
   const tenMinAgo = new Date(Date.now() - 10 * 60_000).toISOString();
   // collectedAmount: the DOLLARS, not just the count — the nightly digest
@@ -976,19 +1108,32 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
     if (priceSanity > 0 && fee > priceSanity * 0.5) continue;
     // Retry cap: card networks limit reattempts — after 5 failed nights, stop
     // (the invoice stays visibly 'due' on the customer's Billing page).
-    const { count: failCount } = await admin
+    const { count: failCount, error: failErr } = await admin
       .from("payments").select("id", { count: "exact", head: true })
       .eq("invoice_id", inv.id).eq("status", "failed");
+    // FAILS OPEN IF IGNORED: an errored count is null, so `(null ?? 0) >= 5` is
+    // false and the retry cap above is not applied — a sixth attempt on a card
+    // that has declined five nights running.
+    if (failErr) {
+      console.error(`[read failed] this fee invoice's failed attempts (job ${j.id}):`, failErr);
+      continue;
+    }
     if ((failCount ?? 0) >= 5) continue;
 
     // Never double-charge: skip if a captured payment already exists.
-    const { data: paid } = await admin.from("payments").select("id").eq("invoice_id", inv.id).eq("status", "captured").maybeSingle();
+    const { data: paid, error: paidErr } = await admin.from("payments").select("id").eq("invoice_id", inv.id).eq("status", "captured").maybeSingle();
+    // FAILS OPEN IF IGNORED: null reads as "never captured" and takes the
+    // charge branch below — a second charge for a fee already collected.
+    if (paidErr) {
+      console.error(`[read failed] whether this fee was already collected (job ${j.id}):`, paidErr);
+      continue;
+    }
     if (paid) {
       await admin.from("invoices").update({ status: "paid" }).eq("id", inv.id);
     } else {
       const ownerId = (one(j.properties) as { owner_id?: string } | null)?.owner_id;
       if (!ownerId) continue;
-      const { data: pm } = await admin
+      const { data: pm, error: pmErr } = await admin
         .from("payment_methods")
         .select("token")
         .eq("user_id", ownerId)
@@ -996,6 +1141,11 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
+      // Not "still no card" — we couldn't look. Same skip, honestly logged.
+      if (pmErr) {
+        console.error(`[read failed] the customer's saved card (job ${j.id}):`, pmErr);
+        continue;
+      }
       if (!pm?.token) continue; // still no card — try again tomorrow
       retried++;
       const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(fee * 100), description: statementDescriptor("cancel_fee") });
@@ -1013,8 +1163,13 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
     if (j.vendor_id && price > 0 && cost > 0) {
       const crewShare = Math.round((fee / price) * cost * 100) / 100;
       if (crewShare > 0) {
-        const { data: existing } = await admin.from("payouts").select("id").eq("job_id", j.id as string).eq("kind", "earning").maybeSingle();
-        if (!existing) {
+        const { data: existing, error: existingErr } = await admin.from("payouts").select("id").eq("job_id", j.id as string).eq("kind", "earning").maybeSingle();
+        // FAILS OPEN IF IGNORED: null reads as "no payout yet" and releases the
+        // crew's share twice. The fee is collected either way; a missed release
+        // can be raised by hand, a duplicate payment has to be clawed back.
+        if (existingErr) {
+          console.error(`[read failed] the crew's existing payout (job ${j.id}):`, existingErr);
+        } else if (!existing) {
           await admin.from("payouts").insert({ vendor_id: j.vendor_id, job_id: j.id, amount: crewShare, original_amount: crewShare, status: "released" });
         }
       }
@@ -1039,13 +1194,13 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
   const admin = createServiceClient();
   const { referralMaturationDays } = await getPlatformSettings();
   const cutoff = new Date(Date.now() - referralMaturationDays * 86_400_000).toISOString();
-  const { data: due } = await admin
+  const due = mustRead("the referral earnings due to mature", await admin
     .from("referral_earnings")
     .select("id, beneficiary, amount, kind")
     .eq("status", "accrued")
     .lt("accrued_at", cutoff)
     .order("accrued_at", { ascending: true })
-    .limit(200);
+    .limit(200));
 
   let matured = 0, credited = 0, creditedAmount = 0;
   /**
@@ -1065,10 +1220,18 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
     if (error) console.error(`[referral mature ${earningId}] credit close-out failed:`, error.message);
   };
   const grantFor = async (earningId: string, beneficiary: string, amount: number, kind: string): Promise<boolean> => {
-    const { data: isVendor } = await admin.from("vendors").select("id").eq("user_id", beneficiary).maybeSingle();
+    const { data: isVendor, error: isVendorErr } = await admin.from("vendors").select("id").eq("user_id", beneficiary).maybeSingle();
     // SIM-FOUND (Wave 2): a lake association is a users row like any owner —
     // but its money is a month-end DONATION, never spendable credits.
-    const { data: isHoa } = await admin.from("lakes").select("id").eq("hoa_user_id", beneficiary).limit(1);
+    const { data: isHoa, error: isHoaErr } = await admin.from("lakes").select("id").eq("hoa_user_id", beneficiary).limit(1);
+    // FAILS OPEN IF IGNORED: both null read as "an ordinary homeowner", which
+    // settles a CREW's or an HOA's cash as spendable credits — the one thing
+    // these two reads exist to stop. No grant: the row stays matured and rides
+    // the month-end batch, which is where their money belongs anyway.
+    if (isVendorErr || isHoaErr) {
+      console.error(`[read failed] who this referral beneficiary is (${earningId}):`, isVendorErr ?? isHoaErr);
+      return false;
+    }
     if (isVendor || (isHoa && isHoa.length > 0) || !(amount > 0)) return false;
     const { error: gErr } = await admin.from("user_credits").insert({
       user_id: beneficiary, amount, earning_id: earningId,
@@ -1105,15 +1268,22 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
   // BACKFILL: recently-matured earnings whose credit never landed (crash
   // between flip and grant). earning_id-unique keeps this idempotent.
   const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
-  const { data: recent } = await admin
+  const { data: recent, error: recentErr } = await admin
     .from("referral_earnings")
     .select("id, beneficiary, amount, kind")
     .eq("status", "matured")
     .gte("matured_at", weekAgo)
     .limit(200);
+  if (recentErr) console.error("[read failed] recently-matured referral earnings:", recentErr);
   if (recent && recent.length > 0) {
-    const { data: creditRows } = await admin
+    const { data: creditRows, error: creditRowsErr } = await admin
       .from("user_credits").select("earning_id").in("earning_id", recent.map((r) => r.id));
+    // An empty `granted` set would re-grant credits already granted and count
+    // them again. The backfill is a heal, not a deadline — skip it tonight.
+    if (creditRowsErr) {
+      console.error("[read failed] which matured earnings were already credited:", creditRowsErr);
+      return { ok: true, matured, credited, creditedAmount };
+    }
     const granted = new Set((creditRows ?? []).map((c) => c.earning_id as string));
     for (const e of recent) {
       // Already credited but still sitting at 'matured' (a pre-fix row, or a
@@ -1162,7 +1332,7 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
   let creditSettledClosed = 0;
   let offset = 0;
   for (let page = 0; page < MAX_PAGES; page++) {
-    const { data: scan } = await admin
+    const { data: scan, error: scanErr } = await admin
       .from("referral_earnings")
       .select("id")
       .eq("status", "matured")
@@ -1172,9 +1342,14 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
       .order("matured_at", { ascending: true })
       .order("id", { ascending: true })
       .range(offset, offset + PAGE - 1);
+    // A failed page is not an empty one — stop draining rather than treat the
+    // silt as gone. The per-row guard further down is the real protection.
+    if (scanErr) { console.error("[read failed] the matured-earnings drain page:", scanErr); break; }
     if (!scan || scan.length === 0) break;
-    const { data: creditRows } = await admin
+    const { data: creditRows, error: creditRowsErr } = await admin
       .from("user_credits").select("earning_id").in("earning_id", scan.map((r) => r.id));
+    // Without this we cannot tell a credit-settled row from one owed cash.
+    if (creditRowsErr) { console.error("[read failed] which drain-page rows were credit-settled:", creditRowsErr); break; }
     const settled = new Set((creditRows ?? []).map((c) => c.earning_id as string));
     let closedThisPage = 0;
     for (const id of scan.map((r) => r.id as string)) {
@@ -1192,11 +1367,14 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
     if (scan.length < PAGE) break;
   }
 
-  const { data: matured } = await admin
+  // THE MONTH'S MONEY. Empty reads as "nobody is owed anything", on the one
+  // night of the month the largest sum leaves the account, and the digest
+  // prints it as a quiet night.
+  const matured = mustRead("the matured referral earnings to pay out", await admin
     .from("referral_earnings")
     .select("id, beneficiary, amount")
     .eq("status", "matured")
-    .limit(500);
+    .limit(500));
 
   // Only vendor/HOA-type beneficiaries batch out; customers settled as
   // credits at maturation are CLOSED OUT above, so the window they used to
@@ -1211,16 +1389,27 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
 
   let beneficiaries = 0, total = 0;
   for (const [userId, u] of byUser) {
-    const { data: vendorRow } = await admin.from("vendors").select("id, company").eq("user_id", userId).maybeSingle();
-    const { data: hoaLake } = await admin.from("lakes").select("id").eq("hoa_user_id", userId).limit(1);
+    const { data: vendorRow, error: vendorRowErr } = await admin.from("vendors").select("id, company").eq("user_id", userId).maybeSingle();
+    const { data: hoaLake, error: hoaLakeErr } = await admin.from("lakes").select("id").eq("hoa_user_id", userId).limit(1);
+    // Both null reads as "a customer", which skips a crew's or an HOA's whole
+    // month on the next line. Skip out loud instead; next run pays them.
+    if (vendorRowErr || hoaLakeErr) {
+      console.error(`[read failed] who this payee is (${userId}):`, vendorRowErr ?? hoaLakeErr);
+      continue;
+    }
     const isHoa = !!hoaLake && hoaLake.length > 0;
     if (!vendorRow && !isHoa) continue; // customer rows were credited at maturation
 
     // SIM-FOUND (Wave 2): money never flips to "paid" without a destination
     // AND a batch artifact the banking layer can execute. No bank on file →
     // the earnings stay matured and next month retries (the statement nags).
-    const { data: acct } = await admin
+    const { data: acct, error: acctErr } = await admin
       .from("payout_accounts").select("account_last4").eq("user_id", userId).maybeSingle();
+    // Not "no bank on file" — we couldn't look. Same skip, said out loud.
+    if (acctErr) {
+      console.error(`[read failed] this payee's bank details (${userId}):`, acctErr);
+      continue;
+    }
     if (!acct) continue;
     const { data: batch } = await admin
       .from("payout_batches")
@@ -1235,8 +1424,15 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
       // credits (user_credits.earning_id linkage) never ALSO rides a bank
       // batch — close it out with no money and move on. The drain above
       // normally catches these; this stays as the per-row last word.
-      const { data: credited } = await admin
+      const { data: credited, error: creditedErr } = await admin
         .from("user_credits").select("id").eq("earning_id", id).limit(1);
+      // FAILS OPEN IF IGNORED: null reads as "never credited", so an earning
+      // already settled as credits ALSO rides a bank batch — paid twice, in two
+      // currencies. Leave it matured; next month's batch tries again.
+      if (creditedErr) {
+        console.error(`[read failed] whether this earning was already credited (${id}):`, creditedErr);
+        continue;
+      }
       if (credited && credited.length > 0) {
         const { data: closed } = await admin
           .from("referral_earnings").update({ status: CREDIT_SETTLED_STATUS }).eq("id", id).eq("status", "matured").select("id");
@@ -1272,10 +1468,14 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
     beneficiaries++;
     total += paidThis;
     // Still-maturing remainder for the digest line.
-    const { data: pending } = await admin
+    const { data: pending, error: pendingErr } = await admin
       .from("referral_earnings").select("amount").eq("beneficiary", userId).eq("status", "accrued");
+    // A failed read drops the "still maturing" sentence rather than printing a
+    // wrong figure — silence, not a lie, but worth knowing it happened.
+    if (pendingErr) console.error(`[read failed] this payee's still-maturing earnings (${userId}):`, pendingErr);
     const maturing = (pending ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
-    const { data: u2 } = await admin.from("users").select("email, name").eq("id", userId).maybeSingle();
+    const { data: u2, error: u2Err } = await admin.from("users").select("email, name").eq("id", userId).maybeSingle();
+    if (u2Err) console.error(`[read failed] this payee's email (${userId}):`, u2Err);
     if (u2?.email) {
       void sendEmail({
         to: u2.email,
@@ -1305,22 +1505,36 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
   const now = Date.now();
 
   const optedOut = async (userId: string): Promise<boolean> => {
-    const { data } = await admin
+    const { data, error } = await admin
       .from("notification_prefs").select("enabled")
       .eq("user_id", userId).eq("type", "growth").eq("channel", "email").maybeSingle();
+    // FAILS OPEN IF IGNORED: `null?.enabled === false` is false, i.e. "they
+    // never opted out" — emailing somebody who did. A failed read counts as an
+    // opt-out; the cost is one unsent nudge.
+    if (error) {
+      console.error(`[read failed] this person's growth-email preference (${userId}):`, error);
+      return true;
+    }
     return data?.enabled === false;
   };
   const cooling = async (userId: string, kind: string): Promise<boolean> => {
-    const { data } = await admin
+    const { data, error } = await admin
       .from("nudge_log").select("sent_at")
       .eq("user_id", userId).eq("kind", kind)
       .order("sent_at", { ascending: false }).limit(1).maybeSingle();
+    // FAILS OPEN IF IGNORED: no row reads as "never nudged", so the cooldown is
+    // skipped and the same person hears from us again tonight.
+    if (error) {
+      console.error(`[read failed] when we last nudged this person (${userId}, ${kind}):`, error);
+      return true;
+    }
     return nudgeCooling((data?.sent_at as string) ?? null, nudgeCooldownDays, now);
   };
   const send = async (userId: string, kind: string, subject: string, html: string): Promise<boolean> => {
     if (await optedOut(userId)) return false;
     if (await cooling(userId, kind)) return false;
-    const { data: u } = await admin.from("users").select("email").eq("id", userId).maybeSingle();
+    const { data: u, error: uErr } = await admin.from("users").select("email").eq("id", userId).maybeSingle();
+    if (uErr) { console.error(`[read failed] this person's email (${userId}):`, uErr); return false; }
     if (!u?.email) return false;
     void sendEmail({ to: u.email, subject, html: html + `<p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>` });
     await admin.from("nudge_log").insert({ user_id: userId, kind });
@@ -1329,7 +1543,9 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
 
   // A) Credits now cover a visit.
   let creditNudges = 0;
-  const { data: creditRows } = await admin.from("user_credits").select("user_id, amount");
+  // Every number below is a dollar figure printed in somebody's email ("You've
+  // got $X in credits", "you're $Y away"). A failed read would print zeroes.
+  const creditRows = mustRead("everyone's credit balances", await admin.from("user_credits").select("user_id, amount"));
   const balances = new Map<string, number>();
   for (const c of creditRows ?? []) balances.set(c.user_id as string, (balances.get(c.user_id as string) ?? 0) + Number(c.amount ?? 0));
   for (const [userId, bal] of balances) {
@@ -1347,14 +1563,16 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
   // visit." Homeowners only — a crew's milestone is the month-end batch, not
   // credits. nearMilestone() itself refuses anyone covers-visit already owns.
   let nearMilestoneNudges = 0;
-  const { data: accruedRows } = await admin
-    .from("referral_earnings").select("beneficiary, amount").eq("status", "accrued");
+  const accruedRows = mustRead("everyone's maturing referral earnings", await admin
+    .from("referral_earnings").select("beneficiary, amount").eq("status", "accrued"));
   const accruedBy = new Map<string, number>();
   for (const a of accruedRows ?? []) accruedBy.set(a.beneficiary as string, (accruedBy.get(a.beneficiary as string) ?? 0) + Number(a.amount ?? 0));
   const candidates = new Set([...balances.keys(), ...accruedBy.keys()]);
   if (candidates.size > 0) {
-    const { data: vendorUsers } = await admin
-      .from("vendors").select("user_id").in("user_id", [...candidates]).not("user_id", "is", null);
+    // An empty crew set sends a HOMEOWNER credit tease to crews — the exact
+    // audience this read exists to exclude.
+    const vendorUsers = mustRead("which of these people are crews", await admin
+      .from("vendors").select("user_id").in("user_id", [...candidates]).not("user_id", "is", null));
     const crewUserIds = new Set((vendorUsers ?? []).map((v) => v.user_id as string));
     for (const userId of candidates) {
       if (crewUserIds.has(userId)) continue;
@@ -1379,16 +1597,18 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
   // B) Territory expansion — waiting demand next door, priced at THEIR rates.
   let territoryNudges = 0;
   const today = todayLakeDate();
-  const { data: waiting } = await admin
+  const waiting = mustRead("the jobs waiting on a crew", await admin
     .from("jobs")
     .select("id, service_id, property_id, services(name, pricing_model), properties(lake_id, lakes(name))")
-    .eq("status", "requested").is("vendor_id", null).gte("date", today).limit(50);
+    .eq("status", "requested").is("vendor_id", null).gte("date", today).limit(50));
   if (waiting && waiting.length > 0) {
-    const { data: crews } = await admin
+    const crews = mustRead("the active crews", await admin
       .from("vendors")
       .select("id, user_id, company, service_types, service_lakes, coi_expiry")
-      .eq("status", "active").not("user_id", "is", null);
-    const { data: rates } = await admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing");
+      .eq("status", "active").not("user_id", "is", null));
+    // The pitch quotes a dollar figure built from these rates; without them
+    // every crew silently looks like it has no rate for anything.
+    const rates = mustRead("the crews' rate cards", await admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"));
     const rateBy = new Map((rates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
 
     for (const v of crews ?? []) {
@@ -1422,9 +1642,15 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
       let best: { lakeId: string; name: string; count: number; est: number } | null = null;
       for (const [lakeId, e] of byLake) {
         if (e.jobs.length === 0 || e.est <= 0) continue;
-        const { data: pause } = await admin
+        const { data: pause, error: pauseErr } = await admin
           .from("vendor_lake_demotions").select("demoted_at")
           .eq("vendor_id", v.id as string).eq("lake_id", lakeId).maybeSingle();
+        // FAILS OPEN IF IGNORED: null reads as "not paused here", so we pitch a
+        // crew the very lake we just paused them on.
+        if (pauseErr) {
+          console.error(`[read failed] whether this crew is paused on the lake (${v.id}, ${lakeId}):`, pauseErr);
+          continue;
+        }
         if (pause && isCoolingDown(pause.demoted_at as string, lakeDemotionCooldownDays, now)) continue;
         if (!best || e.est > best.est) best = { lakeId, name: e.name, count: e.jobs.length, est: e.est };
       }
@@ -1451,10 +1677,10 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
 export async function sendCoiRevalidations(leadDays = 30): Promise<{ ok: boolean; due: number; emailed: number }> {
   const today = todayLakeDate();
   const admin = createServiceClient();
-  const { data: crews } = await admin
+  const crews = mustRead("the active crews and their insurance dates", await admin
     .from("vendors")
     .select("id, company, coi_expiry, verified_at, users(email, name)")
-    .eq("status", "active");
+    .eq("status", "active"));
 
   let due = 0, emailed = 0;
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
@@ -1507,7 +1733,7 @@ export async function sweepWaitlist(lakeId?: string, limit = 60): Promise<{ ok: 
     .order("date", { ascending: true })
     .limit(limit);
   if (lakeId) q = q.eq("properties.lake_id", lakeId);
-  const { data: waiting } = await q;
+  const waiting = mustRead("the future jobs still waiting on a crew", await q);
 
   // Good-news texts respect quiet hours (8a–9p lake). A night fill still
   // happens — the portal shows Scheduled and the night-before reminder is
@@ -1523,7 +1749,8 @@ export async function sweepWaitlist(lakeId?: string, limit = 60): Promise<{ ok: 
       const prop = one(j.properties) as { owner_id?: string } | null;
       const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
       if (canText && prop?.owner_id) {
-        const { data: owner } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+        const { data: owner, error: ownerErr } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+        if (ownerErr) console.error(`[read failed] the owner's phone number (job ${j.id}):`, ownerErr);
         if (owner?.phone) void sendSms(owner.phone as string, `LakeLife: good news — a crew is locked in for your ${svc} on ${prettyDate(j.date as string)}. You'll get a reminder before we arrive. 🌊`);
       }
     } catch {
@@ -1546,13 +1773,13 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
   const { waitlistWarningDays } = await getPlatformSettings();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
-  const { data: unfilled } = await admin
+  const unfilled = mustRead("the jobs still waiting on a crew", await admin
     .from("jobs")
     .select("id, date, group_id, services(name, criticality), properties(owner_id, address, nickname)")
     .eq("status", "requested")
     .is("vendor_id", null)
     .eq("is_rush", false) // rush stragglers get their own, kinder fallback rung
-    .not("date", "is", null);
+    .not("date", "is", null));
 
   let warned = 0, expired = 0, escalated = 0;
   for (const j of unfilled ?? []) {
@@ -1560,9 +1787,17 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
     const svc = svcRow?.name ?? "your service";
     const prop = one(j.properties) as { owner_id?: string; address?: string; nickname?: string } | null;
     const where = prop?.nickname || prop?.address || "your place";
-    const phone = prop?.owner_id
-      ? ((await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle()).data?.phone as string | undefined)
-      : undefined;
+    // A failed read here is not "no phone". Both branches below either CANCEL
+    // the job or burn its one lifetime warning, and neither may happen without
+    // being able to tell the owner — so a job we cannot reach them about waits.
+    const phoneRes = prop?.owner_id
+      ? await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle()
+      : null;
+    if (phoneRes?.error) {
+      console.error(`[read failed] the owner's phone number (job ${j.id}):`, phoneRes.error);
+      continue;
+    }
+    const phone = phoneRes?.data?.phone as string | undefined;
 
     if (isExpired(j.date as string, today)) {
       // CUSTODY GUARD (S4 review): never expire a visit whose boat is IN
@@ -1571,8 +1806,14 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
       // meter and the ops ledger own this case; the job stays requested.
       const gid0 = (j as { group_id?: string | null }).group_id ?? null;
       if (gid0) {
-        const { data: custody } = await admin
+        const { data: custody, error: custodyErr } = await admin
           .from("storage_stays").select("id").eq("group_id", gid0).eq("status", "in_storage").limit(1);
+        // FAILS OPEN IF IGNORED: null reads as "no boat in the barn" and
+        // cancels the envelope that is the boat's only billing rail.
+        if (custodyErr) {
+          console.error(`[read failed] whether the boat is still in the barn (job ${j.id}):`, custodyErr);
+          continue;
+        }
         if (custody && custody.length > 0) continue;
       }
 
@@ -1684,7 +1925,7 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
     .lte("date", today)
     .limit(50);
   if (windowStillOpen) q = q.lt("date", today); // only stale rows mid-window
-  const { data: stuck } = await q;
+  const stuck = mustRead("the unclaimed rush jobs", await q);
 
   const tomorrow = addDays(today, 1);
   let rolled = 0, cancelled = 0;
@@ -1693,9 +1934,17 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
     const prop = one(j.properties) as { owner_id?: string; address?: string; nickname?: string } | null;
     const svcName = svcRow?.name ?? "your service";
     const where = prop?.nickname || prop?.address || "your place";
-    const phone = prop?.owner_id
-      ? ((await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle()).data?.phone as string | undefined)
-      : undefined;
+    // One branch below DELETES the job and the other moves the day and reprices
+    // it. Neither is a thing to do to somebody we then cannot text, and a failed
+    // read looks exactly like "no phone on file".
+    const phoneRes = prop?.owner_id
+      ? await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle()
+      : null;
+    if (phoneRes?.error) {
+      console.error(`[read failed] the owner's phone number (job ${j.id}):`, phoneRes.error);
+      continue;
+    }
+    const phone = phoneRes?.data?.phone as string | undefined;
 
     if ((j.rush_fallback as string) === "cancel") {
       const { data: gone } = await admin
@@ -1708,28 +1957,39 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
 
     // Roll: tomorrow at the STANDARD menu price, recomputed server-side.
     let standard = Number(j.customer_price ?? 0); // fallback: keep rush price only if repricing fails
-    const profile = await loadPricingProfileById(admin, j.property_id as string);
     let repriced = false;
-    if (svcRow?.name && profile) {
-      const rule: ServiceRule = {
-        name: svcRow.name,
-        pricing_model: svcRow.pricing_model as ServiceRule["pricing_model"],
-        base: Number(svcRow.base ?? 0),
-        unit_rate: Number(svcRow.unit_rate ?? 0),
-        band_pricing: (svcRow.band_pricing as ServiceRule["band_pricing"]) ?? null,
-      };
-      // A PARK PAYS ITS OWN RATE (0115). Without the overlay the global row is
-      // base 0 / unit_rate 0, priceService returns 0, the `p > 0` guard below
-      // declines to use it, and `standard` stays at the RUSH price — so the
-      // rolled job keeps its 25% same-day premium and the text that follows
-      // calls that number "the standard price". The guard that was meant to
-      // fail safe is what makes it charge more.
-      const grounds = await groundsFor(j.property_id as string);
-      const p = priceService(
-        grounds ? withParkRate({ ...rule, id: j.service_id as string }, await loadParkRates(grounds.parkId)) : rule,
-        profile,
-      );
-      if (p > 0) { standard = p; repriced = true; }
+    // SEAM: loadPricingProfileById and groundsFor THROW on a failed read now.
+    // Uncaught, one park's dropped connection would abort the beat and leave
+    // every REMAINING rush job unresolved. Cron rule: log and skip the item.
+    // A skipped job leaves `repriced` false, which lands in the "could not work
+    // out the standard price" branch below — the outcome already designed for
+    // not knowing the price, and it says nothing false to anyone.
+    try {
+      const profile = await loadPricingProfileById(admin, j.property_id as string);
+      if (svcRow?.name && profile) {
+        const rule: ServiceRule = {
+          name: svcRow.name,
+          pricing_model: svcRow.pricing_model as ServiceRule["pricing_model"],
+          base: Number(svcRow.base ?? 0),
+          unit_rate: Number(svcRow.unit_rate ?? 0),
+          band_pricing: (svcRow.band_pricing as ServiceRule["band_pricing"]) ?? null,
+        };
+        // A PARK PAYS ITS OWN RATE (0115). Without the overlay the global row is
+        // base 0 / unit_rate 0, priceService returns 0, the `p > 0` guard below
+        // declines to use it, and `standard` stays at the RUSH price — so the
+        // rolled job keeps its 25% same-day premium and the text that follows
+        // calls that number "the standard price". The guard that was meant to
+        // fail safe is what makes it charge more.
+        const grounds = await groundsFor(j.property_id as string);
+        const p = priceService(
+          grounds ? withParkRate({ ...rule, id: j.service_id as string }, await loadParkRates(grounds.parkId)) : rule,
+          profile,
+        );
+        if (p > 0) { standard = p; repriced = true; }
+      }
+    } catch (e) {
+      if (!(e instanceof ReadFailed)) throw e;
+      console.error(`[read failed] the standard price for this rush job (job ${j.id}):`, e);
     }
 
     // COULD NOT WORK OUT THE STANDARD PRICE. Rolling anyway would move the day
@@ -1766,12 +2026,20 @@ export async function demoteLakeStrikes(): Promise<{ ok: boolean; demoted: numbe
   const admin = createServiceClient();
   const { lakeStrikeLimit } = await getPlatformSettings();
 
-  const [{ data: vendors }, { data: misses }, { data: dones }, { data: lakes }] = await Promise.all([
+  const [vendorsRes, missesRes, donesRes, lakesRes] = await Promise.all([
     admin.from("vendors").select("id, user_id, service_lakes").eq("status", "active"),
     admin.from("vendor_no_shows").select("vendor_id, lake_id").not("lake_id", "is", null),
     admin.from("jobs").select("vendor_id, properties(lake_id)").in("status", ["complete", "paid"]).not("vendor_id", "is", null),
     admin.from("lakes").select("id, name"),
   ]);
+  // The COMPLETIONS read is the dangerous one: empty, every crew looks like
+  // nothing but no-shows and shouldDemote strips lakes off crews who have been
+  // working them all season. This takes a lake away from somebody — it runs on
+  // facts or it does not run.
+  const vendors = mustRead("the active crews", vendorsRes);
+  const misses = mustRead("the recorded no-shows", missesRes);
+  const dones = mustRead("the jobs those crews completed", donesRes);
+  const lakes = mustRead("the lakes", lakesRes);
   const lakeName = new Map((lakes ?? []).map((l) => [l.id as string, l.name as string]));
 
   const key = (v: string, l: string) => `${v}|${l}`;
@@ -1801,7 +2069,8 @@ export async function demoteLakeStrikes(): Promise<{ ok: boolean; demoted: numbe
       demoted++;
 
       if (v.user_id) {
-        const { data: cu } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
+        const { data: cu, error: cuErr } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
+        if (cuErr) console.error(`[read failed] the crew's phone number (${v.id}):`, cuErr);
         if (cu?.phone) {
           void sendSms(cu.phone as string, `LakeLife: after repeated missed jobs on ${lakeName.get(lk) ?? "a lake"}, we've paused routing you there for a while. Keep completing jobs on your other lakes and it reopens automatically. Advance-notice blocks never count against you. 🌊`);
         }
@@ -1817,20 +2086,26 @@ export async function demoteLakeStrikes(): Promise<{ ok: boolean; demoted: numbe
  *  from it, correct a wildly-wrong one (>25 mi), leave sane pins alone. */
 export async function selfHealCrewBases(): Promise<{ ok: boolean; set: number; corrected: number }> {
   const admin = createServiceClient();
-  const { data: vendors } = await admin
+  const vendors = mustRead("the active crews", await admin
     .from("vendors")
     .select("id, base_lat, base_lng")
-    .eq("status", "active");
+    .eq("status", "active"));
 
   let setCount = 0, corrected = 0;
   for (const v of vendors ?? []) {
-    const { data: recent } = await admin
+    const { data: recent, error: recentErr } = await admin
       .from("jobs")
       .select("date, properties(lat, lng)")
       .eq("vendor_id", v.id as string)
       .in("status", ["complete", "paid"])
       .order("date", { ascending: false })
       .limit(20);
+    // No points is the input healBase judges a pin against; a failed read must
+    // not be allowed to look like "this crew has completed nothing".
+    if (recentErr) {
+      console.error(`[read failed] where this crew has been completing jobs (${v.id}):`, recentErr);
+      continue;
+    }
     const points = (recent ?? []).map((r) => {
       const p = one(r.properties) as { lat?: number; lng?: number } | null;
       return { lat: p?.lat != null ? Number(p.lat) : null, lng: p?.lng != null ? Number(p.lng) : null };
@@ -1854,32 +2129,46 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
   // Expire stale proposals (their token links die with them).
-  const { data: stale } = await admin
+  const { data: stale, error: staleErr } = await admin
     .from("autopilot_events")
     .update({ status: "expired" })
     .eq("status", "proposed")
     .lt("created_at", new Date(Date.now() - 14 * 86_400_000).toISOString())
     .select("id");
+  if (staleErr) console.error("[read failed] expiring stale autopilot proposals:", staleErr);
   const expired = stale?.length ?? 0;
 
-  const { data: enrollments } = await admin
+  const enrollments = mustRead("the autopilot enrollments", await admin
     .from("autopilot_enrollments")
     .select("id, property_id, service_id, locked_price, services(name, is_water_work), properties(owner_id, address, nickname, lake_id, lakes(ice_out_actual, pull_deadline))")
-    .eq("active", true);
+    .eq("active", true));
 
   let proposed = 0, texted = 0;
   for (const e of enrollments ?? []) {
     // One open proposal at a time (also DB-enforced by the partial unique index).
-    const { data: open } = await admin
+    const { data: open, error: openErr } = await admin
       .from("autopilot_events").select("id").eq("enrollment_id", e.id).eq("status", "proposed").maybeSingle();
+    // FAILS OPEN IF IGNORED: null reads as "no open proposal" and texts the
+    // owner a second one. (The partial unique index would refuse the insert,
+    // but only after we had already decided to send.)
+    if (openErr) {
+      console.error(`[read failed] this enrollment's open proposal (${e.id}):`, openErr);
+      continue;
+    }
     if (open) continue;
     // Don't propose when a manual/confirmed booking is already ahead.
-    const { data: upcoming } = await admin
+    const { data: upcoming, error: upcomingErr } = await admin
       .from("jobs").select("id")
       .eq("property_id", e.property_id).eq("service_id", e.service_id)
       .in("status", ["requested", "scheduled", "in_progress"])
       .gte("date", today)
       .limit(1);
+    // FAILS OPEN IF IGNORED: null reads as "nothing booked", and we propose a
+    // visit to somebody who already has one on the calendar.
+    if (upcomingErr) {
+      console.error(`[read failed] whether a visit is already booked (${e.id}):`, upcomingErr);
+      continue;
+    }
     if (upcoming && upcoming.length > 0) continue;
 
     const svc = one(e.services) as { name?: string; is_water_work?: boolean } | null;
@@ -1887,12 +2176,18 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
     const lake = one(prop?.lakes) as { ice_out_actual?: string; pull_deadline?: string } | null;
     if (!svc?.name || !prop?.owner_id) continue;
 
-    const { data: lastDone } = await admin
+    const { data: lastDone, error: lastDoneErr } = await admin
       .from("jobs").select("date")
       .eq("property_id", e.property_id).eq("service_id", e.service_id)
       .in("status", ["complete", "paid"])
       .order("date", { ascending: false })
       .limit(1);
+    // The last visit is what the proposed date is measured from — a failed read
+    // reads as "never done" and pencils the wrong day into a text.
+    if (lastDoneErr) {
+      console.error(`[read failed] when this service was last done (${e.id}):`, lastDoneErr);
+      continue;
+    }
     const date = proposeAutopilotDate({
       serviceName: svc.name,
       isWaterWork: !!svc.is_water_work,
@@ -1911,7 +2206,9 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
     if (!ev) continue;
     proposed++;
 
-    const { data: owner } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+    const { data: owner, error: ownerErr } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+    // The proposal row now exists with a confirm token nobody was sent.
+    if (ownerErr) console.error(`[read failed] the owner's phone number (enrollment ${e.id}):`, ownerErr);
     if (owner?.phone) {
       const where = prop.nickname || prop.address || "your place";
       void sendSms(
@@ -1934,17 +2231,23 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
   // on the matched lake and emails each owner by name. A born fixture inherits
   // real-looking season dates from lake-birth, so its pull_deadline genuinely
   // lands on the target day; nothing about the date says "this lake is fake".
-  const { data: lakes } = await admin
+  const lakes = mustRead("the lakes whose pull deadline is coming up", await admin
     .from("lakes").select("id, name, pull_deadline")
-    .eq("is_fixture", false).eq("pull_deadline", target);
+    .eq("is_fixture", false).eq("pull_deadline", target));
   if (!lakes || lakes.length === 0) return { ok: true, lakes: 0, emailed: 0 };
 
   let emailed = 0;
   for (const lake of lakes) {
-    const { data: props } = await admin
+    const { data: props, error: propsErr } = await admin
       .from("properties")
       .select("id, address, users(id, email, name)")
       .eq("lake_id", lake.id);
+    // Empty reads as "nobody lives on this lake" and the season's one warning
+    // is silently never sent — the claim ledger means it never sends again.
+    if (propsErr) {
+      console.error(`[read failed] the homes on this lake (${lake.id}):`, propsErr);
+      continue;
+    }
     const seen = new Set<string>();
     // The YEAR of the deadline we are warning about. Keyed by season, not by
     // date, so a re-run with a different `?lead=` is still the same message.
@@ -1999,10 +2302,10 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
   const today = todayLakeDate();
   let born = 0, sticky = 0;
 
-  const { data: groups } = await admin
+  const groups = mustRead("the active season envelopes", await admin
     .from("job_groups")
     .select("id, property_id, spring_service_ids, spring_quote, storing_vendor, fall_job_id, properties(lake_id, owner_id, lakes(name, ice_out_actual))")
-    .eq("status", "active");
+    .eq("status", "active"));
   for (const g of groups ?? []) {
     const springIds = (g.spring_service_ids as string[]) ?? [];
     if (springIds.length === 0) continue;
@@ -2016,23 +2319,38 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
     // Exactly-once: skip envelopes with a LIVE spring job (a cancelled
     // penciled date may re-birth); the partial unique index in 0037 is
     // the concurrent-nightly backstop.
-    const { data: existing } = await admin
+    const { data: existing, error: existingErr } = await admin
       .from("jobs").select("id").eq("group_id", g.id as string).eq("phase", "spring").neq("status", "cancelled").limit(1);
+    // FAILS OPEN IF IGNORED: null reads as "no spring job yet" and births a
+    // second billable visit. The 0037 index is the backstop, not the check.
+    if (existingErr) {
+      console.error(`[read failed] this envelope's existing spring job (${g.id}):`, existingErr);
+      continue;
+    }
     if (existing && existing.length > 0) continue;
 
     // The fall visit must be DONE, and the ice-out must belong to the spring
     // AFTER it — a stale last-spring date would otherwise birth in October.
     if (!g.fall_job_id) continue;
-    const { data: fall } = await admin
+    const { data: fall, error: fallErr } = await admin
       .from("jobs").select("status, date").eq("id", g.fall_job_id as string).maybeSingle();
+    if (fallErr) {
+      console.error(`[read failed] the fall visit behind this envelope (${g.id}):`, fallErr);
+      continue;
+    }
     if (!fall || !["complete", "paid"].includes(fall.status as string)) continue;
     if (iceOut < ((fall.date as string) ?? "")) continue;
 
     const profile = await loadPricingProfileById(admin, g.property_id as string);
-    const { data: svcRows } = await admin
+    const { data: svcRows, error: svcErr } = await admin
       .from("services")
       .select("id, name, kind, pricing_model, base, unit_rate, band_pricing")
       .in("id", springIds);
+    // These rows are what the spring visit is priced from.
+    if (svcErr) {
+      console.error(`[read failed] the spring services to price (${g.id}):`, svcErr);
+      continue;
+    }
     if (!profile || !svcRows?.length) continue;
 
     const { anchorFromServices } = await import("@/lib/packages");
@@ -2090,20 +2408,34 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
     // Sticky custody: the storing vendor holds the boat — assign directly at
     // THEIR rates (legs without a rate price $0 and show up on Margin Health;
     // physics beats the rate card when the boat is already in the barn).
-    const { data: stay } = await admin
+    const { data: stay, error: stayErr } = await admin
       .from("storage_stays").select("id, status").eq("group_id", g.id as string).eq("status", "in_storage").maybeSingle();
+    // FAILS OPEN IF IGNORED: null reads as "no boat in anybody's barn" and the
+    // else-branch below hands the splash to the dispatch lottery — a crew who
+    // cannot do it, because the boat is physically in someone else's building.
+    if (stayErr) {
+      console.error(`[read failed] whether the boat is in a barn (${g.id}):`, stayErr);
+      continue;
+    }
     // Sticky custody needs a HEALTHY barn: suspended crew or lapsed COI is
     // a genuine exception (the boat is physically theirs) — leave the job
     // requested, alert ops, and let the docs get fixed rather than
     // assigning work to a crew the platform has benched.
     let stickyOk = false;
     if (stay && g.storing_vendor) {
-      const { data: sv } = await admin
+      const { data: sv, error: svErr } = await admin
         .from("vendors").select("status, coi_expiry").eq("id", g.storing_vendor as string).maybeSingle();
+      // A failed read would text ops that the storing crew "is not active" —
+      // a statement about that crew, made from a dropped connection.
+      if (svErr) {
+        console.error(`[read failed] the storing crew's standing (${g.storing_vendor}):`, svErr);
+        continue;
+      }
       stickyOk = sv?.status === "active" && !!sv?.coi_expiry && String(sv.coi_expiry) >= today;
       if (!stickyOk) {
         try {
-          const { data: ops } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
+          const { data: ops, error: opsErr } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
+          if (opsErr) console.error("[read failed] the ops phone numbers for a sticky-custody alert:", opsErr);
           for (const o of ops ?? []) {
             void sendSms(o.phone as string, `LakeLife OPS: spring splash for a stored boat can't auto-assign — the storing crew is ${sv?.status !== "active" ? "not active" : "COI-lapsed"}. Group ${g.id}. Fix their docs and the machine takes it from there.`);
           }
@@ -2111,9 +2443,15 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
       }
     }
     if (stay && g.storing_vendor && stickyOk) {
-      const { data: rates } = await admin
+      const { data: rates, error: ratesErr } = await admin
         .from("vendor_rates").select("service_id, base, unit_rate, band_pricing")
         .eq("vendor_id", g.storing_vendor as string).in("service_id", springIds);
+      // Empty reads as "this crew has no rates", and the job would be assigned
+      // to them at a vendor_cost of $0 — they'd do the work for nothing.
+      if (ratesErr) {
+        console.error(`[read failed] the storing crew's rate card (${g.storing_vendor}):`, ratesErr);
+        continue;
+      }
       const rateBy = new Map((rates ?? []).map((r) => [r.service_id as string, r]));
       let cost = 0;
       for (const s of svcRows) {
@@ -2138,7 +2476,8 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
     // The penciled-date text — reschedule rides the existing rails.
     try {
       if (prop?.owner_id) {
-        const { data: u } = await admin.from("users").select("phone").eq("id", prop.owner_id as string).maybeSingle();
+        const { data: u, error: uErr } = await admin.from("users").select("phone").eq("id", prop.owner_id as string).maybeSingle();
+        if (uErr) console.error(`[read failed] the owner's phone number (${g.id}):`, uErr);
         const prettyDate = new Date(springDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
         if (u?.phone) {
           void sendSms(u.phone as string, `LakeLife: ice-out is here on ${lake?.name ?? "your lake"} 🌊 We've penciled your boat's spring visit for ${prettyDate} — $${price.toLocaleString()} as quoted at booking. Need a different day? Just cancel and rebook from your requests page, or text us.`);
@@ -2161,10 +2500,10 @@ export async function overstayNotices(): Promise<{ ok: boolean; sent: number }> 
   const now = Date.now();
   let sent = 0;
 
-  const { data: stays } = await admin
+  const stays = mustRead("the boats still in storage", await admin
     .from("storage_stays")
     .select("id, group_id, intake_at, job_groups(property_id, status, properties(owner_id, address))")
-    .eq("status", "in_storage");
+    .eq("status", "in_storage"));
   for (const st of stays ?? []) {
     const grp = (Array.isArray(st.job_groups) ? st.job_groups[0] : st.job_groups) as
       | { property_id?: string; status?: string; properties?: unknown } | null;
@@ -2175,9 +2514,15 @@ export async function overstayNotices(): Promise<{ ok: boolean; sent: number }> 
     if (days <= 0) continue;
 
     // A scheduled splash on the books = the meter is already understood.
-    const { data: springJob } = await admin
+    const { data: springJob, error: springJobErr } = await admin
       .from("jobs").select("id").eq("group_id", st.group_id as string).eq("phase", "spring")
       .in("status", ["scheduled", "in_progress"]).limit(1);
+    // FAILS OPEN IF IGNORED: null reads as "no splash booked", and somebody
+    // with a date on the calendar gets a meter text anyway.
+    if (springJobErr) {
+      console.error(`[read failed] whether a splash is already booked (${st.group_id}):`, springJobErr);
+      continue;
+    }
     if (springJob && springJob.length > 0) continue;
 
     const prop = (Array.isArray(grp.properties) ? grp.properties[0] : grp.properties) as
@@ -2185,13 +2530,20 @@ export async function overstayNotices(): Promise<{ ok: boolean; sent: number }> 
     if (!prop?.owner_id) continue;
 
     // Weekly, not daily — polite is the covenant.
-    const { data: last } = await admin
+    const { data: last, error: lastErr } = await admin
       .from("nudge_log").select("sent_at").eq("user_id", prop.owner_id as string).eq("kind", `overstay_meter:${st.group_id}`)
       .order("sent_at", { ascending: false }).limit(1).maybeSingle();
+    // FAILS OPEN IF IGNORED: no row reads as "never texted", and weekly
+    // becomes nightly. Polite is the covenant.
+    if (lastErr) {
+      console.error(`[read failed] when we last texted this meter (${st.group_id}):`, lastErr);
+      continue;
+    }
     if (nudgeCooling((last?.sent_at as string) ?? null, 7, now)) continue;
 
     const charge = perdiemCharge(days, settings.storagePerdiemDaily);
-    const { data: u } = await admin.from("users").select("phone").eq("id", prop.owner_id as string).maybeSingle();
+    const { data: u, error: uErr } = await admin.from("users").select("phone").eq("id", prop.owner_id as string).maybeSingle();
+    if (uErr) console.error(`[read failed] the owner's phone number (${st.group_id}):`, uErr);
     if (u?.phone) {
       void sendSms(u.phone as string, `LakeLife: your boat's storage season ended ${end} — the meter's at $${charge.toFixed(2).replace(/\.00$/, "")} ($${settings.storagePerdiemDaily.toFixed(2).replace(/\.00$/, "")}/day, billed at splash). Pick your splash day from your requests page and we'll get it back on the water. 🌊`);
       await admin.from("nudge_log").insert({ user_id: prop.owner_id, kind: `overstay_meter:${st.group_id}` });
@@ -2214,18 +2566,30 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
   if (!force && !isLastDayOfMonth(today)) return { ok: true, ran: false, batches: 0, total: 0 };
   const admin = createServiceClient();
 
-  const { data: unbatched } = await admin
-    .from("payouts").select("vendor_id, amount").eq("status", "released").is("batch_id", null).not("vendor_id", "is", null);
+  // Empty reads as "no crew is owed anything this month", on the night the
+  // crews get paid, and the digest reports it as a quiet night.
+  const unbatched = mustRead("the released payouts waiting on a batch", await admin
+    .from("payouts").select("vendor_id, amount").eq("status", "released").is("batch_id", null).not("vendor_id", "is", null));
   const byVendor = new Map<string, number>();
   for (const p of unbatched ?? []) byVendor.set(p.vendor_id as string, (byVendor.get(p.vendor_id as string) ?? 0) + Number(p.amount ?? 0));
 
   let batches = 0, total = 0;
   for (const [vendorId, sum] of byVendor) {
     if (sum <= 0) continue;
-    const { data: v } = await admin.from("vendors").select("user_id").eq("id", vendorId).maybeSingle();
+    const { data: v, error: vErr } = await admin.from("vendors").select("user_id").eq("id", vendorId).maybeSingle();
+    // Neither of these failing means what its empty case means. Skipping is the
+    // safe direction — the money keeps accumulating — but it must be visible.
+    if (vErr) {
+      console.error(`[read failed] the crew behind this payout (${vendorId}):`, vErr);
+      continue;
+    }
     if (!v?.user_id) continue;
-    const { data: acct } = await admin
+    const { data: acct, error: acctErr } = await admin
       .from("payout_accounts").select("account_last4").eq("user_id", v.user_id as string).maybeSingle();
+    if (acctErr) {
+      console.error(`[read failed] this crew's bank details (${vendorId}):`, acctErr);
+      continue;
+    }
     if (!acct) continue; // no bank on file — keep accumulating, keep nudging
 
     const { data: batch } = await admin
@@ -2233,11 +2597,14 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
       .insert({ user_id: v.user_id, vendor_id: vendorId, kind: "monthly", status: "building" })
       .select("id").single();
     if (!batch) continue;
-    const { data: claimed } = await admin
+    const { data: claimed, error: claimErr } = await admin
       .from("payouts")
       .update({ batch_id: batch.id })
       .eq("vendor_id", vendorId).eq("status", "released").is("batch_id", null)
       .select("amount");
+    // A failed claim leaves gross at 0, which unwinds the batch below — the
+    // right outcome, but not one to reach silently.
+    if (claimErr) console.error(`[read failed] claiming this crew's payouts into a batch (${vendorId}):`, claimErr);
     const gross = Math.round((claimed ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0) * 100) / 100;
     if (gross <= 0) {
       await admin.from("payouts").update({ batch_id: null }).eq("batch_id", batch.id);
@@ -2255,7 +2622,8 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
     batches++;
     total += gross;
     try {
-      const { data: u } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
+      const { data: u, error: uErr } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
+      if (uErr) console.error(`[read failed] the crew's phone number (${vendorId}):`, uErr);
       if (u?.phone) void sendSms(u.phone as string, `LakeLife: month-end payout queued — $${gross.toFixed(2)} to your account ····${acct.account_last4}, no fee. 🌊`);
     } catch { /* best effort */ }
   }
@@ -2284,24 +2652,30 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
   // Age gate in LAKE time, failing closed on a missing created_at — the same
   // rule the board and the claim action enforce.
   const { lakeDateOf } = await import("@/lib/booking");
-  const { data: open } = await admin
+  const open = mustRead("the open fill-in jobs", await admin
     .from("jobs")
     .select("id, date, customer_price, service_id, property_id, created_at, services(name, pricing_model), properties(lake_id)")
     .eq("status", "requested").is("vendor_id", null).is("group_id", null)
-    .gte("date", today).limit(200);
+    .gte("date", today).limit(200));
   const aged = (open ?? []).filter((j) => {
     const d = j.created_at != null ? lakeDateOf(String(j.created_at)) : null;
     return d != null && d < today;
   });
   if (aged.length === 0) return { ok: true, sent: 0 };
 
-  const [{ data: crews }, { data: allRates }, { data: allPauses }] = await Promise.all([
+  const [crewsRes, allRatesRes, allPausesRes] = await Promise.all([
     admin.from("vendors")
       .select("id, user_id, company, service_types, service_lakes, work_days, coi_expiry, status")
       .eq("status", "active").not("user_id", "is", null),
     admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"),
     admin.from("vendor_lake_demotions").select("vendor_id, lake_id, demoted_at"),
   ]);
+  // The PAUSES read is the one that fails open: empty, `pausedNow` is empty and
+  // we advertise a lake to the crew we just paused on it. The rates read is the
+  // subject line's dollar figure.
+  const crews = mustRead("the active crews", crewsRes);
+  const allRates = mustRead("the crews' rate cards", allRatesRes);
+  const allPauses = mustRead("which crews are paused on which lakes", allPausesRes);
   const { gapTakeHome, gapOfferFor, gapJitter, marginPct } = await import("@/lib/dispatch");
   const { loadGapAnchor } = await import("@/app/vendor/open-data");
   const rateByCrewSvc = new Map((allRates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
@@ -2319,7 +2693,7 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
     if (!v.coi_expiry || String(v.coi_expiry) < today) continue;
     const myLakes = new Set((v.service_lakes as string[]) ?? []);
     const myDays = new Set((v.work_days as string[]) ?? []);
-    let total = 0, count = 0;
+    let total = 0, count = 0, tallyFailed = false;
     for (const j of aged) {
       const svc = one(j.services) as { name?: string; pricing_model?: string } | null;
       const lakeId = (one(j.properties) as { lake_id?: string } | null)?.lake_id;
@@ -2335,7 +2709,18 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
       if (!vr) continue; // no rate = no capability — this job never gaps for them
       let profile = profileCache.get(j.property_id as string);
       if (profile === undefined) {
-        profile = await loadPricingProfileById(admin, j.property_id as string);
+        // SEAM: loadPricingProfileById throws on a failed read now. Uncaught it
+        // would abort the digest for every REMAINING crew; skipping just the
+        // job would quietly understate the dollar figure this crew's subject
+        // line asserts. So the ITEM we skip is the crew, not the job.
+        try {
+          profile = await loadPricingProfileById(admin, j.property_id as string);
+        } catch (e) {
+          if (!(e instanceof ReadFailed)) throw e;
+          console.error(`[read failed] pricing a fill-in job for the digest (crew ${v.id}, job ${j.id}):`, e);
+          tallyFailed = true;
+          break;
+        }
         profileCache.set(j.property_id as string, profile);
       }
       if (!profile) continue;
@@ -2352,28 +2737,59 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
       const anchorKey = `${v.id}|${j.service_id}|${j.property_id}`;
       let anchor = anchorCache.get(anchorKey);
       if (anchor === undefined) {
-        anchor = await loadGapAnchor(
-          admin, v.id as string, j.service_id as string, svc.name,
-          svc.pricing_model as ServiceRule["pricing_model"], profile, cardPriced,
-        );
+        // SEAM: loadGapAnchor throws on a failed rate-history read. Same rule
+        // as the profile above — never abort the run, and never email a total
+        // we could not finish adding up.
+        try {
+          anchor = await loadGapAnchor(
+            admin, v.id as string, j.service_id as string, svc.name,
+            svc.pricing_model as ServiceRule["pricing_model"], profile, cardPriced,
+          );
+        } catch (e) {
+          if (!(e instanceof ReadFailed)) throw e;
+          console.error(`[read failed] this crew's rate history for the digest (crew ${v.id}, job ${j.id}):`, e);
+          tallyFailed = true;
+          break;
+        }
         anchorCache.set(anchorKey, anchor);
       }
       const offer = gapOfferFor(tStar, anchor, settings.gapAnchorPct, settings.gapMinOffer);
       if (offer != null) { total += offer; count++; }
     }
+    // A TALLY WE COULDN'T FINISH IS NOT A SMALLER TALLY. The subject line
+    // states a dollar amount as fact, so a crew whose tally hit a failed read
+    // gets no email this beat rather than a number that is short.
+    if (tallyFailed) continue;
+
     // Two-job minimum + dollar threshold: a single-job "digest" would print
     // that job's exact offer in a subject line — aggregate or nothing.
     if (count < 2 || total < settings.fillinDigestMin) continue;
 
-    const { data: last } = await admin
+    const { data: last, error: lastErr } = await admin
       .from("nudge_log").select("sent_at").eq("user_id", v.user_id as string).eq("kind", "fillin_digest")
       .order("sent_at", { ascending: false }).limit(1).maybeSingle();
+    // FAILS OPEN IF IGNORED: no row reads as "never sent", and the cooldown
+    // this crew is inside of is skipped.
+    if (lastErr) {
+      console.error(`[read failed] when this crew last got the digest (${v.id}):`, lastErr);
+      continue;
+    }
     if (nudgeCooling((last?.sent_at as string) ?? null, settings.fillinDigestCooldownDays, now)) continue;
-    const { data: pref } = await admin
+    const { data: pref, error: prefErr } = await admin
       .from("notification_prefs").select("enabled")
       .eq("user_id", v.user_id as string).eq("type", "growth").eq("channel", "email").maybeSingle();
+    // FAILS OPEN IF IGNORED: `null?.enabled === false` is false, i.e. "never
+    // opted out" — emailing a crew who turned this off.
+    if (prefErr) {
+      console.error(`[read failed] this crew's growth-email preference (${v.id}):`, prefErr);
+      continue;
+    }
     if (pref?.enabled === false) continue;
-    const { data: u } = await admin.from("users").select("email").eq("id", v.user_id as string).maybeSingle();
+    const { data: u, error: uErr } = await admin.from("users").select("email").eq("id", v.user_id as string).maybeSingle();
+    if (uErr) {
+      console.error(`[read failed] this crew's email (${v.id}):`, uErr);
+      continue;
+    }
     if (!u?.email) continue;
     // The cooldown row is only written when the email actually went out — a
     // Resend hiccup must not buy 30 days of silence (same standard as the
@@ -2413,7 +2829,7 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
 export async function learnServiceDurations(): Promise<{ ok: boolean; updated: number; changes: Array<{ service: string; from: number; to: number; samples: number }> }> {
   const admin = createServiceClient();
   const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
-  const [{ data: services }, { data: done }] = await Promise.all([
+  const [servicesRes, doneRes] = await Promise.all([
     admin.from("services").select("id, name, est_minutes"),
     admin.from("jobs")
       .select("service_id, started_at, completed_at")
@@ -2423,6 +2839,10 @@ export async function learnServiceDurations(): Promise<{ ok: boolean; updated: n
       .gte("completed_at", since)
       .limit(5000),
   ]);
+  // These samples walk a dial that every route build then plans against. An
+  // empty read is not "nobody worked for 90 days".
+  const services = mustRead("the services", servicesRes);
+  const done = mustRead("90 days of completed jobs", doneRes);
   const samplesBySvc = new Map<string, number[]>();
   for (const j of done ?? []) {
     const mins = (new Date(j.completed_at as string).getTime() - new Date(j.started_at as string).getTime()) / 60_000;
@@ -2460,8 +2880,8 @@ export async function learnServiceDurations(): Promise<{ ok: boolean; updated: n
 export async function reconcileRefunds(): Promise<{ ok: boolean; orphansCleared: number; flipsCompleted: number }> {
   const admin = createServiceClient();
   const cutoff = new Date(Date.now() - 30 * 60_000).toISOString();
-  const { data: orphans } = await admin
-    .from("refunds").select("id").is("processor_ref", null).lt("created_at", cutoff).limit(50);
+  const orphans = mustRead("the unsettled refund claims", await admin
+    .from("refunds").select("id").is("processor_ref", null).lt("created_at", cutoff).limit(50));
   let orphansCleared = 0;
   for (const o of orphans ?? []) {
     const { data: gone } = await admin.from("refunds").delete().eq("id", o.id).is("processor_ref", null).select("id");
@@ -2470,18 +2890,25 @@ export async function reconcileRefunds(): Promise<{ ok: boolean; orphansCleared:
 
   // Durable full refunds whose invoice never flipped: complete the flip +
   // referral void. Small scan — refunds are rare events.
-  const { data: recent } = await admin
+  const recent = mustRead("the week's durable refunds", await admin
     .from("refunds").select("invoice_id, job_id").not("processor_ref", "is", null)
-    .gte("created_at", new Date(Date.now() - 7 * 86_400_000).toISOString()).limit(200);
+    .gte("created_at", new Date(Date.now() - 7 * 86_400_000).toISOString()).limit(200));
   const byInvoice = new Map<string, string | null>();
   for (const r of recent ?? []) byInvoice.set(r.invoice_id as string, (r.job_id as string) ?? null);
   let flipsCompleted = 0;
   for (const [invoiceId, jobId] of byInvoice) {
-    const [{ data: inv }, { data: pay }, { data: rows }] = await Promise.all([
+    const [invRes, payRes, rowsRes] = await Promise.all([
       admin.from("invoices").select("id, status").eq("id", invoiceId).maybeSingle(),
       admin.from("payments").select("amount").eq("invoice_id", invoiceId).eq("status", "captured").maybeSingle(),
       admin.from("refunds").select("amount").eq("invoice_id", invoiceId).not("processor_ref", "is", null),
     ]);
+    // A failed `rows` read totals $0 refunded and the invoice never flips; a
+    // failed `pay` read skips it silently. Both leave the money mis-stated.
+    if (invRes.error || payRes.error || rowsRes.error) {
+      console.error(`[read failed] the refund state of this invoice (${invoiceId}):`, invRes.error ?? payRes.error ?? rowsRes.error);
+      continue;
+    }
+    const inv = invRes.data, pay = payRes.data, rows = rowsRes.data;
     if (!inv || inv.status === "refunded" || !pay) continue;
     const durable = (rows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
     if (durable >= Number(pay.amount ?? 0) - 0.001) {
@@ -2513,16 +2940,17 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number }> 
   // Oldest first: with more than 50 open jobs, the ones stuck LONGEST are
   // always in the sample — an unordered page could skip a stranded job on
   // every run. Null created_at rows can't be aged, so they're excluded.
-  const { data: stuck } = await admin
+  const stuck = mustRead("the jobs sitting unclaimed", await admin
     .from("jobs")
     .select("id, date, created_at, services(name, is_water_work), properties(address, lakes(name, pull_deadline))")
     .eq("status", "requested").is("vendor_id", null).is("group_id", null)
     .gte("date", today).not("created_at", "is", null)
-    .order("created_at", { ascending: true }).limit(200);
+    .order("created_at", { ascending: true }).limit(200));
   // 200-deep page: already-alerted jobs stay 'requested' until a human acts,
   // so a 50-row page could fill up with alerted-but-unresolved rows during a
   // surge and starve job #51. The per-run SMS cap still bounds the noise.
-  const { data: ops } = await admin.from("users").select("id, phone").eq("role", "ops").not("phone", "is", null);
+  // Empty reads as "there is no ops team", and the whole valve returns quietly.
+  const ops = mustRead("the ops team's phone numbers", await admin.from("users").select("id, phone").eq("role", "ops").not("phone", "is", null));
   if (!ops || ops.length === 0) return { ok: true, alerted: 0 };
   for (const j of stuck ?? []) {
     if (alerted >= MAX_ALERTS_PER_RUN) break;
@@ -2539,8 +2967,14 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number }> 
     const overSla = String(j.created_at) < cutoffIso;
     if (!overSla && !nearDeadline) continue;
     // once per job — nudge_log keyed by job id
-    const { data: seen } = await admin
+    const { data: seen, error: seenErr } = await admin
       .from("nudge_log").select("id").eq("kind", `gap_sla:${j.id}`).limit(1);
+    // FAILS OPEN IF IGNORED: null reads as "never alerted", and the once-per-job
+    // promise becomes a nightly text to every ops phone.
+    if (seenErr) {
+      console.error(`[read failed] whether this job was already alerted (${j.id}):`, seenErr);
+      continue;
+    }
     if (seen && seen.length > 0) continue;
     const svcName = svc?.name ?? "a job";
     // Cause-neutral copy: "unclaimed" is the fact; rate-vs-capacity is for
@@ -2589,7 +3023,10 @@ export async function autoApplyPriceSuggestions(): Promise<{
   if (suggestions.length === 0) return { ok: true, applied: 0, changes: [] };
 
   const serviceIds = [...new Set(suggestions.map((s) => s.serviceId))];
-  const { data: svcRows } = await admin.from("services").select("id, last_auto_priced_at").in("id", serviceIds);
+  // FAILS OPEN IF IGNORED: an empty map makes every `last` below null, the
+  // 30-day cooldown never triggers, and the machine re-prices a menu row it
+  // moved last week — twice in one lull is exactly what the dial forbids.
+  const svcRows = mustRead("when these services were last auto-priced", await admin.from("services").select("id, last_auto_priced_at").in("id", serviceIds));
   const lastPriced = new Map<string, string | null>(
     (svcRows ?? []).map((s) => [s.id as string, (s.last_auto_priced_at as string) ?? null]),
   );
@@ -2607,10 +3044,16 @@ export async function autoApplyPriceSuggestions(): Promise<{
     // behind their own raises (the loop the fill-in anchor kills for
     // offers). Recent-card suggestions stay one-tap for a human.
     if (s.drivenByVendorId) {
-      const { data: card } = await admin
+      const { data: card, error: cardErr } = await admin
         .from("vendor_rates").select("updated_at")
         .eq("vendor_id", s.drivenByVendorId).eq("service_id", s.serviceId)
         .maybeSingle();
+      // Fails CLOSED already (`!card` skips the auto-apply) — but "no card" and
+      // "couldn't look" should not be the same silent event on a price change.
+      if (cardErr) {
+        console.error(`[read failed] the crew's rate card behind this suggestion (${s.serviceId}):`, cardErr);
+        continue;
+      }
       // No card or a card touched in the last 30 days (updated OR brand new —
       // updated_at covers both; the history trigger misses inserts) → the
       // rate isn't proven stable. Leave the suggestion one-tap for a human.
@@ -2686,12 +3129,24 @@ export async function sendNightlyDigest(results: {
   const admin = createServiceClient();
   const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString();
 
-  const { data: escalatedRows } = await admin
+  // THE DIGEST CANNOT THROW — it is how ops finds out anything at all, so a
+  // failed read here must not cost them the whole email. Instead each one
+  // becomes a named failure IN the email, alongside the steps that broke: an
+  // empty section that says "we couldn't look" rather than "nothing happened".
+  const readFailures: Array<{ step: string; error: string }> = [];
+  const noteRead = (what: string, error: { message?: string } | null): void => {
+    if (!error) return;
+    console.error(`[read failed] ${what}:`, error);
+    readFailures.push({ step: `digest — ${what}`, error: error.message ?? "read failed" });
+  };
+
+  const { data: escalatedRows, error: escalatedErr } = await admin
     .from("disputes")
     .select("customer_note, jobs!disputes_job_id_fkey(services(name))")
     .eq("status", "escalated")
     .order("opened_at", { ascending: true })
     .limit(20);
+  noteRead("the escalated disputes", escalatedErr);
   const escalatedDisputes = (escalatedRows ?? []).map((d) => {
     const job = one((d as { jobs?: unknown }).jobs) as { services?: unknown } | null;
     const svcName = (one(job?.services) as { name?: string } | null)?.name ?? "a job";
@@ -2701,24 +3156,28 @@ export async function sendNightlyDigest(results: {
   // Homes with no lake. Crew imports used to mint these on every claim; the
   // ones already on the books can only be fixed by a person, so a person has
   // to be told they exist.
-  const { count: lakelessHomes } = await admin
+  const { count: lakelessHomes, error: lakelessErr } = await admin
     .from("properties").select("id", { count: "exact", head: true }).is("lake_id", null);
+  noteRead("the homes with no lake", lakelessErr);
 
-  const { data: bornRows } = await admin.from("lakes").select("name, source").gte("created_at", dayAgo);
+  const { data: bornRows, error: bornErr } = await admin.from("lakes").select("name, source").gte("created_at", dayAgo);
+  noteRead("the lakes born today", bornErr);
   const lakesBorn = (bornRows ?? []).map((l) => ({ name: l.name as string, source: (l.source as string) ?? "ops" }));
 
-  const { count: aiCount } = await admin
+  const { count: aiCount, error: aiCountErr } = await admin
     .from("messages")
     .select("id", { count: "exact", head: true })
     .eq("ai", true)
     .gte("created_at", dayAgo);
-  const { data: aiRows } = await admin
+  noteRead("how many AI auto-replies went out", aiCountErr);
+  const { data: aiRows, error: aiRowsErr } = await admin
     .from("messages")
     .select("body")
     .eq("ai", true)
     .gte("created_at", dayAgo)
     .order("created_at", { ascending: false })
     .limit(5);
+  noteRead("what the AI auto-replies said", aiRowsErr);
   const aiReplyTexts = (aiRows ?? []).map((m) => ((m.body as string) ?? "").slice(0, 200));
 
   const sections: DigestSections = {
@@ -2752,19 +3211,22 @@ export async function sendNightlyDigest(results: {
     visitFees: results.visitFees,
     tripFees: results.tripFees,
     tipsCollected: results.tipsCollected,
-    failures: results.failures,
+    failures: [...(results.failures ?? []), ...readFailures],
     homesWithNoLake: lakelessHomes ?? 0,
   };
   const html = composeNightlyDigest(sections);
 
-  const { data: opsUsers } = await admin.from("users").select("email").eq("role", "ops").not("email", "is", null);
+  // The one read here that IS worth throwing over: without it the digest goes
+  // to nobody, and "sent: 0" would be the only trace. The route's step guard
+  // turns the throw into a named failure in tonight's response.
+  const opsUsers = mustRead("the ops team's emails", await admin.from("users").select("email").eq("role", "ops").not("email", "is", null));
   let sent = 0;
   for (const u of opsUsers ?? []) {
     const email = u.email as string | null;
     if (!email) continue;
     // THE SUBJECT LINE CARRIES THE BAD NEWS. Ops reads this on a phone, in a
     // list, at night — a broken step must be visible without opening it.
-    const broke = results.failures?.length ?? 0;
+    const broke = (results.failures?.length ?? 0) + readFailures.length;
     const subject = broke > 0
       ? `LakeLife nightly — ${broke} step${broke === 1 ? "" : "s"} FAILED`
       : "LakeLife nightly — the machine's report";
@@ -2800,11 +3262,11 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
   const today = todayLakeDate();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
-  const { data: stays } = await admin
+  const stays = mustRead("the stays coming to an end", await admin
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id, during, term, status, extended_count, extend_reminded_at")
     .in("status", ["approved", "active"])
-    .is("extend_reminded_at", null);
+    .is("extend_reminded_at", null));
 
   let reminded = 0;
 
@@ -2832,11 +3294,18 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
     // `phone_on_file_with_park` exists to prevent, and the rest of the park
     // module already enforces the real rule: a verified mobile is not
     // permission, the operational-SMS consent is. Both, or nothing.
-    const { data: renter } = await admin
+    const { data: renter, error: renterErr } = await admin
       .from("park_renters")
       .select("display_name, mobile_e164, mobile_verified_at, sms_consent_operational_at, contact_pref")
       .eq("id", s.renter_id as string)
       .maybeSingle();
+    // Fails closed (no consent read = no text), which is the right direction for
+    // a consent gate — but a month-to-month tenancy that never rolls forward is
+    // a lot the rent roll will call vacant, so it cannot be silent.
+    if (renterErr) {
+      console.error(`[read failed] the renter's consent and mobile (${s.renter_id}):`, renterErr);
+      continue;
+    }
     const phone = renter?.mobile_e164 as string | undefined;
     if (
       !phone ||
@@ -2845,10 +3314,16 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
       !renter?.sms_consent_operational_at
     ) continue;
 
-    const { data: lot } = await admin
+    const { data: lot, error: lotErr } = await admin
       .from("park_lots").select("lot_number").eq("id", s.park_lot_id as string).maybeSingle();
-    const { data: rateRows } = await admin
+    const { data: rateRows, error: rateErr } = await admin
       .from("lot_rates").select("term, amount").eq("park_lot_id", s.park_lot_id as string);
+    // The text names her site and quotes a price. A failed read would send
+    // "your site  is booked" or, worse, price the extension off no rates at all.
+    if (lotErr || rateErr) {
+      console.error(`[read failed] the lot and its rates (${s.park_lot_id}):`, lotErr ?? rateErr);
+      continue;
+    }
     const price = extensionPrice(
       (rateRows ?? []).map((r) => ({ term: r.term as Term, amount: Number(r.amount) })),
       term,
@@ -2918,11 +3393,11 @@ export async function raiseTripFees(): Promise<{ paid: number; total: number; on
   const admin = createServiceClient();
   const settings = await getPlatformSettings();
 
-  const { data: attempts } = await admin
+  const attempts = mustRead("the trips not yet paid for", await admin
     .from("job_visit_attempts")
     .select("id, job_id, vendor_id, outcome, jobs(recovery_state, fee_proposed_amount, vendor_cost)")
     .is("trip_fee_payout_id", null)
-    .not("vendor_id", "is", null);
+    .not("vendor_id", "is", null));
 
   let paid = 0;
   let total = 0;
@@ -3009,12 +3484,14 @@ export async function raiseTripFees(): Promise<{ paid: number; total: number; on
 export async function tipsCollectedSinceLastNight(): Promise<{ count: number; total: number }> {
   const admin = createServiceClient();
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { data } = await admin
+  // A failed read reports "no tips came in", which the digest prints as fact
+  // about money a customer actually gave.
+  const data = mustRead("the tips collected since last night", await admin
     .from("payments")
     .select("amount")
     .not("tip_job_id", "is", null)
     .eq("status", "captured")
-    .gte("created_at", since);
+    .gte("created_at", since));
   const rows = data ?? [];
   return {
     count: rows.length,
@@ -3027,11 +3504,11 @@ export async function proposeOverdueFees(): Promise<{ proposed: number; skipped:
   const today = todayLakeDate();
   const settings = await getPlatformSettings();
 
-  const { data: rows } = await admin
+  const rows = mustRead("the visits waiting on a customer's decision", await admin
     .from("jobs")
     .select("id, customer_price, vendor_cost, vendor_id, reschedule_deadline, no_show_at, stood_down_at")
     .eq("recovery_state", "awaiting_customer")
-    .not("reschedule_deadline", "is", null);
+    .not("reschedule_deadline", "is", null));
 
   let proposed = 0;
   let skipped = 0;

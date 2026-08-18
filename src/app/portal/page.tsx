@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { hasSupabaseEnv } from "@/lib/env";
 import { claimCrewInvite } from "@/app/ops/crews-invite";
 import { claimCustomerImports } from "@/app/vendor/import-actions";
@@ -20,11 +21,12 @@ export default async function PortalPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/");
 
-  const { data: me } = await supabase
-    .from("users")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
+  // This row decides which door they get. A failed read would read as "no
+  // role" and send ops, crews and park owners to the homeowner booking page.
+  const me = mustRead(
+    "your account",
+    await supabase.from("users").select("role").eq("id", user.id).maybeSingle(),
+  );
 
   // Referral attribution (one-time, self-referral blocked) — §8 rails.
   await claimReferral(user.id);
@@ -47,12 +49,20 @@ export default async function PortalPage() {
   // here means checking membership before anything can rewrite the role.
   if (role !== "ops") {
     const admin = createServiceClient();
-    const { data: membership } = await admin
-      .from("park_members")
-      .select("park_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
+    // FAILS OPEN if left alone, and this is the guard the comment above is
+    // about: a failed read reads as "not a park member", so the park owner
+    // falls straight into claimCrewInvite, which REWRITES users.role to
+    // 'vendor' on an email match — a write guard_role_change then makes
+    // awkward to undo. It must not be skipped because a read blipped.
+    const membership = mustRead(
+      "whether you own or manage a park",
+      await admin
+        .from("park_members")
+        .select("park_id")
+        .eq("user_id", user.id)
+        .limit(1)
+        .maybeSingle(),
+    );
     if (membership) redirect("/park");
   }
 
@@ -74,20 +84,26 @@ export default async function PortalPage() {
   // specific answer to "where does this person live" than "somewhere".
   if (role !== "vendor" && role !== "ops") {
     const admin = createServiceClient();
-    const { data: file } = await admin
-      .from("park_renters")
-      .select("id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
-    if (file) {
-      const { data: stay } = await admin
-        .from("lot_reservations")
+    const file = mustRead(
+      "your resident file",
+      await admin
+        .from("park_renters")
         .select("id")
-        .eq("renter_id", file.id as string)
-        .in("status", ["approved", "active"])
+        .eq("user_id", user.id)
         .limit(1)
-        .maybeSingle();
+        .maybeSingle(),
+    );
+    if (file) {
+      const stay = mustRead(
+        "your tenancy",
+        await admin
+          .from("lot_reservations")
+          .select("id")
+          .eq("renter_id", file.id as string)
+          .in("status", ["approved", "active"])
+          .limit(1)
+          .maybeSingle(),
+      );
       // A claimed file with no live tenancy is an applicant, not a resident —
       // they carry on to the ordinary customer door rather than being sent to
       // a screen that would only tell them they have no lot.

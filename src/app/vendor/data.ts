@@ -2,6 +2,7 @@ import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { decryptGate } from "@/lib/gate";
 import { todayLakeDate } from "@/lib/booking";
+import { mustRead } from "@/lib/must-read";
 
 export interface VendorStop {
   id: string;
@@ -42,7 +43,13 @@ export async function getMyVendorId(): Promise<string | null> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
-  const { data } = await supabase.from("vendors").select("id").eq("user_id", user.id).maybeSingle();
+  // `null` from here means "you are not a crew" and every crew screen and crew
+  // action is built on it. A failed read must never be able to say that to
+  // somebody who has been working these lakes all season.
+  const data = mustRead(
+    "your crew account",
+    await supabase.from("vendors").select("id").eq("user_id", user.id).maybeSingle(),
+  );
   return (data?.id as string) ?? null;
 }
 
@@ -68,11 +75,14 @@ export async function getMyVendor(): Promise<MyVendor | null> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
-  const { data } = await supabase
-    .from("vendors")
-    .select("id, company, status, coi_url, coi_expiry, w9_url, service_types, work_days, service_lakes, daily_capacity, base_lat, base_lng")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const data = mustRead(
+    "your crew profile",
+    await supabase
+      .from("vendors")
+      .select("id, company, status, coi_url, coi_expiry, w9_url, service_types, work_days, service_lakes, daily_capacity, base_lat, base_lng")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+  );
   if (!data) return null;
   return {
     id: data.id as string,
@@ -124,12 +134,17 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
   const date = dateISO ?? today;
 
   // Price-free crew view, scoped by RLS to this vendor's own jobs.
-  const { data: jobs } = await supabase
-    .from("vendor_jobs")
-    .select("*")
-    .eq("date", date)
-    .order("sequence", { ascending: true, nullsFirst: false })
-    .order("created_at", { ascending: true });
+  // A failed read here used to render "Nothing on your route today" to a crew
+  // with four stops booked — the one sentence that sends them home.
+  const jobs = mustRead(
+    "your stops for the day",
+    await supabase
+      .from("vendor_jobs")
+      .select("*")
+      .eq("date", date)
+      .order("sequence", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true }),
+  );
 
   const rows = jobs ?? [];
   if (rows.length === 0) return { date, stops: [] };
@@ -137,7 +152,12 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
   // Photo counts per job.
   const admin = createServiceClient();
   const jobIds = rows.map((r) => r.id);
-  const { data: photos } = await admin.from("job_photos").select("job_id").in("job_id", jobIds);
+  // A failed read here reads as "0 photos uploaded" on every card — the number
+  // the crew watches to know whether they can close the job out.
+  const photos = mustRead(
+    "the photos already uploaded",
+    await admin.from("job_photos").select("job_id").in("job_id", jobIds),
+  );
   const counts = new Map<string, number>();
   for (const p of photos ?? []) counts.set(p.job_id, (counts.get(p.job_id) ?? 0) + 1);
 
@@ -153,14 +173,23 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
   // service's minimum, so it said "2 / 2 — ready to complete", the crew tapped,
   // and the server answered "2/6 uploaded" with a counter that never moved.
   const legGateByJob = new Map<string, number>();
-  const { data: jobRows } = await admin.from("jobs").select("id, group_id").in("id", jobIds);
+  // A failed read on either of these two silently drops the package legs, and
+  // the card falls back to the ANCHOR service's minimum — the exact "2 / 2 —
+  // ready to complete" lie the comment above describes, arrived at a second way.
+  const jobRows = mustRead(
+    "which of today's visits are packages",
+    await admin.from("jobs").select("id, group_id").in("id", jobIds),
+  );
   const groupedJobIds = (jobRows ?? []).filter((j) => j.group_id != null).map((j) => j.id as string);
   if (groupedJobIds.length > 0) {
-    const { data: items } = await admin
-      .from("job_items")
-      .select("job_id, created_at, services(name, min_photos)")
-      .in("job_id", groupedJobIds)
-      .order("created_at", { ascending: true });
+    const items = mustRead(
+      "the legs of today's package visits",
+      await admin
+        .from("job_items")
+        .select("job_id, created_at, services(name, min_photos)")
+        .in("job_id", groupedJobIds)
+        .order("created_at", { ascending: true }),
+    );
     for (const it of items ?? []) {
       const svc = (Array.isArray(it.services) ? it.services[0] : it.services) as
         { name?: string; min_photos?: number } | null;
@@ -182,7 +211,10 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
   const unitNameByRoute = new Map<string, string | null>();
   const routeIds = [...new Set(rows.map((r) => r.route_id).filter((id): id is string => !!id))];
   if (routeIds.length > 0) {
-    const { data: routeRows } = await admin.from("routes").select("id, unit_name").in("id", routeIds);
+    const routeRows = mustRead(
+      "which truck is on each stop",
+      await admin.from("routes").select("id, unit_name").in("id", routeIds),
+    );
     for (const rt of routeRows ?? []) unitNameByRoute.set(rt.id as string, (rt.unit_name as string | null) ?? null);
   }
 
@@ -190,10 +222,16 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
   const gateByProp = new Map<string, string | null>();
   if (date === today) {
     const propIds = [...new Set(rows.map((r) => r.property_id))];
-    const { data: props } = await admin
-      .from("properties")
-      .select("id, gate_code_encrypted")
-      .in("id", propIds);
+    // A failed read hands the crew a blank where the gate code should be, while
+    // they are standing at the gate. Note the decrypt failure below is a
+    // DIFFERENT case and stays as it is: that one really is "no usable code".
+    const props = mustRead(
+      "today's gate codes",
+      await admin
+        .from("properties")
+        .select("id, gate_code_encrypted")
+        .in("id", propIds),
+    );
     for (const p of props ?? []) {
       try {
         gateByProp.set(p.id, decryptGate(p.gate_code_encrypted as unknown as string));

@@ -2,6 +2,7 @@ import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertOps } from "./data";
 import { signedJobPhotos, type JobPhoto } from "@/lib/photos";
+import { mustRead, mustCount } from "@/lib/must-read";
 
 /**
  * THE ops job file (owner ask, 2026-07-26): click a job anywhere in the ops
@@ -233,18 +234,23 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
 
   const admin = createServiceClient();
 
-  const { data: jobRow } = await admin
-    .from("jobs")
-    .select(
-      "id, status, date, slot, frequency, is_rush, gap_claim, correction_of, price_finalized, " +
-        "created_at, started_at, completed_at, customer_price, vendor_cost, margin, " +
-        "property_id, service_id, vendor_id, group_id, " +
-        "services(name, min_photos), " +
-        "properties(id, address, nickname, owner_id, lakes(name), users(id, name, email, phone)), " +
-        "vendors(id, company)",
-    )
-    .eq("id", jobId)
-    .maybeSingle();
+  // `return null` below means "no such job" and the page renders exactly that.
+  // It must not also mean "we couldn't look" — see lib/must-read.ts.
+  const jobRow = mustRead(
+    "this job",
+    await admin
+      .from("jobs")
+      .select(
+        "id, status, date, slot, frequency, is_rush, gap_claim, correction_of, price_finalized, " +
+          "created_at, started_at, completed_at, customer_price, vendor_cost, margin, " +
+          "property_id, service_id, vendor_id, group_id, " +
+          "services(name, min_photos), " +
+          "properties(id, address, nickname, owner_id, lakes(name), users(id, name, email, phone)), " +
+          "vendors(id, company)",
+      )
+      .eq("id", jobId)
+      .maybeSingle(),
+  );
   if (!jobRow) return null;
 
   const job = jobRow as unknown as {
@@ -359,7 +365,12 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
       admin.from("job_photos").select("id", { count: "exact", head: true }).eq("job_id", jobId),
     ]);
 
-  const invoiceRows = (invoiceRes.data ?? []) as unknown as {
+  // EVERY ROW BELOW IS PART OF THE MONEY STORY. "No invoice", "no payouts",
+  // "no refunds" are all sentences ops acts on — a customer gets told what we
+  // charged, a crew gets told what they're owed — so none of them may be the
+  // shape a dropped connection takes. Unwrapped through mustRead one by one so
+  // the log names which read actually failed.
+  const invoiceRows = (mustRead("this job's invoices", invoiceRes) ?? []) as unknown as {
     id: string; amount: number | null; status: string | null; processor_ref: string | null; created_at: string;
   }[];
   const invoiceIds = invoiceRows.map((i) => i.id);
@@ -367,16 +378,16 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
   // Second wave: rows keyed off the invoice, the payout batch, and the user ids
   // we just learned about (names for refund authors / credit holders / referral
   // beneficiaries — one lookup instead of three embeds that confuse inference).
-  const payoutRows = (payoutRes.data ?? []) as unknown as {
+  const payoutRows = (mustRead("this job's crew payouts", payoutRes) ?? []) as unknown as {
     id: string; kind: string; amount: number | null; original_amount: number | null;
     status: string; batch_id: string | null; created_at: string;
   }[];
   const batchIds = [...new Set(payoutRows.map((p) => p.batch_id).filter(Boolean))] as string[];
-  const refundRows = (refundRes.data ?? []) as unknown as {
+  const refundRows = (mustRead("this job's refunds", refundRes) ?? []) as unknown as {
     id: string; amount: number | null; crew_clawback: number | null; reason: string | null;
     created_by: string | null; processor_ref: string | null; created_at: string;
   }[];
-  const referralRows = (referralRes.data ?? []) as unknown as {
+  const referralRows = (mustRead("this job's referral earnings", referralRes) ?? []) as unknown as {
     id: string; kind: string; amount: number | null; status: string; beneficiary: string;
     accrued_at: string; matured_at: string | null;
   }[];
@@ -388,13 +399,13 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
           .select("id, invoice_id, amount, status, processor_ref, created_at")
           .in("invoice_id", invoiceIds)
           .order("created_at", { ascending: true })
-      : Promise.resolve({ data: [] as unknown[] }),
+      : Promise.resolve({ data: [] as unknown[], error: null }),
     invoiceIds.length
       ? admin.from("user_credits").select("id, amount, reason, user_id, created_at").in("invoice_id", invoiceIds)
-      : Promise.resolve({ data: [] as unknown[] }),
+      : Promise.resolve({ data: [] as unknown[], error: null }),
     batchIds.length
       ? admin.from("payout_batches").select("id, status").in("id", batchIds)
-      : Promise.resolve({ data: [] as unknown[] }),
+      : Promise.resolve({ data: [] as unknown[], error: null }),
     // A TIP HAS NO INVOICE (0097), so the payments fetch above — keyed on
     // invoiceIds, like every other read of this table in the codebase — can
     // never see it. Without this the tip is a card charge that appears on no
@@ -406,7 +417,7 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
       .eq("status", "captured"),
   ]);
 
-  const creditRows = (creditRes.data ?? []) as unknown as {
+  const creditRows = (mustRead("the credits applied to this bill", creditRes) ?? []) as unknown as {
     id: string; amount: number | null; reason: string | null; user_id: string; created_at: string;
   }[];
 
@@ -419,16 +430,21 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
       ].filter(Boolean) as string[],
     ),
   ];
-  const { data: userRows } = userIds.length
-    ? await admin.from("users").select("id, name").in("id", userIds)
-    : { data: [] as { id: string; name: string | null }[] };
+  const userRows = mustRead(
+    "the names behind this job's refunds, credits and referrals",
+    userIds.length
+      ? await admin.from("users").select("id, name").in("id", userIds)
+      : { data: [] as { id: string; name: string | null }[], error: null },
+  );
   const nameById = new Map((userRows ?? []).map((u) => [u.id as string, (u.name as string) ?? null]));
 
   const batchStatus = new Map(
-    ((batchRes.data ?? []) as unknown as { id: string; status: string }[]).map((b) => [b.id, b.status]),
+    ((mustRead("the payout batches this job sits in", batchRes) ?? []) as unknown as { id: string; status: string }[]).map(
+      (b) => [b.id, b.status],
+    ),
   );
 
-  const paymentRows = (paymentRes.data ?? []) as unknown as {
+  const paymentRows = (mustRead("the card payments against this bill", paymentRes) ?? []) as unknown as {
     id: string; invoice_id: string; amount: number | null; status: string; processor_ref: string | null; created_at: string;
   }[];
 
@@ -488,7 +504,7 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
     maturedAt: r.matured_at ?? null,
   }));
 
-  const items: OpsJobItem[] = ((itemsRes.data ?? []) as unknown as {
+  const items: OpsJobItem[] = ((mustRead("this job's line items", itemsRes) ?? []) as unknown as {
     id: string; customer_price: number | null; vendor_cost: number | null; services: Embed<{ name: string | null }>;
   }[]).map((i) => ({
     id: i.id,
@@ -498,14 +514,17 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
   }));
 
   // Disputes + the free return visit each one booked.
-  const disputeRows = (disputeRes.data ?? []) as unknown as {
+  const disputeRows = (mustRead("this job's disputes", disputeRes) ?? []) as unknown as {
     id: string; status: string; customer_note: string | null; resolution: string | null;
     opened_at: string; respond_by: string | null; resolved_at: string | null; correction_job_id: string | null;
   }[];
   const correctionIds = disputeRows.map((d) => d.correction_job_id).filter(Boolean) as string[];
-  const { data: correctionRows } = correctionIds.length
-    ? await admin.from("jobs").select("id, date, status, vendors(company)").in("id", correctionIds)
-    : { data: [] as unknown[] };
+  const correctionRows = mustRead(
+    "the return visits those disputes booked",
+    correctionIds.length
+      ? await admin.from("jobs").select("id, date, status, vendors(company)").in("id", correctionIds)
+      : { data: [] as unknown[], error: null },
+  );
   const correctionById = new Map(
     ((correctionRows ?? []) as unknown as { id: string; date: string | null; status: string; vendors: Embed<{ company: string | null }> }[]).map(
       (c) => [c.id, { id: c.id, date: c.date, status: c.status, crewCompany: first(c.vendors)?.company ?? null }],
@@ -524,18 +543,20 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
     correction: d.correction_job_id ? (correctionById.get(d.correction_job_id) ?? null) : null,
   }));
 
-  const flags: OpsFlag[] = ((flagRes.data ?? []) as unknown as {
+  const flags: OpsFlag[] = ((mustRead("this job's flags", flagRes) ?? []) as unknown as {
     id: string; type: string | null; note: string | null; status: string; created_at: string;
   }[]).map((f) => ({ id: f.id, type: f.type ?? null, note: f.note ?? null, status: f.status, createdAt: f.created_at }));
 
-  const confirmRow = confirmRes.data as { verdict: string | null; note: string | null; responded_at: string | null } | null;
+  const confirmRow = mustRead("the customer's confirmation of this job", confirmRes) as
+    | { verdict: string | null; note: string | null; responded_at: string | null }
+    | null;
   const confirmation = confirmRow
     ? { verdict: confirmRow.verdict ?? null, note: confirmRow.note ?? null, respondedAt: confirmRow.responded_at ?? null }
     : null;
 
   // The property thread, with this job's own messages annotated (0046). Same
   // owner-vs-ops derivation groupThreads uses: from_user === owner ⇒ owner.
-  const messages: OpsJobMessage[] = ((msgRes.data ?? []) as unknown as {
+  const messages: OpsJobMessage[] = ((mustRead("this property's message thread", msgRes) ?? []) as unknown as {
     id: string; body: string | null; created_at: string; from_user: string | null; ai: boolean | null; job_id: string | null;
   }[]).map((m) => ({
     id: m.id,
@@ -549,7 +570,7 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
   // Package visit: the whole season envelope, this leg marked.
   let group: OpsJobGroup | null = null;
   if (job.group_id) {
-    const [{ data: groupRow }, { data: legRows }] = await Promise.all([
+    const [groupRes, legsRes] = await Promise.all([
       admin.from("job_groups").select("id, status, service_packages(name)").eq("id", job.group_id).maybeSingle(),
       admin
         .from("jobs")
@@ -557,6 +578,9 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
         .eq("group_id", job.group_id)
         .order("date", { ascending: true, nullsFirst: true }),
     ]);
+    const groupRow = mustRead("the package this visit belongs to", groupRes);
+    // A failed legs read would show a season package with one leg in it.
+    const legRows = mustRead("the other legs of that package", legsRes);
     if (groupRow) {
       const g = groupRow as unknown as { id: string; status: string; service_packages: Embed<{ name: string | null }> };
       group = {
@@ -612,10 +636,17 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
     // Not netted into anything above — see the field's comment. Passing it
     // through `lakelifeNet` would say we kept a thank-you.
     tipCharged: round2(
-      ((tipPayRes.data ?? []) as { amount: number | null }[])
+      ((mustRead("the tip charged on this job", tipPayRes) ?? []) as { amount: number | null }[])
         .reduce((s, p) => s + Number(p.amount ?? 0), 0),
     ),
   };
+
+  // mustCount is here for its THROW: a head-count that errored must never read
+  // as an unmet photo gate. Its own `?? 0` fallback would say exactly that,
+  // though, so the non-error `{count: null}` case keeps the fallback this line
+  // has always had — the photos we actually loaded.
+  mustCount("this job's photo count", photoCountRes);
+  const photoCount = photoCountRes.count ?? photos.length;
 
   return {
     header,
@@ -627,7 +658,7 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
     referrals,
     totals,
     photos,
-    photoCount: photoCountRes.count ?? photos.length,
+    photoCount,
     messages,
     disputes,
     flags,

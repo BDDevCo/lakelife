@@ -1,5 +1,6 @@
 import { htmlPage } from "@/app/a/[token]/respond";
-import { loadPaymentByToken, confirmByToken, disputeByToken } from "@/lib/confirm-server";
+import { loadPaymentByToken, type ConfirmView, confirmByToken, disputeByToken } from "@/lib/confirm-server";
+import { ReadFailed } from "@/lib/must-read";
 
 /**
  * "DOES THIS LOOK RIGHT?" — the renter's half of the receipt.
@@ -28,7 +29,21 @@ function pretty(iso: string): string {
 
 export async function GET(_req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
-  const view = await loadPaymentByToken(token);
+  // The loader THROWS on a failed read and a Route Handler has no error
+  // boundary. This page asks somebody to agree to a figure, so it must never
+  // guess one — and "this link doesn't match a payment" is itself a figure-
+  // shaped claim we couldn't check. Nothing here is recorded either way.
+  let view: ConfirmView | null;
+  try {
+    view = await loadPaymentByToken(token);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return htmlPage(
+      "We couldn't load that just now",
+      "Nothing has been confirmed and nothing has been changed on your bill. Open the link again in a moment — if it keeps happening, give the park a call. 🌊",
+      false,
+    );
+  }
   if (!view) {
     return htmlPage("That link isn't right", "This link doesn't match a payment. 🌊", false);
   }

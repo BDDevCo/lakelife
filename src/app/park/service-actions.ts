@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead, mustCount, readFailedMessage } from "@/lib/must-read";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { assertMyPark } from "./data";
@@ -52,7 +53,7 @@ export async function getParkServiceDesk(parkId: string): Promise<{
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const [{ data: park }, { count: liveLots }, { data: me }, { count: cards }] =
+  const [parkRes, lotsRes, meRes, cardsRes] =
     await Promise.all([
       admin.from("parks")
         .select("name, address, lake_id, lat, lng, service_property_id")
@@ -65,22 +66,29 @@ export async function getParkServiceDesk(parkId: string): Promise<{
         .select("id", { count: "exact", head: true })
         .eq("user_id", user.id),
     ]);
+  // EVERY ONE OF THESE BECOMES A BLOCKER SENTENCE. A failed count is not zero
+  // lots and not "no card on file" — it is a screen telling a man to go and do
+  // things he has already done, with no way to tell that it is wrong.
+  const park = mustRead("your park", parkRes);
+  const liveLots = mustCount("your live lots", lotsRes);
+  const me = mustRead("your account", meRes);
+  const cards = mustCount("your saved cards", cardsRes);
   if (!park) return null;
 
   const readiness: ParkReadiness = {
     parkName: (park.name as string) ?? null,
     lakeId: (park.lake_id as string) ?? null,
     address: (park.address as string) ?? null,
-    liveLots: liveLots ?? 0,
+    liveLots,
     memberRole: membership.role,
     accountRole: (me?.role as string) ?? null,
-    hasCard: (cards ?? 0) > 0,
+    hasCard: cards > 0,
   };
 
   return {
     propertyId: (park.service_property_id as string) ?? null,
     parkName: (park.name as string) ?? "Your park",
-    liveLots: liveLots ?? 0,
+    liveLots,
     blockers: buildParkBlockers(readiness),
     canEnable: canEnableParkServices(membership.role),
   };
@@ -104,7 +112,15 @@ export async function enableParkServices(parkId: string): Promise<ServiceDeskRes
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Please sign in again." };
 
-  const desk = await getParkServiceDesk(parkId);
+  // `getParkServiceDesk` is a loader and now THROWS on a failed read rather
+  // than reporting a park with no lots and no card. This is an action, so it
+  // catches and answers in the shape the button is awaiting.
+  let desk: Awaited<ReturnType<typeof getParkServiceDesk>>;
+  try {
+    desk = await getParkServiceDesk(parkId);
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("your park's set-up", e) };
+  }
   if (!desk) return { ok: false, error: DENIED };
   if (desk.propertyId) {
     return { ok: true, signal: "Park services are already on." };
@@ -116,8 +132,12 @@ export async function enableParkServices(parkId: string): Promise<ServiceDeskRes
   }
 
   const admin = createServiceClient();
-  const { data: park } = await admin
+  const parkRes = await admin
     .from("parks").select("name, address, lake_id, lat, lng").eq("id", parkId).maybeSingle();
+  if (parkRes.error) {
+    return { ok: false, error: readFailedMessage("your park", parkRes.error) };
+  }
+  const park = parkRes.data;
   if (!park) return { ok: false, error: "That park is gone." };
 
   const { data: prop, error: propErr } = await admin
@@ -167,9 +187,14 @@ export async function focusParkProperty(parkId: string): Promise<ServiceDeskResu
   if (!membership) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
-  const { data: park } = await admin
+  // "Turn on park services first" is a lie to a park that already has, and it
+  // sends him to a screen where the switch is already on.
+  const parkRes = await admin
     .from("parks").select("service_property_id").eq("id", parkId).maybeSingle();
-  const propertyId = (park?.service_property_id as string) ?? null;
+  if (parkRes.error) {
+    return { ok: false, error: readFailedMessage("your park", parkRes.error) };
+  }
+  const propertyId = (parkRes.data?.service_property_id as string) ?? null;
   if (!propertyId) return { ok: false, error: "Turn on park services first." };
 
   const jar = await cookies();
@@ -205,7 +230,7 @@ export async function getParkServiceMenu(parkId: string): Promise<ParkServiceRow
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
 
-  const [{ count: lots }, { data: services }, rates] = await Promise.all([
+  const [lotsRes, servicesRes, rates] = await Promise.all([
     admin.from("park_lots").select("id", { count: "exact", head: true })
       .eq("park_id", parkId).eq("lifecycle", "live"),
     admin.from("services")
@@ -213,6 +238,10 @@ export async function getParkServiceMenu(parkId: string): Promise<ParkServiceRow
       .eq("active", true).eq("park_only", true),
     loadParkRates(parkId),
   ]);
+  // The lot count is a MULTIPLIER on every price below it, so a dropped count
+  // read as 0 shows him his base rate and calls it the price of a mow.
+  const lots = mustCount("your live lots", lotsRes);
+  const services = mustRead("the grounds menu", servicesRes);
 
   // THIS PARK'S OWN NUMBERS, or none at all.
   //
@@ -221,7 +250,7 @@ export async function getParkServiceMenu(parkId: string): Promise<ParkServiceRow
   // here comes back priced `null`, and the screen asks for a number instead of
   // showing a confident wrong one.
   const { priceService } = await import("@/lib/pricing");
-  const n = lots ?? 0;
+  const n = lots;
 
   return (services ?? []).map((s) => {
     const own = rates.get(s.id as string);
@@ -277,11 +306,17 @@ export async function setParkServiceRate(
   // grounds, so a park owner could have set a rate of $1 against "Fall
   // winterization" and then booked a $485 lake-house service for a dollar.
   // That is LakeLife's price list, not his.
-  const { data: svc } = await admin
+  // A failed read must not be the answer to "is this one of yours" — the
+  // question this paragraph exists to ask.
+  const svcRes = await admin
     .from("services")
     .select("id, name, park_only, active")
     .eq("id", serviceId)
     .maybeSingle();
+  if (svcRes.error) {
+    return { ok: false, error: readFailedMessage("that service", svcRes.error) };
+  }
+  const svc = svcRes.data;
   if (!svc) return { ok: false, error: "That service isn't there any more." };
   if (svc.park_only !== true) {
     return { ok: false, error: "That isn't one of your park's grounds services — its price is set by LakeLife." };
@@ -336,24 +371,28 @@ export async function getOwnedHomes(parkId: string): Promise<OwnedHomeRow[]> {
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
 
-  const { data: lots } = await admin
+  const lots = mustRead("the homes you own", await admin
     .from("park_lots")
     .select("id, lot_number, service_property_id")
     .eq("park_id", parkId)
     .eq("park_owned_home", true)
-    .eq("lifecycle", "live");
+    .eq("lifecycle", "live"));
   if (!lots?.length) return [];
 
   const propIds = lots.map((l) => l.service_property_id as string).filter(Boolean);
   const lotIds = lots.map((l) => l.id as string);
 
-  const [{ data: props }, { data: stays }] = await Promise.all([
+  const [propsRes, staysRes] = await Promise.all([
     propIds.length
       ? admin.from("properties").select("id, sqft, beds, baths").in("id", propIds)
-      : Promise.resolve({ data: [] as Array<{ id: string; sqft: number | null; beds: number | null; baths: number | null }> }),
+      : Promise.resolve({ data: [] as Array<{ id: string; sqft: number | null; beds: number | null; baths: number | null }>, error: null }),
     admin.from("lot_reservations")
       .select("park_lot_id").in("park_lot_id", lotIds).in("status", ["approved", "active"]),
   ]);
+  // `occupied` decides whether the screen says interior work needs arranging;
+  // an empty read says every one of his homes is standing empty.
+  const props = mustRead("those homes' details", propsRes);
+  const stays = mustRead("who is living in them", staysRes);
 
   const propById = new Map((props ?? []).map((p) => [p.id as string, p]));
   const occupied = new Set((stays ?? []).map((s) => s.park_lot_id as string));
@@ -395,10 +434,16 @@ export async function enableHomeServices(
   if (!built.ok || !built.row) return { ok: false, error: built.error };
 
   const admin = createServiceClient();
-  const { data: lot } = await admin
+  // Not DENIED on a failed read — that sentence tells the owner the lot isn't
+  // his, which is both false and the one thing he cannot check from here.
+  const lotRes = await admin
     .from("park_lots")
     .select("id, lot_number, park_id, park_owned_home, service_property_id")
     .eq("id", lotId).eq("park_id", parkId).maybeSingle();
+  if (lotRes.error) {
+    return { ok: false, error: readFailedMessage("that lot", lotRes.error) };
+  }
+  const lot = lotRes.data;
   if (!lot) return { ok: false, error: DENIED };
   if (lot.park_owned_home !== true) {
     return { ok: false, error: "That lot's home isn't yours — their house is their business." };
@@ -407,8 +452,12 @@ export async function enableHomeServices(
     return { ok: true, signal: `Lot ${lot.lot_number} is already set up.` };
   }
 
-  const { data: park } = await admin
+  const parkRes = await admin
     .from("parks").select("name, address, lake_id, lat, lng").eq("id", parkId).maybeSingle();
+  if (parkRes.error) {
+    return { ok: false, error: readFailedMessage("your park", parkRes.error) };
+  }
+  const park = parkRes.data;
   if (!park) return { ok: false, error: "That park is gone." };
 
   const { data: prop, error: propErr } = await admin
@@ -486,9 +535,13 @@ export async function focusOwnedHome(parkId: string, lotId: string): Promise<Ser
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
-  const { data: lot } = await admin
+  const lotRes = await admin
     .from("park_lots").select("service_property_id, lot_number")
     .eq("id", lotId).eq("park_id", parkId).maybeSingle();
+  if (lotRes.error) {
+    return { ok: false, error: readFailedMessage("that home", lotRes.error) };
+  }
+  const lot = lotRes.data;
   const propertyId = (lot?.service_property_id as string) ?? null;
   if (!propertyId) return { ok: false, error: "Set that home up for service first." };
 

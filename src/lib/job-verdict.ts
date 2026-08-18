@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { openDisputeForJob, resolveFromCorrection } from "@/lib/disputes";
 import { sendSms } from "@/lib/sms";
 
@@ -49,20 +50,34 @@ export async function recordJobVerdict(
   const admin = createServiceClient();
   const cleanNote = (note ?? "").trim().slice(0, 500);
 
-  const { data: conf } = await admin
+  const confRes = await admin
     .from("job_confirmations")
     .select("id, verdict, job_id, property_id, vendor_id, jobs(date, correction_of, services(name)), properties(nickname, address, owner_id)")
     .eq("id", confirmationId)
     .maybeSingle();
+  // "That job isn't open for feedback" is a closed door. A failed read must not
+  // be able to close it on somebody with a genuine complaint — their pay hold
+  // and their free return visit both hang off this tap.
+  if (confRes.error) {
+    return { ok: false, recorded: false, error: readFailedMessage("this job", confRes.error) };
+  }
+  const conf = confRes.data;
   if (!conf) return { ok: false, recorded: false, error: "That job isn't open for feedback." };
   if (conf.verdict) return { ok: true, recorded: false };
 
-  const { data: won } = await admin
+  const wonRes = await admin
     .from("job_confirmations")
     .update({ verdict, note: cleanNote || null, responded_at: new Date().toISOString() })
     .eq("id", conf.id)
     .is("verdict", null) // one verdict, ever — first tap wins
     .select("id");
+  // A FAILED WRITE IS NOT A LOST RACE. `{ ok: true, recorded: false }` means
+  // "somebody already answered" — reported as success, so a 👎 that never
+  // saved would silently skip the dispute, the pay hold and the crew's text.
+  if (wonRes.error) {
+    return { ok: false, recorded: false, error: readFailedMessage("your answer", wonRes.error) };
+  }
+  const won = wonRes.data;
   if (!won || won.length === 0) return { ok: true, recorded: false };
 
   const job = one(conf.jobs) as { date?: string; correction_of?: string | null; services?: unknown } | null;
@@ -89,11 +104,20 @@ export async function recordJobVerdict(
     const r = await openDisputeForJob(conf.job_id as string, cleanNote || null);
     disputeOpened = Boolean(r.ok);
     if (r.ok && r.crewLinks && conf.vendor_id) {
-      const { data: v } = await admin
+      // DELIBERATELY NOT FATAL, and deliberately logged. The verdict is already
+      // written and the dispute already open by this point, so throwing would
+      // tell the customer their tap failed when it did not. What a failed read
+      // costs is the crew's notification — they find out from the ops board
+      // instead of from their phone — and that is worth a line in the log.
+      const vRes = await admin
         .from("vendors").select("user_id").eq("id", conf.vendor_id as string).maybeSingle();
-      const { data: cu } = v?.user_id
+      if (vRes.error) console.error("[read failed] the crew to notify:", vRes.error);
+      const v = vRes.data;
+      const cuRes = v?.user_id
         ? await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle()
-        : { data: null };
+        : { data: null as { phone?: string } | null, error: null };
+      if (cuRes.error) console.error("[read failed] the crew's phone number:", cuRes.error);
+      const cu = cuRes.data;
       if (cu?.phone) {
         void sendSms(
           cu.phone as string,
@@ -121,7 +145,9 @@ export async function recordJobVerdict(
 export async function confirmationIdForToken(token: string): Promise<string | null> {
   if (!token || !/^[0-9a-f-]{36}$/i.test(token)) return null;
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("job_confirmations").select("id").eq("confirm_token", token).maybeSingle();
+  // null here renders "that link isn't right" to a customer holding a link we
+  // texted them. Throw instead of denying their own job exists.
+  const data = mustRead("this job", await admin
+    .from("job_confirmations").select("id").eq("confirm_token", token).maybeSingle());
   return (data?.id as string) ?? null;
 }

@@ -1,6 +1,7 @@
 import "server-only";
 import { isBearerToken } from "@/lib/token-format";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange, toDaterange, type ParkSeason } from "@/lib/parks";
 import {
@@ -69,11 +70,13 @@ export async function loadGuestView(token: string): Promise<GuestView | null> {
   if (!isBearerToken(token)) return null;
   const admin = createServiceClient();
 
-  const { data: stay } = await admin
+  // `return null` renders "this link doesn't match a stay" to a guest standing
+  // at the park. Only true when the lookup ran.
+  const stay = mustRead("your stay", await admin
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id, during, status")
     .eq("use_token", token)
-    .maybeSingle();
+    .maybeSingle());
   if (!stay) return null;
   // A finished or cancelled stay is not a door. Say nothing about the park.
   if (!["approved", "active"].includes(stay.status as string)) return null;
@@ -81,18 +84,20 @@ export async function loadGuestView(token: string): Promise<GuestView | null> {
   const window = parseDaterange(stay.during as string);
   if (!window) return null;
 
-  const [{ data: lot }, { data: renter }] = await Promise.all([
+  const [lotRes, renterRes] = await Promise.all([
     admin.from("park_lots")
       .select("id, lot_number, park_id, rental_mode").eq("id", stay.park_lot_id as string).maybeSingle(),
     admin.from("park_renters")
       .select("display_name").eq("id", stay.renter_id as string).maybeSingle(),
   ]);
+  const lot = mustRead("your lot", lotRes);
+  const renter = mustRead("your name", renterRes);
   if (!lot) return null;
 
   const parkId = lot.park_id as string;
   const isShortStay = (lot.rental_mode as string) === "short_term";
 
-  const [{ data: park }, { data: amenities }] = await Promise.all([
+  const [parkRes, amenitiesRes] = await Promise.all([
     admin.from("parks")
       .select("name, season_open_month, season_open_day, season_close_month, season_close_day")
       .eq("id", parkId).maybeSingle(),
@@ -100,6 +105,12 @@ export async function loadGuestView(token: string): Promise<GuestView | null> {
       .select("id, name, kind, charge_model, day_rate, who_may_book, max_days, season_open_month, season_open_day, season_close_month, season_close_day, rules, active")
       .eq("park_id", parkId).eq("active", true).order("name", { ascending: true }),
   ]);
+  // A failed `parks` read drops parkSeason to null, which stops the season
+  // check running at all — the boat would be offered in January. A failed
+  // `park_amenities` read prints "There's nothing to book here at the moment"
+  // at a park with a pontoon and four kayaks.
+  const park = mustRead("the park", parkRes);
+  const amenities = mustRead("what the park rents out", amenitiesRes);
 
   const parkSeason: ParkSeason | null = park
     ? {
@@ -126,18 +137,22 @@ export async function loadGuestView(token: string): Promise<GuestView | null> {
   }
 
   const amenityIds = amenities.map((a) => a.id as string);
-  const { data: units } = await admin
+  const units = mustRead("the park's kayaks and boats", await admin
     .from("park_amenity_units")
     .select("id, amenity_id, label, active")
     .in("amenity_id", amenityIds).eq("active", true)
-    .order("sort_order", { ascending: true });
+    .order("sort_order", { ascending: true }));
 
   const unitIds = (units ?? []).map((u) => u.id as string);
-  const { data: held } = unitIds.length
+  // FAILS OPEN IF LEFT ALONE. Nothing held reads as everything free, so every
+  // day of every unit would render bookable — and two guests get handed the
+  // same pontoon on the same Saturday. The exclusion constraint would refuse
+  // the second insert, but only after she has been told it is hers.
+  const held = mustRead("what's already taken", unitIds.length
     ? await admin.from("amenity_bookings")
         .select("id, unit_id, during, status, stay_id, quoted_amount")
         .in("unit_id", unitIds).neq("status", "cancelled")
-    : { data: [] as Array<Record<string, unknown>> };
+    : { data: [] as Array<Record<string, unknown>>, error: null });
 
   const heldWindows = (held ?? []).flatMap((h) => {
     const r = parseDaterange(h.during as string);
@@ -238,7 +253,16 @@ export async function bookDayByToken(
 
   // RE-DERIVE EVERYTHING FROM THE TOKEN. The unit id arrived in a form; the
   // only thing that proves who is asking is the token in the URL.
-  const view = await loadGuestView(token);
+  //
+  // The loader THROWS on a failed read; a button awaiting { ok, error } can't,
+  // so it is turned back into a sentence here rather than becoming "this link
+  // doesn't match a stay".
+  let view: GuestView | null;
+  try {
+    view = await loadGuestView(token);
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("what's free", e, { money: true }) };
+  }
   if (!view) return { ok: false, error: "This link doesn't match a stay." };
 
   const offer = view.offers.find((o) => o.units.some((u) => u.unitId === unitId));
@@ -251,19 +275,27 @@ export async function bookDayByToken(
   if (!state) return { ok: false, error: "That day isn't part of your stay." };
   if (!state.open) return { ok: false, error: state.why };
 
-  const { data: stay } = await admin
+  const stayRes = await admin
     .from("lot_reservations")
     .select("id, renter_id, park_lot_id")
     .eq("use_token", token).maybeSingle();
+  if (stayRes.error) return { ok: false, error: readFailedMessage("your stay", stayRes.error, { money: true }) };
+  const stay = stayRes.data;
   if (!stay) return { ok: false, error: "This link doesn't match a stay." };
-  const { data: lot } = await admin
+  const lotRes = await admin
     .from("park_lots").select("park_id").eq("id", stay.park_lot_id as string).maybeSingle();
+  if (lotRes.error) return { ok: false, error: readFailedMessage("your lot", lotRes.error, { money: true }) };
+  const lot = lotRes.data;
   if (!lot) return { ok: false, error: "This link doesn't match a stay." };
 
-  const { data: am } = await admin
+  // This read sets the PRICE. "That isn't available any more" on a failed read
+  // is the wrong answer, and quoting off a half-read row would be worse.
+  const amRes = await admin
     .from("park_amenities")
     .select("charge_model, day_rate, name")
     .eq("id", offer.amenityId).maybeSingle();
+  if (amRes.error) return { ok: false, error: readFailedMessage("the price", amRes.error, { money: true }) };
+  const am = amRes.data;
   if (!am) return { ok: false, error: "That isn't available any more." };
 
   const quoted = quoteAmenity(
@@ -324,8 +356,10 @@ export async function cancelDayByToken(
   if (!/^[0-9a-f-]{36}$/i.test(bookingId)) return { ok: false, error: "That didn't look right." };
 
   const admin = createServiceClient();
-  const { data: stay } = await admin
+  const stayRes = await admin
     .from("lot_reservations").select("id").eq("use_token", token).maybeSingle();
+  if (stayRes.error) return { ok: false, error: readFailedMessage("your stay", stayRes.error) };
+  const stay = stayRes.data;
   if (!stay) return { ok: false, error: "This link doesn't match a stay." };
 
   // Scoped to HER stay, so a token cannot cancel somebody else's day even if

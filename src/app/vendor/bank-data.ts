@@ -2,6 +2,7 @@ import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getPlatformSettings } from "@/lib/settings";
 import { earlyFee } from "@/lib/payouts";
+import { mustRead } from "@/lib/must-read";
 
 export interface PayoutState {
   hasAccount: boolean;
@@ -23,15 +24,24 @@ export async function getMyPayoutState(): Promise<PayoutState | null> {
   } = await supabase.auth.getUser();
   if (!user) return null;
   const admin = createServiceClient();
-  const { data: vendor } = await admin.from("vendors").select("id").eq("user_id", user.id).maybeSingle();
+  const vendor = mustRead(
+    "your crew account",
+    await admin.from("vendors").select("id").eq("user_id", user.id).maybeSingle(),
+  );
   if (!vendor) return null;
 
-  const [{ data: acct }, { data: ready }, { data: batches }, settings] = await Promise.all([
+  // EVERY READ BELOW IS A NUMBER ABOUT SOMEBODY'S MONEY. A dropped connection
+  // used to render "no bank account on file", "$0.00 ready to pull" and an
+  // empty payout history — three sentences a crew acts on, none of them true.
+  const [acctRes, readyRes, batchesRes, settings] = await Promise.all([
     admin.from("payout_accounts").select("bank_name, account_last4").eq("user_id", user.id).maybeSingle(),
     admin.from("payouts").select("amount, kind").eq("vendor_id", vendor.id).eq("status", "released").is("batch_id", null),
     admin.from("payout_batches").select("id, kind, net, status, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(12),
     getPlatformSettings(),
   ]);
+  const acct = mustRead("your bank details", acctRes);
+  const ready = mustRead("what's ready to pull", readyRes);
+  const batches = mustRead("your payout history", batchesRes);
   const readyNow = Math.round((ready ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0) * 100) / 100;
   // THE PREVIEW MUST QUOTE WHAT THE ACTION WILL ACTUALLY CHARGE. `requestEarlyPayout`
   // computes the 2% on earned money only — a tip is never discounted, because

@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, mustCount, readFailedMessage } from "@/lib/must-read";
 import { isBearerToken, STICKER_MIN } from "@/lib/token-format";
 
 /**
@@ -52,11 +53,11 @@ export async function loadSticker(token: string): Promise<StickerView | null> {
   if (!isBearerToken(token, STICKER_MIN)) return null;
   const admin = createServiceClient();
 
-  const { data: lot } = await admin
+  const lot = mustRead("the lot on the sticker", await admin
     .from("park_lots")
     .select("id, lot_number, park_id, lifecycle")
     .eq("qr_token", token)
-    .maybeSingle();
+    .maybeSingle());
   if (!lot) return null;
 
   // LIFECYCLE, AND DELIBERATELY NOT `active`.
@@ -72,22 +73,27 @@ export async function loadSticker(token: string): Promise<StickerView | null> {
   // that is park business, not a stranger's.
   if (lot.lifecycle && lot.lifecycle !== "live") return null;
 
-  const { data: park } = await admin
-    .from("parks").select("id, name").eq("id", lot.park_id as string).maybeSingle();
+  const park = mustRead("the park", await admin
+    .from("parks").select("id, name").eq("id", lot.park_id as string).maybeSingle());
   if (!park) return null;
 
-  const { count } = await admin
+  // FAILS OPEN IF LEFT ALONE. `(count ?? 0) >= CAP` is false when the count is
+  // NULL, and a failed count IS null — so a dropped read switched the courtesy
+  // ceiling off entirely. 0106's trigger is still the real ceiling, so nothing
+  // could be buried; what was lost is the sentence that stops a person at the
+  // pedestal typing a report the database is about to refuse.
+  const count = mustCount("how many reports are already open", await admin
     .from("park_requests")
     .select("id", { count: "exact", head: true })
     .eq("park_lot_id", lot.id as string)
-    .neq("status", "done");
+    .neq("status", "done"));
 
   return {
     lotId: lot.id as string,
     lotNumber: (lot.lot_number as string) ?? "?",
     parkId: park.id as string,
     parkName: (park.name as string) ?? "the park",
-    flooded: (count ?? 0) >= OPEN_PER_LOT_CAP,
+    flooded: count >= OPEN_PER_LOT_CAP,
   };
 }
 
@@ -117,7 +123,16 @@ export async function fileRequestByToken(input: {
   name?: string;
   phone?: string;
 }): Promise<{ ok: boolean; error?: string; signal?: string }> {
-  const view = await loadSticker(input.token);
+  // `loadSticker` throws on a failed read so the GET renders honestly; this
+  // form is awaiting { ok, error }, so it becomes a sentence here instead of
+  // "this sticker doesn't match a lot", which would send somebody to the office
+  // about a perfectly good sticker.
+  let view: StickerView | null;
+  try {
+    view = await loadSticker(input.token);
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("the lot on the sticker", e) };
+  }
   if (!view) return { ok: false, error: "This sticker doesn't match a lot — tell the office." };
 
   const note = (input.note ?? "").trim();

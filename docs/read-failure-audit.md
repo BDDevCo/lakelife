@@ -91,14 +91,46 @@ Concentrations: `src/lib/automation.ts` (the cron and money-close engine),
 `src/lib/refund-core.ts`, `src/app/ops/refund-actions.ts`,
 `src/app/park/ledger-actions.ts`, `src/app/vendor/*`.
 
-## Fixed so far
+## Fixed
 
-| File | What changed |
+All of it, in three passes. **574 read sites across 56 files**, plus the seams
+the fix itself opened.
+
+| Area | What it stops |
 |---|---|
-| `src/app/parks/my-data.ts` | All 9 reads. Identity and money reads throw; the maintenance list degrades with a visible "we couldn't look". |
-| `src/app/parks/pay-actions.ts` | All reads in `payRent` and `sayIPaid`, including the guard that failed open and charged a disputed bill. |
-| `src/app/parks/my/error.tsx` | The app's **first error boundary**. There were none. |
-| `src/lib/must-read.ts` | `mustRead` / `mustCount` / `softRead`. |
+| `parks/my-data.ts`, `parks/pay-actions.ts` | telling a resident their tenancy doesn't exist; charging a disputed bill |
+| `lib/automation.ts` | charging the same invoice twice; paying a crew twice; charging mid-dispute; a permanent no-show strike against a crew that did the work |
+| `lib/refund-core.ts`, `lib/disputes.ts` | a second full refund on one capture; closing a dispute as resolved without refunding |
+| `app/vendor/*` | asking a crew to re-key a bank account already on file; $0.00 earnings |
+| `app/park/*` | "Nothing billed yet this month" on a month with 19 open charges |
+| `app/ops/*`, `app/book/*`, `app/profile/*` | a booking calendar drawing every day open; cards and credits reading as absent |
+| `lib/photos.ts` | "the crew can't be paid" off a photo list that failed to load |
+
+**The fails-open guards were the worst of it**, and none were in the original
+report. Every one is the same signature — `(count ?? 0) > 0` on a count that
+came back `null` because the read failed, so the guard did not get skipped, it
+*passed*.
+
+### The fix opened its own seams, and that is worth remembering
+
+Converting loaders to throw is right, but a throw needs somewhere to land.
+Nine regressions came from loaders that are shared:
+
+- **Route handlers have no error boundary.** `app/error.tsx` only wraps page
+  renders. Every no-login token link — the guest boat booking, the dispute SMS
+  links — became a bare 500. The worst was `/use/[token]`, where the failing
+  read is the one *after* a successful booking: a blank 500 and no confirmation
+  for a booking that did happen.
+- **Server actions owe their caller a sentence**, not a rejected promise.
+- **Client components have a toast** that a rejection skips straight past.
+- And the hunted lie came back one layer up: a customer tapping "still not
+  right" during a dropped read was shown the headline **"Already settled"**.
+  Then again one layer *down* — a failed compare-and-set WRITE returns the same
+  empty array as "somebody else got there first", and answered with the same
+  sentence.
+
+All closed, with scanner tests over the route handlers so they cannot silently
+reopen.
 
 ## The rule, for anything built from here
 

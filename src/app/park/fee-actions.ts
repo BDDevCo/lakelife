@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import {
   checkCoverage, payersFor, monthlyIncome,
@@ -42,7 +43,7 @@ export async function listFees(parkId: string): Promise<FeesPage> {
   if (!(await assertMyPark(parkId))) return empty;
 
   const admin = createServiceClient();
-  const [{ data: feeRows }, { data: lots }, { data: costs }] = await Promise.all([
+  const [feeRes, lotsRes, costsRes] = await Promise.all([
     admin.from("park_fees")
       .select("id, label, amount, cadence, applies_to, covers, active")
       .eq("park_id", parkId).order("created_at"),
@@ -51,6 +52,12 @@ export async function listFees(parkId: string): Promise<FeesPage> {
     admin.from("park_costs")
       .select("category, amount_paid, period_start, period_end").eq("park_id", parkId),
   ]);
+  // This screen's whole job is the comparison between the two halves, so a
+  // dropped read on either one shows a margin that was never measured — a fee
+  // covering nothing, or costs covered by nothing.
+  const feeRows = mustRead("your fees", feeRes);
+  const lots = mustRead("your lots", lotsRes);
+  const costs = mustRead("your bills", costsRes);
 
   const live = (lots ?? []).filter((l) => (l.lifecycle as string) === "live");
 
@@ -58,13 +65,13 @@ export async function listFees(parkId: string): Promise<FeesPage> {
   // none — so counting every live lot overstated fee income by exactly the
   // vacancy the park now carries on the cost side, and the two halves of this
   // screen disagreed by the amount it exists to make visible.
-  const { data: liveStays } = live.length
+  const liveStays = mustRead("who is on your lots", live.length
     ? await admin
         .from("lot_reservations")
         .select("park_lot_id")
         .in("park_lot_id", live.map((l) => l.id as string))
         .in("status", ["approved", "active"])
-    : { data: [] as Record<string, unknown>[] };
+    : { data: [] as Record<string, unknown>[], error: null });
   const occupied = new Set((liveStays ?? []).map((s) => s.park_lot_id as string));
 
   const counts = {
@@ -80,8 +87,8 @@ export async function listFees(parkId: string): Promise<FeesPage> {
   const ids = (feeRows ?? []).map((f) => f.id as string);
   const optedInBy = new Map<string, number>();
   if (ids.length) {
-    const { data: assigns } = await admin
-      .from("lot_fee_assignments").select("fee_id").in("fee_id", ids);
+    const assigns = mustRead("who has opted in to each fee", await admin
+      .from("lot_fee_assignments").select("fee_id").in("fee_id", ids));
     for (const a of assigns ?? []) {
       const k = a.fee_id as string;
       optedInBy.set(k, (optedInBy.get(k) ?? 0) + 1);

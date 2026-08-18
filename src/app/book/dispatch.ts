@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, softRead } from "@/lib/must-read";
 import { priceService, type ServiceRule, type PricingProfile } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
 import { decideDispatch, isEligible, remainingCapacity, type CrewCandidate, type DispatchDecision, type DispatchInput } from "@/lib/dispatch";
@@ -24,12 +25,21 @@ export async function loadPricingProfileById(
   admin: ReturnType<typeof createServiceClient>,
   propertyId: string,
 ): Promise<PricingProfile | null> {
-  const [{ data: prop }, { data: pp }, { data: boats }, { data: toys }] = await Promise.all([
+  const [propRes, ppRes, boatsRes, toysRes] = await Promise.all([
     admin.from("properties").select("sqft, beds, baths").eq("id", propertyId).maybeSingle(),
     admin.from("property_profile").select("*").eq("property_id", propertyId).maybeSingle(),
     admin.from("boats").select("type, length_ft, engine_type, engine_hp, engines").eq("property_id", propertyId),
     admin.from("toys").select("name").eq("property_id", propertyId),
   ]);
+  // EVERY FIELD BELOW IS PRICED. A failed read would zero the pier sections,
+  // the lifts, the boat feet — and this loader feeds the crew's rate, the
+  // vendor cost written at assignment (which IS the margin), autopilot's
+  // locked price and the nightly repricing. `null` here still means "no such
+  // property"; it no longer also means "we couldn't look".
+  const prop = mustRead("the property", propRes);
+  const pp = mustRead("the property's profile", ppRes);
+  const boats = mustRead("the property's boats", boatsRes);
+  const toys = mustRead("the property's toys", toysRes);
   if (!prop) return null;
 
   // A PARK'S GROUNDS HAS LOTS, and every park price counts them. Without this
@@ -85,7 +95,7 @@ export async function buildCandidates(
   const comps: VisitComponent[] = opts.components?.length
     ? opts.components
     : [{ serviceId: opts.serviceId, serviceName: opts.serviceName, pricingModel: opts.pricingModel }];
-  const [{ data: vendors }, { data: rates }, { data: dayJobs }, { data: blocks }, scores, { data: stays }, { data: units }] = await Promise.all([
+  const [vendorsRes, ratesRes, dayJobsRes, blocksRes, scores, staysRes, unitsRes] = await Promise.all([
     admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, storage_capacity_feet, storage_types, garagekeepers_expiry"),
     admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing").in("service_id", comps.map((c) => c.serviceId)),
     admin.from("jobs").select("vendor_id, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))").eq("date", opts.dateISO).in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null),
@@ -93,9 +103,20 @@ export async function buildCandidates(
     getVendorScores(), // real quality score (on-time + flag accuracy + volume), not a raw count
     opts.storage
       ? admin.from("storage_stays").select("vendor_id, boat_feet, group_id").in("status", ["reserved", "in_storage"])
-      : Promise.resolve({ data: null as Array<{ vendor_id: string; boat_feet: number; group_id: string }> | null }),
+      : Promise.resolve({ data: null as Array<{ vendor_id: string; boat_feet: number; group_id: string }> | null, error: null }),
     admin.from("crew_units").select("vendor_id, capacity, work_start, work_end").eq("active", true),
   ]);
+  // EVERY ONE OF THESE FAILS OPEN IF SWALLOWED. An empty `dayJobs` is an empty
+  // day, so a full crew looks free; empty `blocks` un-blocks everyone; empty
+  // `stays` empties a barn that is full; a missing `rates` row is read as "no
+  // rate", which silently disqualifies the crew who should have won. The
+  // callers that decide money would then decide it on a fiction.
+  const vendors = mustRead("the crews", vendorsRes);
+  const rates = mustRead("the crews' rates", ratesRes);
+  const dayJobs = mustRead("what the crews already have that day", dayJobsRes);
+  const blocks = mustRead("the crews' days off", blocksRes);
+  const stays = mustRead("what's already in the barns", staysRes);
+  const units = mustRead("the crews' trucks", unitsRes);
 
   const rateByKey = new Map((rates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
   const assigned = new Map<string, number>();
@@ -220,12 +241,19 @@ export async function getServiceAvailability(
   const to = toISODate(new Date(year, month + 1, 0));
   const today = todayLakeDate();
 
-  const [{ data: vendors }, { data: blocks }, { data: dayJobs }, { data: units }] = await Promise.all([
+  const [vendorsRes, blocksRes, dayJobsRes, unitsRes] = await Promise.all([
     admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity"),
     admin.from("vendor_availability").select("vendor_id, date").eq("status", "blocked").gte("date", from).lte("date", to),
     admin.from("jobs").select("vendor_id, date").in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null).gte("date", from).lte("date", to),
     admin.from("crew_units").select("vendor_id, capacity").eq("active", true),
   ]);
+  // A failed `vendors` read empties the pool, and the cold-start branch below
+  // then tells a customer "we're finding you a crew" for a lake that is fully
+  // staffed — while opening every date, including the full ones.
+  const vendors = mustRead("the crews", vendorsRes);
+  const blocks = mustRead("the crews' days off", blocksRes);
+  const dayJobs = mustRead("what the crews already have booked", dayJobsRes);
+  const units = mustRead("the crews' trucks", unitsRes);
   // Fleet cap: trucks sum where they exist, legacy number otherwise. The
   // calendar stays count-based on purpose — the time budget is enforced at
   // dispatch/claim, where the actual job's duration is known.
@@ -309,16 +337,32 @@ export interface AssignOutcome {
  */
 export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   const admin = createServiceClient();
-  const { data: job } = await admin
+  // NOBODY IS WATCHING THIS ONE, so a failed read neither throws (the rest of
+  // the nightly run still needs doing) nor carries on (this job's crew, cost
+  // and margin would be decided on missing data). It SKIPS: the job is left
+  // 'requested', which is the ops "needs attention" bucket, and the decision
+  // carries no reasonNoFit — we don't know why, and won't pretend to.
+  const jobRes = await admin
     .from("jobs")
     .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, est_minutes, services(name, pricing_model, est_minutes)")
     .eq("id", jobId)
     .maybeSingle();
+  if (jobRes.error) {
+    console.error("[read failed] the job to dispatch:", jobRes.error);
+    return { assigned: false, decision: { ok: false } };
+  }
+  const job = jobRes.data;
   if (!job || !job.service_id || !job.date) {
     return { assigned: false, decision: { ok: false, reasonNoFit: "no_crew_for_service" } };
   }
   const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string; est_minutes?: number } | null;
-  const profile = await loadPricingProfileById(admin, job.property_id as string);
+  let profile: PricingProfile | null;
+  try {
+    profile = await loadPricingProfileById(admin, job.property_id as string);
+  } catch (e) {
+    console.error("[read failed] the property to price this job against:", e);
+    return { assigned: false, decision: { ok: false } };
+  }
   if (!svc?.name || !profile) return { assigned: false, decision: { ok: false, reasonNoFit: "no_crew_for_service" } };
 
   // Package visits (S2): the job's line items are its legs. Every leg is a
@@ -326,10 +370,17 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   let components: VisitComponent[] | undefined;
   let storage: { tier: "outdoor" | "indoor"; boatFeet: number } | null = null;
   if (job.group_id) {
-    const { data: items } = await admin
+    const itemsRes = await admin
       .from("job_items")
       .select("service_id, services(name, pricing_model, est_minutes)")
       .eq("job_id", jobId);
+    if (itemsRes.error) {
+      // A failed read is not "no legs" — pricing a bundle as its anchor leg
+      // alone would hand a crew a six-month custody job at a mow's rate.
+      console.error("[read failed] the legs of this package visit:", itemsRes.error);
+      return { assigned: false, decision: { ok: false } };
+    }
+    const items = itemsRes.data;
     if (!items || items.length === 0) {
       // Booking is mid-flight (items land right after the job row) — do not
       // price a bundle as its anchor leg alone. The next sweep gets it.
@@ -350,9 +401,16 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
         // Tier comes from DATA (band_pricing.storage_type) so a rule-8
         // rename can never silently downgrade the custody gate; the name
         // is only the legacy fallback.
-        const { data: tierSvc } = await admin
+        const tierSvcRes = await admin
           .from("services").select("band_pricing").eq("id", tierComp.serviceId).maybeSingle();
-        const declared = (tierSvc?.band_pricing as { storage_type?: string } | null)?.storage_type;
+        if (tierSvcRes.error) {
+          // The whole point of reading the tier from DATA is that the name is
+          // not trustworthy. A failed read must not quietly fall back to it and
+          // put a boat outdoors for the winter.
+          console.error("[read failed] whether this storage is indoor or outdoor:", tierSvcRes.error);
+          return { assigned: false, decision: { ok: false } };
+        }
+        const declared = (tierSvcRes.data?.band_pricing as { storage_type?: string } | null)?.storage_type;
         storage = {
           tier: declared === "indoor" || declared === "outdoor"
             ? declared
@@ -363,21 +421,36 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     }
   }
 
-  const [{ data: prop }, settings] = await Promise.all([
+  const [propRes, settings] = await Promise.all([
     admin.from("properties").select("preferred_vendor, lake_id, lat, lng").eq("id", job.property_id as string).maybeSingle(),
     getPlatformSettings(),
   ]);
+  if (propRes.error) {
+    // FAILS OPEN if swallowed: a null row means lakeId null, and a null lakeId
+    // is "no geo gate" — the job would be offered to crews who don't work this
+    // lake, and the owner's preferred crew would silently lose their right of
+    // refusal.
+    console.error("[read failed] the property this job is at:", propRes.error);
+    return { assigned: false, decision: { ok: false } };
+  }
+  const prop = propRes.data;
 
-  const crews = await buildCandidates(admin, {
-    serviceId: job.service_id as string,
-    serviceName: svc.name,
-    pricingModel: svc.pricing_model as ServiceRule["pricing_model"],
-    dateISO: job.date as string,
-    profile,
-    components,
-    storage,
-    excludeGroupId: (job.group_id as string) ?? null,
-  });
+  let crews;
+  try {
+    crews = await buildCandidates(admin, {
+      serviceId: job.service_id as string,
+      serviceName: svc.name,
+      pricingModel: svc.pricing_model as ServiceRule["pricing_model"],
+      dateISO: job.date as string,
+      profile,
+      components,
+      storage,
+      excludeGroupId: (job.group_id as string) ?? null,
+    });
+  } catch (e) {
+    console.error("[read failed] the crews who could take this job:", e);
+    return { assigned: false, decision: { ok: false } };
+  }
 
   // Visit duration for the fleet time budget: the one service's dial, or a
   // package's legs summed (each missing dial contributes the engine default).
@@ -412,7 +485,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   const winnerId = decision.result.vendorId;
 
   // Apply — but only to a job that still needs a crew (no double-assign races).
-  const { data: changed } = await admin
+  const changedRes = await admin
     .from("jobs")
     .update({
       vendor_id: winnerId,
@@ -424,6 +497,10 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     .in("status", ["requested"])
     .is("vendor_id", null)
     .select("id");
+  // No returned row = not applied, which is the safe reading either way; a
+  // failure here just needs to stop being invisible.
+  if (changedRes.error) console.error("[read failed] confirming the assignment stuck:", changedRes.error);
+  const changed = changedRes.data;
 
   let applied = !!changed && changed.length > 0;
 
@@ -434,12 +511,19 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   if (applied) {
     const winner = crews.find((c) => c.vendorId === winnerId);
     const cap = winner?.dailyCapacity ?? 0;
-    const { data: dayNow } = await admin
+    const dayNowRes = await admin
       .from("jobs")
       .select("id, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))")
       .eq("vendor_id", winnerId)
       .eq("date", job.date as string)
       .in("status", ["scheduled", "in_progress"]);
+    // THE FAILS-OPEN CASE IN THIS FUNCTION. A failed read is an empty day: the
+    // count is 0, the minutes are 0, `busted` is false, and the backstop we
+    // just wrote passes without ever having run — overbooking the crew for
+    // real. An unverified backstop counts as busted, so the job goes back to
+    // 'requested' and re-dispatches, which is the recoverable direction.
+    if (dayNowRes.error) console.error("[read failed] the crew's other jobs that day:", dayNowRes.error);
+    const dayNow = dayNowRes.data;
     const count = (dayNow ?? []).length;
     // Fleet mirror of the count backstop: two concurrent long jobs can each
     // pass the pre-write time gate — re-sum the day's minutes AFTER the
@@ -458,7 +542,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
       return s + (stamped > 0 ? stamped : jobMinutesOf(svcEm?.est_minutes, legs));
     }, 0);
     const budget = winner?.minuteBudget ?? null;
-    const busted = (cap > 0 && count > cap) || (budget != null && !fitsTimeBudget(minutesNow, 0, budget));
+    const busted = !!dayNowRes.error || (cap > 0 && count > cap) || (budget != null && !fitsTimeBudget(minutesNow, 0, budget));
     if (busted) {
       await admin
         .from("jobs")
@@ -474,11 +558,18 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   if (applied && job.group_id && components?.length) {
     try {
       let custodyOk = true;
-      const { data: rateRows } = await admin
-        .from("vendor_rates")
-        .select("service_id, base, unit_rate, band_pricing")
-        .eq("vendor_id", winnerId)
-        .in("service_id", components.map((c) => c.serviceId));
+      // Everything in this block is inside the try that releases the
+      // assignment, so a failed read throwing here lands exactly where a
+      // failed WRITE already lands: the job goes back to the pool rather than
+      // being left half-booked with unstamped leg costs.
+      const rateRows = mustRead(
+        "this crew's rate for each leg of the visit",
+        await admin
+          .from("vendor_rates")
+          .select("service_id, base, unit_rate, band_pricing")
+          .eq("vendor_id", winnerId)
+          .in("service_id", components.map((c) => c.serviceId)),
+      );
       const byService = new Map((rateRows ?? []).map((r) => [r.service_id as string, r]));
       for (const comp of components) {
         const vr = byService.get(comp.serviceId);
@@ -492,17 +583,29 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
       }
       if (storage) {
         await admin.from("job_groups").update({ storing_vendor: winnerId }).eq("id", job.group_id as string);
-        const { data: stay } = await admin
-          .from("storage_stays").select("id, status").eq("group_id", job.group_id as string).maybeSingle();
+        // A failed read here reads as "no stay yet" and inserts a SECOND
+        // reservation, committing the same boat's feet twice in one barn.
+        const stay = mustRead(
+          "the boat's existing storage reservation",
+          await admin
+            .from("storage_stays").select("id, status").eq("group_id", job.group_id as string).maybeSingle(),
+        );
         if (!stay) {
           // Boat label (polish item 3): storage_stays carries its own label so
           // ops/crew custody views read the boat without a price-bearing join
           // back to the profile. Mirrors the exact display format used in the
           // wizard/profile/storage pages (e.g. "22' Tritoon · 150hp outboard").
-          const { data: boatRows } = await admin
-            .from("boats")
-            .select("type, length_ft, engine_type, engine_hp, engines")
-            .eq("property_id", job.property_id as string);
+          // Label only — nothing is priced or gated on it, so this one degrades
+          // to a null label (which the custody views already handle) instead of
+          // releasing an otherwise-good assignment. It logs.
+          const [boatRows] = softRead(
+            "the boat's details for its storage label",
+            await admin
+              .from("boats")
+              .select("type, length_ft, engine_type, engine_hp, engines")
+              .eq("property_id", job.property_id as string),
+            null,
+          );
           const boatLabel = (boatRows ?? [])
             .map((b) => {
               const eng = b.engine_type && b.engine_type !== "none"
@@ -529,10 +632,15 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
         // job (and its stay) back to the pool instead of overcommitting a
         // physical building for six months.
         if (custodyOk) {
-          const [{ data: allStays }, { data: vRow }] = await Promise.all([
+          const [allStaysRes, vRowRes] = await Promise.all([
             admin.from("storage_stays").select("boat_feet, group_id").eq("vendor_id", winnerId).in("status", ["reserved", "in_storage"]),
             admin.from("vendors").select("storage_capacity_feet").eq("id", winnerId).maybeSingle(),
           ]);
+          // FAILS OPEN if swallowed: a failed read totals 0 feet against a
+          // capacity of 0, `total > capacity` is false, and the barn is
+          // overcommitted for six months by a check that never ran.
+          const allStays = mustRead("what's already committed to this barn", allStaysRes);
+          const vRow = mustRead("this barn's capacity", vRowRes);
           const total = (allStays ?? []).reduce((sum, st) => sum + Number(st.boat_feet ?? 0), 0);
           if (total > Number(vRow?.storage_capacity_feet ?? 0)) custodyOk = false;
         }
@@ -574,11 +682,19 @@ export interface RevalidateOutcome {
  */
 export async function revalidateJob(jobId: string): Promise<RevalidateOutcome> {
   const admin = createServiceClient();
-  const { data: job } = await admin
+  const jobRes = await admin
     .from("jobs")
     .select("id, property_id, service_id, date, status, vendor_id, customer_price, group_id, services(name, pricing_model, est_minutes), properties(lake_id)")
     .eq("id", jobId)
     .maybeSingle();
+  if (jobRes.error) {
+    // Skip this one job, exactly as the other "leave it alone" branches below
+    // do — never unassign a crew, and never report it to the sweep as unfilled
+    // (that would text every crew that a booked job is up for grabs).
+    console.error("[read failed] the job to revalidate:", jobRes.error);
+    return { rehomed: false, nowAssigned: true };
+  }
+  const job = jobRes.data;
   if (!job || !job.service_id || !job.date) return { rehomed: false, nowAssigned: false };
 
   // A requested job just needs assignment.
@@ -595,16 +711,31 @@ export async function revalidateJob(jobId: string): Promise<RevalidateOutcome> {
   if ((job as { group_id?: string | null }).group_id) return { rehomed: false, nowAssigned: true };
 
   const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string; est_minutes?: number } | null;
-  const profile = await loadPricingProfileById(admin, job.property_id as string);
+  // Never release a crew on the strength of a read that failed — an unreadable
+  // profile or candidate list looks exactly like "nobody is eligible", and
+  // would unassign a perfectly good crew at midnight.
+  let profile: PricingProfile | null;
+  try {
+    profile = await loadPricingProfileById(admin, job.property_id as string);
+  } catch (e) {
+    console.error("[read failed] the property to reprice this job against:", e);
+    return { rehomed: false, nowAssigned: true };
+  }
   if (!svc?.name || !profile) return { rehomed: false, nowAssigned: true };
 
-  const crews = await buildCandidates(admin, {
-    serviceId: job.service_id as string,
-    serviceName: svc.name,
-    pricingModel: svc.pricing_model as ServiceRule["pricing_model"],
-    dateISO: job.date as string,
-    profile,
-  });
+  let crews;
+  try {
+    crews = await buildCandidates(admin, {
+      serviceId: job.service_id as string,
+      serviceName: svc.name,
+      pricingModel: svc.pricing_model as ServiceRule["pricing_model"],
+      dateISO: job.date as string,
+      profile,
+    });
+  } catch (e) {
+    console.error("[read failed] the crews eligible for this job:", e);
+    return { rehomed: false, nowAssigned: true };
+  }
   const jobLake = (Array.isArray(job.properties) ? job.properties[0] : job.properties) as { lake_id?: string } | null;
   // The job's OWN stamped figure (0083), not the service's flat dial. This
   // number is subtracted from the crew's committed day when re-validating, so

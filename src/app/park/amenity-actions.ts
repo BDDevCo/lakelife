@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange, toDaterange, type ParkSeason } from "@/lib/parks";
@@ -67,15 +68,15 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
 
-  const { data: rows } = await admin
+  const rows = mustRead("the things your park rents out", await admin
     .from("park_amenities")
     .select("id, name, kind, charge_model, day_rate, who_may_book, max_days, season_open_month, season_open_day, season_close_month, season_close_day, rules, active")
     .eq("park_id", parkId)
-    .order("name", { ascending: true });
+    .order("name", { ascending: true }));
   if (!rows?.length) return [];
 
   const ids = rows.map((a) => a.id as string);
-  const [{ data: units }, { data: books }] = await Promise.all([
+  const [unitsRes, booksRes] = await Promise.all([
     admin.from("park_amenity_units")
       .select("id, amenity_id, label, active, sort_order")
       .in("amenity_id", ids).order("sort_order", { ascending: true }),
@@ -83,6 +84,10 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
       .select("id, unit_id, during, status, quoted_amount, renter_id, stay_id")
       .eq("park_id", parkId).neq("status", "cancelled"),
   ]);
+  // An empty booking list is a free calendar. He books the boat out to a
+  // second guest on a week it is already gone.
+  const units = mustRead("the units of each", unitsRes);
+  const books = mustRead("what's already booked", booksRes);
 
   const unitById = new Map((units ?? []).map((u) => [u.id as string, u]));
   const bookingIds = (books ?? []).map((b) => b.id as string);
@@ -92,25 +97,30 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
   // WHAT HAS ACTUALLY BEEN COLLECTED, derived from park_payments rather than
   // stored as a flag. A stored `paid` boolean and a payments table are two
   // places to be told the same thing, and they drift.
-  const [{ data: names }, { data: stays }, { data: paid }] = await Promise.all([
+  const [namesRes, staysRes, paidRes] = await Promise.all([
     renterIds.length
       ? admin.from("park_renters").select("id, display_name").in("id", renterIds)
-      : Promise.resolve({ data: [] as { id: string; display_name: string }[] }),
+      : Promise.resolve({ data: [] as { id: string; display_name: string }[], error: null }),
     stayIds.length
       ? admin.from("lot_reservations").select("id, park_lot_id").in("id", stayIds)
-      : Promise.resolve({ data: [] as { id: string; park_lot_id: string }[] }),
+      : Promise.resolve({ data: [] as { id: string; park_lot_id: string }[], error: null }),
     bookingIds.length
       ? admin.from("park_payments")
           .select("amenity_booking_id, amount, reversed_at").in("amenity_booking_id", bookingIds)
-      : Promise.resolve({ data: [] as { amenity_booking_id: string; amount: number; reversed_at: string | null }[] }),
+      : Promise.resolve({ data: [] as { amenity_booking_id: string; amount: number; reversed_at: string | null }[], error: null }),
   ]);
+  const names = mustRead("who has them booked", namesRes);
+  const stays = mustRead("their stays", staysRes);
+  // `collected` is derived from this and from nothing else, so a failed read
+  // shows $0 collected against a booking that was paid for in cash.
+  const paid = mustRead("what's been collected", paidRes);
 
   const nameById = new Map((names ?? []).map((r) => [r.id as string, r.display_name as string]));
   const lotIdByStay = new Map((stays ?? []).map((s) => [s.id as string, s.park_lot_id as string]));
   const lotIds = [...new Set([...lotIdByStay.values()])];
-  const { data: lots } = lotIds.length
+  const lots = mustRead("their lots", lotIds.length
     ? await admin.from("park_lots").select("id, lot_number").in("id", lotIds)
-    : { data: [] as { id: string; lot_number: string }[] };
+    : { data: [] as { id: string; lot_number: string }[], error: null });
   const lotNumberById = new Map((lots ?? []).map((l) => [l.id as string, l.lot_number as string]));
 
   const collectedByBooking = new Map<string, number>();
@@ -282,9 +292,12 @@ export async function addAmenityUnit(
   // The amenity must be THIS park's. Without this check a browser could hang a
   // unit off another park's amenity, and every later read is park-scoped so it
   // would never show up here again.
-  const { data: mine } = await admin.from("park_amenities")
+  const mineRes = await admin.from("park_amenities")
     .select("id").eq("id", amenityId).eq("park_id", parkId).maybeSingle();
-  if (!mine) return { ok: false, error: DENIED };
+  if (mineRes.error) {
+    return { ok: false, error: readFailedMessage("that amenity", mineRes.error) };
+  }
+  if (!mineRes.data) return { ok: false, error: DENIED };
 
   const { error } = await admin.from("park_amenity_units")
     .insert({ amenity_id: amenityId, label: clean });
@@ -307,10 +320,14 @@ export async function blackoutDays(
   if (to <= from) return { ok: false, error: "The last day has to be after the first — use the next day as the end." };
 
   const admin = createServiceClient();
-  const { data: unit } = await admin
+  const unitRes = await admin
     .from("park_amenity_units")
     .select("id, park_amenities!inner(park_id)")
     .eq("id", unitId).maybeSingle();
+  if (unitRes.error) {
+    return { ok: false, error: readFailedMessage("that one", unitRes.error) };
+  }
+  const unit = unitRes.data;
   const owner = (unit?.park_amenities as unknown as { park_id: string } | null)?.park_id;
   if (!unit || owner !== parkId) return { ok: false, error: DENIED };
 
@@ -347,18 +364,29 @@ export async function bookAmenityForStay(
   if (!window) return { ok: false, error: "Pick at least one day." };
 
   const admin = createServiceClient();
-  const { data: unit } = await admin
+  // The rate comes off this read, and `quoteAmenity` returns null for a
+  // missing one — so a dropped read tells him to go and set a price he has
+  // already set, on a boat he is standing next to.
+  const unitRes = await admin
     .from("park_amenity_units")
     .select("id, amenity_id, park_amenities!inner(park_id, charge_model, day_rate, who_may_book, max_days, name, kind, rules, active, season_open_month, season_open_day, season_close_month, season_close_day)")
     .eq("id", unitId).maybeSingle();
+  if (unitRes.error) {
+    return { ok: false, error: readFailedMessage("that one", unitRes.error, { money: true }) };
+  }
+  const unit = unitRes.data;
   const am = unit?.park_amenities as unknown as {
     park_id: string; charge_model: string; day_rate: number | null;
     who_may_book: string; max_days: number | null; name: string;
   } | null;
   if (!unit || !am || am.park_id !== parkId) return { ok: false, error: DENIED };
 
-  const { data: stay } = await admin
+  const stayRes = await admin
     .from("lot_reservations").select("id, renter_id").eq("id", stayId).maybeSingle();
+  if (stayRes.error) {
+    return { ok: false, error: readFailedMessage("that stay", stayRes.error, { money: true }) };
+  }
+  const stay = stayRes.data;
   if (!stay) return { ok: false, error: "That stay is gone." };
 
   const quoted = quoteAmenity(
@@ -445,10 +473,17 @@ export async function collectAmenityMoney(
   }
 
   const admin = createServiceClient();
-  const { data: booking } = await admin
+  // Money in. A failed read here answers DENIED — "you don't manage that park"
+  // — to a man holding their cash, so it says nothing about his account and
+  // says plainly that nothing was recorded.
+  const bookingRes = await admin
     .from("amenity_bookings")
     .select("id, renter_id, status")
     .eq("id", bookingId).eq("park_id", parkId).maybeSingle();
+  if (bookingRes.error) {
+    return { ok: false, error: readFailedMessage("that booking", bookingRes.error, { money: true }) };
+  }
+  const booking = bookingRes.data;
   if (!booking) return { ok: false, error: DENIED };
   if (!booking.renter_id) return { ok: false, error: "There's nobody to take money from on that one." };
   if (booking.status === "cancelled") {
@@ -478,23 +513,27 @@ export async function staysOverlapping(
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
 
-  const { data: lots } = await admin
-    .from("park_lots").select("id, lot_number, rental_mode").eq("park_id", parkId);
+  // THROWS rather than returning []. This one has no error channel — its
+  // caller is a button that renders "Nobody is staying across those days" for
+  // an empty array — and that sentence about a full park is worse than no
+  // answer at all. Everything else in this file returns { ok, error }.
+  const lots = mustRead("your lots", await admin
+    .from("park_lots").select("id, lot_number, rental_mode").eq("park_id", parkId));
   const lotIds = (lots ?? []).map((l) => l.id as string);
   if (!lotIds.length) return [];
 
-  const { data: stays } = await admin
+  const stays = mustRead("who is staying then", await admin
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id, during")
     .in("park_lot_id", lotIds)
     .in("status", ["approved", "active"])
-    .overlaps("during", toDaterange({ start: from, end: to }));
+    .overlaps("during", toDaterange({ start: from, end: to })));
   if (!stays?.length) return [];
 
   const renterIds = [...new Set(stays.map((s) => s.renter_id as string).filter(Boolean))];
-  const { data: names } = renterIds.length
+  const names = mustRead("their names", renterIds.length
     ? await admin.from("park_renters").select("id, display_name").in("id", renterIds)
-    : { data: [] as { id: string; display_name: string }[] };
+    : { data: [] as { id: string; display_name: string }[], error: null });
   const nameById = new Map((names ?? []).map((r) => [r.id as string, r.display_name as string]));
   const lotById = new Map((lots ?? []).map((l) => [l.id as string, l]));
 

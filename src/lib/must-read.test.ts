@@ -203,3 +203,71 @@ describe("a guard that could not run is not a guard that passed", () => {
     expect(s).not.toMatch(/const\s*\{\s*count:\s*open\s*\}/);
   });
 });
+
+describe("the seams stay closed", () => {
+  // A loader that throws is only safe if every caller that CANNOT throw catches
+  // it. Route handlers have no error boundary; server actions owe their caller
+  // an { ok, error }; client components have a toast that a rejection skips.
+  // These scanners exist because the first remediation pass opened all three.
+
+  const routes = [
+    "../app/d/[token]/verify/route.ts",
+    "../app/d/[token]/still/route.ts",
+    "../app/d/[token]/talk/route.ts",
+    "../app/d/[token]/fix/route.ts",
+    "../app/d/[token]/resolved/route.ts",
+  ];
+
+  it("every dispute route handler catches ReadFailed", () => {
+    // These are tapped from an SMS by a crew whose pay is on hold. Next has no
+    // boundary for a route handler, so an uncaught throw is a bare 500.
+    for (const r of routes) {
+      const src = read(r);
+      expect(src, `${r} must import ReadFailed`).toMatch(/ReadFailed/);
+      expect(src, `${r} must catch it`).toMatch(/instanceof ReadFailed/);
+      // And must not swallow: anything else still propagates.
+      expect(src, `${r} must re-throw non-ReadFailed`).toMatch(/throw e/);
+    }
+  });
+
+  it("'Already settled' is never printed for a read it could not do", () => {
+    // The exact regression the first pass introduced: customerStill gained an
+    // ok:false path, and the route headlined every !ok as "Already settled" —
+    // telling somebody saying "still not right" that it was closed.
+    for (const r of ["../app/d/[token]/still/route.ts", "../app/d/[token]/resolved/route.ts"]) {
+      const src = read(r);
+      // Match the GUARD, not the word. An earlier version of this test looked
+      // for the substring "readFailed" and passed happily against a file where
+      // every occurrence had been renamed — it was asserting nothing.
+      const settled = src.search(/if\s*\(!r\.ok\)\s*return htmlPage\("Already settled/);
+      expect(settled, `${r} lost its settled branch`).toBeGreaterThan(-1);
+      const guard = src.search(/if\s*\(!r\.ok\s*&&\s*r\.readFailed\)/);
+      expect(guard, `${r} must branch on r.readFailed before printing a verdict`).toBeGreaterThan(-1);
+      expect(guard, `${r}: the readFailed branch must come FIRST`).toBeLessThan(settled);
+      // The loader wrapper must flag it too, or the field is always false.
+      expect(src, `${r} loader must set readFailed`).toMatch(/readFailed:\s*true/);
+    }
+  });
+
+  it("a failed WRITE is not 'already settled' either", () => {
+    // The same lie one layer down: a compare-and-set UPDATE returns an empty
+    // array both when somebody else won the race AND when the write failed.
+    const src = read("../lib/disputes.ts");
+    const at = src.indexOf('resolution: "customer accepted"');
+    expect(at).toBeGreaterThan(-1);
+    expect(src.slice(at, at + 700)).toMatch(/flipErr/);
+  });
+
+  it("the photo gate cannot be failed by a dropped connection", () => {
+    // "No photos on this job yet — the crew can't be paid" off an unread list
+    // is the non-negotiable rule in CLAUDE.md accusing a crew of a fault of ours.
+    expect(read("../lib/photos.ts")).toMatch(/mustRead\(/);
+  });
+
+  it("the booking calendar refuses rather than drawing every day open", () => {
+    const src = read("../app/book/actions.ts");
+    expect(src).toMatch(/unavailable: true/);
+    // The early "no such service" return must not be reachable by a failed read.
+    expect(src).toMatch(/mustRead\(\s*"this service"/);
+  });
+});

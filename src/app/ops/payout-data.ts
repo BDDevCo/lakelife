@@ -1,6 +1,7 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertOps } from "./data";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * Ops-side view of the payout queue: what's waiting for the ACH export
@@ -51,12 +52,18 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
   if (!ops) return EMPTY;
 
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("payout_batches")
-    .select("id, kind, net, status, created_at, vendors(company), users(name)")
-    .in("status", ["queued", "exported"])
-    .order("created_at", { ascending: false })
-    .limit(100);
+  // EMPTY is "nobody is owed anything" — $0.00 queued, nothing to export. On a
+  // failed read that sentence is a lie about money crews are waiting on, so
+  // the screen must fail instead of quietly showing an empty queue.
+  const data = mustRead(
+    "the payout queue",
+    await admin
+      .from("payout_batches")
+      .select("id, kind, net, status, created_at, vendors(company), users(name)")
+      .in("status", ["queued", "exported"])
+      .order("created_at", { ascending: false })
+      .limit(100),
+  );
 
   const raw = (data ?? []) as unknown as RawRow[];
 

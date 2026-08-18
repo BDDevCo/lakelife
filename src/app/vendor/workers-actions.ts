@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { likeLiteral } from "@/lib/sql-like";
 import { getMyVendorId } from "./data";
+import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 /**
  * WHO WAS ACTUALLY HERE — the vendor's own roster, and who was on a job.
@@ -57,6 +58,9 @@ export interface WorkerResult {
   signal?: string;
 }
 
+// NOT caught: this returns a bare array, and its callers are /vendor/crew (a
+// page, where a throw reaches the error boundary) and getWhoWasHere below.
+// Converting a failed read here could only mean `[]` — "no crew list yet".
 /** The signed-in vendor's roster, active first then alphabetical. */
 export async function listWorkers(): Promise<Worker[]> {
   const vendorId = await getMyVendorId();
@@ -76,7 +80,17 @@ export async function listWorkers(): Promise<Worker[]> {
 }
 
 export async function addWorker(rawName: string): Promise<WorkerResult> {
-  const vendorId = await getMyVendorId();
+  // getMyVendorId THROWS when the read fails — `null` from it means "you are
+  // not a crew", which a dropped read must never be able to say. A rejection
+  // out of a "use server" action arrives as a blank failure with no sentence,
+  // so it becomes this action's own WorkerResult. Nothing has been written yet.
+  let vendorId: string | null = null;
+  try {
+    vendorId = await getMyVendorId();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew list", e) };
+    throw e;
+  }
   if (!vendorId) return { ok: false, error: "Crews only." };
 
   const name = (rawName ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
@@ -125,7 +139,17 @@ export async function addWorker(rawName: string): Promise<WorkerResult> {
  * the winter is a decision nobody meant to make.
  */
 export async function setWorkerActive(workerId: string, active: boolean): Promise<WorkerResult> {
-  const vendorId = await getMyVendorId();
+  // getMyVendorId THROWS when the read fails — `null` from it means "you are
+  // not a crew", which a dropped read must never be able to say. A rejection
+  // out of a "use server" action arrives as a blank failure with no sentence,
+  // so it becomes this action's own WorkerResult. Nothing has been written yet.
+  let vendorId: string | null = null;
+  try {
+    vendorId = await getMyVendorId();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew list", e) };
+    throw e;
+  }
   if (!vendorId) return { ok: false, error: "Crews only." };
 
   const admin = createServiceClient();
@@ -168,9 +192,21 @@ export async function getJobWorkers(jobId: string): Promise<Worker[]> {
  * "nobody, actually" would leave a wrong name on a statement forever.
  */
 export async function setJobWorkers(jobId: string, workerIds: string[]): Promise<WorkerResult> {
-  const vendorId = await getMyVendorId();
+  // Both gates THROW on a failed read rather than answer "not a crew" / "not
+  // your job" — neither of which the code could know. Caught together so the
+  // crew gets a sentence instead of a blank failure; nothing is written until
+  // the delete/insert further down.
+  let vendorId: string | null = null;
+  let mine: Awaited<ReturnType<typeof myJob>> = null;
+  try {
+    vendorId = await getMyVendorId();
+    mine = vendorId ? await myJob(jobId) : null;
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew list", e) };
+    throw e;
+  }
   if (!vendorId) return { ok: false, error: "Crews only." };
-  if (!(await myJob(jobId))) return { ok: false, error: "That job isn't on your route." };
+  if (!mine) return { ok: false, error: "That job isn't on your route." };
 
   const admin = createServiceClient();
 
@@ -276,6 +312,10 @@ export interface WhoWasHereView {
  * bars — to serve the minority who tap it would be the wrong trade.
  */
 export async function getWhoWasHere(jobId: string): Promise<WhoWasHereView> {
+  // NOT caught. This view has no error channel, and `empty` is what the picker
+  // renders as "No names on your crew list yet" — a sentence we must never put
+  // in front of a crew who has a list. So the reads below stay throwing, and
+  // WhoWasHere.tsx catches the rejection and says we couldn't look.
   const empty: WhoWasHereView = { roster: [], selected: [], suggested: [] };
   const vendorId = await getMyVendorId();
   if (!vendorId) return empty;

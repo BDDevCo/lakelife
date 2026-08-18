@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getMyVendorId, getVendorDay } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { signedJobPhotos, type JobPhoto } from "@/lib/photos";
+import { mustRead, mustCount } from "@/lib/must-read";
 
 /**
  * CREW JOB DETAIL + CREW CALENDAR reads (2026-07-26).
@@ -40,14 +41,20 @@ export async function assertVendorJob(jobId: string) {
   const vendorId = await getMyVendorId();
   if (!vendorId) return null;
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("jobs")
-    // Deliberately NO customer_price / vendor_cost: this is the crew code path,
-    // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
-    // those columns out of reach by construction (settleJob re-loads them ops-side).
-    .select("id, status, vendor_id, service_id, date, property_id, group_id, services(name, min_photos)")
-    .eq("id", jobId)
-    .maybeSingle();
+  // `null` from this gate means "that job isn't yours", and both the page and
+  // job-detail-actions.ts say exactly that. A failed read must not be able to
+  // tell a crew their own job belongs to somebody else, so it throws instead.
+  const data = mustRead(
+    "your job",
+    await admin
+      .from("jobs")
+      // Deliberately NO customer_price / vendor_cost: this is the crew code path,
+      // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
+      // those columns out of reach by construction (settleJob re-loads them ops-side).
+      .select("id, status, vendor_id, service_id, date, property_id, group_id, services(name, min_photos)")
+      .eq("id", jobId)
+      .maybeSingle(),
+  );
   if (!data || data.vendor_id !== vendorId) return null;
   return data;
 }
@@ -141,11 +148,14 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
 
   // The ONE extra job column the gate deliberately doesn't carry. Narrow by
   // hand: never select("*") on jobs (customer_price/vendor_cost/margin).
-  const { data: extra } = await admin
-    .from("jobs")
-    .select("id, correction_of")
-    .eq("id", jobId)
-    .maybeSingle();
+  const extra = mustRead(
+    "whether this is a make-it-right visit",
+    await admin
+      .from("jobs")
+      .select("id, correction_of")
+      .eq("id", jobId)
+      .maybeSingle(),
+  );
   const correctionOfId = (extra?.correction_of as string | null) ?? null;
 
   // Reuse the Today list's own day loader for the crew-facing facts: address,
@@ -165,11 +175,14 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
     // Undated job, or a day the route view doesn't cover — fetch the property
     // facts directly. NOTE: no gate_code_encrypted in this select. A job we
     // can't place on a day can never be "today", so it never shows a code.
-    const { data: prop } = await admin
-      .from("properties")
-      .select("address, lat, lng, lakes(name), users(name)")
-      .eq("id", job.property_id as string)
-      .maybeSingle();
+    const prop = mustRead(
+      "where this job is",
+      await admin
+        .from("properties")
+        .select("address, lat, lng, lakes(name), users(name)")
+        .eq("id", job.property_id as string)
+        .maybeSingle(),
+    );
     address = (prop?.address as string | null) ?? null;
     lat = (prop?.lat as number | null) ?? null;
     lng = (prop?.lng as number | null) ?? null;
@@ -196,13 +209,19 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
   let minPhotos = svc?.min_photos ?? 0;
   let legs: string[] = [];
   if (job.group_id) {
-    const { data: items } = await admin
-      .from("job_items")
-      // Column-by-column on purpose: job_items also carries customer_price and
-      // vendor_cost on the same row (rule 1).
-      .select("created_at, services(name, min_photos)")
-      .eq("job_id", jobId)
-      .order("created_at", { ascending: true });
+    // A failed read leaves minPhotos at the ANCHOR service's minimum, so the
+    // card says "2 / 2 — ready to complete" and the server then refuses the
+    // completion at 2/6 with a counter that never moves.
+    const items = mustRead(
+      "the legs of this package visit",
+      await admin
+        .from("job_items")
+        // Column-by-column on purpose: job_items also carries customer_price and
+        // vendor_cost on the same row (rule 1).
+        .select("created_at, services(name, min_photos)")
+        .eq("job_id", jobId)
+        .order("created_at", { ascending: true }),
+    );
     if (items && items.length > 0) {
       minPhotos = items.reduce((sum, it) => {
         const ls = one(it.services) as { min_photos?: number } | null;
@@ -214,7 +233,11 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
     }
   }
 
-  const [{ count }, photos, { data: payRows }, { data: disputeRows }, { data: flagRows }] = await Promise.all([
+  // The dispute read is the one to watch here: an unread dispute renders as no
+  // dispute at all, which removes the customer's note, the respond-by date and
+  // the cure buttons from a screen whose whole job is to say "answer this by
+  // Thursday or the payout stays held".
+  const [countRes, photos, payRes, disputeRes, flagRes] = await Promise.all([
     admin.from("job_photos").select("id", { count: "exact", head: true }).eq("job_id", jobId),
     signedJobPhotos(jobId), // signs only — this call site is the authorization
     admin
@@ -236,6 +259,10 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
       .eq("job_id", jobId)
       .order("created_at", { ascending: false }),
   ]);
+  const count = mustCount("the photos on this job", countRes);
+  const payRows = mustRead("your pay for this job", payRes);
+  const disputeRows = mustRead("whether this job is disputed", disputeRes);
+  const flagRows = mustRead("what's been flagged on this job", flagRes);
 
   const payouts: CrewPayoutRow[] = (payRows ?? []).map((p) => ({
     id: p.id as string,
@@ -270,10 +297,13 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
   const linkIds = [correctionOfId, dispute?.correctionJobId ?? null].filter((v): v is string => Boolean(v));
   const links = new Map<string, CrewJobLink>();
   if (linkIds.length > 0) {
-    const { data: linkRows } = await admin
-      .from("jobs")
-      .select("id, date, status, services(name)")
-      .in("id", linkIds);
+    const linkRows = mustRead(
+      "the visit this one is linked to",
+      await admin
+        .from("jobs")
+        .select("id, date, status, services(name)")
+        .in("id", linkIds),
+    );
     for (const r of linkRows ?? []) {
       links.set(r.id as string, {
         id: r.id as string,
@@ -352,19 +382,25 @@ export async function getCrewCalendarYear(year: number): Promise<CrewCalRow[]> {
   if (!Number.isFinite(y) || y < 2000 || y > 2100) return [];
 
   const supabase = await createClient();
-  const { data: rows } = await supabase
-    .from("vendor_jobs")
-    .select("id, date, status, service_name, address, lake_name")
-    .gte("date", `${y}-01-01`)
-    .lte("date", `${y}-12-31`)
-    .order("date", { ascending: true });
+  // An empty year is a real answer for a crew's first season. A failed read
+  // rendering that same blank grid is not, and there is nothing on the page to
+  // tell the two apart.
+  const rows = mustRead(
+    "your calendar",
+    await supabase
+      .from("vendor_jobs")
+      .select("id, date, status, service_name, address, lake_name")
+      .gte("date", `${y}-01-01`)
+      .lte("date", `${y}-12-31`)
+      .order("date", { ascending: true }),
+  );
 
   const jobs = (rows ?? []).filter((r) => r.date);
   if (jobs.length === 0) return [];
 
   const ids = jobs.map((r) => r.id as string);
   const admin = createServiceClient();
-  const [{ data: payRows }, { data: corrRows }] = await Promise.all([
+  const [calPayRes, corrRes] = await Promise.all([
     // Take-home per job: 'earning' rows only. Clawback adjustments are dated
     // to when they were APPLIED, not to the job (see earnings-data.ts), so
     // folding them into a calendar day would misdate the crew's own money.
@@ -376,6 +412,10 @@ export async function getCrewCalendarYear(year: number): Promise<CrewCalRow[]> {
       .in("job_id", ids),
     admin.from("jobs").select("id, correction_of").in("id", ids),
   ]);
+  // Unread pay is not unpaid work, and an unread correction flag turns a $0
+  // make-it-right visit into a day that merely looks like it was never paid.
+  const payRows = mustRead("your pay for the year", calPayRes);
+  const corrRows = mustRead("which visits were make-it-rights", corrRes);
 
   const payByJob = new Map<string, { amount: number; status: string }>();
   for (const p of payRows ?? []) {

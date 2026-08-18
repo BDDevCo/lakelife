@@ -1,6 +1,7 @@
 import { htmlPage, escapeHtml } from "@/app/a/[token]/respond";
 import { todayLakeDate, toISODate } from "@/lib/booking";
 import { loadDisputeByToken, crewChooseFix } from "@/lib/disputes";
+import { ReadFailed } from "@/lib/must-read";
 
 /**
  * Make-It-Right — crew taps "I'll fix it" (right-to-cure, ToS §11.5). GET is
@@ -28,9 +29,34 @@ function nextSevenDays(): { iso: string; label: string }[] {
   return days;
 }
 
+/**
+ * A ROUTE HANDLER HAS NO ERROR BOUNDARY — src/app/error.tsx wraps page and
+ * layout renders, not this. loadDisputeByToken now THROWS ReadFailed rather
+ * than returning null on a dropped read (a valid link is not an unknown one),
+ * so uncaught it is a bare 500 on the link holding this crew's pay. Catch it
+ * and say the only true thing: we couldn't look, and nothing changed. `null`
+ * still means the token genuinely matches nothing.
+ */
+async function loadForCrew(tok: string): Promise<{ d: Awaited<ReturnType<typeof loadDisputeByToken>>; readFailed: boolean }> {
+  try {
+    return { d: await loadDisputeByToken("crew", tok), readFailed: false };
+  } catch (e) {
+    if (e instanceof ReadFailed) return { d: null, readFailed: true };
+    throw e;
+  }
+}
+
+const couldNotCheck = () =>
+  htmlPage(
+    "We couldn't check just now",
+    "Something on our end didn't answer, so nothing has changed — we haven't booked, sent or settled anything. Give it another tap in a minute. 🌊",
+    false,
+  );
+
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
-  const d = await loadDisputeByToken("crew", token);
+  const { d, readFailed } = await loadForCrew(token);
+  if (readFailed) return couldNotCheck();
   if (!d) return htmlPage("That link isn't right", "This link doesn't match anything. 🌊", false);
   if (!FIXABLE.includes(d.status)) {
     return htmlPage("Already moving", "This one's already moving — check your Today list. 🌊");
@@ -46,7 +72,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
 
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
-  const d = await loadDisputeByToken("crew", token);
+  const { d, readFailed } = await loadForCrew(token);
+  if (readFailed) return couldNotCheck();
   if (!d) return htmlPage("That link isn't right", "This link doesn't match anything. 🌊", false);
   if (!FIXABLE.includes(d.status)) {
     return htmlPage("Already moving", "This one's already moving — check your Today list. 🌊");

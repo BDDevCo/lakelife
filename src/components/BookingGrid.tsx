@@ -69,6 +69,9 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const [picked, setPicked] = useState<string[]>([]);
   const [fullDates, setFullDates] = useState<Set<string>>(new Set());
   const [findingCrew, setFindingCrew] = useState(false);
+  /** The calendar couldn't be READ — which is neither open nor full. No day is
+   *  offered while this is true, because we don't know which ones are free. */
+  const [unavailable, setUnavailable] = useState(false);
   const [rush, setRush] = useState<RushWindow | null>(null);
   const [rushFallback, setRushFallback] = useState<"roll" | "cancel">("roll");
   const [busy, setBusy] = useState(false);
@@ -88,14 +91,20 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
 
   useEffect(() => {
     let cancelled = false;
-    getAvailability(service.id, year, month).then((res) => {
-      if (!cancelled) {
-        setFullDates(new Set(res.fullDates));
-        setFindingCrew(!!res.findingCrew);
-        setRush(res.rush);
-        if (res.today) setToday(res.today);
-      }
-    });
+    getAvailability(service.id, year, month)
+      .then((res) => {
+        if (!cancelled) {
+          setUnavailable(!!res.unavailable);
+          setFullDates(new Set(res.fullDates));
+          setFindingCrew(!!res.findingCrew);
+          setRush(res.rush);
+          if (res.today) setToday(res.today);
+        }
+      })
+      // The action answers `unavailable` for a failed read; this catch is for
+      // everything else that can reject on the way (a dropped request). Either
+      // way the squares below stay unpickable rather than all-white-and-open.
+      .catch(() => { if (!cancelled) setUnavailable(true); });
     return () => { cancelled = true; };
   }, [service.id, year, month, reload]);
 
@@ -237,6 +246,21 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
             </div>
           )}
 
+          {/* We couldn't READ the calendar. Not "full", not "open" — unknown,
+              and no day is offered until we can say which are free. */}
+          {unavailable && (
+            <div
+              role="status"
+              style={{
+                border: "1.5px solid var(--line)", borderRadius: 12, padding: "10px 14px",
+                marginBottom: 14, fontSize: 13.5, lineHeight: 1.45, background: "#f0f3f4",
+              }}
+            >
+              <b>We couldn&apos;t check the calendar just now.</b> Nothing has been booked, and
+              we&apos;d rather not guess which days are free. Close this and try again in a moment.
+            </div>
+          )}
+
           {/* what actually happened to a batch that only partly landed */}
           {outcome && (
             <div
@@ -317,7 +341,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
             {cells.map((c, i) => {
               if (!c) return <div key={i} />;
               const isRushDay = c.status === "rush";
-              const clickable = c.status === "available" || isRushDay;
+              const clickable = !unavailable && (c.status === "available" || isRushDay);
               const sel = picked.includes(c.iso);
               const bg = sel
                 ? (isRushDay ? "var(--gold)" : "var(--teal)")
@@ -327,7 +351,10 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
               const border = sel
                 ? (isRushDay ? "var(--gold)" : "var(--teal)")
                 : isRushDay ? "var(--gold)" : "var(--line)";
-              const title = c.status === "off-season" ? "Outside the water-work season"
+              // "Available" is a fact we don't have when the read failed — the
+              // tooltip must not assert it while the banner above says otherwise.
+              const title = unavailable ? "We couldn't check this day"
+                : c.status === "off-season" ? "Outside the water-work season"
                 : c.status === "full" ? "Crew at capacity"
                 : c.status === "past" ? ""
                 : isRushDay ? "Book today — rush rate" : "Available";
@@ -447,7 +474,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
               : "Confirming creates a request. Autopay charges only after the service is completed and its photos are uploaded — never before."}
           </p>
 
-          <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={() => confirm()} disabled={picked.length === 0 || busy}>
+          <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={() => confirm()} disabled={unavailable || picked.length === 0 || busy}>
             {busy
               ? "Booking…"
               : picked.length > 1

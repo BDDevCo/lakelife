@@ -119,3 +119,41 @@ export function softRead<T>(what: string, res: ReadResult<T>, whenFailed: T): [T
   }
   return [res.data, false];
 }
+
+/**
+ * THE SAME RULE, FOR SERVER ACTIONS.
+ *
+ * A loader throws and the boundary catches it. An action cannot: its caller is
+ * a button awaiting `{ ok, error }`, and a rejected promise inside a transition
+ * surfaces as a blank failure with no sentence attached. So actions RETURN.
+ *
+ * Two things this message must do, both learned from what it replaces:
+ *
+ *   SAY NOTHING ABOUT THEIR ACCOUNT. The old refusals asserted facts —
+ *   "That isn't your bill", "Add your bank details first", "No lot on your
+ *   account" — precisely when the code had no fact to assert.
+ *
+ *   SAY WHETHER MONEY MOVED. It is the reader's first question and the one
+ *   thing they cannot check from where they are standing. Callers that charge
+ *   or pay pass `moved: false` to say so explicitly.
+ */
+export function readFailedMessage(
+  what: string,
+  error: unknown,
+  opts?: { money?: boolean },
+): string {
+  console.error(`[read failed] ${what}:`, error);
+  // "Nothing has been charged" was wrong half the time: these paths include
+  // REFUNDS, where the reader's question is "did my money come back", not "was
+  // I charged". Both are answered by naming the movement rather than the
+  // direction — and it stays true because every one of these returns sits
+  // BEFORE the processor call.
+  return opts?.money
+    ? "We couldn't check something just now, so no money has moved. Try again in a moment."
+    : "We couldn't load something just now, so nothing has been changed. Try again in a moment.";
+}
+
+/** True when a supabase-js result carries an error. Keeps call sites to one line. */
+export function readFailed(res: { error: unknown | null }): boolean {
+  return !!res.error;
+}

@@ -21,6 +21,7 @@ import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
 import { autoAssignJob, getServiceAvailability } from "./dispatch";
 import { ensureTos } from "@/lib/tos-server";
+import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 /** Current hour (0–23) in lake time — the rush-window clock. */
 function lakeHour(): number {
@@ -36,13 +37,16 @@ interface ServiceRow extends ServiceRule {
 
 async function loadService(serviceId: string): Promise<ServiceRow | null> {
   const supabase = await createClient();
-  const { data } = await supabase
+  // Null here means "no such bookable service", and the caller answers it with
+  // an EMPTY calendar that has no `unavailable` flag — so every square draws
+  // white and clickable. A failed read must not reach that branch.
+  const data = mustRead("this service", await supabase
     .from("services")
     .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, is_water_work, daily_capacity, frequency_options, kind, active")
     .eq("id", serviceId)
     .eq("active", true)
     .eq("kind", "standalone") // components/add-ons book only inside packages
-    .maybeSingle();
+    .maybeSingle());
   return (data as ServiceRow | null) ?? null;
 }
 
@@ -78,10 +82,19 @@ export async function getAvailability(
   year: number,
   month: number, // 0-indexed
   propertyId?: string, // defaults to the active property; used to scope by lake
-): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean; rush: RushWindow; today: string }> {
+): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean; rush: RushWindow; today: string; unavailable?: boolean }> {
   const settings = await getPlatformSettings();
   const rush: RushWindow = { nowHour: lakeHour(), cutoffHour: settings.sameDayCutoffHour, surchargePct: settings.sameDaySurchargePct };
-  const service = await loadService(serviceId);
+  let service: ServiceRow | null;
+  try {
+    service = await loadService(serviceId);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return {
+      fullDates: [], capacity: 0, findingCrew: false,
+      rush, today: todayLakeDate(), unavailable: true,
+    };
+  }
   // TODAY IN LAKE TIME, DECIDED SERVER-SIDE.
   //
   // The calendar was deriving "today" from the BROWSER clock while the confirm
@@ -94,15 +107,33 @@ export async function getAvailability(
   if (!service) return { fullDates: [], capacity: 0, findingCrew: false, rush, today };
   // Scope capacity to crews that service THIS property's lake (Phase B): a date
   // is only bookable if a crew who works this lake has an open slot.
-  const pid = propertyId ?? (await getActivePropertyId());
-  let lakeId: string | null = null;
-  if (pid) {
-    const admin = createServiceClient();
-    const { data } = await admin.from("properties").select("lake_id").eq("id", pid).maybeSingle();
-    lakeId = (data?.lake_id as string) ?? null;
+  // A FAILED READ IS NOT AN OPEN CALENDAR.
+  //
+  // getActivePropertyId (through listProperties) and getServiceAvailability
+  // both throw now, and this is a "use server" action: the calendar awaits it
+  // in an effect with no catch, so a rejection left every square drawn white
+  // and bookable. `unavailable` is the honest third answer — not "full", not
+  // "open", but "we couldn't look" — and every caller below refuses on it
+  // rather than reading the empty fullDates as a green light.
+  try {
+    const pid = propertyId ?? (await getActivePropertyId());
+    let lakeId: string | null = null;
+    if (pid) {
+      const admin = createServiceClient();
+      // lakeId scopes capacity to crews who work THIS lake. Swallowed, a failed
+      // read reads as "no lake", which counts every crew everywhere and offers
+      // days nobody serving this water can take — and can trip the cold-start
+      // "New water for us" banner on an established lake.
+      const data = mustRead("this property's lake", await admin
+        .from("properties").select("lake_id").eq("id", pid).maybeSingle());
+      lakeId = (data?.lake_id as string) ?? null;
+    }
+    const avail = await getServiceAvailability(service.name, year, month, lakeId);
+    return { ...avail, rush, today };
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { fullDates: [], capacity: 0, findingCrew: false, rush, today, unavailable: true };
   }
-  const avail = await getServiceAvailability(service.name, year, month, lakeId);
-  return { ...avail, rush, today };
 }
 
 export interface BookingResult {
@@ -271,6 +302,12 @@ export async function createBookingBatch(
   const monthFulls = await Promise.all(
     months.map((m) => getAvailability(serviceId, Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, profile.propertyId)),
   );
+  // If the calendar couldn't be read for any month this batch touches, its
+  // empty fullDates would wave every day through — including the full ones.
+  // Nothing is booked and nothing is charged, so say exactly that.
+  if (monthFulls.some((a) => a.unavailable)) {
+    return { ok: false, error: readFailedMessage("which days the crews still have open", null) };
+  }
   const fullDates = new Set(monthFulls.flatMap((a) => a.fullDates));
   const plan = planBatchDates(wanted, {
     today: todayLakeDate(),

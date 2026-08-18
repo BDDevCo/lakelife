@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
 import { listPaymentMethods } from "@/app/profile/payment-actions";
+import { mustRead } from "@/lib/must-read";
 import { getActivePropertyId } from "@/app/profile/data";
 
 export default async function BillingPage() {
@@ -53,8 +54,18 @@ export default async function BillingPage() {
   let tippedJobsQ = supabase.from("owner_jobs").select("id, service_name, property_id");
   if (activeId) tippedJobsQ = tippedJobsQ.eq("property_id", activeId);
 
-  const [cards, { data: jobs }, { data: invoices }, { data: credits }, { data: tipRows }, { data: tipJobs }] =
+  // EVERY READ HERE ANSWERS OR THROWS. This page's empty state reads "Nothing
+  // charged yet — this fills in after your first completed service", which is
+  // a calm, plausible sentence and a flat lie to somebody holding a receipt.
+  // The credit balance is worse: a swallowed error shows $0.00 of credit to a
+  // customer who has earned some, and they have no way to know it is wrong.
+  const [cards, jobsRes, invoicesRes, creditsRes, tipRowsRes, tipJobsRes] =
     await Promise.all([listPaymentMethods(), upcomingQ, invoiceQ, creditQ, tipQ, tippedJobsQ]);
+  const jobs = mustRead("your upcoming visits", jobsRes);
+  const invoices = mustRead("your billing history", invoicesRes);
+  const credits = mustRead("your credit balance", creditsRes);
+  const tipRows = mustRead("your tips", tipRowsRes);
+  const tipJobs = mustRead("the visits those tips belong to", tipJobsRes);
 
   const defaultCard = cards.find((c) => c.is_default) ?? cards[0];
   const upcoming = jobs ?? [];

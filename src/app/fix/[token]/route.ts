@@ -1,5 +1,6 @@
 import { htmlPage, escapeHtml } from "@/app/a/[token]/respond";
-import { loadSticker, fileRequestByToken, REQUEST_CATEGORIES } from "@/lib/park-request-server";
+import { loadSticker, type StickerView, fileRequestByToken, REQUEST_CATEGORIES } from "@/lib/park-request-server";
+import { ReadFailed } from "@/lib/must-read";
 
 /**
  * THE QR STICKER ON A LOT PEDESTAL — /fix/<token>.
@@ -100,7 +101,21 @@ ${warn}
 
 export async function GET(_req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
-  const view = await loadSticker(token);
+  // The loader THROWS on a failed read and a Route Handler has no error
+  // boundary. Telling somebody standing at the pedestal that their sticker
+  // needs replacing is a claim about the sticker — a failed read supports no
+  // such claim, and a bare 500 supports nothing at all.
+  let view: StickerView | null;
+  try {
+    view = await loadSticker(token);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return htmlPage(
+      "We couldn't load that just now",
+      "Nothing has been sent. Scan the sticker again in a moment — if it keeps happening, ring the office and tell them what needs looking at. 🌊",
+      false,
+    );
+  }
   if (!view) {
     return htmlPage(
       "That sticker isn't working",
@@ -137,7 +152,16 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
     // Re-render WITH WHAT THEY TYPED. This used to re-render an empty form
     // while the comment claimed otherwise — on a phone that means the report
     // is gone and most people do not type it again.
-    const view = await loadSticker(token);
+    // And the re-read itself can fail. It throws, this handler has no error
+    // boundary, and the report has already NOT been filed — so fall through to
+    // the same plain page rather than turning a failed send into a 500.
+    let view: StickerView | null;
+    try {
+      view = await loadSticker(token);
+    } catch (e) {
+      if (!(e instanceof ReadFailed)) throw e;
+      view = null;
+    }
     if (view) return page(view, token, res.error, sent);
     return htmlPage("That didn't send", res.error ?? "Please ring the office. 🌊", false);
   }

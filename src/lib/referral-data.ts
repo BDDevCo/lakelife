@@ -1,5 +1,6 @@
 import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * Referral ticker aggregates (owner request, 2026-07-23). Per-row earnings are
@@ -25,11 +26,19 @@ export async function getMyReferralTicker(): Promise<ReferralTicker | null> {
   if (!user) return null;
 
   const admin = createServiceClient();
-  const [{ data: earnings }, { data: credits }, { data: vendorRow }] = await Promise.all([
+  const [earningsRes, creditsRes, vendorRes] = await Promise.all([
     admin.from("referral_earnings").select("amount, status").eq("beneficiary", user.id).neq("status", "void"),
     admin.from("user_credits").select("amount").eq("user_id", user.id),
     admin.from("vendors").select("id").eq("user_id", user.id).maybeSingle(),
   ]);
+  // Every branch below reduces an absent row to $0.00. That is the right answer
+  // for somebody who has referred nobody and a flat lie to somebody who has —
+  // and it is their money, on a scoreboard they check.
+  const earnings = mustRead("your referral earnings", earningsRes);
+  const credits = mustRead("your credit balance", creditsRes);
+  // Not cosmetic: a crew read as a homeowner shows spendable credit instead of
+  // their matured payout.
+  const vendorRow = mustRead("your crew account", vendorRes);
 
   let earnedTotal = 0, maturing = 0, matured = 0;
   for (const e of earnings ?? []) {

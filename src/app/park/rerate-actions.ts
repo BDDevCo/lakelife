@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { applyDueRentChangesFor } from "@/lib/rent-changes";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
@@ -46,11 +47,23 @@ export async function previewReRate(
   }
 
   const admin = createServiceClient();
-  const { data: park } = await admin
+  // 30 IS A FALLBACK FOR "HE HASN'T SET ONE", not for "we couldn't look".
+  // Quoting a 30-day notice period to a park that runs 45 is how a rent change
+  // gets scheduled too early and served too late.
+  const parkRes = await admin
     .from("parks").select("rent_notice_days").eq("id", parkId).maybeSingle();
-  const noticeDays = (park?.rent_notice_days as number) ?? 30;
+  if (parkRes.error) {
+    return { ok: false, error: readFailedMessage("your notice period", parkRes.error) };
+  }
+  const noticeDays = (parkRes.data?.rent_notice_days as number) ?? 30;
 
   const targets = await loadTargets(admin, parkId, lotIds);
+  if (targets === null) {
+    return {
+      ok: false,
+      error: readFailedMessage("your roll", "see the read above", { money: true }),
+    };
+  }
   const plan = planReRate({
     targets,
     toAmount,
@@ -62,26 +75,37 @@ export async function previewReRate(
   return { ok: true, preview: { plan, noticeDays, parkId } };
 }
 
+/** NULL means the roll could not be read — not that nobody is on it. Every lot
+ *  would otherwise come back with no tenancy and no current rent, and the plan
+ *  built from that says "Nothing would change" about nineteen households. */
 async function loadTargets(
   admin: ReturnType<typeof createServiceClient>,
   parkId: string,
   lotIds: string[],
-): Promise<ReRateTarget[]> {
-  const { data: lots } = await admin
+): Promise<ReRateTarget[] | null> {
+  const lotsRes = await admin
     .from("park_lots")
     .select("id, lot_number")
     .eq("park_id", parkId);
+  if (lotsRes.error) {
+    console.error("[read failed] your lots:", lotsRes.error);
+    return null;
+  }
   const wanted = new Set(lotIds);
-  const scoped = (lots ?? []).filter((l) => wanted.size === 0 || wanted.has(l.id as string));
+  const scoped = (lotsRes.data ?? []).filter((l) => wanted.size === 0 || wanted.has(l.id as string));
   if (scoped.length === 0) return [];
 
-  const { data: stays } = await admin
+  const staysRes = await admin
     .from("lot_reservations")
     .select("id, park_lot_id, during, term, quoted_amount, status")
     .in("park_lot_id", scoped.map((l) => l.id as string))
     .in("status", ["approved", "active"]);
+  if (staysRes.error) {
+    console.error("[read failed] the tenancies on those lots:", staysRes.error);
+    return null;
+  }
 
-  const byLot = new Map((stays ?? []).map((s) => [s.park_lot_id as string, s]));
+  const byLot = new Map((staysRes.data ?? []).map((s) => [s.park_lot_id as string, s]));
 
   return scoped.map((l) => {
     const s = byLot.get(l.id as string);
@@ -253,13 +277,15 @@ export interface PendingReRate {
 export async function pendingReRates(parkId: string): Promise<PendingReRate[]> {
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
-  const { data } = await admin
+  // An empty list here means "nothing is scheduled", which on /park is read as
+  // permission to forget about it.
+  const data = mustRead("your scheduled rent changes", await admin
     .from("lot_rent_changes")
     .select("effective_on, to_amount, from_amount, notice_given_on, notice_days_required")
     .eq("park_id", parkId)
     .is("applied_at", null)
     .is("cancelled_at", null)
-    .order("effective_on");
+    .order("effective_on"));
 
   const byDate = new Map<string, PendingReRate>();
   for (const c of data ?? []) {

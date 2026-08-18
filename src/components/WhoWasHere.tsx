@@ -38,12 +38,21 @@ export function WhoWasHere({ jobId }: { jobId: string }) {
     setOpen(true);
     if (loaded) return;
     start(async () => {
-      const view = await getWhoWasHere(jobId);
-      setRoster(view.roster);
-      // Already recorded wins over the suggestion — a crew that has answered
-      // must never have their answer quietly replaced by a guess.
-      setPicked(new Set(view.selected.length > 0 ? view.selected : view.suggested));
-      setLoaded(true);
+      try {
+        const view = await getWhoWasHere(jobId);
+        setRoster(view.roster);
+        // Already recorded wins over the suggestion — a crew that has answered
+        // must never have their answer quietly replaced by a guess.
+        setPicked(new Set(view.selected.length > 0 ? view.selected : view.suggested));
+        setLoaded(true);
+      } catch {
+        // The loader THROWS on a failed read instead of returning an empty
+        // view, because an empty view renders "No names on your crew list yet"
+        // to a crew who has one. Close the picker so the button comes back to
+        // tap again, and say what actually happened.
+        setOpen(false);
+        toast("Couldn't load your crew list just now — try again in a moment.");
+      }
     });
   }
 

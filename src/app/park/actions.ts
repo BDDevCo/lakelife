@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { toDaterange, parseDaterange, type Lot, effectiveSeason } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
@@ -35,12 +36,18 @@ export interface ParkResult {
 
 const DENIED = "You don't manage that park.";
 
-/** Resolve the park that owns a lot, then assert membership. */
+/** Resolve the park that owns a lot, then assert membership.
+ *
+ *  A failed read comes back null and every caller turns that into "You don't
+ *  manage that park." — a refusal that names his own lot as somebody else's.
+ *  It is at least logged now; the sentence is still wrong, and fixing it means
+ *  giving these two guards a third answer (see the note on `assertMyPark`). */
 async function assertLotIsMine(lotId: string): Promise<string | null> {
   const admin = createServiceClient();
-  const { data } = await admin
+  const res = await admin
     .from("park_lots").select("park_id").eq("id", lotId).maybeSingle();
-  const parkId = (data?.park_id as string) ?? null;
+  if (res.error) console.error("[read failed] which park that lot is on:", res.error);
+  const parkId = (res.data?.park_id as string) ?? null;
   if (!parkId) return null;
   return (await assertMyPark(parkId)) ? parkId : null;
 }
@@ -50,11 +57,13 @@ async function assertReservationIsMine(
   reservationId: string,
 ): Promise<{ parkId: string; lotId: string } | null> {
   const admin = createServiceClient();
-  const { data } = await admin
+  const res = await admin
     .from("lot_reservations")
     .select("park_lot_id, park_lots(park_id)")
     .eq("id", reservationId)
     .maybeSingle();
+  if (res.error) console.error("[read failed] which park that tenancy is on:", res.error);
+  const data = res.data;
   if (!data) return null;
   const lotId = data.park_lot_id as string;
   const parkId = (data.park_lots as unknown as { park_id: string } | null)?.park_id ?? null;
@@ -91,23 +100,26 @@ export async function getParkDials(parkId: string): Promise<{
   if (!(await assertMyPark(parkId))) return null;
   const admin = createServiceClient();
 
-  const { data: p } = await admin
+  // EVERY FIELD ON THIS FORM IS A DIAL HE THEN SAVES BACK. A failed read
+  // renders them all blank, and blank on this form means "no cap, no deposit,
+  // no cutover" — one tap from wiping the rules the whole ledger runs on.
+  const p = mustRead("your park's settings", await admin
     .from("parks")
     .select("max_agreement_months, deposit_amount, rent_due_day, office_recording_lag_days, rent_notice_days, cutover_date")
     .eq("id", parkId)
-    .maybeSingle();
+    .maybeSingle());
 
-  const { data: lots } = await admin
-    .from("park_lots").select("id").eq("park_id", parkId);
+  const lots = mustRead("your lots", await admin
+    .from("park_lots").select("id").eq("park_id", parkId));
   const lotIds = (lots ?? []).map((l) => l.id as string);
 
   let longestStayDays: number | null = null;
   if (lotIds.length) {
-    const { data: stays } = await admin
+    const stays = mustRead("your longest tenancy", await admin
       .from("lot_reservations")
       .select("during")
       .in("park_lot_id", lotIds)
-      .in("status", ["approved", "active"]);
+      .in("status", ["approved", "active"]));
     for (const s of stays ?? []) {
       const r = parseDaterange(s.during as string);
       if (!r) continue;
@@ -184,16 +196,26 @@ export async function setParkLive(parkId: string, active: boolean): Promise<Park
   if (active) {
     // Refuse to publish an empty park. A public page with no lots is a dead
     // link that costs the owner a first impression they only get once.
-    const { count } = await admin
+    const countRes = await admin
       .from("park_lots")
       .select("id", { count: "exact", head: true })
       .eq("park_id", parkId)
       .eq("active", true);
-    if (!count) {
+    // A failed count is null, and `!null` is true — so this refusal used to
+    // fire hardest for the park that HAS lots, telling him to go and add the
+    // twenty-one he is looking at.
+    if (countRes.error) {
+      return { ok: false, error: readFailedMessage("your lots", countRes.error) };
+    }
+    if (!countRes.count) {
       return { ok: false, error: "Add at least one lot before you publish the park." };
     }
-    const { data: park } = await admin
+    const parkRes = await admin
       .from("parks").select("slug, name, lake_id, lat, lng").eq("id", parkId).maybeSingle();
+    if (parkRes.error) {
+      return { ok: false, error: readFailedMessage("your park", parkRes.error) };
+    }
+    const park = parkRes.data;
 
     // A PARK THE CREWS CANNOT BE SENT TO. `lake_id`, `lat` and `lng` had no
     // writer anywhere until parks could be created properly, so a park could
@@ -221,9 +243,14 @@ export async function setParkLive(parkId: string, active: boolean): Promise<Park
   // THE PARK'S OWN PUBLIC PAGE, by slug. `revalidatePath("/parks")` pointed at
   // a route that doesn't exist — there is no index page, only /parks/[slug] —
   // so publishing left the cached public page exactly as it was.
-  const { data: published } = await admin
+  // The park HAS been published by this point, so a failed read here must not
+  // become a refusal — it only costs a cache revalidation. Logged, not silent.
+  const publishedRes = await admin
     .from("parks").select("slug").eq("id", parkId).maybeSingle();
-  if (published?.slug) revalidatePath(`/parks/${published.slug}`);
+  if (publishedRes.error) {
+    console.error("[read failed, degraded] your park's web address:", publishedRes.error);
+  }
+  if (publishedRes.data?.slug) revalidatePath(`/parks/${publishedRes.data.slug}`);
   return {
     ok: true,
     signal: active ? "Your park is live. 🌊" : "Park unpublished — only you can see it now.",
@@ -299,9 +326,14 @@ export async function generateLots(
 
   // Read what is already there so collisions become a "skipped" line in the
   // confirmation rather than a unique-violation the owner cannot interpret.
-  const { data: existing } = await admin
+  // Which is exactly what a FAILED read produces: no known lot numbers, every
+  // label looks new, and the insert hits the unique index instead.
+  const existingRes = await admin
     .from("park_lots").select("lot_number").eq("park_id", parkId);
-  const have = (existing ?? []).map((r) => r.lot_number as string);
+  if (existingRes.error) {
+    return { ok: false, error: readFailedMessage("the lots you already have", existingRes.error) };
+  }
+  const have = (existingRes.data ?? []).map((r) => r.lot_number as string);
 
   const built = buildLotRange(input, have);
   if (!built.ok || !built.rows) return { ok: false, error: built.error };
@@ -388,20 +420,33 @@ export async function setRatesForLots(
 
   const admin = createServiceClient();
 
-  const { data: lotRows } = await admin
+  const lotsRes = await admin
     .from("park_lots").select("id, site_type, tier").eq("park_id", parkId);
-  const lots = lotRows ?? [];
+  if (lotsRes.error) {
+    return { ok: false, error: readFailedMessage("your lots", lotsRes.error) };
+  }
+  const lots = lotsRes.data ?? [];
   if (lots.length === 0) return { ok: false, error: "Add some lots first." };
 
-  const { data: rateRows } = await admin
+  // FAILS OPEN, AND THE DAMAGE IS THE UNRECOVERABLE KIND.
+  //
+  // This read is the ONLY thing that makes "fills by default, never
+  // overwrites" true. A dropped read leaves `priced` empty, so every lot he
+  // tuned by hand reads as unpriced, and the upsert below writes the bulk
+  // number over all of them. There is no undo on a rate card and no error on
+  // screen — the first sign is a renter being quoted the wrong rent.
+  const ratesRes = await admin
     .from("lot_rates").select("park_lot_id, amount")
     .in("park_lot_id", lots.map((l) => l.id as string));
+  if (ratesRes.error) {
+    return { ok: false, error: readFailedMessage("the rates already on your lots", ratesRes.error) };
+  }
 
   // Only a PRICED rate counts as "already set" — a stored 0 is our own
   // representation of "not for sale", and treating it as priced would make
   // those lots permanently unreachable by the bulk tool.
   const priced = new Map<string, number>();
-  for (const r of rateRows ?? []) {
+  for (const r of ratesRes.data ?? []) {
     if (Number(r.amount) > 0) {
       priced.set(r.park_lot_id as string, (priced.get(r.park_lot_id as string) ?? 0) + 1);
     }
@@ -468,9 +513,15 @@ export async function addTenant(
   // silent 365-day range collides with 0062's cap trigger and every add fails
   // on a database error the moment the owner turns his rule on.
   const capAdmin = createServiceClient();
-  const { data: capRow } = await capAdmin
+  const capRes = await capAdmin
     .from("parks").select("max_agreement_months").eq("id", parkId).maybeSingle();
-  const cap = (capRow?.max_agreement_months as number | null) ?? null;
+  // Null means "he has no cap". A failed read means we don't know his, and
+  // writing the silent 365-day range against a park that HAS one is the
+  // database error this paragraph exists to prevent.
+  if (capRes.error) {
+    return { ok: false, error: readFailedMessage("your park's agreement cap", capRes.error) };
+  }
+  const cap = (capRes.data?.max_agreement_months as number | null) ?? null;
 
   const built = buildTenant(input, todayLakeDate(), cap);
   if (!built.ok || !built.renter || !built.tenancy) {
@@ -550,11 +601,15 @@ export async function decideApplication(
 
   const admin = createServiceClient();
 
-  const { data: appRow } = await admin
+  const appRes = await admin
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
     .eq("id", reservationId)
     .maybeSingle();
+  if (appRes.error) {
+    return { ok: false, error: readFailedMessage("that application", appRes.error) };
+  }
+  const appRow = appRes.data;
   if (!appRow) return { ok: false, error: "That application is gone." };
 
   const application = toStay(appRow as unknown as RawReservation);
@@ -580,25 +635,42 @@ export async function decideApplication(
 
   // Approving: re-read the lot and its other stays so the check is against the
   // CURRENT state, not what the page rendered a few minutes ago.
-  const { data: lotRow } = await admin
+  const lotRes = await admin
     .from("park_lots")
     .select("id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, lifecycle, park_id, season_open_month, season_open_day, season_close_month, season_close_day")
     .eq("id", scope.lotId)
     .maybeSingle();
+  if (lotRes.error) {
+    return { ok: false, error: readFailedMessage("that lot", lotRes.error) };
+  }
+  const lotRow = lotRes.data;
   if (!lotRow) return { ok: false, error: "That lot is gone." };
 
-  const { data: others } = await admin
+  // THE CLASH CHECK, AND IT FAILS OPEN. An empty list of other stays means
+  // `canApprove` sees a free lot, so a dropped read approves straight over
+  // somebody else's dates — the exclusion constraint catches the overlap, but
+  // only for the nights that actually overlap.
+  const othersRes = await admin
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
     .eq("park_lot_id", scope.lotId);
+  if (othersRes.error) {
+    return { ok: false, error: readFailedMessage("the other stays on that lot", othersRes.error) };
+  }
+  const others = othersRes.data;
 
   // The lot's own window, else the park's. Without this a boat slip approves
-  // happily for a week in January.
-  const { data: parkRow } = await admin
+  // happily for a week in January — and so does a failed read, which is that
+  // same sentence with no constraint behind it.
+  const parkSeasonRes = await admin
     .from("parks")
     .select("season_open_month, season_open_day, season_close_month, season_close_day")
     .eq("id", lotRow.park_id as string)
     .maybeSingle();
+  if (parkSeasonRes.error) {
+    return { ok: false, error: readFailedMessage("your park's season", parkSeasonRes.error) };
+  }
+  const parkRow = parkSeasonRes.data;
 
   const season = effectiveSeason(
     {
@@ -670,11 +742,15 @@ export async function endTenancy(
   if (!(await assertReservationIsMine(reservationId))) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
-  const { data: stay } = await admin
+  const stayRes = await admin
     .from("lot_reservations")
     .select("id, during, status")
     .eq("id", reservationId)
     .maybeSingle();
+  if (stayRes.error) {
+    return { ok: false, error: readFailedMessage("that tenancy", stayRes.error, { money: true }) };
+  }
+  const stay = stayRes.data;
   if (!stay) return { ok: false, error: "That tenancy isn't there any more." };
   if (stay.status !== "approved" && stay.status !== "active") {
     return { ok: false, error: "That one is already closed." };
@@ -806,11 +882,18 @@ export async function editTenancy(
   if (!scope) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
-  const { data: res } = await admin
+  // The rent that comes back here is what the edit is DIFFED against, so a
+  // failed read would look like a tenancy with no rent on it and quietly
+  // change the meaning of what he typed.
+  const resRow = await admin
     .from("lot_reservations")
     .select("id, renter_id, quoted_amount, due_day, status")
     .eq("id", reservationId)
     .maybeSingle();
+  if (resRow.error) {
+    return { ok: false, error: readFailedMessage("that tenancy", resRow.error, { money: true }) };
+  }
+  const res = resRow.data;
   if (!res) return { ok: false, error: "That tenancy is gone." };
 
   const built = buildTenantEdit(
@@ -912,8 +995,12 @@ export async function setLotLifecycle(
   }
 
   const admin = createServiceClient();
-  const { data: lot } = await admin
+  const lotRes = await admin
     .from("park_lots").select("lot_number, lifecycle").eq("id", lotId).maybeSingle();
+  if (lotRes.error) {
+    return { ok: false, error: readFailedMessage("that lot", lotRes.error) };
+  }
+  const lot = lotRes.data;
   if (!lot) return { ok: false, error: "That lot isn't here." };
 
   // TAKING A LOT OUT FROM UNDER SOMEBODY IS NOT A STATUS CHANGE. A lot with a
@@ -922,12 +1009,19 @@ export async function setLotLifecycle(
   // billable but invisible to every screen that filters on 'live'.
   if (lifecycle !== "live") {
     const today = todayLakeDate();
-    const { data: stays } = await admin
+    const staysRes = await admin
       .from("lot_reservations")
       .select("during, status")
       .eq("park_lot_id", lotId)
       .in("status", ["approved", "active"]);
-    const held = (stays ?? []).some((s) => {
+    // FAILS OPEN. `stays ?? []` on a dropped read means `held` is false and
+    // this guard simply does not run — the lot goes to 'retired' with somebody
+    // living on it, which is the exact state the paragraph above says must
+    // never happen: billable, and off every screen that filters on 'live'.
+    if (staysRes.error) {
+      return { ok: false, error: readFailedMessage("who is on that lot", staysRes.error) };
+    }
+    const held = (staysRes.data ?? []).some((s) => {
       const r = parseDaterange(s.during as string);
       return r != null && today < r.end;
     });
@@ -1006,10 +1100,15 @@ export async function addLots(
   const admin = createServiceClient();
 
   // Never renumber or overwrite an existing pad. A lot number is what a
-  // resident, a crew and a utility all use to find the place.
-  const { data: have } = await admin
+  // resident, a crew and a utility all use to find the place — and a failed
+  // read here says he has no pads at all, which turns "skipped" into a
+  // unique-violation on every label.
+  const haveRes = await admin
     .from("park_lots").select("lot_number").eq("park_id", parkId);
-  const existing = new Set((have ?? []).map((l) => String(l.lot_number).toLowerCase()));
+  if (haveRes.error) {
+    return { ok: false, error: readFailedMessage("the lots you already have", haveRes.error) };
+  }
+  const existing = new Set((haveRes.data ?? []).map((l) => String(l.lot_number).toLowerCase()));
   const fresh = labels.filter((l) => !existing.has(l.toLowerCase()));
   const skipped = labels.filter((l) => existing.has(l.toLowerCase()));
   if (fresh.length === 0) {
@@ -1075,11 +1174,14 @@ export async function getOnlineRent(parkId: string): Promise<{
   if (!membership) return null;
 
   const admin = createServiceClient();
-  const { data: park } = await admin
+  // `accepts_online_rent` and the card fee are read back onto a form he saves.
+  // A failed read shows the switch off and the fee blank for a park that takes
+  // card rent at 3%.
+  const park = mustRead("how you take rent", await admin
     .from("parks")
     .select("accepts_online_rent, card_fee_pct")
     .eq("id", parkId)
-    .maybeSingle();
+    .maybeSingle());
   if (!park) return null;
 
   // WHO COULD ACTUALLY USE IT — not how many tenancies exist.
@@ -1089,22 +1191,23 @@ export async function getOnlineRent(parkId: string): Promise<{
   // /parks/my for a file with one. Every tenancy the office keys in is created
   // UNCLAIMED, so counting tenancies told The Haven's owner "19 households can
   // use it" when the true answer was none of them.
-  const { data: lots } = await admin.from("park_lots").select("id").eq("park_id", parkId);
+  const lots = mustRead("your lots", await admin
+    .from("park_lots").select("id").eq("park_id", parkId));
   const lotIds = (lots ?? []).map((l) => l.id as string);
   let households = 0;
   let unclaimed = 0;
   if (lotIds.length) {
-    const { data: stays } = await admin
+    const stays = mustRead("your roll", await admin
       .from("lot_reservations")
       .select("renter_id")
       .in("park_lot_id", lotIds)
-      .in("status", ["approved", "active"]);
+      .in("status", ["approved", "active"]));
     const renterIds = [...new Set((stays ?? []).map((r) => r.renter_id as string).filter(Boolean))];
     if (renterIds.length) {
-      const { data: files } = await admin
+      const files = mustRead("who has claimed their portal account", await admin
         .from("park_renters")
         .select("id, user_id")
-        .in("id", renterIds);
+        .in("id", renterIds));
       households = (files ?? []).filter((f) => f.user_id != null).length;
       unclaimed = (files ?? []).length - households;
     }

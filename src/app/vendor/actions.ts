@@ -1,6 +1,7 @@
 "use server";
 
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { getMyVendorId } from "./data";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
@@ -37,29 +38,45 @@ export interface ActionResult {
   photoCount?: number;
 }
 
-/** Confirm the job is assigned to the signed-in vendor. Returns the job row or null. */
+/**
+ * Confirm the job is assigned to the signed-in vendor. Returns the job row or null.
+ *
+ * `null` means ONE thing: this job is not yours. A failed read THROWS instead —
+ * every caller below turns that into a sentence, because "That job isn't on your
+ * route" said to a crew standing on the property is a lie, not a refusal.
+ */
 async function assertVendorJob(jobId: string) {
   const vendorId = await getMyVendorId();
   if (!vendorId) return null;
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("jobs")
-    // Deliberately NO customer_price / vendor_cost: this is the crew code path,
-    // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
-    // those columns out of reach by construction (settleJob re-loads them ops-side).
-    .select("id, status, vendor_id, service_id, date, property_id, group_id, held_at, no_show_at, stood_down_at, services(name, min_photos, needs_interior_access)")
-    .eq("id", jobId)
-    .maybeSingle();
+  const data = mustRead(
+    "your job",
+    await admin
+      .from("jobs")
+      // Deliberately NO customer_price / vendor_cost: this is the crew code path,
+      // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
+      // those columns out of reach by construction (settleJob re-loads them ops-side).
+      .select("id, status, vendor_id, service_id, date, property_id, group_id, held_at, no_show_at, stood_down_at, services(name, min_photos, needs_interior_access)")
+      .eq("id", jobId)
+      .maybeSingle(),
+  );
   if (!data || data.vendor_id !== vendorId) return null;
   return data;
 }
+
+type VendorJob = Awaited<ReturnType<typeof assertVendorJob>>;
 
 /**
  * Upload one job photo. The crew's device sends the image in a FormData; the
  * file goes to a PRIVATE storage bucket and only a row (job_id + path) is kept.
  */
 export async function uploadJobPhoto(jobId: string, form: FormData): Promise<ActionResult> {
-  const job = await assertVendorJob(jobId);
+  let job: VendorJob;
+  try {
+    job = await assertVendorJob(jobId);
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("your job", e) };
+  }
   if (!job) return { ok: false, error: "That job isn't on your route." };
 
   const file = form.get("photo");
@@ -86,11 +103,19 @@ export async function uploadJobPhoto(jobId: string, form: FormData): Promise<Act
   // Best-effort, only if not already set.
   await admin.from("jobs").update({ started_at: new Date().toISOString() }).eq("id", jobId).is("started_at", null);
 
-  const { count } = await admin
+  const countRes = await admin
     .from("job_photos")
     .select("id", { count: "exact", head: true })
     .eq("job_id", jobId);
-  return { ok: true, photoCount: count ?? 0 };
+  // The photo IS uploaded, so this cannot fail the action. But `count ?? 0` sent
+  // back a zero the card would have displayed — the counter jumping backwards
+  // right after a successful upload. Omitting photoCount instead makes the card
+  // fall back to its own +1, which is the one thing we do know for certain.
+  if (countRes.error) {
+    console.error("[read failed] the photo count after upload:", countRes.error);
+    return { ok: true };
+  }
+  return { ok: true, photoCount: countRes.count ?? 0 };
 }
 
 /**
@@ -100,7 +125,12 @@ export async function uploadJobPhoto(jobId: string, form: FormData): Promise<Act
  * released (photo-verified), and the owner gets the "done + photos" text.
  */
 export async function completeJob(jobId: string): Promise<ActionResult> {
-  const job = await assertVendorJob(jobId);
+  let job: VendorJob;
+  try {
+    job = await assertVendorJob(jobId);
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("your job", e, { money: true }) };
+  }
   if (!job) return { ok: false, error: "That job isn't on your route." };
   if (job.status === "complete" || job.status === "paid") {
     return { ok: false, error: "That job is already complete." };
@@ -133,8 +163,16 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   // condition photos ARE the custody baseline that settles spring disputes.
   const groupId = (job as { group_id?: string | null }).group_id ?? null;
   if (groupId) {
-    const { data: legs } = await admin
+    const legsRes = await admin
       .from("job_items").select("services(min_photos)").eq("job_id", jobId);
+    // THE GATE GETS WEAKER, NOT LOUDER, IF THIS IS ALLOWED TO FAIL QUIETLY.
+    // An unread leg list leaves minPhotos at the ANCHOR service's minimum, so a
+    // six-photo custody baseline becomes a two-photo one and the payout releases
+    // against it. Rule 2 is not something to infer from a dropped connection.
+    if (legsRes.error) {
+      return { ok: false, error: readFailedMessage("this visit's photo requirement", legsRes.error, { money: true }) };
+    }
+    const legs = legsRes.data;
     if (legs && legs.length > 0) {
       minPhotos = legs.reduce((sum, l) => {
         const ls = (Array.isArray(l.services) ? l.services[0] : l.services) as { min_photos?: number } | null;
@@ -142,11 +180,18 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
       }, 0);
     }
   }
-  const { count } = await admin
+  const countRes = await admin
     .from("job_photos")
     .select("id", { count: "exact", head: true })
     .eq("job_id", jobId);
-  const photoCount = count ?? 0;
+  // `count ?? 0` cut both ways here. On a service whose minimum is 0 a failed
+  // read PASSED the gate; on every other service it refused with "0/6 uploaded"
+  // to a crew looking at six photos on their own screen — and the counter in
+  // that sentence would never move however many more they took.
+  if (countRes.error) {
+    return { ok: false, error: readFailedMessage("the photos on this job", countRes.error, { money: true }) };
+  }
+  const photoCount = countRes.count ?? 0;
   if (photoCount < minPhotos) {
     return {
       ok: false,
@@ -190,11 +235,16 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   // carrying the one-tap quality check: the CUSTOMER is the auditor (Phase E
   // design). 👍 builds the crew's trust record; 👎 pings the crew to make it
   // right — never an ops queue.
-  const { data: prop } = await admin
+  const propRes = await admin
     .from("properties")
     .select("address, users(id, phone)")
     .eq("id", job.property_id)
     .maybeSingle();
+  // Swallowed on purpose — the job is complete and the payout has settled; a
+  // missing "we're done" text must not undo that. Logged, because "no phone on
+  // file" and "we couldn't look" send exactly the same number of texts.
+  if (propRes.error) console.error("[read failed] who to tell the job is done:", propRes.error);
+  const prop = propRes.data;
   const ownerUser = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as
     { id?: string; phone?: string } | null;
   const ownerPhone = ownerUser?.phone;
@@ -249,7 +299,12 @@ export async function submitFlag(
    */
   scope?: { canProceed: boolean; cannotReason?: string },
 ): Promise<ActionResult> {
-  const job = await assertVendorJob(jobId);
+  let job: VendorJob;
+  try {
+    job = await assertVendorJob(jobId);
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("your job", e) };
+  }
   if (!job) return { ok: false, error: "That job isn't on your route." };
   if (job.status === "complete" || job.status === "paid") {
     return { ok: false, error: "That job is already closed out." };
@@ -323,11 +378,16 @@ export async function submitFlag(
       { name?: string } | null;
     const svcName = svc?.name ?? "your service";
 
-    const { data: prop } = await admin
+    const propRes = await admin
       .from("properties")
       .select("address, nickname, users(id, name, email, phone)")
       .eq("id", job.property_id as string)
       .maybeSingle();
+    // Swallowed on purpose (the flag is already filed and the hold is on), but
+    // never silently: an unread owner is an owner who is never asked, and the
+    // crew has already been told "the owner sees it in Approvals".
+    if (propRes.error) console.error("[read failed] who to ask about this flag:", propRes.error);
+    const prop = propRes.data;
     const owner = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as
       { id?: string; name?: string; email?: string; phone?: string } | null;
     const where = (prop?.nickname as string) || (prop?.address as string) || "your place";
@@ -345,7 +405,7 @@ export async function submitFlag(
     let detail = "";
     if (atArrival && proposed) {
       try {
-        const [{ data: rule }, profile] = await Promise.all([
+        const [ruleRes, profile] = await Promise.all([
           admin.from("services")
             .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, needs_interior_access")
             .eq("id", job.service_id as string).maybeSingle(),
@@ -354,6 +414,11 @@ export async function submitFlag(
           // no log — and every owner got the generic message with no numbers.
           getFullProfile(job.property_id as string, { asService: true }),
         ]);
+        // Same failure mode the asService comment below describes, one layer
+        // down: an unread rule drops the numbers out of the owner's message and
+        // they get the generic "found something" text with nothing to decide on.
+        if (ruleRes.error) console.error("[read failed] the pricing rule for this correction:", ruleRes.error);
+        const rule = ruleRes.data;
         if (rule && profile?.hasProfile) {
           const summary = summariseCorrection(
             rule as unknown as TimedRule,
@@ -415,7 +480,12 @@ export async function submitFlag(
  * easiest way to end a hot afternoon early.
  */
 export async function recordNoShow(jobId: string, reason: string): Promise<ActionResult> {
-  const job = await assertVendorJob(jobId);
+  let job: VendorJob;
+  try {
+    job = await assertVendorJob(jobId);
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("your job", e) };
+  }
   if (!job) return { ok: false, error: "That job isn't on your route." };
   if (job.status === "complete" || job.status === "paid") {
     return { ok: false, error: "That job is already closed out." };
@@ -437,9 +507,20 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
   }
 
   const admin = createServiceClient();
-  const { data: rule } = await admin
+  const ruleRes = await admin
     .from("services").select("name, needs_interior_access")
     .eq("id", job.service_id as string).maybeSingle();
+  // THE GUARD BELOW IS GUARDED BY `rule &&`, SO A FAILED READ SKIPPED IT.
+  //
+  // That is the whole check — the one that refuses to call it a no-show when
+  // the work never needed anybody to open a door. Silently switched off, a
+  // dropped connection would write the attempt row, mint the trip payout, and
+  // send the homeowner "we couldn't get in" about a pier the crew could have
+  // pulled without knocking. It has to be read, not assumed.
+  if (ruleRes.error) {
+    return { ok: false, error: readFailedMessage("what this service needs", ruleRes.error) };
+  }
+  const rule = ruleRes.data;
 
   if (rule && noAnswerOutcome(rule as { needs_interior_access?: boolean | null }) === "proceed_as_booked") {
     return {
@@ -484,9 +565,14 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
   // by a crew tapping a button on a doorstep.
   try {
     const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
-    const { data: prop } = await admin
+    const propRes = await admin
       .from("properties").select("address, nickname, users(id, name, email, phone)")
       .eq("id", job.property_id as string).maybeSingle();
+    // Swallowed on purpose — the no-show is recorded and must stay recorded —
+    // but an owner who is never emailed can't take the reschedule window they
+    // are being timed against, so the failure has to exist somewhere.
+    if (propRes.error) console.error("[read failed] who to tell we couldn't get in:", propRes.error);
+    const prop = propRes.data;
     const owner = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as
       { id?: string; name?: string; email?: string; phone?: string } | null;
     const where = (prop?.nickname as string) || (prop?.address as string) || "your place";
@@ -518,12 +604,27 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
 
 /** Signed URLs for a job's photos (used to show thumbnails to the crew/owner). */
 export async function getJobPhotoUrls(jobId: string): Promise<string[]> {
-  const job = await assertVendorJob(jobId);
+  // A `string[]` has nowhere to put a sentence, and the caller awaits this
+  // inline while an upload spinner is running — a throw here would leave the
+  // card stuck mid-upload. So this one stays swallowed, and stays logged: the
+  // thumbnails are a mirror of the photo count, which has its own honest path.
+  let job: VendorJob;
+  try {
+    job = await assertVendorJob(jobId);
+  } catch (e) {
+    console.error("[read failed] the job behind these thumbnails:", e);
+    return [];
+  }
   if (!job) return [];
   const admin = createServiceClient();
-  const { data: rows } = await admin.from("job_photos").select("url").eq("job_id", jobId);
+  const rowsRes = await admin.from("job_photos").select("url").eq("job_id", jobId);
+  if (rowsRes.error) console.error("[read failed] this job's photo thumbnails:", rowsRes.error);
+  const rows = rowsRes.data;
   const paths = (rows ?? []).map((r) => r.url as string);
   if (paths.length === 0) return [];
-  const { data: signed } = await admin.storage.from("job-photos").createSignedUrls(paths, 3600);
-  return (signed ?? []).map((s) => s.signedUrl).filter(Boolean) as string[];
+  const signedRes = await admin.storage.from("job-photos").createSignedUrls(paths, 3600);
+  // Same swallow, same reason — but photos that exist and won't sign is a
+  // different problem from photos that were never taken, so say which.
+  if (signedRes.error) console.error("[read failed] signing this job's photos:", signedRes.error);
+  return (signedRes.data ?? []).map((s) => s.signedUrl).filter(Boolean) as string[];
 }

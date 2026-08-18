@@ -3,6 +3,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
+import { mustRead } from "@/lib/must-read";
 import {
   monthPeriod, quarterPeriod, yearPeriod, customPeriod,
   summariseReceipts, exclusionLines,
@@ -68,11 +69,19 @@ export async function getStatement(
   if (!period) return null;
 
   const admin = createServiceClient();
-  const { data: park } = await admin
-    .from("parks")
-    .select("name, office_recording_lag_days")
-    .eq("id", parkId)
-    .maybeSingle();
+  // EVERY READ BELOW EITHER ANSWERS OR THROWS. This page becomes a file that
+  // is forwarded to an accountant and then filed, and every empty case here
+  // reads as a fact about the year: "This park", no receipts, nothing
+  // excluded, $0 collected. A cash statement that is quietly short is worse
+  // than no statement, because nobody goes looking for the missing part.
+  const park = mustRead(
+    "your park",
+    await admin
+      .from("parks")
+      .select("name, office_recording_lag_days")
+      .eq("id", parkId)
+      .maybeSingle(),
+  );
   const parkName = (park?.name as string) ?? "This park";
   const lagDays = (park?.office_recording_lag_days as number) ?? 0;
 
@@ -86,14 +95,17 @@ export async function getStatement(
   //
   // (The old comment here said park_payments has no park_id of its own. It has
   // one now, which is why the query below can exist at all.)
-  const { data: offBook } = await admin
-    .from("park_payments")
-    .select("amount, kind, charge_id")
-    .eq("park_id", parkId)
-    .is("charge_id", null)
-    .is("reversed_at", null)
-    .gte("received_on", period.from)
-    .lte("received_on", period.to);
+  const offBook = mustRead(
+    "the deposits and money on account",
+    await admin
+      .from("park_payments")
+      .select("amount, kind, charge_id")
+      .eq("park_id", parkId)
+      .is("charge_id", null)
+      .is("reversed_at", null)
+      .gte("received_on", period.from)
+      .lte("received_on", period.to),
+  );
   const depositsReceivedCents = Math.round(
     (offBook ?? []).filter((p) => p.kind === "deposit")
       .reduce((s2, p) => s2 + Number(p.amount ?? 0), 0) * 100,
@@ -112,10 +124,16 @@ export async function getStatement(
       .reduce((s2, p) => s2 + Number(p.amount ?? 0), 0) * 100,
   );
 
-  const { data: charges } = await admin
-    .from("park_charges")
-    .select("id, park_lot_id, renter_id, period_month, due_on, amount, status, lines")
-    .eq("park_id", parkId);
+  // The branch below turns an empty result into a complete, plausible,
+  // ZERO statement. It must only ever be reachable by a park that has genuinely
+  // never billed anybody.
+  const charges = mustRead(
+    "the bills you've raised",
+    await admin
+      .from("park_charges")
+      .select("id, park_lot_id, renter_id, period_month, due_on, amount, status, lines")
+      .eq("park_id", parkId),
+  );
 
   const chargeIds = (charges ?? []).map((c) => c.id as string);
   if (chargeIds.length === 0) {
@@ -131,7 +149,7 @@ export async function getStatement(
     };
   }
 
-  const [{ data: payments }, { data: lots }, { data: renters }, { data: fees }] = await Promise.all([
+  const [paymentsRes, lotsRes, rentersRes, feesRes] = await Promise.all([
     admin
       .from("park_payments")
       .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason")
@@ -140,6 +158,13 @@ export async function getStatement(
     admin.from("park_renters").select("id, display_name").eq("park_id", parkId),
     admin.from("park_fees").select("label, active").eq("park_id", parkId).eq("active", true),
   ]);
+  // The first of these IS the statement. The other three are its labels, and a
+  // statement full of lot "?" with no payer names is one nobody can tie to a
+  // bank line — so none of them is allowed to fail quietly either.
+  const payments = mustRead("the money received", paymentsRes);
+  const lots = mustRead("your lots", lotsRes);
+  const renters = mustRead("the households", rentersRes);
+  const fees = mustRead("your park's fees", feesRes);
 
   const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
   const lotName = new Map((lots ?? []).map((l) => [l.id as string, l.lot_number as string]));

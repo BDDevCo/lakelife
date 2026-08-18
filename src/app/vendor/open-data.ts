@@ -8,6 +8,7 @@ import { isCoolingDown } from "@/lib/lake-standing";
 import { fillInRate, rushWindowOpen } from "@/lib/rush";
 import { loadPricingProfileById } from "@/app/book/dispatch";
 import { getPlatformSettings } from "@/lib/settings";
+import { mustRead } from "@/lib/must-read";
 import type { MyVendor } from "./data";
 
 /**
@@ -54,14 +55,22 @@ export async function loadGapAnchor(
   // window, so no amount of rapid rate-editing (spam rows are newest) can
   // flush it out of the sample and raise the anchor. It only ages out at the
   // designed 90-day decay. 500 edits/90d is far beyond honest use.
-  const { data: hist } = await admin
-    .from("vendor_rate_history")
-    .select("base, unit_rate, band_pricing")
-    .eq("vendor_id", vendorId)
-    .eq("service_id", serviceId)
-    .gte("changed_at", since)
-    .order("changed_at", { ascending: true })
-    .limit(500);
+  //
+  // A FAILED READ RAISES THE OFFER. With no history the anchor collapses to
+  // today's card, which is exactly the number a hike-and-harvest play wants it
+  // to be — the anti-harvest control would be switched off by a dropped
+  // connection, and nothing on the board would look wrong. So it throws.
+  const hist = mustRead(
+    "your rate history",
+    await admin
+      .from("vendor_rate_history")
+      .select("base, unit_rate, band_pricing")
+      .eq("vendor_id", vendorId)
+      .eq("service_id", serviceId)
+      .gte("changed_at", since)
+      .order("changed_at", { ascending: true })
+      .limit(500),
+  );
   let low = currentPriced != null && currentPriced > 0 ? currentPriced : null;
   for (const h of hist ?? []) {
     const priced = priceService({
@@ -95,12 +104,19 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   // at rows 31-34 behind thirty mow jobs saw "No open jobs right now" — while
   // the nightly text was actively pointing them at the board, and the work went
   // unclaimed. The cap is meant to bound the page, not to hide the job.
-  const { data: myServices } = await admin
-    .from("services").select("id").in("name", vendor.service_types);
+  const myServices = mustRead(
+    "your trades",
+    await admin.from("services").select("id").in("name", vendor.service_types),
+  );
   const myServiceIds = (myServices ?? []).map((s) => s.id as string);
   if (myServiceIds.length === 0) return [];
 
-  const { data: jobs } = await admin
+  // "No open jobs right now" on a board the nightly text is actively pointing
+  // them at — the same wrong sentence the cap bug produced, arrived at from a
+  // dropped connection instead.
+  const jobs = mustRead(
+    "the open jobs",
+    await admin
     .from("jobs")
     .select("id, date, customer_price, service_id, property_id, is_rush, est_minutes, created_at, services(name, pricing_model, est_minutes), properties(lake_id, lat, lng, lakes(name))")
     .eq("status", "requested")
@@ -109,7 +125,8 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
     .in("service_id", myServiceIds)
     .gte("date", today)
     .order("date", { ascending: true })
-    .limit(BOARD_CAP);
+    .limit(BOARD_CAP),
+  );
   if (!jobs || jobs.length === 0) return [];
 
   const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
@@ -124,13 +141,24 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   // One shot each: my rates, my assigned counts per date, my blocked dates,
   // and any lakes I'm paused on (Phase E cooldowns).
   const dates = [...new Set(doable.map((j) => j.date as string))];
-  const [{ data: rates }, { data: myJobs }, { data: myBlocks }, { data: myPauses }, { data: myUnits }] = await Promise.all([
+  //
+  // THREE OF THESE FIVE ARE GUARDS THAT FAIL OPEN, NOT DISPLAY DATA.
+  // An unread `myJobs` is an empty day, so the capacity and minute-budget
+  // checks pass; an unread `myBlocks` is a day nobody blocked off; an unread
+  // `myPauses` is a crew nobody paused. Each one turns a refusal into a Claim
+  // button, and the claim writes. None of them may be inferred from silence.
+  const [ratesRes, myJobsRes, myBlocksRes, myPausesRes, myUnitsRes] = await Promise.all([
     admin.from("vendor_rates").select("service_id, base, unit_rate, band_pricing").eq("vendor_id", vendor.id),
     admin.from("jobs").select("date, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))").eq("vendor_id", vendor.id).in("status", ["scheduled", "in_progress"]).in("date", dates),
     admin.from("vendor_availability").select("date").eq("vendor_id", vendor.id).eq("status", "blocked").in("date", dates),
     admin.from("vendor_lake_demotions").select("lake_id, demoted_at").eq("vendor_id", vendor.id),
     admin.from("crew_units").select("capacity, work_start, work_end").eq("vendor_id", vendor.id).eq("active", true),
   ]);
+  const rates = mustRead("your rate card", ratesRes);
+  const myJobs = mustRead("what you're already booked for", myJobsRes);
+  const myBlocks = mustRead("the days you've blocked off", myBlocksRes);
+  const myPauses = mustRead("the lakes you're paused on", myPausesRes);
+  const myUnits = mustRead("your trucks", myUnitsRes);
   // Fleet layer: with trucks, cap = fleet sum + a minute budget activates;
   // without, legacy vendor numbers (budget null = gate off) — the invariant.
   const units = (myUnits ?? []).map((u) => ({

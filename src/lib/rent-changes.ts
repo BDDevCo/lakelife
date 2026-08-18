@@ -39,10 +39,23 @@ export async function applyDueRentChangesFor(parkId?: string): Promise<{
     .not("notice_given_on", "is", null);
   if (parkId) q = q.eq("park_id", parkId);
 
-  const { data: due } = await q;
+  const dueRes = await q;
   const errors: string[] = [];
   let applied = 0;
   let skipped = 0;
+
+  // NOBODY IS WATCHING THIS ONE. A failed read arrives as `data: null`, which
+  // this loop reads as "no increases are due" — so the nightly returned
+  // { applied: 0, skipped: 0, errors: [] }, a clean bill of health for a run
+  // that never looked. Rent then quietly stays at the old figure until somebody
+  // notices. Report it as the failure it is and apply nothing: the other
+  // nightly steps still run, and tomorrow's run picks these up because they are
+  // still unapplied.
+  if (dueRes.error) {
+    console.error("[read failed] rent increases that have come due:", dueRes.error);
+    return { applied: 0, skipped: 0, errors: ["couldn't read the due rent changes"] };
+  }
+  const due = dueRes.data;
 
   for (const c of due ?? []) {
     const { error: resErr } = await admin

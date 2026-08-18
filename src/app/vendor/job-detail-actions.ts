@@ -3,6 +3,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertVendorJob, getCrewCalendarYear, type CrewCalRow } from "./job-detail-data";
 import { crewChooseFix, crewChooseVerify, crewChooseTalk } from "@/lib/disputes";
+import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 /**
  * CREW JOB-DETAIL actions (2026-07-26).
@@ -56,7 +57,18 @@ export async function crewCureJob(
   choice: "fix" | "verify" | "talk",
   dateISO?: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const job = await assertVendorJob(jobId);
+  // assertVendorJob THROWS when the read itself fails, so that a dropped
+  // connection can never be reported as "that job isn't on your route". A
+  // rejection escaping a "use server" action reaches the crew as a blank
+  // failure with no sentence, so it is converted to this action's own
+  // { ok, error } here. Nothing has been written at this point.
+  let job: Awaited<ReturnType<typeof assertVendorJob>> = null;
+  try {
+    job = await assertVendorJob(jobId);
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your job", e) };
+    throw e;
+  }
   if (!job) return { ok: false, error: "That job isn't on your route." };
 
   const token = await openDisputeToken(jobId);
@@ -75,5 +87,9 @@ export async function crewCureJob(
  * vendor from the SESSION — no vendor id is ever accepted from the browser.
  */
 export async function loadCrewCalendarYear(year: number): Promise<CrewCalRow[]> {
+  // DELIBERATELY NOT CAUGHT. This returns a bare array, so the only shape a
+  // catch could convert a failed read into is `[]` — the blank grid must-read
+  // exists to prevent. VendorCalendar.ensureYear already wraps this call in
+  // try/catch and says "Couldn't load that year — try again."
   return getCrewCalendarYear(Number(year));
 }

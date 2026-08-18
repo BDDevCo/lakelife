@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import type { PaymentToken } from "@/lib/payments";
 
 export interface SavedCard {
@@ -19,11 +20,16 @@ export async function listPaymentMethods(): Promise<SavedCard[]> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return [];
-  const { data } = await supabase
-    .from("payment_methods")
-    .select("id, brand, last4, exp_month, exp_year, is_default")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false });
+  // Returns a LIST, not { ok, error } — so this one throws rather than lying
+  // with an empty wallet ("no card on file" to someone who is on autopay).
+  const data = mustRead(
+    "your saved cards",
+    await supabase
+      .from("payment_methods")
+      .select("id, brand, last4, exp_month, exp_year, is_default")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false }),
+  );
   return (data ?? []) as SavedCard[];
 }
 
@@ -52,10 +58,17 @@ export async function savePaymentMethod(token: PaymentToken): Promise<{ ok: bool
     return { ok: false, error: "Invalid payment token." };
   }
 
-  const { count } = await supabase
+  // THIS COUNT DECIDES WHICH CARD AUTOPAY CHARGES. A failed count is null, and
+  // `(count ?? 0) === 0` would read that as "first card" — quietly making this
+  // card the default over the one they chose. No count, no save.
+  const countRes = await supabase
     .from("payment_methods")
     .select("id", { count: "exact", head: true })
     .eq("user_id", user.id);
+  if (countRes.error) {
+    return { ok: false, error: readFailedMessage("your saved cards", countRes.error) };
+  }
+  const count = countRes.count;
 
   const { error } = await supabase.from("payment_methods").insert({
     user_id: user.id,

@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { readFailedMessage } from "@/lib/must-read";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 
@@ -45,46 +46,66 @@ export async function enableBookingForMyLot(): Promise<BookingSetupResult> {
   const admin = createServiceClient();
 
   // Same gate the portal uses: a CLAIMED file, then a live tenancy.
-  const { data: files } = await admin
+  //
+  // A FAILED READ IS NOT AN EMPTY ROLL. Every `return NO_TENANCY` below used to
+  // be reachable by a dropped connection, and it asserts a fact about somebody's
+  // household — "we can't find a lot on your account" to a resident who has paid
+  // rent for years. We only get to say that when we actually looked.
+  const filesRes = await admin
     .from("park_renters").select("id, park_id").eq("user_id", user.id);
+  if (filesRes.error) return { ok: false, error: readFailedMessage("your lot", filesRes.error) };
+  const files = filesRes.data;
   if (!files?.length) return { ok: false, error: NO_TENANCY };
 
-  const { data: stays } = await admin
+  const staysRes = await admin
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id")
     .in("renter_id", files.map((f) => f.id as string))
     .in("status", ["approved", "active"])
     .order("created_at", { ascending: false });
-  const stay = stays?.[0];
+  if (staysRes.error) return { ok: false, error: readFailedMessage("your stay", staysRes.error) };
+  const stay = staysRes.data?.[0];
   if (!stay) return { ok: false, error: NO_TENANCY };
 
   // IDEMPOTENT. A second tap must not mint a second address — that would
   // split their service history in half with no way to tell which is real.
-  const { data: lot } = await admin
+  const lotRes = await admin
     .from("park_lots")
     .select("lot_number, park_id")
     .eq("id", stay.park_lot_id as string)
     .maybeSingle();
+  if (lotRes.error) return { ok: false, error: readFailedMessage("your lot", lotRes.error) };
+  const lot = lotRes.data;
   if (!lot) return { ok: false, error: NO_TENANCY };
 
-  const { data: park } = await admin
+  const parkRes = await admin
     .from("parks")
     .select("name, address, lake_id, lat, lng")
     .eq("id", lot.park_id as string)
     .maybeSingle();
+  // Told apart from the genuine "no lake set" case below: that one sends them
+  // to the office, which is wasted advice when the truth is a dropped read.
+  if (parkRes.error) return { ok: false, error: readFailedMessage("your park", parkRes.error) };
+  const park = parkRes.data;
   if (!park?.lake_id) {
     return { ok: false, error: "Your park isn't set up for services yet — ring the office." };
   }
 
   const address = `Lot ${lot.lot_number}, ${park.name}, ${park.address ?? ""}`.replace(/,\s*$/, "");
 
-  const { data: already } = await admin
+  const alreadyRes = await admin
     .from("properties")
     .select("id")
     .eq("owner_id", user.id)
     .eq("park_id", lot.park_id as string)
     .eq("address", address)
     .maybeSingle();
+  // FAILS OPEN IF LEFT ALONE. This IS the idempotency check, and a failed read
+  // looks exactly like "no such property" — so a dropped connection here mints
+  // a SECOND address and splits their service history in half, which is the one
+  // outcome the comment above says must never happen. Refuse instead.
+  if (alreadyRes.error) return { ok: false, error: readFailedMessage("your lot's address", alreadyRes.error) };
+  const already = alreadyRes.data;
   if (already) {
     await point(already.id as string);
     return { ok: true, propertyId: already.id as string, signal: "Your lot is ready to book for." };

@@ -1,4 +1,5 @@
 import "server-only";
+import { mustRead, ReadFailed } from "@/lib/must-read";
 import { createServiceClient } from "@/lib/supabase/server";
 
 /**
@@ -31,17 +32,29 @@ export interface JobPhoto {
 /** Signed URLs + capture times for one job's photos, oldest first. */
 export async function signedJobPhotos(jobId: string): Promise<JobPhoto[]> {
   const admin = createServiceClient();
-  const { data: rows } = await admin
+  // AN EMPTY PHOTO LIST IS AN ACCUSATION HERE. The ops job file renders "No
+  // photos on this job yet. A job can't reach complete — and the crew can't be
+  // paid" off the length of what this returns, so a swallowed read says the
+  // crew didn't document their work and shouldn't be paid for it. That is the
+  // photo gate — the one rule CLAUDE.md calls non-negotiable — reporting a
+  // dropped connection as a crew failing it.
+  const rows = mustRead("this job's photos", await admin
     .from("job_photos")
     .select("url, taken_at")
     .eq("job_id", jobId)
-    .order("taken_at", { ascending: true });
+    .order("taken_at", { ascending: true }));
   const paths = (rows ?? []).map((r) => r.url as string).filter(Boolean);
   if (paths.length === 0) return [];
 
-  const { data: signed } = await admin.storage
+  // Storage, not Postgres, but the same rule: rows exist and we could not sign
+  // them is not "there are no photos".
+  const { data: signed, error: signErr } = await admin.storage
     .from("job-photos")
     .createSignedUrls(paths, PHOTO_URL_TTL_SECONDS);
+  if (signErr) {
+    console.error("[read failed] signing this job's photos:", signErr);
+    throw new ReadFailed("this job's photos", signErr.message);
+  }
   // createSignedUrls preserves input order; a path that failed to sign comes
   // back with a null signedUrl rather than shifting the rest.
   return (signed ?? [])

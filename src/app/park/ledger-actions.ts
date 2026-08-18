@@ -12,6 +12,7 @@ import {
   type Charge, type LedgerRow, type LedgerSummary, type RunPlan,
 } from "./ledger-helpers";
 import { preCutoverRefusal } from "@/lib/billing-start";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { sendEmail } from "@/lib/email";
 import { receiptBody, type ReceiptLines } from "./receipt-helpers";
 // The ENGINE, not the action: runCharges has already asserted membership
@@ -59,22 +60,30 @@ function paymentDateProblem(receivedOn: string, todayISO: string): string | null
   return null;
 }
 
+// A FAILED FEE READ IS NOT A PARK WITH NO FEES. Swallowed, it drops the
+// monthly fees off every bill the run raises — nineteen households under-billed,
+// with nothing on any screen to say so. The error travels back to the caller,
+// which is an action and can say it in a sentence.
 async function feesFor(
   admin: ReturnType<typeof createServiceClient>,
   parkId: string,
-): Promise<StatementFee[]> {
-  const { data } = await admin
+): Promise<{ fees: StatementFee[]; error: unknown }> {
+  const { data, error } = await admin
     .from("park_fees")
     .select("label, amount, cadence, applies_to, active")
     .eq("park_id", parkId)
     .eq("active", true);
-  return (data ?? [])
-    .filter((f) => ["all_lots", "long_term"].includes(f.applies_to as string))
-    .map((f) => ({
-      label: f.label as string,
-      amount: Number(f.amount),
-      cadence: f.cadence as string,
-    }));
+  if (error) return { fees: [], error };
+  return {
+    fees: (data ?? [])
+      .filter((f) => ["all_lots", "long_term"].includes(f.applies_to as string))
+      .map((f) => ({
+        label: f.label as string,
+        amount: Number(f.amount),
+        cadence: f.cadence as string,
+      })),
+    error: null,
+  };
 }
 
 
@@ -92,24 +101,33 @@ async function unbilledCostShares(
   admin: ReturnType<typeof createServiceClient>,
   parkId: string,
   reservationIds: string[],
-): Promise<Map<string, Array<{ id: string; label: string; amount: number; basis: string }>>> {
+): Promise<{
+  shares: Map<string, Array<{ id: string; label: string; amount: number; basis: string }>>;
+  error: unknown;
+}> {
   const out = new Map<string, Array<{ id: string; label: string; amount: number; basis: string }>>();
-  if (reservationIds.length === 0) return out;
+  if (reservationIds.length === 0) return { shares: out, error: null };
 
-  const { data: shares } = await admin
+  // A FAILED READ HERE IS NOT "NOTHING TO SPLIT". Swallowed, the water the
+  // owner has already paid for silently misses this month's bills — the exact
+  // failure this reader was written to end. Both reads report back instead.
+  const sharesRes = await admin
     .from("lot_cost_shares")
     .select("id, cost_id, reservation_id, amount, basis")
     .in("reservation_id", reservationIds)
     .is("billed_on_charge_id", null);
-  if (!shares?.length) return out;
+  if (sharesRes.error) return { shares: out, error: sharesRes.error };
+  const shares = sharesRes.data;
+  if (!shares?.length) return { shares: out, error: null };
 
   const costIds = [...new Set(shares.map((s) => s.cost_id as string))];
-  const { data: costs } = await admin
+  const costsRes = await admin
     .from("park_costs")
     .select("id, park_id, category, period_start, period_end")
     .in("id", costIds)
     .eq("park_id", parkId);          // never bill another park's water
-  const costById = new Map((costs ?? []).map((c) => [c.id as string, c]));
+  if (costsRes.error) return { shares: out, error: costsRes.error };
+  const costById = new Map((costsRes.data ?? []).map((c) => [c.id as string, c]));
 
   for (const sh of shares) {
     const cost = costById.get(sh.cost_id as string);
@@ -135,7 +153,7 @@ async function unbilledCostShares(
     });
     out.set(sh.reservation_id as string, list);
   }
-  return out;
+  return { shares: out, error: null };
 }
 
 /** What a run WOULD do. Nothing is written. */
@@ -146,10 +164,22 @@ export async function previewChargeRun(
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
-  const [{ data: park }, fees] = await Promise.all([
+  const [parkRes, feeRes] = await Promise.all([
     admin.from("parks").select("rent_due_day, cutover_date").eq("id", parkId).maybeSingle(),
     feesFor(admin, parkId),
   ]);
+  // FAILS OPEN IF SWALLOWED. `cutover_date` is the gate immediately below; a
+  // failed read arrives as `park = null`, which reads as "no cutover set", so
+  // the refusal never fires and the preview offers to bill a month the
+  // previous owner already collected. Same for the fees: absent reads as free.
+  if (parkRes.error) {
+    return { ok: false, error: readFailedMessage("your park's billing settings", parkRes.error, { money: true }) };
+  }
+  if (feeRes.error) {
+    return { ok: false, error: readFailedMessage("your park's fees", feeRes.error, { money: true }) };
+  }
+  const park = parkRes.data;
+  const fees = feeRes.fees;
   const dueDay = (park?.rent_due_day as number) ?? 1;
 
   // NOT OURS TO BILL. A month that began before the park went live belongs to
@@ -159,11 +189,17 @@ export async function previewChargeRun(
     month, (park?.cutover_date as string | null) ?? null, prettyMonth);
   if (tooEarly) return { ok: false, error: tooEarly };
 
-  const { data: lots } = await admin
+  const lotsRes = await admin
     .from("park_lots")
     .select("id, lot_number, rental_mode, lifecycle")
     .eq("park_id", parkId)
     .eq("lifecycle", "live");
+  // An empty plan is a real answer for a park with no live lots. It must not
+  // also be the answer for a dropped connection.
+  if (lotsRes.error) {
+    return { ok: false, error: readFailedMessage("your lots", lotsRes.error, { money: true }) };
+  }
+  const lots = lotsRes.data;
   const lotById = new Map((lots ?? []).map((l) => [l.id as string, l]));
   if (lotById.size === 0) return { ok: true, plan: planRun([], new Set()) };
 
@@ -171,11 +207,15 @@ export async function previewChargeRun(
   // billed for the days it covered. Leaving it out here would break this
   // function's own stated invariant, two comments below — the preview would
   // omit a final part-month the run then charges.
-  const { data: staysRaw } = await admin
+  const staysRes = await admin
     .from("lot_reservations")
     .select("id, park_lot_id, during, quoted_amount, status, moved_out_on")
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active", "ended"]);
+  if (staysRes.error) {
+    return { ok: false, error: readFailedMessage("who's on your lots", staysRes.error, { money: true }) };
+  }
+  const staysRaw = staysRes.data;
   const stays = (staysRaw ?? []).filter(
     (s) => s.status !== "ended" || s.moved_out_on != null,
   );
@@ -187,7 +227,7 @@ export async function previewChargeRun(
   // total he approves and the total he gets would differ — which is the one
   // thing a confirm screen must never do. Nothing is written here: the new
   // amounts are overlaid for the arithmetic only.
-  const { data: dueChanges } = await admin
+  const dueChangesRes = await admin
     .from("lot_rent_changes")
     .select("reservation_id, to_amount")
     .eq("park_id", parkId)
@@ -195,8 +235,13 @@ export async function previewChargeRun(
     .is("applied_at", null)
     .is("cancelled_at", null)
     .not("notice_given_on", "is", null);
+  // Swallowed, this is precisely the divergence the paragraph above forbids:
+  // the preview would quote the old rate and the run would bill the new one.
+  if (dueChangesRes.error) {
+    return { ok: false, error: readFailedMessage("the rent increases coming due", dueChangesRes.error, { money: true }) };
+  }
   const pendingRate = new Map(
-    (dueChanges ?? []).map((c) => [c.reservation_id as string, Number(c.to_amount)]),
+    (dueChangesRes.data ?? []).map((c) => [c.reservation_id as string, Number(c.to_amount)]),
   );
 
   // A VOIDED BILL IS NOT A BILL. Without this filter, cancelling a charge made
@@ -205,17 +250,26 @@ export async function previewChargeRun(
   // outstanding, and they simply stopped being billed for a month as a
   // consequence of the owner fixing a mistake. 0081 makes the unique index
   // agree.
-  const { data: existing } = await admin
+  const existingRes = await admin
     .from("park_charges")
     .select("reservation_id")
     .eq("park_id", parkId)
     .eq("period_month", month)
     .neq("status", "void");
-  const already = new Set((existing ?? []).map((c) => c.reservation_id as string));
+  // A failed read reads as "nothing billed yet", so the preview would promise
+  // to raise bills that already exist.
+  if (existingRes.error) {
+    return { ok: false, error: readFailedMessage("the bills already raised for that month", existingRes.error, { money: true }) };
+  }
+  const already = new Set((existingRes.data ?? []).map((c) => c.reservation_id as string));
 
   // The preview must include what the run will bill (its own stated
   // invariant, forty lines up) — and the run now bills cost shares.
-  const shareMap = await unbilledCostShares(admin, parkId, (stays ?? []).map((s) => s.id as string));
+  const shareRes = await unbilledCostShares(admin, parkId, (stays ?? []).map((s) => s.id as string));
+  if (shareRes.error) {
+    return { ok: false, error: readFailedMessage("the costs you've split", shareRes.error, { money: true }) };
+  }
+  const shareMap = shareRes.shares;
 
   const candidates = (stays ?? []).map((s) => {
     const lot = lotById.get(s.park_lot_id as string)!;
@@ -272,10 +326,22 @@ export async function runCharges(
   // ever apply increases that were already legitimately due today.
   const rateMoves = await applyDueRentChangesFor(parkId);
 
-  const [{ data: park }, fees] = await Promise.all([
+  const [parkRes, feeRes] = await Promise.all([
     admin.from("parks").select("rent_due_day, cutover_date").eq("id", parkId).maybeSingle(),
     feesFor(admin, parkId),
   ]);
+  // FAILS OPEN IF SWALLOWED, and this is the write path. A failed park read
+  // reads as "no cutover set" to the refusal below, which is the third of the
+  // three layers that stop nineteen bills going out for a month somebody else
+  // already collected. A layer that cannot run is not a layer.
+  if (parkRes.error) {
+    return { ok: false, error: readFailedMessage("your park's billing settings", parkRes.error, { money: true }) };
+  }
+  if (feeRes.error) {
+    return { ok: false, error: readFailedMessage("your park's fees", feeRes.error, { money: true }) };
+  }
+  const park = parkRes.data;
+  const fees = feeRes.fees;
   const dueDay = (park?.rent_due_day as number) ?? 1;
 
   // The same refusal as the preview, checked again here rather than trusted.
@@ -287,11 +353,17 @@ export async function runCharges(
     month, (park?.cutover_date as string | null) ?? null, prettyMonth);
   if (tooEarly) return { ok: false, error: tooEarly };
 
-  const { data: lots } = await admin
+  const lotsRes = await admin
     .from("park_lots")
     .select("id, lot_number, rental_mode")
     .eq("park_id", parkId)
     .eq("lifecycle", "live");
+  // "No live lots to bill" is a statement about his park. Do not make it on
+  // the strength of a read that never came back.
+  if (lotsRes.error) {
+    return { ok: false, error: readFailedMessage("your lots", lotsRes.error, { money: true }) };
+  }
+  const lots = lotsRes.data;
   const lotById = new Map((lots ?? []).map((l) => [l.id as string, l]));
   if (lotById.size === 0) return { ok: false, error: "No live lots to bill." };
 
@@ -308,11 +380,17 @@ export async function runCharges(
   // contributes nothing to August.
   //
   // 'cancelled' stays OUT: nobody ever lived there.
-  const { data: staysRaw } = await admin
+  const staysRes = await admin
     .from("lot_reservations")
     .select("id, park_lot_id, renter_id, during, quoted_amount, status, moved_out_on")
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active", "ended"]);
+  // Swallowed, this ends as "Nothing to bill — it may already be done", which
+  // is how a whole month quietly goes unbilled.
+  if (staysRes.error) {
+    return { ok: false, error: readFailedMessage("who's on your lots", staysRes.error, { money: true }) };
+  }
+  const staysRaw = staysRes.data;
 
   // An 'ended' row with no `moved_out_on` was closed by the old one-click
   // path, so its range was never trimmed and still runs to the end of the
@@ -323,15 +401,25 @@ export async function runCharges(
   );
 
   // Same rule as the preview: a cancelled bill leaves the month billable.
-  const { data: existing } = await admin
+  const existingRes = await admin
     .from("park_charges").select("reservation_id")
     .eq("park_id", parkId).eq("period_month", month)
     .neq("status", "void");
-  const already = new Set((existing ?? []).map((c) => c.reservation_id as string));
+  // This is the "safe to run twice" guarantee. A failed read empties it, and
+  // the run tries to re-bill everybody — the unique index catches it, but as
+  // an anonymous insert failure rather than a sentence.
+  if (existingRes.error) {
+    return { ok: false, error: readFailedMessage("the bills already raised for that month", existingRes.error, { money: true }) };
+  }
+  const already = new Set((existingRes.data ?? []).map((c) => c.reservation_id as string));
 
   // The money the owner already paid out and split (0104). Billed once: the
   // stamp below is what stops a second run charging the water twice.
-  const shareMap = await unbilledCostShares(admin, parkId, (stays ?? []).map((x) => x.id as string));
+  const shareRes = await unbilledCostShares(admin, parkId, (stays ?? []).map((x) => x.id as string));
+  if (shareRes.error) {
+    return { ok: false, error: readFailedMessage("the costs you've split", shareRes.error, { money: true }) };
+  }
+  const shareMap = shareRes.shares;
   /** reservation -> the share ids that went onto its charge, stamped after insert. */
   const shareIdsByRes = new Map<string, string[]>();
 
@@ -441,9 +529,15 @@ export async function recordPayment(
 
   const admin = createServiceClient();
   // Confirm the charge belongs to this park before writing against it.
-  const { data: charge } = await admin
+  const chargeRes = await admin
     .from("park_charges").select("id, park_id, renter_id, amount, paid_total, status")
     .eq("id", chargeId).eq("park_id", parkId).maybeSingle();
+  // "That bill isn't here" is an assertion about his own ledger, told at the
+  // window with the cash already in hand. Never say it because a read failed.
+  if (chargeRes.error) {
+    return { ok: false, error: readFailedMessage("that bill", chargeRes.error, { money: true }) };
+  }
+  const charge = chargeRes.data;
   if (!charge) return { ok: false, error: "That bill isn't here." };
   if (charge.status === "void") {
     return { ok: false, error: "That bill was cancelled — record it against a live one." };
@@ -491,15 +585,24 @@ export async function recordPayment(
   // payment landing in between printed a "still owing" figure that was already
   // wrong — on the only copy the renter keeps. Re-read after the trigger has
   // recomputed the total.
-  const { data: after } = await admin
+  // THE MONEY IS ALREADY RECORDED, so a failed read here must not fail the
+  // action — telling the office it failed is how the same cash gets keyed
+  // twice. It degrades to the pre-insert arithmetic, which is right in the
+  // ordinary case, and the failure is logged so its rate is knowable.
+  const afterRes = await admin
     .from("park_charges").select("amount, paid_total").eq("id", chargeId).maybeSingle();
+  if (afterRes.error) console.error("[read failed] the bill's new balance:", afterRes.error);
+  const after = afterRes.data;
   const balance = after
     ? Number(after.amount) - Number(after.paid_total)
     : Number(charge.amount) - Number(charge.paid_total) - amount;
 
   // Everything the receipt needs, gathered once here rather than by a second
   // round trip from the screen.
-  const [{ data: park }, { data: full }] = await Promise.all([
+  // Same rule as the balance above: the payment exists, so these four reads
+  // degrade rather than refuse. Each one is logged — a receipt that says "This
+  // park" and lot "?" is a receipt worth knowing about.
+  const [parkRes, fullRes] = await Promise.all([
     admin.from("parks").select("name, address").eq("id", parkId).maybeSingle(),
     admin
       .from("park_charges")
@@ -507,15 +610,23 @@ export async function recordPayment(
       .eq("id", chargeId)
       .maybeSingle(),
   ]);
-  const [{ data: lot }, { data: renter }] = await Promise.all([
+  if (parkRes.error) console.error("[read failed] the park's name for the receipt:", parkRes.error);
+  if (fullRes.error) console.error("[read failed] the bill behind the receipt:", fullRes.error);
+  const park = parkRes.data;
+  const full = fullRes.data;
+  const [lotRes, renterRes] = await Promise.all([
     full?.park_lot_id
       ? admin.from("park_lots").select("lot_number").eq("id", full.park_lot_id).maybeSingle()
-      : Promise.resolve({ data: null }),
+      : Promise.resolve({ data: null, error: null }),
     full?.renter_id
       ? admin.from("park_renters").select("display_name, email, contact_pref")
           .eq("id", full.renter_id).maybeSingle()
-      : Promise.resolve({ data: null }),
+      : Promise.resolve({ data: null, error: null }),
   ]);
+  if (lotRes.error) console.error("[read failed] the lot number for the receipt:", lotRes.error);
+  if (renterRes.error) console.error("[read failed] who the receipt is for:", renterRes.error);
+  const lot = lotRes.data;
+  const renter = renterRes.data;
 
   const receipt: ReceiptLines = {
     parkName: (park?.name as string) ?? "This park",
@@ -597,8 +708,15 @@ export async function takeDropSlipSerials(
   }
 
   const admin = createServiceClient();
-  const { data: park } = await admin
+  const parkRes = await admin
     .from("parks").select("name, address, next_drop_slip_no").eq("id", parkId).maybeSingle();
+  // A failed read would both tell him his own park isn't here AND, if it got
+  // past that, restart the serial run at 1 — re-issuing numbers already on
+  // paper, which is the one property that makes a slip evidence.
+  if (parkRes.error) {
+    return { ok: false, error: readFailedMessage("your park", parkRes.error) };
+  }
+  const park = parkRes.data;
   if (!park) return { ok: false, error: "That park isn't here." };
 
   const from = (park.next_drop_slip_no as number) ?? 1;
@@ -636,9 +754,18 @@ export async function voidCharge(
   // a mis-tap away. Cancelling a paid bill drops that cash out of every total
   // while it is sitting in the bank. 0072 refuses it in the database too; this
   // is the sentence he should see instead of an error code.
-  const { data: existing } = await admin
+  const existingRes = await admin
     .from("park_charges").select("paid_total")
     .eq("id", chargeId).eq("park_id", parkId).maybeSingle();
+  // FAILS OPEN IF SWALLOWED. `existing` comes back null on a failed read, the
+  // `existing &&` below is false, and the guard the paragraph above exists for
+  // is simply skipped. 0072 still refuses it in the database, so the cash is
+  // safe — but he would get "Couldn't cancel that — try again" forever instead
+  // of the sentence explaining why.
+  if (existingRes.error) {
+    return { ok: false, error: readFailedMessage("what's been paid against that bill", existingRes.error, { money: true }) };
+  }
+  const existing = existingRes.data;
   if (existing && Number(existing.paid_total) > 0) {
     return {
       ok: false,
@@ -663,12 +790,18 @@ export async function voidCharge(
   // cancelled bill they would never reach anybody: the owner would cancel one
   // wrong bill and silently lose that household's share of a bill the park
   // has genuinely paid. Same lesson 0101 learned about a voided month.
-  const { data: released } = await admin
+  const releasedRes = await admin
     .from("lot_cost_shares")
     .update({ billed_on_charge_id: null })
     .eq("billed_on_charge_id", chargeId)
     .select("id");
-  const n = released?.length ?? 0;
+  // The bill IS cancelled by this point, so this cannot refuse. A failure
+  // leaves the shares stamped to a dead charge — money that reaches nobody —
+  // so it is logged rather than swallowed, and the signal below says "0".
+  if (releasedRes.error) {
+    console.error("[read failed] the cost shares on that bill:", releasedRes.error);
+  }
+  const n = releasedRes.data?.length ?? 0;
 
   revalidatePath("/park/rent");
   revalidatePath("/park/costs");
@@ -720,15 +853,25 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
   const today = todayLakeDate();
   const period = month ?? currentPeriod(today);
 
-  const { data: park } = await admin
-    .from("parks").select("office_recording_lag_days").eq("id", parkId).maybeSingle();
+  // EVERY READ BELOW EITHER ANSWERS OR THROWS. This loader returns `null` to
+  // mean "you don't manage that park"; a swallowed failure would render an
+  // empty rent roll — no bills, nobody late, nobody disputing — which is the
+  // calmest possible lie about a month's money.
+  const park = mustRead(
+    "your park's settings",
+    await admin
+      .from("parks").select("office_recording_lag_days").eq("id", parkId).maybeSingle(),
+  );
   const lagDays = (park?.office_recording_lag_days as number) ?? 3;
 
-  const { data } = await admin
-    .from("park_charges")
-    .select("id, park_lot_id, renter_id, period_month, due_on, amount, paid_total, status")
-    .eq("park_id", parkId)
-    .eq("period_month", period);
+  const data = mustRead(
+    "this month's bills",
+    await admin
+      .from("park_charges")
+      .select("id, park_lot_id, renter_id, period_month, due_on, amount, paid_total, status")
+      .eq("park_id", parkId)
+      .eq("period_month", period),
+  );
 
   // UNANSWERED "I PAID THIS" claims. A charge carrying one is disputed, not
   // late — the two parties disagree, and disagreement is a question rather
@@ -738,13 +881,18 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
   // there is nothing to resolve — which is why `resolvePaymentClaim` sat
   // written, careful and tested, with no caller: the screen had no handle on
   // the thing it was being asked to close.
-  const { data: claims } = chargeIds.length
-    ? await admin
-        .from("park_payment_claims")
-        .select("id, charge_id, claimed_amount, claimed_paid_on, method, reference, note, asserted_by, paid_to")
-        .in("charge_id", chargeIds)
-        .is("resolved_at", null)
-    : { data: [] as RawClaim[] };
+  // A swallowed failure here downgrades every disputed row to plain 'late', so
+  // households who have told the office they paid get chased on our word.
+  const claims = chargeIds.length
+    ? mustRead(
+        "what households have told you about paying",
+        await admin
+          .from("park_payment_claims")
+          .select("id, charge_id, claimed_amount, claimed_paid_on, method, reference, note, asserted_by, paid_to")
+          .in("charge_id", chargeIds)
+          .is("resolved_at", null),
+      )
+    : ([] as RawClaim[]);
   const openClaims = (claims ?? []) as unknown as RawClaim[];
   const claimed = new Set(openClaims.map((c) => c.charge_id));
   const claimByCharge = new Map(openClaims.map((c) => [c.charge_id, c]));
@@ -752,14 +900,17 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
   const lotIds = [...new Set((data ?? []).map((c) => c.park_lot_id as string))];
   const renterIds = [...new Set((data ?? []).map((c) => c.renter_id as string).filter(Boolean))];
 
-  const [{ data: lots }, { data: renters }] = await Promise.all([
+  const [lotsRes, rentersRes] = await Promise.all([
     lotIds.length
       ? admin.from("park_lots").select("id, lot_number").in("id", lotIds)
-      : Promise.resolve({ data: [] as { id: string; lot_number: string }[] }),
+      : Promise.resolve({ data: [] as { id: string; lot_number: string }[], error: null }),
     renterIds.length
       ? admin.from("park_renters").select("id, display_name").in("id", renterIds)
-      : Promise.resolve({ data: [] as { id: string; display_name: string }[] }),
+      : Promise.resolve({ data: [] as { id: string; display_name: string }[], error: null }),
   ]);
+  // Without these the roll renders every row as lot "?" with no name on it.
+  const lots = mustRead("your lots", lotsRes);
+  const renters = mustRead("the households", rentersRes);
 
   const lotName = new Map((lots ?? []).map((l) => [l.id as string, l.lot_number as string]));
   const renterName = new Map((renters ?? []).map((r) => [r.id as string, r.display_name as string]));
@@ -827,9 +978,14 @@ export async function logPaymentClaim(
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
-  const { data: charge } = await admin
+  const chargeRes = await admin
     .from("park_charges").select("id").eq("id", chargeId).eq("park_id", parkId).maybeSingle();
-  if (!charge) return { ok: false, error: "That bill isn't here." };
+  // Refusing to record what somebody said, on the grounds of a read that never
+  // came back, is exactly the silence this function exists to prevent.
+  if (chargeRes.error) {
+    return { ok: false, error: readFailedMessage("that bill", chargeRes.error) };
+  }
+  if (!chargeRes.data) return { ok: false, error: "That bill isn't here." };
 
   // Every detail optional on purpose. "I paid you" with no amount and no date
   // is still the renter's account of events, and demanding a check number
@@ -886,11 +1042,15 @@ export async function resolvePaymentClaim(
 
   const admin = createServiceClient();
   // Scope the claim to this park through its charge before touching it.
-  const { data: claim } = await admin
+  const claimRes = await admin
     .from("park_payment_claims")
     .select("id, charge_id, park_charges!inner(park_id)")
     .eq("id", claimId)
     .maybeSingle();
+  if (claimRes.error) {
+    return { ok: false, error: readFailedMessage("that disagreement", claimRes.error) };
+  }
+  const claim = claimRes.data;
   const owner = (claim as { park_charges?: { park_id?: string } } | null)?.park_charges?.park_id;
   if (!claim || owner !== parkId) return { ok: false, error: "That isn't here." };
 
@@ -952,11 +1112,18 @@ export async function confirmClaimCollected(
   const admin = createServiceClient();
   // Scope the claim to this park through its charge, the same join
   // resolvePaymentClaim uses.
-  const { data: claim } = await admin
+  const claimRes = await admin
     .from("park_payment_claims")
     .select("id, charge_id, method, reference, resolved_at, park_charges!inner(park_id)")
     .eq("id", claimId)
     .maybeSingle();
+  // This is the answer that MOVES THE MONEY, and every check below it — whose
+  // claim it is, whether it is already answered, which rail it came in on —
+  // reads off this one row. A failed read must not reach any of them.
+  if (claimRes.error) {
+    return { ok: false, error: readFailedMessage("that disagreement", claimRes.error, { money: true }) };
+  }
+  const claim = claimRes.data;
   const owner = (claim as { park_charges?: { park_id?: string } } | null)?.park_charges?.park_id;
   if (!claim || owner !== parkId) return { ok: false, error: "That isn't here." };
   if (claim.resolved_at) return { ok: false, error: "That one's already been answered." };
@@ -1034,12 +1201,19 @@ export async function reversePayment(
   // every cheque taken before the bill existed. So money recorded by mistake
   // at the window could never be taken back, and the office was told "That
   // isn't here" about a payment sitting on their own screen.
-  const { data: pay } = await admin
+  const payRes = await admin
     .from("park_payments")
     .select("id, amount, receipt_no, reversed_at, park_id, kind, charge_id")
     .eq("id", paymentId)
     .eq("park_id", parkId)
     .maybeSingle();
+  // "That isn't here" about a payment sitting on their own screen is the exact
+  // complaint the paragraph above was written to fix — do not reintroduce it
+  // through a dropped connection.
+  if (payRes.error) {
+    return { ok: false, error: readFailedMessage("that payment", payRes.error, { money: true }) };
+  }
+  const pay = payRes.data;
   if (!pay) return { ok: false, error: "That isn't here." };
   if (pay.reversed_at) return { ok: false, error: "That one's already been taken back." };
 
@@ -1048,8 +1222,16 @@ export async function reversePayment(
   // returned_amount on a reversed row would be the ledger holding two
   // contradictory facts about the same cash.
   if (pay.kind === "deposit") {
-    const { data: dep } = await admin
+    const depRes = await admin
       .from("park_payments").select("returned_on").eq("id", paymentId).maybeSingle();
+    // FAILS OPEN IF SWALLOWED. `dep?.returned_on` on a failed read is
+    // undefined, the guard falls through, and a deposit that has demonstrably
+    // gone back to the household gets reversed — the ledger then holding two
+    // contradictory facts about the same cash, which is what this refuses.
+    if (depRes.error) {
+      return { ok: false, error: readFailedMessage("whether that deposit was already returned", depRes.error, { money: true }) };
+    }
+    const dep = depRes.data;
     if (dep?.returned_on) {
       return { ok: false, error: "That deposit was already returned — reversing it would contradict the record." };
     }

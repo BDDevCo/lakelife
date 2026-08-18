@@ -3,6 +3,7 @@
 import twilio from "twilio";
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { readFailedMessage } from "@/lib/must-read";
 import { hasTwilioEnv } from "@/lib/env";
 import { toE164 } from "@/lib/phone";
 import { phoneRefusal } from "@/lib/contactable";
@@ -27,31 +28,47 @@ import { smsConsentText, optInSays, type OptInResult } from "@/lib/sms-consent";
  * as claim_park_file, and the same reasoning that fixed claimCrewInvite.
  */
 
-/** The caller's own claimed park file, or null. Identity from the session only. */
-async function myFile(): Promise<{ id: string; parkId: string; parkName: string } | null> {
+/**
+ * The caller's own claimed park file, or null. Identity from the session only.
+ *
+ * THREE ANSWERS, NOT TWO. A failed read used to arrive as `null`, which every
+ * caller below reported as `no_file` — "We couldn't find your lot. Have a word
+ * with the office." That sends a resident to ring about a record that is
+ * perfectly fine. `error` is returned alongside so the caller can say the true
+ * thing instead.
+ */
+async function myFile(): Promise<{
+  file: { id: string; parkId: string; parkName: string } | null;
+  error?: unknown;
+}> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
+  if (!user) return { file: null };
 
   const admin = createServiceClient();
-  const { data } = await admin
+  const res = await admin
     .from("park_renters")
     .select("id, park_id, parks(name)")
     .eq("user_id", user.id)
     .limit(1)
     .maybeSingle();
-  if (!data) return null;
+  if (res.error) return { file: null, error: res.error };
+  const data = res.data;
+  if (!data) return { file: null };
 
   return {
-    id: data.id as string,
-    parkId: data.park_id as string,
-    parkName: ((data.parks as { name?: string } | null)?.name as string) ?? "your park",
+    file: {
+      id: data.id as string,
+      parkId: data.park_id as string,
+      parkName: ((data.parks as { name?: string } | null)?.name as string) ?? "your park",
+    },
   };
 }
 
 /** Send the six-digit code to a number the resident just typed. */
 export async function startTextOptIn(phone: string): Promise<OptInResult> {
-  const file = await myFile();
+  const { file, error: fileErr } = await myFile();
+  if (fileErr) return { ok: false, message: readFailedMessage("your park file", fileErr) };
   if (!file) return { ok: false, message: optInSays("no_file") };
 
   const e164 = toE164(String(phone ?? ""));
@@ -96,7 +113,8 @@ export async function startTextOptIn(phone: string): Promise<OptInResult> {
  * anybody would ask about it.
  */
 export async function confirmTextOptIn(phone: string, code: string): Promise<OptInResult> {
-  const file = await myFile();
+  const { file, error: fileErr } = await myFile();
+  if (fileErr) return { ok: false, message: readFailedMessage("your park file", fileErr) };
   if (!file) return { ok: false, message: optInSays("no_file") };
 
   const e164 = toE164(String(phone ?? ""));
@@ -150,7 +168,10 @@ export async function confirmTextOptIn(phone: string, code: string): Promise<Opt
  * too would mean re-doing the code dance for a change of mind.
  */
 export async function stopTexts(): Promise<OptInResult> {
-  const file = await myFile();
+  const { file, error: fileErr } = await myFile();
+  // WITHDRAWAL MUST NOT BE THE THING THAT BREAKS. Saying "we couldn't find your
+  // lot" to somebody trying to stop texts reads as a refusal to let them stop.
+  if (fileErr) return { ok: false, message: readFailedMessage("your park file", fileErr) };
   if (!file) return { ok: false, message: optInSays("no_file") };
 
   const admin = createServiceClient();

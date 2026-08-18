@@ -1,6 +1,7 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
+import { mustRead } from "@/lib/must-read";
 import { getMyVendorId } from "./data";
 import {
   periodRanges,
@@ -66,21 +67,33 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
 
   const admin = createServiceClient();
 
-  const { data: vendor } = await admin
-    .from("vendors")
-    .select("company")
-    .eq("id", vendorId)
-    .maybeSingle();
+  const vendor = mustRead(
+    "your company name",
+    await admin
+      .from("vendors")
+      .select("company")
+      .eq("id", vendorId)
+      .maybeSingle(),
+  );
 
   // NOTE: the jobs embed lists ONLY date / service name / address — no price,
   // no margin (CLAUDE.md rule 1). amount is the crew's own take-home. No
   // `kind` filter — 'earning' (job pay) and 'adjustment' (negative refund
   // clawback, migration 0043) rows both belong here so totals stay accurate.
-  const { data: payouts } = await admin
-    .from("payouts")
-    .select("id, amount, status, kind, created_at, job_id, jobs(date, route_id, services(name), properties(address))")
-    .eq("vendor_id", vendorId)
-    .order("created_at", { ascending: false });
+  //
+  // THIS IS THE READ. Everything a crew is owed comes off these rows: the
+  // dashboard totals, the statement, the CSV their accountant gets. A failed
+  // read used to produce $0.00 across every window and a statement with no
+  // lines on it — which is not "you earned nothing", it is a document that
+  // could cost them a tax return.
+  const payouts = mustRead(
+    "your earnings",
+    await admin
+      .from("payouts")
+      .select("id, amount, status, kind, created_at, job_id, jobs(date, route_id, services(name), properties(address))")
+      .eq("vendor_id", vendorId)
+      .order("created_at", { ascending: false }),
+  );
 
   // WHICH CREW WAS ON EACH JOB — fetched separately and joined in code, NOT
   // embedded. `jobs.route_id` has no foreign key to `routes` (checked against
@@ -100,8 +113,10 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
   )];
   const unitByRoute = new Map<string, string>();
   if (routeIds.length > 0) {
-    const { data: routeRows } = await admin
-      .from("routes").select("id, unit_name").in("id", routeIds);
+    const routeRows = mustRead(
+      "which truck was on each job",
+      await admin.from("routes").select("id, unit_name").in("id", routeIds),
+    );
     for (const r of routeRows ?? []) {
       const name = (r.unit_name as string | null)?.trim();
       if (name) unitByRoute.set(r.id as string, name);
@@ -123,8 +138,10 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
   )];
   const workersByJob = new Map<string, string[]>();
   if (payoutJobIds.length > 0) {
-    const { data: jw } = await admin
-      .from("job_workers").select("job_id, name").in("job_id", payoutJobIds);
+    const jw = mustRead(
+      "who the crew said was there",
+      await admin.from("job_workers").select("job_id, name").in("job_id", payoutJobIds),
+    );
     for (const r of jw ?? []) {
       const list = workersByJob.get(r.job_id as string) ?? [];
       list.push(r.name as string);

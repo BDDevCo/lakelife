@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { priceService, type ServiceRule, type PricingProfile } from "@/lib/pricing";
 import type { PackageView, PackageComponentView } from "@/lib/packages";
 
@@ -12,11 +13,17 @@ import type { PackageView, PackageComponentView } from "@/lib/packages";
  */
 export async function getPackageViews(profile: PricingProfile): Promise<PackageView[]> {
   const admin = createServiceClient();
-  const [{ data: packages }, { data: recipe }, { data: services }] = await Promise.all([
+  const [packagesRes, recipeRes, servicesRes] = await Promise.all([
     admin.from("service_packages").select("id, code, name, description, sort").eq("active", true).order("sort"),
     admin.from("package_components").select("package_id, service_id, phase, required, default_on, role"),
     admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, kind").in("kind", ["component", "addon"]),
   ]);
+  // The recipe and the component prices ARE the package price. A failed read of
+  // either would render a package with legs missing — priced, bookable, and
+  // wrong — and a failed package read would say we don't offer storage at all.
+  const packages = mustRead("the storage packages", packagesRes);
+  const recipe = mustRead("what's in each package", recipeRes);
+  const services = mustRead("the prices of each part of the package", servicesRes);
   if (!packages?.length) return [];
 
   const svcById = new Map((services ?? []).map((s) => [s.id as string, s]));

@@ -9,6 +9,7 @@ import { isCoolingDown } from "@/lib/lake-standing";
 import { fillInRate, rushWindowOpen } from "@/lib/rush";
 import { loadPricingProfileById } from "@/app/book/dispatch";
 import { loadGapAnchor } from "./open-data";
+import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
 
@@ -112,7 +113,19 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
       unit_rate: Number(vr.unit_rate ?? 0),
       band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
     };
-    const profile = await loadPricingProfileById(admin, job.property_id as string);
+    // Same reason as the anchor read below: this loader throws now, and a
+    // rejection out of a "use server" action reaches the crew as a blank
+    // failure. Nothing has been written yet — the guarded UPDATE is further
+    // down — so refusing here leaves the job on the board.
+    let profile;
+    try {
+      profile = await loadPricingProfileById(admin, job.property_id as string);
+    } catch (e) {
+      if (e instanceof ReadFailed) {
+        return { ok: false, error: readFailedMessage("this property's details", e) };
+      }
+      throw e;
+    }
     if (profile) myRate = priceService(rule, profile);
   }
 
@@ -211,7 +224,15 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     // matching is case-insensitive, so an uppercased jobId would still find
     // the row but hash to a different (pickable) jitter.
     const tStar = gapTakeHome(Number(job.customer_price ?? 0), settings.marginFloor, gapJitter(String(job.id)), settings.gapMinOffer);
-    const profileForAnchor = await loadPricingProfileById(admin, job.property_id as string);
+    let profileForAnchor;
+    try {
+      profileForAnchor = await loadPricingProfileById(admin, job.property_id as string);
+    } catch (e) {
+      if (e instanceof ReadFailed) {
+        return { ok: false, error: readFailedMessage("this property's details", e) };
+      }
+      throw e;
+    }
     if (tStar != null && profileForAnchor) {
       // Anchor from the UN-discounted card (rush discount never stacks onto a
       // fill-in offer — one haircut, never two).
@@ -220,10 +241,23 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
         base: Number(vr.base ?? 0), unit_rate: Number(vr.unit_rate ?? 0),
         band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
       }, profileForAnchor) : null;
-      const anchor = await loadGapAnchor(
-        admin, vendor.id as string, job.service_id as string, svc.name,
-        svc.pricing_model as ServiceRule["pricing_model"], profileForAnchor, undiscounted,
-      );
+      // loadGapAnchor THROWS rather than let a dropped read collapse the
+      // anti-harvest anchor onto today's card and RAISE the offer. This is a
+      // "use server" action, so a rejection would reach the crew as a blank
+      // failure — it becomes a ClaimResult instead. The guarded UPDATE below
+      // has not run, so the job is still on the board and nothing was priced.
+      let anchor: number | null = null;
+      try {
+        anchor = await loadGapAnchor(
+          admin, vendor.id as string, job.service_id as string, svc.name,
+          svc.pricing_model as ServiceRule["pricing_model"], profileForAnchor, undiscounted,
+        );
+      } catch (e) {
+        if (e instanceof ReadFailed) {
+          return { ok: false, error: readFailedMessage("your rate history", e) };
+        }
+        throw e;
+      }
       const offer = gapOfferFor(tStar, anchor, settings.gapAnchorPct, settings.gapMinOffer);
       if (offer != null) {
         myRate = offer;

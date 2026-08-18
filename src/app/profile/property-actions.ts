@@ -2,6 +2,7 @@
 
 import { cookies } from "next/headers";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { readFailedMessage } from "@/lib/must-read";
 
 const ACTIVE_PROPERTY_COOKIE = "ll_active_property";
 
@@ -15,12 +16,16 @@ export async function setPropertyNickname(propertyId: string, nickname: string):
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Sign in first." };
 
-  const { data: own } = await supabase
+  const ownRes = await supabase
     .from("properties")
     .select("id")
     .eq("owner_id", user.id)
     .eq("id", propertyId)
     .maybeSingle();
+  // "That property isn't yours" is a claim about their account. Don't make it
+  // on the strength of a read that never ran.
+  if (ownRes.error) return { ok: false, error: readFailedMessage("your properties", ownRes.error) };
+  const own = ownRes.data;
   if (!own) return { ok: false, error: "That property isn't yours." };
 
   const clean = String(nickname ?? "").trim().slice(0, 40);
@@ -41,12 +46,19 @@ export async function setActiveProperty(propertyId: string): Promise<{ ok: boole
   } = await supabase.auth.getUser();
   if (!user) return { ok: false };
 
-  const { data } = await supabase
+  const res = await supabase
     .from("properties")
     .select("id")
     .eq("owner_id", user.id)
     .eq("id", propertyId)
     .maybeSingle();
+  // Fails CLOSED (the cookie is left alone), which is the safe direction — but
+  // the switcher has no error slot to say so, so at least log it.
+  if (res.error) {
+    console.error("[read failed] your properties:", res.error);
+    return { ok: false };
+  }
+  const data = res.data;
   if (!data) return { ok: false };
 
   const cookieStore = await cookies();

@@ -2,6 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getMyVendorId } from "@/app/vendor/data";
+import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 export interface SlotResult {
   ok: boolean;
@@ -98,7 +99,18 @@ export async function setStorageSettings(input: StorageSettingsInput): Promise<S
  * takes the leftover INSERT/DELETE away with the rest.
  */
 export async function toggleWorkDay(day: string): Promise<SlotResult> {
-  const vendorId = await getMyVendorId();
+  // getMyVendorId now THROWS when the read fails, because `null` from it means
+  // "you are not a crew" and a dropped read must never say that to somebody who
+  // has worked these lakes all season. A rejection out of a "use server" action
+  // is a blank failure on the phone, so it becomes a SlotResult here. Nothing
+  // has been written at this point.
+  let vendorId: string | null = null;
+  try {
+    vendorId = await getMyVendorId();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendorId) return { ok: false, error: "This is the vendor area." };
 
   const admin = createServiceClient();
@@ -129,7 +141,18 @@ export async function toggleWorkDay(day: string): Promise<SlotResult> {
  * scheduled crew. Vendor-only via the user-session client + RLS.
  */
 export async function setSlot(date: string, slot: string, blocked: boolean): Promise<SlotResult> {
-  const vendorId = await getMyVendorId();
+  // getMyVendorId now THROWS when the read fails, because `null` from it means
+  // "you are not a crew" and a dropped read must never say that to somebody who
+  // has worked these lakes all season. A rejection out of a "use server" action
+  // is a blank failure on the phone, so it becomes a SlotResult here. Nothing
+  // has been written at this point.
+  let vendorId: string | null = null;
+  try {
+    vendorId = await getMyVendorId();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
   if (!vendorId) return { ok: false, error: "This is the vendor area." };
 
   const supabase = await createClient();

@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { readFailedMessage } from "@/lib/must-read";
 import { sendEmail } from "@/lib/email";
 import { likeLiteral } from "@/lib/sql-like";
 import { getActivePropertyId } from "@/app/profile/data";
@@ -38,22 +39,39 @@ export async function inviteMyContractor(company: string, email: string): Promis
   if (!EMAIL_RE.test(addr)) return { ok: false, error: "That email doesn't look right." };
 
   // The invite binds to the owner's ACTIVE property — verify they own it.
-  const activeId = await getActivePropertyId();
+  // getActivePropertyId reads the property list, which throws on a failed read
+  // rather than reporting an empty portfolio.
+  let activeId: string | null;
+  try {
+    activeId = await getActivePropertyId();
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("your properties", e) };
+  }
   if (!activeId) return { ok: false, error: "Add a property first, then invite your crew." };
 
   const admin = createServiceClient();
-  const { data: prop } = await admin
+  const propRes = await admin
     .from("properties")
     .select("id, owner_id")
     .eq("id", activeId)
     .maybeSingle();
+  if (propRes.error) return { ok: false, error: readFailedMessage("your property", propRes.error) };
+  const prop = propRes.data;
   if (!prop || prop.owner_id !== user.id) return { ok: false, error: "That property isn't yours." };
 
   // One account per email; one open invite per email (same guard as ops invites).
   // users.email is auth's, not ours — case-insensitive, wildcards escaped.
-  const { data: existingUser } = await admin.from("users").select("id").ilike("email", likeLiteral(addr)).maybeSingle();
+  // FAILS OPEN if left alone: a failed read reads as "no such account / no open
+  // invite", and the guard below waves the invite through — a second invite
+  // email to a crew who already has one, or a row that collides with the
+  // existing account.
+  const existingRes = await admin.from("users").select("id").ilike("email", likeLiteral(addr)).maybeSingle();
+  if (existingRes.error) return { ok: false, error: readFailedMessage("whether that email is already with us", existingRes.error) };
+  const existingUser = existingRes.data;
   if (existingUser) {
-    const { data: alreadyVendor } = await admin.from("vendors").select("id").eq("user_id", existingUser.id).maybeSingle();
+    const vendorRes = await admin.from("vendors").select("id").eq("user_id", existingUser.id).maybeSingle();
+    if (vendorRes.error) return { ok: false, error: readFailedMessage("that crew's account", vendorRes.error) };
+    const alreadyVendor = vendorRes.data;
     return {
       ok: false,
       error: alreadyVendor
@@ -61,13 +79,14 @@ export async function inviteMyContractor(company: string, email: string): Promis
         : "That email already has an account — your crew should use a different email to join as a crew.",
     };
   }
-  const { data: openInvite } = await admin
+  const openInviteRes = await admin
     .from("vendors")
     .select("id")
     .eq("invite_email", addr)
     .is("user_id", null)
     .maybeSingle();
-  if (openInvite) return { ok: false, error: "There's already an open invite out to that email." };
+  if (openInviteRes.error) return { ok: false, error: readFailedMessage("open invites for that email", openInviteRes.error) };
+  if (openInviteRes.data) return { ok: false, error: "There's already an open invite out to that email." };
 
   // Create the unclaimed crew invite, then bind it as this property's preferred crew.
   const { data: created, error: insErr } = await admin
@@ -88,8 +107,13 @@ export async function inviteMyContractor(company: string, email: string): Promis
   }
 
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
-  const { data: me } = await admin.from("users").select("name").eq("id", user.id).maybeSingle();
-  const ownerName = (me?.name as string) ?? "your customer";
+  const meRes = await admin.from("users").select("name").eq("id", user.id).maybeSingle();
+  // Not fatal, deliberately: the invite row is already created and bound, so
+  // failing the action here would report "nothing has been changed" when
+  // plenty has. The fallback greeting asserts nothing false — it's just
+  // impersonal. Log it and send.
+  if (meRes.error) console.error("[read failed] your name for the invite email:", meRes.error);
+  const ownerName = (meRes.data?.name as string) ?? "your customer";
   void sendEmail({
     to: addr,
     subject: `${ownerName} wants to keep working with you — on LakeLife`,

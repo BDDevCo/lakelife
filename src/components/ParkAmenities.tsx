@@ -447,8 +447,20 @@ function BookForSomebody({
           className="ll-btn ghost" disabled={busy || nights < 1 || overCap}
           onClick={() =>
             start(async () => {
-              const s = await staysOverlapping(parkId, from, to);
-              setStays(s);
+              // `staysOverlapping` THROWS rather than returning [] on a failed
+              // read, and a rejection inside this transition has nowhere to
+              // go. Caught so it reaches a toast: leaving `stays` unset shows
+              // nothing, where an empty array would print "Nobody is staying
+              // across those days" about a park that may be full. A server
+              // action's rejection is opaque on the client, so this cannot
+              // narrow to ReadFailed — but no error here is an answer.
+              try {
+                const s = await staysOverlapping(parkId, from, to);
+                setStays(s);
+              } catch (e) {
+                console.error("[LakeLife] couldn't read who's staying:", e);
+                toast("We couldn't check who's staying just now, so nothing has been booked. Try again in a moment.");
+              }
             })
           }
         >

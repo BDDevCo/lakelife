@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { todayLakeDate } from "@/lib/booking";
 import { assertMyPark } from "./data";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 
 /**
  * MONEY THAT ARRIVES BEFORE A BILL DOES — and money that is not a bill at all.
@@ -62,17 +63,28 @@ function amountProblem(amount: number): string | null {
   return null;
 }
 
-/** The renter must be in THIS park, or a browser could file money anywhere. */
+/**
+ * The renter must be in THIS park, or a browser could file money anywhere.
+ *
+ * A FAILED READ IS NOT AN ABSENT HOUSEHOLD. Swallowed, it returns null and the
+ * callers say "That household isn't in this park" to somebody standing at the
+ * window with their own money — a flat assertion about their tenancy that the
+ * code had no fact to support. The error travels back instead.
+ */
 async function renterInPark(
   admin: ReturnType<typeof createServiceClient>,
   parkId: string,
   renterId: string,
-): Promise<{ id: string; name: string } | null> {
-  const { data } = await admin
+): Promise<{ renter: { id: string; name: string } | null; error: unknown }> {
+  const { data, error } = await admin
     .from("park_renters").select("id, display_name, park_id")
     .eq("id", renterId).eq("park_id", parkId).maybeSingle();
-  if (!data) return null;
-  return { id: data.id as string, name: (data.display_name as string) ?? "that household" };
+  if (error) return { renter: null, error };
+  if (!data) return { renter: null, error: null };
+  return {
+    renter: { id: data.id as string, name: (data.display_name as string) ?? "that household" },
+    error: null,
+  };
 }
 
 /**
@@ -99,7 +111,11 @@ export async function recordOnAccount(
   if (!METHODS.includes(method)) return { ok: false, error: "That isn't a way money arrives." };
 
   const admin = createServiceClient();
-  const renter = await renterInPark(admin, parkId, renterId);
+  const found = await renterInPark(admin, parkId, renterId);
+  if (found.error) {
+    return { ok: false, error: readFailedMessage("that household's file", found.error, { money: true }) };
+  }
+  const renter = found.renter;
   if (!renter) return { ok: false, error: "That household isn't in this park." };
 
   const confirmToken = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().slice(0, 8);
@@ -149,10 +165,16 @@ export async function applyOnAccount(
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
   const admin = createServiceClient();
 
-  const { data: pay } = await admin
+  const payRes = await admin
     .from("park_payments")
     .select("id, park_id, renter_id, amount, charge_id, kind, reversed_at")
     .eq("id", paymentId).eq("park_id", parkId).maybeSingle();
+  // Every check below — already applied, reversed, a deposit, whose money it
+  // is, whether it would strand change — reads off this one row.
+  if (payRes.error) {
+    return { ok: false, error: readFailedMessage("that payment", payRes.error, { money: true }) };
+  }
+  const pay = payRes.data;
   if (!pay) return { ok: false, error: "That payment isn't here." };
   if (pay.charge_id) return { ok: false, error: "That one is already against a bill." };
   if (pay.reversed_at) return { ok: false, error: "That payment was reversed." };
@@ -162,10 +184,14 @@ export async function applyOnAccount(
     return { ok: false, error: "A deposit is held money — it can't be used to pay rent." };
   }
 
-  const { data: charge } = await admin
+  const chargeRes = await admin
     .from("park_charges")
     .select("id, park_id, renter_id, status, amount, paid_total, period_month")
     .eq("id", chargeId).eq("park_id", parkId).maybeSingle();
+  if (chargeRes.error) {
+    return { ok: false, error: readFailedMessage("that bill", chargeRes.error, { money: true }) };
+  }
+  const charge = chargeRes.data;
   if (!charge) return { ok: false, error: "That bill isn't here." };
   if (charge.status === "void") return { ok: false, error: "That bill was cancelled — pick a live one." };
 
@@ -198,17 +224,25 @@ export async function applyOnAccount(
   if (error) return { ok: false, error: `Couldn't apply that — ${error.message}` };
   if (!done?.length) return { ok: false, error: "Somebody just applied that one." };
 
-  const { data: after } = await admin
+  // THE MONEY IS ALREADY APPLIED, so this cannot refuse — but it must not let
+  // the sentence ASSERT anything either. A failed read used to collapse to
+  // `left = 0`, which printed "that bill is settled" about a bill nobody had
+  // looked at. Unknown now says "Applied." and stops there.
+  const afterRes = await admin
     .from("park_charges").select("amount, paid_total, status").eq("id", chargeId).maybeSingle();
-  const left = after ? Number(after.amount) - Number(after.paid_total) : 0;
+  if (afterRes.error) console.error("[read failed] the bill's new balance:", afterRes.error);
+  const after = afterRes.data;
+  const left = after && !afterRes.error ? Number(after.amount) - Number(after.paid_total) : null;
 
   revalidatePath("/park/rent");
   revalidatePath("/park");
   return {
     ok: true,
-    signal: left > 0
-      ? `Applied. $${left.toFixed(2)} still owing on that bill.`
-      : "Applied — that bill is settled.",
+    signal: left == null
+      ? "Applied."
+      : left > 0
+        ? `Applied. $${left.toFixed(2)} still owing on that bill.`
+        : "Applied — that bill is settled.",
   };
 }
 
@@ -235,7 +269,11 @@ export async function recordDeposit(
   if (!METHODS.includes(method)) return { ok: false, error: "That isn't a way money arrives." };
 
   const admin = createServiceClient();
-  const renter = await renterInPark(admin, parkId, renterId);
+  const found = await renterInPark(admin, parkId, renterId);
+  if (found.error) {
+    return { ok: false, error: readFailedMessage("that household's file", found.error, { money: true }) };
+  }
+  const renter = found.renter;
   if (!renter) return { ok: false, error: "That household isn't in this park." };
 
   const confirmToken = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().slice(0, 8);
@@ -290,10 +328,16 @@ export async function returnDeposit(
   if (bad) return { ok: false, error: bad };
 
   const admin = createServiceClient();
-  const { data: dep } = await admin
+  const depRes = await admin
     .from("park_payments")
     .select("id, park_id, kind, amount, returned_on, reversed_at")
     .eq("id", paymentId).eq("park_id", parkId).maybeSingle();
+  // The deposit is the single most argued-about number in this business.
+  // "That deposit isn't here" is never a thing to say on a failed read.
+  if (depRes.error) {
+    return { ok: false, error: readFailedMessage("that deposit", depRes.error, { money: true }) };
+  }
+  const dep = depRes.data;
   if (!dep) return { ok: false, error: "That deposit isn't here." };
   if (dep.kind !== "deposit") return { ok: false, error: "That isn't a deposit." };
   if (dep.reversed_at) return { ok: false, error: "That deposit was reversed." };
@@ -367,7 +411,7 @@ export async function getHeldMoney(parkId: string): Promise<{
   // ONE literal string. A `+`-joined select turns every column into a
   // GenericStringError at the type level and silently into nothing at runtime.
   const cols = "id, renter_id, amount, fee_amount, method, received_on, reference, receipt_no, kind, charge_id, returned_on, returned_amount, return_note, note, reversed_at";
-  const [{ data: acctRows }, { data: depRows }] = await Promise.all([
+  const [acctRes, depRes] = await Promise.all([
     admin.from("park_payments").select(cols)
       .eq("park_id", parkId).is("reversed_at", null).eq("kind", "rent").is("charge_id", null)
       .order("received_on", { ascending: false }),
@@ -375,14 +419,21 @@ export async function getHeldMoney(parkId: string): Promise<{
       .eq("park_id", parkId).is("reversed_at", null).eq("kind", "deposit")
       .order("received_on", { ascending: false }),
   ]);
+  // `empty` above means "$0 on account, $0 held". Told to a household whose
+  // deposit is $500 that is the worst sentence on the screen, so a failed read
+  // never reaches it — it throws to the error boundary instead.
+  const acctRows = mustRead("money sitting on account", acctRes);
+  const depRows = mustRead("the deposits you're holding", depRes);
   const rows = [...(acctRows ?? []), ...(depRows ?? [])];
   if (!rows.length) return empty;
 
   const renterIds = [...new Set(rows.map((r) => r.renter_id as string).filter(Boolean))];
   const names = new Map<string, string>();
   if (renterIds.length) {
-    const { data: rs } = await admin
-      .from("park_renters").select("id, display_name").in("id", renterIds);
+    const rs = mustRead(
+      "whose money it is",
+      await admin.from("park_renters").select("id, display_name").in("id", renterIds),
+    );
     for (const r of rs ?? []) names.set(r.id as string, (r.display_name as string) ?? "—");
   }
 
@@ -425,12 +476,17 @@ export async function getHeldMoney(parkId: string): Promise<{
 export async function getHouseholds(parkId: string): Promise<Array<{ id: string; name: string }>> {
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("park_renters")
-    .select("id, display_name, merged_into")
-    .eq("park_id", parkId)
-    .is("merged_into", null)          // a merged file is a duplicate, not a household
-    .order("display_name");
+  // An empty picker reads as "this park has nobody on it", and the office then
+  // cannot file the cash in their hand against anyone.
+  const data = mustRead(
+    "the households on your roll",
+    await admin
+      .from("park_renters")
+      .select("id, display_name, merged_into")
+      .eq("park_id", parkId)
+      .is("merged_into", null)          // a merged file is a duplicate, not a household
+      .order("display_name"),
+  );
   return (data ?? []).map((r) => ({
     id: r.id as string,
     name: (r.display_name as string) ?? "—",
@@ -450,20 +506,27 @@ export async function getOpenChargesForApply(
 ): Promise<Array<{ id: string; renterId: string | null; label: string }>> {
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("park_charges")
-    .select("id, renter_id, period_month, amount, paid_total, park_lot_id, status")
-    .eq("park_id", parkId)
-    .eq("status", "open")
-    .order("period_month", { ascending: false })
-    .limit(200);
+  // An empty list reads as "nothing is owed" and hides every bill this money
+  // could be put against.
+  const data = mustRead(
+    "the open bills",
+    await admin
+      .from("park_charges")
+      .select("id, renter_id, period_month, amount, paid_total, park_lot_id, status")
+      .eq("park_id", parkId)
+      .eq("status", "open")
+      .order("period_month", { ascending: false })
+      .limit(200),
+  );
   if (!data?.length) return [];
 
   const lotIds = [...new Set(data.map((c) => c.park_lot_id as string).filter(Boolean))];
   const lotNo = new Map<string, string>();
   if (lotIds.length) {
-    const { data: lots } = await admin
-      .from("park_lots").select("id, lot_number").in("id", lotIds);
+    const lots = mustRead(
+      "the lots those bills are for",
+      await admin.from("park_lots").select("id, lot_number").in("id", lotIds),
+    );
     for (const l of lots ?? []) lotNo.set(l.id as string, (l.lot_number as string) ?? "?");
   }
 

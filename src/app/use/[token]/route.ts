@@ -2,6 +2,7 @@ import { htmlPage, escapeHtml } from "@/app/a/[token]/respond";
 import {
   loadGuestView, bookDayByToken, cancelDayByToken, type GuestView,
 } from "@/lib/amenity-guest-server";
+import { ReadFailed } from "@/lib/must-read";
 
 /**
  * "WHAT CAN I BOOK WHILE I'M HERE?" — one link, no account.
@@ -122,7 +123,21 @@ function page(view: GuestView, path: string, note?: { text: string; ok: boolean 
 
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
-  const view = await loadGuestView(token);
+  // The loader THROWS on a failed read, and a Route Handler has no error
+  // boundary — an escaping ReadFailed is a bare 500 to a guest who has no
+  // account to sign into and no other way back in. "This link doesn't match a
+  // stay" would be the wrong sentence too: we don't know that.
+  let view: GuestView | null;
+  try {
+    view = await loadGuestView(token);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return htmlPage(
+      "We couldn't load that just now",
+      "Nothing has changed. Open the link again in a moment — if it keeps happening, ring the office. 🌊",
+      false,
+    );
+  }
   if (!view) {
     return htmlPage("That link isn't right", "This link doesn't match a stay. 🌊", false);
   }
@@ -141,7 +156,30 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 
   // FRESH DAYS, ALWAYS — including after a failure. The one thing she must not
   // be shown is the list that was true a moment ago.
-  const view = await loadGuestView(token);
+  //
+  // THIS RE-READ CAN FAIL AFTER THE BOOKING ALREADY HAPPENED. The row is in and
+  // the amount is quoted, so a 500 here would leave her holding a day she was
+  // charged for with nothing on screen saying she got it. Catch it and say what
+  // we do know — that her tap went through — without pretending to know the
+  // rest of the list.
+  let view: GuestView | null;
+  try {
+    view = await loadGuestView(token);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return res.ok
+      ? htmlPage(
+          // Neutral, because this same branch covers a give-back as well as a
+          // booking — res.signal is the part that says which.
+          "That went through 🌊",
+          `${res.signal ?? "Done."} We couldn't reload the rest of what's free just now — open the link again in a moment to see it.`,
+        )
+      : htmlPage(
+          "That didn't go through",
+          `${res.error ?? "That didn't work."} We couldn't reload what's free just now either — open the link again in a moment, or ring the office. 🌊`,
+          false,
+        );
+  }
   if (!view) {
     return htmlPage("That link isn't right", "This link doesn't match a stay. 🌊", false);
   }

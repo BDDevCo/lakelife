@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { marginPct } from "@/lib/dispatch";
+import { mustRead, mustCount } from "@/lib/must-read";
 
 /** The one place margin lives (rule 1): ops-only. Everything here is service-role
  *  read, gated by assertOps — never import this into a vendor/owner surface. */
@@ -19,7 +20,16 @@ export async function assertOps(): Promise<OpsUser | null> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
-  const { data } = await supabase.from("users").select("id, name, role").eq("id", user.id).maybeSingle();
+  const res = await supabase.from("users").select("id, name, role").eq("id", user.id).maybeSingle();
+  // DELIBERATELY NOT `mustRead`. A failed read here FAILS CLOSED — the caller
+  // is told "ops only", which is wrong but harmless. Throwing would be the
+  // honest answer for the loaders, but this same gate is awaited at the top of
+  // every ops SERVER ACTION (recovery, refunds, payouts, messages…), and an
+  // action that throws surfaces to the button as a blank failure with no
+  // sentence attached. So it stays closed — and it LOGS, so an ops user who
+  // gets bounced off their own console leaves a trace.
+  if (res.error) console.error("[read failed] the signed-in user's role:", res.error);
+  const data = res.data;
   if (!data || data.role !== "ops") return null;
   return { id: data.id as string, name: (data.name as string) ?? null };
 }
@@ -52,23 +62,29 @@ export async function getOpsSummary(): Promise<OpsSummary> {
   const admin = createServiceClient();
   const { start, end } = weekBounds();
 
-  const { count: requestsWaiting } = await admin
-    .from("jobs")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "requested");
+  const requestsWaiting = mustCount(
+    "the number of requests waiting",
+    await admin
+      .from("jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "requested"),
+  );
 
-  const { data: week } = await admin
-    .from("jobs")
-    .select("customer_price, margin")
-    .gte("date", start)
-    .lte("date", end)
-    .in("status", ["scheduled", "in_progress", "complete", "paid"]);
+  const week = mustRead(
+    "this week's jobs",
+    await admin
+      .from("jobs")
+      .select("customer_price, margin")
+      .gte("date", start)
+      .lte("date", end)
+      .in("status", ["scheduled", "in_progress", "complete", "paid"]),
+  );
 
   const rows = week ?? [];
   const weekRevenue = rows.reduce((s, r) => s + Number(r.customer_price ?? 0), 0);
   const weekMargin = rows.reduce((s, r) => s + Number(r.margin ?? 0), 0);
   return {
-    requestsWaiting: requestsWaiting ?? 0,
+    requestsWaiting,
     jobsThisWeek: rows.length,
     weekRevenue,
     weekMargin,
@@ -123,28 +139,39 @@ interface JobBoardRaw {
 
 export async function getJobBoard(): Promise<OpsJob[]> {
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("jobs")
-    .select(
-      "id, status, date, slot, frequency, service_id, customer_price, vendor_cost, margin, vendor_id, " +
-        "services(name, min_photos), properties(address, lakes(name), users(name)), vendors(company)",
-    )
-    .in("status", BOARD_STATUSES as unknown as string[])
-    .order("date", { ascending: true, nullsFirst: true })
-    .order("created_at", { ascending: true });
+  const data = mustRead(
+    "the job board",
+    await admin
+      .from("jobs")
+      .select(
+        "id, status, date, slot, frequency, service_id, customer_price, vendor_cost, margin, vendor_id, " +
+          "services(name, min_photos), properties(address, lakes(name), users(name)), vendors(company)",
+      )
+      .in("status", BOARD_STATUSES as unknown as string[])
+      .order("date", { ascending: true, nullsFirst: true })
+      .order("created_at", { ascending: true }),
+  );
 
   const rows = (data ?? []) as unknown as JobBoardRaw[];
   const ids = rows.map((r) => r.id);
   const counts = new Map<string, number>();
   const invoiceStatus = new Map<string, string>();
   if (ids.length) {
-    const { data: photos } = await admin.from("job_photos").select("job_id").in("job_id", ids);
+    // A failed read here would put 0 against every job — i.e. the board would
+    // show the photo gate unmet on jobs that are fully documented.
+    const photos = mustRead(
+      "the job board's photo counts",
+      await admin.from("job_photos").select("job_id").in("job_id", ids),
+    );
     for (const p of photos ?? []) counts.set(p.job_id, (counts.get(p.job_id) ?? 0) + 1);
 
     // One invoice per job (refund-actions.ts assumes the same) — used only to
     // drive the ops "Refund…" button / "↩ refunded" pill. Never joined into any
     // customer or vendor read (rule 1 doesn't apply here — this IS the ops board).
-    const { data: invoices } = await admin.from("invoices").select("job_id, status").in("job_id", ids);
+    const invoices = mustRead(
+      "the job board's invoice statuses",
+      await admin.from("invoices").select("job_id, status").in("job_id", ids),
+    );
     for (const inv of invoices ?? []) if (inv.job_id) invoiceStatus.set(inv.job_id as string, inv.status as string);
   }
 
@@ -199,11 +226,14 @@ export interface EligibleVendor {
 export async function getEligibleVendors(serviceName: string | null): Promise<EligibleVendor[]> {
   const admin = createServiceClient();
   const today = todayLakeDate();
-  const { data } = await admin
-    .from("vendors")
-    .select("id, company, coi_expiry, service_types, daily_capacity, status")
-    .eq("status", "active")
-    .order("company", { ascending: true });
+  const data = mustRead(
+    "the crews eligible for this job",
+    await admin
+      .from("vendors")
+      .select("id, company, coi_expiry, service_types, daily_capacity, status")
+      .eq("status", "active")
+      .order("company", { ascending: true }),
+  );
 
   const svc = (serviceName ?? "").toLowerCase();
   return (data ?? []).map((v) => {
@@ -241,11 +271,14 @@ export interface ActiveVendor {
 export async function getActiveVendors(): Promise<ActiveVendor[]> {
   const admin = createServiceClient();
   const today = todayLakeDate();
-  const { data } = await admin
-    .from("vendors")
-    .select("id, company, coi_expiry, service_types, daily_capacity")
-    .eq("status", "active")
-    .order("company", { ascending: true });
+  const data = mustRead(
+    "the active crews",
+    await admin
+      .from("vendors")
+      .select("id, company, coi_expiry, service_types, daily_capacity")
+      .eq("status", "active")
+      .order("company", { ascending: true }),
+  );
   return (data ?? []).map((v) => ({
     id: v.id as string,
     company: (v.company as string) ?? null,
@@ -269,10 +302,13 @@ export interface MarginRow {
 
 export async function getMarginByService(): Promise<{ rows: MarginRow[]; total: MarginRow }> {
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("jobs")
-    .select("customer_price, vendor_cost, margin, services(name)")
-    .in("status", ["scheduled", "in_progress", "complete", "paid"]);
+  const data = mustRead(
+    "revenue and margin by service",
+    await admin
+      .from("jobs")
+      .select("customer_price, vendor_cost, margin, services(name)")
+      .in("status", ["scheduled", "in_progress", "complete", "paid"]),
+  );
 
   const byName = new Map<string, MarginRow>();
   for (const r of data ?? []) {
@@ -344,15 +380,19 @@ async function fuelCostPerMile(admin: ReturnType<typeof createServiceClient>): P
   } catch {
     // getPlatformSettings unreachable — fall through to a direct read.
   }
-  const { data } = await admin.from("platform_settings").select("value").eq("key", "fuel_cost_per_mile").maybeSingle();
-  const n = Number(data?.value);
+  const res = await admin.from("platform_settings").select("value").eq("key", "fuel_cost_per_mile").maybeSingle();
+  // The fallback above is deliberate and stays — a display-only dial is not
+  // worth withholding the routes board over — but "missing row" and "couldn't
+  // look" are different facts, so the second one is logged.
+  if (res.error) console.error("[read failed] the fuel-cost-per-mile dial:", res.error);
+  const n = Number(res.data?.value);
   return Number.isFinite(n) ? n : 0.65;
 }
 
 /** Tomorrow's built routes (or a given date's). */
 export async function getRoutesForDate(dateISO: string): Promise<RouteSummary[]> {
   const admin = createServiceClient();
-  const [{ data }, fuelDial] = await Promise.all([
+  const [routesRes, fuelDial] = await Promise.all([
     admin
       .from("routes")
       .select("id, date, stops_order, drive_minutes, map_url, unit_name, drive_km, vendors(company)")
@@ -360,6 +400,7 @@ export async function getRoutesForDate(dateISO: string): Promise<RouteSummary[]>
       .order("created_at", { ascending: true }),
     fuelCostPerMile(admin),
   ]);
+  const data = mustRead("the routes for that day", routesRes);
   return (data ?? []).map((r) => {
     const v = Array.isArray(r.vendors) ? r.vendors[0] : r.vendors;
     const driveKm = r.drive_km == null ? null : Number(r.drive_km);
@@ -397,12 +438,15 @@ export interface LakeCondition {
 
 export async function getLakeConditions(): Promise<LakeCondition[]> {
   const admin = createServiceClient();
-  const { data: lakes } = await admin
-    .from("lakes")
-    .select("id, name, ice_out_actual, hard_freeze_est, pull_deadline, is_fixture")
-    .order("name", { ascending: true });
+  const lakes = mustRead(
+    "the lakes and their season dates",
+    await admin
+      .from("lakes")
+      .select("id, name, ice_out_actual, hard_freeze_est, pull_deadline, is_fixture")
+      .order("name", { ascending: true }),
+  );
 
-  const { data: props } = await admin.from("properties").select("lake_id");
+  const props = mustRead("the properties on each lake", await admin.from("properties").select("lake_id"));
   const byLake = new Map<string, number>();
   for (const p of props ?? []) if (p.lake_id) byLake.set(p.lake_id, (byLake.get(p.lake_id) ?? 0) + 1);
 
@@ -492,7 +536,12 @@ async function computeMarginHealthRows(
 ): Promise<MarginHealthRowInternal[]> {
   const today = todayLakeDate();
 
-  const [{ data: jobs }, { data: waiting }, { data: vendors }, { data: rates }] = await Promise.all([
+  // EVERY ONE OF THESE MUST LAND. A failed `rates` or `vendors` read would
+  // leave every crew looking unpriced, which reads as "nobody has quoted this
+  // work" — and the nightly auto-apply pass drives MENU PRICES off the same
+  // rows. Better the pass throws (the cron's `step` wrapper records it and the
+  // other steps run on) than that it re-prices the menu off a half-read table.
+  const [jobsRes, waitingRes, vendorsRes, ratesRes] = await Promise.all([
     admin
       .from("jobs")
       .select("customer_price, margin, service_id, services(name), properties(lake_id, lakes(name))")
@@ -507,6 +556,10 @@ async function computeMarginHealthRows(
     admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes").eq("status", "active"),
     admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"),
   ]);
+  const jobs = mustRead("the jobs behind margin health", jobsRes);
+  const waiting = mustRead("the waiting demand", waitingRes);
+  const vendors = mustRead("the active crews", vendorsRes);
+  const rates = mustRead("the crews' rates", ratesRes);
 
   const key = (svc: string, lake: string) => `${svc}|${lake}`;
   const acc = new Map<
@@ -608,7 +661,10 @@ async function computeMarginHealthRows(
   };
   const rateRows = new Map((rates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
   const insured = (vendors ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today);
-  const { data: svcRows } = await admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing");
+  const svcRows = mustRead(
+    "the menu prices",
+    await admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing"),
+  );
   const svcById = new Map((svcRows ?? []).map((s) => [s.id as string, s]));
   for (const row of acc.values()) {
     if (!row.service_id || !row.lake_id) continue;
@@ -789,12 +845,18 @@ export async function getEscalatedDisputes(): Promise<EscalatedDispute[]> {
   const ops = await assertOps();
   if (!ops) return [];
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("disputes")
-    .select("id, customer_note, resolution, opened_at, jobs!disputes_job_id_fkey(customer_price, services(name), properties(address, nickname))")
-    .eq("status", "escalated")
-    .order("opened_at", { ascending: true })
-    .limit(50);
+  // An empty list here means "nothing waiting on a person", and every one of
+  // these rows has a crew's pay frozen behind it — so it must never be the
+  // shape a dropped connection takes.
+  const data = mustRead(
+    "the disputes waiting on a person",
+    await admin
+      .from("disputes")
+      .select("id, customer_note, resolution, opened_at, jobs!disputes_job_id_fkey(customer_price, services(name), properties(address, nickname))")
+      .eq("status", "escalated")
+      .order("opened_at", { ascending: true })
+      .limit(50),
+  );
   const first = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
   return (data ?? []).map((d) => {
     const job = first((d as { jobs?: unknown }).jobs) as { customer_price?: number; services?: unknown; properties?: unknown } | null;

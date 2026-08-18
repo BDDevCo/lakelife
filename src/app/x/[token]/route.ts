@@ -1,5 +1,6 @@
 import { htmlPage } from "@/app/a/[token]/respond";
-import { loadExtendByToken, extendByToken } from "@/lib/extend-server";
+import { loadExtendByToken, type ExtendView, extendByToken } from "@/lib/extend-server";
+import { ReadFailed } from "@/lib/must-read";
 
 /**
  * ONE-TAP EXTEND, for a renter who has no account and may never have one.
@@ -21,7 +22,21 @@ function pretty(iso: string): string {
 
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
-  const view = await loadExtendByToken(token);
+  // The loader THROWS on a failed read and this Route Handler has no error
+  // boundary. A renter here has no account to sign into, so a bare 500 is a
+  // dead end — and "this link doesn't match a stay" would assert a fact we
+  // couldn't read.
+  let view: ExtendView | null;
+  try {
+    view = await loadExtendByToken(token);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return htmlPage(
+      "We couldn't load that just now",
+      "Nothing has changed and nothing has been charged. Open the link again in a moment — if it keeps happening, give the park a call. 🌊",
+      false,
+    );
+  }
   if (!view) {
     return htmlPage("That link isn't right", "This link doesn't match a stay. 🌊", false);
   }

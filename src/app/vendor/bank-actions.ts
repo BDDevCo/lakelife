@@ -5,6 +5,7 @@ import { sealSecret } from "@/lib/gate";
 import { abaValid, accountPlausible, earlyFee } from "@/lib/payouts";
 import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
+import { readFailedMessage } from "@/lib/must-read";
 
 export interface BankResult {
   ok: boolean;
@@ -36,8 +37,17 @@ export async function setPayoutAccount(input: {
 
   const admin = createServiceClient();
   const last4 = account.slice(-4);
-  const { data: prev } = await admin
+  // THIS READ IS THE ALARM, NOT A DETAIL. It is the only thing that knows the
+  // destination changed, and the warning text below is conditioned on it — so a
+  // failed read is a SILENT reroute, which is precisely the attack the text
+  // exists to catch. Nothing is written yet, so refusing here costs the crew a
+  // retry and costs a hijacked session everything.
+  const prevRes = await admin
     .from("payout_accounts").select("account_last4").eq("user_id", user.id).maybeSingle();
+  if (prevRes.error) {
+    return { ok: false, error: readFailedMessage("your current bank details", prevRes.error) };
+  }
+  const prev = prevRes.data;
   const { error } = await admin.from("payout_accounts").upsert({
     user_id: user.id,
     bank_name: (input.bankName ?? "").slice(0, 80) || null,
@@ -51,7 +61,12 @@ export async function setPayoutAccount(input: {
   // not be able to reroute money without the owner hearing about it.
   if (prev && prev.account_last4 !== last4) {
     try {
-      const { data: u } = await admin.from("users").select("phone").eq("id", user.id).maybeSingle();
+      const uRes = await admin.from("users").select("phone").eq("id", user.id).maybeSingle();
+      // The account is already changed, so this can't refuse any more — but an
+      // unsent security warning must never be silent in the log as well as on
+      // the phone. "No phone on file" and "couldn't look" are not the same.
+      if (uRes.error) console.error("[read failed] the number to warn about a payout change:", uRes.error);
+      const u = uRes.data;
       if (u?.phone) void sendSms(u.phone as string, `LakeLife security: your payout account was just changed to ····${last4}. If this wasn't you, call us immediately.`);
     } catch { /* best effort */ }
   }
@@ -82,12 +97,24 @@ export async function requestEarlyPayout(): Promise<EarlyPayoutResult> {
   if (!user) return { ok: false, error: "Please sign in first." };
 
   const admin = createServiceClient();
-  const { data: vendor } = await admin
+  // Both refusals below assert a fact about the crew's account — "you're not
+  // set up", "you have no bank details" — and a failed read had no fact to
+  // assert. Told to somebody who banked with us last week, either one reads as
+  // their account having been wiped.
+  const vendorRes = await admin
     .from("vendors").select("id, company").eq("user_id", user.id).maybeSingle();
+  if (vendorRes.error) {
+    return { ok: false, error: readFailedMessage("your crew account", vendorRes.error, { money: true }) };
+  }
+  const vendor = vendorRes.data;
   if (!vendor) return { ok: false, error: "Your crew account isn't set up yet." };
 
-  const { data: acct } = await admin
+  const acctRes = await admin
     .from("payout_accounts").select("account_last4").eq("user_id", user.id).maybeSingle();
+  if (acctRes.error) {
+    return { ok: false, error: readFailedMessage("your bank details", acctRes.error, { money: true }) };
+  }
+  const acct = acctRes.data;
   if (!acct) return { ok: false, error: "Add your bank details first — that's where the money lands." };
 
   // Create the envelope INVISIBLE to the exporter ('building'), claim rows
@@ -106,13 +133,22 @@ export async function requestEarlyPayout(): Promise<EarlyPayoutResult> {
     await admin.from("payout_batches").delete().eq("id", batch.id);
   };
 
-  const { data: claimed } = await admin
+  const claimRes = await admin
     .from("payouts")
     .update({ batch_id: batch.id })
     .eq("vendor_id", vendor.id)
     .eq("status", "released")
     .is("batch_id", null)
     .select("amount, kind");
+  // A FAILED CLAIM IS NOT AN EMPTY ONE. Falling through told a crew with money
+  // waiting "nothing released to pull right now" — and if the update landed but
+  // the response didn't, those rows are sitting in a batch we just said was
+  // empty. Unclaim first (nothing stranded), then say what actually happened.
+  if (claimRes.error) {
+    await unclaimAndDrop();
+    return { ok: false, error: readFailedMessage("what's ready to pull", claimRes.error, { money: true }) };
+  }
+  const claimed = claimRes.data;
   const gross = Math.round((claimed ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0) * 100) / 100;
 
   // A TIP IS NEVER DISCOUNTED. The homeowner is told in writing "every cent
@@ -148,7 +184,11 @@ export async function requestEarlyPayout(): Promise<EarlyPayoutResult> {
 
   // The receipt text — the number they'll see land.
   try {
-    const { data: u } = await admin.from("users").select("phone").eq("id", user.id).maybeSingle();
+    const uRes = await admin.from("users").select("phone").eq("id", user.id).maybeSingle();
+    // Deliberately swallowed — the payout is queued and a missing receipt text
+    // must not un-queue it — but never swallowed silently.
+    if (uRes.error) console.error("[read failed] the number to text the payout receipt to:", uRes.error);
+    const u = uRes.data;
     if (u?.phone) {
       void sendSms(u.phone as string, `LakeLife: early payout queued — $${net.toFixed(2)} to your account ····${acct.account_last4} ($${gross.toFixed(2)} − $${fee.toFixed(2)} early fee${tipTotal > 0 ? `; $${tipTotal.toFixed(2)} of tips came through in full` : ""}). Month-end payouts are always free. 🌊`);
     }

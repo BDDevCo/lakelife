@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { assertOps } from "@/app/ops/data";
 import { refundableRemaining, defaultClawback } from "@/lib/refunds";
 import { executeRefund, type RefundResult } from "@/lib/refund-core";
+import { readFailedMessage } from "@/lib/must-read";
 // NOTE no `export type` re-exports from a "use server" module — the server
 // actions loader re-exports every name as a VALUE and crashes at runtime
 // (proof run, 2026-07-24). Import RefundResult from @/lib/refund-core.
@@ -32,31 +33,43 @@ export async function quoteRefund(jobId: string): Promise<{
   if (!ops) return { ok: false, error: "Ops only." };
   const admin = createServiceClient();
 
-  const { data: job } = await admin
+  // Every number on this modal is read from here, and ops repeats them to a
+  // customer on the phone. A failed read must never arrive as "no invoice",
+  // "nothing captured" or a confident $0 — see lib/must-read.ts.
+  const { data: job, error: jobErr } = await admin
     .from("jobs")
     .select("id, customer_price, vendor_cost, vendor_id")
     .eq("id", jobId)
     .maybeSingle();
+  if (jobErr) return { ok: false, error: readFailedMessage("this job", jobErr) };
   if (!job) return { ok: false, error: "Job not found." };
 
-  const { data: invoice } = await admin
+  const { data: invoice, error: invoiceErr } = await admin
     .from("invoices").select("id, amount, status").eq("job_id", jobId).maybeSingle();
+  if (invoiceErr) return { ok: false, error: readFailedMessage("the bill on this job", invoiceErr) };
   if (!invoice) return { ok: false, error: "No invoice on this job yet." };
-  const { data: payment } = await admin
+  const { data: payment, error: paymentErr } = await admin
     .from("payments").select("id, amount, status, processor_ref")
     .eq("invoice_id", invoice.id).eq("status", "captured").maybeSingle();
+  if (paymentErr) return { ok: false, error: readFailedMessage("the payment on this bill", paymentErr) };
   if (!payment) return { ok: false, error: "Nothing captured on this job — there's no cash to send back." };
 
-  const { data: priorRows } = await admin
+  // A failed read here would show the FULL captured amount as still
+  // refundable — ops would type a number the executor then refuses.
+  const { data: priorRows, error: priorErr } = await admin
     .from("refunds").select("amount, crew_clawback").eq("invoice_id", invoice.id);
+  if (priorErr) return { ok: false, error: readFailedMessage("the refunds already on this bill", priorErr) };
   const already = (priorRows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
   const alreadyClawed = (priorRows ?? []).reduce((s, r) => s + Number(r.crew_clawback ?? 0), 0);
   const captured = Number(payment.amount ?? 0);
   const refundable = refundableRemaining(captured, already);
 
-  const { data: payout } = await admin
+  // `crewPaidOut` below is decided from this row's absence — a failed read
+  // would tell ops the crew hasn't been paid when they may well have been.
+  const { data: payout, error: payoutErr } = await admin
     .from("payouts").select("id, amount, original_amount, status, batch_id")
     .eq("job_id", jobId).eq("kind", "earning").maybeSingle();
+  if (payoutErr) return { ok: false, error: readFailedMessage("the crew's earning on this job", payoutErr) };
   // Across MULTIPLE partial refunds the crew can never give back more than
   // they were EVER OWED (the earning's immutable original — a cancellation
   // fee only ever paid the crew their share, never vendor_cost).
@@ -66,8 +79,11 @@ export async function quoteRefund(jobId: string): Promise<{
   // Disclosure only — see the field's comment. Deliberately NOT added to
   // `capturedCash` or `refundable`: those bound what this control may hand
   // back, and it cannot hand back a tip.
-  const { data: tipRows } = await admin
+  // A tip read that failed must not show as "no tip charged" — this number
+  // exists precisely because ops was deciding from a screen that omitted it.
+  const { data: tipRows, error: tipErr } = await admin
     .from("payments").select("amount").eq("tip_job_id", jobId).eq("status", "captured");
+  if (tipErr) return { ok: false, error: readFailedMessage("the tip charged on this job", tipErr) };
   const tipCharged = Math.round(
     (tipRows ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0) * 100,
   ) / 100;

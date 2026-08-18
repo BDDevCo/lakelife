@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { toDaterange, parseDaterange, type Term } from "@/lib/parks";
 import { parseRentRoll, contentHash, redactSensitive, type ParseResult } from "@/lib/roll-parse";
@@ -79,7 +80,10 @@ export async function readPaste(
   // database will happily hold, because the one-claim-per-park index is
   // partial (it only applies where user_id is not null).
   if (!opts?.force) {
-    const { data: prior } = await admin
+    // FAILS OPEN, AND THE PARAGRAPH ABOVE SAYS WHAT THAT COSTS: a dropped read
+    // is indistinguishable from "no prior paste", so the re-paste guard simply
+    // does not run and the same 79 people are filed twice.
+    const priorRes = await admin
       .from("park_import_batches")
       .select("id, created_at, committed_at, undone_at")
       .eq("park_id", parkId)
@@ -88,6 +92,10 @@ export async function readPaste(
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (priorRes.error) {
+      return { ok: false, error: readFailedMessage("your earlier imports", priorRes.error) };
+    }
+    const prior = priorRes.data;
     if (prior) {
       return {
         ok: false,
@@ -101,7 +109,13 @@ export async function readPaste(
     }
   }
 
+  // The known lot numbers change how the sheet PARSES — which lines are a
+  // tenancy and which are a heading — so reading none of them silently
+  // produces a different reading of the same paste.
   const lots = await loadLotNumbers(admin, parkId);
+  if (lots === null) {
+    return { ok: false, error: readFailedMessage("your lot numbers", "see the read above") };
+  }
   const parsed = parseRentRoll(rawText, { knownLots: lots });
 
   const { data: batch, error: batchErr } = await admin
@@ -190,15 +204,21 @@ function rowsForStorage(batchId: string, parsed: ParseResult) {
     .filter((r) => (seen.has(r.line_no) ? false : (seen.add(r.line_no), true)));
 }
 
+/** NULL means the read failed — not that the park has no lots yet, which on
+ *  closing morning is a perfectly ordinary thing for it to be. */
 async function loadLotNumbers(
   admin: ReturnType<typeof createServiceClient>,
   parkId: string,
-): Promise<string[]> {
-  const { data } = await admin
+): Promise<string[] | null> {
+  const res = await admin
     .from("park_lots")
     .select("lot_number")
     .eq("park_id", parkId);
-  return (data ?? []).map((l) => l.lot_number as string);
+  if (res.error) {
+    console.error("[read failed] your lot numbers:", res.error);
+    return null;
+  }
+  return (res.data ?? []).map((l) => l.lot_number as string);
 }
 
 // ---------------------------------------------------------------- the plan --
@@ -242,35 +262,47 @@ export interface LoadedBatch {
  */
 export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
   const admin = createServiceClient();
-  const { data: batch } = await admin
+  // THROWS on a failed read rather than returning null, because null here
+  // means "that import is gone" to the screen and DENIED to `commitImport` —
+  // and because the plan this builds is what the commit then writes. The
+  // action below catches it; the page has the root boundary.
+  const batch = mustRead("that import", await admin
     .from("park_import_batches")
     .select("id, park_id, raw_text, cutover_date, lines_total, lines_read, committed_at, undone_at, counts")
     .eq("id", batchId)
-    .maybeSingle();
+    .maybeSingle());
   if (!batch) return null;
 
   const parkId = batch.park_id as string;
   if (!(await assertMyPark(parkId))) return null;
 
-  const [{ data: park }, { data: lotRows }, { data: rowRecords }] = await Promise.all([
+  const [parkRes, lotsRes, rowsRes] = await Promise.all([
     admin.from("parks").select("name, park_type, season_open_month, season_open_day, season_close_month, season_close_day")
       .eq("id", parkId).maybeSingle(),
     admin.from("park_lots").select("id, lot_number").eq("park_id", parkId),
     admin.from("park_import_rows").select("line_no, raw_line, verdict, flags, resolved, commit_error")
       .eq("batch_id", batchId).order("line_no"),
   ]);
+  const park = mustRead("your park", parkRes);
+  // Without the lots, every line looks like a lot that has to be created;
+  // without the row records, every answer he typed on this screen is lost and
+  // the rows go back to being blocked.
+  const lotRows = mustRead("your lots", lotsRes);
+  const rowRecords = mustRead("your answers on this import", rowsRes);
 
   const lots = (lotRows ?? []).map((l) => ({ id: l.id as string, lotNumber: l.lot_number as string }));
   const lotIds = lots.map((l) => l.id);
 
   // Tenancies that already hold dates, so a collision is caught before a write.
-  const { data: stayRows } = lotIds.length
+  // A failed read is an empty list, which is "no collisions" — the check the
+  // commit relies on to not put two households on one pad.
+  const stayRows = mustRead("who is already on those lots", lotIds.length
     ? await admin
         .from("lot_reservations")
         .select("park_lot_id, during, status")
         .in("park_lot_id", lotIds)
         .in("status", ["approved", "active"])
-    : { data: [] as { park_lot_id: string; during: string }[] };
+    : { data: [] as { park_lot_id: string; during: string; status: string }[], error: null });
 
   const liveStays = (stayRows ?? [])
     .map((s) => ({ lotId: s.park_lot_id as string, range: parseDaterange(s.during as string) }))
@@ -385,23 +417,33 @@ export async function resolveRow(
   resolved: Record<string, unknown>,
 ): Promise<ParkResult> {
   const admin = createServiceClient();
-  const { data: batch } = await admin
+  const batchRes = await admin
     .from("park_import_batches")
     .select("park_id, committed_at")
     .eq("id", batchId)
     .maybeSingle();
+  if (batchRes.error) {
+    return { ok: false, error: readFailedMessage("that import", batchRes.error) };
+  }
+  const batch = batchRes.data;
   if (!batch) return { ok: false, error: "That import is gone." };
   if (!(await assertMyPark(batch.park_id as string))) return { ok: false, error: DENIED };
   if (batch.committed_at) return { ok: false, error: "That import is already in." };
 
-  const { data: existing } = await admin
+  // This read is what makes the write a MERGE. Failing it reads as "he has
+  // answered nothing about this line", and the update below then overwrites
+  // the answers he already gave with only the one he just typed.
+  const existingRes = await admin
     .from("park_import_rows")
     .select("resolved")
     .eq("batch_id", batchId)
     .eq("line_no", lineNo)
     .maybeSingle();
+  if (existingRes.error) {
+    return { ok: false, error: readFailedMessage("your earlier answers", existingRes.error) };
+  }
 
-  const merged = { ...((existing?.resolved as Record<string, unknown>) ?? {}), ...resolved };
+  const merged = { ...((existingRes.data?.resolved as Record<string, unknown>) ?? {}), ...resolved };
   const { error } = await admin
     .from("park_import_rows")
     .update({ resolved: merged })
@@ -426,16 +468,30 @@ export interface CommitOutcome extends ParkResult {
 }
 
 export async function commitImport(batchId: string): Promise<CommitOutcome> {
-  const loaded = await loadBatch(batchId);
+  // `loadBatch` throws on a failed read now. This is the button, so it catches
+  // and answers in the shape the screen is awaiting — and it must answer
+  // BEFORE any row is written, which is why the catch is out here.
+  let loaded: LoadedBatch | null;
+  try {
+    loaded = await loadBatch(batchId);
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("that import", e) };
+  }
   if (!loaded) return { ok: false, error: DENIED };
   if (loaded.committedAt) return { ok: false, error: "You already imported this one." };
 
   const admin = createServiceClient();
-  const { data: park } = await admin
+  // `rent_due_day` goes onto every tenancy this writes, so the fallback of 1
+  // has to mean "his park has no due day set" and nothing else.
+  const parkRes = await admin
     .from("parks")
     .select("park_type, rent_due_day")
     .eq("id", loaded.parkId)
     .maybeSingle();
+  if (parkRes.error) {
+    return { ok: false, error: readFailedMessage("your park", parkRes.error, { money: true }) };
+  }
+  const park = parkRes.data;
 
   const defaultSiteType = siteTypeForPark((park?.park_type as string) ?? null);
   const defaults = SITE_DEFAULTS[defaultSiteType] ?? { hasWater: true, hasSewer: true };
@@ -490,13 +546,16 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
     }
     // 23505 — he created it in another tab thirty seconds ago. Use theirs.
     if (error?.code === "23505") {
-      const { data: found } = await admin
+      const foundRes = await admin
         .from("park_lots")
         .select("id")
         .eq("park_id", loaded.parkId)
         .eq("lot_number", label)
         .maybeSingle();
-      if (found) { lotIdByLabel.set(label, found.id as string); continue; }
+      // Per-row, so a failed read here falls through to the failure line below
+      // rather than stopping the other 78. It must not be silent, though.
+      if (foundRes.error) console.error(`[read failed] lot ${label}:`, foundRes.error);
+      if (foundRes.data) { lotIdByLabel.set(label, foundRes.data.id as string); continue; }
     }
     failures.push({ lot: label, name: null, message: `Couldn't create lot ${label}.` });
   }
@@ -682,13 +741,28 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
     const rateLotIds = loaded.plan.rates
       .map((r) => lotIdByLabel.get(r.lotLabel))
       .filter(Boolean) as string[];
-    const { data: haveRates } = rateLotIds.length
+    const haveRatesRes = rateLotIds.length
       ? await admin.from("lot_rates").select("park_lot_id").in("park_lot_id", rateLotIds).eq("term", "monthly")
-      : { data: [] as { park_lot_id: string }[] };
-    const alreadyRated = new Set((haveRates ?? []).map((r) => r.park_lot_id as string));
+      : { data: [] as { park_lot_id: string }[], error: null };
+    // FAILS OPEN INTO THE ONE THING THIS BLOCK PROMISES NOT TO DO. An empty
+    // set means "nobody has a rate yet", so the upsert below would put the
+    // seller's number over the owner's own on every lot. We cannot tell which
+    // are his, so none are written and the receipt says so by name.
+    const rateReadFailed = !!haveRatesRes.error;
+    if (rateReadFailed) {
+      console.error("[read failed] the rates already on those lots:", haveRatesRes.error);
+    }
+    const alreadyRated = new Set((haveRatesRes.data ?? []).map((r) => r.park_lot_id as string));
 
     for (const r of loaded.plan.rates) {
       const lotId = lotIdByLabel.get(r.lotLabel);
+      if (rateReadFailed) {
+        failures.push({
+          lot: r.lotLabel, name: null,
+          message: `We couldn't check whether lot ${r.lotLabel} already had a rent set, so we left it alone. Set it on Lots & rates.`,
+        });
+        continue;
+      }
       if (!lotId || r.amount == null || alreadyRated.has(lotId)) continue;
       const { error } = await admin
         .from("lot_rates")
@@ -765,8 +839,15 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
   // Only when it is null. If he set a date on Park setup that is his answer,
   // and an import must not quietly move his ledger's start.
   if (loaded.cutover) {
-    const { data: park } = await admin
+    const cutRes = await admin
       .from("parks").select("cutover_date").eq("id", loaded.parkId).maybeSingle();
+    // The tenancies are already written, so this cannot refuse — but a failed
+    // read leaves parks.cutover_date NULL and the go-live gate switched off,
+    // which is the whole bug this paragraph describes. Say so on the log.
+    if (cutRes.error) {
+      console.error("[read failed] your park's takeover date:", cutRes.error);
+    }
+    const park = cutRes.data;
     if (park && park.cutover_date == null) {
       await admin
         .from("parks")
@@ -805,20 +886,31 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
  */
 export async function undoImport(batchId: string): Promise<ParkResult> {
   const admin = createServiceClient();
-  const { data: batch } = await admin
+  const batchRes = await admin
     .from("park_import_batches")
     .select("park_id, committed_at, undone_at")
     .eq("id", batchId)
     .maybeSingle();
+  if (batchRes.error) {
+    return { ok: false, error: readFailedMessage("that import", batchRes.error) };
+  }
+  const batch = batchRes.data;
   if (!batch) return { ok: false, error: "That import is gone." };
   if (!(await assertMyPark(batch.park_id as string))) return { ok: false, error: DENIED };
   if (!batch.committed_at) return { ok: false, error: "That import was never put in." };
   if (batch.undone_at) return { ok: false, error: "That import was already undone." };
 
-  const { data: rows } = await admin
+  // Everything this function deletes comes off this one read. A failure gives
+  // three empty lists, and the undo then deletes nothing, stamps `undone_at`
+  // so it can never be retried, and reports "your roll is back how it was".
+  const rowsRes = await admin
     .from("park_import_rows")
     .select("created_reservation_id, created_renter_id, created_lot_id")
     .eq("batch_id", batchId);
+  if (rowsRes.error) {
+    return { ok: false, error: readFailedMessage("what that import created", rowsRes.error, { money: true }) };
+  }
+  const rows = rowsRes.data;
 
   const resIds = (rows ?? []).map((r) => r.created_reservation_id as string | null).filter(Boolean) as string[];
   const renterIds = (rows ?? []).map((r) => r.created_renter_id as string | null).filter(Boolean) as string[];
@@ -832,11 +924,19 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
   // recorded against them — this check is here so he gets a sentence he can act
   // on instead of a foreign-key error, and so it refuses on the BILL, before
   // any money has even arrived.
+  //
+  // AND IT FAILS OPEN. `count` is null on a failed read, `null && ...` is
+  // false, so the refusal is skipped and the delete runs — the one path this
+  // guard exists to stop, taking the bills and the money with it.
   if (lotIds.length) {
-    const { count } = await admin
+    const chargesRes = await admin
       .from("park_charges")
       .select("id", { count: "exact", head: true })
       .in("park_lot_id", lotIds);
+    if (chargesRes.error) {
+      return { ok: false, error: readFailedMessage("the bills on those lots", chargesRes.error, { money: true }) };
+    }
+    const count = chargesRes.count;
     if (count && count > 0) {
       return {
         ok: false,
@@ -857,13 +957,19 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
   // nothing). The error was never read, so the function carried on: lots
   // deleted, `undone_at` stamped, and the toast said "your roll is back how it
   // was" over a roll where every household file survived.
+  //
+  // Same shape, same failure: a dropped count is not "no money on account".
   if (renterIds.length) {
-    const { count: held } = await admin
+    const heldRes = await admin
       .from("park_payments")
       .select("id", { count: "exact", head: true })
       .in("renter_id", renterIds)
       .is("charge_id", null)
       .is("reversed_at", null);
+    if (heldRes.error) {
+      return { ok: false, error: readFailedMessage("money held on account", heldRes.error, { money: true }) };
+    }
+    const held = heldRes.count;
     if (held && held > 0) {
       return {
         ok: false,
@@ -892,11 +998,18 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
   // Lots created by the import come out ONLY if nobody else has since been put
   // on them. A lot with a tenancy on it is now his inventory, not our mess.
   for (const lotId of lotIds) {
-    const { count } = await admin
+    const usedRes = await admin
       .from("lot_reservations")
       .select("id", { count: "exact", head: true })
       .eq("park_lot_id", lotId);
-    if (!count) await admin.from("park_lots").delete().eq("id", lotId);
+    // FAILS OPEN INTO A DELETE. `!count` is true for a failed count as well as
+    // for an empty one, so a dropped read used to remove a pad somebody had
+    // since been put on. Per-lot, so the rest of the undo still finishes.
+    if (usedRes.error) {
+      console.error(`[read failed] whether lot ${lotId} is in use:`, usedRes.error);
+      continue;
+    }
+    if (!usedRes.count) await admin.from("park_lots").delete().eq("id", lotId);
   }
 
   await admin
@@ -912,16 +1025,25 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
 /** Remove a renter file that never made it onto a lot. */
 export async function removeOrphan(batchId: string, renterId: string): Promise<ParkResult> {
   const admin = createServiceClient();
-  const { data: batch } = await admin
+  const batchRes = await admin
     .from("park_import_batches").select("park_id").eq("id", batchId).maybeSingle();
+  if (batchRes.error) {
+    return { ok: false, error: readFailedMessage("that import", batchRes.error) };
+  }
+  const batch = batchRes.data;
   if (!batch) return { ok: false, error: "That import is gone." };
   if (!(await assertMyPark(batch.park_id as string))) return { ok: false, error: DENIED };
 
-  const { count } = await admin
+  // FAILS OPEN INTO A DELETE. A failed count is null, `if (count)` is false,
+  // and the household file of somebody who IS on a lot gets removed.
+  const usedRes = await admin
     .from("lot_reservations")
     .select("id", { count: "exact", head: true })
     .eq("renter_id", renterId);
-  if (count) return { ok: false, error: "They're on a lot now — end the tenancy instead." };
+  if (usedRes.error) {
+    return { ok: false, error: readFailedMessage("whether they're on a lot", usedRes.error) };
+  }
+  if (usedRes.count) return { ok: false, error: "They're on a lot now — end the tenancy instead." };
 
   await admin.from("park_renters").delete().eq("id", renterId).eq("park_id", batch.park_id as string);
   revalidatePath("/park");

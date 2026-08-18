@@ -14,6 +14,7 @@ import { lotFits, fitProblemText, type Lot } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
 import { periodIsBillable, firstBillablePeriod } from "@/lib/billing-start";
 import { prettyMonth } from "@/app/park/ledger-helpers";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * The park owner's home screen — the rent roll. Everything here is scoped to
@@ -72,18 +73,27 @@ export default async function ParkPage() {
   // for a part month, and withheld entirely where a rent was never set —
   // billing somebody the fee alone is worse than billing nothing.
   const sb = await createClient();
-  const { data: parkRow } = await sb
-    .from("parks")
-    .select("rent_notice_days, rent_due_day, cutover_date")
-    .eq("id", park.id)
-    .maybeSingle();
+  // EVERY READ BELOW EITHER ANSWERS OR THROWS. Swallowed, `cutover_date` reads
+  // as "no cutover", which turns the pre-go-live guard forty lines down off;
+  // and missing fees quietly shrink what every household is shown as owing.
+  const parkRow = mustRead(
+    "your park's settings",
+    await sb
+      .from("parks")
+      .select("rent_notice_days, rent_due_day, cutover_date")
+      .eq("id", park.id)
+      .maybeSingle(),
+  );
   const noticeDays = (parkRow?.rent_notice_days as number) ?? 30;
 
-  const { data: feeRows } = await sb
-    .from("park_fees")
-    .select("label, amount, cadence, applies_to, active")
-    .eq("park_id", park.id)
-    .eq("active", true);
+  const feeRows = mustRead(
+    "your park's fees",
+    await sb
+      .from("park_fees")
+      .select("label, amount, cadence, applies_to, active")
+      .eq("park_id", park.id)
+      .eq("active", true),
+  );
 
   const monthlyFees: StatementFee[] = (feeRows ?? [])
     .filter((f) => ["all_lots", "long_term"].includes(f.applies_to as string))
@@ -137,16 +147,26 @@ export default async function ParkPage() {
   // A DISPUTED BILL IS NOT ARREARS. It is counted separately below, because
   // "they say they paid and we haven't found it" is a thing to go and settle,
   // not money to chase.
-  const { data: liveCharges } = await sb
-    .from("park_charges")
-    .select("id, amount, paid_total, status, period_month")
-    .eq("park_id", park.id)
-    .eq("period_month", thisMonth)
-    .neq("status", "void");
-  const { data: openClaims } = await sb
-    .from("park_payment_claims")
-    .select("charge_id")
-    .is("resolved_at", null);
+  //
+  // AND A FAILED READ IS NOT A SETTLED MONTH. Swallowed, this pair renders
+  // "0 billed, $0 outstanding, nothing disputed" — the tile he plans against,
+  // saying the calmest possible wrong thing.
+  const liveCharges = mustRead(
+    "this month's bills",
+    await sb
+      .from("park_charges")
+      .select("id, amount, paid_total, status, period_month")
+      .eq("park_id", park.id)
+      .eq("period_month", thisMonth)
+      .neq("status", "void"),
+  );
+  const openClaims = mustRead(
+    "what households have told you about paying",
+    await sb
+      .from("park_payment_claims")
+      .select("charge_id")
+      .is("resolved_at", null),
+  );
   const disputedIds = new Set((openClaims ?? []).map((c) => c.charge_id as string));
 
   const billedThisMonth = (liveCharges ?? []).length;
@@ -190,14 +210,16 @@ export default async function ParkPage() {
   // rather than assumed, exactly as data.ts does it.
   const contact = new Map<string, { email: string | null; invitedAt: string | null }>();
   {
-    const { data: contactRows, error: contactErr } = await createServiceClient()
-      .from("park_renters")
-      .select("id, email, invite_sent_at, user_id, claim_declined_at")
-      .eq("park_id", park.id);
-
-    // Not swallowed. An error here reads as "nobody is reachable", which is a
-    // quiet, wrong answer to the question this whole screen exists to ask.
-    if (contactErr) console.error("[park] contact read failed", contactErr.message);
+    // Not swallowed, and no longer merely logged. An error here reads as
+    // "nobody is reachable", which is a quiet, wrong answer to the question
+    // this whole screen exists to ask — so it stops the screen instead.
+    const contactRows = mustRead(
+      "how to reach each household",
+      await createServiceClient()
+        .from("park_renters")
+        .select("id, email, invite_sent_at, user_id, claim_declined_at")
+        .eq("park_id", park.id),
+    );
 
     for (const c of contactRows ?? []) {
       contact.set(c.id as string, {

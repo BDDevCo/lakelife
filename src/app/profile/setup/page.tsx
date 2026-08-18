@@ -2,6 +2,7 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { ProfileWizard } from "@/components/ProfileWizard";
 import { createClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getFullProfile } from "../data";
 import type { ServiceRule } from "@/lib/pricing";
@@ -44,7 +45,7 @@ export default async function SetupPage({
     );
   }
 
-  const [{ data: lakeRows }, { data: parkRows }, { data: serviceRows }, profile] = await Promise.all([
+  const [lakeRes, parkRes, serviceRes, profile] = await Promise.all([
     supabase.from("lakes").select("name").eq("is_fixture", false).order("name"),
     // Published parks only — an unpublished one is still being set up and its
     // owner has not asked to be listed anywhere.
@@ -53,6 +54,12 @@ export default async function SetupPage({
     // When adding a new property, start blank; otherwise load the active one.
     addingNew ? Promise.resolve(null) : getFullProfile(),
   ]);
+  // An empty dropdown here is indistinguishable from "we don't serve any lakes"
+  // — and a park list that failed to load lets an edit save park_id = null over
+  // a park the resident already declared.
+  const lakeRows = mustRead("the lakes we serve", lakeRes);
+  const parkRows = mustRead("the parks we serve", parkRes);
+  const serviceRows = mustRead("the service menu", serviceRes);
 
   const lakes = (lakeRows ?? []).map((l) => l.name);
   const parks = (parkRows ?? []).map((r) => ({ id: r.id as string, name: r.name as string }));
