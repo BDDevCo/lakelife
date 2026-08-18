@@ -31,6 +31,39 @@ export interface PayResult {
   signal?: string;
 }
 
+/**
+ * A CHECK THAT COULD NOT BE RUN IS NOT A CHECK THAT PASSED.
+ *
+ * Every read in this file used to be written `const { data } = await ...`,
+ * which cannot tell a failed read from an empty one. Four of them fail CLOSED
+ * and merely lie — a dropped connection produced "We can't find that bill" or,
+ * worse, "That isn't your bill", told to somebody looking at their own rent.
+ *
+ * ONE OF THEM FAILED OPEN, and that one took money. The disputed-bill guard
+ * counted open claims and read `(count ?? 0) > 0`; a failed count is `null`, so
+ * it evaluated false and the charge went through on a bill the resident had
+ * formally disputed. The comment above it called that "the single worst thing
+ * this action could do", and it was one dropped packet away at all times.
+ *
+ * The second-order effect is what makes it hard to notice afterwards: 0074's
+ * `trg_settle_claims_on_payment` fires on the insert and marks the open claim
+ * `matched` — "A payment was recorded against this bill." So the dispute is
+ * closed as CONCEDED, and the only trace that the guard failed is destroyed by
+ * the same transaction that failed it.
+ *
+ * Actions RETURN rather than throw — the caller is a button expecting a
+ * result, not a page with an error boundary — so this is the shared refusal.
+ * It names no fact about their account, because the whole problem is that we
+ * do not have one.
+ */
+function couldNotCheck(what: string, error: unknown): PayResult {
+  console.error(`[read failed] ${what}:`, error);
+  return {
+    ok: false,
+    error: "We couldn't check something just now, so nothing has been charged. Try again in a moment.",
+  };
+}
+
 export async function payRent(chargeId: string): Promise<PayResult> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -42,19 +75,25 @@ export async function payRent(chargeId: string): Promise<PayResult> {
   // The charge id comes from a browser, so nothing is trusted about it. The
   // path from the signed-in account to the bill runs through the CLAIMED
   // renter file, which is the same gate the portal itself uses.
-  const { data: charge } = await admin
+  const chargeRes = await admin
     .from("park_charges")
     .select("id, park_id, renter_id, amount, paid_total, status, period_month")
     .eq("id", chargeId)
     .maybeSingle();
+  if (chargeRes.error) return couldNotCheck("the bill", chargeRes.error);
+  const charge = chargeRes.data;
   if (!charge) return { ok: false, error: "We can't find that bill." };
 
-  const { data: file } = await admin
+  // "That isn't your bill" is an accusation. It must never be reachable by a
+  // dropped connection, only by a charge that genuinely belongs elsewhere.
+  const fileRes = await admin
     .from("park_renters")
     .select("id")
     .eq("id", charge.renter_id as string)
     .eq("user_id", user.id)
     .maybeSingle();
+  if (fileRes.error) return couldNotCheck("whose bill this is", fileRes.error);
+  const file = fileRes.data;
   if (!file) return { ok: false, error: "That isn't your bill." };
 
   if ((charge.status as string) === "void") {
@@ -62,11 +101,13 @@ export async function payRent(chargeId: string): Promise<PayResult> {
   }
 
   // ---- the park has to have agreed to take money this way ----------------
-  const { data: park } = await admin
+  const parkRes = await admin
     .from("parks")
     .select("accepts_online_rent, name, card_fee_pct")
     .eq("id", charge.park_id as string)
     .maybeSingle();
+  if (parkRes.error) return couldNotCheck("the park's settings", parkRes.error);
+  const park = parkRes.data;
   if (!park?.accepts_online_rent) {
     return { ok: false, error: "This park isn't taking online rent payments yet." };
   }
@@ -75,11 +116,19 @@ export async function payRent(chargeId: string): Promise<PayResult> {
   // They have told the office the ledger is wrong and nothing is being chased
   // until somebody looks. Taking the money anyway — especially on a future
   // autopay run — is the single worst thing this action could do.
-  const { count: openClaims } = await admin
+  //
+  // THE ONE THAT FAILED OPEN. A head-count resolves to `{ count: null, error }`
+  // when the read fails, and `(null ?? 0) > 0` is false — so a dropped
+  // connection did not skip this guard, it PASSED it, and the card was charged
+  // on a bill the resident had formally disputed. Checking the error is the
+  // whole fix; the count is now only trusted when there was an answer.
+  const claimsRes = await admin
     .from("park_payment_claims")
     .select("id", { count: "exact", head: true })
     .eq("charge_id", charge.id as string)
     .is("resolved_at", null);
+  if (claimsRes.error) return couldNotCheck("whether you've flagged this bill", claimsRes.error);
+  const openClaims = claimsRes.count;
   if ((openClaims ?? 0) > 0) {
     return {
       ok: false,
@@ -90,13 +139,15 @@ export async function payRent(chargeId: string): Promise<PayResult> {
   const owed = Math.round((Number(charge.amount ?? 0) - Number(charge.paid_total ?? 0)) * 100) / 100;
   if (owed <= 0) return { ok: false, error: "That bill is already settled." };
 
-  const { data: pm } = await admin
+  const pmRes = await admin
     .from("payment_methods")
     .select("token, last4")
     .eq("user_id", user.id)
     .order("is_default", { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (pmRes.error) return couldNotCheck("your saved card", pmRes.error);
+  const pm = pmRes.data;
   if (!pm?.token) return { ok: false, error: "Add a payment method first." };
 
   // ---- the card costs more than a bank transfer --------------------------
@@ -207,19 +258,23 @@ export async function sayIPaid(
   // ---- is this bill actually theirs? -------------------------------------
   // Same gate as payRent: the path from the signed-in account to the bill runs
   // through the CLAIMED renter file. The charge id came from a browser.
-  const { data: charge } = await admin
+  const chargeRes = await admin
     .from("park_charges")
     .select("id, park_id, renter_id, amount, paid_total, status, period_month")
     .eq("id", chargeId)
     .maybeSingle();
+  if (chargeRes.error) return couldNotCheck("the bill", chargeRes.error);
+  const charge = chargeRes.data;
   if (!charge) return { ok: false, error: "We can't find that bill." };
 
-  const { data: file } = await admin
+  const fileRes = await admin
     .from("park_renters")
     .select("id, display_name")
     .eq("id", charge.renter_id as string)
     .eq("user_id", user.id)
     .maybeSingle();
+  if (fileRes.error) return couldNotCheck("whose bill this is", fileRes.error);
+  const file = fileRes.data;
   if (!file) return { ok: false, error: "That isn't your bill." };
 
   if ((charge.status as string) === "void") {
@@ -244,11 +299,17 @@ export async function sayIPaid(
   // A second claim on the same bill tells the office nothing the first didn't,
   // and every open claim is a household not being chased. One is the record;
   // more than one is a way to never be asked for rent again.
-  const { count: open } = await admin
+  // Same fails-open shape as payRent's guard, milder consequence: a failed
+  // count would let a second claim be filed on the same bill. Refusing is the
+  // safe direction here too — "try again" costs a tap; a duplicated claim
+  // makes the office arbitrate a disagreement the resident never had.
+  const openRes = await admin
     .from("park_payment_claims")
     .select("id", { count: "exact", head: true })
     .eq("charge_id", charge.id as string)
     .is("resolved_at", null);
+  if (openRes.error) return couldNotCheck("what you've already told the office", openRes.error);
+  const open = openRes.count;
   if ((open ?? 0) > 0) {
     return {
       ok: false,
@@ -320,7 +381,17 @@ async function tellTheOffice(
     const ids = (members ?? []).map((m) => m.user_id as string).filter(Boolean);
     if (ids.length === 0) return;
 
-    const { data: people } = await admin.from("users").select("id, email").in("id", ids);
+    // Swallowed like everything else in this helper — the claim is already
+    // written and a failed notification must not undo it — but NAMED, so the
+    // rule "no read discards its error silently" holds everywhere in this file
+    // with no exception to remember. The office finding out late is a real
+    // consequence; it just isn't one worth failing the resident's claim over.
+    const peopleRes = await admin.from("users").select("id, email").in("id", ids);
+    if (peopleRes.error) {
+      console.error("[read failed, notification skipped] the park's owners:", peopleRes.error);
+      return;
+    }
+    const people = peopleRes.data;
     const parkName = (park?.name as string) ?? "Your park";
 
     const lines = [

@@ -162,3 +162,44 @@ describe("the screen tells the difference", () => {
     expect(boundary).toMatch(/nothing about your rent/);
   });
 });
+
+describe("a guard that could not run is not a guard that passed", () => {
+  const pay = () => read("../app/parks/pay-actions.ts");
+
+  it("payRent's disputed-bill guard checks the error before trusting the count", () => {
+    // THE BUG: `const { count } = await ...` then `(count ?? 0) > 0`. A failed
+    // head-count is `{ count: null, error }`, so the expression is false and the
+    // guard PASSES — charging a card on a bill the resident formally disputed.
+    // Worse, 0074's trg_settle_claims_on_payment then marks that claim
+    // 'matched', closing the dispute as conceded and erasing the evidence.
+    const s = pay();
+    const guard = s.indexOf("park_payment_claims");
+    expect(guard).toBeGreaterThan(-1);
+    const region = s.slice(guard - 400, guard + 700);
+    expect(region, "the claims read must check .error").toMatch(/claimsRes\.error/);
+    // And the bare fails-open form must be gone entirely.
+    expect(s).not.toMatch(/const\s*\{\s*count:\s*openClaims\s*\}/);
+  });
+
+  it("no read in the money path silently discards its error", () => {
+    const s = pay();
+    // auth.getUser() is a different shape and fails closed to "sign in again";
+    // everything reading `admin` must go through an explicit error check.
+    const bare = s.match(/const\s*\{\s*(data|count):[^}]*\}\s*=\s*await\s+admin/g) ?? [];
+    expect(bare, `swallowing reads: ${bare.join(" | ")}`).toEqual([]);
+  });
+
+  it("refuses without asserting anything about their account", () => {
+    // The refusal must not invent a fact — the whole problem is we haven't got
+    // one. And it must say no money moved, which is the reader's first question.
+    const s = pay();
+    expect(s).toMatch(/function couldNotCheck/);
+    expect(s).toMatch(/nothing has been charged/);
+  });
+
+  it("sayIPaid's duplicate-claim guard fails closed too", () => {
+    const s = pay();
+    expect(s).toMatch(/openRes\.error/);
+    expect(s).not.toMatch(/const\s*\{\s*count:\s*open\s*\}/);
+  });
+});
