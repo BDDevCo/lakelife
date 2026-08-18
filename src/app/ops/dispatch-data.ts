@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { expiryActionFor } from "@/lib/waitlist";
 import { todayLakeDate } from "@/lib/booking";
 import { assertOps } from "./data";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * Ops-side view of the auto-dispatch machine (Phase 8). Everything here is
@@ -48,15 +49,23 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
   const admin = createServiceClient();
   const today = todayLakeDate();
 
-  const { data } = await admin
-    .from("jobs")
-    .select(
-      "id, property_id, date, customer_price, service_id, " +
-        "services(name, criticality), properties(address, preferred_vendor, lake_id, lakes(name))",
-    )
-    .eq("status", "requested")
-    .is("vendor_id", null)
-    .order("date", { ascending: false });
+  // THE BOARD SAYS "All jobs have a crew ✓" ON AN EMPTY LIST. That sentence is
+  // the entire point of this screen, and a dropped connection used to produce it
+  // — the failure and a genuinely healthy dispatch queue arrived here as exactly
+  // the same `data: null`. mustRead throws instead; the empty case still means
+  // empty, it just stops meaning "we couldn't look".
+  const data = mustRead(
+    "the jobs still waiting for a crew",
+    await admin
+      .from("jobs")
+      .select(
+        "id, property_id, date, customer_price, service_id, " +
+          "services(name, criticality), properties(address, preferred_vendor, lake_id, lakes(name))",
+      )
+      .eq("status", "requested")
+      .is("vendor_id", null)
+      .order("date", { ascending: false }),
+  );
   // NOTE: the `.gte("date", today)` filter that used to live here is GONE, and
   // that is the point. It was safe only because the nightly cancelled every
   // past-dated unfilled job, so nothing could linger behind it. Migration 0053
@@ -78,10 +87,16 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
   if (rows.length === 0) return [];
 
   // Active, insured crews (for the reason heuristic — incl. WHICH lakes).
-  const { data: vendors } = await admin
-    .from("vendors")
-    .select("service_types, service_lakes, coi_expiry, status")
-    .eq("status", "active");
+  // Not optional decoration: an empty crew list makes every row read "No active,
+  // insured crew signed up for this service", which sends ops recruiting for a
+  // problem that does not exist.
+  const vendors = mustRead(
+    "the active crews",
+    await admin
+      .from("vendors")
+      .select("service_types, service_lakes, coi_expiry, status")
+      .eq("status", "active"),
+  );
   const insured = (vendors ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today);
 
   // Resolve preferred-crew company names in one shot.
@@ -94,7 +109,10 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
   );
   const companyById = new Map<string, string | null>();
   if (prefIds.length) {
-    const { data: prefVendors } = await admin.from("vendors").select("id, company").in("id", prefIds);
+    const prefVendors = mustRead(
+      "the preferred crews' company names",
+      await admin.from("vendors").select("id, company").in("id", prefIds),
+    );
     for (const v of prefVendors ?? []) companyById.set(v.id as string, (v.company as string) ?? null);
   }
 
@@ -181,9 +199,12 @@ export async function getPropertiesWithPreferred(): Promise<PropertyPreferred[]>
 
   const admin = createServiceClient();
 
-  const { data } = await admin
-    .from("properties")
-    .select("id, address, preferred_vendor, lakes(name), users(name)");
+  const data = mustRead(
+    "the properties and their preferred crews",
+    await admin
+      .from("properties")
+      .select("id, address, preferred_vendor, lakes(name), users(name)"),
+  );
 
   const rows = (data ?? []) as unknown as Array<{
     id: string;
@@ -201,7 +222,10 @@ export async function getPropertiesWithPreferred(): Promise<PropertyPreferred[]>
   );
   const companyById = new Map<string, string | null>();
   if (prefIds.length) {
-    const { data: prefVendors } = await admin.from("vendors").select("id, company").in("id", prefIds);
+    const prefVendors = mustRead(
+      "the preferred crews' company names",
+      await admin.from("vendors").select("id, company").in("id", prefIds),
+    );
     for (const v of prefVendors ?? []) companyById.set(v.id as string, (v.company as string) ?? null);
   }
 
@@ -240,11 +264,14 @@ export async function getPreferredJobIds(): Promise<string[]> {
   if (!ops) return [];
 
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("jobs")
-    .select("id, vendor_id, properties(preferred_vendor)")
-    .not("vendor_id", "is", null)
-    .in("status", ["scheduled", "in_progress", "complete", "paid"]);
+  const data = mustRead(
+    "which jobs went to the property's preferred crew",
+    await admin
+      .from("jobs")
+      .select("id, vendor_id, properties(preferred_vendor)")
+      .not("vendor_id", "is", null)
+      .in("status", ["scheduled", "in_progress", "complete", "paid"]),
+  );
 
   const out: string[] = [];
   for (const r of data ?? []) {

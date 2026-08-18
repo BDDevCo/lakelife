@@ -1,15 +1,16 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { getFullProfile, toPricingProfile } from "@/app/profile/data";
+import { getFullProfile, toPricingProfile, type FullProfile } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { serviceMinutes, type DurationBands } from "@/lib/duration";
 import { summariseCorrection, scopeNoteFor, type TimedRule } from "@/lib/arrival";
 import { todayLakeDate } from "@/lib/booking";
 import { planRecovery } from "@/lib/recovery";
 import { sendSms } from "@/lib/sms";
-import { withParkRate } from "@/lib/park-rates";
-import { loadParkRates } from "@/app/park/rate-data";
+import { withParkRate, type ParkRates } from "@/lib/park-rates";
+import { loadParkRatesChecked } from "@/app/park/rate-data";
+import { mustRead, softRead, readFailedMessage } from "@/lib/must-read";
 
 export interface ApprovalResult {
   ok: boolean;
@@ -37,7 +38,7 @@ async function assertOwnerFlag(flagId: string) {
   } = await supabase.auth.getUser();
   if (!user) return null;
   const admin = createServiceClient();
-  const { data } = await admin
+  const res = await admin
     .from("flags")
     // `jobs!flags_job_id_fkey` NAMES THE RELATIONSHIP ON PURPOSE.
     // 0084 added jobs.held_flag_id -> flags(id), so there are now TWO
@@ -48,11 +49,23 @@ async function assertOwnerFlag(flagId: string) {
     .select("id, status, job_id, vendor_id, proposed_change, at_arrival, crew_can_proceed, crew_cannot_reason, jobs!flags_job_id_fkey(property_id, service_id, properties(owner_id))")
     .eq("id", flagId)
     .maybeSingle();
+  // A FAILED READ IS NOT SOMEBODY ELSE'S FLAG. Both callers turn `null` into
+  // "That approval isn't yours." — an accusation made about the owner's own
+  // property at the exact moment the code has no fact to assert, and the exact
+  // moment a crew is standing in their driveway waiting on the answer. The
+  // failure is kept as a THIRD state so each caller can say what happened;
+  // `null` goes back to meaning only "no such flag, or not yours".
+  if (res.error) return { readFailed: true as const, error: res.error };
+  const data = res.data;
   if (!data) return null;
   const job = Array.isArray(data.jobs) ? data.jobs[0] : data.jobs;
   const prop = job && (Array.isArray(job.properties) ? job.properties[0] : job.properties);
   if ((prop as { owner_id?: string } | null)?.owner_id !== user.id) return null;
-  return { flag: data, propertyId: (job as { property_id?: string } | null)?.property_id ?? null };
+  return {
+    readFailed: false as const,
+    flag: data,
+    propertyId: (job as { property_id?: string } | null)?.property_id ?? null,
+  };
 }
 
 /**
@@ -63,6 +76,9 @@ async function assertOwnerFlag(flagId: string) {
  */
 export async function approveFlag(flagId: string): Promise<ApprovalResult> {
   const ctx = await assertOwnerFlag(flagId);
+  if (ctx?.readFailed) {
+    return { ok: false, error: readFailedMessage("this approval", ctx.error, { money: true }) };
+  }
   if (!ctx) return { ok: false, error: "That approval isn't yours." };
   // Pending -> apply the change. Already-approved -> allow a re-price retry
   // (if the profile change landed but repricing failed the first time).
@@ -79,11 +95,29 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
   // Re-price the owner's open jobs on this property from the updated profile.
   // vendor_cost/margin are preserved; margin is re-derived when a cost exists.
   if (ctx.propertyId) {
-    const profile = await getFullProfile(ctx.propertyId);
+    // getFullProfile THROWS when one of its reads fails (a half-read profile
+    // is what reprices a twelve-section pier as an eight). A server action
+    // cannot throw — its caller is a button awaiting { ok, error } — so the
+    // failure is caught here and returned as a sentence. Nothing is charged by
+    // this action, and the retry path above is designed for exactly this: the
+    // flag may already be approved, and approving again re-runs the repricing.
+    let profile: FullProfile | null = null;
+    try {
+      profile = await getFullProfile(ctx.propertyId);
+    } catch (e) {
+      return { ok: false, error: readFailedMessage("the updated profile", e, { money: true }) };
+    }
     if (profile?.hasProfile) {
-      const { data: services } = await admin
+      const servicesRes = await admin
         .from("services")
         .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands");
+      // An unread price list is an EMPTY price list one line below: every job
+      // misses `byId`, every job `continue`s, and the owner is told "nothing
+      // upcoming to re-price yet" about a season that is fully booked.
+      if (servicesRes.error) {
+        return { ok: false, error: readFailedMessage("the price list", servicesRes.error, { money: true }) };
+      }
+      const services = servicesRes.data;
       // Typed to INCLUDE the duration fields, not merely to carry them at
       // runtime — a plain ServiceRule cast would still compile if the select
       // above dropped them, and serviceMinutes would quietly return the flat
@@ -100,15 +134,35 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
       // purpose, so approving a crew's correction on a park's grounds repriced
       // a $100 mow to $0 — the crew files "the lawn is large, not medium", the
       // owner taps Approve, and the job silently becomes free.
-      const parkRates = profile.groundsForParkId
-        ? await loadParkRates(profile.groundsForParkId)
-        : null;
-      const { data: openJobs } = await admin
+      //
+      // AND AN UNREAD RATE MAP IS INDISTINGUISHABLE FROM A PARK THAT SET NO
+      // PRICES. `loadParkRates` swallows the failure — right for the nightly,
+      // wrong here, because the swallow leaves the zeroed global base in place,
+      // `price` comes out 0, the backstop below skips the job, and the owner is
+      // told "nothing upcoming to re-price". Take the checked read and stop.
+      let parkRates: ParkRates | null = null;
+      if (profile.groundsForParkId) {
+        const got = await loadParkRatesChecked(profile.groundsForParkId);
+        if (got.failed) {
+          return {
+            ok: false,
+            error: readFailedMessage("what this park pays", "park_service_rates read failed", { money: true }),
+          };
+        }
+        parkRates = got.rates;
+      }
+      const openJobsRes = await admin
         .from("jobs")
         .select("id, service_id, vendor_id, vendor_cost")
         .eq("property_id", ctx.propertyId)
         .is("group_id", null) // package jobs price as a SUM of legs — repricing by the anchor alone would collapse the bundle (component-aware reprice = S3)
         .in("status", ["requested", "scheduled"]);
+      // The visits we cannot read are not visits that do not exist: the loop
+      // below would run zero times and report "0 re-priced" as a success.
+      if (openJobsRes.error) {
+        return { ok: false, error: readFailedMessage("your upcoming visits", openJobsRes.error, { money: true }) };
+      }
+      const openJobs = openJobsRes.data;
 
       // THE CREW'S SIDE HAS TO MOVE TOO.
       //
@@ -124,10 +178,18 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
       const vendorIds = [...new Set((openJobs ?? []).map((j) => j.vendor_id).filter(Boolean))] as string[];
       const rateByVendorService = new Map<string, { base: unknown; unit_rate: unknown; band_pricing: unknown }>();
       if (vendorIds.length > 0) {
-        const { data: rateRows } = await admin
+        const rateRes = await admin
           .from("vendor_rates")
           .select("vendor_id, service_id, base, unit_rate, band_pricing")
           .in("vendor_id", vendorIds);
+        // A FAILED RATE READ IS "NO RATE ON FILE" TO THE CODE BELOW — and "no
+        // rate on file" means keep the crew's old cost while the customer's
+        // price moves. That is precisely the bug the comment above describes:
+        // the owner pays for twelve sections and the crew is paid for eight.
+        if (rateRes.error) {
+          return { ok: false, error: readFailedMessage("the crew's rates", rateRes.error, { money: true }) };
+        }
+        const rateRows = rateRes.data;
         for (const r of rateRows ?? []) {
           rateByVendorService.set(`${r.vendor_id}:${r.service_id}`, r);
         }
@@ -210,8 +272,17 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
   // Was the job they flagged already finished? Reported, not acted on.
   let flaggedJobAlreadyDone = false;
   if (ctx.flag.job_id) {
-    const { data: flagged } = await admin
-      .from("jobs").select("status").eq("id", ctx.flag.job_id as string).maybeSingle();
+    // DEGRADED, NOT SILENT, AND DELIBERATELY NOT FATAL. Everything above has
+    // already happened — the profile change is applied, the jobs are repriced,
+    // the crew has been told. This read only decides whether we ADD a sentence
+    // about the flagged visit keeping its old numbers, so a failure here must
+    // not fail an approval that has already succeeded. softRead logs it and
+    // the extra sentence is simply not offered.
+    const [flagged] = softRead(
+      "whether the flagged visit is already finished",
+      await admin.from("jobs").select("status").eq("id", ctx.flag.job_id as string).maybeSingle(),
+      null,
+    );
     const st = flagged?.status as string | undefined;
     flaggedJobAlreadyDone = st === "complete" || st === "paid";
   }
@@ -238,17 +309,21 @@ async function tellTheCrew(
   line: string,
 ): Promise<void> {
   try {
-    const { data: job } = await admin
+    // mustRead here so a failed lookup is LOGGED rather than read as "this job
+    // has no crew" — the silent version of that is a crew left in a driveway
+    // with no text, which is the whole failure this function exists to end.
+    // It throws into the catch below, where the decision is already safe.
+    const job = mustRead("the crew to text", await admin
       .from("jobs")
       .select("vendor_id, vendors(user_id)")
       .eq("id", jobId)
-      .maybeSingle();
+      .maybeSingle());
     const v = (Array.isArray(job?.vendors) ? job?.vendors[0] : job?.vendors) as
       { user_id?: string } | null;
     if (!v?.user_id) return;
 
-    const { data: u } = await admin
-      .from("users").select("phone").eq("id", v.user_id).maybeSingle();
+    const u = mustRead("the crew's phone number", await admin
+      .from("users").select("phone").eq("id", v.user_id).maybeSingle());
     const phone = (u?.phone as string) ?? "";
     if (!phone) return;
 
@@ -273,6 +348,9 @@ async function tellTheCrew(
  */
 export async function declineFlag(flagId: string): Promise<ApprovalResult> {
   const ctx = await assertOwnerFlag(flagId);
+  if (ctx?.readFailed) {
+    return { ok: false, error: readFailedMessage("this approval", ctx.error, { money: true }) };
+  }
   if (!ctx) return { ok: false, error: "That approval isn't yours." };
   if (ctx.flag.status !== "pending") return { ok: false, error: "Already decided." };
   const admin = createServiceClient();
@@ -343,12 +421,19 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
           .proposed_change ?? null;
         const svcId = (ctx.flag.jobs as { service_id?: string } | null)?.service_id;
         if (proposed && svcId && ctx.propertyId) {
-          const [{ data: rule }, profile] = await Promise.all([
+          // mustRead, not a bare read: an unread service rule reads as "no such
+          // service" and the job silently loses its scope note — the invoice
+          // then says "Pier install ✓" over a pier ending in open water. It
+          // throws into the catch below, which is the right place: the decline
+          // is already written and must not be undone over a note.
+          // (getFullProfile throws for the same reason and lands there too.)
+          const [ruleRes, profile] = await Promise.all([
             admin.from("services")
               .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands")
               .eq("id", svcId).maybeSingle(),
             getFullProfile(ctx.propertyId),
           ]);
+          const rule = mustRead("this service's pricing rule", ruleRes);
           if (rule && profile?.hasProfile) {
             const summary = summariseCorrection(
               rule as unknown as TimedRule,

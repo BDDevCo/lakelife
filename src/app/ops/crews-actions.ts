@@ -3,6 +3,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
 import { assertOps } from "./data";
+import { readFailedMessage } from "@/lib/must-read";
 
 export interface CrewResult {
   ok: boolean;
@@ -22,11 +23,17 @@ function validCapacity(n: unknown): number | null {
  * that is still in the future. Returns an error string, or null if clear.
  */
 async function assertRoutable(admin: ReturnType<typeof createServiceClient>, vendorId: string): Promise<string | null> {
-  const { data: v } = await admin
+  const res = await admin
     .from("vendors")
     .select("id, coi_url, w9_url, coi_expiry")
     .eq("id", vendorId)
     .maybeSingle();
+  // THIS IS THE GATE THAT DECIDES WHETHER A CREW MAY BE ROUTED, and every
+  // sentence it returns is a claim about their paperwork. A failed read takes
+  // the `!v` branch and tells ops the crew doesn't exist — about a crew whose
+  // COI and W-9 are both on file. Say what actually happened instead.
+  if (res.error) return readFailedMessage("that crew's insurance and W-9", res.error);
+  const v = res.data;
   if (!v) return "That crew doesn't exist.";
   if (!v.coi_url) return "No insurance certificate (COI) on file — the crew must upload one before they can be routed.";
   if (!v.w9_url) return "No W-9 on file — the crew must upload one before they can be routed.";

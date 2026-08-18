@@ -271,3 +271,41 @@ describe("the seams stay closed", () => {
     expect(src).toMatch(/mustRead\(\s*"this service"/);
   });
 });
+
+describe("the surfaces the first sweep missed", () => {
+  // The season simulation found these independently, in directories the 574-site
+  // pass never opened. Each one is a sentence that accuses the reader or their
+  // account of something, on a dropped connection.
+
+  it("/requests cannot say 'No requests yet' to a full season", () => {
+    const src = read("../app/requests/page.tsx");
+    expect(src).toMatch(/mustRead\(\s*"your requests"/);
+    // The honest empty state must survive — it is correct when it is true.
+    expect(read("../app/requests/page.tsx")).toMatch(/No requests yet/);
+    const bare = src.match(/const\s*\{\s*data:[^}]*\}\s*=\s*await\s+(query|groupQuery|admin)/g) ?? [];
+    expect(bare, `still swallowing: ${bare.join(" | ")}`).toEqual([]);
+  });
+
+  it("/approvals cannot say 'No approvals waiting' with a crew in the driveway", () => {
+    const src = read("../app/approvals/data.ts");
+    expect(src).toMatch(/mustRead\(\s*"your approvals"/);
+    expect((src.match(/const\s*\{\s*data\s*\}\s*=\s*await\s+admin/g) ?? [])).toEqual([]);
+  });
+
+  it("a job page cannot tell a customer their job was cancelled", () => {
+    // loadCustomerJobDetail returning null renders "It may have been cancelled,
+    // or it belongs to another account" — two accusations from one dropped read.
+    const src = read("../app/requests/job-detail-data.ts");
+    expect(src).toMatch(/mustRead\(\s*"this job"/);
+    const bare = src.match(/const\s*\{\s*(data|count):[^}]*\}\s*=\s*await\s+admin/g) ?? [];
+    expect(bare, `still swallowing: ${bare.join(" | ")}`).toEqual([]);
+  });
+
+  it("the card-on-file check cannot fail open", () => {
+    // (cardCount ?? 0) > 0 on a failed count is false, and the page then tells
+    // somebody with a card that their $450 is unpaid because they have none.
+    const src = read("../app/requests/job-detail-data.ts");
+    expect(src).toMatch(/mustCount\(\s*"whether you have a card on file"/);
+    expect(src).not.toMatch(/\(cardCount \?\? 0\) > 0/);
+  });
+});

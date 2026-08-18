@@ -4,6 +4,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { seasonEndFor, overstayDays, perdiemCharge } from "@/lib/storage";
 import { assertOps } from "./data";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * Ops-side view of the winter-storage program: who's holding what, how full
@@ -78,7 +79,7 @@ export async function getStorageLedger(): Promise<StorageLedger> {
   if (!ops) return { vendors: [], stays: [] };
 
   const admin = createServiceClient();
-  const [dials, { data: stayRows }, { data: vendorRows }] = await Promise.all([
+  const [dials, stayRes, vendorRes] = await Promise.all([
     getPlatformSettings(),
     admin
       .from("storage_stays")
@@ -92,6 +93,13 @@ export async function getStorageLedger(): Promise<StorageLedger> {
       .gt("storage_capacity_feet", 0)
       .order("company", { ascending: true }),
   ]);
+
+  // THIS VIEW IS ABOUT CUSTODY — whose boat is in whose yard. An empty ledger
+  // reads as "nobody is storing anything", and the utilization figures below are
+  // computed from these same rows: a lost stays read shows every yard at 0%
+  // committed, which is exactly when ops would promise somebody space.
+  const stayRows = mustRead("the boats in storage", stayRes);
+  const vendorRows = mustRead("the crews' yard capacity", vendorRes);
 
   const today = todayLakeDate();
   const rawStays = (stayRows ?? []) as unknown as RawStay[];

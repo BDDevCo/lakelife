@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
 import { buildRentRoll, summarise, toStay, type RawReservation } from "@/app/park/park-helpers";
 import type { Lot } from "@/lib/parks";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * Ops' read-only view of every park on the platform. Ops already sees
@@ -32,15 +33,23 @@ export interface OpsParkRow {
 export async function getOpsParks(): Promise<OpsParkRow[]> {
   const admin = createServiceClient();
 
-  const { data: parks } = await admin
-    .from("parks")
-    .select("id, name, slug, lake_id, active")
-    .order("name");
+  // EVERY NUMBER BELOW IS OCCUPANCY. A failed read used to return the same empty
+  // board as a platform with no parks on it — and the rows that survive a
+  // partial failure are worse than none: a park whose lots read but whose stays
+  // don't shows every lot vacant. /ops wraps this call in its own try/catch, so
+  // the throw lands there and the board is missing rather than wrong.
+  const parks = mustRead(
+    "the parks on the platform",
+    await admin
+      .from("parks")
+      .select("id, name, slug, lake_id, active")
+      .order("name"),
+  );
   if (!parks || parks.length === 0) return [];
 
   const parkIds = parks.map((p) => p.id as string);
 
-  const [{ data: lakes }, { data: lotRows }, { data: memberRows }] = await Promise.all([
+  const [lakeRes, lotRes, memberRes] = await Promise.all([
     admin.from("lakes").select("id, name"),
     admin
       .from("park_lots")
@@ -49,15 +58,24 @@ export async function getOpsParks(): Promise<OpsParkRow[]> {
     admin.from("park_members").select("park_id, user_id").in("park_id", parkIds),
   ]);
 
+  const lakes = mustRead("the lakes those parks sit on", lakeRes);
+  const lotRows = mustRead("the lots in those parks", lotRes);
+  const memberRows = mustRead("who each park's members are", memberRes);
+
   const lakeName = new Map((lakes ?? []).map((l) => [l.id as string, l.name as string]));
   const lots = lotRows ?? [];
 
-  const { data: resRows } = lots.length
-    ? await admin
-        .from("lot_reservations")
-        .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
-        .in("park_lot_id", lots.map((l) => l.id as string))
-    : { data: [] as RawReservation[] };
+  const resRows = lots.length
+    ? mustRead(
+        // The one that decides occupied vs vacant. A lost read here reports a
+        // full park as empty, which is the most alarming possible way to be wrong.
+        "who is staying in those lots",
+        await admin
+          .from("lot_reservations")
+          .select("id, park_lot_id, renter_id, renter_unit_id, during, term, quoted_amount, status, decided_at, created_at")
+          .in("park_lot_id", lots.map((l) => l.id as string)),
+      )
+    : ([] as RawReservation[]);
 
   const stays = (resRows ?? []).map((r) => toStay(r as unknown as RawReservation));
   const today = todayLakeDate();

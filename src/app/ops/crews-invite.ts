@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/email";
 import { likeLiteral } from "@/lib/sql-like";
 import { assertOps } from "./data";
+import { readFailedMessage } from "@/lib/must-read";
 
 export interface InviteResult {
   ok: boolean;
@@ -35,17 +36,36 @@ export async function inviteCrew(input: {
 
   const admin = createServiceClient();
 
-  // Whitelist service types against real, active services.
-  const { data: svcs } = await admin.from("services").select("name").eq("active", true);
-  const valid = new Set((svcs ?? []).map((s) => s.name as string));
+  // Whitelist service types against real, active services. A failed read
+  // whitelists NOTHING, so the crew is created with an empty service_types and
+  // the dispatch engine — which matches on exact service-name membership — will
+  // never offer them a job. Silent, permanent, and indistinguishable on the
+  // Crews tab from a crew who was invited for nothing.
+  const svcRes = await admin.from("services").select("name").eq("active", true);
+  if (svcRes.error) return { ok: false, error: readFailedMessage("the list of services", svcRes.error) };
+  const valid = new Set((svcRes.data ?? []).map((s) => s.name as string));
   const serviceTypes = [...new Set((input.serviceTypes ?? []).filter((t) => valid.has(t)))];
 
   // One account per email, one open invite per email.
   // users.email is synced from Supabase auth (0003), so this repo cannot
   // promise its case — it stays case-insensitive and escapes the wildcards.
-  const { data: existingUser } = await admin.from("users").select("id").ilike("email", likeLiteral(email)).maybeSingle();
+  //
+  // BOTH OF THESE READS ARE GUARDS, AND A FAILED READ WAVES THEM THROUGH. `data:
+  // null` is what "no such account" and "no open invite" look like, so a dropped
+  // connection produced a SECOND vendors row on an address that already has one
+  // — and the duplicate is what the next invite attempt then trips over.
+  const existingRes = await admin.from("users").select("id").ilike("email", likeLiteral(email)).maybeSingle();
+  if (existingRes.error) {
+    return { ok: false, error: readFailedMessage("whether that email already has an account", existingRes.error) };
+  }
+  const existingUser = existingRes.data;
   if (existingUser) {
-    const { data: alreadyVendor } = await admin.from("vendors").select("id").eq("user_id", existingUser.id).maybeSingle();
+    const vendorRes = await admin.from("vendors").select("id").eq("user_id", existingUser.id).maybeSingle();
+    // Which of the two sentences below is true is decided entirely by this read.
+    if (vendorRes.error) {
+      return { ok: false, error: readFailedMessage("what that account already is", vendorRes.error) };
+    }
+    const alreadyVendor = vendorRes.data;
     return {
       ok: false,
       error: alreadyVendor
@@ -53,13 +73,16 @@ export async function inviteCrew(input: {
         : "That email already has a homeowner account — use a different email for the crew.",
     };
   }
-  const { data: openInvite } = await admin
+  const openRes = await admin
     .from("vendors")
     .select("id")
     .eq("invite_email", email)
     .is("user_id", null)
     .maybeSingle();
-  if (openInvite) return { ok: false, error: "There's already an open invite for that email." };
+  if (openRes.error) {
+    return { ok: false, error: readFailedMessage("open invites for that email", openRes.error) };
+  }
+  if (openRes.data) return { ok: false, error: "There's already an open invite for that email." };
 
   const { error: insErr } = await admin.from("vendors").insert({
     company,
@@ -75,9 +98,14 @@ export async function inviteCrew(input: {
   // name it. Fixtures excluded by lakes.is_fixture (0124): this list goes out
   // in a real email to a real crew, so a scratch lake here is not a cosmetic
   // slip, it is a fake place named in correspondence.
-  const { data: lakeRows } = await admin
+  const lakeRes = await admin
     .from("lakes").select("name").eq("is_fixture", false).order("name");
-  const shortNames = (lakeRows ?? []).map((l) => (l.name as string).replace(/ Lake$/, ""));
+  // Soft on purpose: the vendors row is already inserted above, so refusing here
+  // would leave an invite nobody can claim (see the send comment below). The
+  // fallback names no place that doesn't exist — but it logs, because "your
+  // local lakes" going out in real correspondence is worth knowing about.
+  if (lakeRes.error) console.error("[read failed, degraded] the lakes named in the invite email:", lakeRes.error);
+  const shortNames = (lakeRes.data ?? []).map((l) => (l.name as string).replace(/ Lake$/, ""));
   const lakeList = shortNames.length > 1
     ? `${shortNames.slice(0, -1).join(", ")} &amp; ${shortNames[shortNames.length - 1]}`
     : shortNames[0] ?? "your local lakes";
@@ -162,21 +190,34 @@ export async function claimCrewInvite(userId: string, userEmail: string | null |
   // (inviteCrew above, inviteMyContractor in book/contractor-actions.ts), and
   // `email` is lower-cased on the line above, so exact match is correct AND
   // strictly safer than any pattern.
-  const { data: invite } = await admin
+  const inviteRes = await admin
     .from("vendors")
     .select("id")
     .eq("invite_email", email)
     .is("user_id", null)
     .maybeSingle();
+  // NOT CONVERTED TO A THROW, deliberately: the only caller is /portal, which
+  // uses the boolean to decide where to send somebody, and this returns false on
+  // every ordinary homeowner sign-in. It stays false on a failed read — the
+  // claim is idempotent, so their next portal load tries again — but it says so
+  // in the log, because a crew silently landing in the homeowner portal on the
+  // day they join has otherwise no explanation anywhere.
+  if (inviteRes.error) console.error("[read failed] a pending crew invite for", email, inviteRes.error);
+  const invite = inviteRes.data;
   if (!invite) return false;
 
   // Attach the person to the crew row first; only claim a still-open row.
-  const { data: claimed } = await admin
+  const claimRes = await admin
     .from("vendors")
     .update({ user_id: userId })
     .eq("id", invite.id)
     .is("user_id", null)
     .select("id");
+  // Same posture as the read above: an empty result means somebody else claimed
+  // it first, a failed one means we don't know. Both are safe to retry, neither
+  // may be silent.
+  if (claimRes.error) console.error("[write failed] claiming the crew invite for", email, claimRes.error);
+  const claimed = claimRes.data;
   if (!claimed || claimed.length === 0) return false;
 
   // Then flip their role so /portal routes them to the crew side.

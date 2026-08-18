@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { likeLiteral } from "@/lib/sql-like";
 import { assertOps } from "./data";
+import { readFailedMessage } from "@/lib/must-read";
 
 /**
  * CREATING A PARK — the thing nothing in the product could do.
@@ -78,14 +79,21 @@ export async function createPark(input: NewParkInput): Promise<ParkCreateResult>
   // The owner must already exist. Creating a park for a user id that isn't
   // there would leave the park unreachable in a NEW way — which is the bug
   // this action was written to end.
-  const { data: owner } = await admin
+  const ownerRes = await admin
     .from("users").select("id, email").eq("id", input.ownerUserId).maybeSingle();
+  // "They need an account first" sends ops off to create an account that already
+  // exists — the id came from findUserByEmail one screen earlier. A failed read
+  // is the same `data: null` and knows nothing about who does or doesn't exist.
+  if (ownerRes.error) return { ok: false, error: readFailedMessage("the owner's account", ownerRes.error) };
+  const owner = ownerRes.data;
   if (!owner) return { ok: false, error: "No user with that id — they need an account first." };
 
-  const { data: lake } = await admin
+  const lakeRes = await admin
     .from("lakes").select("id, name").eq("id", input.lakeId)
     .eq("is_fixture", false) // 0124 — this writes parks.lake_id
     .maybeSingle();
+  if (lakeRes.error) return { ok: false, error: readFailedMessage("that lake", lakeRes.error) };
+  const lake = lakeRes.data;
   if (!lake) return { ok: false, error: "That lake isn't on the list." };
 
   // A slug is claimed even before publishing, because the public page is the
@@ -93,8 +101,15 @@ export async function createPark(input: NewParkInput): Promise<ParkCreateResult>
   const base = slugify(name);
   let slug = base;
   for (let n = 2; n <= 20; n++) {
-    const { data: taken } = await admin.from("parks").select("id").eq("slug", slug).maybeSingle();
-    if (!taken) break;
+    const takenRes = await admin.from("parks").select("id").eq("slug", slug).maybeSingle();
+    // A failed read here reads as "that slug is free" and the loop breaks with
+    // it — so the insert below either collides on the unique index and reports a
+    // raw Postgres error, or (worse) succeeds and hands two parks the same
+    // printed address. The slug is the one thing that cannot be changed later.
+    if (takenRes.error) {
+      return { ok: false, error: readFailedMessage("which web addresses are already taken", takenRes.error) };
+    }
+    if (!takenRes.data) break;
     slug = `${base}-${n}`;
   }
 
@@ -155,8 +170,13 @@ export async function findUserByEmail(
   // matched email — so the wrong person could be made a park owner by somebody
   // reading the confirmation too quickly. users.email is auth's, so case stays
   // insensitive; only the wildcards go.
-  const { data } = await admin
+  const res = await admin
     .from("users").select("id, email, name, role").ilike("email", likeLiteral(clean)).maybeSingle();
+  // "No account for X — they need to sign up first" is a fact about the user
+  // table, and it is the sentence ops acts on: they go and ask a park owner who
+  // already has an account to sign up again. A failed read must not say it.
+  if (res.error) return { ok: false, error: readFailedMessage("that account", res.error) };
+  const data = res.data;
   if (!data) return { ok: false, error: `No account for ${clean} — they need to sign up first.` };
   return {
     ok: true,
@@ -170,8 +190,13 @@ export async function listLakes(): Promise<Array<{ id: string; name: string }>> 
   if (!(await assertOps())) return [];
   const admin = createServiceClient();
   // 0124 — the form must never offer what the create above would refuse.
-  const { data } = await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name");
-  return (data ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
+  const res = await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name");
+  // Returns a bare array, so there is nowhere here to put a sentence — but an
+  // empty list makes the form's own "Pick the lake it sits on" impossible to
+  // satisfy, which looks like a product with no lakes rather than a failed read.
+  // It logs, and `createPark` above refuses honestly if ops somehow gets past it.
+  if (res.error) console.error("[read failed] the lakes a park can sit on:", res.error);
+  return (res.data ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
 }
 
 /**
@@ -203,8 +228,12 @@ export async function setParkActive(
   if (!(await assertOps())) return { ok: false, error: "Ops only." };
 
   const admin = createServiceClient();
-  const { data: park } = await admin
+  const parkRes = await admin
     .from("parks").select("id, name, slug, active").eq("id", parkId).maybeSingle();
+  // The park is right there on the board ops clicked from. "No park with that
+  // id" on a failed read is the console contradicting its own screen.
+  if (parkRes.error) return { ok: false, error: readFailedMessage("that park", parkRes.error) };
+  const park = parkRes.data;
   if (!park) return { ok: false, error: "No park with that id." };
   if (Boolean(park.active) === active) {
     return { ok: true, signal: active ? "Already live." : "Already dark." };

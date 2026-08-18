@@ -49,15 +49,43 @@ export interface TokenEvent {
 
 const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
 
-/** Resolve a confirm token to its event + enrollment, or null. */
-export async function loadTokenEvent(token: string): Promise<TokenEvent | null> {
+/**
+ * A FAILED READ IS NOT A BAD TOKEN.
+ *
+ * These pages are reached by tapping a link in a text message. There is no
+ * session, no account, and nowhere else for the customer to look — so the
+ * `null` branch's sentence ("This link doesn't match anything") is the worst
+ * thing we could say when the truth is that the database didn't answer: it
+ * tells them their proposal is gone. A token route also has no error boundary,
+ * so throwing here would be a bare 500 on a phone. The load therefore reports
+ * the failure as its own value, and each route renders the difference.
+ */
+export const TOKEN_READ_FAILED = "token-read-failed" as const;
+export type TokenLoad = TokenEvent | null | typeof TOKEN_READ_FAILED;
+
+/** What to show when we could not look. Never "that link isn't right". */
+export const tokenReadFailedPage = (): Response =>
+  htmlPage(
+    "We couldn't check that just now",
+    "Something on our end didn't answer, so nothing has been booked, skipped or charged. The link still works — give it another tap in a minute. 🌊",
+    false,
+  );
+
+/** Resolve a confirm token to its event + enrollment, `null` when the token
+ *  genuinely matches nothing, or TOKEN_READ_FAILED when we couldn't look. */
+export async function loadTokenEvent(token: string): Promise<TokenLoad> {
   if (!token || !/^[0-9a-f-]{36}$/i.test(token)) return null;
   const admin = createServiceClient();
-  const { data: ev } = await admin
+  const res = await admin
     .from("autopilot_events")
     .select("id, status, proposed_date, autopilot_enrollments(id, active, property_id, service_id, locked_price, services(name), properties(owner_id, address, nickname))")
     .eq("confirm_token", token)
     .maybeSingle();
+  if (res.error) {
+    console.error("[read failed] the proposal behind this link:", res.error.code ?? "", res.error.message);
+    return TOKEN_READ_FAILED;
+  }
+  const ev = res.data;
   if (!ev) return null;
   const enr = one(ev.autopilot_enrollments) as {
     id?: string; active?: boolean; property_id?: string; service_id?: string; locked_price?: number;

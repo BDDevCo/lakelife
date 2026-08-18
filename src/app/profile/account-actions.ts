@@ -3,6 +3,7 @@
 import { cookies } from "next/headers";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { supabaseUrl } from "@/lib/env";
+import { readFailedMessage } from "@/lib/must-read";
 import { getActivePropertyId } from "./data";
 
 export interface DeleteResult {
@@ -10,31 +11,44 @@ export interface DeleteResult {
   error?: string;
 }
 
-/** Read the minimal marketing contact for the signed-in user and retain it. */
+/**
+ * Read the minimal marketing contact for the signed-in user and retain it.
+ *
+ * RETURNS A MESSAGE INSTEAD OF THROWING, because both callers are buttons
+ * awaiting `{ ok, error }` — and because what follows either call is a cascade
+ * delete that cannot be undone. A failed read here arrives as "no email on
+ * file", which takes the `return` below and retains nothing; the account is
+ * then wiped and the record we meant to keep is gone with no trace that we
+ * ever tried. So the failure has to reach the caller and stop the delete.
+ */
 async function retainMarketingContact(
   userId: string,
   reason: "property_removed" | "account_deleted",
-): Promise<void> {
+): Promise<string | null> {
   const supabase = await createClient();
-  const { data: me } = await supabase
+  const meRes = await supabase
     .from("users")
     .select("name, email, phone")
     .eq("id", userId)
     .maybeSingle();
+  if (meRes.error) return readFailedMessage("your contact details", meRes.error);
+  const me = meRes.data;
 
   // Lake (if they have a property) — for seasonal segmentation.
-  const { data: property } = await supabase
+  const propertyRes = await supabase
     .from("properties")
     .select("lakes(name)")
     .eq("owner_id", userId)
     .limit(1)
     .maybeSingle();
+  if (propertyRes.error) return readFailedMessage("your property", propertyRes.error);
+  const property = propertyRes.data;
   const lakesField = property?.lakes as unknown;
   const lakeName = Array.isArray(lakesField)
     ? (lakesField[0] as { name?: string } | undefined)?.name
     : (lakesField as { name?: string } | null | undefined)?.name;
 
-  if (!me?.email) return; // nothing to retain
+  if (!me?.email) return null; // nothing to retain
 
   // Write with the service role so retention isn't blocked by RLS. If they had
   // already opted out, leave that flag intact.
@@ -51,6 +65,7 @@ async function retainMarketingContact(
     },
     { onConflict: "email" },
   );
+  return null;
 }
 
 /**
@@ -67,10 +82,20 @@ export async function removeProperty(propertyId?: string): Promise<DeleteResult>
 
   // Prefer the exact property the confirmation dialog showed; fall back to the
   // active one. Either way the delete below is scoped to this owner.
-  const activeId = propertyId ?? (await getActivePropertyId());
+  // getActivePropertyId reads the property list, which THROWS on a failed read
+  // rather than reporting an empty portfolio — and this is an action, so that
+  // has to become a sentence instead of a rejected promise.
+  let activeId: string | null;
+  try {
+    activeId = propertyId ?? (await getActivePropertyId());
+  } catch (e) {
+    return { ok: false, error: readFailedMessage("your properties", e) };
+  }
   if (!activeId) return { ok: false, error: "No property to remove." };
 
-  await retainMarketingContact(user.id, "property_removed");
+  // Nothing irreversible happens until the contact is safely retained.
+  const retainErr = await retainMarketingContact(user.id, "property_removed");
+  if (retainErr) return { ok: false, error: retainErr };
 
   // Deleting the property cascades to profile, boats, toys, photos, jobs, etc.
   // Scoped to the ACTIVE property only — never the whole portfolio.
@@ -99,7 +124,10 @@ export async function deleteAccount(): Promise<DeleteResult> {
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Please sign in first." };
 
-  await retainMarketingContact(user.id, "account_deleted");
+  // The auth delete below cascades through every table they touch and cannot
+  // be undone, so it does not start on the strength of a read that never ran.
+  const retainErr = await retainMarketingContact(user.id, "account_deleted");
+  if (retainErr) return { ok: false, error: retainErr };
 
   // Delete the auth user via the admin endpoint (service role). auth.users has
   // ON DELETE CASCADE into public.users -> properties -> children, so all house

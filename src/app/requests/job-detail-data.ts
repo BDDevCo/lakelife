@@ -1,5 +1,6 @@
 import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead, mustCount } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
 import { signedJobPhotos, signedJobPhotosFor, type JobPhoto } from "@/lib/photos";
 import { getPackageBreakdowns } from "@/app/requests/package-data";
@@ -170,13 +171,18 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
 
   const admin = createServiceClient();
   // Explicit columns only. vendor_cost / margin are absent by construction.
-  const { data: job } = await admin
+  // A FAILED READ IS NOT A CANCELLED JOB. Returning null here makes
+  // requests/[id]/page.tsx:71 tell the customer "It may have been cancelled, or
+  // it belongs to another account" — two accusations about their own booking,
+  // on a dropped connection. Confirmed by the season simulation. The sole
+  // caller is that page, a server component under src/app/error.tsx.
+  const job = mustRead("this job", await admin
     .from("jobs")
     // ONE string literal, not a concatenation — PostgREST's typings key off
     // the literal, and a `+` join degrades every field to `unknown`.
     .select("id, status, date, slot, customer_price, property_id, group_id, vendor_id, correction_of, scope_note, tip_amount, tipped_at, services(name, min_photos), properties(owner_id, nickname, address), vendors(company)")
     .eq("id", jobId)
-    .maybeSingle();
+    .maybeSingle());
   if (!job) return null;
 
   // ---- THE GATE ------------------------------------------------------------
@@ -221,19 +227,24 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
   // Invoice → was it actually collected? (payments hangs off the invoice.)
   let paidAt: string | null = null;
   if (invoice?.id) {
-    const { data: pay } = await admin
+    // paidAt null renders as "not paid yet" — a swallowed error tells somebody
+    // whose card was charged that it was not.
+    const pay = mustRead("whether this was paid", await admin
       .from("payments").select("created_at, status").eq("invoice_id", invoice.id as string)
-      .eq("status", "captured").order("created_at", { ascending: false }).limit(1).maybeSingle();
+      .eq("status", "captured").order("created_at", { ascending: false }).limit(1).maybeSingle());
     paidAt = (pay?.created_at as string) ?? null;
   }
 
   // Only whether one EXISTS — never the token, brand or last four. This page
   // needs to know which sentence is true, not what the card is.
-  const { count: cardCount } = await admin
+  // FAILS OPEN IF SWALLOWED: a failed count is null, so hasCardOnFile goes
+  // false and the page says "We don't have a card on file for you yet, so the
+  // $450.00 hasn't been paid yet" to somebody who has one.
+  const cardCount = mustCount("whether you have a card on file", await admin
     .from("payment_methods")
     .select("id", { count: "exact", head: true })
-    .eq("user_id", prop.owner_id as string);
-  const hasCardOnFile = (cardCount ?? 0) > 0;
+    .eq("user_id", prop.owner_id as string));
+  const hasCardOnFile = cardCount > 0;
 
   const refunds: JobDetailRefund[] = (refundRows ?? []).map((r) => ({
     amount: Number(r.amount ?? 0),
@@ -245,13 +256,13 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
   // in depth, so a mis-stamped group can never leak another home's photos.
   const siblings: JobDetailSibling[] = [];
   if (groupId) {
-    const { data: sibRows } = await admin
+    const sibRows = mustRead("the other visits in this package", await admin
       .from("jobs")
       .select("id, date, services(name)")
       .eq("group_id", groupId)
       .eq("property_id", propertyId)
       .neq("id", jobId)
-      .order("date", { ascending: true });
+      .order("date", { ascending: true }));
     const sibs = (sibRows ?? []) as Array<{ id: string; date: string | null; services: unknown }>;
     if (sibs.length > 0) {
       const byJob = await signedJobPhotosFor(sibs.map((s) => s.id));
@@ -281,7 +292,9 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
   if (dispute) {
     let correctionDate: string | null = null;
     if (dispute.correction_job_id) {
-      const { data: fix } = await admin.from("jobs").select("date").eq("id", dispute.correction_job_id as string).maybeSingle();
+      // The date of the free return visit. Null renders as no date at all,
+      // which reads as "not booked" to somebody waiting for a crew.
+      const fix = mustRead("the return visit", await admin.from("jobs").select("date").eq("id", dispute.correction_job_id as string).maybeSingle());
       correctionDate = (fix?.date as string) ?? null;
     }
     const v = disputeViewForCustomer({ status: dispute.status as string, correctionDate });

@@ -61,6 +61,26 @@ const first = <T,>(x: Embed<T> | undefined): T | null =>
 
 const EMPTY = (term: string): JobSearchResult => ({ ok: true, term, rows: [], truncated: false });
 
+/**
+ * A failed read here is NOT "no jobs match".
+ *
+ * The needle is resolved to id sets first (see the header), and each of those
+ * reads is silent about failing: `data: null` collapses to an empty id set,
+ * every clause vanishes, and the function returns the same `ok: true, rows: []`
+ * that a genuine miss returns. Ops types a customer's name, is told there are no
+ * jobs, and goes looking somewhere else — for a customer with a full season
+ * booked. A PARTIAL failure is worse still: the address hits land, the
+ * customer-name hits are lost, and the short list looks like the whole answer.
+ *
+ * NOT a throw. `searchOpsJobs` is called from job-detail-actions.ts, which
+ * carries "use server" and hands this straight back to a client component — so
+ * this returns the failure in the shape that component already renders.
+ */
+const READ_FAILED = (term: string, what: string, error: unknown): JobSearchResult => {
+  console.error(`[read failed] ${what}:`, error);
+  return { ok: false, error: "Search failed — try again.", term, rows: [], truncated: false };
+};
+
 export async function searchOpsJobs(raw: string): Promise<JobSearchResult> {
   const ops = await assertOps();
   if (!ops) return { ok: false, error: "Ops only.", term: "", rows: [], truncated: false };
@@ -83,6 +103,11 @@ export async function searchOpsJobs(raw: string): Promise<JobSearchResult> {
     admin.from("vendors").select("id").ilike("company", like).limit(50),
   ]);
 
+  if (propRes.error) return READ_FAILED(term, "the properties matching that search", propRes.error);
+  if (userRes.error) return READ_FAILED(term, "the customers matching that search", userRes.error);
+  if (svcRes.error) return READ_FAILED(term, "the services matching that search", svcRes.error);
+  if (vendRes.error) return READ_FAILED(term, "the crews matching that search", vendRes.error);
+
   const propertyIds = new Set(((propRes.data ?? []) as { id: string }[]).map((r) => r.id));
   const ownerIds = ((userRes.data ?? []) as { id: string }[]).map((r) => r.id);
   const serviceIds = ((svcRes.data ?? []) as { id: string }[]).map((r) => r.id);
@@ -90,12 +115,15 @@ export async function searchOpsJobs(raw: string): Promise<JobSearchResult> {
 
   // A customer-name hit means "every property that person owns".
   if (ownerIds.length) {
-    const { data: owned } = await admin
+    const ownedRes = await admin
       .from("properties")
       .select("id")
       .in("owner_id", ownerIds)
       .limit(ID_FANOUT_LIMIT);
-    for (const p of (owned ?? []) as { id: string }[]) propertyIds.add(p.id);
+    // We already know a person matched. Losing their properties turns a real hit
+    // into "no jobs match" — the exact wrong answer for a name search.
+    if (ownedRes.error) return READ_FAILED(term, "the properties that customer owns", ownedRes.error);
+    for (const p of (ownedRes.data ?? []) as { id: string }[]) propertyIds.add(p.id);
   }
 
   const clauses: string[] = [];
@@ -115,7 +143,7 @@ export async function searchOpsJobs(raw: string): Promise<JobSearchResult> {
     .order("created_at", { ascending: false })
     .limit(JOB_SEARCH_LIMIT + 1); // one extra row = "there are more"
 
-  if (error) return { ok: false, error: "Search failed — try again.", term, rows: [], truncated: false };
+  if (error) return READ_FAILED(term, "the jobs matching that search", error);
 
   const raws = (data ?? []) as unknown as {
     id: string;

@@ -278,7 +278,17 @@ export async function createBookingBatch(
     return { ok: false, needsTos: true };
   }
 
-  const profile = await getFullProfile();
+  // "Set up your property first" is a statement about their account, and a
+  // failed read must not make it. getFullProfile throws ReadFailed; this is a
+  // "use server" action, so a rejection would reach the booking screen as a
+  // blank failure with no sentence. Nothing has been written at this point.
+  let profile;
+  try {
+    profile = await getFullProfile();
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("your property", e) };
+  }
   if (!profile?.hasProfile || !profile.propertyId) {
     return { ok: false, error: "Set up your property first." };
   }

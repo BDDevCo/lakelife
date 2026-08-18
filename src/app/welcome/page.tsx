@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { TopBar, Waves } from "@/components/Brand";
 import { createClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { hasSupabaseEnv } from "@/lib/env";
 import { SignOutButton } from "@/components/SignOutButton";
 import { listProperties } from "@/app/profile/data";
@@ -24,11 +25,17 @@ export default async function WelcomePage() {
       if (properties.length > 0) redirect("/book");
 
       email = user.email ?? "";
-      const { data: profile } = await supabase
-        .from("users")
-        .select("name, email_verified, phone_verified")
-        .eq("id", user.id)
-        .maybeSingle();
+      // The checklist below IS this read. A failure renders "Welcome to
+      // LakeLife, there." over two unticked boxes and "Booking unlocks once
+      // email & mobile are both verified" — told to somebody who verified both.
+      const profile = mustRead(
+        "your account",
+        await supabase
+          .from("users")
+          .select("name, email_verified, phone_verified")
+          .eq("id", user.id)
+          .maybeSingle(),
+      );
       name = profile?.name || (user.user_metadata?.full_name as string) || "there";
       // The Supabase auth record is the source of truth for email confirmation;
       // the profile flag is just a synced convenience.

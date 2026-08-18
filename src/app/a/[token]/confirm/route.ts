@@ -1,7 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
 import { autoAssignJob } from "@/app/book/dispatch";
-import { htmlPage, loadTokenEvent, prettyDay } from "../respond";
+import { htmlPage, loadTokenEvent, prettyDay, TOKEN_READ_FAILED, tokenReadFailedPage } from "../respond";
 
 /**
  * Autopilot CONFIRM. GET is SAFE (renders a "Book it" button) — SMS apps and
@@ -16,6 +16,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   const ev = await loadTokenEvent(token);
+  if (ev === TOKEN_READ_FAILED) return tokenReadFailedPage();
   if (!ev) return htmlPage("That link isn't right", "This link doesn't match anything — book anytime at lakelife.ai. 🌊", false);
 
   if (ev.status === "confirmed") {
@@ -36,6 +37,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   const ev = await loadTokenEvent(token);
+  if (ev === TOKEN_READ_FAILED) return tokenReadFailedPage();
   if (!ev) return htmlPage("That link isn't right", "This link doesn't match anything — book anytime at lakelife.ai. 🌊", false);
 
   if (ev.status === "confirmed") {
@@ -49,7 +51,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 
   // Did something else get booked for this property+service in the meantime
   // (manual booking, another proposal)? Never double-book the same work.
-  const { data: upcoming } = await admin
+  //
+  // A FAILED READ IS NOT "NOTHING ELSE IS BOOKED". This guard FAILS OPEN on
+  // null: the check that could not run passes, we book the same work a second
+  // time, and the customer is charged twice for one visit. A check we could
+  // not make is a refusal — the proposal stays proposed and the link tappable.
+  const upcomingRes = await admin
     .from("jobs")
     .select("id")
     .eq("property_id", ev.enrollment.property_id)
@@ -57,18 +64,38 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
     .in("status", ["requested", "scheduled", "in_progress"])
     .gte("date", todayLakeDate())
     .limit(1);
+  if (upcomingRes.error) {
+    console.error("[read failed] what's already on the books:", upcomingRes.error.code ?? "", upcomingRes.error.message);
+    return htmlPage(
+      "We couldn't check just now",
+      "Nothing has been booked and nothing has been charged. Give it another tap in a minute. 🌊",
+      false,
+    );
+  }
+  const upcoming = upcomingRes.data;
   if (upcoming && upcoming.length > 0) {
     await admin.from("autopilot_events").update({ status: "expired" }).eq("id", ev.id).eq("status", "proposed");
     return htmlPage("Already on the books ✓", `You already have ${ev.enrollment.serviceName} coming up at ${ev.enrollment.where} — no need to book it twice. 🌊`);
   }
 
   // Only one submit wins the proposed→confirmed flip (double-tap, two phones).
-  const { data: won } = await admin
+  const wonRes = await admin
     .from("autopilot_events")
     .update({ status: "confirmed" })
     .eq("id", ev.id)
     .eq("status", "proposed")
     .select("id");
+  // An errored flip is not "somebody else got there first" — saying so would
+  // tell a customer their booking is handled when nothing was written.
+  if (wonRes.error) {
+    console.error("[read failed] confirming this proposal:", wonRes.error.code ?? "", wonRes.error.message);
+    return htmlPage(
+      "We couldn't check just now",
+      "Nothing has been booked and nothing has been charged. Give it another tap in a minute. 🌊",
+      false,
+    );
+  }
+  const won = wonRes.data;
   if (!won || won.length === 0) {
     return htmlPage("Already handled", "This proposal was just confirmed or skipped — check your requests at lakelife.ai. 🌊");
   }

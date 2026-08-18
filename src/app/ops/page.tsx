@@ -104,10 +104,21 @@ export default async function OpsPage() {
 
   let stuck: Awaited<ReturnType<typeof getStuckHouseholds>> = [];
   let tally = { invitesSent: 0, slipsPrinted: 0, claimed: 0, refused: 0, declined: 0, empty: true };
+  // CAUGHT SEPARATELY, because the fallbacks are not equally harmless. `stuck`
+  // falls back to an empty list; `tally` falls back to `empty: true`, which the
+  // card renders as "nobody has started onboarding a park yet". Sharing one
+  // try/catch meant a failed stuck-households read reset a tally that had
+  // already come back fine, inventing that sentence out of the other read's
+  // failure.
   try {
-    [stuck, tally] = await Promise.all([getStuckHouseholds(), getClaimTally()]);
+    stuck = await getStuckHouseholds();
   } catch (e) {
-    console.error("[ops] claim surface failed", e instanceof Error ? e.message : e);
+    console.error("[ops] stuck households unavailable", e instanceof Error ? e.message : e);
+  }
+  try {
+    tally = await getClaimTally();
+  } catch (e) {
+    console.error("[ops] claim tally unavailable", e instanceof Error ? e.message : e);
   }
 
   let parks: Awaited<ReturnType<typeof getOpsParks>> = [];

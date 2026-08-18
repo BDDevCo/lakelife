@@ -14,6 +14,7 @@ import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge } from "@/lib/automation";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
+import { readFailedMessage } from "@/lib/must-read";
 
 export interface CancelResult {
   ok: boolean;
@@ -52,17 +53,30 @@ interface LoadedJob {
   address: string | null;
 }
 
+/**
+ * "We couldn't look" — the third answer this gate has always had and never
+ * been able to give. A failed read resolves to `{ data: null }`, which is the
+ * same value as "no such job" and as "somebody else's job", so every caller
+ * below told the owner "That request isn't yours" about a request that is
+ * theirs. This carries the failure out separately so nobody asserts whose it
+ * is when the answer was never read.
+ */
+interface LoadFailure { readFailed: true; error: unknown }
+const loadFailed = (l: LoadedJob | LoadFailure | null): l is LoadFailure =>
+  !!l && (l as LoadFailure).readFailed === true;
+
 /** Load a job + verify the signed-in user owns its property. Null = not theirs. */
-async function loadOwnJob(jobId: string): Promise<LoadedJob | null> {
+async function loadOwnJob(jobId: string): Promise<LoadedJob | LoadFailure | null> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user || !jobId) return null;
   const admin = createServiceClient();
-  const { data: job } = await admin
+  const { data: job, error: jobErr } = await admin
     .from("jobs")
     .select("id, status, date, slot, customer_price, vendor_cost, vendor_id, property_id, service_id, group_id, no_show_at, stood_down_at, recovery_state, reschedule_deadline, services(name, is_water_work), properties(owner_id, address)")
     .eq("id", jobId)
     .maybeSingle();
+  if (jobErr) return { readFailed: true, error: jobErr };
   if (!job) return null;
   const prop = one(job.properties) as { owner_id?: string; address?: string } | null;
   if (prop?.owner_id !== user.id) return null;
@@ -120,6 +134,9 @@ export interface CancelQuoteView {
  *  action recomputes; never trust the number the browser saw.) */
 export async function quoteCancellation(jobId: string): Promise<CancelQuoteView> {
   const l = await loadOwnJob(jobId);
+  // The button toasts policyNote whenever allowed is false, so the failure has
+  // somewhere honest to land without a new field.
+  if (loadFailed(l)) return { allowed: false, free: false, fee: 0, policyNote: readFailedMessage("this request", l.error) };
   if (!l) return { allowed: false, free: false, fee: 0, policyNote: "That request isn't yours to cancel." };
   const q = await quoteFor(l);
   if (!q.allowed) return { allowed: false, free: false, fee: 0, policyNote: "A crew is already on this one — text or call us and we'll sort it out." };
@@ -141,6 +158,7 @@ export async function quoteCancellation(jobId: string): Promise<CancelQuoteView>
  */
 export async function cancelRequest(jobId: string): Promise<CancelResult> {
   const l = await loadOwnJob(jobId);
+  if (loadFailed(l)) return { ok: false, error: readFailedMessage("this request", l.error, { money: true }) };
   if (!l) return { ok: false, error: "That request isn't yours to cancel." };
   const q = await quoteFor(l);
   if (!q.allowed) {
@@ -155,8 +173,15 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   // BEFORE either path (the fee path flips first, so a late check would
   // cancel the job and strand the boat with no billing rail).
   if (groupId) {
-    const { data: custody } = await admin
+    const custodyRes = await admin
       .from("storage_stays").select("id").eq("group_id", groupId).eq("status", "in_storage").limit(1);
+    // THIS GUARD FAILED OPEN. A failed read is `data: null`, so `length > 0`
+    // was false and a boat sitting in somebody's barn had its splash cancelled
+    // by the very check written to stop that. Not knowing is not "no boat".
+    if (custodyRes.error) {
+      return { ok: false, error: readFailedMessage("this request", custodyRes.error, { money: true }) };
+    }
+    const custody = custodyRes.data;
     if (custody && custody.length > 0) {
       return { ok: false, error: "Your boat is in winter storage — text or call us to arrange the splash or a release instead." };
     }
@@ -169,8 +194,15 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   // self-serve-cancels (that's a release flow, not a booking cancel).
   const cascadePackage = async (): Promise<string | null> => {
     if (!groupId) return null;
-    const { data: stay } = await admin
+    const stayRes = await admin
       .from("storage_stays").select("id, status").eq("group_id", groupId).maybeSingle();
+    // Same fail-open shape as the custody check above: a failed read reads as
+    // "there is no stay", which would close the season envelope and hand the
+    // barn's reserved feet back for a boat that may well be in it.
+    if (stayRes.error) {
+      return readFailedMessage("this booking", stayRes.error, { money: true });
+    }
+    const stay = stayRes.data;
     if (stay?.status === "in_storage") {
       return "Your boat is already in winter storage — text or call us to arrange a release instead.";
     }
@@ -195,30 +227,53 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   // ---------- FEE PATH ----------
   // Flip to cancelled first (guarded on current status) so a concurrent crew
   // start / double-click can't double-charge: only ONE caller wins this update.
-  const { data: flipped } = await admin
+  const { data: flipped, error: flipErr } = await admin
     .from("jobs")
     .update({ status: "cancelled", route_id: null, sequence: null })
     .eq("id", jobId)
     .eq("status", "scheduled")
     .select("id");
+  // A failed update also returns `data: null`, and "this job just changed" is a
+  // fact we'd have no way of knowing. Nothing has moved yet either way.
+  if (flipErr) return { ok: false, error: readFailedMessage("this request", flipErr, { money: true }) };
   if (!flipped || flipped.length === 0) {
     return { ok: false, error: "This job just changed — refresh and try again." };
   }
   if (groupId) await cascadePackage(); // envelope + reserved feet close with the job
+  // (the return is discarded on purpose here — the custody guard above already
+  // refused an in-storage boat; a read failure inside is logged by cascadePackage.)
 
   // Fee invoice + charge (mirrors settleJob; invoice stays 'due' if the card fails).
-  let { data: invoice } = await admin.from("invoices").select("id, status").eq("job_id", jobId).maybeSingle();
-  if (!invoice) {
-    const { data: created } = await admin
+  //
+  // THE JOB IS ALREADY CANCELLED BY HERE, so a failed read below cannot be
+  // answered by refusing — the cancel really did happen and saying otherwise
+  // would be the bigger lie. What a failure changes is what we may TELL them:
+  // `feeOnFile` tracks whether the fee actually landed on a bill, and neither
+  // the SMS nor the returned `feeCharged` claims a fee unless one exists.
+  const invRes = await admin.from("invoices").select("id, status").eq("job_id", jobId).maybeSingle();
+  if (invRes.error) {
+    // Do NOT fall through to the insert: `invoices_one_per_job` is UNIQUE, so
+    // blind-inserting over an invoice we simply couldn't see raises a 23505
+    // whose error is discarded, and the fee ends up neither read nor written.
+    console.error("[read failed] this job's invoice:", invRes.error.code ?? "", invRes.error.message ?? invRes.error);
+  }
+  let invoice = invRes.data;
+  if (!invoice && !invRes.error) {
+    const { data: created, error: createErr } = await admin
       .from("invoices")
       .insert({ job_id: jobId, property_id: l.job.property_id, amount: q.fee, status: "due" })
       .select("id, status")
       .single();
+    if (createErr) {
+      console.error("[write failed] this job's fee invoice:", createErr.code ?? "", createErr.message ?? createErr);
+    }
     invoice = created;
   }
+  /** Did the fee actually reach a bill? Nothing below may say so if it didn't. */
+  const feeOnFile = !!invoice;
   let charged = false;
   if (invoice && invoice.status !== "paid" && l.ownerId) {
-    const { data: pm } = await admin
+    const pmRes = await admin
       .from("payment_methods")
       .select("token, last4, brand")
       .eq("user_id", l.ownerId)
@@ -226,6 +281,12 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    // No card and an unreadable card list both end with the invoice sitting
+    // 'due', which is the honest outcome — but only one of them is a fault.
+    if (pmRes.error) {
+      console.error("[read failed] the card on file:", pmRes.error.code ?? "", pmRes.error.message ?? pmRes.error);
+    }
+    const pm = pmRes.data;
     // NEVER CHARGE A CARD FOR AN INVOICE THAT IS ALREADY PAID.
     //
     // `payments_one_capture_per_invoice` (0024) allows exactly one captured
@@ -234,10 +295,20 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
     // fee, the second charge went through the processor and its record was
     // silently rejected. Money taken, nothing on file, and `processor_ref`
     // overwritten on top.
-    const { data: alreadyCaptured } = await admin
+    //
+    // AND THIS IS THE READ THAT CHARGES TWICE WHEN IT FAILS. `data` comes back
+    // null, `length > 0` is false, and the branch below takes the card again
+    // for a fee something else may already have collected — the exact hole the
+    // paragraph above describes, reopened by the failure path instead of the
+    // ordering. Not knowing whether it was collected means not collecting it:
+    // the invoice stays 'due' and can be settled once reads work again.
+    const capRes = await admin
       .from("payments").select("id").eq("invoice_id", invoice.id)
       .eq("status", "captured").limit(1);
-    if (alreadyCaptured && alreadyCaptured.length > 0) {
+    const alreadyCaptured = capRes.data;
+    if (capRes.error) {
+      console.error("[read failed] this fee's payments:", capRes.error.code ?? "", capRes.error.message ?? capRes.error);
+    } else if (alreadyCaptured && alreadyCaptured.length > 0) {
       await admin.from("invoices").update({ status: "paid" }).eq("id", invoice.id);
       charged = true;
     } else if (pm?.token) {
@@ -264,7 +335,14 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   // charge failed, the invoice sits 'due' and no payout releases: LakeLife
   // never fronts crew pay against an uncollected fee. One per job.
   if (charged && l.job.vendor_id && q.crewShare > 0) {
-    const { data: existing } = await admin.from("payouts").select("id").eq("job_id", jobId).eq("kind", "earning").maybeSingle();
+    const existRes = await admin.from("payouts").select("id").eq("job_id", jobId).eq("kind", "earning").maybeSingle();
+    // Logged, then the insert is still attempted: `payouts_one_earning_per_job`
+    // (0043b) is the real guard, so a failed read here cannot double-pay — and
+    // skipping the insert on a failed read WOULD leave the crew unpaid.
+    if (existRes.error) {
+      console.error("[read failed] this job's crew payout:", existRes.error.code ?? "", existRes.error.message ?? existRes.error);
+    }
+    const existing = existRes.data;
     if (!existing) {
       await admin.from("payouts").insert({
         vendor_id: l.job.vendor_id, job_id: jobId, amount: q.crewShare, original_amount: q.crewShare, status: "released",
@@ -273,10 +351,18 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   }
 
   // Tell both sides. Crew: slot freed + what they're paid. Owner: confirmation.
+  // A failed lookup here costs a text, not money, so it is logged and stepped
+  // over rather than unwinding a cancel that already happened — but it is
+  // LOGGED, because "no phone on file" and "we couldn't look" are different
+  // faults and only one of them is the vendor's to fix.
   if (l.job.vendor_id) {
-    const { data: v } = await admin.from("vendors").select("user_id").eq("id", l.job.vendor_id).maybeSingle();
+    const vRes = await admin.from("vendors").select("user_id").eq("id", l.job.vendor_id).maybeSingle();
+    if (vRes.error) console.error("[read failed, degraded] the crew's account:", vRes.error.code ?? "", vRes.error.message ?? vRes.error);
+    const v = vRes.data;
     if (v?.user_id) {
-      const { data: cu } = await admin.from("users").select("phone").eq("id", v.user_id).maybeSingle();
+      const cuRes = await admin.from("users").select("phone").eq("id", v.user_id).maybeSingle();
+      if (cuRes.error) console.error("[read failed, degraded] the crew's phone:", cuRes.error.code ?? "", cuRes.error.message ?? cuRes.error);
+      const cu = cuRes.data;
       if (cu?.phone) {
         const payLine = charged && q.crewShare > 0
           ? `you're paid $${q.crewShare.toFixed(2)} for holding the slot`
@@ -285,12 +371,20 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
       }
     }
   }
-  const { data: ou } = await admin.from("users").select("phone").eq("id", l.ownerId ?? "").maybeSingle();
+  const ouRes = await admin.from("users").select("phone").eq("id", l.ownerId ?? "").maybeSingle();
+  if (ouRes.error) console.error("[read failed, degraded] the owner's phone:", ouRes.error.code ?? "", ouRes.error.message ?? ouRes.error);
+  const ou = ouRes.data;
   if (ou?.phone) {
-    void sendSms(ou.phone as string, `LakeLife: your ${l.svcName} is cancelled. A ${Math.round(q.feePct * 100)}% late fee of $${q.fee.toFixed(2)} ${charged ? "was charged to your card on file" : "will appear on your next bill"} — cancelling more than ${l.isWaterWork ? "7 days" : "48 hours"} ahead is always free. 🌊`);
+    // The fee clause goes out only when a fee actually reached a bill. If the
+    // invoice could neither be read nor raised above, "will appear on your
+    // next bill" names a charge that exists nowhere — and the same is true of
+    // the `feeCharged` the button turns into "$X late fee applied".
+    void sendSms(ou.phone as string, feeOnFile
+      ? `LakeLife: your ${l.svcName} is cancelled. A ${Math.round(q.feePct * 100)}% late fee of $${q.fee.toFixed(2)} ${charged ? "was charged to your card on file" : "will appear on your next bill"} — cancelling more than ${l.isWaterWork ? "7 days" : "48 hours"} ahead is always free. 🌊`
+      : `LakeLife: your ${l.svcName} is cancelled. Cancelling more than ${l.isWaterWork ? "7 days" : "48 hours"} ahead is always free. 🌊`);
   }
 
-  return { ok: true, feeCharged: q.fee };
+  return feeOnFile ? { ok: true, feeCharged: q.fee } : { ok: true };
 }
 
 // ==========================================================================
@@ -308,6 +402,14 @@ export interface RescheduleView {
   deadline: string | null;
   /** False for a stand-down — our record was wrong, so nobody is charged. */
   feeEligible: boolean;
+  /**
+   * We couldn't read the visit. `needed: false` renders NOTHING, which on this
+   * particular card is the old fault in miniature: the whole reason it exists
+   * is that a customer was asked to pick another day, given no door, and
+   * charged seven days later. Silently withholding the door on a failed read
+   * walks straight back into that. The card says so instead.
+   */
+  unavailable?: boolean;
 }
 
 /** What the customer is looking at, and what they're being asked. */
@@ -317,6 +419,10 @@ export async function getRescheduleView(jobId: string): Promise<RescheduleView> 
     deadline: null, feeEligible: false,
   };
   const loaded = await loadOwnJob(jobId);
+  if (loadFailed(loaded)) {
+    console.error("[read failed] this visit:", loaded.error);
+    return { ...empty, unavailable: true };
+  }
   if (!loaded) return empty;
 
   const { job, svcName } = loaded;
@@ -365,6 +471,7 @@ export async function rescheduleUnworkedVisit(
   newDateISO: string,
 ): Promise<{ ok: boolean; error?: string; signal?: string }> {
   const loaded = await loadOwnJob(jobId);
+  if (loadFailed(loaded)) return { ok: false, error: readFailedMessage("this visit", loaded.error) };
   if (!loaded) return { ok: false, error: "That visit isn't yours." };
   const { job, svcName } = loaded;
 
@@ -389,13 +496,22 @@ export async function rescheduleUnworkedVisit(
   // `is_water_work` to false, so the gate FAILS OPEN: a pier could be
   // rescheduled through ice, and a full day would read as available. The job
   // already knows its service_id; a name is a label, not an identity.
-  const [{ data: svcRow }, { data: propRow }] = await Promise.all([
+  const [svcRes, propRes] = await Promise.all([
     job.service_id
       ? admin0.from("services").select("id, is_water_work").eq("id", job.service_id).maybeSingle()
-      : Promise.resolve({ data: null }),
+      : Promise.resolve({ data: null, error: null }),
     admin0.from("properties").select("lakes(ice_out_actual, pull_deadline)")
       .eq("id", job.property_id).maybeSingle(),
   ]);
+  // A FAILED READ IS A GATE THAT DIDN'T RUN. The lake one is the quiet half:
+  // `propRow` null leaves seasonStart/seasonEnd null, dayStatus fails closed to
+  // "off-season", and the customer is told their pier is out of season on a day
+  // that is squarely inside it. Refuse honestly instead — and never guess.
+  if (svcRes.error || propRes.error) {
+    return { ok: false, error: readFailedMessage("this lake's dates", svcRes.error ?? propRes.error) };
+  }
+  const svcRow = svcRes.data;
+  const propRow = propRes.data;
   if (!svcRow?.id) {
     // Without the service we cannot apply ice-out, the pull deadline or
     // capacity. Refusing is the only safe answer — a silent pass is how a
@@ -506,14 +622,21 @@ export async function getTipView(jobId: string): Promise<TipView> {
     daysLeft: null,
   };
   const loaded = await loadOwnJob(jobId);
+  // A failed read means no tip is offered — the one place on this page where
+  // silence is the honest outcome, because a tip is optional and the design is
+  // that it is asked once and never nudged. `why` carries the reason for the
+  // log; the card renders nothing either way, and nothing false is claimed.
+  if (loadFailed(loaded)) return { ...blank, why: readFailedMessage("this visit", loaded.error) };
   if (!loaded) return blank;
 
   const admin = createServiceClient();
-  const { data: row } = await admin
+  const rowRes = await admin
     .from("jobs")
     .select("status, date, est_minutes, group_id, tip_amount, no_show_at, stood_down_at, services(est_minutes), job_items(services(est_minutes))")
     .eq("id", jobId)
     .maybeSingle();
+  if (rowRes.error) return { ...blank, why: readFailedMessage("this visit", rowRes.error) };
+  const row = rowRes.data;
   if (!row) return blank;
 
   const today = todayLakeDate();
@@ -580,14 +703,19 @@ export async function addTip(
   raw: string | number,
 ): Promise<{ ok: boolean; error?: string; signal?: string }> {
   const loaded = await loadOwnJob(jobId);
+  if (loadFailed(loaded)) return { ok: false, error: readFailedMessage("this visit", loaded.error, { money: true }) };
   if (!loaded) return { ok: false, error: "That visit isn't yours." };
 
   const admin = createServiceClient();
-  const { data: row } = await admin
+  const rowRes = await admin
     .from("jobs")
     .select("status, date, vendor_id, tip_amount, no_show_at, stood_down_at")
     .eq("id", jobId)
     .maybeSingle();
+  // "That visit isn't yours" is a statement about their account, made from a
+  // read that never came back. Every return here sits before the charge.
+  if (rowRes.error) return { ok: false, error: readFailedMessage("this visit", rowRes.error, { money: true }) };
+  const row = rowRes.data;
   if (!row) return { ok: false, error: "That visit isn't yours." };
 
   // The window is enforced HERE as well as on the screen — a stale tab is the
@@ -631,7 +759,7 @@ export async function addTip(
     return { ok: false, error: "We can't add a thank-you to this one — give us a call." };
   }
 
-  const { data: pm } = await admin
+  const pmRes = await admin
     .from("payment_methods")
     .select("token, brand, last4")
     .eq("user_id", loaded.ownerId)
@@ -639,6 +767,11 @@ export async function addTip(
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+  // "Add a card in Billing first" is a fact about their account, and a failed
+  // read had none to state — it sent people who have had a card on file for
+  // years to a Billing page that already shows it. Still before the charge.
+  if (pmRes.error) return { ok: false, error: readFailedMessage("your card on file", pmRes.error, { money: true }) };
+  const pm = pmRes.data;
   if (!pm?.token) {
     return { ok: false, error: "Add a card in Billing first and we'll pass it straight on." };
   }
@@ -720,8 +853,13 @@ export async function addTip(
   // nothing at all. The customer's card moved and their only evidence was a
   // grey line on one job page.
   try {
-    const { data: owner } = await admin
+    const ownerRes = await admin
       .from("users").select("email, name").eq("id", loaded.ownerId).maybeSingle();
+    // Logged, not raised: the charge succeeded and the payout is released, so
+    // there is nothing to undo. But a missing receipt address and an unreadable
+    // one are different faults, and only the second is ours.
+    if (ownerRes.error) console.error("[read failed, degraded] the receipt address:", ownerRes.error.code ?? "", ownerRes.error.message ?? ownerRes.error);
+    const owner = ownerRes.data;
     const to = (owner?.email as string) ?? null;
     if (to) {
       const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v.amount);

@@ -1,6 +1,7 @@
 import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getActivePropertyId } from "@/app/profile/data";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * Owner side of the dispatch message board.
@@ -41,20 +42,28 @@ export async function getMyThread(): Promise<OwnerThread> {
 
   const admin = createServiceClient();
   // Assert ownership from the service client (rule: never trust the UI).
-  const { data: prop } = await admin
+  //
+  // mustRead because the empty return below is a SENTENCE: a null propertyId
+  // renders "Add a property first, then you can message dispatch about it." to
+  // somebody who has a property and an open thread about it, and there is no
+  // send box on that screen to argue with. `null` must mean "no such property",
+  // never "we could not look". The page has an error boundary (src/app/error.tsx).
+  const prop = mustRead("your property", await admin
     .from("properties")
     .select("id, address, owner_id")
     .eq("id", propertyId)
-    .maybeSingle();
+    .maybeSingle());
   if (!prop || prop.owner_id !== user.id) {
     return { propertyId: null, address: null, messages: [] };
   }
 
-  const { data: rows } = await admin
+  // And an unread thread renders an empty board — a customer who asked about a
+  // gate code yesterday sees no trace of it and asks again.
+  const rows = mustRead("your messages", await admin
     .from("messages")
     .select("id, body, created_at, from_user")
     .eq("property_id", propertyId)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true }));
 
   const messages: OwnerMessage[] = (rows ?? []).map((r) => ({
     id: r.id as string,

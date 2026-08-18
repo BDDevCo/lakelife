@@ -14,15 +14,33 @@ const SLOT_HOUR: Record<string, number> = { "8a": 8, "10a": 10, "1p": 13, "3p": 
 /** iCalendar escaping for text fields (RFC 5545 §3.3.11). */
 const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
 
+/** A route handler has no error boundary — a throw here is a bare 500 and some
+ *  calendar clients treat that as badly as a 404. 503 + Retry-After is the one
+ *  answer that means "ask again", and keeps the existing events in place. */
+const unavailable = () =>
+  new Response("temporarily unavailable", {
+    status: 503,
+    headers: { "Content-Type": "text/plain; charset=utf-8", "Retry-After": "600", "Cache-Control": "no-store" },
+  });
+
 export async function GET(_req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   if (!token || !/^[0-9a-f-]{36}$/i.test(token)) return new Response("not found", { status: 404 });
 
   const admin = createServiceClient();
-  const { data: user } = await admin.from("users").select("id").eq("ics_token", token).maybeSingle();
+
+  // A FAILED READ IS NOT A BAD TOKEN. 404 tells the calendar app this feed is
+  // gone and several will drop the subscription outright, so the owner would
+  // have to re-add it by hand. A failed lookup is 503 — retry, don't unsubscribe.
+  const userRes = await admin.from("users").select("id").eq("ics_token", token).maybeSingle();
+  if (userRes.error) {
+    console.error("[read failed] the account behind this calendar feed:", userRes.error.code ?? "", userRes.error.message);
+    return unavailable();
+  }
+  const user = userRes.data;
   if (!user) return new Response("not found", { status: 404 });
 
-  const { data: jobs } = await admin
+  const jobsRes = await admin
     .from("jobs")
     .select("id, date, slot, status, services(name), properties!inner(owner_id, address, nickname)")
     .eq("properties.owner_id", user.id as string)
@@ -30,6 +48,15 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
     .not("date", "is", null)
     .order("date", { ascending: true })
     .limit(200);
+  // AN EMPTY CALENDAR IS AN ASSERTION, AND A DESTRUCTIVE ONE. Falling through
+  // on null serves a valid, empty VCALENDAR, and a subscribed phone deletes
+  // every LakeLife appointment it was holding — silently, with no page anyone
+  // is looking at. Serve nothing rather than "nothing".
+  if (jobsRes.error) {
+    console.error("[read failed] this account's upcoming services:", jobsRes.error.code ?? "", jobsRes.error.message);
+    return unavailable();
+  }
+  const jobs = jobsRes.data;
 
   const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
   const lines: string[] = [

@@ -1,6 +1,7 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertOps } from "./data";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * Ops-side scheduling calendar: every job in a given calendar year, flattened
@@ -45,16 +46,22 @@ export async function getOpsCalendar(year: number): Promise<CalRow[]> {
   const start = `${year}-01-01`;
   const end = `${year}-12-31`;
 
-  const { data } = await admin
-    .from("jobs")
-    .select(
-      "id, date, status, services(name), vendors(company), properties(address, lake_id, lakes(name))",
-    )
-    .gte("date", start)
-    .lte("date", end)
-    .in("status", CAL_STATUSES as unknown as string[])
-    .order("date", { ascending: true })
-    .limit(3000); // beta volume comfortably fits a single year in one page
+  // A year of empty squares is a real answer for a quiet January and a lie for a
+  // dropped connection — and this is the screen ops uses to decide the calendar
+  // is clear. mustRead throws so the year is missing rather than wrong.
+  const data = mustRead(
+    "the jobs on the calendar",
+    await admin
+      .from("jobs")
+      .select(
+        "id, date, status, services(name), vendors(company), properties(address, lake_id, lakes(name))",
+      )
+      .gte("date", start)
+      .lte("date", end)
+      .in("status", CAL_STATUSES as unknown as string[])
+      .order("date", { ascending: true })
+      .limit(3000), // beta volume comfortably fits a single year in one page
+  );
 
   const rows = (data ?? []) as unknown as CalRaw[];
 

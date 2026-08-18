@@ -3,6 +3,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { autoAssignJob } from "@/app/book/dispatch";
 import { assertOps } from "./data";
+import { readFailedMessage } from "@/lib/must-read";
 
 export interface RetryResult {
   ok: boolean;
@@ -47,19 +48,29 @@ export async function setPreferredCrew(propertyId: string, vendorId: string | nu
   const admin = createServiceClient();
 
   if (vendorId) {
-    const { data: vendor } = await admin
+    const vendorRes = await admin
       .from("vendors")
       .select("id, status, service_types")
       .eq("id", vendorId)
       .maybeSingle();
+    // "That crew doesn't exist" is a statement about the roster. A failed read
+    // arrives as the same `data: null` and knows nothing of the sort — and ops
+    // would go looking for a crew row that is sitting there fine.
+    if (vendorRes.error) return { ok: false, error: readFailedMessage("that crew", vendorRes.error) };
+    const vendor = vendorRes.data;
     if (!vendor) return { ok: false, error: "That crew doesn't exist." };
     if (vendor.status !== "active") return { ok: false, error: "Only an active crew can be a preferred crew." };
 
     // "Does at least one service" — a private rate set, or listed service types.
-    const { count: rateCount } = await admin
+    const rateRes = await admin
       .from("vendor_rates")
       .select("id", { count: "exact", head: true })
       .eq("vendor_id", vendorId);
+    // An errored count is null, which reduces the test below to "no rates" and
+    // refuses a crew who may have a full rate card — telling ops to go and set
+    // something that is already set.
+    if (rateRes.error) return { ok: false, error: readFailedMessage("that crew's rates", rateRes.error) };
+    const rateCount = rateRes.count;
     const listsService = ((vendor.service_types as string[] | null) ?? []).length > 0;
     if (!(rateCount && rateCount > 0) && !listsService) {
       return { ok: false, error: "That crew doesn't do any service yet — set a rate or service type first." };

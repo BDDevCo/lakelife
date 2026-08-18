@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 import { getFullProfile, getPricedServices } from "./data";
 import { formatPrice } from "@/lib/pricing";
 import { sendEmail } from "@/lib/email";
@@ -24,9 +25,19 @@ export async function sendWelcomeEmail(): Promise<{ ok: boolean; skipped?: boole
   } = await supabase.auth.getUser();
   if (!user?.email) return { ok: false, error: "No email on file." };
 
-  const profile = await getFullProfile();
-  if (!profile?.hasProfile) return { ok: false, error: "No profile to summarize." };
-  const services = await getPricedServices(profile);
+  // Both of these throw now. The only caller does `.catch(() => {})`, so a
+  // rejection is swallowed silently and the welcome email simply never arrives
+  // with nothing anywhere saying so — which is the same class of quiet lie,
+  // one level up. Returning lets the caller's own error path work.
+  let profile, services;
+  try {
+    profile = await getFullProfile();
+    if (!profile?.hasProfile) return { ok: false, error: "No profile to summarize." };
+    services = await getPricedServices(profile);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("your profile", e) };
+  }
 
   const priceMap = new Map(services.map((s) => [s.name, s.price]));
 

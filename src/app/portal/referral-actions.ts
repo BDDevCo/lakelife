@@ -34,16 +34,34 @@ export async function claimReferral(userId: string): Promise<void> {
     if (!code || !/^[0-9a-f]{8}$/i.test(code)) return;
 
     const admin = createServiceClient();
-    const { data: me } = await admin.from("users").select("referred_by, referral_code").eq("id", userId).maybeSingle();
+    // BOTH READS BELOW FAIL CLOSED — a null takes an early `return` and no
+    // attribution is written — which is the safe direction for something
+    // one-time and permanent. What they must not do is fail SILENTLY: the
+    // referral is dropped for good and the cookie is left behind, so the only
+    // evidence this ever happened is the log line.
+    const meRes = await admin.from("users").select("referred_by, referral_code").eq("id", userId).maybeSingle();
+    if (meRes.error) {
+      console.error("[read failed] referral attribution (your account):", meRes.error.code ?? "", meRes.error.message ?? meRes.error);
+      return;
+    }
+    const me = meRes.data;
     if (!me || me.referred_by != null) return; // already attributed — permanent
     if ((me.referral_code as string)?.toLowerCase() === code.toLowerCase()) return; // self-referral blocked
 
-    const { data: referrer } = await admin.from("users").select("id").ilike("referral_code", code).maybeSingle();
+    // The self-referral guard above has already run, so a failure here loses an
+    // attribution but can never mis-assign one.
+    const referrerRes = await admin.from("users").select("id").ilike("referral_code", code).maybeSingle();
+    if (referrerRes.error) {
+      console.error("[read failed] referral attribution (who referred you):", referrerRes.error.code ?? "", referrerRes.error.message ?? referrerRes.error);
+      return;
+    }
+    const referrer = referrerRes.data;
     if (!referrer || referrer.id === userId) return;
 
     await admin.from("users").update({ referred_by: referrer.id }).eq("id", userId).is("referred_by", null);
     jar.delete("ll_ref");
-  } catch {
-    /* attribution is best-effort — never block the front door */
+  } catch (e) {
+    /* attribution is best-effort — never block the front door, but say so */
+    console.error("[referral attribution failed]", e);
   }
 }

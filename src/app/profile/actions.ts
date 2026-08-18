@@ -2,6 +2,7 @@
 
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
+import { readFailedMessage } from "@/lib/must-read";
 import { encryptGate } from "@/lib/gate";
 import { findOrCreateLake } from "@/lib/lake-birth";
 
@@ -71,7 +72,7 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
     if (!born.ok) return { ok: false, error: born.error };
     lakeId = born.lakeId ?? null;
   } else {
-    const { data: lake } = await supabase
+    const lakeRes = await supabase
       .from("lakes")
       .select("id")
       .eq("name", input.lake)
@@ -81,6 +82,13 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
       // scratch row's dates.
       .eq("is_fixture", false)
       .maybeSingle();
+    // A failed read arrives as "no such lake" and the save below then writes
+    // lake_id = null — silently unhooking the property from the ice-out and
+    // pull-deadline dates (rule 7) with no error anywhere. Refuse instead.
+    if (lakeRes.error) {
+      return { ok: false, error: readFailedMessage("the lakes we serve", lakeRes.error) };
+    }
+    const lake = lakeRes.data;
     lakeId = (lake?.id as string | undefined) ?? null;
   }
 
@@ -89,12 +97,19 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
   // Edit a specific property when an id is given; otherwise create a new one.
   let propertyId: string | undefined;
   if (input.propertyId) {
-    const { data: existing } = await supabase
+    const existingRes = await supabase
       .from("properties")
       .select("id")
       .eq("owner_id", user.id)
       .eq("id", input.propertyId)
       .maybeSingle();
+    // "That property no longer exists" is a claim about their account, and a
+    // failed read has no standing to make it — the property is very likely
+    // still there and the refresh they're told to do won't help.
+    if (existingRes.error) {
+      return { ok: false, error: readFailedMessage("your property", existingRes.error) };
+    }
+    const existing = existingRes.data;
     propertyId = existing?.id as string | undefined;
     if (!propertyId) {
       // The property being edited is gone (removed in another tab?). Fail

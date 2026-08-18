@@ -1,6 +1,7 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { opsReasonText, REISSUABLE } from "@/lib/claim-reasons";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * THE READER THE CLAIM LOG NEVER HAD.
@@ -80,10 +81,18 @@ export async function getStuckHouseholds(): Promise<StuckHousehold[]> {
   }
 
   const ids = [...byRenter.keys()];
-  const { data: files } = await admin
-    .from("park_renters")
-    .select("id, park_id, display_name, user_id, claim_declined_at, parks(name)")
-    .in("id", ids);
+  // These two DECIDE WHO APPEARS. The refusals are already in hand at this
+  // point, so a lost read below does not produce "nobody is stuck" out of thin
+  // air — it drops people who ARE stuck out of a list built from their own
+  // failures. /ops wraps this loader in its own try/catch, so the throw is
+  // logged there rather than becoming a shorter, plausible list.
+  const files = mustRead(
+    "the household files behind those refusals",
+    await admin
+      .from("park_renters")
+      .select("id, park_id, display_name, user_id, claim_declined_at, parks(name)")
+      .in("id", ids),
+  );
 
   // Still-open files only. Claimed or declined means the story ended well
   // enough, whatever happened on the way.
@@ -92,11 +101,14 @@ export async function getStuckHouseholds(): Promise<StuckHousehold[]> {
   );
   if (open.length === 0) return [];
 
-  const { data: stays } = await admin
-    .from("lot_reservations")
-    .select("renter_id, park_lots(lot_number)")
-    .in("renter_id", open.map((f) => f.id as string))
-    .in("status", ["approved", "active"]);
+  const stays = mustRead(
+    "which lot each of those households is on",
+    await admin
+      .from("lot_reservations")
+      .select("renter_id, park_lots(lot_number)")
+      .in("renter_id", open.map((f) => f.id as string))
+      .in("status", ["approved", "active"]),
+  );
   const lotBy = new Map<string, string>();
   for (const s of stays ?? []) {
     const n = (s.park_lots as { lot_number?: string } | null)?.lot_number;
@@ -154,6 +166,11 @@ export async function getClaimTally(): Promise<ClaimTally> {
 
   if (error) {
     console.error("[ops] claim tally read failed", error.message);
+    // KNOWN RESIDUAL, and it is a lie: `empty: true` is what the card reads as
+    // "nobody has started onboarding a park yet". Ending it needs a third state
+    // on OpsStuckClaims — "we couldn't check" — rather than a different value
+    // for a flag that only has two meanings. Until then it at least logs, and
+    // /ops no longer manufactures this branch out of the OTHER read's failure.
     return { invitesSent: 0, slipsPrinted: 0, claimed: 0, refused: 0, declined: 0, empty: true };
   }
 

@@ -14,6 +14,7 @@ import { getPackageBreakdowns, getStorageStatusCards, type PackageBreakdown, typ
 import { todayLakeDate } from "@/lib/booking";
 import { createServiceClient } from "@/lib/supabase/server";
 import { customerStatusLabel } from "@/lib/job-view";
+import { mustRead } from "@/lib/must-read";
 
 // Pill COLOUR lives here; the WORDS come from customerStatusLabel
 // (src/lib/job-view, under test) so this table and the job-detail page can
@@ -49,7 +50,12 @@ export default async function RequestsPage() {
     .select("id, service_name, date, frequency, status, customer_price, created_at")
     .order("created_at", { ascending: false });
   if (activeId) query = query.eq("property_id", activeId);
-  const { data: jobs } = await query;
+  // A FAILED READ IS NOT AN EMPTY SEASON. Swallowed, `rows` is [] and the page
+  // renders "No requests yet. Book your first service to see it here." to a
+  // household that has booked spring open, pier install, a lift set, weekly
+  // mowing and a fall close — and the month-at-a-glance goes blank with it.
+  // Confirmed as a real bug by the season simulation.
+  const jobs = mustRead("your requests", await query);
 
   const rows = jobs ?? [];
 
@@ -67,7 +73,9 @@ export default async function RequestsPage() {
   // (storage_stays itself is OPS/vendor-only at RLS).
   let groupQuery = supabase.from("job_groups").select("id").eq("status", "active");
   if (activeId) groupQuery = groupQuery.eq("property_id", activeId);
-  const { data: groupRows } = await groupQuery;
+  // Storage cards hang off these ids; an unread list silently drops every
+  // storage package from the screen rather than saying it could not look.
+  const groupRows = mustRead("your storage packages", await groupQuery);
   const storageCards = await getStorageStatusCards((groupRows ?? []).map((g) => g.id as string));
 
   // Month-at-a-glance: confirmed visits only (scheduled / in progress), today
@@ -91,11 +99,11 @@ export default async function RequestsPage() {
   let preferredCompany: string | null = null;
   if (activeId) {
     const admin = createServiceClient();
-    const { data: prop } = await admin
+    const prop = mustRead("your preferred crew", await admin
       .from("properties")
       .select("owner_id, preferred_vendor, vendors:preferred_vendor(company)")
       .eq("id", activeId)
-      .maybeSingle();
+      .maybeSingle());
     if (prop && prop.owner_id === user.id) {
       const v = Array.isArray(prop.vendors) ? prop.vendors[0] : prop.vendors;
       preferredCompany = (v as { company?: string } | null)?.company ?? null;

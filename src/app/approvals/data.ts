@@ -1,5 +1,6 @@
 import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 
 export interface OwnerFlag {
   id: string;
@@ -34,7 +35,14 @@ export async function getOwnerFlags(): Promise<OwnerFlag[]> {
   // regardless of RLS, and the nested job/service/property embed (otherwise
   // RLS-blocked on the ops-only jobs table) resolves.
   const admin = createServiceClient();
-  const { data } = await admin
+  // THE COMMENT BELOW DIAGNOSED THIS AND THEN SWALLOWED IT ANYWAY. Naming the
+  // foreign key fixed the ONE error that was happening; every other error still
+  // arrived as {error, data:null} and still rendered "No approvals waiting" —
+  // to an owner whose crew is standing in their driveway waiting on a decision,
+  // which is the one screen in the product with somebody physically blocked on
+  // it. The season simulation confirmed it. Sole caller is approvals/page.tsx,
+  // a server component under src/app/error.tsx, so throwing lands honestly.
+  const data = mustRead("your approvals", await admin
     .from("flags")
     // `jobs!flags_job_id_fkey` NAMES THE RELATIONSHIP ON PURPOSE.
     // 0084 added jobs.held_flag_id -> flags(id), so there are now TWO
@@ -44,7 +52,7 @@ export async function getOwnerFlags(): Promise<OwnerFlag[]> {
     // nothing logged. Naming the key is the fix and the documentation.
     .select("id, type, note, status, created_at, proposed_change, at_arrival, crew_can_proceed, crew_cannot_reason, jobs!flags_job_id_fkey!inner(services(name), properties!inner(address, owner_id))")
     .eq("jobs.properties.owner_id", user.id)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false }));
 
   return (data ?? [])
     .map((f) => {

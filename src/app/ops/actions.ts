@@ -6,6 +6,7 @@ import { todayLakeDate, dayStatus, effectiveSeason, validateSeasonDates } from "
 import { runRouteBuild } from "@/lib/automation";
 import { getPlatformSettings } from "@/lib/settings";
 import { assertOps } from "./data";
+import { readFailedMessage } from "@/lib/must-read";
 
 export interface OpsResult {
   ok: boolean;
@@ -39,11 +40,17 @@ export async function assignAndSchedule(
   if (!ops) return { ok: false, error: "Ops only." };
 
   const admin = createServiceClient();
-  const { data: job } = await admin
+  const jobRes = await admin
     .from("jobs")
     .select("id, status, customer_price, property_id, service_id, group_id, services(name, is_water_work)")
     .eq("id", jobId)
     .maybeSingle();
+  // "Job not found." asserts the row is gone — and every check below it (the
+  // season gate, the price, the status) is decided from this row. A failed read
+  // hands back the same `data: null` as a deleted job, so ops is told a job they
+  // are looking at on the board does not exist.
+  if (jobRes.error) return { ok: false, error: readFailedMessage("that job", jobRes.error) };
+  const job = jobRes.data;
   if (!job) return { ok: false, error: "Job not found." };
   if (job.group_id) {
     return { ok: false, error: "Storage packages route automatically — this visit needs a crew that covers every leg (rates, insurance, barn space). Fix the crew's docs or capacity and the machine will place it." };
@@ -69,11 +76,18 @@ export async function assignAndSchedule(
   // the DATE itself falls inside the season.
   const svcRow = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; is_water_work?: boolean } | null;
   if (svcRow?.is_water_work) {
-    const { data: propRow } = await admin
+    const propRes = await admin
       .from("properties")
       .select("lakes(ice_out_actual, pull_deadline)")
       .eq("id", job.property_id as string)
       .maybeSingle();
+    // dayStatus fails closed on half a window, so a failed read here refuses the
+    // assignment AND blames the lake — "ice-out not set" about a lake whose
+    // dates are on file. Ops would go and re-enter season dates that are fine.
+    if (propRes.error) {
+      return { ok: false, error: readFailedMessage("this lake's season dates", propRes.error) };
+    }
+    const propRow = propRes.data;
     const lake = (Array.isArray(propRow?.lakes) ? propRow?.lakes[0] : propRow?.lakes) as
       | { ice_out_actual?: string; pull_deadline?: string } | undefined;
     const today = todayLakeDate();
@@ -103,11 +117,16 @@ export async function assignAndSchedule(
   }
 
   // Validate the vendor: must be active with a valid COI (spec: no COI, no jobs).
-  const { data: vendor } = await admin
+  const vendorRes = await admin
     .from("vendors")
     .select("id, company, status, coi_expiry, user_id")
     .eq("id", input.vendorId)
     .maybeSingle();
+  // "That vendor isn't active" and "That vendor's insurance is expired" are both
+  // claims about the crew's file. On a failed read we have no file to claim
+  // anything about, and ops would chase a crew for paperwork they already sent.
+  if (vendorRes.error) return { ok: false, error: readFailedMessage("that crew", vendorRes.error) };
+  const vendor = vendorRes.data;
   if (!vendor || vendor.status !== "active") return { ok: false, error: "That vendor isn't active." };
   if (vendor.coi_expiry == null || String(vendor.coi_expiry) < todayLakeDate()) {
     return { ok: false, error: "That vendor's insurance (COI) is missing or expired — can't route them." };
@@ -150,15 +169,23 @@ export async function assignAndSchedule(
   const svcName = ((Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string } | null)?.name ?? "a service";
   const prettyDate = new Date(input.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 
-  const { data: vUser } = await admin.from("users").select("phone").eq("id", vendor.user_id).maybeSingle();
+  // The two reads below stay best-effort: the job is already scheduled, and
+  // unwinding that over a missing phone number would be worse than a text that
+  // did not go. But a swallow has to leave a trace, or "the crew never got told"
+  // has no explanation anywhere.
+  const vUserRes = await admin.from("users").select("phone").eq("id", vendor.user_id).maybeSingle();
+  if (vUserRes.error) console.error("[read failed] the crew's phone number (job scheduled, text not sent):", vUserRes.error);
+  const vUser = vUserRes.data;
   if (vUser?.phone) {
     void sendSms(vUser.phone as string, `LakeLife: new job on your route — ${svcName}, ${prettyDate} (${input.slot}). Opens in your Today list. 🌊`);
   }
-  const { data: prop } = await admin
+  const propNotifyRes = await admin
     .from("properties")
     .select("address, users(phone)")
     .eq("id", job.property_id)
     .maybeSingle();
+  if (propNotifyRes.error) console.error("[read failed] the owner's phone number (job scheduled, text not sent):", propNotifyRes.error);
+  const prop = propNotifyRes.data;
   const ownerPhone = ((Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as { phone?: string } | null)?.phone;
   if (ownerPhone) {
     void sendSms(ownerPhone, `LakeLife: your ${svcName} is booked for ${prettyDate}. We'll text you when the crew is done, with photos. 🌊`);

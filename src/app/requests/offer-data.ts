@@ -6,6 +6,7 @@ import { DEFAULT_JOB_MINUTES } from "@/lib/fleet";
 import { buildCandidates, loadPricingProfileById } from "@/app/book/dispatch";
 import { getPlatformSettings } from "@/lib/settings";
 import type { ServiceRule } from "@/lib/pricing";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * SCARCITY OFFERS for the owner's requests page (Phase C, ladder rung 3).
@@ -31,15 +32,21 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
 
 /** Compute the offer for ONE job id. Server-side authority — used by both the
- *  page (display) and the accept action (recompute before applying). */
+ *  page (display) and the accept action (recompute before applying).
+ *
+ *  THROWS ReadFailed if the job read fails. `null` from here means "no offer"
+ *  as a FACT, and the accept action reports that fact to the customer as a
+ *  sentence about their request — so a failed read must not be able to
+ *  produce it. Callers that cannot throw (the accept action, the nightly
+ *  waitlist text) catch it; the pages let the error boundary have it. */
 export async function computeScarcityOffer(jobId: string): Promise<ScarcityOfferView | null> {
   const admin = createServiceClient();
   const today = todayLakeDate();
-  const { data: job } = await admin
+  const job = mustRead("this request", await admin
     .from("jobs")
     .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, services(name, pricing_model, est_minutes), properties(lake_id)")
     .eq("id", jobId)
-    .maybeSingle();
+    .maybeSingle());
   if (!job || job.status !== "requested" || job.vendor_id != null || !job.date || (job.date as string) < today) return null;
   if ((job as { is_rush?: boolean }).is_rush) return null; // rush already carries its premium — never stack a boost
   const svc = one(job.services) as { name?: string; pricing_model?: string; est_minutes?: number } | null;

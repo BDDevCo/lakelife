@@ -31,6 +31,17 @@ export function RescheduleVisit({ jobId, view }: { jobId: string; view: Reschedu
   const [busy, start] = useTransition();
   const [date, setDate] = useState("");
 
+  // WE COULDN'T READ THE VISIT. `needed` is false on a failed read for exactly
+  // the same reason it is false on a healthy job that needs nothing — so
+  // returning null here would hide the door on the one card whose absence is
+  // what this component was built to fix. Say it, and leave the page alone.
+  if (view.unavailable) {
+    return (
+      <p className="mut" style={{ fontSize: 13, marginBottom: 16 }}>
+        We couldn&apos;t load this visit&apos;s details just now. Refresh in a moment — or text us and we&apos;ll sort it out.
+      </p>
+    );
+  }
   if (!view.needed) return null;
 
   const earliest = tomorrow();

@@ -2,6 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getFullProfile, toPricingProfile } from "@/app/profile/data";
+import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 import { validateSelection, anchorServiceId } from "@/lib/packages";
 import { todayLakeDate, effectiveSeason } from "@/lib/booking";
 import { sendSms } from "@/lib/sms";
@@ -60,7 +61,15 @@ export async function createPackageBooking(input: {
     return { ok: false, needsTos: true };
   }
 
-  const profile = await getFullProfile();
+  // Same seam as createBookingBatch: an unread profile must not become "set up
+  // your property first" to somebody who has, nor a blank rejection.
+  let profile;
+  try {
+    profile = await getFullProfile();
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("your property", e) };
+  }
   if (!profile?.hasProfile || !profile.propertyId) return { ok: false, error: "Set up your property first." };
   if (!profile.boats.length) return { ok: false, error: "Add your boat to your property profile first — storage is priced by it." };
 

@@ -6,6 +6,7 @@ import { OwnerHeader } from "@/components/OwnerHeader";
 import { NicknameEditor } from "@/components/NicknameEditor";
 import { listPaymentMethods } from "./payment-actions";
 import { createClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getFullProfile } from "./data";
 
@@ -41,11 +42,15 @@ export default async function ProfilePage() {
     );
   }
 
-  const [{ data: me }, profile, cards] = await Promise.all([
+  const [meRes, profile, cards] = await Promise.all([
     supabase.from("users").select("name, email, phone").eq("id", user.id).maybeSingle(),
     getFullProfile(),
     listPaymentMethods(),
   ]);
+  // "Contact on file" below renders `—` for anything missing. A failed read
+  // makes that card say we hold no name, no email and no mobile for somebody
+  // who verified both to get here (rule 5).
+  const me = mustRead("your contact details", meRes);
 
   // No property yet → invite them into the wizard.
   if (!profile?.hasProfile) {
@@ -75,11 +80,16 @@ export default async function ProfilePage() {
   // so read it here (page-local — shared data functions stay untouched).
   let nickname: string | null = null;
   if (profile.propertyId) {
-    const { data: prop } = await supabase
-      .from("properties")
-      .select("nickname")
-      .eq("id", profile.propertyId)
-      .maybeSingle();
+    // NicknameEditor saves whatever it was handed. A failed read arrives as
+    // "no nickname", and the next save writes that blank over "The Cabin".
+    const prop = mustRead(
+      "your property's nickname",
+      await supabase
+        .from("properties")
+        .select("nickname")
+        .eq("id", profile.propertyId)
+        .maybeSingle(),
+    );
     nickname = (prop as { nickname?: string | null } | null)?.nickname ?? null;
   }
 

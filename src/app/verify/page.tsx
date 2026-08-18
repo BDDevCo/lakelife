@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { TopBar } from "@/components/Brand";
 import { VerifyPanel } from "@/components/VerifyPanel";
 import { createClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { hasSupabaseEnv } from "@/lib/env";
 
 export default async function VerifyPage({
@@ -56,11 +57,17 @@ export default async function VerifyPage({
   }
 
   // Already verified? Skip ahead.
-  const { data: profile } = await supabase
-    .from("users")
-    .select("phone_verified, phone")
-    .eq("id", user.id)
-    .maybeSingle();
+  // A failed read reads as "not verified yet" AND as "no number on file", so a
+  // customer who finished this weeks ago is sent back to re-verify a phone the
+  // form can't even prefill. Rule 5 hangs off this flag — it is not a guess.
+  const profile = mustRead(
+    "your account",
+    await supabase
+      .from("users")
+      .select("phone_verified, phone")
+      .eq("id", user.id)
+      .maybeSingle(),
+  );
 
   if (profile?.phone_verified) {
     redirect("/welcome");

@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { getPlatformSettings } from "@/lib/settings";
 import { seasonEndFor, overstayDays, perdiemCharge } from "@/lib/storage";
 import { todayLakeDate } from "@/lib/booking";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * PACKAGE BREAKDOWNS for the owner's requests table (storage packages —
@@ -40,30 +41,39 @@ export async function getPackageBreakdowns(jobIds: string[]): Promise<Record<str
   if (jobIds.length === 0) return out;
   const admin = createServiceClient();
 
-  const { data: jobRows } = await admin
+  // A failed read here would leave packageJobs empty, and an empty result is
+  // read downstream as "these aren't package jobs" — the price legs would
+  // simply vanish from a money breakdown with no sign anything went wrong.
+  const jobRows = mustRead("your package requests", await admin
     .from("jobs")
     .select("id, group_id")
     .in("id", jobIds)
-    .not("group_id", "is", null);
+    .not("group_id", "is", null));
   const packageJobs = (jobRows ?? []) as { id: string; group_id: string }[];
   if (packageJobs.length === 0) return out;
 
   const jobIdsWithGroup = packageJobs.map((j) => j.id);
   const groupIds = [...new Set(packageJobs.map((j) => j.group_id))];
 
-  const [{ data: itemRows }, { data: groupRows }] = await Promise.all([
+  const [itemsRes, groupsRes] = await Promise.all([
     // NEVER select vendor_cost — job_items is OPS-ONLY at RLS precisely
     // because that column lives on this same row.
     admin.from("job_items").select("job_id, customer_price, services(name)").in("job_id", jobIdsWithGroup),
     admin.from("job_groups").select("id, spring_quote, spring_service_ids").in("id", groupIds),
   ]);
+  // Both feed prices the customer reads as their total. A dropped read here
+  // renders "no legs, no spring quote" — a cheaper package than the real one.
+  const itemRows = mustRead("your package breakdown", itemsRes);
+  const groupRows = mustRead("your package breakdown", groupsRes);
 
   const springIds = [
     ...new Set((groupRows ?? []).flatMap((g) => ((g as { spring_service_ids?: string[] }).spring_service_ids ?? []))),
   ];
   const springNameById = new Map<string, string>();
   if (springIds.length > 0) {
-    const { data: svcRows } = await admin.from("services").select("id, name").in("id", springIds);
+    // Failure here would name every spring service "Service" — see the
+    // springNameById.get(id) ?? "Service" fallback below.
+    const svcRows = mustRead("the services in your package", await admin.from("services").select("id, name").in("id", springIds));
     for (const s of svcRows ?? []) springNameById.set(s.id as string, s.name as string);
   }
 
@@ -125,18 +135,21 @@ export async function getStorageStatusCards(groupIds: string[]): Promise<Storage
   if (groupIds.length === 0) return out;
   const admin = createServiceClient();
 
-  const [{ data: groupRows }, settings] = await Promise.all([
+  const [groupsRes, settings] = await Promise.all([
     admin.from("job_groups").select("id, spring_quote").in("id", groupIds),
     getPlatformSettings(),
   ]);
+  const groupRows = mustRead("your storage status", groupsRes);
   const groups = (groupRows ?? []) as { id: string; spring_quote: number }[];
   if (groups.length === 0) return out;
 
-  const { data: stayRows } = await admin
+  // No card at all is how "your boat isn't in storage" renders. A failed read
+  // must not be able to tell an owner their boat isn't tucked in.
+  const stayRows = mustRead("your storage status", await admin
     .from("storage_stays")
     .select("group_id, intake_at, vendors(company)")
     .in("group_id", groups.map((g) => g.id))
-    .eq("status", "in_storage");
+    .eq("status", "in_storage"));
 
   const springQuoteByGroup = new Map(groups.map((g) => [g.id, Number(g.spring_quote ?? 0)]));
   const today = todayLakeDate();

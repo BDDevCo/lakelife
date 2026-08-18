@@ -18,11 +18,21 @@ export async function loadNotifStates(): Promise<Record<string, boolean>> {
   // below carried the display label ("Text + email") in `channel`, which no
   // send path can ever match — reading them here would show a state that
   // nothing acts on.
-  const { data } = await supabase
+  const res = await supabase
     .from("notification_prefs")
     .select("type, channel, enabled")
     .eq("user_id", user.id)
     .in("channel", ["sms", "email"]);
+  // DEGRADED, NOT SILENT. This is a "use server" export, so it must not throw,
+  // and `Record<string, boolean>` has nowhere to put a failure — the toggles
+  // would show `defaultOn` for somebody who turned one off. The log line is
+  // the only signal, so it has to be here; give this an error slot before any
+  // screen renders it.
+  if (res.error) {
+    console.error("[read failed, degraded] your notification settings:", res.error.code ?? "", res.error.message ?? res.error);
+    return states;
+  }
+  const data = res.data;
   // A type is OFF only if every channel it uses is off — the simple toggle on
   // this screen speaks for all of them.
   const seen = new Map<string, boolean>();

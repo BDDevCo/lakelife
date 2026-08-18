@@ -4,6 +4,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { getVendorScores } from "@/lib/scoring-data";
 import { computeScore, type CrewTier } from "@/lib/scoring";
 import { coiState, type CoiState } from "./crews-coi";
+import { mustRead } from "@/lib/must-read";
 
 /** Crew (vendor) roster for the ops Crews tab. Ops-only, service-role read —
  *  never import this into a vendor/owner surface (it carries no margin, but it
@@ -68,7 +69,7 @@ export async function getCrews(): Promise<OpsCrew[]> {
   const admin = createServiceClient();
   const today = todayLakeDate();
 
-  const [{ data }, scores, { data: confirmations }] = await Promise.all([
+  const [crewRes, scores, confirmRes] = await Promise.all([
     admin
       .from("vendors")
       .select(
@@ -78,6 +79,11 @@ export async function getCrews(): Promise<OpsCrew[]> {
     getVendorScores(),
     admin.from("job_confirmations").select("vendor_id, verdict").not("verdict", "is", null),
   ]);
+  // An empty roster is a real state (nobody invited yet) and the Crews tab says
+  // so. A failed read used to say the same thing — and a lost thumbs-down read
+  // shows a crew with a clean record they may not have.
+  const data = mustRead("the crew roster", crewRes);
+  const confirmations = mustRead("the customers' verdicts on each crew", confirmRes);
   const thumbs = new Map<string, { up: number; down: number }>();
   for (const c of confirmations ?? []) {
     const t = thumbs.get(c.vendor_id as string) ?? { up: 0, down: 0 };
@@ -92,8 +98,16 @@ export async function getCrews(): Promise<OpsCrew[]> {
   // that exist so we never mint a URL for a missing doc.
   async function sign(path: string | null): Promise<string | null> {
     if (!path) return null;
-    const { data: s } = await admin.storage.from(DOC_BUCKET).createSignedUrl(path, 3600);
-    return s?.signedUrl ?? null;
+    const signed = await admin.storage.from(DOC_BUCKET).createSignedUrl(path, 3600);
+    // Deliberately soft: `hasCoiDoc` / `hasW9Doc` are decided from the stored
+    // path, not from this, so a failed signing costs a link and not a fact —
+    // the card still says the document is there. It logs so a bucket that has
+    // stopped signing does not simply look like a screen with no links.
+    if (signed.error) {
+      console.error("[read failed] a signed link to a crew document:", signed.error.message);
+      return null;
+    }
+    return signed.data?.signedUrl ?? null;
   }
 
   const crews = await Promise.all(
@@ -151,6 +165,12 @@ export async function getCrews(): Promise<OpsCrew[]> {
  *  the crew service-type editor. Small helper so the page can pass it as a prop. */
 export async function getActiveServiceNames(): Promise<string[]> {
   const admin = createServiceClient();
-  const { data } = await admin.from("services").select("name").eq("active", true).order("name", { ascending: true });
+  // These are the tap-chips ops picks a crew's services from. An empty list
+  // reads as "no services are set up", and picking nothing is how a crew ends up
+  // invited with no work they can be routed for.
+  const data = mustRead(
+    "the list of bookable services",
+    await admin.from("services").select("name").eq("active", true).order("name", { ascending: true }),
+  );
   return [...new Set((data ?? []).map((s) => s.name as string))];
 }

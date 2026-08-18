@@ -2,6 +2,7 @@ import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertOps } from "./data";
 import { groupThreads, type FlatMessage, type OpsThread } from "./messages-group";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * Ops side of the dispatch message board — every property's thread in one place.
@@ -36,13 +37,18 @@ export async function getMessageThreads(): Promise<OpsThread[]> {
   if (!ops) return [];
 
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("messages")
-    .select(
-      "id, body, created_at, from_user, ai, property_id, " +
-        "properties(address, owner_id, lakes(name), users(name))",
-    )
-    .order("created_at", { ascending: true });
+  // "No conversations" is what a quiet week looks like AND what a failed read
+  // looked like — on the board ops uses to check nobody is waiting on a reply.
+  const data = mustRead(
+    "the message threads",
+    await admin
+      .from("messages")
+      .select(
+        "id, body, created_at, from_user, ai, property_id, " +
+          "properties(address, owner_id, lakes(name), users(name))",
+      )
+      .order("created_at", { ascending: true }),
+  );
 
   const rows = (data ?? []) as unknown as ThreadRaw[];
   const flat: FlatMessage[] = rows.map((r) => {

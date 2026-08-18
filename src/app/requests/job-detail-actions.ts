@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { recordJobVerdict } from "@/lib/job-verdict";
+import { readFailedMessage } from "@/lib/must-read";
 import type { JobVerdictResult, JobMessageResult } from "@/app/requests/job-detail-data";
 
 /**
@@ -20,18 +21,30 @@ import type { JobVerdictResult, JobMessageResult } from "@/app/requests/job-deta
  * types live in job-detail-data.ts and are imported as types.
  */
 
+/**
+ * "We couldn't look" — kept apart from "not theirs" on purpose. A failed read
+ * resolves to `{ data: null }`, indistinguishable from a job that doesn't
+ * exist and from a stranger's, so all three actions below told the owner "That
+ * job isn't yours" about their own job. Ownership was never read; nothing may
+ * assert it. Null still means exactly what it meant.
+ */
+interface GateFailure { readFailed: true; error: unknown }
+type Gate = { userId: string; propertyId: string } | GateFailure | null;
+const gateFailed = (g: Gate): g is GateFailure => !!g && (g as GateFailure).readFailed === true;
+
 /** Ownership gate. Returns the ids the actions need, or null if not theirs. */
-async function ownJob(jobId: string): Promise<{ userId: string; propertyId: string } | null> {
+async function ownJob(jobId: string): Promise<Gate> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user || !jobId) return null;
 
   const admin = createServiceClient();
-  const { data: job } = await admin
+  const { data: job, error: jobErr } = await admin
     .from("jobs")
     .select("id, property_id, properties(owner_id)")
     .eq("id", jobId)
     .maybeSingle();
+  if (jobErr) return { readFailed: true, error: jobErr };
   if (!job) return null;
   const prop = (Array.isArray(job.properties) ? job.properties[0] : job.properties) as { owner_id?: string } | null;
   if (prop?.owner_id !== user.id) return null;
@@ -52,15 +65,22 @@ export async function submitJobVerdict(
   note: string,
 ): Promise<JobVerdictResult> {
   const ctx = await ownJob(jobId);
+  // A 👎 opens the dispute that can refund and claw back, so this one names money.
+  if (gateFailed(ctx)) return { ok: false, error: readFailedMessage("this job", ctx.error, { money: true }) };
   if (!ctx) return { ok: false, error: "That job isn't yours." };
   if (verdict !== "good" && verdict !== "issue") return { ok: false, error: "Pick 👍 or 👎." };
 
   const admin = createServiceClient();
-  const { data: conf } = await admin
+  const confRes = await admin
     .from("job_confirmations")
     .select("id, verdict")
     .eq("job_id", jobId)
     .maybeSingle();
+  // "It opens when your crew finishes" is a claim about their job's state made
+  // from a read that never returned — and it is told to somebody whose crew
+  // has finished, looking at the buttons the finished job put on their screen.
+  if (confRes.error) return { ok: false, error: readFailedMessage("this job's feedback", confRes.error, { money: true }) };
+  const conf = confRes.data;
   if (!conf) return { ok: false, error: "This one isn't open for feedback yet — it opens when your crew finishes." };
   if (conf.verdict) return { ok: true, recorded: false };
 
@@ -89,6 +109,9 @@ export async function settleMyDispute(
   answer: "resolved" | "still",
 ): Promise<JobMessageResult> {
   const ctx = await ownJob(jobId);
+  // "Still not right" fires the policy engine (refund + crew clawback), so the
+  // failure has to say whether money moved. This return sits before all of it.
+  if (gateFailed(ctx)) return { ok: false, error: readFailedMessage("this job", ctx.error, { money: true }) };
   if (!ctx) return { ok: false, error: "That job isn't yours." };
 
   const { customerResolvedForJob, customerStillForJob } = await import("@/lib/disputes");
@@ -115,6 +138,7 @@ export async function settleMyDispute(
  */
 export async function postJobMessage(jobId: string, body: string): Promise<JobMessageResult> {
   const ctx = await ownJob(jobId);
+  if (gateFailed(ctx)) return { ok: false, error: readFailedMessage("this job", ctx.error) };
   if (!ctx) return { ok: false, error: "That job isn't yours." };
 
   const text = (body ?? "").trim().slice(0, 2000);
