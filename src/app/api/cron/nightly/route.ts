@@ -47,6 +47,26 @@ async function step<T>(name: string, fn: () => Promise<T>): Promise<T | null> {
   }
 }
 
+/**
+ * A STEP THAT DIDN'T THROW CAN STILL HAVE FAILED SOMEBODY.
+ *
+ * `step()` only sees a throw. But the cron rule for these runners is the
+ * opposite of throwing: a read that fails inside a loop SKIPS that one job,
+ * crew or property and carries on — which is right, and which used to be
+ * completely invisible. The step returned `ok:true` with counts that looked
+ * exactly like a quiet night, and the only trace was a console line on a
+ * server nobody reads. (That is how the COI check reported `{ok:true, due:0}`
+ * every night for months while no crew was ever warned.)
+ *
+ * So the steps that skip now say what they skipped, in words, and those land
+ * in the SAME digest section as a thrown step — because to the person reading
+ * it at 8am, "the step died" and "the step quietly didn't do it" need the same
+ * response.
+ */
+function noteSkips(name: string, r: { skipped?: string[] } | null | undefined) {
+  for (const s of r?.skipped ?? []) failures.push({ step: name, error: s });
+}
+
 async function run(req: Request) {
   if (!cronAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -119,6 +139,40 @@ async function run(req: Request) {
   // The park's evening read. Guarded like everything else, and it writes its
   // own run row so a night it never ran is visible on his screen tomorrow.
   const park = await step("park", () => runParkNightly());
+  // The scheduling-lifecycle steps: what each of them SKIPPED tonight, into
+  // the same digest section as an outright failure. See noteSkips above.
+  noteSkips("noShows", noShows);
+  noteSkips("lakeStanding", lakeStanding);
+  noteSkips("springBirths", springBirths);
+  noteSkips("waitlist", waitlist);
+  noteSkips("extendReminders", extendReminders);
+  noteSkips("sweep", sweep);
+  noteSkips("overstay", overstay);
+  noteSkips("dispatch", dispatch);
+  noteSkips("routes", routes);
+  noteSkips("autopilot", autopilot);
+  noteSkips("bases", bases);
+  // The TELLING steps. These four decide who hears from us — a crew's fill-in
+  // digest, a homeowner's credit nudge, ops' one text about a job nobody has
+  // claimed, and a price the machine moved. None of them reports a count the
+  // digest renders, so before this the only trace of one skipping somebody was
+  // a console line. (gapSla's `alerted` IS rendered — its SKIPS were not.)
+  noteSkips("nudges", nudges);
+  noteSkips("fillInDigest", fillInDigest);
+  noteSkips("gapSla", gapSla);
+  noteSkips("autoPricing", autoPricing);
+  // THE MONEY STEPS, which is where a silent skip costs the most. Each of these
+  // now names what it did not do — a fee not charged, a crew's month not
+  // batched, a referral not credited — and every one of those was previously a
+  // console line and a count that read identically to a quiet night.
+  noteSkips("feeReconcile", feeReconcile);
+  noteSkips("referrals", referrals);
+  noteSkips("payoutBatch", payoutBatch);
+  noteSkips("monthlyPayouts", monthlyPayouts);
+  // reconcileUnsettledJobs reports `failures: string[]` rather than `skipped`,
+  // because every entry is a settle that refused — the customer was not charged
+  // and the crew was not paid. Same destination, so ops reads one list.
+  for (const f of reconcile?.failures ?? []) failures.push({ step: "reconcile", error: f });
   // A step that died contributes its empty shape rather than blocking the
   // digest — the digest is how ops finds out, so it must survive the failure
   // it is reporting. `failures` carries what actually broke.
@@ -148,6 +202,9 @@ async function run(req: Request) {
     tripFees: tripFees ?? undefined,
     tipsCollected: tipsCollected ?? undefined,
   }));
+  // The digest cannot report its own non-delivery by email. This lands it in
+  // the cron response instead — the only place left.
+  noteSkips("digest", digest);
   return NextResponse.json({ ok: failures.length === 0, failures, park, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, rentChanges, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, visitFees, tripFees, digest });
 }
 

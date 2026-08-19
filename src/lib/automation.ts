@@ -56,6 +56,15 @@ export interface RouteBuildOutcome {
   texted?: number;
   trucks?: number; // count of per-truck route rows written (fleet vendors only)
   hoursBust?: number; // count of truck days that busted the truck's work window
+  /**
+   * WHAT DIDN'T GET BUILT OR DELIVERED, in human words.
+   *
+   * `ok:false` and a crew who silently never received tomorrow's route both
+   * ended in an HTTP response nobody reads. The nightly carries this into the
+   * digest, so a morning where a crew has no route is something ops learns the
+   * night before rather than from the crew.
+   */
+  skipped?: string[];
 }
 
 /**
@@ -85,8 +94,10 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
     .eq("status", "scheduled")
     .not("vendor_id", "is", null);
   if (onlyVendorId) jobsQuery = jobsQuery.eq("vendor_id", onlyVendorId);
+  // Route-build skips, collected for the digest (see RouteBuildOutcome.skipped).
+  const skipped: string[] = [];
   const { data: jobs, error: loadErr } = await jobsQuery;
-  if (loadErr) return { ok: false, error: loadErr.message };
+  if (loadErr) return { ok: false, error: loadErr.message, skipped: [`Couldn't read the jobs scheduled for ${date} — NO routes were built and no crew was texted a route.`] };
 
   const byVendor = new Map<
     string,
@@ -143,7 +154,7 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
       .in("vendor_id", vendorIds)
       .eq("active", true)
       .order("created_at", { ascending: true });
-    if (uErr) return { ok: false, error: uErr.message };
+    if (uErr) return { ok: false, error: uErr.message, skipped: [`Couldn't read the crews' trucks for ${date} — NO routes were built and no crew was texted a route.`] };
     for (const u of units ?? []) {
       const vid = u.vendor_id as string;
       if (!unitsByVendor.has(vid)) unitsByVendor.set(vid, []);
@@ -173,7 +184,11 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
     const { data: u, error: uPhoneErr } = await admin.from("users").select("phone").eq("id", userId).maybeSingle();
     // A failed read is not "no phone on file". Say so, or a crew silently
     // never gets tomorrow's route and nothing anywhere records why.
-    if (uPhoneErr) { console.error("[read failed] the crew's phone number:", uPhoneErr); return null; }
+    if (uPhoneErr) {
+      console.error("[read failed] the crew's phone number:", uPhoneErr);
+      skipped.push(`A crew's route for ${date} was built but their phone number couldn't be read — no route text went out; they will arrive with nothing but their Today list.`);
+      return null;
+    }
     return (u?.phone as string) ?? null;
   };
 
@@ -191,7 +206,16 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
         .insert({ vendor_id: vendorId, date, stops_order: plan.ordered.map((s) => s.id), drive_minutes: plan.driveMinutes, map_url: mapUrl })
         .select("id")
         .single();
-      if (rErr) return { ok: false, error: rErr.message };
+      // SKIP THE VENDOR, NEVER THE REBUILD. Every routes row for this date was
+      // deleted above and every scheduled job had its route_id nulled, so
+      // returning here left EVERY REMAINING CREW with no route for tomorrow —
+      // a wiped calendar, not a stale one. Cron rule 1: one crew's failed
+      // insert costs that crew their route and nothing more.
+      if (rErr) {
+        console.error("[route build] couldn't write a route row:", rErr);
+        skipped.push(`One crew (${vendorId}) has no route for ${date} — we couldn't write it. Every other crew's route was built.`);
+        continue;
+      }
       for (let i = 0; i < plan.ordered.length; i++) {
         await admin.from("jobs").update({ sequence: i + 1, route_id: routeRow.id }).eq("id", plan.ordered[i].id);
       }
@@ -214,6 +238,7 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
     // interleave the trucks if each restarted at 1. Each truck's own
     // stop order still lives in routes.stops_order and its map link.
     let seq = 0;
+    let truckWriteFailed = false;
     for (const tp of plan.trucks) {
       if (!tp.ordered.length) continue;
       const mapUrl = routeMapUrl(tp.ordered);
@@ -231,7 +256,12 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
         })
         .select("id")
         .single();
-      if (rErr) return { ok: false, error: rErr.message };
+      if (rErr) {
+        console.error("[route build] couldn't write a truck's route row:", rErr);
+        skipped.push(`One crew (${vendorId}) has an incomplete route for ${date} — a truck's route wouldn't write. Every other crew's route was built.`);
+        truckWriteFailed = true;
+        break;
+      }
       for (let i = 0; i < tp.ordered.length; i++) {
         seq++;
         await admin.from("jobs").update({ sequence: seq, route_id: routeRow.id }).eq("id", tp.ordered[i].id);
@@ -246,11 +276,14 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
         texted++;
       }
     }
+    // This crew's route is incomplete; don't also tell them what overflowed
+    // from a plan we failed to write. The next crew still gets theirs.
+    if (truckWriteFailed) continue;
     if (plan.overflow.length > 0 && vendorPhone) {
       void sendSms(vendorPhone, `LakeLife: ${plan.overflow.length} job${plan.overflow.length === 1 ? "" : "s"} didn't fit tomorrow's trucks — ops has them. 🌊`);
     }
   }
-  return { ok: true, date, routes, stops, overflow, texted, trucks, hoursBust };
+  return { ok: true, date, routes, stops, overflow, texted, trucks, hoursBust, skipped };
 }
 
 export interface SettleOutcome {
@@ -258,6 +291,15 @@ export interface SettleOutcome {
   invoiced?: boolean;
   charged?: boolean;
   error?: string;
+  /**
+   * THINGS THAT WENT WRONG WITHOUT STOPPING THE SETTLE, in human words.
+   *
+   * A settle can return ok:true having quietly failed to pay a crew or failed
+   * to raise the alarm on a charge the ledger refused. Those used to exist
+   * only as a console line on a server nobody reads. Absent when nothing went
+   * wrong — the reconcile rail carries whatever is here into the digest.
+   */
+  notes?: string[];
 }
 
 /**
@@ -278,7 +320,11 @@ export async function alertOpsDoubleCharge(
   // has to name the right thing or ops goes looking for an invoice that was
   // never raised.
   against: "invoice" | "tip" = "invoice",
-): Promise<void> {
+  // WHETHER A HUMAN WAS ACTUALLY REACHED. This used to return nothing, which
+  // made "the alert went out" and "the alert reached nobody" the same value at
+  // every call site. The caller can now say so where somebody reads it.
+): Promise<{ notified: number }> {
+  let notified = 0;
   try {
     const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
     const what = against === "tip"
@@ -294,7 +340,7 @@ export async function alertOpsDoubleCharge(
     for (const u of opsUsers ?? []) {
       const to = u.email as string | null;
       if (!to) continue;
-      await sendEmail({
+      const res = await sendEmail({
         to,
         subject: `⚠️ CHARGED BUT NOT RECORDED — ${amt}`,
         html:
@@ -303,10 +349,36 @@ export async function alertOpsDoubleCharge(
           `<code>${ref ?? "none returned"}</code>.</p>` +
           `<p><b>This needs a refund today.</b> Nothing automatic will fix it.</p>`,
       });
+      if (res.ok) notified++;
     }
   } catch {
     /* nothing here may throw into a payment path */
   }
+  // THE ALERT ITSELF FAILED. A failed ops read, an ops table with nobody in
+  // it, an unconfigured mailer — all three end the same way: a real charge,
+  // no ledger row, and now no alert either. Nothing retries this and nothing
+  // else in the system knows it happened, so the log line has to carry the
+  // whole fact (amount and processor reference) rather than point at a row
+  // that was never written. The caller carries it to the digest.
+  //
+  // INSIDE ITS OWN TRY, for the same reason as the block above. This runs on a
+  // path where the card HAS ALREADY BEEN CHARGED, and `amount.toFixed(2)`
+  // throws if a caller ever hands it something that is not a number — which
+  // would propagate out of the alert and into the payment path that the catch
+  // above exists to protect. A log line must never be the thing that breaks a
+  // settle.
+  if (notified === 0) {
+    try {
+      console.error(
+        `[alert unsent] a card was charged $${Number(amount).toFixed(2)} against ${against} ${subjectId} ` +
+        `and the ledger refused the payment row — and NOBODY WAS EMAILED. ` +
+        `Processor reference: ${ref ?? "none returned"}. This needs a refund today.`,
+      );
+    } catch {
+      console.error("[alert unsent] a card was charged and the ledger refused it; nobody was emailed.", subjectId, ref);
+    }
+  }
+  return { notified };
 }
 
 /**
@@ -398,6 +470,9 @@ async function noteSettleFailure(
  */
 export async function settleJob(jobId: string): Promise<SettleOutcome> {
   const admin = createServiceClient();
+  // Things that did not stop the settle but that nothing else will ever
+  // mention. Stays empty on a clean run; see SettleOutcome.notes.
+  const notes: string[] = [];
   const { data: job, error: jobErr } = await admin
     .from("jobs")
     .select("id, status, customer_price, vendor_cost, vendor_id, property_id, margin, group_id, phase, price_finalized, correction_of, services(name)")
@@ -512,7 +587,15 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
       original_amount: job.vendor_cost, // immutable "ever owed" anchor — refund clawback conservation
       status: openDispute ? "held" : job.vendor_cost != null ? "released" : "pending",
     });
-    if (pErr) console.error(`[settleJob ${jobId}] payout insert failed:`, pErr.message);
+    // THE CREW'S MONEY, AND NOTHING COMES BACK FOR IT. Deliberately does not
+    // abort the settle — the customer's charge is not the crew's problem — but
+    // the reconcile sweep only revisits jobs whose INVOICE is unpaid, so a
+    // payout that failed to insert on a job that then charged cleanly is never
+    // retried and, until now, never mentioned anywhere a person looks.
+    if (pErr) {
+      console.error(`[settleJob ${jobId}] payout insert failed:`, pErr.message);
+      notes.push(`the crew's payout row was refused (${pErr.message}) — they have not been paid for this job and nothing retries it`);
+    }
   }
 
   // 2) Invoice — one per job. Reuse an existing row rather than creating a second.
@@ -649,7 +732,14 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
         });
         // Charged, and the ledger wouldn't take it. See alertOpsDoubleCharge.
         if (payErr?.code === "23505" && charge.ok) {
-          await alertOpsDoubleCharge(admin, invoice.id as string, cashDue, charge.ref ?? null);
+          const alerted = await alertOpsDoubleCharge(admin, invoice.id as string, cashDue, charge.ref ?? null);
+          // The alert IS the safety net here, and it hangs off a read of its
+          // own (the ops mailboxes). If that read failed — or there was nobody
+          // to email — the one failure that has to reach a human the same
+          // night reached nobody, and only the digest can still say so.
+          if (alerted.notified === 0) {
+            notes.push(`a card was charged $${cashDue.toFixed(2)} and the ledger refused the payment row — and the CHARGED-BUT-NOT-RECORDED alert reached nobody. Needs a refund today.`);
+          }
         }
         await admin.from("invoices").update({ status: charge.ok ? "paid" : "due", processor_ref: charge.ref ?? null }).eq("id", invoice.id);
         charged = charge.ok;
@@ -704,7 +794,8 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
     }
   }
 
-  return { ok: true, invoiced: true, charged };
+  // The spread keeps a clean settle byte-identical to what it always returned.
+  return { ok: true, invoiced: true, charged, ...(notes.length > 0 ? { notes } : {}) };
 }
 
 /** §8b accrual hooks — called by settleJob strictly AFTER cash collection. */
@@ -785,7 +876,7 @@ async function accrueReferralEarnings(
 /** Reconcile sweep: settle any job that's complete but wasn't fully billed
  *  (invoice missing, or invoice still 'due' with no captured payment). Safe to
  *  run on a schedule — settleJob is idempotent. Bounded scan of recent jobs. */
-export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: number; capped: number }> {
+export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: number; capped: number; skipped: number; failures: string[] }> {
   const admin = createServiceClient();
   // A failed read here reports "0 settled" for a night the reconcile never
   // looked. The nightly route catches this and names the step in the digest,
@@ -798,6 +889,20 @@ export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: 
     .limit(500));
   let settled = 0;
   let capped = 0;
+  // A JOB THIS SWEEP COULD NOT FINISH IS NOT A JOB IT FINISHED. `settled` and
+  // `capped` between them described a night where every single job was skipped
+  // exactly as they described a clean one, and this step's result goes nowhere
+  // but an HTTP response. Skips are counted, and the first twenty are worded
+  // for the digest — a bad night can touch every job in the scan and the email
+  // still has to be readable.
+  let skipped = 0;
+  let hidden = 0;
+  const failures: string[] = [];
+  const note = (line: string): void => {
+    if (failures.length < 20) failures.push(line);
+    else hidden++;
+  };
+  const noteSkip = (line: string): void => { skipped++; note(line); };
   for (const j of jobs ?? []) {
     const inv = j.invoices as { id?: string; status?: string }[] | { id?: string; status?: string } | null;
     const rows = Array.isArray(inv) ? inv : inv ? [inv] : [];
@@ -821,15 +926,34 @@ export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: 
       // the card gets hammered a sixth night. A night not retried costs nothing.
       if (failErr) {
         console.error(`[read failed] this invoice's failed attempts (job ${j.id}):`, failErr);
+        noteSkip(`Job ${j.id}: couldn't read how many times this card has already been declined, so the settle was skipped rather than risk a sixth retry.`);
         continue;
       }
       if ((failCount ?? 0) >= 5) { capped++; continue; }
     }
 
-    const r = await settleJob(j.id as string);
+    // ONE JOB MUST NEVER TAKE DOWN THE SWEEP. settleJob can throw — the
+    // processor call, a dynamic import, a mustRead deeper down — and an
+    // uncaught throw here left every REMAINING unsettled job unlooked-at,
+    // with the step recorded by name and no hint that the list was truncated.
+    let r: SettleOutcome;
+    try {
+      r = await settleJob(j.id as string);
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      console.error(`[settle threw] job ${j.id}:`, e);
+      noteSkip(`Job ${j.id}: the settle threw (${why}) — skipped tonight; the rest of the sweep still ran.`);
+      continue;
+    }
     if (r.ok) settled++;
+    // A settle that REFUSED (a failed read on the money path stops rather than
+    // guesses) reports its reason and then had nowhere to put it.
+    else noteSkip(`Job ${j.id}: not settled — ${r.error ?? "no reason given"}.`);
+    // ...and the things it did anyway that nothing else will mention.
+    for (const n of r.notes ?? []) note(`Job ${j.id}: ${n}`);
   }
-  return { ok: true, settled, capped };
+  if (hidden > 0) failures.push(`…and ${hidden} more, in tonight's server log.`);
+  return { ok: true, settled, capped, skipped, failures };
 }
 
 /**
@@ -848,9 +972,14 @@ export async function reconcileUnsettledJobs(): Promise<{ ok: boolean; settled: 
  * via the unique(job_id) on vendor_no_shows. A job WITH photos is a "forgot to
  * tap complete", not a ghost — left alone for ops.
  */
-export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }> {
+export async function recordNoShows(): Promise<{ ok: boolean; flagged: number; skipped: string[] }> {
   const admin = createServiceClient();
   const today = todayLakeDate();
+  // JOBS THIS SWEEP COULD NOT JUDGE TONIGHT. Both guards below skip rather
+  // than strike — right, because a strike never clears — but a skipped job is
+  // one nobody has looked at, and `{ok:true, flagged:0}` is also what a night
+  // with no ghosts looks like. The nightly carries this into the digest.
+  const skipped: string[] = [];
   const stale = mustRead("yesterday's still-scheduled jobs", await admin
     .from("jobs")
     .select("id, vendor_id, property_id, date, group_id, phase, held_at, no_show_at, stood_down_at, services(name), properties(address, owner_id, lake_id), vendors(user_id)")
@@ -886,6 +1015,7 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
     // job is unassigned and repriced. Skip it; tomorrow's sweep looks again.
     if (photoErr) {
       console.error(`[read failed] the job's photos (${j.id}):`, photoErr);
+      skipped.push(`Job ${j.id} (${j.date}): couldn't count its photos, so we did NOT record a no-show — no strike, no release; tomorrow's sweep looks again.`);
       continue;
     }
     if ((count ?? 0) > 0) continue; // photos on file → not a ghost, leave for ops
@@ -906,6 +1036,7 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
       // the strike this guard was written to prevent, and it never clears.
       if (custodyErr) {
         console.error(`[read failed] whether the boat is still in the barn (${j.id}):`, custodyErr);
+        skipped.push(`Job ${j.id} (${j.date}): couldn't tell whether the boat is still in the crew's barn, so we did NOT record a no-show — no strike; tomorrow's sweep looks again.`);
         continue;
       }
       if (custody && custody.length > 0) continue;
@@ -941,26 +1072,41 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number }>
     // Owner: no charge, easy reschedule.
     if (prop?.owner_id) {
       const { data: owner, error: ownerErr } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
-      if (ownerErr) console.error(`[read failed] the owner's phone number (job ${j.id}):`, ownerErr);
+      // POST-WRITE: the strike is recorded and the job already unassigned, so
+      // refusing here would undo nothing — but the customer's crew has
+      // vanished off their calendar and nobody has told them.
+      if (ownerErr) {
+        console.error(`[read failed] the owner's phone number (job ${j.id}):`, ownerErr);
+        skipped.push(`Job ${j.id} (${j.date}): released for a free rebook, but we couldn't read the owner's phone number — they were not told their crew missed it.`);
+      }
       if (owner?.phone) void sendSms(owner.phone as string, `LakeLife: your crew couldn't make ${svc} at ${prop?.address ?? "your place"} — no charge. Pick any open day to rebook: ${site}/book 🌊`);
     }
     // Crew: reliability warning (standing-based, no fine).
     const crewUser = (one(j.vendors) as { user_id?: string } | null)?.user_id;
     if (crewUser) {
       const { data: cu, error: cuErr } = await admin.from("users").select("phone").eq("id", crewUser).maybeSingle();
-      if (cuErr) console.error(`[read failed] the crew's phone number (job ${j.id}):`, cuErr);
+      // POST-WRITE, and the one that matters most to the crew: the strike is
+      // already on their record and counts toward losing the lake.
+      if (cuErr) {
+        console.error(`[read failed] the crew's phone number (job ${j.id}):`, cuErr);
+        skipped.push(`Job ${j.id} (${j.date}): a no-show strike was recorded but we couldn't read the crew's phone number — they were never told their standing moved.`);
+      }
       if (cu?.phone) void sendSms(cu.phone as string, `LakeLife: a scheduled job was marked missed and affects your standing. If something came up, block the day ahead next time — no penalty for advance notice.`);
     }
   }
-  return { ok: true, flagged };
+  return { ok: true, flagged, skipped };
 }
 
 export async function revalidateAssignments(
   dateISO?: string,
   opts: { broadcast?: boolean } = {},
-): Promise<{ ok: boolean; checked: number; rehomed: number; unfilled: number; crewsTexted?: number }> {
+): Promise<{ ok: boolean; checked: number; rehomed: number; unfilled: number; crewsTexted?: number; skipped: string[] }> {
   const broadcast = opts.broadcast ?? true; // intraday heartbeat passes false — no SMS every 30 min
   const admin = createServiceClient();
+  // What this pass could not do, in words. The per-job reads live inside
+  // revalidateJob and already skip rather than unassign; what has never had
+  // anywhere to go is the dead-end alert failing to reach a person.
+  const skipped: string[] = [];
   // SIM-FOUND (Wave 2): healing only "tomorrow" left a COI-lapsed crew
   // holding every job further out until the night before each one. When no
   // explicit date is given, sweep the WHOLE forward book (bounded 60 days)
@@ -976,7 +1122,18 @@ export async function revalidateAssignments(
   let rehomed = 0;
   const unfilledIds: string[] = [];
   for (const j of jobs ?? []) {
-    const r = await revalidateJob(j.id as string);
+    // PER ITEM, NEVER THE SWEEP. revalidateJob reaches reads that throw now, and
+    // an escape here abandoned every remaining job in the forward book — the
+    // one thing this step exists to walk. A job we could not re-validate keeps
+    // whatever crew it has, which is the safe direction, and is named.
+    let r;
+    try {
+      r = await revalidateJob(j.id as string);
+    } catch (e) {
+      console.error("[revalidate] skipped a job:", j.id, e);
+      skipped.push(`Couldn't re-check the crew on one job (${j.id}) — it keeps the crew it has. The rest of the book was checked.`);
+      continue;
+    }
     if (r.rehomed) rehomed++;
     if (!r.nowAssigned) unfilledIds.push(j.id as string);
   }
@@ -1027,7 +1184,10 @@ export async function revalidateAssignments(
     const deadEnd = [...openServices].filter((s) => !claimersByService.has(s));
     if (deadEnd.length > 0 || crewsTexted === 0) {
       const { data: ops, error: opsErr } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
-      if (opsErr) console.error("[read failed] the ops phone numbers for a dead-end alert:", opsErr);
+      if (opsErr) {
+        console.error("[read failed] the ops phone numbers for a dead-end alert:", opsErr);
+        skipped.push(`${unfilled} job${unfilled === 1 ? "" : "s"} nobody on the platform can claim, and we couldn't read the ops phone numbers to raise it — no dead-end text went out.`);
+      }
       const pretty = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO)
         ? new Date(dateISO + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
         : "the coming days";
@@ -1037,7 +1197,7 @@ export async function revalidateAssignments(
       }
     }
   }
-  return { ok: true, checked: (jobs ?? []).length, rehomed, unfilled, crewsTexted };
+  return { ok: true, checked: (jobs ?? []).length, rehomed, unfilled, crewsTexted, skipped };
 }
 
 /** Night-before reminder text to each owner who has a scheduled job on `date`
@@ -1076,7 +1236,7 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
  * isn't paid, retry the saved card, and — only once the money is actually in —
  * release the crew's proportional share (roadmap §2: paid from fees COLLECTED).
  */
-export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: number; collected: number; collectedAmount: number }> {
+export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: number; collected: number; collectedAmount: number; skipped: string[] }> {
   const admin = createServiceClient();
   // Inner-join on UNPAID invoices so paid/free-cancelled rows never occupy the
   // scan window (expired-waitlist cancels accumulate forever — an unfiltered
@@ -1093,6 +1253,12 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
   // collectedAmount: the DOLLARS, not just the count — the nightly digest
   // has to be able to say what money moved tonight (audit bug 10a).
   let retried = 0, collected = 0, collectedAmount = 0;
+  // FEES WE COULD NOT DECIDE ABOUT TONIGHT, in words a person can read.
+  // Every guard below skips ONE job and carries on (cron rule 1) — right, but
+  // a night where every read failed returned exactly the same {collected: 0}
+  // as a night with nothing to collect, and the only trace was a console line
+  // on a server nobody opens. The nightly carries this into the digest.
+  const skipped: string[] = [];
   for (const j of jobs ?? []) {
     const invRaw = j.invoices as { id?: string; status?: string; amount?: number; created_at?: string }[] | { id?: string; status?: string; amount?: number; created_at?: string } | null;
     const inv = (Array.isArray(invRaw) ? invRaw[0] : invRaw) ?? null;
@@ -1116,6 +1282,7 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
     // that has declined five nights running.
     if (failErr) {
       console.error(`[read failed] this fee invoice's failed attempts (job ${j.id}):`, failErr);
+      skipped.push(`cancellation fee on job ${j.id}: couldn't read how many nights this card has already declined, so nothing was charged — it retries tomorrow`);
       continue;
     }
     if ((failCount ?? 0) >= 5) continue;
@@ -1126,6 +1293,7 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
     // charge branch below — a second charge for a fee already collected.
     if (paidErr) {
       console.error(`[read failed] whether this fee was already collected (job ${j.id}):`, paidErr);
+      skipped.push(`cancellation fee on job ${j.id}: couldn't tell whether it was already collected, so no card was charged — it retries tomorrow`);
       continue;
     }
     if (paid) {
@@ -1144,6 +1312,7 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
       // Not "still no card" — we couldn't look. Same skip, honestly logged.
       if (pmErr) {
         console.error(`[read failed] the customer's saved card (job ${j.id}):`, pmErr);
+        skipped.push(`cancellation fee on job ${j.id}: couldn't read the customer's saved card, so nothing was charged — it retries tomorrow`);
         continue;
       }
       if (!pm?.token) continue; // still no card — try again tomorrow
@@ -1169,13 +1338,18 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
         // can be raised by hand, a duplicate payment has to be clawed back.
         if (existingErr) {
           console.error(`[read failed] the crew's existing payout (job ${j.id}):`, existingErr);
+          // POST-CHARGE, and the only one in this step: the customer's fee is
+          // already collected by the time we get here. Refusing releases
+          // nothing, so this is the crew's share NOT going out tonight and
+          // nothing coming back to retry it — it needs a person.
+          skipped.push(`job ${j.id}: the cancellation fee was collected, but we couldn't tell whether the crew's share had already been released — it was NOT released, and nothing retries it`);
         } else if (!existing) {
           await admin.from("payouts").insert({ vendor_id: j.vendor_id, job_id: j.id, amount: crewShare, original_amount: crewShare, status: "released" });
         }
       }
     }
   }
-  return { ok: true, retried, collected, collectedAmount };
+  return { ok: true, retried, collected, collectedAmount, skipped };
 }
 
 /**
@@ -1190,7 +1364,7 @@ const CREDIT_SETTLED_STATUS = "paid";
  *  window. Homeowner/HOA beneficiaries get service credits; crew beneficiaries
  *  flip to 'matured' and ride the payout batch when it runs. Idempotent —
  *  guarded status flips, one credit grant per earning row. */
-export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: number; credited: number; creditedAmount: number }> {
+export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: number; credited: number; creditedAmount: number; skipped: string[] }> {
   const admin = createServiceClient();
   const { referralMaturationDays } = await getPlatformSettings();
   const cutoff = new Date(Date.now() - referralMaturationDays * 86_400_000).toISOString();
@@ -1203,6 +1377,11 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
     .limit(200));
 
   let matured = 0, credited = 0, creditedAmount = 0;
+  // EARNINGS WE COULDN'T PLACE TONIGHT. A beneficiary we can't identify, or a
+  // backfill that couldn't read, leaves real money parked at 'matured' — and
+  // the backfill's heal only looks back seven days, so a read that keeps
+  // failing orphans that money for good. {credited: 0} alone can't say that.
+  const skipped: string[] = [];
   /**
    * AUDIT BUG 4: a credit grant is a SETTLEMENT — the beneficiary has been
    * paid, in credits. Leaving the earning at 'matured' parked it in the
@@ -1230,6 +1409,7 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
     // the month-end batch, which is where their money belongs anyway.
     if (isVendorErr || isHoaErr) {
       console.error(`[read failed] who this referral beneficiary is (${earningId}):`, isVendorErr ?? isHoaErr);
+      skipped.push(`referral earning ${earningId}: couldn't tell whether the beneficiary is a crew, a lake association or a homeowner — no credits were granted; it sits at 'matured' waiting on the month-end batch`);
       return false;
     }
     if (isVendor || (isHoa && isHoa.length > 0) || !(amount > 0)) return false;
@@ -1274,7 +1454,10 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
     .eq("status", "matured")
     .gte("matured_at", weekAgo)
     .limit(200);
-  if (recentErr) console.error("[read failed] recently-matured referral earnings:", recentErr);
+  if (recentErr) {
+    console.error("[read failed] recently-matured referral earnings:", recentErr);
+    skipped.push("the referral credit backfill didn't run tonight: the recently-matured earnings couldn't be read, so any earning whose credit never landed is still uncredited");
+  }
   if (recent && recent.length > 0) {
     const { data: creditRows, error: creditRowsErr } = await admin
       .from("user_credits").select("earning_id").in("earning_id", recent.map((r) => r.id));
@@ -1282,7 +1465,8 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
     // them again. The backfill is a heal, not a deadline — skip it tonight.
     if (creditRowsErr) {
       console.error("[read failed] which matured earnings were already credited:", creditRowsErr);
-      return { ok: true, matured, credited, creditedAmount };
+      skipped.push("the referral credit backfill stopped: we couldn't read which matured earnings were already credited, so nothing was re-granted tonight");
+      return { ok: true, matured, credited, creditedAmount, skipped };
     }
     const granted = new Set((creditRows ?? []).map((c) => c.earning_id as string));
     for (const e of recent) {
@@ -1299,7 +1483,7 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
       }
     }
   }
-  return { ok: true, matured, credited, creditedAmount };
+  return { ok: true, matured, credited, creditedAmount, skipped };
 }
 
 /**
@@ -1311,9 +1495,9 @@ export async function matureReferralEarnings(): Promise<{ ok: boolean; matured: 
  * Real money movement rides the crew remittance rails when the processor
  * lands — until then the flip + statement IS the batch, idempotently.
  */
-export async function runReferralPayoutBatch(force = false): Promise<{ ok: boolean; ran: boolean; beneficiaries: number; total: number; creditSettledClosed: number }> {
+export async function runReferralPayoutBatch(force = false): Promise<{ ok: boolean; ran: boolean; beneficiaries: number; total: number; creditSettledClosed: number; skipped: string[] }> {
   const today = todayLakeDate();
-  if (!force && !isLastDayOfMonth(today)) return { ok: true, ran: false, beneficiaries: 0, total: 0, creditSettledClosed: 0 };
+  if (!force && !isLastDayOfMonth(today)) return { ok: true, ran: false, beneficiaries: 0, total: 0, creditSettledClosed: 0, skipped: [] };
   const admin = createServiceClient();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
@@ -1329,6 +1513,12 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
   // would skip un-closeable rows and the sweep would never terminate cleanly.
   const PAGE = 500;
   const MAX_PAGES = 40; // 20k rows a night — far past any real backlog
+  // WHO DIDN'T GET PAID TONIGHT, AND WHY. This runs once a month, on the night
+  // the largest sum of the month leaves the account; a payee skipped here waits
+  // a FULL MONTH for the next attempt. {beneficiaries: 0} read as a quiet
+  // month-end whether nobody was owed or every read failed. Carried to the
+  // digest so a skipped crew is a sentence somebody sees tomorrow morning.
+  const skipped: string[] = [];
   let creditSettledClosed = 0;
   let offset = 0;
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -1344,12 +1534,20 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
       .range(offset, offset + PAGE - 1);
     // A failed page is not an empty one — stop draining rather than treat the
     // silt as gone. The per-row guard further down is the real protection.
-    if (scanErr) { console.error("[read failed] the matured-earnings drain page:", scanErr); break; }
+    if (scanErr) {
+      console.error("[read failed] the matured-earnings drain page:", scanErr);
+      skipped.push("the credit-settled drain stopped early: a page of matured earnings couldn't be read, so some already-credited rows still sit in the payout window");
+      break;
+    }
     if (!scan || scan.length === 0) break;
     const { data: creditRows, error: creditRowsErr } = await admin
       .from("user_credits").select("earning_id").in("earning_id", scan.map((r) => r.id));
     // Without this we cannot tell a credit-settled row from one owed cash.
-    if (creditRowsErr) { console.error("[read failed] which drain-page rows were credit-settled:", creditRowsErr); break; }
+    if (creditRowsErr) {
+      console.error("[read failed] which drain-page rows were credit-settled:", creditRowsErr);
+      skipped.push("the credit-settled drain stopped early: we couldn't tell which of this page's earnings were already settled as credits");
+      break;
+    }
     const settled = new Set((creditRows ?? []).map((c) => c.earning_id as string));
     let closedThisPage = 0;
     for (const id of scan.map((r) => r.id as string)) {
@@ -1395,6 +1593,7 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
     // month on the next line. Skip out loud instead; next run pays them.
     if (vendorRowErr || hoaLakeErr) {
       console.error(`[read failed] who this payee is (${userId}):`, vendorRowErr ?? hoaLakeErr);
+      skipped.push(`referral payout for ${userId}: couldn't tell whether they're a crew, a lake association or a customer — $${(Math.round(u.total * 100) / 100).toFixed(2)} was NOT paid out and waits for next month's batch`);
       continue;
     }
     const isHoa = !!hoaLake && hoaLake.length > 0;
@@ -1408,13 +1607,21 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
     // Not "no bank on file" — we couldn't look. Same skip, said out loud.
     if (acctErr) {
       console.error(`[read failed] this payee's bank details (${userId}):`, acctErr);
+      skipped.push(`referral payout for ${userId}: couldn't read their bank details, so $${(Math.round(u.total * 100) / 100).toFixed(2)} was NOT paid out and waits for next month's batch`);
       continue;
     }
     if (!acct) continue;
-    const { data: batch } = await admin
+    const { data: batch, error: batchErr } = await admin
       .from("payout_batches")
       .insert({ user_id: userId, vendor_id: vendorRow?.id ?? null, kind: "referral", status: "building" })
       .select("id").single();
+    // No batch artifact, no payout — the earnings stay matured, which is the
+    // safe direction, but it is a payee going a whole month unpaid with nothing
+    // but a null local to show for it.
+    if (batchErr) {
+      console.error(`[write failed] this payee's referral batch (${userId}):`, batchErr);
+      skipped.push(`referral payout for ${userId}: the payout batch couldn't be created, so $${(Math.round(u.total * 100) / 100).toFixed(2)} was NOT paid out and waits for next month's batch`);
+    }
     if (!batch) continue;
 
     let paidThis = 0;
@@ -1431,6 +1638,7 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
       // currencies. Leave it matured; next month's batch tries again.
       if (creditedErr) {
         console.error(`[read failed] whether this earning was already credited (${id}):`, creditedErr);
+        skipped.push(`referral earning ${id} (payee ${userId}): couldn't tell whether it was already settled as credits, so it was left out of tonight's batch rather than risk paying it twice`);
         continue;
       }
       if (credited && credited.length > 0) {
@@ -1472,10 +1680,20 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
       .from("referral_earnings").select("amount").eq("beneficiary", userId).eq("status", "accrued");
     // A failed read drops the "still maturing" sentence rather than printing a
     // wrong figure — silence, not a lie, but worth knowing it happened.
-    if (pendingErr) console.error(`[read failed] this payee's still-maturing earnings (${userId}):`, pendingErr);
+    // POST-WRITE: the money is already flipped to 'paid' and the batch queued.
+    // Refusing here would undo none of that — it would only drop the statement.
+    if (pendingErr) {
+      console.error(`[read failed] this payee's still-maturing earnings (${userId}):`, pendingErr);
+      skipped.push(`referral statement for ${userId}: paid as normal, but the "still maturing" figure couldn't be read, so their email doesn't mention it`);
+    }
     const maturing = (pending ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
     const { data: u2, error: u2Err } = await admin.from("users").select("email, name").eq("id", userId).maybeSingle();
-    if (u2Err) console.error(`[read failed] this payee's email (${userId}):`, u2Err);
+    // POST-WRITE as above: their money moved. This is the notification only —
+    // no address, no email, and nothing else tells them the payout happened.
+    if (u2Err) {
+      console.error(`[read failed] this payee's email (${userId}):`, u2Err);
+      skipped.push(`referral payout for ${userId}: $${paidThis.toFixed(2)} was approved, but their email address couldn't be read so NO statement was sent`);
+    }
     if (u2?.email) {
       void sendEmail({
         to: u2.email,
@@ -1484,7 +1702,7 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
       });
     }
   }
-  return { ok: true, ran: true, beneficiaries, total: Math.round(total * 100) / 100, creditSettledClosed };
+  return { ok: true, ran: true, beneficiaries, total: Math.round(total * 100) / 100, creditSettledClosed, skipped };
 }
 
 /**
@@ -1498,11 +1716,17 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
  *     they do; estimate the season at THEIR OWN rates (rule-1 safe) and
  *     hand them the one-tap lakes editor.
  */
-export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; nearMilestoneNudges: number; territoryNudges: number }> {
+export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; nearMilestoneNudges: number; territoryNudges: number; skipped: string[] }> {
   const admin = createServiceClient();
   const { nudgeCreditThreshold, nudgeCooldownDays, lakeDemotionCooldownDays } = await getPlatformSettings();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
   const now = Date.now();
+  // WHAT TONIGHT'S NUDGES SILENTLY DIDN'T DO. Every guard below fails CLOSED,
+  // which is right — an unreadable preference must not become an email. But a
+  // closed guard and a quiet night look identical from the outside, and three
+  // zeroes in a return value is exactly how the COI check reported success for
+  // months. The nightly route feeds these to the digest (noteSkips).
+  const skipped: string[] = [];
 
   const optedOut = async (userId: string): Promise<boolean> => {
     const { data, error } = await admin
@@ -1513,6 +1737,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
     // opt-out; the cost is one unsent nudge.
     if (error) {
       console.error(`[read failed] this person's growth-email preference (${userId}):`, error);
+      skipped.push(`no nudge for ${userId}: couldn't read whether they'd opted out of growth email (${error.message ?? "read failed"})`);
       return true;
     }
     return data?.enabled === false;
@@ -1526,6 +1751,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
     // skipped and the same person hears from us again tonight.
     if (error) {
       console.error(`[read failed] when we last nudged this person (${userId}, ${kind}):`, error);
+      skipped.push(`no ${kind} nudge for ${userId}: couldn't read when we last nudged them (${error.message ?? "read failed"})`);
       return true;
     }
     return nudgeCooling((data?.sent_at as string) ?? null, nudgeCooldownDays, now);
@@ -1534,10 +1760,21 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
     if (await optedOut(userId)) return false;
     if (await cooling(userId, kind)) return false;
     const { data: u, error: uErr } = await admin.from("users").select("email").eq("id", userId).maybeSingle();
-    if (uErr) { console.error(`[read failed] this person's email (${userId}):`, uErr); return false; }
+    if (uErr) {
+      console.error(`[read failed] this person's email (${userId}):`, uErr);
+      skipped.push(`no ${kind} nudge for ${userId}: couldn't read their email address (${uErr.message ?? "read failed"})`);
+      return false;
+    }
     if (!u?.email) return false;
     void sendEmail({ to: u.email, subject, html: html + `<p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>` });
-    await admin.from("nudge_log").insert({ user_id: userId, kind });
+    const logged = await admin.from("nudge_log").insert({ user_id: userId, kind });
+    // POST-SEND: the email has gone. Refusing here would un-send nothing — but
+    // this row IS the frequency cap, so a failure means the same person can
+    // hear the same pitch again tomorrow night, and the night after.
+    if (logged.error) {
+      console.error(`[write failed] the nudge cooldown row (${userId}, ${kind}):`, logged.error);
+      skipped.push(`${kind} nudge sent to ${userId} but its cooldown row did not save (${logged.error.message ?? "write failed"}) — nothing stops them being nudged again tomorrow`);
+    }
     return true;
   };
 
@@ -1616,6 +1853,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
       const myLakes = new Set((v.service_lakes as string[]) ?? []);
       // Group this crew's claimable-if-they-expanded demand by lake.
       const byLake = new Map<string, { name: string; jobs: typeof waiting; est: number }>();
+      let tallyFailed = false;
       for (const j of waiting) {
         const svc = one(j.services) as { name?: string; pricing_model?: string } | null;
         const prop = one(j.properties) as { lake_id?: string; lakes?: unknown } | null;
@@ -1626,7 +1864,20 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
         if (!vr) continue; // no rate = no honest estimate
         const lakeName = (one(prop?.lakes) as { name?: string } | null)?.name ?? "a nearby lake";
         const entry = byLake.get(lakeId) ?? { name: lakeName, jobs: [] as typeof waiting, est: 0 };
-        const profile = await loadPricingProfileById(admin, j.property_id as string);
+        // SEAM: loadPricingProfileById THROWS on a failed read now. Uncaught it
+        // leaves runNudges entirely — the credit and near-milestone nudges
+        // already sent stand, but every REMAINING crew loses tonight's pitch and
+        // the step reports only the throw. So catch it here and skip the item.
+        let profile: Awaited<ReturnType<typeof loadPricingProfileById>>;
+        try {
+          profile = await loadPricingProfileById(admin, j.property_id as string);
+        } catch (e) {
+          if (!(e instanceof ReadFailed)) throw e;
+          console.error(`[read failed] pricing a waiting job for the territory pitch (crew ${v.id}, job ${j.id}):`, e);
+          skipped.push(`no territory pitch for crew ${v.id}: couldn't price waiting job ${j.id} (${e.message})`);
+          tallyFailed = true;
+          break;
+        }
         if (profile) {
           const rule: ServiceRule = {
             name: svc.name, pricing_model: svc.pricing_model as ServiceRule["pricing_model"],
@@ -1638,6 +1889,11 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
         entry.jobs.push(j);
         byLake.set(lakeId, entry);
       }
+      // A TALLY WE COULDN'T FINISH IS NOT A SMALLER TALLY. The pitch states
+      // "$X sitting there right now" as fact, so a crew whose tally hit a
+      // failed read hears nothing tonight rather than a number that is short.
+      // (Same rule the fill-in digest follows: the item skipped is the CREW.)
+      if (tallyFailed) continue;
       // Best single lake pitch; skip lakes the crew is paused on (Phase E).
       let best: { lakeId: string; name: string; count: number; est: number } | null = null;
       for (const [lakeId, e] of byLake) {
@@ -1649,6 +1905,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
         // crew the very lake we just paused them on.
         if (pauseErr) {
           console.error(`[read failed] whether this crew is paused on the lake (${v.id}, ${lakeId}):`, pauseErr);
+          skipped.push(`${lakeId} left out of crew ${v.id}'s territory pitch: couldn't read whether they're paused on it (${pauseErr.message ?? "read failed"})`);
           continue;
         }
         if (pause && isCoolingDown(pause.demoted_at as string, lakeDemotionCooldownDays, now)) continue;
@@ -1665,7 +1922,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
     }
   }
 
-  return { ok: true, creditNudges, nearMilestoneNudges, territoryNudges };
+  return { ok: true, creditNudges, nearMilestoneNudges, territoryNudges, skipped };
 }
 
 /** Annual COI re-validation nudge (the owner's yearly re-attest). Emails an
@@ -1727,9 +1984,12 @@ function lakeHour(): number {
   return Number(h) % 24;
 }
 
-export async function sweepWaitlist(lakeId?: string, limit = 60): Promise<{ ok: boolean; checked: number; filled: number }> {
+export async function sweepWaitlist(lakeId?: string, limit = 60): Promise<{ ok: boolean; checked: number; filled: number; skipped: string[] }> {
   const admin = createServiceClient();
   const today = todayLakeDate();
+  // The good news that didn't get delivered. A fill nobody hears about looks
+  // to the customer exactly like still waiting.
+  const skipped: string[] = [];
   // FUTURE-only (strictly after today). Same-day fills are deliberately out:
   // today's capacity math counts completed jobs as freed slots and there's no
   // time-of-day cutoff, so a late beat could pile guaranteed no-shows onto a
@@ -1760,14 +2020,24 @@ export async function sweepWaitlist(lakeId?: string, limit = 60): Promise<{ ok: 
       const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
       if (canText && prop?.owner_id) {
         const { data: owner, error: ownerErr } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
-        if (ownerErr) console.error(`[read failed] the owner's phone number (job ${j.id}):`, ownerErr);
+        // POST-WRITE: the crew is already assigned. Nothing to undo — but the
+        // whole point of the waitlist is the instant good news, and it didn't
+        // go. The night-before reminder is still the backstop.
+        if (ownerErr) {
+          console.error(`[read failed] the owner's phone number (job ${j.id}):`, ownerErr);
+          skipped.push(`Job ${j.id}: a crew was locked in for ${prettyDate(j.date as string)} but we couldn't read the owner's phone number — the good-news text didn't go.`);
+        }
         if (owner?.phone) void sendSms(owner.phone as string, `LakeLife: good news — a crew is locked in for your ${svc} on ${prettyDate(j.date as string)}. You'll get a reminder before we arrive. 🌊`);
       }
-    } catch {
+    } catch (e) {
       /* keep sweeping */
+      // ...but say which job the sweep gave up on. This catch is deliberate
+      // (one job must never end the sweep); silence was the accident.
+      console.error(`[waitlist sweep] job ${j.id} threw:`, e);
+      skipped.push(`Job ${j.id}: the fill attempt threw (${e instanceof Error ? e.message : String(e)}) — still waiting on a crew; the next sweep tries again.`);
     }
   }
-  return { ok: true, checked: (waiting ?? []).length, filled };
+  return { ok: true, checked: (waiting ?? []).length, filled, skipped };
 }
 
 /**
@@ -1777,9 +2047,14 @@ export async function sweepWaitlist(lakeId?: string, limit = 60): Promise<{ ok: 
  * says so plainly, and reminds them they were never charged — no silent rot,
  * no ops queue. The demand history stays on the books as the recruit signal.
  */
-export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: number; expired: number; escalated: number }> {
+export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: number; expired: number; escalated: number; skipped: string[] }> {
   const admin = createServiceClient();
   const today = todayLakeDate();
+  // JOBS THIS RUNG COULD NOT REACH TONIGHT. Each skip below is correct — none
+  // of these branches may fire on a read it could not make — but a job left in
+  // limbo is not the same as a quiet night, and only this array can tell them
+  // apart from outside.
+  const skipped: string[] = [];
   const { waitlistWarningDays } = await getPlatformSettings();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
@@ -1805,6 +2080,7 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
       : null;
     if (phoneRes?.error) {
       console.error(`[read failed] the owner's phone number (job ${j.id}):`, phoneRes.error);
+      skipped.push(`Job ${j.id} (${svc} on ${j.date}): couldn't read the owner's phone number, so it was neither warned nor cancelled — it is still open and waiting.`);
       continue;
     }
     const phone = phoneRes?.data?.phone as string | undefined;
@@ -1822,6 +2098,7 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
         // cancels the envelope that is the boat's only billing rail.
         if (custodyErr) {
           console.error(`[read failed] whether the boat is still in the barn (job ${j.id}):`, custodyErr);
+          skipped.push(`Job ${j.id} (${svc} on ${j.date}): couldn't tell whether the boat is still in a barn, so the past-due visit was NOT cancelled — it stays open and billable.`);
           continue;
         }
         if (custody && custody.length > 0) continue;
@@ -1845,7 +2122,17 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
         const { error: escLogErr } = await admin
           .from("waitlist_notice_log")
           .insert({ job_id: j.id as string, kind: PROTECTIVE_ESCALATION_KIND });
-        if (escLogErr) continue; // already escalated — stay quiet, stay open
+        if (escLogErr) {
+          // A DUPLICATE IS THE DESIGN (we already chased this one); anything
+          // else is the ledger refusing, and the behaviour is identical —
+          // silence — on protective work nobody has been staffed for. Say
+          // which it was, since only one of the two is fine.
+          if (!/duplicate|unique/i.test(escLogErr.message)) {
+            console.error(`[protective escalation ${j.id}] ledger write failed:`, escLogErr.message);
+            skipped.push(`Job ${j.id} (${svc} on ${j.date}): protective work with no crew, and the escalation ledger refused the claim — nobody was texted. It stays open on the ops board.`);
+          }
+          continue; // already escalated — stay quiet, stay open
+        }
         escalated++;
         if (phone) {
           void sendSms(
@@ -1887,6 +2174,7 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
       if (logErr) {
         if (!/duplicate|unique/i.test(logErr.message)) {
           console.error(`[waitlist warn ${j.id}] ledger write failed:`, logErr.message);
+          skipped.push(`Job ${j.id} (${svc} on ${j.date}): the warning ledger refused the claim, so the customer's one options text didn't go — the job is still open.`);
         }
         continue; // never text without a durable record of having texted
       }
@@ -1905,7 +2193,7 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
       }
     }
   }
-  return { ok: true, warned, expired, escalated };
+  return { ok: true, warned, expired, escalated, skipped };
 }
 
 /**
@@ -2032,9 +2320,12 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
  *  completions) on ONE lake reach the dial gets paused there: the lake is
  *  removed from their service area and a cooldown row blocks claims/re-adds
  *  until the clock runs out. Nobody suspends anyone — the marketplace heals. */
-export async function demoteLakeStrikes(): Promise<{ ok: boolean; demoted: number }> {
+export async function demoteLakeStrikes(): Promise<{ ok: boolean; demoted: number; skipped: string[] }> {
   const admin = createServiceClient();
   const { lakeStrikeLimit } = await getPlatformSettings();
+  // A crew loses a lake here. If we could not tell them, that has to be said
+  // out loud — they find out by their work drying up otherwise.
+  const skipped: string[] = [];
 
   const [vendorsRes, missesRes, donesRes, lakesRes] = await Promise.all([
     admin.from("vendors").select("id, user_id, service_lakes").eq("status", "active"),
@@ -2080,7 +2371,12 @@ export async function demoteLakeStrikes(): Promise<{ ok: boolean; demoted: numbe
 
       if (v.user_id) {
         const { data: cu, error: cuErr } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
-        if (cuErr) console.error(`[read failed] the crew's phone number (${v.id}):`, cuErr);
+        // POST-WRITE: the lake is already off their service area and the
+        // cooldown has started. Nothing to undo, and nothing to tell them with.
+        if (cuErr) {
+          console.error(`[read failed] the crew's phone number (${v.id}):`, cuErr);
+          skipped.push(`Crew ${v.id}: paused on ${lakeName.get(lk) ?? "a lake"}, but we couldn't read their phone number — they were never told, and their work there just stops.`);
+        }
         if (cu?.phone) {
           void sendSms(cu.phone as string, `LakeLife: after repeated missed jobs on ${lakeName.get(lk) ?? "a lake"}, we've paused routing you there for a while. Keep completing jobs on your other lakes and it reopens automatically. Advance-notice blocks never count against you. 🌊`);
         }
@@ -2088,14 +2384,18 @@ export async function demoteLakeStrikes(): Promise<{ ok: boolean; demoted: numbe
       break; // one demotion per crew per night — no pile-ons
     }
   }
-  return { ok: true, demoted };
+  return { ok: true, demoted, skipped };
 }
 
 /** PHASE E: base-pin self-heal. The rolling median of where a crew actually
  *  COMPLETES jobs is ground truth for proximity ranking — set a missing pin
  *  from it, correct a wildly-wrong one (>25 mi), leave sane pins alone. */
-export async function selfHealCrewBases(): Promise<{ ok: boolean; set: number; corrected: number }> {
+export async function selfHealCrewBases(): Promise<{ ok: boolean; set: number; corrected: number; skipped: string[] }> {
   const admin = createServiceClient();
+  // Crews whose pin could not be judged tonight. A missing pin costs them
+  // proximity rank every day it stays missing, so "0 set, 0 corrected" must
+  // not be able to mean "we never looked".
+  const skipped: string[] = [];
   const vendors = mustRead("the active crews", await admin
     .from("vendors")
     .select("id, base_lat, base_lng")
@@ -2114,6 +2414,7 @@ export async function selfHealCrewBases(): Promise<{ ok: boolean; set: number; c
     // not be allowed to look like "this crew has completed nothing".
     if (recentErr) {
       console.error(`[read failed] where this crew has been completing jobs (${v.id}):`, recentErr);
+      skipped.push(`Crew ${v.id}: couldn't read where they have been completing jobs, so their base pin was left exactly as it is.`);
       continue;
     }
     const points = (recent ?? []).map((r) => {
@@ -2126,17 +2427,21 @@ export async function selfHealCrewBases(): Promise<{ ok: boolean; set: number; c
     if (d.action === "set") setCount++;
     else corrected++;
   }
-  return { ok: true, set: setCount, corrected };
+  return { ok: true, set: setCount, corrected, skipped };
 }
 
 /** AUTOPILOT (§8d): propose each enrolled service's next visit and text the
  *  owner a one-tap confirm/skip. One OPEN proposal per enrollment (DB-enforced);
  *  nothing is booked without the customer's tap; skip is free. Proposals older
  *  than 14 days quietly expire (no nagging). */
-export async function generateAutopilotProposals(): Promise<{ ok: boolean; proposed: number; expired: number; texted: number }> {
+export async function generateAutopilotProposals(): Promise<{ ok: boolean; proposed: number; expired: number; texted: number; skipped: string[] }> {
   const admin = createServiceClient();
   const today = todayLakeDate();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  // Enrollments that got no proposal tonight. Autopilot's whole promise is
+  // that the customer never has to remember; an enrollment silently skipped
+  // every night is the promise quietly not being kept.
+  const skipped: string[] = [];
 
   // Expire stale proposals (their token links die with them).
   const { data: stale, error: staleErr } = await admin
@@ -2145,7 +2450,10 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
     .eq("status", "proposed")
     .lt("created_at", new Date(Date.now() - 14 * 86_400_000).toISOString())
     .select("id");
-  if (staleErr) console.error("[read failed] expiring stale autopilot proposals:", staleErr);
+  if (staleErr) {
+    console.error("[read failed] expiring stale autopilot proposals:", staleErr);
+    skipped.push("Couldn't expire the stale proposals, so 14-day-old confirm links may still be live tonight.");
+  }
   const expired = stale?.length ?? 0;
 
   const enrollments = mustRead("the autopilot enrollments", await admin
@@ -2163,6 +2471,7 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
     // but only after we had already decided to send.)
     if (openErr) {
       console.error(`[read failed] this enrollment's open proposal (${e.id}):`, openErr);
+      skipped.push(`Enrollment ${e.id}: couldn't check for an open proposal, so nothing was proposed tonight — tomorrow's run looks again.`);
       continue;
     }
     if (open) continue;
@@ -2177,6 +2486,7 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
     // visit to somebody who already has one on the calendar.
     if (upcomingErr) {
       console.error(`[read failed] whether a visit is already booked (${e.id}):`, upcomingErr);
+      skipped.push(`Enrollment ${e.id}: couldn't check whether a visit is already booked, so nothing was proposed tonight — tomorrow's run looks again.`);
       continue;
     }
     if (upcoming && upcoming.length > 0) continue;
@@ -2196,6 +2506,7 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
     // reads as "never done" and pencils the wrong day into a text.
     if (lastDoneErr) {
       console.error(`[read failed] when this service was last done (${e.id}):`, lastDoneErr);
+      skipped.push(`Enrollment ${e.id}: couldn't read when the service was last done, so no date was penciled tonight — tomorrow's run looks again.`);
       continue;
     }
     const date = proposeAutopilotDate({
@@ -2217,8 +2528,13 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
     proposed++;
 
     const { data: owner, error: ownerErr } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
-    // The proposal row now exists with a confirm token nobody was sent.
-    if (ownerErr) console.error(`[read failed] the owner's phone number (enrollment ${e.id}):`, ownerErr);
+    // POST-WRITE. The proposal row now exists with a confirm token nobody was
+    // sent — and it holds the enrollment's one open slot until it expires in
+    // 14 days, so this quietly costs them a whole cycle.
+    if (ownerErr) {
+      console.error(`[read failed] the owner's phone number (enrollment ${e.id}):`, ownerErr);
+      skipped.push(`Enrollment ${e.id}: a visit was penciled for ${prettyDate(date)} but we couldn't read the owner's phone number — the confirm link was never sent.`);
+    }
     if (owner?.phone) {
       const where = prop.nickname || prop.address || "your place";
       void sendSms(
@@ -2228,15 +2544,19 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
       texted++;
     }
   }
-  return { ok: true, proposed, expired, texted };
+  return { ok: true, proposed, expired, texted, skipped };
 }
 
 /** Seasonal "book your fall pull before freeze" email. Fires the day a lake's
  *  pull deadline is exactly `leadDays` out (default 14) — so it sends once per
  *  lake per season, no per-user tracking column needed. */
-export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: boolean; lakes: number; emailed: number }> {
+export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: boolean; lakes: number; emailed: number; skipped: string[] }> {
   const target = addDays(todayLakeDate(), leadDays);
   const admin = createServiceClient();
+  // THIS FIRES ONCE PER LAKE PER SEASON, on an exact date match. A lake
+  // skipped tonight is not retried tomorrow — the target date has moved on —
+  // so a silent skip is the season's freeze warning simply never sent.
+  const skipped: string[] = [];
   // 0124: fixtures excluded. This is a SEND — it fans out over every property
   // on the matched lake and emails each owner by name. A born fixture inherits
   // real-looking season dates from lake-birth, so its pull_deadline genuinely
@@ -2244,7 +2564,7 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
   const lakes = mustRead("the lakes whose pull deadline is coming up", await admin
     .from("lakes").select("id, name, pull_deadline")
     .eq("is_fixture", false).eq("pull_deadline", target));
-  if (!lakes || lakes.length === 0) return { ok: true, lakes: 0, emailed: 0 };
+  if (!lakes || lakes.length === 0) return { ok: true, lakes: 0, emailed: 0, skipped };
 
   let emailed = 0;
   for (const lake of lakes) {
@@ -2256,6 +2576,7 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
     // is silently never sent — the claim ledger means it never sends again.
     if (propsErr) {
       console.error(`[read failed] the homes on this lake (${lake.id}):`, propsErr);
+      skipped.push(`${lake.name}: couldn't read the homes on the lake, so NOBODY got this season's pull-deadline warning (deadline ${lake.pull_deadline}). This fires on one date a year — it will not retry itself.`);
       continue;
     }
     const seen = new Set<string>();
@@ -2289,7 +2610,7 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
       emailed++;
     }
   }
-  return { ok: true, lakes: lakes.length, emailed };
+  return { ok: true, lakes: lakes.length, emailed, skipped };
 }
 
 // ============================================================================
@@ -2307,10 +2628,15 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
  * physically in their barn, there is no dispatch lottery. Home-storage
  * variants flow through the component-aware engine like any job.
  */
-export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; sticky: number }> {
+export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; sticky: number; skipped: string[] }> {
   const admin = createServiceClient();
   const today = todayLakeDate();
   let born = 0, sticky = 0;
+  // WHAT DIDN'T GET BORN, AND WHY, in words a person can act on. Every skip
+  // below is a boat whose spring visit does not exist tonight — it existed
+  // only as a console line before, and `{ok:true, born:0}` is exactly what a
+  // clean night looks like. The nightly carries this into the digest.
+  const skipped: string[] = [];
 
   const groups = mustRead("the active season envelopes", await admin
     .from("job_groups")
@@ -2335,6 +2661,7 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
     // second billable visit. The 0037 index is the backstop, not the check.
     if (existingErr) {
       console.error(`[read failed] this envelope's existing spring job (${g.id}):`, existingErr);
+      skipped.push(`Envelope ${g.id}: couldn't check whether its spring visit already exists — no visit born tonight; tomorrow's run looks again.`);
       continue;
     }
     if (existing && existing.length > 0) continue;
@@ -2346,12 +2673,26 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
       .from("jobs").select("status, date").eq("id", g.fall_job_id as string).maybeSingle();
     if (fallErr) {
       console.error(`[read failed] the fall visit behind this envelope (${g.id}):`, fallErr);
+      skipped.push(`Envelope ${g.id}: couldn't read the fall visit it hangs off — no spring visit born tonight; tomorrow's run looks again.`);
       continue;
     }
     if (!fall || !["complete", "paid"].includes(fall.status as string)) continue;
     if (iceOut < ((fall.date as string) ?? "")) continue;
 
-    const profile = await loadPricingProfileById(admin, g.property_id as string);
+    // SEAM: loadPricingProfileById THROWS on a failed read (mustRead inside).
+    // Uncaught, ONE property's dropped connection aborts the whole birth run
+    // and every REMAINING envelope's spring visit goes unborn — invisibly,
+    // since the throw takes the counts with it. Cron rule 1: log, name it,
+    // skip THIS envelope. The next nightly births it.
+    let profile: Awaited<ReturnType<typeof loadPricingProfileById>>;
+    try {
+      profile = await loadPricingProfileById(admin, g.property_id as string);
+    } catch (e) {
+      if (!(e instanceof ReadFailed)) throw e;
+      console.error(`[read failed] the property to price the spring visit against (${g.id}):`, e);
+      skipped.push(`Envelope ${g.id}: couldn't read the property to price the spring visit — no visit born tonight; tomorrow's run tries again.`);
+      continue;
+    }
     const { data: svcRows, error: svcErr } = await admin
       .from("services")
       .select("id, name, kind, pricing_model, base, unit_rate, band_pricing")
@@ -2359,6 +2700,7 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
     // These rows are what the spring visit is priced from.
     if (svcErr) {
       console.error(`[read failed] the spring services to price (${g.id}):`, svcErr);
+      skipped.push(`Envelope ${g.id}: couldn't read the services the spring visit is priced from — no visit born tonight; tomorrow's run tries again.`);
       continue;
     }
     if (!profile || !svcRows?.length) continue;
@@ -2425,6 +2767,7 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
     // cannot do it, because the boat is physically in someone else's building.
     if (stayErr) {
       console.error(`[read failed] whether the boat is in a barn (${g.id}):`, stayErr);
+      skipped.push(`Envelope ${g.id}: the spring visit was created but we couldn't tell whether the boat is in a barn — it has no crew yet and is sitting on the ops board.`);
       continue;
     }
     // Sticky custody needs a HEALTHY barn: suspended crew or lapsed COI is
@@ -2439,13 +2782,17 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
       // a statement about that crew, made from a dropped connection.
       if (svErr) {
         console.error(`[read failed] the storing crew's standing (${g.storing_vendor}):`, svErr);
+        skipped.push(`Envelope ${g.id}: the spring visit was created but we couldn't read the storing crew's standing — it has no crew yet and is sitting on the ops board.`);
         continue;
       }
       stickyOk = sv?.status === "active" && !!sv?.coi_expiry && String(sv.coi_expiry) >= today;
       if (!stickyOk) {
         try {
           const { data: ops, error: opsErr } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
-          if (opsErr) console.error("[read failed] the ops phone numbers for a sticky-custody alert:", opsErr);
+          if (opsErr) {
+            console.error("[read failed] the ops phone numbers for a sticky-custody alert:", opsErr);
+            skipped.push(`Envelope ${g.id}: a stored boat's splash can't auto-assign (the storing crew is benched) and we couldn't read the ops phone numbers to say so — nobody was texted.`);
+          }
           for (const o of ops ?? []) {
             void sendSms(o.phone as string, `LakeLife OPS: spring splash for a stored boat can't auto-assign — the storing crew is ${sv?.status !== "active" ? "not active" : "COI-lapsed"}. Group ${g.id}. Fix their docs and the machine takes it from there.`);
           }
@@ -2460,6 +2807,7 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
       // to them at a vendor_cost of $0 — they'd do the work for nothing.
       if (ratesErr) {
         console.error(`[read failed] the storing crew's rate card (${g.storing_vendor}):`, ratesErr);
+        skipped.push(`Envelope ${g.id}: the spring visit was created but we couldn't read the storing crew's rates, so it was not assigned to them — it is sitting on the ops board.`);
         continue;
       }
       const rateBy = new Map((rates ?? []).map((r) => [r.service_id as string, r]));
@@ -2487,7 +2835,13 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
     try {
       if (prop?.owner_id) {
         const { data: u, error: uErr } = await admin.from("users").select("phone").eq("id", prop.owner_id as string).maybeSingle();
-        if (uErr) console.error(`[read failed] the owner's phone number (${g.id}):`, uErr);
+        // POST-WRITE: the visit is already on their calendar. Refusing here
+        // would undo nothing and lose the text as well, so it is logged and
+        // named — somebody has a penciled date they were never told about.
+        if (uErr) {
+          console.error(`[read failed] the owner's phone number (${g.id}):`, uErr);
+          skipped.push(`Envelope ${g.id}: the spring visit is penciled in, but we couldn't read the owner's phone number — nobody told them the date.`);
+        }
         const prettyDate = new Date(springDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
         if (u?.phone) {
           void sendSms(u.phone as string, `LakeLife: ice-out is here on ${lake?.name ?? "your lake"} 🌊 We've penciled your boat's spring visit for ${prettyDate} — $${price.toLocaleString()} as quoted at booking. Need a different day? Just cancel and rebook from your requests page, or text us.`);
@@ -2495,7 +2849,7 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
       }
     } catch { /* best effort */ }
   }
-  return { ok: true, born, sticky };
+  return { ok: true, born, sticky, skipped };
 }
 
 /**
@@ -2503,12 +2857,15 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
  * season end, with no scheduled splash on the calendar, get ONE weekly
  * operational text with the running number — never a surprise bill.
  */
-export async function overstayNotices(): Promise<{ ok: boolean; sent: number }> {
+export async function overstayNotices(): Promise<{ ok: boolean; sent: number; skipped: string[] }> {
   const admin = createServiceClient();
   const settings = await getPlatformSettings();
   const today = todayLakeDate();
   const now = Date.now();
   let sent = 0;
+  // A meter running on a boat whose owner has not been told is the surprise
+  // bill this whole step exists to prevent. Every skip below is one of those.
+  const skipped: string[] = [];
 
   const stays = mustRead("the boats still in storage", await admin
     .from("storage_stays")
@@ -2531,6 +2888,7 @@ export async function overstayNotices(): Promise<{ ok: boolean; sent: number }> 
     // with a date on the calendar gets a meter text anyway.
     if (springJobErr) {
       console.error(`[read failed] whether a splash is already booked (${st.group_id}):`, springJobErr);
+      skipped.push(`Stay ${st.group_id}: couldn't check whether a splash is booked, so no meter text went out — the per-diem is still accruing.`);
       continue;
     }
     if (springJob && springJob.length > 0) continue;
@@ -2547,20 +2905,24 @@ export async function overstayNotices(): Promise<{ ok: boolean; sent: number }> 
     // becomes nightly. Polite is the covenant.
     if (lastErr) {
       console.error(`[read failed] when we last texted this meter (${st.group_id}):`, lastErr);
+      skipped.push(`Stay ${st.group_id}: couldn't read when we last texted this meter, so no text went out tonight — the per-diem is still accruing.`);
       continue;
     }
     if (nudgeCooling((last?.sent_at as string) ?? null, 7, now)) continue;
 
     const charge = perdiemCharge(days, settings.storagePerdiemDaily);
     const { data: u, error: uErr } = await admin.from("users").select("phone").eq("id", prop.owner_id as string).maybeSingle();
-    if (uErr) console.error(`[read failed] the owner's phone number (${st.group_id}):`, uErr);
+    if (uErr) {
+      console.error(`[read failed] the owner's phone number (${st.group_id}):`, uErr);
+      skipped.push(`Stay ${st.group_id}: the meter is at $${charge.toFixed(2)} and we couldn't read the owner's phone number — they have not been told, and nothing was logged as sent.`);
+    }
     if (u?.phone) {
       void sendSms(u.phone as string, `LakeLife: your boat's storage season ended ${end} — the meter's at $${charge.toFixed(2).replace(/\.00$/, "")} ($${settings.storagePerdiemDaily.toFixed(2).replace(/\.00$/, "")}/day, billed at splash). Pick your splash day from your requests page and we'll get it back on the water. 🌊`);
       await admin.from("nudge_log").insert({ user_id: prop.owner_id, kind: `overstay_meter:${st.group_id}` });
       sent++;
     }
   }
-  return { ok: true, sent };
+  return { ok: true, sent, skipped };
 }
 
 /**
@@ -2571,9 +2933,9 @@ export async function overstayNotices(): Promise<{ ok: boolean; sent: number }> 
  * export until it lands) executes. Crews without bank details just keep
  * accumulating — nothing is ever lost, and the earnings page nags them.
  */
-export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: boolean; ran: boolean; batches: number; total: number }> {
+export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: boolean; ran: boolean; batches: number; total: number; skipped: string[] }> {
   const today = todayLakeDate();
-  if (!force && !isLastDayOfMonth(today)) return { ok: true, ran: false, batches: 0, total: 0 };
+  if (!force && !isLastDayOfMonth(today)) return { ok: true, ran: false, batches: 0, total: 0, skipped: [] };
   const admin = createServiceClient();
 
   // Empty reads as "no crew is owed anything this month", on the night the
@@ -2583,6 +2945,12 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
   const byVendor = new Map<string, number>();
   for (const p of unbatched ?? []) byVendor.set(p.vendor_id as string, (byVendor.get(p.vendor_id as string) ?? 0) + Number(p.amount ?? 0));
 
+  // CREWS THIS RUN DIDN'T PAY, IN WORDS. Skipping is the safe direction —
+  // the payouts stay released and un-batched, so nothing is lost — but this
+  // runs once a month, so a crew skipped tonight waits until the end of the
+  // NEXT month, and {batches: 0} looked identical to a month where nobody was
+  // owed anything. The nightly carries this into the digest.
+  const skipped: string[] = [];
   let batches = 0, total = 0;
   for (const [vendorId, sum] of byVendor) {
     if (sum <= 0) continue;
@@ -2591,6 +2959,7 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
     // safe direction — the money keeps accumulating — but it must be visible.
     if (vErr) {
       console.error(`[read failed] the crew behind this payout (${vendorId}):`, vErr);
+      skipped.push(`crew ${vendorId}: couldn't look up who they are, so $${(Math.round(sum * 100) / 100).toFixed(2)} of released pay was NOT batched — it waits for next month's run`);
       continue;
     }
     if (!v?.user_id) continue;
@@ -2598,14 +2967,22 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
       .from("payout_accounts").select("account_last4").eq("user_id", v.user_id as string).maybeSingle();
     if (acctErr) {
       console.error(`[read failed] this crew's bank details (${vendorId}):`, acctErr);
+      skipped.push(`crew ${vendorId}: couldn't read their bank details, so $${(Math.round(sum * 100) / 100).toFixed(2)} of released pay was NOT batched — it waits for next month's run`);
       continue;
     }
     if (!acct) continue; // no bank on file — keep accumulating, keep nudging
 
-    const { data: batch } = await admin
+    const { data: batch, error: batchErr } = await admin
       .from("payout_batches")
       .insert({ user_id: v.user_id, vendor_id: vendorId, kind: "monthly", status: "building" })
       .select("id").single();
+    // The batch IS the payout as far as the banking layer is concerned. No
+    // batch, no money — the payouts stay released and un-batched (safe), but a
+    // crew with a bank account on file goes another month unpaid.
+    if (batchErr) {
+      console.error(`[write failed] this crew's monthly payout batch (${vendorId}):`, batchErr);
+      skipped.push(`crew ${vendorId}: the payout batch couldn't be created, so $${(Math.round(sum * 100) / 100).toFixed(2)} of released pay was NOT batched — it waits for next month's run`);
+    }
     if (!batch) continue;
     const { data: claimed, error: claimErr } = await admin
       .from("payouts")
@@ -2614,16 +2991,26 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
       .select("amount");
     // A failed claim leaves gross at 0, which unwinds the batch below — the
     // right outcome, but not one to reach silently.
-    if (claimErr) console.error(`[read failed] claiming this crew's payouts into a batch (${vendorId}):`, claimErr);
+    if (claimErr) {
+      console.error(`[read failed] claiming this crew's payouts into a batch (${vendorId}):`, claimErr);
+      skipped.push(`crew ${vendorId}: their released payouts couldn't be claimed into a batch, so $${(Math.round(sum * 100) / 100).toFixed(2)} was NOT paid out — it waits for next month's run`);
+    }
     const gross = Math.round((claimed ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0) * 100) / 100;
     if (gross <= 0) {
       await admin.from("payouts").update({ batch_id: null }).eq("batch_id", batch.id);
       await admin.from("payout_batches").delete().eq("id", batch.id);
       continue;
     }
-    const { data: fin } = await admin
+    const { data: fin, error: finErr } = await admin
       .from("payout_batches").update({ gross, net: gross, status: "queued" })
       .eq("id", batch.id).eq("status", "building").select("id");
+    // An empty `fin` is the ordinary lost-race case (someone else moved the
+    // batch out of 'building') and unwinds quietly. An ERRORED one is a crew's
+    // whole month not going out, and looked exactly the same.
+    if (finErr) {
+      console.error(`[write failed] queueing this crew's payout batch (${vendorId}):`, finErr);
+      skipped.push(`crew ${vendorId}: their payout batch couldn't be queued for the bank, so $${gross.toFixed(2)} was NOT paid out — it waits for next month's run`);
+    }
     if (!fin || fin.length === 0) {
       await admin.from("payouts").update({ batch_id: null }).eq("batch_id", batch.id);
       await admin.from("payout_batches").delete().eq("id", batch.id);
@@ -2633,11 +3020,17 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
     total += gross;
     try {
       const { data: u, error: uErr } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
-      if (uErr) console.error(`[read failed] the crew's phone number (${vendorId}):`, uErr);
+      // POST-WRITE: the batch is queued and the money is on its way. This read
+      // only decides whether the crew is TOLD, so it can't refuse anything —
+      // but "we queued $X and nobody told them" should be said out loud.
+      if (uErr) {
+        console.error(`[read failed] the crew's phone number (${vendorId}):`, uErr);
+        skipped.push(`crew ${vendorId}: $${gross.toFixed(2)} was queued as normal, but their phone number couldn't be read so NO payout text was sent`);
+      }
       if (u?.phone) void sendSms(u.phone as string, `LakeLife: month-end payout queued — $${gross.toFixed(2)} to your account ····${acct.account_last4}, no fee. 🌊`);
     } catch { /* best effort */ }
   }
-  return { ok: true, ran: true, batches, total: Math.round(total * 100) / 100 };
+  return { ok: true, ran: true, batches, total: Math.round(total * 100) / 100, skipped };
 }
 
 /**
@@ -2650,13 +3043,18 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
  * Two-job minimum so the total can never identify a single job's number
  * (a one-job "aggregate" IS that job — rule 1 by arithmetic again).
  */
-export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> {
+export async function runFillInDigest(): Promise<{ ok: boolean; sent: number; skipped: string[] }> {
   const admin = createServiceClient();
   const settings = await getPlatformSettings();
   const today = todayLakeDate();
   const now = Date.now();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
   let sent = 0;
+  // THE CREWS WHO HEARD NOTHING, AND WHY. Every skip below is correct — none of
+  // them may email a dollar figure we couldn't finish adding up — but `sent: 0`
+  // on its own reads as "no fill-in work tonight". The route lifts these into
+  // the digest's failures section (noteSkips).
+  const skipped: string[] = [];
 
   // Open, aged, unassigned, non-package jobs = the gap-offer universe.
   // Age gate in LAKE time, failing closed on a missing created_at — the same
@@ -2671,7 +3069,7 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
     const d = j.created_at != null ? lakeDateOf(String(j.created_at)) : null;
     return d != null && d < today;
   });
-  if (aged.length === 0) return { ok: true, sent: 0 };
+  if (aged.length === 0) return { ok: true, sent: 0, skipped };
 
   const [crewsRes, allRatesRes, allPausesRes] = await Promise.all([
     admin.from("vendors")
@@ -2728,6 +3126,7 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
         } catch (e) {
           if (!(e instanceof ReadFailed)) throw e;
           console.error(`[read failed] pricing a fill-in job for the digest (crew ${v.id}, job ${j.id}):`, e);
+          skipped.push(`no fill-in digest for crew ${v.id}: couldn't price job ${j.id} (${e.message})`);
           tallyFailed = true;
           break;
         }
@@ -2758,6 +3157,7 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
         } catch (e) {
           if (!(e instanceof ReadFailed)) throw e;
           console.error(`[read failed] this crew's rate history for the digest (crew ${v.id}, job ${j.id}):`, e);
+          skipped.push(`no fill-in digest for crew ${v.id}: couldn't read their rate history for job ${j.id} (${e.message})`);
           tallyFailed = true;
           break;
         }
@@ -2782,6 +3182,7 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
     // this crew is inside of is skipped.
     if (lastErr) {
       console.error(`[read failed] when this crew last got the digest (${v.id}):`, lastErr);
+      skipped.push(`no fill-in digest for crew ${v.id} ($${total.toFixed(0)} of work): couldn't read when they last got one (${lastErr.message ?? "read failed"})`);
       continue;
     }
     if (nudgeCooling((last?.sent_at as string) ?? null, settings.fillinDigestCooldownDays, now)) continue;
@@ -2792,12 +3193,14 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
     // opted out" — emailing a crew who turned this off.
     if (prefErr) {
       console.error(`[read failed] this crew's growth-email preference (${v.id}):`, prefErr);
+      skipped.push(`no fill-in digest for crew ${v.id} ($${total.toFixed(0)} of work): couldn't read whether they'd opted out (${prefErr.message ?? "read failed"})`);
       continue;
     }
     if (pref?.enabled === false) continue;
     const { data: u, error: uErr } = await admin.from("users").select("email").eq("id", v.user_id as string).maybeSingle();
     if (uErr) {
       console.error(`[read failed] this crew's email (${v.id}):`, uErr);
+      skipped.push(`no fill-in digest for crew ${v.id} ($${total.toFixed(0)} of work): couldn't read their email address (${uErr.message ?? "read failed"})`);
       continue;
     }
     if (!u?.email) continue;
@@ -2809,11 +3212,24 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number }> 
       subject: `$${total.toFixed(0)} of fill-in work is open on your lakes 🌊`,
       html: `<p>Hi ${v.company ?? "there"},</p><p><b>${count} jobs</b> on your lakes are offering posted fill-in rates right now — <b>$${total.toFixed(0)}</b> of take-home, first tap takes each one: <a href="${site}/vendor/open">${site}/vendor/open</a></p><p>Your regular rates stay yours — fill-ins are extra work at a posted price, nothing more.</p><p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>`,
     });
-    if (!sentRes.ok) continue;
-    await admin.from("nudge_log").insert({ user_id: v.user_id, kind: "fillin_digest" });
+    if (!sentRes.ok) {
+      // The cooldown row is deliberately NOT written (above), so this crew is
+      // tried again on the next beat — but a Resend outage that silences every
+      // crew must not report as a night with no fill-in work.
+      console.error(`[send failed] the fill-in digest to crew ${v.id}:`, sentRes.error);
+      skipped.push(`the fill-in digest to crew ${v.id} ($${total.toFixed(0)} of work) did not send: ${sentRes.error ?? "send failed"}`);
+      continue;
+    }
+    const logged = await admin.from("nudge_log").insert({ user_id: v.user_id, kind: "fillin_digest" });
+    // POST-SEND: same rule as the nudge log — the email is gone, and this row
+    // is the only thing holding the cooldown.
+    if (logged.error) {
+      console.error(`[write failed] the fill-in digest cooldown row (crew ${v.id}):`, logged.error);
+      skipped.push(`the fill-in digest went to crew ${v.id} but its cooldown row did not save (${logged.error.message ?? "write failed"}) — nothing stops them getting it again tomorrow`);
+    }
     sent++;
   }
-  return { ok: true, sent };
+  return { ok: true, sent, skipped };
 }
 
 /**
@@ -2939,12 +3355,16 @@ export async function reconcileRefunds(): Promise<{ ok: boolean; orphansCleared:
  * its own, but nothing sits silently either. The three sanctioned exits are
  * human: recruit, logged override, or proactive rebook.
  */
-export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number }> {
+export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number; skipped: string[] }> {
   const admin = createServiceClient();
   const settings = await getPlatformSettings();
   const today = todayLakeDate();
   const now = Date.now();
   let alerted = 0;
+  // THE STRANDED JOBS NOBODY WAS TOLD ABOUT. This valve exists because a job
+  // nobody claims needs a person; `alerted: 0` is also what a healthy night
+  // looks like, so a job we couldn't alert on has to say so by name.
+  const skipped: string[] = [];
   const MAX_ALERTS_PER_RUN = 10; // backlog-burst guard — the rest alert on later runs
   const cutoffIso = new Date(now - settings.gapSlaHours * 3_600_000).toISOString();
   // Oldest first: with more than 50 open jobs, the ones stuck LONGEST are
@@ -2961,7 +3381,7 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number }> 
   // surge and starve job #51. The per-run SMS cap still bounds the noise.
   // Empty reads as "there is no ops team", and the whole valve returns quietly.
   const ops = mustRead("the ops team's phone numbers", await admin.from("users").select("id, phone").eq("role", "ops").not("phone", "is", null));
-  if (!ops || ops.length === 0) return { ok: true, alerted: 0 };
+  if (!ops || ops.length === 0) return { ok: true, alerted: 0, skipped };
   for (const j of stuck ?? []) {
     if (alerted >= MAX_ALERTS_PER_RUN) break;
     const svc = one(j.services) as { name?: string; is_water_work?: boolean } | null;
@@ -2983,6 +3403,7 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number }> 
     // promise becomes a nightly text to every ops phone.
     if (seenErr) {
       console.error(`[read failed] whether this job was already alerted (${j.id}):`, seenErr);
+      skipped.push(`no ops alert for stranded job ${j.id}: couldn't read whether it had already been alerted (${seenErr.message ?? "read failed"})`);
       continue;
     }
     if (seen && seen.length > 0) continue;
@@ -3001,11 +3422,24 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number }> 
       if (res.queued) queuedAny = true;
     }
     if (queuedAny) {
-      await admin.from("nudge_log").insert({ user_id: ops[0].id, kind: `gap_sla:${j.id}` });
+      const logged = await admin.from("nudge_log").insert({ user_id: ops[0].id, kind: `gap_sla:${j.id}` });
+      // POST-SEND: the texts are away. This row is the once-per-job promise —
+      // without it every ops phone hears about this same job every run until
+      // somebody acts on it, which is how ops learns to ignore the channel.
+      if (logged.error) {
+        console.error(`[write failed] the once-per-job dedupe row for the SLA alert (${j.id}):`, logged.error);
+        skipped.push(`ops were alerted about stranded job ${j.id} but the once-per-job dedupe row did not save (${logged.error.message ?? "write failed"}) — they will be texted about it again on every run until it is claimed`);
+      }
       alerted++;
+    } else {
+      // The dedupe row is deliberately NOT written, so the job keeps its one
+      // lifetime alert and this retries next run — but a carrier outage that
+      // queues nothing must not look like a night with nothing stranded.
+      console.error(`[send failed] the ops SLA alert for job ${j.id}: no message was queued to any ops phone`);
+      skipped.push(`the ops alert for stranded job ${j.id} (${svcName} on ${lk?.name ?? "a lake"}) queued to nobody — will retry next run`);
     }
   }
-  return { ok: true, alerted };
+  return { ok: true, alerted, skipped };
 }
 
 /**
@@ -3024,13 +3458,19 @@ export async function autoApplyPriceSuggestions(): Promise<{
   ok: boolean;
   applied: number;
   changes: Array<{ label: string; service: string }>;
+  skipped: string[];
 }> {
+  // THE PRICES THE MACHINE DIDN'T MOVE, AND THE ONE IT MOVED WITHOUT A
+  // COOLDOWN. `applied: 0` is the normal shape of a healthy night, so anything
+  // that stopped a price change — or half-finished one — is named here and
+  // carried into the digest by the route (noteSkips).
+  const skipped: string[] = [];
   const settings = await getPlatformSettings();
-  if (!(settings.priceAutoapplyMaxPct > 0)) return { ok: true, applied: 0, changes: [] };
+  if (!(settings.priceAutoapplyMaxPct > 0)) return { ok: true, applied: 0, changes: [], skipped };
 
   const admin = createServiceClient();
   const suggestions = await computeMenuSuggestions(admin, settings.marginFloor);
-  if (suggestions.length === 0) return { ok: true, applied: 0, changes: [] };
+  if (suggestions.length === 0) return { ok: true, applied: 0, changes: [], skipped };
 
   const serviceIds = [...new Set(suggestions.map((s) => s.serviceId))];
   // FAILS OPEN IF IGNORED: an empty map makes every `last` below null, the
@@ -3062,6 +3502,7 @@ export async function autoApplyPriceSuggestions(): Promise<{
       // "couldn't look" should not be the same silent event on a price change.
       if (cardErr) {
         console.error(`[read failed] the crew's rate card behind this suggestion (${s.serviceId}):`, cardErr);
+        skipped.push(`${s.serviceName} not auto-priced (${s.label}): couldn't read the crew's rate card behind the suggestion (${cardErr.message ?? "read failed"}) — still one tap on the Margin Health board`);
         continue;
       }
       // No card or a card touched in the last 30 days (updated OR brand new —
@@ -3072,12 +3513,21 @@ export async function autoApplyPriceSuggestions(): Promise<{
     const res = await executeMenuUpdate(admin, { serviceId: s.serviceId, field: s.field, newValue: s.newValue });
     if (!res.ok) continue; // cap re-check or a stale service row refused it — skip, never force
     const nowIso = new Date().toISOString();
-    await admin.from("services").update({ last_auto_priced_at: nowIso }).eq("id", s.serviceId);
+    const stamped = await admin.from("services").update({ last_auto_priced_at: nowIso }).eq("id", s.serviceId);
+    // POST-WRITE — THE MENU HAS ALREADY MOVED. Refusing here would undo
+    // nothing. But this stamp IS the 30-day cooldown, so a failed one means
+    // tomorrow night can price the same row again: "twice in one lull" is
+    // exactly what the dial forbids, and the only thing standing between the
+    // customer and a second hike is a person reading this line.
+    if (stamped.error) {
+      console.error(`[write failed] the 30-day cooldown stamp after auto-pricing ${s.serviceName}:`, stamped.error);
+      skipped.push(`${s.serviceName} WAS auto-priced (${s.label}) but its 30-day cooldown stamp did not save (${stamped.error.message ?? "write failed"}) — nothing stops it being auto-priced again tomorrow night`);
+    }
     lastPriced.set(s.serviceId, nowIso); // in-run guard: a second lake's suggestion for this service tonight won't double-fire
     applied++;
     changes.push({ label: s.label, service: s.serviceName });
   }
-  return { ok: true, applied, changes };
+  return { ok: true, applied, changes, skipped };
 }
 
 /**
@@ -3135,7 +3585,7 @@ export async function sendNightlyDigest(results: {
   tripFees?: { paid: number; total: number; onUs: number };
   /** Tips customers gave since the last digest — pass-through, never ours. */
   tipsCollected?: { count: number; total: number };
-}): Promise<{ ok: boolean; sent: number }> {
+}): Promise<{ ok: boolean; sent: number; skipped: string[] }> {
   const admin = createServiceClient();
   const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString();
 
@@ -3231,6 +3681,12 @@ export async function sendNightlyDigest(results: {
   // turns the throw into a named failure in tonight's response.
   const opsUsers = mustRead("the ops team's emails", await admin.from("users").select("email").eq("role", "ops").not("email", "is", null));
   let sent = 0;
+  // WHEN THE REPORT ITSELF DOESN'T LAND. Everything above — the money, the
+  // failed steps, the crews nobody warned — is in this one email. If it
+  // bounces, all of it goes with it, and `sent: 0` alongside `ok: true` is the
+  // quietest possible way to lose a night. This is the one thing that cannot
+  // be reported by email, so it goes back to the cron route instead.
+  const undelivered: string[] = [];
   for (const u of opsUsers ?? []) {
     const email = u.email as string | null;
     if (!email) continue;
@@ -3242,8 +3698,12 @@ export async function sendNightlyDigest(results: {
       : "LakeLife nightly — the machine's report";
     const res = await sendEmail({ to: email, subject, html });
     if (res.ok) sent++;
+    else {
+      console.error(`[send failed] tonight's digest to ${email}:`, res.error);
+      undelivered.push(`tonight's digest did not reach ${email} (${res.error ?? "send failed"}) — ${broke > 0 ? `${broke} failed step${broke === 1 ? "" : "s"} went unread with it` : "nothing else reports the night"}`);
+    }
   }
-  return { ok: true, sent };
+  return { ok: true, sent, skipped: undelivered };
 }
 
 
@@ -3267,10 +3727,14 @@ export async function sendNightlyDigest(results: {
  * same checkout stops reading our texts, and the one they stop reading is the
  * freeze warning.
  */
-export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: number }> {
+export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: number; skipped: string[] }> {
   const admin = createServiceClient();
   const today = todayLakeDate();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  // A stay that is never asked about is a lot the rent roll calls vacant next
+  // month. The skips below are all correct — none of them may send on a read
+  // that failed — but the park owner has to be able to see them.
+  const skipped: string[] = [];
 
   const stays = mustRead("the stays coming to an end", await admin
     .from("lot_reservations")
@@ -3314,6 +3778,7 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
     // a lot the rent roll will call vacant, so it cannot be silent.
     if (renterErr) {
       console.error(`[read failed] the renter's consent and mobile (${s.renter_id}):`, renterErr);
+      skipped.push(`Stay ${s.id}: couldn't read the renter's consent and mobile, so the extend question wasn't asked — the tenancy still ends ${range?.end ?? "on its date"} unless somebody asks by hand.`);
       continue;
     }
     const phone = renter?.mobile_e164 as string | undefined;
@@ -3332,6 +3797,7 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
     // "your site  is booked" or, worse, price the extension off no rates at all.
     if (lotErr || rateErr) {
       console.error(`[read failed] the lot and its rates (${s.park_lot_id}):`, lotErr ?? rateErr);
+      skipped.push(`Stay ${s.id}: couldn't read the lot or its rates, so the extend question wasn't asked — the tenancy still ends ${range?.end ?? "on its date"} unless somebody asks by hand.`);
       continue;
     }
     const price = extensionPrice(
@@ -3365,7 +3831,7 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
     );
   }
 
-  return { ok: true, reminded };
+  return { ok: true, reminded, skipped };
 }
 
 // ==========================================================================
