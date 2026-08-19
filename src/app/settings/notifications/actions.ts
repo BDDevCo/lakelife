@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
 import { NOTIF_DEFS } from "@/lib/notifications";
 import {
   channelsFor,
@@ -23,10 +24,15 @@ export async function loadNotifPrefs(): Promise<NotifPrefState> {
   } = await supabase.auth.getUser();
   if (!user) return mergeNotifPrefs([]);
 
-  const { data } = await supabase
+  // A LOADER, not a button: its only caller is the settings page, awaited
+  // during render, so a throw lands on src/app/error.tsx. Left bare, a failed
+  // read merged an empty list and drew every switch at its factory setting —
+  // so somebody who turned texts off a month ago is shown them ON, and turning
+  // an already-off switch off writes a row saying nothing changed.
+  const data = mustRead("your notification settings", await supabase
     .from("notification_prefs")
     .select("type, channel, enabled")
-    .eq("user_id", user.id);
+    .eq("user_id", user.id));
 
   return mergeNotifPrefs((data ?? []) as SavedPref[]);
 }

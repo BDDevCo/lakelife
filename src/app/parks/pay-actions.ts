@@ -374,10 +374,23 @@ async function tellTheOffice(
 ): Promise<void> {
   try {
     const admin = createServiceClient();
-    const [{ data: park }, { data: members }] = await Promise.all([
+    const [parkRes, membersRes] = await Promise.all([
       admin.from("parks").select("name").eq("id", parkId).maybeSingle(),
       admin.from("park_members").select("user_id").eq("park_id", parkId).eq("role", "owner"),
     ]);
+    // Named for the same reason the owners' addresses are, below: an unread
+    // member list is empty, and an empty one returns here as though the park
+    // simply had no owner to tell. Same swallow, no silence.
+    if (membersRes.error) {
+      console.error("[read failed, notification skipped] the park's owners:", membersRes.error);
+      return;
+    }
+    if (parkRes.error) {
+      // Degraded, not fatal: the mail goes out headed "Your park".
+      console.error("[read failed, degraded] the park's name:", parkRes.error);
+    }
+    const park = parkRes.data;
+    const members = membersRes.data;
     const ids = (members ?? []).map((m) => m.user_id as string).filter(Boolean);
     if (ids.length === 0) return;
 

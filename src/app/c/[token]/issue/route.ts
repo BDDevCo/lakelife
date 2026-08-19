@@ -14,15 +14,40 @@ import { recordJobVerdict } from "@/lib/job-verdict";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * A FAILED READ IS NOT A BAD LINK.
+ *
+ * This is the 👎 door, which makes the swallow worse than on its 👍 twin: the
+ * customer tapping it has something wrong with their job, and "This link
+ * doesn't match anything" told them the way to report it was junk — while the
+ * POST that was meant to open a Make-It-Right dispute and hold the crew's pay
+ * quietly did nothing at all. No session, no account, nowhere else to look,
+ * and no error boundary on a route handler, so the load reports the failure as
+ * its own value and each door renders the difference.
+ */
+const CONF_READ_FAILED = "conf-read-failed" as const;
+
+/** What to show when we could not look. Never "that link isn't right". */
+const confReadFailedPage = () =>
+  htmlPage(
+    "We couldn't check that just now",
+    "Something on our end didn't answer, so nothing has been recorded yet. The link still works — give it another tap in a minute. 🌊",
+    false,
+  );
+
 async function loadConf(token: string) {
   if (!token || !/^[0-9a-f-]{36}$/i.test(token)) return null;
   const admin = createServiceClient();
-  const { data } = await admin
+  const res = await admin
     .from("job_confirmations")
     .select("id, verdict, job_id, property_id, vendor_id, jobs(date, correction_of, services(name)), properties(address, nickname, owner_id)")
     .eq("confirm_token", token)
     .maybeSingle();
-  return data ?? null;
+  if (res.error) {
+    console.error("[read failed] your feedback link:", res.error.code ?? "", res.error.message ?? res.error);
+    return CONF_READ_FAILED;
+  }
+  return res.data ?? null;
 }
 
 const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
@@ -30,6 +55,7 @@ const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null :
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   const conf = await loadConf(token);
+  if (conf === CONF_READ_FAILED) return confReadFailedPage();
   if (!conf) return htmlPage("That link isn't right", "This link doesn't match anything. 🌊", false);
   if (conf.verdict) return htmlPage("Thanks — got it ✓", "Your feedback is already in. If anything's still unresolved, message us from your portal. 🌊");
 
@@ -44,6 +70,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   const conf = await loadConf(token);
+  if (conf === CONF_READ_FAILED) return confReadFailedPage();
   if (!conf) return htmlPage("That link isn't right", "This link doesn't match anything. 🌊", false);
   if (conf.verdict) return htmlPage("Thanks — got it ✓", "Your feedback is already in. 🌊");
 

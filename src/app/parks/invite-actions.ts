@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "@/app/park/data";
+import { readFailedMessage } from "@/lib/must-read";
 import { sendEmail } from "@/lib/email";
 import { sendSms } from "@/lib/sms";
 import { planChannels, inviteSmsBody, smsHoldSays, type SmsHold } from "@/lib/invite-channels";
@@ -63,11 +64,22 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
   // The address and the details for the letter. Service-role read of ONE file,
   // then every write goes through the user-scoped RPC that checks membership.
   const admin = createServiceClient();
-  const { data: file } = await admin
+  const fileRes = await admin
     .from("park_renters")
     .select("id, park_id, display_name, email, user_id, claim_declined_at, mobile_e164, mobile_verified_at, sms_consent_operational_at, phone_on_file_with_park")
     .eq("id", renterId)
     .maybeSingle();
+  // A READ THAT FAILED IS NOT A HOUSEHOLD THAT ISN'T THERE. "invite_no_file"
+  // tells the office the row is gone and sends them hunting the roll for a
+  // household that is sitting in front of them.
+  if (fileRes.error) {
+    return {
+      ok: false,
+      outcome: "invite_read_failed",
+      message: readFailedMessage("that household's file", fileRes.error),
+    };
+  }
+  const file = fileRes.data;
   if (!file) return { ok: false, outcome: "invite_no_file", message: inviteIssueSays("invite_no_file") };
 
   // MEMBERSHIP BEFORE ANYTHING IS READ ALOUD. `issue_park_invite` checks this
@@ -98,7 +110,7 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
     };
   }
 
-  const [{ data: park }, { data: stay }] = await Promise.all([
+  const [parkRes, stayRes] = await Promise.all([
     admin.from("parks").select("name").eq("id", file.park_id as string).maybeSingle(),
     admin
       .from("lot_reservations")
@@ -108,6 +120,20 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
       .limit(1)
       .maybeSingle(),
   ]);
+  // THESE TWO ARE WHAT THE LETTER SAYS. Left bare, a failed read falls through
+  // to "Your park" and lot "—", and the resident gets a letter that names
+  // neither her park nor her lot — from an unfamiliar sender, asking her to
+  // tap a link. Refused here rather than sent, and refused BEFORE the mint, so
+  // nothing is spent and the office can press the button again.
+  if (parkRes.error || stayRes.error) {
+    return {
+      ok: false,
+      outcome: "invite_read_failed",
+      message: readFailedMessage("their park and lot", parkRes.error ?? stayRes.error),
+    };
+  }
+  const park = parkRes.data;
+  const stay = stayRes.data;
 
   const lotNumber =
     ((stay?.park_lots as { lot_number?: string } | null)?.lot_number as string) ?? "—";
@@ -268,10 +294,21 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
     return { ok: false, sent: 0, texted: 0, needSlips: [], skipped: 0, message: "You don't manage that park." };
   }
 
-  const { data: rows } = await admin
+  const rowsRes = await admin
     .from("park_renters")
     .select("id, display_name, email, user_id, claim_declined_at, invite_sent_at")
     .eq("park_id", parkId);
+  // FAILS OPEN IF LEFT BARE. `null` becomes an empty roll, the loop below runs
+  // over nobody, and this returns ok with "0 emailed" and an empty slip list —
+  // an all-clear that says every household is already reached. The whole point
+  // of this screen is that nobody is quietly never contacted.
+  if (rowsRes.error) {
+    return {
+      ok: false, sent: 0, texted: 0, needSlips: [], skipped: 0,
+      message: readFailedMessage("your roll", rowsRes.error),
+    };
+  }
+  const rows = rowsRes.data;
 
   const candidates = (rows ?? []).filter(
     (r) => r.user_id == null && r.claim_declined_at == null,
@@ -280,11 +317,21 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
   // Lot numbers, so the "needs a slip" list is something he can walk with.
   const lotByRenter = new Map<string, string>();
   if (candidates.length > 0) {
-    const { data: stays } = await admin
+    const staysRes = await admin
       .from("lot_reservations")
       .select("renter_id, park_lots(lot_number)")
       .in("renter_id", candidates.map((r) => r.id as string))
       .in("status", ["approved", "active"]);
+    // Without these every letter says lot "—" and every line of the paper list
+    // does too, which is the one thing that makes the list walkable. Nothing
+    // has been sent at this point, so refusing costs a button press.
+    if (staysRes.error) {
+      return {
+        ok: false, sent: 0, texted: 0, needSlips: [], skipped: 0,
+        message: readFailedMessage("their lot numbers", staysRes.error),
+      };
+    }
+    const stays = staysRes.data;
     for (const s of stays ?? []) {
       const n = (s.park_lots as { lot_number?: string } | null)?.lot_number;
       if (n) lotByRenter.set(s.renter_id as string, n);

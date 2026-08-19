@@ -2,7 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { withParkRate } from "@/lib/park-rates";
-import { loadParkRates } from "@/app/park/rate-data";
+import { loadParkRatesChecked } from "@/app/park/rate-data";
 import { getFullProfile, toPricingProfile, getActivePropertyId } from "@/app/profile/data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { serviceMinutes } from "@/lib/duration";
@@ -53,11 +53,16 @@ async function loadService(serviceId: string): Promise<ServiceRow | null> {
 /** Season window (ice-out → pull deadline) for the SPECIFIC property being booked. */
 async function loadSeason(propertyId: string): Promise<{ start: string | null; end: string | null }> {
   const supabase = await createClient();
-  const { data } = await supabase
+  // HALF A WINDOW IS NOT A WINDOW, AND NO WINDOW IS NOT AN ANSWER. dayStatus
+  // fails closed on a missing season, so a dropped read here refuses every
+  // water-work date with "That date is outside this lake's water-work season"
+  // — a confident statement about a lake nobody managed to read. Throws; the
+  // caller turns it into a sentence that says nothing about the lake.
+  const data = mustRead("this lake's season dates", await supabase
     .from("properties")
     .select("lakes(ice_out_actual, pull_deadline)")
     .eq("id", propertyId)
-    .maybeSingle();
+    .maybeSingle());
   const lake = Array.isArray(data?.lakes) ? data?.lakes[0] : data?.lakes;
   return {
     start: (lake as { ice_out_actual?: string })?.ice_out_actual ?? null,
@@ -189,31 +194,36 @@ async function blastRushToCrews(
   opts: { propertyId: string; serviceName: string; date: string },
 ): Promise<void> {
   try {
-    const { data: propRow } = await admin.from("properties").select("lake_id, lakes(name)").eq("id", opts.propertyId).maybeSingle();
+    // Every read in here throws and lands in this function's own catch below:
+    // the blast is best-effort either way, but a failed read now says so in
+    // the log instead of quietly blasting the wrong crews (an unread
+    // `outToday` reads as "nobody is out there", which falls through to
+    // texting every crew on the lake) or nobody at all.
+    const propRow = mustRead("this property's lake", await admin.from("properties").select("lake_id, lakes(name)").eq("id", opts.propertyId).maybeSingle());
     const jobLake = (propRow?.lake_id as string) ?? null;
     const lakeName = ((Array.isArray(propRow?.lakes) ? propRow?.lakes[0] : propRow?.lakes) as { name?: string } | null)?.name ?? "your lake";
     if (!jobLake) return;
-    const { data: outToday } = await admin
+    const outToday = mustRead("who's out on this lake today", await admin
       .from("jobs")
       .select("vendor_id, properties!inner(lake_id)")
       .eq("date", opts.date)
       .eq("properties.lake_id", jobLake)
       .in("status", ["scheduled", "in_progress"])
-      .not("vendor_id", "is", null);
+      .not("vendor_id", "is", null));
     let crewIds = [...new Set((outToday ?? []).map((r) => r.vendor_id as string))];
     if (crewIds.length === 0) {
-      const { data: lakeCrews } = await admin
+      const lakeCrews = mustRead("the crews who work this lake", await admin
         .from("vendors")
         .select("id")
         .eq("status", "active")
-        .contains("service_lakes", [jobLake]);
+        .contains("service_lakes", [jobLake]));
       crewIds = (lakeCrews ?? []).map((v) => v.id as string);
     }
     if (crewIds.length === 0) return;
-    const { data: crewRows } = await admin.from("vendors").select("user_id").in("id", crewIds).not("user_id", "is", null);
+    const crewRows = mustRead("those crews' accounts", await admin.from("vendors").select("user_id").in("id", crewIds).not("user_id", "is", null));
     const userIds = (crewRows ?? []).map((v) => v.user_id as string);
     if (userIds.length === 0) return;
-    const { data: phones } = await admin.from("users").select("phone").in("id", userIds).not("phone", "is", null);
+    const phones = mustRead("those crews' numbers", await admin.from("users").select("phone").in("id", userIds).not("phone", "is", null));
     const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
     for (const p of phones ?? []) {
       void sendSms(p.phone as string, `LakeLife ⚡ same-day ${opts.serviceName} just posted on ${lakeName} — fits a gap in your day, first crew to claim gets it: ${site}/vendor/open 🌊`);
@@ -254,11 +264,18 @@ export async function createBookingBatch(
   if (!user) return { ok: false, error: "Please sign in first." };
 
   // RULE 5: working email AND SMS-verified mobile before any booking.
-  const { data: me } = await supabase
+  // A FAILED READ IS NOT AN UNVERIFIED ACCOUNT. Unread, both flags fall to
+  // false and the refusal below tells somebody who verified their mobile
+  // months ago to go and verify it — a statement about their account made
+  // with no fact behind it, and a dead end, since the verify screen will
+  // show them a number that is already confirmed. Nothing is written yet.
+  const meRes = await supabase
     .from("users")
     .select("email_verified, phone_verified, phone, email")
     .eq("id", user.id)
     .maybeSingle();
+  if (meRes.error) return { ok: false, error: readFailedMessage("your account", meRes.error) };
+  const me = meRes.data;
   const emailOk = (me?.email_verified ?? false) || Boolean(user.email_confirmed_at);
   const phoneOk = me?.phone_verified ?? false;
   if (!emailOk || !phoneOk) {
@@ -292,7 +309,16 @@ export async function createBookingBatch(
   if (!profile?.hasProfile || !profile.propertyId) {
     return { ok: false, error: "Set up your property first." };
   }
-  const service = await loadService(serviceId);
+  // Same seam as getAvailability's: loadService throws now, and "That service
+  // isn't available" is the one sentence that must NOT be reachable by a
+  // failed read — it sends somebody away from a service that is on sale.
+  let service;
+  try {
+    service = await loadService(serviceId);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("this service", e) };
+  }
   if (!service) return { ok: false, error: "That service isn't available." };
 
   // Nothing vanishes: garbage dates and anything past the batch cap come back
@@ -307,7 +333,16 @@ export async function createBookingBatch(
   // is read once per calendar month the batch touches, then every date is
   // judged against it individually.
   const settings = await getPlatformSettings();
-  const season = await loadSeason(profile.propertyId);
+  // loadSeason throws rather than handing back an empty window; this is a
+  // "use server" action, so a rejection would reach the booking screen as a
+  // blank failure. Nothing has been written or charged at this point.
+  let season;
+  try {
+    season = await loadSeason(profile.propertyId);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("this lake's season dates", e) };
+  }
   const months = [...new Set(wanted.map((d) => d.slice(0, 7)))];
   const monthFulls = await Promise.all(
     months.map((m) => getAvailability(serviceId, Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, profile.propertyId)),
@@ -350,8 +385,23 @@ export async function createBookingBatch(
   // A PARK PAYS ITS OWN RATE (0115). The global row for a grounds service
   // carries no price at all, so without this overlay a mow books at $0 and the
   // refusal below fires with a message about boat lifts.
+  // THE CHECKED VARIANT, because the refusal below speaks to a person.
+  // loadParkRates swallows by design (the nightly must not die over one park's
+  // prices). Here an unread map leaves 0115's zeroed global base in place,
+  // standardPrice comes out $0, and the owner is told to "set what you pay for
+  // it on your park's Services page" — a confident statement about their setup,
+  // sent to somebody who has already set it, pointing at a page where it is
+  // already correct. rate-data.ts exports loadParkRatesChecked for exactly this.
+  let parkRates = new Map();
+  if (profile.groundsForParkId) {
+    const checked = await loadParkRatesChecked(profile.groundsForParkId);
+    if (checked.failed) {
+      return { ok: false, error: readFailedMessage("what your park pays for this", null) };
+    }
+    parkRates = checked.rates;
+  }
   const priceRule = profile.groundsForParkId
-    ? withParkRate(service, await loadParkRates(profile.groundsForParkId))
+    ? withParkRate(service, parkRates)
     : service;
   const standardPrice = priceService(priceRule, toPricingProfile(profile));
   // SIM-FOUND (Wave 1): a $0 price means the profile has none of what this

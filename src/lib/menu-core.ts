@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { readFailedMessage } from "@/lib/must-read";
 
 /**
  * THE menu update executor (moved out of the "use server" action module,
@@ -46,11 +47,19 @@ export async function executeMenuUpdate(
   const serviceId = input.serviceId;
   if (!serviceId) return { ok: false, error: "Missing service." };
 
-  const { data: svc } = await admin
+  // "Service not found." IS AN ASSERTION ABOUT THE MENU. On a failed read it
+  // was made about a service that is sitting on the menu right now, to ops
+  // acting on a Margin Health suggestion — and every guard underneath it (the
+  // 40% cap, both ladder checks) is measured against THIS row, so a swallowed
+  // read is also the one input that could let an inverted ladder through if
+  // the branch were ever softened. Nothing is written at this point.
+  const svcRes = await admin
     .from("services")
     .select("id, name, base, unit_rate, band_pricing")
     .eq("id", serviceId)
     .maybeSingle();
+  if (svcRes.error) return { ok: false, error: readFailedMessage("this service's current price", svcRes.error) };
+  const svc = svcRes.data;
   if (!svc) return { ok: false, error: "Service not found." };
 
   // 40% cap, checked against whatever the CURRENT value of the target field

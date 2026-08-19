@@ -1,6 +1,7 @@
 import { TopBar } from "@/components/Brand";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { mustRead, softRead } from "@/lib/must-read";
 import { ClaimMyLot } from "@/components/ClaimMyLot";
 import { SignInHere } from "@/components/SignInHere";
 
@@ -49,13 +50,27 @@ export default async function ClaimPage({
   const slug = (park ?? "").trim().toLowerCase();
   if (slug) {
     const admin = createServiceClient();
-    const { data } = await admin
-      .from("parks").select("id, name").eq("slug", slug).eq("active", true).maybeSingle();
+    // Throws rather than quietly dropping the name: a nameless "See your lot"
+    // on a page reached from a slip that names her park is the moment she
+    // decides the link is not from the office after all. The boundary at
+    // src/app/error.tsx says the fault is ours and offers Try again.
+    const data = mustRead("the park on your slip", await admin
+      .from("parks").select("id, name").eq("slug", slug).eq("active", true).maybeSingle());
     parkName = (data?.name as string) ?? undefined;
     if (data?.id) {
-      const { data: lots } = await admin
-        .from("park_lots").select("lot_number").eq("park_id", data.id as string);
+      // Degraded rather than fatal, because the failure direction is the safe
+      // one: not knowing means the full keyboard, which can type digits. A
+      // keypad that cannot type "12A" is the fault worth avoiding, and it is
+      // unreachable from here. The flag keeps that a decision rather than an
+      // accident.
+      const [lots, lotsUnknown] = softRead<{ lot_number: string | null }[] | null>(
+        "this park's lot numbers",
+        await admin
+          .from("park_lots").select("lot_number").eq("park_id", data.id as string),
+        null,
+      );
       lotsAreNumeric =
+        !lotsUnknown &&
         (lots?.length ?? 0) > 0 &&
         lots!.every((l) => /^\d+$/.test(String(l.lot_number ?? "")));
     }

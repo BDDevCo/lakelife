@@ -5,6 +5,7 @@ import { RefCatcher } from "@/components/RefCatcher";
 import { createServiceClient } from "@/lib/supabase/server";
 import { fromPrice } from "@/lib/lake-pages";
 import type { ServiceRule } from "@/lib/pricing";
+import { mustRead, mustCount } from "@/lib/must-read";
 
 /**
  * Public per-lake landing page (§8 SEO) — every number on it is LIVE
@@ -30,7 +31,12 @@ interface LakeRow {
 
 async function loadLake(slug: string): Promise<LakeRow | null> {
   const admin = createServiceClient();
-  const { data } = await admin
+  // A FAILED READ IS NOT AN UNKNOWN LAKE. The `null` branch below renders "We
+  // don't know that lake yet" — a sentence that tells somebody standing on
+  // their own dock we don't serve their water, and that a search engine will
+  // happily cache. It has to mean the row is genuinely absent (or a fixture,
+  // per the note inside), so a read that could not run throws instead.
+  const data = mustRead(`the ${slug} lake page`, await admin
     .from("lakes")
     .select("id, name, slug, ice_out_actual, pull_deadline, hoa_user_id, hoa_name")
     .eq("slug", slug)
@@ -41,13 +47,17 @@ async function loadLake(slug: string): Promise<LakeRow | null> {
     // to anyone who typed or was linked the slug. Same posture parks already
     // take in parks/public-data.ts, where an inactive park is a 404.
     .eq("is_fixture", false)
-    .maybeSingle();
+    .maybeSingle());
   return (data as LakeRow | null) ?? null;
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const lake = await loadLake(slug);
+  // The page below throws to the error boundary; metadata must not, or the
+  // throw escapes where no boundary is listening. A bare tab title is the same
+  // thing this already renders when the lake is genuinely unknown, and it
+  // asserts nothing about the lake either way.
+  const lake = await loadLake(slug).catch(() => null);
   if (!lake) return { title: "LakeLife" };
   return {
     title: `Lake-home services on ${lake.name} — piers, boats, lawn & housekeeping | LakeLife`,
@@ -77,15 +87,27 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
   }
 
   const admin = createServiceClient();
-  const [{ data: services }, { data: crews }, { count: completedCount }, { data: thumbs }, { data: hoaEarnings }] = await Promise.all([
+  // EVERY NUMBER BELOW IS A CLAIM ABOUT THIS LAKE, and each empty branch was
+  // written for a lake that genuinely has none yet: no crews reads as "We're
+  // building our crew bench on {lake}", no jobs as "0 jobs completed", no
+  // earnings as "$0.00 raised so far · Be the first." to an association that
+  // has raised real money. Public page, so the reader has no portal to check
+  // any of it against. The page fails to the error boundary rather than
+  // publish a number it could not read.
+  const [servicesRes, crewsRes, completedRes, thumbsRes, hoaRes] = await Promise.all([
     admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work").eq("active", true).eq("kind", "standalone").order("name"),
     admin.from("vendors").select("id, coi_expiry, service_lakes").eq("status", "active").contains("service_lakes", [lake.id]),
     admin.from("jobs").select("id, properties!inner(lake_id)", { count: "exact", head: true }).eq("properties.lake_id", lake.id).in("status", ["complete", "paid"]),
     admin.from("job_confirmations").select("verdict, properties!inner(lake_id)").eq("properties.lake_id", lake.id).eq("verdict", "good"),
     lake.hoa_user_id
       ? admin.from("referral_earnings").select("amount").eq("beneficiary", lake.hoa_user_id).neq("status", "void")
-      : Promise.resolve({ data: null }),
+      : Promise.resolve({ data: null, error: null }),
   ]);
+  const services = mustRead("the menu for this lake", servicesRes);
+  const crews = mustRead("the crews serving this lake", crewsRes);
+  const completedCount = mustCount("the jobs completed on this lake", completedRes);
+  const thumbs = mustRead("the neighbours' thumbs for this lake", thumbsRes);
+  const hoaEarnings = mustRead("the association fund total", hoaRes);
 
   const today = new Date().toISOString().slice(0, 10);
   const crewCount = (crews ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today).length;

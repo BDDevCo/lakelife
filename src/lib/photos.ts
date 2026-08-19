@@ -69,17 +69,26 @@ export async function signedJobPhotosFor(jobIds: string[]): Promise<Map<string, 
   if (ids.length === 0) return out;
 
   const admin = createServiceClient();
-  const { data: rows } = await admin
+  // SAME ACCUSATION, ONE SCREEN OVER. The package legs render off this map, so
+  // a swallowed read here said the OTHER visits in the package came back with
+  // no photos — the same "the crew didn't document their work" claim, made
+  // about several jobs at once. Both callers are page loaders behind the error
+  // boundary, so this throws exactly like signedJobPhotos above.
+  const rows = mustRead("the photos on this package's visits", await admin
     .from("job_photos")
     .select("job_id, url, taken_at")
     .in("job_id", ids)
-    .order("taken_at", { ascending: true });
+    .order("taken_at", { ascending: true }));
   const flat = (rows ?? []).filter((r) => r.url);
   if (flat.length === 0) return out;
 
-  const { data: signed } = await admin.storage
+  const { data: signed, error: signErr } = await admin.storage
     .from("job-photos")
     .createSignedUrls(flat.map((r) => r.url as string), PHOTO_URL_TTL_SECONDS);
+  if (signErr) {
+    console.error("[read failed] signing this package's photos:", signErr);
+    throw new ReadFailed("the photos on this package's visits", signErr.message);
+  }
   flat.forEach((r, i) => {
     const url = (signed ?? [])[i]?.signedUrl;
     if (!url) return;

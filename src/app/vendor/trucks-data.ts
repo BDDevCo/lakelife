@@ -1,6 +1,7 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getMyVendorId } from "./data";
+import { mustRead } from "@/lib/must-read";
 
 /**
  * "My trucks" — the self-serve fleet list on the Availability tab
@@ -22,11 +23,19 @@ export async function getMyTrucks(): Promise<MyTruck[]> {
   if (!vendorId) return [];
 
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("crew_units")
-    .select("id, name, phone, capacity, work_start, work_end, active")
-    .eq("vendor_id", vendorId)
-    .order("created_at", { ascending: true });
+  // AN EMPTY LIST IS LOAD-BEARING HERE — see the invariant above: it means this
+  // crew is on the legacy single-route path. So a swallowed read did not just
+  // hide their trucks, it ASSERTED they have none, and the screen offered to
+  // set up a fleet the crew has already set up. The only caller is a page
+  // loader behind the error boundary, so this throws.
+  const data = mustRead(
+    "your trucks",
+    await admin
+      .from("crew_units")
+      .select("id, name, phone, capacity, work_start, work_end, active")
+      .eq("vendor_id", vendorId)
+      .order("created_at", { ascending: true }),
+  );
 
   return (data ?? []).map((r) => ({
     id: r.id as string,

@@ -48,7 +48,11 @@ type Admin = {
     select: (c: string) => {
       eq: (a: string, b: string) => {
         not: (a: string, op: string, c: null) => {
-          limit: (n: number) => Promise<{ data: { phone?: string | null }[] | null }>;
+          // `error` is part of the shape supabase-js actually returns, and it
+          // was missing here — which is why the read below could only ever be
+          // written as a bare destructure. A structural type that omits the
+          // error makes the bug unwritable-around.
+          limit: (n: number) => Promise<{ data: { phone?: string | null }[] | null; error?: unknown | null }>;
         };
       };
     };
@@ -85,12 +89,22 @@ export async function triageInboundMessage(
   if (verdict.outcome === "emergency") {
     try {
       const db = admin as Admin;
-      const { data: ops } = await db
+      // NOBODY PAGED, AND NOBODY TOLD. This is the emergency lane — a customer
+      // has said something the triage judged urgent. A swallowed read empties
+      // `phones`, the fan-out sends to nobody, and `paged` comes back false
+      // exactly as it does when ops genuinely has no number on file. The
+      // enclosing catch is best-effort by design (a failed page must not fail
+      // the message), so the error has to be named here or it is named nowhere.
+      const opsRes = await db
         .from("users")
         .select("phone")
         .eq("role", "ops")
         .not("phone", "is", null)
         .limit(PAGE_FANOUT);
+      if (opsRes.error) {
+        console.error("[read failed] the ops numbers for an EMERGENCY page — nobody was paged:", opsRes.error);
+      }
+      const ops = opsRes.data;
 
       const phones = (ops ?? [])
         .map((o) => o.phone)
@@ -148,16 +162,30 @@ export async function populationForOwner(
   const db = admin as {
     from: (t: string) => {
       select: (c: string) => {
-        eq: (a: string, b: string) => { limit: (n: number) => Promise<{ data: unknown[] | null }> };
+        eq: (a: string, b: string) => {
+          limit: (n: number) => Promise<{ data: unknown[] | null; error?: unknown | null }>;
+        };
       };
     };
   };
 
   try {
-    const [{ data: member }, { data: renter }] = await Promise.all([
+    const [memberRes, renterRes] = await Promise.all([
       db.from("park_members").select("park_id").eq("user_id", ownerId).limit(1),
       db.from("park_renters").select("id").eq("user_id", ownerId).limit(1),
     ]);
+    // THE FAIL-CLOSED PROMISE ABOVE ONLY HELD FOR A THROW. supabase-js does not
+    // throw — it RESOLVES to `{ data: null, error }` — so a dropped connection
+    // arrived here as two empty arrays, both park traces came back "no", and
+    // this returned `lake_customer`: the one lane where the housing rules are
+    // off and the machine may auto-send. The permissive answer was reachable by
+    // failure, which is exactly what the doc comment says must never happen.
+    if (memberRes.error || renterRes.error) {
+      console.error("[read failed] the park trace on this person:", memberRes.error ?? renterRes.error);
+      return "unknown";
+    }
+    const member = memberRes.data;
+    const renter = renterRes.data;
     if ((member ?? []).length > 0) return "park_owner";
     if ((renter ?? []).length > 0) return "park_tenant";
     return "lake_customer";

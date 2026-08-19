@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { readFailedMessage } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
 import {
   isRealRange, lotFits, parkOpenFor, parseDaterange, quoteStay, toDaterange,
@@ -68,11 +69,18 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
   const admin = createServiceClient();
 
   // --- the lot, its park, and whether either is even open to the public ---
-  const { data: lotRow } = await admin
+  const lotRes = await admin
     .from("park_lots")
     .select("id, park_id, lot_number, site_type, max_length_ft, amperage, has_water, has_sewer, slip_included, active, lifecycle")
     .eq("id", input.lotId)
     .maybeSingle();
+  // A READ THAT FAILED IS NOT A LOT THAT IS GONE. "That lot isn't available"
+  // below is written for a retired lot, and it sends somebody looking for a
+  // different site when the truth is that we could not look at all.
+  if (lotRes.error) {
+    return { ok: false, error: readFailedMessage("that lot", lotRes.error) };
+  }
+  const lotRow = lotRes.data;
   // Checked here as well as in the listing, because a lot can be retired
   // between the page loading and the form being sent — and because a link to a
   // lot can be kept, shared, or bookmarked. 0065's trigger would refuse this
@@ -82,11 +90,17 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
     return { ok: false, error: "That lot isn't available." };
   }
 
-  const { data: park } = await admin
+  const parkRes = await admin
     .from("parks")
     .select("id, slug, name, active, season_open_month, season_open_day, season_close_month, season_close_day")
     .eq("id", lotRow.park_id)
     .maybeSingle();
+  // Same again: "isn't taking applications right now" is a statement about the
+  // park, and a failed read knows nothing about the park.
+  if (parkRes.error) {
+    return { ok: false, error: readFailedMessage("that park", parkRes.error) };
+  }
+  const park = parkRes.data;
   // An unpublished park must not take applications through a guessed lot id.
   if (!park || !park.active) return { ok: false, error: "That park isn't taking applications right now." };
 
@@ -103,8 +117,15 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
   }
 
   // --- the money is the PARK OWNER'S, read from their card ---
-  const { data: rateRows } = await admin
+  const rateRes = await admin
     .from("lot_rates").select("term, amount").eq("park_lot_id", input.lotId);
+  // No rates read means no card read. Falling through with an empty card makes
+  // `quoteStay` return null, and the renter is told this lot isn't rented by
+  // the term they picked — which may be exactly how it IS rented.
+  if (rateRes.error) {
+    return { ok: false, error: readFailedMessage("this lot's rates", rateRes.error) };
+  }
+  const rateRows = rateRes.data;
   const rates: RateCard[] = (rateRows ?? []).map((r) => ({ term: r.term as Term, amount: Number(r.amount) }));
   const quoted = quoteStay(rates, input.term as Term, range);
   if (quoted == null) {
@@ -113,11 +134,19 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
 
   // --- is it actually free? The database is the real guard when the owner
   //     approves; this is so a renter doesn't apply for nights already sold ---
-  const { data: heldRows } = await admin
+  const heldRes = await admin
     .from("lot_reservations")
     .select("during, status")
     .eq("park_lot_id", input.lotId)
     .in("status", ["approved", "active"]);
+  // FAILS OPEN IF LEFT BARE. `null` here is an empty list of holds, so the
+  // loop below never runs and the clash check PASSES without having looked —
+  // the renter applies for nights that are already sold, and finds out when
+  // the owner's approval is refused by the database.
+  if (heldRes.error) {
+    return { ok: false, error: readFailedMessage("what's already booked on this lot", heldRes.error) };
+  }
+  const heldRows = heldRes.data;
   for (const h of heldRows ?? []) {
     const other = parseDaterange(h.during as string);
     if (other && other.start < range.end && range.start < other.end) {
@@ -158,12 +187,20 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
   // deleting that account later, and it sits alongside the files the park
   // owner typed in for tenants who never signed up.
   let renterId: string | null = null;
-  const { data: existing } = await admin
+  const existingRes = await admin
     .from("park_renters")
     .select("id")
     .eq("park_id", park.id)
     .eq("user_id", user.id)
     .maybeSingle();
+  // FAILS OPEN IF LEFT BARE. `null` reads as "no file here yet" and the branch
+  // below opens a SECOND file for somebody the park already has one for —
+  // splitting one tenancy across two records, or failing on the unique index
+  // with a sentence about saving their unit.
+  if (existingRes.error) {
+    return { ok: false, error: readFailedMessage("your file at this park", existingRes.error) };
+  }
+  const existing = existingRes.data;
 
   if (existing) {
     renterId = existing.id as string;

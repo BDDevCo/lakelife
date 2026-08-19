@@ -3,7 +3,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertVendorJob, getCrewCalendarYear, type CrewCalRow } from "./job-detail-data";
 import { crewChooseFix, crewChooseVerify, crewChooseTalk } from "@/lib/disputes";
-import { ReadFailed, readFailedMessage } from "@/lib/must-read";
+import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 /**
  * CREW JOB-DETAIL actions (2026-07-26).
@@ -33,14 +33,22 @@ const OPEN_DISPUTE = ["crew_review", "fixing", "verifying", "talk", "escalated"]
  */
 async function openDisputeToken(jobId: string): Promise<string | null> {
   const admin = createServiceClient();
-  const { data } = await admin
-    .from("disputes")
-    .select("crew_token, status")
-    .eq("job_id", jobId)
-    .in("status", OPEN_DISPUTE)
-    .order("opened_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  // THROWS on a failed read, same reason assertVendorJob does. `null` from here
+  // means "there is nothing open to settle", and that is what the caller says
+  // out loud — to a crew whose pay is being HELD by the very dispute this read
+  // failed to find, on the screen they were sent to in order to clear it. The
+  // caller converts the throw into its own result.
+  const data = mustRead(
+    "this job's open dispute",
+    await admin
+      .from("disputes")
+      .select("crew_token, status")
+      .eq("job_id", jobId)
+      .in("status", OPEN_DISPUTE)
+      .order("opened_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  );
   return (data?.crew_token as string | null) ?? null;
 }
 
@@ -71,7 +79,16 @@ export async function crewCureJob(
   }
   if (!job) return { ok: false, error: "That job isn't on your route." };
 
-  const token = await openDisputeToken(jobId);
+  // Same conversion as above: a rejection escaping a "use server" action is a
+  // blank failure on the crew's phone. Nothing has been written at this point —
+  // all three cures are driven by the lib functions below.
+  let token: string | null = null;
+  try {
+    token = await openDisputeToken(jobId);
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("this job's dispute", e) };
+    throw e;
+  }
   if (!token) return { ok: false, error: "There's nothing open to settle on this job." };
 
   if (choice === "fix") return crewChooseFix(token, String(dateISO ?? "").trim());

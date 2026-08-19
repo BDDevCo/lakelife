@@ -135,7 +135,16 @@ export async function getVendorDocUrl(kind: "coi" | "w9" | "garagekeepers"): Pro
       kind === "coi" ? data?.coi_url : kind === "garagekeepers" ? data?.garagekeepers_url : data?.w9_url
     ) as string | null;
     if (!path) return null;
-    const { data: signed } = await admin.storage.from("vendor-docs").createSignedUrl(path, 3600);
+    const { data: signed, error: signErr } = await admin.storage.from("vendor-docs").createSignedUrl(path, 3600);
+    if (signErr) {
+      // Storage, not Postgres, but the same rule as the mustRead above. `null`
+      // is the right ANSWER here — the button already renders it as "Couldn't
+      // open that one", which stays true when signing is what failed — but the
+      // failure was invisible, so a crew reporting they can't open their own
+      // COI left no trace anywhere to look at.
+      console.error("[read failed] signing the document on file:", signErr);
+      return null;
+    }
     return signed?.signedUrl ?? null;
   } catch (e) {
     if (e instanceof ReadFailed) return null;

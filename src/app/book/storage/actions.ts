@@ -46,11 +46,16 @@ export async function createPackageBooking(input: {
   if (!user) return { ok: false, error: "Please sign in first." };
 
   // RULE 5: working email AND SMS-verified mobile before any booking.
-  const { data: me } = await supabase
+  // Unread, both flags read as false and the refusal below sends somebody who
+  // verified months ago back to a verify screen with nothing left to verify.
+  // Nothing is written yet, so the honest answer is that we couldn't look.
+  const meRes = await supabase
     .from("users")
     .select("email_verified, phone_verified, phone, email")
     .eq("id", user.id)
     .maybeSingle();
+  if (meRes.error) return { ok: false, error: readFailedMessage("your account", meRes.error) };
+  const me = meRes.data;
   const emailOk = (me?.email_verified ?? false) || Boolean(user.email_confirmed_at);
   const phoneOk = me?.phone_verified ?? false;
   if (!emailOk || !phoneOk) {
@@ -74,7 +79,20 @@ export async function createPackageBooking(input: {
   if (!profile.boats.length) return { ok: false, error: "Add your boat to your property profile first — storage is priced by it." };
 
   // Server-truth recipe + prices; the wizard's copy of both is display-only.
-  const pkgs = await getPackageViews(toPricingProfile(profile));
+  //
+  // getPackageViews throws ReadFailed. This is a "use server" action and its
+  // only caller is StoragePackageWizard's book(), which does setBusy(true) and
+  // then awaits it with no catch — so a rejection means setBusy(false) never
+  // runs and the button spins forever with no error and no toast. The same
+  // file already closes this seam twice above; this was the throwing call left
+  // uncovered.
+  let pkgs;
+  try {
+    pkgs = await getPackageViews(toPricingProfile(profile));
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("the storage packages", e, { money: true }) };
+  }
   const pkg = pkgs.find((p) => p.id === input.packageId);
   if (!pkg) return { ok: false, error: "That package isn't available." };
 
@@ -92,17 +110,27 @@ export async function createPackageBooking(input: {
     return { ok: false, error: "Pick a date at least a day out — storage runs are planned, not same-day." };
   }
   const admin = createServiceClient();
-  const { data: propRow } = await admin
+  // BOTH OF THESE FAIL OPEN, and they are the two reads the freeze check is
+  // made of. An unread lake leaves `effective.seasonEnd` null and the pull
+  // deadline below is skipped entirely; unread services leave `touchesWater`
+  // false, which skips it just the same — and stamps the longest visit of the
+  // year with a duration summed over nothing. A haul-out booked past the hard
+  // freeze is a boat in the water when the lake closes over it.
+  const propRes = await admin
     .from("properties")
     .select("lake_id, lakes(name, ice_out_actual, pull_deadline)")
     .eq("id", profile.propertyId)
     .maybeSingle();
+  if (propRes.error) return { ok: false, error: readFailedMessage("your lake's season dates", propRes.error) };
+  const propRow = propRes.data;
   const lake = (Array.isArray(propRow?.lakes) ? propRow?.lakes[0] : propRow?.lakes) as
     | { name?: string; ice_out_actual?: string; pull_deadline?: string } | undefined;
-  const { data: fallSvcRows } = await admin
+  const fallSvcRes = await admin
     .from("services")
     .select("id, is_water_work, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands")
     .in("id", sel.fall);
+  if (fallSvcRes.error) return { ok: false, error: readFailedMessage("what this package includes", fallSvcRes.error) };
+  const fallSvcRows = fallSvcRes.data;
   const touchesWater = (fallSvcRows ?? []).some((s) => s.is_water_work);
   // Compare against the EFFECTIVE window, not the raw stored dates. A lake row
   // holds one season's absolute dates and nothing writes a rolled year back to

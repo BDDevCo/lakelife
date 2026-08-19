@@ -5,6 +5,7 @@ import { RefCatcher } from "@/components/RefCatcher";
 import { ConfigNotice } from "@/components/ConfigNotice";
 import { hasSupabaseEnv, hasTwilioEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
+import { softRead } from "@/lib/must-read";
 
 export default async function Home() {
   const supaOk = hasSupabaseEnv();
@@ -23,8 +24,20 @@ export default async function Home() {
       data: { user },
     } = await supabase.auth.getUser();
     signedIn = !!user;
-    const { data: lakeRows } = await supabase
-      .from("lakes").select("name").eq("is_fixture", false).order("name");
+    // A FAILED READ IS NOT AN EMPTY LAKES TABLE — but here it is one of the
+    // few places where the fallback is genuinely defensible, so the failure is
+    // DEGRADED rather than fatal: the three founding lakes below are real
+    // markets, the sentence they build is incomplete rather than untrue, and
+    // 500ing the front door over a marketing chip would cost a new customer
+    // more than a short list does. What was missing was any trace at all —
+    // softRead logs it. The flag is deliberately not rendered: there is no
+    // honest sentence to add to a hero chip, and the lake a visitor can't find
+    // here they can still name themselves at booking (lib/lake-birth.ts).
+    const [lakeRows] = softRead(
+      "the list of lakes for the front door",
+      await supabase.from("lakes").select("name").eq("is_fixture", false).order("name"),
+      null,
+    );
     if (lakeRows && lakeRows.length > 0) {
       shortNames = lakeRows.map((l) => (l.name as string).replace(/ Lake$/, ""));
     }
