@@ -106,3 +106,37 @@ describe("rule 3 — the alert cannot break the payment path", () => {
     expect(body).toMatch(/Number\(amount\)\.toFixed/);
   });
 });
+
+describe("the park machine reports, and never bills, on its own", () => {
+  const machine = () => src("./park-machine.ts");
+  const ceilings = () => src("../app/park/machine-helpers.ts");
+
+  it("urgent findings come out in WORDS, not as a count", () => {
+    // reconcile has always produced "N occupied lots have no bill for August
+    // 2026 — somebody lives there and nothing is being charged". It went into
+    // `findings: number`, which went into an HTTP response nobody reads. That
+    // sentence IS the answer to "nobody raised the rent this month".
+    const s = machine();
+    expect(s).toMatch(/urgent: string\[\]/);
+    expect(s).toMatch(/if \(f\.urgent\) urgent\.push/);
+    // Named with the park — there will be a second one.
+    expect(s).toMatch(/\$\{\(p\.name as string\) \?\? "A park"\}/);
+  });
+
+  it("those findings reach the nightly digest", () => {
+    expect(nightly()).toMatch(/park\?\.urgent \?\? \[\]/);
+  });
+
+  it("raising charges is NOT something the machine may do alone", () => {
+    // The park autonomy rule: a job runs unattended only if its worst outcome
+    // is a sentence on a screen, or a write the database itself would refuse.
+    // Raising bills asserts that nineteen households owe money. If a ceiling
+    // for it is ever added, it must not be 'act'.
+    const c = ceilings();
+    const m = /raise_charges:\s*"(\w+)"/.exec(c);
+    if (m) expect(m[1], "raising bills unattended asserts money is owed").not.toBe("act");
+    // And the only 'act' entries stay the ones the DB itself makes safe.
+    const acts = [...c.matchAll(/(\w+):\s*"act"/g)].map((x) => x[1]).sort();
+    expect(acts).toEqual(["apply_rent_change", "owner_email"]);
+  });
+});

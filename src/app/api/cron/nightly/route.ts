@@ -173,6 +173,14 @@ async function run(req: Request) {
   // because every entry is a settle that refused — the customer was not charged
   // and the crew was not paid. Same destination, so ops reads one list.
   for (const f of reconcile?.failures ?? []) failures.push({ step: "reconcile", error: f });
+  // THE PARK MACHINE'S URGENT FINDINGS. It has always produced them — "N
+  // occupied lots have no bill for August 2026" is the standing answer to
+  // nobody having raised the rent — and they only ever reached a count in an
+  // HTTP response. The nightly is the one thing the owner actually reads.
+  //
+  // Reporting, never raising: billing nineteen households unattended asserts
+  // that money is owed, which the park autonomy rule reserves for a human tap.
+  for (const u of park?.urgent ?? []) failures.push({ step: "park", error: u });
   // A step that died contributes its empty shape rather than blocking the
   // digest — the digest is how ops finds out, so it must survive the failure
   // it is reporting. `failures` carries what actually broke.

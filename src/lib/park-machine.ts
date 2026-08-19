@@ -35,6 +35,22 @@ export interface ParkRunResult {
   parks: number;
   findings: number;
   errors: string[];
+  /**
+   * THE URGENT FINDINGS, IN WORDS — not just how many.
+   *
+   * `reconcile` has always produced `live_lot_unbilled`: "N occupied lots have
+   * no bill for August 2026. Somebody lives there and nothing is being
+   * charged." It is the exact answer to "nothing raises the rent, the owner has
+   * to remember every month, forever" — and it went into a COUNT, which went
+   * into an HTTP response nobody reads. The machine noticed every night and
+   * told nobody.
+   *
+   * Reporting is all it may do. Raising the bills unattended would assert that
+   * money is owed by nineteen households, which is exactly what the park
+   * autonomy rule reserves for a human tap: a job runs alone only when its
+   * worst outcome is a sentence on a screen. This is that sentence.
+   */
+  urgent: string[];
 }
 
 /**
@@ -201,17 +217,23 @@ export async function runParkNightly(): Promise<ParkRunResult> {
   const today = todayLakeDate();
 
   const { data: parks, error } = await admin.from("parks").select("id, name");
-  if (error) return { ok: false, parks: 0, findings: 0, errors: [error.message] };
+  if (error) return { ok: false, parks: 0, findings: 0, errors: [error.message], urgent: [] };
 
   let findings = 0;
   const errors: string[] = [];
+  const urgent: string[] = [];
   for (const p of parks ?? []) {
     const res = await reconcileOnePark(admin, p.id as string, today);
     findings += res.findings.length;
+    // Named with the park, because there will be a second one and "3 occupied
+    // lots have no bill" is unanswerable without knowing whose.
+    for (const f of res.findings) {
+      if (f.urgent) urgent.push(`${(p.name as string) ?? "A park"}: ${f.line}`);
+    }
     if (res.error) errors.push(res.error);
   }
 
-  return { ok: errors.length === 0, parks: (parks ?? []).length, findings, errors };
+  return { ok: errors.length === 0, parks: (parks ?? []).length, findings, errors, urgent };
 }
 
 export { reconcileSummary };
