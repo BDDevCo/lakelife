@@ -1679,7 +1679,17 @@ export async function sendCoiRevalidations(leadDays = 30): Promise<{ ok: boolean
   const admin = createServiceClient();
   const crews = mustRead("the active crews and their insurance dates", await admin
     .from("vendors")
-    .select("id, company, coi_expiry, verified_at, users(email, name)")
+    // NAME THE RELATIONSHIP. There are TWO foreign keys from vendors to users —
+    // vendors_user_id_fkey (the crew's own account) and vendors_invited_by_fkey
+    // (whoever at ops invited them, added in 0028). A bare users(...) is
+    // ambiguous and PostgREST answers PGRST201, which arrives as
+    // {error, data:null} — so before this read was guarded, every night this
+    // step reported {ok:true, due:0, emailed:0} and NO crew was ever warned
+    // that their insurance was about to lapse. An expired COI drops a crew from
+    // routing, so the first they'd have known is the work stopping.
+    // Had it resolved the other way it would have emailed the ops person who
+    // invited them instead of the crew.
+    .select("id, company, coi_expiry, verified_at, users!vendors_user_id_fkey(email, name)")
     .eq("status", "active"));
 
   let due = 0, emailed = 0;

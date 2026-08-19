@@ -74,7 +74,10 @@ export async function getCrews(): Promise<OpsCrew[]> {
       .from("vendors")
       .select(
         "id, company, status, invite_email, service_types, daily_capacity, work_days, " +
-          "coi_url, coi_expiry, w9_url, created_at, users(name, email, phone)",
+          // Named for the same reason as the COI cron: two FKs from vendors to
+        // users, so a bare users(...) is PGRST201. Unguarded this showed an
+        // empty Crews tab reading "nobody invited yet"; guarded it threw.
+        "coi_url, coi_expiry, w9_url, created_at, users!vendors_user_id_fkey(name, email, phone)",
       ),
     getVendorScores(),
     admin.from("job_confirmations").select("vendor_id, verdict").not("verdict", "is", null),
