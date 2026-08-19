@@ -28,6 +28,22 @@ import { mustRead, mustCount, softRead } from "@/lib/must-read";
 
 export interface BillLine { label: string; amount: number }
 
+export interface Bill {
+  /** Needed by payRent and sayIPaid — the only id this screen hands back. */
+  id: string;
+  monthLabel: string;
+  dueOn: string;
+  amount: number;
+  paidTotal: number;
+  outstanding: number;
+  status: string;
+  /** An unanswered "I already paid this" is open against THIS bill. */
+  disputed: boolean;
+  /** The day they said they paid, when they gave one. */
+  claimedPaidOn: string | null;
+  lines: BillLine[];
+}
+
 export interface RenterHome {
   parkName: string;
   lotNumber: string;
@@ -63,21 +79,34 @@ export interface RenterHome {
   today: string;
 
   /** This month's bill, or null when the park has not raised it yet. */
-  bill: {
-    /** Needed by payRent — the only id this screen hands back to the server. */
-    id: string;
-    monthLabel: string;
-    dueOn: string;
-    amount: number;
-    paidTotal: number;
-    outstanding: number;
-    status: string;
-    /** An unanswered "I already paid this" is open against this bill. */
-    disputed: boolean;
-    /** The day they said they paid, when they gave one. */
-    claimedPaidOn: string | null;
-    lines: BillLine[];
-  } | null;
+  bill: Bill | null;
+
+  /**
+   * EVERY EARLIER BILL THEY STILL OWE ON, oldest first.
+   *
+   * This read used to be `.limit(1)`, so the morning February was raised an
+   * unpaid January left the screen entirely — no balance, no Pay button, no
+   * "I already paid this", and if February was then settled the card read
+   * "Paid in full — thank you." to a household a month in arrears. Her only
+   * route to her own back rent was ringing the office, which is the call this
+   * module exists to prevent.
+   */
+  arrears: Bill[];
+
+  /**
+   * Set when the tenancy has ENDED, to the last day.
+   *
+   * The tenancy read excluded `ended` rows, so the day the office closed her
+   * out the whole screen became "No lot on your account — we looked for a
+   * tenancy attached to this sign-in and didn't find one", and her deposit and
+   * her final part-month went with it. `runCharges` deliberately raises that
+   * final prorated month AFTER the move-out (0101), so it was a bill she could
+   * never see. The original exclusion was right about the LOT — she is not
+   * owed a live screen about a pad somebody else now lives on — and wrong
+   * about her money. When this is set the screen shows the wrap-up, not the
+   * lot.
+   */
+  tenancyEnded: string | null;
 
   /** Deposit still held. Null when there has never been one. */
   deposit: { amount: number; since: string } | null;
@@ -132,20 +161,31 @@ export async function getRenterHome(): Promise<RenterHome | null> {
 
   const renterIds = files.map((f) => f.id as string);
 
-  // The tenancy they are actually living in. `ended` rows are deliberately
-  // excluded: a former resident is not owed a live screen about a lot
-  // somebody else now lives on.
+  // The tenancy they are living in — or, failing that, the one they have just
+  // left. `ended` used to be excluded outright, on the reasoning that a former
+  // resident is not owed a live screen about a lot somebody else now lives on.
+  // That reasoning is right about the LOT and wrong about the MONEY: the day
+  // the office closed her out, her deposit and her final prorated month
+  // vanished with the screen, and 0101 raises that final month AFTER the
+  // move-out on purpose — so it was a bill she could never see or pay.
+  //
+  // A live tenancy still wins if she has one. Only when there is none does the
+  // ended row carry the screen, and then it renders the wrap-up.
   const stays = mustRead(
     "your tenancy",
     await admin
       .from("lot_reservations")
-      .select("id, park_lot_id, renter_id, during, term, status, expected_move_out, tenancy_began_on")
+      .select("id, park_lot_id, renter_id, during, term, status, expected_move_out, tenancy_began_on, moved_out_on")
       .in("renter_id", renterIds)
-      .in("status", ["approved", "active"])
+      .in("status", ["approved", "active", "ended"])
       .order("created_at", { ascending: false }),
   );
-  const stay = stays?.[0];
+  const liveStay = (stays ?? []).find((r) => (r.status as string) !== "ended");
+  const stay = liveStay ?? stays?.[0];
   if (!stay) return null;
+  const tenancyEnded = liveStay
+    ? null
+    : ((stay.moved_out_on as string | null) ?? (stay.expected_move_out as string | null) ?? null);
 
   const file = files.find((f) => f.id === stay.renter_id) ?? files[0];
   const range = parseDaterange(stay.during as string);
@@ -180,17 +220,28 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       .eq("reservation_id", stay.id as string)
       .neq("status", "void")
       .order("period_month", { ascending: false })
-      .limit(1),
+      .limit(24),
   );
   const charge = charges?.[0];
+  // EVERY EARLIER MONTH SHE STILL OWES ON, oldest first — the ones `.limit(1)`
+  // used to drop off the screen the moment the next month was raised.
+  const older = (charges ?? [])
+    .slice(1)
+    .filter((c) => Number(c.amount ?? 0) - Number(c.paid_total ?? 0) > 0.005)
+    .reverse();
 
   // THE OPEN CLAIM, not just whether there is one. `park_payment_claims` is
   // specifically "I already paid this" — the date is the thing the resident
   // most wants read back to them, and a screen that says only "you disputed
   // it" describes something they never did.
-  let disputed = false;
-  let claimedPaidOn: string | null = null;
-  if (charge) {
+  //
+  // ACROSS EVERY BILL ON SCREEN, not just the newest. An arrears month she has
+  // already told the office about must show the same "nothing is being chased"
+  // line and must NOT offer to take payment again — the same rule as the
+  // current month, applied to the months that used to be invisible.
+  const claimedOn = new Map<string, string | null>();
+  const billIds = (charges ?? []).map((c) => c.id as string);
+  if (billIds.length > 0) {
     // A swallowed error here says "no open claim", which un-says the "nothing
     // is being chased" banner and puts the Pay button back on a bill they have
     // already told the office they paid. `payRent` would still refuse it
@@ -200,14 +251,36 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       "what you've told the office",
       await admin
         .from("park_payment_claims")
-        .select("id, claimed_paid_on")
-        .eq("charge_id", charge.id as string)
-        .is("resolved_at", null)
-        .limit(1),
+        .select("charge_id, claimed_paid_on")
+        .in("charge_id", billIds)
+        .is("resolved_at", null),
     );
-    disputed = (claims?.length ?? 0) > 0;
-    claimedPaidOn = (claims?.[0]?.claimed_paid_on as string | null) ?? null;
+    for (const c of claims ?? []) {
+      const key = c.charge_id as string;
+      if (!claimedOn.has(key)) claimedOn.set(key, (c.claimed_paid_on as string | null) ?? null);
+    }
   }
+  /** One charge row shaped for the screen. Used for the current bill and each
+   *  arrears month, so they cannot drift apart. */
+  const toBill = (c: Record<string, unknown>): Bill => {
+    const amt = Number(c.amount ?? 0);
+    const paid = Number(c.paid_total ?? 0);
+    return {
+      id: c.id as string,
+      monthLabel: prettyMonth(c.period_month as string),
+      dueOn: c.due_on as string,
+      amount: amt,
+      paidTotal: paid,
+      outstanding: Math.round((amt - paid) * 100) / 100,
+      status: (c.status as string) ?? "open",
+      disputed: claimedOn.has(c.id as string),
+      claimedPaidOn: claimedOn.get(c.id as string) ?? null,
+      lines: ((c.lines as { label?: string; amount?: number }[]) ?? []).map((l) => ({
+        label: String(l.label ?? "Rent"),
+        amount: Number(l.amount ?? 0),
+      })),
+    };
+  };
 
   // ---- money in -----------------------------------------------------------
   // This one read produces BOTH the receipt list and the deposit figure. An
@@ -284,9 +357,6 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       .eq("park_id", file.park_id as string),
   );
 
-  const amount = Number(charge?.amount ?? 0);
-  const paidTotal = Number(charge?.paid_total ?? 0);
-
   return {
     parkName: (park?.name as string) ?? "your park",
     acceptsOnlineRent: Boolean(park?.accepts_online_rent),
@@ -308,23 +378,9 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     textNumber: (file.mobile_e164 as string | null) ?? null,
     term: (stay.term as string) ?? "monthly",
     leavingOn: (stay.expected_move_out as string) ?? null,
-    bill: charge
-      ? {
-          id: charge.id as string,
-          monthLabel: prettyMonth(charge.period_month as string),
-          dueOn: charge.due_on as string,
-          amount,
-          paidTotal,
-          outstanding: Math.round((amount - paidTotal) * 100) / 100,
-          status: (charge.status as string) ?? "open",
-          disputed,
-          claimedPaidOn,
-          lines: ((charge.lines as { label?: string; amount?: number }[]) ?? []).map((l) => ({
-            label: String(l.label ?? "Rent"),
-            amount: Number(l.amount ?? 0),
-          })),
-        }
-      : null,
+    bill: charge ? toBill(charge) : null,
+    arrears: older.map(toBill),
+    tenancyEnded,
     deposit: depositTotal > 0 && depositSince
       ? { amount: depositTotal, since: depositSince }
       : null,

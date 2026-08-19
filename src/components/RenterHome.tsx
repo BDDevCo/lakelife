@@ -46,8 +46,33 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
       </div>
       <p className="mut" style={{ fontSize: 13, margin: "4px 0 16px" }}>
         {view.displayName}
-        {view.since ? ` · living here since ${pretty(view.since)}` : ""}
+        {view.tenancyEnded
+          ? ` · lived here${view.since ? ` from ${pretty(view.since)}` : ""} until ${pretty(view.tenancyEnded)}`
+          : view.since ? ` · living here since ${pretty(view.since)}` : ""}
       </p>
+
+      {/* ------------------------------------------------------ moved out --- */}
+      {/* THE DAY THE OFFICE CLOSED HER OUT, THIS WHOLE SCREEN USED TO VANISH —
+          replaced by "No lot on your account. We looked for a tenancy attached
+          to this sign-in and didn't find one", every clause of it false. Her
+          file was linked; it was the tenancy that ended. Behind that sentence
+          went her deposit and her final part-month, which runCharges raises
+          AFTER the move-out on purpose (0101) — a bill she could never see.
+
+          She keeps the money half of the screen and loses the lot half: no
+          reporting a broken step on a pad somebody else now lives on, and no
+          booking against it. */}
+      {view.tenancyEnded && (
+        <div className="ll-card ll-card-pad" style={{ marginBottom: 12, borderLeft: "3px solid var(--sun)" }}>
+          <strong style={{ fontSize: 15 }}>Your tenancy has ended</strong>
+          <p className="mut" style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.55 }}>
+            You moved out on {pretty(view.tenancyEnded)}. This page stays here
+            while anything is still open between you and the park &mdash;{" "}
+            <strong>anything you still owe, and any deposit still held.</strong>{" "}
+            Your receipts stay too, so you can always show what you paid.
+          </p>
+        </div>
+      )}
 
       {/* ---------------------------------------------------- what you owe -- */}
       <div className="ll-card ll-card-pad">
@@ -146,6 +171,74 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
         )}
       </div>
 
+      {/* ------------------------------------------------ earlier months --- */}
+      {/* THE MONTHS THAT USED TO DISAPPEAR. The bill read was `.limit(1)`, so
+          the morning February was raised an unpaid January left this screen
+          entirely — she could not see it, pay it, or say she already had, and
+          if February was then settled the card above read "Paid in full —
+          thank you." to a household a month in arrears. Her only route to her
+          own back rent was ringing the office.
+
+          Oldest first, because that is the one to clear first, and each row
+          carries the SAME two controls as the current bill: paying and saying
+          "I already paid this" are exactly as necessary here. */}
+      {view.arrears.length > 0 && (
+        <div className="ll-card ll-card-pad" style={{ marginTop: 12 }}>
+          <h3 style={{ fontSize: 15, margin: 0 }}>
+            Still owing from earlier{view.arrears.length > 1 ? ` — ${view.arrears.length} months` : ""}
+          </h3>
+          <p className="mut" style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.55 }}>
+            These are older bills with a balance left on them. Clearing the
+            oldest first is usually the right order.
+          </p>
+          {view.arrears.map((a) => (
+            <div
+              key={a.id}
+              style={{
+                borderTop: "1px solid var(--line)",
+                marginTop: 10,
+                paddingTop: 10,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                <strong style={{ fontSize: 14 }}>{a.monthLabel}</strong>
+                <span className="mut" style={{ fontSize: 12.5 }}>
+                  due {pretty(a.dueOn)}
+                </span>
+                <span style={{ marginLeft: "auto", fontSize: 17, fontWeight: 800 }}>
+                  {usd(a.outstanding)}
+                </span>
+              </div>
+
+              {a.disputed ? (
+                <div style={{ fontSize: 13, color: "var(--ink-warn)", marginTop: 4 }}>
+                  You&apos;ve told the office you paid this
+                  {a.claimedPaidOn ? ` on ${pretty(a.claimedPaidOn)}` : ""}. Nothing
+                  is being chased until they&apos;ve checked.
+                </div>
+              ) : (
+                <>
+                  {view.acceptsOnlineRent && (
+                    <PayRentButton
+                      chargeId={a.id}
+                      amount={a.outstanding}
+                      parkName={view.parkName}
+                      hasCard={view.hasCard}
+                      cardFeePct={view.cardFeePct}
+                    />
+                  )}
+                  <IPaidForm
+                    chargeId={a.id}
+                    monthLabel={a.monthLabel}
+                    today={view.today}
+                  />
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ------------------------------------------- deposit and agreement -- */}
       <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
         <div className="ll-card ll-card-pad" style={{ flex: "1 1 200px" }}>
@@ -213,6 +306,12 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
       </div>
 
       {/* --------------------------------------------- what you reported --- */}
+      {/* THE LOT HALF OF THE SCREEN, and it stops at the move-out. The original
+          reason for hiding an ended tenancy was exactly right about this part:
+          a former resident is not owed a live screen about a pad somebody else
+          now lives on, and must not be able to report a broken step on it. The
+          money half above stays. */}
+      {!view.tenancyEnded && (
       <div className="ll-card ll-card-pad" style={{ marginTop: 12 }}>
         <h3 style={{ fontSize: 15, margin: 0 }}>What you reported</h3>
         {/* "NOTHING YET" AND "WE COULDN'T LOOK" ARE DIFFERENT SENTENCES, and
@@ -254,6 +353,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
           </div>
         )}
       </div>
+      )}
 
       {/* ============ THE LINE. Different money, different creditor. ======== */}
       <div style={{ borderTop: "2px solid var(--line)", marginTop: 22, paddingTop: 16 }}>
@@ -267,7 +367,9 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
           can see that a crew came to your lot, but not what you booked or what
           you paid.
         </p>
-        <EnableLotBooking ready={view.bookingReady} />
+        {/* Not offered once the tenancy has ended — it sets up services against
+            the LOT, which is no longer hers. */}
+        {!view.tenancyEnded && <EnableLotBooking ready={view.bookingReady} />}
       </div>
 
       {/* HER NUMBER, HER CHOICE, BELOW HER RENT. The park has had a phone
