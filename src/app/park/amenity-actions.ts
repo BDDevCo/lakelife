@@ -49,6 +49,19 @@ export interface AmenityRow extends Amenity {
     quotedAmount: number | null;
     /** Money actually taken against this booking. Derived, never stored. */
     collected: number;
+    /**
+     * THE PAYMENTS THEMSELVES, so a wrong one can be taken back.
+     *
+     * `collectAmenityMoney` writes kind:'amenity' with NO charge_id. The
+     * statement lists `.in("charge_id", chargeIds)` and held-money lists
+     * `.eq("kind","rent")` — so an amenity payment appeared on no screen that
+     * offers a reversal, and a $150 typed in error was permanent everywhere.
+     * (The action even calls revalidatePath("/park/statements"), which tells
+     * you what the author expected to happen.) reversePayment already scopes
+     * by park rather than through the charge, so it reaches these fine; what
+     * was missing was somewhere to press it.
+     */
+    payments: Array<{ id: string; amount: number; method: string; on: string }>;
   }>;
 }
 
@@ -106,8 +119,8 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
       : Promise.resolve({ data: [] as { id: string; park_lot_id: string }[], error: null }),
     bookingIds.length
       ? admin.from("park_payments")
-          .select("amenity_booking_id, amount, reversed_at").in("amenity_booking_id", bookingIds)
-      : Promise.resolve({ data: [] as { amenity_booking_id: string; amount: number; reversed_at: string | null }[], error: null }),
+          .select("id, amenity_booking_id, amount, method, received_on, reversed_at").in("amenity_booking_id", bookingIds)
+      : Promise.resolve({ data: [] as { id: string; amenity_booking_id: string; amount: number; method: string; received_on: string; reversed_at: string | null }[], error: null }),
   ]);
   const names = mustRead("who has them booked", namesRes);
   const stays = mustRead("their stays", staysRes);
@@ -124,10 +137,19 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
   const lotNumberById = new Map((lots ?? []).map((l) => [l.id as string, l.lot_number as string]));
 
   const collectedByBooking = new Map<string, number>();
+  const paymentsByBooking = new Map<string, Array<{ id: string; amount: number; method: string; on: string }>>();
   for (const p of paid ?? []) {
     if (p.reversed_at) continue;   // a bounced payment is not money
     const k = p.amenity_booking_id as string;
     collectedByBooking.set(k, Math.round(((collectedByBooking.get(k) ?? 0) + Number(p.amount ?? 0)) * 100) / 100);
+    const list = paymentsByBooking.get(k) ?? [];
+    list.push({
+      id: p.id as string,
+      amount: Number(p.amount ?? 0),
+      method: (p.method as string) ?? "payment",
+      on: (p.received_on as string) ?? "",
+    });
+    paymentsByBooking.set(k, list);
   }
 
   return rows.map((a): AmenityRow => {
@@ -169,6 +191,7 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
             lotNumber: stayLot ? (lotNumberById.get(stayLot) ?? null) : null,
             quotedAmount: b.quoted_amount == null ? null : Number(b.quoted_amount),
             collected: collectedByBooking.get(b.id as string) ?? 0,
+            payments: paymentsByBooking.get(b.id as string) ?? [],
           };
         })
         .sort((x, y) => x.from.localeCompare(y.from)),

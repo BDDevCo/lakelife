@@ -4,7 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { toE164 } from "@/lib/phone";
 import { fleetJobCap, fleetMinuteBudget, fitsTimeBudget, jobMinutesOf } from "@/lib/fleet";
 import { todayLakeDate } from "@/lib/booking";
-import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 import { getSellableDay } from "@/lib/settings";
 import { sellableWindow } from "@/lib/duration";
 import { readFailedMessage } from "@/lib/must-read";
@@ -318,8 +318,19 @@ export async function addTruck(input: TruckInput): Promise<TruckResult> {
   // A truck phone is a standing destination for route texts (they carry the
   // day's stop map) — the number hears about it the moment it's enrolled,
   // so a typo'd digit surfaces on day one, not silently every morning.
+  // A TRUCK HAS NO INBOX. crew_units holds a phone and nothing else — this
+  // number IS the recipient, a cab phone that may belong to whoever is driving
+  // today, so there is no second door to open here. What notify adds is that
+  // the enrolment failing to queue now says so in the log instead of nowhere.
   if (built.row.phone) {
-    void sendSms(built.row.phone, `LakeLife: this number now gets ${vendor.company ?? "your crew"}'s morning truck routes ("${built.row.name}"). Wrong number? Tell your crew office to fix it in the LakeLife app. 🌊`);
+    await notify(
+      "the truck phone that it now gets this crew's morning routes",
+      { phone: built.row.phone },
+      {
+        sms: `LakeLife: this number now gets ${vendor.company ?? "your crew"}'s morning truck routes ("${built.row.name}"). Wrong number? Tell your crew office to fix it in the LakeLife app. 🌊`,
+        subject: `This number now gets ${vendor.company ?? "your crew"}'s morning truck routes`,
+      },
+    );
   }
   return { ok: true };
 }
@@ -369,8 +380,17 @@ export async function updateTruck(unitId: string, input: TruckInput): Promise<Tr
   const prev = prevRes.data;
   const { error } = await admin.from("crew_units").update(built.row).eq("id", unitId).eq("vendor_id", vendor.id);
   if (error) return { ok: false, error: error.message };
+  // Same as addTruck: the truck phone is the whole recipient, so this one has
+  // only the door it was born with. notify is here for the log line.
   if (built.row.phone && built.row.phone !== ((prev?.phone as string) ?? null)) {
-    void sendSms(built.row.phone, `LakeLife: this number now gets ${vendor.company ?? "your crew"}'s morning truck routes ("${built.row.name}"). Wrong number? Tell your crew office to fix it in the LakeLife app. 🌊`);
+    await notify(
+      "the truck phone that it now gets this crew's morning routes",
+      { phone: built.row.phone },
+      {
+        sms: `LakeLife: this number now gets ${vendor.company ?? "your crew"}'s morning truck routes ("${built.row.name}"). Wrong number? Tell your crew office to fix it in the LakeLife app. 🌊`,
+        subject: `This number now gets ${vendor.company ?? "your crew"}'s morning truck routes`,
+      },
+    );
   }
   return { ok: true };
 }

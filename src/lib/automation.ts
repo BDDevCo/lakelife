@@ -1,6 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
-import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
 import { LakeLifePayments } from "@/lib/payments";
@@ -179,17 +179,17 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
     await admin.from("jobs").update({ route_id: null, sequence: null }).eq("date", date).eq("status", "scheduled");
   }
 
-  const vendorPhoneFor = async (userId: string | null): Promise<string | null> => {
-    if (!userId) return null;
-    const { data: u, error: uPhoneErr } = await admin.from("users").select("phone").eq("id", userId).maybeSingle();
+  const vendorContactFor = async (userId: string | null): Promise<{ phone: string | null; email: string | null }> => {
+    if (!userId) return { phone: null, email: null };
+    const { data: u, error: uPhoneErr } = await admin.from("users").select("phone, email").eq("id", userId).maybeSingle();
     // A failed read is not "no phone on file". Say so, or a crew silently
     // never gets tomorrow's route and nothing anywhere records why.
     if (uPhoneErr) {
       console.error("[read failed] the crew's phone number:", uPhoneErr);
       skipped.push(`A crew's route for ${date} was built but their phone number couldn't be read — no route text went out; they will arrive with nothing but their Today list.`);
-      return null;
+      return { phone: null, email: null };
     }
-    return (u?.phone as string) ?? null;
+    return { phone: (u?.phone as string) ?? null, email: (u?.email as string) ?? null };
   };
 
   let routes = 0, stops = 0, overflow = 0, texted = 0, trucks = 0, hoursBust = 0;
@@ -220,9 +220,20 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
         await admin.from("jobs").update({ sequence: i + 1, route_id: routeRow.id }).eq("id", plan.ordered[i].id);
       }
       routes++; stops += plan.ordered.length; overflow += plan.overflow.length;
-      const phone = await vendorPhoneFor(v.user_id);
-      if (phone) {
-        void sendSms(phone, `LakeLife route for ${prettyDate(date)}: ${plan.ordered.length} stops, ~${plan.driveMinutes} min drive.${mapUrl ? " Map: " + mapUrl : ""} Details in your Today list. 🌊`);
+      const crew = await vendorContactFor(v.user_id);
+      if (crew.phone || crew.email) {
+        // EVERY DOOR. This IS tomorrow's work — where to go and in what order.
+        // On text alone it has reached nobody since July, and a crew with no
+        // route arrives with nothing but their Today list.
+        const told = await notify(
+          `a crew their route for ${prettyDate(date)}`,
+          crew,
+          {
+            sms: `LakeLife route for ${prettyDate(date)}: ${plan.ordered.length} stops, ~${plan.driveMinutes} min drive.${mapUrl ? " Map: " + mapUrl : ""} Details in your Today list. 🌊`,
+            subject: `Your route for ${prettyDate(date)}: ${plan.ordered.length} stops`,
+          },
+        );
+        if (!told.reached && told.note) skipped.push(told.note);
         texted++;
       }
       continue;
@@ -232,7 +243,7 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
     const vendorBase = v.baseLat != null && v.baseLng != null ? { lat: v.baseLat, lng: v.baseLng } : null;
     const plan = planFleetDay(v.stops, units, vendorBase);
     overflow += plan.overflow.length;
-    const vendorPhone = await vendorPhoneFor(v.user_id);
+    const vendorContact = await vendorContactFor(v.user_id);
     // sequence runs CONTINUOUSLY across trucks (Truck 1: 1..n, Truck 2:
     // n+1..m) — the vendor Today list orders by sequence and would
     // interleave the trucks if each restarted at 1. Each truck's own
@@ -268,19 +279,40 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
       }
       routes++; stops += tp.ordered.length; trucks++;
       if (!tp.fitsHours) hoursBust++;
-      const phone = tp.truck.phone ?? vendorPhone;
-      if (phone) {
+      const phone = tp.truck.phone ?? vendorContact.phone;
+      // A truck with its OWN number is its own crew, and crew_units holds no
+      // email address — so the second door exists only where this falls back
+      // to the vendor's own number. Where it doesn't, the route still rides
+      // the dead channel alone and `notify` is what says so out loud.
+      const email = tp.truck.phone ? null : vendorContact.email;
+      if (phone || email) {
         let msg = `LakeLife route for ${prettyDate(date)} — ${tp.truck.name}: ${tp.ordered.length} stops, ~${tp.driveMinutes} min drive.${mapUrl ? " Map: " + mapUrl : ""} 🌊`;
         if (!tp.fitsHours) msg += " Heads up: this day runs past your hours — tap Availability to adjust.";
-        void sendSms(phone, msg);
+        const told = await notify(
+          `a crew their ${tp.truck.name} route for ${prettyDate(date)}`,
+          { phone, email },
+          {
+            sms: msg,
+            subject: `${tp.truck.name} — your route for ${prettyDate(date)}: ${tp.ordered.length} stops`,
+          },
+        );
+        if (!told.reached && told.note) skipped.push(told.note);
         texted++;
       }
     }
     // This crew's route is incomplete; don't also tell them what overflowed
     // from a plan we failed to write. The next crew still gets theirs.
     if (truckWriteFailed) continue;
-    if (plan.overflow.length > 0 && vendorPhone) {
-      void sendSms(vendorPhone, `LakeLife: ${plan.overflow.length} job${plan.overflow.length === 1 ? "" : "s"} didn't fit tomorrow's trucks — ops has them. 🌊`);
+    if (plan.overflow.length > 0 && (vendorContact.phone || vendorContact.email)) {
+      const told = await notify(
+        "a crew that some jobs didn't fit tomorrow's trucks",
+        vendorContact,
+        {
+          sms: `LakeLife: ${plan.overflow.length} job${plan.overflow.length === 1 ? "" : "s"} didn't fit tomorrow's trucks — ops has them. 🌊`,
+          subject: `${plan.overflow.length} job${plan.overflow.length === 1 ? "" : "s"} didn't fit tomorrow's trucks`,
+        },
+      );
+      if (!told.reached && told.note) skipped.push(told.note);
     }
   }
   return { ok: true, date, routes, stops, overflow, texted, trucks, hoursBust, skipped };
@@ -1071,7 +1103,7 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number; s
 
     // Owner: no charge, easy reschedule.
     if (prop?.owner_id) {
-      const { data: owner, error: ownerErr } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+      const { data: owner, error: ownerErr } = await admin.from("users").select("phone, email").eq("id", prop.owner_id).maybeSingle();
       // POST-WRITE: the strike is recorded and the job already unassigned, so
       // refusing here would undo nothing — but the customer's crew has
       // vanished off their calendar and nobody has told them.
@@ -1079,19 +1111,46 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number; s
         console.error(`[read failed] the owner's phone number (job ${j.id}):`, ownerErr);
         skipped.push(`Job ${j.id} (${j.date}): released for a free rebook, but we couldn't read the owner's phone number — they were not told their crew missed it.`);
       }
-      if (owner?.phone) void sendSms(owner.phone as string, `LakeLife: your crew couldn't make ${svc} at ${prop?.address ?? "your place"} — no charge. Pick any open day to rebook: ${site}/book 🌊`);
+      // EVERY DOOR: their crew has just come off the calendar. On text alone
+      // the first they hear of it is an empty driveway.
+      if (owner?.phone || owner?.email) {
+        const told = await notify(
+          `the owner that their crew missed ${svc} (job ${j.id})`,
+          { phone: owner?.phone as string | null, email: owner?.email as string | null },
+          {
+            sms: `LakeLife: your crew couldn't make ${svc} at ${prop?.address ?? "your place"} — no charge. Pick any open day to rebook: ${site}/book 🌊`,
+            subject: `Your crew couldn't make ${svc} at ${prop?.address ?? "your place"}`,
+            body:
+              `Your crew couldn't make ${svc} at ${prop?.address ?? "your place"}, and you were not charged.\n\n` +
+              `Pick any open day to rebook:\n  ${site}/book`,
+          },
+        );
+        if (!told.reached && told.note) skipped.push(told.note);
+      }
     }
     // Crew: reliability warning (standing-based, no fine).
     const crewUser = (one(j.vendors) as { user_id?: string } | null)?.user_id;
     if (crewUser) {
-      const { data: cu, error: cuErr } = await admin.from("users").select("phone").eq("id", crewUser).maybeSingle();
+      const { data: cu, error: cuErr } = await admin.from("users").select("phone, email").eq("id", crewUser).maybeSingle();
       // POST-WRITE, and the one that matters most to the crew: the strike is
       // already on their record and counts toward losing the lake.
       if (cuErr) {
         console.error(`[read failed] the crew's phone number (job ${j.id}):`, cuErr);
         skipped.push(`Job ${j.id} (${j.date}): a no-show strike was recorded but we couldn't read the crew's phone number — they were never told their standing moved.`);
       }
-      if (cu?.phone) void sendSms(cu.phone as string, `LakeLife: a scheduled job was marked missed and affects your standing. If something came up, block the day ahead next time — no penalty for advance notice.`);
+      // EVERY DOOR: this strike counts toward losing a lake, and a crew that
+      // is never told has no way to change what causes it.
+      if (cu?.phone || cu?.email) {
+        const told = await notify(
+          `the crew that a missed job is on their record (job ${j.id})`,
+          { phone: cu?.phone as string | null, email: cu?.email as string | null },
+          {
+            sms: `LakeLife: a scheduled job was marked missed and affects your standing. If something came up, block the day ahead next time — no penalty for advance notice.`,
+            subject: "A missed job was recorded against your standing",
+          },
+        );
+        if (!told.reached && told.note) skipped.push(told.note);
+      }
     }
   }
   return { ok: true, flagged, skipped };
@@ -1166,24 +1225,37 @@ export async function revalidateAssignments(
       return mine.length > 0;
     });
     if (notifiable.length > 0) {
+      // The `phone` filter still decides WHO is asked — same crews as before,
+      // now reachable at both of their doors rather than one dead one.
       const users = mustRead("the crews' phone numbers", await admin
         .from("users")
-        .select("id, phone")
+        .select("id, phone, email")
         .in("id", notifiable.map((v) => v.user_id as string))
         .not("phone", "is", null));
-      const phoneByUser = new Map((users ?? []).map((u) => [u.id as string, u.phone as string]));
+      const contactByUser = new Map((users ?? []).map((u) => [u.id as string, { phone: (u.phone as string) ?? null, email: (u.email as string) ?? null }]));
       const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
       for (const v of notifiable) {
-        const phone = phoneByUser.get(v.user_id as string);
-        if (!phone) continue;
-        void sendSms(phone, `LakeLife: ${unfilled} open job${unfilled === 1 ? "" : "s"} up for grabs near you — first crew to claim gets it: ${site}/vendor/open 🌊`);
+        const contact = contactByUser.get(v.user_id as string);
+        if (!contact) continue;
+        const told = await notify(
+          "a crew that there is open work up for grabs near them",
+          contact,
+          {
+            sms: `LakeLife: ${unfilled} open job${unfilled === 1 ? "" : "s"} up for grabs near you — first crew to claim gets it: ${site}/vendor/open 🌊`,
+            subject: `${unfilled} open job${unfilled === 1 ? "" : "s"} up for grabs near you`,
+            body:
+              `${unfilled} open job${unfilled === 1 ? "" : "s"} up for grabs near you — first crew to claim gets it.\n\n` +
+              `  ${site}/vendor/open`,
+          },
+        );
+        if (!told.reached && told.note) skipped.push(told.note);
         crewsTexted++;
       }
     }
     // True dead end: a service nobody on the platform offers ⇒ recruit signal.
     const deadEnd = [...openServices].filter((s) => !claimersByService.has(s));
     if (deadEnd.length > 0 || crewsTexted === 0) {
-      const { data: ops, error: opsErr } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
+      const { data: ops, error: opsErr } = await admin.from("users").select("phone, email").eq("role", "ops").not("phone", "is", null);
       if (opsErr) {
         console.error("[read failed] the ops phone numbers for a dead-end alert:", opsErr);
         skipped.push(`${unfilled} job${unfilled === 1 ? "" : "s"} nobody on the platform can claim, and we couldn't read the ops phone numbers to raise it — no dead-end text went out.`);
@@ -1193,7 +1265,15 @@ export async function revalidateAssignments(
         : "the coming days";
       const what = deadEnd.length > 0 ? deadEnd.join(", ") : "open jobs";
       for (const o of ops ?? []) {
-        if (o.phone) void sendSms(o.phone as string, `LakeLife: no crew on the platform can claim ${what} for ${pretty} — recruiting signal, nothing to dispatch. 🌊`);
+        const told = await notify(
+          "ops that nobody on the platform can claim this work",
+          { phone: o.phone as string | null, email: o.email as string | null },
+          {
+            sms: `LakeLife: no crew on the platform can claim ${what} for ${pretty} — recruiting signal, nothing to dispatch. 🌊`,
+            subject: `No crew on the platform can claim ${what} for ${pretty}`,
+          },
+        );
+        if (!told.reached && told.note) skipped.push(told.note);
       }
     }
   }
@@ -1207,7 +1287,7 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
   const admin = createServiceClient();
   const jobs = mustRead("tomorrow's scheduled jobs", await admin
     .from("jobs")
-    .select("id, slot, services(name), properties(address, users(id, phone))")
+    .select("id, slot, services(name), properties(address, users(id, phone, email))")
     .eq("date", date)
     .eq("status", "scheduled"));
 
@@ -1216,14 +1296,29 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
   let sent = 0;
   for (const j of jobs ?? []) {
     const p = one(j.properties) as { address?: string; users?: unknown } | null;
-    const ownerUser = one(p?.users) as { id?: string; phone?: string } | null;
+    const ownerUser = one(p?.users) as { id?: string; phone?: string; email?: string } | null;
     const phone = ownerUser?.phone;
     const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
     if (!phone || seen.has(phone)) continue;
     seen.add(phone);
-    // The 'day' switch on the settings screen finally means something.
-    if (!(await allowsNotification(ownerUser?.id, "day", "sms"))) continue;
-    void sendSms(phone, `LakeLife reminder: ${svc} is scheduled tomorrow (${prettyDate(date)}) at ${p?.address ?? "your place"}. We'll text you when it's done, with photos. 🌊`);
+    // The 'day' switch on the settings screen finally means something. EACH
+    // CHANNEL IS ASKED SEPARATELY, the same way the completion notice asks:
+    // "Crew on the way / service-day reminder" is a TEXT-ONLY type on the
+    // settings screen, so today the email half is always denied and this stays
+    // a text — the day that type is offered on email too, this already sends it.
+    const [dayBySms, dayByEmail] = await Promise.all([
+      allowsNotification(ownerUser?.id, "day", "sms"),
+      allowsNotification(ownerUser?.id, "day", "email"),
+    ]);
+    if (!dayBySms && !dayByEmail) continue;
+    await notify(
+      "the owner that their crew comes tomorrow",
+      { phone: dayBySms ? phone : null, email: dayByEmail ? ownerUser?.email : null },
+      {
+        sms: `LakeLife reminder: ${svc} is scheduled tomorrow (${prettyDate(date)}) at ${p?.address ?? "your place"}. We'll text you when it's done, with photos. 🌊`,
+        subject: `${svc} is scheduled tomorrow at ${p?.address ?? "your place"}`,
+      },
+    );
     sent++;
   }
   return { ok: true, sent };
@@ -2019,7 +2114,7 @@ export async function sweepWaitlist(lakeId?: string, limit = 60): Promise<{ ok: 
       const prop = one(j.properties) as { owner_id?: string } | null;
       const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
       if (canText && prop?.owner_id) {
-        const { data: owner, error: ownerErr } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+        const { data: owner, error: ownerErr } = await admin.from("users").select("phone, email").eq("id", prop.owner_id).maybeSingle();
         // POST-WRITE: the crew is already assigned. Nothing to undo — but the
         // whole point of the waitlist is the instant good news, and it didn't
         // go. The night-before reminder is still the backstop.
@@ -2027,7 +2122,17 @@ export async function sweepWaitlist(lakeId?: string, limit = 60): Promise<{ ok: 
           console.error(`[read failed] the owner's phone number (job ${j.id}):`, ownerErr);
           skipped.push(`Job ${j.id}: a crew was locked in for ${prettyDate(j.date as string)} but we couldn't read the owner's phone number — the good-news text didn't go.`);
         }
-        if (owner?.phone) void sendSms(owner.phone as string, `LakeLife: good news — a crew is locked in for your ${svc} on ${prettyDate(j.date as string)}. You'll get a reminder before we arrive. 🌊`);
+        if (owner?.phone || owner?.email) {
+          const told = await notify(
+            `the owner that a crew is locked in for their ${svc} (job ${j.id})`,
+            { phone: owner?.phone as string | null, email: owner?.email as string | null },
+            {
+              sms: `LakeLife: good news — a crew is locked in for your ${svc} on ${prettyDate(j.date as string)}. You'll get a reminder before we arrive. 🌊`,
+              subject: `A crew is locked in for your ${svc} on ${prettyDate(j.date as string)}`,
+            },
+          );
+          if (!told.reached && told.note) skipped.push(told.note);
+        }
       }
     } catch (e) {
       /* keep sweeping */
@@ -2076,14 +2181,18 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
     // the job or burn its one lifetime warning, and neither may happen without
     // being able to tell the owner — so a job we cannot reach them about waits.
     const phoneRes = prop?.owner_id
-      ? await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle()
+      ? await admin.from("users").select("phone, email").eq("id", prop.owner_id).maybeSingle()
       : null;
     if (phoneRes?.error) {
       console.error(`[read failed] the owner's phone number (job ${j.id}):`, phoneRes.error);
       skipped.push(`Job ${j.id} (${svc} on ${j.date}): couldn't read the owner's phone number, so it was neither warned nor cancelled — it is still open and waiting.`);
       continue;
     }
-    const phone = phoneRes?.data?.phone as string | undefined;
+    const owner = {
+      phone: (phoneRes?.data?.phone as string | undefined) ?? null,
+      email: (phoneRes?.data?.email as string | undefined) ?? null,
+    };
+    const canTell = !!(owner.phone || owner.email);
 
     if (isExpired(j.date as string, today)) {
       // CUSTODY GUARD (S4 review): never expire a visit whose boat is IN
@@ -2134,11 +2243,16 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
           continue; // already escalated — stay quiet, stay open
         }
         escalated++;
-        if (phone) {
-          void sendSms(
-            phone,
-            `LakeLife: we still don't have a crew for ${svc} at ${where}, and we are NOT cancelling it — this is the kind of work that can't wait. We're on it and will text as soon as it's set. If it's urgent, reply here. 🌊`,
+        if (canTell) {
+          const told = await notify(
+            `the owner that we have NOT cancelled their ${svc} (job ${j.id})`,
+            owner,
+            {
+              sms: `LakeLife: we still don't have a crew for ${svc} at ${where}, and we are NOT cancelling it — this is the kind of work that can't wait. We're on it and will text as soon as it's set. If it's urgent, reply here. 🌊`,
+              subject: `We still don't have a crew for ${svc} at ${where} — and we are not cancelling it`,
+            },
           );
+          if (!told.reached && told.note) skipped.push(told.note);
         }
         continue;
       }
@@ -2158,8 +2272,24 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
         await admin.from("job_groups").update({ status: "cancelled", storing_vendor: null }).eq("id", gid0);
       }
       expired++;
-      if (phone) {
-        void sendSms(phone, `LakeLife: we couldn't line up a crew in time for ${svc} at ${where} — so we've cancelled it and you were never charged. Rebook any open day (${site}/book), or invite a crew you trust and they're always first on your jobs (${site}/book). We're recruiting on your lake. 🌊`);
+      // EVERY DOOR. This is the machine cancelling somebody's booked work in
+      // the night. On text alone — 0 of 81 delivered since July — they find
+      // out by nobody arriving.
+      if (canTell) {
+        const told = await notify(
+          `the owner that their ${svc} was cancelled for want of a crew (job ${j.id})`,
+          owner,
+          {
+            sms: `LakeLife: we couldn't line up a crew in time for ${svc} at ${where} — so we've cancelled it and you were never charged. Rebook any open day (${site}/book), or invite a crew you trust and they're always first on your jobs (${site}/book). We're recruiting on your lake. 🌊`,
+            subject: `Your ${svc} at ${where} was cancelled — you were never charged`,
+            body:
+              `We couldn't line up a crew in time for ${svc} at ${where}, so we've cancelled it. You were never charged.\n\n` +
+              `Rebook any open day:\n  ${site}/book\n\n` +
+              `Or invite a crew you trust — they're always first on your jobs:\n  ${site}/book\n\n` +
+              `We're recruiting on your lake.`,
+          },
+        );
+        if (!told.reached && told.note) skipped.push(told.note);
       }
     } else if (warningDue(j.date as string, today, waitlistWarningDays)) {
       // AUDIT BUG 10d: the warning used to be a bare date equality — a missed
@@ -2179,7 +2309,7 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
         continue; // never text without a durable record of having texted
       }
       warned++;
-      if (phone) {
+      if (canTell) {
         // If a price bump would unlock a crew RIGHT NOW (rung 3), say so in
         // the same text — the fix shouldn't hide on a page they may not visit.
         let boost = "";
@@ -2189,7 +2319,21 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
         } catch {
           /* offer is a bonus, never a blocker */
         }
-        void sendSms(phone, `LakeLife: still lining up a crew for ${svc} at ${where} on ${prettyDate(j.date as string)}. You can hold tight (no charge unless it's done), pick a different day (${site}/requests), or invite a crew you know (${site}/book) — they'd be first on all your jobs.${boost} 🌊`);
+        const told = await notify(
+          `the owner their options while we look for a crew (job ${j.id})`,
+          owner,
+          {
+            sms: `LakeLife: still lining up a crew for ${svc} at ${where} on ${prettyDate(j.date as string)}. You can hold tight (no charge unless it's done), pick a different day (${site}/requests), or invite a crew you know (${site}/book) — they'd be first on all your jobs.${boost} 🌊`,
+            subject: `Still lining up a crew for ${svc} at ${where} on ${prettyDate(j.date as string)}`,
+            body:
+              `We're still lining up a crew for ${svc} at ${where} on ${prettyDate(j.date as string)}.\n\n` +
+              `You can hold tight — there's no charge unless it's done.\n\n` +
+              `Pick a different day:\n  ${site}/requests\n\n` +
+              `Or invite a crew you know — they'd be first on all your jobs:\n  ${site}/book` +
+              `${boost ? `\n\n${boost.trim()}` : ""}`,
+          },
+        );
+        if (!told.reached && told.note) skipped.push(told.note);
       }
     }
   }
@@ -2236,20 +2380,33 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
     // it. Neither is a thing to do to somebody we then cannot text, and a failed
     // read looks exactly like "no phone on file".
     const phoneRes = prop?.owner_id
-      ? await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle()
+      ? await admin.from("users").select("phone, email").eq("id", prop.owner_id).maybeSingle()
       : null;
     if (phoneRes?.error) {
       console.error(`[read failed] the owner's phone number (job ${j.id}):`, phoneRes.error);
       continue;
     }
-    const phone = phoneRes?.data?.phone as string | undefined;
+    const owner = {
+      phone: (phoneRes?.data?.phone as string | undefined) ?? null,
+      email: (phoneRes?.data?.email as string | undefined) ?? null,
+    };
+    const canTell = !!(owner.phone || owner.email);
 
     if ((j.rush_fallback as string) === "cancel") {
       const { data: gone } = await admin
         .from("jobs").delete().eq("id", j.id as string).eq("status", "requested").is("vendor_id", null).select("id");
       if (!gone || gone.length === 0) continue; // claimed at the buzzer — leave it
       cancelled++;
-      if (phone) void sendSms(phone, `LakeLife: no crew could free up today for ${svcName} at ${where} — cancelled as you asked, nothing charged. Book any other day at your standard price. 🌊`);
+      if (canTell) {
+        await notify(
+          `the owner that their same-day ${svcName} was cancelled as they asked (job ${j.id})`,
+          owner,
+          {
+            sms: `LakeLife: no crew could free up today for ${svcName} at ${where} — cancelled as you asked, nothing charged. Book any other day at your standard price. 🌊`,
+            subject: `Your ${svcName} at ${where} was cancelled — nothing charged`,
+          },
+        );
+      }
       continue;
     }
 
@@ -2309,8 +2466,15 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
     try {
       assignedNow = (await autoAssignJob(j.id as string)).assigned;
     } catch { /* waitlist sweeps take it from here */ }
-    if (phone) {
-      void sendSms(phone, `LakeLife: no crew could free up today for ${svcName} at ${where}, so it's moved to tomorrow at the standard price ($${standard.toFixed(2)})${assignedNow ? " — and a crew is already locked in" : " — we're lining up a crew now"}. 🌊`);
+    if (canTell) {
+      await notify(
+        `the owner that their same-day ${svcName} moved to tomorrow (job ${j.id})`,
+        owner,
+        {
+          sms: `LakeLife: no crew could free up today for ${svcName} at ${where}, so it's moved to tomorrow at the standard price ($${standard.toFixed(2)})${assignedNow ? " — and a crew is already locked in" : " — we're lining up a crew now"}. 🌊`,
+          subject: `Your ${svcName} at ${where} moved to tomorrow at the standard price`,
+        },
+      );
     }
   }
   return { ok: true, rolled, cancelled };
@@ -2370,15 +2534,25 @@ export async function demoteLakeStrikes(): Promise<{ ok: boolean; demoted: numbe
       demoted++;
 
       if (v.user_id) {
-        const { data: cu, error: cuErr } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
+        const { data: cu, error: cuErr } = await admin.from("users").select("phone, email").eq("id", v.user_id as string).maybeSingle();
         // POST-WRITE: the lake is already off their service area and the
         // cooldown has started. Nothing to undo, and nothing to tell them with.
         if (cuErr) {
           console.error(`[read failed] the crew's phone number (${v.id}):`, cuErr);
           skipped.push(`Crew ${v.id}: paused on ${lakeName.get(lk) ?? "a lake"}, but we couldn't read their phone number — they were never told, and their work there just stops.`);
         }
-        if (cu?.phone) {
-          void sendSms(cu.phone as string, `LakeLife: after repeated missed jobs on ${lakeName.get(lk) ?? "a lake"}, we've paused routing you there for a while. Keep completing jobs on your other lakes and it reopens automatically. Advance-notice blocks never count against you. 🌊`);
+        // EVERY DOOR: a crew that is never told just watches the work on that
+        // lake stop, with no idea why or how it comes back.
+        if (cu?.phone || cu?.email) {
+          const told = await notify(
+            `the crew that they are paused on ${lakeName.get(lk) ?? "a lake"}`,
+            { phone: cu?.phone as string | null, email: cu?.email as string | null },
+            {
+              sms: `LakeLife: after repeated missed jobs on ${lakeName.get(lk) ?? "a lake"}, we've paused routing you there for a while. Keep completing jobs on your other lakes and it reopens automatically. Advance-notice blocks never count against you. 🌊`,
+              subject: `You're paused on ${lakeName.get(lk) ?? "a lake"} for a while`,
+            },
+          );
+          if (!told.reached && told.note) skipped.push(told.note);
         }
       }
       break; // one demotion per crew per night — no pile-ons
@@ -2527,7 +2701,7 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
     if (!ev) continue;
     proposed++;
 
-    const { data: owner, error: ownerErr } = await admin.from("users").select("phone").eq("id", prop.owner_id).maybeSingle();
+    const { data: owner, error: ownerErr } = await admin.from("users").select("phone, email").eq("id", prop.owner_id).maybeSingle();
     // POST-WRITE. The proposal row now exists with a confirm token nobody was
     // sent — and it holds the enrollment's one open slot until it expires in
     // 14 days, so this quietly costs them a whole cycle.
@@ -2535,12 +2709,23 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
       console.error(`[read failed] the owner's phone number (enrollment ${e.id}):`, ownerErr);
       skipped.push(`Enrollment ${e.id}: a visit was penciled for ${prettyDate(date)} but we couldn't read the owner's phone number — the confirm link was never sent.`);
     }
-    if (owner?.phone) {
+    if (owner?.phone || owner?.email) {
       const where = prop.nickname || prop.address || "your place";
-      void sendSms(
-        owner.phone as string,
-        `LakeLife Autopilot 🌊: time for ${svc.name} at ${where} — we've penciled ${prettyDate(date)} at your locked price. Book it: ${site}/a/${ev.confirm_token}/confirm  ·  Skip: ${site}/a/${ev.confirm_token}/skip`,
+      // EVERY DOOR: the confirm token holds the enrollment's one open slot for
+      // 14 days. A link that reaches nobody costs them the whole cycle.
+      const told = await notify(
+        `the owner that we penciled ${svc.name} for ${prettyDate(date)} (enrollment ${e.id})`,
+        { phone: owner?.phone as string | null, email: owner?.email as string | null },
+        {
+          sms: `LakeLife Autopilot 🌊: time for ${svc.name} at ${where} — we've penciled ${prettyDate(date)} at your locked price. Book it: ${site}/a/${ev.confirm_token}/confirm  ·  Skip: ${site}/a/${ev.confirm_token}/skip`,
+          subject: `We've penciled ${svc.name} at ${where} for ${prettyDate(date)}`,
+          body:
+            `It's time for ${svc.name} at ${where} — we've penciled ${prettyDate(date)} at your locked price.\n\n` +
+            `Book it:\n  ${site}/a/${ev.confirm_token}/confirm\n\n` +
+            `Skip it:\n  ${site}/a/${ev.confirm_token}/skip`,
+        },
       );
+      if (!told.reached && told.note) skipped.push(told.note);
       texted++;
     }
   }
@@ -2788,13 +2973,21 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
       stickyOk = sv?.status === "active" && !!sv?.coi_expiry && String(sv.coi_expiry) >= today;
       if (!stickyOk) {
         try {
-          const { data: ops, error: opsErr } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null);
+          const { data: ops, error: opsErr } = await admin.from("users").select("phone, email").eq("role", "ops").not("phone", "is", null);
           if (opsErr) {
             console.error("[read failed] the ops phone numbers for a sticky-custody alert:", opsErr);
             skipped.push(`Envelope ${g.id}: a stored boat's splash can't auto-assign (the storing crew is benched) and we couldn't read the ops phone numbers to say so — nobody was texted.`);
           }
           for (const o of ops ?? []) {
-            void sendSms(o.phone as string, `LakeLife OPS: spring splash for a stored boat can't auto-assign — the storing crew is ${sv?.status !== "active" ? "not active" : "COI-lapsed"}. Group ${g.id}. Fix their docs and the machine takes it from there.`);
+            const told = await notify(
+              `ops that a stored boat's spring splash can't auto-assign (group ${g.id})`,
+              { phone: o.phone as string | null, email: o.email as string | null },
+              {
+                sms: `LakeLife OPS: spring splash for a stored boat can't auto-assign — the storing crew is ${sv?.status !== "active" ? "not active" : "COI-lapsed"}. Group ${g.id}. Fix their docs and the machine takes it from there.`,
+                subject: `A stored boat's spring splash can't auto-assign — group ${g.id}`,
+              },
+            );
+            if (!told.reached && told.note) skipped.push(told.note);
           }
         } catch { /* best effort */ }
       }
@@ -2834,7 +3027,7 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
     // The penciled-date text — reschedule rides the existing rails.
     try {
       if (prop?.owner_id) {
-        const { data: u, error: uErr } = await admin.from("users").select("phone").eq("id", prop.owner_id as string).maybeSingle();
+        const { data: u, error: uErr } = await admin.from("users").select("phone, email").eq("id", prop.owner_id as string).maybeSingle();
         // POST-WRITE: the visit is already on their calendar. Refusing here
         // would undo nothing and lose the text as well, so it is logged and
         // named — somebody has a penciled date they were never told about.
@@ -2843,8 +3036,16 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
           skipped.push(`Envelope ${g.id}: the spring visit is penciled in, but we couldn't read the owner's phone number — nobody told them the date.`);
         }
         const prettyDate = new Date(springDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
-        if (u?.phone) {
-          void sendSms(u.phone as string, `LakeLife: ice-out is here on ${lake?.name ?? "your lake"} 🌊 We've penciled your boat's spring visit for ${prettyDate} — $${price.toLocaleString()} as quoted at booking. Need a different day? Just cancel and rebook from your requests page, or text us.`);
+        if (u?.phone || u?.email) {
+          const told = await notify(
+            `the owner that their boat's spring visit is penciled in (envelope ${g.id})`,
+            { phone: u?.phone as string | null, email: u?.email as string | null },
+            {
+              sms: `LakeLife: ice-out is here on ${lake?.name ?? "your lake"} 🌊 We've penciled your boat's spring visit for ${prettyDate} — $${price.toLocaleString()} as quoted at booking. Need a different day? Just cancel and rebook from your requests page, or text us.`,
+              subject: `Ice-out on ${lake?.name ?? "your lake"} — your boat's spring visit is penciled for ${prettyDate}`,
+            },
+          );
+          if (!told.reached && told.note) skipped.push(told.note);
         }
       }
     } catch { /* best effort */ }
@@ -2911,13 +3112,25 @@ export async function overstayNotices(): Promise<{ ok: boolean; sent: number; sk
     if (nudgeCooling((last?.sent_at as string) ?? null, 7, now)) continue;
 
     const charge = perdiemCharge(days, settings.storagePerdiemDaily);
-    const { data: u, error: uErr } = await admin.from("users").select("phone").eq("id", prop.owner_id as string).maybeSingle();
+    const { data: u, error: uErr } = await admin.from("users").select("phone, email").eq("id", prop.owner_id as string).maybeSingle();
     if (uErr) {
       console.error(`[read failed] the owner's phone number (${st.group_id}):`, uErr);
       skipped.push(`Stay ${st.group_id}: the meter is at $${charge.toFixed(2)} and we couldn't read the owner's phone number — they have not been told, and nothing was logged as sent.`);
     }
-    if (u?.phone) {
-      void sendSms(u.phone as string, `LakeLife: your boat's storage season ended ${end} — the meter's at $${charge.toFixed(2).replace(/\.00$/, "")} ($${settings.storagePerdiemDaily.toFixed(2).replace(/\.00$/, "")}/day, billed at splash). Pick your splash day from your requests page and we'll get it back on the water. 🌊`);
+    // EVERY DOOR: this is the notice that stops a per-diem from arriving as a
+    // surprise bill at splash. The weekly cooldown row is still written on the
+    // attempt, so the cadence is exactly what it was — but a week where it
+    // reached nobody now says so in the digest instead of counting as told.
+    if (u?.phone || u?.email) {
+      const told = await notify(
+        `the owner that their boat's storage meter is running (stay ${st.group_id})`,
+        { phone: u?.phone as string | null, email: u?.email as string | null },
+        {
+          sms: `LakeLife: your boat's storage season ended ${end} — the meter's at $${charge.toFixed(2).replace(/\.00$/, "")} ($${settings.storagePerdiemDaily.toFixed(2).replace(/\.00$/, "")}/day, billed at splash). Pick your splash day from your requests page and we'll get it back on the water. 🌊`,
+          subject: `Your boat's storage meter is at $${charge.toFixed(2).replace(/\.00$/, "")}`,
+        },
+      );
+      if (!told.reached && told.note) skipped.push(told.note);
       await admin.from("nudge_log").insert({ user_id: prop.owner_id, kind: `overstay_meter:${st.group_id}` });
       sent++;
     }
@@ -3019,7 +3232,7 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
     batches++;
     total += gross;
     try {
-      const { data: u, error: uErr } = await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle();
+      const { data: u, error: uErr } = await admin.from("users").select("phone, email").eq("id", v.user_id as string).maybeSingle();
       // POST-WRITE: the batch is queued and the money is on its way. This read
       // only decides whether the crew is TOLD, so it can't refuse anything —
       // but "we queued $X and nobody told them" should be said out loud.
@@ -3027,7 +3240,17 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
         console.error(`[read failed] the crew's phone number (${vendorId}):`, uErr);
         skipped.push(`crew ${vendorId}: $${gross.toFixed(2)} was queued as normal, but their phone number couldn't be read so NO payout text was sent`);
       }
-      if (u?.phone) void sendSms(u.phone as string, `LakeLife: month-end payout queued — $${gross.toFixed(2)} to your account ····${acct.account_last4}, no fee. 🌊`);
+      if (u?.phone || u?.email) {
+        const told = await notify(
+          "the crew that their month-end payout is queued",
+          { phone: u?.phone as string | null, email: u?.email as string | null },
+          {
+            sms: `LakeLife: month-end payout queued — $${gross.toFixed(2)} to your account ····${acct.account_last4}, no fee. 🌊`,
+            subject: `Your month-end payout is queued — $${gross.toFixed(2)}`,
+          },
+        );
+        if (!told.reached && told.note) skipped.push(told.note);
+      }
     } catch { /* best effort */ }
   }
   return { ok: true, ran: true, batches, total: Math.round(total * 100) / 100, skipped };
@@ -3380,7 +3603,7 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number; sk
   // so a 50-row page could fill up with alerted-but-unresolved rows during a
   // surge and starve job #51. The per-run SMS cap still bounds the noise.
   // Empty reads as "there is no ops team", and the whole valve returns quietly.
-  const ops = mustRead("the ops team's phone numbers", await admin.from("users").select("id, phone").eq("role", "ops").not("phone", "is", null));
+  const ops = mustRead("the ops team's phone numbers", await admin.from("users").select("id, phone, email").eq("role", "ops").not("phone", "is", null));
   if (!ops || ops.length === 0) return { ok: true, alerted: 0, skipped };
   for (const j of stuck ?? []) {
     if (alerted >= MAX_ALERTS_PER_RUN) break;
@@ -3418,8 +3641,15 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number; sk
     // gets marked "sent" and never reaches anybody.
     let queuedAny = false;
     for (const o of ops) {
-      const res = await sendSms(o.phone as string, `LakeLife OPS: ${svcName} on ${lk?.name ?? "a lake"} has sat ${overSla ? `${settings.gapSlaHours}h+` : "into the pull-deadline window"} unclaimed — no crew has taken it at card or fill-in rates. Exits: recruit, logged override, or rebook the customer. Job ${j.id}.`);
-      if (res.queued) queuedAny = true;
+      const told = await notify(
+        `ops that a job has sat unclaimed (job ${j.id})`,
+        { phone: o.phone as string | null, email: o.email as string | null },
+        {
+          sms: `LakeLife OPS: ${svcName} on ${lk?.name ?? "a lake"} has sat ${overSla ? `${settings.gapSlaHours}h+` : "into the pull-deadline window"} unclaimed — no crew has taken it at card or fill-in rates. Exits: recruit, logged override, or rebook the customer. Job ${j.id}.`,
+          subject: `${svcName} on ${lk?.name ?? "a lake"} has sat unclaimed — job ${j.id}`,
+        },
+      );
+      if (told.reached) queuedAny = true;
     }
     if (queuedAny) {
       const logged = await admin.from("nudge_log").insert({ user_id: ops[0].id, kind: `gap_sla:${j.id}` });
@@ -3770,7 +4000,7 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
     // permission, the operational-SMS consent is. Both, or nothing.
     const { data: renter, error: renterErr } = await admin
       .from("park_renters")
-      .select("display_name, mobile_e164, mobile_verified_at, sms_consent_operational_at, contact_pref")
+      .select("display_name, email, mobile_e164, mobile_verified_at, sms_consent_operational_at, contact_pref")
       .eq("id", s.renter_id as string)
       .maybeSingle();
     // Fails closed (no consent read = no text), which is the right direction for
@@ -3823,12 +4053,27 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
     if (!claimed || claimed.length === 0) continue;
 
     reminded++;
-    void sendSms(
-      phone,
-      `LakeLife: your site ${lot?.lot_number ?? ""} is booked through ${range.end}. ` +
-      `Want to keep it through ${next.end} for $${price.toLocaleString()}? ` +
-      `One tap: ${site}/x/${token}`,
+    // THE SMS GATE ABOVE IS UNTOUCHED — nobody new is messaged. The email is
+    // the second door to the SAME renter, and the park module already treats
+    // it as the one that is always open (invite-channels.ts). It matters here
+    // because the token minted just above is the only thing that can roll her
+    // tenancy forward, and on text alone it has reached nobody since July.
+    const told = await notify(
+      `the renter that her stay is ending, with the one tap that extends it (stay ${s.id})`,
+      { phone, email: renter?.email as string | null },
+      {
+        sms:
+          `LakeLife: your site ${lot?.lot_number ?? ""} is booked through ${range.end}. ` +
+          `Want to keep it through ${next.end} for $${price.toLocaleString()}? ` +
+          `One tap: ${site}/x/${token}`,
+        subject: `Your site is booked through ${range.end} — keep it through ${next.end}?`,
+        body:
+          `Your site ${lot?.lot_number ?? ""} is booked through ${range.end}.\n\n` +
+          `Want to keep it through ${next.end} for $${price.toLocaleString()}?\n\n` +
+          `One tap:\n  ${site}/x/${token}`,
+      },
     );
+    if (!told.reached && told.note) skipped.push(told.note);
   }
 
   return { ok: true, reminded, skipped };

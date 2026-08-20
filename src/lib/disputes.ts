@@ -6,7 +6,7 @@ import { getPlatformSettings } from "@/lib/settings";
 import { decideDisputeOutcome, respondByFrom, DISPUTE_ACCEPTABLE_STATUSES, DISPUTE_ESCALATABLE_STATUSES } from "@/lib/dispute-policy";
 import { executeRefund } from "@/lib/refund-core";
 import { refundableRemaining } from "@/lib/refunds";
-import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 
 /**
@@ -199,7 +199,7 @@ export async function crewChooseFix(crewToken: string, dateISO: string): Promise
 
   const { data: job, error: jobErr } = await admin
     .from("jobs")
-    .select("id, property_id, service_id, vendor_id, properties(address, nickname, users(phone)), services(name)")
+    .select("id, property_id, service_id, vendor_id, properties(address, nickname, users(phone, email)), services(name)")
     .eq("id", d.job_id).maybeSingle();
   if (jobErr) return { ok: false, error: readFailedMessage("this job", jobErr) };
   if (!job) return { ok: false, error: "Job not found." };
@@ -229,11 +229,16 @@ export async function crewChooseFix(crewToken: string, dateISO: string): Promise
 
   const svcName = (one(job.services) as { name?: string } | null)?.name ?? "the work";
   const prop = one(job.properties) as { nickname?: string; address?: string; users?: unknown } | null;
-  const ownerPhone = (one(prop?.users) as { phone?: string } | null)?.phone;
+  const owner = one(prop?.users) as { phone?: string; email?: string } | null;
   const pretty = new Date(dateISO + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-  if (ownerPhone) {
-    void sendSms(ownerPhone, `LakeLife: your crew is coming back ${pretty} to make the ${svcName} right — no charge. You'll get photos when it's done. 🌊`);
-  }
+  void notify(
+    "the owner that their crew is coming back to make it right",
+    { phone: owner?.phone, email: owner?.email },
+    {
+      sms: `LakeLife: your crew is coming back ${pretty} to make the ${svcName} right — no charge. You'll get photos when it's done. 🌊`,
+      subject: `Your crew is coming back ${pretty} to make the ${svcName} right`,
+    },
+  );
   return { ok: true };
 }
 
@@ -253,13 +258,23 @@ export async function crewChooseVerify(crewToken: string): Promise<{ ok: boolean
   // sweep closes a quiet 'verifying' in the crew's favour, and it must be
   // findable if the customer was never actually asked.
   const { data: job, error: jobErr } = await admin
-    .from("jobs").select("properties(users(phone)), services(name)").eq("id", d.job_id).maybeSingle();
+    .from("jobs").select("properties(users(phone, email)), services(name)").eq("id", d.job_id).maybeSingle();
   if (jobErr) console.error(`[read failed] the customer's number for dispute ${d.id}:`, jobErr);
-  const ownerPhone = (one((one(job?.properties) as { users?: unknown } | null)?.users) as { phone?: string } | null)?.phone;
+  const owner = one((one(job?.properties) as { users?: unknown } | null)?.users) as { phone?: string; email?: string } | null;
   const svcName = (one(job?.services) as { name?: string } | null)?.name ?? "the work";
-  if (ownerPhone) {
-    void sendSms(ownerPhone, `LakeLife: the crew stands by the ${svcName} — their completion photos are in your portal. Does that settle it? Yes: ${site()}/d/${d.customer_token}/resolved · No: ${site()}/d/${d.customer_token}/still 🌊`);
-  }
+  void notify(
+    "the owner that the crew stands by the work and the decision is theirs",
+    { phone: owner?.phone, email: owner?.email },
+    {
+      sms: `LakeLife: the crew stands by the ${svcName} — their completion photos are in your portal. Does that settle it? Yes: ${site()}/d/${d.customer_token}/resolved · No: ${site()}/d/${d.customer_token}/still 🌊`,
+      subject: `The crew stands by the ${svcName} — does that settle it?`,
+      body:
+        `The crew stands by the ${svcName}. Their completion photos are in your portal.\n\n` +
+        `Does that settle it?\n\n` +
+        `  Yes:\n  ${site()}/d/${d.customer_token}/resolved\n\n` +
+        `  No:\n  ${site()}/d/${d.customer_token}/still`,
+    },
+  );
   return { ok: true };
 }
 
@@ -280,12 +295,12 @@ export async function crewChooseTalk(crewToken: string): Promise<{ ok: boolean; 
   // failure has to be on the record.
   const { data: job, error: jobErr } = await admin
     .from("jobs")
-    .select("property_id, vendor_id, vendors(user_id), properties(users(id, phone)), services(name)")
+    .select("property_id, vendor_id, vendors(user_id), properties(users(id, phone, email)), services(name)")
     .eq("id", d.job_id).maybeSingle();
   if (jobErr) console.error(`[read failed] the people on dispute ${d.id}:`, jobErr);
   const svcName = (one(job?.services) as { name?: string } | null)?.name ?? "the work";
   const crewUserId = (one(job?.vendors) as { user_id?: string } | null)?.user_id;
-  const owner = one((one(job?.properties) as { users?: unknown } | null)?.users) as { id?: string; phone?: string } | null;
+  const owner = one((one(job?.properties) as { users?: unknown } | null)?.users) as { id?: string; phone?: string; email?: string } | null;
   if (job?.property_id && crewUserId) {
     await admin.from("messages").insert({
       property_id: job.property_id,
@@ -298,12 +313,21 @@ export async function crewChooseTalk(crewToken: string): Promise<{ ok: boolean; 
       body: `About the ${svcName} — we saw your note and want to get this right. What would you like us to do? We can come back, or talk it through here.`,
     });
   }
-  if (owner?.phone) {
-    // The customer's resolve/still links ride along — a talk dispute can
-    // quiet-close in the crew's favor, which is only fair if the customer
-    // held the "still not right" lever the whole window (review finding).
-    void sendSms(owner.phone, `LakeLife: your crew replied about the ${svcName} — see Messages in your portal to sort it out together. All set: ${site()}/d/${d.customer_token}/resolved · Still not right: ${site()}/d/${d.customer_token}/still 🌊`);
-  }
+  // The customer's resolve/still links ride along — a talk dispute can
+  // quiet-close in the crew's favor, which is only fair if the customer
+  // held the "still not right" lever the whole window (review finding).
+  void notify(
+    "the owner that their crew replied and the thread is open",
+    { phone: owner?.phone, email: owner?.email },
+    {
+      sms: `LakeLife: your crew replied about the ${svcName} — see Messages in your portal to sort it out together. All set: ${site()}/d/${d.customer_token}/resolved · Still not right: ${site()}/d/${d.customer_token}/still 🌊`,
+      subject: `Your crew replied about the ${svcName}`,
+      body:
+        `Your crew replied about the ${svcName} — see Messages in your portal to sort it out together.\n\n` +
+        `  All set:\n  ${site()}/d/${d.customer_token}/resolved\n\n` +
+        `  Still not right:\n  ${site()}/d/${d.customer_token}/still`,
+    },
+  );
   return { ok: true };
 }
 
@@ -837,17 +861,45 @@ export async function sweepDisputeDeadlines(): Promise<{ ok: boolean; fired: num
       const svcName = (one(job?.services) as { name?: string } | null)?.name ?? "a recent job";
       const { data: v, error: vErr } = await admin.from("vendors").select("user_id").eq("id", c.vendor_id as string).maybeSingle();
       const { data: cu, error: cuErr } = v?.user_id
-        ? await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle()
+        ? await admin.from("users").select("phone, email").eq("id", v.user_id as string).maybeSingle()
         : { data: null, error: null };
       // The dispute is open and the pay is held either way — but a crew that is
       // never told why has no way to use its cure window.
       if (vErr || cuErr) console.error(`[read failed] the crew's number for job ${c.job_id}:`, vErr ?? cuErr);
-      if (cu?.phone) {
-        void sendSms(
-          cu.phone as string,
-          `LakeLife: the customer flagged the ${svcName}. Your pay for it is ON HOLD until this is settled. Make it right (free return visit): ${r.crewLinks.fix} · It was done right: ${r.crewLinks.verify} · Talk it through: ${r.crewLinks.talk}`,
-        );
-      }
+      // EVERY DOOR, because this one holds their money and starts a clock.
+      // It was a text alone, on a channel that has delivered 0 of 81 messages
+      // since July — so a crew's pay was being held, a cure window was
+      // running, and the only notice of either went nowhere. The email now
+      // carries it, and `notify` says so when neither door takes it.
+      const told = await notify(
+        "the crew that their pay is held and their cure window has started",
+        { phone: cu?.phone as string | null, email: cu?.email as string | null },
+        {
+          sms: `LakeLife: the customer flagged the ${svcName}. Your pay for it is ON HOLD until this is settled. Make it right (free return visit): ${r.crewLinks.fix} · It was done right: ${r.crewLinks.verify} · Talk it through: ${r.crewLinks.talk}`,
+          subject: `Your pay for the ${svcName} is on hold — the customer flagged it`,
+          // WORD FOR WORD THE SAME NOTICE AS job-verdict.ts, on purpose. This
+          // is the sweep's copy of a message that file also sends; two versions
+          // of one notice drifting apart is what job-verdict's own module
+          // header exists to prevent.
+          //
+          // AND IT CLAIMS NOTHING THE CODE CANNOT BACK. The first draft of this
+          // body said "answering is what releases it" and "if nobody answers,
+          // this decides itself against you". Both were invented. Answering
+          // does not release the hold — releaseHeldPayout runs on a RESOLUTION,
+          // not on a reply — and silence does not decide against them either:
+          // decideDisputeOutcome returns `escalate`, which sends it to a human.
+          // Telling a crew their money turns on something it does not turn on
+          // is the exact failure this whole change set is about, written into
+          // the fix for it.
+          body:
+            `The customer flagged the ${svcName}, so your pay for that job is ON HOLD until it's settled.\n\n` +
+            `You have three ways to answer:\n\n` +
+            `  Make it right — book a free return visit:\n  ${r.crewLinks.fix}\n\n` +
+            `  It was done right — send them your photos:\n  ${r.crewLinks.verify}\n\n` +
+            `  Talk it through:\n  ${r.crewLinks.talk}`,
+        },
+      );
+      if (!told.reached && told.note) couldNotRead.push(told.note);
       reconciled++;
     }
   }

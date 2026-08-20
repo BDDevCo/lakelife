@@ -1,5 +1,5 @@
 import "server-only";
-import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 import { screenMessage, type Population, type FenceVerdict } from "@/lib/comms-fence";
 
 /**
@@ -52,7 +52,7 @@ type Admin = {
           // was missing here — which is why the read below could only ever be
           // written as a bare destructure. A structural type that omits the
           // error makes the bug unwritable-around.
-          limit: (n: number) => Promise<{ data: { phone?: string | null }[] | null; error?: unknown | null }>;
+          limit: (n: number) => Promise<{ data: { phone?: string | null; email?: string | null }[] | null; error?: unknown | null }>;
         };
       };
     };
@@ -97,7 +97,7 @@ export async function triageInboundMessage(
       // the message), so the error has to be named here or it is named nowhere.
       const opsRes = await db
         .from("users")
-        .select("phone")
+        .select("phone, email")
         .eq("role", "ops")
         .not("phone", "is", null)
         .limit(PAGE_FANOUT);
@@ -106,11 +106,11 @@ export async function triageInboundMessage(
       }
       const ops = opsRes.data;
 
-      const phones = (ops ?? [])
-        .map((o) => o.phone)
-        .filter((p): p is string => typeof p === "string" && p.length > 0);
+      const oncall = (ops ?? [])
+        .filter((o): o is { phone: string; email?: string | null } =>
+          typeof o.phone === "string" && o.phone.length > 0);
 
-      if (phones.length > 0) {
+      if (oncall.length > 0) {
         // The page carries the customer's OWN WORDS, trimmed. A page that says
         // "a message needs attention" makes someone open an app to find out
         // whether to get in the truck; the words are what let them decide from
@@ -120,7 +120,11 @@ export async function triageInboundMessage(
         const text =
           `LakeLife URGENT${where}: "${excerpt}"\n` +
           `${verdict.opsLine ?? "Needs a person now."} Call them.`;
-        await Promise.all(phones.map((p) => sendSms(p, text)));
+        await Promise.all(oncall.map((p) => notify(
+          "an on-call person that a customer message needs someone now",
+          { phone: p.phone, email: p.email },
+          { sms: text, subject: `Urgent: a message needs a person now${where}` },
+        )));
         pagedAt = new Date().toISOString();
       }
     } catch {

@@ -8,6 +8,7 @@ import {
   bookAmenityForStay, cancelAmenityBooking, collectAmenityMoney, staysOverlapping,
   type AmenityRow,
 } from "@/app/park/amenity-actions";
+import { reversePayment } from "@/app/park/ledger-actions";
 import { priceLine, daysIn } from "@/lib/amenities";
 
 const money = (n: number) =>
@@ -106,7 +107,19 @@ function AmenityCard({
   const [unitLabel, setUnitLabel] = useState("");
   const [booking, setBooking] = useState<string | null>(null);
 
-  const upcoming = a.held.filter((h) => h.to > today);
+  // WHAT IS COMING, PLUS WHAT IS STILL OWED FROM WHAT HAS GONE.
+  //
+  // This was `h.to > today` alone, so the morning after a boat day the booking
+  // left the screen — and any money never collected on it left with it. A day
+  // on the water, quoted and unpaid, and the only surface that ever mentioned
+  // it was gone by breakfast. Uncollected money does not stop existing because
+  // the day is over; it is the one thing here that must outlive its date.
+  const upcoming = a.held.filter(
+    (h) => h.to > today || (h.quotedAmount ?? 0) - h.collected > 0.005,
+  );
+  const owedFromPast = upcoming.filter(
+    (h) => h.to <= today && (h.quotedAmount ?? 0) - h.collected > 0.005,
+  );
 
   return (
     <section className="ll-card ll-card-pad" style={{ marginTop: 16, opacity: a.active ? 1 : 0.72 }}>
@@ -208,9 +221,16 @@ function AmenityCard({
 
       {/* WHO HAS IT AND WHAT IS OWED. */}
       <div style={{ marginTop: 12 }}>
+        {owedFromPast.length > 0 && (
+          <p style={{ fontSize: 12.5, margin: "0 0 6px", color: "var(--ink-warn)" }}>
+            {owedFromPast.length === 1 ? "One day has" : `${owedFromPast.length} days have`}{" "}
+            been and gone with money still owed on{" "}
+            {owedFromPast.length === 1 ? "it" : "them"}.
+          </p>
+        )}
         {upcoming.length === 0 ? (
           <p className="mut" style={{ fontSize: 12.5, margin: 0 }}>
-            Nothing booked from today on.
+            Nothing booked from today on, and nothing owed from before.
           </p>
         ) : (
           upcoming.map((h) => {
@@ -262,6 +282,49 @@ function AmenityCard({
                 >
                   Cancel
                 </button>
+
+                {/* TAKE IT BACK. An amenity payment carries no charge_id, so it
+                    appears on neither the statement (which lists payments by
+                    charge) nor Held money (which lists kind='rent'). $150 typed
+                    in error against the wrong day was permanent on every
+                    screen. reversePayment already scopes by park rather than
+                    through the charge, so it reaches these — there was just
+                    nowhere to press it. Here is that place, next to the money
+                    it is about. */}
+                {h.payments.length > 0 && (
+                  <div style={{ flexBasis: "100%", paddingLeft: 2 }}>
+                    {h.payments.map((p) => (
+                      <div key={p.id} style={{
+                        display: "flex", gap: 8, alignItems: "baseline",
+                        fontSize: 12.5, paddingTop: 4,
+                      }}>
+                        <span className="mut">
+                          {money(p.amount)} {p.method}{p.on ? ` · ${pretty(p.on)}` : ""}
+                        </span>
+                        <button
+                          className="ll-btn ghost sm" disabled={busy}
+                          style={{ marginLeft: "auto" }}
+                          onClick={() =>
+                            start(async () => {
+                              // The reason is required by reversePayment and
+                              // the record keeps it — "a bounced check, a
+                              // typo". Asking is the point.
+                              const why = window.prompt(
+                                "What happened? A typo, a bounced cheque — the record keeps the reason.",
+                              );
+                              if (why == null || !why.trim()) return;
+                              const res = await reversePayment(parkId, p.id, why);
+                              toast(res.ok ? (res.signal ?? "Taken back.") : (res.error ?? "Couldn't take that back."));
+                              if (res.ok) router.refresh();
+                            })
+                          }
+                        >
+                          Take it back
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })

@@ -2,7 +2,7 @@ import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { openDisputeForJob, resolveFromCorrection } from "@/lib/disputes";
-import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 
 /**
  * THE post-job verdict recorder (extracted 2026-07-26 for the job-detail
@@ -114,16 +114,27 @@ export async function recordJobVerdict(
       if (vRes.error) console.error("[read failed] the crew to notify:", vRes.error);
       const v = vRes.data;
       const cuRes = v?.user_id
-        ? await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle()
-        : { data: null as { phone?: string } | null, error: null };
+        ? await admin.from("users").select("phone, email").eq("id", v.user_id as string).maybeSingle()
+        : { data: null as { phone?: string; email?: string } | null, error: null };
       if (cuRes.error) console.error("[read failed] the crew's phone number:", cuRes.error);
       const cu = cuRes.data;
-      if (cu?.phone) {
-        void sendSms(
-          cu.phone as string,
-          `LakeLife: the customer flagged the ${svc} at ${where}${cleanNote ? ` — "${cleanNote.slice(0, 120)}"` : ""}. Your pay for it is ON HOLD until this is settled. Make it right (free return visit): ${r.crewLinks.fix} · It was done right (send them your photos): ${r.crewLinks.verify} · Talk it through: ${r.crewLinks.talk}`,
-        );
-      }
+      // EVERY DOOR, because this one holds their money and starts a clock —
+      // the same reason the sweep's copy of this notice goes both ways.
+      void notify(
+        "the crew that their pay is held and their cure window has started",
+        { phone: cu?.phone as string | null, email: cu?.email as string | null },
+        {
+          sms: `LakeLife: the customer flagged the ${svc} at ${where}${cleanNote ? ` — "${cleanNote.slice(0, 120)}"` : ""}. Your pay for it is ON HOLD until this is settled. Make it right (free return visit): ${r.crewLinks.fix} · It was done right (send them your photos): ${r.crewLinks.verify} · Talk it through: ${r.crewLinks.talk}`,
+          subject: `Your pay for the ${svc} at ${where} is on hold — the customer flagged it`,
+          body:
+            `The customer flagged the ${svc} at ${where}${cleanNote ? `:\n\n  "${cleanNote.slice(0, 120)}"` : "."}\n\n` +
+            `Your pay for that job is ON HOLD until this is settled.\n\n` +
+            `You have three ways to answer:\n\n` +
+            `  Make it right — book a free return visit:\n  ${r.crewLinks.fix}\n\n` +
+            `  It was done right — send them your photos:\n  ${r.crewLinks.verify}\n\n` +
+            `  Talk it through:\n  ${r.crewLinks.talk}`,
+        },
+      );
     }
   }
 

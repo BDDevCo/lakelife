@@ -362,6 +362,38 @@ export async function cancelDayByToken(
   const stay = stayRes.data;
   if (!stay) return { ok: false, error: "This link doesn't match a stay." };
 
+  // A DAY THAT HAS STARTED IS NOT HERS TO GIVE BACK.
+  //
+  // This had no date condition at all — only `status = 'booked'`. So she could
+  // take the boat out at nine, bring it back at six, and tap "give it back" on
+  // the way to the car. The owner's screen reads `.neq("status","cancelled")`,
+  // so the booking AND the money quoted against it left his view together. A
+  // day on the water, billed to nobody, with nothing anywhere saying it
+  // happened.
+  //
+  // Giving back tomorrow is still one tap — that is the whole point of the
+  // feature, and it puts the day back on the board for somebody else. Today
+  // and anything past it is the office's call, because only a person can know
+  // whether she actually went out.
+  const bookRes = await admin
+    .from("amenity_bookings")
+    .select("id, during")
+    .eq("id", bookingId).eq("stay_id", stay.id).eq("status", "booked")
+    .maybeSingle();
+  if (bookRes.error) return { ok: false, error: readFailedMessage("that day", bookRes.error) };
+  if (!bookRes.data) return { ok: false, error: "That one was already given back." };
+
+  const when = parseDaterange(bookRes.data.during as string);
+  const today = todayLakeDate();
+  if (when && when.start <= today) {
+    return {
+      ok: false,
+      error:
+        "That day has already started, so it's not one you can give back here. " +
+        "If you didn't take it out, ring the office and they'll sort it.",
+    };
+  }
+
   // Scoped to HER stay, so a token cannot cancel somebody else's day even if
   // the id is guessed.
   const { data: gone, error } = await admin

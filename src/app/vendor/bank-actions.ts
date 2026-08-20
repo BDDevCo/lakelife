@@ -4,7 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sealSecret } from "@/lib/gate";
 import { abaValid, accountPlausible, earlyFee } from "@/lib/payouts";
 import { getPlatformSettings } from "@/lib/settings";
-import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 import { readFailedMessage } from "@/lib/must-read";
 
 export interface BankResult {
@@ -61,13 +61,23 @@ export async function setPayoutAccount(input: {
   // not be able to reroute money without the owner hearing about it.
   if (prev && prev.account_last4 !== last4) {
     try {
-      const uRes = await admin.from("users").select("phone").eq("id", user.id).maybeSingle();
+      const uRes = await admin.from("users").select("phone, email").eq("id", user.id).maybeSingle();
       // The account is already changed, so this can't refuse any more — but an
       // unsent security warning must never be silent in the log as well as on
       // the phone. "No phone on file" and "couldn't look" are not the same.
       if (uRes.error) console.error("[read failed] the number to warn about a payout change:", uRes.error);
       const u = uRes.data;
-      if (u?.phone) void sendSms(u.phone as string, `LakeLife security: your payout account was just changed to ····${last4}. If this wasn't you, call us immediately.`);
+      // EVERY DOOR. This is the only thing standing between a hijacked session
+      // and a silent reroute of somebody's money, and it went by text alone on
+      // a channel that has delivered nothing since July.
+      await notify(
+        "the account owner that their payout destination was changed",
+        { phone: u?.phone as string | null, email: u?.email as string | null },
+        {
+          sms: `LakeLife security: your payout account was just changed to ····${last4}. If this wasn't you, call us immediately.`,
+          subject: `Your payout account was changed to ····${last4}`,
+        },
+      );
     } catch { /* best effort */ }
   }
   return { ok: true, last4 };
@@ -184,14 +194,21 @@ export async function requestEarlyPayout(): Promise<EarlyPayoutResult> {
 
   // The receipt text — the number they'll see land.
   try {
-    const uRes = await admin.from("users").select("phone").eq("id", user.id).maybeSingle();
+    const uRes = await admin.from("users").select("phone, email").eq("id", user.id).maybeSingle();
     // Deliberately swallowed — the payout is queued and a missing receipt text
     // must not un-queue it — but never swallowed silently.
     if (uRes.error) console.error("[read failed] the number to text the payout receipt to:", uRes.error);
     const u = uRes.data;
-    if (u?.phone) {
-      void sendSms(u.phone as string, `LakeLife: early payout queued — $${net.toFixed(2)} to your account ····${acct.account_last4} ($${gross.toFixed(2)} − $${fee.toFixed(2)} early fee${tipTotal > 0 ? `; $${tipTotal.toFixed(2)} of tips came through in full` : ""}). Month-end payouts are always free. 🌊`);
-    }
+    // A receipt for money that has left, and a fee they just paid to have it
+    // early. Both doors, so it isn't only the bank statement that ever says so.
+    await notify(
+      "the crew that their early payout is queued and what the fee was",
+      { phone: u?.phone as string | null, email: u?.email as string | null },
+      {
+        sms: `LakeLife: early payout queued — $${net.toFixed(2)} to your account ····${acct.account_last4} ($${gross.toFixed(2)} − $${fee.toFixed(2)} early fee${tipTotal > 0 ? `; $${tipTotal.toFixed(2)} of tips came through in full` : ""}). Month-end payouts are always free. 🌊`,
+        subject: `Your early payout of $${net.toFixed(2)} is queued`,
+      },
+    );
   } catch { /* best effort */ }
 
   return { ok: true, gross, fee, net };

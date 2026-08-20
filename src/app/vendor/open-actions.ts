@@ -11,7 +11,7 @@ import { loadPricingProfileById } from "@/app/book/dispatch";
 import { loadGapAnchor } from "./open-data";
 import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 import { getPlatformSettings } from "@/lib/settings";
-import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 
 /**
  * CLAIM a job off the open board (Phase D). First qualified crew wins — the
@@ -72,7 +72,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const today = todayLakeDate();
   const jobRes = await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model, est_minutes), properties(lake_id, address, users(phone))")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model, est_minutes), properties(lake_id, address, users(phone, email))")
     .eq("id", jobId)
     .maybeSingle();
   // "That job was already taken" is the one sentence that walks a crew away
@@ -374,10 +374,27 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   }
 
   // Recovery notify: the waiting owner instantly hears a crew picked it up.
-  const ownerPhone = (one(prop?.users) as { phone?: string } | null)?.phone;
-  if (ownerPhone) {
+  const ownerUser = one(prop?.users) as { phone?: string; email?: string } | null;
+  // This is the end of "Finding a crew" — the one message that tells somebody
+  // their job stopped being a maybe. By text alone it has told nobody since
+  // July, so it goes to both doors now.
+  if (ownerUser?.phone || ownerUser?.email) {
     const pretty = new Date((job.date as string) + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-    void sendSms(ownerPhone, `LakeLife: good news — a crew picked up your ${svc.name} for ${pretty}. We'll text you when it's done, with photos. 🌊`);
+    await notify(
+      "the owner that a crew picked up their job",
+      { phone: ownerUser.phone ?? null, email: ownerUser.email ?? null },
+      {
+        sms: `LakeLife: good news — a crew picked up your ${svc.name} for ${pretty}. We'll text you when it's done, with photos. 🌊`,
+        subject: `A crew picked up your ${svc.name} for ${pretty}`,
+        // The SMS says "we'll text you when it's done", which is a promise the
+        // text can make and an email cannot — it may be going to somebody with
+        // no mobile on file at all. Same fact, without the promise about the
+        // channel it arrives on.
+        body:
+          `Good news — a crew picked up your ${svc.name} for ${pretty}.\n\n` +
+          `You'll hear from us when it's done, with photos.`,
+      },
+    );
   }
 
   return { ok: true };

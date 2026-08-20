@@ -17,6 +17,7 @@ import {
 import { rushPrice, validRushFallback } from "@/lib/rush";
 import { getPlatformSettings } from "@/lib/settings";
 import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
 import { autoAssignJob, getServiceAvailability } from "./dispatch";
@@ -223,10 +224,26 @@ async function blastRushToCrews(
     const crewRows = mustRead("those crews' accounts", await admin.from("vendors").select("user_id").in("id", crewIds).not("user_id", "is", null));
     const userIds = (crewRows ?? []).map((v) => v.user_id as string);
     if (userIds.length === 0) return;
-    const phones = mustRead("those crews' numbers", await admin.from("users").select("phone").in("id", userIds).not("phone", "is", null));
+    // REACHABLE, NOT PHONED. This still filtered `.not("phone","is",null)`
+    // after the send widened to email — so a crew with an address and no mobile
+    // on file was excluded from a rush blast they could have claimed, by a
+    // guard written when a phone was the only door. A rush job goes to whoever
+    // sees it first, and since July nobody has seen a text.
+    const phones = mustRead("those crews' contact details", await admin
+      .from("users").select("phone, email").in("id", userIds)
+      .or("phone.not.is.null,email.not.is.null"));
     const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
     for (const p of phones ?? []) {
-      void sendSms(p.phone as string, `LakeLife ⚡ same-day ${opts.serviceName} just posted on ${lakeName} — fits a gap in your day, first crew to claim gets it: ${site}/vendor/open 🌊`);
+      // EVERY DOOR: a rush job is claimed by whoever sees it first, and text
+      // alone has been seen by nobody since July.
+      await notify(
+        "a crew that a same-day job just posted on their lake",
+        { phone: p.phone as string | null, email: p.email as string | null },
+        {
+          sms: `LakeLife ⚡ same-day ${opts.serviceName} just posted on ${lakeName} — fits a gap in your day, first crew to claim gets it: ${site}/vendor/open 🌊`,
+          subject: `Same-day ${opts.serviceName} just posted on ${lakeName}`,
+        },
+      );
     }
   } catch {
     /* the board itself is the source of truth; the blast is best-effort */

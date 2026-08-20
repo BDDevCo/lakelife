@@ -5,6 +5,7 @@ import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { getMyVendorId } from "./data";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
+import { notify } from "@/lib/notify";
 import { allowsNotification } from "@/lib/notif-gate";
 import { settleJob } from "@/lib/automation";
 import { todayLakeDate } from "@/lib/booking";
@@ -237,7 +238,7 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   // right — never an ops queue.
   const propRes = await admin
     .from("properties")
-    .select("address, users(id, phone)")
+    .select("address, users(id, phone, email)")
     .eq("id", job.property_id)
     .maybeSingle();
   // Swallowed on purpose — the job is complete and the payout has settled; a
@@ -246,9 +247,11 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   if (propRes.error) console.error("[read failed] who to tell the job is done:", propRes.error);
   const prop = propRes.data;
   const ownerUser = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as
-    { id?: string; phone?: string } | null;
+    { id?: string; phone?: string; email?: string } | null;
   const ownerPhone = ownerUser?.phone;
   let confirmLinks = "";
+  // The same two links, laid out for an inbox rather than a text bubble.
+  let confirmLines = "";
   try {
     const { data: conf, error: confErr } = await admin
       .from("job_confirmations")
@@ -262,14 +265,37 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
     if (conf?.confirm_token) {
       const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
       confirmLinks = ` All good? ${site}/c/${conf.confirm_token}/good — something off? ${site}/c/${conf.confirm_token}/issue`;
+      confirmLines =
+        `\n\nAll good?\n  ${site}/c/${conf.confirm_token}/good` +
+        `\n\nSomething off?\n  ${site}/c/${conf.confirm_token}/issue`;
     }
   } catch {
     /* pre-migration or duplicate row — the completion text still goes out */
   }
-  if (ownerPhone && (await allowsNotification(ownerUser?.id, "done", "sms"))) {
-    void sendSms(
-      ownerPhone,
-      `LakeLife: ${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"} — ${photoCount} photos are in your property log.${confirmLinks} 🌊`,
+  // BOTH SWITCHES, NOT ONE. "Service complete — with photos" has always been a
+  // "Text + email" type on the settings screen, so each channel has its own
+  // switch and each is asked separately here — the email is the one this type
+  // was already promised on, not a new message. It matters more than it looks:
+  // these two links are how the customer audits the job, and the 👎 is what
+  // holds the crew's pay. On text alone that choice reached nobody since July.
+  const [doneBySms, doneByEmail] = await Promise.all([
+    allowsNotification(ownerUser?.id, "done", "sms"),
+    allowsNotification(ownerUser?.id, "done", "email"),
+  ]);
+  if ((ownerPhone && doneBySms) || (ownerUser?.email && doneByEmail)) {
+    await notify(
+      "the owner that their service is done and their photos are up",
+      {
+        phone: doneBySms ? ownerPhone : null,
+        email: doneByEmail ? ownerUser?.email : null,
+      },
+      {
+        sms: `LakeLife: ${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"} — ${photoCount} photos are in your property log.${confirmLinks} 🌊`,
+        subject: `${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"}`,
+        body:
+          `${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"} — ` +
+          `${photoCount} photos are in your property log.${confirmLines}`,
+      },
     );
   }
 

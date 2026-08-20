@@ -7,7 +7,7 @@ import { serviceMinutes, type DurationBands } from "@/lib/duration";
 import { summariseCorrection, scopeNoteFor, type TimedRule } from "@/lib/arrival";
 import { todayLakeDate } from "@/lib/booking";
 import { planRecovery } from "@/lib/recovery";
-import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 import { withParkRate, type ParkRates } from "@/lib/park-rates";
 import { loadParkRatesChecked } from "@/app/park/rate-data";
 import { mustRead, softRead, readFailedMessage } from "@/lib/must-read";
@@ -323,11 +323,20 @@ async function tellTheCrew(
     if (!v?.user_id) return;
 
     const u = mustRead("the crew's phone number", await admin
-      .from("users").select("phone").eq("id", v.user_id).maybeSingle());
-    const phone = (u?.phone as string) ?? "";
-    if (!phone) return;
+      .from("users").select("phone, email").eq("id", v.user_id).maybeSingle());
 
-    void sendSms(phone, `LakeLife: ${line}`);
+    // EVERY DOOR. The promise on the arrival screens is "you'll get a text
+    // either way", and text alone has delivered nothing since July — so the
+    // crew waiting on this answer is written to as well, and the day A2P
+    // clears the same call sends both.
+    await notify(
+      "the crew what the owner decided about their flag",
+      { phone: u?.phone as string | null, email: u?.email as string | null },
+      {
+        sms: `LakeLife: ${line}`,
+        subject: "The owner answered your flag",
+      },
+    );
   } catch {
     /* The decision is recorded. A failed text must never undo it. */
   }

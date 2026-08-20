@@ -5,8 +5,7 @@ import {
   refundableRemaining, defaultClawback, clampClawback, planClawback,
   invoiceStatusAfter, type PayoutSnapshot,
 } from "@/lib/refunds";
-import { sendSms } from "@/lib/sms";
-import { sendEmail } from "@/lib/email";
+import { notify } from "@/lib/notify";
 import { readFailedMessage } from "@/lib/must-read";
 
 export interface RefundResult {
@@ -221,9 +220,18 @@ export async function executeRefund(input: {
         console.error(`[refund ${claim.id}] adjustment insert failed:`, adjErr.message);
         clawbackWarning = `Refund sent, but the crew adjustment of $${adjustMagnitude.toFixed(2)} FAILED to record — fix manually (refund ${claim.id}).`;
         try {
-          const { data: opsUsers, error: opsErr } = await admin.from("users").select("phone").eq("role", "ops").not("phone", "is", null).limit(3);
+          const { data: opsUsers, error: opsErr } = await admin.from("users").select("phone, email").eq("role", "ops").not("phone", "is", null).limit(3);
           if (opsErr) console.error("[read failed] the ops phone list:", opsErr);
-          for (const o of opsUsers ?? []) void sendSms(o.phone as string, `LakeLife OPS: ${clawbackWarning}`);
+          for (const o of opsUsers ?? []) {
+            void notify(
+              "ops that a crew adjustment failed to record after a refund",
+              { phone: o.phone as string | null, email: o.email as string | null },
+              {
+                sms: `LakeLife OPS: ${clawbackWarning}`,
+                subject: "A crew adjustment failed to record after a refund",
+              },
+            );
+          }
         } catch { /* best effort */ }
       }
     }
@@ -259,27 +267,34 @@ export async function executeRefund(input: {
   const prop = (Array.isArray(job.properties) ? job.properties[0] : job.properties) as { address?: string; users?: unknown } | null;
   const owner = (Array.isArray(prop?.users) ? (prop?.users as unknown[])[0] : prop?.users) as { phone?: string; email?: string } | null;
   try {
-    if (owner?.phone) {
-      void sendSms(owner.phone, `LakeLife: $${amount.toFixed(2)} for your ${svcName} is on its way back to your card — allow a few business days. 🌊`);
-    }
-    if (owner?.email) {
-      void sendEmail({
-        to: owner.email,
+    void notify(
+      "the owner that their refund is on its way back to their card",
+      { phone: owner?.phone, email: owner?.email },
+      {
+        sms: `LakeLife: $${amount.toFixed(2)} for your ${svcName} is on its way back to your card — allow a few business days. 🌊`,
         subject: `Refund issued — $${amount.toFixed(2)}`,
-        html: `<p>We've sent <b>$${amount.toFixed(2)}</b> back to your card for your ${svcName}.</p><p>Reason: ${reason.replace(/</g, "&lt;")}</p><p>Refunds usually land within a few business days. Questions? Just reply. 🌊</p>`,
-      });
-    }
+        body:
+          `We've sent $${amount.toFixed(2)} back to your card for your ${svcName}.\n\n` +
+          `Reason: ${reason}\n\n` +
+          `Refunds usually land within a few business days. Questions? Just reply.`,
+      },
+    );
     if (effectiveClawback > 0 && job.vendor_id) {
       const { data: v, error: vErr } = await admin.from("vendors").select("user_id").eq("id", job.vendor_id).maybeSingle();
       const { data: vu, error: vuErr } = v?.user_id
-        ? await admin.from("users").select("phone").eq("id", v.user_id as string).maybeSingle()
+        ? await admin.from("users").select("phone, email").eq("id", v.user_id as string).maybeSingle()
         : { data: null, error: null };
       // Best effort by design — the money moved regardless. But a crew whose pay
       // just dropped and who was never told must not be a silent event.
       if (vErr || vuErr) console.error(`[read failed] the crew's number for the clawback notice (refund ${claim.id}):`, vErr ?? vuErr);
-      if (vu?.phone) {
-        void sendSms(vu.phone as string, `LakeLife: a customer refund on your ${svcName} job adjusted your pay by −$${effectiveClawback.toFixed(2)} per the service terms. Details in Earnings. Reply here with questions.`);
-      }
+      void notify(
+        "the crew that a customer refund reduced their pay",
+        { phone: vu?.phone as string | null, email: vu?.email as string | null },
+        {
+          sms: `LakeLife: a customer refund on your ${svcName} job adjusted your pay by −$${effectiveClawback.toFixed(2)} per the service terms. Details in Earnings. Reply here with questions.`,
+          subject: `A customer refund adjusted your pay for the ${svcName} job`,
+        },
+      );
     }
   } catch { /* notifications are best effort — the money moves regardless */ }
 

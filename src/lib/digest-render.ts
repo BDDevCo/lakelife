@@ -144,7 +144,7 @@ export function composeNightlyDigest(sections: DigestSections): string {
   const hoursBust = sections.routes.hoursBust ?? 0;
   if (hoursBust > 0) {
     parts.push(
-      `<h3>Routes</h3><p>${hoursBust} truck day${plural(hoursBust)} tomorrow run past a crew's hours — they've been texted; nothing to do unless it keeps happening.</p>`,
+      `<h3>Routes</h3><p>${hoursBust} truck day${plural(hoursBust)} tomorrow run past a crew's hours — they've been told; nothing to do unless it keeps happening.</p>`,
     );
   }
 

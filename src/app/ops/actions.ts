@@ -1,7 +1,7 @@
 "use server";
 
 import { createServiceClient } from "@/lib/supabase/server";
-import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 import { todayLakeDate, dayStatus, effectiveSeason, validateSeasonDates } from "@/lib/booking";
 import { runRouteBuild } from "@/lib/automation";
 import { getPlatformSettings } from "@/lib/settings";
@@ -173,22 +173,41 @@ export async function assignAndSchedule(
   // unwinding that over a missing phone number would be worse than a text that
   // did not go. But a swallow has to leave a trace, or "the crew never got told"
   // has no explanation anywhere.
-  const vUserRes = await admin.from("users").select("phone").eq("id", vendor.user_id).maybeSingle();
+  const vUserRes = await admin.from("users").select("phone, email").eq("id", vendor.user_id).maybeSingle();
   if (vUserRes.error) console.error("[read failed] the crew's phone number (job scheduled, text not sent):", vUserRes.error);
   const vUser = vUserRes.data;
-  if (vUser?.phone) {
-    void sendSms(vUser.phone as string, `LakeLife: new job on your route — ${svcName}, ${prettyDate} (${input.slot}). Opens in your Today list. 🌊`);
+  // EVERY DOOR: this is the only notice a stop was added to their day, and on
+  // text alone it has reached nobody since July.
+  if (vUser?.phone || vUser?.email) {
+    await notify(
+      "the crew that a job was added to their route",
+      { phone: vUser.phone as string | null, email: vUser.email as string | null },
+      {
+        sms: `LakeLife: new job on your route — ${svcName}, ${prettyDate} (${input.slot}). Opens in your Today list. 🌊`,
+        subject: `New job on your route — ${svcName}, ${prettyDate}`,
+      },
+    );
   }
   const propNotifyRes = await admin
     .from("properties")
-    .select("address, users(phone)")
+    .select("address, users(phone, email)")
     .eq("id", job.property_id)
     .maybeSingle();
   if (propNotifyRes.error) console.error("[read failed] the owner's phone number (job scheduled, text not sent):", propNotifyRes.error);
   const prop = propNotifyRes.data;
-  const ownerPhone = ((Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as { phone?: string } | null)?.phone;
-  if (ownerPhone) {
-    void sendSms(ownerPhone, `LakeLife: your ${svcName} is booked for ${prettyDate}. We'll text you when the crew is done, with photos. 🌊`);
+  const ownerUser = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as { phone?: string; email?: string } | null;
+  const ownerPhone = ownerUser?.phone;
+  const ownerEmail = ownerUser?.email;
+  // EVERY DOOR: the owner is being told a crew and a date are locked in.
+  if (ownerPhone || ownerEmail) {
+    await notify(
+      "the owner that their service is scheduled",
+      { phone: ownerPhone ?? null, email: ownerEmail ?? null },
+      {
+        sms: `LakeLife: your ${svcName} is booked for ${prettyDate}. We'll text you when the crew is done, with photos. 🌊`,
+        subject: `Your ${svcName} is booked for ${prettyDate}`,
+      },
+    );
   }
 
   return { ok: true };

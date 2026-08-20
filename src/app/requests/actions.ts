@@ -12,7 +12,7 @@ import { getAvailability } from "@/app/book/actions";
 import { LakeLifePayments } from "@/lib/payments";
 import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge } from "@/lib/automation";
-import { sendSms } from "@/lib/sms";
+import { notify } from "@/lib/notify";
 import { sendEmail } from "@/lib/email";
 import { readFailedMessage } from "@/lib/must-read";
 
@@ -360,28 +360,50 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
     if (vRes.error) console.error("[read failed, degraded] the crew's account:", vRes.error.code ?? "", vRes.error.message ?? vRes.error);
     const v = vRes.data;
     if (v?.user_id) {
-      const cuRes = await admin.from("users").select("phone").eq("id", v.user_id).maybeSingle();
+      const cuRes = await admin.from("users").select("phone, email").eq("id", v.user_id).maybeSingle();
       if (cuRes.error) console.error("[read failed, degraded] the crew's phone:", cuRes.error.code ?? "", cuRes.error.message ?? cuRes.error);
       const cu = cuRes.data;
-      if (cu?.phone) {
+      if (cu?.phone || cu?.email) {
         const payLine = charged && q.crewShare > 0
           ? `you're paid $${q.crewShare.toFixed(2)} for holding the slot`
           : "your slot share releases once the fee settles";
-        void sendSms(cu.phone as string, `LakeLife: the ${l.svcName} at ${l.address ?? "a stop"} on ${l.job.date} was cancelled late — ${payLine}. Your route will update tonight. 🌊`);
+        // EVERY DOOR: this says what they are paid for a stop that is no longer
+        // on their route. On text alone it has reached nobody since July.
+        await notify(
+          "the crew that a stop was cancelled late and what it pays",
+          { phone: cu.phone as string | null, email: cu.email as string | null },
+          {
+            sms: `LakeLife: the ${l.svcName} at ${l.address ?? "a stop"} on ${l.job.date} was cancelled late — ${payLine}. Your route will update tonight. 🌊`,
+            subject: `${l.svcName} on ${l.job.date} was cancelled late`,
+          },
+        );
       }
     }
   }
-  const ouRes = await admin.from("users").select("phone").eq("id", l.ownerId ?? "").maybeSingle();
+  const ouRes = await admin.from("users").select("phone, email").eq("id", l.ownerId ?? "").maybeSingle();
   if (ouRes.error) console.error("[read failed, degraded] the owner's phone:", ouRes.error.code ?? "", ouRes.error.message ?? ouRes.error);
   const ou = ouRes.data;
-  if (ou?.phone) {
+  if (ou?.phone || ou?.email) {
     // The fee clause goes out only when a fee actually reached a bill. If the
     // invoice could neither be read nor raised above, "will appear on your
     // next bill" names a charge that exists nowhere — and the same is true of
     // the `feeCharged` the button turns into "$X late fee applied".
-    void sendSms(ou.phone as string, feeOnFile
-      ? `LakeLife: your ${l.svcName} is cancelled. A ${Math.round(q.feePct * 100)}% late fee of $${q.fee.toFixed(2)} ${charged ? "was charged to your card on file" : "will appear on your next bill"} — cancelling more than ${l.isWaterWork ? "7 days" : "48 hours"} ahead is always free. 🌊`
-      : `LakeLife: your ${l.svcName} is cancelled. Cancelling more than ${l.isWaterWork ? "7 days" : "48 hours"} ahead is always free. 🌊`);
+    //
+    // EVERY DOOR: on the fee branch this is the only notice that money was
+    // taken from their card, and text alone has delivered none of it.
+    await notify(
+      `the owner that their ${l.svcName} is cancelled`,
+      { phone: ou.phone as string | null, email: ou.email as string | null },
+      feeOnFile
+        ? {
+            sms: `LakeLife: your ${l.svcName} is cancelled. A ${Math.round(q.feePct * 100)}% late fee of $${q.fee.toFixed(2)} ${charged ? "was charged to your card on file" : "will appear on your next bill"} — cancelling more than ${l.isWaterWork ? "7 days" : "48 hours"} ahead is always free. 🌊`,
+            subject: `Your ${l.svcName} is cancelled — a late fee applies`,
+          }
+        : {
+            sms: `LakeLife: your ${l.svcName} is cancelled. Cancelling more than ${l.isWaterWork ? "7 days" : "48 hours"} ahead is always free. 🌊`,
+            subject: `Your ${l.svcName} is cancelled`,
+          },
+    );
   }
 
   return feeOnFile ? { ok: true, feeCharged: q.fee } : { ok: true };
