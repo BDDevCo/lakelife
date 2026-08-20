@@ -94,7 +94,10 @@ describe("what a customer may actually enter", () => {
   it("caps a fat finger and says so kindly", () => {
     const r = validateTip(5000);
     expect(r.ok).toBe(false);
-    expect(r.error).toContain("give us a call");
+    // Was "give us a call" — LakeLife publishes no number, so the refusal
+    // named an action the reader could not take. What matters is that it
+    // still offers a way through rather than just saying no.
+    expect(r.error).toContain("send us a message from your portal");
   });
 
   it("refuses junk", () => {
@@ -176,7 +179,7 @@ describe("the 30-day window", () => {
     const r = canTip(done, "2026-09-01");
     expect(r.ok).toBe(false);
     expect(r.why).toContain("30 days");
-    expect(r.why).toContain("give us a call");
+    expect(r.why).toContain("send us a message from your portal");
   });
 
   it("NOON, NOT MIDNIGHT — the Indiana off-by-one", () => {

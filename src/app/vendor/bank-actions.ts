@@ -74,8 +74,31 @@ export async function setPayoutAccount(input: {
         "the account owner that their payout destination was changed",
         { phone: u?.phone as string | null, email: u?.email as string | null },
         {
-          sms: `LakeLife security: your payout account was just changed to ····${last4}. If this wasn't you, call us immediately.`,
+          // "CALL US IMMEDIATELY" NAMED NO NUMBER. LakeLife publishes none —
+          // not in the top bar, not in a footer, not in this message — so the
+          // one instruction on the one alert standing between a hijacked
+          // session and a silent reroute of somebody's money was an action the
+          // reader could not take. This is the pattern the codebase already
+          // has a name for: copy that instructs an action the screen lacks.
+          //
+          // So it says what they CAN do, and each half is true of the channel
+          // it arrives on. The email is a reply away from a person; both can
+          // change a password; and the account itself is one screen away.
+          sms: `LakeLife security: your payout account was just changed to ····${last4}. If this wasn't you, change your password now and reply to the email we've just sent.`,
           subject: `Your payout account was changed to ····${last4}`,
+          body:
+            `Your LakeLife payout account was just changed to ····${last4}.\n\n` +
+            `If that was you, nothing to do.\n\n` +
+            `IF IT WASN'T:\n` +
+            `  1. Change your password now — ${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/reset-password\n` +
+            `  2. Reply to this email and we'll freeze the account.\n\n` +
+            // A first draft ended "Nothing has been paid out to the new account
+            // yet." True at the instant of sending, and not something this code
+            // checked — and it could stop being true before the email is read,
+            // because an early payout or a month-end batch would both go to the
+            // new destination. A reassurance with a shelf life is worse than
+            // none on a security alert. Sooner is what is actually true.
+            `The sooner you tell us, the more we can stop.`,
         },
       );
     } catch { /* best effort */ }

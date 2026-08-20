@@ -779,7 +779,18 @@ export async function endTenancy(
   // month permanently unbillable, because an ended tenancy drops out of every
   // future run — or never billed for the twenty days, silently.
   const range = parseDaterange(stay.during as string);
-  if (!range) return { ok: false, error: "That tenancy has no dates on it — call us." };
+  // "Call us" named no number, and LakeLife publishes none. This one is a data
+  // problem the owner cannot fix from his own screen, so the sentence has to
+  // say that plainly rather than send him looking for a phone line that does
+  // not exist. (The rent-reminder copy elsewhere in this module says "give us
+  // a call" in the PARK's voice to its own residents, with the office address
+  // printed beside it — that one is his phone number and his to give.)
+  if (!range) {
+    return {
+      ok: false,
+      error: "That tenancy has no dates on it, so we can't work out the part-month. That's ours to fix — get in touch and we'll sort it.",
+    };
+  }
 
   const lastDay = (moveOutISO ?? "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(lastDay)) {

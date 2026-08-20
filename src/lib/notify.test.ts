@@ -133,3 +133,62 @@ describe("reachable means reachable, not phoned", () => {
     expect(s.slice(at, at + 400)).toMatch(/phone\.not\.is\.null,email\.not\.is\.null/);
   });
 });
+
+describe("no copy sends anybody to a phone line that does not exist", () => {
+  // LakeLife publishes no number — not in the top bar, not in a footer, not in
+  // any message. Thirteen user-facing strings said "call us" anyway, including
+  // the security alert on a changed payout account, whose ONE instruction was
+  // an action the reader could not take. Customers have /messages, which is in
+  // OwnerNav and reaches ops; that is what the copy names now.
+  //
+  // "Ring the office" is DIFFERENT and stays: in the park module that is the
+  // park owner's own office, in his voice, to his own residents, with his
+  // address printed beside it. His number is his to give.
+  const appFiles = [
+    "../app/requests/actions.ts",
+    "../app/book/storage/actions.ts",
+    "../app/park/actions.ts",
+    "../app/vendor/bank-actions.ts",
+    "./tips.ts",
+    "./packages.ts",
+  ];
+
+  it("no user-facing string tells them to call us", () => {
+    const bad: string[] = [];
+    for (const f of appFiles) {
+      const s = stripComments(read(f));
+      for (const m of s.matchAll(/"[^"\n]*\b(call us|give us a call|give us a shout|phone us)\b[^"\n]*"/gi)) {
+        bad.push(`${f}: ${m[0].slice(0, 80)}`);
+      }
+      // No newlines in the character classes: a greedy template-literal match
+      // otherwise swallows whole functions and reports them as copy.
+      for (const m of s.matchAll(/`[^`\n]*\b(call us|give us a call|give us a shout|phone us)\b[^`\n]*`/gi)) {
+        bad.push(`${f}: ${m[0].slice(0, 80)}`);
+      }
+    }
+    expect(bad, `copy instructing an action the reader cannot take:\n${bad.join("\n")}`).toEqual([]);
+  });
+
+  it("the payout-change alert names what they CAN do", () => {
+    // A hijacked session rerouting somebody's money is the worst thing this
+    // alert exists for, and "call us immediately" was the whole instruction.
+    const s = read("../app/vendor/bank-actions.ts");
+    expect(s).toMatch(/change your password now and reply to the email/);
+    expect(s).toMatch(/reset-password/);
+  });
+
+  it("and does not reassure them about money it has not checked", () => {
+    // A first draft ended "Nothing has been paid out to the new account yet."
+    // True when sent, unchecked, and able to stop being true before it is read.
+    const s = stripComments(read("../app/vendor/bank-actions.ts"));
+    expect(s).not.toMatch(/Nothing has been paid out/);
+    expect(s).toMatch(/The sooner you tell us, the more we can stop\./);
+  });
+
+  it("the park's own reminder still points at the park's office", () => {
+    // Not ours to rewrite: the park owner is "us" there, and the address is
+    // printed next to it.
+    const s = read("../app/park/reminder-actions.ts");
+    expect(s).toMatch(/Drop it at the office/);
+  });
+});

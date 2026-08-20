@@ -139,7 +139,7 @@ export async function quoteCancellation(jobId: string): Promise<CancelQuoteView>
   if (loadFailed(l)) return { allowed: false, free: false, fee: 0, policyNote: readFailedMessage("this request", l.error) };
   if (!l) return { allowed: false, free: false, fee: 0, policyNote: "That request isn't yours to cancel." };
   const q = await quoteFor(l);
-  if (!q.allowed) return { allowed: false, free: false, fee: 0, policyNote: "A crew is already on this one — text or call us and we'll sort it out." };
+  if (!q.allowed) return { allowed: false, free: false, fee: 0, policyNote: "A crew is already on this one — send us a message from your portal and we'll sort it out." };
   if (q.free) return { allowed: true, free: true, fee: 0, policyNote: "No charge — this one cancels free." };
   const pct = Math.round(q.feePct * 100);
   return {
@@ -162,7 +162,7 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
   if (!l) return { ok: false, error: "That request isn't yours to cancel." };
   const q = await quoteFor(l);
   if (!q.allowed) {
-    return { ok: false, error: "A crew is already on this one — text or call us and we'll sort it out." };
+    return { ok: false, error: "A crew is already on this one — send us a message from your portal and we'll sort it out." };
   }
 
   const admin = createServiceClient();
@@ -183,7 +183,7 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
     }
     const custody = custodyRes.data;
     if (custody && custody.length > 0) {
-      return { ok: false, error: "Your boat is in winter storage — text or call us to arrange the splash or a release instead." };
+      return { ok: false, error: "Your boat is in winter storage — message us from your portal to arrange the splash or a release instead." };
     }
   }
 
@@ -204,7 +204,7 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
     }
     const stay = stayRes.data;
     if (stay?.status === "in_storage") {
-      return "Your boat is already in winter storage — text or call us to arrange a release instead.";
+      return "Your boat is already in winter storage — message us from your portal to arrange a release instead.";
     }
     if (stay) await admin.from("storage_stays").update({ status: "cancelled" }).eq("id", stay.id as string).eq("status", "reserved");
     await admin.from("job_groups").update({ status: "cancelled", storing_vendor: null }).eq("id", groupId);
@@ -538,7 +538,7 @@ export async function rescheduleUnworkedVisit(
     // Without the service we cannot apply ice-out, the pull deadline or
     // capacity. Refusing is the only safe answer — a silent pass is how a
     // pier ends up booked into February.
-    return { ok: false, error: "Give us a call to move this one — we can't check the dates from here." };
+    return { ok: false, error: "We can't check the dates from here — send us a message from your portal and we'll move it." };
   }
   const lake = one(propRow?.lakes) as { ice_out_actual?: string; pull_deadline?: string } | null;
   const { fullDates, unavailable } = svcRow?.id
@@ -778,7 +778,7 @@ export async function addTip(
   if (!row.vendor_id) {
     // No crew on the job means nobody to pay. Better to refuse than to take
     // the money and have it land nowhere.
-    return { ok: false, error: "We can't add a thank-you to this one — give us a call." };
+    return { ok: false, error: "We can't add a thank-you to this one — send us a message from your portal." };
   }
 
   const pmRes = await admin

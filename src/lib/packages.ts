@@ -129,7 +129,7 @@ export function validateSelection(
     // "boat stays" — and the wrong answer bills a winter of storage AND a trip
     // home for the same hull. Refuse and send it to a human.
     if (returnLegIds.size === 0) {
-      return fail("This package isn't set up for booking yet — its return trip isn't identified. Give us a call and we'll sort it out.");
+      return fail("This package isn't set up for booking yet — its return trip isn't identified. Send us a message from your portal and we'll sort it out.");
     }
 
     const fallReturn = chosen.some((c) => c.phase === "fall" && returnLegIds.has(c.serviceId));

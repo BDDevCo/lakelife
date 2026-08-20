@@ -199,7 +199,7 @@ export function validateTip(
     return {
       ok: false,
       amount: 0,
-      error: `That's more than $${cap} — give us a call if you really mean it.`,
+      error: `That's more than $${cap} — send us a message from your portal if you really mean it.`,
     };
   }
   return { ok: true, amount: Math.round(n * 100) / 100 };
@@ -267,7 +267,7 @@ export function canTip(
     if (left != null && left < 0) {
       return {
         ok: false,
-        why: `That visit was over ${dials.windowDays} days ago — give us a call if you'd still like to send the crew something.`,
+        why: `That visit was over ${dials.windowDays} days ago — send us a message from your portal if you'd still like to send the crew something.`,
       };
     }
   }

@@ -109,7 +109,7 @@ export async function createPackageBooking(input: {
   if (!(sel.total > 0)) {
     return {
       ok: false,
-      error: "We can't price that package for your boat right now — nothing has been booked. Give us a shout and we'll sort it.",
+      error: "We can't price that package for your boat right now — nothing has been booked. Send us a message from your portal and we'll sort it.",
     };
   }
   if (sel.storageTierId && !input.agreementAccepted) {
