@@ -192,3 +192,52 @@ export function photoGateLabel(count: number, min: number): string {
   const need = min - count;
   return `${count} / ${min} photos — ${need} more before you can mark this done`;
 }
+
+/**
+ * THE SAME COUNT, TOLD TO THE PERSON WHO IS BEING ASKED TO JUDGE IT.
+ *
+ * The crew sees "3 / 4 photos — 1 more before you can mark this done". The
+ * customer saw "4 photos from your crew" and nothing else — the minimum was
+ * loaded into their view model and never printed. So when four photos arrive
+ * for a fall winterization they have no way to know the gate was four, and
+ * cannot tell a job that cleared the bar from a thin one. That is exactly the
+ * judgement the 👍/👎 underneath is asking them to make, and the 👎 is what
+ * holds the crew's pay.
+ *
+ * BEFORE THE JOB IS DONE, A SHORT COUNT IS NOT A SHORTFALL. Crews upload as
+ * they work, so two-of-four mid-morning is normal and must not read as a crew
+ * cutting corners. Only a finished job can be judged against its minimum.
+ *
+ * @param done whether the crew has marked the job complete.
+ */
+export function customerPhotoLabel(count: number, min: number, done: boolean): string {
+  const photos = `${count} photo${count === 1 ? "" : "s"}`;
+  if (min <= 0) return `${photos} from your crew, taken on site.`;
+  if (!done) return `${photos} so far — ${min} are required before your crew can finish.`;
+  if (count > min) return `${photos} from your crew — ${min} were required.`;
+  return `${photos} from your crew — all ${min} required.`;
+}
+
+/**
+ * WHAT AN EMPTY GALLERY MEANS, WHICH DEPENDS ENTIRELY ON WHEN YOU ASK.
+ *
+ * One sentence covered every status but cancelled: "No photos yet — they land
+ * here the moment your crew finishes." On a COMPLETED visit that tells the
+ * customer to keep waiting for something that is never coming. And if the
+ * service carries a minimum, rows must exist for the job to have reached
+ * complete at all — so an empty gallery there is ours to fix, not their cue to
+ * wait. (`signedJobPhotos` returns nothing when the files behind the rows have
+ * gone missing; it logs that, loudly, for the same reason.)
+ */
+export function emptyPhotoNote(status: string, minPhotos: number): string {
+  if (status === "cancelled") return "No photos — this one was cancelled.";
+  const done = status === "complete" || status === "paid";
+  if (!done) return "No photos yet — they land here the moment your crew finishes.";
+  if (minPhotos > 0) {
+    return (
+      `We can't show the photos for this visit right now — ${minPhotos} were required ` +
+      `before your crew could mark it done. Tell us and we'll get them up.`
+    );
+  }
+  return "This service doesn't call for photos, so your crew didn't take any.";
+}

@@ -57,9 +57,25 @@ export async function signedJobPhotos(jobId: string): Promise<JobPhoto[]> {
   }
   // createSignedUrls preserves input order; a path that failed to sign comes
   // back with a null signedUrl rather than shifting the rest.
-  return (signed ?? [])
+  const out = (signed ?? [])
     .map((s, i) => ({ url: s?.signedUrl ?? "", takenAt: ((rows ?? [])[i]?.taken_at as string) ?? null }))
     .filter((p) => p.url);
+
+  // ROWS BUT NO PICTURES IS A DIFFERENT FACT FROM NO ROWS, and until now it
+  // was silent. `createSignedUrls` returns a null url per path rather than an
+  // error when the FILE is gone, so a half-finished upload left a job that
+  // cleared the photo gate, got paid, and shows the customer an empty gallery
+  // — the screen saying the crew documented nothing about work they were paid
+  // for. Not throwable: a missing file is permanent, and taking the page down
+  // forever is worse than showing the rest of it. So it is logged, loudly,
+  // because somebody has to go and look.
+  if (paths.length > 0 && out.length === 0) {
+    console.error(
+      `[photos] job ${jobId}: ${paths.length} photo row(s) on file and none could be signed — ` +
+        `the customer sees an empty gallery on a job that passed the photo gate.`,
+    );
+  }
+  return out;
 }
 
 /** Photos for SEVERAL jobs at once (package visits: the legs share a group). */

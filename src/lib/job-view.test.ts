@@ -3,7 +3,7 @@ import {
   sanitizeSearchTerm, isSearchable,
   customerStatusLabel, crewStatusLabel,
   disputeViewForCustomer, disputeViewForCrew,
-  photoGateLabel,
+  photoGateLabel, customerPhotoLabel, emptyPhotoNote,
 } from "@/lib/job-view";
 
 describe("sanitizeSearchTerm — a search box is an untrusted input", () => {
@@ -151,5 +151,61 @@ describe("photoGateLabel — rule 2 in words", () => {
   it("handles a service with no photo minimum without nonsense", () => {
     expect(photoGateLabel(2, 0)).toBe("2 photos on file");
     expect(photoGateLabel(1, 0)).toBe("1 photo on file");
+  });
+});
+
+describe("customerPhotoLabel — the number the 👍/👎 is a judgement about", () => {
+  it("says nothing about a minimum when the service has none", () => {
+    expect(customerPhotoLabel(3, 0, true)).toBe("3 photos from your crew, taken on site.");
+    expect(customerPhotoLabel(1, 0, true)).toBe("1 photo from your crew, taken on site.");
+  });
+
+  it("names the bar once the job is finished", () => {
+    expect(customerPhotoLabel(4, 4, true)).toBe("4 photos from your crew — all 4 required.");
+  });
+
+  it("says which of them were required when the crew sent extras", () => {
+    expect(customerPhotoLabel(6, 4, true)).toBe("6 photos from your crew — 4 were required.");
+  });
+
+  it("a short count mid-job reads as progress, not as a crew cutting corners", () => {
+    // Crews upload as they work. Two-of-four at 10am is normal.
+    expect(customerPhotoLabel(2, 4, false)).toBe("2 photos so far — 4 are required before your crew can finish.");
+  });
+
+  it("gets the singular right in every branch", () => {
+    expect(customerPhotoLabel(1, 4, false)).toContain("1 photo so far");
+    expect(customerPhotoLabel(1, 1, true)).toBe("1 photo from your crew — all 1 required.");
+  });
+});
+
+describe("emptyPhotoNote — an empty gallery means different things at different times", () => {
+  it("never tells a customer to wait on a job the crew has already finished", () => {
+    for (const status of ["complete", "paid"]) {
+      expect(emptyPhotoNote(status, 4)).not.toContain("the moment your crew finishes");
+      expect(emptyPhotoNote(status, 0)).not.toContain("the moment your crew finishes");
+    }
+  });
+
+  it("still says 'yet' while the work is ahead of them", () => {
+    for (const status of ["requested", "scheduled", "in_progress"]) {
+      expect(emptyPhotoNote(status, 4)).toBe("No photos yet — they land here the moment your crew finishes.");
+    }
+  });
+
+  it("owns the problem when the gate required photos and none are showing", () => {
+    // The job could not have reached complete without them, so rows exist and
+    // this is ours to fix — not a crew who documented nothing.
+    const note = emptyPhotoNote("complete", 4);
+    expect(note).toContain("4 were required");
+    expect(note).toContain("Tell us");
+  });
+
+  it("says plainly when the service never called for any", () => {
+    expect(emptyPhotoNote("paid", 0)).toBe("This service doesn't call for photos, so your crew didn't take any.");
+  });
+
+  it("a cancelled visit is its own answer", () => {
+    expect(emptyPhotoNote("cancelled", 4)).toBe("No photos — this one was cancelled.");
   });
 });

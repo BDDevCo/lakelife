@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
 import { JobPhotoGallery } from "@/components/JobPhotoGallery";
+import { customerPhotoLabel, emptyPhotoNote } from "@/lib/job-view";
 import { JobVerdictButtons, JobMessageComposer, DisputeAnswerButtons } from "@/components/JobDetailPanel";
 import { TipCrew } from "@/components/TipCrew";
 import { getTipView, getRescheduleView } from "@/app/requests/actions";
@@ -202,18 +203,21 @@ function MakeItRightCard({ job }: { job: JobDetailView }) {
 
 function PhotosCard({ job }: { job: JobDetailView }) {
   const n = job.photos.length;
-  const emptyNote =
-    job.status === "cancelled"
-      ? "No photos — this one was cancelled."
-      : "No photos yet — they land here the moment your crew finishes.";
+  const done = job.status === "complete" || job.status === "paid";
+  const emptyNote = emptyPhotoNote(job.status, job.minPhotos);
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginBottom: 16 }}>
       <h2 style={{ fontSize: 18, margin: "0 0 2px" }}>📸 Photos of the work</h2>
       <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
         {n > 0
-          ? `${n} photo${n === 1 ? "" : "s"} from your crew, taken on site. Tap any one to see it full size.`
-          : "Every LakeLife job is photo-verified before your crew can mark it done — and before they get paid."}
+          ? `${customerPhotoLabel(n, job.minPhotos, done)} Tap any one to see it full size.`
+          : // The count belongs here only while it is still ahead of them. Once
+            // the job is done the note below carries it, and saying it twice
+            // reads as two different problems.
+            job.minPhotos > 0 && !done
+            ? `Every LakeLife job is photo-verified before your crew can mark it done — and before they get paid. This one takes ${job.minPhotos}.`
+            : "Every LakeLife job is photo-verified before your crew can mark it done — and before they get paid."}
       </p>
 
       <JobPhotoGallery photos={job.photos} emptyNote={emptyNote} />
