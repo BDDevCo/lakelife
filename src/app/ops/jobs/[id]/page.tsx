@@ -79,7 +79,16 @@ function payoutStatusLine(status: string): string {
     case "released": return "released — nets into the next payout batch";
     case "clawed": return "clawed back to zero — nothing left on this row";
     case "paid": return "paid out";
-    case "pending": return "pending — waiting on the photo gate";
+    // "WAITING ON THE PHOTO GATE" DESCRIBES A STATE THAT CANNOT COEXIST WITH
+    // THIS ROW EXISTING. The sole writer of 'pending' is settleJob —
+    // `openDispute ? "held" : job.vendor_cost != null ? "released" : "pending"`
+    // — so pending means we have no vendor_cost and don't know what to pay.
+    // And settleJob only runs on a job already complete/paid, which completeJob
+    // refuses to set until photoCount >= minPhotos. So a payout row existing at
+    // all proves the gate passed; the same page prints "gate clear" beside it.
+    // Ops went chasing photos already on file instead of setting the missing
+    // crew cost, and the payout kept missing every month-end batch.
+    case "pending": return "pending — no crew cost recorded on this job yet, so there's nothing to pay out";
     default: return status;
   }
 }

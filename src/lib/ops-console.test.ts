@@ -285,3 +285,45 @@ describe("no hint quotes a dial nobody set", () => {
     expect(c).toMatch(/Work LakeLife has done here/);
   });
 });
+
+describe("the console counts only what a person can act on", () => {
+  it("the fee heading counts decidable rows, not every row ever", () => {
+    // fee_waived is terminal — nothing in the tree moves a row out of it — and
+    // the card renders buttons only for fee > 0 && state === 'fee_proposed'.
+    // The old heading counted all three states, so it could say "5 to decide"
+    // with nothing decidable, forever.
+    const p = src("../app/ops/page.tsx");
+    expect(p).toMatch(/f\.fee > 0 && f\.state === "fee_proposed"/);
+    expect(p).toMatch(/Nothing to decide right now/);
+    expect(p).toMatch(/already settled below/);
+    const code = p.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(code).not.toMatch(/\$\{proposedFees\.length\} visit fees to decide/);
+  });
+
+  it("and stops claiming nobody-was-home about auto-waived stand-downs", () => {
+    const code = src("../app/ops/page.tsx")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(code).not.toMatch(/Nobody was home, the customer had a week to rebook, and didn&apos;t\./);
+  });
+
+  it("waived really is terminal, which is why the count had to change", () => {
+    // If some path ever un-waives a row, the framing above is stale.
+    const r = src("../app/ops/recovery-actions.ts");
+    expect(r).toMatch(/fee_waived/);
+    expect(r).not.toMatch(/recovery_state: "fee_proposed"[\s\S]{0,120}fee_waived/);
+  });
+
+  it("a pending payout is explained by its actual cause", () => {
+    // 'pending' means no vendor_cost — the photo gate cannot still be open,
+    // because a payout row only exists on a job that already reached complete.
+    const j = src("../app/ops/jobs/[id]/page.tsx");
+    expect(j).toMatch(/no crew cost recorded on this job yet/);
+    const code = j.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(code).not.toMatch(/pending — waiting on the photo gate/);
+  });
+
+  it("and that IS what pending means, per its only writer", () => {
+    const a = src("./automation.ts");
+    expect(a).toMatch(/openDispute \? "held" : job\.vendor_cost != null \? "released" : "pending"/);
+  });
+});

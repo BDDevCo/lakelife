@@ -227,15 +227,45 @@ export default async function OpsPage() {
             everything it could and stopped at the point where money moves. */}
         {proposedFees.length > 0 && (
           <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--warn)" }}>
-            <span className="ll-pill warn">Missed visits · waiting on you</span>
-            <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
-              {proposedFees.length === 1
-                ? "1 visit fee to decide"
-                : `${proposedFees.length} visit fees to decide`}
-            </h2>
+            {/* THE COUNT SAID THERE WAS WORK WAITING WHEN THERE WASN'T.
+                getProposedFees selects fee_proposed, fee_waived AND
+                fee_charging with no date bound, and `fee_waived` is terminal —
+                nothing in the tree ever moves a row out of it. The card only
+                renders buttons for `fee > 0 && state === "fee_proposed"`, so
+                the heading could read "5 visit fees to decide" with nothing
+                decidable, permanently, and the number never went down.
+                The blurb was wrong twice more: waived rows include stand-downs
+                the nightly auto-waived because OUR profile was wrong, where
+                "nobody was home" is false; and "Nothing is charged until you
+                say so" sat above fee_charging cards whose own text says a
+                charge was started and may have gone through. */}
+            {(() => {
+              const decidable = proposedFees.filter((f) => f.fee > 0 && f.state === "fee_proposed");
+              const settled = proposedFees.length - decidable.length;
+              return (
+                <>
+                  <span className={`ll-pill ${decidable.length > 0 ? "warn" : "slate"}`}>
+                    {decidable.length > 0 ? "Missed visits · waiting on you" : "Missed visits"}
+                  </span>
+                  <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+                    {decidable.length === 0
+                      ? "Nothing to decide right now"
+                      : decidable.length === 1
+                        ? "1 visit fee to decide"
+                        : `${decidable.length} visit fees to decide`}
+                    {settled > 0 && (
+                      <span className="mut" style={{ fontWeight: 400, fontSize: 14 }}>
+                        {" "}· {settled} already settled below
+                      </span>
+                    )}
+                  </h2>
+                </>
+              );
+            })()}
             <p className="mut" style={{ fontSize: 13, marginBottom: 12 }}>
-              Nobody was home, the customer had a week to rebook, and didn&apos;t.
-              Nothing is charged until you say so.
+              Where nobody was home and the customer didn&apos;t rebook, nothing is
+              charged until you say so. Rows already waived or charging are listed
+              too, so you can see what was decided.
             </p>
             <ProposedFees rows={proposedFees} />
           </div>
