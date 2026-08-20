@@ -42,10 +42,22 @@ export async function resolveEscalationAction(
     return { ok: false, message: res.error ?? "That didn't go through — nothing has changed." };
   }
   revalidatePath("/ops");
+  // "REFUNDED." WAS PRINTED WHETHER OR NOT ANY MONEY MOVED.
+  //
+  // opsResolveEscalated returns { ok: true, refunded: 0 } when nothing was ever
+  // captured on the invoice — it closes the dispute and releases the crew, and
+  // no refund row is written. The action threw `res.refunded` away and said
+  // "Refunded." on any ok. And this is not the rare path: decideDisputeOutcome
+  // escalates a dispute PRECISELY BECAUSE nothing was captured, so the common
+  // escalation is the one where that word is false. Ops then tells a customer
+  // their money is on the way back when it never left.
+  const moved = (res.refunded ?? 0) > 0;
   return {
     ok: true,
     message: outcome === "refund"
-      ? "Refunded. The crew's remainder has been released."
+      ? moved
+        ? `Refunded ${res.refunded!.toLocaleString("en-US", { style: "currency", currency: "USD" })}. The crew's remainder has been released.`
+        : "Closed. Nothing had been charged on this job, so there was nothing to refund — the crew's pay has been released."
       : "Closed in the crew's favour. Their pay has been released.",
   };
 }

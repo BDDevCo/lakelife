@@ -92,7 +92,7 @@ export default async function StorageBookingPage() {
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
             <h3 style={{ fontSize: 18, margin: "0 0 6px" }}>Winter packages open soon 🌊</h3>
             <p className="mut" style={{ fontSize: 14, margin: 0 }}>
-              We&apos;re lining up shops and barns now — you&apos;ll get a text the day booking opens.
+              We&apos;re lining up shops and barns now — there&apos;s nothing to book yet. Check back here, or message dispatch from your portal and we&apos;ll let you know when it opens.
             </p>
           </div>
         ) : (

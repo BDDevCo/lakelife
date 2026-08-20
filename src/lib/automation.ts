@@ -6,7 +6,7 @@ import { sendEmail } from "@/lib/email";
 import { LakeLifePayments } from "@/lib/payments";
 import { statementDescriptor } from "@/lib/descriptor";
 import { revalidateJob } from "@/app/book/dispatch";
-import { todayLakeDate } from "@/lib/booking";
+import { todayLakeDate, effectiveSeason, seasonIsProvisional } from "@/lib/booking";
 import { planVendorDay, routeMapUrl } from "@/lib/router";
 import { planFleetDay, jobMinutesOf, type TruckIn, type FleetStop } from "@/lib/fleet";
 import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
@@ -2755,7 +2755,7 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
   // real-looking season dates from lake-birth, so its pull_deadline genuinely
   // lands on the target day; nothing about the date says "this lake is fake".
   const lakes = mustRead("the lakes whose pull deadline is coming up", await admin
-    .from("lakes").select("id, name, pull_deadline")
+    .from("lakes").select("id, name, ice_out_actual, pull_deadline, season_confirmed")
     .eq("is_fixture", false).eq("pull_deadline", target));
   if (!lakes || lakes.length === 0) return { ok: true, lakes: 0, emailed: 0, skipped };
 
@@ -2795,10 +2795,28 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
         .insert({ property_id: (p as { id: string }).id, season_year: seasonYear });
       if (claimErr) continue; // 23505 = already told about this season
       const deadline = prettyDate(lake.pull_deadline as string);
+      // THE SAME HEDGE THE BOOKING GRID AND THE PUBLIC PAGE NOW CARRY.
+      //
+      // This is the ONE email of the year that tells a homeowner when their
+      // pier has to come out, and it stated a date that may have been rolled
+      // from last season as flat fact — prettyDate prints weekday/month/day
+      // with no year, so a guess is indistinguishable from a measurement. If
+      // this lake's dates are provisional the reader is planning a $604 haul
+      // and a winter's worth of ice risk against a number nobody has checked.
+      const provisional = seasonIsProvisional(
+        effectiveSeason(
+          { iceOut: (lake.ice_out_actual as string) ?? null, pullDeadline: (lake.pull_deadline as string) ?? null },
+          todayLakeDate(),
+        ),
+        lake.season_confirmed as boolean | undefined,
+      );
+      const deadlineLine = provisional
+        ? `We're expecting ${lake.name}'s pull deadline around <b>${deadline}</b> — an estimate until this year's ice-out is measured. That's when piers, lifts and boats need to be out ahead of the hard freeze (we build in an 8-day safety buffer), and we'll tell you if it moves.`
+        : `${lake.name}'s pull deadline is <b>${deadline}</b> — that's when piers, lifts and boats need to be out ahead of the hard freeze (we build in an 8-day safety buffer).`;
       void sendEmail({
         to: email,
         subject: `Book your fall pull on ${lake.name} before the freeze`,
-        html: `<p>Hi ${u?.name ?? "there"},</p><p>${lake.name}'s pull deadline is <b>${deadline}</b> — that's when piers, lifts and boats need to be out ahead of the hard freeze (we build in an 8-day safety buffer). Book your fall pull now so your crew has a slot before the rush.</p><p>Open LakeLife to schedule. 🌊</p>`,
+        html: `<p>Hi ${u?.name ?? "there"},</p><p>${deadlineLine} Book your fall pull now so your crew has a slot before the rush.</p><p>Open LakeLife to schedule. 🌊</p>`,
       });
       emailed++;
     }

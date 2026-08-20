@@ -316,7 +316,7 @@ export function JobThread({
 
       {shown.length === 0 ? (
         <p className="mut" style={{ fontSize: 13.5 }}>
-          Nothing said yet on this property. Anything you send lands in the homeowner&apos;s portal and their inbox.
+          Nothing said yet on this property. Anything you send shows up in the homeowner&apos;s portal — we don&apos;t email it to them, so it waits until they sign in.
         </p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 400, overflowY: "auto" }}>

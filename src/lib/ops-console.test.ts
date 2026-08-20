@@ -198,3 +198,90 @@ describe("nobody is sold against a guessed season window", () => {
     expect(ui).toMatch(/copied from a neighbouring lake/);
   });
 });
+
+/**
+ * FIVE MORE SENTENCES THAT ASSERTED SOMETHING THE CODE DOES NOT DO.
+ * Found by a per-role audit of every user-facing surface, each one then put to
+ * an independent reviewer told to refute it.
+ */
+describe("nothing claims money moved when none did", () => {
+  it("the escalation result reports the refund it actually made", () => {
+    // opsResolveEscalated returns { ok: true, refunded: 0 } when nothing was
+    // ever captured — and decideDisputeOutcome escalates PRECISELY BECAUSE
+    // nothing was captured, so that is the common path, not the edge.
+    const a = src("../app/ops/dispute-actions.ts");
+    const code = a.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // ASKED IS NOT OBEYED. Checking only that `res.refunded` appears passes
+    // even when the branch is hard-coded to true — the same gap that let the
+    // notification gate be computed and ignored. Pin the derivation itself.
+    expect(code).toMatch(/const moved = \(res\.refunded \?\? 0\) > 0;/);
+    expect(code).toMatch(/moved\s*\n?\s*\?/);
+    expect(code).toMatch(/nothing to refund/);
+    expect(code).not.toMatch(/"Refunded\. The crew's remainder has been released\."/);
+  });
+
+  it("the branch it is about still exists", () => {
+    expect(src("./disputes.ts")).toMatch(/return \{ ok: true, refunded: 0 \}/);
+  });
+});
+
+describe("the seasonal freeze warning hedges a guessed deadline", () => {
+  it("reads the signals rather than printing the raw column", () => {
+    // The one email of the year that tells a homeowner when their pier must
+    // come out. prettyDate prints no year, so a rolled date is
+    // indistinguishable from a measured one.
+    const a = src("./automation.ts");
+    const at = a.indexOf("export async function sendSeasonalPullReminders");
+    expect(at).toBeGreaterThan(-1);
+    const body = a.slice(at, a.indexOf("\nexport ", at + 10));
+    expect(body).toMatch(/season_confirmed/);
+    expect(body).toMatch(/seasonIsProvisional/);
+    expect(body).toMatch(/an estimate until this year's ice-out is measured/);
+  });
+
+  it("and still states it plainly when the lake is confirmed", () => {
+    const a = src("./automation.ts");
+    const at = a.indexOf("export async function sendSeasonalPullReminders");
+    const body = a.slice(at, a.indexOf("\nexport ", at + 10));
+    expect(body).toMatch(/pull deadline is <b>\$\{deadline\}<\/b>/);
+  });
+});
+
+describe("no screen promises a message it does not send", () => {
+  it("ops is told their reply is not emailed", () => {
+    const f = src("../components/ops/JobFile.tsx");
+    expect(f).not.toMatch(/and their inbox/);
+    expect(f).toMatch(/we don&apos;t email it to them/);
+  });
+
+  it("because sendOpsMessage genuinely only writes a row", () => {
+    // If a send is ever added here, this fails and the copy above is stale.
+    const a = src("../app/ops/messages-actions.ts");
+    const at = a.indexOf("export async function sendOpsMessage");
+    const body = a.slice(at, a.indexOf("\nexport ", at + 10));
+    expect(body).not.toMatch(/sendEmail|notify\(|sendSms/);
+  });
+
+  it("storage does not promise a text nothing can send", () => {
+    const p = src("../app/book/storage/page.tsx");
+    expect(p).not.toMatch(/you&apos;ll get a text|you'll get a text/);
+  });
+});
+
+describe("no hint quotes a dial nobody set", () => {
+  it("the agreement-length hint describes the field, not a value", () => {
+    // parks.max_agreement_months is nullable with no default; the hint said
+    // "Your rule is three months" whatever was in the box, including empty.
+    const d = src("../components/ParkDials.tsx");
+    expect(d).not.toMatch(/Your rule is three months/);
+    expect(d).toMatch(/How long one agreement may run/);
+  });
+
+  it("the park cost label claims only what the query knows", () => {
+    // getBillableParkJobs filters on job status alone and reads nothing about
+    // payment — and nothing in the tree ever writes jobs.status = 'paid'.
+    const c = src("../components/ParkCosts.tsx");
+    expect(c).not.toMatch(/Paid to LakeLife, not yet passed on/);
+    expect(c).toMatch(/Work LakeLife has done here/);
+  });
+});

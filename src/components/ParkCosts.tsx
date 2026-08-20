@@ -202,7 +202,7 @@ export function ParkCosts({
 
           <div style={{ fontSize: 13.5, fontWeight: 800, marginBottom: 4 }}>
 
-            Paid to LakeLife, not yet passed on
+            Work LakeLife has done here, not yet passed on
 
           </div>
 
