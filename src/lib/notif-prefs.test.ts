@@ -72,10 +72,19 @@ describe("the send gate — six switches that used to do nothing", () => {
   });
 
   it("refuses a channel the type is never delivered on", () => {
-    // "Approval needed from a crew flag" is a text; there is no email switch
-    // to consult, so an email path must not silently fall through to allowed.
-    expect(staticGate("appr", "email")).toBe("deny");
+    // "Crew on the way" is a text and the seasonal nudge is an email; neither
+    // has the other's switch to consult, so those paths must not silently fall
+    // through to allowed.
+    expect(staticGate("day", "email")).toBe("deny");
     expect(staticGate("season", "sms")).toBe("deny");
+  });
+
+  it("consults BOTH channels for the crew flag — the email is the one that arrives", () => {
+    // This assertion used to read `staticGate("appr","email") === "deny"`,
+    // which was true of the DEFINITION and false of the code: submitFlag sent
+    // that email with no gate at all. The def now matches what sends.
+    expect(staticGate("appr", "sms")).toBe("consult");
+    expect(staticGate("appr", "email")).toBe("consult");
   });
 
   it("allows a type it has never heard of rather than swallowing it", () => {

@@ -465,7 +465,23 @@ export async function submitFlag(
       }
     }
 
-    if (owner?.phone && (await allowsNotification(owner.id, "appr", "sms"))) {
+    // THE SWITCH THEY CAN SEE GOVERNED THE CHANNEL THAT DOESN'T WORK.
+    //
+    // "Approval needed from a crew flag" was declared a TEXT-ONLY type, so the
+    // settings screen drew one chip — SMS — and the text is on the channel that
+    // has delivered nothing since 19 July. The email below then went out with
+    // no gate on it at all: the message that actually arrives was the one the
+    // customer had no way to stop, and the one they could stop never arrived.
+    //
+    // The def now says "Text + email" and the email asks the same question the
+    // text does. Nobody's mail changes today — `appr` defaults on and no
+    // customer can have saved an email row for a chip that was never drawn —
+    // but from here the switch means what it says.
+    const [apprBySms, apprByEmail] = await Promise.all([
+      allowsNotification(owner?.id, "appr", "sms"),
+      allowsNotification(owner?.id, "appr", "email"),
+    ]);
+    if (owner?.phone && apprBySms) {
       void sendSms(
         owner.phone,
         detail
@@ -475,7 +491,7 @@ export async function submitFlag(
             `you say yes: ${site}/approvals 🌊`,
       );
     }
-    if (owner?.email) {
+    if (owner?.email && apprByEmail) {
       void sendEmail({
         to: owner.email,
         subject: `A quick check on your ${svcName}`,
