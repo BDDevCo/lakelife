@@ -12,6 +12,8 @@ import { getMyStanding } from "@/lib/scoring-data";
 import { tierLabel } from "@/lib/scoring";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
 import { VendorDocs } from "@/components/VendorDocs";
+import { getNeedsYou } from "./needs-you-data";
+import { VendorNeedsYou } from "@/components/VendorNeedsYou";
 import { todayLakeDate } from "@/lib/booking";
 import { TermsBody } from "@/components/TermsBody";
 import { TOS_VERSION } from "@/lib/tos";
@@ -108,10 +110,20 @@ export default async function VendorTodayPage() {
   }
 
   const admin2 = createServiceClient();
-  const [day, standing, confRes] = await Promise.all([
+  const [day, standing, confRes, needsYou] = await Promise.all([
     getVendorDay(),
     getMyStanding(vendorId),
     admin2.from("job_confirmations").select("verdict").eq("vendor_id", vendorId).not("verdict", "is", null),
+    // A FAILED SIDECAR MUST NOT TAKE THE ROUTE DOWN.
+    //
+    // This is the screen a crew works from at 7am. If the dispute read fails,
+    // they still need their stops — so the failure lands in the card as a
+    // sentence rather than as a page that will not load. The card says it
+    // could not check, which is the one thing an empty card cannot say.
+    getNeedsYou(vendorId).catch((e) => {
+      console.error("[vendor] couldn't build what-needs-you:", e);
+      return { held: [], pausedLakes: [], checkFailed: true };
+    }),
   ]);
   const confRows = mustRead("your customer feedback", confRes);
   const thumbsUp = (confRows ?? []).filter((c) => c.verdict === "good").length;
@@ -157,6 +169,10 @@ export default async function VendorTodayPage() {
         <p style={{ fontSize: 13, fontWeight: 700, color: "var(--warn)", marginBottom: 16 }}>
           Photos are required on every job — no photos, no completion, no payout.
         </p>
+
+        {/* Above standing on purpose: held pay and a paused lake are things a
+            crew has to ACT on, and standing is something they read. */}
+        <VendorNeedsYou data={needsYou} today={todayLakeDate()} />
 
         {standing && standingLabels && (
           <VendorStanding standing={standing} label={standingLabels.label} blurb={standingLabels.blurb} thumbsUp={thumbsUp} thumbsDown={thumbsDown} />

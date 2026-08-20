@@ -198,6 +198,7 @@ const MAY_SEE_FIXTURES: Record<string, string> = {
   "src/app/profile/account-actions.ts": "a signed-in owner's own account",
   "src/app/vendor/job-detail-data.ts": "a signed-in crew's own job",
   "src/app/vendor/open-data.ts": "a signed-in crew's open board",
+  "src/app/vendor/needs-you-data.ts": "a signed-in crew's own lake demotions",
   "src/app/ops/calendar-data.ts": "ops",
   "src/app/ops/dispatch-data.ts": "ops",
   "src/app/ops/job-detail-data.ts": "ops",

@@ -31,8 +31,10 @@ export function TermsBody() {
         <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>What LakeLife verifies</h3>
         <p className="mut" style={{ fontSize: 14, margin: 0, lineHeight: 1.6 }}>
           Every active crew has <b>insurance on file</b> (a certificate of insurance, re-validated
-          yearly; storage crews additionally carry custody coverage) and a <b>W-9 with a valid
-          EIN or SSN</b> on file before they can be routed work. Verification of documents is the
+          yearly; storage crews additionally carry custody coverage) and a{" "}
+          <b>W-9 with a valid EIN or SSN</b>{" "}
+          on file before they can be routed work.
+          Verification of documents is the
           extent of LakeLife&apos;s role — crews are independent businesses responsible for their
           own work.
         </p>
