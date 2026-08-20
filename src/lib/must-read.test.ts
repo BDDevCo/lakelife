@@ -301,6 +301,18 @@ describe("the surfaces the first sweep missed", () => {
     expect(bare, `still swallowing: ${bare.join(" | ")}`).toEqual([]);
   });
 
+  it("the crews board cannot invent a crew's standing on a lake", () => {
+    // Two ways this lies. An empty lake list prints every crew as serving
+    // nowhere — the exact question the board is being asked. An empty demotion
+    // list says every crew is in good standing everywhere, which is the
+    // reassuring answer and sometimes the false one.
+    const src = read("../app/ops/crews-data.ts");
+    expect(src).toMatch(/mustRead\(\s*"the lakes"/);
+    expect(src).toMatch(/mustRead\(\s*"which crews are paused off a lake"/);
+    const bare = src.match(/const\s*\{\s*(data|count):[^}]*\}\s*=\s*await\s+admin/g) ?? [];
+    expect(bare, `still swallowing: ${bare.join(" | ")}`).toEqual([]);
+  });
+
   it("the card-on-file check cannot fail open", () => {
     // (cardCount ?? 0) > 0 on a failed count is false, and the page then tells
     // somebody with a card that their $450 is unpaid because they have none.

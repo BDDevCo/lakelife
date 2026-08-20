@@ -173,6 +173,7 @@ const MAY_SEE_FIXTURES: Record<string, string> = {
   "src/lib/comms-context.ts": "a signed-in crew's own service lakes",
   "src/app/ops/data.ts": "ops edits lake conditions — somebody has to be able to set a fixture's dates",
   "src/app/ops/actions.ts": "ops writes lake conditions",
+  "src/app/ops/crews-data.ts": "ops crews board — names the lakes each crew serves, and a fixture appearing there is itself worth seeing",
   "src/app/ops/parks-data.ts": "ops park admin",
   "src/app/ops/parks-actions.ts": "ops park admin",
   "src/app/park/data.ts": "a signed-in park owner's own park",

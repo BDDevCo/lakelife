@@ -214,6 +214,26 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
         )}
       </div>
 
+      {/* WHERE THEY WORK, AND WHAT HAS BEEN TAKEN AWAY.
+          "No crew serves Pretty Lake yet" is a sentence ops reads on the
+          dispatch side with nothing here to check it against. A crew who never
+          ticked Pretty and a crew auto-demoted off it last night look identical
+          from this board and need opposite responses — ring them and ask, or
+          go and look at what went wrong. */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 12, fontSize: 13 }}>
+        <span className="mut">Lakes:</span>
+        {crew.lakes.length === 0 ? (
+          <span className="ll-pill warn">no lakes ticked — dispatch can&apos;t route them</span>
+        ) : (
+          crew.lakes.map((l) => <span key={l} className="ll-pill teal">{l}</span>)
+        )}
+        {crew.pausedLakes.map((p) => (
+          <span key={p.name} className="ll-pill warn" title={`Auto-demoted. Lifts ${p.liftsOn}.`}>
+            {p.name} paused until {new Date(p.liftsOn + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </span>
+        ))}
+      </div>
+
       {/* Controls */}
       <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
         <div className="ll-field" style={{ marginBottom: 0, width: 130 }}>

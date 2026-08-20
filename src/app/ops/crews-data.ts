@@ -5,6 +5,8 @@ import { getVendorScores } from "@/lib/scoring-data";
 import { computeScore, type CrewTier } from "@/lib/scoring";
 import { coiState, type CoiState } from "./crews-coi";
 import { mustRead } from "@/lib/must-read";
+import { isCoolingDown } from "@/lib/lake-standing";
+import { getPlatformSettings } from "@/lib/settings";
 
 /** Crew (vendor) roster for the ops Crews tab. Ops-only, service-role read —
  *  never import this into a vendor/owner surface (it carries no margin, but it
@@ -39,6 +41,18 @@ export interface OpsCrew {
   completedCount: number;
   thumbsUp: number; // customer 👍 confirmations
   thumbsDown: number; // customer 👎 issue flags
+  /**
+   * WHICH LAKES THIS CREW ACTUALLY WORKS, and which have been taken away.
+   *
+   * When dispatch says "No crew serves Pretty Lake yet", ops had no way from
+   * this board to tell the two apart: a crew who simply never ticked Pretty,
+   * and a crew who was auto-demoted off it last night after two strikes. Those
+   * need opposite responses — ring them and ask, or look at what went wrong —
+   * and the board showed neither.
+   */
+  lakes: string[];
+  /** Demoted off, still inside the cooldown. Empty for almost every crew. */
+  pausedLakes: Array<{ name: string; liftsOn: string }>;
 }
 
 const FRESH_CREW = computeScore({ completedCount: 0, onTimeCount: 0, ratedCount: 0, flagsApproved: 0, flagsDeclined: 0 });
@@ -53,6 +67,7 @@ interface CrewRaw {
   status: string;
   invite_email: string | null;
   service_types: string[] | null;
+  service_lakes: string[] | null;
   daily_capacity: number | null;
   work_days: string[] | null;
   coi_url: string | null;
@@ -69,11 +84,11 @@ export async function getCrews(): Promise<OpsCrew[]> {
   const admin = createServiceClient();
   const today = todayLakeDate();
 
-  const [crewRes, scores, confirmRes] = await Promise.all([
+  const [crewRes, scores, confirmRes, lakeRes, demotionRes, settings] = await Promise.all([
     admin
       .from("vendors")
       .select(
-        "id, company, status, invite_email, service_types, daily_capacity, work_days, " +
+        "id, company, status, invite_email, service_types, service_lakes, daily_capacity, work_days, " +
           // Named for the same reason as the COI cron: two FKs from vendors to
         // users, so a bare users(...) is PGRST201. Unguarded this showed an
         // empty Crews tab reading "nobody invited yet"; guarded it threw.
@@ -81,12 +96,34 @@ export async function getCrews(): Promise<OpsCrew[]> {
       ),
     getVendorScores(),
     admin.from("job_confirmations").select("vendor_id, verdict").not("verdict", "is", null),
+    admin.from("lakes").select("id, name"),
+    admin.from("vendor_lake_demotions").select("vendor_id, lake_id, demoted_at"),
+    getPlatformSettings(),
   ]);
   // An empty roster is a real state (nobody invited yet) and the Crews tab says
   // so. A failed read used to say the same thing — and a lost thumbs-down read
   // shows a crew with a clean record they may not have.
   const data = mustRead("the crew roster", crewRes);
   const confirmations = mustRead("the customers' verdicts on each crew", confirmRes);
+  // An empty lake list here would print every crew as serving nowhere, which is
+  // the exact question this board is being asked to answer.
+  const lakeNames = new Map(
+    (mustRead("the lakes", lakeRes) ?? []).map((l) => [l.id as string, l.name as string]),
+  );
+  // And an empty demotion list would say every crew is in good standing on
+  // every lake — the reassuring answer, and the one that is sometimes false.
+  const demotions = mustRead("which crews are paused off a lake", demotionRes);
+  const nowMs = Date.now();
+  const pausedByVendor = new Map<string, Array<{ name: string; liftsOn: string }>>();
+  for (const d of demotions ?? []) {
+    if (!isCoolingDown(d.demoted_at as string, settings.lakeDemotionCooldownDays, nowMs)) continue;
+    const lifts = new Date(
+      Date.parse(d.demoted_at as string) + settings.lakeDemotionCooldownDays * 86_400_000,
+    ).toISOString().slice(0, 10);
+    const list = pausedByVendor.get(d.vendor_id as string) ?? [];
+    list.push({ name: lakeNames.get(d.lake_id as string) ?? "a lake", liftsOn: lifts });
+    pausedByVendor.set(d.vendor_id as string, list);
+  }
   const thumbs = new Map<string, { up: number; down: number }>();
   for (const c of confirmations ?? []) {
     const t = thumbs.get(c.vendor_id as string) ?? { up: 0, down: 0 };
@@ -146,6 +183,11 @@ export async function getCrews(): Promise<OpsCrew[]> {
         completedCount: sc.completedCount,
         thumbsUp: thumbs.get(r.id)?.up ?? 0,
         thumbsDown: thumbs.get(r.id)?.down ?? 0,
+        lakes: ((r.service_lakes as string[] | null) ?? [])
+          .map((id) => lakeNames.get(id))
+          .filter((n): n is string => !!n)
+          .sort((a, b) => a.localeCompare(b)),
+        pausedLakes: (pausedByVendor.get(r.id) ?? []).sort((a, b) => a.liftsOn.localeCompare(b.liftsOn)),
       };
     }),
   );
