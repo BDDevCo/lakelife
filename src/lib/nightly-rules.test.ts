@@ -246,3 +246,71 @@ describe("stranded payout batches are swept back into the pool", () => {
     expect(route).toMatch(/noteSkips\("strandedPayouts", strandedPayouts\)/);
   });
 });
+
+/**
+ * THE BOUNTY WAS PAID ON A MARGIN THE JOB NO LONGER HAD.
+ *
+ * settleJob reads the job once at the top. The spring finalize block then
+ * UPDATEs customer_price and margin for an overstay, and refreshed only the
+ * price in memory. `price` below is re-read from job.customer_price so it was
+ * always right; `job.margin` was not — and it is what the crew-bringer's
+ * referral bounty is a share of (accrueReferralEarnings → crewShareAccrual of
+ * p.margin × cashRatio). A spring job that ran over billed the customer the
+ * higher amount, recorded the higher margin, and paid the bounty on the older,
+ * smaller one.
+ */
+describe("the spring finalize refreshes everything it changed", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("./automation.ts", import.meta.url)), "utf8",
+  );
+  const at = src.indexOf("if (finalized && finalized.length > 0) {");
+  const body = src.slice(at, at + 1400);
+
+  it("refreshes the in-memory margin as well as the price", () => {
+    expect(at).toBeGreaterThan(-1);
+    expect(body).toMatch(/job\.customer_price = finalPrice;/);
+    expect(body).toMatch(/job\.margin = job\.vendor_cost != null/);
+  });
+
+  it("uses the same expression the UPDATE used, so the two cannot disagree", () => {
+    // The UPDATE writes Math.round((finalPrice - vendor_cost) * 100) / 100.
+    const upd = src.slice(src.indexOf("const finalPrice ="), at);
+    expect(upd).toMatch(/margin: job\.vendor_cost != null \? Math\.round\(\(finalPrice - Number\(job\.vendor_cost\)\) \* 100\) \/ 100 : null/);
+    expect(body).toMatch(/Math\.round\(\(finalPrice - Number\(job\.vendor_cost\)\) \* 100\) \/ 100/);
+  });
+
+  it("and the bounty really is a share of that margin", () => {
+    // If this stops being true the fix above stops mattering — and this is
+    // where you find out.
+    expect(src).toMatch(/crewShareAccrual\(p\.margin \* cashRatio/);
+  });
+});
+
+describe("the ops job file's totals match the lines above them", () => {
+  const data = readFileSync(
+    fileURLToPath(new URL("../app/ops/job-detail-data.ts", import.meta.url)), "utf8",
+  );
+
+  it("crew take-home includes trip fees", () => {
+    // The page renders a "Trip fee" payout line and then a total that did not
+    // contain it — a self-contradicting screen ops has to reconcile by hand.
+    expect(data).toMatch(/const crewTripFees = round2\(payouts\.filter\(\(p\) => p\.kind === "trip"\)/);
+    expect(data).toMatch(/const crewNet = round2\(crewNow \+ crewAdjustments \+ crewTripFees\);/);
+  });
+
+  it("but still excludes the tip, which is not ours and not billed", () => {
+    // 0091/0097: a tip never touches an invoice and is passed to the crew in
+    // full. Sweeping it into crewNet would make LakeLife look like it kept
+    // less than it did, and would double-count against the customer's card.
+    const at = data.indexOf("const crewNet =");
+    expect(data.slice(at - 400, at + 120)).not.toMatch(/kind === "tip"/);
+  });
+
+  it("and the screen names each part of the total", () => {
+    const page = readFileSync(
+      fileURLToPath(new URL("../app/ops/jobs/[id]/page.tsx", import.meta.url)), "utf8",
+    );
+    expect(page).toMatch(/in trip fees/);
+    expect(page).toMatch(/in clawbacks/);
+  });
+});

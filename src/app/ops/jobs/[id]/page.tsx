@@ -454,7 +454,20 @@ export default async function OpsJobPage(ctx: { params: Promise<{ id: string }> 
 
         <div style={{ borderTop: "1px solid var(--line)", marginTop: 12, paddingTop: 8 }}>
           <Row label="Customer cash, net of refunds" value={money.format(t.netCustomerCash)} strong />
-          <Row label="Crew take-home on this job" sub={t.crewAdjustments < 0 ? `earning ${money.format(t.crewNow)} less ${money.format(Math.abs(t.crewAdjustments))} in clawbacks` : undefined} value={money.format(t.crewNet)} strong />
+          {/* The sub-line names every part, because the payout lines above are
+              itemised and a total that does not add up to them is the thing
+              ops has to reconcile by hand. Trip fees used to be printed as a
+              line and then left out of this figure entirely. */}
+          <Row
+            label="Crew take-home on this job"
+            sub={[
+              t.crewAdjustments < 0 || t.crewTripFees > 0 ? `earning ${money.format(t.crewNow)}` : undefined,
+              t.crewTripFees > 0 ? `plus ${money.format(t.crewTripFees)} in trip fees` : undefined,
+              t.crewAdjustments < 0 ? `less ${money.format(Math.abs(t.crewAdjustments))} in clawbacks` : undefined,
+            ].filter(Boolean).join(" ") || undefined}
+            value={money.format(t.crewNet)}
+            strong
+          />
           {t.referralAccrued > 0 && <Row label="Referral money owed out" value={money.format(t.referralAccrued)} strong />}
           <Row label="LakeLife keeps" value={money.format(t.lakelifeNet)} strong />
           {t.tipCharged > 0 && (

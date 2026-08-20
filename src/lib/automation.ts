@@ -571,6 +571,21 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
     if (finErr) return { ok: false, error: `spring finalize failed: ${finErr.message}` };
     if (finalized && finalized.length > 0) {
       job.customer_price = finalPrice; // the number every step below bills
+      // AND THE MARGIN, which the same UPDATE just changed in the database.
+      //
+      // Refreshing the price and not the margin left `job.margin` holding the
+      // figure from BEFORE the overstay was added. `price` below is re-read
+      // from job.customer_price so it was always right; the margin was not,
+      // and it is what the crew-bringer's referral bounty is a share of
+      // (accrueReferralEarnings → crewShareAccrual(p.margin × cashRatio, …)).
+      // So a spring job that ran over billed the customer the higher amount,
+      // recorded the higher margin, and paid the bounty on the lower one.
+      //
+      // Computed with the identical expression the UPDATE used, so the row and
+      // the local copy cannot say different things.
+      job.margin = job.vendor_cost != null
+        ? Math.round((finalPrice - Number(job.vendor_cost)) * 100) / 100
+        : null;
       if (addOn > 0) {
         // The meter as its own honest line (items must sum to the bill).
         const { data: meterSvc, error: meterErr } = await admin

@@ -187,6 +187,15 @@ export interface OpsMoneyTotals {
   crewOriginal: number; // what the crew was EVER owed (immutable anchor)
   crewNow: number; // earning rows as they stand after any reduction
   crewAdjustments: number; // negative: clawbacks netting against a future batch
+  /**
+   * Trip fees paid to the crew for this job — they drove out and could not get
+   * in. Real take-home, and it was MISSING from crewNet: the page renders a
+   * "Trip fee" payout line and then a "Crew take-home on this job" total that
+   * did not contain it, so the totals contradicted the lines printed directly
+   * above them. Unlike a tip (below), a trip fee IS ours to account for —
+   * whether or not the customer was ever charged for it, we paid it.
+   */
+  crewTripFees: number;
   crewNet: number;
   referralAccrued: number; // non-void referral money this job generated
   lakelifeNet: number; // what LakeLife keeps once everyone else is paid
@@ -195,7 +204,8 @@ export interface OpsMoneyTotals {
    *
    * DELIBERATELY OUTSIDE EVERY TOTAL ABOVE. It is not billed, not captured
    * revenue, and not LakeLife's — 0097 keeps it out of `invoices` for exactly
-   * that reason, and `crewNet` counts only earnings and adjustments. It is
+   * that reason, and `crewNet` counts earnings, adjustments and trip fees but
+   * never this. It is
    * here so that when a customer rings up asking what we charged them, ops can
    * see the whole card statement instead of a number that is short by the tip.
    */
@@ -617,7 +627,8 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
   const crewOriginal = round2(earnings.reduce((s, p) => s + (p.originalAmount ?? p.amount), 0));
   const crewNow = round2(earnings.reduce((s, p) => s + p.amount, 0));
   const crewAdjustments = round2(payouts.filter((p) => p.kind === "adjustment").reduce((s, p) => s + p.amount, 0));
-  const crewNet = round2(crewNow + crewAdjustments);
+  const crewTripFees = round2(payouts.filter((p) => p.kind === "trip").reduce((s, p) => s + p.amount, 0));
+  const crewNet = round2(crewNow + crewAdjustments + crewTripFees);
   const referralAccrued = round2(referrals.filter((r) => r.status !== "void").reduce((s, r) => s + r.amount, 0));
   const netCustomerCash = round2(captured - refunded);
 
@@ -630,6 +641,7 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
     crewOriginal,
     crewNow,
     crewAdjustments,
+    crewTripFees,
     crewNet,
     referralAccrued,
     lakelifeNet: round2(netCustomerCash - crewNet - referralAccrued),
