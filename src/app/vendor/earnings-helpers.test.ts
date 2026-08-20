@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   earningsRowLabel,
+  reportedPayoutStatus,
   tipsByCrew,
   isoWeekKey,
   isoWeekParts,
@@ -331,5 +332,71 @@ describe("nothing tells a crew their money moves on a day it doesn't", () => {
     const code = strip(readSrc("./earnings/statement/route.ts"));
     expect(code).toMatch(/not a record of what\s*\n?\s*was paid out/);
     expect(code).toMatch(/pulled early|early pull/i);
+  });
+});
+
+/**
+ * A CREW WHO HAD BEEN PAID STILL READ "IN THE NEXT MONTH-END PAYOUT".
+ *
+ * Nothing in the tree writes 'queued', 'exported' or 'paid' onto a PAYOUT row.
+ * settleJob inserts 'released', disputes flip held/released, refunds write
+ * 'clawed'. The money moving is recorded on the BATCH. So three of
+ * statusLabel's branches were unreachable and the crew's screen, printed
+ * statement and bookkeeper's CSV all reported money already in their bank as
+ * still waiting.
+ */
+describe("reportedPayoutStatus — the batch is where the money moving is recorded", () => {
+  it("a released payout not yet in a batch is still released", () => {
+    expect(reportedPayoutStatus("released", null)).toBe("released");
+  });
+
+  it("follows the batch once there is one", () => {
+    expect(reportedPayoutStatus("released", "queued")).toBe("queued");
+    expect(reportedPayoutStatus("released", "exported")).toBe("exported");
+    expect(reportedPayoutStatus("released", "paid")).toBe("paid");
+  });
+
+  it("treats a stalled 'building' batch as money in flight, not money waiting", () => {
+    // Until the nightly sweep frees it, those payouts are invisible to the
+    // export AND to readyNow — saying "waiting" would invite a crew to go
+    // looking for a Get-it-now button that will not offer them anything.
+    expect(reportedPayoutStatus("released", "building")).toBe("queued");
+  });
+
+  it("the row's own status wins where it is about the ROW", () => {
+    // A held payout is held whatever its batch says; a clawed one is clawed.
+    expect(reportedPayoutStatus("held", "paid")).toBe("held");
+    expect(reportedPayoutStatus("clawed", "exported")).toBe("clawed");
+    expect(reportedPayoutStatus("pending", "queued")).toBe("pending");
+  });
+
+  it("and those statuses now reach a label that means something", () => {
+    expect(statusLabel(reportedPayoutStatus("released", "paid"))).toBe("Paid");
+    expect(statusLabel(reportedPayoutStatus("released", "queued"))).toBe("In a payout being sent");
+    expect(statusLabel(reportedPayoutStatus("released", null))).toBe("In the next month-end payout");
+  });
+});
+
+describe("the readers that were reporting the wrong money", () => {
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+  it("the crew's earnings derive their status from the batch", () => {
+    const d = read("./earnings-data.ts");
+    expect(d).toMatch(/payout_batches\(status\)/);
+    expect(d).toMatch(/reportedPayoutStatus\(/);
+  });
+
+  it("ops' 'ready to pay out' counts only what is still unbatched", () => {
+    // Without the filter this summed every payout the crew had EVER been paid
+    // and reported it as outstanding.
+    const c = read("../../lib/comms-context.ts");
+    const at = c.indexOf('from("payouts")');
+    expect(c.slice(at, at + 220)).toMatch(/\.is\("batch_id", null\)/);
+  });
+
+  it("the early-pull fee is read and shown", () => {
+    expect(read("./bank-data.ts")).toMatch(/select\("id, kind, gross, fee, net, status, created_at"\)/);
+    expect(read("../../components/VendorPayouts.tsx")).toMatch(/early-pull fee/);
   });
 });

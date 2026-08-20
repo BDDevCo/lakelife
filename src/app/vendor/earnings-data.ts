@@ -10,6 +10,7 @@ import {
   sumByStatus,
   type EarningRow,
   type DateRange,
+  reportedPayoutStatus,
 } from "./earnings-helpers";
 
 /**
@@ -90,7 +91,9 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
     "your earnings",
     await admin
       .from("payouts")
-      .select("id, amount, status, kind, created_at, job_id, jobs(date, route_id, services(name), properties(address))")
+      // batch_id + the batch's own status: the payout row never advances past
+      // 'released', so the batch is the only record of the money moving.
+      .select("id, amount, status, kind, created_at, job_id, batch_id, payout_batches(status), jobs(date, route_id, services(name), properties(address))")
       .eq("vendor_id", vendorId)
       .order("created_at", { ascending: false }),
   );
@@ -178,7 +181,10 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
       service,
       address,
       amount: Number(p.amount) || 0,
-      status: (p.status as string) ?? "pending",
+      status: reportedPayoutStatus(
+        (p.status as string) ?? "pending",
+        ((Array.isArray(p.payout_batches) ? p.payout_batches[0] : p.payout_batches) as { status?: string } | null)?.status ?? null,
+      ),
       kind,
       crew: (() => {
         const jid = (p as { job_id?: string | null }).job_id ?? null;

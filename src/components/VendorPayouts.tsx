@@ -215,6 +215,18 @@ function BatchHistory({ batches }: { batches: PayoutState["batches"] }) {
               {BATCH_KIND_LABEL[b.kind] ?? b.kind}
             </div>
             <div className="mut" style={{ fontSize: 12 }}>{prettyDate(b.created_at)}</div>
+            {/* THE FEE, WHICH NOTHING READ. requestEarlyPayout writes
+                {gross, fee, net} and every later select omitted the fee — so a
+                crew who pulled early saw a period total and a smaller deposit
+                with nothing anywhere explaining the difference. The month-end
+                batch has no fee, so the gap shows up only in the months they
+                pulled early, which is exactly the shape that reads as an error
+                rather than a charge they agreed to. */}
+            {b.fee > 0 && (
+              <div className="mut" style={{ fontSize: 12 }}>
+                {formatCurrency(b.gross)} earned − {formatCurrency(b.fee)} early-pull fee
+              </div>
+            )}
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 14, fontWeight: 800 }}>{formatCurrency(b.net)}</div>

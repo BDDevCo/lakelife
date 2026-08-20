@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
-import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, runFillInDigest, gapSlaAlerts, reconcileRefunds, learnServiceDurations, autoApplyPriceSuggestions, sendNightlyDigest, remindExpiringStays,
+import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeReminders, reconcileUnsettledJobs, reconcileCancelledFees, sendCoiRevalidations, generateAutopilotProposals, demoteLakeStrikes, selfHealCrewBases, sweepWaitlist, expireUnfilledJobs, resolveRushFallbacks, matureReferralEarnings, runReferralPayoutBatch, runNudges, birthSpringJobs, overstayNotices, runMonthlyPayoutBatches, sweepStrandedPayoutBatches, runFillInDigest, gapSlaAlerts, reconcileRefunds, learnServiceDurations, autoApplyPriceSuggestions, sendNightlyDigest, remindExpiringStays,
   proposeOverdueFees,
   raiseTripFees,
   tipsCollectedSinceLastNight,
@@ -128,6 +128,12 @@ async function run(req: Request) {
   // + the frequency-capped, prefs-gated nudge engine.
   const payoutBatch = await step("payoutBatch", () => runReferralPayoutBatch());
   const monthlyPayouts = await step("monthlyPayouts", () => runMonthlyPayoutBatches());
+  // BEFORE the month-end batch would be wrong and after is right: a stranded
+  // 'building' batch holds payouts that are invisible to the export AND to the
+  // crew's own screen, so freeing them lets the very next run pick them up.
+  // Only ever moves money backwards into the pool — a batch that never reached
+  // 'queued' has never been sent to a bank.
+  const strandedPayouts = await step("strandedPayouts", () => sweepStrandedPayoutBatches());
   const fillInDigest = await step("fillInDigest", () => runFillInDigest());
   // Autonomy Ladder (2026-07-23): silent-crew disputes fire their policy,
   // margin_stranded prices within the dial apply themselves.
@@ -141,6 +147,7 @@ async function run(req: Request) {
   const park = await step("park", () => runParkNightly());
   // The scheduling-lifecycle steps: what each of them SKIPPED tonight, into
   // the same digest section as an outright failure. See noteSkips above.
+  noteSkips("strandedPayouts", strandedPayouts);
   noteSkips("noShows", noShows);
   noteSkips("lakeStanding", lakeStanding);
   noteSkips("springBirths", springBirths);

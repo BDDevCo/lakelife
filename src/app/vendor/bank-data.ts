@@ -13,7 +13,12 @@ export interface PayoutState {
   feePct: number;
   feeNow: number;
   netNow: number;
-  batches: Array<{ id: string; kind: string; net: number; status: string; created_at: string }>;
+  batches: Array<{
+    id: string; kind: string; net: number; status: string; created_at: string;
+    /** What was earned before the early-pull fee, and the fee itself. Both are
+     *  written by requestEarlyPayout and were read by nothing. */
+    gross: number; fee: number;
+  }>;
 }
 
 /** The crew's payout picture — last4 only, never the encrypted blobs. */
@@ -36,7 +41,13 @@ export async function getMyPayoutState(): Promise<PayoutState | null> {
   const [acctRes, readyRes, batchesRes, settings] = await Promise.all([
     admin.from("payout_accounts").select("bank_name, account_last4").eq("user_id", user.id).maybeSingle(),
     admin.from("payouts").select("amount, kind").eq("vendor_id", vendor.id).eq("status", "released").is("batch_id", null),
-    admin.from("payout_batches").select("id, kind, net, status, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(12),
+    // gross and fee: `requestEarlyPayout` writes {gross, fee, net} and NOTHING
+    // read the fee — not this screen, not the statement, not the CSV. A crew
+    // who pulled early saw a $2,000 period total and a $1,960 deposit with
+    // nothing anywhere explaining the $40, and the month-end batch has no fee,
+    // so the gap appears only in the months they pulled early — the shape that
+    // reads as an error rather than a charge.
+    admin.from("payout_batches").select("id, kind, gross, fee, net, status, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(12),
     getPlatformSettings(),
   ]);
   const acct = mustRead("your bank details", acctRes);
@@ -64,6 +75,7 @@ export async function getMyPayoutState(): Promise<PayoutState | null> {
     netNow: net,
     batches: (batches ?? []).map((b) => ({
       id: b.id as string, kind: b.kind as string, net: Number(b.net ?? 0),
+      gross: Number(b.gross ?? 0), fee: Number(b.fee ?? 0),
       status: b.status as string, created_at: b.created_at as string,
     })),
   };

@@ -3165,6 +3165,68 @@ export async function overstayNotices(): Promise<{ ok: boolean; sent: number; sk
 }
 
 /**
+ * A PAYOUT REQUEST THAT DIED MID-FLIGHT LEFT THE CREW'S MONEY IN LIMBO.
+ *
+ * `requestEarlyPayout` inserts a batch as 'building', stamps `batch_id` onto
+ * the crew's released payouts, then finalizes the batch to 'queued'. Every
+ * FAILURE path in it already unclaims and drops the batch. What it cannot
+ * handle is the invocation simply ending between those two steps — a
+ * serverless timeout, a deploy mid-request — because then no cleanup code runs
+ * at all.
+ *
+ * What that leaves: payouts stamped into a 'building' batch. The export route
+ * only takes 'queued' and 'exported', deliberately, so the money is never sent
+ * — and `readyNow` filters on `batch_id is null`, so the crew's own screen
+ * says they have nothing to pull. Their money is invisible on every surface
+ * and moving on none of them, permanently, and nothing anywhere is watching
+ * for it.
+ *
+ * This puts it back in the pool. It only moves money BACKWARDS — a batch that
+ * never queued has never been sent to a bank — and the age floor means a
+ * request genuinely in flight right now is never touched. The crew simply taps
+ * Get it now again.
+ */
+const STRANDED_BATCH_MINUTES = 30;
+
+export async function sweepStrandedPayoutBatches(): Promise<{ ok: boolean; swept: number; released: number; skipped: string[] }> {
+  const admin = createServiceClient();
+  const skipped: string[] = [];
+  const cutoff = new Date(Date.now() - STRANDED_BATCH_MINUTES * 60_000).toISOString();
+
+  // Empty here reads as "nothing is stranded", which is the usual and correct
+  // answer — so a failed read saying it would be indistinguishable from a
+  // quiet night, on money nobody else is watching.
+  const stuck = mustRead("payout batches that never finished assembling", await admin
+    .from("payout_batches")
+    .select("id, user_id, created_at")
+    .eq("status", "building")
+    .lt("created_at", cutoff));
+  if (!stuck || stuck.length === 0) return { ok: true, swept: 0, released: 0, skipped };
+
+  let swept = 0, released = 0;
+  for (const b of stuck) {
+    const id = b.id as string;
+    // Unclaim FIRST. If the delete fails afterwards we are left with an empty
+    // building batch, which is inert; the reverse order could delete the batch
+    // and leave payouts pointing at nothing.
+    const { data: freed, error: freeErr } = await admin
+      .from("payouts").update({ batch_id: null }).eq("batch_id", id).select("id");
+    if (freeErr) {
+      skipped.push(`Payout batch ${id} never finished assembling and its money could not be released back to the crew — check it by hand.`);
+      continue;
+    }
+    const { error: delErr } = await admin
+      .from("payout_batches").delete().eq("id", id).eq("status", "building");
+    if (delErr) {
+      skipped.push(`Freed ${(freed ?? []).length} payout(s) from stalled batch ${id}, but the empty batch row is still there.`);
+    }
+    swept += 1;
+    released += (freed ?? []).length;
+  }
+  return { ok: true, swept, released, skipped };
+}
+
+/**
  * Month-end payout batches (owner: all automated, no human banking).
  * Last lake-day of the month: every crew with released, un-batched job
  * payouts AND a bank account on file gets ONE free batch (fee 0). The

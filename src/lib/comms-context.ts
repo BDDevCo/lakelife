@@ -95,7 +95,13 @@ export async function buildCrewContext(vendorId: string): Promise<CrewContext | 
     admin.from("lakes").select("id, name").in("id", (v.service_lakes as string[]) ?? []),
     admin.from("crew_units").select("name, capacity, work_start, work_end, active").eq("vendor_id", vendorId),
     // The crew's OWN take-home ledger — their numbers, allowed.
-    admin.from("payouts").select("amount, status, kind").eq("vendor_id", vendorId).limit(500),
+    // `.is("batch_id", null)` is what makes this "still owed" rather than
+    // "ever earned". A payout's own status never advances past 'released' —
+    // the batch is where the money moving is recorded — so without this filter
+    // every payout the crew has ALREADY BEEN PAID still counted, and ops was
+    // told a crew's lifetime earnings were outstanding. bank-data.ts computes
+    // the same figure and has always carried the filter; this one did not.
+    admin.from("payouts").select("amount, status, kind").eq("vendor_id", vendorId).is("batch_id", null).limit(500),
     admin.from("jobs").select("date, services(name)").eq("vendor_id", vendorId)
       .in("status", ["scheduled", "in_progress"]).order("date", { ascending: true }).limit(8),
   ]);

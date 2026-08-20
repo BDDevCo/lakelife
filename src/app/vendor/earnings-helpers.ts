@@ -209,6 +209,37 @@ export function csvRow(cells: Array<string | number | null | undefined>): string
   return cells.map(csvCell).join(",");
 }
 
+/**
+ * WHAT THIS PAYOUT'S STATUS ACTUALLY IS, given the batch it belongs to.
+ *
+ * Nothing in this codebase ever writes 'queued', 'exported' or 'paid' onto a
+ * PAYOUT row — I grepped every writer. settleJob inserts 'released', disputes
+ * flip 'held'/'released', refunds write 'clawed'. The money moving is recorded
+ * on the BATCH: runMonthlyPayoutBatches and requestEarlyPayout create one and
+ * stamp `batch_id` on the rows; the ACH export flips it to 'exported'; ops
+ * marks it 'paid'.
+ *
+ * So the three branches below for queued/exported/paid were unreachable, and a
+ * crew who had ALREADY BEEN PAID still read "In the next month-end payout" —
+ * on their screen, on the statement they print, and in the CSV their
+ * bookkeeper opens. Deriving it here rather than denormalising a second copy
+ * onto the payout row means the two can never disagree.
+ *
+ * The row's own status wins where it is about the ROW rather than the money:
+ * a held payout is held whatever its batch says, and a clawed one is clawed.
+ */
+export function reportedPayoutStatus(rowStatus: string, batchStatus: string | null | undefined): string {
+  if (rowStatus === "held" || rowStatus === "clawed" || rowStatus === "pending") return rowStatus;
+  if (!batchStatus) return rowStatus;              // not in a batch yet
+  if (batchStatus === "paid") return "paid";
+  if (batchStatus === "exported") return "exported";
+  // 'queued' and 'building' are both "in a payout we are sending" from the
+  // crew's side. `building` is a batch that never finished being assembled —
+  // see the sweep in automation.ts — and until it is cleaned up the honest
+  // thing is to say the money is in flight, not that it is still waiting.
+  return "queued";
+}
+
 /** Human status label shared by the list, statement, and CSV. */
 export function statusLabel(status: string): string {
   // "IN FRIDAY'S PAYOUT" WAS NOT TRUE. `runMonthlyPayoutBatches` gates on

@@ -191,3 +191,58 @@ describe("the route build reports who it actually reached", () => {
     expect(ui).toMatch(/we couldn't reach/);
   });
 });
+
+/**
+ * A PAYOUT REQUEST THAT DIED MID-FLIGHT LEFT THE CREW'S MONEY IN LIMBO.
+ *
+ * requestEarlyPayout inserts a batch as 'building', stamps batch_id onto the
+ * crew's released payouts, then finalizes to 'queued'. Every FAILURE path
+ * already unclaims and drops. What it cannot handle is the invocation ending
+ * between those steps — no cleanup code runs at all. The payouts are then in a
+ * batch the export refuses ('queued'/'exported' only) and invisible to the
+ * crew's own screen (readyNow filters batch_id is null). Money frozen on every
+ * surface, permanently, with nothing watching for it.
+ */
+describe("stranded payout batches are swept back into the pool", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("./automation.ts", import.meta.url)), "utf8",
+  );
+  const at = src.indexOf("export async function sweepStrandedPayoutBatches");
+  const body = src.slice(at, src.indexOf("\nexport ", at + 10));
+
+  it("only touches batches that never finished assembling", () => {
+    expect(at).toBeGreaterThan(-1);
+    expect(body).toMatch(/\.eq\("status", "building"\)/);
+  });
+
+  it("leaves a request that is genuinely in flight alone", () => {
+    // Without an age floor this would race a crew's live tap.
+    expect(body).toMatch(/\.lt\("created_at", cutoff\)/);
+    expect(src).toMatch(/const STRANDED_BATCH_MINUTES = 30;/);
+  });
+
+  it("unclaims the payouts BEFORE deleting the batch", () => {
+    // The reverse order could delete the batch and leave payouts pointing at
+    // a row that no longer exists.
+    expect(body.indexOf('update({ batch_id: null })')).toBeLessThan(body.indexOf('.delete()'));
+  });
+
+  it("refuses to guess when the read fails", () => {
+    // "Nothing is stranded" is the usual answer, so a swallowed read would be
+    // indistinguishable from a quiet night on money nobody else watches.
+    expect(body).toMatch(/mustRead\("payout batches that never finished assembling"/);
+  });
+
+  it("names what it could not free instead of counting it", () => {
+    expect(body).toMatch(/could not be released back to the crew/);
+    expect(body).toMatch(/skipped\.push\(/);
+  });
+
+  it("runs nightly and its skips reach the digest", () => {
+    const route = readFileSync(
+      fileURLToPath(new URL("../app/api/cron/nightly/route.ts", import.meta.url)), "utf8",
+    );
+    expect(route).toMatch(/step\("strandedPayouts", \(\) => sweepStrandedPayoutBatches\(\)\)/);
+    expect(route).toMatch(/noteSkips\("strandedPayouts", strandedPayouts\)/);
+  });
+});
