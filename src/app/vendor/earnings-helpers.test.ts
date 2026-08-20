@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   earningsRowLabel,
   tipsByCrew,
@@ -266,5 +268,68 @@ describe("who gets tipped out — one bank account, several crews", () => {
     expect(t.count).toBe(0);
     expect(t.total).toBe(0);
     expect(t.byCrew).toEqual([]);
+  });
+});
+
+/**
+ * THE SENTENCE THAT SAID FRIDAY.
+ *
+ * `statusLabel` above carries a comment recording that "in Friday's payout" was
+ * not true — `runMonthlyPayoutBatches` gates on `isLastDayOfMonth` and there is
+ * no weekly cadence anywhere in the system. That was fixed in the per-row label
+ * and the reason written down. The headline paragraph on the SAME screen went
+ * on saying "Payouts release every Friday" for another month.
+ *
+ * A fix that lands in one place and not the other is how a falsehood survives
+ * being found. So this scans the surfaces a crew actually reads about their own
+ * money, rather than trusting that the label is the only place it was said.
+ */
+describe("nothing tells a crew their money moves on a day it doesn't", () => {
+  const CREW_MONEY_SURFACES = [
+    "../../components/VendorEarnings.tsx",
+    "../../components/VendorPayouts.tsx",
+    "./earnings-helpers.ts",
+    "./earnings/statement/route.ts",
+  ];
+
+  const readSrc = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  // Comments are where the codebase RECORDS that Friday was wrong. Matching
+  // them would fail the test for documenting its own rule.
+  const strip = (s: string) =>
+    s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  it("the scanner is actually reading these files", () => {
+    for (const f of CREW_MONEY_SURFACES) {
+      expect(readSrc(f).length, `${f} came back empty`).toBeGreaterThan(500);
+    }
+  });
+
+  it("no crew-facing money surface promises a weekly payout", () => {
+    for (const f of CREW_MONEY_SURFACES) {
+      const code = strip(readSrc(f));
+      expect(code, `${f} still tells a crew their pay moves weekly`).not.toMatch(/every Friday|each Friday|Friday's payout|weekly payout/i);
+    }
+  });
+
+  it("the real cadence is the one the batch runner enforces", () => {
+    // If this ever stops being month-end, the copy above is wrong again and
+    // this line is where you find out.
+    const runner = readFileSync(
+      fileURLToPath(new URL("../../lib/automation.ts", import.meta.url)), "utf8",
+    );
+    const at = runner.indexOf("export async function runMonthlyPayoutBatches");
+    expect(at).toBeGreaterThan(-1);
+    expect(runner.slice(at, at + 400)).toMatch(/isLastDayOfMonth\(today\)/);
+  });
+
+  it("the statement does not claim to be a record of what was paid out", () => {
+    // It lists EARNINGS by job date. An early pull carries a fee and a
+    // month-end batch sweeps prior-period jobs, so it can never equal a
+    // deposit — and a document that reads like a remittance advice and isn't
+    // is worse than one that says what it is.
+    const code = strip(readSrc("./earnings/statement/route.ts"));
+    expect(code).toMatch(/not a record of what\s*\n?\s*was paid out/);
+    expect(code).toMatch(/pulled early|early pull/i);
   });
 });

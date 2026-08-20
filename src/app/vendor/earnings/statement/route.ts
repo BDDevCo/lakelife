@@ -175,9 +175,11 @@ ${body}
     </table>
 
     <p class="note">
-      Amounts are your crew&apos;s take-home pay. Payouts go out at month end once a job&apos;s photos
-      are verified. This statement is provided for your records and your accountant — it is not a tax
-      document. Questions? Contact LakeLife dispatch.
+      Amounts are your crew&apos;s take-home pay, listed by the day the work was done. Pay is
+      released once a job&apos;s photos are verified and goes out in the month-end payout, unless it
+      was pulled early — an early pull carries a fee, so a deposit can be smaller than a total shown
+      here. This statement is a record of what was EARNED in the period; it is not a record of what
+      was paid out, and it is not a tax document. Questions? Contact LakeLife dispatch.
     </p>
 
     <div class="print-btn">

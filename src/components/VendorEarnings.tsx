@@ -51,8 +51,17 @@ export function VendorEarnings({
     <div className="wrap" style={{ paddingTop: 24, maxWidth: 720 }}>
       <h1 style={{ fontSize: 26, marginBottom: 4 }}>Your earnings</h1>
       <p className="mut" style={{ fontSize: 14, marginBottom: 16, maxWidth: 560 }}>
-        Payouts release every Friday once a job&apos;s photos are verified. These are your
-        take-home numbers — yours to keep.
+        {/* THERE IS NO FRIDAY. `runMonthlyPayoutBatches` gates on
+            `isLastDayOfMonth` (automation.ts) and nothing anywhere runs weekly.
+            earnings-helpers.ts:214 found this exact falsehood in the per-row
+            status label, fixed it there, and wrote down why — and the headline
+            paragraph on the same screen kept saying it. Telling a crew the
+            wrong week for their own money is the fastest way to lose one.
+            The fee is not named here on purpose: it is a platform dial, and
+            the button below prints the actual dollar amount. */}
+        Your pay is released once a job&apos;s photos are verified, and goes out in the
+        month-end payout. You can pull released money earlier from the card below,
+        for a fee. These are your take-home numbers — yours to keep.
       </p>
 
       {/* Big totals row */}
