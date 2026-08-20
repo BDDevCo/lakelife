@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  summariseCorrection, correctionMessage, humanDuration,
+  summariseCorrection, correctionMessage, correctionCard, humanDuration,
   noAnswerOutcome, noAnswerExplainer, completionBlock,
   declineMeans, scopeNoteFor,
   type TimedRule,
@@ -256,5 +256,54 @@ describe("the record when a declined job goes ahead anyway", () => {
     });
     expect(n).toContain("pier sections: booked 8, crew found 12");
     expect(n).toContain("boat lifts: booked 1, crew found 2");
+  });
+});
+
+describe("correctionCard — the same numbers the notification quoted", () => {
+  it("carries the finding, the money and the time", () => {
+    // The exact case from the season simulation: 8 → 12 sections.
+    const c = correctionCard(summariseCorrection(PIER, P({ pier_sections: 8 }), { pier_sections: 12 }))!;
+    expect(c.changes).toEqual(["Pier sections 8 → 12"]);
+    expect(c.price).toBe("$796.00 instead of $604.00 — up $192.00");
+    expect(c.time).toContain("longer on site");
+  });
+
+  it("says 'down' and 'less' when the crew found LESS than the profile claimed", () => {
+    // The whole string, not a substring: `money` and `humanDuration` both take
+    // the absolute value themselves, so a substring check for "-$" could never
+    // have failed and was proving nothing.
+    const c = correctionCard(summariseCorrection(PIER, P({ pier_sections: 8 }), { pier_sections: 4 }))!;
+    expect(c.changes).toEqual(["Pier sections 8 → 4"]);
+    expect(c.price).toBe("$412.00 instead of $604.00 — down $192.00");
+    expect(c.time).toBe("about an hour less on site");
+  });
+
+  it("says nothing about money when the money doesn't move", () => {
+    // A crew correcting something that carries no price — the card renders
+    // "The price doesn't change." rather than a blank where money should be.
+    const s = summariseCorrection(PIER, P({ pier_sections: 8 }), { pier_sections: 12 });
+    const flat = correctionCard({ ...s, priceDelta: 0, priceAfter: s.priceBefore })!;
+    expect(flat.price).toBeNull();
+  });
+
+  it("is null when the crew confirmed the profile was already right", () => {
+    expect(correctionCard(summariseCorrection(PIER, P({ pier_sections: 8 }), { pier_sections: 8 }))).toBeNull();
+  });
+
+  it("lists every field the crew corrected", () => {
+    const c = correctionCard(summariseCorrection(PIER, P(), { pier_sections: 12, boat_lifts: 2 }))!;
+    expect(c.changes.length).toBe(2);
+  });
+
+  it("agrees with the message the customer already read", () => {
+    // Both sides run the same summary, so the card cannot quote a different
+    // price from the email that brought them here.
+    const s = summariseCorrection(PIER, P({ pier_sections: 8 }), { pier_sections: 12 });
+    const msg = correctionMessage(s, { serviceName: "Pier install", crewName: null });
+    const c = correctionCard(s)!;
+    expect(msg).toContain("$796.00");
+    expect(c.price).toContain("$796.00");
+    expect(msg).toContain("$604.00");
+    expect(c.price).toContain("$604.00");
   });
 });

@@ -140,11 +140,35 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
         </p>
       )}
 
-      {flag.proposed_change && Object.keys(flag.proposed_change).length > 0 && (
-        <p style={{ fontSize: 14, margin: "10px 0 0" }}>
-          <span className="mut">Proposed change: </span>
-          <b>{summarizeChange(flag.proposed_change)}</b>
-        </p>
+      {/* WHAT THE EMAIL SAID, ON THE SCREEN THAT DECIDES.
+          The notification quotes the whole thing — "Pier sections 8 → 12, $796
+          instead of $604, about an hour and a quarter longer". This card used
+          to show "Proposed change: Pier sections: 12". Having read the money,
+          they were approving on a page that had forgotten it.
+          `correction` is null when we could not price it (or on a decided
+          card, where the profile has already moved and the diff would lie), and
+          the old count-only line stands in — never nothing. */}
+      {flag.correction ? (
+        <div style={{ margin: "12px 0 0", padding: "10px 12px", borderRadius: 10, background: "var(--sand)", border: "1px solid var(--line)" }}>
+          {flag.correction.changes.map((c) => (
+            <div key={c} style={{ fontSize: 14, fontWeight: 700 }}>{c}</div>
+          ))}
+          <div style={{ fontSize: 14, marginTop: 6 }}>
+            {flag.correction.price ?? "The price doesn't change."}
+          </div>
+          {flag.correction.time && (
+            <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
+              {flag.correction.time}
+            </div>
+          )}
+        </div>
+      ) : (
+        flag.proposed_change && Object.keys(flag.proposed_change).length > 0 && (
+          <p style={{ fontSize: 14, margin: "10px 0 0" }}>
+            <span className="mut">Proposed change: </span>
+            <b>{summarizeChange(flag.proposed_change)}</b>
+          </p>
+        )
       )}
 
       {pending && (

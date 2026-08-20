@@ -326,3 +326,48 @@ export function completionBlock(job: {
   }
   return null;
 }
+
+/**
+ * THE SAME NUMBERS THE NOTIFICATION QUOTED, ON THE SCREEN THAT DECIDES.
+ *
+ * `submitFlag` composes a fully priced sentence — "Pier sections 8 → 12, $796
+ * instead of $604, about an hour and a quarter longer" — and sends it by text
+ * and email. The approval card then showed "Proposed change: Pier sections:
+ * 12". Just the count. So a homeowner reads the money in the email, taps
+ * through, and approves on a page that has forgotten it — deciding on a number
+ * they now have to remember, or go back to their inbox for.
+ *
+ * Same `summariseCorrection` on both sides, so the card and the message cannot
+ * drift apart. `correctionMessage` itself is not reusable here: it is written
+ * for someone who has not seen the screen yet ("Your crew is at your place…",
+ * "They're waiting on your yes before they start"), which is the wrong voice
+ * for the page you are already looking at, and simply wrong for a flag filed
+ * after the crew has gone.
+ */
+export interface CorrectionCard {
+  /** "Pier sections 8 → 12" — the finding, per field. */
+  changes: string[];
+  /** The money, or null when it genuinely doesn't move. */
+  price: string | null;
+  /** How much longer they'll be there, when that changes. */
+  time: string | null;
+}
+
+export function correctionCard(s: CorrectionSummary): CorrectionCard | null {
+  if (s.noChange) return null;
+  return {
+    // FIELD_LABEL is lower-case because `correctionMessage` drops it into the
+    // middle of a sentence ("…and found pier sections 8 → 12"). Here each one
+    // is its own line, so it starts like one.
+    changes: s.lines.map((l) => `${l.label.charAt(0).toUpperCase()}${l.label.slice(1)} ${l.from} → ${l.to}`),
+    price:
+      s.priceDelta === 0
+        ? null
+        : `${money(s.priceAfter)} instead of ${money(s.priceBefore)} — ` +
+          `${s.priceDelta > 0 ? "up" : "down"} ${money(s.priceDelta)}`,
+    time:
+      s.minutesDelta === 0
+        ? null
+        : `about ${humanDuration(s.minutesDelta)} ${s.minutesDelta > 0 ? "longer" : "less"} on site`,
+  };
+}
