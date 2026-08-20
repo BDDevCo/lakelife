@@ -106,6 +106,14 @@ function AmenityCard({
 }) {
   const [unitLabel, setUnitLabel] = useState("");
   const [booking, setBooking] = useState<string | null>(null);
+  // HOW THEY PAID, PER BOOKING. `collectAmenityMoney` has accepted cash, check,
+  // card, transfer and other since 0119 — the button passed "cash"
+  // unconditionally, so a guest who wrote a cheque for the boat was recorded as
+  // having paid cash and the method column on the CPA statement was wrong from
+  // the first boat day. Defaults to cash because that is what happens at an
+  // office window, but it is a visible control next to the button rather than
+  // an assumption made for him.
+  const [payMethod, setPayMethod] = useState<Record<string, string>>({});
 
   // WHAT IS COMING, PLUS WHAT IS STILL OWED FROM WHAT HAS GONE.
   //
@@ -257,18 +265,35 @@ function AmenityCard({
                   </span>
                 )}
                 {h.status !== "blackout" && owed > 0 && (
-                  <button
-                    className="ll-btn ghost sm" disabled={busy}
-                    onClick={() =>
-                      start(async () => {
-                        const res = await collectAmenityMoney(parkId, h.id, String(owed), "cash");
-                        toast(res.ok ? (res.signal ?? "Recorded.") : (res.error ?? "Couldn't record that."));
-                        if (res.ok) router.refresh();
-                      })
-                    }
-                  >
-                    Took cash
-                  </button>
+                  <>
+                    <select
+                      aria-label="How they paid"
+                      value={payMethod[h.id] ?? "cash"}
+                      disabled={busy}
+                      onChange={(e) => setPayMethod((m) => ({ ...m, [h.id]: e.target.value }))}
+                      // No inline fontSize: anything under 16 makes iOS zoom the
+                      // whole page on focus. design-system-holds.test.ts catches it.
+                      style={{ padding: "4px 6px" }}
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="check">Check</option>
+                      <option value="card">Card</option>
+                      <option value="transfer">Transfer</option>
+                      <option value="other">Other</option>
+                    </select>
+                    <button
+                      className="ll-btn ghost sm" disabled={busy}
+                      onClick={() =>
+                        start(async () => {
+                          const res = await collectAmenityMoney(parkId, h.id, String(owed), payMethod[h.id] ?? "cash");
+                          toast(res.ok ? (res.signal ?? "Recorded.") : (res.error ?? "Couldn't record that."));
+                          if (res.ok) router.refresh();
+                        })
+                      }
+                    >
+                      Took it
+                    </button>
+                  </>
                 )}
                 <button
                   className="ll-btn ghost sm" disabled={busy}

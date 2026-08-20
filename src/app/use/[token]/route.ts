@@ -56,6 +56,24 @@ function page(view: GuestView, path: string, note?: { text: string; ok: boolean 
     ? `<div class="note ${note.ok ? "ok" : "no"}">${escapeHtml(note.text)}</div>`
     : "";
 
+  // THE SUM SHE IS WALKING TO THE OFFICE WITH.
+  //
+  // Three boat days are three taps producing three rows, each reading
+  // "· $150.00", and there was no total anywhere. She arrives at the window not
+  // knowing whether she owes $150 or $450, and the owner is quoting off a
+  // different screen — which is the phone call this whole feature exists to
+  // remove. Days included with the stay carry a null amount and are simply not
+  // money, so they are counted separately and not silently added as zero.
+  const owed = view.mine.reduce((n, m) => n + (m.amount ?? 0), 0);
+  const freeDays = view.mine.filter((m) => !m.amount).length;
+  const totalHtml =
+    view.mine.length > 1 || owed > 0
+      ? `<div class="row" style="border-top:1px solid #dbe6ea;margin-top:6px;padding-top:10px">
+           <span class="mine">${owed > 0 ? `$${owed.toFixed(2)} to pay at the office` : "Nothing to pay"}</span>
+           <span class="why">${freeDays > 0 && owed > 0 ? `${freeDays} of these ${freeDays === 1 ? "is" : "are"} included with your stay` : owed > 0 ? "when you settle up" : "these are included with your stay"}</span>
+         </div>`
+      : "";
+
   const mineHtml = view.mine.length
     ? `<div class="card"><h2>What you have</h2>
        ${view.mine.map((m) => `
@@ -67,6 +85,7 @@ function page(view: GuestView, path: string, note?: { text: string; ok: boolean 
              <button class="give" type="submit">Give it back</button>
            </form>
          </div>`).join("")}
+       ${totalHtml}
        </div>`
     : "";
 

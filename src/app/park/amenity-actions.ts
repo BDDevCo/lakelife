@@ -260,12 +260,43 @@ export async function saveAmenity(parkId: string, input: AmenityInput): Promise<
 
   const admin = createServiceClient();
   if (input.id) {
+    // The name BEFORE the write, so the rename below can tell an auto-made unit
+    // from one he named himself. Read first or there is nothing to compare to.
+    const wasRes = await admin.from("park_amenities")
+      .select("name").eq("id", input.id).eq("park_id", parkId).maybeSingle();
+    if (wasRes.error) console.error("[read failed] the amenity's current name:", wasRes.error);
+    const wasName = (wasRes.data?.name as string | null) ?? null;
+
     const { error } = await admin.from("park_amenities")
       .update(row).eq("id", input.id).eq("park_id", parkId);
     if (error) {
       if (error.code === "23505") return { ok: false, error: "You already have one called that." };
       return { ok: false, error: `Couldn't save that — ${error.message}` };
     }
+
+    // RENAMING THE THING HAS TO RENAME WHAT THE GUEST IS HOLDING.
+    //
+    // Creating an amenity auto-makes one unit labelled with the amenity's name
+    // — a COPY, taken once. Rename "The pontoon" to "The 24' Bennington" and
+    // the card heading changes (that reads park_amenities.name live) while her
+    // "What you have" row and her booking confirmation keep saying "The
+    // pontoon", because both read the unit's label. A guest who cannot say
+    // which boat she has is the phone call this feature exists to remove.
+    //
+    // ONLY THE COPY. A unit whose label no longer matches the old amenity name
+    // was named by him — "Kayak A", "the red one" — and renaming the amenity
+    // must not overwrite that. Matching on the old name is what tells them
+    // apart, and is why it had to be read before the update.
+    if (wasName && wasName !== name) {
+      const { error: relabel } = await admin.from("park_amenity_units")
+        .update({ label: name })
+        .eq("amenity_id", input.id)
+        .eq("label", wasName);
+      // Never fails the save: the amenity IS renamed, and a stale unit label is
+      // a smaller wrong than telling him his rename didn't take.
+      if (relabel) console.error("[park] renamed the amenity but not its unit:", relabel);
+    }
+
     revalidatePath("/park/amenities");
     revalidatePath("/park/today");
     return { ok: true, signal: `${name} saved.` };

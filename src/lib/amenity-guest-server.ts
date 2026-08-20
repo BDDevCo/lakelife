@@ -273,7 +273,22 @@ export async function bookDayByToken(
 
   const state = unit.days.find((d) => d.day === day);
   if (!state) return { ok: false, error: "That day isn't part of your stay." };
-  if (!state.open) return { ok: false, error: state.why };
+  // ALREADY HERS IS NOT A REFUSAL.
+  //
+  // A slow connection at the lake means she taps "Take it" twice. The second
+  // POST finds the day closed — closed by her OWN booking — and answered with
+  // ok:false, which the page paints in the amber failure box. The sentence
+  // shown after successfully booking a boat looked like the booking had been
+  // rejected, and the honest next move from there is to ring the office about
+  // a day she is already holding.
+  //
+  // Idempotent: the same tap twice reports the same true thing.
+  if (!state.open) {
+    if (state.mine) {
+      return { ok: true, signal: `${unit.label} is already yours on ${readable(day)}. Nothing else to do.` };
+    }
+    return { ok: false, error: state.why };
+  }
 
   const stayRes = await admin
     .from("lot_reservations")
