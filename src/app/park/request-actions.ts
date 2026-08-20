@@ -1,5 +1,6 @@
 "use server";
 
+import { lakeDaysSince, todayLakeDate } from "@/lib/booking";
 import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { revalidatePath } from "next/cache";
@@ -133,8 +134,6 @@ async function shape(
       .from("park_lots").select("id, lot_number").in("id", lotIds));
     for (const l of lots ?? []) lotNo.set(l.id as string, (l.lot_number as string) ?? "?");
   }
-
-  const now = Date.now();
   return data.map((r) => ({
     id: r.id as string,
     // Null is a COMMON-AREA report — the road, the mailboxes — not a missing
@@ -146,7 +145,11 @@ async function shape(
     reporterPhone: (r.reporter_phone as string) ?? null,
     status: (r.status as string) ?? "new",
     createdAt: (r.created_at as string) ?? "",
-    ageDays: Math.max(0, Math.floor((now - Date.parse(r.created_at as string)) / 86_400_000)),
+    // LAKE CALENDAR DAYS, NOT ELAPSED HOURS. Flooring elapsed time called a
+    // report filed at 8pm last night "today" all the next morning. This
+    // expression exists twice — here and on the other screen that shows the
+    // same rows — so both were wrong in the same way.
+    ageDays: lakeDaysSince(r.created_at as string, todayLakeDate()),
     resolutionNote: (r.resolution_note as string) ?? null,
   }));
 }

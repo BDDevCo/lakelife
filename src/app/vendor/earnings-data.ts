@@ -12,6 +12,7 @@ import {
   type DateRange,
   reportedPayoutStatus,
 } from "./earnings-helpers";
+import { lakeDateOf } from "@/lib/booking";
 
 /**
  * CREW EARNINGS reads. Every read is service-role AFTER asserting the caller
@@ -165,9 +166,17 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
     // original job — a September clawback must land in September's period
     // totals/statement, never restate a July statement the crew already
     // downloaded (review finding, 2026-07-23).
+    // LAKE-LOCAL, NOT THE UTC SLICE. `created_at` is a timestamptz served as
+    // UTC; every window this is compared against — this week, this month, YTD,
+    // the statement's from/to — is built from todayLakeDate(). A clawback
+    // applied 31 Dec at 7:15pm EST is 2027-01-01 in UTC, so it dropped off the
+    // crew's 2026 statement entirely and landed on a year it has nothing to do
+    // with. BOTH branches: a tip or trip row whose job has no date falls
+    // through to the same slice.
+    const stamped = lakeDateOf(String(p.created_at ?? "")) ?? "";
     const jobDate = (p as { kind?: string }).kind === "adjustment"
-      ? String(p.created_at ?? "").slice(0, 10)
-      : job?.date ?? String(p.created_at ?? "").slice(0, 10);
+      ? stamped
+      : job?.date ?? stamped;
     // CARRY THE KIND THROUGH. This was `=== "adjustment" ? "adjustment" :
     // "earning"`, which quietly relabelled 0090's trip fees and 0091's tips as
     // ordinary job pay on the crew's statement and CSV. Anything unrecognised

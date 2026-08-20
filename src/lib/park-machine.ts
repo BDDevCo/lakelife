@@ -1,5 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
-import { todayLakeDate } from "@/lib/booking";
+import { todayLakeDate, lakeDaysSince } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import { currentPeriod } from "@/app/park/ledger-helpers";
 import { reconcile, reconcileSummary, type Finding } from "@/app/park/reconcile-helpers";
@@ -175,9 +175,10 @@ async function reconcileOnePark(
         lotNumber: lotName.get(lotOfCharge.get(c.charge_id as string) ?? "") ?? "?",
         ageDays: Math.max(
           0,
-          Math.round(
-            (Date.parse(`${today}T00:00:00Z`) - Date.parse(c.created_at as string)) / 86_400_000,
-          ),
+          // `today` is a LAKE date; anchoring it at Z put it 4-5 hours before
+          // lake midnight, so a claim made after ~7am aged one day short and
+          // the 14-day chase fired a day late.
+          lakeDaysSince(c.created_at as string, today),
         ),
       })),
     });

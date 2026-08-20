@@ -135,7 +135,22 @@ export function buildStatement(input: StatementInput): Statement {
 
   // Clamp the due day to a month that has fewer days — the 31st of February
   // is not a date, and silently rolling into March would move a due date.
-  const due = `${month}-${String(Math.min(dueDay, total)).padStart(2, "0")}`;
+  const clamped = `${month}-${String(Math.min(dueDay, total)).padStart(2, "0")}`;
+
+  // AND NEVER BEFORE THE TENANCY EXISTED.
+  //
+  // The due day is a park dial; the stay's own start never entered this, even
+  // though the amount two blocks down is prorated by exactly that start. So a
+  // household moving in on 18 February, at a park whose rent is due on the 1st,
+  // got a bill for 11 of 28 days dated due 1 February — seventeen days before
+  // they lived there. ledgerState then reads it as `late` on the day it is
+  // raised, the roll shows them in arrears, and planReminders drafts them an
+  // overdue notice on day one. A first impression that is entirely our error.
+  //
+  // Only ever moves the date LATER, and only within the month, so a sitting
+  // tenant's due day is untouched.
+  const firstCovered = stay.start > `${month}-01` ? stay.start.slice(0, 10) : clamped;
+  const due = days > 0 && firstCovered > clamped ? firstCovered : clamped;
 
   const base: Statement = {
     month, dueOn: due, lines: [], total: null,

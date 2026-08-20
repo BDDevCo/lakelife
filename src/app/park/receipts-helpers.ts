@@ -1,3 +1,4 @@
+import { lakeDateOf } from "@/lib/booking";
 /**
  * WHAT CAME IN, BETWEEN TWO DATES. CASH BASIS.
  *
@@ -394,7 +395,10 @@ export function receiptsCsv(
       // "YES" rather than a date alone, so it survives a spreadsheet filter and
       // is legible to somebody scanning the column rather than reading rows.
       csvText(r.reversedAt ? "YES" : ""),
-      csvText(r.reversedAt ? String(r.reversedAt).slice(0, 10) : ""),
+      // Lake-local, like `receivedOn` and the period bounds beside it. Sliced
+      // from UTC, a reversal recorded at 7:30pm on 31 Dec printed 2027-01-01 —
+      // a date outside the very window the statement was generated for.
+      csvText(r.reversedAt ? lakeDateOf(String(r.reversedAt)) ?? "" : ""),
       csvText(r.reversedAt ? (r.reversedReason ?? "") : ""),
       csvText(r.lotNumber),
       csvText(r.payerName),

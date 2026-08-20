@@ -247,6 +247,29 @@ export function todayLakeDate(): string {
 }
 
 /**
+ * HOW MANY LAKE CALENDAR DAYS AGO WAS THIS INSTANT?
+ *
+ * The bug this replaces, in three places at once: taking a Postgres timestamptz
+ * (served as UTC) and either slicing it to a date or subtracting it from a
+ * lake-local date anchored at `T00:00:00Z`. Indiana is UTC−5/−4, so from 7pm
+ * local until midnight the UTC day is already TOMORROW — and a lake date pinned
+ * at Z is four or five hours before lake midnight, so every age comes out one
+ * short for anything created after about 7am.
+ *
+ * Both operands are converted to lake calendar days first, then differenced.
+ * Noon anchoring makes the subtraction DST-proof: the two dates are plain
+ * calendar days by then, and no transition is ever 12 hours wide.
+ */
+export function lakeDaysSince(iso: string, today: string): number {
+  const from = lakeDateOf(iso);
+  if (!from) return 0;
+  const a = Date.parse(`${from}T12:00:00Z`);
+  const b = Date.parse(`${today}T12:00:00Z`);
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
+  return Math.max(0, Math.round((b - a) / 86_400_000));
+}
+
+/**
  * A timestamp's calendar date AT THE LAKES, or null if the input doesn't
  * parse. Comparing a raw UTC date slice against todayLakeDate() makes an
  * 8pm booking look like "tomorrow" — any age-gated rule (fill-in offers)

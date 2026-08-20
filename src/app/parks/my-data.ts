@@ -2,7 +2,7 @@ import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 import { parseDaterange } from "@/lib/parks";
-import { todayLakeDate } from "@/lib/booking";
+import { todayLakeDate, lakeDaysSince } from "@/lib/booking";
 import { mustRead, mustCount, softRead } from "@/lib/must-read";
 
 /**
@@ -349,12 +349,15 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   if (range?.start) {
     const [reqs, failed] = softRead("what you've reported", reqsRes, null);
     reportedFailed = failed;
-    const now = Date.now();
     reported = (reqs ?? []).map((r) => ({
       note: (r.note as string) ?? "",
       status: (r.status as string) ?? "new",
       resolutionNote: (r.resolution_note as string) ?? null,
-      ageDays: Math.max(0, Math.floor((now - Date.parse(r.created_at as string)) / 86_400_000)),
+      // LAKE CALENDAR DAYS, NOT ELAPSED HOURS. Flooring elapsed time called a
+    // report filed at 8pm last night "today" all the next morning. This
+    // expression exists twice — here and on the other screen that shows the
+    // same rows — so both were wrong in the same way.
+    ageDays: lakeDaysSince(r.created_at as string, todayLakeDate()),
     }));
   }
 

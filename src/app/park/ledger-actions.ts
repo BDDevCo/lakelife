@@ -1,5 +1,6 @@
 "use server";
 
+import { rentForPeriod, lastDayOfMonth, type RentChangePoint } from "./rerate-helpers";
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
@@ -324,7 +325,15 @@ export async function runCharges(
   // Safe to call here: it is idempotent, scoped to this park, and the database
   // refuses any change whose notice was not properly served — so this can only
   // ever apply increases that were already legitimately due today.
-  const rateMoves = await applyDueRentChangesFor(parkId);
+  // ONLY WHEN BILLING THE MONTH WE ARE ACTUALLY IN. This writes today's due
+  // increases onto lot_reservations.quoted_amount; running it while raising a
+  // PAST month pulled a later increase back over an earlier month's bill.
+  // (The rate used for the bill itself is chosen per-period below, so this is
+  // belt as well as braces.)
+  const billingCurrentMonth = month === todayLakeDate().slice(0, 7);
+  const rateMoves = billingCurrentMonth
+    ? await applyDueRentChangesFor(parkId)
+    : { applied: 0, skipped: [] as string[] };
 
   const [parkRes, feeRes] = await Promise.all([
     admin.from("parks").select("rent_due_day, cutover_date").eq("id", parkId).maybeSingle(),
@@ -421,6 +430,33 @@ export async function runCharges(
   }
   const shareMap = shareRes.shares;
   /** reservation -> the share ids that went onto its charge, stamped after insert. */
+  // THE RENT HISTORY FOR THESE TENANCIES, so each month is billed at its own
+  // rate rather than at today's. Cancelled changes are not history.
+  const resIds = (stays ?? []).map((x) => x.id as string);
+  const changesByRes = new Map<string, RentChangePoint[]>();
+  if (resIds.length > 0) {
+    const changeRes = await admin
+      .from("lot_rent_changes")
+      .select("reservation_id, effective_on, from_amount, to_amount")
+      .in("reservation_id", resIds)
+      .is("cancelled_at", null);
+    // Empty here would silently bill every past month at today's rate — the
+    // exact defect this read exists to prevent — so it stops rather than guesses.
+    if (changeRes.error) {
+      return { ok: false, error: readFailedMessage("the rent history for these lots", changeRes.error, { money: true }) };
+    }
+    for (const c of changeRes.data ?? []) {
+      const k = c.reservation_id as string;
+      const list = changesByRes.get(k) ?? [];
+      list.push({
+        effective_on: c.effective_on as string,
+        from_amount: c.from_amount == null ? null : Number(c.from_amount),
+        to_amount: c.to_amount == null ? null : Number(c.to_amount),
+      });
+      changesByRes.set(k, list);
+    }
+  }
+
   const shareIdsByRes = new Map<string, string[]>();
 
   const rows: Record<string, unknown>[] = [];
@@ -433,7 +469,14 @@ export async function runCharges(
     const shares = shareMap.get(s.id as string) ?? [];
     const st = buildStatement({
       month, stay: range,
-      rent: s.quoted_amount == null ? null : Number(s.quoted_amount),
+      // THE RATE THAT WAS IN FORCE DURING THIS MONTH, not the one in force
+      // today — see rentForPeriod. quoted_amount is a live value; a bill for
+      // January must not inherit February's increase.
+      rent: rentForPeriod(
+        changesByRes.get(s.id as string) ?? [],
+        lastDayOfMonth(month),
+        s.quoted_amount == null ? null : Number(s.quoted_amount),
+      ),
       fees: (lot.rental_mode as string) === "short_term" ? [] : fees,
       dueDay,
       costShares: shares,

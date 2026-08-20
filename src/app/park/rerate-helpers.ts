@@ -184,3 +184,58 @@ export function reRateSummary(plan: ReRatePlan): string {
     : "";
   return `${households}${worst} — ${money}.`;
 }
+
+/**
+ * WHAT THIS HOUSEHOLD'S RENT WAS DURING A GIVEN MONTH.
+ *
+ * `runCharges(parkId, month)` takes ANY month — the rent screen has month
+ * navigation and its "Bill <month>" button is not gated to the current one —
+ * and it billed `lot_reservations.quoted_amount`, which is whatever the rent is
+ * TODAY. So on 2 February, re-raising a voided January bill charged January at
+ * February's rate: the household is billed the increase for a month they were
+ * never given notice for. Voiding and re-raising is an explicitly supported
+ * flow, so this is not a corner.
+ *
+ * The rate for a month is reconstructable exactly, because a change records
+ * both sides of itself:
+ *
+ *   - the newest change already in force by the end of that month → `to_amount`
+ *   - else the oldest change still ahead of it → its `from_amount`, which IS
+ *     the rate that was in force before it
+ *   - else nothing has ever changed → today's rent is also that month's rent
+ *
+ * Cancelled changes are not history and must be filtered out before this.
+ */
+export interface RentChangePoint {
+  effective_on: string;   // YYYY-MM-DD
+  from_amount: number | null;
+  to_amount: number | null;
+}
+
+export function rentForPeriod(
+  changes: readonly RentChangePoint[],
+  periodEnd: string,
+  currentRent: number | null,
+): number | null {
+  const ordered = [...changes]
+    .filter((c) => !!c.effective_on)
+    .sort((a, b) => a.effective_on.localeCompare(b.effective_on));
+
+  let inForce: RentChangePoint | null = null;
+  for (const c of ordered) {
+    if (c.effective_on <= periodEnd) inForce = c;
+    else break;
+  }
+  if (inForce && inForce.to_amount != null) return Number(inForce.to_amount);
+
+  const ahead = ordered.find((c) => c.effective_on > periodEnd);
+  if (ahead && ahead.from_amount != null) return Number(ahead.from_amount);
+
+  return currentRent == null ? null : Number(currentRent);
+}
+
+/** The last day of a YYYY-MM month, as YYYY-MM-DD. */
+export function lastDayOfMonth(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+}

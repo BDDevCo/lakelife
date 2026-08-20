@@ -2769,10 +2769,31 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
   // on the matched lake and emails each owner by name. A born fixture inherits
   // real-looking season dates from lake-birth, so its pull_deadline genuinely
   // lands on the target day; nothing about the date says "this lake is fake".
-  const lakes = mustRead("the lakes whose pull deadline is coming up", await admin
+  // MATCHED ON THE ROLLED WINDOW, NOT THE RAW COLUMN.
+  //
+  // `target` is always a date in the CURRENT year, and this used to compare it
+  // straight to `lakes.pull_deadline` — which holds whatever ops last typed.
+  // The seeded lakes carry 2026 dates and nothing rolls them forward: the only
+  // writers are the ops form and lake-birth. So from 2027 the equality matched
+  // zero lakes on every night of the year, the function returned
+  // {ok:true, lakes:0, emailed:0} with an empty `skipped`, and the one email of
+  // the year telling a homeowner to get their pier out before the ice simply
+  // stopped being sent — indistinguishable from a quiet night.
+  //
+  // The rest of the product already rolls: effectiveSeason is called fourteen
+  // lines below purely to hedge the wording. The roll landed on the sentence
+  // and not on the query that decides whether the sentence is ever sent.
+  const allLakes = mustRead("the lakes and their season dates", await admin
     .from("lakes").select("id, name, ice_out_actual, pull_deadline, season_confirmed")
-    .eq("is_fixture", false).eq("pull_deadline", target));
-  if (!lakes || lakes.length === 0) return { ok: true, lakes: 0, emailed: 0, skipped };
+    .eq("is_fixture", false));
+  const lakes = (allLakes ?? []).filter((l) => {
+    const eff = effectiveSeason(
+      { iceOut: (l.ice_out_actual as string) ?? null, pullDeadline: (l.pull_deadline as string) ?? null },
+      todayLakeDate(),
+    );
+    return eff.seasonEnd === target;
+  });
+  if (lakes.length === 0) return { ok: true, lakes: 0, emailed: 0, skipped };
 
   let emailed = 0;
   for (const lake of lakes) {
@@ -2790,7 +2811,14 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
     const seen = new Set<string>();
     // The YEAR of the deadline we are warning about. Keyed by season, not by
     // date, so a re-run with a different `?lead=` is still the same message.
-    const seasonYear = Number(String(lake.pull_deadline).slice(0, 4));
+    // Keyed off the EFFECTIVE deadline's year, not the stored column's. The
+    // once-per-season claim is (property_id, season_year, kind); filing a 2027
+    // send under 2026 would collide with the 2026 row and suppress it.
+    const effectiveDeadline = effectiveSeason(
+      { iceOut: (lake.ice_out_actual as string) ?? null, pullDeadline: (lake.pull_deadline as string) ?? null },
+      todayLakeDate(),
+    ).seasonEnd ?? (lake.pull_deadline as string);
+    const seasonYear = Number(String(effectiveDeadline).slice(0, 4));
     for (const p of props ?? []) {
       const u = one((p as { users?: unknown }).users) as
         { id?: string; email?: string; name?: string } | null;
@@ -2809,7 +2837,7 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
         .from("seasonal_notice_log")
         .insert({ property_id: (p as { id: string }).id, season_year: seasonYear });
       if (claimErr) continue; // 23505 = already told about this season
-      const deadline = prettyDate(lake.pull_deadline as string);
+      const deadline = prettyDate(effectiveDeadline);
       // THE SAME HEDGE THE BOOKING GRID AND THE PUBLIC PAGE NOW CARRY.
       //
       // This is the ONE email of the year that tells a homeowner when their
