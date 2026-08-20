@@ -96,3 +96,40 @@ describe("the escalation decision", () => {
     }
   });
 });
+
+/**
+ * A SCRATCH LAKE LOOKING EXACTLY LIKE A REAL ONE, on the screen where six
+ * hand-typed date fields gate the entire spring water calendar.
+ *
+ * 0124 fenced fixtures off every public surface and deliberately left them in
+ * the ops editor — somebody has to be able to set a scratch lake's dates. It
+ * left them unmarked, and it carried `is_fixture` all the way onto the view
+ * model where nothing read it. The real ice-out goes into the wrong card; the
+ * lake that needed it stays provisional, its pull reminder never fires, and a
+ * pier spends the winter in the ice.
+ */
+describe("a test lake cannot be mistaken for a real one", () => {
+  it("the badge is rendered, not just loaded", () => {
+    const ui = src("../components/ops/LakeConditions.tsx");
+    expect(ui).toMatch(/lake\.is_fixture/);
+    expect(ui).toMatch(/Test lake/);
+    expect(ui).toMatch(/Not a real lake/);
+  });
+
+  it("real lakes sort ahead of fixtures", () => {
+    const data = src("../app/ops/data.ts");
+    const at = data.indexOf("export async function getLakeConditions");
+    expect(at).toBeGreaterThan(-1);
+    const body = data.slice(at, data.indexOf("\n// ----", at));
+    expect(body).toMatch(/Number\(a\.is_fixture\) - Number\(b\.is_fixture\)/);
+  });
+
+  it("ops still SEES fixtures — the editor is the one place they belong", () => {
+    // The fence is about public surfaces. Filtering them out here would leave
+    // a scratch lake with no way to set its dates at all.
+    const data = src("../app/ops/data.ts");
+    const at = data.indexOf("export async function getLakeConditions");
+    const body = data.slice(at, data.indexOf("\n// ----", at));
+    expect(body).not.toMatch(/\.eq\("is_fixture", false\)/);
+  });
+});

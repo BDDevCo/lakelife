@@ -475,15 +475,22 @@ export async function getLakeConditions(): Promise<LakeCondition[]> {
   const byLake = new Map<string, number>();
   for (const p of props ?? []) if (p.lake_id) byLake.set(p.lake_id, (byLake.get(p.lake_id) ?? 0) + 1);
 
-  return (lakes ?? []).map((l) => ({
-    id: l.id as string,
-    name: l.name as string,
-    ice_out_actual: (l.ice_out_actual as string) ?? null,
-    hard_freeze_est: (l.hard_freeze_est as string) ?? null,
-    pull_deadline: (l.pull_deadline as string) ?? null,
-    active_properties: byLake.get(l.id as string) ?? 0,
-    is_fixture: l.is_fixture === true,
-  }));
+  return (lakes ?? [])
+    .map((l) => ({
+      id: l.id as string,
+      name: l.name as string,
+      ice_out_actual: (l.ice_out_actual as string) ?? null,
+      hard_freeze_est: (l.hard_freeze_est as string) ?? null,
+      pull_deadline: (l.pull_deadline as string) ?? null,
+      active_properties: byLake.get(l.id as string) ?? 0,
+      is_fixture: l.is_fixture === true,
+    }))
+    // REAL LAKES FIRST, always. The badge says which is which; this makes it
+    // so a fixture is never sitting between two real lakes in the first place.
+    // These six date fields are typed by hand once a year and gate the whole
+    // spring water calendar — the cheapest guard is the wrong card not being
+    // where the right one should be. Name order is preserved within each group.
+    .sort((a, b) => Number(a.is_fixture) - Number(b.is_fixture));
 }
 
 // ---- Margin health (per service × lake) -----------------------------------

@@ -71,9 +71,25 @@ function LakeCard({ lake }: { lake: LakeCondition }) {
 
   return (
     <div className="ll-card ll-card-pad">
-      <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 800 }}>
+      {/* A SCRATCH LAKE LOOKED EXACTLY LIKE A REAL ONE HERE.
+          0124 fenced fixtures off every public surface and deliberately left
+          them in this editor — somebody has to be able to set a scratch lake's
+          dates — but with nothing marking them. A card for a fixture sat
+          between Big Long and Pretty looking identical, and the six date
+          fields that gate the whole spring water calendar are typed by hand,
+          once a year, from memory. The real ice-out goes into the wrong card
+          and the lake that needed it stays provisional: its pull reminder
+          never fires and a pier is left in the ice. `is_fixture` was already
+          loaded onto this view model and read by nothing. */}
+      <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 800, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {lake.name}
+        {lake.is_fixture && <span className="ll-pill slate" style={{ fontSize: 11 }}>Test lake</span>}
       </h3>
+      {lake.is_fixture && (
+        <div className="mut" style={{ fontSize: 12.5, marginTop: 2 }}>
+          Not a real lake — nothing here reaches a customer.
+        </div>
+      )}
       <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
         {lake.active_properties} active properties
       </div>
