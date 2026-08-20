@@ -3,7 +3,7 @@ import { TopBar } from "@/components/Brand";
 import { hasSupabaseEnv } from "@/lib/env";
 import { assertOps, getActiveVendors } from "@/app/ops/data";
 import { getOpsJobFile } from "@/app/ops/job-detail-data";
-import { resolveEscalationAction } from "@/app/ops/dispute-actions";
+import { EscalationDecision } from "@/components/ops/EscalationDecision";
 import { JobPhotoGallery } from "@/components/JobPhotoGallery";
 import { JobActions, JobThread } from "@/components/ops/JobFile";
 
@@ -306,11 +306,7 @@ export default async function OpsJobPage(ctx: { params: Promise<{ id: string }> 
                 The machine handled everything it could — this crossed the auto-refund line. The crew&apos;s pay
                 for this job is frozen until you decide.
               </p>
-              <form action={resolveEscalationAction} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <input type="hidden" name="disputeId" value={latestDispute.id} />
-                <button className="ll-btn" type="submit" name="outcome" value="refund" style={{ fontSize: 13 }}>Refund the customer</button>
-                <button className="ll-btn ghost" type="submit" name="outcome" value="close" style={{ fontSize: 13 }}>Close in crew&apos;s favor</button>
-              </form>
+              <EscalationDecision disputeId={latestDispute.id} />
             </>
           )}
           {file.disputes.length > 1 && (

@@ -12,13 +12,40 @@ import { opsResolveEscalated } from "@/lib/disputes";
  * Without this, an escalation strands the crew's held pay forever (review
  * finding, 2026-07-23).
  */
-export async function resolveEscalationAction(formData: FormData): Promise<void> {
+/**
+ * The result the card renders. This used to be `Promise<void>`: a failure
+ * logged to a server console nobody reads, the page revalidated, and the same
+ * card came back unchanged — so the honest response was to tap it again, on
+ * the button that refunds a customer and releases a crew's frozen pay.
+ */
+export interface EscalationResult {
+  ok: boolean;
+  message: string;
+}
+
+export async function resolveEscalationAction(
+  _prev: EscalationResult | null,
+  formData: FormData,
+): Promise<EscalationResult> {
   const ops = await assertOps();
-  if (!ops) return;
+  if (!ops) return { ok: false, message: "You're not signed in as ops any more — sign in again." };
   const disputeId = String(formData.get("disputeId") ?? "");
   const outcome = String(formData.get("outcome") ?? "");
-  if (!disputeId || (outcome !== "refund" && outcome !== "close")) return;
+  if (!disputeId || (outcome !== "refund" && outcome !== "close")) {
+    return { ok: false, message: "That didn't come through — try again." };
+  }
   const res = await opsResolveEscalated(disputeId, outcome, ops.id);
-  if (!res.ok) console.error(`[resolveEscalation ${disputeId}] ${outcome} failed: ${res.error}`);
+  if (!res.ok) {
+    console.error(`[resolveEscalation ${disputeId}] ${outcome} failed: ${res.error}`);
+    // The crew's pay is still frozen and the customer still has no refund.
+    // Saying so is the whole point — silence here reads as success.
+    return { ok: false, message: res.error ?? "That didn't go through — nothing has changed." };
+  }
   revalidatePath("/ops");
+  return {
+    ok: true,
+    message: outcome === "refund"
+      ? "Refunded. The crew's remainder has been released."
+      : "Closed in the crew's favour. Their pay has been released.",
+  };
 }

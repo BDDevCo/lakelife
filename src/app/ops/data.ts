@@ -115,7 +115,21 @@ export interface OpsJob {
   invoice_status: string | null; // 'due' | 'paid' | 'refunded' | ... — drives the Refund button + "↩ refunded" pill
 }
 
-const BOARD_STATUSES = ["requested", "scheduled", "in_progress", "complete", "paid"] as const;
+/**
+ * How far back finished work stays on the board.
+ *
+ * The three live buckets are unbounded on purpose — a requested job with no
+ * crew is a thing to do, however old it is, and hiding one would hide the
+ * problem. `complete` and `paid` are not: they are history, and they were
+ * unbounded too, so the Complete bucket held every finished job since launch.
+ * By September that is a phone-length scroll to get past before reaching
+ * today's work, on the console checked twenty times a day — and a query that
+ * grows without limit under it.
+ *
+ * A month is what a person still asks about. Older than that, the job file and
+ * the search are the right tools, and both already exist.
+ */
+const DONE_WINDOW_DAYS = 30;
 
 // Deeply-nested embeds confuse supabase-js type inference (it collapses the row
 // to an error type). We assert the shape we asked for; `first()` tolerates the
@@ -139,6 +153,12 @@ interface JobBoardRaw {
 
 export async function getJobBoard(): Promise<OpsJob[]> {
   const admin = createServiceClient();
+  // Local rather than importing a park helper into the ops console — one date
+  // arithmetic line does not justify a dependency between two modules that
+  // otherwise share nothing.
+  const cutoff = new Date(`${todayLakeDate()}T12:00:00Z`);
+  cutoff.setUTCDate(cutoff.getUTCDate() - DONE_WINDOW_DAYS);
+  const doneSince = cutoff.toISOString().slice(0, 10);
   const data = mustRead(
     "the job board",
     await admin
@@ -147,7 +167,12 @@ export async function getJobBoard(): Promise<OpsJob[]> {
         "id, status, date, slot, frequency, service_id, customer_price, vendor_cost, margin, vendor_id, " +
           "services(name, min_photos), properties(address, lakes(name), users(name)), vendors(company)",
       )
-      .in("status", BOARD_STATUSES as unknown as string[])
+      // Live work in full; finished work only while somebody might still ask
+      // about it. One query, so the board is still a single round trip.
+      .or(
+        `status.in.(requested,scheduled,in_progress),` +
+        `and(status.in.(complete,paid),date.gte.${doneSince})`,
+      )
       .order("date", { ascending: true, nullsFirst: true })
       .order("created_at", { ascending: true }),
   );

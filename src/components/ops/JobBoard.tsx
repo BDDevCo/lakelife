@@ -20,7 +20,12 @@ const BUCKETS: Array<{ key: string; label: string; statuses: string[]; tone: str
   { key: "requested", label: "Machine hunting (no approval needed)", statuses: ["requested"], tone: "warn" },
   { key: "scheduled", label: "Scheduled", statuses: ["scheduled"], tone: "teal" },
   { key: "in_progress", label: "In progress", statuses: ["in_progress"], tone: "slate" },
-  { key: "done", label: "Complete", statuses: ["complete", "paid"], tone: "ok" },
+  // NAMED FOR WHAT IT HOLDS. The loader bounds finished work to the last 30
+  // days (see DONE_WINDOW_DAYS) — the three live buckets stay unbounded,
+  // because an old requested job with no crew is still a thing to do. Calling
+  // this one "Complete" while showing a month of it is the kind of quiet
+  // half-truth this codebase keeps finding; the label says the window instead.
+  { key: "done", label: "Complete — last 30 days", statuses: ["complete", "paid"], tone: "ok" },
 ];
 
 /** Does this vendor list this service? Empty service_types = generalist. */
@@ -62,7 +67,9 @@ export function JobBoard({
               <span className="mut" style={{ fontSize: 13 }}>{rows.length}</span>
             </div>
             {rows.length === 0 ? (
-              <div className="mut" style={{ fontSize: 13, padding: "4px 2px" }}>Nothing here right now.</div>
+              <div className="mut" style={{ fontSize: 13, padding: "4px 2px" }}>
+                {b.key === "done" ? "Nothing finished in the last 30 days." : "Nothing here right now."}
+              </div>
             ) : (
               <div style={{ display: "grid", gap: 10 }}>
                 {rows.map((j) => (

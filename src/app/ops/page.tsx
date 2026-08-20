@@ -19,7 +19,7 @@ import {
   getMarginHealth,
   getEscalatedDisputes,
 } from "./data";
-import { resolveEscalationAction } from "./dispute-actions";
+import { EscalationDecision } from "@/components/ops/EscalationDecision";
 import { getMessageThreads } from "./messages-data";
 import { getCrews, getActiveServiceNames } from "./crews-data";
 import { getNeedsAttention, getPreferredJobIds, getPropertiesWithPreferred } from "./dispatch-data";
@@ -215,11 +215,7 @@ export default async function OpsPage() {
                     {e.note && <div className="mut" style={{ fontSize: 12.5 }}>Customer: &ldquo;{e.note}&rdquo;</div>}
                     {e.why && <div className="mut" style={{ fontSize: 12 }}>{e.why} · opened {e.openedAt}</div>}
                   </div>
-                  <form action={resolveEscalationAction} style={{ display: "flex", gap: 8 }}>
-                    <input type="hidden" name="disputeId" value={e.id} />
-                    <button className="ll-btn" type="submit" name="outcome" value="refund" style={{ fontSize: 13 }}>Refund the customer</button>
-                    <button className="ll-btn ghost" type="submit" name="outcome" value="close" style={{ fontSize: 13 }}>Close in crew&apos;s favor</button>
-                  </form>
+                  <EscalationDecision disputeId={e.id} />
                 </div>
               ))}
             </div>
