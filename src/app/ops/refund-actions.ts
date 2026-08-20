@@ -18,6 +18,9 @@ export async function quoteRefund(jobId: string): Promise<{
   ok: boolean; error?: string;
   refundable?: number; capturedCash?: number; alreadyRefunded?: number;
   suggestedClawback?: number; vendorCost?: number; crewPaidOut?: boolean;
+  /** The two figures the proportional clawback is made of, so the modal can
+   *  re-derive it as the amount changes instead of carrying a stale one. */
+  customerPrice?: number; crewShareOfJob?: number;
   /**
    * A tip charged on this job — DISCLOSURE ONLY, never part of `refundable`.
    *
@@ -96,6 +99,17 @@ export async function quoteRefund(jobId: string): Promise<{
     alreadyRefunded: Math.round(already * 100) / 100,
     suggestedClawback: Math.min(clawable, defaultClawback(refundable, Number(job.customer_price ?? 0), Number(job.vendor_cost ?? 0))),
     vendorCost: clawable,
+    // THE TWO NUMBERS THE PROPORTION IS MADE OF.
+    //
+    // `suggestedClawback` above is computed against `refundable` — the FULL
+    // remaining balance. The modal seeded its clawback box with it and never
+    // recomputed when ops typed a SMALLER refund, so a $100 refund on a $604
+    // job still proposed clawing the crew's whole $422.80 instead of the $70
+    // their share of that $100 actually is. Returning these lets the modal
+    // re-derive exactly as refund-core does, rather than carrying a figure
+    // that was right for a refund nobody is issuing.
+    customerPrice: Number(job.customer_price ?? 0),
+    crewShareOfJob: Number(job.vendor_cost ?? 0),
     crewPaidOut: !!payout && (payout.batch_id != null || payout.status !== "released"),
   };
 }

@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { defaultClawback } from "@/lib/refunds";
 import { useRouter } from "next/navigation";
 import { quoteRefund, issueRefund } from "@/app/ops/refund-actions";
 import { toast } from "@/components/Toast";
@@ -21,10 +22,14 @@ interface Quote {
   capturedCash: number;
   alreadyRefunded: number;
   suggestedClawback: number;
+  /** The CAP: what is still clawable from the crew after any earlier clawback. */
   vendorCost: number;
   crewPaidOut: boolean;
   /** Disclosure only — a tip cannot be refunded through this control. */
   tipCharged: number;
+  /** The two figures the proportional clawback is made of. */
+  customerPrice: number;
+  crewShareOfJob: number;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -53,6 +58,22 @@ export function RefundModal({
 
   const [amount, setAmount] = useState("");
   const [clawback, setClawback] = useState("");
+  /**
+   * Has ops typed in the clawback box themselves?
+   *
+   * Until they do, the crew's clawback FOLLOWS the refund amount, because it
+   * is a proportion of it — refund-core computes exactly
+   * `min(clawable, defaultClawback(amount, customerPrice, vendorCost))` when
+   * the caller sends nothing. The modal seeded the box once, from the FULL
+   * refundable balance, and then always sent that value back, so the server's
+   * own correct formula never ran. Ops typing a $100 refund on a $604 job
+   * still submitted a $422.80 clawback — the crew's entire pay for the job —
+   * where their share of that $100 is $70.
+   *
+   * Once ops edits it, it is theirs and we stop moving it. The override is the
+   * point of the field; it just must not be the default.
+   */
+  const [clawbackTouched, setClawbackTouched] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,12 +94,15 @@ export function RefundModal({
         alreadyRefunded: res.alreadyRefunded ?? 0,
         suggestedClawback: res.suggestedClawback ?? 0,
         vendorCost: res.vendorCost ?? 0,
+        customerPrice: res.customerPrice ?? 0,
+        crewShareOfJob: res.crewShareOfJob ?? 0,
         crewPaidOut: !!res.crewPaidOut,
         tipCharged: res.tipCharged ?? 0,
       };
       setQuote(q);
       setAmount(q.refundable > 0 ? q.refundable.toFixed(2) : "");
-      setClawback(q.suggestedClawback.toFixed(2));
+      // Not seeded into state any more: until ops types, the box below is
+      // derived from the amount. Seeding was what made it go stale.
       setLoading(false);
     })();
     return () => {
@@ -88,7 +112,16 @@ export function RefundModal({
 
   // Quantize to whole cents so the preview matches what the server stores.
   const amountNum = Math.round((Number(amount) || 0) * 100) / 100;
-  const clawbackNum = Math.round((Number(clawback) || 0) * 100) / 100;
+
+  // DERIVED, NOT SYNCED. Computing this rather than pushing it into state in
+  // an effect means it can never lag the amount by a render — and there is no
+  // second copy of the truth to fall out of step.
+  const suggestedForAmount = quote
+    ? Math.min(quote.vendorCost, defaultClawback(amountNum, quote.customerPrice, quote.crewShareOfJob))
+    : 0;
+  const clawbackShown = clawbackTouched ? clawback : suggestedForAmount.toFixed(2);
+
+  const clawbackNum = Math.round((Number(clawbackShown) || 0) * 100) / 100;
   const amountValid = !!quote && quote.refundable > 0 && Number.isFinite(amountNum) && amountNum > 0 && amountNum <= quote.refundable;
   const clawbackValid = !!quote && Number.isFinite(clawbackNum) && clawbackNum >= 0 && clawbackNum <= quote.vendorCost;
   const canSubmit = !loading && !!quote && amountValid && clawbackValid && reason.trim().length > 0 && !busy;
@@ -170,7 +203,11 @@ export function RefundModal({
 
               <div className="ll-field">
                 <label>Crew clawback</label>
-                <input inputMode="decimal" value={clawback} onChange={(e) => setClawback(e.target.value)} />
+                <input
+                  inputMode="decimal"
+                  value={clawbackShown}
+                  onChange={(e) => { setClawbackTouched(true); setClawback(e.target.value); }}
+                />
                 <p className="mut" style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
                   0 = goodwill, up to the crew&apos;s full cut ({money.format(quote.vendorCost)}) for crew-fault.
                   Suggested {money.format(quote.suggestedClawback)}.{" "}

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   refundableRemaining,
   defaultClawback,
@@ -265,3 +267,76 @@ describe("money conservation — property test across random refund/price/cost c
     }
   });
 });
+
+/**
+ * THE CLAWBACK MUST FOLLOW THE REFUND, NOT THE BALANCE.
+ *
+ * `defaultClawback` is proportional and always was — refund-core computes
+ * `min(clawable, defaultClawback(amount, customerPrice, vendorCost))` when the
+ * caller sends no clawback. But the ops modal seeded its clawback box ONCE,
+ * from `suggestedClawback`, which quoteRefund computes against the FULL
+ * refundable balance — and then always sent that value back, so the server's
+ * own correct formula never ran for a partial refund.
+ */
+describe("a partial refund claws back a partial share", () => {
+  // The real seeded pier: $604 to the customer, $422.80 to the crew.
+  const PRICE = 604;
+  const COST = 422.8;
+
+  it("a full refund claws the whole crew cost", () => {
+    expect(defaultClawback(604, PRICE, COST)).toBeCloseTo(422.8, 2);
+  });
+
+  it("a $100 refund claws $70, not $422.80", () => {
+    // 100 × (422.80 / 604) = 69.99…, to cents.
+    expect(defaultClawback(100, PRICE, COST)).toBeCloseTo(70, 2);
+  });
+
+  it("half a refund claws half the crew's share", () => {
+    expect(defaultClawback(302, PRICE, COST)).toBeCloseTo(211.4, 2);
+  });
+
+  it("never exceeds the crew's cost however big the refund", () => {
+    expect(defaultClawback(10_000, PRICE, COST)).toBeCloseTo(COST, 2);
+  });
+});
+
+describe("the ops modal re-derives it instead of carrying a stale one", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("../components/ops/RefundModal.tsx", import.meta.url)), "utf8",
+  );
+
+  it("recomputes the suggestion as the amount changes", () => {
+    // DERIVED, not synced into state — so it cannot lag the amount by a render
+    // and there is no second copy of the truth to fall out of step.
+    expect(src).toMatch(/defaultClawback\(amountNum, quote\.customerPrice, quote\.crewShareOfJob\)/);
+    expect(src).toMatch(/const clawbackShown = clawbackTouched \? clawback : suggestedForAmount\.toFixed\(2\);/);
+    expect(src).toMatch(/value=\{clawbackShown\}/);
+  });
+
+  it("does not seed the box from the full-balance suggestion any more", () => {
+    // Seeding once from `suggestedClawback` — computed against the FULL
+    // refundable balance — is exactly what went stale.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(code).not.toMatch(/setClawback\(q\.suggestedClawback/);
+  });
+
+  it("mirrors the server's cap, not just the proportion", () => {
+    // refund-core clamps to what is still clawable after any earlier clawback.
+    expect(src).toMatch(/Math\.min\(\s*\n?\s*quote\.vendorCost,/);
+  });
+
+  it("stops moving it the moment ops types their own number", () => {
+    // The override is the point of the field; it just must not be the default.
+    expect(src).toMatch(/clawbackTouched \? clawback :/);
+    expect(src).toMatch(/setClawbackTouched\(true\); setClawback\(e\.target\.value\)/);
+  });
+
+  it("and the quote actually supplies the two figures", () => {
+    const q = readFileSync(
+      fileURLToPath(new URL("../app/ops/refund-actions.ts", import.meta.url)), "utf8",
+    );
+    expect(q).toMatch(/customerPrice: Number\(job\.customer_price \?\? 0\)/);
+    expect(q).toMatch(/crewShareOfJob: Number\(job\.vendor_cost \?\? 0\)/);
+  });
+})
