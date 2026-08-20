@@ -13,11 +13,38 @@ import { toast } from "@/components/Toast";
 export function ShareLakeLife({
   link,
   earnedToDate,
+  creditAvailable,
+  maturing,
+  availableIsPayout,
   customerPct = 5,
   crewCap = 250,
 }: {
   link: string;
   earnedToDate?: number;
+  /**
+   * WHAT IS ACTUALLY LEFT, because the two are not the same number and the
+   * screens that showed them never said so.
+   *
+   * `earnedToDate` is LIFETIME — every non-void referral earning, including
+   * credits already spent on bills. /billing shows the credit BALANCE. A
+   * customer who earned $150 and has spent $100 read "$150 earned" here and
+   * "$50 credit" there, with nothing on either explaining why they disagree.
+   * Both were true and the pair was confusing, which on somebody's money is
+   * its own kind of wrong.
+   *
+   * The crew's version of this card already names all three of its figures
+   * ("earned · maturing · ready for your next payout batch"). This is the
+   * customer's, brought up to it.
+   */
+  creditAvailable?: number;
+  /** Earned but not yet mature — not spendable, and not nothing either. */
+  maturing?: number;
+  /**
+   * True when `creditAvailable` is a crew's matured payout rather than
+   * spendable credit. A crew who also owns a lake house lands on this card,
+   * and the two are not the same money.
+   */
+  availableIsPayout?: boolean;
   customerPct?: number;
   crewCap?: number;
 }) {
@@ -37,7 +64,16 @@ export function ShareLakeLife({
       </p>
       {(earnedToDate ?? 0) > 0 && (
         <p style={{ fontSize: 15, fontWeight: 800, color: "var(--teal-dark)", margin: "0 0 10px" }}>
-          You&apos;ve earned ${earnedToDate!.toFixed(2)} so far 🎉
+          ${earnedToDate!.toFixed(2)} earned so far 🎉
+          <span className="mut" style={{ fontWeight: 400, fontSize: 13.5 }}>
+            {(maturing ?? 0) > 0 && <> · ${maturing!.toFixed(2)} still maturing</>}
+            {creditAvailable != null && (
+              <>
+                {" "}· <b style={{ fontWeight: 700 }}>${creditAvailable.toFixed(2)}</b>{" "}
+                {availableIsPayout ? "ready for your next payout batch" : "left to spend on your bills"}
+              </>
+            )}
+          </span>
         </p>
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>

@@ -14,6 +14,16 @@ export interface ReferralTicker {
   earnedTotal: number; // lifetime, all non-void accruals
   maturing: number; // inside the clawback window
   available: number; // homeowners: spendable credit balance · crews: matured awaiting payout batch
+  /**
+   * WHICH OF THOSE TWO `available` IS, so a screen cannot mislabel it.
+   *
+   * The comment above has always said it means different things. A crew who
+   * also owns a lake house sees the customer referral card on /book, where
+   * `available` would have been captioned "left to spend on your bills" — and
+   * for them it is a matured payout waiting on a bank batch, not credit. The
+   * distinction was in a comment; now it is in the data.
+   */
+  isCrew: boolean;
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -53,5 +63,6 @@ export async function getMyReferralTicker(): Promise<ReferralTicker | null> {
     earnedTotal: r2(earnedTotal),
     maturing: r2(maturing),
     available: r2(vendorRow ? matured : Math.max(0, creditBalance)),
+    isCrew: !!vendorRow,
   };
 }

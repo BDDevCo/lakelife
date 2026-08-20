@@ -222,6 +222,9 @@ export default async function BookPage() {
           <ShareLakeLife
             link={referralLink}
             earnedToDate={referralTicker?.earnedTotal}
+            creditAvailable={referralTicker?.available}
+            maturing={referralTicker?.maturing}
+            availableIsPayout={referralTicker?.isCrew}
             customerPct={Math.round(dials.referralCustomerPct * 100)}
             crewCap={dials.referralCrewCap}
           />
