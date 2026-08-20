@@ -1,4 +1,5 @@
 import "server-only";
+import { assignmentIsLive } from "@/lib/job-view";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getMyVendorId, getVendorDay } from "./data";
 import { todayLakeDate } from "@/lib/booking";
@@ -199,7 +200,9 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
   // from this crew and left unassigned, is no longer their scheduled job — and
   // a URL-reachable page would otherwise still hand over the code for the rest
   // of the day (review finding). Only a live assignment opens the door.
-  const stillTheirs = ["scheduled", "in_progress", "complete", "paid"].includes(job.status as string);
+  // The same predicate getVendorDay uses — one definition, so the two lanes
+  // that render this value cannot drift apart again.
+  const stillTheirs = assignmentIsLive(job.status as string);
   const gateCode = isToday && stillTheirs ? stop?.gate_code ?? null : null;
 
   // Photo minimum. For a package visit the gate is the SUM of every leg's

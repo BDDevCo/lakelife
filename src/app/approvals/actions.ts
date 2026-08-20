@@ -444,8 +444,28 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
   if (!ctx) return { ok: false, error: "That approval isn't yours." };
   if (ctx.flag.status !== "pending") return { ok: false, error: "Already decided." };
   const admin = createServiceClient();
-  const { error } = await admin.from("flags").update({ status: "declined" }).eq("id", flagId);
-  if (error) return { ok: false, error: error.message };
+  // THE STATUS FLIP IS THE LOCK, the way approveFlag's apply_flag_change RPC
+  // already does it ("select ... where id = p_flag_id and status = 'pending'
+  // for update", raising for the loser). The check above is a read from a
+  // moment earlier, and the UPDATE carried no status predicate — so a
+  // homeowner with /approvals open on a phone and a laptop could decline
+  // twice, and everything below runs twice: a second append-only stand-down
+  // attempt row, a second $35 trip payout the nightly funds out of LakeLife's
+  // own money, and a second "pack up and head to your next stop" to the crew.
+  //
+  // Writing status='declined' twice is harmless in itself; what is not
+  // harmless is the work underneath it, which is why the guard belongs here
+  // rather than on each of those writes.
+  const declined = await admin
+    .from("flags")
+    .update({ status: "declined" })
+    .eq("id", flagId)
+    .eq("status", "pending")
+    .select("id");
+  if (declined.error) return { ok: false, error: declined.error.message };
+  if (!declined.data || declined.data.length === 0) {
+    return { ok: false, error: "Already decided." };
+  }
 
   // DECLINING IS AN ANSWER, AND IT UNBLOCKS THE CREW — one way or the other.
   if (ctx.flag.job_id) {

@@ -545,6 +545,27 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
     return { ok: false, error: "Already recorded as a no-show — nothing more to do here." };
   }
 
+  // AND THE DAY, WHICH completeJob CHECKS AND THIS DID NOT.
+  //
+  // 380 lines up, completeJob refuses to close out work that is not due yet —
+  // "no closing (and no payout) on work that isn't due yet". The sibling action
+  // that closes the same visit the OTHER way had no such test, and it also
+  // releases money: the nightly funds a $35 trip fee per attempt row. So a
+  // Wednesday tap on a Friday job paid for a trip nobody made, emailed the
+  // homeowner "our crew was at your place today" about a visit two days out,
+  // and — because 0084's trigger refuses to complete a job while no_show_at is
+  // set, and only the CUSTOMER's reschedule clears it — bricked the booked
+  // visit until they acted, inside a window that closes.
+  //
+  // One-directional on purpose: a crew recording yesterday's no-show this
+  // morning is legitimate and common. Only the future is refused.
+  if (job.date && String(job.date) > todayLakeDate()) {
+    return {
+      ok: false,
+      error: "That visit isn't until later — you can record a no-show on the day.",
+    };
+  }
+
   const why = reason.trim().slice(0, 300);
   if (!why) {
     // The customer may be charged for this. They are entitled to know what
@@ -583,19 +604,31 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
   // this row, the trip the crew made would vanish with them (0089's trigger
   // refuses the clear if it is missing).
   const today = todayLakeDate();
-  await admin.from("job_visit_attempts").insert({
+  const attemptRes = await admin.from("job_visit_attempts").insert({
     job_id: jobId,
     vendor_id: job.vendor_id,
     attempted_on: today,
     outcome: "no_access",
     reason: why,
-  });
+  }).select("id").single();
+  if (attemptRes.error) return { ok: false, error: attemptRes.error.message };
 
   const plan = planRecovery("no_access", today, {
     serviceName: (rule?.name as string) ?? "your service",
   });
 
-  const { error } = await admin
+  // THE CLAIM, NOT A READ. The `if (job.no_show_at)` above is a check against a
+  // value read four round trips ago — the comment beside it describes exactly
+  // the race it does not prevent. `.is("no_show_at", null)` makes the UPDATE
+  // itself the lock, so of two crew tapping "Nobody's answering" on one shared
+  // login, exactly one wins.
+  //
+  // The attempt row is still written FIRST, because 0089's trigger refuses to
+  // clear no_show_at without one — claiming the job first and then failing to
+  // insert would strand a visit nobody could reschedule. So the LOSER removes
+  // the row it just added: one request rolling back its own write, before
+  // anything has read it, not an edit to the append-only history.
+  const claimed = await admin
     .from("jobs")
     .update({
       no_show_at: new Date().toISOString(),
@@ -603,8 +636,19 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
       recovery_state: "awaiting_customer",
       reschedule_deadline: plan.deadline,
     })
-    .eq("id", jobId);
-  if (error) return { ok: false, error: error.message };
+    .eq("id", jobId)
+    .is("no_show_at", null)
+    .select("id");
+  if (claimed.error) {
+    await admin.from("job_visit_attempts").delete().eq("id", attemptRes.data.id);
+    return { ok: false, error: claimed.error.message };
+  }
+  if (!claimed.data || claimed.data.length === 0) {
+    // Somebody else recorded it while this request was in flight. Take our
+    // attempt row back out so the nightly does not fund a second $35 trip.
+    await admin.from("job_visit_attempts").delete().eq("id", attemptRes.data.id);
+    return { ok: false, error: "Already recorded as a no-show — nothing more to do here." };
+  }
 
   // Ops picks this up: a no-show is a conversation (reschedule by agreement,
   // else the cancellation policy), never an automatic charge. Nobody is billed

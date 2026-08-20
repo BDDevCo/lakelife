@@ -1,6 +1,7 @@
 import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { decryptGate } from "@/lib/gate";
+import { assignmentIsLive } from "@/lib/job-view";
 import { todayLakeDate } from "@/lib/booking";
 import { mustRead } from "@/lib/must-read";
 
@@ -221,7 +222,13 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
   // Gate codes: only for TODAY, and only decrypted server-side here.
   const gateByProp = new Map<string, string | null>();
   if (date === today) {
-    const propIds = [...new Set(rows.map((r) => r.property_id))];
+    // ONLY PROPERTIES THIS CREW STILL HAS LIVE WORK AT. Building this from
+    // every row decrypted the code for a job that had been cancelled — see
+    // assignmentIsLive. Not decrypting it at all is a better answer than
+    // decrypting and then declining to render it.
+    const propIds = [...new Set(
+      rows.filter((r) => assignmentIsLive(r.status as string | null)).map((r) => r.property_id),
+    )];
     // A failed read hands the crew a blank where the gate code should be, while
     // they are standing at the gate. Note the decrypt failure below is a
     // DIFFERENT case and stays as it is: that one really is "no usable code".
@@ -255,7 +262,11 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
     lake_name: r.lake_name,
     owner_name: r.owner_name,
     facts: factsFor(r),
-    gate_code: date === today ? gateByProp.get(r.property_id) ?? null : null,
+    // Today AND still theirs. `date === today` alone handed the code over for a
+    // job the homeowner cancelled yesterday.
+    gate_code: date === today && assignmentIsLive(r.status as string | null)
+      ? gateByProp.get(r.property_id) ?? null
+      : null,
     photo_count: counts.get(r.id) ?? 0,
     legs: legsByJob.get(r.id),
     unit_name: r.route_id ? unitNameByRoute.get(r.route_id) ?? null : null,

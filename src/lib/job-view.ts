@@ -241,3 +241,25 @@ export function emptyPhotoNote(status: string, minPhotos: number): string {
   }
   return "This service doesn't call for photos, so your crew didn't take any.";
 }
+
+/**
+ * IS THIS JOB STILL THIS CREW'S TO WORK?
+ *
+ * The gate code is the sharpest consumer, and the reason this lives here rather
+ * than inline: the guard was written once, in job-detail-data.ts, with the
+ * comment "Only a live assignment opens the door" — and the OTHER lane that
+ * renders the same value, getVendorDay, never got it. A homeowner cancelling a
+ * pier removal on Thursday left the crew holding the plaintext door code all
+ * day Friday, on the route card, under the caption "Shown only today, for this
+ * job" — about a job that no longer existed. Cancelling does not clear
+ * `vendor_id` (it is read afterwards to pay the crew their slot share), so the
+ * row keeps coming back for that crew.
+ *
+ * One exported predicate, used by both, so the next reader cannot inherit the
+ * hole.
+ */
+export const LIVE_ASSIGNMENT_STATUSES = ["scheduled", "in_progress", "complete", "paid"] as const;
+
+export function assignmentIsLive(status: string | null | undefined): boolean {
+  return LIVE_ASSIGNMENT_STATUSES.includes(status as (typeof LIVE_ASSIGNMENT_STATUSES)[number]);
+}
