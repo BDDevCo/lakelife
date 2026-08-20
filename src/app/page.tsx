@@ -124,6 +124,26 @@ export default async function Home() {
             />
           </div>
         </section>
+
+        {/* THE LEGAL PAGES HAVE TO BE FINDABLE FROM THE FRONT DOOR.
+            /terms was reachable only from inside an acceptance modal, and
+            /privacy did not exist. A2P campaign vetting checks for a public,
+            unauthenticated privacy policy and messaging-terms page, and a
+            crawler that cannot reach them is the same as not having them. */}
+        <footer
+          style={{
+            borderTop: "1px solid var(--line)", marginTop: 40, paddingTop: 18,
+            display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center",
+            fontSize: 13,
+          }}
+          className="mut"
+        >
+          <span>© {new Date().getFullYear()} LakeLife AI</span>
+          <Link href="/privacy">Privacy</Link>
+          <Link href="/sms">Text messages</Link>
+          <Link href="/terms">Terms</Link>
+          <a href="mailto:hello@lakelife.ai">hello@lakelife.ai</a>
+        </footer>
       </main>
     </>
   );
