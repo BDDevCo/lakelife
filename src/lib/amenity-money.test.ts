@@ -181,3 +181,71 @@ describe("how they paid is recorded, not assumed", () => {
     }
   });
 });
+
+describe("what the guest still owes is not what she was quoted", () => {
+  it("the guest total nets off what the office already took", () => {
+    // The first version of this total summed `amount` alone, so a day she had
+    // already paid for at the window still counted toward "to pay at the
+    // office" — a bigger number than she owes, which is worse than the missing
+    // total it replaced. Money lives in park_payments keyed by
+    // amenity_booking_id; the booking's own status never changes when it is
+    // paid (0119 allows only booked/cancelled/blackout).
+    const route = src("../app/use/[token]/route.ts");
+    expect(route).toMatch(/\(m\.amount \?\? 0\) - m\.paid/);
+    expect(route).toMatch(/already paid/);
+  });
+
+  it("the loader reads what was paid, and refuses to guess it", () => {
+    const s = src("./amenity-guest-server.ts");
+    expect(s).toMatch(/from\("park_payments"\)/);
+    expect(s).toMatch(/mustRead\(\s*\n?\s*"what you've already settled"/);
+    expect(s).toMatch(/\.in\("amenity_booking_id", myBookingIds\)/);
+  });
+
+  it("a reversed payment is owed again", () => {
+    // A bounced cheque coming back must not leave her marked as settled.
+    const s = src("./amenity-guest-server.ts");
+    expect(s).toMatch(/if \(p\.reversed_at != null\) continue;/);
+  });
+});
+
+describe("no crew is sent to a screen their role cannot open", () => {
+  // VendorNav has no Messages tab, and /messages resolves the thread from the
+  // signed-in user's own property and refuses anyone who is not its owner. Two
+  // crew-facing strings told them to carry on there anyway.
+  it("the crew's dispute replies don't name Messages", () => {
+    for (const f of ["../app/d/[token]/talk/route.ts", "../components/VendorJobPanel.tsx"]) {
+      expect(src(f), `${f} still sends a crew to Messages`).not.toMatch(/in Messages|Messages in your portal/);
+    }
+  });
+
+  it("the customer's ones still do — they have that tab", () => {
+    // Guard on the carve-out, so a future sweep does not strip the true one.
+    expect(src("../app/c/[token]/issue/route.ts")).toMatch(/Messages in your portal/);
+  });
+});
+
+describe("what actually lifts a held payout", () => {
+  it("no crew screen claims that finishing the fix releases it", () => {
+    // settleJob returns before the payout block for a correction job, so
+    // completing it touches no payout row. The hold lifts on the customer's
+    // acceptance, or on the nightly quiet-close.
+    for (const f of ["../app/vendor/jobs/[id]/page.tsx", "../app/d/[token]/fix/route.ts"]) {
+      const code = src(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+      expect(code, `${f} still says finishing releases the hold`).not.toMatch(/releases the hold|pay releases once it's done/);
+    }
+  });
+
+  it("and both name the two things that actually do", () => {
+    for (const f of ["../app/vendor/jobs/[id]/page.tsx", "../app/d/[token]/fix/route.ts"]) {
+      const s = src(f);
+      expect(s, `${f} does not mention the customer accepting`).toMatch(/accept/i);
+      expect(s, `${f} does not mention the quiet-close`).toMatch(/three days/i);
+    }
+  });
+
+  it("three days is what the code actually waits", () => {
+    const d = src("./disputes.ts");
+    expect(d).toMatch(/const CORRECTION_QUIET_DAYS = 3;/);
+  });
+});

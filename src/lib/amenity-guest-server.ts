@@ -47,7 +47,20 @@ export interface GuestView {
   to: string;
   offers: GuestOffer[];
   /** What she already has, so the page can say it back to her. */
-  mine: Array<{ id: string; unit: string; from: string; to: string; amount: number | null }>;
+  mine: Array<{
+    id: string; unit: string; from: string; to: string;
+    amount: number | null;
+    /**
+     * What the office has already taken for this day. The total on her page
+     * summed `amount` alone, so a day she had ALREADY PAID FOR still counted
+     * toward "to pay at the office" — sending her back to the window with a
+     * number bigger than she owes. Money lives in `park_payments` keyed by
+     * `amenity_booking_id`; the booking's own status never changes when it is
+     * paid (0119 allows only booked/cancelled/blackout), so the booking row
+     * alone can never answer this.
+     */
+    paid: number;
+  }>;
   /** Non-null when there is nothing to show and we should say why. */
   nothing: string | null;
 }
@@ -163,6 +176,31 @@ export async function loadGuestView(token: string): Promise<GuestView | null> {
   });
 
   const unitLabel = new Map((units ?? []).map((u) => [u.id as string, u.label as string]));
+
+  // WHAT SHE HAS ALREADY SETTLED, so the total is what she still owes.
+  // Scoped to her own bookings' ids and nothing else. A failed read here would
+  // silently re-bill her for days she has paid for, which is the one direction
+  // this number must never be wrong in.
+  const myBookingIds = (held ?? [])
+    .filter((h) => h.stay_id === stay.id)
+    .map((h) => h.id as string);
+  const paidRows = myBookingIds.length
+    ? mustRead(
+        "what you've already settled",
+        await admin
+          .from("park_payments")
+          .select("amenity_booking_id, amount, reversed_at")
+          .in("amenity_booking_id", myBookingIds),
+      )
+    : [];
+  const paidByBooking = new Map<string, number>();
+  for (const p of paidRows ?? []) {
+    // A reversed payment is money that came back — it is owed again.
+    if (p.reversed_at != null) continue;
+    const k = p.amenity_booking_id as string;
+    paidByBooking.set(k, (paidByBooking.get(k) ?? 0) + Number(p.amount ?? 0));
+  }
+
   const mine = (held ?? [])
     .filter((h) => h.stay_id === stay.id)
     .flatMap((h) => {
@@ -172,6 +210,7 @@ export async function loadGuestView(token: string): Promise<GuestView | null> {
         unit: unitLabel.get(h.unit_id as string) ?? "—",
         from: r.start, to: r.end,
         amount: h.quoted_amount == null ? null : Number(h.quoted_amount),
+        paid: paidByBooking.get(h.id as string) ?? 0,
       }] : [];
     })
     .sort((a, b) => a.from.localeCompare(b.from));

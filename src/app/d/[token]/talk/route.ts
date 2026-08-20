@@ -62,6 +62,6 @@ export async function POST(_req: Request, ctx: { params: Promise<{ token: string
   if (!r.ok) return htmlPage("Hmm, that didn't take", r.error ?? "Give it another tap in a minute. 🌊", false);
   return htmlPage(
     "Opened — check Messages 🌊",
-    "The customer's been told you want to talk it through. Continue the conversation from Messages in your portal.",
+    "The customer's been told you want to talk it through, and we've passed on your message. They'll come back to you — nothing else for you to do right now.",
   );
 }

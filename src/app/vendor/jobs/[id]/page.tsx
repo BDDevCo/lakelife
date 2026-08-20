@@ -210,8 +210,17 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
         <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>Your take-home</h3>
         {job.payouts.length === 0 ? (
           <p className="mut" style={{ fontSize: 13.5, margin: 0 }}>
+            {/* "FINISHING IT RELEASES THE HOLD" IS THE ONE THING IT DOES NOT DO.
+                settleJob returns before the payout block for any correction job
+                (`if (job.correction_of) return ...`), so completing this visit
+                touches no payout row at all. The hold lifts on one of two LATER
+                events: the customer taps 👍, which routes to
+                resolveFromCorrection and calls releaseHeldPayout; or the nightly
+                quiet-closes it after CORRECTION_QUIET_DAYS of silence. A crew
+                told their money turns on finishing goes looking for it that
+                evening, finds it still held, and concludes we kept it. */}
             {isCorrection
-              ? "A make-it-right visit carries no charge and no separate pay — finishing it releases the hold on the original job."
+              ? "A make-it-right visit carries no charge and no separate pay. Finish it with photos and it's back with the customer — the hold on your original job lifts when they accept it, or on its own after three days if they say nothing."
               : "Your pay for this job posts when it's complete and photo-verified."}
           </p>
         ) : (

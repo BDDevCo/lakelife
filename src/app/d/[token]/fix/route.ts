@@ -91,6 +91,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   if (!r.ok) return htmlPage("Hmm, that didn't take", r.error ?? "Give it another tap in a minute. 🌊", false);
   return htmlPage(
     "Booked — thanks for making it right 🌊",
-    "The customer's been told you're coming back, no charge. You'll see it on your Today list, and your pay releases once it's done and photographed.",
+    "The customer's been told you're coming back, no charge. You'll see it on your Today list. Your pay on the original job lifts once they accept the fix — or on its own after three days if they say nothing.",
   );
 }

@@ -233,7 +233,7 @@ export function CrewMakeItRight({
         ? "Booked — the customer knows you're coming back, no charge. 🌊"
         : choice === "verify"
           ? "Sent — the customer is looking at your photos now."
-          : "Opened — carry on in Messages.",
+          : "Opened — we've passed your message to the customer. They'll come back to you.",
     );
     router.refresh();
   }

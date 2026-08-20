@@ -64,13 +64,24 @@ function page(view: GuestView, path: string, note?: { text: string; ok: boolean 
   // different screen — which is the phone call this whole feature exists to
   // remove. Days included with the stay carry a null amount and are simply not
   // money, so they are counted separately and not silently added as zero.
-  const owed = view.mine.reduce((n, m) => n + (m.amount ?? 0), 0);
+  // NET OF WHAT SHE HAS ALREADY HANDED OVER. The first version of this summed
+  // `amount` alone, so a day she had already paid for at the window still
+  // counted toward "to pay at the office" — sending her back with a bigger
+  // number than she owes, which is worse than the missing total it replaced.
+  const owed = view.mine.reduce((n, m) => n + Math.max(0, (m.amount ?? 0) - m.paid), 0);
+  const settled = view.mine.reduce((n, m) => n + m.paid, 0);
   const freeDays = view.mine.filter((m) => !m.amount).length;
   const totalHtml =
-    view.mine.length > 1 || owed > 0
+    view.mine.length > 1 || owed > 0 || settled > 0
       ? `<div class="row" style="border-top:1px solid #dbe6ea;margin-top:6px;padding-top:10px">
-           <span class="mine">${owed > 0 ? `$${owed.toFixed(2)} to pay at the office` : "Nothing to pay"}</span>
-           <span class="why">${freeDays > 0 && owed > 0 ? `${freeDays} of these ${freeDays === 1 ? "is" : "are"} included with your stay` : owed > 0 ? "when you settle up" : "these are included with your stay"}</span>
+           <span class="mine">${owed > 0 ? `$${owed.toFixed(2)} to pay at the office` : settled > 0 ? "You're all settled up" : "Nothing to pay"}</span>
+           <span class="why">${
+             settled > 0
+               ? `$${settled.toFixed(2)} already paid${owed > 0 ? " — thank you" : ", thank you"}`
+               : freeDays > 0 && owed > 0
+                 ? `${freeDays} of these ${freeDays === 1 ? "is" : "are"} included with your stay`
+                 : owed > 0 ? "when you settle up" : "these are included with your stay"
+           }</span>
          </div>`
       : "";
 
