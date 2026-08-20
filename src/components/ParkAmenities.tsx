@@ -109,10 +109,20 @@ function AmenityCard({
   // HOW THEY PAID, PER BOOKING. `collectAmenityMoney` has accepted cash, check,
   // card, transfer and other since 0119 — the button passed "cash"
   // unconditionally, so a guest who wrote a cheque for the boat was recorded as
-  // having paid cash and the method column on the CPA statement was wrong from
-  // the first boat day. Defaults to cash because that is what happens at an
-  // office window, but it is a visible control next to the button rather than
-  // an assumption made for him.
+  // having paid cash.
+  //
+  // WHERE THAT SHOWED, precisely — the audit doc said "the CPA statement's
+  // method column", and that is not right. An amenity payment carries no
+  // charge_id, so it is not in the statement's per-payment list at all; the
+  // statement counts it as a lump `amenityReceivedCents` with no method column
+  // to be wrong. The place the falsehood was actually legible is the payment
+  // line a few dozen lines below this one — "$150.00 cash · Aug 19", on his own
+  // card, next to the button for taking it back. That line said cash for every
+  // cheque anybody ever wrote.
+  //
+  // Defaults to cash because that is what happens at an office window, but it
+  // is a visible control next to the button rather than an assumption made for
+  // him.
   const [payMethod, setPayMethod] = useState<Record<string, string>>({});
 
   // WHAT IS COMING, PLUS WHAT IS STILL OWED FROM WHAT HAS GONE.
