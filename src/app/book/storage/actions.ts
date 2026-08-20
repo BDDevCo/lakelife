@@ -99,6 +99,19 @@ export async function createPackageBooking(input: {
   const sel = validateSelection(pkg, input.selectedServiceIds);
   if (!sel.ok) return { ok: false, error: sel.error };
   if (sel.fall.length === 0) return { ok: false, error: "Nothing selected for the fall visit." };
+  // A $0 PACKAGE IS A CONFIGURATION MISTAKE, NOT A FREE ONE.
+  //
+  // The tile that priced at $0 is filtered out of the menu now (see
+  // storage/data.ts), but a stale wizard, a back button or a direct post can
+  // still arrive here — and nothing downstream refuses it, so this would have
+  // booked a haul-out, a winterization and a season of storage for nothing.
+  // The customer is not wrong and should not be blamed for it.
+  if (!(sel.total > 0)) {
+    return {
+      ok: false,
+      error: "We can't price that package for your boat right now — nothing has been booked. Give us a shout and we'll sort it.",
+    };
+  }
   if (sel.storageTierId && !input.agreementAccepted) {
     return { ok: false, error: "Please agree to the winter storage terms first." };
   }

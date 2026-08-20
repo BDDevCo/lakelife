@@ -28,7 +28,8 @@ export async function getPackageViews(profile: PricingProfile): Promise<PackageV
 
   const svcById = new Map((services ?? []).map((s) => [s.id as string, s]));
 
-  return packages.map((p) => {
+  const empty: string[] = [];
+  const views = packages.map((p) => {
     const components: PackageComponentView[] = (recipe ?? [])
       .filter((r) => r.package_id === p.id)
       .flatMap((r) => {
@@ -57,6 +58,7 @@ export async function getPackageViews(profile: PricingProfile): Promise<PackageV
         }];
       })
       .sort((a, b) => (a.phase === b.phase ? (a.required === b.required ? a.name.localeCompare(b.name) : a.required ? -1 : 1) : a.phase === "fall" ? -1 : 1));
+    if (components.length === 0) empty.push((p.code as string) ?? (p.id as string));
     return {
       id: p.id as string,
       code: p.code as string,
@@ -65,4 +67,26 @@ export async function getPackageViews(profile: PricingProfile): Promise<PackageV
       components,
     };
   });
+
+  // A PACKAGE WITH NOTHING IN IT IS NOT AN OFFER.
+  //
+  // An active service_packages row whose package_components rows are missing —
+  // or whose services have since been retired — priced at $0 and rendered as a
+  // tile: real name, real description, "From $0", and a Book button. Opening it
+  // showed "Nothing scheduled this fall", "Nothing scheduled next spring", and
+  // an enabled confirm reading "Book — $0". Tapping it got "Nothing selected
+  // for the fall visit", which is true and unactionable — the customer chose
+  // nothing because there was nothing to choose.
+  //
+  // So it does not appear. It is a configuration mistake, not a product, and
+  // the customer is not the right person to discover it. Logged by code so ops
+  // finds out from the server log rather than from somebody ringing up about a
+  // free winterization.
+  if (empty.length > 0) {
+    console.error(
+      `[storage] ${empty.length} active package(s) have no bookable components and were hidden: ${empty.join(", ")}. ` +
+      `Check package_components, and that their services still exist with kind component/addon.`,
+    );
+  }
+  return views.filter((v) => v.components.length > 0);
 }

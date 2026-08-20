@@ -2706,8 +2706,8 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
     // sent — and it holds the enrollment's one open slot until it expires in
     // 14 days, so this quietly costs them a whole cycle.
     if (ownerErr) {
-      console.error(`[read failed] the owner's phone number (enrollment ${e.id}):`, ownerErr);
-      skipped.push(`Enrollment ${e.id}: a visit was penciled for ${prettyDate(date)} but we couldn't read the owner's phone number — the confirm link was never sent.`);
+      console.error(`[read failed] how to reach the owner (enrollment ${e.id}):`, ownerErr);
+      skipped.push(`Enrollment ${e.id}: a visit was penciled for ${prettyDate(date)} but we couldn't read how to reach the owner — the confirm link was never sent, and it holds their slot for 14 days.`);
     }
     if (owner?.phone || owner?.email) {
       const where = prop.nickname || prop.address || "your place";
