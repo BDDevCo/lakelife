@@ -58,7 +58,18 @@ export async function sendSms(
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_PHONE_NUMBER;
-  if (!sid || !token || !from) return { queued: false, error: "SMS not configured" };
+  // ONCE A2P REGISTRATION CLEARS, THE SENDER IS A SERVICE, NOT A NUMBER.
+  //
+  // A registered campaign is attached to a Messaging Service, and carriers
+  // route on THAT — sending from the bare number keeps the traffic
+  // unregistered no matter how green the console looks. So the day the brand
+  // is approved this becomes a one-line environment change with no deploy:
+  // set TWILIO_MESSAGING_SERVICE_SID and the send switches over.
+  //
+  // Until it is set, nothing changes — the number is still used, and the
+  // product behaves exactly as it does today.
+  const serviceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+  if (!sid || !token || (!from && !serviceSid)) return { queued: false, error: "SMS not configured" };
 
   // AND THE SECOND GATE: a fixture holding a plausible number (0126). Placed
   // after the configuration check on purpose — it costs a database round trip,
@@ -70,7 +81,13 @@ export async function sendSms(
 
   try {
     const client = twilio(sid, token);
-    const msg = await client.messages.create({ from, to, body });
+    // messagingServiceSid and from are mutually exclusive at the API: sending
+    // both is an error, so the service wins when it is configured.
+    const msg = await client.messages.create(
+      serviceSid
+        ? { messagingServiceSid: serviceSid, to, body }
+        : { from: from as string, to, body },
+    );
 
     // Some failures are known immediately — a blocked or unroutable number
     // comes back already final. Those are not queued by any honest reading, so
