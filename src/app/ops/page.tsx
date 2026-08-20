@@ -93,50 +93,66 @@ export default async function OpsPage() {
   // WHETHER THE TEXTS ARE ARRIVING. Defensive like the rest: a Twilio hiccup
   // must not take the console down, and it must not read as healthy either —
   // a null window renders as "we couldn't check".
-  let smsHealth: SmsHealth = {
-    configured: false, window: null, reasons: [], oldest: null, newest: null,
-  };
-  try {
-    smsHealth = await getSmsHealth();
-  } catch (e) {
-    console.error("[ops] sms health failed", e instanceof Error ? e.message : e);
-  }
-
-  let stuck: Awaited<ReturnType<typeof getStuckHouseholds>> = [];
-  let tally = { invitesSent: 0, slipsPrinted: 0, claimed: 0, refused: 0, declined: 0, empty: true };
+  // ALL FIVE AT ONCE, each still isolated.
+  //
+  // These were five sequential `await`s, each wrapped in its own try/catch —
+  // and the sequencing was accidental, a by-product of writing the blocks one
+  // after another rather than a decision. It cost five round trips in a row
+  // before the console painted, and the FIRST of them, getSmsHealth, is a live
+  // call out to Twilio's API. On LTE, in a truck, on the screen checked twenty
+  // times a day.
+  //
+  // allSettled gives exactly what the try/catch blocks gave — one loader
+  // throwing cannot touch the others — with none of the queue. Every fallback
+  // and every log line below is the one that sat with its own await.
+  //
   // CAUGHT SEPARATELY, because the fallbacks are not equally harmless. `stuck`
   // falls back to an empty list; `tally` falls back to `empty: true`, which the
   // card renders as "nobody has started onboarding a park yet". Sharing one
-  // try/catch meant a failed stuck-households read reset a tally that had
-  // already come back fine, inventing that sentence out of the other read's
-  // failure.
-  try {
-    stuck = await getStuckHouseholds();
-  } catch (e) {
-    console.error("[ops] stuck households unavailable", e instanceof Error ? e.message : e);
-  }
-  try {
-    tally = await getClaimTally();
-  } catch (e) {
-    console.error("[ops] claim tally unavailable", e instanceof Error ? e.message : e);
-  }
+  // catch meant a failed stuck-households read reset a tally that had already
+  // come back fine, inventing that sentence out of the other read's failure.
+  // Settling them separately keeps that apart by construction.
+  const [smsRes, stuckRes, tallyRes, parksRes, feesRes] = await Promise.allSettled([
+    getSmsHealth(),
+    getStuckHouseholds(),
+    getClaimTally(),
+    getOpsParks(),
+    getProposedFees(),
+  ]);
 
+  const why = (r: PromiseRejectedResult) =>
+    r.reason instanceof Error ? r.reason.message : r.reason;
+
+  // WHETHER THE TEXTS ARE ARRIVING. A Twilio hiccup must not take the console
+  // down, and it must not read as healthy either — a null window renders as
+  // "we couldn't check".
+  let smsHealth: SmsHealth = {
+    configured: false, window: null, reasons: [], oldest: null, newest: null,
+  };
+  if (smsRes.status === "fulfilled") smsHealth = smsRes.value;
+  else console.error("[ops] sms health failed", why(smsRes));
+
+  // WHO CANNOT GET IN.
+  let stuck: Awaited<ReturnType<typeof getStuckHouseholds>> = [];
+  if (stuckRes.status === "fulfilled") stuck = stuckRes.value;
+  else console.error("[ops] stuck households unavailable", why(stuckRes));
+
+  let tally = { invitesSent: 0, slipsPrinted: 0, claimed: 0, refused: 0, declined: 0, empty: true };
+  if (tallyRes.status === "fulfilled") tally = tallyRes.value;
+  else console.error("[ops] claim tally unavailable", why(tallyRes));
+
+  // Parks are read defensively for the same reason as the rest: a brand-new
+  // module is the likeliest thing to throw, and losing the jobs board over an
+  // empty parks table would be a self-inflicted outage.
   let parks: Awaited<ReturnType<typeof getOpsParks>> = [];
-  try {
-    parks = await getOpsParks();
-  } catch (err) {
-    console.error("ops: parks board unavailable", err);
-  }
+  if (parksRes.status === "fulfilled") parks = parksRes.value;
+  else console.error("ops: parks board unavailable", why(parksRes));
 
-  // Same reasoning as parks, and the comment above is why: this is the newest
-  // loader on the page, so it is the likeliest to throw, and a fee decision
+  // Newest loader on the page, so the likeliest to throw — and a fee decision
   // nobody can see is a much smaller problem than a jobs board nobody can.
   let proposedFees: Awaited<ReturnType<typeof getProposedFees>> = [];
-  try {
-    proposedFees = await getProposedFees();
-  } catch (err) {
-    console.error("ops: proposed fees unavailable", err);
-  }
+  if (feesRes.status === "fulfilled") proposedFees = feesRes.value;
+  else console.error("ops: proposed fees unavailable", why(feesRes));
 
   const kpis = [
     { v: String(summary.requestsWaiting), l: "Requests waiting" },
