@@ -5,6 +5,7 @@ import { RefCatcher } from "@/components/RefCatcher";
 import { createServiceClient } from "@/lib/supabase/server";
 import { fromPrice } from "@/lib/lake-pages";
 import type { ServiceRule } from "@/lib/pricing";
+import { effectiveSeason, seasonIsProvisional, todayLakeDate } from "@/lib/booking";
 import { mustRead, mustCount } from "@/lib/must-read";
 
 /**
@@ -25,6 +26,8 @@ interface LakeRow {
   slug: string;
   ice_out_actual: string | null;
   pull_deadline: string | null;
+  /** Defaults TRUE (0044). False only on a lake born from "my lake isn't listed". */
+  season_confirmed: boolean | null;
   hoa_user_id: string | null;
   hoa_name: string | null;
 }
@@ -38,7 +41,7 @@ async function loadLake(slug: string): Promise<LakeRow | null> {
   // per the note inside), so a read that could not run throws instead.
   const data = mustRead(`the ${slug} lake page`, await admin
     .from("lakes")
-    .select("id, name, slug, ice_out_actual, pull_deadline, hoa_user_id, hoa_name")
+    .select("id, name, slug, ice_out_actual, pull_deadline, season_confirmed, hoa_user_id, hoa_name")
     .eq("slug", slug)
     // A FIXTURE IS A 404 TO THE WORLD (0124). The old zz- convention never
     // reached this route: the directory and the sitemap both filtered it out,
@@ -115,6 +118,19 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
   const hoaTotal = (hoaEarnings ?? []).reduce((s, e) => s + Number(e.amount ?? 0), 0);
   const iceOut = pretty(lake.ice_out_actual);
   const pullBy = pretty(lake.pull_deadline);
+  // A PUBLIC, SEO-INDEXED, HOURLY-CACHED PAGE STATING A GUESS AS A FACT.
+  //
+  // `pretty` drops the year, so a date rolled from last season prints as this
+  // season's deadline and reads exactly like a measured one. Nobody typing
+  // this lake's name into a search engine has any way to tell. The same two
+  // signals the booking grid uses decide it here.
+  const seasonProvisional = seasonIsProvisional(
+    effectiveSeason(
+      { iceOut: (lake.ice_out_actual as string) ?? null, pullDeadline: (lake.pull_deadline as string) ?? null },
+      todayLakeDate(),
+    ),
+    lake.season_confirmed ?? undefined,
+  );
 
   return (
     <>
@@ -141,8 +157,12 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
           <div className="ll-card ll-card-pad" style={{ marginBottom: 16 }}>
             <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>{lake.name} season</h3>
             <p className="mut" style={{ fontSize: 14, margin: 0 }}>
-              {iceOut ? `Ice-out: ${iceOut}. ` : ""}
-              {pullBy ? `Everything out of the water by ${pullBy} — we build in an 8-day buffer before the hard freeze, so book your fall pull early.` : ""}
+              {iceOut ? `Ice-out: ${iceOut}${seasonProvisional ? " (estimated)" : ""}. ` : ""}
+              {pullBy
+                ? seasonProvisional
+                  ? `We expect everything out of the water by ${pullBy} — an estimate until this year's ice-out is measured, with an 8-day buffer before the hard freeze built in. Book your fall pull early and we'll confirm the day with you.`
+                  : `Everything out of the water by ${pullBy} — we build in an 8-day buffer before the hard freeze, so book your fall pull early.`
+                : ""}
             </p>
           </div>
         )}

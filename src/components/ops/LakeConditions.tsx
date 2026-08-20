@@ -90,6 +90,27 @@ function LakeCard({ lake }: { lake: LakeCondition }) {
           Not a real lake — nothing here reaches a customer.
         </div>
       )}
+
+      {/* THIS IS THE SCREEN THAT EXISTS TO FIX IT, and it could not say which
+          lake needed fixing. `season_confirmed` was not even loaded here. A
+          provisional window is a guess the booking calendar and the public
+          lake page are now both obliged to admit to — so the sooner a real
+          ice-out lands in these two boxes, the sooner they stop hedging. */}
+      {!lake.is_fixture && lake.provisional && (
+        <div
+          style={{
+            fontSize: 12.5, lineHeight: 1.5, marginTop: 8,
+            padding: "8px 10px", borderRadius: 8,
+            background: "var(--sun-soft)", border: "1px solid #ecd9ad", color: "#7a5a1e",
+          }}
+        >
+          <b>Still provisional.</b>{" "}
+          {lake.season_confirmed
+            ? "These dates were rolled from a past season, so customers booking water work here are being told they're an estimate."
+            : "Nobody has confirmed this lake's dates — they were copied from a neighbouring lake when it was created."}{" "}
+          Type this year&apos;s ice-out and hard freeze below and the hedging stops.
+        </div>
+      )}
       <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
         {lake.active_properties} active properties
       </div>

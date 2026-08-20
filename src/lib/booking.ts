@@ -87,6 +87,36 @@ export interface EffectiveSeason {
  * window a human confirmed is never overwritten by a guess. Pure: no clock,
  * no I/O; `today` is passed in.
  */
+/**
+ * IS THIS WINDOW A GUESS? — one answer, so every surface agrees.
+ *
+ * `effectiveSeason` already computes `wasRolled` and its own doc says of it:
+ * "Surface it; never sell against it silently." Outside tests it had exactly
+ * ONE consumer — the ops assign-refusal, which tells the person REFUSING a job
+ * that the dates are provisional. The customer committing money to the same
+ * window saw a plain white square and the tooltip "Available".
+ *
+ * TWO SIGNALS, because either one alone is wrong:
+ *
+ *   `wasRolled` is true when stored dates are from a past year and have been
+ *   rolled onto this one. It is FALSE for a lake born from "my lake isn't
+ *   listed", whose dates are this year's — because they were COPIED off a
+ *   neighbouring lake. A pure guess that rolls to nothing.
+ *
+ *   `season_confirmed` is false on exactly those demand-born lakes
+ *   (lake-birth.ts) and true once ops types both dates by hand
+ *   (ops/actions.ts). But it DEFAULTS TRUE (0044), so the seeded lakes read
+ *   confirmed while holding dates that will be a year stale come January.
+ *
+ * So: rolled, or never confirmed, is provisional.
+ */
+export function seasonIsProvisional(
+  eff: Pick<EffectiveSeason, "wasRolled">,
+  seasonConfirmed: boolean | null | undefined,
+): boolean {
+  return eff.wasRolled || seasonConfirmed === false;
+}
+
 export function effectiveSeason(stored: StoredSeason, today: string): EffectiveSeason {
   const unrolled = {
     seasonStart: stored.iceOut,

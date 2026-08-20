@@ -1,6 +1,6 @@
 import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { todayLakeDate } from "@/lib/booking";
+import { todayLakeDate, effectiveSeason, seasonIsProvisional } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { marginPct } from "@/lib/dispatch";
 import { mustRead, mustCount } from "@/lib/must-read";
@@ -459,15 +459,27 @@ export interface LakeCondition {
    *  set a scratch lake's season dates — so this is carried, not filtered on
    *  here. The header decides what to show; the editor shows everything. */
   is_fixture: boolean;
+  /**
+   * TRUE once a human typed both dates for this lake (ops/actions.ts), FALSE
+   * on a lake born from "my lake isn't listed" carrying a neighbour's dates.
+   * Defaults TRUE (0044), so it is not sufficient on its own.
+   */
+  season_confirmed: boolean;
+  /**
+   * The whole truth: rolled from a past year OR never confirmed. This is the
+   * screen that exists to fix that, and it could not say which lake needed it.
+   */
+  provisional: boolean;
 }
 
 export async function getLakeConditions(): Promise<LakeCondition[]> {
   const admin = createServiceClient();
+  const today = todayLakeDate();
   const lakes = mustRead(
     "the lakes and their season dates",
     await admin
       .from("lakes")
-      .select("id, name, ice_out_actual, hard_freeze_est, pull_deadline, is_fixture")
+      .select("id, name, ice_out_actual, hard_freeze_est, pull_deadline, is_fixture, season_confirmed")
       .order("name", { ascending: true }),
   );
 
@@ -484,6 +496,14 @@ export async function getLakeConditions(): Promise<LakeCondition[]> {
       pull_deadline: (l.pull_deadline as string) ?? null,
       active_properties: byLake.get(l.id as string) ?? 0,
       is_fixture: l.is_fixture === true,
+      season_confirmed: l.season_confirmed !== false,
+      provisional: seasonIsProvisional(
+        effectiveSeason(
+          { iceOut: (l.ice_out_actual as string) ?? null, pullDeadline: (l.pull_deadline as string) ?? null },
+          today,
+        ),
+        l.season_confirmed as boolean | undefined,
+      ),
     }))
     // REAL LAKES FIRST, always. The badge says which is which; this makes it
     // so a fixture is never sitting between two real lakes in the first place.

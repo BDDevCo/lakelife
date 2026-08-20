@@ -133,3 +133,68 @@ describe("a test lake cannot be mistaken for a real one", () => {
     expect(body).not.toMatch(/\.eq\("is_fixture", false\)/);
   });
 });
+
+/**
+ * A GUESSED SEASON WINDOW, SOLD SILENTLY.
+ *
+ * `effectiveSeason` computes `wasRolled` and its doc says "Surface it; never
+ * sell against it silently." Outside tests it had ONE consumer — the ops
+ * assign-refusal. So the person refusing a job was told the dates were a
+ * guess and the customer committing money to the same window was not.
+ *
+ * These scan the three surfaces that were silent, plus the screen that exists
+ * to fix it, which did not even load the column.
+ */
+describe("nobody is sold against a guessed season window", () => {
+  it("the booking page loads the flag and passes it to the grid", () => {
+    const page = src("../app/book/page.tsx");
+    expect(page).toMatch(/season_confirmed/);
+    expect(page).toMatch(/seasonIsProvisional/);
+    expect(page).toMatch(/provisional: seasonProvisional/);
+  });
+
+  it("the grid can receive it and says something when it is true", () => {
+    const grid = src("../components/BookingGrid.tsx");
+    expect(grid).toMatch(/provisional\?: boolean/);
+    expect(grid).toMatch(/season\.provisional/);
+    expect(grid).toMatch(/aren't confirmed yet/);
+  });
+
+  it("the warning is water-work only — on a mow these dates decide nothing", () => {
+    const grid = src("../components/BookingGrid.tsx");
+    expect(grid).toMatch(/service\.is_water_work && season\.provisional/);
+  });
+
+  it("it warns rather than blocks — a guessed window still beats no window", () => {
+    // If this ever became a refusal, a customer who wants to book their pull
+    // in August could not, on the strength of a date nobody has measured.
+    const grid = src("../components/BookingGrid.tsx");
+    const at = grid.indexOf("season.provisional");
+    const block = grid.slice(at, at + 900);
+    expect(block).toMatch(/You can book now/);
+    expect(block).not.toMatch(/disabled|return null/);
+  });
+
+  it("the public lake page stops stating a guess as this year's deadline", () => {
+    const pub = src("../app/lakes/[slug]/page.tsx");
+    expect(pub).toMatch(/season_confirmed/);
+    expect(pub).toMatch(/seasonIsProvisional/);
+    expect(pub).toMatch(/an estimate until this year's ice-out is measured/);
+  });
+
+  it("ops can finally see WHICH lake is still provisional", () => {
+    const data = src("../app/ops/data.ts");
+    const ui = src("../components/ops/LakeConditions.tsx");
+    expect(data).toMatch(/season_confirmed/);
+    expect(data).toMatch(/provisional: seasonIsProvisional/);
+    expect(ui).toMatch(/Still provisional/);
+  });
+
+  it("and it tells ops WHY, because the two causes have different fixes", () => {
+    // Rolled from last season vs never confirmed at all — one is a stale date
+    // on a real lake, the other is a lake wearing a neighbour's dates.
+    const ui = src("../components/ops/LakeConditions.tsx");
+    expect(ui).toMatch(/rolled from a past season/);
+    expect(ui).toMatch(/copied from a neighbouring lake/);
+  });
+});

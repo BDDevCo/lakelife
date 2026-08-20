@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dayStatus, toISODate, isRecurring, todayLakeDate, type DayContext , lakeDateOf} from "./booking";
+import { dayStatus, toISODate, isRecurring, todayLakeDate, seasonIsProvisional, type DayContext , lakeDateOf} from "./booking";
 
 // Big Long Lake 2026: ice-out Mar 21, pull deadline Nov 14.
 const waterCtx = (fullDates: string[] = []): DayContext => ({
@@ -113,5 +113,45 @@ describe("the last evening of a month", () => {
   it("handles the winter offset too", () => {
     // Indiana is UTC-5 in January, so the window is an hour wider.
     expect(lakeDateOf("2026-02-01T04:30:00+00:00")?.slice(0, 7)).toBe("2026-01");
+  });
+});
+
+/**
+ * "SURFACE IT; NEVER SELL AGAINST IT SILENTLY" — booking.ts's own words about
+ * wasRolled, and outside tests it had exactly ONE consumer: the ops refusal
+ * note. The person REFUSING a job was told the dates were a guess; the person
+ * committing money to the same window saw a white square reading "Available".
+ */
+describe("seasonIsProvisional — two signals, because either alone is wrong", () => {
+  const rolled = { wasRolled: true };
+  const notRolled = { wasRolled: false };
+
+  it("a rolled window is provisional even on a lake ops confirmed years ago", () => {
+    // The seeded lakes: season_confirmed defaults TRUE (0044) and their dates
+    // are 2026. On 1 Jan 2027 those roll, and confirmed-ness goes stale.
+    expect(seasonIsProvisional(rolled, true)).toBe(true);
+  });
+
+  it("an unconfirmed lake is provisional even when nothing rolled", () => {
+    // A lake born from "my lake isn't listed" gets a COPY of a neighbour's
+    // month/day stamped onto this year — so wasRolled is false and the window
+    // is still a pure guess.
+    expect(seasonIsProvisional(notRolled, false)).toBe(true);
+  });
+
+  it("confirmed and unrolled is the only combination that is not a guess", () => {
+    expect(seasonIsProvisional(notRolled, true)).toBe(false);
+  });
+
+  it("treats a missing flag as confirmed, matching the column default", () => {
+    // 0044 defaults the column TRUE, so null/undefined must not read as a
+    // guess — that would hedge on every lake ops has actually confirmed.
+    expect(seasonIsProvisional(notRolled, null)).toBe(false);
+    expect(seasonIsProvisional(notRolled, undefined)).toBe(false);
+  });
+
+  it("a rolled window stays provisional whatever the flag says", () => {
+    expect(seasonIsProvisional(rolled, false)).toBe(true);
+    expect(seasonIsProvisional(rolled, null)).toBe(true);
   });
 });

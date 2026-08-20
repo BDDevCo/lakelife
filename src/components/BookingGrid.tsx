@@ -21,6 +21,13 @@ interface Season {
   start: string | null;
   end: string | null;
   lake: string | null;
+  /**
+   * These dates are a GUESS — rolled from a past year, or copied off a
+   * neighbouring lake when this one was born from "my lake isn't listed".
+   * The grid still uses them (a guessed window beats no window), but a person
+   * about to commit money to a date inside it is told so.
+   */
+  provisional?: boolean;
 }
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -327,6 +334,26 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
                 ? "Pick your first visit — we'll line up the repeats with you once it's confirmed."
                 : "Pick your date."}
           </div>
+
+          {/* THE WINDOW IS A GUESS AND THE PERSON PAYING SHOULD KNOW.
+              Water work only — the ice-out / pull-deadline gate is the only
+              thing these dates decide, so on a mow this would be noise.
+              Deliberately NOT a blocker and not a greyed-out calendar: a
+              guessed window is still the best window we have, and refusing to
+              take the booking would be worse than taking it honestly. */}
+          {service.is_water_work && season.provisional && (
+            <div
+              style={{
+                fontSize: 12.5, lineHeight: 1.5, marginBottom: 8,
+                padding: "8px 10px", borderRadius: 8,
+                background: "var(--sun-soft)", border: "1px solid #ecd9ad", color: "#7a5a1e",
+              }}
+            >
+              <b>{season.lake ? `${season.lake}'s season dates aren't confirmed yet.` : "These season dates aren't confirmed yet."}</b>{" "}
+              They&apos;re our best estimate, not this year&apos;s measured ice-out. You can book now
+              — if the water moves the date, we&apos;ll come back to you before anyone drives out.
+            </div>
+          )}
 
           {/* calendar */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>

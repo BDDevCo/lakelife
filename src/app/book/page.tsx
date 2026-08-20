@@ -10,6 +10,7 @@ import { getPlatformSettings } from "@/lib/settings";
 import { createClient } from "@/lib/supabase/server";
 import { mustRead, mustCount, softRead, ReadFailed } from "@/lib/must-read";
 import { hasSupabaseEnv } from "@/lib/env";
+import { effectiveSeason, seasonIsProvisional, todayLakeDate } from "@/lib/booking";
 import { getMyReferralLink, getFullProfile, getPricedServices } from "@/app/profile/data";
 
 export default async function BookPage() {
@@ -150,14 +151,29 @@ export default async function BookPage() {
     "your lake's season dates",
     await supabase
       .from("properties")
-      .select("lakes(name, ice_out_actual, pull_deadline)")
+      .select("lakes(name, ice_out_actual, pull_deadline, season_confirmed)")
       .eq("owner_id", user.id)
       .eq("id", profile.propertyId!)
       .maybeSingle(),
   );
   const lake = (Array.isArray(prop?.lakes) ? prop?.lakes[0] : prop?.lakes) as
-    | { name?: string; ice_out_actual?: string; pull_deadline?: string }
+    | { name?: string; ice_out_actual?: string; pull_deadline?: string; season_confirmed?: boolean }
     | undefined;
+
+  // NEVER SELL AGAINST A GUESSED WINDOW SILENTLY — booking.ts:76 says exactly
+  // that about wasRolled, and until now the only thing that acted on it was the
+  // OPS refusal note. The customer spending the money was told nothing.
+  //
+  // No extra read: effectiveSeason is pure and runs off the two columns this
+  // query already loads, and season_confirmed is one more column on the same
+  // select rather than a second round trip.
+  const seasonProvisional = seasonIsProvisional(
+    effectiveSeason(
+      { iceOut: lake?.ice_out_actual ?? null, pullDeadline: lake?.pull_deadline ?? null },
+      todayLakeDate(),
+    ),
+    lake?.season_confirmed,
+  );
 
   // Autopilot enrollment state — RLS means owners only ever see their own
   // rows. The table may not exist yet (migration pending): a query error just
@@ -209,7 +225,7 @@ export default async function BookPage() {
             frequency_options: s.frequency_options,
             is_water_work: s.is_water_work,
           }))}
-          season={{ start: lake?.ice_out_actual ?? null, end: lake?.pull_deadline ?? null, lake: lake?.name ?? null }}
+          season={{ start: lake?.ice_out_actual ?? null, end: lake?.pull_deadline ?? null, lake: lake?.name ?? null, provisional: seasonProvisional }}
         />
         <AutopilotCard
           propertyId={profile.propertyId!}
