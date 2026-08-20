@@ -111,6 +111,19 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
       if (res.flaggedJobAlreadyDone) {
         parts.push("That visit is already done, so its bill stays as it was.");
       }
+      // A VISIT WHOSE PRICE WAS AGREED, NOT LISTED. A scarcity uplift the
+      // customer accepted, or a below-floor take-home a crew claimed, cannot
+      // be re-derived at the new size — nothing records what it was. Those
+      // visits keep exactly the numbers both sides agreed to, and saying so
+      // is the point: silently rewriting them is what this fixed.
+      const held = res.heldAgreements ?? 0;
+      if (held > 0) {
+        parts.push(
+          held === 1
+            ? "One upcoming visit has a price you'd already agreed, so we left it exactly as it was."
+            : `${held} upcoming visits have prices you'd already agreed, so we left them exactly as they were.`,
+        );
+      }
       toast(parts.join(" "));
     }
     router.refresh();

@@ -11,12 +11,24 @@ import { notify } from "@/lib/notify";
 import { withParkRate, type ParkRates } from "@/lib/park-rates";
 import { loadParkRatesChecked } from "@/app/park/rate-data";
 import { mustRead, softRead, readFailedMessage } from "@/lib/must-read";
+import { rushPrice, fillInRate } from "@/lib/rush";
+import { getPlatformSettings } from "@/lib/settings";
 
 export interface ApprovalResult {
   ok: boolean;
   error?: string;
   /** How many still-open jobs on this property were repriced. */
   repriced?: number;
+  /**
+   * Visits whose price was AGREED at something other than the menu — a
+   * scarcity uplift the customer tapped Accept on, or a below-floor take-home
+   * a crew tapped Claim on. The correction changes the size of the job, but
+   * nothing records what that uplift or that offer was, so it cannot be
+   * re-derived at the new size. Rewriting them to the menu discarded an
+   * agreement; inventing a new one would be worse. They are left exactly as
+   * agreed and named here so a person decides.
+   */
+  heldAgreements?: number;
   /**
    * The visit the crew was standing on when they raised this is already
    * finished and billed. Repricing only touches `requested`/`scheduled`, so
@@ -86,6 +98,7 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
 
   const admin = createServiceClient();
   let repriced = 0;
+  let heldAgreements = 0;
   if (ctx.flag.status === "pending") {
     // Atomic: apply the proposed profile change + mark the flag approved.
     const { error: rpcErr } = await admin.rpc("apply_flag_change", { p_flag_id: flagId });
@@ -153,7 +166,10 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
       }
       const openJobsRes = await admin
         .from("jobs")
-        .select("id, service_id, vendor_id, vendor_cost")
+        // is_rush and gap_claim are what say this job's money is not the menu
+        // price. Without them the loop could not tell an agreed number from a
+        // stale one, and overwrote both.
+        .select("id, service_id, vendor_id, vendor_cost, customer_price, is_rush, gap_claim")
         .eq("property_id", ctx.propertyId)
         .is("group_id", null) // package jobs price as a SUM of legs — repricing by the anchor alone would collapse the bundle (component-aware reprice = S3)
         .in("status", ["requested", "scheduled"]);
@@ -195,11 +211,50 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
         }
       }
 
+      // The rush premium is a PERCENTAGE, so it re-derives correctly at any
+      // size — unlike the two agreements below it.
+      const rushSettings = await getPlatformSettings();
+
       for (const j of openJobs ?? []) {
         const raw = j.service_id ? byId.get(j.service_id) : undefined;
         if (!raw) continue;
         const rule = parkRates ? withParkRate(raw, parkRates) : raw;
-        const price = priceService(rule, pp);
+        const menu = priceService(rule, pp);
+
+        // AN AGREED PRICE IS NOT A STALE ONE.
+        //
+        // This loop used to write the bare menu price over every open job on
+        // the property. Two kinds of job carry a price that is deliberately
+        // NOT the menu:
+        //
+        //   A SAME-DAY RUSH job, priced menu + same_day_surcharge_pct and
+        //   confirmed to the customer at that number. That is a percentage, so
+        //   it re-derives at the new size and is re-applied below.
+        //
+        //   A SCARCITY-BUMPED job, where the customer tapped Accept on a
+        //   specific uplift so the cheapest crew could clear the margin floor.
+        //   acceptScarcityOffer writes that straight into customer_price and
+        //   records the uplift NOWHERE, so at a new size it cannot be
+        //   re-derived — only the offer engine, with the crew in front of it,
+        //   could choose a new one.
+        //
+        // Worked: an 8-section pier books same-day at ceil(604 × 1.25) = $755.
+        // The crew finds a 9th section, the owner approves, and the old code
+        // wrote the menu price for 9 sections — $652. The owner said yes to
+        // MORE work and the bill fell $103 below what they had agreed to, and
+        // $163 below the correct rush figure. The row still said is_rush.
+        const isRush = (j as { is_rush?: boolean }).is_rush === true;
+        const agreed = Number((j as { customer_price?: number }).customer_price ?? 0);
+        const price = isRush ? rushPrice(menu, rushSettings.sameDaySurchargePct) : menu;
+
+        // Not rush, and priced above menu: an uplift we cannot re-derive.
+        // Leave the whole job alone — price, minutes and cost — and name it.
+        // A half-updated job (new minutes, old price) is worse than an
+        // untouched one.
+        if (!isRush && agreed > menu) {
+          heldAgreements += 1;
+          continue;
+        }
 
         // NEVER REPRICE A SOLD JOB TO NOTHING.
         //
@@ -227,19 +282,45 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
         const vr = j.vendor_id && j.service_id
           ? rateByVendorService.get(`${j.vendor_id}:${j.service_id}`)
           : undefined;
-        if (vr) {
-          const cost = priceService({
+        // THE CREW'S NUMBER WAS AGREED TOO.
+        //
+        // Re-deriving vendor_cost from the raw rate card undoes whatever the
+        // crew actually tapped Claim on:
+        //
+        //   A GAP CLAIM is below-floor BY DEFINITION — canClaim refused the
+        //   card rate for exactly that reason, and the gap engine offered a
+        //   lower take-home the crew accepted. Its inputs (the customer price
+        //   at claim time, the crew's own rate-history anchor, a per-job
+        //   jitter) have all moved, so re-running it would produce a different
+        //   number than the one they agreed to. Recomputing from the card
+        //   instead pays them MORE and drops margin below the floor dispatch
+        //   enforces — the job ends up carrying the exact rate the system
+        //   refused to route at, with gap_claim still true.
+        //
+        //   A SAME-DAY FILL-IN took their standing rate minus the fill-in
+        //   discount. That IS a percentage of the card rate, so it re-derives.
+        //
+        // Worked: pier at 14 sections, card $728, gap offer $690 accepted.
+        // Crew flags 15; the old code paid the card rate 52 × 15 = $780 on a
+        // $940 job — 17.0% margin, under the 20% floor.
+        const isGapClaim = (j as { gap_claim?: boolean }).gap_claim === true;
+        if (vr && !isGapClaim) {
+          const card = priceService({
             name: rule.name,
             pricing_model: rule.pricing_model,
             base: Number(vr.base ?? 0),
             unit_rate: Number(vr.unit_rate ?? 0),
             band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
           }, pp);
+          // Mirror the claim: a rush job's take-home is the card rate less the
+          // fill-in discount, exactly as claimJob computed it.
+          const cost = isRush ? fillInRate(card, rushSettings.sameDayFillDiscountPct) : card;
           update.vendor_cost = cost;
           update.margin = price - cost;
         } else if (j.vendor_cost != null) {
-          // No rate card to re-derive from — keep what was agreed and let the
-          // margin follow the new price rather than inventing a crew number.
+          // No card to re-derive from, OR a gap claim we must not re-derive —
+          // keep what was agreed and let the margin follow the new price
+          // rather than inventing a crew number.
           update.margin = price - Number(j.vendor_cost);
         }
         // COUNT WHAT LANDED, not what was attempted. The result was discarded
@@ -287,7 +368,7 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
     flaggedJobAlreadyDone = st === "complete" || st === "paid";
   }
 
-  return { ok: true, repriced, flaggedJobAlreadyDone };
+  return { ok: true, repriced, heldAgreements, flaggedJobAlreadyDone };
 }
 
 
