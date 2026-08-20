@@ -466,7 +466,22 @@ export async function runCharges(
   // STAMP THE SHARES. Without this a second run bills the same water again —
   // the unique index stops a second CHARGE, but the shares would still read as
   // unbilled and land on the next month's bill instead.
+  //
+  // AND A FAILED STAMP USED TO BE SWALLOWED — `if (!stampErr)` counted it and
+  // said nothing. The charge is already raised, so the resident has been
+  // billed for the water; the shares still read as unbilled, so NEXT month's
+  // run picks them up and bills the same water again. The same-month guard
+  // above (`already`) cannot help: that keys on period_month, and next month
+  // is a different one.
+  //
+  // So: if we could not mark the shares as spent, we take the bill back. The
+  // invariant this restores is "a charge exists only if its shares are
+  // stamped" — voiding leaves the month billable, which is recoverable, where
+  // a double bill is money out of a resident's pocket. If the void ALSO fails
+  // there is nothing left to do but say so, loudly and by name, because the
+  // one outcome we will not have is a quiet one.
   let sharesBilled = 0;
+  const stampProblems: string[] = [];
   for (const c of raised ?? []) {
     const ids = shareIdsByRes.get(c.reservation_id as string);
     if (!ids?.length) continue;
@@ -475,7 +490,22 @@ export async function runCharges(
       .update({ billed_on_charge_id: c.id })
       .in("id", ids)
       .is("billed_on_charge_id", null);   // never re-stamp one already spent
-    if (!stampErr) sharesBilled += ids.length;
+    if (!stampErr) { sharesBilled += ids.length; continue; }
+
+    console.error(`[runCharges] couldn't stamp ${ids.length} cost share(s) onto charge ${c.id}:`, stampErr);
+    const { error: voidErr } = await admin
+      .from("park_charges").update({ status: "void" }).eq("id", c.id as string);
+    if (voidErr) {
+      console.error(`[runCharges] and couldn't void charge ${c.id} either:`, voidErr);
+      stampProblems.push(
+        `One bill went out with allocated costs we couldn't mark as spent, and we couldn't take it back either. ` +
+        `Check it before you run next month or that cost will be billed twice.`,
+      );
+    } else {
+      stampProblems.push(
+        `One bill was taken back: we couldn't mark its allocated costs as spent, and billing it would have charged them again next month. Run this again.`,
+      );
+    }
   }
 
   const total = rows.reduce((s, r) => s + (r.amount as number), 0);
@@ -493,7 +523,8 @@ export async function runCharges(
       (rateMoves.applied > 0
         ? ` ${rateMoves.applied} rent ${rateMoves.applied === 1 ? "increase" : "increases"} came due today and went in first.`
         : "") +
-      " Nobody has been told.",
+      " Nobody has been told." +
+      (stampProblems.length > 0 ? ` ⚠️ ${stampProblems.join(" ")}` : ""),
   };
 }
 

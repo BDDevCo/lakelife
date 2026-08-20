@@ -127,8 +127,27 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
   }
   const rateRows = rateRes.data;
   const rates: RateCard[] = (rateRows ?? []).map((r) => ({ term: r.term as Term, amount: Number(r.amount) }));
-  const quoted = quoteStay(rates, input.term as Term, range);
-  if (quoted == null) {
+  // WHAT THE APPLICANT IS QUOTED vs WHAT THE LEDGER BILLS ARE DIFFERENT NUMBERS.
+  //
+  // `quoteStay` is a STAY TOTAL — parks.ts multiplies the card rate by the
+  // number of whole periods, and its own test asserts a $900/month card over
+  // 2½ months quotes 2700. That is right for the applicant, who wants to know
+  // what the stay costs.
+  //
+  // `lot_reservations.quoted_amount` is NOT that. Every other writer puts a
+  // per-period RATE in it — the importer writes the monthly figure off the
+  // rent roll — and `buildStatement` bills it as "Lot rent … for the month",
+  // prorating by days in the month. Storing the stay total here billed that
+  // three-month applicant $2,700 EVERY MONTH, and the charge run bills
+  // 'approved' rows, so approving the application was enough to start it.
+  // quoteStay is kept as the VALIDITY check — it returns null both when the
+  // park does not sell this term and when the range is not a real one. Its
+  // number is deliberately not stored; naming it `sellable` so nobody wires
+  // the stay total back into quoted_amount by reaching for the nearest
+  // variable.
+  const sellable = quoteStay(rates, input.term as Term, range);
+  const card = rates.find((r) => r.term === (input.term as Term));
+  if (sellable == null || !card) {
     return { ok: false, error: "This lot isn't rented by that term. Pick another option." };
   }
 
@@ -249,7 +268,8 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
     renter_unit_id: unit.id,
     during: toDaterange(range),
     term: input.term,
-    quoted_amount: quoted,
+    // The RATE, not the stay total — see the note above `quoteStay` here.
+    quoted_amount: card.amount,
     status: "applied",
   });
   if (resErr) {

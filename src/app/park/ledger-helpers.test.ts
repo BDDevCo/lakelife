@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   ledgerState, balanceOf, toRows, summarise, ledgerHeadline,
   planRun, runSummary, daysBetween,
@@ -256,3 +258,81 @@ describe("stepping between months", () => {
     expect(shiftMonth("nonsense", 1)).toBe("nonsense");
   });
 });
+
+describe("an application stores a RATE, never a stay total", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("../parks/apply-actions.ts", import.meta.url)), "utf8",
+  );
+
+  it("writes the rate card's amount into quoted_amount", () => {
+    // quoteStay multiplies the card rate by the number of whole periods — its
+    // own test asserts $900/month over 2.5 months quotes 2700. buildStatement
+    // bills quoted_amount as "Lot rent … for the month". Storing the stay
+    // total billed a three-month applicant $2,700 EVERY month, and the charge
+    // run bills 'approved' rows, so approving the application started it.
+    expect(src).toMatch(/quoted_amount: card\.amount/);
+  });
+
+  it("does not store the stay total under any name", () => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(code).not.toMatch(/quoted_amount:\s*(quoted|sellable|quoteStay)/);
+  });
+
+  it("still refuses a term the park does not sell", () => {
+    // quoteStay stays as the validity check — it returns null for an unsold
+    // term AND for an unreal range.
+    expect(src).toMatch(/const sellable = quoteStay\(/);
+    expect(src).toMatch(/sellable == null \|\| !card/);
+  });
+
+  it("and the ledger really does treat that column as a monthly rent", () => {
+    // If this ever stops being true, the fix above is wrong.
+    const st = readFileSync(
+      fileURLToPath(new URL("./statement-helpers.ts", import.meta.url)), "utf8",
+    );
+    expect(st).toMatch(/label: "Lot rent"/);
+    expect(st).toMatch(/basis: prorated \? proratedBasis : "for the month"/);
+  });
+})
+
+describe("a cost share billed once, or the bill comes back", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("./ledger-actions.ts", import.meta.url)), "utf8",
+  );
+  const at = src.indexOf("STAMP THE SHARES");
+  const body = src.slice(at, at + 3200);
+
+  it("no longer swallows a failed stamp", () => {
+    // `if (!stampErr) sharesBilled += ids.length;` counted the good case and
+    // said nothing about the bad one. The charge is already raised, so the
+    // resident has been billed; the shares still read unbilled, so NEXT
+    // month's run bills the same water again.
+    // Pin the SHAPE, not the presence of a handler. Checking only that a
+    // console.error exists passes even when an unconditional `continue` above
+    // it makes the whole recovery unreachable — the same "asked is not obeyed"
+    // gap that let a notification gate be computed and ignored.
+    expect(body).toMatch(/if \(!stampErr\) \{ sharesBilled \+= ids\.length; continue; \}/);
+    expect(body).not.toMatch(/\}\s*continue;/);
+    expect(body).toMatch(/console\.error\(`\[runCharges\] couldn't stamp/);
+  });
+
+  it("takes the bill back when it cannot mark the costs as spent", () => {
+    expect(body).toMatch(/from\("park_charges"\)\.update\(\{ status: "void" \}\)/);
+  });
+
+  it("and still says so when even the void fails", () => {
+    expect(body).toMatch(/couldn't void charge/);
+    expect(body).toMatch(/billed twice/);
+  });
+
+  it("the problems reach the sentence the owner reads", () => {
+    expect(src).toMatch(/stampProblems\.length > 0 \? ` ⚠️ \$\{stampProblems\.join\(" "\)\}`/);
+  });
+
+  it("the same-month guard is still there — it just cannot cover next month", () => {
+    // `already` keys on period_month, which is why an unstamped share survives
+    // into a different month and gets billed again.
+    expect(src).toMatch(/\.eq\("period_month", month\)/);
+    expect(src).toMatch(/already\.has\(s\.id as string\)/);
+  });
+})
