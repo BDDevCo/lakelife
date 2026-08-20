@@ -175,10 +175,24 @@ export function TipCrew({ jobId, view }: { jobId: string; view: TipView }) {
           way to hold that policy is to state it at the moment of the decision
           rather than in an error message later. */}
       <p className="mut" style={{ fontSize: 11.5, marginTop: 12, marginBottom: 0, lineHeight: 1.5 }}>
+        {/* "IT REACHES THEM STRAIGHT AWAY" WAS THE REASON GIVEN FOR
+            IRREVERSIBILITY, AND IT IS NOT THE REASON.
+            addTip writes the crew's share as a `payouts` row with status
+            'released' and no batch. Money only leaves for a crew's bank in
+            runMonthlyPayoutBatches, which returns immediately unless today is
+            the last day of the month and then claims exactly these rows
+            (status 'released', batch_id null). A tip given on the 2nd sits for
+            about twenty-nine days. The crew's own screen says so — "goes out
+            in the month-end payout".
+            The tip IS irreversible, but because no refund path for a tip
+            exists, not because the money has gone. Telling somebody their
+            money is already spent, when it is sitting in a queue, is the wrong
+            reason for the right warning — and it is the sentence they read
+            with their thumb over the button. */}
         Every cent goes to the crew — LakeLife doesn&apos;t take a share of a
-        thank-you. It reaches them straight away, so it can&apos;t be undone;
-        if something was wrong with the work itself, tell us and we&apos;ll put
-        that right separately.
+        thank-you. It&apos;s theirs from the moment you send it and we
+        can&apos;t take it back, so please be sure; if something was wrong with
+        the work itself, tell us and we&apos;ll put that right separately.
       </p>
     </div>
   );

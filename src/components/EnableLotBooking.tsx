@@ -30,8 +30,11 @@ export function EnableLotBooking({ ready }: { ready: boolean }) {
           : "Book a mow or a clean for your lot. Nothing to fill in — we already know where you live."}
       </p>
       <p className="mut" style={{ fontSize: 12, margin: "0 0 10px", lineHeight: 1.5 }}>
-        Your park office will see that a crew came to your lot, and when — they
-        never see what you booked or what you paid.
+        {/* Same correction as RenterHome: the owner's visits screen shows the
+            service name. This is the consent moment, so it is the one place
+            that must not overstate the privacy. */}
+        Your park office will see that a crew came to your lot, what they were
+        there to do, and when. They never see what you paid.
       </p>
       <button
         className="ll-btn gold"

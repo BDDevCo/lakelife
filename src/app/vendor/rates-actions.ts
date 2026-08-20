@@ -72,9 +72,9 @@ export async function setMyRate(serviceId: string, payload: RatePayload): Promis
     if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
     throw e;
   }
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
   if (vendor.status === "suspended") {
-    return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+    return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
   }
   if (typeof serviceId !== "string" || !serviceId) return { ok: false, error: "Unknown service." };
 

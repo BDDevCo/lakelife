@@ -53,7 +53,8 @@ export interface RouteBuildOutcome {
   routes?: number;
   stops?: number;
   overflow?: number;
-  texted?: number;
+  notified?: number;
+  unreached?: number;
   trucks?: number; // count of per-truck route rows written (fleet vendors only)
   hoursBust?: number; // count of truck days that busted the truck's work window
   /**
@@ -97,7 +98,7 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
   // Route-build skips, collected for the digest (see RouteBuildOutcome.skipped).
   const skipped: string[] = [];
   const { data: jobs, error: loadErr } = await jobsQuery;
-  if (loadErr) return { ok: false, error: loadErr.message, skipped: [`Couldn't read the jobs scheduled for ${date} — NO routes were built and no crew was texted a route.`] };
+  if (loadErr) return { ok: false, error: loadErr.message, skipped: [`Couldn't read the jobs scheduled for ${date} — NO routes were built and no crew was sent a route.`] };
 
   const byVendor = new Map<
     string,
@@ -154,7 +155,7 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
       .in("vendor_id", vendorIds)
       .eq("active", true)
       .order("created_at", { ascending: true });
-    if (uErr) return { ok: false, error: uErr.message, skipped: [`Couldn't read the crews' trucks for ${date} — NO routes were built and no crew was texted a route.`] };
+    if (uErr) return { ok: false, error: uErr.message, skipped: [`Couldn't read the crews' trucks for ${date} — NO routes were built and no crew was sent a route.`] };
     for (const u of units ?? []) {
       const vid = u.vendor_id as string;
       if (!unitsByVendor.has(vid)) unitsByVendor.set(vid, []);
@@ -192,7 +193,14 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
     return { phone: (u?.phone as string) ?? null, email: (u?.email as string) ?? null };
   };
 
-  let routes = 0, stops = 0, overflow = 0, texted = 0, trucks = 0, hoursBust = 0;
+  // "TEXTED" COUNTED CREWS WE DID NOT REACH, AND CALLED EMAIL A TEXT.
+  //
+  // `texted++` ran unconditionally after notify(), so a crew whose message
+  // reached nobody still incremented it — the failure went to `skipped` and the
+  // number ops read said they were told. And notify() sends SMS AND email, on a
+  // day when SMS has delivered nothing since July, so the one word in the
+  // sentence that named a channel named the wrong one.
+  let routes = 0, stops = 0, overflow = 0, notified = 0, unreached = 0, trucks = 0, hoursBust = 0;
   for (const [vendorId, v] of byVendor) {
     const units = unitsByVendor.get(vendorId) ?? [];
 
@@ -234,7 +242,7 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
           },
         );
         if (!told.reached && told.note) skipped.push(told.note);
-        texted++;
+        if (told.reached) notified++; else unreached++;
       }
       continue;
     }
@@ -297,7 +305,7 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
           },
         );
         if (!told.reached && told.note) skipped.push(told.note);
-        texted++;
+        if (told.reached) notified++; else unreached++;
       }
     }
     // This crew's route is incomplete; don't also tell them what overflowed
@@ -315,7 +323,7 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
       if (!told.reached && told.note) skipped.push(told.note);
     }
   }
-  return { ok: true, date, routes, stops, overflow, texted, trucks, hoursBust, skipped };
+  return { ok: true, date, routes, stops, overflow, notified, unreached, trucks, hoursBust, skipped };
 }
 
 export interface SettleOutcome {
@@ -3041,7 +3049,7 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
             `the owner that their boat's spring visit is penciled in (envelope ${g.id})`,
             { phone: u?.phone as string | null, email: u?.email as string | null },
             {
-              sms: `LakeLife: ice-out is here on ${lake?.name ?? "your lake"} 🌊 We've penciled your boat's spring visit for ${prettyDate} — $${price.toLocaleString()} as quoted at booking. Need a different day? Just cancel and rebook from your requests page, or text us.`,
+              sms: `LakeLife: ice-out is here on ${lake?.name ?? "your lake"} 🌊 We've penciled your boat's spring visit for ${prettyDate} — $${price.toLocaleString()} as quoted at booking. Need a different day? Just cancel and rebook from your requests page, or message us from your portal.`,
               subject: `Ice-out on ${lake?.name ?? "your lake"} — your boat's spring visit is penciled for ${prettyDate}`,
             },
           );

@@ -140,3 +140,54 @@ describe("the park machine reports, and never bills, on its own", () => {
     expect(acts).toEqual(["apply_rent_change", "owner_email"]);
   });
 });
+
+/**
+ * A COUNT OF PEOPLE TOLD MUST NOT INCLUDE THE ONES WE FAILED TO TELL.
+ *
+ * `runRouteBuild` incremented `texted` unconditionally after notify(), so
+ * a crew whose message reached nobody still counted. The failure went into
+ * `skipped`, and the number ops actually read said the crew had been told. The
+ * word was wrong too: notify() sends SMS AND email, and SMS has delivered
+ * nothing since 19 July, so the one word naming a channel named the dead one.
+ */
+describe("the route build reports who it actually reached", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("./automation.ts", import.meta.url)), "utf8",
+  );
+
+  it("only counts a crew as notified when a door actually took the message", () => {
+    const at = src.indexOf("export async function runRouteBuild");
+    expect(at).toBeGreaterThan(-1);
+    const body = src.slice(at, src.indexOf("\nexport ", at + 10));
+    expect(body).toMatch(/if \(told\.reached\) notified\+\+; else unreached\+\+;/);
+    // The old unconditional increment must be gone, not merely renamed.
+    expect(body).not.toMatch(/^\s*(texted|notified)\+\+;\s*$/m);
+  });
+
+  it("still records the failure for the digest as well as counting it", () => {
+    const at = src.indexOf("export async function runRouteBuild");
+    const body = src.slice(at, src.indexOf("\nexport ", at + 10));
+    expect(body).toMatch(/if \(!told\.reached && told\.note\) skipped\.push\(told\.note\)/);
+  });
+
+  it("nothing in the route path still calls a notification a text", () => {
+    // COMMENTS STRIPPED FIRST. The comment above the counter explains why
+    // "texted" was wrong, and an unstripped check fails on the documentation
+    // of its own rule — which is how a guard ends up deleting the reason it
+    // exists.
+    const at = src.indexOf("export async function runRouteBuild");
+    const body = src
+      .slice(at, src.indexOf("\nexport ", at + 10))
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(body).not.toMatch(/\btexted\b/);
+  });
+
+  it("and ops is shown the ones we could not reach", () => {
+    const ui = readFileSync(
+      fileURLToPath(new URL("../components/ops/RouteBuilder.tsx", import.meta.url)), "utf8",
+    );
+    expect(ui).toMatch(/crew\$\{res\.notified === 1 \? "" : "s"\} notified/);
+    expect(ui).toMatch(/we couldn't reach/);
+  });
+});

@@ -237,13 +237,25 @@ export function ParkStatements({
       {/* ---- the file ----------------------------------------------------- */}
       <section style={{ marginTop: 18 }}>
         <a className="ll-btn" href={href} style={{ display: "inline-block", textDecoration: "none" }}>
-          {s.count > 0
-            ? `Download ${s.count} ${s.count === 1 ? "payment" : "payments"} for your accountant`
+          {/* THE BUTTON PROMISED A ROW COUNT THE FILE DID NOT HONOUR.
+              `s.count` excludes reversed payments — every total on this screen
+              does, and it says so. The FILE is built from a date filter alone,
+              so a bounced cheque is in it. "Download 11 payments" produced a
+              spreadsheet with 12 rows, the twelfth carrying the bounced amount.
+              The rows now carry a "Taken back" column, so the honest count is
+              every row in the file, with the taken-back ones named separately
+              rather than quietly folded in. */}
+          {s.count + s.reversed.length > 0
+            ? `Download ${s.count + s.reversed.length} ${s.count + s.reversed.length === 1 ? "payment" : "payments"} for your accountant`
             : "Download the empty file anyway"}
         </a>
         <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
           A spreadsheet — one line per payment, with the date, amount, how it was
-          paid, which lot and what the bill was made up of. Nothing is rounded
+          paid, which lot and what the bill was made up of.{" "}
+          {s.reversed.length > 0
+            ? `${s.reversed.length} taken-back ${s.reversed.length === 1 ? "payment is" : "payments are"} in the file too, marked "Taken back" — they're excluded from the totals above, so don't sum the Amount column without filtering that out.`
+            : ""}{" "}
+          Nothing is rounded
           or summarised in it.
         </p>
       </section>

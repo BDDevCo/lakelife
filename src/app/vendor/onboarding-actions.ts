@@ -64,7 +64,7 @@ export async function uploadVendorDoc(kind: "coi" | "w9" | "garagekeepers", form
     if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
     throw e;
   }
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
   // A PAUSED CREW MAY STILL SEND PAPERWORK.
   //
   // This used to refuse them, and the most common reason a crew is paused is a
@@ -168,9 +168,9 @@ export async function setServiceTypes(types: string[]): Promise<OnboardingResult
     if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
     throw e;
   }
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
   if (vendor.status === "suspended") {
-    return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+    return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
   }
 
   const admin = createServiceClient();
@@ -218,8 +218,8 @@ export async function setDailyCapacity(n: number): Promise<OnboardingResult> {
     if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
     throw e;
   }
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
-  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
 
   const cap = validCapacity(n);
   if (cap == null) return { ok: false, error: "Enter a whole number of jobs per day, 1 to 20." };
@@ -246,8 +246,8 @@ export async function setServiceLakes(lakeIds: string[]): Promise<OnboardingResu
     if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
     throw e;
   }
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
-  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
 
   const admin = createServiceClient();
   // 0124. This whitelist is what stops a crew claiming a lake that isn't real
@@ -332,8 +332,8 @@ export async function addLakeAndServe(rawName: string): Promise<AddLakeResult> {
     if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
     throw e;
   }
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
-  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
 
   const { findOrCreateLake } = await import("@/lib/lake-birth");
   const born = await findOrCreateLake(rawName, "crew");
@@ -373,8 +373,8 @@ export async function setBaseLocation(lat: number, lng: number): Promise<Onboard
     if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
     throw e;
   }
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
-  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
 
   const base = validLatLng(lat, lng);
   if (!base) return { ok: false, error: "That location didn't look right — pick your town from the list." };
@@ -408,8 +408,8 @@ export async function finishOnboarding(tosAccepted?: boolean): Promise<Onboardin
     if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
     throw e;
   }
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
-  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
   if (vendor.status === "active") return { ok: true }; // already live — idempotent
 
   // THE AGREEMENT at go-live: crews accept the same terms — independent
@@ -430,7 +430,7 @@ export async function finishOnboarding(tosAccepted?: boolean): Promise<Onboardin
   // complete and filed. Nothing is written until the status flip further down.
   if (vRes.error) return { ok: false, error: readFailedMessage("your onboarding paperwork", vRes.error) };
   const v = vRes.data;
-  if (!v) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (!v) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
 
   const gaps = activationGaps(
     {

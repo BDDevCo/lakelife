@@ -363,9 +363,21 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
         </div>
         <p className="mut" style={{ fontSize: 12.5, margin: "4px 0 10px", lineHeight: 1.55 }}>
           Work you book is paid to LakeLife on your own card — never added to
-          your rent, and never held back because rent is due. Your park office
-          can see that a crew came to your lot, but not what you booked or what
-          you paid.
+          your rent, and never held back because rent is due.{" "}
+          {/* A PRIVACY ASSURANCE THAT WAS NOT TRUE.
+              This said the office "can see that a crew came to your lot, but
+              not what you booked". The park owner's visits screen renders the
+              SERVICE NAME on every row — park_site_visits selects `s.name as
+              service` (0107:172) and /park/visits prints it as its widest
+              column. So "what you booked" is exactly what he sees.
+              The design is deliberate and stays: he sees what he could see out
+              of his own window — a crew, doing a thing, on a day. What he
+              never sees is the money. Promising more than that, to the person
+              deciding whether to book at all, is the wrong thing to be wrong
+              about. */}
+          Your park office sees that a crew came to your lot, what they were
+          there to do, and when — the same things they&apos;d see out the
+          window. They never see what you paid.
         </p>
         {/* Not offered once the tenancy has ended — it sets up services against
             the LOT, which is no longer hers. */}

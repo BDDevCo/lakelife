@@ -19,7 +19,12 @@ export function RouteBuilder({ routes, date }: { routes: RouteSummary[]; date: s
     toast(
       `Built ${res.routes} route${res.routes === 1 ? "" : "s"} · ${res.stops} stop${res.stops === 1 ? "" : "s"}` +
       (res.overflow ? ` · ${res.overflow} over capacity — reschedule those` : "") +
-      (res.texted ? ` · ${res.texted} crew${res.texted === 1 ? "" : "s"} texted` : ""),
+      // "texted" named the channel that delivers nothing and counted crews we
+      // failed to reach. notify() sends by every open door and reports whether
+      // ANY landed, so the honest words are "notified" and, separately, the
+      // ones we could not reach — which ops needs to see, not swallow.
+      (res.notified ? ` · ${res.notified} crew${res.notified === 1 ? "" : "s"} notified` : "") +
+      (res.unreached ? ` · ${res.unreached} we couldn't reach — check the digest` : ""),
     );
     router.refresh();
   }

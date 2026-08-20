@@ -252,6 +252,6 @@ export function computeRateRow(service: RateService, payload: RatePayload): Rate
     }
 
     default:
-      return { ok: false, error: "This service can't be priced yet — call dispatch." };
+      return { ok: false, error: "This service can't be priced yet — email hello@lakelife.ai and we'll sort it." };
   }
 }

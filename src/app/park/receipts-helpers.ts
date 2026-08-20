@@ -346,6 +346,20 @@ export function linesCell(lines: readonly ChargeLine[]): string {
 const HEADERS = [
   "Park", "Generated at", "Basis",
   "Date received", "Amount", "Card fee", "Charged total", "Method", "Reference",
+  // THE COLUMN WITHOUT WHICH THIS FILE OVERSTATES INCOME.
+  //
+  // The screen excludes reversed payments from every total and says so out
+  // loud — "It is NOT counted in the totals above". The FILE was built from a
+  // date filter alone, so a bounced cheque was in it, with its amount in the
+  // Amount column and nothing anywhere marking it. The owner forwards the file
+  // believing it matches the screen he just read; the accountant sums Amount
+  // and books money the park never had. That is the exact error this module's
+  // own header warns about.
+  //
+  // The row STAYS and is marked, rather than being dropped: receipt numbers
+  // run in a sequence, and a file with a hole in it is a file an auditor has
+  // to ask about.
+  "Taken back", "Taken back on", "Reason",
   "Lot", "Payer", "Bill month", "Bill total", "Bill status", "Bill breakdown",
   "Payment ID", "Charge ID",
 ] as const;
@@ -377,6 +391,11 @@ export function receiptsCsv(
       csvText(decimal(r.amountCents + r.feeCents)),
       csvText(METHOD_LABEL[r.method] ?? r.method),
       csvText(r.reference),
+      // "YES" rather than a date alone, so it survives a spreadsheet filter and
+      // is legible to somebody scanning the column rather than reading rows.
+      csvText(r.reversedAt ? "YES" : ""),
+      csvText(r.reversedAt ? String(r.reversedAt).slice(0, 10) : ""),
+      csvText(r.reversedAt ? (r.reversedReason ?? "") : ""),
       csvText(r.lotNumber),
       csvText(r.payerName),
       csvText(r.periodMonth),

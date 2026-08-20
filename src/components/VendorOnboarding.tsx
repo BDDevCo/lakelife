@@ -75,9 +75,18 @@ export function VendorOnboarding({
         <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
           <span className="ll-pill slate">Paused</span>
           <h2 style={{ fontSize: 22, margin: "12px 0 6px" }}>Your crew account is paused</h2>
+          {/* THIS CARD IS THE WHOLE SCREEN — VendorOnboarding returns early for
+              a suspended crew, so there is no other link, button or address on
+              it. Its one instruction was "call dispatch", and LakeLife
+              publishes no number anywhere: no tel: link exists in the tree.
+              A crew whose income has just stopped was given a dead end.
+              bank-actions.ts already made this exact call for the payout-change
+              alert ("CALL US IMMEDIATELY" NAMED NO NUMBER) and pointed at email
+              instead. The second sentence is true and stays — isEligible's
+              first line is `if (c.status !== "active") return false`. */}
           <p className="mut" style={{ fontSize: 15 }}>
-            Call LakeLife dispatch and we&apos;ll get you sorted. No jobs will route while
-            your account is paused.
+            Email <a href="mailto:hello@lakelife.ai">hello@lakelife.ai</a> and we&apos;ll get
+            you sorted — a human reads it. No jobs will route while your account is paused.
           </p>
         </div>
       </div>
@@ -355,7 +364,7 @@ function ServiceStep({
       </p>
 
       {activeServices.length === 0 ? (
-        <p className="mut" style={{ fontSize: 14 }}>No services set up yet — call dispatch.</p>
+        <p className="mut" style={{ fontSize: 14 }}>No services set up yet — email hello@lakelife.ai.</p>
       ) : (
         <ToggleChips options={activeServices} selected={picked} onToggle={toggle} />
       )}
@@ -430,7 +439,7 @@ function LakeStep({
       </p>
 
       {lakes.length === 0 ? (
-        <p className="mut" style={{ fontSize: 14 }}>No lakes set up yet — call dispatch.</p>
+        <p className="mut" style={{ fontSize: 14 }}>No lakes set up yet — email hello@lakelife.ai.</p>
       ) : (
         <ToggleChips options={lakes.map((l) => l.name)} selected={picked} onToggle={toggle} />
       )}

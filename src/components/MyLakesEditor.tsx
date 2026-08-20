@@ -80,7 +80,7 @@ export function MyLakesEditor({
   }
 
   if (lakes.length === 0) {
-    return <p className="mut" style={{ fontSize: 14 }}>No lakes set up yet — call dispatch.</p>;
+    return <p className="mut" style={{ fontSize: 14 }}>No lakes set up yet — email hello@lakelife.ai.</p>;
   }
 
   return (

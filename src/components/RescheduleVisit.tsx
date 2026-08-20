@@ -38,7 +38,7 @@ export function RescheduleVisit({ jobId, view }: { jobId: string; view: Reschedu
   if (view.unavailable) {
     return (
       <p className="mut" style={{ fontSize: 13, marginBottom: 16 }}>
-        We couldn&apos;t load this visit&apos;s details just now. Refresh in a moment — or text us and we&apos;ll sort it out.
+        We couldn&apos;t load this visit&apos;s details just now. Refresh in a moment — or message dispatch from your portal and we&apos;ll sort it out.
       </p>
     );
   }

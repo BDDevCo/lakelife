@@ -270,9 +270,9 @@ export async function addTruck(input: TruckInput): Promise<TruckResult> {
   const me = await assertMyVendor();
   if (me.readError) return { ok: false, error: readFailedMessage("your crew account", me.readError) };
   const vendor = me.vendor;
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
   if (vendor.status === "suspended") {
-    return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+    return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
   }
 
   const built = await buildRow(input);
@@ -340,9 +340,9 @@ export async function updateTruck(unitId: string, input: TruckInput): Promise<Tr
   const me = await assertMyVendor();
   if (me.readError) return { ok: false, error: readFailedMessage("your crew account", me.readError) };
   const vendor = me.vendor;
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
   if (vendor.status === "suspended") {
-    return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+    return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
   }
   if (typeof unitId !== "string" || !unitId) return { ok: false, error: "Unknown truck." };
 
@@ -400,9 +400,9 @@ export async function setTruckActive(unitId: string, active: boolean): Promise<T
   const me = await assertMyVendor();
   if (me.readError) return { ok: false, error: readFailedMessage("your crew account", me.readError) };
   const vendor = me.vendor;
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
   if (vendor.status === "suspended") {
-    return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+    return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
   }
   if (typeof unitId !== "string" || !unitId) return { ok: false, error: "Unknown truck." };
 

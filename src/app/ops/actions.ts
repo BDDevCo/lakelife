@@ -217,7 +217,8 @@ export interface BuildRoutesResult extends OpsResult {
   routes?: number;
   stops?: number;
   overflow?: number;
-  texted?: number;
+  notified?: number;
+  unreached?: number;
 }
 
 /**
@@ -232,7 +233,7 @@ export async function buildRoutesForDate(dateISO?: string): Promise<BuildRoutesR
   if (!ops) return { ok: false, error: "Ops only." };
   // Same engine the nightly cron runs — authorized here by assertOps.
   const r = await runRouteBuild(dateISO);
-  return { ok: r.ok, error: r.error, routes: r.routes, stops: r.stops, overflow: r.overflow, texted: r.texted };
+  return { ok: r.ok, error: r.error, routes: r.routes, stops: r.stops, overflow: r.overflow, notified: r.notified, unreached: r.unreached };
 }
 
 /**

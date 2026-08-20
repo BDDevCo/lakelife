@@ -57,8 +57,8 @@ export async function importMyCustomers(pasted: string): Promise<ImportResult> {
   } catch (e) {
     return { ok: false, error: readFailedMessage("your crew account", e) };
   }
-  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — call dispatch." };
-  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — call LakeLife dispatch." };
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
 
   const parsed = parseCustomers(pasted ?? "");
   if (parsed.valid.length === 0) {

@@ -143,7 +143,7 @@ export async function findOrCreateLake(
       // human problem and ops can rename the fixture in seconds; silently
       // seating somebody on a fake lake is not recoverable by anybody.
       if (winner?.is_fixture === true) {
-        return { ok: false, error: "We can't add that lake just now — call dispatch and we'll sort it out." };
+        return { ok: false, error: "We can't add that lake just now — email hello@lakelife.ai and we'll sort it out." };
       }
       if (winner) return { ok: true, lakeId: winner.id as string, lakeName: winner.name as string, created: false };
     }

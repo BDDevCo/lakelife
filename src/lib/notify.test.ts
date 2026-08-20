@@ -144,29 +144,64 @@ describe("no copy sends anybody to a phone line that does not exist", () => {
   // "Ring the office" is DIFFERENT and stays: in the park module that is the
   // park owner's own office, in his voice, to his own residents, with his
   // address printed beside it. His number is his to give.
-  const appFiles = [
-    "../app/requests/actions.ts",
-    "../app/book/storage/actions.ts",
-    "../app/park/actions.ts",
-    "../app/vendor/bank-actions.ts",
-    "./tips.ts",
-    "./packages.ts",
-  ];
+  // A SIX-FILE ALLOWLIST AND A FOUR-PHRASE REGEX LET FIFTEEN THROUGH.
+  //
+  // The first version of this guard listed the files it had already fixed and
+  // matched only "call us" and its variants. So "call dispatch" — the same
+  // instruction, said to a crew — was invisible in seven vendor files, and
+  // "text us" was invisible in RescheduleVisit, which was not in the list at
+  // all. Fixing the instances and not the guard is how the class survives
+  // being found; the same thing happened with "every Friday".
+  //
+  // Now it walks the whole tree and names the channel, not the wording.
+  const allSrc = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) return p.endsWith("/sim") ? [] : allSrc(p);
+      if (!/\.tsx?$/.test(e.name) || /\.test\.tsx?$/.test(e.name)) return [];
+      return [p];
+    });
 
-  it("no user-facing string tells them to call us", () => {
+  /**
+   * "Ring the office" / "give us a call" inside the PARK module is different
+   * and stays: that is the park owner's own office, in his voice, to his own
+   * residents, with his address printed beside it. His number is his to give.
+   * LakeLife's is not, because LakeLife has none.
+   */
+  const PARK_OWNERS_OWN_VOICE = /src\/app\/park\//;
+
+  const PHONE_PROMISE =
+    /(call us|give us a call|give us a shout|phone us|text us|call dispatch|call LakeLife|call the office|give us a ring|ring us)/i;
+
+  it("the scanner is reading the whole tree", () => {
+    expect(allSrc(join(process.cwd(), "src")).length).toBeGreaterThan(200);
+  });
+
+  it("no user-facing string sends anybody to a phone LakeLife does not have", () => {
     const bad: string[] = [];
-    for (const f of appFiles) {
-      const s = stripComments(read(f));
-      for (const m of s.matchAll(/"[^"\n]*\b(call us|give us a call|give us a shout|phone us)\b[^"\n]*"/gi)) {
-        bad.push(`${f}: ${m[0].slice(0, 80)}`);
-      }
-      // No newlines in the character classes: a greedy template-literal match
-      // otherwise swallows whole functions and reports them as copy.
-      for (const m of s.matchAll(/`[^`\n]*\b(call us|give us a call|give us a shout|phone us)\b[^`\n]*`/gi)) {
-        bad.push(`${f}: ${m[0].slice(0, 80)}`);
+    for (const f of allSrc(join(process.cwd(), "src"))) {
+      if (PARK_OWNERS_OWN_VOICE.test(f)) continue;
+      const s = stripComments(readFileSync(f, "utf8"));
+      const rel = f.replace(process.cwd() + "/", "");
+      for (const re of [
+        new RegExp(`"[^"\n]*\\b${PHONE_PROMISE.source}\\b[^"\n]*"`, "gi"),
+        new RegExp("`[^`\n]*\\b" + PHONE_PROMISE.source + "\\b[^`\n]*`", "gi"),
+        // JSX text, which carries no quotes at all — this is how the two
+        // "No lakes set up yet — call dispatch." strings hid.
+        new RegExp(`>[^<>{}\n]*\\b${PHONE_PROMISE.source}\\b[^<>{}\n]*`, "gi"),
+      ]) {
+        for (const m of s.matchAll(re)) bad.push(`${rel}: ${m[0].trim().slice(0, 90)}`);
       }
     }
     expect(bad, `copy instructing an action the reader cannot take:\n${bad.join("\n")}`).toEqual([]);
+  });
+
+  it("still permits the park owner to name his own office", () => {
+    // Guard on the carve-out: if this ever returns nothing, the exception has
+    // silently stopped being needed — or the copy it protects has been lost.
+    const s = stripComments(read("../app/park/reminder-actions.ts"));
+    expect(s).toMatch(/give us a call/i);
+    expect(s).toMatch(/park\.address/);
   });
 
   it("the payout-change alert names what they CAN do", () => {
