@@ -374,8 +374,26 @@ export async function bookDayByToken(
     renter_id: stay.renter_id,
     during: toDaterange(dayWindow(day)),
     quoted_amount: quoted,
-    // She read the park's own rules above the button and tapped it.
-    acknowledged_at: new Date().toISOString(),
+    // WHAT SHE TICKED, AND THE WORDS SHE TICKED IT ON.
+    //
+    // `acknowledged_at` alone records THAT she agreed and cannot say what to —
+    // park_amenities.rules is live, and the day the owner tightens the
+    // life-jacket line, every past acknowledgement re-points at wording nobody
+    // was shown. The same row already snapshots `quoted_amount` for exactly
+    // this reason; the words are the part somebody would actually argue about,
+    // and they are not even LakeLife's words to stand behind.
+    //
+    // `offer.rules` is the value THIS request rendered — bookDayByToken and the
+    // page both come from loadGuestView — so the sentence in the record is by
+    // construction the sentence on her screen (0133's rule, applied to a
+    // column instead of a constant).
+    //
+    // BOTH OR NEITHER. The page prints the rules only `if (o.rules)`, so an
+    // amenity with none showed her a bare button; stamping "she ticked the
+    // rules" there asserts she agreed to nothing at all. 0138 makes the
+    // database refuse the mismatched pair either way round.
+    acknowledged_at: offer.rules ? new Date().toISOString() : null,
+    rules_text: offer.rules ?? null,
     // NULL means she did it herself, which is the point of the whole page.
     booked_by: null,
   });
