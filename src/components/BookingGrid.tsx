@@ -76,6 +76,9 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const [picked, setPicked] = useState<string[]>([]);
   const [fullDates, setFullDates] = useState<Set<string>>(new Set());
   const [findingCrew, setFindingCrew] = useState(false);
+  // WHICH gap — see getServiceAvailability. "lake" means new water for us;
+  // "service" means crews work this lake already, just not on this job.
+  const [crewGap, setCrewGap] = useState<"lake" | "service" | null>(null);
   /** The calendar couldn't be READ — which is neither open nor full. No day is
    *  offered while this is true, because we don't know which ones are free. */
   const [unavailable, setUnavailable] = useState(false);
@@ -104,6 +107,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
           setUnavailable(!!res.unavailable);
           setFullDates(new Set(res.fullDates));
           setFindingCrew(!!res.findingCrew);
+          setCrewGap(res.crewGap ?? null);
           setRush(res.rush);
           if (res.today) setToday(res.today);
         }
@@ -247,9 +251,19 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
                 marginBottom: 14, fontSize: 13.5, lineHeight: 1.45,
               }}
             >
-              <b>New water for us 🌊</b> — no regular crew on your lake yet. Book any day and
-              we&apos;ll hunt one down; you&apos;re never charged until the work is done, and
-              we&apos;ll tell you straight if we can&apos;t line one up in time.
+              {crewGap === "service" ? (
+                <>
+                  <b>Nobody does this one here yet 🧰</b> — crews work your lake, but none of
+                  them takes {service.name} so far.
+                </>
+              ) : (
+                <>
+                  <b>New water for us 🌊</b> — no regular crew on your lake yet.
+                </>
+              )}{" "}
+              Book any day and we&apos;ll hunt one down; you&apos;re never charged until the
+              work is done, and we&apos;ll tell you straight if we can&apos;t line one up in
+              time.
             </div>
           )}
 

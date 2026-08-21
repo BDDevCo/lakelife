@@ -235,7 +235,24 @@ export async function getServiceAvailability(
   year: number,
   month: number, // 0-indexed
   lakeId: string | null = null, // when set, only crews servicing this lake count
-): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean }> {
+): Promise<{
+  fullDates: string[];
+  capacity: number;
+  findingCrew: boolean;
+  /**
+   * WHY there is no crew, when there is none — because the two causes read
+   * completely differently to the person booking.
+   *
+   *   "lake"    — no active crew serves this lake at all. New water for us.
+   *   "service" — crews work this lake every week; none of them does THIS
+   *               service yet.
+   *
+   * The banner used to say "no regular crew on your lake yet" for both, which
+   * tells a customer whose mow-and-blow runs fine every Tuesday that his lake
+   * is unserved. Null whenever `findingCrew` is false.
+   */
+  crewGap?: "lake" | "service" | null;
+}> {
   const admin = createServiceClient();
   const from = `${year}-${String(month + 1).padStart(2, "0")}-01`;
   const to = toISODate(new Date(year, month + 1, 0));
@@ -277,7 +294,17 @@ export async function getServiceAvailability(
   // simply no crew YET. Keep every date open and flag it: the booking becomes
   // a "Finding a crew" waitlist row, which is itself the recruiting signal.
   if (!pool.some((v) => v.status === "active")) {
-    return { fullDates: [], capacity: 0, findingCrew: true };
+    // Which gap is it? `pool` filtered on lake AND service, so an empty pool
+    // says nothing about which of the two is missing. Ask the lake on its own.
+    const anyOnThisLake = (vendors ?? []).some(
+      (v) =>
+        v.status === "active" &&
+        (!lakeId || ((v.service_lakes as string[]) ?? []).includes(lakeId)),
+    );
+    return {
+      fullDates: [], capacity: 0, findingCrew: true,
+      crewGap: anyOnThisLake ? "service" : "lake",
+    };
   }
   const maxDailyCap = pool.reduce((m, v) => m + Math.max(0, fleetJobCap(unitCapByVendor.get(v.id as string) ?? [], Number(v.daily_capacity ?? 0))), 0);
 
@@ -319,7 +346,7 @@ export async function getServiceAvailability(
     if (remaining <= 0) fullDates.push(iso);
   }
 
-  return { fullDates, capacity: maxDailyCap, findingCrew: false };
+  return { fullDates, capacity: maxDailyCap, findingCrew: false, crewGap: null };
 }
 
 export interface AssignOutcome {

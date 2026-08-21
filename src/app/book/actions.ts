@@ -88,7 +88,7 @@ export async function getAvailability(
   year: number,
   month: number, // 0-indexed
   propertyId?: string, // defaults to the active property; used to scope by lake
-): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean; rush: RushWindow; today: string; unavailable?: boolean }> {
+): Promise<{ fullDates: string[]; capacity: number; findingCrew: boolean; crewGap?: "lake" | "service" | null; rush: RushWindow; today: string; unavailable?: boolean }> {
   const settings = await getPlatformSettings();
   const rush: RushWindow = { nowHour: lakeHour(), cutoffHour: settings.sameDayCutoffHour, surchargePct: settings.sameDaySurchargePct };
   let service: ServiceRow | null;

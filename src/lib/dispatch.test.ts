@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   isEligible,
   marginPct,
@@ -452,5 +454,53 @@ describe("gapOfferFor — hiking your card can never raise your offer", () => {
   it("anchorPct and minOffer are dials", () => {
     expect(gapOfferFor(335, 300, 0.9)).toBe(270); // 270 exactly at 90%
     expect(gapOfferFor(335, 60, 0.95, 60)).toBeNull(); // 55 < $60 min
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("why there is no crew, when there is none", () => {
+  /**
+   * `pool` filters on lake AND service, so an empty pool says nothing about
+   * which of the two is missing — and the banner said "no regular crew on your
+   * lake yet" for both. A customer whose mow-and-blow runs every Tuesday on
+   * Pretty Lake was told his lake had no crew, because nobody there does pier
+   * work yet. The lake was fine. The sentence was not.
+   */
+  const src = readFileSync(
+    fileURLToPath(new URL("../app/book/dispatch.ts", import.meta.url)), "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  const grid = readFileSync(
+    fileURLToPath(new URL("../components/BookingGrid.tsx", import.meta.url)), "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it("reads the files it thinks it reads", () => {
+    expect(src).toContain("findingCrew");
+    expect(grid).toContain("findingCrew");
+  });
+
+  it("the cold-start branch says which gap it is", () => {
+    const branch = src.slice(src.indexOf('if (!pool.some'), src.indexOf("maxDailyCap"));
+    expect(branch).toContain("crewGap");
+    // and it decides by asking the LAKE on its own, not by reusing `pool`
+    expect(branch).toMatch(/service_lakes/);
+    expect(branch).toMatch(/crewGap: anyOnThisLake \? "service" : "lake"/);
+  });
+
+  it("the banner no longer blames the lake unconditionally", () => {
+    // The old sentence must not be reachable when the lake is served.
+    const banner = grid.slice(grid.indexOf("findingCrew && ("), grid.indexOf("unavailable && ("));
+    expect(banner).toContain('crewGap === "service"');
+    expect(banner).toContain("New water for us");
+    // the service-gap wording names the service rather than the water
+    expect(banner).toContain("crews work your lake");
+  });
+
+  it("the availability action carries the reason to the browser", () => {
+    const actions = readFileSync(
+      fileURLToPath(new URL("../app/book/actions.ts", import.meta.url)), "utf8",
+    );
+    expect(actions).toContain('crewGap?: "lake" | "service" | null');
   });
 });
