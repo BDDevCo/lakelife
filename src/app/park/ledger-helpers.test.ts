@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   ledgerState, balanceOf, toRows, summarise, ledgerHeadline,
   planRun, runSummary, daysBetween,
-  prettyMonth, shiftMonth,
+  prettyMonth, shiftMonth, dueDayFor,
   type Charge,
 } from "./ledger-helpers";
 
@@ -336,3 +336,55 @@ describe("a cost share billed once, or the bill comes back", () => {
     expect(src).toMatch(/already\.has\(s\.id as string\)/);
   });
 })
+
+// ---------------------------------------------------------------------------
+
+describe("which day a household's rent is due", () => {
+  /**
+   * `lot_reservations.due_day` was written by the tenant-edit form, shown on
+   * the rent roll, and read by nothing that raises a bill. An owner who set
+   * lot 7 to the 10th saw "the 10th" and got bills due on the 1st — and since
+   * lateness is measured from the charge's own due_on, that household was
+   * chased nine days early every month.
+   */
+  it("uses the household's own day when it has one", () => {
+    expect(dueDayFor(10, 1)).toBe(10);
+  });
+
+  it("falls back to the park's day when it has none", () => {
+    expect(dueDayFor(null, 5)).toBe(5);
+    expect(dueDayFor(undefined, 5)).toBe(5);
+  });
+
+  it("ignores a stored value that isn't a real day", () => {
+    expect(dueDayFor("", 3)).toBe(3);
+    expect(dueDayFor(0, 3)).toBe(3);
+    expect(dueDayFor(32, 3)).toBe(3);
+    expect(dueDayFor("nonsense", 3)).toBe(3);
+  });
+
+  it("accepts the numeric string Postgres may hand back for a smallint", () => {
+    expect(dueDayFor("10", 1)).toBe(10);
+  });
+
+  it("both charge paths ask it, rather than using the park day directly", () => {
+    const src = readFileSync(fileURLToPath(new URL("./ledger-actions.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // preview and run
+    expect((src.match(/dueDay: dueDayFor\(/g) ?? []).length).toBe(2);
+    // and neither still passes the bare park-level value into a statement
+    expect(src).not.toMatch(/\n\s+dueDay,\n/);
+    // both must actually select the column, or the value is always undefined
+    expect((src.match(/moved_out_on, due_day/g) ?? []).length).toBe(2);
+  });
+
+  it("the importer no longer copies the park's day onto every tenancy", () => {
+    const src = readFileSync(fileURLToPath(new URL("./import-actions.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // A copy goes stale the moment he changes the dial.
+    expect(src).not.toMatch(/due_day: parkDueDay/);
+    expect(src).not.toContain("parkDueDay");
+  });
+});

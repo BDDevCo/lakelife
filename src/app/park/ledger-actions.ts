@@ -8,10 +8,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import { buildStatement, type StatementFee } from "./statement-helpers";
 import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
-import {
-  planRun, toRows, summarise, currentPeriod, prettyMonth,
-  type Charge, type LedgerRow, type LedgerSummary, type RunPlan,
-} from "./ledger-helpers";
+import { planRun, toRows, summarise, currentPeriod, prettyMonth, type Charge, type LedgerRow, type LedgerSummary, type RunPlan, dueDayFor } from "./ledger-helpers";
 import { preCutoverRefusal } from "@/lib/billing-start";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { sendEmail } from "@/lib/email";
@@ -181,6 +178,8 @@ export async function previewChargeRun(
   }
   const park = parkRes.data;
   const fees = feeRes.fees;
+  // THE PARK'S DAY IS THE FALLBACK, not the answer. A tenancy may carry its
+  // own `due_day`; see dueDayFor.
   const dueDay = (park?.rent_due_day as number) ?? 1;
 
   // NOT OURS TO BILL. A month that began before the park went live belongs to
@@ -210,7 +209,7 @@ export async function previewChargeRun(
   // omit a final part-month the run then charges.
   const staysRes = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, during, quoted_amount, status, moved_out_on")
+    .select("id, park_lot_id, during, quoted_amount, status, moved_out_on, due_day")
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active", "ended"]);
   if (staysRes.error) {
@@ -277,7 +276,7 @@ export async function previewChargeRun(
           rent: rentNow,
           // A nightly home is priced per stay, not billed a monthly fee.
           fees: (lot.rental_mode as string) === "short_term" ? [] : fees,
-          dueDay,
+          dueDay: dueDayFor(s.due_day, dueDay),
           costShares: shareMap.get(s.id as string) ?? [],
         })
       : null;
@@ -343,6 +342,8 @@ export async function runCharges(
   }
   const park = parkRes.data;
   const fees = feeRes.fees;
+  // THE PARK'S DAY IS THE FALLBACK, not the answer. A tenancy may carry its
+  // own `due_day`; see dueDayFor.
   const dueDay = (park?.rent_due_day as number) ?? 1;
 
   // The same refusal as the preview, checked again here rather than trusted.
@@ -383,7 +384,7 @@ export async function runCharges(
   // 'cancelled' stays OUT: nobody ever lived there.
   const staysRes = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_id, during, quoted_amount, status, moved_out_on")
+    .select("id, park_lot_id, renter_id, during, quoted_amount, status, moved_out_on, due_day")
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active", "ended"]);
   // Swallowed, this ends as "Nothing to bill — it may already be done", which
@@ -455,7 +456,7 @@ export async function runCharges(
         s.quoted_amount == null ? null : Number(s.quoted_amount),
       ),
       fees: (lot.rental_mode as string) === "short_term" ? [] : fees,
-      dueDay,
+      dueDay: dueDayFor(s.due_day, dueDay),
       costShares: shares,
     });
     // No total = a rent nobody set. Billing zero would hide it behind a paid

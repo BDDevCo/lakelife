@@ -313,3 +313,27 @@ export function runSummary(plan: RunPlan, month: string): string {
   if (plan.skippedNoTotal > 0) parts.push(`${plan.skippedNoTotal} skipped — no rent set`);
   return parts.join(" · ");
 }
+
+/**
+ * WHICH DAY THIS HOUSEHOLD'S RENT IS DUE.
+ *
+ * `lot_reservations.due_day` is written by the tenant-edit form, shown on the
+ * rent roll, and was read by NOTHING that raises a bill — both charge paths
+ * used `parks.rent_due_day` for everybody. So an owner who set lot 7 to the
+ * 10th because that household is paid mid-month saw "due the 10th" on the
+ * roll, and every bill went out due on the 1st. Worse than cosmetic: lateness
+ * is measured from the charge's own `due_on`, so that household was chased
+ * nine days early, every month, for a concession he thought he had granted.
+ *
+ * NULL MEANS FOLLOW THE PARK, and that is why the importer no longer copies
+ * the park's day onto all nineteen rows. A copy is not a default: it goes
+ * stale the moment he changes the dial, and every household would have kept
+ * the old day while the screen showed the new one.
+ */
+export function dueDayFor(
+  tenancyDueDay: unknown,
+  parkDueDay: number,
+): number {
+  const own = Number(tenancyDueDay);
+  return Number.isFinite(own) && own >= 1 && own <= 31 ? own : parkDueDay;
+}

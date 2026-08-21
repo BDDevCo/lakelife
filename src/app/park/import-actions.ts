@@ -481,11 +481,12 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
   if (loaded.committedAt) return { ok: false, error: "You already imported this one." };
 
   const admin = createServiceClient();
-  // `rent_due_day` goes onto every tenancy this writes, so the fallback of 1
-  // has to mean "his park has no due day set" and nothing else.
+  // The park type picks the site defaults for any lot this has to create. The
+  // due day is deliberately NOT read: it is not copied onto the tenancies any
+  // more, because billing reads it from the park at bill time (dueDayFor).
   const parkRes = await admin
     .from("parks")
-    .select("park_type, rent_due_day")
+    .select("park_type")
     .eq("id", loaded.parkId)
     .maybeSingle();
   if (parkRes.error) {
@@ -495,7 +496,6 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
 
   const defaultSiteType = siteTypeForPark((park?.park_type as string) ?? null);
   const defaults = SITE_DEFAULTS[defaultSiteType] ?? { hasWater: true, hasSewer: true };
-  const parkDueDay = (park?.rent_due_day as number) ?? 1;
 
   const failures: CommitOutcome["failures"] = [];
   const orphans: CommitOutcome["orphans"] = [];
@@ -684,7 +684,12 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
         // recorded here — decided_by and decided_at stay null.
         amount_source: "prior_roll",
         amount_source_at: new Date().toISOString(),
-        due_day: parkDueDay,
+        // NULL MEANS FOLLOW THE PARK. This used to copy `rent_due_day` onto
+        // every imported row, which looks harmless and is not: a copy is not a
+        // default. The moment he changed the park dial, all nineteen
+        // households would have kept the old day while the screen showed the
+        // new one. Only a day he sets for ONE household belongs on that
+        // household — see dueDayFor.
         import_batch_id: batchId,
       })
       .select("id")
