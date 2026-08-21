@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { resyncParkProperties } from "@/lib/park-properties";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
@@ -86,8 +87,17 @@ export async function saveParkProfile(
   const { error } = await admin.from("parks").update(built.row).eq("id", parkId);
   if (error) return { ok: false, error: "Couldn't save that — try again." };
 
+  // The grounds property and every park-owned home carry an address COPIED
+  // from this park. Without this they keep the old one forever, and the
+  // property address is what a crew is dispatched to — he would correct the
+  // park's address, watch it save, and still have trucks sent to the wrong
+  // place. Best-effort by design: the park is already written and a stale
+  // nickname is not worth refusing his save over.
+  await resyncParkProperties(parkId);
+
   revalidatePath("/park");
   revalidatePath("/park/setup");
+  revalidatePath("/park/services");
   return { ok: true, signal: "Park profile saved." };
 }
 
