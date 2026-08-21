@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { RenterHome as RenterHomeView } from "@/app/parks/my-data";
 import { PayRentButton } from "@/components/PayRentButton";
 import { IPaidForm } from "@/components/IPaidForm";
@@ -388,6 +389,22 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
           number for this household all along and the software has never been
           allowed to use it. This is the only door that changes that. */}
       <TextOptIn parkName={view.parkName} on={view.textsOn} number={view.textNumber} />
+
+      {/* THE RESIDENT'S PORTAL IS THIS ONE PAGE, so the way back to what she
+          agreed to is a card on it rather than a tab she does not have. The
+          text-consent sentence she read is on that page too — 0133 snapshotted
+          it precisely so it could be shown back, and until now nothing did. */}
+      <Link
+        href="/agreements"
+        className="ll-card ll-card-pad"
+        style={{ display: "block", textDecoration: "none", color: "inherit", marginTop: 12 }}
+      >
+        <div style={{ fontWeight: 800, fontSize: 15 }}>What you&apos;ve agreed to &rarr;</div>
+        <div className="mut" style={{ fontSize: 13 }}>
+          Your LakeLife terms and your text-message consent, in the exact words
+          you read at the time.
+        </div>
+      </Link>
     </div>
   );
 }

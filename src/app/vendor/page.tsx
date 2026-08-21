@@ -207,12 +207,20 @@ export default async function VendorTodayPage() {
             emailing them "Update my COI → /vendor". Quiet when everything is
             in date; loud when it isn't. */}
         {vendor && (
-          <VendorDocs
-            coiUrl={vendor.coi_url}
-            coiExpiry={vendor.coi_expiry}
-            w9Url={vendor.w9_url}
-            today={todayLakeDate()}
-          />
+          <>
+            {/* Their COI and W-9 sit here; the terms they accepted at go-live
+                belong in the same place a crew looks for their paperwork. */}
+            <Link href="/agreements" className="ll-card ll-card-pad" style={{ display: "block", textDecoration: "none", color: "inherit", marginBottom: 12 }}>
+              <div style={{ fontWeight: 800, fontSize: 15 }}>What you&apos;ve agreed to →</div>
+              <div className="mut" style={{ fontSize: 13 }}>The terms you accepted, word for word, and the day you accepted them.</div>
+            </Link>
+            <VendorDocs
+              coiUrl={vendor.coi_url}
+              coiExpiry={vendor.coi_expiry}
+              w9Url={vendor.w9_url}
+              today={todayLakeDate()}
+            />
+          </>
         )}
       </div>
     </>

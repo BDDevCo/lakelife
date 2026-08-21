@@ -92,6 +92,14 @@ export default async function ParkSetupPage() {
         </div>
       )}
       <ParkSetup parkId={park.id} initial={initial} />
+      {/* The terms a park owner is now asked to accept (v1-beta) have a section
+          about running a park. This is where he comes back to re-read it. */}
+      <div className="wrap" style={{ paddingTop: 0, paddingBottom: 40 }}>
+        <Link href="/agreements" className="ll-card ll-card-pad" style={{ display: "block", textDecoration: "none", color: "inherit", maxWidth: 620 }}>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>What you&apos;ve agreed to →</div>
+          <div className="mut" style={{ fontSize: 13 }}>Your LakeLife terms, with the exact words as they were on the day you accepted them.</div>
+        </Link>
+      </div>
     </>
   );
 }

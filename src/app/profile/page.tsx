@@ -190,6 +190,10 @@ export default async function ProfilePage() {
             <div style={{ fontWeight: 800, fontSize: 15 }}>Notification settings →</div>
             <div className="mut" style={{ fontSize: 13 }}>Choose text or email for each kind of update. Receipts are always on.</div>
           </Link>
+          <Link href="/agreements" className="ll-card ll-card-pad" style={{ display: "block", textDecoration: "none", color: "inherit" }}>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>What you&apos;ve agreed to →</div>
+            <div className="mut" style={{ fontSize: 13 }}>Every agreement on your account, with the exact words as they were on the day.</div>
+          </Link>
           <AccountControls
             hasProperty={true}
             propertyLabel={profile.address ?? undefined}
