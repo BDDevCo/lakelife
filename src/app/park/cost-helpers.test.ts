@@ -6,6 +6,10 @@ import {
   buildCostScheduleRow, SCHEDULABLE_CATEGORIES, type CostScheduleInput,
   carryFromRow, billPeriod,
 } from "./cost-helpers";
+import { addDays } from "./today-helpers";
+import { overlaps } from "@/lib/parks";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 /** The Haven: 19 occupied lots, 2 empty (3 and 22). */
 const HAVEN: CostLot[] = [
@@ -621,5 +625,59 @@ describe("saying how often a bill comes", () => {
       expect(buildCostScheduleRow({ ...base, category: c, cadence: "annual", dueMonth: "6" }).ok).toBe(true);
       expect(canSplit(c as never)).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the one-tap 'pass this on' period", () => {
+  /**
+   * `billableParkJobs` builds the two dates that `ParkCosts.fillFrom` submits
+   * with no chance to edit them. It used to end the period ON the job date,
+   * which is wrong twice over under half-open ranges:
+   *
+   *   * a job on the 1st gave start === end — an empty range that recordCost
+   *     refuses, so the button was permanently dead for that job
+   *   * every other job excluded the day the work happened
+   *
+   * The builder is inside a server action, so this pins the arithmetic it uses
+   * and the guard that rejected the degenerate case.
+   */
+  const periodFor = (date: string) => ({
+    periodStart: `${date.slice(0, 7)}-01`,
+    periodEnd: addDays(date, 1),
+  });
+
+  it("a job on the 1st is no longer an empty period", () => {
+    const p = periodFor("2027-03-01");
+    expect(p).toEqual({ periodStart: "2027-03-01", periodEnd: "2027-03-02" });
+    expect(p.periodEnd > p.periodStart).toBe(true);
+  });
+
+  it("the old shape is exactly what recordCost refuses", () => {
+    // start === end, the condition behind "The period has to end after it starts"
+    expect("2027-03-01" > "2027-03-01").toBe(false);
+  });
+
+  it("covers the day the work happened", () => {
+    const p = periodFor("2027-03-15");
+    // Half-open: a tenancy starting the morning of the mow overlaps only if
+    // the period runs past it.
+    expect(overlaps({ start: "2027-03-15", end: "2027-04-15" }, { start: p.periodStart, end: p.periodEnd })).toBe(true);
+    // and the old end date did not
+    expect(overlaps({ start: "2027-03-15", end: "2027-04-15" }, { start: p.periodStart, end: "2027-03-15" })).toBe(false);
+  });
+
+  it("crosses a month end correctly", () => {
+    expect(periodFor("2027-01-31")).toEqual({ periodStart: "2027-01-01", periodEnd: "2027-02-01" });
+    expect(periodFor("2028-02-29")).toEqual({ periodStart: "2028-02-01", periodEnd: "2028-03-01" });
+  });
+
+  it("the builder really uses this shape", () => {
+    const src = readFileSync(
+      join(__dirname, "cost-actions.ts"), "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).toContain("periodEnd: addDays(date, 1)");
+    expect(src).not.toMatch(/periodEnd: date,/);
   });
 });

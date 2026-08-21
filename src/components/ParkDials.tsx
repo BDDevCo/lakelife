@@ -101,7 +101,7 @@ export function ParkDials({
         />
         <Field
           label="The day you take over"
-          hint="Leave blank until the contract says. Nothing is collectable before it."
+          hint="The date the park became yours. Set it and no month that began before it can be billed — that rent is the seller's. Leave it blank and we'll raise bills for any month you ask for."
           type="date"
           value={form.cutoverOn}
           onChange={(v) => set("cutoverOn", v)}

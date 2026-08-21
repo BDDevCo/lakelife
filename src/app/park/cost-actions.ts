@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { ordinal } from "./today-helpers";
+import { ordinal, addDays } from "./today-helpers";
 import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
@@ -585,8 +585,25 @@ export async function getBillableParkJobs(parkId: string): Promise<BillableParkJ
         // The period a mow covers is the month it happened in — that is what
         // decides WHO is billed, because the allocator splits across whoever
         // was on a lot during it.
+        //
+        // THE END IS THE DAY AFTER, because every range here is half-open
+        // (`overlaps` is `a.start < b.end && b.start < a.end`), and this button
+        // submits these two dates with no chance to edit them. Ending ON the
+        // job date broke it twice:
+        //
+        //   * a job done on the 1ST produced start === end, an empty range.
+        //     `recordCost` refuses it — "The period has to end after it starts"
+        //     — so the one-tap button was permanently dead for that job, with
+        //     no form to correct and no way to pass the cost on at all. Grounds
+        //     work lands on the 1st all the time.
+        //   * for every other job it excluded the day the work actually
+        //     happened, so a household that moved in that morning paid no share
+        //     of the mow they watched.
+        //
+        // It is the same convention the manual form's own error text teaches:
+        // "for a one-day job, use the next day as the end".
         periodStart: `${date.slice(0, 7)}-01`,
-        periodEnd: date,
+        periodEnd: addDays(date, 1),
         note: `${svc ?? "Park work"} — LakeLife, ${date}`,
       };
     });

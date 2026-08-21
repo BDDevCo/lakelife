@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   firstBillablePeriod, periodIsBillable, preCutoverRefusal,
 } from "./billing-start";
@@ -128,5 +129,55 @@ describe("every path that raises a charge is gated", () => {
     const selects = s.match(/select\("rent_due_day[^"]*"\)/g) ?? [];
     expect(selects.length).toBeGreaterThanOrEqual(2);
     for (const sel of selects) expect(sel).toContain("cutover_date");
+  });
+});
+
+describe("what the screens say about leaving the date blank", () => {
+  /**
+   * NULL MEANS NO RESTRICTION — that is this module's documented, deliberate
+   * choice, because plenty of parks join with no handover at all and refusing
+   * to bill them would be the worse failure.
+   *
+   * The park dials told him the opposite: "Leave blank until the contract
+   * says. Nothing is collectable before it." Blank is precisely when
+   * EVERYTHING is collectable. The Haven's cutover_date is null right now, so
+   * this is the sentence he would have read.
+   *
+   * Any screen that offers this field has to agree with the code, so the guard
+   * is on the claim rather than on the one component that made it.
+   */
+  const SCREENS = [
+    "src/components/ParkDials.tsx",
+    "src/components/ParkImportPaste.tsx",
+  ];
+
+  const bodyOf = (rel: string) =>
+    readFileSync(join(process.cwd(), rel), "utf8");
+
+  it("finds the screens it is scanning", () => {
+    for (const f of SCREENS) expect(bodyOf(f).length).toBeGreaterThan(200);
+  });
+
+  it("no screen claims that a blank date blocks billing", () => {
+    // The exact false promise, and the shapes it would most likely come back in.
+    const lies = [
+      /Nothing is collectable before it/i,
+      /nothing can be billed until/i,
+      /leave (it )?blank[^.]*nothing[^.]*bill/i,
+    ];
+    for (const f of SCREENS) {
+      const body = bodyOf(f);
+      for (const lie of lies) expect(body).not.toMatch(lie);
+    }
+  });
+
+  it("the dial says what blank actually does", () => {
+    expect(bodyOf("src/components/ParkDials.tsx")).toMatch(/blank[^"]*any month you ask for/i);
+  });
+
+  it("and the code it describes really does treat blank as unrestricted", () => {
+    // Ties the copy to the behaviour, so changing one without the other fails.
+    expect(firstBillablePeriod(null)).toBeNull();
+    expect(periodIsBillable("2020-01", null)).toBe(true);
   });
 });
