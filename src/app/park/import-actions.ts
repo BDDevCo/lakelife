@@ -69,7 +69,7 @@ export async function readPaste(
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
   if (!rawText.trim()) return { ok: false, error: "Paste the list first." };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoverISO)) {
-    return { ok: false, error: "Pick the month you take over." };
+    return { ok: false, error: "Pick the day you take over." };
   }
 
   const admin = createServiceClient();

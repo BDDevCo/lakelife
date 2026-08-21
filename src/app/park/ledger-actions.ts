@@ -1,6 +1,6 @@
 "use server";
 
-import { rentForPeriod, lastDayOfMonth, type RentChangePoint } from "./rerate-helpers";
+import { rentForPeriod, lastDayOfMonth } from "./rerate-helpers";
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
@@ -19,7 +19,7 @@ import { receiptBody, type ReceiptLines } from "./receipt-helpers";
 // The ENGINE, not the action: runCharges has already asserted membership
 // twenty lines up, so going back through the authorized wrapper would just
 // re-ask the same question.
-import { applyDueRentChangesFor } from "@/lib/rent-changes";
+import { applyDueRentChangesFor, servedRentHistory } from "@/lib/rent-changes";
 import type { ParkResult } from "./actions";
 
 /**
@@ -223,27 +223,16 @@ export async function previewChargeRun(
 
   // A PREVIEW MUST SHOW WHAT THE RUN WILL ACTUALLY DO.
   //
-  // `runCharges` now applies any properly-served increase that has come due
-  // before it bills. If this preview kept reading the old `quoted_amount`, the
-  // total he approves and the total he gets would differ — which is the one
-  // thing a confirm screen must never do. Nothing is written here: the new
-  // amounts are overlaid for the arithmetic only.
-  const dueChangesRes = await admin
-    .from("lot_rent_changes")
-    .select("reservation_id, to_amount")
-    .eq("park_id", parkId)
-    .lte("effective_on", todayLakeDate())
-    .is("applied_at", null)
-    .is("cancelled_at", null)
-    .not("notice_given_on", "is", null);
-  // Swallowed, this is precisely the divergence the paragraph above forbids:
-  // the preview would quote the old rate and the run would bill the new one.
-  if (dueChangesRes.error) {
-    return { ok: false, error: readFailedMessage("the rent increases coming due", dueChangesRes.error, { money: true }) };
+  // This used to read its own narrower set of changes — the ones already due
+  // TODAY — while the run resolved the rate at the END of the month being
+  // billed. Billing January on the 2nd with an increase due the 15th, the
+  // preview quoted the old rent and the run charged the new one. Same query,
+  // same instant, or the number he approves is not the number he sends.
+  const histRes = await servedRentHistory((stays ?? []).map((s) => s.id as string));
+  if (histRes.error) {
+    return { ok: false, error: readFailedMessage("the rent history for these lots", histRes.error, { money: true }) };
   }
-  const pendingRate = new Map(
-    (dueChangesRes.data ?? []).map((c) => [c.reservation_id as string, Number(c.to_amount)]),
-  );
+  const changesByRes = histRes.byRes;
 
   // A VOIDED BILL IS NOT A BILL. Without this filter, cancelling a charge made
   // that household's month permanently unbillable — the row still occupied the
@@ -275,9 +264,12 @@ export async function previewChargeRun(
   const candidates = (stays ?? []).map((s) => {
     const lot = lotById.get(s.park_lot_id as string)!;
     const range = parseDaterange(s.during as string);
-    const rentNow = pendingRate.has(s.id as string)
-      ? pendingRate.get(s.id as string)!
-      : (s.quoted_amount == null ? null : Number(s.quoted_amount));
+    // Resolved exactly as the run resolves it — see servedRentHistory.
+    const rentNow = rentForPeriod(
+      changesByRes.get(s.id as string) ?? [],
+      lastDayOfMonth(month),
+      s.quoted_amount == null ? null : Number(s.quoted_amount),
+    );
     const st = range
       ? buildStatement({
           month,
@@ -431,31 +423,16 @@ export async function runCharges(
   const shareMap = shareRes.shares;
   /** reservation -> the share ids that went onto its charge, stamped after insert. */
   // THE RENT HISTORY FOR THESE TENANCIES, so each month is billed at its own
-  // rate rather than at today's. Cancelled changes are not history.
-  const resIds = (stays ?? []).map((x) => x.id as string);
-  const changesByRes = new Map<string, RentChangePoint[]>();
-  if (resIds.length > 0) {
-    const changeRes = await admin
-      .from("lot_rent_changes")
-      .select("reservation_id, effective_on, from_amount, to_amount")
-      .in("reservation_id", resIds)
-      .is("cancelled_at", null);
-    // Empty here would silently bill every past month at today's rate — the
-    // exact defect this read exists to prevent — so it stops rather than guesses.
-    if (changeRes.error) {
-      return { ok: false, error: readFailedMessage("the rent history for these lots", changeRes.error, { money: true }) };
-    }
-    for (const c of changeRes.data ?? []) {
-      const k = c.reservation_id as string;
-      const list = changesByRes.get(k) ?? [];
-      list.push({
-        effective_on: c.effective_on as string,
-        from_amount: c.from_amount == null ? null : Number(c.from_amount),
-        to_amount: c.to_amount == null ? null : Number(c.to_amount),
-      });
-      changesByRes.set(k, list);
-    }
+  // rate rather than at today's — and only the increases actually SERVED. This
+  // read every non-cancelled change, so an increase scheduled but never
+  // noticed was billed anyway; see servedRentHistory.
+  const histRes = await servedRentHistory((stays ?? []).map((x) => x.id as string));
+  // Empty here would silently bill every past month at today's rate — the
+  // exact defect this read exists to prevent — so it stops rather than guesses.
+  if (histRes.error) {
+    return { ok: false, error: readFailedMessage("the rent history for these lots", histRes.error, { money: true }) };
   }
+  const changesByRes = histRes.byRes;
 
   const shareIdsByRes = new Map<string, string[]>();
 

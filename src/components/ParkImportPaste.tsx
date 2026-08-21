@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
 import { readPaste } from "@/app/park/import-actions";
+import { firstBillablePeriod } from "@/lib/billing-start";
+import { prettyMonth } from "@/app/park/ledger-helpers";
 
 /**
  * Screen 1 — the paste box.
@@ -14,26 +16,41 @@ import { readPaste } from "@/app/park/import-actions";
  * straight about the rest.
  */
 
-/** The next twelve months, plus the last three — he may be importing late. */
-function monthOptions(todayISO: string): { value: string; label: string }[] {
-  const [y, m] = todayISO.split("-").map(Number);
-  const out: { value: string; label: string }[] = [];
-  for (let i = -3; i <= 12; i++) {
-    const d = new Date(Date.UTC(y, m - 1 + i, 1));
-    out.push({
-      value: d.toISOString().slice(0, 10),
-      label: d.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
-    });
-  }
-  return out;
+/**
+ * THIS ASKED FOR A MONTH, AND A MONTH CANNOT ANSWER IT.
+ *
+ * The old control offered "December 2026", "January 2027" and wrote the FIRST
+ * of whichever he chose. Two things downstream read that value, and a
+ * month-start is wrong for both:
+ *
+ *   - `rangeForTerm` dates every grandfathered tenancy from it, and its own
+ *     comment calls it "the day the park changed hands, the one date that is
+ *     actually true". A 1st is not that day.
+ *   - `firstBillablePeriod` reads the DAY on purpose: a go-live on the 1st is
+ *     the claim "this whole month is mine to bill", any later day means the
+ *     month began before us and belongs to whoever was collecting then.
+ *
+ * So the honest answer to "which month do you take over?" — December, because
+ * he closes on the 15th — wrote 2026-12-01 and made December billable. The
+ * seller collected December on the 1st and was made whole for the back half at
+ * the closing table. Nineteen households would have been billed $400 for a
+ * month they had already paid ~$272 for, and the guard written to prevent
+ * exactly that (see billing-start.ts) cannot fire, because the date it is
+ * handed says the whole month is his.
+ *
+ * Ask for the day. It is the one he has in front of him at the closing table,
+ * and it is the only value both readers can use.
+ */
+function firstBill(cutoverISO: string): string | null {
+  const first = firstBillablePeriod(cutoverISO);
+  return first == null ? null : prettyMonth(first);
 }
 
 export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO: string }) {
-  const months = monthOptions(todayISO);
-  const thisMonth = months[3].value;
-
   const [text, setText] = useState("");
-  const [cutover, setCutover] = useState(thisMonth);
+  // Today, because the common case is doing this the day it happens — and
+  // never a value he did not choose that would silently claim a whole month.
+  const [cutover, setCutover] = useState(todayISO);
   const [dup, setDup] = useState<{ id: string; when: string; committed: boolean } | null>(null);
   const [pending, start] = useTransition();
   const router = useRouter();
@@ -78,15 +95,26 @@ export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO
         )}
 
         <label className="ll-field" style={{ fontSize: 13, marginTop: 16 }}>
-          <span className="mut">Which month do you take over?</span>
-          <select value={cutover} onChange={(e) => setCutover(e.target.value)}>
-            {months.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-          </select>
+          <span className="mut">What day do you take over?</span>
+          <input
+            type="date"
+            value={cutover}
+            onChange={(e) => setCutover(e.target.value)}
+          />
         </label>
-        <p className="mut" style={{ fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
-          Rent starts counting from the 1st. This isn&apos;t anybody&apos;s
-          move-in date — nobody&apos;s history gets rewritten.
-        </p>
+        {/* The rule made visible, in his numbers, before he commits to it —
+            rather than a sentence about the 1st that hides which month gets
+            billed. */}
+        {firstBill(cutover) && (
+          <p className="mut" style={{ fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
+            {cutover.endsWith("-01")
+              ? `You take over on the 1st, so ${firstBill(cutover)} is yours to bill in full.`
+              : `Your month began before you, so whoever was collecting rent keeps it. ` +
+                `Your first bill is ${firstBill(cutover)}.`}{" "}
+            This isn&apos;t anybody&apos;s move-in date — nobody&apos;s history
+            gets rewritten.
+          </p>
+        )}
 
         {dup && (
           <div
@@ -116,7 +144,7 @@ export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO
           <button
             className="ll-btn"
             onClick={() => submit(false)}
-            disabled={pending || !text.trim()}
+            disabled={pending || !text.trim() || !cutover}
           >
             {pending ? "Reading…" : "Read it"}
           </button>
