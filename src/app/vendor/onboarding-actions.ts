@@ -415,8 +415,18 @@ export async function finishOnboarding(tosAccepted?: boolean): Promise<Onboardin
   // THE AGREEMENT at go-live: crews accept the same terms — independent
   // businesses, responsible and liable for the work they provide.
   const { ensureTos } = await import("@/lib/tos-server");
-  if (vendor.user_id && (await ensureTos(vendor.user_id, tosAccepted)) === "needs") {
-    return { ok: false, needsTos: true };
+  // Caught for the same reason assertMyVendor is, twenty lines up: ensureTos
+  // asks the acceptance ledger and throws ReadFailed rather than answering
+  // "hasn't agreed" on a dropped read.
+  if (vendor.user_id) {
+    let tos: "ok" | "needs";
+    try {
+      tos = await ensureTos(vendor.user_id, tosAccepted);
+    } catch (e) {
+      if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your terms acceptance", e) };
+      throw e;
+    }
+    if (tos === "needs") return { ok: false, needsTos: true };
   }
 
   const admin = createServiceClient();

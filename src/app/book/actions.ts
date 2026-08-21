@@ -308,7 +308,19 @@ export async function createBookingBatch(
   // THE AGREEMENT, at the moment of service: one quick scroll-and-agree the
   // first time, stamped forever (until a version bump), then the booking
   // pushes straight through on the retry.
-  if ((await ensureTos(user.id, tosAccepted)) === "needs") {
+  // ensureTos THROWS ReadFailed now — it asks the acceptance ledger, and a
+  // dropped read there must not read as "hasn't agreed" (which would re-prompt
+  // somebody who has, then record a second acceptance when they tapped again).
+  // Same seam as getFullProfile below: this is a "use server" action, so an
+  // uncaught rejection reaches the booking screen as a blank failure.
+  let tos: "ok" | "needs";
+  try {
+    tos = await ensureTos(user.id, tosAccepted);
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your terms acceptance", e) };
+    throw e;
+  }
+  if (tos === "needs") {
     return { ok: false, needsTos: true };
   }
 

@@ -35,9 +35,16 @@ export interface TermsSection {
 }
 
 /**
- * Changing any word here changes what people are agreeing to. Bump
- * TOS_VERSION in the same commit, or the ledger records new words under an old
- * version — see `termsVersionGuard` in the tests.
+ * CHANGING ANY WORD HERE CHANGES WHAT PEOPLE ARE AGREEING TO. Bump TOS_VERSION
+ * in `@/lib/tos` in the same commit, or the ledger records new words under an
+ * old version — every existing acceptance stays in force against wording
+ * nobody saw, because the gate compares the version and nothing else.
+ *
+ * `termsVersionGuard` in `TermsBody.test.tsx` enforces exactly that: it pins
+ * the sha256 of `termsPlainText()`, so an edit here fails CI until both the
+ * digest and TOS_VERSION move. (That sentence used to be here naming a test
+ * that had never been written — a promise, in the one place it was most likely
+ * to be believed, that nothing was keeping.)
  */
 export const TERMS_SECTIONS: readonly TermsSection[] = [
   {

@@ -62,7 +62,16 @@ export async function createPackageBooking(input: {
     return { ok: false, needsVerification: true, error: "One quick step first: verify your contact info, then you're ready to book." };
   }
 
-  if ((await ensureTos(user.id, input.tosAccepted)) === "needs") {
+  // ensureTos THROWS ReadFailed now (it asks the acceptance ledger). Uncaught,
+  // a dropped read reaches the storage wizard as a blank failure.
+  let tos: "ok" | "needs";
+  try {
+    tos = await ensureTos(user.id, input.tosAccepted);
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your terms acceptance", e) };
+    throw e;
+  }
+  if (tos === "needs") {
     return { ok: false, needsTos: true };
   }
 

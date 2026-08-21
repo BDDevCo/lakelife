@@ -191,7 +191,6 @@ where u.tos_version is not null
 do $$
 declare
   n int;
-  migrated int;
   expected int;
 begin
   -- The table is append-only in fact, not just in intention.
@@ -219,13 +218,27 @@ begin
     raise exception '0139: a required check constraint is missing';
   end loop;
 
-  -- Everybody who had an acceptance still has one.
-  select count(*) into expected from public.users where tos_version is not null;
-  select count(*) into migrated
-    from public.acceptances where provenance = 'migrated_pre_ledger';
-  if migrated <> expected then
-    raise exception '0139: backfill lost somebody — % users had a version, % rows migrated',
-      expected, migrated;
+  -- EVERYBODY WHO HAD AN ACCEPTANCE STILL HAS ONE.
+  --
+  -- Asserted as "no user with a version lacks a row", NOT as a count match
+  -- between the two tables. Counting would contradict this table's own design:
+  -- the ledger row deliberately has no FK and OUTLIVES the account it is about
+  -- (see the header), so the first time somebody closes their account the
+  -- `users` count drops, the `acceptances` count does not, and a replay of this
+  -- migration aborts on a database that is perfectly correct. The rule worth
+  -- asserting is that nobody was LOST, and that is a one-sided check.
+  select count(*) into expected
+    from public.users u
+   where u.tos_version is not null
+     and not exists (
+       select 1 from public.acceptances a
+        where a.user_id = u.id
+          and a.document_kind = 'tos'
+          and a.provenance = 'migrated_pre_ledger'
+     );
+  if expected <> 0 then
+    raise exception '0139: backfill lost somebody — % users with a version have no ledger row',
+      expected;
   end if;
 
   -- And no migrated row is pretending to know words it never had.

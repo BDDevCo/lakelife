@@ -16,7 +16,21 @@ export async function acceptTos(form: FormData): Promise<void> {
   // which meant the grandfathered-crew card recorded an acceptance with none of
   // the words — the exact gap 0139 exists to close. `ensureTos` carries the
   // snapshot, so both doors record the same thing.
-  await ensureTos(user.id, true);
+  //
+  // AND ITS ANSWER IS NOT OPTIONAL. This discarded the return value and
+  // redirected regardless, so a failed insert — or a failed read of the
+  // ledger, which now throws — sent somebody who had just tapped "I agree"
+  // onward with nothing recorded and nothing said. They would believe they had
+  // agreed; the ledger would not know it. Staying on the card is the honest
+  // outcome: the button is still there, and tapping it again retries.
+  let tos: "ok" | "needs";
+  try {
+    tos = await ensureTos(user.id, true);
+  } catch {
+    return;
+  }
+  if (tos !== "ok") return;
+
   const next = String(form.get("next") ?? "/portal");
   redirect(next.startsWith("/") ? next : "/portal");
 }

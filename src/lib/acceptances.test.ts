@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { acceptedFromLatest, textFingerprint, ACCEPTANCE_KINDS } from "@/lib/acceptances";
+import { acceptedFromLatest, latestAct, textFingerprint, ACCEPTANCE_KINDS } from "@/lib/acceptances";
 import { TERMS_SECTIONS, termsPlainText, runText } from "@/lib/terms-content";
 import { TOS_VERSION } from "@/lib/tos";
 
@@ -128,8 +128,48 @@ describe("what counts as agreed, right now", () => {
   });
 
   it("re-accepting after withdrawing puts it back in force", () => {
-    // The withdrawal row is still there; it is simply no longer the latest.
-    expect(acceptedFromLatest({ act: "accepted", version: V }, V)).toBe(true);
+    // A REAL SEQUENCE. This assertion used to be character-for-character the
+    // one above it: it passed a single row to a function that cannot observe
+    // history, so it proved nothing about withdrawal at all. The rule lives in
+    // the ordering, so the ordering is what has to be exercised.
+    const history = [
+      { act: "accepted" as const, version: V, occurredAt: "2026-08-01T10:00:00Z" },
+      { act: "withdrawn" as const, version: V, occurredAt: "2026-08-02T10:00:00Z" },
+      { act: "accepted" as const, version: V, occurredAt: "2026-08-03T10:00:00Z" },
+    ];
+    expect(acceptedFromLatest(latestAct(history), V)).toBe(true);
+    // and the acceptance that was withdrawn is still sitting in the history
+    expect(history).toHaveLength(3);
+  });
+
+  it("a withdrawal after an acceptance takes it out of force", () => {
+    const history = [
+      { act: "accepted" as const, version: V, occurredAt: "2026-08-01T10:00:00Z" },
+      { act: "withdrawn" as const, version: V, occurredAt: "2026-08-02T10:00:00Z" },
+    ];
+    expect(acceptedFromLatest(latestAct(history), V)).toBe(false);
+  });
+
+  it("picks the newest act whatever order the rows arrive in", () => {
+    // The database orders these; latestAct orders them again. If the ORDER BY
+    // were ever dropped, this is what still picks the right row.
+    const shuffled = [
+      { act: "accepted" as const, version: V, occurredAt: "2026-08-01T10:00:00Z" },
+      { act: "accepted" as const, version: V, occurredAt: "2026-08-03T10:00:00Z" },
+      { act: "withdrawn" as const, version: V, occurredAt: "2026-08-02T10:00:00Z" },
+    ];
+    expect(latestAct(shuffled)?.occurredAt).toBe("2026-08-03T10:00:00Z");
+    expect(latestAct([])).toBeNull();
+  });
+
+  it("hasAccepted asks for the whole history, ordered, and re-picks it", () => {
+    const mod = code("./acceptances.ts");
+    expect(mod).toMatch(/\.order\("occurred_at", \{ ascending: false \}\)/);
+    expect(mod).toContain("latestAct(");
+    // A .limit(1) here would make latestAct decorative and put the rule back
+    // inside the query where nothing can execute it.
+    const fn = mod.slice(mod.indexOf("export async function hasAccepted"));
+    expect(fn.slice(0, fn.indexOf("acceptedFromLatest"))).not.toContain(".limit(");
   });
 
   it("treats a null version as its own answer, not as a wildcard", () => {
@@ -167,8 +207,11 @@ describe("the ToS gate now runs on the ledger", () => {
     expect(tos).toContain("recordAcceptance");
   });
 
-  it("asks the ledger whether they have agreed", () => {
-    expect(tos).toContain("hasAccepted");
+  it("asks the ledger whether they have agreed, and ACTS on the answer", () => {
+    // `toContain("hasAccepted")` was satisfied by the import line alone —
+    // asking is not obeying, and this repo has been caught by that before.
+    // Pin the shape: the answer is what returns "ok".
+    expect(tos).toMatch(/if \(await hasAccepted\(\{ userId \}, "tos", TOS_VERSION\)\) return "ok";/);
   });
 
   it("does not treat an unrecorded acceptance as a recorded one", () => {
@@ -250,11 +293,33 @@ describe("the kinds the ledger accepts", () => {
   const sql = migrationFor("public.acceptances");
 
   it("the TypeScript list and the database check agree", () => {
-    // A kind the code can produce and the column refuses is a runtime failure
-    // on the one write that matters.
+    // READ THE CONSTRAINT, NOT THE FILE. Searching the whole migration for
+    // `'tos'` passes on three unrelated hits — the backfill's SELECT list and
+    // its NOT EXISTS clause both contain it — so deleting 'tos' from the CHECK
+    // left this green while every ToS acceptance would fail on a fresh build
+    // with a 23514.
+    const check = sql.slice(
+      sql.indexOf("document_kind    text not null"),
+      sql.indexOf("document_version text"),
+    );
+    expect(check).toContain("check (document_kind in");
     for (const kind of ACCEPTANCE_KINDS) {
-      expect(sql).toContain(`'${kind}'`);
+      expect(check).toContain(`'${kind}'`);
     }
+    // And nothing the database allows that the TypeScript cannot produce.
+    const allowed = [...check.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    expect([...allowed].sort()).toEqual([...ACCEPTANCE_KINDS].sort());
+  });
+
+  it("that slice really is only the constraint", () => {
+    // Guards the guard: if the column declaration is reformatted, the slice
+    // could silently widen back to the whole file.
+    const check = sql.slice(
+      sql.indexOf("document_kind    text not null"),
+      sql.indexOf("document_version text"),
+    );
+    expect(check.length).toBeLessThan(300);
+    expect(check).not.toContain("insert into");
   });
 
   it("covers the documents the four roles actually need", () => {

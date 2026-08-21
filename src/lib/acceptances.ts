@@ -169,6 +169,26 @@ export async function withdrawAcceptance(input: {
  * A version that does not match is NOT accepted: bumping TOS_VERSION is how
  * everyone gets re-prompted, which is the whole point of the constant.
  */
+/**
+ * THE NEWEST ACT IN A HISTORY.
+ *
+ * Pulled out so "the latest act wins" — the ledger's headline rule — can be
+ * executed by a test on a real sequence, instead of living only inside a
+ * database ORDER BY that nothing exercises. `hasAccepted` reads the rows
+ * already ordered and passes them through here anyway: the database and this
+ * function must agree, and if the ORDER BY were ever dropped this still picks
+ * the right row.
+ *
+ * Sorted by the string form of the timestamp, which is ISO-8601 from Postgres
+ * and therefore sorts as time. Ties keep their incoming order, which is the
+ * database's — a genuine tie means two acts in the same microsecond, and there
+ * is no truer answer available than the one the index already gives.
+ */
+export function latestAct<T extends { occurredAt: string }>(rows: readonly T[]): T | null {
+  if (rows.length === 0) return null;
+  return [...rows].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt))[0];
+}
+
 export function acceptedFromLatest(
   latest: { act: "accepted" | "withdrawn"; version: string | null } | null,
   currentVersion: string | null,
@@ -202,23 +222,22 @@ export async function hasAccepted(
     "what you've agreed to",
     await admin
       .from("acceptances")
-      .select("act, document_version")
+      .select("act, document_version, occurred_at")
       .eq(column, value)
       .eq("document_kind", kind)
-      .order("occurred_at", { ascending: false })
-      .limit(1),
+      .order("occurred_at", { ascending: false }),
   );
 
-  const latest = (rows ?? [])[0];
-  return acceptedFromLatest(
-    latest
-      ? {
-          act: latest.act as "accepted" | "withdrawn",
-          version: (latest.document_version as string) ?? null,
-        }
-      : null,
-    version,
+  // Ordered by the database AND re-picked here. A person has a handful of acts
+  // per document, so there is nothing to save by trusting one of the two.
+  const latest = latestAct(
+    (rows ?? []).map((r) => ({
+      act: r.act as "accepted" | "withdrawn",
+      version: (r.document_version as string) ?? null,
+      occurredAt: r.occurred_at as string,
+    })),
   );
+  return acceptedFromLatest(latest, version);
 }
 
 /**
