@@ -247,7 +247,13 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                     claim={page.claims[r.id]}
                     lotNumber={r.lotNumber}
                     today={page.today}
-                    onDone={() => { setResolvingId(null); router.refresh(); }}
+                    onDone={(r) => {
+                      setResolvingId(null);
+                      // Same panel the Record-payment path opens: confirming a
+                      // claim IS a payment, and it prints the same receipt.
+                      if (r) setReceipt(r);
+                      router.refresh();
+                    }}
                     onCancel={() => setResolvingId(null)}
                   />
                 )}

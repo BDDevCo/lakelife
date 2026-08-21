@@ -202,3 +202,40 @@ describe("the screens say what actually happened", () => {
     expect(notify).not.toMatch(/sendSms/);
   });
 });
+
+describe("confirming a claim prints the same receipt as typing the payment in", () => {
+  // `confirmClaimCollected` delegates to `recordPayment`, which mints a receipt
+  // number and a /paid confirmation link. The form used to call `onDone()` with
+  // no argument, so on the ordinary answer — "yes, I collected it" — the
+  // receipt was built and thrown away. The household that handed over CASH and
+  // then had to assert they had paid is the one with nothing else to show for
+  // it; they got no printed copy and no counterfoil, while a household whose
+  // payment was simply typed in got both.
+  it("the claim form hands the receipt back up", () => {
+    const src = resolve();
+    expect(src).toMatch(/onDone: \(receipt\?: \{ lines: ReceiptLines; email: string \| null \}\) => void/);
+    expect(src).toContain("onDone(res.receipt");
+  });
+
+  it("the rent screen opens its receipt panel with it", () => {
+    const src = read("../components/ParkRent.tsx");
+    // ANCHORED TO THIS MOUNT. The Record-payment form on the same screen has
+    // always passed its receipt up, so a whole-file search for that shape
+    // passes on the broken code and proves nothing. Read only the props of
+    // <ResolveClaimForm ... />.
+    const at = src.indexOf("<ResolveClaimForm");
+    expect(at).toBeGreaterThan(-1);
+    const mount = src.slice(at, src.indexOf("/>", at));
+    expect(mount).toContain("setReceipt(r)");
+  });
+
+  it("that anchor really does exclude the record-payment mount", () => {
+    // Guards the guard: if <ResolveClaimForm ... /> ever stops being its own
+    // element, the slice above would silently widen to the whole file again.
+    const src = read("../components/ParkRent.tsx");
+    const at = src.indexOf("<ResolveClaimForm");
+    const mount = src.slice(at, src.indexOf("/>", at));
+    expect(mount).not.toContain("<PaymentForm");
+    expect(mount.length).toBeLessThan(800);
+  });
+});

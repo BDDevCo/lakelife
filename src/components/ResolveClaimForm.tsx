@@ -7,6 +7,7 @@ import {
   confirmClaimCollected,
   type OpenClaim,
 } from "@/app/park/ledger-actions";
+import type { ReceiptLines } from "@/app/park/receipt-helpers";
 
 /**
  * ANSWERING "THEY SAY THEY PAID".
@@ -39,6 +40,15 @@ import {
  *
  * What is deliberately NOT here: any way to delete the claim. The renter's
  * assertion stays on the record whichever way it is answered.
+ *
+ * AND THE RECEIPT GOES BACK UP. "Yes, I collected it" runs `recordPayment`,
+ * which mints a receipt number and a /paid confirmation link — the same
+ * payload the Record-payment form hands to the receipt panel. This form's
+ * `onDone` took no argument, so on the path the doc above calls "the answer
+ * given most often" the receipt was built and dropped. The household that
+ * handed over cash and then had to ASSERT they had paid is exactly the one
+ * with nothing else to show for it; they got no printed copy and no counterfoil
+ * to sign, while the household whose payment was simply typed in got both.
  */
 export function ResolveClaimForm({
   parkId, claim, lotNumber, today, onDone, onCancel,
@@ -48,7 +58,8 @@ export function ResolveClaimForm({
   lotNumber: string;
   /** Lake-local today — the default collection date, and the picker's ceiling. */
   today: string;
-  onDone: () => void;
+  /** Carries the receipt up on the collected path, so it can be printed. */
+  onDone: (receipt?: { lines: ReceiptLines; email: string | null }) => void;
   onCancel: () => void;
 }) {
   const [busy, start] = useTransition();
@@ -185,11 +196,19 @@ export function ResolveClaimForm({
           disabled={busy || amountBad || (needsNote && !note.trim())}
           onClick={() =>
             start(async () => {
-              const res = collected
-                ? await confirmClaimCollected(
-                    parkId, claim.id, amountNum, receivedOn, idem,
-                  )
-                : await resolvePaymentClaim(parkId, claim.id, resolution, note);
+              if (collected) {
+                const res = await confirmClaimCollected(
+                  parkId, claim.id, amountNum, receivedOn, idem,
+                );
+                toast(res.ok ? (res.signal ?? "Recorded.") : (res.error ?? "Couldn't record that."));
+                if (res.ok) {
+                  onDone(res.receipt
+                    ? { lines: res.receipt, email: res.renterEmail ?? null }
+                    : undefined);
+                }
+                return;
+              }
+              const res = await resolvePaymentClaim(parkId, claim.id, resolution, note);
               toast(res.ok ? (res.signal ?? "Recorded.") : (res.error ?? "Couldn't record that."));
               if (res.ok) onDone();
             })
