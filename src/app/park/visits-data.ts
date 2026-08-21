@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead, mustCount } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { clockLabel } from "@/lib/duration";
@@ -15,9 +16,12 @@ import { clockLabel } from "@/lib/duration";
  * by standing there — and it withholds everything he could not: who booked it,
  * what they paid, which lot it is for.
  *
- * The link is to the PARK and never to the LOT (0085), so a visit cannot be
- * attributed to a household. That is structural, not a matter of which columns
- * a screen happens to render.
+ * The link was to the PARK and never to the LOT in 0085; 0107 put the lot back
+ * in deliberately, for liability — a landlord needs to know who is on his
+ * property and where, which is again exactly what he could see from the window.
+ * What stays out is structural and unchanged: no renter, no address, no price,
+ * no margin, no job id to join back with. It is the VIEW that withholds those,
+ * not a choice of columns on this screen.
  */
 
 export interface SiteVisit {
@@ -73,7 +77,7 @@ export async function getSiteVisits(parkId: string): Promise<VisitBoard | null> 
   const admin = createServiceClient();
   const today = todayLakeDate();
 
-  const [{ data: rows }, { data: dials }, { count: linked }] = await Promise.all([
+  const [visitsRes, dialsRes, linkedRes] = await Promise.all([
     admin
       .from("park_site_visits")
       .select("visit_date, crew, service, status, est_minutes, lot_number")
@@ -86,7 +90,21 @@ export async function getSiteVisits(parkId: string): Promise<VisitBoard | null> 
       .eq("park_id", parkId),
   ]);
 
-  const startHour = Number(dials?.sell_start_hour ?? 7);
+  // A DROPPED READ IS NOT AN EMPTY DRIVE. Every read in this file used to be
+  // destructured straight to `data`, so a failure arrived as null and the
+  // board printed "Nothing booked yet." — on a screen whose entire job is
+  // telling him whether the truck outside is meant to be there. He would go
+  // and challenge his own crew.
+  const rows = mustRead("the visits booked in your park", visitsRes);
+  const linked = mustCount("the places in your park set up for service", linkedRes);
+
+  // The one read worth degrading for: it only picks the hour a window label
+  // starts from, and 7 is the same answer the dial itself carries. Logged,
+  // because a park quietly reading the wrong sell-start is worth knowing about.
+  if (dialsRes.error) {
+    console.error("[read failed] the platform sell-start hour:", dialsRes.error);
+  }
+  const startHour = Number(dialsRes.data?.sell_start_hour ?? 7);
 
   const all: Array<SiteVisit & { _d: string }> = (rows ?? []).map((r) => ({
     _d: r.visit_date as string,
@@ -108,6 +126,6 @@ export async function getSiteVisits(parkId: string): Promise<VisitBoard | null> 
     today: all.filter((v) => v._d === today),
     upcoming: all.filter((v) => v._d > today),
     recent: all.filter((v) => v._d < today && v._d >= cutoffISO).reverse(),
-    anyLinkedProperties: (linked ?? 0) > 0,
+    anyLinkedProperties: linked > 0,
   };
 }
