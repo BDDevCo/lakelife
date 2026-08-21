@@ -95,8 +95,8 @@ describe("the guard that keeps the words and the version in step", () => {
    * failure prints into TERMS_DIGEST below — both, in this commit.
    */
   const TERMS_DIGEST =
-    "6c536ec99fe7d02d16108038123e4c8d09f014d4c503b1ef79bf9e15f525c7f2";
-  const DIGEST_IS_FOR_VERSION = "tos-v0-beta";
+    "5c1b225decf51f83a8cadb4844c9476fec290861f6a5818ab4dad15d8f075701";
+  const DIGEST_IS_FOR_VERSION = "tos-v1-beta";
 
   it("termsVersionGuard: the words have not changed without the version", () => {
     expect(textFingerprint(termsPlainText())).toBe(TERMS_DIGEST);

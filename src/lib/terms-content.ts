@@ -73,6 +73,22 @@ export const TERMS_SECTIONS: readonly TermsSection[] = [
       " on file before they can be routed work. Verification of documents is the extent of LakeLife’s role — crews are independent businesses responsible for their own work.",
     ],
   },
+  {
+    heading: "If you run a park",
+    body: [
+      "LakeLife administers your park; it ",
+      { b: "never owns the park, the lots, or the homes on them" },
+      ", and it handles no cash. Your lease and your park rules are yours: LakeLife does not write them, takes no position on what they say, and does not host the signing of them — it stores the documents and records that they were sent. It never screens, scores or rates a resident, and it will not bill for a month that began before the day you took the park over.",
+    ],
+  },
+  {
+    heading: "If you rent a lot",
+    body: [
+      "Your agreement about the lot is ",
+      { b: "with the park, not with LakeLife" },
+      ". LakeLife shows you what your park has recorded and takes no position on your park’s terms. When you tell us you have paid, that is passed to the park — a payment is credited only once the park confirms it collected it, because LakeLife never handles the money. We never screen, score or rate you, and we only text you if you have said we may; one word stops it.",
+    ],
+  },
 ] as const;
 
 /** The words of one run, whether it is emphasised or not. */

@@ -15,10 +15,9 @@ import { VendorDocs } from "@/components/VendorDocs";
 import { getNeedsYou } from "./needs-you-data";
 import { VendorNeedsYou } from "@/components/VendorNeedsYou";
 import { todayLakeDate } from "@/lib/booking";
-import { TermsBody } from "@/components/TermsBody";
+import { TermsGate } from "@/components/TermsGate";
 import { TOS_VERSION } from "@/lib/tos";
 import { hasAccepted } from "@/lib/acceptances";
-import { acceptTos } from "@/app/portal/tos-actions";
 import { getSellableDay } from "@/lib/settings";
 import { sellableMinutes, fitsInDay, clockLabel } from "@/lib/duration";
 
@@ -89,22 +88,22 @@ export default async function VendorTodayPage() {
   // who already agreed back in front of the agreement.
   if (vendor && vendor.status === "active") {
     if (!(await hasAccepted({ userId: user.id }, "tos", TOS_VERSION))) {
+      // The same card the park owner and the resident get. This JSX was the
+      // only version that existed, and copying it into two more routes is how
+      // three doors end up recording three slightly different things.
       return (
         <>
           <TopBar />
           <VendorNav />
-          <div className="wrap" style={{ paddingTop: 24, maxWidth: 560 }}>
-            <div className="ll-card ll-card-pad">
-              <h2 style={{ fontSize: 22, margin: "0 0 12px" }}>The ground rules 🌊</h2>
-              <TermsBody />
-              <form action={acceptTos}>
-                <input type="hidden" name="next" value="/vendor" />
-                <button className="ll-btn gold" style={{ width: "100%", marginTop: 4 }}>
-                  I agree — back to my route 🌊
-                </button>
-              </form>
-            </div>
-          </div>
+          <TermsGate
+            heading="The ground rules 🌊"
+            intro={
+              "One read-through before your first job. You're an independent " +
+              "business here — the work is yours, and so is the money for it."
+            }
+            next="/vendor"
+            cta="I agree — back to my route 🌊"
+          />
         </>
       );
     }
