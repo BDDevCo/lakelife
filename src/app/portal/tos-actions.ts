@@ -1,8 +1,8 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { TOS_VERSION } from "@/lib/tos";
+import { createClient } from "@/lib/supabase/server";
+import { ensureTos } from "@/lib/tos-server";
 
 /** Explicit, versioned acceptance — stamped who/which/when, then onward.
  *  Used by the grandfathered-crew card (crews active before the rails). */
@@ -12,11 +12,11 @@ export async function acceptTos(form: FormData): Promise<void> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) redirect("/");
-  const admin = createServiceClient();
-  await admin
-    .from("users")
-    .update({ tos_version: TOS_VERSION, tos_accepted_at: new Date().toISOString() })
-    .eq("id", user.id);
+  // ONE WRITER, AND IT IS THE LEDGER. This wrote the two columns directly,
+  // which meant the grandfathered-crew card recorded an acceptance with none of
+  // the words — the exact gap 0139 exists to close. `ensureTos` carries the
+  // snapshot, so both doors record the same thing.
+  await ensureTos(user.id, true);
   const next = String(form.get("next") ?? "/portal");
   redirect(next.startsWith("/") ? next : "/portal");
 }

@@ -17,6 +17,7 @@ import { VendorNeedsYou } from "@/components/VendorNeedsYou";
 import { todayLakeDate } from "@/lib/booking";
 import { TermsBody } from "@/components/TermsBody";
 import { TOS_VERSION } from "@/lib/tos";
+import { hasAccepted } from "@/lib/acceptances";
 import { acceptTos } from "@/app/portal/tos-actions";
 import { getSellableDay } from "@/lib/settings";
 import { sellableMinutes, fitsInDay, clockLabel } from "@/lib/duration";
@@ -82,12 +83,12 @@ export default async function VendorTodayPage() {
   // Grandfathered crews (active before the at-the-moment-of-service TOS rails
   // existed) accept once here, gating the route until they do. New crews
   // accept at go-live instead — this only fires for accounts already active.
+  // Asks the LEDGER (0139), not the two columns on `users` that used to hold a
+  // single acceptance with none of its words. `hasAccepted` throws on a failed
+  // read rather than answering "no", so a dropped connection cannot put a crew
+  // who already agreed back in front of the agreement.
   if (vendor && vendor.status === "active") {
-    const meRow = mustRead(
-      "your terms acceptance",
-      await supabase.from("users").select("tos_version").eq("id", user.id).maybeSingle(),
-    );
-    if ((meRow?.tos_version as string | null) !== TOS_VERSION) {
+    if (!(await hasAccepted({ userId: user.id }, "tos", TOS_VERSION))) {
       return (
         <>
           <TopBar />
