@@ -92,11 +92,37 @@ export async function buildCandidates(
     excludeGroupId?: string | null;
   },
 ): Promise<CrewCandidate[]> {
+  // A FIXTURE CREW MUST NEVER BE ROUTED REAL WORK.
+  //
+  // Three scratch accounts own three ACTIVE vendors — GreenEdge Lawn Co.,
+  // Northshore Docks and "Iso Test Vendor 2 LLC" — and until 0140 there was no
+  // fact in the database that distinguished them from a real business. This
+  // pool selected every vendor and filtered on status, service and lake, so
+  // the routing pool for Pretty Lake contained a crew that does not exist. The
+  // first real booking could have been assigned to it, and the likeliest
+  // outcome is not a stranger in a driveway but a job that silently never
+  // happens.
+  //
+  // Excluded at the QUERY rather than in the scoring, so a fixture cannot enter
+  // the pool at all — nothing downstream has to remember it might be there.
+  //
+  // DERIVED FROM THE OWNER, not stored again on the crew. `users.is_fixture`
+  // already exists (0126) and is the one fact: an account either stands for a
+  // person or it does not. A `vendors.is_fixture` column beside it would be the
+  // same truth written twice, free to disagree the moment somebody flags the
+  // account and forgets the crew — this codebase has dug that class of bug out
+  // repeatedly. So the fence joins.
+  //
+  // THE FK IS NAMED EXPLICITLY because `vendors` has TWO paths to `users`:
+  // `user_id` (whose crew this is) and `invited_by` (who asked them along).
+  // PostgREST refuses the ambiguous embed rather than guessing, which is lucky
+  // — filtering on the inviter would look like it worked and fence the wrong
+  // crews.
   const comps: VisitComponent[] = opts.components?.length
     ? opts.components
     : [{ serviceId: opts.serviceId, serviceName: opts.serviceName, pricingModel: opts.pricingModel }];
   const [vendorsRes, ratesRes, dayJobsRes, blocksRes, scores, staysRes, unitsRes] = await Promise.all([
-    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, storage_capacity_feet, storage_types, garagekeepers_expiry"),
+    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, storage_capacity_feet, storage_types, garagekeepers_expiry, users!vendors_user_id_fkey!inner(is_fixture)").eq("users.is_fixture", false),
     admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing").in("service_id", comps.map((c) => c.serviceId)),
     admin.from("jobs").select("vendor_id, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))").eq("date", opts.dateISO).in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null),
     admin.from("vendor_availability").select("vendor_id").eq("date", opts.dateISO).eq("status", "blocked"),
@@ -259,7 +285,7 @@ export async function getServiceAvailability(
   const today = todayLakeDate();
 
   const [vendorsRes, blocksRes, dayJobsRes, unitsRes] = await Promise.all([
-    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity"),
+    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, users!vendors_user_id_fkey!inner(is_fixture)").eq("users.is_fixture", false),
     admin.from("vendor_availability").select("vendor_id, date").eq("status", "blocked").gte("date", from).lte("date", to),
     admin.from("jobs").select("vendor_id, date").in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null).gte("date", from).lte("date", to),
     admin.from("crew_units").select("vendor_id, capacity").eq("active", true),
