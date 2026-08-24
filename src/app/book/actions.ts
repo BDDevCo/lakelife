@@ -313,12 +313,15 @@ export async function createBookingBatch(
   // somebody who has, then record a second acceptance when they tapped again).
   // Same seam as getFullProfile below: this is a "use server" action, so an
   // uncaught rejection reaches the booking screen as a blank failure.
-  let tos: "ok" | "needs";
+  let tos: "ok" | "needs" | "failed";
   try {
     tos = await ensureTos(user.id, tosAccepted);
   } catch (e) {
     if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your terms acceptance", e) };
     throw e;
+  }
+  if (tos === "failed") {
+    return { ok: false, error: "We couldn't record your agreement just now — nothing has been booked. Try once more." };
   }
   if (tos === "needs") {
     return { ok: false, needsTos: true };

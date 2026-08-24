@@ -99,7 +99,13 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
   // publish a number it could not read.
   const [servicesRes, crewsRes, completedRes, thumbsRes, hoaRes] = await Promise.all([
     admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work").eq("active", true).eq("kind", "standalone").order("name"),
-    admin.from("vendors").select("id, coi_expiry, service_lakes").eq("status", "active").contains("service_lakes", [lake.id]),
+    // FIXTURE CREWS ARE NOT A CREW BENCH. This is a public, SEO-indexed page
+    // that prints "N insured local crews serving <lake>". Two of the three
+    // vendors are the owner's own scratch accounts, so every lake advertised
+    // two crews to the world while the routing pool for those lakes is
+    // deliberately empty — a number no booking could cash. Derived from the
+    // owner (0126), same as the router: see dispatch.ts.
+    admin.from("vendors").select("id, coi_expiry, service_lakes, users!vendors_user_id_fkey!inner(is_fixture)").eq("status", "active").eq("users.is_fixture", false).contains("service_lakes", [lake.id]),
     admin.from("jobs").select("id, properties!inner(lake_id)", { count: "exact", head: true }).eq("properties.lake_id", lake.id).in("status", ["complete", "paid"]),
     admin.from("job_confirmations").select("verdict, properties!inner(lake_id)").eq("properties.lake_id", lake.id).eq("verdict", "good"),
     lake.hoa_user_id

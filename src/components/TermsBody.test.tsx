@@ -8,6 +8,7 @@ import {
 } from "@/lib/terms-content";
 import { textFingerprint } from "@/lib/acceptances";
 import { TOS_VERSION } from "@/lib/tos";
+import { TERMS_DIGESTS } from "@/lib/terms-versions";
 
 /**
  * THE WORDS ON SCREEN ARE THE WORDS IN THE RECORD.
@@ -79,43 +80,66 @@ describe("TermsBody renders every word the ledger will store", () => {
 
 describe("the guard that keeps the words and the version in step", () => {
   /**
-   * THE GUARD `terms-content.ts` PROMISES, WHICH DID NOT EXIST.
+   * THE GUARD `terms-content.ts` PROMISES — now with the hole closed.
    *
-   * That file told the next editor — in the one place every word of the
-   * agreement lives, and directly beneath the instruction to replace the body
-   * with the attorney's full text — that a test named `termsVersionGuard`
-   * would catch a word change unaccompanied by a TOS_VERSION bump. Nothing of
-   * the kind existed. The gate is `latest.version === TOS_VERSION`, so a
-   * changed sentence shipped without a bump would leave every existing
-   * acceptance in force against words nobody had seen, and would file new
-   * acceptances of DIFFERENT text under the SAME version string.
+   * v1 of this guard pinned two independent constants IN THIS FILE: a digest
+   * and a version. Change a word and only the digest assertion failed, and its
+   * own message told the editor to paste the new digest in. Doing exactly that
+   * turned CI green with NEW WORDS UNDER THE OLD VERSION STRING — the precise
+   * failure it was written to prevent. Nothing compared the new digest to what
+   * that version had hashed to before, because nothing remembered.
    *
-   * Here it is. If you are reading this because CI failed: you changed the
-   * terms. Bump TOS_VERSION in `src/lib/tos.ts` and paste the digest the
-   * failure prints into TERMS_DIGEST below — both, in this commit.
+   * `src/lib/terms-versions.ts` remembers, is committed, and is append-only.
+   *
+   * If you are reading this because CI failed: you changed the terms. Add a NEW
+   * entry to TERMS_DIGESTS with a NEW version string and point TOS_VERSION at
+   * it. Do not edit an existing entry — that is rewriting what somebody already
+   * agreed to, and the second test below is watching for it.
    */
-  const TERMS_DIGEST =
-    "6ba022c24bb106f0a23132468013b5faea7f2beb88659b1fc1e1a32aaf2b7011";
-  const DIGEST_IS_FOR_VERSION = "tos-v2-beta";
 
-  it("termsVersionGuard: the words have not changed without the version", () => {
-    expect(textFingerprint(termsPlainText())).toBe(TERMS_DIGEST);
+  it("termsVersionGuard: the current version's entry matches the current words", () => {
+    expect(TERMS_DIGESTS[TOS_VERSION]).toBe(textFingerprint(termsPlainText()));
   });
 
-  it("and the pinned digest belongs to the version now shipping", () => {
-    expect(TOS_VERSION).toBe(DIGEST_IS_FOR_VERSION);
+  it("and these words have never shipped under a DIFFERENT version", () => {
+    // The rule with teeth. Editing an old entry to silence the test above
+    // rewrites history; this catches the old digest reappearing, and the diff
+    // shows a reviewer exactly what was changed.
+    const digest = textFingerprint(termsPlainText());
+    const under = Object.entries(TERMS_DIGESTS)
+      .filter(([, d]) => d === digest)
+      .map(([v]) => v);
+    expect(under).toEqual([TOS_VERSION]);
+  });
+
+  it("every recorded version is a real sha256, and none repeats", () => {
+    const digests = Object.values(TERMS_DIGESTS);
+    for (const d of digests) expect(d).toMatch(/^[0-9a-f]{64}$/);
+    // Two versions with the same digest would mean a bump that changed nothing,
+    // which re-prompts everybody for no reason.
+    expect(new Set(digests).size).toBe(digests.length);
+  });
+
+  it("the version currently shipping is recorded at all", () => {
+    expect(Object.keys(TERMS_DIGESTS)).toContain(TOS_VERSION);
   });
 
   it("the digest really is of the terms, not of an empty string", () => {
     // Guards the guard: a termsPlainText() that returned "" would otherwise
-    // just need its constant updated once and would then never fail again.
+    // just need its entry updated once and would then never fail again.
     expect(termsPlainText().length).toBeGreaterThan(500);
-    expect(textFingerprint("")).not.toBe(TERMS_DIGEST);
+    expect(textFingerprint("")).not.toBe(TERMS_DIGESTS[TOS_VERSION]);
   });
 
   it("would notice a single changed word", () => {
     const tampered = termsPlainText().replace("third-party", "third party");
     expect(tampered).not.toBe(termsPlainText());
-    expect(textFingerprint(tampered)).not.toBe(TERMS_DIGEST);
+    expect(textFingerprint(tampered)).not.toBe(TERMS_DIGESTS[TOS_VERSION]);
+  });
+
+  it("tos-v0-beta is absent, because its words were never captured", () => {
+    // Inventing a digest for it would assert we know something we do not —
+    // the same reason the four migrated ledger rows carry a NULL sha.
+    expect(Object.keys(TERMS_DIGESTS)).not.toContain("tos-v0-beta");
   });
 });

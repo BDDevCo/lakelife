@@ -217,7 +217,22 @@ describe("the ToS gate now runs on the ledger", () => {
   it("does not treat an unrecorded acceptance as a recorded one", () => {
     // The caller's next move is the thing the acceptance gates. If the write
     // failed, saying "ok" lets a booking through on an agreement nobody has.
-    expect(tos).toMatch(/if \(!res\.ok\) return "needs"/);
+    expect(tos).toMatch(/if \(!res\.ok\) return "failed"/);
+  });
+
+  it("and a failed write is DISTINGUISHABLE from never having agreed", () => {
+    // Both used to return "needs", which makes the booking screen reopen the
+    // agree modal — right the first time, a trap the second: tap "I agree",
+    // the insert fails again, the same modal returns, nothing ever says why.
+    expect(tos).toContain('"ok" | "needs" | "failed"');
+    // and every door that gates on it reports the difference
+    for (const rel of [
+      "../app/book/actions.ts",
+      "../app/book/storage/actions.ts",
+      "../app/vendor/onboarding-actions.ts",
+    ]) {
+      expect(code(rel)).toMatch(/tos === "failed"/);
+    }
   });
 
   it("both acceptance doors go through one writer", () => {

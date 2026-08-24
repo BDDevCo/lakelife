@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { applyStanding, type AgreementLine } from "@/app/agreements/data";
+import type { AcceptanceKind } from "@/lib/acceptances";
 
 /**
  * THE RECORD KEPT FOR A DISPUTE, SHOWN TO THE PERSON IT IS ABOUT.
@@ -143,40 +145,106 @@ describe("every row states where it stands", () => {
   const data = code("../app/agreements/data.ts");
   const view = code("../components/MyAgreements.tsx");
 
-  it("computes standing over the whole history, not one row at a time", () => {
-    // "Replaced" is a claim about a row further up the list, so it cannot be
-    // decided inside the map. This was the bug the screen showed with real
-    // data: two cards both titled "Terms of service", a badge on one, and no
-    // way for a reader to tell whether the other was superseded or broken.
-    expect(data).toContain("seenAccepted");
-    expect(data).toMatch(/for \(const line of lines\)/);
+  /**
+   * RUN THE RULE, do not scan for it.
+   *
+   * Every assertion here used to be a string search of data.ts — does it
+   * contain "seenAccepted", does it contain a for-loop. Nothing evaluated the
+   * logic, so inverting the version comparison, swapping the in_force and
+   * replaced labels, or deleting a `continue` all left the suite green. That
+   * is how the missing-badge defect shipped in the first place.
+   */
+  const row = (
+    kind: AcceptanceKind,
+    version: string | null,
+    act: "accepted" | "withdrawn",
+    occurredAt: string,
+  ): AgreementLine => ({
+    id: `${kind}-${version}-${act}-${occurredAt}`,
+    kind, label: kind, version, occurredAt, act,
+    text: "words", wordsWereKept: true, standing: "out_of_date",
   });
 
-  it("has a word for all four states", () => {
-    for (const st of ["in_force", "replaced", "out_of_date", "withdrawn"]) {
-      expect(data).toContain(st);
-      expect(view).toContain(st);
-    }
+  /** Newest first, exactly as acceptancesFor returns them. */
+  const standings = (rows: AgreementLine[], v = "tos-v3") =>
+    applyStanding(rows, v).map((r) => r.standing);
+
+  it("a single current acceptance is in force", () => {
+    expect(standings([row("tos", "tos-v3", "accepted", "2026-08-03")]))
+      .toEqual(["in_force"]);
+  });
+
+  it("an older version with no newer acceptance is OUT OF DATE, not replaced", () => {
+    // The state that predicts something: they will meet the agree screen.
+    expect(standings([row("tos", "tos-v1", "accepted", "2026-08-01")]))
+      .toEqual(["out_of_date"]);
+  });
+
+  it("accepting again REPLACES the older row", () => {
+    expect(standings([
+      row("tos", "tos-v3", "accepted", "2026-08-03"),
+      row("tos", "tos-v1", "accepted", "2026-08-01"),
+    ])).toEqual(["in_force", "replaced"]);
+  });
+
+  it("a withdrawal is withdrawn, and does not claim the live slot", () => {
+    expect(standings([
+      row("tos", "tos-v3", "withdrawn", "2026-08-04"),
+      row("tos", "tos-v3", "accepted", "2026-08-03"),
+    ])).toEqual(["withdrawn", "in_force"]);
+  });
+
+  it("the full round trip: accept, accept, withdraw, accept", () => {
+    expect(standings([
+      row("tos", "tos-v3", "accepted", "2026-08-05"),
+      row("tos", "tos-v3", "withdrawn", "2026-08-04"),
+      row("tos", "tos-v3", "accepted", "2026-08-03"),
+      row("tos", "tos-v1", "accepted", "2026-08-01"),
+    ])).toEqual(["in_force", "withdrawn", "replaced", "replaced"]);
+  });
+
+  it("kinds are independent — a park rulebook does not replace the terms", () => {
+    expect(standings([
+      row("park_rules", "2026-spring", "accepted", "2026-08-05"),
+      row("tos", "tos-v3", "accepted", "2026-08-03"),
+    ])).toEqual(["in_force", "in_force"]);
+  });
+
+  it("a document whose version we do NOT control is never out of date", () => {
+    // A park's rulebook carries no version scheme of ours. Comparing it to
+    // TOS_VERSION would mark every acceptance of one out of date forever.
+    expect(standings([row("park_rules", "whatever-the-park-called-it", "accepted", "2026-08-05")]))
+      .toEqual(["in_force"]);
+    expect(standings([row("park_rules", null, "accepted", "2026-08-05")]))
+      .toEqual(["in_force"]);
+  });
+
+  it("catches an inverted version comparison", () => {
+    // The exact mutation the old scanner could not see: if the comparison were
+    // flipped, a current acceptance would read out_of_date.
+    const current = standings([row("tos", "tos-v3", "accepted", "2026-08-03")]);
+    const stale = standings([row("tos", "tos-v1", "accepted", "2026-08-03")]);
+    expect(current).not.toEqual(stale);
   });
 
   it("renders a badge on every row rather than only the live one", () => {
-    // No conditional around the pill — that was the defect.
     expect(view).toContain("{standing.label}");
     expect(view).not.toMatch(/\{line\.isCurrent &&/);
   });
 
-  it("only compares versions for documents whose version WE control", () => {
-    // A park's rulebook carries no version scheme of ours, so the newest
-    // acceptance of it is simply the one in force — comparing it to
-    // TOS_VERSION would mark every one of them out of date forever.
-    expect(data).toMatch(/line\.kind === "tos" \? TOS_VERSION : line\.version/);
+  it("has a word for all four states", () => {
+    for (const st of ["in_force", "replaced", "out_of_date", "withdrawn"]) {
+      expect(view).toContain(st);
+    }
   });
 
   it("tells an out-of-date reader what is about to happen to them", () => {
-    // The one standing that predicts something: they will meet the agree
-    // screen next time, and this is where that stops being a surprise.
     expect(src("../components/MyAgreements.tsx")).toMatch(
       /ask you to read the new ones next time/,
     );
+  });
+
+  it("the loader uses the same pure rule this file just exercised", () => {
+    expect(data).toContain("applyStanding(lines)");
   });
 });

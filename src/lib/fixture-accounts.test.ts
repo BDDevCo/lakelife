@@ -139,3 +139,57 @@ describe("no schema change was needed", () => {
     expect(dispatch).toContain("users.is_fixture");
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("the fence reaches every answer that routes work or is published", () => {
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  /**
+   * THE FENCE WAS ONE FILE WIDE. dispatch.ts was fenced and five other answers
+   * were not, which is worse than no fence in one respect: the ops board's own
+   * comment promises its labels never disagree with the engine, and the moment
+   * dispatch started excluding fixtures it began explaining unfilled jobs with
+   * "the margin floor" instead of "no real crew exists".
+   *
+   * These are the queries whose ANSWER decides routing, a public claim, or a
+   * recruiting alarm. Deliberately NOT every vendor query: a crew reading its
+   * own row, and ops LOOKING at the roster, must still see fixtures.
+   */
+  const MUST_BE_FENCED: Array<[string, string]> = [
+    ["the public lake page's crew count", "../app/lakes/[slug]/page.tsx"],
+    ["the public lake index's crew count", "../app/lakes/page.tsx"],
+    ["the ops assign dropdown", "../app/ops/data.ts"],
+    ["the ops needs-attention board", "../app/ops/dispatch-data.ts"],
+    ["the nightly broadcast and recruiting alarm", "../lib/automation.ts"],
+  ];
+
+  for (const [what, rel] of MUST_BE_FENCED) {
+    it(`${what} excludes fixture crews`, () => {
+      expect(read(rel)).toContain('.eq("users.is_fixture", false)');
+    });
+  }
+
+  it("ops cannot assign a fixture crew even by posting the id directly", () => {
+    // The dropdown is not a guard: vendorId arrives from a browser, and this
+    // action is the only thing between it and a real job row.
+    const act = read("../app/ops/actions.ts");
+    expect(act).toContain("users!vendors_user_id_fkey(is_fixture)");
+    // Not a left-join fallback — a missing owner row is not proof the crew is
+    // real, so anything other than an explicit false must refuse.
+    expect(act).toMatch(/is_fixture !== false/);
+  });
+
+  it("the public counts say nothing a booking could not cash", () => {
+    // Both pages print "N insured crews". With the router's pool empty, an
+    // unfenced count advertised two crews to the world that no booking could
+    // ever reach — on an SEO-indexed page.
+    for (const rel of ["../app/lakes/[slug]/page.tsx", "../app/lakes/page.tsx"]) {
+      const s = read(rel);
+      expect(s).toContain("users!vendors_user_id_fkey!inner(is_fixture)");
+    }
+  });
+});

@@ -39,4 +39,4 @@
  * STILL FOR COUNSEL. These describe what the software does. They are not a
  * substitute for the full agreement, which is still being drafted.
  */
-export const TOS_VERSION = "tos-v2-beta";
+export const TOS_VERSION = "tos-v3-beta";

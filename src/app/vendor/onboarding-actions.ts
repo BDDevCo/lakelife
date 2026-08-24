@@ -419,12 +419,15 @@ export async function finishOnboarding(tosAccepted?: boolean): Promise<Onboardin
   // asks the acceptance ledger and throws ReadFailed rather than answering
   // "hasn't agreed" on a dropped read.
   if (vendor.user_id) {
-    let tos: "ok" | "needs";
+    let tos: "ok" | "needs" | "failed";
     try {
       tos = await ensureTos(vendor.user_id, tosAccepted);
     } catch (e) {
       if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your terms acceptance", e) };
       throw e;
+    }
+    if (tos === "failed") {
+      return { ok: false, error: "We couldn't record your agreement just now — you're not live yet. Try once more." };
     }
     if (tos === "needs") return { ok: false, needsTos: true };
   }

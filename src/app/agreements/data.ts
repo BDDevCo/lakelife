@@ -74,6 +74,49 @@ const LABELS: Record<AcceptanceKind, string> = {
   amenity_rules: "Rules for something you booked",
 };
 
+/**
+ * WHERE EACH ROW STANDS — pure, so the rule can be proved on a history.
+ *
+ * This was a loop inside `myAgreements()`, which needs a database, so the only
+ * test it could have was a source scan: does the file contain the string
+ * "seenAccepted", does it contain a for-loop. Nothing ran it. Inverting the
+ * version comparison, swapping the two labels, or deleting a `continue` all
+ * left that green — and a wrong badge on this screen is the screen lying about
+ * what is on file, which is the one thing it exists not to do.
+ *
+ * The codebase already settled this shape next door: `latestAct` and
+ * `acceptedFromLatest` were pulled out of `hasAccepted` for exactly this
+ * reason — "a rule that only exists inside an I/O function is a rule nobody
+ * can test".
+ *
+ * MUTATES IN PLACE and takes the whole list, because "replaced" is a claim
+ * about a row FURTHER UP: it cannot be decided while mapping one row. `lines`
+ * arrives newest-first, so the first accepted row of a kind is the live one.
+ */
+export function applyStanding(
+  lines: AgreementLine[],
+  tosVersion: string = TOS_VERSION,
+): AgreementLine[] {
+  const seenAccepted = new Set<string>();
+  for (const line of lines) {
+    if (line.act === "withdrawn") {
+      line.standing = "withdrawn";
+      continue;
+    }
+    if (seenAccepted.has(line.kind)) {
+      line.standing = "replaced";
+      continue;
+    }
+    seenAccepted.add(line.kind);
+    // Only OUR documents carry a version we control and can compare against.
+    // A park's rulebook has no version scheme of ours, so the newest
+    // acceptance of it is simply the one in force.
+    const current = line.kind === "tos" ? tosVersion : line.version;
+    line.standing = line.version === current ? "in_force" : "out_of_date";
+  }
+  return lines;
+}
+
 export async function myAgreements(): Promise<MyAgreements | null> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -97,27 +140,7 @@ export async function myAgreements(): Promise<MyAgreements | null> {
                                // history for each kind is in hand
   }));
 
-  // STANDING NEEDS THE WHOLE LIST, not one row. "Replaced" is a statement about
-  // a row that exists further up, so it cannot be decided while mapping.
-  // `rows` arrives newest-first (acceptancesFor orders it), so the first
-  // accepted row of a kind is the one that counts.
-  const seenAccepted = new Set<string>();
-  for (const line of lines) {
-    if (line.act === "withdrawn") {
-      line.standing = "withdrawn";
-      continue;
-    }
-    if (seenAccepted.has(line.kind)) {
-      line.standing = "replaced";
-      continue;
-    }
-    seenAccepted.add(line.kind);
-    // Only OUR documents carry a version we control and can compare against.
-    // A park's rulebook has no version scheme of ours, so the newest
-    // acceptance of it is simply the one in force.
-    const current = line.kind === "tos" ? TOS_VERSION : line.version;
-    line.standing = line.version === current ? "in_force" : "out_of_date";
-  }
+  applyStanding(lines);
 
   // ---- the text consent, which has lived unread since it was built ---------
   //

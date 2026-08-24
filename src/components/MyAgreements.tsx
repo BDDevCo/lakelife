@@ -125,10 +125,21 @@ export function MyAgreements({ view }: { view: View }) {
   return (
     <div className="wrap" style={{ paddingTop: 20, paddingBottom: 56, maxWidth: 720 }}>
       <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>What you&apos;ve agreed to</h1>
+      {/* TWO CLAIMS REMOVED, BOTH FALSE ON THIS VERY PAGE.
+          (1) "with the exact words as they were on the day" — true of rows
+          recorded since the ledger, and NOT of the four migrated ones, which
+          say so themselves in their own card. Three accounts have ONLY such a
+          row, so the header contradicted every card beneath it.
+          (2) "the original is never deleted" — nothing in the app can withdraw
+          a ledger agreement (withdrawAcceptance has no caller), and the one
+          thing on this page a person CAN withdraw is the text consent, which
+          stopTexts() genuinely does delete, card and all. The footnote on that
+          card admits it six lines lower. A blanket promise a reader can
+          disprove in one tap is worse than no promise. */}
       <p className="mut" style={{ fontSize: 14, marginTop: 0, lineHeight: 1.6 }}>
-        Everything you&apos;ve accepted here, with the exact words as they were
-        on the day. An agreement you withdraw stays on this page — the
-        withdrawal is added beside it and the original is never deleted.
+        Everything you&apos;ve accepted here, and — wherever we kept them — the
+        exact words as they were on the day. Nothing in this list is ever
+        edited: each card says where it stands and what we hold for it.
       </p>
 
       {view.empty && (

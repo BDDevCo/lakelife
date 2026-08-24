@@ -86,7 +86,7 @@ export const TERMS_SECTIONS: readonly TermsSection[] = [
     body: [
       "Your agreement about the lot is ",
       { b: "with the park, not with LakeLife" },
-      ". LakeLife shows you what your park has recorded and takes no position on your park’s terms. When you tell us you have paid, that is passed to the park — a payment is credited only once the park confirms it collected it, because LakeLife never handles the money. We never screen, score or rate you, and we only text you if you have said we may; one word stops it.",
+      ". LakeLife shows you what your park has recorded and takes no position on your park’s terms. Tell us you paid by cash or cheque and that is passed to your park — it is credited once the park confirms it collected it, because LakeLife never handles cash. If your park takes card payments here, that one is charged and credited straight away, and any card fee is shown to you before you pay. We never screen, score or rate you, and we only text you if you have said we may; one word stops it.",
     ],
   },
 ] as const;

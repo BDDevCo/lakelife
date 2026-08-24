@@ -54,8 +54,22 @@ describe("the terms now describe the two roles being asked", () => {
   it("tells a renter who their agreement is actually with", () => {
     const text = termsPlainText();
     expect(text).toContain("with the park, not with LakeLife");
-    // The two-sided payment record: nothing the resident says credits the bill.
-    expect(text).toMatch(/credited only once the park confirms it collected it/);
+    // BOTH PAYMENT PATHS, because there are two and the terms described one.
+    //
+    // v2 said "a payment is credited only once the park confirms it collected
+    // it, because LakeLife never handles the money" — a universal claim, true
+    // of `sayIPaid` (the cash/cheque claim) and FALSE of `payRent`, which puts
+    // a saved card through LakeLifePayments, adds the park's card fee, and
+    // credits the bill immediately with no park involvement. Those words were
+    // hashed into the ledger as the evidence of what a resident agreed to.
+    expect(text).toMatch(/cash or cheque[\s\S]*credited once the park confirms it collected it/);
+    expect(text).toMatch(/never handles cash/);
+    expect(text).toMatch(/card payments here[\s\S]*charged and credited straight away/);
+    // and the fee really is shown first — PayRentButton renders it above the
+    // button whenever cardFeePct > 0.
+    expect(text).toMatch(/card fee is shown to you before you pay/);
+    // The old universal claim must not come back.
+    expect(text).not.toMatch(/LakeLife never handles the money/);
     expect(text).toMatch(/only text you if you have said we may/);
   });
 
@@ -218,9 +232,29 @@ describe("one card, three doors", () => {
     expect(btn).toMatch(/if \(!res\.ok\)/);
     expect(btn).toContain("setError(");
     expect(btn).toMatch(/role="alert"/);
-    // and it only navigates when the write actually succeeded
-    const onOk = btn.slice(btn.indexOf("if (!res.ok)"));
-    expect(onOk).toContain("router.push(");
+  });
+
+  it("does NOT navigate on a failed write", () => {
+    // THE ASSERTION THIS REPLACES PROVED NOTHING. It sliced from
+    // `if (!res.ok)` to the END OF THE FILE and asserted that slice contained
+    // `router.push(` — which the SUCCESS branch satisfies. Adding
+    // `router.push(next)` inside the failure branch, the exact regression the
+    // title named, left it green.
+    //
+    // The failure branch is what has to be read, on its own: from the check to
+    // the point it bails out.
+    const btn = code("../components/AcceptTermsButton.tsx");
+    const start = btn.indexOf("if (!res.ok)");
+    expect(start).toBeGreaterThan(-1);
+    const failBranch = btn.slice(start, btn.indexOf("router.push("));
+    expect(failBranch).toContain("return;");
+    expect(failBranch).not.toContain("router.push(");
+  });
+
+  it("and DOES navigate once it succeeded", () => {
+    const btn = code("../components/AcceptTermsButton.tsx");
+    const afterBail = btn.slice(btn.indexOf("return;", btn.indexOf("if (!res.ok)")));
+    expect(afterBail).toContain("router.push(");
   });
 
   it("the action returns a sentence rather than redirecting", () => {

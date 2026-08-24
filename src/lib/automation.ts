@@ -1230,7 +1230,13 @@ export async function revalidateAssignments(
     const today = todayLakeDate();
     const [openJobsRes, crewsRes] = await Promise.all([
       admin.from("jobs").select("id, services(name)").in("id", unfilledIds),
-      admin.from("vendors").select("id, user_id, service_types, coi_expiry").eq("status", "active").not("user_id", "is", null),
+      // FENCED. This pool decides two things and a fixture corrupts both: who
+      // gets "a job is up for grabs", and — when NOBODY can claim a service —
+      // whether ops is told "no crew on the platform can take X", which is the
+      // recruiting signal. A scratch crew that matches the service swallows
+      // that alarm: the job stays unfilled and nobody is told the bench is
+      // empty. Derived from the owner (0126), same as dispatch.ts.
+      admin.from("vendors").select("id, user_id, service_types, coi_expiry, users!vendors_user_id_fkey!inner(is_fixture)").eq("status", "active").eq("users.is_fixture", false).not("user_id", "is", null),
     ]);
     // Either read failing empties `notifiable`, and the dead-end branch at the
     // bottom then texts ops "no crew on the platform can claim open jobs" — a

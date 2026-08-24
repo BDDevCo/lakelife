@@ -1,3 +1,4 @@
+import { termsGateForRouteHandler } from "@/lib/terms-gate-route";
 import { getMyPark } from "@/app/park/data";
 import { getStatement } from "@/app/park/receipts-actions";
 import { receiptsCsv, receiptsFilename } from "@/app/park/receipts-helpers";
@@ -13,9 +14,23 @@ export const dynamic = "force-dynamic";
  * comes from the signed-in user via `getMyPark`, NOT from a query parameter, so
  * a forwarded URL cannot fetch somebody else's park.
  */
+/**
+ * A LAYOUT DOES NOT WRAP A ROUTE HANDLER.
+ *
+ * The terms gate lives in src/app/park/layout.tsx, and every page under it is covered. This
+ * is not a page — Next.js layouts wrap pages, there is no middleware, and the
+ * codebase already records the sibling fact that a route handler has no error
+ * boundary either. So while the whole park area was showing the agree card,
+ * this URL kept returning the document, and it is a plain GET link the app
+ * itself puts in the address bar: it is in history and in bookmarks.
+ *
+ * Identity was never the hole — getMyPark scopes to the caller's own park and 404s a stranger. What walked past was the AGREEMENT.
+ */
 export async function GET(request: Request) {
   const park = await getMyPark();
   if (!park) return new Response("Not found", { status: 404 });
+  const gate = await termsGateForRouteHandler("/park");
+  if (gate) return gate;
 
   const { searchParams } = new URL(request.url);
   const from = searchParams.get("from") ?? "";

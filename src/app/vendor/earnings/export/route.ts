@@ -1,3 +1,4 @@
+import { termsGateForRouteHandler } from "@/lib/terms-gate-route";
 import { todayLakeDate } from "@/lib/booking";
 import { getMyEarningsFor } from "../../earnings-data";
 import { periodRanges, csvRow, statusLabel, earningsRowLabel } from "../../earnings-helpers";
@@ -13,6 +14,18 @@ export const dynamic = "force-dynamic";
  * CLAUDE.md rule 1: only the crew's own take-home is emitted. No customer price
  * or margin is read or written.
  */
+/**
+ * A LAYOUT DOES NOT WRAP A ROUTE HANDLER.
+ *
+ * The terms gate lives in src/app/vendor/layout.tsx, and every page under it is covered. This
+ * is not a page — Next.js layouts wrap pages, there is no middleware, and the
+ * codebase already records the sibling fact that a route handler has no error
+ * boundary either. So while the whole crew area was showing the agree card,
+ * this URL kept returning the document, and it is a plain GET link the app
+ * itself puts in the address bar: it is in history and in bookmarks.
+ *
+ * Identity was never the hole — getMyEarningsFor scopes to the caller's own vendor_id and 401s a stranger. What walked past was the AGREEMENT.
+ */
 export async function GET(req: Request) {
   const { from, to } = resolveRange(req);
   const statement = await getMyEarningsFor(from, to);
@@ -22,6 +35,8 @@ export async function GET(req: Request) {
       headers: { "content-type": "text/plain; charset=utf-8" },
     });
   }
+  const gate = await termsGateForRouteHandler("/vendor");
+  if (gate) return gate;
 
   // A CREW COLUMN, because this file is what the company's bookkeeper opens
   // to split a lump payout. LakeLife pushes to ONE bank account, so without a

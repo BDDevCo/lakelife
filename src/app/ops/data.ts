@@ -300,8 +300,15 @@ export async function getActiveVendors(): Promise<ActiveVendor[]> {
     "the active crews",
     await admin
       .from("vendors")
-      .select("id, company, coi_expiry, service_types, daily_capacity")
+      // FENCED, because this list is not a report — it is the ASSIGN dropdown
+      // on /ops and /ops/jobs/[id], and picking a name from it creates a real
+      // job row. Auto-dispatch excludes fixture crews (dispatch.ts), and this
+      // is the manual fallback ops reaches for precisely when auto-dispatch
+      // finds nobody — so leaving it open put the scratch crews in front of
+      // ops at the exact moment the fence mattered most.
+      .select("id, company, coi_expiry, service_types, daily_capacity, users!vendors_user_id_fkey!inner(is_fixture)")
       .eq("status", "active")
+      .eq("users.is_fixture", false)
       .order("company", { ascending: true }),
   );
   return (data ?? []).map((v) => ({

@@ -119,7 +119,10 @@ export async function assignAndSchedule(
   // Validate the vendor: must be active with a valid COI (spec: no COI, no jobs).
   const vendorRes = await admin
     .from("vendors")
-    .select("id, company, status, coi_expiry, user_id")
+    // `is_fixture` comes along because the DROPDOWN is not a guard — the
+    // vendorId arrives from a browser and this action is the only thing
+    // between it and a real job row.
+    .select("id, company, status, coi_expiry, user_id, users!vendors_user_id_fkey(is_fixture)")
     .eq("id", input.vendorId)
     .maybeSingle();
   // "That vendor isn't active" and "That vendor's insurance is expired" are both
@@ -128,6 +131,13 @@ export async function assignAndSchedule(
   if (vendorRes.error) return { ok: false, error: readFailedMessage("that crew", vendorRes.error) };
   const vendor = vendorRes.data;
   if (!vendor || vendor.status !== "active") return { ok: false, error: "That vendor isn't active." };
+  // A SCRATCH CREW CANNOT BE SENT REAL WORK. Not a left-join fallback: a
+  // missing owner row is not proof the crew is real, so anything other than an
+  // explicit `false` refuses.
+  const owner = vendor.users as unknown as { is_fixture?: boolean } | null;
+  if (owner?.is_fixture !== false) {
+    return { ok: false, error: "That crew is a test account — it can't be assigned real work." };
+  }
   if (vendor.coi_expiry == null || String(vendor.coi_expiry) < todayLakeDate()) {
     return { ok: false, error: "That vendor's insurance (COI) is missing or expired — can't route them." };
   }

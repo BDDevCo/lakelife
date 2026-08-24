@@ -94,8 +94,14 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
     "the active crews",
     await admin
       .from("vendors")
-      .select("service_types, service_lakes, coi_expiry, status")
-      .eq("status", "active"),
+      // FENCED so this board cannot disagree with the engine. Its own comment
+      // says the labels are matched to what dispatch ACTUALLY checks; the
+      // moment dispatch started excluding fixture crews and this did not, the
+      // board began explaining an unfilled job with "the margin floor" while
+      // the real answer was that no real crew exists for it.
+      .select("service_types, service_lakes, coi_expiry, status, users!vendors_user_id_fkey!inner(is_fixture)")
+      .eq("status", "active")
+      .eq("users.is_fixture", false),
   );
   const insured = (vendors ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today);
 

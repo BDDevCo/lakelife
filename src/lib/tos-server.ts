@@ -31,7 +31,23 @@ import { hasAccepted, recordAcceptance } from "@/lib/acceptances";
  * acceptance when they tapped again. `hasAccepted` throws instead, and the
  * request fails honestly rather than quietly collecting a duplicate agreement.
  */
-export async function ensureTos(userId: string, accepted?: boolean): Promise<"ok" | "needs"> {
+/**
+ * THREE ANSWERS, NOT TWO.
+ *
+ * This returned "needs" for both "hasn't agreed yet" and "the write failed",
+ * and the difference matters to everybody who calls it. "Needs" makes the
+ * booking screen open the agree modal — correct the first time, and a trap the
+ * second: the person taps "I agree", the insert fails again, the same modal
+ * reopens, and nothing ever says why. They cannot tell a broken button from a
+ * document they have somehow not accepted.
+ *
+ * `failed` is separate so a caller can say so. The gate button already did the
+ * right thing by reading `acceptTos`'s result; the booking and go-live doors
+ * had only this return value to go on.
+ */
+export type TosOutcome = "ok" | "needs" | "failed";
+
+export async function ensureTos(userId: string, accepted?: boolean): Promise<TosOutcome> {
   if (await hasAccepted({ userId }, "tos", TOS_VERSION)) return "ok";
   if (!accepted) return "needs";
 
@@ -42,9 +58,9 @@ export async function ensureTos(userId: string, accepted?: boolean): Promise<"ok
     text: termsPlainText(),
   });
   // The caller's next move is to perform the thing the acceptance gates —
-  // booking, going live — so an unrecorded agreement must not read as a
-  // recorded one. Sending them back to the modal is the honest failure.
-  if (!res.ok) return "needs";
+  // booking, going live — so an unrecorded agreement must never read as a
+  // recorded one.
+  if (!res.ok) return "failed";
 
   return "ok";
 }

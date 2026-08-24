@@ -20,7 +20,9 @@ export default async function LakesIndexPage() {
     // 0124: the column, not the slug. This guard used to read `slug`, and a
     // fixture with a NULL slug was excluded only because NOT(NULL) is NULL.
     admin.from("lakes").select("id, name, slug").eq("is_fixture", false).order("name"),
-    admin.from("vendors").select("service_lakes, coi_expiry").eq("status", "active"),
+    // Same fence as the single-lake page and the router: a fixture crew must
+    // never be counted in a number the public reads.
+    admin.from("vendors").select("service_lakes, coi_expiry, users!vendors_user_id_fkey!inner(is_fixture)").eq("status", "active").eq("users.is_fixture", false),
   ]);
   const insured = (crews ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today);
   const crewCount = (lakeId: string) => insured.filter((v) => ((v.service_lakes as string[]) ?? []).includes(lakeId)).length;
