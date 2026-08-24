@@ -45,7 +45,10 @@ describe("the terms now describe the two roles being asked", () => {
     expect(text).toContain("handles no cash");
     expect(text).toContain("does not host the signing");
     expect(text).toMatch(/never screens, scores or rates/);
-    expect(text).toMatch(/month that began before the day you took the park over/);
+    // CONDITIONAL, because the guard is. `firstBillablePeriod` returns null
+    // when cutover_date is NULL and every month is then billable — which is
+    // what the park dial already says. v1 promised this unconditionally.
+    expect(text).toMatch(/Once you tell us the day you took the park over, it will not bill for any month that began before it/);
   });
 
   it("tells a renter who their agreement is actually with", () => {
@@ -54,6 +57,16 @@ describe("the terms now describe the two roles being asked", () => {
     // The two-sided payment record: nothing the resident says credits the bill.
     expect(text).toMatch(/credited only once the park confirms it collected it/);
     expect(text).toMatch(/only text you if you have said we may/);
+  });
+
+  it("claims no capability that does not exist", () => {
+    // v1 said LakeLife "stores the documents and records that they were sent".
+    // There is no park document storage and no delivery log — that sentence
+    // was a design note written into a legal document as though it had been
+    // built, sitting behind an unskippable gate.
+    const text = termsPlainText();
+    expect(text).not.toMatch(/stores the documents/);
+    expect(text).not.toMatch(/records that they were sent/);
   });
 
   it("claims nothing about moving money, which is not built", () => {
@@ -138,12 +151,44 @@ describe("one card, three doors", () => {
 
   it("every door renders the same component", () => {
     for (const rel of [
-      "../app/vendor/page.tsx",
+      "../app/vendor/layout.tsx",
       "../app/park/layout.tsx",
       "../app/parks/my/page.tsx",
     ]) {
       expect(code(rel)).toContain("TermsGate");
     }
+  });
+
+  it("a role with many routes gates them ALL, from a layout", () => {
+    // THE BUG THIS PINS. The crew's gate lived in /vendor/page.tsx and covered
+    // one route out of eight, with VendorNav rendered directly above it linking
+    // to the other seven — so a crew tapped "Open jobs" and walked straight
+    // past the terms. A guard with seven ways around it is not a guard.
+    for (const role of ["vendor", "park"]) {
+      const dir = fileURLToPath(new URL(`../app/${role}`, import.meta.url));
+      const pages = readdirSync(dir, { withFileTypes: true, recursive: true })
+        .filter((e) => e.name === "page.tsx");
+      expect(pages.length).toBeGreaterThan(1);
+      const layout = code(`../app/${role}/layout.tsx`);
+      expect(layout).toContain("hasAccepted");
+      expect(layout).toContain("children");
+    }
+  });
+
+  it("the gate does not render the nav that would walk around it", () => {
+    // The old crew card rendered VendorNav above itself. A tab strip somebody
+    // cannot use yet is an invitation to try.
+    const vendorLayout = code("../app/vendor/layout.tsx");
+    const gateBranch = vendorLayout.slice(vendorLayout.indexOf("<TermsGate") - 400);
+    expect(gateBranch).not.toContain("<VendorNav");
+    expect(vendorLayout).not.toContain("VendorNav");
+  });
+
+  it("a crew still onboarding is not gated here", () => {
+    // They accept at go-live via activateVendor -> ensureTos. Gating them would
+    // block the checklist that is the only route to the acceptance.
+    const layout = code("../app/vendor/layout.tsx");
+    expect(layout).toMatch(/status !== "active"\) return <>\{children\}<\/>;/);
   });
 
   it("and none of them writes its own acceptance", () => {

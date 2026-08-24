@@ -15,9 +15,6 @@ import { VendorDocs } from "@/components/VendorDocs";
 import { getNeedsYou } from "./needs-you-data";
 import { VendorNeedsYou } from "@/components/VendorNeedsYou";
 import { todayLakeDate } from "@/lib/booking";
-import { TermsGate } from "@/components/TermsGate";
-import { TOS_VERSION } from "@/lib/tos";
-import { hasAccepted } from "@/lib/acceptances";
 import { getSellableDay } from "@/lib/settings";
 import { sellableMinutes, fitsInDay, clockLabel } from "@/lib/duration";
 
@@ -79,35 +76,10 @@ export default async function VendorTodayPage() {
     );
   }
 
-  // Grandfathered crews (active before the at-the-moment-of-service TOS rails
-  // existed) accept once here, gating the route until they do. New crews
-  // accept at go-live instead — this only fires for accounts already active.
-  // Asks the LEDGER (0139), not the two columns on `users` that used to hold a
-  // single acceptance with none of its words. `hasAccepted` throws on a failed
-  // read rather than answering "no", so a dropped connection cannot put a crew
-  // who already agreed back in front of the agreement.
-  if (vendor && vendor.status === "active") {
-    if (!(await hasAccepted({ userId: user.id }, "tos", TOS_VERSION))) {
-      // The same card the park owner and the resident get. This JSX was the
-      // only version that existed, and copying it into two more routes is how
-      // three doors end up recording three slightly different things.
-      return (
-        <>
-          <TopBar />
-          <VendorNav />
-          <TermsGate
-            heading="The ground rules 🌊"
-            intro={
-              "One read-through before your first job. You're an independent " +
-              "business here — the work is yours, and so is the money for it."
-            }
-            next="/vendor"
-            cta="I agree — back to my route 🌊"
-          />
-        </>
-      );
-    }
-  }
+  // THE TERMS GATE MOVED TO src/app/vendor/layout.tsx. It lived here and
+  // covered this one route out of eight, with VendorNav rendered directly above
+  // it linking to the other seven — so a crew could tap "Open jobs" and walk
+  // straight past it. A layout wraps them all.
 
   const admin2 = createServiceClient();
   const [day, standing, confRes, needsYou] = await Promise.all([

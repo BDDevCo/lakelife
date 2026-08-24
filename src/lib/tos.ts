@@ -21,7 +21,22 @@
  * month that began before go-live (0131) · a payment is credited only on the
  * park's confirmation (0074) · texts only on the resident's own consent (0133).
  *
+ * v2-beta (21 Aug 2026) removes two claims v1 made that the code does not
+ * back, both caught by a first-run walk hours after v1 shipped:
+ *
+ *   * "it stores the documents and records that they were sent" — there is no
+ *     park document storage anywhere (the only buckets are vendor-docs and
+ *     job-photos) and no delivery log at all. That was a design note from the
+ *     paperwork plan written into the terms as though it had been built. A
+ *     capability claim inside an unskippable gate is the sharpest possible
+ *     form of a screen asserting something the code does not do.
+ *   * the pre-go-live billing promise was UNCONDITIONAL, and the guard is not:
+ *     `firstBillablePeriod` returns null when cutover_date is NULL, so every
+ *     month is billable until he sets the date — which is what the park dial
+ *     already tells him in the opposite words. Two screens, one product,
+ *     contradicting each other, and the binding one was the wrong one.
+ *
  * STILL FOR COUNSEL. These describe what the software does. They are not a
  * substitute for the full agreement, which is still being drafted.
  */
-export const TOS_VERSION = "tos-v1-beta";
+export const TOS_VERSION = "tos-v2-beta";

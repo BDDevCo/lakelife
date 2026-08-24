@@ -78,7 +78,7 @@ export const TERMS_SECTIONS: readonly TermsSection[] = [
     body: [
       "LakeLife administers your park; it ",
       { b: "never owns the park, the lots, or the homes on them" },
-      ", and it handles no cash. Your lease and your park rules are yours: LakeLife does not write them, takes no position on what they say, and does not host the signing of them — it stores the documents and records that they were sent. It never screens, scores or rates a resident, and it will not bill for a month that began before the day you took the park over.",
+      ", and it handles no cash. Your lease and your park rules are yours: LakeLife does not write them, takes no position on what they say, and does not host the signing of them. It never screens, scores or rates a resident. Once you tell us the day you took the park over, it will not bill for any month that began before it.",
     ],
   },
   {

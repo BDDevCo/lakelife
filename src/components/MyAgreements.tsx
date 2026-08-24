@@ -20,11 +20,27 @@ import type { MyAgreements as View, AgreementLine } from "@/app/agreements/data"
  *     broken screen.
  */
 
-/** "21 August 2026" — a date a person reads, never 2026-08-21. */
+/**
+ * "21 August 2026" — a date a person reads, never 2026-08-21, IN LAKE TIME.
+ *
+ * Both inputs here are timestamptz — `acceptances.occurred_at` and
+ * `park_renters.sms_consent_operational_at` — not date columns. Formatting an
+ * instant in UTC rolls every Indiana evening into the next day: tap "I agree"
+ * at 9:30pm on the 23rd and this printed "24 August 2026".
+ *
+ * That is the wrong mistake to make HERE of all places. This screen's entire
+ * stated purpose is being trusted about what is on file, and its own header
+ * promises "the exact words as they were on the day".
+ *
+ * The UTC form elsewhere is correct and must stay: RenterHome and VendorDocs
+ * split a y-m-d DATE string and rebuild it through Date.UTC, which is right for
+ * a date column. This is a timestamp, so it takes the timezone the lake is in.
+ */
+const LAKE_TZ = "America/Indiana/Indianapolis";
+
 function prettyDay(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", {
-    day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
+  return new Date(iso).toLocaleDateString("en-US", {
+    day: "numeric", month: "long", year: "numeric", timeZone: LAKE_TZ,
   });
 }
 
@@ -84,8 +100,8 @@ export function MyAgreements({ view }: { view: View }) {
       <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>What you&apos;ve agreed to</h1>
       <p className="mut" style={{ fontSize: 14, marginTop: 0, lineHeight: 1.6 }}>
         Everything you&apos;ve accepted here, with the exact words as they were
-        on the day. Nothing on this page is ever removed — if you withdraw
-        something, the withdrawal is added and the original stays.
+        on the day. An agreement you withdraw stays on this page — the
+        withdrawal is added beside it and the original is never deleted.
       </p>
 
       {view.empty && (
@@ -125,8 +141,15 @@ export function MyAgreements({ view }: { view: View }) {
                   We have the date but not the wording for this one.
                 </p>
               )}
+              {/* HONEST ABOUT THE ONE THING THAT DOES VANISH. `stopTexts()`
+                  nulls the consent and its snapshotted sentence, so stopping
+                  removes this card rather than marking it withdrawn — the
+                  opposite of how the agreements above behave. Saying so beats
+                  a blanket "nothing is ever removed" that a person can
+                  disprove in one tap. */}
               <p className="mut" style={{ fontSize: 12.5, margin: "10px 0 0", lineHeight: 1.6 }}>
-                Reply STOP to any message and we&apos;ll stop.
+                Reply STOP to any message, or turn texts off on your lot page,
+                and we&apos;ll stop — this card goes with it.
               </p>
             </div>
           ))}
