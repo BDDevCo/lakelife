@@ -44,8 +44,30 @@ function prettyDay(iso: string): string {
   });
 }
 
+/**
+ * EVERY ROW SAYS WHERE IT STANDS.
+ *
+ * With a badge on only the live one, a reader looking at two cards both titled
+ * "Terms of service" cannot tell whether the other is superseded or broken.
+ * "Out of date" earns its place separately: it is the one that predicts
+ * something — they will meet the agree screen next time they book or open
+ * their park, and this is where that stops being a surprise.
+ */
+const STANDING: Record<
+  AgreementLine["standing"],
+  { label: string; className: string; note?: string }
+> = {
+  in_force:    { label: "In force",    className: "ll-pill" },
+  replaced:    { label: "Replaced",    className: "ll-pill slate",
+                 note: "You agreed again later — the newer one above is the one that counts." },
+  out_of_date: { label: "Out of date", className: "ll-pill slate",
+                 note: "The terms have changed since. We'll ask you to read the new ones next time." },
+  withdrawn:   { label: "Withdrawn",   className: "ll-pill slate" },
+};
+
 function Line({ line }: { line: AgreementLine }) {
   const withdrawn = line.act === "withdrawn";
+  const standing = STANDING[line.standing];
   return (
     <div
       className="ll-card ll-card-pad"
@@ -53,8 +75,7 @@ function Line({ line }: { line: AgreementLine }) {
     >
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "baseline" }}>
         <strong style={{ fontSize: 16 }}>{line.label}</strong>
-        {line.isCurrent && <span className="ll-pill">In force</span>}
-        {withdrawn && <span className="ll-pill slate">Withdrawn</span>}
+        <span className={standing.className}>{standing.label}</span>
       </div>
 
       <p className="mut" style={{ fontSize: 13.5, margin: "6px 0 0", lineHeight: 1.6 }}>
@@ -62,6 +83,12 @@ function Line({ line }: { line: AgreementLine }) {
         <strong>{prettyDay(line.occurredAt)}</strong>
         {line.version ? <> · version {line.version}</> : null}
       </p>
+
+      {standing.note && (
+        <p className="mut" style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.6 }}>
+          {standing.note}
+        </p>
+      )}
 
       {line.wordsWereKept && line.text ? (
         <details style={{ marginTop: 10 }}>

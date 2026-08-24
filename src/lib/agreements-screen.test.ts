@@ -138,3 +138,45 @@ describe("every role can find it", () => {
     }
   });
 });
+
+describe("every row states where it stands", () => {
+  const data = code("../app/agreements/data.ts");
+  const view = code("../components/MyAgreements.tsx");
+
+  it("computes standing over the whole history, not one row at a time", () => {
+    // "Replaced" is a claim about a row further up the list, so it cannot be
+    // decided inside the map. This was the bug the screen showed with real
+    // data: two cards both titled "Terms of service", a badge on one, and no
+    // way for a reader to tell whether the other was superseded or broken.
+    expect(data).toContain("seenAccepted");
+    expect(data).toMatch(/for \(const line of lines\)/);
+  });
+
+  it("has a word for all four states", () => {
+    for (const st of ["in_force", "replaced", "out_of_date", "withdrawn"]) {
+      expect(data).toContain(st);
+      expect(view).toContain(st);
+    }
+  });
+
+  it("renders a badge on every row rather than only the live one", () => {
+    // No conditional around the pill — that was the defect.
+    expect(view).toContain("{standing.label}");
+    expect(view).not.toMatch(/\{line\.isCurrent &&/);
+  });
+
+  it("only compares versions for documents whose version WE control", () => {
+    // A park's rulebook carries no version scheme of ours, so the newest
+    // acceptance of it is simply the one in force — comparing it to
+    // TOS_VERSION would mark every one of them out of date forever.
+    expect(data).toMatch(/line\.kind === "tos" \? TOS_VERSION : line\.version/);
+  });
+
+  it("tells an out-of-date reader what is about to happen to them", () => {
+    // The one standing that predicts something: they will meet the agree
+    // screen next time, and this is where that stops being a surprise.
+    expect(src("../components/MyAgreements.tsx")).toMatch(
+      /ask you to read the new ones next time/,
+    );
+  });
+});

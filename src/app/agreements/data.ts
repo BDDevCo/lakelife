@@ -34,8 +34,21 @@ export interface AgreementLine {
   text: string | null;
   /** False = we hold no record of the wording, and must say so. */
   wordsWereKept: boolean;
-  /** True when this is the version currently in force. */
-  isCurrent: boolean;
+  /**
+   * WHERE THIS ROW STANDS, in one word the reader can act on.
+   *
+   * Two cards both titled "Terms of service" with a badge on only one of them
+   * makes the other look broken rather than superseded. Every row says which
+   * it is:
+   *
+   *   in_force    — this is the version being enforced right now
+   *   replaced    — you agreed again later; that newer row is the live one
+   *   out_of_date — the terms have moved on and you have not re-agreed, so
+   *                 you will be asked next time. Worth saying: it explains a
+   *                 gate they are about to meet.
+   *   withdrawn   — you took it back. The row stays; that is the point.
+   */
+  standing: "in_force" | "replaced" | "out_of_date" | "withdrawn";
 }
 
 export interface TextConsentLine {
@@ -80,8 +93,31 @@ export async function myAgreements(): Promise<MyAgreements | null> {
     act: r.act,
     text: r.text,
     wordsWereKept: r.wordsWereKept,
-    isCurrent: r.kind === "tos" && r.act === "accepted" && r.version === TOS_VERSION,
+    standing: "out_of_date",   // replaced immediately below, once the whole
+                               // history for each kind is in hand
   }));
+
+  // STANDING NEEDS THE WHOLE LIST, not one row. "Replaced" is a statement about
+  // a row that exists further up, so it cannot be decided while mapping.
+  // `rows` arrives newest-first (acceptancesFor orders it), so the first
+  // accepted row of a kind is the one that counts.
+  const seenAccepted = new Set<string>();
+  for (const line of lines) {
+    if (line.act === "withdrawn") {
+      line.standing = "withdrawn";
+      continue;
+    }
+    if (seenAccepted.has(line.kind)) {
+      line.standing = "replaced";
+      continue;
+    }
+    seenAccepted.add(line.kind);
+    // Only OUR documents carry a version we control and can compare against.
+    // A park's rulebook has no version scheme of ours, so the newest
+    // acceptance of it is simply the one in force.
+    const current = line.kind === "tos" ? TOS_VERSION : line.version;
+    line.standing = line.version === current ? "in_force" : "out_of_date";
+  }
 
   // ---- the text consent, which has lived unread since it was built ---------
   //
