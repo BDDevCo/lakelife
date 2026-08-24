@@ -50,7 +50,7 @@ export default async function ParkLayout({ children }: { children: React.ReactNo
     <>
       <TopBar />
       <TermsGate
-        heading="Before you run a park here 🌊"
+        heading={"Before you run a park here\u00A0🌊"}
         intro={
           "One read-through, once. There's a section in here about what LakeLife " +
           "does and doesn't do for a park — it never owns your lots, never writes " +

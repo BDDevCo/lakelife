@@ -35,7 +35,11 @@ export function TermsGate({
   return (
     <div className="wrap" style={{ paddingTop: 24, paddingBottom: 48, maxWidth: 560 }}>
       <div className="ll-card ll-card-pad">
-        <h2 style={{ fontSize: 22, margin: "0 0 6px" }}>{heading}</h2>
+        {/* `textWrap: balance` plus the non-breaking space the callers put before
+            their emoji: at 375px this heading was leaving the 🌊 stranded alone
+            on a second line, which reads as a broken glyph rather than a
+            flourish. */}
+        <h2 style={{ fontSize: 22, margin: "0 0 6px", textWrap: "balance" }}>{heading}</h2>
         {intro && (
           <p className="mut" style={{ fontSize: 14, lineHeight: 1.6, margin: "0 0 14px" }}>
             {intro}

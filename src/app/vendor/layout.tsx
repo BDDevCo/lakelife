@@ -53,7 +53,7 @@ export default async function VendorLayout({ children }: { children: React.React
           nav is how the old gate was walked around, and a tab strip a crew
           cannot use yet is an invitation to try. */}
       <TermsGate
-        heading="The ground rules 🌊"
+        heading={"The ground rules\u00A0🌊"}
         intro={
           "One read-through before your next job. You're an independent business " +
           "here — the work is yours, and so is the money for it."

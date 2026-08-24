@@ -49,7 +49,7 @@ export default async function MyLotPage() {
         <>
           <TopBar />
           <TermsGate
-            heading="One read-through before we start 🌊"
+            heading={"One read-through before we start\u00A0🌊"}
             intro={
               "There's a section in here about renting a lot — the short version " +
               "is that your agreement is with your park, not with us, and we never " +
