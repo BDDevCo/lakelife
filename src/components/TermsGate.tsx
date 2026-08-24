@@ -1,5 +1,5 @@
 import { TermsBody } from "@/components/TermsBody";
-import { acceptTos } from "@/app/portal/tos-actions";
+import { AcceptTermsButton } from "@/components/AcceptTermsButton";
 
 /**
  * ONE CARD, THREE DOORS.
@@ -16,8 +16,9 @@ import { acceptTos } from "@/app/portal/tos-actions";
  * is exactly the failure the ledger's single-source rule exists to prevent, one
  * level up.
  *
- * `next` is where they were going. It is passed through `acceptTos`, which
- * refuses anything that is not a local path.
+ * `next` is where they were going. The button navigates there itself, because
+ * the action has to be able to return a SENTENCE when the write fails and a
+ * redirect cannot carry one — see AcceptTermsButton.
  */
 export function TermsGate({
   heading,
@@ -43,12 +44,7 @@ export function TermsGate({
 
         <TermsBody />
 
-        <form action={acceptTos}>
-          <input type="hidden" name="next" value={next} />
-          <button className="ll-btn" type="submit" style={{ marginTop: 6 }}>
-            {cta}
-          </button>
-        </form>
+        <AcceptTermsButton next={next} label={cta} />
 
         <p className="mut" style={{ fontSize: 12.5, lineHeight: 1.6, margin: "12px 0 0" }}>
           We keep a copy of exactly these words and the date you agreed to them,

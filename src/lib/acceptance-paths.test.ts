@@ -156,7 +156,33 @@ describe("one card, three doors", () => {
       expect(code(rel)).not.toContain("recordAcceptance");
       expect(code(rel)).not.toMatch(/from\("acceptances"\)/);
     }
-    expect(gate).toContain("acceptTos");
+    // The single writer is one level down now: the gate renders
+    // AcceptTermsButton, which calls acceptTos, which calls ensureTos. The
+    // invariant is unchanged — follow the chain rather than assert on the
+    // link that happened to be there when this was written.
+    expect(gate).toContain("AcceptTermsButton");
+    expect(code("../components/AcceptTermsButton.tsx")).toContain("acceptTos()");
+    expect(code("../app/portal/tos-actions.ts")).toContain("ensureTos(");
+  });
+
+  it("the button reports a failed write instead of silently re-rendering", () => {
+    // As a bare form action this returned void: a failed write left somebody
+    // who had just tapped "I agree" looking at the same card with no message,
+    // unable to tell success from a broken button.
+    const btn = code("../components/AcceptTermsButton.tsx");
+    expect(btn).toMatch(/if \(!res\.ok\)/);
+    expect(btn).toContain("setError(");
+    expect(btn).toMatch(/role="alert"/);
+    // and it only navigates when the write actually succeeded
+    const onOk = btn.slice(btn.indexOf("if (!res.ok)"));
+    expect(onOk).toContain("router.push(");
+  });
+
+  it("the action returns a sentence rather than redirecting", () => {
+    const act = code("../app/portal/tos-actions.ts");
+    expect(act).toMatch(/Promise<AcceptResult>/);
+    // A redirect cannot carry a reason, which is why it stopped doing one.
+    expect(act).not.toContain("redirect(");
   });
 
   it("shows the terms rather than a summary of them", () => {

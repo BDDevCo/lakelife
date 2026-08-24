@@ -1,36 +1,53 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { ensureTos } from "@/lib/tos-server";
+import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 
-/** Explicit, versioned acceptance — stamped who/which/when, then onward.
- *  Used by the grandfathered-crew card (crews active before the rails). */
-export async function acceptTos(form: FormData): Promise<void> {
+export interface AcceptResult {
+  ok: boolean;
+  /** Already a sentence for the screen. Never a raw reason code. */
+  error?: string;
+}
+
+/**
+ * RECORD THAT SOMEBODY AGREED, AND SAY WHETHER IT WORKED.
+ *
+ * One writer for all four doors — the crew's gate, the park owner's, the
+ * resident's, and the grandfathered-crew card — so four screens cannot record
+ * four slightly different things. It goes through `ensureTos`, which carries
+ * the exact words into the ledger.
+ *
+ * IT USED TO REDIRECT AND SAY NOTHING. As a bare form action it returned
+ * `void`: on a failed write it simply returned, the page re-rendered
+ * identically, and the person who had just tapped "I agree" was left looking
+ * at the same card with no idea whether anything had happened. Tapping again
+ * might work or might do the same nothing. That is the worst shape a failure
+ * can take — indistinguishable from success on a slow connection, and
+ * indistinguishable from a broken button.
+ *
+ * So it returns a RESULT, and the button reports it. Navigation moved to the
+ * client for the same reason: a redirect cannot carry a sentence.
+ */
+export async function acceptTos(): Promise<AcceptResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/");
-  // ONE WRITER, AND IT IS THE LEDGER. This wrote the two columns directly,
-  // which meant the grandfathered-crew card recorded an acceptance with none of
-  // the words — the exact gap 0139 exists to close. `ensureTos` carries the
-  // snapshot, so both doors record the same thing.
-  //
-  // AND ITS ANSWER IS NOT OPTIONAL. This discarded the return value and
-  // redirected regardless, so a failed insert — or a failed read of the
-  // ledger, which now throws — sent somebody who had just tapped "I agree"
-  // onward with nothing recorded and nothing said. They would believe they had
-  // agreed; the ledger would not know it. Staying on the card is the honest
-  // outcome: the button is still there, and tapping it again retries.
-  let tos: "ok" | "needs";
-  try {
-    tos = await ensureTos(user.id, true);
-  } catch {
-    return;
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return { ok: false, error: "You're signed out. Sign in again and this will be here." };
   }
-  if (tos !== "ok") return;
 
-  const next = String(form.get("next") ?? "/portal");
-  redirect(next.startsWith("/") ? next : "/portal");
+  try {
+    // "needs" here means the write itself failed — this call already carries
+    // accepted=true, so there is nothing else it can mean.
+    if ((await ensureTos(user.id, true)) !== "ok") {
+      return { ok: false, error: "We couldn't record that just now. Try once more." };
+    }
+  } catch (e) {
+    if (e instanceof ReadFailed) {
+      return { ok: false, error: readFailedMessage("what you've already agreed to", e) };
+    }
+    throw e;
+  }
+
+  return { ok: true };
 }
