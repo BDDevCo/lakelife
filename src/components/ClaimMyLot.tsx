@@ -2,7 +2,9 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { claimMyFile } from "@/app/parks/claim-actions";
+import { SwitchAccount } from "@/components/SignInHere";
 
 /**
  * THE SCREEN SOMEBODY READS IN THEIR KITCHEN.
@@ -24,10 +26,18 @@ import { claimMyFile } from "@/app/parks/claim-actions";
  *     hurdle.
  */
 export function ClaimMyLot({
-  parkSlug, parkName, presetCode, lotsAreNumeric = false,
+  parkSlug, parkName, presetCode, lotsAreNumeric = false, selfUrl,
 }: {
   parkSlug?: string;
   parkName?: string;
+  /**
+   * This same page, with the park and the code still on it. The way back after
+   * signing out of the wrong account — without it, the only sign-out is the top
+   * bar's, which lands on "/" and throws the claim link and the pre-filled code
+   * away. /parks/claim is linked from nowhere in the app, so her only route
+   * back would be re-scanning the paper slip.
+   */
+  selfUrl?: string;
   /** Carried by the QR square on the slip, so only the lot number is left. */
   presetCode?: string;
   /**
@@ -43,7 +53,11 @@ export function ClaimMyLot({
   const [slug, setSlug] = useState(parkSlug ?? "");
   const [lot, setLot] = useState("");
   const [code, setCode] = useState(presetCode ?? "");
-  const [said, setSaid] = useState<{ ok: boolean; message: string; reprintable?: boolean } | null>(null);
+  // `outcome` is kept so the two endings a person can act on get a control.
+  // Without it every refusal was a sentence and nothing else.
+  const [said, setSaid] = useState<
+    { ok: boolean; message: string; reprintable?: boolean; outcome?: string } | null
+  >(null);
   const [busy, start] = useTransition();
   const [optedOut, setOptedOut] = useState(false);
 
@@ -145,6 +159,28 @@ export function ClaimMyLot({
           {said.reprintable && (
             <div className="mut" style={{ fontSize: 13, marginTop: 6 }}>
               Nothing is wrong at your end — a new slip takes them a moment.
+            </div>
+          )}
+
+          {/* THE TWO ENDINGS SHE CAN ACT ON GET A CONTROL, which is the fix
+              FollowInvite already carries for the identical case.
+
+              ALREADY SET UP: the likeliest real refusal — the family iPad is
+              signed in as her husband, or she claimed it on her own phone last
+              week. The sentence says "sign in with that account" and there was
+              no way to; the top bar's sign-out lands on "/" and takes the claim
+              link and the code with it.
+
+              ALREADY HERE: a true sentence about a lot that is one tap away,
+              ending in a full stop. */}
+          {said.outcome === "claim_already_set_up" && selfUrl && (
+            <div style={{ marginTop: 10 }}>
+              <SwitchAccount next={selfUrl} label="Sign in as that account" />
+            </div>
+          )}
+          {said.outcome === "claim_already_here" && (
+            <div style={{ marginTop: 10 }}>
+              <Link className="ll-btn" href="/parks/my">See my lot →</Link>
             </div>
           )}
         </div>

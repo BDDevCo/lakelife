@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -272,6 +273,21 @@ function Blockers({ rows }: { rows: string[] }) {
         {rows.map((r) => (
           <li key={r} className="mut" style={{ fontSize: 12.5, lineHeight: 1.55, marginBottom: 3 }}>
             {r}
+            {/* A blocker that names a destination gets a way to reach it. The
+                card one had none, and it is the only item on this list a park
+                owner cannot fix from a ParkNav tab. */}
+            {r.includes("Add one on your account page") && (
+              <>
+                {" "}
+                <Link href="/profile">Go to my account →</Link>
+              </>
+            )}
+            {r.includes("Set it in Park setup") && (
+              <>
+                {" "}
+                <Link href="/park/setup">Open Park setup →</Link>
+              </>
+            )}
           </li>
         ))}
       </ul>

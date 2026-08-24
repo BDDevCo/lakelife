@@ -121,6 +121,7 @@ export default async function ClaimPage({
             parkName={parkName}
             presetCode={c}
             lotsAreNumeric={lotsAreNumeric}
+            selfUrl={selfUrl}
           />
         )}
 

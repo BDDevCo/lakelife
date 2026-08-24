@@ -52,7 +52,22 @@ export default async function ProfilePage() {
   // who verified both to get here (rule 5).
   const me = mustRead("your contact details", meRes);
 
-  // No property yet → invite them into the wizard.
+  // NO PROPERTY YET → invite them into the wizard.
+  //
+  // A CARD IS AN ACCOUNT FACT, NOT A PROPERTY FACT, and this branch used to
+  // hide the only add-a-card form in the product behind "do you own a lake
+  // house?". Two people fell down that hole:
+  //
+  //   * a PARK OWNER, told on /park/services "There's no card on file" with
+  //     the switch disabled, sent here, and handed a lake-house wizard he has
+  //     no use for. He has no property, so he could never get past this
+  //     return — and /billing's "Add a card" points right back at it.
+  //   * a RESIDENT, sent here by "Add a way to pay" on her rent, for the same
+  //     reason and with the same result.
+  //
+  // Neither of them owns a lake house and neither ever will. The wizard stays
+  // the headline — it IS the next step for a homeowner — with the card form
+  // below it for everybody else.
   if (!profile?.hasProfile) {
     return (
       <>
@@ -68,7 +83,14 @@ export default async function ProfilePage() {
             </p>
             <Link className="ll-btn gold" href="/profile/setup">Start guided setup →</Link>
           </div>
-          <div style={{ maxWidth: 520, margin: "16px auto 0" }}>
+          <div style={{ maxWidth: 520, margin: "16px auto 0", display: "grid", gap: 16 }}>
+            {/* The card, for the park owner and the resident who were sent
+                here by a blocker and have no property to build. */}
+            <PaymentMethods initial={cards} />
+            <Link href="/agreements" className="ll-card ll-card-pad" style={{ display: "block", textDecoration: "none", color: "inherit" }}>
+              <div style={{ fontWeight: 800, fontSize: 15 }}>What you&apos;ve agreed to →</div>
+              <div className="mut" style={{ fontSize: 13 }}>Every agreement on your account, with the exact words as they were on the day.</div>
+            </Link>
             <AccountControls hasProperty={false} />
           </div>
         </div>

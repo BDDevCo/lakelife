@@ -38,6 +38,10 @@ export function PayRentButton({
   if (disabled) return null;
 
   if (!hasCard) {
+    // /profile is right, and it used to be a dead end: the page short-circuited
+    // to the lake-house wizard for anybody with no property profile, which is
+    // every park resident. The card form is on that branch now, so this link
+    // reaches something she can actually use.
     return (
       <Link className="ll-btn ghost sm" href="/profile" style={{ marginTop: 10, display: "inline-block" }}>
         Add a way to pay

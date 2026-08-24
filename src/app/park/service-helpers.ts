@@ -57,7 +57,16 @@ export function buildParkBlockers(r: ParkReadiness): string[] {
     );
   }
   if (!r.hasCard) {
-    out.push("There's no card on file. Work is charged after it's done, but a card has to be there first.");
+    // NAMES WHERE TO GO, like the two Park-setup blockers above it. Without the
+    // destination this was the one item he could not clear: ParkNav has no
+    // account tab, TopBar's "My portal" redirects straight back to /park, and
+    // /profile used to hide the card form behind "do you own a lake house?".
+    // The blocker he had to clear to buy any work for his own park had no door
+    // anywhere in the app.
+    out.push(
+      "There's no card on file. Work is charged after it's done, but a card has " +
+      "to be there first. Add one on your account page.",
+    );
   }
   return out;
 }
