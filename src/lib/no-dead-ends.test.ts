@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -105,5 +105,41 @@ describe("the claim screen's refusals can be acted on", () => {
   it("this is the fix the sibling screen already had", () => {
     // FollowInvite solved the identical case; ClaimMyLot never imported it.
     expect(code("../components/FollowInvite.tsx")).toContain("SwitchAccount");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the resident with no lot is not sent to the phone", () => {
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+  /**
+   * The empty state said "ring them and they can join the two up" — while
+   * /parks/claim existed and is built for exactly this person: the office
+   * hands out a paper slip with a code and she joins her own file to her own
+   * account. Telling her to phone while the self-serve door sits one link away
+   * is the dead-end shape inverted: the screen HAD the better action and never
+   * offered it.
+   */
+  const page = read("../app/parks/my/page.tsx");
+
+  it("offers the claim door", () => {
+    expect(page).toContain('href="/parks/claim"');
+  });
+
+  it("and that route exists", () => {
+    const files = readdirSync(fileURLToPath(new URL("../app/parks/claim", import.meta.url)));
+    expect(files).toContain("page.tsx");
+  });
+
+  it("still tells somebody with no slip what to do", () => {
+    // Ringing the office is the right answer for her — it just is not the
+    // only answer, and it was being given to everybody.
+    expect(page).toMatch(/No slip — ring them/);
+  });
+
+  it("does not send everybody to the phone as the first move", () => {
+    expect(page).not.toMatch(/ring them and they can join the two up/);
   });
 });

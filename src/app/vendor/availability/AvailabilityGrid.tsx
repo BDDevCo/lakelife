@@ -78,12 +78,31 @@ export function AvailabilityGrid({ days }: { days: DayRow[] }) {
     router.refresh();
   }
 
-  const cols = `64px repeat(${SLOT_TIMES.length}, minmax(60px, 1fr))`;
+  // IT HAS TO FIT A PHONE, because this grid decides when the crew can be
+  // BOOKED. At 375px the old sizing (64px + 4x60 + gaps = 340) was ~15px wider
+  // than the card, and `overflowX: auto` did what it was asked: it pushed the
+  // last column — the 3pm slot, header label and all — completely off screen,
+  // with no scroll affordance and only a sliver of a card showing at the edge.
+  //
+  // A crew reading that sees three slots and blocks three slots. The scheduler
+  // then books them at 3pm on a day they believed they had closed, and the
+  // first they know of it is a job on their route.
+  //
+  // MEASURED, not estimated. The card is 327px wide at a 375px viewport, but
+  // `ll-card-pad` leaves the scroller only 285 — my first attempt sized to the
+  // CARD and was still 13px too wide, which is exactly enough to clip the last
+  // column's label to "Oper" and leave the crew unsure whether they had seen
+  // the whole grid.
+  //
+  // 60 + 4x44 + 5 gaps of 4 = 256, and 1fr then spreads them to ~51px each
+  // inside 285. Tap targets stay 48px tall and comfortably over the 44px
+  // minimum. The scroller remains for narrower devices and a future 5th slot.
+  const cols = `60px repeat(${SLOT_TIMES.length}, minmax(44px, 1fr))`;
 
   return (
     <div className="ll-card ll-card-pad">
       <div style={{ overflowX: "auto" }}>
-        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 6, minWidth: 340 }}>
+        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, minWidth: 256 }}>
           {/* header row */}
           <div />
           {SLOT_TIMES.map((s) => (

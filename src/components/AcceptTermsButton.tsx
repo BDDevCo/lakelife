@@ -49,8 +49,24 @@ export function AcceptTermsButton({
             }
             // Local paths only. `next` comes from our own gates, never from a
             // query string, but the check costs nothing and keeps it that way.
-            router.push(next.startsWith("/") ? next : "/portal");
-            router.refresh();
+            const to = next.startsWith("/") ? next : "/portal";
+
+            // PUSHING TO THE PAGE YOU ARE ALREADY ON IS A NO-OP, and inside a
+            // transition that means `isPending` never clears: the button sits
+            // on "Recording…" for ever while the write has, in fact, succeeded.
+            //
+            // Every gate hits this. The crew's `next` is /vendor and the crew
+            // gate renders AT /vendor; the resident's is /parks/my, likewise;
+            // the park owner's is /park, which is where most of them land. So
+            // the shape somebody actually meets is: tap "I agree", watch it
+            // hang, reload, and find themselves through — or tap again and file
+            // a SECOND acceptance, which is append-only and cannot be removed.
+            //
+            // `refresh()` is the right verb when we are already there: it
+            // re-runs the server component, the layout re-asks the ledger, and
+            // the gate is replaced by the page underneath it.
+            if (to === window.location.pathname) router.refresh();
+            else router.push(to);
           })
         }
       >

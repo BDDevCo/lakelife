@@ -75,11 +75,29 @@ export default async function MyLotPage() {
             <h2 style={{ fontSize: 20, margin: "0 0 6px" }}>No lot on your account</h2>
             <p className="mut" style={{ fontSize: 13.5, lineHeight: 1.6, margin: 0 }}>
               We looked for a tenancy attached to this sign-in and didn&apos;t
-              find one. If you rent a lot and the office set you up by hand,
-              your file isn&apos;t linked to this account yet — ring them and
-              they can join the two up.
+              find one.
             </p>
-            <Link className="ll-btn" href="/portal" style={{ marginTop: 12, display: "inline-block" }}>
+            {/* THE DOOR THIS SCREEN WAS HIDING. `/parks/claim` exists and is
+                exactly for this person — the office hands out a paper slip with
+                a code and she joins her own file to her own account. Telling
+                her to ring the office while a self-serve path sits one link
+                away is the "instructs an action the screen lacks" shape in
+                reverse: the screen HAS the better action and never offered it.
+                Ringing stays, honestly, as the answer for somebody with no
+                slip. */}
+            <p className="mut" style={{ fontSize: 13.5, lineHeight: 1.6, margin: "10px 0 0" }}>
+              Got a slip from the office with a code on it? You can join your
+              lot to this account yourself. No slip — ring them and they can
+              either print one or link it for you.
+            </p>
+            <Link
+              className="ll-btn"
+              href="/parks/claim"
+              style={{ marginTop: 12, display: "inline-block" }}
+            >
+              I have a code
+            </Link>
+            <Link className="ll-btn ghost" href="/portal" style={{ marginTop: 12, marginLeft: 8, display: "inline-block" }}>
               Go to my portal
             </Link>
           </div>
