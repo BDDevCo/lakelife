@@ -398,6 +398,12 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     lateCount: monthSummary.lateCount,
     lateAmount: monthSummary.lateAmount,
     disputedCount: monthSummary.disputedCount,
+    // EARLIER MONTHS REACH THE TO-DO LIST NOW. `arrears` was computed forty
+    // lines up and handed only to `moneyBlock`, so it was rendered in bold on
+    // the money card and was invisible to `generateTasks` — the unpaid July
+    // bill dropped off the list at midnight on 1 August and never came back.
+    arrearsCount: arrears.length,
+    arrearsAmount: arrears.reduce((sum, r) => sum + r.balance, 0),
     // A BILL THAT WAS NEVER SPLIT — but only the ones he can actually do
     // something about. Two shapes land on `allocated_total === 0` and are
     // exactly right, and both would have sat here as a permanent chore he
@@ -530,7 +536,21 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     occupancy: occupancyLine(snapshot),
     tasks,
     notes,
-    quiet: tasks.length === 0 && notes.length === 0 ? quietState(checked) : null,
+    // "NOTHING NEEDS YOU" MUST NOT PRINT UNDER A DEBT.
+    //
+    // This read `tasks` and `notes` alone, and `moneyBlock` renders the arrears
+    // and disputed lines on the same card — so on a quiet morning the screen
+    // printed "Nothing needs you this morning." directly beneath a bold
+    // "$2,700.00 still owing from earlier months". The arrears task above now
+    // makes `tasks` non-empty for the arrears case; the disputed line generates
+    // no task by design (a dispute is something to settle, not chase), so it is
+    // consulted here explicitly. The rule this file states about itself two
+    // hundred lines up is "only ever say 'nothing needs you' when nothing does".
+    quiet:
+      tasks.length === 0 && notes.length === 0
+        && money.arrearsLine === null && money.disputedLine === null
+        ? quietState(checked)
+        : null,
     preCutover: cutoverOn && cutoverOn >= today
       ? preCutover({
           today, cutoverOn, parkName,

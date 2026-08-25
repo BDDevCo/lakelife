@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, preCutover,
   addDays, daysBetween, ordinal,
@@ -24,6 +26,8 @@ const facts = (over: Partial<TaskFacts> = {}): TaskFacts => ({
   liveOccupiedLots: 19,
   lateCount: 0,
   lateAmount: 0,
+  arrearsCount: 0,
+  arrearsAmount: 0,
   disputedCount: 0,
   unallocatedCosts: [],
   holdoverLots: [],
@@ -573,5 +577,83 @@ describe("bills that come round again", () => {
   // a default for somebody else's park.
   it("is silent for a park that has set none up", () => {
     expect(generateTasks(facts({ billsDue: [] }))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("money owed from earlier months stays on the to-do list", () => {
+  /**
+   * THE DEBT THAT LEFT THE LIST AT MIDNIGHT.
+   *
+   * `late_rent` is keyed `late_rent:<park>:<currentMonth>` and computed from
+   * charges whose period_month IS the current month. Lot 6 never pays its July
+   * rent; on 20 July the screen carries the non-dismissible task "1 household
+   * is late — $256.00". At 00:00 on 1 August the month rolls, that charge
+   * leaves the window, the task disappears, and no successor is ever generated
+   * for it. At nineteen households one skipped month is roughly $2,700 that
+   * quietly left the one surface designed to be non-dismissible about money.
+   *
+   * The money was never hidden — the arrears line renders in bold on the money
+   * card. It was absent from the TASKS, and "Nothing needs you this morning"
+   * could print directly beneath it.
+   */
+
+  it("raises a task for earlier months", () => {
+    const tasks = generateTasks(facts({ arrearsCount: 1, arrearsAmount: 256 }));
+    const t = tasks.find((x) => x.key.startsWith("arrears:"));
+    expect(t).toBeTruthy();
+    expect(t!.title).toContain("household owes");
+    expect(t!.detail).toContain("256");
+  });
+
+  it("keys it on the park ALONE, so a month rollover cannot take it away", () => {
+    const aug = generateTasks(facts({ currentMonth: "2026-08", arrearsCount: 1, arrearsAmount: 256 }));
+    const sep = generateTasks(facts({ currentMonth: "2026-09", arrearsCount: 1, arrearsAmount: 256 }));
+    const keyOf = (ts: ReturnType<typeof generateTasks>) =>
+      ts.find((x) => x.key.startsWith("arrears:"))!.key;
+    // The same key in both months. `late_rent` deliberately differs — that one
+    // is re-raised monthly; this one must not vanish when the calendar turns.
+    expect(keyOf(aug)).toBe(keyOf(sep));
+    expect(keyOf(aug)).not.toContain("2026-08");
+  });
+
+  it("is never dismissible — the software must not offer to stop mentioning money", () => {
+    const t = generateTasks(facts({ arrearsCount: 2, arrearsAmount: 900 }))
+      .find((x) => x.key.startsWith("arrears:"))!;
+    expect(t.canDismiss).toBe(false);
+    expect(t.urgency).toBe("overdue");
+  });
+
+  it("stays separate from this month's late rent, because they are different jobs", () => {
+    const tasks = generateTasks(facts({
+      lateCount: 3, lateAmount: 1365,
+      arrearsCount: 1, arrearsAmount: 256,
+    }));
+    const arrears = tasks.filter((t) => t.key.startsWith("arrears:"));
+    const late = tasks.filter((t) => t.key.startsWith("late_rent:"));
+    expect(arrears).toHaveLength(1);
+    expect(late).toHaveLength(1);
+    // And neither figure swallows the other.
+    expect(arrears[0].detail).toContain("256");
+    expect(late[0].detail).toContain("1,365");
+  });
+
+  it("says nothing when nothing is owed from earlier months", () => {
+    const tasks = generateTasks(facts({ arrearsCount: 0, arrearsAmount: 0 }));
+    expect(tasks.some((t) => t.key.startsWith("arrears:"))).toBe(false);
+  });
+
+  it("the loader feeds it, and the quiet line consults the money block", () => {
+    const src = readFileSync(
+      fileURLToPath(new URL("./today-actions.ts", import.meta.url)), "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // arrears was computed and handed ONLY to moneyBlock.
+    expect(src).toMatch(/arrearsCount: arrears\.length/);
+    expect(src).toMatch(/arrearsAmount: arrears\.reduce/);
+    // "Nothing needs you this morning." must not print under a debt. A
+    // disputed older bill generates no task by design, so quiet consults the
+    // money block directly rather than trusting tasks.length alone.
+    expect(src).toMatch(/money\.arrearsLine === null && money\.disputedLine === null/);
   });
 });

@@ -199,6 +199,23 @@ export interface TaskFacts {
   lateCount: number;
   lateAmount: number;
   disputedCount: number;
+  /**
+   * EARLIER MONTHS STILL OPEN — and the reason this exists at all.
+   *
+   * `lateCount`/`lateAmount` are computed from THIS MONTH's charges only, and
+   * the task they generate is keyed on the current month. At midnight on the
+   * 1st the unpaid July bill left the window, the task vanished, and no
+   * successor was ever generated for it — the one surface designed to be
+   * non-dismissible about money owed stopped mentioning it. At nineteen
+   * households a single skipped month is roughly $2,700 that quietly left the
+   * to-do list.
+   *
+   * Separate from `lateCount` rather than merged into it: this month's late
+   * rent and last month's unpaid rent are different things to do about, and the
+   * money block already keeps them apart on screen.
+   */
+  arrearsCount: number;
+  arrearsAmount: number;
   /** Costs entered but never split across lots — they bill nobody. */
   unallocatedCosts: { id: string; label: string; amount: number }[];
   /**
@@ -258,6 +275,24 @@ export function generateTasks(f: TaskFacts): Task[] {
   // MONEY OWED. Always aggregate — nineteen separate "chase lot 4" cards is a
   // list nobody reads — and never dismissible, because the software must not
   // offer to stop mentioning money.
+  // EARLIER MONTHS, ON THEIR OWN CARD AND WITH A KEY THAT DOES NOT EXPIRE.
+  //
+  // `late_rent` is keyed on the current month so it can be raised afresh each
+  // month. Arrears must not be: the whole defect was a task whose key rolled
+  // over and took the debt off the list with it. This one is keyed on the park
+  // alone, so it persists until the money does not.
+  if (f.arrearsCount > 0) {
+    out.push({
+      key: `arrears:${f.parkId}`,
+      title: `${f.arrearsCount} ${f.arrearsCount === 1 ? "household owes" : "households owe"} from earlier months`,
+      detail: `${money(f.arrearsAmount)} still outstanding from before ${f.currentMonth}.`,
+      urgency: "overdue",
+      dueOn: null,
+      href: "/park/rent",
+      canDismiss: false,
+    });
+  }
+
   if (f.lateCount > 0) {
     out.push({
       key: `late_rent:${f.parkId}:${f.currentMonth}`,
