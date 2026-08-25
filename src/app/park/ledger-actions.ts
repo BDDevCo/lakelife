@@ -503,6 +503,8 @@ export async function runCharges(
   // one outcome we will not have is a quiet one.
   let sharesBilled = 0;
   const stampProblems: string[] = [];
+  /** Charges this run took BACK, so the totals below do not report them. */
+  const rolledBack = new Set<string>();
   for (const c of raised ?? []) {
     const ids = shareIdsByRes.get(c.reservation_id as string);
     if (!ids?.length) continue;
@@ -514,8 +516,23 @@ export async function runCharges(
     if (!stampErr) { sharesBilled += ids.length; continue; }
 
     console.error(`[runCharges] couldn't stamp ${ids.length} cost share(s) onto charge ${c.id}:`, stampErr);
+    // VOIDED_AT AND VOID_REASON TOO. 0070 declares
+    // `check (voided_at is null or void_reason is not null)`, and `voidCharge`
+    // honours it — it refuses a blank reason with "a cancelled bill needs a
+    // reason". Writing only `status` left voided_at NULL, which satisfies that
+    // constraint vacuously: a bill marked void with no timestamp and no reason,
+    // which is precisely the row the constraint exists to forbid. An accountant
+    // reading the ledger later finds a cancelled bill and nothing saying why.
     const { error: voidErr } = await admin
-      .from("park_charges").update({ status: "void" }).eq("id", c.id as string);
+      .from("park_charges")
+      .update({
+        status: "void",
+        voided_at: new Date().toISOString(),
+        void_reason:
+          "Taken back automatically: the allocated costs on this bill could not be marked as spent, " +
+          "and leaving it would have billed those costs again next month.",
+      })
+      .eq("id", c.id as string);
     if (voidErr) {
       console.error(`[runCharges] and couldn't void charge ${c.id} either:`, voidErr);
       stampProblems.push(
@@ -523,21 +540,33 @@ export async function runCharges(
         `Check it before you run next month or that cost will be billed twice.`,
       );
     } else {
+      rolledBack.add(c.id as string);
       stampProblems.push(
         `One bill was taken back: we couldn't mark its allocated costs as spent, and billing it would have charged them again next month. Run this again.`,
       );
     }
   }
 
-  const total = rows.reduce((s, r) => s + (r.amount as number), 0);
+  // COUNT WHAT SURVIVED, not what was inserted. The loop above voids any charge
+  // whose cost shares could not be stamped — a deliberate rollback — but both
+  // figures were computed from `rows`, the pre-rollback insert list. The owner
+  // was told "19 bills raised — $8,645" for a month where one had just been
+  // taken back, and the number he reads is the one he reconciles against.
+  const survived = (raised ?? [])
+    .filter((r) => !rolledBack.has(r.id as string))
+    .map((r) => r.reservation_id as string);
+  const keptRows = rolledBack.size === 0
+    ? rows
+    : rows.filter((r) => survived.includes(r.reservation_id as string));
+  const total = keptRows.reduce((s, r) => s + (r.amount as number), 0);
   revalidatePath("/park/rent");
   revalidatePath("/park");
   return {
     ok: true,
-    raised: rows.length,
+    raised: keptRows.length,
     total,
     signal:
-      `${rows.length} ${rows.length === 1 ? "bill" : "bills"} raised for ${prettyMonth(month)} — $${total.toFixed(2)}.` +
+      `${keptRows.length} ${keptRows.length === 1 ? "bill" : "bills"} raised for ${prettyMonth(month)} — $${total.toFixed(2)}.` +
       (sharesBilled > 0
         ? ` ${sharesBilled} cost ${sharesBilled === 1 ? "share" : "shares"} you'd allocated went onto those bills.`
         : "") +

@@ -33,6 +33,18 @@ export function PayRentButton({
 }) {
   const router = useRouter();
   const [busy, start] = useTransition();
+  // ONE KEY PER PANEL, minted when it opens and reused by every tap.
+  //
+  // `disabled={busy}` is not a guard against a double charge: it is
+  // client-side, and `payRent` is an exported "use server" action any browser
+  // can call. Two tabs, or a phone and a laptop, both read the same
+  // paid_total and both charge the card. The key travels to the processor,
+  // which replays the first result instead of taking a second payment, and
+  // onto the row, where 0081's unique index refuses the duplicate.
+  //
+  // Minted per PANEL rather than per tap on purpose — a retry after a failed
+  // attempt must carry the SAME key, or it is a fresh charge.
+  const [idemKey] = useState(() => crypto.randomUUID());
   const [confirming, setConfirming] = useState(false);
 
   if (disabled) return null;
@@ -81,7 +93,7 @@ export function PayRentButton({
               disabled={busy}
               onClick={() =>
                 start(async () => {
-                  const res = await payRent(chargeId);
+                  const res = await payRent(chargeId, idemKey);
                   toast(res.ok ? (res.signal ?? "Paid.") : (res.error ?? "That didn't go through."));
                   if (res.ok) { setConfirming(false); router.refresh(); }
                 })

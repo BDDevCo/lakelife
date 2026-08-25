@@ -64,7 +64,28 @@ function couldNotCheck(what: string, error: unknown): PayResult {
   };
 }
 
-export async function payRent(chargeId: string): Promise<PayResult> {
+/**
+ * THE ONLY MONEY PATH IN THIS MODULE THAT WAS NOT KEYED.
+ *
+ * `recordPayment`, `recordOnAccount`, `recordDeposit` and
+ * `confirmClaimCollected` all take an idempotency key and collide on 0081's
+ * unique index — 0081 exists because a double-tapped submit "recorded the
+ * money twice and burnt two receipt numbers". This path arrived later (0108,
+ * 0109) and skipped it, so the only protection was `disabled={busy}` in the
+ * button. That is client-side, and `payRent` is an exported "use server"
+ * function any browser can call.
+ *
+ * Two calls in flight across the processor round-trip — two tabs, a phone and
+ * a laptop — both read paid_total, both charge the saved card, both insert.
+ * One month's rent taken twice, the roll reading "in credit", and NO REFUND
+ * PATH anywhere in the product: `reversePayment` corrects the ledger and
+ * returns nothing to the cardholder.
+ *
+ * The key now goes to the PROCESSOR as well as onto our row. That ordering
+ * matters: our unique index can refuse a second ledger row, but only the
+ * processor can refuse the second charge.
+ */
+export async function payRent(chargeId: string, idempotencyKey: string): Promise<PayResult> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Please sign in again." };
@@ -171,6 +192,7 @@ export async function payRent(chargeId: string): Promise<PayResult> {
     // The park's name on the statement, not LakeLife's — it is their rent, and
     // an unrecognised line on a bank statement is a chargeback.
     description: rentDescriptor(park.name as string),
+    idempotencyKey,
   });
   if (!charged.ok || !charged.ref) {
     return { ok: false, error: "That payment didn't go through. Try again, or ring the office." };
@@ -188,8 +210,16 @@ export async function payRent(chargeId: string): Promise<PayResult> {
     reference: charged.ref,
     kind: "rent",
     fee_amount: fee > 0 ? fee : null,
+    idempotency_key: idempotencyKey,
   });
   if (error) {
+    // 23505 = 0081's unique index. The twin call already filed this exact
+    // payment, and the processor replayed rather than re-charged, so the money
+    // moved once and is recorded once. Telling them it failed would be a lie
+    // that invites a THIRD attempt.
+    if ((error as { code?: string }).code === "23505") {
+      return { ok: true, signal: "That's paid — thank you. It's on your ledger." };
+    }
     // The money left their account and the ledger did not record it. This is
     // the one failure ops must never discover from a resident.
     return {

@@ -4300,12 +4300,31 @@ export async function raiseTripFees(): Promise<{ paid: number; total: number; on
     // night pays again, so a crash between these two writes would double-pay
     // the same trip. Losing a $35 accrual we can re-raise tomorrow is the far
     // better failure of the two.
-    const { error: stampErr } = await admin
+    //
+    // `.select("id")` IS LOAD-BEARING, and its absence made the compare-and-set
+    // above decorative. Without it PostgREST answers 204 and supabase-js
+    // resolves { data: null, error: null } whether the CAS matched ONE row or
+    // ZERO — so the only case this guard exists for, another run having already
+    // stamped the attempt, was indistinguishable from success and the
+    // compensating delete never ran.
+    //
+    // That is the lost race, not a hypothetical one: the nightly holds no lock
+    // of any kind, and its route exports POST as well as GET expressly to allow
+    // a manual re-trigger. Two overlapping runs both read the attempt while
+    // `trip_fee_payout_id` is still null, both insert a RELEASED $35 trip
+    // payout, the first stamp wins, and the second keeps a payout no attempt
+    // row points at. Nothing constrains it either — the uniqueness indexes on
+    // payouts are scoped to kind='earning' (0043b) and kind='tip' (0091), and a
+    // job legitimately attempted twice is two trips, so no index can.
+    //
+    // Zero rows is now treated exactly like an error: take the payout back out.
+    const { data: stamped, error: stampErr } = await admin
       .from("job_visit_attempts")
       .update({ trip_fee_payout_id: payout.id })
       .eq("id", a.id)
-      .is("trip_fee_payout_id", null);
-    if (stampErr) {
+      .is("trip_fee_payout_id", null)
+      .select("id");
+    if (stampErr || !stamped?.length) {
       await admin.from("payouts").delete().eq("id", payout.id);
       continue;
     }

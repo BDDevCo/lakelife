@@ -59,10 +59,31 @@ export interface TokenizeResult {
   token?: PaymentToken;
 }
 
+/**
+ * What the mock has already charged, by idempotency key.
+ *
+ * A real processor keeps this for 24 hours on its own side; in a serverless
+ * runtime this map does not survive a cold start, and that is fine — it exists
+ * to model the CONTRACT so the adapter is a drop-in and so a test can prove a
+ * repeated key takes one payment. The durable guard is the unique index on
+ * park_payments.idempotency_key.
+ */
+const chargeReplays = new Map<string, ChargeResult>();
+
 export interface ChargeInput {
   token: string;
   amountCents: number;
   description?: string;
+  /**
+   * SENT TO THE PROCESSOR, not just used by us.
+   *
+   * Every processor worth using (Stripe, Helcim) dedupes on this: the same key
+   * replays the FIRST result instead of taking a second payment. It is the
+   * answer to "what stops a duplicate charge", and it belongs on the request
+   * rather than only on our own row — our unique index can refuse a second
+   * ledger row, but by then the card has already been debited twice.
+   */
+  idempotencyKey?: string;
 }
 
 export interface ChargeResult {
@@ -126,6 +147,13 @@ export const LakeLifePayments = {
    * anything that looks like a raw PAN, defending CLAUDE.md rule 4 in depth.
    */
   async charge(input: ChargeInput): Promise<ChargeResult> {
+    // REPLAY, DO NOT RE-CHARGE. A real processor holds this server-side for
+    // 24h; this mock holds it in memory, which is enough to model the contract
+    // and to let a test prove that two calls with one key take one payment.
+    if (input.idempotencyKey) {
+      const seen = chargeReplays.get(input.idempotencyKey);
+      if (seen) return seen;
+    }
     if (!input.token.startsWith("tok_")) {
       return { ok: false, error: "Invalid payment token." };
     }
@@ -149,7 +177,9 @@ export const LakeLifePayments = {
       typeof crypto !== "undefined" && crypto.randomUUID
         ? "x" + crypto.randomUUID().replace(/-/g, "").slice(0, 15)
         : "x" + Math.random().toString(36).slice(2, 17);
-    return { ok: true, ref: `ch_mock_${rand}`, amountCents: input.amountCents };
+    const result: ChargeResult = { ok: true, ref: `ch_mock_${rand}`, amountCents: input.amountCents };
+    if (input.idempotencyKey) chargeReplays.set(input.idempotencyKey, result);
+    return result;
   },
 
   /**

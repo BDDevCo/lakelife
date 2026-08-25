@@ -317,7 +317,30 @@ describe("a cost share billed once, or the bill comes back", () => {
   });
 
   it("takes the bill back when it cannot mark the costs as spent", () => {
-    expect(body).toMatch(/from\("park_charges"\)\.update\(\{ status: "void" \}\)/);
+    expect(body).toMatch(/from\("park_charges"\)[\s\S]{0,120}status: "void"/);
+  });
+
+  it("and that void carries its timestamp and its reason", () => {
+    // 0070 declares `check (voided_at is null or void_reason is not null)`, and
+    // voidCharge honours it — it refuses a blank reason outright. Writing only
+    // `status` left voided_at NULL, which satisfies that constraint VACUOUSLY:
+    // a bill marked void with no timestamp and no reason, which is exactly the
+    // row the constraint exists to forbid. An accountant reading the ledger
+    // finds a cancelled bill and nothing saying why.
+    const voidCall = body.slice(body.indexOf('from("park_charges")'));
+    expect(voidCall.slice(0, 400)).toContain("voided_at");
+    expect(voidCall.slice(0, 400)).toContain("void_reason");
+  });
+
+  it("and the run reports what SURVIVED, not what it inserted", () => {
+    // Both figures came from `rows`, the pre-rollback insert list, so a month
+    // where one bill was taken back still reported it — and that number is the
+    // one the owner reconciles against.
+    // `src` not `body`: the return statement sits past the slice `body` covers,
+    // which is the same reason the stampProblems assertion below uses src.
+    expect(src).toContain("rolledBack");
+    expect(src).toMatch(/raised: keptRows\.length/);
+    expect(src).toMatch(/keptRows\.reduce/);
   });
 
   it("and still says so when even the void fails", () => {

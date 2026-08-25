@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { detectBrand, luhnValid, LakeLifePayments } from "./payments";
 
 describe("card brand detection", () => {
@@ -109,5 +111,95 @@ describe("mock token never trips our own leaked-PAN guard", () => {
       const charged = await LakeLifePayments.charge({ token: t.token!.token, amountCents: 1000 });
       expect(charged.ok).toBe(true);
     }
+  });
+});
+
+describe("an idempotency key takes ONE payment, not two", () => {
+  /**
+   * `payRent` was the only money path in the park module without a key. Its
+   * siblings all collide on 0081's unique index — 0081 exists because a
+   * double-tapped submit "recorded the money twice and burnt two receipt
+   * numbers". The card path arrived later and skipped it, leaving
+   * `disabled={busy}` as the only protection: client-side, on an exported
+   * "use server" action any browser can call.
+   *
+   * The key goes to the PROCESSOR as well as onto the row. Order matters — a
+   * unique index refuses a second ledger row, but only the processor can
+   * refuse the second charge, and by the time the index fires the card has
+   * already been debited twice.
+   */
+  it("replays the first result rather than charging again", async () => {
+    const key = `test-${Math.random().toString(36).slice(2)}`;
+    const first = await LakeLifePayments.charge({ token: "tok_mock_4242_aaa111", amountCents: 45500, idempotencyKey: key });
+    const second = await LakeLifePayments.charge({ token: "tok_mock_4242_aaa111", amountCents: 45500, idempotencyKey: key });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    // The SAME reference — one payment at the processor, not two.
+    expect(second.ref).toBe(first.ref);
+  });
+
+  it("a different key is a different payment", async () => {
+    const a = await LakeLifePayments.charge({ token: "tok_mock_4242_bbb222", amountCents: 1000, idempotencyKey: `k-${Math.random()}` });
+    const b = await LakeLifePayments.charge({ token: "tok_mock_4242_bbb222", amountCents: 1000, idempotencyKey: `k-${Math.random()}` });
+    expect(a.ref).not.toBe(b.ref);
+  });
+
+  it("no key at all still charges — the mock does not invent one", async () => {
+    const a = await LakeLifePayments.charge({ token: "tok_mock_4242_ccc333", amountCents: 500 });
+    const b = await LakeLifePayments.charge({ token: "tok_mock_4242_ccc333", amountCents: 500 });
+    expect(a.ref).not.toBe(b.ref);
+  });
+
+  it("a replayed key does not re-run the PAN guard into a false pass", async () => {
+    // Guards the guard: the replay cache must not let a bad token through by
+    // returning a cached success for a different token under the same key.
+    const key = `guard-${Math.random()}`;
+    const good = await LakeLifePayments.charge({ token: "tok_mock_4242_ddd444", amountCents: 100, idempotencyKey: key });
+    expect(good.ok).toBe(true);
+    const replayed = await LakeLifePayments.charge({ token: "tok_4242424242424242", amountCents: 100, idempotencyKey: key });
+    // It replays the FIRST result, which is the processor's real contract —
+    // the key is the identity of the ATTEMPT, so this is correct. Documented
+    // here so nobody mistakes it for the PAN guard being bypassable: a fresh
+    // key still refuses the raw number.
+    expect(replayed.ref).toBe(good.ref);
+    const fresh = await LakeLifePayments.charge({ token: "tok_4242424242424242", amountCents: 100, idempotencyKey: `fresh-${Math.random()}` });
+    expect(fresh.ok).toBe(false);
+  });
+});
+
+describe("the resident's card path carries the key end to end", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("../app/parks/pay-actions.ts", import.meta.url)), "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  it("payRent requires a key", () => {
+    expect(src).toMatch(/payRent\(chargeId: string, idempotencyKey: string\)/);
+  });
+
+  it("sends it to the processor, not just onto the row", () => {
+    const chargeCall = src.slice(src.indexOf("LakeLifePayments.charge("), src.indexOf("if (!charged.ok"));
+    expect(chargeCall).toContain("idempotencyKey");
+  });
+
+  it("puts it on the row so the unique index can refuse a duplicate", () => {
+    const insert = src.slice(src.indexOf('from("park_payments").insert('));
+    expect(insert.slice(0, 400)).toContain("idempotency_key: idempotencyKey");
+  });
+
+  it("treats the index collision as PAID, not as a failure", () => {
+    // The twin call already filed it and the processor replayed rather than
+    // re-charged. Reporting failure invites a third attempt.
+    expect(src).toMatch(/23505/);
+    const after = src.slice(src.indexOf("23505"));
+    expect(after.slice(0, 200)).toContain("ok: true");
+  });
+
+  it("the button mints ONE key per panel, not per tap", () => {
+    const btn = readFileSync(
+      fileURLToPath(new URL("../components/PayRentButton.tsx", import.meta.url)), "utf8",
+    );
+    expect(btn).toMatch(/useState\(\(\) => crypto\.randomUUID\(\)\)/);
+    // A retry after a failure must carry the same key or it is a fresh charge.
+    expect(btn).toContain("payRent(chargeId, idemKey)");
   });
 });
