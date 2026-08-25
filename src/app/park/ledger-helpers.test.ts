@@ -411,3 +411,67 @@ describe("which day a household's rent is due", () => {
     expect(src).not.toContain("parkDueDay");
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("the catch-up window the owner is TOLD about", () => {
+  /**
+   * TWO SENTENCES DESCRIBED THIS RULE AND BOTH WERE A DAY SHORT.
+   *
+   * The rule is `overdueBy > lagDays`, so a bill has to clear the window
+   * before it reads late: with a 3-day window it is still "Due" on day 3 and
+   * turns "Late" on day 4. Both sentences said "until it's 3 days past due",
+   * which reads as late ON day 3.
+   *
+   * Where it lands: the owner sets the dial from the hint on it, then looks at
+   * the roll on day 3 and finds a household the screen has just told him is
+   * late sitting in the Due column. The number in the copy is the only thing
+   * he has to check the software against.
+   *
+   * THE CODE IS RIGHT AND THE COPY WAS WRONG, which is the direction that
+   * mattered: tightening the comparison to `>=` would call somebody late while
+   * the window the setting exists to protect is still open.
+   */
+
+  /** Walk the days and ask the RULE when it first says late. No restatement. */
+  function firstLateDay(lagDays: number): number {
+    for (let d = 0; d <= 60; d += 1) {
+      const today = `2027-04-${String(1 + d).padStart(2, "0")}`;
+      if (ledgerState(charge({ dueOn: "2027-04-01" }), today, lagDays) === "late") return d;
+    }
+    return -1;
+  }
+
+  it("a bill first reads late the day AFTER the window closes", () => {
+    expect(firstLateDay(3)).toBe(4);
+    expect(firstLateDay(14)).toBe(15);
+    // A same-day office has no window at all: due on the 1st, late on the 2nd.
+    expect(firstLateDay(0)).toBe(1);
+  });
+
+  it("is still Due on the last day of the window", () => {
+    // The exact day both sentences called late.
+    expect(ledgerState(charge({ dueOn: "2027-04-01" }), "2027-04-04", 3)).toBe("due");
+  });
+
+  const COPY: Array<[string, string]> = [
+    ["the rent roll's note under the late column", "../../components/ParkRent.tsx"],
+    ["the hint on the dial he sets it with", "../../components/ParkDials.tsx"],
+  ];
+
+  for (const [what, rel] of COPY) {
+    it(`${what} says MORE THAN, not a bare day count`, () => {
+      const s = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+      // Both sentences end the same way, so anchor on that and check the
+      // hedge is in front of it rather than matching loose prose.
+      const sentence = s
+        .split("\n")
+        .join(" ")
+        // Bounded [\s\S], not [^.]: the JSX interpolates `page.lagDays`, and a
+        // dot-excluding class stops dead at that property access.
+        .match(/[Nn]o(?:thing|body) is (?:marked|called) late until[\s\S]{0,120}?days past due/);
+      expect(sentence).not.toBeNull();
+      expect(sentence![0]).toContain("more than");
+    });
+  }
+});

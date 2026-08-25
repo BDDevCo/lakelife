@@ -305,9 +305,9 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
 
           {page.lagDays > 0 && s.lateCount === 0 && s.outstanding > 0 && (
             <p className="mut" style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
-              Nothing is marked late until it&apos;s {page.lagDays} days past due —
-              that&apos;s your office catch-up window, so a check sitting in an
-              envelope doesn&apos;t make somebody look delinquent.
+              Nothing is marked late until a bill is more than {page.lagDays}{" "}
+              days past due — that&apos;s your office catch-up window, so a check
+              sitting in an envelope doesn&apos;t make somebody look delinquent.
             </p>
           )}
         </section>

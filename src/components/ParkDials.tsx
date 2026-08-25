@@ -87,7 +87,7 @@ export function ParkDials({
         />
         <Field
           label="Office catch-up window"
-          hint="Nobody is called late until a bill is this many days past due — so a check in an envelope doesn't make somebody look delinquent."
+          hint="Nobody is called late until a bill is more than this many days past due — so a check in an envelope doesn't make somebody look delinquent."
           suffix="days"
           value={form.officeRecordingLagDays}
           onChange={(v) => set("officeRecordingLagDays", v)}
