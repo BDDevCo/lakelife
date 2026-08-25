@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  payersFor, monthlyIncome, checkCoverage, coverageSummary,
+  payersFor, monthlyIncome, checkCoverage, coverageSummary, feesForTenancy, feePayableCount,
   type ParkFee, nightlyRecoveryTarget, nightlyRecoveryLine,
 } from "./fee-helpers";
 import type { CostCategory } from "./cost-helpers";
@@ -283,5 +283,66 @@ describe("the sentence at the top of the fee screen, on the first day", () => {
   it("keeps working for callers that pass no fee count", () => {
     // The parameter is defaulted, so nothing that existed before changes.
     expect(coverageSummary(noCosts, 0)).toBe("No fees and no bills yet.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("a fee never lands on a tenancy the park inherited", () => {
+  /**
+   * THE FIRST GROUNDS FEE WOULD HAVE BILLED NINETEEN PEOPLE WHO SIGNED NOTHING.
+   *
+   * `feesFor` reads one list for the whole park and the biller handed that same
+   * list to every long-term tenancy. At The Haven that is the nineteen
+   * households inherited from the seller: no notice served, no agreement with
+   * this owner, and rent up by a third on the January bill.
+   *
+   * Nothing in the schema could say "not them" — park_fees has no effective
+   * date and no notice column, and lot_fee_assignments has no writer. But the
+   * TENANCY already knows: origin='grandfathered' means exactly "inherited,
+   * never agreed to anything with us", and 0065 and 0059 already treat it as a
+   * category apart for the agreement cap and for decisions.
+   */
+  const FEES = [{ label: "Grounds fee", amount: 55, cadence: "monthly" }];
+  const longTerm = { rental_mode: "long_term" };
+
+  it("charges a tenancy that was signed with this owner", () => {
+    expect(feesForTenancy(FEES, longTerm, { origin: "application" })).toEqual(FEES);
+    expect(feesForTenancy(FEES, longTerm, { origin: "office" })).toEqual(FEES);
+    expect(feesForTenancy(FEES, longTerm, { origin: "transfer" })).toEqual(FEES);
+  });
+
+  it("charges an inherited tenancy nothing at all", () => {
+    expect(feesForTenancy(FEES, longTerm, { origin: "grandfathered" })).toEqual([]);
+  });
+
+  it("still charges a lot with no origin recorded", () => {
+    // `origin` defaults to 'application' in 0059, so an absent value is an
+    // ordinary tenancy — refusing here would silently stop billing fees to
+    // every park whose rows predate the column.
+    expect(feesForTenancy(FEES, longTerm, {})).toEqual(FEES);
+  });
+
+  it("keeps the rule it already had about a nightly home", () => {
+    // A short-term lot is priced per stay. Adding the new rule must not have
+    // dropped the old one.
+    expect(feesForTenancy(FEES, { rental_mode: "short_term" }, { origin: "application" })).toEqual([]);
+  });
+
+  it("returns a copy, so one tenancy cannot mutate the park's list", () => {
+    const out = feesForTenancy(FEES, longTerm, { origin: "application" });
+    out.pop();
+    expect(FEES).toHaveLength(1);
+  });
+
+  it("counts only the households a fee could actually reach", () => {
+    // The coverage panel divides by this. Counting inherited households would
+    // credit income from bills the run will never raise.
+    expect(feePayableCount([
+      { origin: "grandfathered" }, { origin: "grandfathered" },
+      { origin: "application" },
+    ])).toBe(1);
+    expect(feePayableCount([])).toBe(0);
+    expect(feePayableCount([{ origin: "application" }, {}])).toBe(2);
   });
 });

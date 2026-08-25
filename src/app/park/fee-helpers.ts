@@ -127,6 +127,54 @@ export function payersFor(
   }
 }
 
+/**
+ * WHICH FEES THIS PARTICULAR TENANCY IS CHARGED.
+ *
+ * A FEE NEVER LANDS ON A TENANCY THE PARK INHERITED.
+ *
+ * `feesFor` reads one list for the park and the biller handed that same list to
+ * every long-term tenancy, so the first grounds fee saved would have appeared
+ * on the January bill of all nineteen households at The Haven — people who
+ * signed nothing with this owner, were never told, and whose rent went up by a
+ * third overnight. Nothing in the schema could express "not them": there is no
+ * effective date on a fee, no notice mechanism of any kind, and
+ * `lot_fee_assignments` — the per-lot table — has no writer anywhere.
+ *
+ * The distinction already exists on the TENANCY. `origin = 'grandfathered'`
+ * means exactly "inherited, never agreed to anything with us", and this
+ * codebase already treats it as a category apart in two other places: 0065's
+ * trigger exempts it from the park's agreement cap, and 0059's constraint
+ * forbids it carrying a decision, because no decision happened. A charge the
+ * resident never agreed to is the same argument a third time.
+ *
+ * It is a REFUSAL, not a silence — `ParkFees` says on screen who this fee will
+ * and will not reach, and the payer count agrees with it. A park that means to
+ * charge an inherited household needs to serve notice first, and the machinery
+ * for that does not exist yet; refusing until it does is the conservative half
+ * of the mistake.
+ *
+ * A sitting tenant who later signs a new agreement gets a successor row with a
+ * different origin, and the fee begins applying then — which is right, because
+ * that is the moment they agreed to it.
+ */
+export function feesForTenancy<T>(
+  fees: readonly T[],
+  lot: { rental_mode?: unknown },
+  stay: { origin?: unknown },
+): T[] {
+  // A nightly home is priced per stay, not billed a monthly fee.
+  if ((lot.rental_mode as string) === "short_term") return [];
+  if ((stay.origin as string) === "grandfathered") return [];
+  return [...fees];
+}
+
+/** How many of these tenancies a fee may actually be charged to. */
+export function feePayableCount(
+  stays: readonly { park_lot_id?: unknown; origin?: unknown }[],
+): number {
+  return stays.filter((s) => (s.origin as string) !== "grandfathered").length;
+}
+
 /** What a fee brings in per month. Only the cadence the biller actually bills. */
 export function monthlyIncome(fee: ParkFee, payers: number): number {
   if (!fee.active) return 0;

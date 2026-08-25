@@ -30,6 +30,12 @@ export interface FeesPage {
   coverage: CoverageCheck;
   /** Lots the grounds-style fees land on — the divisor for "per lot". */
   coveragePayers: number;
+  /**
+   * Occupied lots a fee CANNOT be charged to, because the tenancy was
+   * inherited. Counted so the screen can say so out loud rather than just
+   * quietly reporting fewer payers than he has households.
+   */
+  inheritedTenancies: number;
   monthsObserved: number;
 }
 
@@ -45,6 +51,7 @@ export async function listFees(parkId: string): Promise<FeesPage> {
     fees: [],
     coverage: { feeIncome: 0, actualCost: 0, margin: 0, unverified: [], uncovered: [] },
     coveragePayers: 0,
+    inheritedTenancies: 0,
     monthsObserved: 1,
   };
   if (!(await assertMyPark(parkId))) return empty;
@@ -75,11 +82,17 @@ export async function listFees(parkId: string): Promise<FeesPage> {
   const liveStays = mustRead("who is on your lots", live.length
     ? await admin
         .from("lot_reservations")
-        .select("park_lot_id")
+        .select("park_lot_id, origin")
         .in("park_lot_id", live.map((l) => l.id as string))
         .in("status", ["approved", "active"])
     : { data: [] as Record<string, unknown>[], error: null });
-  const occupied = new Set((liveStays ?? []).map((s) => s.park_lot_id as string));
+  // A FEE IS NOT CHARGED TO AN INHERITED TENANCY (feesForTenancy), so counting
+  // those households as payers would credit the park income from bills the run
+  // will never raise — on the one screen built to answer "is my fee covering
+  // my costs".
+  const billable = (liveStays ?? []).filter((s) => (s.origin as string) !== "grandfathered");
+  const inheritedTenancies = (liveStays ?? []).length - billable.length;
+  const occupied = new Set(billable.map((s) => s.park_lot_id as string));
 
   const counts = {
     longTerm: live.filter(
@@ -134,6 +147,7 @@ export async function listFees(parkId: string): Promise<FeesPage> {
     fees,
     coverage,
     coveragePayers: Math.max(...fees.map((f) => f.payers), 0),
+    inheritedTenancies,
     monthsObserved,
   };
 }

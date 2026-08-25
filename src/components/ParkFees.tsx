@@ -114,6 +114,20 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
         the only power you pay for is on homes you own.
       </p>
 
+      {/* WHO THIS WILL NOT REACH, said before he types an amount.
+          A fee is never charged to a tenancy the park INHERITED — they signed
+          nothing with him and there is no way to serve notice yet. Without
+          this sentence the only symptom is a payer count quietly lower than
+          his household count, which reads as a fault rather than a rule. */}
+      {page.inheritedTenancies > 0 && (
+        <p className="mut" style={{ margin: "0 0 14px", lineHeight: 1.5, maxWidth: 640, fontSize: 13 }}>
+          This won&apos;t be charged to the {page.inheritedTenancies}{" "}
+          {page.inheritedTenancies === 1 ? "household you inherited" : "households you inherited"} —
+          they agreed to their rent with the previous owner, not to a fee with
+          you. It starts for each of them when they sign a new agreement.
+        </p>
+      )}
+
       {/* ---- IS IT SET RIGHT. The only question worth asking. ------------- */}
       {page.fees.length > 0 && (
         <div className="ll-card ll-card-pad"

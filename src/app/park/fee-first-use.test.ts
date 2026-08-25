@@ -168,3 +168,45 @@ describe("what the resident sees of a part month", () => {
     expect(home).toMatch(/l\.basis !== "for the month"/);
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("the biller applies the inherited-tenancy rule", () => {
+  const LEDGER = code("./ledger-actions.ts");
+
+  it("reads origin on BOTH tenancy queries", () => {
+    // Without the column the rule cannot be applied, and its absence would
+    // read as "not grandfathered" — billing exactly the people it protects.
+    const selects = LEDGER.split("\n").filter(
+      (l) => l.includes(".select(") && l.includes("park_lot_id") && l.includes("during"),
+    );
+    expect(selects.length).toBe(2);
+    for (const sel of selects) expect(sel).toContain("origin");
+  });
+
+  it("uses the same function in the preview and in the run", () => {
+    // "A PREVIEW MUST SHOW WHAT THE RUN WILL ACTUALLY DO" — this file's own
+    // rule. Two copies of the rule are two chances to disagree about a number
+    // he has already approved.
+    const calls = LEDGER.match(/fees: feesForTenancy\(fees, lot, s\)/g) ?? [];
+    expect(calls.length).toBe(2);
+  });
+
+  it("no longer decides it inline", () => {
+    expect(LEDGER).not.toMatch(/fees:\s*\(lot\.rental_mode as string\) === "short_term"/);
+  });
+
+  it("the payer count agrees with the biller", () => {
+    // If the screen counted inherited households as payers it would credit
+    // income from bills that are never raised.
+    expect(ACTIONS).toMatch(/\(s\.origin as string\) !== "grandfathered"/);
+    expect(ACTIONS).toContain("inheritedTenancies");
+  });
+
+  it("the screen says who it will not reach", () => {
+    // A rule enforced silently looks like a fault: the only other symptom is a
+    // payer count lower than his household count.
+    expect(FORM).toContain("page.inheritedTenancies > 0");
+    expect(FORM).toMatch(/households you inherited/);
+  });
+});

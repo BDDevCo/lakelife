@@ -8,6 +8,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import { buildStatement, type StatementFee } from "./statement-helpers";
 import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
+import { feesForTenancy } from "./fee-helpers";
 import { planRun, toRows, summarise, currentPeriod, prettyMonth, type Charge, type LedgerRow, type LedgerSummary, type RunPlan, dueDayFor } from "./ledger-helpers";
 import { preCutoverRefusal } from "@/lib/billing-start";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
@@ -209,7 +210,7 @@ export async function previewChargeRun(
   // omit a final part-month the run then charges.
   const staysRes = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, during, quoted_amount, status, moved_out_on, due_day")
+    .select("id, park_lot_id, during, quoted_amount, status, moved_out_on, due_day, origin")
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active", "ended"]);
   if (staysRes.error) {
@@ -274,8 +275,11 @@ export async function previewChargeRun(
           month,
           stay: range,
           rent: rentNow,
-          // A nightly home is priced per stay, not billed a monthly fee.
-          fees: (lot.rental_mode as string) === "short_term" ? [] : fees,
+          // A nightly home is priced per stay, and an INHERITED tenancy is
+          // charged no fee at all — see feesForTenancy. The preview must use
+          // the same function as the run or it quotes a number the run will
+          // not raise.
+          fees: feesForTenancy(fees, lot, s),
           dueDay: dueDayFor(s.due_day, dueDay),
           costShares: shareMap.get(s.id as string) ?? [],
         })
@@ -384,7 +388,7 @@ export async function runCharges(
   // 'cancelled' stays OUT: nobody ever lived there.
   const staysRes = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_id, during, quoted_amount, status, moved_out_on, due_day")
+    .select("id, park_lot_id, renter_id, during, quoted_amount, status, moved_out_on, due_day, origin")
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active", "ended"]);
   // Swallowed, this ends as "Nothing to bill — it may already be done", which
@@ -455,7 +459,7 @@ export async function runCharges(
         lastDayOfMonth(month),
         s.quoted_amount == null ? null : Number(s.quoted_amount),
       ),
-      fees: (lot.rental_mode as string) === "short_term" ? [] : fees,
+      fees: feesForTenancy(fees, lot, s),
       dueDay: dueDayFor(s.due_day, dueDay),
       costShares: shares,
     });
