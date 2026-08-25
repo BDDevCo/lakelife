@@ -136,3 +136,47 @@ describe("the whole park, this month", () => {
     expect(r.blocked).toBe(1);      // the one with no rent, surfaced not hidden
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("a fee with no amount", () => {
+  /**
+   * A $0.00 LINE IS NOT A CHARGE, IT IS A QUESTION.
+   *
+   * `park_fees.amount` is `>= 0` in the database, `saveFee` checked only for
+   * negatives, and the Save button blocked an empty box but not the string
+   * "0". So a fee could be saved at zero — and these lines are FROZEN into
+   * `park_charges.lines` the instant the run raises the bill. There is no
+   * editing one out afterwards; nineteen residents get a line reading $0.00
+   * beside a fee name and ring the office to ask what it is.
+   */
+  it("never reaches a resident's bill", () => {
+    const s = buildStatement({
+      month: "2027-03", stay: WHOLE_YEAR, rent: 400,
+      fees: [GROUNDS, { label: "Road fund", amount: 0, cadence: "monthly" }],
+      dueDay: 1,
+    });
+    expect(s.lines.map((l) => l.label)).toEqual(["Lot rent", "Grounds fee"]);
+    expect(s.total).toBe(455);
+  });
+
+  it("is dropped after proration too, not before", () => {
+    // A part month multiplies every line by a fraction. Zero stays zero, and
+    // the line must be gone in both paths rather than only the whole-month one.
+    const s = buildStatement({
+      month: "2027-03", stay: { start: "2027-03-20", end: "2028-01-01" }, rent: 400,
+      fees: [{ label: "Road fund", amount: 0, cadence: "monthly" }],
+      dueDay: 1,
+    });
+    expect(s.prorated).toBe(true);
+    expect(s.lines.map((l) => l.label)).toEqual(["Lot rent"]);
+  });
+
+  it("still bills a real fee on the same statement", () => {
+    // Guards the guard: if the skip were written to drop every fee, this fails.
+    const s = buildStatement({
+      month: "2027-03", stay: WHOLE_YEAR, rent: 400, fees: [GROUNDS], dueDay: 1,
+    });
+    expect(s.lines.find((l) => l.label === "Grounds fee")?.amount).toBe(55);
+  });
+});

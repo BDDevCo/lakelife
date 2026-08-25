@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { mustRead } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import {
@@ -12,6 +12,13 @@ import type { CostCategory } from "./cost-helpers";
 import type { ParkResult } from "./actions";
 
 const DENIED = "You don't manage that park.";
+
+/** Whose hand this was. Null when we cannot tell, never a guess. */
+async function currentUserId(): Promise<string | null> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  return user?.id ?? null;
+}
 
 export interface FeeView extends ParkFee {
   payers: number;
@@ -146,11 +153,41 @@ export async function saveFee(
 
   const label = input.label.trim();
   if (label.length < 2) return { ok: false, error: "Give the fee a name residents will recognise." };
-  if (!Number.isFinite(input.amount) || input.amount < 0) {
+  if (!Number.isFinite(input.amount)) {
     return { ok: false, error: "That amount isn't a number." };
+  }
+  // A ZERO FEE IS A LINE ON NINETEEN BILLS THAT SAYS $0.00.
+  //
+  // The database allows `amount >= 0`, this checked only for negatives, and the
+  // Save button blocks an empty box but not the string "0" — so a fee could be
+  // saved at zero and `buildStatement` would push a $0.00 line onto every
+  // charge, frozen into `park_charges.lines` where it cannot be edited out. A
+  // fee somebody has not decided the price of yet is not a fee; it is a note.
+  if (input.amount <= 0) {
+    return { ok: false, error: "A fee needs an amount. If you haven't settled on one yet, add it when you have." };
   }
 
   const admin = createServiceClient();
+
+  // TWO ACTIVE FEES WITH THE SAME NAME BOTH BILL.
+  //
+  // There is no unique index on (park_id, label) and no way to EDIT a fee from
+  // the screen, so the obvious way to fix a wrong amount — add it again with
+  // the right one — silently charges the resident twice, on two lines with the
+  // same label. Switching the old one off is the correct move and this says so.
+  const clash = mustRead("your existing fees", await admin
+    .from("park_fees")
+    .select("id, label")
+    .eq("park_id", parkId)
+    .eq("active", true)
+    .ilike("label", label));
+  if ((clash ?? []).some((f) => (f.id as string) !== input.id)) {
+    return {
+      ok: false,
+      error: `You already have an active fee called "${label}". Edit that one, or switch it off first — two with the same name would both be charged.`,
+    };
+  }
+
   const row = {
     park_id: parkId,
     label,
@@ -162,7 +199,12 @@ export async function saveFee(
 
   const { error } = input.id
     ? await admin.from("park_fees").update(row).eq("id", input.id).eq("park_id", parkId)
-    : await admin.from("park_fees").insert(row);
+    // WHO ADDED IT. `created_by` has existed since 0067 and nothing has ever
+    // written it, so the one question a disputed line provokes — who put this
+    // on my bill — had no answer. Written only on insert: an edit is a
+    // different act from an addition, and overwriting it would erase the
+    // person who made the original decision.
+    : await admin.from("park_fees").insert({ ...row, created_by: await currentUserId() });
 
   if (error) {
     // The covers allowlist. Unreachable from the UI, which offers checkboxes.

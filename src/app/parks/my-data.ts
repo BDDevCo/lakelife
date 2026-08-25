@@ -26,7 +26,15 @@ import { mustRead, mustCount, softRead } from "@/lib/must-read";
  * late rent would have quietly become a collections tool.
  */
 
-export interface BillLine { label: string; amount: number }
+/**
+ * WHY THIS LINE IS THIS SIZE. `basis` is what `buildStatement` writes beside
+ * every line — "for the month", or "12 of 31 days" when a tenancy started or
+ * ended mid-month. It was dropped here, so a resident who moved in on the 20th
+ * saw a fee at a fraction of its stated amount with nothing saying why. The
+ * screen's own comment promises the bill "shows its working"; the working is
+ * this field.
+ */
+export interface BillLine { label: string; amount: number; basis: string | null }
 
 export interface Bill {
   /** Needed by payRent and sayIPaid — the only id this screen hands back. */
@@ -305,9 +313,13 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       status: (c.status as string) ?? "open",
       disputed: claimedOn.has(c.id as string),
       claimedPaidOn: claimedOn.get(c.id as string) ?? null,
-      lines: ((c.lines as { label?: string; amount?: number }[]) ?? []).map((l) => ({
+      lines: ((c.lines as { label?: string; amount?: number; basis?: string }[]) ?? []).map((l) => ({
         label: String(l.label ?? "Rent"),
         amount: Number(l.amount ?? 0),
+        // Older charges were frozen before this was carried through, so a
+        // missing basis is a real state and reads as no explanation rather
+        // than an empty one.
+        basis: l.basis == null ? null : String(l.basis),
       })),
     };
   };

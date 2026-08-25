@@ -189,6 +189,12 @@ export function buildStatement(input: StatementInput): Statement {
     // A per-stay or one-off fee is not a monthly charge and must not quietly
     // appear every month.
     if (f.cadence !== "monthly") continue;
+    // A $0.00 LINE IS NOT A CHARGE, IT IS A QUESTION. `saveFee` now refuses a
+    // zero amount, but the database still allows `amount >= 0` and these lines
+    // are FROZEN into park_charges.lines the moment the run raises the bill —
+    // there is no editing one out afterwards. A resident reading "$0.00" beside
+    // a fee name learns nothing and rings the office.
+    if (round2(f.amount) === 0) continue;
     const doProrate = prorated && f.prorate !== false;
     lines.push({
       label: f.label,

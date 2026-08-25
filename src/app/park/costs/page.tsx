@@ -45,7 +45,12 @@ export default async function ParkCostsPage() {
         parkId={park.id}
         rows={rows}
         summary={summary}
-        recoveredByFee={feesPage.fees.some((f) => f.active && f.covers.length > 0)}
+        /* A FEE THAT NOBODY PAYS RECOVERS NOTHING. This flipped the costs
+           headline to "covered by your fee below" on the mere EXISTENCE of a
+           fee — so the moment one is saved, before a single household is on a
+           lot, the screen claims costs are being recovered that are not. */
+        recoveredByFee={feesPage.coveragePayers > 0
+          && feesPage.fees.some((f) => f.active && f.covers.length > 0)}
         schedules={<ParkCostSchedules parkId={park.id} rows={schedules} />}
         fees={<ParkFees parkId={park.id} page={feesPage} />}
       />

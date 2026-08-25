@@ -233,3 +233,55 @@ describe("pricing a park-owned home's share into the nightly rate", () => {
     expect(nightlyRecoveryLine("12", 1.81)).toMatch(/booking taken somewhere else/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("the sentence at the top of the fee screen, on the first day", () => {
+  /**
+   * THE CARD CONTRADICTED THE SCREEN IT SAT IN.
+   *
+   * `feeIncome` is zero in two completely different situations — no fees at
+   * all, and fees that nobody is on a lot to pay — and the no-cost branch ran
+   * first. So a park with a saved grounds fee and no tenancies read
+   *
+   *     "No fees and no bills yet."
+   *
+   * inside a card that only renders BECAUSE a fee exists, above a row showing
+   * the fee. That is The Haven's exact state until the roll is named: 21 lots,
+   * 20 rate cards, zero households.
+   */
+  const noCosts = {
+    feeIncome: 0, actualCost: 0, margin: 0,
+    unverified: [] as never[], uncovered: [] as never[],
+  };
+
+  it("says nobody is on a lot when a fee exists and nobody is", () => {
+    expect(coverageSummary(noCosts, 0, 1)).toBe(
+      "Nobody is on a lot yet, so this fee is collecting nothing.",
+    );
+  });
+
+  it("does not claim there are no fees when there are", () => {
+    expect(coverageSummary(noCosts, 0, 1)).not.toMatch(/no fees/i);
+    expect(coverageSummary(noCosts, 0, 3)).not.toMatch(/no fees/i);
+  });
+
+  it("still says so when there genuinely are none", () => {
+    expect(coverageSummary(noCosts, 0, 0)).toBe("No fees and no bills yet.");
+  });
+
+  it("goes back to the real comparison once both sides exist", () => {
+    // Guards the guard: the new branch must not swallow the sentence the
+    // screen exists for.
+    const real = {
+      feeIncome: 1100, actualCost: 900, margin: 200,
+      unverified: [] as never[], uncovered: [] as never[],
+    };
+    expect(coverageSummary(real, 20, 1)).toMatch(/ahead by \$10\.00 a lot/);
+  });
+
+  it("keeps working for callers that pass no fee count", () => {
+    // The parameter is defaulted, so nothing that existed before changes.
+    expect(coverageSummary(noCosts, 0)).toBe("No fees and no bills yet.");
+  });
+});

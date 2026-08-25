@@ -162,7 +162,15 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 {b.lines.map((l, i) => (
                   <div key={`${l.label}-${i}`}
                     style={{ display: "flex", fontSize: 13, padding: "3px 0" }}>
-                    <span className="mut">{l.label}</span>
+                    <span className="mut">
+                      {l.label}
+                      {/* A PART MONTH SAYS SO. Without this a resident who
+                          moved in on the 20th sees a $55 fee charged at $19.35
+                          and no reason for the number. */}
+                      {l.basis && l.basis !== "for the month" && (
+                        <span style={{ opacity: 0.75 }}> · {l.basis}</span>
+                      )}
+                    </span>
                     <span style={{ marginLeft: "auto" }}>{usd(l.amount)}</span>
                   </div>
                 ))}

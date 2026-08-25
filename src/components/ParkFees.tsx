@@ -51,17 +51,39 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
   const router = useRouter();
   const [busy, start] = useTransition();
   const [open, setOpen] = useState(false);
+  /**
+   * WHICH FEE IS BEING CHANGED, or null when adding a new one.
+   *
+   * `saveFee` has always taken an optional `id` and branched to an UPDATE on
+   * it — and nothing in the app ever passed one, so that branch was dead and a
+   * fee could not be corrected at all. The only way to fix a wrong amount was
+   * to add the fee again, which (with no uniqueness on the label) charged the
+   * resident twice on two identically named lines.
+   */
+  const [editing, setEditing] = useState<string | null>(null);
   const [label, setLabel] = useState("Grounds fee");
   const [amount, setAmount] = useState("");
   const [cadence, setCadence] = useState<FeeCadence>("monthly");
   const [appliesTo, setAppliesTo] = useState<FeeAppliesTo>("long_term");
-  const [covers, setCovers] = useState<Set<string>>(
-    new Set(["water", "sewer", "trash", "common_electric", "maintenance"]),
-  );
+  /**
+   * NOTHING IS TICKED UNTIL HE TICKS IT.
+   *
+   * These five arrived pre-ticked, and a tick here is not a label — it is a
+   * money decision. `recordCost` reads the ticked categories and absorbs EVERY
+   * future bill in one of them entirely into `park_absorbed`, marked
+   * `fee_covered`, never splitting it across the lots again. So a box he never
+   * looked at silently converts his water and sewer bills into a permanent
+   * park expense he is no longer recovering.
+   *
+   * A default is a claim about what is true on day one, and on day one nobody
+   * has decided what this fee covers.
+   */
+  const [covers, setCovers] = useState<Set<string>>(new Set());
 
   function save() {
     start(async () => {
       const res = await saveFee(parkId, {
+        id: editing ?? undefined,
         label,
         amount: Number(amount.replace(/[$,\s]/g, "")),
         cadence,
@@ -70,7 +92,7 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
       });
       if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
       toast(res.signal ?? "Saved.");
-      setOpen(false); setAmount("");
+      setOpen(false); setAmount(""); setEditing(null);
       router.refresh();
     });
   }
@@ -96,7 +118,7 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
       {page.fees.length > 0 && (
         <div className="ll-card ll-card-pad"
           style={{ marginBottom: 14, background: short ? "rgba(200,60,40,.07)" : undefined }}>
-          <strong style={{ fontSize: 15 }}>{coverageSummary(c, page.coveragePayers)}</strong>
+          <strong style={{ fontSize: 15 }}>{coverageSummary(c, page.coveragePayers, page.fees.length)}</strong>
           {page.monthsObserved > 1 && (
             <div className="mut" style={{ fontSize: 13, marginTop: 6 }}>
               Averaged over {page.monthsObserved} months of bills.
@@ -127,12 +149,29 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
                 {money(f.amount)} {CADENCE_LABEL[f.cadence]}
               </span>
               <span className="mut" style={{ flex: 1 }}>
-                {APPLIES_LABEL[f.appliesTo]} · {f.payers} paying
+                {APPLIES_LABEL[f.appliesTo]} ·{" "}
+                {/* "0 paying" is true and reads as a fault. Until the roll is
+                    named there is nobody to bill, which is a different thing. */}
+                {f.payers === 0 ? "nobody on a lot yet" : `${f.payers} paying`}
                 {f.covers.length > 0 && ` · covers ${f.covers.map((x) => COVER_LABEL[x] ?? x).join(", ")}`}
               </span>
               <span style={{ minWidth: 90, textAlign: "right", fontWeight: 700 }}>
                 {money(f.monthly)}/mo
               </span>
+              <button className="ll-btn ghost" disabled={busy}
+                onClick={() => {
+                  // Pre-filled from the row, so correcting an amount is one tap
+                  // and cannot become a second fee with the same name.
+                  setEditing(f.id);
+                  setLabel(f.label);
+                  setAmount(String(f.amount));
+                  setCadence(f.cadence);
+                  setAppliesTo(f.appliesTo);
+                  setCovers(new Set(f.covers));
+                  setOpen(true);
+                }}>
+                Edit
+              </button>
               <button className="ll-btn ghost" disabled={busy}
                 onClick={() =>
                   start(async () => {
@@ -149,7 +188,12 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
       )}
 
       {!open ? (
-        <button className="ll-btn ghost" onClick={() => setOpen(true)}>Add a fee</button>
+        <button className="ll-btn ghost" onClick={() => {
+          // A fresh add must never inherit the fee last edited.
+          setEditing(null); setLabel("Grounds fee"); setAmount("");
+          setCadence("monthly"); setAppliesTo("long_term"); setCovers(new Set());
+          setOpen(true);
+        }}>Add a fee</button>
       ) : (
         <div className="ll-card ll-card-pad">
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
@@ -198,10 +242,13 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-            <button className="ll-btn" onClick={save} disabled={busy || !amount}>
-              {busy ? "Saving…" : "Save the fee"}
+            {/* `!amount` blocked an empty box and let the string "0" through,
+                which saved a fee that puts a $0.00 line on every bill. */}
+            <button className="ll-btn" onClick={save}
+              disabled={busy || !(Number(amount.replace(/[$,\s]/g, "")) > 0)}>
+              {busy ? "Saving…" : editing ? "Save the change" : "Save the fee"}
             </button>
-            <button className="ll-btn ghost" onClick={() => setOpen(false)}>Cancel</button>
+            <button className="ll-btn ghost" onClick={() => { setOpen(false); setEditing(null); }}>Cancel</button>
           </div>
         </div>
       )}

@@ -216,11 +216,33 @@ export function checkCoverage(
  * Says the PER-LOT gap, not just the total — "$21 a lot short" is a number he
  * can act on, where "$420 short" needs dividing before it means anything.
  */
-export function coverageSummary(check: CoverageCheck, payers: number): string {
+export function coverageSummary(
+  check: CoverageCheck,
+  payers: number,
+  /**
+   * How many fees exist at all, active or not.
+   *
+   * WITHOUT IT THIS SENTENCE CONTRADICTED THE SCREEN AROUND IT. `feeIncome` is
+   * zero both when there are no fees AND when there are fees nobody is on a lot
+   * to pay — and the no-cost branch ran first, so a park with a saved fee and
+   * no tenancies read "No fees and no bills yet." inside a card that only
+   * renders BECAUSE a fee exists. That is The Haven's exact state until the
+   * roll is named. Defaulted so existing callers keep their old behaviour.
+   */
+  feeCount = 0,
+): string {
+  // NOBODY ON A LOT IS THE MORE SPECIFIC TRUTH, so it goes first. A fee that
+  // exists and collects nothing is a different situation from having no fee,
+  // and only this branch can tell him which one he is looking at.
+  if (feeCount > 0 && payers === 0) {
+    return "Nobody is on a lot yet, so this fee is collecting nothing.";
+  }
   if (check.actualCost === 0) {
     return check.feeIncome > 0
       ? "No bills entered yet, so there's nothing to check this against."
-      : "No fees and no bills yet.";
+      : feeCount > 0
+        ? "No bills entered yet, so there's nothing to check this against."
+        : "No fees and no bills yet.";
   }
   if (payers === 0) return "Nobody is paying this yet.";
 
