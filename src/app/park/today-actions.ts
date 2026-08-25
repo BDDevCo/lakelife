@@ -207,18 +207,36 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // REVERSED PAYMENTS ARE NOT CASH IN. A bounced check must not sit in the
   // "$X has come in this month" line on the screen he reads with coffee — that
   // is the number he plans against.
-  const payments = allIds.length
-    ? mustRead(
-        "the money that's come in",
-        await admin.from("park_payments")
-          .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason")
-          .in("charge_id", allIds)
-          .is("reversed_at", null),
-      )
-    : ([] as Record<string, unknown>[]);
+  //
+  // AND MONEY WITH NO BILL BEHIND IT IS STILL MONEY. This read was keyed on
+  // `.in("charge_id", allIds)`, which is every payment attached to a bill and
+  // nothing else. `park_payments.charge_id` has been NULLABLE since 0102 — a
+  // deposit is required to have none (park_payments_deposit_is_held), amenity
+  // income has none, and rent handed over before its bill exists has none
+  // until the run picks it up. All of it was invisible here.
+  //
+  // So the screen he reads with coffee printed "Nothing has come in yet this
+  // month" on a month the office had banked deposits, and the `allIds.length`
+  // guard made it worse: before the first charge run of a new park there are
+  // no bills at all, so the read was skipped outright and EVERY payment
+  // vanished.
+  //
+  // Keyed on park_id, which 0102 made NOT NULL on this table — so no row can
+  // escape it, and the query needs no bills to exist.
+  const payments = mustRead(
+    "the money that's come in",
+    await admin.from("park_payments")
+      .select("id, charge_id, kind, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason")
+      .eq("park_id", parkId)
+      .is("reversed_at", null),
+  );
 
   const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
-  const receipts: Receipt[] = (payments ?? []).map((p) => {
+  // A Receipt is a payment AGAINST A BILL — every label on it (lot, period,
+  // bill total, bill status) comes off the charge. The billless rows are
+  // summed separately below rather than folded in here with "?" for a lot and
+  // "" for a month, which would also double-count them into the total.
+  const receipts: Receipt[] = (payments ?? []).filter((p) => p.charge_id != null).map((p) => {
     const c = chargeById.get(p.charge_id as string);
     return {
       paymentId: p.id as string,
@@ -243,9 +261,26 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const mtd = summariseReceipts(receipts, customPeriod(monthStart, today, today)!);
   const cashToday = summariseReceipts(receipts, customPeriod(today, today, today)!);
 
+  // The billless part, taken off the raw rows because only they carry `kind`
+  // — a Receipt is built around a charge and has nowhere to put it.
+  const offBook = (payments ?? []).filter((p) => p.charge_id == null);
+  const offIn = (from: string, to: string) =>
+    offBook.filter((p) => {
+      const on = p.received_on as string;
+      return on >= from && on <= to;
+    });
+  const offMonth = offIn(monthStart, today);
+  const offToday = offIn(today, today);
+  const sumCents = (rows: typeof offBook) =>
+    rows.reduce((n, p) => n + cents(p.amount), 0);
+
   const money = moneyBlock({
-    monthToDateCents: mtd.totalCents,
-    todayCents: cashToday.totalCents,
+    // EVERY dollar received, which is the only version of this number he can
+    // tie to a bank statement. The split is named on its own line below.
+    monthToDateCents: mtd.totalCents + sumCents(offMonth),
+    todayCents: cashToday.totalCents + sumCents(offToday),
+    offBookCents: sumCents(offMonth),
+    offBookKinds: [...new Set(offMonth.map((p) => (p.kind as string) ?? "rent"))],
     monthSummary,
     lagDays,
     arrears,

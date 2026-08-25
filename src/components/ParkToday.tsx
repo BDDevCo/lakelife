@@ -105,6 +105,15 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
           {view.money.todayLine && (
             <div style={{ fontSize: 14, marginTop: 4 }}>{view.money.todayLine}</div>
           )}
+          {/* BETWEEN the two numbers it reconciles, deliberately. The headline
+              is every dollar banked; the ledger line under it counts bills
+              only. This sentence is the difference, and without it the two
+              simply disagree. */}
+          {view.money.offBookLine && (
+            <div className="mut" style={{ fontSize: 13.5, marginTop: 6, lineHeight: 1.5 }}>
+              {view.money.offBookLine}
+            </div>
+          )}
           <div className="mut" style={{ fontSize: 14, marginTop: 10, lineHeight: 1.5 }}>
             {view.money.ledgerLine}
           </div>

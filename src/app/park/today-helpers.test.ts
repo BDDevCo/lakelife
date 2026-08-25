@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, preCutover,
+  moneyBlock, describeOffBook, occupancyLine, generateTasks, visibleTasks, quietState, preCutover,
   addDays, daysBetween, ordinal,
   type TaskFacts, type OccupancySnapshot,
 } from "./today-helpers";
@@ -655,5 +655,139 @@ describe("money owed from earlier months stays on the to-do list", () => {
     // disputed older bill generates no task by design, so quiet consults the
     // money block directly rather than trusting tasks.length alone.
     expect(src).toMatch(/money\.arrearsLine === null && money\.disputedLine === null/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("money that arrived without a bill behind it", () => {
+  const empty = summarise([]);
+
+  /**
+   * "NOTHING HAS COME IN YET THIS MONTH" ON A MONTH THE OFFICE BANKED CASH.
+   *
+   * `park_payments.charge_id` has been nullable since 0102, and three kinds of
+   * money legitimately have none: a deposit (park_payments_deposit_is_held
+   * REQUIRES charge_id to be null), amenity income, and rent handed over
+   * before its bill exists. The Today read was keyed on `.in("charge_id",
+   * allIds)`, so none of it counted — and the `allIds.length` guard in front
+   * of it meant that before a park's first charge run, when there are no bills
+   * at all, the read was skipped and EVERY payment vanished.
+   *
+   * I refuted this finding earlier in the session on the grounds that
+   * charge_id is NOT NULL. It was, in 0070. 0102 dropped it.
+   */
+
+  it("no longer says NOTHING when only billless money came in", () => {
+    const b = moneyBlock({
+      monthToDateCents: 50_000, todayCents: 0, monthSummary: empty,
+      offBookCents: 50_000, offBookKinds: ["deposit"],
+      lagDays: 3, arrears: [], today: TODAY,
+    });
+    expect(b.headline).toBe("$500.00 in so far this month.");
+    expect(b.headline).not.toContain("Nothing");
+  });
+
+  it("names the part that is not rent, so the two numbers reconcile", () => {
+    // The headline is every dollar banked. The ledger line under it counts
+    // bills only. Without this sentence they simply disagree and he cannot
+    // tell which is wrong.
+    const b = moneyBlock({
+      monthToDateCents: 484_200, todayCents: 0, monthSummary: empty,
+      offBookCents: 50_000, offBookKinds: ["deposit"],
+      lagDays: 3, arrears: [], today: TODAY,
+    });
+    expect(b.headline).toBe("$4,842.00 in so far this month.");
+    expect(b.offBookLine).toBe(
+      "$500.00 of that is deposit money you're holding. The rent line below counts bills only.",
+    );
+  });
+
+  it("stays silent when every dollar was against a bill", () => {
+    const b = moneyBlock({
+      monthToDateCents: 432_500, todayCents: 0, monthSummary: empty,
+      lagDays: 3, arrears: [], today: TODAY,
+    });
+    expect(b.offBookLine).toBeNull();
+  });
+
+  it("names each kind, in a fixed order, never committing to a singular", () => {
+    // The caller passes which KINDS are present, not how many rows, so a
+    // sentence saying "a deposit" would be wrong the moment there are two.
+    expect(describeOffBook(["deposit"])).toBe("deposit money you're holding");
+    expect(describeOffBook(["rent"])).toBe("money on account, not yet put against a bill");
+    expect(describeOffBook(["amenity"])).toBe("income from something the park rents out");
+    expect(describeOffBook(["rent", "deposit"])).toBe(
+      "deposit money you're holding and money on account, not yet put against a bill",
+    );
+    // Order comes from the list, not from whatever order the rows arrived in.
+    expect(describeOffBook(["rent", "deposit"])).toBe(describeOffBook(["deposit", "rent"]));
+    expect(describeOffBook(["amenity", "deposit", "rent"])).toBe(
+      "deposit money you're holding, income from something the park rents out and money on account, not yet put against a bill",
+    );
+  });
+
+  it("falls back to plain English for a kind nobody has added yet", () => {
+    // A fourth kind would otherwise render "undefined" on his morning screen.
+    expect(describeOffBook(["storage"])).toBe("not rent against a bill");
+    expect(describeOffBook([])).toBe("not rent against a bill");
+  });
+});
+
+describe("the read behind it", () => {
+  /**
+   * STRIPPED FIRST. The doc block above this read explains the defect at
+   * length, and it names `allIds.length` and `.in("charge_id"` while doing it
+   * — so an unstripped scan is satisfied by the explanation of the bug rather
+   * than by its absence. The first version of these tests failed exactly that
+   * way, which is the only reason they are worth having.
+   */
+  const src = readFileSync(
+    fileURLToPath(new URL("./today-actions.ts", import.meta.url)),
+    "utf8",
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  it("the scanner is reading real code, not prose", () => {
+    expect(src).toContain('from("park_payments")');
+    expect(src).not.toContain("EVERY payment");
+  });
+
+  it("asks the park for its payments, not the bills for theirs", () => {
+    // 0102 made park_payments.park_id NOT NULL, so this key reaches every row
+    // — including the ones no charge points at.
+    const stmt = src
+      .split("\n")
+      .join(" ")
+      .match(/from\("park_payments"\)[\s\S]{0,600}?;/);
+    expect(stmt).not.toBeNull();
+    expect(stmt![0]).toContain('.eq("park_id", parkId)');
+  });
+
+  it("never filters that read by charge id again", () => {
+    // The exact shape of the defect. `.in("charge_id", ...)` is the whole bug.
+    const stmt = src
+      .split("\n")
+      .join(" ")
+      .match(/from\("park_payments"\)[\s\S]{0,600}?;/);
+    expect(stmt![0]).not.toMatch(/\.in\("charge_id"/);
+  });
+
+  it("does not gate the read on any bills existing", () => {
+    // `allIds.length ? mustRead(...) : []` was why a park with no charge run
+    // yet showed none of its own money.
+    const stmt = src
+      .split("\n")
+      .join(" ")
+      .match(/allIds\.length[\s\S]{0,400}?park_payments/);
+    expect(stmt).toBeNull();
+  });
+
+  it("still keeps the labelled receipts to rows that HAVE a bill", () => {
+    // Every label on a Receipt — lot, period, bill total, bill status — comes
+    // off the charge. Folding billless rows in would give them "?" and "", and
+    // would double-count them into the month total.
+    expect(src).toMatch(/filter\(\(p\) => p\.charge_id != null\)/);
   });
 });

@@ -64,11 +64,44 @@ export interface MoneyBlock {
    * without saying so would be the opposite mistake — they would vanish.
    */
   disputedLine: string | null;
+  /**
+   * Cash that came in this month with NO BILL BEHIND IT — a deposit, money on
+   * account, or something the park rented out.
+   *
+   * Its own line for the same reason the disputed one is: the headline is
+   * every dollar that hit the bank, and the ledger line under it counts bills
+   * only. Without a sentence naming the difference the two disagree and he
+   * cannot tell which is wrong.
+   */
+  offBookLine: string | null;
+}
+
+/** What each kind of billless money actually is, in his words. */
+const OFF_BOOK_WHAT: Record<string, string> = {
+  // Count-agnostic on purpose: the caller passes which KINDS are present, not
+  // how many rows, so none of these may commit to a singular.
+  deposit: "deposit money you're holding",
+  amenity: "income from something the park rents out",
+  rent: "money on account, not yet put against a bill",
+};
+
+/** Name the kinds present, in a fixed order so the sentence never reshuffles. */
+export function describeOffBook(kinds: readonly string[]): string {
+  const seen = ["deposit", "amenity", "rent"].filter((k) => kinds.includes(k));
+  const words = seen.map((k) => OFF_BOOK_WHAT[k]);
+  if (words.length === 0) return "not rent against a bill";
+  if (words.length === 1) return words[0];
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
 export function moneyBlock(input: {
+  /** EVERY dollar received this month, bill or no bill. */
   monthToDateCents: number;
   todayCents: number;
+  /** The part of monthToDateCents with no charge behind it. */
+  offBookCents?: number;
+  /** Which kinds that part is made of, for the sentence. */
+  offBookKinds?: readonly string[];
   monthSummary: LedgerSummary;
   lagDays: number;
   /** Open charges from months BEFORE this one, EXCLUDING disputed ones. */
@@ -79,7 +112,7 @@ export function moneyBlock(input: {
 }): MoneyBlock {
   const {
     monthToDateCents, todayCents, monthSummary, lagDays, arrears,
-    disputedOlder = [], today,
+    disputedOlder = [], today, offBookCents = 0, offBookKinds = [],
   } = input;
 
   const headline = monthToDateCents === 0
@@ -111,12 +144,18 @@ export function moneyBlock(input: {
       `That is a conversation, not arrears.`;
   }
 
+  const offBookLine = offBookCents > 0
+    ? `${money(offBookCents / 100)} of that is ${describeOffBook(offBookKinds)}. ` +
+      `The rent line below counts bills only.`
+    : null;
+
   return {
     headline,
     todayLine,
     ledgerLine: ledgerHeadline(monthSummary, lagDays),
     arrearsLine,
     disputedLine,
+    offBookLine,
   };
 }
 
