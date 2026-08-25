@@ -53,7 +53,11 @@ export async function GET(request: Request) {
   }
   if (!page) return new Response("Those dates don't work.", { status: 400 });
 
-  const csv = receiptsCsv(page.receipts, {
+  // BOTH ARRAYS. `page.receipts` is rent against a bill; `page.otherReceipts`
+  // is the deposits, on-account money and amenity income that also hit the
+  // bank. Passing only the first is what made this file impossible to
+  // reconcile.
+  const csv = receiptsCsv(page.receipts, page.otherReceipts, {
     parkName: page.parkName,
     generatedAt: page.generatedAt,
   });

@@ -5,9 +5,18 @@ import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { mustRead } from "@/lib/must-read";
 import {
-  monthPeriod, quarterPeriod, yearPeriod, customPeriod,
-  summariseReceipts, exclusionLines,
-  type Receipt, type Period, type ReceiptSummary, type Method, type ChargeLine,
+  monthPeriod,
+  quarterPeriod,
+  yearPeriod,
+  customPeriod,
+  summariseReceipts,
+  exclusionLines,
+  type Receipt,
+  type Period,
+  type ReceiptSummary,
+  type Method,
+  type ChargeLine,
+  type OtherReceipt,
 } from "./receipts-helpers";
 
 /**
@@ -32,6 +41,13 @@ export interface StatementPage {
   period: Period;
   summary: ReceiptSummary;
   receipts: Receipt[];
+  /**
+   * Money that reached the park in this window but is NOT rent against a bill —
+   * deposits, money on account, and what a park rents out. Excluded from the
+   * rent total on purpose; carried so the FILE can state the same figures the
+   * screen does.
+   */
+  otherReceipts: OtherReceipt[];
   notes: string[];
   /** Earliest payment ever recorded here — the edge of what we can know. */
   recordsBeginOn: string | null;
@@ -99,7 +115,11 @@ export async function getStatement(
     "the deposits and money on account",
     await admin
       .from("park_payments")
-      .select("amount, kind, charge_id")
+      // WIDENED so this money can be WRITTEN OUT, not merely counted. These
+      // rows were summed into three sentences on the screen and then dropped:
+      // the file the accountant is actually sent had no row, no total and no
+      // sentence for any of it.
+      .select("id, amount, kind, charge_id, received_on, method, reference, fee_amount")
       .eq("park_id", parkId)
       .is("charge_id", null)
       .is("reversed_at", null)
@@ -124,6 +144,32 @@ export async function getStatement(
       .reduce((s2, p) => s2 + Number(p.amount ?? 0), 0) * 100,
   );
 
+  // THE SAME MONEY, AS ROWS THE ACCOUNTANT CAN TIE TO A BANK LINE.
+  //
+  // These three figures were reaching the caller only as prose in `notes`, and
+  // `receiptsCsv` never receives notes. So the screen said "Also received in
+  // this period: $500.00 in deposits taken" and "$250.00 for things you rent
+  // out — that IS your income", and the file behind the button labelled
+  // "Download N payments for your accountant" contained none of it. The
+  // accountant sums the Amount column, ties it to the bank, and is short by
+  // exactly that much — of which the amenity money is real, taxable park
+  // income appearing in no book anywhere.
+  //
+  // They stay OUT of the rent total, which is correct and deliberate, and they
+  // now appear as their own rows with a Kind saying what each one is. This is
+  // the same judgement the "Taken back" column already makes: the row stays and
+  // is LABELLED, because a file with a hole in it is a file an auditor has to
+  // ask about.
+  const otherReceipts: OtherReceipt[] = (offBook ?? []).map((p2) => ({
+    paymentId: p2.id as string,
+    kind: (p2.kind as string) ?? "other",
+    receivedOn: p2.received_on as string,
+    amountCents: cents(p2.amount),
+    feeCents: cents(p2.fee_amount),
+    method: (p2.method as string) ?? "other",
+    reference: (p2.reference as string) ?? null,
+  }));
+
   // The branch below turns an empty result into a complete, plausible,
   // ZERO statement. It must only ever be reachable by a park that has genuinely
   // never billed anybody.
@@ -139,7 +185,7 @@ export async function getStatement(
   if (chargeIds.length === 0) {
     const empty = summariseReceipts([], period);
     return {
-      parkName, period, summary: empty, receipts: [],
+      parkName, period, summary: empty, receipts: [], otherReceipts,
       notes: exclusionLines({
         recordsBeginOn: null, lagDays, unbilledFeeLabels: [], anyMissingPayerName: false,
         depositsReceivedCents, onAccountReceivedCents, amenityReceivedCents,
@@ -236,6 +282,7 @@ export async function getStatement(
     period,
     summary,
     receipts: inWindow,
+    otherReceipts,
     notes: exclusionLines({
       recordsBeginOn, lagDays, unbilledFeeLabels, anyMissingPayerName,
       depositsReceivedCents, onAccountReceivedCents, amenityReceivedCents,

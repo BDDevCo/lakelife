@@ -344,8 +344,43 @@ export function linesCell(lines: readonly ChargeLine[]): string {
   return lines.map((l) => `${l.label}: ${decimal(l.amountCents)}`).join("; ");
 }
 
+/**
+ * Money the park received that is not rent against a bill: a deposit, money on
+ * account, or income from something the park rents out.
+ *
+ * It is deliberately outside the rent total — a deposit is not income and
+ * on-account money has not been applied to anything yet — but it DID hit the
+ * bank, so it has to be in the file or the file cannot be reconciled.
+ */
+export interface OtherReceipt {
+  paymentId: string;
+  kind: string;
+  receivedOn: string;
+  amountCents: number;
+  feeCents: number;
+  method: string;
+  reference: string | null;
+}
+
+/** What a person calls each kind, for the Kind column. */
+const KIND_LABEL: Record<string, string> = {
+  deposit: "Deposit (not income)",
+  amenity: "Rented out (income)",
+  rent: "Rent",
+};
+
 const HEADERS = [
   "Park", "Generated at", "Basis",
+  // THE COLUMN THAT MAKES THE FILE ADD UP TO THE BANK.
+  //
+  // Every row used to be rent against a bill, and the deposits, on-account
+  // money and amenity income were reported ONLY as sentences on the screen —
+  // which the CSV writer never receives. Summing Amount therefore came up
+  // short by exactly that money, and the amenity part of it is real, taxable
+  // park income that appeared in no book anywhere. Naming the kind on every
+  // row is what lets an accountant both tie the total to the bank AND keep
+  // deposits out of income, which is the distinction that actually matters.
+  "Kind",
   "Date received", "Amount", "Card fee", "Charged total", "Method", "Reference",
   // THE COLUMN WITHOUT WHICH THIS FILE OVERSTATES INCOME.
   //
@@ -375,6 +410,7 @@ const HEADERS = [
  */
 export function receiptsCsv(
   rows: readonly Receipt[],
+  other: readonly OtherReceipt[],
   meta: { parkName: string; generatedAt: string },
 ): string {
   const out: string[] = [HEADERS.map(csvText).join(",")];
@@ -383,6 +419,7 @@ export function receiptsCsv(
       csvText(meta.parkName),
       csvText(meta.generatedAt),
       csvText("cash"),
+      csvText("Rent"),
       csvText(r.receivedOn),
       csvText(decimal(r.amountCents)),
       // Both, because an accountant reconciling to a bank statement needs the
@@ -408,6 +445,28 @@ export function receiptsCsv(
       csvText(linesCell(r.chargeLines)),
       csvText(r.paymentId),
       csvText(r.chargeId),
+    ].join(","));
+  }
+
+  // The bill columns are EMPTY for these, not zero: a deposit has no bill, and
+  // a zero would be a figure somebody could sum.
+  for (const o of other) {
+    out.push([
+      csvText(meta.parkName),
+      csvText(meta.generatedAt),
+      csvText("cash"),
+      csvText(KIND_LABEL[o.kind] ?? "On account (not yet applied)"),
+      csvText(o.receivedOn),
+      csvText(decimal(o.amountCents)),
+      csvText(decimal(o.feeCents)),
+      csvText(decimal(o.amountCents + o.feeCents)),
+      csvText(METHOD_LABEL[o.method as Method] ?? o.method),
+      csvText(o.reference ?? ""),
+      csvText(""), csvText(""), csvText(""),   // taken back / on / reason
+      csvText(""), csvText(""),                // lot / payer
+      csvText(""), csvText(""), csvText(""), csvText(""),  // bill month/total/status/breakdown
+      csvText(o.paymentId),
+      csvText(""),                             // no charge to point at
     ].join(","));
   }
   return out.join("\r\n");

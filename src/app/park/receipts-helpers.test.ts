@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod,
-  summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline,
-  csvText, linesCell, money, decimal, exclusionLines,
-  type Receipt,
-} from "./receipts-helpers";
+import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, type Receipt, type OtherReceipt } from "./receipts-helpers";
 
 const TODAY = "2026-08-11";
 
@@ -180,7 +175,7 @@ describe("grouping", () => {
 describe("the file", () => {
   it("emits a header plus exactly one row per payment — no total row", () => {
     const rows = [receipt({ paymentId: "a" }), receipt({ paymentId: "b" })];
-    const csv = receiptsCsv(rows, { parkName: "The Haven", generatedAt: "2026-08-11T12:00:00Z" });
+    const csv = receiptsCsv(rows, [], { parkName: "The Haven", generatedAt: "2026-08-11T12:00:00Z" });
     const lines = csv.split("\r\n");
     expect(lines).toHaveLength(3);
     // No trailing total/metadata row — a ragged tail breaks the pivot.
@@ -204,7 +199,7 @@ describe("the file", () => {
   });
 
   it("marks a cancelled bill in the file rather than hiding the row", () => {
-    const csv = receiptsCsv([receipt({ chargeStatus: "void" })], {
+    const csv = receiptsCsv([receipt({ chargeStatus: "void" })], [], {
       parkName: "P", generatedAt: "t",
     });
     expect(csv).toContain("CANCELLED");
@@ -218,6 +213,7 @@ describe("the file", () => {
   it("never produces NaN from a zero-total bill", () => {
     const csv = receiptsCsv(
       [receipt({ amountCents: 0, chargeAmountCents: 0, chargeLines: [] })],
+      [],
       { parkName: "P", generatedAt: "t" },
     );
     expect(csv).not.toMatch(/NaN/);
@@ -403,7 +399,7 @@ describe("the card fee on a statement", () => {
   });
 
   it("carries both figures into the CSV so the bank can be reconciled", () => {
-    const csv = receiptsCsv([card()], { parkName: "The Haven", generatedAt: "2026-08-11T12:00:00Z" });
+    const csv = receiptsCsv([card()], [], { parkName: "The Haven", generatedAt: "2026-08-11T12:00:00Z" });
     const [head, row] = csv.split("\r\n");
     expect(head).toContain("Card fee");
     expect(head).toContain("Charged total");
@@ -468,5 +464,96 @@ describe("money from things the park rents out", () => {
       anyMissingPayerName: false, amenityReceivedCents: 0,
     });
     expect(said.some((l) => l.includes("rent out"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the file adds up to the bank", () => {
+  /**
+   * The screen said "Also received in this period, and NOT in the total above:
+   * $500.00 in deposits taken" and "$250.00 for things you rent out… That IS
+   * your income". The button beneath it said "Download N payments for your
+   * accountant", and the file had no row, no total and no sentence for any of
+   * it — because those three figures reached the caller only as prose in
+   * `notes`, and `receiptsCsv` never receives notes.
+   *
+   * The accountant sums Amount, ties it to the bank, and is short by exactly
+   * that money. The amenity part is real, taxable park income appearing in no
+   * book anywhere.
+   */
+  const other = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
+    paymentId: "p-other-1",
+    kind: "amenity",
+    receivedOn: "2026-08-14",
+    amountCents: 25000,
+    feeCents: 0,
+    method: "cash",
+    reference: null,
+    ...over,
+  });
+
+  it("writes a row for money that is not rent", () => {
+    const csv = receiptsCsv([], [other()], { parkName: "P", generatedAt: "t" });
+    const lines = csv.split("\r\n");
+    expect(lines.length).toBe(2);           // header + the one row
+    expect(lines[1]).toContain("250.00");
+  });
+
+  it("names what each kind is, so deposits stay out of income", () => {
+    const csv = receiptsCsv([], [
+      other({ kind: "deposit", amountCents: 50000, paymentId: "d1" }),
+      other({ kind: "amenity", amountCents: 25000, paymentId: "a1" }),
+      other({ kind: "on_account", amountCents: 10000, paymentId: "o1" }),
+    ], { parkName: "P", generatedAt: "t" });
+    expect(csv).toContain("Deposit (not income)");
+    expect(csv).toContain("Rented out (income)");
+    expect(csv).toContain("On account (not yet applied)");
+  });
+
+  /**
+   * Column INDEX resolved from the header, never hardcoded — adding Kind
+   * shifted every money column right by one, and a test that counted from the
+   * left would have gone on passing while reading the wrong cell. (It did:
+   * my first version asserted Amount at index 4, which is now Date received.)
+   */
+  const cellsOf = (csv: string, line: number) => {
+    const header = csv.split("\r\n")[0].split(",");
+    const row = csv.split("\r\n")[line].split(",");
+    return (name: string) => row[header.indexOf(name)];
+  };
+
+  it("marks the rent rows as rent, so Kind is never blank", () => {
+    const csv = receiptsCsv([receipt({})], [], { parkName: "P", generatedAt: "t" });
+    expect(cellsOf(csv, 1)("Kind")).toBe("Rent");
+  });
+
+  it("the Amount column now totals everything that hit the bank", () => {
+    const csv = receiptsCsv(
+      [receipt({ amountCents: 45500 })],
+      [other({ kind: "deposit", amountCents: 50000 }), other({ kind: "amenity", amountCents: 25000, paymentId: "a2" })],
+      { parkName: "P", generatedAt: "t" },
+    );
+    const header = csv.split("\r\n")[0].split(",");
+    const amountAt = header.indexOf("Amount");
+    const amounts = csv.split("\r\n").slice(1)
+      .map((r) => Number(r.split(",")[amountAt].replace(/"/g, "")));
+    expect(amounts).toEqual([455, 500, 250]);
+    // The whole point: the column now sums to everything that hit the bank.
+    expect(amounts.reduce((a, b) => a + b, 0)).toBe(1205);
+  });
+
+  it("leaves the bill columns EMPTY rather than zero", () => {
+    // A zero is a figure somebody can sum. A deposit has no bill at all.
+    const csv = receiptsCsv([], [other()], { parkName: "P", generatedAt: "t" });
+    const at = cellsOf(csv, 1);
+    expect(at("Bill total")).toBe("");
+    expect(at("Bill status")).toBe("");
+    expect(at("Charge ID")).toBe("");
+  });
+
+  it("still carries the payment id, so a row can be traced", () => {
+    const csv = receiptsCsv([], [other({ paymentId: "pay-xyz" })], { parkName: "P", generatedAt: "t" });
+    expect(csv).toContain("pay-xyz");
   });
 });
