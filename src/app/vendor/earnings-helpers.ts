@@ -18,7 +18,21 @@ export interface EarningRow {
   service: string | null;
   address: string | null;
   amount: number; // the crew's take-home for this job (negative for adjustments)
+  /**
+   * What the CREW is told — `reportedPayoutStatus`, which deliberately
+   * overrides a released row the moment it joins a batch: queued, exported,
+   * paid. Right for the row list; wrong to sum lifetime money over.
+   */
   status: string; // 'released' | 'pending'
+  /**
+   * THE PAYOUT ROW'S OWN STATUS, which batching never touches —
+   * `runMonthlyPayoutBatches` filters ON status='released' and writes only
+   * `batch_id` (automation.ts:3339). Summing the reported status made
+   * "released so far" fall to $0.00 the night a batch was assembled, because
+   * every row then reported 'queued'. Optional so existing fixtures without it
+   * still type-check; treat missing as equal to `status`.
+   */
+  rawStatus?: string;
   // 'earning' = job pay; 'adjustment' = a refund clawback (docs/refunds-design.md,
   // migration 0043). Optional so existing test fixtures without it still type-check
   // — treat missing as 'earning'.
@@ -154,10 +168,48 @@ export function sumInRange(rows: EarningRow[], from: string, to: string): number
   return Math.round(total * 100) / 100;
 }
 
-/** Sum take-home for rows with a given status, rounded to cents. */
+/** Sum take-home for rows with a given REPORTED status, rounded to cents. */
 export function sumByStatus(rows: EarningRow[], status: string): number {
   const total = rows.reduce((acc, r) => (r.status === status ? acc + r.amount : acc), 0);
   return Math.round(total * 100) / 100;
+}
+
+/**
+ * EVERYTHING EVER RELEASED TO THIS CREW — including what has since been
+ * batched, exported and paid.
+ *
+ * `sumByStatus(rows, "released")` cannot answer this. It reads the REPORTED
+ * status, and `reportedPayoutStatus` overrides a released row the instant it
+ * belongs to a batch. So the footer's "$X released so far" went to $0.00 on
+ * the night `runMonthlyPayoutBatches` assembled the batch — before a cent had
+ * left the bank — on the very screen a crew uses to reconcile against their
+ * deposits. The label and the field name both promise a LIFETIME figure.
+ *
+ * The row's own status is the durable fact: batching writes `batch_id` and
+ * nothing else.
+ */
+export function sumEverReleased(rows: EarningRow[]): number {
+  const total = rows.reduce(
+    (acc, r) => ((r.rawStatus ?? r.status) === "released" ? acc + r.amount : acc),
+    0,
+  );
+  return Math.round(total * 100) / 100;
+}
+
+/**
+ * How many JOBS this crew has completed.
+ *
+ * `rows.length` counted every payout row, and since 0090/0091 that includes a
+ * tip, a trip fee for a visit where no work was possible, and a refund
+ * clawback — two of which are explicitly NOT completed work. Three real jobs
+ * with two tips, a trip fee and a clawback read as "7 completed jobs".
+ *
+ * `payouts_one_earning_per_job` already makes kind='earning' one row per job,
+ * so counting those rows and counting distinct job ids among them are the same
+ * number.
+ */
+export function completedJobCount(rows: EarningRow[]): number {
+  return rows.filter((r) => (r.kind ?? "earning") === "earning").length;
 }
 
 /**

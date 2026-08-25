@@ -20,6 +20,8 @@ import {
   csvRow,
   statusLabel,
   type EarningRow,
+  sumEverReleased,
+  completedJobCount,
 } from "./earnings-helpers";
 
 const row = (over: Partial<EarningRow>): EarningRow => ({
@@ -398,5 +400,99 @@ describe("the readers that were reporting the wrong money", () => {
   it("the early-pull fee is read and shown", () => {
     expect(read("./bank-data.ts")).toMatch(/select\("id, kind, gross, fee, net, status, created_at"\)/);
     expect(read("../../components/VendorPayouts.tsx")).toMatch(/early-pull fee/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the footer a crew reconciles against their bank", () => {
+  const row = (over: Partial<EarningRow> = {}): EarningRow => ({
+    id: `r${Math.random()}`,
+    jobDate: "2026-08-14",
+    service: "Lawn mowing",
+    address: "1 Lake Rd",
+    amount: 100,
+    status: "released",
+    rawStatus: "released",
+    kind: "earning",
+    ...over,
+  });
+
+  /**
+   * "$X RELEASED SO FAR" WENT TO $0.00 THE NIGHT THEY WERE PAID.
+   *
+   * `reportedPayoutStatus` deliberately overrides a released row the moment it
+   * joins a batch — queued, exported, paid — which is right for the row list.
+   * The lifetime total was summed over that DERIVED label, so once
+   * `runMonthlyPayoutBatches` stamped every row the figure read zero. Not when
+   * ops marked the batch paid, either: the batch flips to 'queued' in the same
+   * run, so it zeroed before a cent left the bank.
+   */
+  it("still counts money that has since been batched, exported and paid", () => {
+    const rows = [
+      row({ amount: 400, status: "paid", rawStatus: "released" }),
+      row({ amount: 300, status: "exported", rawStatus: "released" }),
+      row({ amount: 200, status: "queued", rawStatus: "released" }),
+      row({ amount: 100, status: "released", rawStatus: "released" }),
+    ];
+    expect(sumEverReleased(rows)).toBe(1000);
+    // The old computation, kept here to show what it answered.
+    expect(sumByStatus(rows, "released")).toBe(100);
+  });
+
+  it("does not count money that has not been released yet", () => {
+    const rows = [
+      row({ amount: 500, status: "pending", rawStatus: "pending" }),
+      row({ amount: 250, status: "held", rawStatus: "held" }),
+      row({ amount: 100, status: "paid", rawStatus: "released" }),
+    ];
+    expect(sumEverReleased(rows)).toBe(100);
+  });
+
+  it("falls back to the reported status when a row carries no raw one", () => {
+    // Existing fixtures predate rawStatus; missing must mean "same as status".
+    const rows = [row({ amount: 75, status: "released", rawStatus: undefined })];
+    expect(sumEverReleased(rows)).toBe(75);
+  });
+
+  it("subtracts a clawback, which is real money going the other way", () => {
+    const rows = [
+      row({ amount: 400, status: "paid", rawStatus: "released" }),
+      row({ amount: -120, status: "paid", rawStatus: "released", kind: "adjustment" }),
+    ];
+    expect(sumEverReleased(rows)).toBe(280);
+  });
+});
+
+describe("\"N completed jobs\" counts jobs", () => {
+  const row = (kind: EarningRow["kind"], over: Partial<EarningRow> = {}): EarningRow => ({
+    id: `r${Math.random()}`, jobDate: "2026-08-14", service: "s", address: "a",
+    amount: 50, status: "released", rawStatus: "released", kind, ...over,
+  });
+
+  /**
+   * `rows.length` counted every payout row. Since 0090/0091 that includes a
+   * tip, a trip fee for a visit where no work was possible, and a refund
+   * clawback — and two of those represent visits where the crew explicitly did
+   * NOT complete work. Three real jobs with two tips, a trip fee and a
+   * clawback read as "7 completed jobs all-time".
+   */
+  it("ignores tips, trip fees and clawbacks", () => {
+    const rows = [
+      row("earning"), row("earning"), row("earning"),
+      row("tip"), row("tip"),
+      row("trip"),
+      row("adjustment"),
+    ];
+    expect(rows.length).toBe(7);
+    expect(completedJobCount(rows)).toBe(3);
+  });
+
+  it("treats a row with no kind as a job, matching the type's own rule", () => {
+    expect(completedJobCount([row(undefined)])).toBe(1);
+  });
+
+  it("is zero for a crew who has only been tipped", () => {
+    expect(completedJobCount([row("tip"), row("trip")])).toBe(0);
   });
 });

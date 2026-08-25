@@ -7,10 +7,11 @@ import {
   periodRanges,
   weekStartMonday,
   sumInRange,
-  sumByStatus,
   type EarningRow,
   type DateRange,
   reportedPayoutStatus,
+  sumEverReleased,
+  completedJobCount,
 } from "./earnings-helpers";
 import { lakeDateOf } from "@/lib/booking";
 
@@ -190,6 +191,9 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
       service,
       address,
       amount: Number(p.amount) || 0,
+      // The row's own status, kept beside the reported one so a lifetime
+      // total is not computed from a label that changes when money moves.
+      rawStatus: (p.status as string) ?? "pending",
       status: reportedPayoutStatus(
         (p.status as string) ?? "pending",
         ((Array.isArray(p.payout_batches) ? p.payout_batches[0] : p.payout_batches) as { status?: string } | null)?.status ?? null,
@@ -217,8 +221,8 @@ function computeTotals(rows: EarningRow[], todayISO: string): EarningsTotals {
     thisWeek: sumInRange(rows, weekStart, todayISO),
     thisMonth: sumInRange(rows, ranges.thisMonth.from, ranges.thisMonth.to),
     ytd: sumInRange(rows, ranges.ytd.from, ranges.ytd.to),
-    allTimeReleased: sumByStatus(rows, "released"),
-    jobCount: rows.length,
+    allTimeReleased: sumEverReleased(rows),
+    jobCount: completedJobCount(rows),
   };
 }
 
