@@ -784,6 +784,20 @@ describe("the read behind it", () => {
     expect(stmt).toBeNull();
   });
 
+  /**
+   * ON THE GO-LIVE DAY THE PARK IS HIS.
+   *
+   * The gate read `cutoverOn >= today`, so the readiness checklist stayed up
+   * for one day too many — and ParkToday renders the checklist INSTEAD of the
+   * money card, not beside it. With go-live 1 Jan 2027 and rent due on the
+   * 1st, that is the morning nineteen bills fall due, and he would have opened
+   * the app to a setup list.
+   */
+  it("stops showing the readiness checklist ON the go-live day", () => {
+    expect(src).toMatch(/cutoverOn\s*>\s*today/);
+    expect(src).not.toMatch(/cutoverOn\s*>=\s*today/);
+  });
+
   it("still keeps the labelled receipts to rows that HAVE a bill", () => {
     // Every label on a Receipt — lot, period, bill total, bill status — comes
     // off the charge. Folding billless rows in would give them "?" and "", and

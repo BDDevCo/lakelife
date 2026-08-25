@@ -93,8 +93,10 @@ async function reconcileOnePark(
       "parks",
       admin.from("parks").select("cutover_date").eq("id", parkId).limit(1),
     );
+    // NOT sliced to a month here any more. The day decides whether the takeover
+    // month is a part-month or wholly ours, and only `reconcile` knows what to
+    // do with that — see its note on cutoverDate.
     const cutoverDate = (park[0]?.cutover_date as string) ?? null;
-    const cutoverMonth = cutoverDate ? cutoverDate.slice(0, 7) : null;
 
     const lots = await must<Record<string, unknown>[]>(
       "park_lots",
@@ -156,7 +158,7 @@ async function reconcileOnePark(
     const findings = reconcile({
       today,
       month,
-      cutoverMonth,
+      cutoverDate,
       lots: live.map((l) => {
         const slot = byLot.get(l.id as string)!;
         const amount = slot.current?.quoted_amount;

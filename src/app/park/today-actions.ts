@@ -586,7 +586,12 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
         && money.arrearsLine === null && money.disputedLine === null
         ? quietState(checked)
         : null,
-    preCutover: cutoverOn && cutoverOn >= today
+    // ON the go-live day the park IS his, so `>=` held the readiness checklist
+    // up for one day too many — and ParkToday renders the checklist INSTEAD of
+    // the money card. With go-live 1 Jan 2027 and rent due on the 1st, that is
+    // the morning nineteen bills fall due and he would have been looking at a
+    // setup list.
+    preCutover: cutoverOn && cutoverOn > today
       ? preCutover({
           today, cutoverOn, parkName,
           lots: (lots ?? []).length,

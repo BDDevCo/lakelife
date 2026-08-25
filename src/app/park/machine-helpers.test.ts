@@ -4,6 +4,7 @@ import {
   reconcile, reconcileSummary, cutoverMonthNote, CLAIM_STALE_DAYS,
   type ReconcileInput,
 } from "./reconcile-helpers";
+import { periodIsBillable } from "@/lib/billing-start";
 
 const TODAY = "2026-08-11";
 const run = (o: Partial<RunRow> = {}): RunRow => ({
@@ -98,7 +99,7 @@ const lot = (o: Partial<ReconcileInput["lots"][number]> = {}) => ({
 });
 
 const input = (o: Partial<ReconcileInput> = {}): ReconcileInput => ({
-  today: TODAY, month: "2026-08", lots: [lot()], openClaims: [], cutoverMonth: null, ...o,
+  today: TODAY, month: "2026-08", lots: [lot()], openClaims: [], cutoverDate: null, ...o,
 });
 
 describe("what the nightly read notices", () => {
@@ -162,24 +163,68 @@ describe("what the nightly read notices", () => {
     }))).toEqual([]);
   });
 
-  it("NEVER calls anyone unbilled in the takeover month", () => {
-    // The seller collected half of it and the roll is half-entered. "Late" is
-    // a claim this data cannot support.
+  it("NEVER calls anyone unbilled in the takeover PART-month", () => {
+    // The Haven closes 15 December. The seller collected the 1st and the roll
+    // is half-entered. "Late" is a claim this data cannot support.
     const f = reconcile(input({
-      month: "2026-12", cutoverMonth: "2026-12",
+      month: "2026-12", cutoverDate: "2026-12-15",
       lots: [lot({ billedThisMonth: false })],
     }));
     expect(f.some((x) => x.kind === "live_lot_unbilled")).toBe(false);
-    expect(cutoverMonthNote("2026-12", "2026-12")).toMatch(/nobody is being called late/);
+    expect(cutoverMonthNote("2026-12", "2026-12-15")).toMatch(/nobody is being called late/);
   });
 
   it("goes back to normal the month after the takeover", () => {
     const f = reconcile(input({
-      month: "2027-01", cutoverMonth: "2026-12",
+      month: "2027-01", cutoverDate: "2026-12-15",
       lots: [lot({ billedThisMonth: false })],
     }));
     expect(f.some((x) => x.kind === "live_lot_unbilled")).toBe(true);
-    expect(cutoverMonthNote("2027-01", "2026-12")).toBeNull();
+    expect(cutoverMonthNote("2027-01", "2026-12-15")).toBeNull();
+  });
+
+  /**
+   * A GO-LIVE ON THE FIRST IS NOT A PART-MONTH.
+   *
+   * The suppression keyed on the takeover MONTH, so setting go-live to the 1st
+   * — the supported way to say "this whole month is mine to bill" — bought
+   * silence over a month that was wholly ours and fully billable.
+   *
+   * At The Haven with go-live 1 Jan 2027 that is January: the first month he
+   * bills, nineteen occupied lots, and the one night the first-ever charge run
+   * is most likely to have been forgotten or half-finished. The nightly read
+   * is the ONLY error-detection surface this park has.
+   */
+  it("DOES call unbilled lots in a takeover month that starts on the 1st", () => {
+    const f = reconcile(input({
+      month: "2027-01", cutoverDate: "2027-01-01",
+      lots: [lot({ billedThisMonth: false })],
+    }));
+    expect(f.some((x) => x.kind === "live_lot_unbilled")).toBe(true);
+  });
+
+  it("does not call that month a part-month, because it is not one", () => {
+    // The note's own words are "your first PART-month". A month beginning on
+    // the go-live day has no part the seller collected.
+    expect(cutoverMonthNote("2027-01", "2027-01-01")).toBeNull();
+  });
+
+  it("agrees with the ledger about which months it may judge", () => {
+    // The reconciler now goes quiet about exactly the months the ledger will
+    // refuse to charge for, and about no others — one rule, one function.
+    for (const [month, cutover, billable] of [
+      ["2026-12", "2026-12-15", false],
+      ["2027-01", "2026-12-15", true],
+      ["2027-01", "2027-01-01", true],
+      ["2026-12", "2026-12-01", true],
+    ] as const) {
+      expect(periodIsBillable(month, cutover)).toBe(billable);
+      const f = reconcile(input({
+        month, cutoverDate: cutover, lots: [lot({ billedThisMonth: false })],
+      }));
+      expect({ month, cutover, alarms: f.some((x) => x.kind === "live_lot_unbilled") })
+        .toEqual({ month, cutover, alarms: billable });
+    }
   });
 
   it("puts the urgent findings first", () => {
