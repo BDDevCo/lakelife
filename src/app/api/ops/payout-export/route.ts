@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { assertOps } from "@/app/ops/data";
 import { openSecret } from "@/lib/gate";
 import { todayLakeDate } from "@/lib/booking";
+import { csvCell } from "@/lib/csv";
 
 /**
  * POST /api/ops/payout-export — the ACH export the bank API will eventually
@@ -40,14 +41,17 @@ interface RawAccount {
   account_encrypted: string | null;
 }
 
-/** CSV field escaping + formula-injection guard: a crew named
- *  "=HYPERLINK(...)" must open as text, not execute, in the one file
- *  that also carries decrypted bank numbers. */
-function csvField(v: string | number): string {
-  let s = String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
+/**
+ * CSV field escaping + formula-injection guard: a crew named "=HYPERLINK(...)"
+ * must open as text, not execute, in the one file that also carries decrypted
+ * bank numbers.
+ *
+ * Now src/lib/csv.ts. Two things this private copy got wrong: it did not quote
+ * a lone carriage return, which splits a row mid-record for anything reading
+ * strict RFC 4180 — in a file a BANK ingests — and it prefixed the Net column
+ * when a batch nets negative, sending `'-45.00` where a number belongs.
+ */
+const csvField = csvCell;
 
 const CSV_HEADERS = (filename: string) => ({
   "Content-Type": "text/csv",

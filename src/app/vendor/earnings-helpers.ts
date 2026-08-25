@@ -250,16 +250,21 @@ export function groupByWeek(rows: EarningRow[]): WeekGroup[] {
   return groups;
 }
 
-/** Escape one CSV cell per RFC 4180 (quote when it holds a comma, quote, or newline). */
-export function csvCell(value: string | number | null | undefined): string {
-  const s = value == null ? "" : String(value);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-/** Join one CSV row from cells, escaping each. */
-export function csvRow(cells: Array<string | number | null | undefined>): string {
-  return cells.map(csvCell).join(",");
-}
+/**
+ * CSV escaping now lives in src/lib/csv.ts, shared with the park receipts and
+ * the ACH export.
+ *
+ * THIS FILE'S VERSION HAD NO FORMULA GUARD. It quoted commas and newlines
+ * correctly and stopped there, while both sibling writers prefixed a leading
+ * =, + , - or @ so a spreadsheet reads the cell as text. Two of the six columns
+ * here are free text somebody else typed — `Property` is the address on the
+ * homeowner's property record, and `Crew` is the name the crew tapped into
+ * their own roster — and this is the file a crew hands their bookkeeper.
+ *
+ * Re-exported rather than replaced at every call site so the export route and
+ * its tests keep the names they already use.
+ */
+export { csvCell, csvRow } from "@/lib/csv";
 
 /**
  * WHAT THIS PAYOUT'S STATUS ACTUALLY IS, given the batch it belongs to.

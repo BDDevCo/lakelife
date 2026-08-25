@@ -40,6 +40,7 @@ import { lakeDateOf } from "@/lib/booking";
  */
 
 import { prettyMonth } from "./ledger-helpers";
+import { csvCell as csvText } from "@/lib/csv";
 
 export type Method = "cash" | "check" | "card" | "ach" | "transfer" | "other";
 
@@ -325,19 +326,16 @@ export function receiptsHeadline(s: ReceiptSummary, period: Period): string {
 // ------------------------------------------------------------- the file ----
 
 /**
- * One cell.
+ * One cell — now src/lib/csv.ts, shared with the crew's earnings file and the
+ * ACH export, which had drifted apart in three different directions.
  *
- * A leading =, +, - or @ makes Excel and Sheets treat the cell as a FORMULA.
- * A payer called "-Smith" or a check reference somebody typed oddly would
- * execute rather than display, so anything starting with one is prefixed with a
- * single quote first, and then quoted normally.
+ * This copy was the closest to right, and still guarded NEGATIVE NUMBERS:
+ * `decimal()` returns "-45.00" for a negative, and the old rule prefixed it to
+ * `'-45.00`, which imports as text. Every amount in this file goes through
+ * `decimal`. The shared version exempts a well-formed decimal and guards
+ * everything else, so "-Smith" is still quoted and -45.00 stays a number.
  */
-export function csvText(value: string | number | null | undefined): string {
-  let s = value == null ? "" : String(value);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-  if (/["\n\r,]/.test(s)) s = `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
+export { csvText };
 
 /** The bill's frozen breakdown, in one cell, unparsed. */
 export function linesCell(lines: readonly ChargeLine[]): string {
