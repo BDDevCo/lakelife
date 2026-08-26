@@ -9,7 +9,7 @@ import { parseDaterange } from "@/lib/parks";
 import { buildStatement, type StatementFee } from "./statement-helpers";
 import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
 import { feesForTenancy } from "./fee-helpers";
-import { planRun, toRows, summarise, currentPeriod, prettyMonth, type Charge, type LedgerRow, type LedgerSummary, type RunPlan, dueDayFor } from "./ledger-helpers";
+import { planRun, toRows, summarise, currentPeriod, prettyMonth, nothingToBillReason, type Charge, type LedgerRow, type LedgerSummary, type RunPlan, dueDayFor } from "./ledger-helpers";
 import { preCutoverRefusal } from "@/lib/billing-start";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { sendEmail } from "@/lib/email";
@@ -442,8 +442,29 @@ export async function runCharges(
   const shareIdsByRes = new Map<string, string[]>();
 
   const rows: Record<string, unknown>[] = [];
+  /**
+   * WHY NOTHING WAS RAISED, when nothing is.
+   *
+   * "It may already be done" was asserted whenever this loop produced no rows,
+   * and the loop skips for four different reasons. The one that matters is a
+   * tenancy whose agreement window has ENDED: the household is still on the
+   * lot, nobody moved out, and the rent simply stops.
+   *
+   * That is not hypothetical here. Every agreement filed on one afternoon
+   * under a 3-month cap ends on the same day — file 20 households on 1 January
+   * 2027 and every one of them runs out on 1 April. April's run would then have
+   * told him the month was probably already billed, on the morning the whole
+   * park stopped paying.
+   */
+  const monthStart = `${month}-01`;
+  const monthEnd = lastDayOfMonth(month);
+  let skippedAlready = 0;
+  const expiredLots: string[] = [];
+  const notYetLots: string[] = [];
+  const noRentLots: string[] = [];
+
   for (const s of stays ?? []) {
-    if (already.has(s.id as string)) continue;
+    if (already.has(s.id as string)) { skippedAlready += 1; continue; }
     const lot = lotById.get(s.park_lot_id as string)!;
     const range = parseDaterange(s.during as string);
     if (!range) continue;
@@ -465,7 +486,13 @@ export async function runCharges(
     });
     // No total = a rent nobody set. Billing zero would hide it behind a paid
     // charge; skipping leaves it visible on the roll where it belongs.
-    if (st.total == null || st.total === 0) continue;
+    if (st.total == null || st.total === 0) {
+      const name = (lot.lot_number as string) ?? "?";
+      if (st.total == null) noRentLots.push(name);
+      else if (range.end <= monthStart) expiredLots.push(name);
+      else if (range.start > monthEnd) notYetLots.push(name);
+      continue;
+    }
     if (shares.length) shareIdsByRes.set(s.id as string, shares.map((c) => c.id));
 
     rows.push({
@@ -481,7 +508,9 @@ export async function runCharges(
   }
 
   if (rows.length === 0) {
-    return { ok: false, error: `Nothing to bill for ${prettyMonth(month)} — it may already be done.` };
+    return { ok: false, error: nothingToBillReason(prettyMonth(month), {
+      already: skippedAlready, expired: expiredLots, notYet: notYetLots, noRent: noRentLots,
+    }) };
   }
 
   const { data: raised, error } = await admin

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   ledgerState, balanceOf, toRows, summarise, ledgerHeadline,
   planRun, runSummary, daysBetween,
-  prettyMonth, shiftMonth, dueDayFor,
+  prettyMonth, shiftMonth, dueDayFor, nothingToBillReason,
   type Charge,
 } from "./ledger-helpers";
 
@@ -474,4 +474,79 @@ describe("the catch-up window the owner is TOLD about", () => {
       expect(sentence![0]).toContain("more than");
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+
+describe("why a charge run raised nothing", () => {
+  /**
+   * "IT MAY ALREADY BE DONE" WAS ASSERTED FOR ALL FOUR REASONS.
+   *
+   * The run skips a tenancy when the bill already exists, when the agreement
+   * window has ended, when it has not started, and when no rent is set. Only
+   * one of those is "already done", and the one that matters is the second:
+   * nobody moved out, the household is still on the lot, and the rent stops.
+   *
+   * At The Haven that is a whole-park event on one morning. Every agreement
+   * filed on the same afternoon under a 3-month cap ends on the same day — file
+   * twenty households on 1 January 2027 and every one runs out on 1 April. The
+   * old sentence would have explained that away as probably-already-billed.
+   */
+  const none = { already: 0, expired: [], notYet: [], noRent: [] };
+
+  it("names an expired agreement as the cause, and names the lots", () => {
+    const s = nothingToBillReason("April 2027", { ...none, expired: ["1", "2", "7"] });
+    expect(s).toContain("3 agreements have run out");
+    expect(s).toContain("lot 1, lot 2, lot 7");
+    expect(s).toContain("Nobody moved out");
+    expect(s).not.toContain("already");
+  });
+
+  it("does not list twenty lot numbers in one sentence", () => {
+    const many = ["1", "2", "6", "7", "9", "10", "11"];
+    const s = nothingToBillReason("April 2027", { ...none, expired: many });
+    expect(s).toContain("lot 1, lot 2, lot 6 and 4 more");
+  });
+
+  it("puts the expired case FIRST, because it is the one that is money stopping", () => {
+    // A month can be several of these at once. The loudest has to win.
+    const s = nothingToBillReason("April 2027", {
+      already: 5, expired: ["3"], notYet: ["4"], noRent: ["5"],
+    });
+    expect(s).toContain("run out");
+  });
+
+  it("still says 'already raised' when that is genuinely why", () => {
+    const s = nothingToBillReason("January 2027", { ...none, already: 20 });
+    expect(s).toBe("Nothing to bill for January 2027 — 20 bills are already raised.");
+  });
+
+  it("says which lots have no rent set", () => {
+    const s = nothingToBillReason("January 2027", { ...none, noRent: ["6"] });
+    expect(s).toContain("no rent is set on lot 6");
+  });
+
+  it("says when a tenancy simply has not started", () => {
+    const s = nothingToBillReason("January 2027", { ...none, notYet: ["6"] });
+    expect(s).toContain("starts after this month");
+  });
+
+  it("falls back to the honest answer when nobody is on a lot at all", () => {
+    expect(nothingToBillReason("January 2027", none)).toBe(
+      "Nothing to bill for January 2027 — nobody is on a lot.",
+    );
+  });
+
+  it("never claims the month is done unless something was actually done", () => {
+    // Guards the guard: the old sentence must not be reachable from any state
+    // other than a genuine already-billed one.
+    for (const cause of [
+      { ...none, expired: ["1"] },
+      { ...none, noRent: ["1"] },
+      { ...none, notYet: ["1"] },
+      none,
+    ]) {
+      expect(nothingToBillReason("April 2027", cause)).not.toMatch(/already/);
+    }
+  });
 });

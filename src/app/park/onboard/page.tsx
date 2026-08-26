@@ -37,6 +37,7 @@ export default async function ParkOnboardPage() {
         today={res.today ?? ""}
         capMonths={res.capMonths ?? null}
         rentsFromImport={res.rentsFromImport ?? false}
+        feePerSignedLot={res.feePerSignedLot ?? 0}
       />
     </>
   );

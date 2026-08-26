@@ -52,6 +52,8 @@ export async function getOnboardSeeds(
   today?: string;
   capMonths?: number | null;
   rentsFromImport?: boolean;
+  /** Monthly fees a SIGNED household will also be charged, per lot. */
+  feePerSignedLot?: number;
 }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
@@ -112,7 +114,7 @@ export async function getOnboardSeeds(
   // rather than assumed — and neither may be assumed by FAILING either, which
   // is what `?? null` and `(count ?? 0) > 0` quietly did: a dropped read put
   // the screen straight back on the two sentences this paragraph removed.
-  const [parkRes, importRes] = await Promise.all([
+  const [parkRes, importRes, feeRes] = await Promise.all([
     admin.from("parks").select("max_agreement_months").eq("id", parkId).maybeSingle(),
     // Committed and not since undone. There is no `status` column here — the
     // batch's life is recorded as two timestamps.
@@ -122,9 +124,24 @@ export async function getOnboardSeeds(
       .eq("park_id", parkId)
       .not("committed_at", "is", null)
       .is("undone_at", null),
+    // WHAT ELSE THE RUN WILL CHARGE THEM. The same filter the biller uses —
+    // active, monthly, and an audience the charge run honours — so this screen
+    // cannot quote a fee that will not bill, nor miss one that will.
+    admin
+      .from("park_fees")
+      .select("amount, cadence, applies_to")
+      .eq("park_id", parkId)
+      .eq("active", true),
   ]);
   const parkRow = mustRead("your park's agreement cap", parkRes);
   const importCount = mustCount("whether you imported a rent roll", importRes);
+  // A dropped read here would quote rent alone and understate the total he is
+  // about to commit to, which is the whole reason the figure is on the screen.
+  const feeRows = mustRead("the fees these households will also pay", feeRes);
+  const feePerSignedLot = (feeRows ?? [])
+    .filter((f) => (f.cadence as string) === "monthly")
+    .filter((f) => ["all_lots", "long_term"].includes(f.applies_to as string))
+    .reduce((sum, f) => sum + Number(f.amount), 0);
 
   return {
     ok: true,
@@ -132,6 +149,7 @@ export async function getOnboardSeeds(
     today,
     capMonths: (parkRow?.max_agreement_months as number | null) ?? null,
     rentsFromImport: importCount > 0,
+    feePerSignedLot: Math.round(feePerSignedLot * 100) / 100,
   };
 }
 

@@ -148,7 +148,22 @@ const money = (n: number) =>
  * own roll, and names the lots with no rent because those are the ones that
  * will silently not be billed.
  */
-export function onboardSummary(plan: OnboardPlan, capMonths: number | null): string {
+export function onboardSummary(
+  plan: OnboardPlan,
+  capMonths: number | null,
+  /**
+   * What the biller will ADD to each signed household, per month.
+   *
+   * THE SCREEN TOTALLED RENT AND THE RUN CHARGES MORE. A grounds fee lands on
+   * every tenancy signed with this owner (feesForTenancy), and the word "fee"
+   * did not appear anywhere on this screen — so filing twenty households at
+   * $400 read "$8,000 a month" and the January run would raise $10,850.60. The
+   * number he checks against his own roll has to be the number that bills.
+   *
+   * Defaulted to 0, so a park with no fees reads exactly as it did before.
+   */
+  feePerSignedLot = 0,
+): string {
   if (plan.toFile.length === 0) {
     return plan.problems.length > 0
       ? "Nothing to file yet — fix the lines below."
@@ -156,17 +171,41 @@ export function onboardSummary(plan: OnboardPlan, capMonths: number | null): str
   }
 
   const withRent = plan.toFile.filter((r) => r.rent != null);
-  const total = withRent.reduce((s, r) => s + (r.rent ?? 0), 0);
+  const rentTotal = withRent.reduce((s, r) => s + (r.rent ?? 0), 0);
+
+  // Only a SIGNED household is charged a fee, and only one with a rent is
+  // billed at all — so the fee rides on the intersection, not on the headcount.
+  const feePayers = withRent.filter((r) => r.signedNewLease).length;
+  const feeTotal = Math.round(feePerSignedLot * feePayers * 100) / 100;
+  const total = Math.round((rentTotal + feeTotal) * 100) / 100;
+
   const parts = [
     `File ${plan.toFile.length} ${plan.toFile.length === 1 ? "household" : "households"}` +
-    (withRent.length > 0 ? ` — ${money(total)} a month` : ""),
+    (withRent.length === 0
+      ? ""
+      : feeTotal > 0
+        // Shown as its own arithmetic. A single total he cannot decompose is a
+        // number he has to trust rather than check.
+        ? ` — ${money(rentTotal)} rent + ${money(feeTotal)} fees = ${money(total)} a month`
+        : ` — ${money(rentTotal)} a month`),
   ];
 
   // The split he actually cares about on the first morning.
-  const signed = plan.toFile.filter((r) => r.signedNewLease).length;
-  const holdover = plan.toFile.length - signed;
+  const signedRows = plan.toFile.filter((r) => r.signedNewLease);
+  const holdoverRows = plan.toFile.filter((r) => !r.signedNewLease);
+  const signed = signedRows.length;
+  const holdover = holdoverRows.length;
   if (signed > 0 && holdover > 0) {
-    parts.push(`${signed} on the new lease, ${holdover} on the arrangement they already had`);
+    // NAMED, NOT COUNTED. One missed tick is a household on the old
+    // arrangement — no new lease and, because a fee never lands on an
+    // inherited tenancy, no fee either. At twenty rows a bare count will not
+    // find which one, and the difference is silent on every later screen.
+    const named = holdoverRows.map((r) => `lot ${r.lotNumber}`).join(", ");
+    parts.push(
+      `${signed} on the new lease, ${holdover} on the arrangement they already had ` +
+      `(${named})` +
+      (feePerSignedLot > 0 ? ` — no fee will bill for ${holdover === 1 ? "it" : "those"}` : ""),
+    );
   } else if (holdover > 0) {
     // THE ORDINARY CASE, AND NOT A FAILING. On the first morning nobody has
     // signed anything — that is what onboarding an occupied park means. This

@@ -209,3 +209,81 @@ describe("the tick that claims a lease exists", () => {
     expect(source()).not.toMatch(/signedNewLease\s*:\s*true/);
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("the number he checks before he taps File", () => {
+  /**
+   * THE SCREEN TOTALLED RENT AND THE RUN CHARGES MORE.
+   *
+   * A grounds fee lands on every tenancy signed with this owner, and the word
+   * "fee" appeared nowhere on this screen. So filing twenty households at $400
+   * read "$8,000 a month" while the January run would raise $10,850.60 — the
+   * number he checks against his own roll was not the number that bills.
+   */
+  const signed = (o: Partial<OnboardRow> = {}) =>
+    row({ signedNewLease: true, rent: "400", ...o });
+
+  it("shows rent and fees as their own arithmetic, not one opaque total", () => {
+    const p = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1" }), signed({ lotId: "b", lotNumber: "2" })],
+      TODAY,
+    );
+    const s = onboardSummary(p, 3, 142.53);
+    expect(s).toContain("$800.00 rent + $285.06 fees = $1,085.06 a month");
+  });
+
+  it("reads exactly as before for a park with no fees", () => {
+    const p = planOnboarding([signed({ lotNumber: "1" })], TODAY);
+    expect(onboardSummary(p, 3, 0)).toContain("$400.00 a month");
+    expect(onboardSummary(p, 3, 0)).not.toContain("fees");
+    // And the parameter is defaulted, so old callers are untouched.
+    expect(onboardSummary(p, 3)).toBe(onboardSummary(p, 3, 0));
+  });
+
+  it("charges the fee only to the SIGNED rows", () => {
+    // A holdover is an inherited tenancy and a fee never lands on one.
+    const p = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1" }),
+       row({ lotId: "b", lotNumber: "2", rent: "400", signedNewLease: false })],
+      TODAY,
+    );
+    const s = onboardSummary(p, 3, 142.53);
+    expect(s).toContain("$800.00 rent + $142.53 fees = $942.53 a month");
+  });
+
+  it("does not count a fee for a row with no rent, which will not be billed", () => {
+    const p = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1" }),
+       signed({ lotId: "b", lotNumber: "6", rent: "" })],
+      TODAY,
+    );
+    const s = onboardSummary(p, 3, 142.53);
+    expect(s).toContain("$400.00 rent + $142.53 fees = $542.53 a month");
+  });
+
+  it("NAMES the households left on the old arrangement", () => {
+    // One missed tick is a household with no new lease and — because a fee
+    // never lands on an inherited tenancy — no fee either. At twenty rows a
+    // bare count will not tell him which one, and nothing later says so.
+    const p = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1" }),
+       signed({ lotId: "b", lotNumber: "2" }),
+       row({ lotId: "c", lotNumber: "14", rent: "400", signedNewLease: false })],
+      TODAY,
+    );
+    const s = onboardSummary(p, 3, 142.53);
+    expect(s).toContain("2 on the new lease, 1 on the arrangement they already had (lot 14)");
+    expect(s).toContain("no fee will bill for it");
+  });
+
+  it("says nothing about fees in that sentence when the park has none", () => {
+    const p = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1" }),
+       row({ lotId: "c", lotNumber: "14", rent: "400", signedNewLease: false })],
+      TODAY,
+    );
+    expect(onboardSummary(p, 3, 0)).toContain("(lot 14)");
+    expect(onboardSummary(p, 3, 0)).not.toContain("no fee will bill");
+  });
+});

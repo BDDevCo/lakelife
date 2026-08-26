@@ -151,6 +151,64 @@ export function ledgerState(
   return c.paidTotal > 0 ? "part_paid" : "due";
 }
 
+/**
+ * WHY A CHARGE RUN RAISED NOTHING.
+ *
+ * The run said "it may already be done" whenever it produced no rows, and it
+ * skips a tenancy for four different reasons. Three of them are not that.
+ *
+ * The one that matters is an ENDED AGREEMENT WINDOW. Nobody moved out, the
+ * household is still on the lot, and the rent stops — the failure this ledger
+ * calls "the one with no error anywhere". Every agreement filed on the same
+ * afternoon under a 3-month cap ends on the same day, so this is a whole-park
+ * event, not a one-lot one, and the old sentence would have explained it away
+ * on exactly that morning.
+ *
+ * Named lots, not counts: at 21 lots a number sends him hunting and a list
+ * does not.
+ */
+export function nothingToBillReason(
+  monthLabel: string,
+  cause: {
+    already: number;
+    expired: readonly string[];
+    notYet: readonly string[];
+    noRent: readonly string[];
+  },
+): string {
+  const lots = (ns: readonly string[]) =>
+    ns.length <= 3
+      ? ns.map((n) => `lot ${n}`).join(", ")
+      : `${ns.slice(0, 3).map((n) => `lot ${n}`).join(", ")} and ${ns.length - 3} more`;
+
+  // LOUDEST FIRST. An expired window is money stopping; the rest are ordinary.
+  if (cause.expired.length > 0) {
+    const n = cause.expired.length;
+    return (
+      `Nothing to bill for ${monthLabel} — ${n} ${n === 1 ? "agreement has" : "agreements have"} ` +
+      `run out (${lots(cause.expired)}). Nobody moved out; the paperwork ended. ` +
+      `Renew ${n === 1 ? "it" : "them"} and run this again.`
+    );
+  }
+  if (cause.noRent.length > 0) {
+    return (
+      `Nothing to bill for ${monthLabel} — no rent is set on ${lots(cause.noRent)}, ` +
+      `so there is nothing to charge.`
+    );
+  }
+  if (cause.notYet.length > 0) {
+    return (
+      `Nothing to bill for ${monthLabel} — ${lots(cause.notYet)} ` +
+      `${cause.notYet.length === 1 ? "starts" : "start"} after this month.`
+    );
+  }
+  if (cause.already > 0) {
+    const n = cause.already;
+    return `Nothing to bill for ${monthLabel} — ${n} ${n === 1 ? "bill is" : "bills are"} already raised.`;
+  }
+  return `Nothing to bill for ${monthLabel} — nobody is on a lot.`;
+}
+
 export interface LedgerRow extends Charge {
   balance: number;
   state: LedgerState;

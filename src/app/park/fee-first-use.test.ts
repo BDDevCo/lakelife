@@ -210,3 +210,50 @@ describe("the biller applies the inherited-tenancy rule", () => {
     expect(FORM).toMatch(/households you inherited/);
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("the first afternoon, and what it shows before he taps", () => {
+  const LEDGER = code("./ledger-actions.ts");
+  const ONBOARD = code("./onboard-actions.ts");
+  const SCREEN = code("../../components/ParkOnboard.tsx");
+
+  it("the run counts WHY it skipped, rather than assuming", () => {
+    // "It may already be done" was asserted for four different causes, one of
+    // which is the whole park's rent stopping.
+    expect(LEDGER).toContain("nothingToBillReason");
+    expect(LEDGER).not.toMatch(/it may already be done/i);
+    for (const bucket of ["expiredLots", "notYetLots", "noRentLots", "skippedAlready"]) {
+      expect(LEDGER).toContain(bucket);
+    }
+  });
+
+  it("an expired window is told apart from one that has not started", () => {
+    // Both produce a zero statement. Only one of them is money stopping.
+    expect(LEDGER).toMatch(/range\.end <= monthStart/);
+    expect(LEDGER).toMatch(/range\.start > monthEnd/);
+  });
+
+  it("the onboarding screen reads the fees the biller will actually charge", () => {
+    // Same filter as feesFor, or the screen quotes a fee that will not bill.
+    expect(ONBOARD).toContain('from("park_fees")');
+    expect(ONBOARD).toMatch(/\["all_lots", "long_term"\]\.includes/);
+    expect(ONBOARD).toMatch(/=== "monthly"/);
+  });
+
+  it("that read cannot fail quietly into 'no fees'", () => {
+    // A dropped read would understate the total he is committing to.
+    expect(ONBOARD).toMatch(/mustRead\("the fees these households will also pay"/);
+  });
+
+  it("the summary is given the fee, not just the rent", () => {
+    expect(SCREEN).toMatch(/onboardSummary\(plan, capMonths, feePerSignedLot\)/);
+  });
+
+  it("a partial failure names the lots instead of counting them", () => {
+    // The action already returns {lotNumber, why} per household and the toast
+    // discarded every one of them.
+    expect(SCREEN).toContain("setFailed(res.failed ?? [])");
+    expect(SCREEN).toMatch(/Lot \{f\.lotNumber\}/);
+  });
+});

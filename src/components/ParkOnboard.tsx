@@ -20,7 +20,7 @@ import {
  * afternoon, and a blank row is left for later rather than blocking the save.
  */
 export function ParkOnboard({
-  parkId, seeds, today, capMonths, rentsFromImport,
+  parkId, seeds, today, capMonths, rentsFromImport, feePerSignedLot = 0,
 }: {
   parkId: string;
   seeds: OnboardSeed[];
@@ -29,9 +29,17 @@ export function ParkOnboard({
   capMonths: number | null;
   /** Did a roll actually get pasted in? The rent hint is a lie otherwise. */
   rentsFromImport: boolean;
+  /**
+   * Monthly fees a SIGNED household will also be charged. The summary totalled
+   * rent alone while the run charges rent plus fees, so the number he checked
+   * against his own roll was not the number that billed.
+   */
+  feePerSignedLot?: number;
 }) {
   const router = useRouter();
   const [busy, start] = useTransition();
+  /** Lots that came back with a reason, so a partial failure names them. */
+  const [failed, setFailed] = useState<{ lotNumber: string; why: string }[]>([]);
   const [rows, setRows] = useState<OnboardRow[]>(
     seeds.map((s) => ({
       lotId: s.lotId,
@@ -144,7 +152,7 @@ export function ParkOnboard({
 
       {/* ---- what is about to happen -------------------------------------- */}
       <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
-        <strong style={{ fontSize: 15 }}>{onboardSummary(plan, capMonths)}</strong>
+        <strong style={{ fontSize: 15 }}>{onboardSummary(plan, capMonths, feePerSignedLot)}</strong>
         <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
           Nobody is told anything by this. It puts them on the roll so you can
           bill them — the rents are recorded as YOUR figures, not as anything
@@ -156,12 +164,32 @@ export function ParkOnboard({
               start(async () => {
                 const res = await commitOnboarding(parkId, rows);
                 toast(res.ok ? (res.signal ?? "Filed.") : (res.error ?? "Couldn't file those."));
+                // THE NAMES, NOT THE COUNT. The action already returns a lot
+                // number and a reason for every household that did not file,
+                // and the toast threw all of it away — so "18 filed, 3
+                // couldn't be" sent him hunting three households across
+                // twenty-one rows, where an unfiled one and an empty lot look
+                // identical.
+                setFailed(res.failed ?? []);
                 if (res.ok) router.refresh();
               })
             }>
             {busy ? "Filing…" : `File ${plan.toFile.length}`}
           </button>
         </div>
+
+        {failed.length > 0 && (
+          <div style={{ marginTop: 12, borderTop: "1px solid rgba(0,0,0,.08)", paddingTop: 10 }}>
+            <strong style={{ fontSize: 13.5, color: "var(--warn)" }}>
+              {failed.length === 1 ? "One didn't file" : `${failed.length} didn't file`} — the rest did.
+            </strong>
+            {failed.map((f) => (
+              <p key={f.lotNumber} style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.5 }}>
+                <strong>Lot {f.lotNumber}</strong> — {f.why}
+              </p>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
