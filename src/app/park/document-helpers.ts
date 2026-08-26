@@ -60,12 +60,25 @@ export const CHANNEL_LABEL: Record<DeliveryChannel, string> = {
   post: "Posted",
 };
 
+/** One SEND. A household may have several; see the note in 0140. */
+export interface DeliveryAttempt {
+  channel: DeliveryChannel;
+  sentAt: string;
+  openedAt: string | null;
+}
+
 export interface DeliveryRow {
   parkRenterId: string;
   displayName: string;
-  channel: DeliveryChannel | null;
-  sentAt: string | null;
-  openedAt: string | null;
+  /**
+   * EVERY SEND, NEWEST FIRST. Empty when nobody has given it to them.
+   *
+   * This used to be a single flattened delivery, which said a household could
+   * be given a document exactly once — so an address that changed, a copy that
+   * was lost, or a first email that bounced left them permanently unreachable
+   * with the record insisting they already had it.
+   */
+  attempts: DeliveryAttempt[];
 }
 
 /**
@@ -78,13 +91,30 @@ export interface DeliveryRow {
  */
 export type DeliveryState = "not_sent" | "handed" | "sent" | "opened";
 
-export function deliveryState(d: Pick<DeliveryRow, "channel" | "sentAt" | "openedAt">): DeliveryState {
-  if (d.channel == null || d.sentAt == null) return "not_sent";
-  if (d.openedAt != null) return "opened";
-  // A channel we cannot hear back on. The record stops at delivery because
-  // that is where the knowledge stops.
-  if (d.channel !== "email") return "handed";
-  return "sent";
+export function deliveryState(d: Pick<DeliveryRow, "attempts">): DeliveryState {
+  if (d.attempts.length === 0) return "not_sent";
+
+  // OPENED IS PERMANENT AND OUTRANKS EVERYTHING. If she opened January's email
+  // and was handed a fresh copy in February, she has read it — reporting the
+  // later, less informative send would lose the only strong fact here.
+  if (d.attempts.some((a) => a.openedAt != null)) return "opened";
+
+  // Otherwise the most recent send is the one that describes where things
+  // stand. A channel we cannot hear back on stops at delivery, because that is
+  // where the knowledge stops.
+  const latest = d.attempts[0];
+  return latest.channel === "email" ? "sent" : "handed";
+}
+
+/**
+ * The state, and how many times it took — because "sent three times, still not
+ * opened" is a different conversation from "sent once".
+ */
+export function deliveryDetail(d: Pick<DeliveryRow, "attempts">): string {
+  const label = DELIVERY_STATE_LABEL[deliveryState(d)];
+  const n = d.attempts.length;
+  if (n <= 1) return label;
+  return `${label} · sent ${n === 2 ? "twice" : `${n} times`}`;
 }
 
 export const DELIVERY_STATE_LABEL: Record<DeliveryState, string> = {
@@ -111,12 +141,12 @@ export function deliverySummary(
 ): string {
   if (households === 0) return "Nobody is on a lot yet, so there is nobody to give this to.";
 
-  const states = rows.map(deliveryState);
-  const sent = states.filter((s) => s !== "not_sent").length;
-  const opened = states.filter((s) => s === "opened").length;
-  const emailed = rows.filter(
-    (r) => r.channel === "email" && r.sentAt != null,
-  ).length;
+  // COUNTED BY HOUSEHOLD, NOT BY SEND. Three emails to one household who lost
+  // the first two is one household who has it, and "given to 23 of 21" is the
+  // shape of number that ends trust in a screen.
+  const sent = rows.filter((r) => r.attempts.length > 0).length;
+  const opened = rows.filter((r) => r.attempts.some((a) => a.openedAt != null)).length;
+  const emailed = rows.filter((r) => r.attempts.some((a) => a.channel === "email")).length;
   const missing = households - sent;
 
   if (sent === 0) {

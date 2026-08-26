@@ -8,7 +8,7 @@ import { assertMyPark } from "./data";
 import { sendEmail } from "@/lib/email";
 import {
   planFiling, deliverySummary, DOCUMENT_KIND_LABEL, VERSIONED_KINDS,
-  type DeliveryChannel, type DeliveryRow, type DocumentKind,
+  type DeliveryChannel, type DeliveryRow, type DeliveryAttempt, type DocumentKind,
 } from "./document-helpers";
 import type { ParkResult } from "./actions";
 
@@ -89,25 +89,32 @@ export async function listDocuments(parkId: string): Promise<DocumentsPage> {
         .in("document_id", ids))
     : ([] as Record<string, unknown>[]);
 
-  const byDoc = new Map<string, Map<string, Record<string, unknown>>>();
+  const byDoc = new Map<string, Map<string, DeliveryAttempt[]>>();
   for (const d of deliveries ?? []) {
     const k = d.document_id as string;
     if (!byDoc.has(k)) byDoc.set(k, new Map());
-    byDoc.get(k)!.set(d.park_renter_id as string, d);
+    const perDoc = byDoc.get(k)!;
+    const renter = d.park_renter_id as string;
+    // A LIST PER HOUSEHOLD, not one row. A delivery is an event and a household
+    // may have several — her address changed, she lost the copy, the first
+    // email bounced.
+    if (!perDoc.has(renter)) perDoc.set(renter, []);
+    perDoc.get(renter)!.push({
+      channel: d.channel as DeliveryChannel,
+      sentAt: d.sent_at as string,
+      openedAt: (d.opened_at as string) ?? null,
+    });
   }
 
   const documents: FiledDocument[] = (docs ?? []).map((d) => {
-    const sent = byDoc.get(d.id as string) ?? new Map();
-    const rows: DeliveryRow[] = [...renterName.entries()].map(([id, name]) => {
-      const row = sent.get(id);
-      return {
-        parkRenterId: id,
-        displayName: name,
-        channel: (row?.channel as DeliveryChannel) ?? null,
-        sentAt: (row?.sent_at as string) ?? null,
-        openedAt: (row?.opened_at as string) ?? null,
-      };
-    });
+    const sent = byDoc.get(d.id as string) ?? new Map<string, DeliveryAttempt[]>();
+    const rows: DeliveryRow[] = [...renterName.entries()].map(([id, name]) => ({
+      parkRenterId: id,
+      displayName: name,
+      // NEWEST FIRST — `deliveryState` reads attempts[0] as the one that
+      // describes where things stand.
+      attempts: [...(sent.get(id) ?? [])].sort((a, b) => (a.sentAt < b.sentAt ? 1 : -1)),
+    }));
     return {
       id: d.id as string,
       kind: d.kind as DocumentKind,
@@ -261,6 +268,38 @@ export async function recordDeliveries(
   renterIds: string[],
   channel: DeliveryChannel,
 ): Promise<ParkResult & { failed?: { name: string; why: string }[] }> {
+  return deliver(parkId, documentId, renterIds, channel, { repeat: false });
+}
+
+/**
+ * SEND IT AGAIN, on purpose, to one household.
+ *
+ * The unique index used to make this impossible: one row per household per
+ * document, for ever, so an address that changed, a copy that was lost or a
+ * first email that bounced left somebody permanently unreachable while the
+ * record insisted they already had it. 0140 now treats a delivery as an EVENT,
+ * and this is the deliberate act that adds one.
+ *
+ * Its own action rather than a flag on the bulk one, because the two want
+ * opposite defaults. A bulk run must never quietly re-send to twenty
+ * households; a re-send is somebody standing at the counter asking for it.
+ */
+export async function resendDelivery(
+  parkId: string,
+  documentId: string,
+  renterId: string,
+  channel: DeliveryChannel,
+): Promise<ParkResult & { failed?: { name: string; why: string }[] }> {
+  return deliver(parkId, documentId, [renterId], channel, { repeat: true });
+}
+
+async function deliver(
+  parkId: string,
+  documentId: string,
+  renterIds: string[],
+  channel: DeliveryChannel,
+  opts: { repeat: boolean },
+): Promise<ParkResult & { failed?: { name: string; why: string }[] }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
   if (renterIds.length === 0) return { ok: false, error: "Pick who was given it." };
 
@@ -279,12 +318,41 @@ export async function recordDeliveries(
     .eq("park_id", parkId)
     .in("id", renterIds));
 
+  /**
+   * WHO ALREADY HAS IT — because the database no longer says.
+   *
+   * `unique (document_id, park_renter_id)` used to refuse a second delivery
+   * with a 23505, which doubled as the guard against including somebody twice
+   * in a bulk run. Dropping it to make a re-send possible took that guard away
+   * with it, so the guard moves here, where it can tell the two apart: a bulk
+   * run refuses a household that already has the document, and `resendDelivery`
+   * deliberately does not.
+   *
+   * FAILS CLOSED. A dropped read means we do not know who has it, and quietly
+   * emailing twenty households a second copy of their lease is the wrong way to
+   * be wrong.
+   */
+  const already = new Set<string>();
+  if (!opts.repeat) {
+    const prior = mustRead("who already has it", await admin
+      .from("park_document_deliveries")
+      .select("park_renter_id")
+      .eq("document_id", documentId)
+      .in("park_renter_id", renterIds));
+    for (const p of prior ?? []) already.add(p.park_renter_id as string);
+  }
+
   const failed: { name: string; why: string }[] = [];
   let done = 0;
 
   for (const r of renters ?? []) {
     const name = (r.display_name as string) ?? "That household";
     const email = (r.email as string) ?? null;
+
+    if (already.has(r.id as string)) {
+      failed.push({ name, why: "Already has it — use Send again if they need another copy." });
+      continue;
+    }
 
     if (channel === "email" && !email) {
       failed.push({ name, why: "No email on file — hand it over or post it instead." });
@@ -336,13 +404,11 @@ export async function recordDeliveries(
       // an afternoon for, and the first delivery is the one that counts.
       failed.push({
         name,
-        why: error.code === "23505"
-          ? "Already logged as given it."
-          : channel === "email"
-            // Said plainly, because the household DID get it and the log is the
-            // thing that is now wrong.
-            ? "The email went out but couldn't be logged — they have it."
-            : "Couldn't log that one.",
+        why: channel === "email"
+          // Said plainly, because the household DID get it and the log is the
+          // thing that is now wrong.
+          ? "The email went out but couldn't be logged — they have it."
+          : "Couldn't log that one.",
       });
       continue;
     }

@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  deliveryState, deliverySummary, planFiling, saysOnlyCourier,
+  deliveryState, deliveryDetail, deliverySummary, planFiling, saysOnlyCourier,
   DELIVERY_STATE_LABEL, DOCUMENT_KIND_LABEL, CHANNEL_LABEL, FORBIDDEN_WORDS,
-  MAX_DOC_BYTES, VERSIONED_KINDS, DOCUMENT_KINDS, type DeliveryRow,
+  MAX_DOC_BYTES, VERSIONED_KINDS, DOCUMENT_KINDS,
+  type DeliveryRow, type DeliveryAttempt, type DeliveryChannel,
 } from "./document-helpers";
 
 /**
@@ -22,28 +23,59 @@ import {
  */
 
 const row = (o: Partial<DeliveryRow> = {}): DeliveryRow => ({
-  parkRenterId: "r1", displayName: "Amberg, Roy",
-  channel: null, sentAt: null, openedAt: null, ...o,
+  parkRenterId: "r1", displayName: "Amberg, Roy", attempts: [], ...o,
 });
+
+/** One send. A date is not optional — the column is NOT NULL. */
+const sent = (
+  channel: DeliveryChannel, sentAt = "2027-01-01", openedAt: string | null = null,
+): DeliveryAttempt => ({ channel, sentAt, openedAt });
 
 describe("what state a delivery is in", () => {
   it("is NOT SENT until somebody was given it", () => {
+    // The old model allowed a channel with no date — a half-written row. An
+    // attempt now always carries a date, because the column is NOT NULL, so
+    // the only way to have nothing is to have no attempts.
     expect(deliveryState(row())).toBe("not_sent");
-    // A channel with no date is not a delivery — it is a half-written row.
-    expect(deliveryState(row({ channel: "hand" }))).toBe("not_sent");
   });
 
   it("stops at HANDED for a channel that cannot report back", () => {
     // The park handed it over and cannot know what happened next. Calling that
     // "sent" invites a reader to wonder why it was never opened.
-    expect(deliveryState(row({ channel: "hand", sentAt: "2027-01-01" }))).toBe("handed");
-    expect(deliveryState(row({ channel: "post", sentAt: "2027-01-01" }))).toBe("handed");
+    expect(deliveryState(row({ attempts: [sent("hand")] }))).toBe("handed");
+    expect(deliveryState(row({ attempts: [sent("post")] }))).toBe("handed");
   });
 
   it("distinguishes emailed from opened", () => {
-    expect(deliveryState(row({ channel: "email", sentAt: "2027-01-01" }))).toBe("sent");
-    expect(deliveryState(row({ channel: "email", sentAt: "2027-01-01", openedAt: "2027-01-02" })))
+    expect(deliveryState(row({ attempts: [sent("email")] }))).toBe("sent");
+    expect(deliveryState(row({ attempts: [sent("email", "2027-01-01", "2027-01-02")] })))
       .toBe("opened");
+  });
+
+  it("reads the NEWEST send when none has been opened", () => {
+    // She was emailed in January and handed a copy in February. Where things
+    // stand is the copy in her hand.
+    expect(deliveryState(row({ attempts: [sent("hand", "2027-02-01"), sent("email", "2027-01-01")] })))
+      .toBe("handed");
+  });
+
+  it("OPENED outranks everything and is permanent", () => {
+    // She opened January's email and was handed a fresh copy in February. She
+    // has read it — reporting the later, less informative send would throw
+    // away the only strong fact here.
+    expect(deliveryState(row({
+      attempts: [sent("hand", "2027-02-01"), sent("email", "2027-01-01", "2027-01-02")],
+    }))).toBe("opened");
+  });
+
+  it("says how many times it took, when it took more than one", () => {
+    expect(deliveryDetail(row({ attempts: [sent("email")] }))).toBe("Emailed — not opened yet");
+    expect(deliveryDetail(row({ attempts: [sent("email", "2027-02-01"), sent("email")] })))
+      .toBe("Emailed — not opened yet · sent twice");
+    expect(deliveryDetail(row({
+      attempts: [sent("email", "2027-03-01"), sent("email", "2027-02-01"), sent("email")],
+    }))).toBe("Emailed — not opened yet · sent 3 times");
+    expect(deliveryDetail(row())).toBe("Not sent yet");
   });
 
   it("has a label for every state, and none of them says agreed", () => {
@@ -70,7 +102,7 @@ describe("the line at the top of a document", () => {
   it("counts, and NAMES the ones nobody has given it to", () => {
     // "2 not sent" sends him to another screen. The names are the answer.
     const rows = [
-      row({ parkRenterId: "a", displayName: "Amberg", channel: "hand", sentAt: "2027-01-01" }),
+      row({ parkRenterId: "a", displayName: "Amberg", attempts: [sent("hand")] }),
       row({ parkRenterId: "b", displayName: "Boyle" }),
       row({ parkRenterId: "c", displayName: "Crane" }),
     ];
@@ -82,7 +114,7 @@ describe("the line at the top of a document", () => {
   it("falls back to a count when there are too many to name", () => {
     const rows = Array.from({ length: 9 }, (_, i) =>
       row({ parkRenterId: String(i), displayName: `H${i}` }));
-    rows[0] = row({ parkRenterId: "0", displayName: "H0", channel: "hand", sentAt: "2027-01-01" });
+    rows[0] = row({ parkRenterId: "0", displayName: "H0", attempts: [sent("hand")] });
     expect(deliverySummary(rows, 9)).toContain("8 still to go");
   });
 
@@ -90,9 +122,9 @@ describe("the line at the top of a document", () => {
     // Counting handed-over copies in that denominator would make the park look
     // ignored by people who took the document out of his hand.
     const rows = [
-      row({ parkRenterId: "a", displayName: "A", channel: "hand", sentAt: "2027-01-01" }),
-      row({ parkRenterId: "b", displayName: "B", channel: "email", sentAt: "2027-01-01", openedAt: "2027-01-02" }),
-      row({ parkRenterId: "c", displayName: "C", channel: "email", sentAt: "2027-01-01" }),
+      row({ parkRenterId: "a", displayName: "A", attempts: [sent("hand")] }),
+      row({ parkRenterId: "b", displayName: "B", attempts: [sent("email", "2027-01-01", "2027-01-02")] }),
+      row({ parkRenterId: "c", displayName: "C", attempts: [sent("email")] }),
     ];
     const s = deliverySummary(rows, 3);
     expect(s).toContain("Given to 3 of 3");
@@ -100,9 +132,34 @@ describe("the line at the top of a document", () => {
     expect(s).not.toContain("of 3 opened");
   });
 
+  it("counts HOUSEHOLDS, never sends", () => {
+    // She lost it twice and was emailed three times. That is one household who
+    // has the document — "Given to 3 of 1" is the shape of number that ends
+    // trust in a screen, and the re-send path is what makes it reachable.
+    const rows = [row({
+      parkRenterId: "a", displayName: "A",
+      attempts: [sent("email", "2027-03-01"), sent("email", "2027-02-01"), sent("email")],
+    })];
+    const s = deliverySummary(rows, 1);
+    expect(s).toContain("Given to 1 of 1");
+    expect(s).not.toContain("of 1 opened");
+    expect(s).not.toMatch(/Given to [23]/);
+  });
+
+  it("counts one household as opened however many times it was sent", () => {
+    const rows = [
+      row({ parkRenterId: "a", displayName: "A",
+        attempts: [sent("email", "2027-02-01"), sent("email", "2027-01-01", "2027-01-02")] }),
+      row({ parkRenterId: "b", displayName: "B", attempts: [sent("email")] }),
+    ];
+    const s = deliverySummary(rows, 2);
+    expect(s).toContain("Given to 2 of 2");
+    expect(s).toContain("1 of the 2 emailed opened");
+  });
+
   it("says so when every emailed copy has been opened", () => {
     const rows = [
-      row({ parkRenterId: "a", displayName: "A", channel: "email", sentAt: "2027-01-01", openedAt: "2027-01-02" }),
+      row({ parkRenterId: "a", displayName: "A", attempts: [sent("email", "2027-01-01", "2027-01-02")] }),
     ];
     expect(deliverySummary(rows, 1)).toContain("all 1 emailed copy has been opened");
   });
@@ -113,10 +170,10 @@ describe("the line at the top of a document", () => {
     const shapes: [DeliveryRow[], number][] = [
       [[], 0],
       [[row()], 1],
-      [[row({ channel: "hand", sentAt: "x" })], 1],
-      [[row({ channel: "email", sentAt: "x" })], 1],
-      [[row({ channel: "email", sentAt: "x", openedAt: "y" })], 1],
-      [[row({ parkRenterId: "a", channel: "post", sentAt: "x" }), row({ parkRenterId: "b" })], 2],
+      [[row({ attempts: [sent("hand", "x")] })], 1],
+      [[row({ attempts: [sent("email", "x")] })], 1],
+      [[row({ attempts: [sent("email", "x", "y")] })], 1],
+      [[row({ parkRenterId: "a", attempts: [sent("post", "x")] }), row({ parkRenterId: "b" })], 2],
     ];
     for (const [rows, n] of shapes) {
       const s = deliverySummary(rows, n);
@@ -440,5 +497,72 @@ describe("no migration, ever, gives these tables a column recording assent", () 
     expect(sql).toContain(ASSENT.source.replace(/^\(|\)$/g, "").length > 0
       ? "sign|agree|accept|consent|assent|acknowledg"
       : "");
+  });
+});
+
+describe("sending it again", () => {
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const code = (rel: string) =>
+    read(rel)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  /**
+   * A DELIVERY IS AN EVENT, NOT A STATE.
+   *
+   * `unique (document_id, park_renter_id)` said a household could be given a
+   * document exactly once, for ever. Her address changes. She loses the copy
+   * and asks at the window. The first email bounced. Every one of those was
+   * refused as 23505 — "Already logged as given it" — with no way round it:
+   * the household could not be given the document again, and the record
+   * insisted they already had it.
+   */
+  it("the schema does not cap a household at one copy", () => {
+    const sql = read("../../../supabase/migrations/0140_the_file_and_who_was_given_it.sql")
+      .split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
+    expect(sql).not.toMatch(/unique \(document_id, park_renter_id\)/);
+    // And the reason is recorded where the next person will look.
+    expect(read("../../../supabase/migrations/0140_the_file_and_who_was_given_it.sql"))
+      .toContain("A DELIVERY IS AN EVENT, NOT A STATE");
+  });
+
+  it("still indexes the lookup the screen actually makes", () => {
+    // Dropping the unique index must not have dropped the way in.
+    const sql = read("../../../supabase/migrations/0140_the_file_and_who_was_given_it.sql");
+    expect(sql).toMatch(/park_doc_deliveries_pair_idx[\s\S]{0,120}document_id, park_renter_id, sent_at desc/);
+  });
+
+  it("the guard the index used to provide moved into the action", () => {
+    // A bulk run must not quietly send twenty households a second copy. The
+    // database no longer refuses it, so this does.
+    const act = code("./document-actions.ts");
+    expect(act).toMatch(/if \(!opts\.repeat\)/);
+    expect(act).toMatch(/mustRead\("who already has it"/);
+    expect(act).toMatch(/already\.has\(r\.id as string\)/);
+  });
+
+  it("a re-send is its own action, not a flag on the bulk one", () => {
+    // The two want opposite defaults: bulk must never repeat, a re-send is
+    // somebody standing at the counter asking for it.
+    const act = code("./document-actions.ts");
+    expect(act).toMatch(/export async function resendDelivery/);
+    expect(act).toMatch(/deliver\(parkId, documentId, renterIds, channel, \{ repeat: false \}\)/);
+    expect(act).toMatch(/deliver\(parkId, documentId, \[renterId\], channel, \{ repeat: true \}\)/);
+  });
+
+  it("no longer reads 23505 as 'already logged' — nothing raises it now", () => {
+    // The unique index is gone, so that branch could only ever mislead.
+    const act = code("./document-actions.ts");
+    expect(act).not.toContain("Already logged as given it.");
+  });
+
+  it("the screen offers Send again to a household that already has it", () => {
+    const ui = code("../../components/ParkDocuments.tsx");
+    expect(ui).toContain("resendDelivery(parkId, d.id, r.parkRenterId, channel)");
+    expect(ui).toMatch(/Send again/);
+    // And that household is no longer a checkbox, so a bulk run cannot pick
+    // them up by accident.
+    expect(ui).toMatch(/already \? \(/);
   });
 });

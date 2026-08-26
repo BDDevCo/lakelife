@@ -109,24 +109,52 @@ create table if not exists public.park_document_deliveries (
   constraint park_doc_opened_only_by_link
     check (opened_at is null or channel = 'email'),
 
-  -- What makes 'opened' knowable at all: one link per household per document.
-  -- Without it opened_at would be a column with no writer, which is this
-  -- codebase's most-repaired defect.
+  -- What makes 'opened' knowable at all: one link per SEND. Without it
+  -- opened_at would be a column with no writer, which is this codebase's
+  -- most-repaired defect.
   token          text unique,
   constraint park_doc_email_has_token
-    check (channel <> 'email' or token is not null),
-
-  unique (document_id, park_renter_id)
+    check (channel <> 'email' or token is not null)
 );
 
+-- A DELIVERY IS AN EVENT, NOT A STATE.
+--
+-- This table carried `unique (document_id, park_renter_id)` — one row per
+-- household per document, for ever. Which says a household can be given a
+-- document exactly once, and that is not true of any real park office. Her
+-- address changes. She loses the copy and asks at the window. The first email
+-- bounced. Under the unique index every one of those was refused as 23505,
+-- surfaced as "Already logged as given it", and there was no way round it: the
+-- household could not be given the document again, and the record insisted
+-- they already had it.
+--
+-- So each send is its own row and the history survives: sent 1 January, opened
+-- the 2nd; sent again 15 February when she changed her address. Collapsing
+-- those into one row would have to either destroy the first open or hide the
+-- second send, and both are facts a delivery log exists to keep.
+--
+-- NOTHING REPLACES THE UNIQUE INDEX AS AN IDEMPOTENCY GUARD, deliberately. If
+-- the office sends the same document twice, two emails left the building and
+-- the log should say two did. Guarding against a double tap by silently
+-- discarding the second send would put the software's tidiness ahead of what
+-- actually happened. What the ACTION does instead is refuse to include a
+-- household in a bulk run when they already have a delivery — being missed is
+-- the risk on that path — while a re-send is its own deliberate, per-household
+-- act.
 comment on table public.park_document_deliveries is
-  'SENT, and where knowable OPENED. Never agreed: LakeLife is a courier here, '
-  'not a witness, and no column on this table may record assent.';
+  'One row per SEND — a delivery is an event, not a state, so a household may '
+  'be given the same document more than once and the history survives. Sent, '
+  'and where knowable opened. Never agreed: LakeLife is a courier here, not a '
+  'witness, and no column on this table may record assent.';
 
 create index if not exists park_doc_deliveries_doc_idx
   on public.park_document_deliveries (document_id);
 create index if not exists park_doc_deliveries_renter_idx
   on public.park_document_deliveries (park_renter_id);
+-- The lookup the screen actually makes: every send to this household of this
+-- document, newest first.
+create index if not exists park_doc_deliveries_pair_idx
+  on public.park_document_deliveries (document_id, park_renter_id, sent_at desc);
 
 -- ------------------------------------------------------------- the bucket --
 --

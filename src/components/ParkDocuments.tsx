@@ -4,11 +4,11 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import {
-  fileDocument, recordDeliveries, documentUrl, type DocumentsPage,
+  fileDocument, recordDeliveries, resendDelivery, documentUrl, type DocumentsPage,
 } from "@/app/park/document-actions";
 import {
-  DOCUMENT_KINDS, DOCUMENT_KIND_LABEL, DELIVERY_STATE_LABEL,
-  deliveryState, type DeliveryChannel, type DocumentKind,
+  DOCUMENT_KINDS, DOCUMENT_KIND_LABEL,
+  deliveryState, deliveryDetail, type DeliveryChannel, type DocumentKind,
 } from "@/app/park/document-helpers";
 
 /**
@@ -155,24 +155,49 @@ export function ParkDocuments({ parkId, page }: { parkId: string; page: Document
                   <div style={{ marginTop: 12, borderTop: "1px solid rgba(0,0,0,.08)", paddingTop: 10 }}>
                     <div style={{ display: "grid", gap: 4, marginBottom: 10 }}>
                       {d.deliveries.map((r) => {
-                        const state = deliveryState(r);
-                        const already = state !== "not_sent";
+                        const already = deliveryState(r) !== "not_sent";
                         return (
-                          <label key={r.parkRenterId}
+                          <div key={r.parkRenterId}
                             style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5 }}>
-                            <input type="checkbox" disabled={already || busy}
-                              checked={picked.has(r.parkRenterId)}
-                              onChange={() => setPicked((prev) => {
-                                const n = new Set(prev);
-                                if (n.has(r.parkRenterId)) n.delete(r.parkRenterId);
-                                else n.add(r.parkRenterId);
-                                return n;
-                              })} />
+                            {/* A household who has it is no longer a checkbox —
+                                a bulk run must not include them again. What
+                                they get instead is a deliberate re-send. */}
+                            {already ? (
+                              <span style={{ width: 13 }} />
+                            ) : (
+                              <input type="checkbox" disabled={busy}
+                                checked={picked.has(r.parkRenterId)}
+                                onChange={() => setPicked((prev) => {
+                                  const n = new Set(prev);
+                                  if (n.has(r.parkRenterId)) n.delete(r.parkRenterId);
+                                  else n.add(r.parkRenterId);
+                                  return n;
+                                })} />
+                            )}
                             <span style={{ flex: 1 }}>{r.displayName}</span>
                             <span className="mut" style={{ fontSize: 12.5 }}>
-                              {DELIVERY_STATE_LABEL[state]}
+                              {deliveryDetail(r)}
                             </span>
-                          </label>
+                            {already && (
+                              /* HER ADDRESS CHANGED. SHE LOST IT. THE FIRST ONE
+                                 BOUNCED. Every one of those was unreachable
+                                 while a unique index said a household could be
+                                 given a document exactly once. */
+                              <button className="ll-btn ghost" disabled={busy}
+                                style={{ fontSize: 12, padding: "3px 8px" }}
+                                onClick={() => start(async () => {
+                                  const res = await resendDelivery(parkId, d.id, r.parkRenterId, channel);
+                                  const f = res.failed ?? [];
+                                  setDeliveryFailed(f);
+                                  toast(res.ok
+                                    ? `Sent to ${r.displayName} again.`
+                                    : (res.error ?? "Couldn't send that again."));
+                                  if (res.ok) router.refresh();
+                                })}>
+                                Send again
+                              </button>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
