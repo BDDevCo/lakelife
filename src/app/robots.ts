@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next";
+import { TOKEN_PATH_DISALLOW } from "@/lib/token-paths";
 
 /**
  * WHAT A CRAWLER MAY LOOK AT.
@@ -42,13 +43,13 @@ export default function robots(): MetadataRoute.Robots {
         allow: "/",
         disallow: [
           // Token-bearing. The token is the credential; see above.
-          "/use/",
-          "/d/",
-          "/a/",
-          "/c/",
-          "/x/",
-          "/fix/",
-          "/paid/",
+          //
+          // DERIVED, NOT RETYPED. This list and the X-Robots-Tag matcher in
+          // next.config.ts both spelled the set out by hand and both called it
+          // closed, so the eighth path — /doc, which 302s to a household's
+          // lease — was allowed by the allow-by-default rule above and carried
+          // no noindex. Both now read src/lib/token-paths.ts.
+          ...TOKEN_PATH_DISALLOW,
           // Signed-in areas. Redirect anonymous visitors already.
           "/ops/",
           "/vendor/",

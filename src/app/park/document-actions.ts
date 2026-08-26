@@ -7,7 +7,7 @@ import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { sendEmail } from "@/lib/email";
 import {
-  planFiling, deliverySummary, DOCUMENT_KIND_LABEL,
+  planFiling, deliverySummary, DOCUMENT_KIND_LABEL, VERSIONED_KINDS,
   type DeliveryChannel, type DeliveryRow, type DocumentKind,
 } from "./document-helpers";
 import type { ParkResult } from "./actions";
@@ -18,8 +18,12 @@ import type { ParkResult } from "./actions";
  * COURIER, NOT WITNESS. Nothing in this file collects, stores or asks for a
  * signature. A lease is between the park and the household; LakeLife
  * administers the billing under it and is not a party to it. What it does is
- * keep the file and keep a record of delivery — and the database refuses to
- * grow a column that would record assent (0140).
+ * keep the file and keep a record of delivery.
+ *
+ * 0140 PROVES THOSE TABLES SHIPPED without a column recording assent, and the
+ * all-migrations scanner in document-helpers.test.ts is what keeps them that
+ * way — a post-condition inside a migration runs once and cannot police the
+ * migration that comes after it.
  */
 
 const DENIED = "You don't manage that park.";
@@ -197,16 +201,25 @@ export async function fileDocument(parkId: string, form: FormData): Promise<Park
     .single();
   if (error || !row) return { ok: false, error: "Couldn't file that — try again." };
 
-  // SUPERSEDED, NEVER REPLACED. The older version is what nineteen households
-  // were actually given, and deleting it would destroy the only record of what
-  // was sent. It stops being the current one and stays readable for ever.
-  const prior = mustRead("the version this replaces", await admin
-    .from("park_documents")
-    .select("id")
-    .eq("park_id", parkId)
-    .eq("kind", plan.row.kind)
-    .is("superseded_at", null)
-    .neq("id", row.id));
+  // SUPERSEDED, NEVER REPLACED — and only for a kind that HAS versions.
+  //
+  // The older lease is what nineteen households were actually given, and
+  // deleting it would destroy the only record of what was sent. It stops being
+  // current and stays readable for ever.
+  //
+  // A NOTICE IS NOT A VERSION OF THE LAST NOTICE. Superseding on kind alone
+  // retired November's rent-increase notice the moment March's water notice was
+  // filed — greyed out, marked "replaced", and no longer deliverable. See
+  // VERSIONED_KINDS.
+  const prior = VERSIONED_KINDS.includes(plan.row.kind)
+    ? mustRead("the version this replaces", await admin
+        .from("park_documents")
+        .select("id")
+        .eq("park_id", parkId)
+        .eq("kind", plan.row.kind)
+        .is("superseded_at", null)
+        .neq("id", row.id))
+    : [];
   for (const p of prior ?? []) {
     await admin
       .from("park_documents")
@@ -279,22 +292,20 @@ export async function recordDeliveries(
     }
 
     const token = channel === "email" ? randomUUID().replace(/-/g, "") : null;
-    const { error } = await admin.from("park_document_deliveries").insert({
-      document_id: documentId,
-      park_renter_id: r.id as string,
-      channel,
-      token,
-    });
-    if (error) {
-      // 23505: already logged. Delivering twice is not an error worth stopping
-      // an afternoon for, and the first delivery is the one that counts.
-      failed.push({
-        name,
-        why: error.code === "23505" ? "Already logged as given it." : "Couldn't log that one.",
-      });
-      continue;
-    }
 
+    /**
+     * SEND FIRST, THEN LOG. The row used to be written before the mail went
+     * out, and `sent_at` defaults to now(), so a send that FAILED still left a
+     * complete, timestamped delivery. The screen then read "Emailed — not
+     * opened yet", disabled that household's checkbox, and the unique index
+     * refused any second attempt: the household never got the lease and the
+     * park's only record said they had been emailed it.
+     *
+     * That is the exact opposite of what a delivery log is for. Logging late
+     * can only ever UNDERSTATE — a send that worked and a row that did not
+     * write leaves him able to try again — and understating is the direction
+     * this record must fail in.
+     */
     if (channel === "email" && token) {
       const base = process.env.NEXT_PUBLIC_SITE_URL ?? "";
       const res = await sendEmail({
@@ -308,7 +319,32 @@ export async function recordDeliveries(
           `<p style="color:#5D7681;font-size:13px">This link just opens the document. ` +
           `Your agreement is with the park — LakeLife handles the billing and isn't a party to it.</p>`,
       });
-      if (!res.ok) failed.push({ name, why: "Logged, but the email didn't go out." });
+      if (!res.ok) {
+        failed.push({ name, why: "The email didn't go out — nothing was logged, so you can try again." });
+        continue;
+      }
+    }
+
+    const { error } = await admin.from("park_document_deliveries").insert({
+      document_id: documentId,
+      park_renter_id: r.id as string,
+      channel,
+      token,
+    });
+    if (error) {
+      // 23505: already logged. Delivering twice is not an error worth stopping
+      // an afternoon for, and the first delivery is the one that counts.
+      failed.push({
+        name,
+        why: error.code === "23505"
+          ? "Already logged as given it."
+          : channel === "email"
+            // Said plainly, because the household DID get it and the log is the
+            // thing that is now wrong.
+            ? "The email went out but couldn't be logged — they have it."
+            : "Couldn't log that one.",
+      });
+      continue;
     }
     done += 1;
   }

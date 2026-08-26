@@ -46,6 +46,16 @@ export function ParkDocuments({ parkId, page }: { parkId: string; page: Document
   const [deliverFor, setDeliverFor] = useState<string | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [channel, setChannel] = useState<DeliveryChannel>("hand");
+  /**
+   * WHY EACH ONE DIDN'T GO, ON THE PAGE.
+   *
+   * These were dispatched as one toast per failure. ToastHost holds a SINGLE
+   * message in state and every toast replaces the last, so twenty-one
+   * households with no email on file produced one visible line — and it
+   * overwrote the summary too, including the "None of those could be logged"
+   * error. He could not tell whether one had failed or all of them.
+   */
+  const [deliveryFailed, setDeliveryFailed] = useState<{ name: string; why: string }[]>([]);
 
   function save() {
     if (!file) return;
@@ -131,7 +141,11 @@ export function ParkDocuments({ parkId, page }: { parkId: string; page: Document
                   </button>
                   {!d.supersededAt && page.households > 0 && (
                     <button className="ll-btn ghost" disabled={busy}
-                      onClick={() => { setDeliverFor(showing ? null : d.id); setPicked(new Set()); }}>
+                      onClick={() => {
+                        setDeliverFor(showing ? null : d.id);
+                        setPicked(new Set());
+                        setDeliveryFailed([]);
+                      }}>
                       {showing ? "Cancel" : "Record who got it"}
                     </button>
                   )}
@@ -173,13 +187,43 @@ export function ParkDocuments({ parkId, page }: { parkId: string; page: Document
                       <button className="ll-btn" disabled={busy || picked.size === 0}
                         onClick={() => start(async () => {
                           const res = await recordDeliveries(parkId, d.id, [...picked], channel);
-                          toast(res.ok ? (res.signal ?? "Logged.") : (res.error ?? "Couldn't log that."));
-                          for (const f of res.failed ?? []) toast(`${f.name}: ${f.why}`);
-                          if (res.ok) { setDeliverFor(null); setPicked(new Set()); router.refresh(); }
+                          const failed = res.failed ?? [];
+                          setDeliveryFailed(failed);
+                          // ONE toast, and it counts both halves rather than
+                          // asserting only the good one.
+                          toast(
+                            res.ok
+                              ? failed.length === 0
+                                ? (res.signal ?? "Logged.")
+                                : `${res.signal ?? "Logged."} ${failed.length} didn't — see below.`
+                              : (res.error ?? "Couldn't log that."),
+                          );
+                          // The panel stays open while there is something to
+                          // read; closing it is what threw the reasons away.
+                          if (res.ok) {
+                            setPicked(new Set());
+                            if (failed.length === 0) setDeliverFor(null);
+                            router.refresh();
+                          }
                         })}>
                         {busy ? "Recording…" : `Record ${picked.size}`}
                       </button>
                     </div>
+
+                    {deliveryFailed.length > 0 && (
+                      <div style={{ marginTop: 10, borderTop: "1px solid rgba(0,0,0,.08)", paddingTop: 8 }}>
+                        <strong style={{ fontSize: 13, color: "var(--warn)" }}>
+                          {deliveryFailed.length === 1
+                            ? "One wasn't logged"
+                            : `${deliveryFailed.length} weren't logged`}
+                        </strong>
+                        {deliveryFailed.map((f) => (
+                          <p key={f.name} style={{ fontSize: 13, margin: "5px 0 0", lineHeight: 1.5 }}>
+                            <strong>{f.name}</strong> — {f.why}
+                          </p>
+                        ))}
+                      </div>
+                    )}
                     <p className="mut" style={{ fontSize: 12, margin: "8px 0 0", lineHeight: 1.5 }}>
                       {CHANNELS.find((c) => c.value === channel)?.hint}
                       {channel !== "email" &&

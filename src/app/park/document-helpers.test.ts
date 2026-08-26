@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   deliveryState, deliverySummary, planFiling, saysOnlyCourier,
   DELIVERY_STATE_LABEL, DOCUMENT_KIND_LABEL, CHANNEL_LABEL, FORBIDDEN_WORDS,
-  MAX_DOC_BYTES, type DeliveryRow,
+  MAX_DOC_BYTES, VERSIONED_KINDS, DOCUMENT_KINDS, type DeliveryRow,
 } from "./document-helpers";
 
 /**
@@ -272,10 +272,29 @@ describe("nothing in this feature records assent", () => {
   });
 
   it("the screen offers no control that would mark somebody as agreeing", () => {
-    const ui = code("../../components/ParkDocuments.tsx");
-    for (const w of ["signed", "agreed", "accepted", "Signature"]) {
-      expect({ w, present: ui.includes(w) }).toEqual({ w, present: false });
-    }
+    /**
+     * EVERY WORD IN FORBIDDEN_WORDS, not a hand-copied four. The first version
+     * listed signed/agreed/accepted/Signature, so a pill reading "Consent
+     * recorded" or a button "Mark as acknowledged" would have shipped green
+     * against a test named for forbidding exactly that.
+     *
+     * ATTRIBUTE NAMES ARE STRIPPED, VALUES ARE NOT. The file input carries
+     * `accept=".pdf,image/*"` — an HTML API name, not something a resident
+     * reads — and a naive widening fails on correct code, which is how a guard
+     * gets weakened again by the next person. Removing `name=` leaves the
+     * value, so a visible `placeholder="..."` is still scanned.
+     */
+    const ui = code("../../components/ParkDocuments.tsx")
+      .replace(/\b[a-zA-Z-]+=/g, "");
+    const found = FORBIDDEN_WORDS.filter((w) => new RegExp(`\\b${w}\\b`, "i").test(ui));
+    expect(found).toEqual([]);
+  });
+
+  it("that scan would still catch a word hidden in a placeholder", () => {
+    // Guards the guard: stripping attribute NAMES must not have stripped the
+    // text a resident actually reads.
+    const stripped = 'placeholder="Mark as agreed"'.replace(/\b[a-zA-Z-]+=/g, "");
+    expect(FORBIDDEN_WORDS.some((w) => new RegExp(`\\b${w}\\b`, "i").test(stripped))).toBe(true);
   });
 
   it("the delivery link asks for nothing and stamps only the FIRST open", () => {
@@ -290,5 +309,136 @@ describe("nothing in this feature records assent", () => {
   it("the emailed link says it is a delivery, not a request to agree", () => {
     const act = code("./document-actions.ts");
     expect(act).toContain("isn't a party to it");
+  });
+
+  it("a delivery is only logged AFTER the email actually went out", () => {
+    /**
+     * The row used to be written first, and `sent_at` defaults to now() — so a
+     * send that FAILED left a complete, timestamped delivery. The screen then
+     * read "Emailed — not opened yet", disabled that household's checkbox, and
+     * the unique index refused any second attempt. The household never got the
+     * lease and the park's only record said they had.
+     *
+     * Logging late can only UNDERSTATE, which is the direction this record has
+     * to fail in.
+     */
+    const act = code("./document-actions.ts");
+    const send = act.indexOf("await sendEmail(");
+    const log = act.indexOf('.from("park_document_deliveries").insert(');
+    expect(send).toBeGreaterThan(0);
+    expect(log).toBeGreaterThan(0);
+    expect(send).toBeLessThan(log);
+    // And a failed send must abandon the household, not fall through to it.
+    expect(act).toMatch(/nothing was logged, so you can try again/);
+  });
+
+  it("a notice does not supersede the last notice", () => {
+    // Two notices are two documents, not two versions of one. Superseding on
+    // kind alone retired November's rent notice when March's water notice was
+    // filed — greyed out, marked replaced, no longer deliverable.
+    const act = code("./document-actions.ts");
+    expect(act).toMatch(/VERSIONED_KINDS\.includes\(plan\.row\.kind\)/);
+  });
+});
+
+describe("which kinds have versions at all", () => {
+  it("a lease and a rulebook do — a park has one current each", () => {
+    expect(VERSIONED_KINDS).toContain("park_lease");
+    expect(VERSIONED_KINDS).toContain("park_rules");
+    expect(VERSIONED_KINDS).toContain("amenity_rules");
+  });
+
+  it("a notice and a one-off do NOT", () => {
+    expect(VERSIONED_KINDS).not.toContain("notice");
+    expect(VERSIONED_KINDS).not.toContain("other");
+  });
+
+  it("names only kinds that exist", () => {
+    for (const k of VERSIONED_KINDS) expect(DOCUMENT_KINDS).toContain(k);
+  });
+});
+
+describe("no migration, ever, gives these tables a column recording assent", () => {
+  /**
+   * THE STANDING GUARD. 0140's post-condition is a SHIP-TIME assertion — a
+   * do-block runs once, in the transaction that applies it, and cannot police
+   * `0141_add_signed_at.sql`. Three comments used to describe it as a permanent
+   * refusal; they now say what it is, and this is the thing that actually holds.
+   *
+   * It walks EVERY .sql in the directory, so the migration that has not been
+   * written yet is the one it is for.
+   */
+  const DIR = fileURLToPath(new URL("../../../supabase/migrations", import.meta.url));
+
+  /** The same alternation 0140 applies to information_schema. */
+  const ASSENT = /(sign|agree|accept|consent|assent|acknowledg)/i;
+  const TABLES = ["park_documents", "park_document_deliveries"];
+
+  const files = readdirSync(DIR).filter((f) => f.endsWith(".sql"));
+
+  it("reads the whole directory, not one pinned file", () => {
+    expect(files.length).toBeGreaterThan(100);
+    expect(files).toContain("0140_the_file_and_who_was_given_it.sql");
+  });
+
+  /** Column names introduced against either table, across every migration. */
+  function columnsIntroduced(): { file: string; column: string }[] {
+    const out: { file: string; column: string }[] = [];
+    for (const f of files) {
+      const sql = readFileSync(`${DIR}/${f}`, "utf8")
+        .split("\n")
+        .filter((l) => !l.trim().startsWith("--"))
+        .join("\n");
+
+      for (const t of TABLES) {
+        // create table … ( … )
+        const at = sql.indexOf(`create table if not exists public.${t} (`);
+        if (at > 0) {
+          const body = sql.slice(at, sql.indexOf("\n);", at));
+          for (const line of body.split("\n").slice(1)) {
+            const l = line.trim();
+            if (!l || l.startsWith("constraint") || l.startsWith("check") || l.startsWith("unique")) continue;
+            out.push({ file: f, column: l.split(/\s+/)[0] });
+          }
+        }
+        // alter table … add column <name>, and … rename column … to <name>.
+        //
+        // BOUNDED BY THE SEMICOLON, not by [\s\S]*?. The first version let the
+        // gap span the rest of the file, so every `alter table park_documents`
+        // re-scanned everything after it — across 140 migrations that took the
+        // whole suite from 4.6s to 34s and started timing out unrelated fuzz
+        // tests. A statement ends at its semicolon; matching past one would
+        // also be wrong, since it could pick up a column from the NEXT
+        // statement on a different table.
+        for (const m of sql.matchAll(
+          new RegExp(`alter table\\s+(?:only\\s+)?public\\.${t}[^;]*?add column(?:\\s+if not exists)?\\s+(\\w+)`, "gi"),
+        )) out.push({ file: f, column: m[1] });
+        for (const m of sql.matchAll(
+          new RegExp(`alter table\\s+(?:only\\s+)?public\\.${t}[^;]*?rename column\\s+\\w+\\s+to\\s+(\\w+)`, "gi"),
+        )) out.push({ file: f, column: m[1] });
+      }
+    }
+    return out;
+  }
+
+  it("finds the columns it is supposed to be policing", () => {
+    // A scanner that matches nothing passes for ever. These are 0140's own.
+    const cols = columnsIntroduced().map((c) => c.column);
+    expect(cols).toContain("sha256");
+    expect(cols).toContain("opened_at");
+    expect(cols.length).toBeGreaterThan(15);
+  });
+
+  it("finds none that records assent", () => {
+    const bad = columnsIntroduced().filter((c) => ASSENT.test(c.column));
+    expect(bad).toEqual([]);
+  });
+
+  it("uses the same pattern the migration applies to information_schema", () => {
+    // If the two drifted, one would forbid what the other allowed.
+    const sql = readFileSync(`${DIR}/0140_the_file_and_who_was_given_it.sql`, "utf8");
+    expect(sql).toContain(ASSENT.source.replace(/^\(|\)$/g, "").length > 0
+      ? "sign|agree|accept|consent|assent|acknowledg"
+      : "");
   });
 });

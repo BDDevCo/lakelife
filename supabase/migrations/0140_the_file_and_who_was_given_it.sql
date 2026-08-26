@@ -15,12 +15,21 @@
 --   WHO WAS GIVEN IT   — park_document_deliveries. Sent, and where knowable,
 --                        opened.
 --
--- The vocabulary is SENT and OPENED. There is no agreed_at, no signed_at, no
--- accepted_at, and the post-condition at the bottom of this file refuses to
--- apply if any column on either table ever comes to look like one. That is not
--- decoration: the single most likely future change here is somebody adding
--- "signed" because a screen would look tidier with it, and the whole legal
--- posture turns on it not being there.
+-- The vocabulary is SENT and OPENED. There is no agreed_at, no signed_at and no
+-- accepted_at, and the post-condition at the bottom of this file proves these
+-- tables SHIP without one.
+--
+-- THAT CHECK IS A SHIP-TIME ASSERTION, NOT A STANDING GUARD, and the difference
+-- matters enough to say out loud. A do-block runs once, in the transaction that
+-- applies this file; a later migration adding `signed_at` would never re-run it.
+-- The standing guard is a repo test — src/app/park/document-helpers.test.ts
+-- walks EVERY file in supabase/migrations and fails on any create/alter/rename
+-- that gives either table a column matching the pattern below. Both use the
+-- same alternation so they cannot disagree about what they forbid.
+--
+-- This is not decoration: the single most likely future change here is somebody
+-- adding "signed" because a screen would look tidier with it, and the whole
+-- legal posture turns on it not being there.
 --
 -- WHY A DIGEST. 0139 snapshots the WORDS of a clickwrap, because a version
 -- string cannot answer what somebody actually read. A PDF cannot be snapshotted
@@ -149,9 +158,11 @@ revoke all on public.park_document_deliveries from anon, authenticated;
 do $$
 declare n int; bad text;
 begin
-  -- THE ONE THAT MATTERS. If a future migration adds a column that records
-  -- assent, this refuses to apply and says why. The legal posture of the whole
-  -- product turns on these two tables never growing one.
+  -- THE ONE THAT MATTERS — but read what it is. This proves the two tables are
+  -- BORN without a column recording assent. It runs once, here, and cannot
+  -- catch a later migration that adds one; the standing guard for that is the
+  -- all-migrations scanner in src/app/park/document-helpers.test.ts, which
+  -- applies this same alternation to every .sql in the directory.
   select string_agg(column_name, ', ') into bad
     from information_schema.columns
    where table_schema = 'public'

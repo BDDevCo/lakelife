@@ -28,6 +28,21 @@ export const DOCUMENT_KINDS: DocumentKind[] = [
   "park_lease", "park_rules", "amenity_rules", "notice", "other",
 ];
 
+/**
+ * KINDS THAT HAVE VERSIONS, and therefore supersede.
+ *
+ * A park has ONE current lease and ONE current rulebook, so filing a new one
+ * retires the old. It does not have one current NOTICE: a rent-increase notice
+ * in November and a water-shutoff notice in March are two documents, not two
+ * versions of a document.
+ *
+ * Superseding on `kind` alone marked the November notice "Replaced by a newer
+ * version" the moment the March one was filed, greyed it out, and removed its
+ * delivery control — so the record of what nineteen households were told in
+ * November read as obsolete, and nobody could be given it afterwards.
+ */
+export const VERSIONED_KINDS: DocumentKind[] = ["park_lease", "park_rules", "amenity_rules"];
+
 /** What the owner calls each kind, in his words rather than the column's. */
 export const DOCUMENT_KIND_LABEL: Record<DocumentKind, string> = {
   park_lease: "Lease",
