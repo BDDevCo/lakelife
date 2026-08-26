@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { getStatement, type StatementPage } from "@/app/park/receipts-actions";
-import { reversePayment } from "@/app/park/ledger-actions";
+import { reversePayment, refundParkPayment, refundableOn } from "@/app/park/ledger-actions";
 import {
   money, receiptsHeadline, monthPeriod, quarterPeriod, yearPeriod, customPeriod,
   type Period,
@@ -39,6 +39,37 @@ export function ParkStatements({
   // Which receipt he is taking back, and why.
   const [reversing, setReversing] = useState<string | null>(null);
   const [reason, setReason] = useState("");
+  // Which receipt he is sending BACK to a card, and how much of it. Separate
+  // state from the reversal above, because they are separate acts: one
+  // corrects our record, the other moves real money outward.
+  const [refunding, setRefunding] = useState<string | null>(null);
+  // Dollars, from the server. Null while we are still asking.
+  const [left, setLeft] = useState<{ amount: number; fee: number } | null>(null);
+  const [backAmount, setBackAmount] = useState("");
+  const [backFee, setBackFee] = useState(false);
+  // Minted when the panel OPENS, not when the button is pressed — that is the
+  // whole point. Two taps on one open panel must carry the same key, so the
+  // processor recognises the second as a replay of the first.
+  const [refundKey, setRefundKey] = useState("");
+
+  function openRefund(paymentId: string) {
+    setRefunding(paymentId);
+    setLeft(null);
+    setBackAmount("");
+    setBackFee(false);
+    setRefundKey(crypto.randomUUID());
+    start(async () => {
+      const res = await refundableOn(parkId, paymentId);
+      if ("error" in res) { toast(res.error); setRefunding(null); return; }
+      if (res.refusal) { toast(res.refusal); setRefunding(null); return; }
+      setLeft({ amount: res.amount, fee: res.fee });
+      setBackAmount(res.amount.toFixed(2));
+    });
+  }
+
+  function closeRefund() {
+    setRefunding(null); setLeft(null); setBackAmount(""); setBackFee(false); setRefundKey("");
+  }
   const router = useRouter();
 
   function load(p: Period | null) {
@@ -284,13 +315,95 @@ export function ParkStatements({
                                opacity: r.reversedAt ? 0.55 : 1 }}>
                   {money(r.amountCents)}
                 </span>
+                {/* TWO DIFFERENT ACTS, AND THE METHOD DECIDES WHICH IS HONEST.
+                    Cash and cheques can be un-recorded, because nothing left
+                    anybody's account. Card and ACH money demonstrably moved, so
+                    the only truthful correction is sending it back — 0142 makes
+                    the database refuse the other one. */}
+                {!r.reversedAt && (r.method === "card" || r.method === "ach") && (
+                  <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
+                    onClick={() => openRefund(r.paymentId)}>
+                    Refund to card
+                  </button>
+                )}
                 {/* A TRANSPOSED DIGIT USED TO BE PERMANENT. The row survives
                     with its receipt number; only the money stops counting. */}
-                {!r.reversedAt && (
+                {!r.reversedAt && r.method !== "card" && r.method !== "ach" && (
                   <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
                     onClick={() => setReversing(r.paymentId)}>
                     Take it back
                   </button>
+                )}
+                {refunding === r.paymentId && (
+                  <div style={{ flexBasis: "100%", marginTop: 6 }}>
+                    {!left ? (
+                      <p className="mut" style={{ fontSize: 12, margin: 0 }}>
+                        Checking what can still go back…
+                      </p>
+                    ) : (
+                      <>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <label style={{ fontSize: 13 }}>Send back</label>
+                          <input
+                            value={backAmount}
+                            onChange={(e) => setBackAmount(e.target.value)}
+                            inputMode="decimal"
+                            style={{ width: 110, fontVariantNumeric: "tabular-nums" }}
+                          />
+                          <span className="mut" style={{ fontSize: 12 }}>
+                            of {money(Math.round(left.amount * 100))} left
+                          </span>
+                        </div>
+                        {/* THE SURCHARGE IS A SEPARATE DECISION, ASKED EVERY
+                            TIME. There is no park setting for it and no
+                            default, because a default would be us deciding a
+                            money policy nobody set. Only shown when a fee was
+                            actually charged. */}
+                        {left.fee > 0 && (
+                          <label style={{ display: "flex", gap: 6, alignItems: "center",
+                                          fontSize: 13, marginTop: 6 }}>
+                            <input type="checkbox" checked={backFee}
+                              onChange={(e) => setBackFee(e.target.checked)} />
+                            <span>
+                              Also return the {money(Math.round(left.fee * 100))} card fee
+                            </span>
+                          </label>
+                        )}
+                        <input
+                          value={reason}
+                          onChange={(e) => setReason(e.target.value)}
+                          placeholder="Why is it going back? Charged twice, wrong household…"
+                          style={{ width: "100%", marginTop: 6 }}
+                        />
+                        <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                          <button className="ll-btn" disabled={busy || !reason.trim() || !backAmount.trim()}
+                            onClick={() =>
+                              start(async () => {
+                                const res = await refundParkPayment(parkId, r.paymentId, {
+                                  amount: Number(backAmount.replace(/[$,\s]/g, "")),
+                                  feeAmount: backFee ? left.fee : 0,
+                                  reason,
+                                  idempotencyKey: refundKey,
+                                });
+                                toast(res.ok ? (res.signal ?? "Sent back.") : (res.error ?? "Couldn't do that."));
+                                if (res.ok) { closeRefund(); setReason(""); router.refresh(); }
+                              })
+                            }>
+                            {busy ? "Sending…" : "Send it back"}
+                          </button>
+                          <button className="ll-btn ghost" disabled={busy}
+                            onClick={() => { closeRefund(); setReason(""); }}>
+                            Cancel
+                          </button>
+                        </div>
+                        <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
+                          This moves real money back to the card it came from. The
+                          receipt stays on the record with the reason, and the bill
+                          goes back to outstanding by whatever you send.
+                        </p>
+                      </>
+                    )}
+                  </div>
                 )}
                 {reversing === r.paymentId && (
                   <div style={{ flexBasis: "100%", marginTop: 6 }}>

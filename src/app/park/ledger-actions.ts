@@ -12,6 +12,8 @@ import { feesForTenancy } from "./fee-helpers";
 import { planRun, toRows, summarise, currentPeriod, prettyMonth, nothingToBillReason, type Charge, type LedgerRow, type LedgerSummary, type RunPlan, dueDayFor } from "./ledger-helpers";
 import { preCutoverRefusal } from "@/lib/billing-start";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
+import { LakeLifePayments } from "@/lib/payments";
+import { remainingRefundable, refundRefusal, refundAmountRefusal, refundCents, refundSignal } from "./refund-helpers";
 import { sendEmail } from "@/lib/email";
 import { receiptBody, type ReceiptLines } from "./receipt-helpers";
 // The ENGINE, not the action: runCharges has already asserted membership
@@ -1317,7 +1319,7 @@ export async function reversePayment(
   // isn't here" about a payment sitting on their own screen.
   const payRes = await admin
     .from("park_payments")
-    .select("id, amount, receipt_no, reversed_at, park_id, kind, charge_id")
+    .select("id, amount, receipt_no, reversed_at, park_id, kind, charge_id, method")
     .eq("id", paymentId)
     .eq("park_id", parkId)
     .maybeSingle();
@@ -1330,6 +1332,21 @@ export async function reversePayment(
   const pay = payRes.data;
   if (!pay) return { ok: false, error: "That isn't here." };
   if (pay.reversed_at) return { ok: false, error: "That one's already been taken back." };
+
+  // A REVERSAL IS NOT A REFUND, AND THIS IS WHERE THE TWO USED TO BE CONFUSED.
+  //
+  // Reversing says the money never arrived. For a cheque that bounced that is
+  // exactly right. For a card or ACH payment the money demonstrably DID arrive
+  // — 0108 will not even record one without a processor reference — so this
+  // path would tell the office "$542.53 taken back" while the cardholder's
+  // statement still showed the charge. 0142 makes the database refuse it; this
+  // says so in a sentence rather than as a constraint name.
+  if (pay.method === "card" || pay.method === "ach") {
+    return {
+      ok: false,
+      error: "That was paid by card, so the money really did arrive — reversing it would only change our record. Refund it instead and it goes back to their card.",
+    };
+  }
 
   // A DEPOSIT ALREADY GIVEN BACK CANNOT BE UNSAID. Reversing means "this never
   // happened", and the money demonstrably did go back out — leaving a
@@ -1378,4 +1395,162 @@ export async function reversePayment(
           ? "That deposit is no longer held, and the record shows why."
           : "It's off the household's account, and the record shows why."),
   };
+}
+
+/** What is still refundable on a payment, and why it might not be. */
+export interface RefundableState {
+  /** Rent still sendable back, in dollars. */
+  amount: number;
+  /** Card surcharge still sendable back, in dollars. */
+  fee: number;
+  /** Null when a refund is possible; otherwise the sentence saying why not. */
+  refusal: string | null;
+}
+
+/**
+ * HOW MUCH OF THIS PAYMENT COULD STILL GO BACK.
+ *
+ * Derived every time from the refunds actually recorded, never stored on the
+ * payment. A `refunded_total` column would be a second answer to a question
+ * the rows already answer, and this codebase keeps finding that exact shape as
+ * a bug — a number some writers update and others forget.
+ */
+export async function refundableOn(parkId: string, paymentId: string): Promise<RefundableState | { error: string }> {
+  if (!(await assertMyPark(parkId))) return { error: DENIED };
+  const admin = createServiceClient();
+
+  const payRes = await admin
+    .from("park_payments")
+    .select("id, amount, fee_amount, method, reference, reversed_at")
+    .eq("id", paymentId)
+    .eq("park_id", parkId)
+    .maybeSingle();
+  if (payRes.error) return { error: readFailedMessage("that payment", payRes.error, { money: true }) };
+  const pay = payRes.data;
+  if (!pay) return { error: "That isn't here." };
+
+  const givenRes = await admin
+    .from("park_refunds")
+    .select("amount, fee_amount")
+    .eq("payment_id", paymentId);
+  // A FAILED READ HERE IS NOT "NOTHING REFUNDED YET". Treating it as zero
+  // would offer the whole payment back a second time, which is the one
+  // arithmetic mistake that costs real money.
+  if (givenRes.error) {
+    return { error: readFailedMessage("what has already been refunded", givenRes.error, { money: true }) };
+  }
+  const rows = (givenRes.data ?? []) as { amount: number | null; fee_amount: number | null }[];
+  const left = remainingRefundable(pay as never, rows);
+  return { ...left, refusal: refundRefusal(pay as never, left) };
+}
+
+/**
+ * SEND MONEY BACK TO THE CARD IT CAME FROM.
+ *
+ * The other half of the pair `reversePayment` had been doing alone. A reversal
+ * corrects OUR record; this moves real money outward through the processor
+ * that took it, and only then writes the record.
+ *
+ * ---------------------------------------------------------------------------
+ * THE ORDER IS REFUND FIRST, RECORD SECOND, AND IT IS NOT ARBITRARY.
+ *
+ * The two are not one transaction and cannot be — a processor call is a
+ * network round trip and Postgres cannot roll it back. So one of the two
+ * failure shapes has to be chosen deliberately:
+ *
+ *   Record first: a filed refund that never actually reached the card. The
+ *   ledger says the household got their money and they did not. Nobody finds
+ *   out until they ring, and the screen contradicts them.
+ *
+ *   Refund first: money that reached the card and was not filed. The household
+ *   is whole; our ledger is short a row; the processor reference is in the
+ *   error message and the office can file it by hand.
+ *
+ * The second is recoverable and the first is not, so the money goes first —
+ * the same reasoning, and the same failure sentence, as `payRent`.
+ *
+ * ---------------------------------------------------------------------------
+ * THE SURCHARGE IS ASKED FOR, NEVER ASSUMED. `feeAmount` arrives from the
+ * office. A default would be this code deciding a money policy nobody set, and
+ * 0142's header explains why the database has no column for one either.
+ *
+ * The PROCESSOR is asked for one refund of rent + fee together, because that
+ * is how the money left: `payRent` charged `owed + fee` as a single charge and
+ * the reference points at that. The two are only separate on our row.
+ */
+export async function refundParkPayment(
+  parkId: string,
+  paymentId: string,
+  input: { amount: number; feeAmount: number; reason: string; idempotencyKey: string },
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const why = (input.reason ?? "").trim();
+  if (!why) {
+    return { ok: false, error: "Say why the money is going back — the record has to carry the reason." };
+  }
+  if (why.length > 500) return { ok: false, error: "That's a bit long — a sentence is plenty." };
+  if (!String(input.idempotencyKey ?? "").trim()) {
+    // Minted when the form opens. Without it a double-tapped submit is two
+    // refunds, and the processor has no way to know they are the same one.
+    return { ok: false, error: "Couldn't start that safely — reopen the refund and try again." };
+  }
+
+  const state = await refundableOn(parkId, paymentId);
+  if ("error" in state) return { ok: false, error: state.error };
+  if (state.refusal) return { ok: false, error: state.refusal };
+
+  const amount = Math.round(Number(input.amount) * 100) / 100;
+  const feeAmount = Math.round(Number(input.feeAmount ?? 0) * 100) / 100;
+  const wrong = refundAmountRefusal(amount, feeAmount, state);
+  if (wrong) return { ok: false, error: wrong };
+
+  const admin = createServiceClient();
+  const refRes = await admin
+    .from("park_payments")
+    .select("reference, charge_id")
+    .eq("id", paymentId)
+    .eq("park_id", parkId)
+    .maybeSingle();
+  if (refRes.error) return { ok: false, error: readFailedMessage("that payment", refRes.error, { money: true }) };
+  const chargeRef = String(refRes.data?.reference ?? "").trim();
+  if (!chargeRef) return { ok: false, error: "That payment has no processor reference to refund against." };
+
+  const done = await LakeLifePayments.refund({ chargeRef, amountCents: refundCents(amount, feeAmount) });
+  if (!done.ok || !done.ref) {
+    return {
+      ok: false,
+      error: `The processor wouldn't return that${done.error ? ` — ${done.error}` : ""}. Nothing has moved and nothing has been recorded.`,
+    };
+  }
+
+  const { error } = await admin.from("park_refunds").insert({
+    payment_id: paymentId,
+    park_id: parkId,
+    amount,
+    fee_amount: feeAmount,
+    reason: why,
+    processor_ref: done.ref,
+    idempotency_key: input.idempotencyKey,
+    created_by: await currentUserId(),
+  });
+  if (error) {
+    // 23505 = the idempotency index. The twin submit already filed this exact
+    // refund, so the money went back once and is recorded once. Saying it
+    // failed would invite a third attempt.
+    if ((error as { code?: string }).code === "23505") {
+      return { ok: true, signal: `$${(amount + feeAmount).toFixed(2)} is on its way back.` };
+    }
+    // Money left and the ledger did not record it. Recoverable, but only if
+    // the reference reaches a person — so it goes in the sentence.
+    return {
+      ok: false,
+      error: `The refund went through (${done.ref}) but we couldn't file it. Write that reference down and ring the office — do not refund again.`,
+    };
+  }
+
+  revalidatePath("/park/rent");
+  revalidatePath("/park/today");
+  revalidatePath("/park");
+  return { ok: true, signal: refundSignal(amount, feeAmount, Boolean(refRes.data?.charge_id)) };
 }
