@@ -47,6 +47,10 @@ export function ParkOnboard({
       displayName: "",
       rent: s.suggestedRent,
       movedInOn: "",
+      // Taken at signing — a condition of renting a lot here. Blank until he
+      // types them, and a row without both is named rather than filed.
+      email: "",
+      phone: "",
       // NOBODY HAS SIGNED ANYTHING YET. This defaulted to true, on the theory
       // that everyone signs at takeover — so an owner who read the instruction
       // ("tick anyone who has signed"), ticked nobody because nobody had, and
@@ -124,6 +128,27 @@ export function ParkOnboard({
                 onChange={(e) => set(i, "rent", e.target.value)}
                 placeholder="rent"
                 style={{ flex: "0 1 90px", minWidth: 0 }}
+              />
+              {/* HOW TO REACH THEM, taken at signing and required to file.
+                  The number lands in phone_on_file_with_park — the office may
+                  ring it and nothing may text it until the resident verifies
+                  it themselves, which is the only thing that makes it a send
+                  target. */}
+              <input
+                value={r.email}
+                inputMode="email"
+                autoCapitalize="off"
+                autoCorrect="off"
+                onChange={(e) => set(i, "email", e.target.value)}
+                placeholder="email"
+                style={{ flex: "2 1 170px", minWidth: 0 }}
+              />
+              <input
+                value={r.phone}
+                inputMode="tel"
+                onChange={(e) => set(i, "phone", e.target.value)}
+                placeholder="phone"
+                style={{ flex: "1 1 130px", minWidth: 0 }}
               />
               <input
                 type="date"

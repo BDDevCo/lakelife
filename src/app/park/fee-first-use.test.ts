@@ -257,3 +257,47 @@ describe("the first afternoon, and what it shows before he taps", () => {
     expect(SCREEN).toMatch(/Lot \{f\.lotNumber\}/);
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("the term, and the number that must never be a send target", () => {
+  const ONBOARD2 = code("./onboard-actions.ts");
+  const ACT = code("./actions.ts");
+  const HELPERS = code("./park-helpers.ts");
+  const SCREEN2 = code("../../components/ParkOnboard.tsx");
+
+  it("BOTH filing paths write the term, not the ceiling", () => {
+    // Passing the cap straight through wrote every signed agreement at the
+    // maximum, so a whole afternoon's tenancies expire on one morning.
+    for (const src of [ONBOARD2, ACT]) {
+      expect(src).toContain("agreementMonthsFor");
+    }
+    expect(ONBOARD2).toContain("default_agreement_months");
+    expect(ACT).toContain("default_agreement_months");
+  });
+
+  it("neither path passes a bare cap into buildTenant any more", () => {
+    expect(ONBOARD2).not.toMatch(/signedNewLease \? parkCap : null/);
+  });
+
+  it("an office-typed number goes where nothing can text it", () => {
+    // 0059 made phone_on_file_with_park a separate column precisely so an
+    // office-typed number could not enrol a household into automated texting.
+    expect(HELPERS).toMatch(/phone_on_file_with_park:\s*mobile \|\| null/);
+    expect(HELPERS).not.toMatch(/mobile_e164:\s*mobile/);
+  });
+
+  it("and the screen no longer promises a text nobody will get", () => {
+    // contact_pref is 'paper' unconditionally and no text has been delivered
+    // since 19 July, so "They'll get receipts and reminders by text" was false
+    // of every household it was ever shown for.
+    expect(ACT).not.toMatch(/receipts and reminders by text/);
+  });
+
+  it("the onboarding row takes an email and a phone", () => {
+    expect(SCREEN2).toMatch(/set\(i, "email", e\.target\.value\)/);
+    expect(SCREEN2).toMatch(/set\(i, "phone", e\.target\.value\)/);
+    expect(ONBOARD2).toMatch(/mobile: r\.phone/);
+    expect(ONBOARD2).toMatch(/email: r\.email/);
+  });
+});

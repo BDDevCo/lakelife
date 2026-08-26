@@ -6,7 +6,7 @@ import { mustRead, mustCount, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { toDaterange } from "@/lib/parks";
-import { buildTenant } from "./park-helpers";
+import { buildTenant, agreementMonthsFor } from "./park-helpers";
 import { planOnboarding, type OnboardRow } from "./onboard-helpers";
 import type { ParkResult } from "./actions";
 
@@ -182,11 +182,21 @@ export async function commitOnboarding(
   // unexplained failures at the end of the afternoon. Same guard the
   // one-at-a-time path (`addTenant`) already makes.
   const parkRes = await admin
-    .from("parks").select("max_agreement_months").eq("id", parkId).maybeSingle();
+    .from("parks")
+    .select("max_agreement_months, default_agreement_months")
+    .eq("id", parkId)
+    .maybeSingle();
   if (parkRes.error) {
     return { ok: false, error: readFailedMessage("your park's agreement cap", parkRes.error) };
   }
-  const parkCap = (parkRes.data?.max_agreement_months as number) ?? null;
+  // THE TERM, NOT THE CEILING. The cap used to be passed straight through as
+  // the length, so every signed agreement was written at the MAXIMUM — the
+  // conflation 0067 added `default_agreement_months` to prevent, in a column
+  // that then shipped with no reader at all.
+  const parkTerm = agreementMonthsFor(
+    (parkRes.data?.default_agreement_months as number) ?? null,
+    (parkRes.data?.max_agreement_months as number) ?? null,
+  );
 
   // Re-check what is already held, so a second submit cannot double-file.
   //
@@ -220,8 +230,11 @@ export async function commitOnboarding(
         movedInOn: r.movedInOn,
         term: "monthly",
         rent: r.rent == null ? "" : String(r.rent),
-        mobile: "",
-        email: "",
+        // Taken at signing, as a condition of renting. `mobile` lands in
+        // phone_on_file_with_park — a number the office may ring and nothing
+        // may text until the resident verifies it themselves.
+        mobile: r.phone,
+        email: r.email,
         source: "owner_knowledge",
       },
       today,
@@ -229,7 +242,7 @@ export async function commitOnboarding(
       // the cap. Unsigned is a holdover on the rolling horizon, which the 0065
       // trigger exempts by origin — the two must move together or the write is
       // refused.
-      r.signedNewLease ? parkCap : null,
+      r.signedNewLease ? parkTerm : null,
     );
     if (!built.ok || !built.renter || !built.tenancy) {
       failed.push({ lotNumber: r.lotNumber, why: built.error ?? "Couldn't file that one." });

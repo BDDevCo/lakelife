@@ -752,7 +752,7 @@ export interface TenantResult {
   error?: string;
   renter?: {
     display_name: string;
-    mobile_e164: string | null;
+    phone_on_file_with_park: string | null;
     email: string | null;
     contact_pref: string;
     source: string;
@@ -797,6 +797,38 @@ const TENANT_SOURCES = ["prior_roll", "owner_knowledge", "tenant_confirmed", "do
  */
 export const TENANCY_HORIZON_DAYS = 365;
 
+/**
+ * HOW LONG ONE NEW AGREEMENT RUNS.
+ *
+ * THE CAP AND THE DEFAULT ARE DIFFERENT NUMBERS, and 0067 added
+ * `parks.default_agreement_months` specifically to stop them being conflated:
+ * "Three months max, but typically month to month ... conflating them writes
+ * every new tenant a three-month agreement when the house style is one month
+ * rolling."
+ *
+ * The column shipped with neither a reader nor a writer. So the cap was passed
+ * straight through as the length, and every signed agreement was written at
+ * the MAXIMUM — the exact bug that comment describes.
+ *
+ * It matters most on a day everybody signs at once. Twenty agreements written
+ * on one afternoon all end on one morning, and when they do the rent stops
+ * with no error anywhere.
+ *
+ * Clamped, because a default longer than the cap is a contradiction the
+ * database also refuses (parks_default_within_max), and because the 0062
+ * trigger rejects any agreement longer than the cap outright.
+ */
+export function agreementMonthsFor(
+  defaultMonths: number | null,
+  capMonths: number | null,
+): number | null {
+  // No default set means "however long the horizon is", which is the old
+  // behaviour for a park that has neither dial.
+  if (defaultMonths == null) return capMonths;
+  if (capMonths == null) return defaultMonths;
+  return Math.min(defaultMonths, capMonths);
+}
+
 /** Add days to an ISO date without touching local time. */
 function addDays(iso: string, days: number): string {
   const [y, m, d] = iso.split("-").map(Number);
@@ -820,7 +852,11 @@ export function buildTenant(
   input: TenantInput,
   todayISO: string,
   /**
-   * The park's agreement cap, when it has one.
+   * How long THIS agreement runs, in months — see `agreementMonthsFor`.
+   *
+   * Named for what it is rather than for the cap, because it is no longer the
+   * cap: a park with a one-month house style and a three-month ceiling writes
+   * ONE month, and passing the ceiling here wrote three.
    *
    * WITHOUT THIS, TURNING THE CAP ON BREAKS ADDING A TENANT. The silent range
    * written below used to be a flat 365 days, while 0062's trigger refuses
@@ -828,10 +864,11 @@ export function buildTenant(
    * three-month rule, every "add a tenant" failed on a database trigger and
    * surfaced as "Couldn't put them on that lot — try again."
    *
-   * A cap is a statement about how long ONE agreement runs, not about how long
-   * somebody may stay. So it shortens the range; it never refuses the person.
+   * A term is a statement about how long ONE agreement runs, not about how
+   * long somebody may stay. So it shortens the range; it never refuses the
+   * person.
    */
-  maxAgreementMonths: number | null = null,
+  agreementMonths: number | null = null,
 ): TenantResult {
   const displayName = input.displayName.trim();
   if (!displayName) return { ok: false, error: "Who lives here? A name is enough to start." };
@@ -876,6 +913,7 @@ export function buildTenant(
     return { ok: false, error: "That phone number looks short." };
   }
 
+
   const email = input.email.trim();
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return { ok: false, error: "That email doesn't look right." };
@@ -885,7 +923,21 @@ export function buildTenant(
     ok: true,
     renter: {
       display_name: displayName,
-      mobile_e164: mobile || null,
+      // THE COLUMN THIS FIELD'S OWN DOC ALREADY NAMED, and not the one it was
+      // writing. `mobile_e164` means a number the person gave US and VERIFIED:
+      // consent-actions.ts sets it only alongside mobile_verified_at, the
+      // operational-consent stamp and the snapshotted sentence they read,
+      // because those four facts are one fact. An office-typed number has none
+      // of them, and 0059 made phone_on_file_with_park a separate column for
+      // exactly this — "a column the reminder engine is built to be unable to
+      // read".
+      //
+      // Nothing could text it either way: planChannels holds an unverified
+      // mobile as `unverified`. But the roll would have said twenty households
+      // had given us a mobile when what they gave the office was a landline to
+      // ring, and the first person to widen a consent check would have found
+      // twenty numbers sitting in the send-target column.
+      phone_on_file_with_park: mobile || null,
       email: email || null,
       // PAPER, ALWAYS, until THEY say otherwise.
       //
@@ -916,9 +968,9 @@ export function buildTenant(
       // The cap when there is one, the horizon when there is not. `addMonths`
       // clamps a short month properly — Jan 31 plus one month is Feb 28, not
       // an invalid date.
-      end: maxAgreementMonths == null
+      end: agreementMonths == null
         ? addDays(rangeStart, TENANCY_HORIZON_DAYS)
-        : addMonths(rangeStart, maxAgreementMonths),
+        : addMonths(rangeStart, agreementMonths),
       beganOn: input.movedInOn.trim() || null,
       term,
       quoted_amount: quoted,

@@ -13,6 +13,7 @@ import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
   buildLotRange, planBulkRates, buildTenant, buildTenantEdit, buildParkDialsRow,
+  agreementMonthsFor,
   type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
   type TenantInput, type TenantEditInput, type ParkDialsInput, lotLabelRange, SITE_DEFAULTS,
   buildOnlineRentRow, onlineRentCautions, CARD_FEE_CEILING, type OnlineRentInput,
@@ -524,14 +525,22 @@ export async function addTenant(
   // on a database error the moment the owner turns his rule on.
   const capAdmin = createServiceClient();
   const capRes = await capAdmin
-    .from("parks").select("max_agreement_months").eq("id", parkId).maybeSingle();
+    .from("parks")
+    .select("max_agreement_months, default_agreement_months")
+    .eq("id", parkId)
+    .maybeSingle();
   // Null means "he has no cap". A failed read means we don't know his, and
   // writing the silent 365-day range against a park that HAS one is the
   // database error this paragraph exists to prevent.
   if (capRes.error) {
     return { ok: false, error: readFailedMessage("your park's agreement cap", capRes.error) };
   }
-  const cap = (capRes.data?.max_agreement_months as number | null) ?? null;
+  // The park's TERM — its house style, clamped to its ceiling. Passing the
+  // ceiling wrote every new agreement at the maximum; see agreementMonthsFor.
+  const cap = agreementMonthsFor(
+    (capRes.data?.default_agreement_months as number | null) ?? null,
+    (capRes.data?.max_agreement_months as number | null) ?? null,
+  );
 
   const built = buildTenant(input, todayLakeDate(), cap);
   if (!built.ok || !built.renter || !built.tenancy) {
@@ -580,8 +589,16 @@ export async function addTenant(
   revalidatePath("/park");
   return {
     ok: true,
+    // "THEY'LL GET RECEIPTS AND REMINDERS BY TEXT" WAS NOT TRUE OF ANYBODY.
+    // buildTenant writes contact_pref 'paper' unconditionally and the number
+    // lands in phone_on_file_with_park, which the reminder engine cannot read.
+    // Nothing was ever going to be sent — and no text this app sent has been
+    // delivered since 19 July. The sentence promised a channel to a household
+    // that would then wait for it.
     signal: `${built.renter.display_name} is on the roll.` +
-      (built.renter.mobile_e164 ? " They'll get receipts and reminders by text." : ""),
+      (built.renter.phone_on_file_with_park
+        ? " The number is on file for you to ring — they'll get anything automated only once they ask for it themselves."
+        : ""),
   };
 }
 

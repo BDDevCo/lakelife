@@ -58,6 +58,19 @@ export interface OnboardRow {
    * arrangement they already had and nobody has changed that yet.
    */
   signedNewLease: boolean;
+  /**
+   * HOW TO REACH THEM, taken at signing.
+   *
+   * The owner's rule: both are a condition of renting a lot in the park. So
+   * they are REQUIRED to file rather than optional — but a missing one names
+   * its lot rather than failing quietly, because an unfiled household is not
+   * billed at all and that is the worse end of this trade.
+   *
+   * The number goes to `phone_on_file_with_park`, which nothing can text. It
+   * becomes a send target only when the resident verifies it themselves.
+   */
+  email: string;
+  phone: string;
 }
 
 export interface OnboardPlan {
@@ -68,6 +81,8 @@ export interface OnboardPlan {
     rent: number | null;
     movedInOn: string;
     signedNewLease: boolean;
+    email: string;
+    phone: string;
   }[];
   skipped: number;
   problems: { lotNumber: string; why: string }[];
@@ -129,9 +144,35 @@ export function planOnboarding(rows: readonly OnboardRow[], todayISO: string): O
       }
     }
 
+    // BOTH ARE A CONDITION OF RENTING, so a row without them does not file.
+    // Named, never silent: the whole point of the screen is that a household
+    // left off the roll is a household nobody bills.
+    const email = r.email.trim().toLowerCase();
+    const phone = r.phone.trim();
+    if (!email && !phone) {
+      problems.push({ lotNumber: r.lotNumber, why: "No email or phone yet — both are needed to file." });
+      continue;
+    }
+    if (!email) {
+      problems.push({ lotNumber: r.lotNumber, why: "No email yet." });
+      continue;
+    }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      problems.push({ lotNumber: r.lotNumber, why: "That email doesn't look right." });
+      continue;
+    }
+    if (!phone) {
+      problems.push({ lotNumber: r.lotNumber, why: "No phone number yet." });
+      continue;
+    }
+    if (phone.replace(/\D/g, "").length < 10) {
+      problems.push({ lotNumber: r.lotNumber, why: "That phone number looks short." });
+      continue;
+    }
+
     toFile.push({
       lotId: r.lotId, lotNumber: r.lotNumber, displayName: name, rent, movedInOn,
-      signedNewLease: r.signedNewLease,
+      signedNewLease: r.signedNewLease, email, phone,
     });
   }
 

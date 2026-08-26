@@ -3,6 +3,7 @@ import {
   toStay, buildRentRoll, summarise, coversDay, canApprove, decideProblemText,
   buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
   planBulkRates, buildTenant, buildParkDialsRow, dialsWarning, noticeShape,
+  agreementMonthsFor,
   type BulkRateTarget, type TenantInput,
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
   buildTenantEdit,
@@ -662,9 +663,17 @@ describe("buildTenant — the tenant who was already there", () => {
     expect(buildTenant(input({ mobile: "(260) 555-0142" }), TODAY).renter!.contact_pref).toBe("paper");
   });
 
-  it("keeps the phone number in a shape we can text", () => {
+  it("keeps an office number where nothing can text it", () => {
+    // THE COLUMN THIS FIELD'S OWN DOC ALREADY NAMED. `mobile_e164` means a
+    // number the person gave US and verified — consent-actions.ts sets it only
+    // alongside mobile_verified_at, the operational-consent stamp and the
+    // sentence they read, because those four facts are one fact. An
+    // office-typed number has none of them, and 0059 made
+    // phone_on_file_with_park a separate column for exactly that.
     const res = buildTenant(input({ mobile: "(260) 555-0142" }), TODAY);
-    expect(res.renter!.mobile_e164).toBe("2605550142");
+    expect(res.renter!.phone_on_file_with_park).toBe("2605550142");
+    expect(res.renter).not.toHaveProperty("mobile_e164");
+    expect(res.renter!.contact_pref).toBe("paper");
   });
 
   it("carries PROVENANCE, so the roll can later show its work", () => {
@@ -1198,5 +1207,74 @@ describe("taking rent online", () => {
     // funding type, and surcharging debit is forbidden at any rate.
     expect(onlineRentCautions(3).some((c) => c.includes("debit"))).toBe(true);
     expect(onlineRentCautions(0).some((c) => c.includes("absorbing"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("how long one new agreement runs", () => {
+  /**
+   * THE CAP AND THE DEFAULT ARE DIFFERENT NUMBERS.
+   *
+   * 0067 added `parks.default_agreement_months` for exactly this reason, in its
+   * own words: "Three months max, but typically month to month ... conflating
+   * them writes every new tenant a three-month agreement when the house style
+   * is one month rolling."
+   *
+   * The column then shipped with neither a reader nor a writer, so the CAP was
+   * passed through as the length and every signed agreement was written at the
+   * maximum — the bug that comment describes, in the code it was added to.
+   *
+   * It bites hardest on a day everybody signs at once: twenty agreements
+   * written on one afternoon all end on one morning, and when they do the
+   * charge run raises nothing at all.
+   */
+  it("writes the house style, not the ceiling", () => {
+    // The Haven: month to month, capped at three.
+    expect(agreementMonthsFor(1, 3)).toBe(1);
+  });
+
+  it("never exceeds the cap, because the database refuses one that does", () => {
+    // 0062's trigger rejects any agreement longer than cap*31+1 days, and
+    // parks_default_within_max already forbids this state — but a clamp costs
+    // nothing and the alternative is a refusal the owner reads as a fault.
+    expect(agreementMonthsFor(12, 3)).toBe(3);
+    expect(agreementMonthsFor(3, 3)).toBe(3);
+  });
+
+  it("falls back to the cap when no house style is set", () => {
+    expect(agreementMonthsFor(null, 3)).toBe(3);
+  });
+
+  it("is the house style when there is no cap", () => {
+    expect(agreementMonthsFor(1, null)).toBe(1);
+    expect(agreementMonthsFor(12, null)).toBe(12);
+  });
+
+  it("is null only when the park has set neither, which means the horizon", () => {
+    expect(agreementMonthsFor(null, null)).toBeNull();
+  });
+
+  it("dates a month-to-month agreement one month out, not three", () => {
+    const r = buildTenant(
+      { displayName: "Amberg, Roy", mobile: "", email: "", movedInOn: "",
+        term: "monthly", rent: "400", source: "owner_knowledge" },
+      "2027-01-01",
+      agreementMonthsFor(1, 3),
+    );
+    expect(r.tenancy!.start).toBe("2027-01-01");
+    expect(r.tenancy!.end).toBe("2027-02-01");
+  });
+
+  it("would have written 1 April under the old conflation", () => {
+    // The defect, kept as a test so nobody reintroduces it: passing the cap
+    // straight through is what put every household's expiry on one morning.
+    const r = buildTenant(
+      { displayName: "Amberg, Roy", mobile: "", email: "", movedInOn: "",
+        term: "monthly", rent: "400", source: "owner_knowledge" },
+      "2027-01-01",
+      3,
+    );
+    expect(r.tenancy!.end).toBe("2027-04-01");
   });
 });

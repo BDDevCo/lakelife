@@ -6,7 +6,8 @@ const TODAY = "2026-12-16";
 
 const row = (o: Partial<OnboardRow> = {}): OnboardRow => ({
   lotId: "l1", lotNumber: "3", displayName: "Amberg, Roy",
-  rent: "395", movedInOn: "", signedNewLease: false, ...o,
+  rent: "395", movedInOn: "", signedNewLease: false,
+  email: "roy@example.com", phone: "(260) 555-0142", ...o,
 });
 
 describe("filing the households who were already there", () => {
@@ -285,5 +286,72 @@ describe("the number he checks before he taps File", () => {
     );
     expect(onboardSummary(p, 3, 0)).toContain("(lot 14)");
     expect(onboardSummary(p, 3, 0)).not.toContain("no fee will bill");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("how to reach them, taken at signing", () => {
+  /**
+   * THE SCREEN CAPTURED NEITHER, AND HARDCODED BOTH TO EMPTY.
+   *
+   * Twenty households would have gone onto the roll with no address of any
+   * kind — the invite refuses outright ("No email on file for them — print a
+   * slip instead"), so nothing could ever be delivered and no file could be
+   * claimed. The owner's rule is that both are a condition of renting a lot.
+   *
+   * REQUIRED, BUT NEVER SILENT. A row missing one is named with the reason
+   * rather than dropped, because an unfiled household is not billed at all and
+   * that is the worse end of this trade.
+   */
+  it("files a row that has both", () => {
+    const p = planOnboarding([row()], TODAY);
+    expect(p.toFile).toHaveLength(1);
+    expect(p.toFile[0].email).toBe("roy@example.com");
+    expect(p.toFile[0].phone).toBe("(260) 555-0142");
+  });
+
+  it("lower-cases the email, so two spellings are one address", () => {
+    const p = planOnboarding([row({ email: "Roy.A@Example.COM" })], TODAY);
+    expect(p.toFile[0].email).toBe("roy.a@example.com");
+  });
+
+  it("names the lot when one is missing, rather than filing them without it", () => {
+    const p = planOnboarding([row({ lotNumber: "14", email: "" })], TODAY);
+    expect(p.toFile).toHaveLength(0);
+    expect(p.problems).toEqual([{ lotNumber: "14", why: "No email yet." }]);
+  });
+
+  it("says which one is missing when only one is", () => {
+    expect(planOnboarding([row({ lotNumber: "6", phone: "" })], TODAY).problems)
+      .toEqual([{ lotNumber: "6", why: "No phone number yet." }]);
+    expect(planOnboarding([row({ lotNumber: "6", email: "", phone: "" })], TODAY).problems)
+      .toEqual([{ lotNumber: "6", why: "No email or phone yet — both are needed to file." }]);
+  });
+
+  it("refuses an address that is not one, and a number too short to be one", () => {
+    expect(planOnboarding([row({ email: "roy@" })], TODAY).problems[0].why)
+      .toBe("That email doesn't look right.");
+    expect(planOnboarding([row({ phone: "555" })], TODAY).problems[0].why)
+      .toBe("That phone number looks short.");
+  });
+
+  it("still lets the rest of the afternoon file around a bad row", () => {
+    // Eighteen good rows must never be lost to one incomplete one.
+    const p = planOnboarding(
+      [row({ lotId: "a", lotNumber: "1" }),
+       row({ lotId: "b", lotNumber: "2", email: "" }),
+       row({ lotId: "c", lotNumber: "7" })],
+      TODAY,
+    );
+    expect(p.toFile.map((r) => r.lotNumber)).toEqual(["1", "7"]);
+    expect(p.problems).toHaveLength(1);
+  });
+
+  it("leaves a wholly blank row as work still to do, not as a problem", () => {
+    // A lot he has not got to yet is not an error, and never was.
+    const p = planOnboarding([row({ lotNumber: "9", displayName: "", email: "", phone: "" })], TODAY);
+    expect(p.problems).toHaveLength(0);
+    expect(p.blankLotNumbers).toEqual(["9"]);
   });
 });
