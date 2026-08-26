@@ -46,7 +46,7 @@ export default async function ParkRentPage({
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       <ParkRent parkId={park.id} page={page} />
       <div className="wrap" style={{ maxWidth: 900, paddingBottom: 24 }}>
         <ParkHeldMoney

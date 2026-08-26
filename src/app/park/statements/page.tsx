@@ -46,7 +46,7 @@ export default async function ParkStatementsPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       {page ? (
         <ParkStatements parkId={park.id} page={page} today={today} />
       ) : (

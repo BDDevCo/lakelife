@@ -35,7 +35,7 @@ export default async function ParkAmenitiesPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       <ParkAmenities parkId={park.id} rows={rows} today={today} />
     </>
   );

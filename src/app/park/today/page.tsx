@@ -41,7 +41,7 @@ export default async function ParkTodayPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       {view ? (
         <>
           <ParkToday parkId={park.id} view={view} />

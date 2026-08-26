@@ -30,7 +30,7 @@ export default async function ParkImportPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       <ParkImportPaste parkId={park.id} todayISO={todayLakeDate()} />
     </>
   );

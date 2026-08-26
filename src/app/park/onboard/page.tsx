@@ -30,7 +30,7 @@ export default async function ParkOnboardPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       <ParkOnboard
         parkId={park.id}
         seeds={res.seeds ?? []}

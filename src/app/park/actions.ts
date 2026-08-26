@@ -602,6 +602,51 @@ export async function addTenant(
   };
 }
 
+/**
+ * HOLD OR LIFT EVERY NOTICE TO THIS PARK'S HOUSEHOLDS.
+ *
+ * The switch itself is one column; what makes it a guard is that `sendEmail`
+ * and `sendSms` read it, so a send path written next year inherits it without
+ * anybody remembering. See src/lib/notice-hold.ts.
+ *
+ * LIFTING IS DELIBERATE AND TAKES HIS WORDS. A hold that can be cleared by a
+ * stray tap is not a hold, and the reason is what a future reader — including
+ * him in December — needs in order to know whether it is safe to lift.
+ */
+export async function setNoticeHold(
+  parkId: string,
+  held: boolean,
+  reason: string,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  const why = reason.trim();
+  if (held && why.length < 3) {
+    return { ok: false, error: "Say why it's on hold — you'll want to know in December." };
+  }
+
+  const admin = createServiceClient();
+  const { error } = await admin
+    .from("parks")
+    .update(held
+      ? { notices_held_at: new Date().toISOString(), notices_held_reason: why }
+      // Cleared TOGETHER. A lingering reason beside a null date reads as held
+      // on any screen that checks the wrong one of the two.
+      : { notices_held_at: null, notices_held_reason: null })
+    .eq("id", parkId);
+  if (error) return { ok: false, error: "Couldn't change that — try again." };
+
+  revalidatePath("/park");
+  revalidatePath("/park/setup");
+  revalidatePath("/park/today");
+  return {
+    ok: true,
+    signal: held
+      ? "Held. Nothing will reach your households until you lift it."
+      : "Lifted. Notices can now reach your households.",
+  };
+}
+
 // -------------------------------------------------------- applications ----
 
 /**

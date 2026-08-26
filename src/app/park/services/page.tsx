@@ -45,7 +45,7 @@ export default async function ParkServicesPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       <div className="wrap" style={{ paddingTop: 0, paddingBottom: 48 }}>
         {desk ? (
           <ParkServices

@@ -39,7 +39,7 @@ export default async function ParkCostsPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       <ParkCosts
         billable={billable}
         parkId={park.id}

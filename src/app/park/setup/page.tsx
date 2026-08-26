@@ -9,6 +9,7 @@ import { parkStreamStatuses } from "@/app/park/stream-actions";
 import { getParkDials, getOnlineRent } from "@/app/park/actions";
 import { ParkDials } from "@/components/ParkDials";
 import { ParkOnlineRent } from "@/components/ParkOnlineRent";
+import { NoticeHold } from "@/components/NoticeHold";
 import type { ParkProfileInput } from "@/app/park/park-helpers";
 
 const md = (m: number | null, d: number | null) =>
@@ -56,7 +57,14 @@ export default async function ParkSetupPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
+      <div className="wrap">
+        <NoticeHold
+          parkId={park.id}
+          heldAt={park.noticesHeldAt}
+          reason={park.noticesHeldReason}
+        />
+      </div>
       {/* WHAT THE PARK EARNS FROM comes first: it decides which of everything
           below is even relevant to this owner. */}
       <div className="wrap" style={{ paddingTop: 18, paddingBottom: 0 }}>

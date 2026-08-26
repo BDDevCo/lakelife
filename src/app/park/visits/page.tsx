@@ -32,7 +32,7 @@ export default async function ParkVisitsPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
         <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Who&apos;s on site</h1>
         <p className="mut" style={{ fontSize: 14, marginTop: 0, lineHeight: 1.5 }}>

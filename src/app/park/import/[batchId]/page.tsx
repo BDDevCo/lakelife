@@ -60,7 +60,7 @@ export default async function ParkImportBatchPage({
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       <ParkImportRead view={view} />
     </>
   );

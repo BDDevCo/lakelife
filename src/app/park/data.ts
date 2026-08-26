@@ -25,6 +25,15 @@ import { fromPrice, type Lot, type RateCard, type RenterUnit, type Term, type Pa
 
 export interface MyPark {
   id: string;
+  /**
+   * When notices were put on hold, or null when they may go out.
+   *
+   * Read here so EVERY park screen can say so — a hold nobody can see is the
+   * failure shape this codebase keeps digging out, and the owner would rightly
+   * assume a silent product was broken rather than obedient.
+   */
+  noticesHeldAt: string | null;
+  noticesHeldReason: string | null;
   role: "owner" | "manager";
   name: string;
   slug: string | null;
@@ -70,7 +79,7 @@ export async function getMyPark(): Promise<MyPark | null> {
     // One string literal, deliberately: supabase-js parses the select at the
     // TYPE level, and a concatenated string widens to `string`, which collapses
     // every column to GenericStringError.
-    .select("id, name, slug, address, lake_id, park_type, age_restricted, approval_required, season_open_month, season_open_day, season_close_month, season_close_day, included_utilities, house_rules, active")
+    .select("id, name, slug, address, lake_id, park_type, age_restricted, approval_required, season_open_month, season_open_day, season_close_month, season_close_day, included_utilities, house_rules, active, notices_held_at, notices_held_reason")
     .in("id", parkIds)
     .order("name"));
   const park = parks?.[0];
@@ -88,6 +97,8 @@ export async function getMyPark(): Promise<MyPark | null> {
   return {
     id: park.id as string,
     role: role ?? "manager",
+    noticesHeldAt: (park.notices_held_at as string | null) ?? null,
+    noticesHeldReason: (park.notices_held_reason as string | null) ?? null,
     name: park.name as string,
     slug: (park.slug as string | null) ?? null,
     address: (park.address as string | null) ?? null,

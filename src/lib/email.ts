@@ -1,6 +1,7 @@
 import "server-only";
 import { emailRefusal } from "@/lib/contactable";
 import { recipientIsFixture } from "@/lib/recipient-gate";
+import { recipientIsHeld, holdRefusal } from "@/lib/notice-hold";
 
 /**
  * Send a transactional email via Resend (welcome recap, booking confirmations,
@@ -81,6 +82,23 @@ export async function sendEmail(opts: {
   if (await recipientIsFixture("email", opts.to)) {
     console.warn(`[email] refused: ${opts.to} belongs to an account marked not-a-person`);
     return { ok: false, error: "unsendable recipient (fixture)" };
+  }
+
+  // AND THE THIRD: a park that has not said it is ready. The owner's rule is
+  // that nothing reaches a renter until the roll is loaded, the leases are
+  // executed and the households are comfortable, and nothing enforced it —
+  // parks.active gates no send, and the one unattended path was held shut only
+  // by a column nobody writes.
+  //
+  // IT LIVES HERE, NOT AT THE CALL SITES. A dozen places can write to a renter
+  // today and there will be more; a guard each of them has to remember is a
+  // guard the next one forgets. This door and sendSms are the only two out.
+  //
+  // Unlike the gate above it, this one FAILS CLOSED — see notice-hold.ts.
+  const hold = await recipientIsHeld("email", opts.to);
+  if (hold.held) {
+    console.warn(`[email] held: ${opts.to} — ${hold.failed ? "could not check" : "park is holding notices"}`);
+    return { ok: false, error: holdRefusal(hold) };
   }
 
   const from = opts.from ?? process.env.EMAIL_FROM ?? SANDBOX_FROM;

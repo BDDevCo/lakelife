@@ -286,7 +286,7 @@ export default async function ParkPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       {/* RESERVED counts too. The Haven's whole roll is "reserved" until the
           Dec 15 cutover, so gating on `occupied` would hide the re-rate panel
           on precisely the park it was built for — and on every park during the

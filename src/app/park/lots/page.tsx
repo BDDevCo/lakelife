@@ -66,7 +66,7 @@ export default async function ParkLotsPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       <ParkLots parkId={park.id} lots={view} />
       <div className="wrap" style={{ paddingTop: 0, paddingBottom: 40 }}>
         <AddLots

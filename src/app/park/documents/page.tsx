@@ -30,7 +30,7 @@ export default async function ParkDocumentsPage() {
   return (
     <>
       <TopBar />
-      <ParkNav parkName={park.name} live={park.active} />
+      <ParkNav park={park} />
       <div className="wrap" style={{ paddingTop: 8 }}>
         <ParkDocuments parkId={park.id} page={page} />
       </div>

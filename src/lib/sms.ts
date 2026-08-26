@@ -1,6 +1,7 @@
 import twilio from "twilio";
 import { phoneRefusal } from "@/lib/contactable";
 import { recipientIsFixture } from "@/lib/recipient-gate";
+import { recipientIsHeld, holdRefusal } from "@/lib/notice-hold";
 
 /**
  * Send an alert SMS via Twilio Messaging (booking confirmations, reminders,
@@ -77,6 +78,17 @@ export async function sendSms(
   if (await recipientIsFixture("phone", to)) {
     console.warn(`[sms] refused: ${to} belongs to an account marked not-a-person`);
     return { queued: false, error: "unsendable recipient (fixture)" };
+  }
+
+  // AND THE THIRD: a park that has not said it is ready. Both of this park's
+  // phone columns are checked — the verified mobile AND the number the office
+  // wrote down — because a hold that covered only the first would let a text
+  // reach exactly the people who never asked to be texted. Fails CLOSED; see
+  // notice-hold.ts.
+  const hold = await recipientIsHeld("phone", to);
+  if (hold.held) {
+    console.warn(`[sms] held: ${to} — ${hold.failed ? "could not check" : "park is holding notices"}`);
+    return { queued: false, error: holdRefusal(hold) };
   }
 
   try {

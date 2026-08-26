@@ -30,10 +30,47 @@ const TABS = [
   { href: "/park/setup", label: "Park setup" },
 ];
 
-export function ParkNav({ parkName, live }: { parkName: string; live: boolean }) {
+/**
+ * TAKES THE PARK, NOT ITS FIELDS.
+ *
+ * This used to take `parkName` and `live` — two props, spelled out at fourteen
+ * call sites. Adding a fifteenth field would have meant editing all fourteen
+ * and trusting the next screen to remember, which is the shape of guard this
+ * codebase keeps having to repair. Passing the park means a new field is
+ * available on every park screen the moment `getMyPark` returns it.
+ */
+export function ParkNav({ park }: {
+  park: {
+    name: string;
+    active: boolean;
+    noticesHeldAt?: string | null;
+    noticesHeldReason?: string | null;
+  };
+}) {
   const pathname = usePathname();
+  const parkName = park.name;
+  const live = park.active;
   return (
     <div className="wrap" style={{ paddingTop: 20, paddingBottom: 0 }}>
+      {/* A HOLD NOBODY CAN SEE IS A PRODUCT THAT LOOKS BROKEN.
+          Every send to a household is refused while this is up, including the
+          ones he taps himself — so it says so on every park screen, and says
+          where to lift it. Silence he did not ask for is indistinguishable
+          from silence that is failing. */}
+      {park.noticesHeldAt && (
+        <div className="ll-card ll-card-pad" role="status"
+          style={{ marginBottom: 10, background: "rgba(200,150,40,.10)" }}>
+          <strong style={{ fontSize: 14 }}>
+            Notices are on hold — nothing is reaching your households.
+          </strong>
+          <p className="mut" style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.5 }}>
+            {park.noticesHeldReason
+              ? `${park.noticesHeldReason} `
+              : "No email or text will go out to anyone on your roll — including anything you send by hand. "}
+            Lift it in <Link href="/park/setup">Park setup</Link> when everyone is ready.
+          </p>
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
         <strong style={{ fontSize: 15 }}>{parkName}</strong>
         {/* A dark park is the normal state during setup, so this reads as a
