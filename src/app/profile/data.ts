@@ -306,24 +306,36 @@ export function toPricingProfile(p: FullProfile): PricingProfile {
 /** Load all active services and price each one against a profile. */
 export async function getPricedServices(p: FullProfile): Promise<PricedService[]> {
   const supabase = await createClient();
-  // A GROUNDS PROPERTY SEES ONLY PARK SERVICES; EVERY OTHER PROPERTY SEES ONLY
-  // THE REST. Two menus that never overlap, decided by one boolean, so a lake
-  // homeowner is never offered a 21-lot mow and a park is never offered a pier.
+  // THE FENCE RUNS ONE WAY (0143).
   //
-  // Pricing alone would ALMOST do this — park services count `lots`, which a
-  // lake house does not have, so they price to $0 and vanish. But it would not
-  // work the other way: "Fall winterization" is flat $485 and counts nothing,
-  // so it applies to everything, and a park's grounds menu would carry a
-  // lake-house winterization at a lake-house price. The flag is the fence.
+  // A LAKE HOUSE still sees only `park_only = false`, and that half must never
+  // move: nobody buying a lake house should be offered a 21-lot mow.
+  //
+  // A GROUNDS PROPERTY used to be the mirror of that — `park_only = true` and
+  // nothing else — which meant a park's entire menu was three rows and the
+  // park could not book its own dock. The Haven has a 28-section pier it pays
+  // to put in and pull every year, and the software could not see the service.
+  //
+  // Pricing alone cannot open that direction safely, which is why the fence
+  // exists at all: park services count `lots`, so they price to $0 on a lake
+  // house and vanish on their own — but `serviceApplies` returns TRUE for any
+  // rule that counts nothing, so flat lake-house work like "Fall winterization"
+  // ($485) would leak onto a park's menu at a lake-house price. So the opening
+  // is NAMED, service by service, in `park_bookable`.
   const isGrounds = p.groundsForParkId != null;
+  const menuQuery = supabase
+    .from("services")
+    .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work, park_only")
+    .eq("active", true)
+    .eq("kind", "standalone"); // components/add-ons price inside packages, never as menu tiles
   const services = mustRead(
     "the service menu",
-    await supabase
-      .from("services")
-      .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work, park_only")
-      .eq("active", true)
-      .eq("park_only", isGrounds)
-      .eq("kind", "standalone"), // components/add-ons price inside packages, never as menu tiles
+    isGrounds
+      // Its own grounds services, PLUS the general work a park has been let
+      // buy. Each of those is gated a second time by `serviceApplies`, so a
+      // park with no dock still sees no pier.
+      ? await menuQuery.or("park_only.eq.true,park_bookable.eq.true")
+      : await menuQuery.eq("park_only", false),
   );
 
   // A PARK SERVICE IS PRICED BY THE PARK THAT BUYS IT (0115).
