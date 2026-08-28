@@ -26,7 +26,7 @@ const money = (n: number) =>
 // metered to that home and billed directly, never divided across the lots.
 // `canSplit` in cost-helpers is the rule; this list is the courtesy.
 const CATEGORIES: CostCategory[] = [
-  "water", "sewer", "trash", "common_electric", "grounds", "other",
+  "water", "sewer", "trash", "common_electric", "grounds", "snow", "other",
 ];
 
 export function ParkCosts({

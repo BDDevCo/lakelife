@@ -24,6 +24,9 @@
 
 export type CostCategory =
   | "water" | "sewer" | "trash" | "common_electric" | "grounds"
+  // 0144. The fee could claim snow from 0067 onward and no bill could carry
+  // it, so the coverage panel called it unverified forever.
+  | "snow"
   | "unit_electric" | "other" | "tax" | "insurance";
 
 /**
@@ -63,6 +66,7 @@ export const COST_CATEGORY_LABEL: Record<CostCategory, string> = {
   trash: "Trash",
   common_electric: "Park lighting & common areas",
   grounds: "Grounds & mowing",
+  snow: "Snow clearing",
   // Power for a home the PARK owns and rents out. A lot renter's own
   // electricity is metered and billed by the utility DIRECTLY to them — the
   // park never sees it, and nothing here should imply otherwise.
@@ -463,7 +467,7 @@ export function carryFromRow(row: {
 }
 
 export const SCHEDULABLE_CATEGORIES: CostCategory[] = [
-  "water", "sewer", "trash", "common_electric", "grounds", "tax", "insurance",
+  "water", "sewer", "trash", "common_electric", "grounds", "snow", "tax", "insurance",
 ];
 
 export type Cadence = "monthly" | "quarterly" | "annual";
