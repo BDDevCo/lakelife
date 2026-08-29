@@ -4,7 +4,8 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { withParkRate } from "@/lib/park-rates";
 import { loadParkRatesChecked } from "@/app/park/rate-data";
 import { getFullProfile, toPricingProfile, getActivePropertyId } from "@/app/profile/data";
-import { priceService, type ServiceRule } from "@/lib/pricing";
+import { priceService, transportFee, billsByDistance, type ServiceRule } from "@/lib/pricing";
+import { milesBetween } from "@/lib/dispatch";
 import { serviceMinutes } from "@/lib/duration";
 import { todayLakeDate } from "@/lib/booking";
 import {
@@ -472,7 +473,7 @@ export async function createBookingBatch(
   const priceRule = profile.groundsForParkId
     ? withParkRate(service, parkRates)
     : service;
-  const standardPrice = priceService(priceRule, toPricingProfile(profile));
+  let standardPrice = priceService(priceRule, toPricingProfile(profile));
   // SIM-FOUND (Wave 1): a $0 price means the profile has none of what this
   // service counts (0 PWC lifts booking a PWC pull). A $0 job can never
   // assign and sits as phantom "demand" — refuse with the honest fix.
@@ -484,6 +485,52 @@ export async function createBookingBatch(
         : `${service.name} prices to $0 for your place — your profile shows none of the equipment it covers. Update your property profile and the real price appears.`,
     };
   }
+  // TRANSPORT ON A COLLECTION VISIT (0149).
+  //
+  // Every other pricing input comes off the property profile. This one cannot:
+  // the tow is as long as wherever the boat happened to winter, which is a
+  // fact about THIS booking. Shape is the market's (research billingNorms[7],
+  // Pointe Marine): the model price covers an included radius, and only the
+  // miles beyond it are charged.
+  //
+  // Priced HERE, server-side, off the coordinates — never off anything the
+  // browser sent as a number. Added after the $0 refusal above so that guard
+  // still judges the service's own price, and before the rush multiplier so
+  // there is one all-in figure and one code path.
+  //
+  // INERT TODAY: no service carries a per-mile rate, so `billsByDistance` is
+  // false everywhere and this block does nothing at all.
+  let transport = 0;
+  if (billsByDistance(priceRule)) {
+    const geo = await createServiceClient()
+      .from("properties").select("lat, lng").eq("id", profile.propertyId).maybeSingle();
+    // A price is about to be charged against this. An unread row would leave
+    // the coordinates null, the distance unmeasurable, and the tow free.
+    if (geo.error) return { ok: false, error: readFailedMessage("where this job is going", geo.error) };
+    const propLat = geo.data?.lat != null ? Number(geo.data.lat) : null;
+    const propLng = geo.data?.lng != null ? Number(geo.data.lng) : null;
+    if (propLat == null || propLng == null) {
+      // OUR data, not theirs — so it must not read as their mistake.
+      return {
+        ok: false,
+        error: "We don't have your property pinned on the map yet, so we can't work out the tow. Re-save your address on your profile and it'll price straight away.",
+      };
+    }
+    const miles = milesBetween(pickup?.lat ?? null, pickup?.lng ?? null, propLat, propLng);
+    if (!Number.isFinite(miles)) {
+      // Charging nothing for an unmeasured tow is an undercharge, and quoting
+      // a price we cannot stand behind is worse. Ask for the one thing that
+      // fixes it. (Straight-line miles: shorter than the road, so the radius
+      // is generous by construction rather than by accident.)
+      return {
+        ok: false,
+        error: "Pick the boat's location from the suggestions rather than typing it — we need the spot on the map to work out the tow.",
+      };
+    }
+    transport = transportFee(priceRule, miles);
+    standardPrice += transport;
+  }
+
   const rushAllIn = rushPrice(standardPrice, settings.sameDaySurchargePct);
 
   // HOW LONG, from the same profile that decided how much (0083). Frozen onto
