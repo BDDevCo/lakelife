@@ -118,10 +118,10 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
     "the open jobs",
     await admin
     .from("jobs")
-    .select("id, date, customer_price, service_id, property_id, is_rush, est_minutes, created_at, services(name, pricing_model, est_minutes), properties(lake_id, lat, lng, lakes(name))")
+    .select("id, date, customer_price, service_id, property_id, is_rush, est_minutes, created_at, services(name, pricing_model, est_minutes, takes_custody), properties(lake_id, lat, lng, lakes(name))")
     .eq("status", "requested")
     .is("vendor_id", null)
-    .is("group_id", null) // package visits are routed, never cold-claimed — a claim can't price multi-leg work, and custody is never a first-tap prize
+    .is("group_id", null) // package visits are routed, never cold-claimed — a claim can't price multi-leg work. This filter is about MULTI-LEG, not custody: a standalone custody service carries no group and passes straight through it. takes_custody below is what guards custody.
     .in("service_id", myServiceIds)
     .gte("date", today)
     .order("date", { ascending: true })
@@ -203,7 +203,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
     // date never renders.
     const isRushRow = !!(j as { is_rush?: boolean }).is_rush;
     if (isRushRow && (!rushOpen || (j.date as string) !== today)) continue;
-    const svc = one(j.services) as { name?: string; pricing_model?: string } | null;
+    const svc = one(j.services) as { name?: string; pricing_model?: string; takes_custody?: boolean } | null;
     const prop = one(j.properties) as { lake_id?: string; lat?: number; lng?: number; lakes?: unknown } | null;
     const lakeName = (one(prop?.lakes) as { name?: string } | null)?.name ?? "a nearby lake";
 
@@ -259,6 +259,18 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       menuPrice: Number(j.customer_price ?? 0), // server-side only — never returned
       marginFloor: settings.marginFloor,
       jobMinutes,
+      // CUSTODY REACHES canClaim OR ITS REFUSAL IS DEAD CODE (0145, second door).
+      //
+      // canClaim opens by refusing every custody visit, and neither caller ever
+      // passed the field, so that line had never run. The `group_id` filter
+      // above catches only PACKAGE custody; the three active standalone custody
+      // services carry no group, so a crew with a plain COI and no
+      // garagekeepers policy could tap Claim on a customer's boat.
+      //
+      // A truthy marker is the whole message — canClaim tests presence, never
+      // the feet or the barn type (those are isEligible's gates, on the routing
+      // path where a tier and a boat length actually exist).
+      storage: svc?.takes_custody ? { tier: null, boatFeet: 0 } : null,
     });
     // Phase E: a cooling-down lake overrides everything else — be upfront.
     if (prop?.lake_id && pausedLakes.has(prop.lake_id as string)) {

@@ -72,7 +72,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const today = todayLakeDate();
   const jobRes = await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model, est_minutes), properties(lake_id, address, users(phone, email))")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model, est_minutes, takes_custody), properties(lake_id, address, users(phone, email))")
     .eq("id", jobId)
     .maybeSingle();
   // "That job was already taken" is the one sentence that walks a crew away
@@ -87,7 +87,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     return { ok: false, error: "That job was already taken — grab the next one. 🌊" };
   }
 
-  const svc = one(job.services) as { name?: string; pricing_model?: string } | null;
+  const svc = one(job.services) as { name?: string; pricing_model?: string; takes_custody?: boolean } | null;
   if (!svc?.name) return { ok: false, error: "That job isn't claimable." };
 
   // Phase E: a crew paused on this job's lake can't claim there (and therefore
@@ -248,6 +248,13 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     menuPrice: Number(job.customer_price ?? 0),
     marginFloor: settings.marginFloor,
     jobMinutes,
+    // THE ACTION IS THE AUTHORITY, and it was not passing this (0145, second
+    // door). The board hiding a row is a courtesy; this POST is the boundary.
+    // Without the flag canClaim's custody refusal never ran here either, so a
+    // hand-made POST — or a stale board — claimed a standalone custody job
+    // outright: no garagekeepers policy, no barn, no free feet.
+    // Presence is the whole message; see the note in open-data.ts.
+    storage: svc.takes_custody ? { tier: null, boatFeet: 0 } : null,
   });
   // FILL-IN ACCEPTANCE (margin-gap design): blocked ONLY on rate, past the
   // age gate (or rush, whose premium funds the gap) → the claim happens at
