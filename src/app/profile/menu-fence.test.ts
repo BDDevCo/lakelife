@@ -43,12 +43,30 @@ describe("a lake house never sees a park service", () => {
     const fn = menuFn();
     // park_bookable says "a PARK may also buy this". It has no meaning on a
     // lake house, and reading it there would be the fence failing open.
+    //
+    // Scoped to the .or() calls that actually name a park flag. 0147 added a
+    // SECOND .or() to this query — the solo_bookable door — which carries no
+    // park flag at all and so cannot widen this fence in either direction.
+    // The pre-0147 version of this test looped over EVERY .or() and would now
+    // fail on that unrelated one, which would have said nothing true about
+    // the fence.
     const orCalls = fn.match(/\.or\([^)]*\)/g) ?? [];
     expect(orCalls.length, "no .or() found — scan is stale").toBeGreaterThan(0);
-    for (const call of orCalls) {
+    const parkOrs = orCalls.filter((c) => c.includes("park_"));
+    expect(parkOrs.length, "no park .or() found — scan is stale").toBeGreaterThan(0);
+    for (const call of parkOrs) {
       expect(call, "park_bookable may only widen the GROUNDS branch")
         .toMatch(/park_only\.eq\.true/);
     }
+  });
+
+  it("the solo_bookable door carries no park flag — it cannot move this fence", () => {
+    const fn = menuFn();
+    // 0147's door is about packages, not parks. If it ever grows a park_ term
+    // it stops being a package question and becomes a fence question.
+    const soloOr = (fn.match(/\.or\([^)]*\)/g) ?? []).find((c) => c.includes("solo_bookable"));
+    expect(soloOr, "no solo_bookable .or() found — scan is stale").toBeTruthy();
+    expect(soloOr, "the package door must not touch the park fence").not.toMatch(/park_/);
   });
 
   it("branches on grounds, not on something incidental", () => {
@@ -72,8 +90,11 @@ describe("a park's grounds can reach its own dock", () => {
 
   it("still gives the grounds its own park_only services too", () => {
     const fn = menuFn();
-    const or = fn.match(/\.or\("([^"]*)"\)/)?.[1] ?? "";
-    expect(or, "no .or() filter found — scan is stale").not.toBe("");
+    // The PARK .or() specifically — since 0147 this query has two.
+    const or = (fn.match(/\.or\("([^"]*)"\)/g) ?? [])
+      .map((c) => c.match(/\.or\("([^"]*)"\)/)?.[1] ?? "")
+      .find((c) => c.includes("park_")) ?? "";
+    expect(or, "no park .or() filter found — scan is stale").not.toBe("");
     expect(or, "a park must keep seeing its grounds services").toContain("park_only.eq.true");
     expect(or, "and gain the ones it has been let buy").toContain("park_bookable.eq.true");
   });
@@ -101,11 +122,24 @@ describe("the query itself stays sound", () => {
     expect(tail, "both branches sit inside the same mustRead").toMatch(/isGrounds/);
   });
 
-  it("still filters to standalone services", () => {
+  it("still filters by kind — components are not menu tiles by default", () => {
     const fn = menuFn();
     // Components and add-ons price inside packages; as menu tiles they are
-    // duplicates at the wrong price.
-    expect(fn).toMatch(/\.eq\("kind",\s*"standalone"\)/);
+    // duplicates at the wrong price. 0147 did not relax that — it moved the
+    // test from `.eq("kind","standalone")` into an `.or()` that ALSO admits a
+    // leg explicitly opened with solo_bookable. The gate is still named and
+    // still closed by default; what changed is that there are now two ways
+    // through it, both of them deliberate.
+    expect(fn, "the menu must still gate on kind").toMatch(/kind\.eq\.standalone/);
+    // The failure this guards: admitting every component wholesale, which is
+    // what a `.in("kind", [...])` here would do.
+    expect(fn, "the menu must never admit components in bulk").not.toMatch(/\.in\("kind"/);
+  });
+
+  it("only an explicitly opened leg gets in — the flag is the whole permission", () => {
+    const fn = menuFn();
+    expect(fn, "solo_bookable is what distinguishes an opened leg from every other component")
+      .toMatch(/solo_bookable\.eq\.true/);
   });
 });
 

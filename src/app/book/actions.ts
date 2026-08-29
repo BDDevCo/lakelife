@@ -46,7 +46,7 @@ async function loadService(serviceId: string): Promise<ServiceRow | null> {
     .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, is_water_work, daily_capacity, frequency_options, kind, active")
     .eq("id", serviceId)
     .eq("active", true)
-    .eq("kind", "standalone") // components/add-ons book only inside packages
+    .or("kind.eq.standalone,solo_bookable.eq.true") // standalone, OR a package leg opened for solo booking (0147 — spring entry)
     .maybeSingle());
   return (data as ServiceRow | null) ?? null;
 }

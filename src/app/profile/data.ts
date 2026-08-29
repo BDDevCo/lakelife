@@ -327,7 +327,7 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
     .from("services")
     .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work, park_only")
     .eq("active", true)
-    .eq("kind", "standalone"); // components/add-ons price inside packages, never as menu tiles
+    .or("kind.eq.standalone,solo_bookable.eq.true"); // standalone, OR a package leg opened for solo booking (0147 — spring entry)
   const services = mustRead(
     "the service menu",
     isGrounds
