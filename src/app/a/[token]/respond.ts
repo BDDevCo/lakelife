@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { photoStripHtml, type StripPhoto } from "@/lib/photo-strip";
 
 /**
  * Shared bits for the Autopilot one-tap links (/a/<token>/confirm|skip).
@@ -13,9 +14,22 @@ import { createServiceClient } from "@/lib/supabase/server";
 export const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
-export function htmlPage(rawTitle: string, rawBody: string, ok = true, formAction?: string, formLabel?: string): Response {
+/**
+ * @param photos OPTIONAL condition-report thumbnails, already signed by the
+ *   caller (see photoStripHtml). Passed as VALUES, never as HTML: this
+ *   function does every escape, so no caller can hand it markup to render.
+ */
+export function htmlPage(
+  rawTitle: string,
+  rawBody: string,
+  ok = true,
+  formAction?: string,
+  formLabel?: string,
+  photos?: StripPhoto[],
+): Response {
   const title = escapeHtml(rawTitle);
   const body = escapeHtml(rawBody);
+  const strip = photoStripHtml(photos);
   // Mutations happen ONLY on POST (link-preview prefetchers issue GETs — a
   // prefetch must never book or skip anything). The GET page renders this form.
   const form = formAction
@@ -27,7 +41,7 @@ export function htmlPage(rawTitle: string, rawBody: string, ok = true, formActio
   .badge{display:inline-block;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;padding:4px 12px;border-radius:999px;background:${ok ? "#e0f2ef" : "#fdf1dc"};color:${ok ? "#0e7a6a" : "#9a6b15"}}
   h1{font-size:22px;margin:14px 0 8px}p{font-size:15px;color:#48626e;line-height:1.5;margin:0}
   a{color:#0e7a6a;font-weight:700}
-  </style></head><body><div class="card"><span class="badge">${ok ? "LakeLife" : "Heads up"}</span><h1>${title}</h1><p>${body}</p>${form}</div></body></html>`;
+  </style></head><body><div class="card"><span class="badge">${ok ? "LakeLife" : "Heads up"}</span><h1>${title}</h1><p>${body}</p>${strip}${form}</div></body></html>`;
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
 

@@ -20,6 +20,18 @@ export interface VendorStop {
   facts: string; // short crew-facing profile summary (no prices)
   gate_code: string | null; // only populated for TODAY's jobs (rule 3)
   photo_count: number;
+  /**
+   * This service's named walk-around (services.required_photo_slots, 0146).
+   * EMPTY FOR A PACKAGE VISIT, deliberately: a package's gate is the sum of
+   * its legs, and two legs can both want an "overall" shot, so a merged list
+   * would tick one leg's slot off with the other leg's photo. A walk-around
+   * that quietly loses a shot is worse than the count the card already shows.
+   * Every ACTIVE custody service today is standalone (0145), which is the
+   * path this covers.
+   */
+  photo_slots: string[];
+  /** Which of those slots already have a photo. */
+  shot_slots: string[];
   legs?: string[]; // package-visit leg NAMES ONLY (no prices) — set when job_items exist
   unit_name: string | null; // truck name (routes.unit_name), fleet vendors only — crew's own data, rule 1 safe
   // ---- the driveway (0084/0086) ----
@@ -157,10 +169,21 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
   // the crew watches to know whether they can close the job out.
   const photos = mustRead(
     "the photos already uploaded",
-    await admin.from("job_photos").select("job_id").in("job_id", jobIds),
+    await admin.from("job_photos").select("job_id, slot").in("job_id", jobIds),
   );
   const counts = new Map<string, number>();
-  for (const p of photos ?? []) counts.set(p.job_id, (counts.get(p.job_id) ?? 0) + 1);
+  // Which named shots are already in the bag. An unlabelled photo still
+  // counts toward the gate; it just does not tick anything off the list.
+  const shotByJob = new Map<string, string[]>();
+  for (const p of photos ?? []) {
+    counts.set(p.job_id, (counts.get(p.job_id) ?? 0) + 1);
+    const slot = (p.slot as string | null) ?? "";
+    if (slot) {
+      const arr = shotByJob.get(p.job_id as string) ?? [];
+      arr.push(slot);
+      shotByJob.set(p.job_id as string, arr);
+    }
+  }
 
   // Package-visit legs (crews must see every leg of a package visit, not
   // just the anchor service name). group_id lives on `jobs`, not the
@@ -202,6 +225,31 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
         it.job_id as string,
         (legGateByJob.get(it.job_id as string) ?? 0) + (svc.min_photos ?? 0),
       );
+    }
+  }
+
+  // THE NAMED WALK-AROUND (0146). `services.required_photo_slots` is the list
+  // a crew is actually being asked to shoot; without it on screen the raised
+  // min_photos is just a bigger number with no instruction attached.
+  //
+  // Only for SINGLE-service visits — see the note on VendorStop.photo_slots.
+  const grouped = new Set(groupedJobIds);
+  const slotsByService = new Map<string, string[]>();
+  const slotServiceIds = [...new Set(
+    rows.filter((r) => !grouped.has(r.id))
+        .map((r) => r.service_id)
+        .filter((id): id is string => !!id),
+  )];
+  if (slotServiceIds.length > 0) {
+    // A failed read here shows no walk-around at all, which is the old
+    // screen — worse, but never wrong. It must not become an empty list that
+    // reads as "nothing to shoot".
+    const svcRows = mustRead(
+      "the shot list for today's visits",
+      await admin.from("services").select("id, required_photo_slots").in("id", slotServiceIds),
+    );
+    for (const sv of svcRows ?? []) {
+      slotsByService.set(sv.id as string, (sv.required_photo_slots as string[] | null) ?? []);
     }
   }
 
@@ -268,6 +316,8 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
       ? gateByProp.get(r.property_id) ?? null
       : null,
     photo_count: counts.get(r.id) ?? 0,
+    photo_slots: grouped.has(r.id) ? [] : slotsByService.get(r.service_id) ?? [],
+    shot_slots: shotByJob.get(r.id) ?? [],
     legs: legsByJob.get(r.id),
     unit_name: r.route_id ? unitNameByRoute.get(r.route_id) ?? null : null,
     held_at: r.held_at ?? null,

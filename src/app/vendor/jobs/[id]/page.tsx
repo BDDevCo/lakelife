@@ -288,6 +288,8 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
           address={job.address}
           photoCount={job.photoCount}
           minPhotos={job.minPhotos}
+          photoSlots={job.photoSlots}
+          shotSlots={job.photos.map((p) => p.slot).filter((s): s is string => !!s)}
           status={job.status}
           isCorrection={isCorrection}
         />

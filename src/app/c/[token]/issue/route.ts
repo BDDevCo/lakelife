@@ -1,6 +1,8 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { htmlPage, escapeHtml } from "@/app/a/[token]/respond";
 import { recordJobVerdict } from "@/lib/job-verdict";
+import { signedJobPhotosOrNone } from "@/lib/photos";
+import { photoStripHtml } from "@/lib/photo-strip";
 
 /**
  * Post-job quality check — 👎 SOMETHING'S OFF. GET renders a small form
@@ -63,7 +65,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   const svc = (one(job?.services) as { name?: string } | null)?.name ?? "your service";
   // Small form: the note is optional — a bare 👎 still counts and still routes.
   const action = escapeHtml(new URL(req.url).pathname);
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Something's off — LakeLife</title><style>body{font-family:system-ui,sans-serif;background:#f2f6f7;margin:0;display:grid;place-items:center;min-height:100vh;padding:20px;color:#20343d}.card{background:#fff;border-radius:16px;max-width:420px;padding:28px;box-shadow:0 8px 30px rgba(10,36,48,.12)}h1{font-size:20px;margin:10px 0 8px}p{font-size:14.5px;line-height:1.5;color:#5D7681}textarea{width:100%;box-sizing:border-box;min-height:90px;border:1.5px solid #d7e0e3;border-radius:12px;padding:10px;font:inherit;font-size:15px;margin-top:10px}button{width:100%;min-height:48px;border:0;border-radius:12px;background:#d9a441;color:#0a2430;font-size:16px;font-weight:800;cursor:pointer;margin-top:12px}.badge{display:inline-block;background:#fdf1dc;color:#8a6116;font-weight:800;font-size:12px;border-radius:99px;padding:4px 10px}</style></head><body><div class="card"><span class="badge">Heads up</span><h1>Sorry to hear it — tell us what's off</h1><p>${escapeHtml(`Your crew will be told right away and it's on them to make ${svc} right — that's how standing works here.`)}</p><form method="post" action="${action}"><textarea name="note" maxlength="500" placeholder="What happened? (optional)"></textarea><button type="submit">Send it — flag the issue</button></form></div></body></html>`;
+  // THE 👎 DOOR NEEDS THE REPORT MORE THAN THE 👍 DOES. Someone about to say
+  // what went wrong should be looking at what the crew photographed while
+  // they write it — it makes the note specific ("the port side, third photo")
+  // instead of a sentence ops has to go and interpret. Never throws: see
+  // signedJobPhotosOrNone.
+  const strip = photoStripHtml(await signedJobPhotosOrNone(conf.job_id as string | null));
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Something's off — LakeLife</title><style>body{font-family:system-ui,sans-serif;background:#f2f6f7;margin:0;display:grid;place-items:center;min-height:100vh;padding:20px;color:#20343d}.card{background:#fff;border-radius:16px;max-width:420px;padding:28px;box-shadow:0 8px 30px rgba(10,36,48,.12)}h1{font-size:20px;margin:10px 0 8px}p{font-size:14.5px;line-height:1.5;color:#5D7681}textarea{width:100%;box-sizing:border-box;min-height:90px;border:1.5px solid #d7e0e3;border-radius:12px;padding:10px;font:inherit;font-size:15px;margin-top:10px}button{width:100%;min-height:48px;border:0;border-radius:12px;background:#d9a441;color:#0a2430;font-size:16px;font-weight:800;cursor:pointer;margin-top:12px}.badge{display:inline-block;background:#fdf1dc;color:#8a6116;font-weight:800;font-size:12px;border-radius:99px;padding:4px 10px}</style></head><body><div class="card"><span class="badge">Heads up</span><h1>Sorry to hear it — tell us what's off</h1><p>${escapeHtml(`Your crew will be told right away and it's on them to make ${svc} right — that's how standing works here.`)}</p>${strip}<form method="post" action="${action}"><textarea name="note" maxlength="500" placeholder="What happened? (optional)"></textarea><button type="submit">Send it — flag the issue</button></form></div></body></html>`;
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
 

@@ -1,6 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { htmlPage } from "@/app/a/[token]/respond";
 import { recordJobVerdict } from "@/lib/job-verdict";
+import { signedJobPhotosOrNone } from "@/lib/photos";
 
 /**
  * Post-job quality check — 👍 ALL GOOD. GET is SAFE (renders a confirm button;
@@ -68,6 +69,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
     true,
     new URL(req.url).pathname,
     "All good 👍",
+    await signedJobPhotosOrNone(conf.job_id as string | null),
   );
 }
 

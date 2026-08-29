@@ -8,6 +8,8 @@ import { uploadJobPhoto, completeJob, submitFlag, getJobPhotoUrls } from "@/app/
 import { WhoWasHere } from "@/components/WhoWasHere";
 import { ArrivalSheet } from "@/components/ArrivalSheet";
 import { completionBlock } from "@/lib/arrival";
+import { shotProgress } from "@/lib/shot-list";
+import { WalkAround } from "@/components/WalkAround";
 import { toast } from "@/components/Toast";
 import type { VendorStop } from "@/app/vendor/data";
 
@@ -24,6 +26,13 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
   const fileRef = useRef<HTMLInputElement>(null);
   const [count, setCount] = useState(stop.photo_count);
   const [thumbs, setThumbs] = useState<string[]>([]);
+  // Which named shots are in. Local as well as from the row, so a chip ticks
+  // the moment the upload returns rather than after a refresh.
+  const [shot, setShot] = useState<string[]>(stop.shot_slots);
+  // Which slot the next file belongs to. A ref, not state: it is read inside
+  // the change handler the click itself triggers, and a state write would not
+  // have landed yet.
+  const pendingSlot = useRef<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [done, setDone] = useState(stop.status === "complete" || stop.status === "paid");
   const [completing, setCompleting] = useState(false);
@@ -39,6 +48,9 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
 
   const min = stop.min_photos;
   const enough = count >= min;
+  // The walk-around. `canComplete` mirrors `enough` on purpose — 0146 left the
+  // gate a COUNT, and the card must not invent a block the server has not got.
+  const progress = shotProgress(stop.photo_slots, shot, count, min);
 
   // 0084's trigger is the real gate; this is so the crew reads a sentence
   // instead of meeting a database error with their thumb on the button.
@@ -60,21 +72,34 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
     if (!files || files.length === 0) return;
     setUploading(true);
     let latest = count;
+    // Whatever slot the crew tapped, taken once for the whole batch: three
+    // shots of the hull are three hull photos.
+    const slot = pendingSlot.current;
+    pendingSlot.current = null;
+    let landed = false;
     for (const file of Array.from(files)) {
       const fd = new FormData();
       fd.append("photo", file);
+      if (slot) fd.append("slot", slot);
       const res = await uploadJobPhoto(stop.id, fd);
       if (!res.ok) {
         toast(res.error ?? "Photo failed to upload.");
         continue;
       }
+      landed = true;
       latest = res.photoCount ?? latest + 1;
     }
     setCount(latest);
+    // Only tick the chip if something actually got through. Ticking on a
+    // failed upload would show a walk-around as done with nothing behind it.
+    if (slot && landed) setShot((prev) => (prev.includes(slot) ? prev : [...prev, slot]));
     setThumbs(await getJobPhotoUrls(stop.id));
     setUploading(false);
     if (fileRef.current) fileRef.current.value = "";
-    if (latest < min) toast(`${min - latest} more photo${min - latest === 1 ? "" : "s"} needed to close this job.`);
+    // Say what is MISSING, not how many are left. Recomputed here because
+    // `progress` above is a render-time snapshot of the counts we just moved.
+    const after = shotProgress(stop.photo_slots, slot && landed ? [...shot, slot] : shot, latest, min);
+    if (!after.canComplete || after.missing.length > 0) toast(after.message);
   }
 
   async function markComplete() {
@@ -179,6 +204,16 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
           >
             📷 {count} / {min} photo{min === 1 ? "" : "s"} {enough ? "— ready to complete" : "— required to complete"}
           </div>
+
+          {/* One component, two doors — see WalkAround. */}
+          <WalkAround
+            progress={progress}
+            uploading={uploading}
+            onPick={(slug) => {
+              pendingSlot.current = slug;
+              fileRef.current?.click();
+            }}
+          />
           {thumbs.length > 0 && (
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               {thumbs.map((u, i) => (

@@ -13,6 +13,8 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { navUrl } from "@/lib/navlink";
 import { toast } from "@/components/Toast";
+import { shotProgress } from "@/lib/shot-list";
+import { WalkAround } from "@/components/WalkAround";
 import { uploadJobPhoto, completeJob, submitFlag } from "@/app/vendor/actions";
 import { crewCureJob } from "@/app/vendor/job-detail-actions";
 import { FlagModal } from "@/components/VendorStopCard";
@@ -52,6 +54,8 @@ export function CrewJobActions({
   address,
   photoCount,
   minPhotos,
+  photoSlots,
+  shotSlots,
   status,
   isCorrection,
 }: {
@@ -59,12 +63,19 @@ export function CrewJobActions({
   address: string | null;
   photoCount: number;
   minPhotos: number;
+  /** The service's named walk-around (0146). Empty for a package visit. */
+  photoSlots: string[];
+  /** Which of those already have a photo, from this job's rows. */
+  shotSlots: string[];
   status: string;
   isCorrection: boolean;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [count, setCount] = useState(photoCount);
+  const [shot, setShot] = useState<string[]>(shotSlots);
+  // A ref, not state: read inside the change handler the click itself fires.
+  const pendingSlot = useRef<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [done, setDone] = useState(status === "complete" || status === "paid");
@@ -74,24 +85,33 @@ export function CrewJobActions({
     if (!files || files.length === 0) return;
     setUploading(true);
     let latest = count;
+    // Whichever chip was tapped, for the whole batch: three shots of the hull
+    // are three hull photos.
+    const slot = pendingSlot.current;
+    pendingSlot.current = null;
+    let landed = false;
     for (const file of Array.from(files)) {
       const fd = new FormData();
       fd.append("photo", file);
+      if (slot) fd.append("slot", slot);
       const res = await uploadJobPhoto(jobId, fd);
       if (!res.ok) {
         toast(res.error ?? "Photo failed to upload.");
         continue;
       }
+      landed = true;
       latest = res.photoCount ?? latest + 1;
     }
     setCount(latest);
+    // Only tick the chip if something got through — a ticked chip with no
+    // photo behind it is a walk-around that lies.
+    if (slot && landed) setShot((prev) => (prev.includes(slot) ? prev : [...prev, slot]));
     setUploading(false);
     if (fileRef.current) fileRef.current.value = "";
     router.refresh(); // the gallery above is server-rendered from signed URLs
-    if (latest < minPhotos) {
-      const need = minPhotos - latest;
-      toast(`${need} more photo${need === 1 ? "" : "s"} needed to close this job.`);
-    }
+    // Name what is missing rather than counting it.
+    const after = shotProgress(photoSlots, slot && landed ? [...shot, slot] : shot, latest, minPhotos);
+    if (!after.canComplete || after.missing.length > 0) toast(after.message);
   }
 
   async function markComplete() {
@@ -110,6 +130,7 @@ export function CrewJobActions({
   }
 
   const enough = minPhotos <= 0 || count >= minPhotos;
+  const progress = shotProgress(photoSlots, shot, count, minPhotos);
 
   return (
     <div className="ll-card ll-card-pad">
@@ -122,6 +143,15 @@ export function CrewJobActions({
           ? "This is the free make-it-right visit — photos are still required before it can be closed."
           : "No photos, no completion, no payout. The photos are what settle a question months later."}
       </p>
+
+      <WalkAround
+        progress={progress}
+        uploading={uploading}
+        onPick={(slug) => {
+          pendingSlot.current = slug;
+          fileRef.current?.click();
+        }}
+      />
 
       <input
         ref={fileRef}

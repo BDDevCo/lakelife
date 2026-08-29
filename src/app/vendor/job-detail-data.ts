@@ -52,7 +52,7 @@ export async function assertVendorJob(jobId: string) {
       // Deliberately NO customer_price / vendor_cost: this is the crew code path,
       // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
       // those columns out of reach by construction (settleJob re-loads them ops-side).
-      .select("id, status, vendor_id, service_id, date, property_id, group_id, services(name, min_photos)")
+      .select("id, status, vendor_id, service_id, date, property_id, group_id, services(name, min_photos, required_photo_slots)")
       .eq("id", jobId)
       .maybeSingle(),
   );
@@ -115,6 +115,13 @@ export interface CrewJobDetail {
   /** Package-visit leg NAMES only — never a leg price. */
   legs: string[];
   minPhotos: number;
+  /**
+   * The named walk-around for this service (0146). EMPTY FOR A PACKAGE VISIT
+   * — same reason as VendorStop.photo_slots: a package's gate is the sum of
+   * its legs and two legs can both want an "overall", so a merged list would
+   * tick one leg's slot off with the other leg's photo.
+   */
+  photoSlots: string[];
   photoCount: number;
   photos: JobPhoto[];
   /** Rule 3: non-null ONLY on the day of this crew's job at this property. */
@@ -145,7 +152,8 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
   const today = todayLakeDate();
   const date = (job.date as string | null) ?? null;
   const isToday = date != null && date === today;
-  const svc = one(job.services) as { name?: string; min_photos?: number } | null;
+  const svc = one(job.services) as
+    { name?: string; min_photos?: number; required_photo_slots?: string[] } | null;
 
   // The ONE extra job column the gate deliberately doesn't carry. Narrow by
   // hand: never select("*") on jobs (customer_price/vendor_cost/margin).
@@ -210,6 +218,8 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
   // src/app/vendor/actions.ts. What's shown here is only the label; that
   // action remains the authority that refuses an under-photographed job.
   let minPhotos = svc?.min_photos ?? 0;
+  // The walk-around, and only for a single-service visit — see photoSlots.
+  let photoSlots: string[] = job.group_id ? [] : svc?.required_photo_slots ?? [];
   let legs: string[] = [];
   if (job.group_id) {
     // A failed read leaves minPhotos at the ANCHOR service's minimum, so the
@@ -226,6 +236,7 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
         .order("created_at", { ascending: true }),
     );
     if (items && items.length > 0) {
+      photoSlots = [];
       minPhotos = items.reduce((sum, it) => {
         const ls = one(it.services) as { min_photos?: number } | null;
         return sum + (ls?.min_photos ?? 0);
@@ -332,6 +343,7 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
     unitName: stop?.unit_name ?? null,
     legs,
     minPhotos,
+    photoSlots,
     photoCount: count ?? 0,
     photos,
     gateCode,
