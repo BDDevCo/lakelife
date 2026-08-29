@@ -504,3 +504,116 @@ describe("why there is no crew, when there is none", () => {
     expect(actions).toContain('crewGap?: "lake" | "service" | null');
   });
 });
+
+/**
+ * CUSTODY (0145) — the gates run because the SERVICE holds property, not
+ * because its price happened to be shaped a certain way.
+ *
+ * Before 0145 `input.storage` was only ever set inside `if (job.group_id)`,
+ * and only when a package leg was priced `seasonal_plus_perdiem`. Three ACTIVE
+ * standalone services — Boat storage & winterize, Jet ski winterize & store,
+ * Water toy prep & storage — took custody through the single-service path and
+ * met none of the three gates. Nothing was ever booked through them only
+ * because every vendor on the platform is a fixture dispatch skips.
+ */
+describe("the custody gates", () => {
+  const storer = (over: Partial<CrewCandidate> = {}) =>
+    crew({
+      serviceTypes: ["Boat storage & winterize"],
+      garagekeepersExpiry: "2027-04-01",
+      storageTypes: ["indoor"],
+      storageCapacityFeet: 100,
+      storageCommittedFeet: 0,
+      ...over,
+    });
+  const custody = (over: Partial<DispatchInput> = {}) =>
+    input({
+      serviceName: "Boat storage & winterize",
+      storage: { tier: null, boatFeet: 22 },
+      ...over,
+    });
+
+  it("refuses a crew with no garagekeepers policy", () => {
+    // The whole reason the gate exists: general liability excludes damage to
+    // property in the vendor's own care, custody and control.
+    const c = storer({ garagekeepersExpiry: null });
+    expect(isEligible(c, custody({ crews: [c] }))).toBe(false);
+  });
+
+  it("refuses a crew whose garagekeepers policy has expired", () => {
+    const c = storer({ garagekeepersExpiry: "2026-07-19" }); // todayISO is 2026-07-20
+    expect(isEligible(c, custody({ crews: [c] }))).toBe(false);
+  });
+
+  it("checks the insurance even when the visit names no barn type", () => {
+    // A standalone custody service declares no indoor/outdoor tier. That must
+    // stand the TIER gate down, never the insurance one.
+    const c = storer({ garagekeepersExpiry: null, storageTypes: [] });
+    expect(isEligible(c, custody({ storage: { tier: null, boatFeet: 22 }, crews: [c] })))
+      .toBe(false);
+  });
+
+  it("does NOT demand a barn type the visit never asked for", () => {
+    // tier null + a crew declaring only outdoor: eligible. Refusing here would
+    // shut the gate on the wrong thing and strand every standalone booking.
+    const c = storer({ storageTypes: ["outdoor"] });
+    expect(isEligible(c, custody({ storage: { tier: null, boatFeet: 22 }, crews: [c] })))
+      .toBe(true);
+  });
+
+  it("still matches the barn type when the visit DOES name one", () => {
+    // The package path derives the tier from band_pricing and must keep
+    // putting the boat in the right building.
+    const c = storer({ storageTypes: ["outdoor"] });
+    expect(isEligible(c, custody({ storage: { tier: "indoor", boatFeet: 22 }, crews: [c] })))
+      .toBe(false);
+  });
+
+  it("refuses a barn without the feet, tier or no tier", () => {
+    const c = storer({ storageCapacityFeet: 30, storageCommittedFeet: 20 }); // 10 free
+    expect(isEligible(c, custody({ storage: { tier: null, boatFeet: 22 }, crews: [c] })))
+      .toBe(false);
+    expect(isEligible(c, custody({ storage: { tier: "indoor", boatFeet: 22 }, crews: [c] })))
+      .toBe(false);
+  });
+
+  it("leaves non-custody work alone — no policy needed to mow a lawn", () => {
+    const c = crew({ serviceTypes: ["Housekeeping"], garagekeepersExpiry: null });
+    expect(isEligible(c, input({ crews: [c] }))).toBe(true);
+  });
+});
+
+describe("0145 wiring: custody is read from the service, not guessed", () => {
+  const src = (p: string) =>
+    readFileSync(new URL(p, import.meta.url), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("dispatch sets the custody gates from takes_custody", () => {
+    const d = src("../app/book/dispatch.ts");
+    expect(d, "the flag must be selected or it is always undefined")
+      .toMatch(/takes_custody/);
+    expect(d, "a standalone custody service must set input.storage")
+      .toMatch(/if \(!storage && svc\.takes_custody\)/);
+  });
+
+  it("keeps the seasonal package path as the way a tier is chosen", () => {
+    // The package route has to pick the right BUILDING, so it still reads
+    // band_pricing.storage_type. The flag only adds a second way in.
+    const d = src("../app/book/dispatch.ts");
+    expect(d).toMatch(/seasonal_plus_perdiem/);
+    expect(d).toMatch(/storage_type/);
+  });
+
+  it("never makes the insurance check conditional on the tier", () => {
+    const g = src("./dispatch.ts");
+    const gate = g.match(/if \(input\.storage\) \{[\s\S]*?\n  \}/)?.[0] ?? "";
+    expect(gate.length, "the custody block was not found — this scan is stale")
+      .toBeGreaterThan(120);
+    const ins = gate.indexOf("garagekeepersExpiry");
+    const tier = gate.indexOf("input.storage.tier &&");
+    expect(ins, "no garagekeepers check inside the custody block").toBeGreaterThan(-1);
+    expect(tier, "the tier check should be the conditional one").toBeGreaterThan(-1);
+    expect(ins, "insurance must be checked before, and independently of, the tier")
+      .toBeLessThan(tier);
+  });
+});

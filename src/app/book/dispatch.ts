@@ -86,7 +86,9 @@ export async function buildCandidates(
      *  component rate means no rate at all (legs are capabilities). */
     components?: VisitComponent[];
     /** Present when the visit stores the boat — loads the feet ledger. */
-    storage?: { tier: "outdoor" | "indoor"; boatFeet: number } | null;
+    /** tier is null for a standalone custody service (0145) — it names no
+     *  building, so only the insurance and the free feet can be checked. */
+    storage?: { tier: "outdoor" | "indoor" | null; boatFeet: number } | null;
     /** Re-dispatch: this group's OWN reserved stay must not count against
      *  the incumbent barn (the committed feet ARE this boat). */
     excludeGroupId?: string | null;
@@ -397,7 +399,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   // carries no reasonNoFit — we don't know why, and won't pretend to.
   const jobRes = await admin
     .from("jobs")
-    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, est_minutes, services(name, pricing_model, est_minutes)")
+    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, est_minutes, services(name, pricing_model, est_minutes, takes_custody, band_pricing)")
     .eq("id", jobId)
     .maybeSingle();
   if (jobRes.error) {
@@ -408,7 +410,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   if (!job || !job.service_id || !job.date) {
     return { assigned: false, decision: { ok: false, reasonNoFit: "no_crew_for_service" } };
   }
-  const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string; est_minutes?: number } | null;
+  const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string; est_minutes?: number; takes_custody?: boolean; band_pricing?: Record<string, unknown> | null } | null;
   let profile: PricingProfile | null;
   try {
     profile = await loadPricingProfileById(admin, job.property_id as string);
@@ -421,7 +423,8 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   // Package visits (S2): the job's line items are its legs. Every leg is a
   // capability the crew must cover; a storage leg brings the custody gates.
   let components: VisitComponent[] | undefined;
-  let storage: { tier: "outdoor" | "indoor"; boatFeet: number } | null = null;
+  // tier is null for a standalone custody service, which names no building.
+  let storage: { tier: "outdoor" | "indoor" | null; boatFeet: number } | null = null;
   if (job.group_id) {
     const itemsRes = await admin
       .from("job_items")
@@ -472,6 +475,25 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
         };
       }
     }
+  }
+
+  // A SINGLE-SERVICE JOB CAN HOLD A BOAT TOO (0145).
+  //
+  // Everything above runs only inside `if (job.group_id)`, and only when a leg
+  // is priced by the season — so custody used to be inferred from two
+  // accidents: that the booking came through the package wizard, and that one
+  // of its legs happened to be seasonal. Neither is what makes a job custody.
+  // Three ACTIVE standalone services held customer property and reached crews
+  // with no insurance check at all.
+  //
+  // `takes_custody` says it directly. No tier: a standalone names no building,
+  // so the barn-type gate stands down while insurance and space still bite.
+  if (!storage && svc.takes_custody) {
+    const declared = (svc.band_pricing as { storage_type?: string } | null)?.storage_type;
+    storage = {
+      tier: declared === "indoor" || declared === "outdoor" ? declared : null,
+      boatFeet: profile.boats.reduce((sum, b) => sum + (Number(b.length_ft) || 0), 0),
+    };
   }
 
   const [propRes, settings] = await Promise.all([

@@ -55,8 +55,10 @@ export interface DispatchInput {
   /** This job's duration (services.est_minutes; packages = Σ legs). Only
    *  consulted when a candidate carries a minute budget (has trucks). */
   jobMinutes?: number;
-  /** Present when the visit includes a storage tier: the custody gates. */
-  storage?: { tier: "outdoor" | "indoor"; boatFeet: number } | null;
+  /** Present when the visit HOLDS the customer's property: the custody gates.
+   *  `tier` is null for a standalone custody service, which declares no
+   *  building — the insurance and the space still gate, the barn type cannot. */
+  storage?: { tier: "outdoor" | "indoor" | null; boatFeet: number } | null;
   crews: CrewCandidate[];
 }
 
@@ -109,7 +111,11 @@ export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
   // right building, and free feet in the seasonal pool. Hard by owner decision.
   if (input.storage) {
     if (!c.garagekeepersExpiry || String(c.garagekeepersExpiry) < input.todayISO) return false;
-    if (!(c.storageTypes ?? []).includes(input.storage.tier)) return false;
+    // The barn TYPE is only checkable when the visit named one. A package with
+    // a seasonal leg does; a standalone custody service does not, and refusing
+    // every crew for failing to match a tier that was never asked for would
+    // shut the gate on the wrong thing. Insurance and space still bite.
+    if (input.storage.tier && !(c.storageTypes ?? []).includes(input.storage.tier)) return false;
     const free = (c.storageCapacityFeet ?? 0) - (c.storageCommittedFeet ?? 0);
     if (free < input.storage.boatFeet) return false;
   }
