@@ -118,7 +118,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
     "the open jobs",
     await admin
     .from("jobs")
-    .select("id, date, customer_price, service_id, property_id, is_rush, est_minutes, created_at, services(name, pricing_model, est_minutes, takes_custody), properties(lake_id, lat, lng, lakes(name))")
+    .select("id, date, customer_price, service_id, property_id, is_rush, est_minutes, created_at, pickup_lat, pickup_lng, services(name, pricing_model, est_minutes, takes_custody), properties(lake_id, lat, lng, lakes(name))")
     .eq("status", "requested")
     .is("vendor_id", null)
     .is("group_id", null) // package visits are routed, never cold-claimed — a claim can't price multi-leg work. This filter is about MULTI-LEG, not custody: a standalone custody service carries no group and passes straight through it. takes_custody below is what guards custody.
@@ -310,7 +310,11 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       }
     }
 
-    const miles = milesBetween(prop?.lat ?? null, prop?.lng ?? null, vendor.base_lat, vendor.base_lng);
+    // 0148: distance to the FIRST stop. On a collection job that is the yard
+    // the boat wintered in, which can be a different lake from the customer's.
+    const jobLat = (j as { pickup_lat?: number | null }).pickup_lat ?? prop?.lat ?? null;
+    const jobLng = (j as { pickup_lng?: number | null }).pickup_lng ?? prop?.lng ?? null;
+    const miles = milesBetween(jobLat, jobLng, vendor.base_lat, vendor.base_lng);
     out.push({
       id: j.id as string,
       serviceName: svc?.name ?? "Service",

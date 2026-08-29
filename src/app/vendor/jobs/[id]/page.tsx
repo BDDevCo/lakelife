@@ -151,6 +151,27 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
           </p>
         )}
 
+        {/* THE BOAT IS NOT AT THE HOUSE (0148).
+            Spring collection is the only work where the first stop is not the
+            customer's property. Both addresses show, in the order the crew
+            drives them — the pickup NEVER replaces the property, because the
+            boat is being brought back to it. */}
+        {job.pickupAddress ? (
+          <>
+            <div style={{ padding: "10px 12px", background: "var(--sun-soft)", border: "1px solid #ecd9ad", borderRadius: 10, margin: "0 0 10px" }}>
+              <p style={{ fontSize: 12.5, fontWeight: 700, margin: "0 0 2px", color: "#7a5a1e" }}>
+                ⛵ Collect the boat here first
+              </p>
+              <p style={{ fontSize: 14, margin: "0 0 8px" }}>{job.pickupAddress}</p>
+              <CrewNavigateButton lat={job.pickupLat} lng={job.pickupLng} address={job.pickupAddress} />
+              <p className="mut" style={{ fontSize: 12, margin: "8px 0 0", lineHeight: 1.5 }}>
+                It wintered here — check with whoever&apos;s holding it before you load up.
+              </p>
+            </div>
+            <p className="mut" style={{ fontSize: 12.5, fontWeight: 700, margin: "0 0 2px" }}>Then to the property</p>
+          </>
+        ) : null}
+
         <p style={{ fontSize: 14, margin: "0 0 2px" }}>{job.address ?? "Address on file"}</p>
         {subline && <p className="mut" style={{ fontSize: 12.5, margin: "0 0 10px" }}>{subline}</p>}
 

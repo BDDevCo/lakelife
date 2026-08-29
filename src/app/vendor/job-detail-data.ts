@@ -52,7 +52,7 @@ export async function assertVendorJob(jobId: string) {
       // Deliberately NO customer_price / vendor_cost: this is the crew code path,
       // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
       // those columns out of reach by construction (settleJob re-loads them ops-side).
-      .select("id, status, vendor_id, service_id, date, property_id, group_id, services(name, min_photos, required_photo_slots)")
+      .select("id, status, vendor_id, service_id, date, property_id, group_id, pickup_address, pickup_lat, pickup_lng, services(name, min_photos, required_photo_slots)")
       .eq("id", jobId)
       .maybeSingle(),
   );
@@ -108,6 +108,15 @@ export interface CrewJobDetail {
   address: string | null;
   lat: number | null;
   lng: number | null;
+  /**
+   * WHERE THE BOAT IS (0148), when that is not the property above. Spring
+   * collection only. Null on every ordinary visit, and the UI must show the
+   * property address in that case — this never REPLACES the address, because
+   * the boat comes back to the property afterwards.
+   */
+  pickupAddress: string | null;
+  pickupLat: number | null;
+  pickupLng: number | null;
   lakeName: string | null;
   ownerName: string | null;
   facts: string;
@@ -337,6 +346,9 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
     address,
     lat,
     lng,
+    pickupAddress: (job.pickup_address as string | null) ?? null,
+    pickupLat: (job.pickup_lat as number | null) ?? null,
+    pickupLng: (job.pickup_lng as number | null) ?? null,
     lakeName,
     ownerName,
     facts: stop?.facts ?? "",

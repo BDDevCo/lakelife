@@ -9,6 +9,7 @@ import { RUSH_OPEN_HOUR, rushPrice } from "@/lib/rush";
 import { getAvailability, createBookingBatch, type RushWindow } from "@/app/book/actions";
 import { toast } from "@/components/Toast";
 import { TosAgreeModal } from "@/components/TosAgreeModal";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 
 interface Service {
   id: string;
@@ -16,6 +17,8 @@ interface Service {
   price: number;
   frequency_options: string[];
   is_water_work: boolean;
+  /** 0148 — spring collection: this visit does NOT happen at their property. */
+  needs_pickup_spot: boolean;
 }
 interface Season {
   start: string | null;
@@ -85,6 +88,10 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const [rush, setRush] = useState<RushWindow | null>(null);
   const [rushFallback, setRushFallback] = useState<"roll" | "cancel">("roll");
   const [busy, setBusy] = useState(false);
+  // 0148: where the boat wintered. Only ever asked by services that say so.
+  const [pickup, setPickup] = useState<{ address: string; lat: number | null; lng: number | null }>(
+    { address: "", lat: null, lng: null },
+  );
   const [tosOpen, setTosOpen] = useState(false);
   /** What came back from a batch that only partly landed — stays on screen
    *  (a toast fades, and a visit nobody booked must not fade with it). */
@@ -179,6 +186,9 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const rushOpen = rush != null && rush.nowHour >= RUSH_OPEN_HOUR && rush.nowHour < rush.cutoffHour;
   const pickedIsRush = rushOpen && picked.includes(today);
   const rushAllIn = rush ? rushPrice(service.price, rush.surchargePct) : service.price;
+  // Blank until they answer. The SERVER is what actually refuses (the form can
+  // be bypassed); this only stops them tapping a button that cannot succeed.
+  const needsSpot = service.needs_pickup_spot && pickup.address.trim() === "";
   const totalPrice = picked.length === 0
     ? 0
     : service.price * (picked.length - (pickedIsRush ? 1 : 0)) + (pickedIsRush ? rushAllIn : 0);
@@ -193,6 +203,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
       service.frequency_options[freq] ?? "",
       pickedIsRush ? rushFallback : undefined,
       tosAccepted,
+      service.needs_pickup_spot ? pickup : undefined,
     );
     setBusy(false);
     if (res.needsTos) { setTosOpen(true); return; }
@@ -509,15 +520,41 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
             </div>
           )}
 
+          {/* WHERE IS THE BOAT? (0148)
+              Spring collection is the only work we sell that does not happen at
+              their own property — the boat spent the winter in somebody else's
+              yard. Asked here rather than assumed, because the alternative is a
+              crew at a lake house with no boat in the driveway. The server
+              refuses the booking without it; this field is the courtesy, not
+              the gate. */}
+          {service.needs_pickup_spot && (
+            <div className="ll-field" style={{ marginTop: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                Where is the boat now?
+              </label>
+              <AddressAutocomplete
+                value={pickup.address}
+                onChange={(address) => setPickup((p) => ({ ...p, address, lat: null, lng: null }))}
+                onSelect={(sel) => setPickup({ address: sel.address, lat: sel.lat, lng: sel.lng })}
+              />
+              <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
+                The marina, storage yard or barn it wintered in — that&apos;s where the crew
+                will collect it. Make sure whoever&apos;s holding it knows we&apos;re coming.
+              </p>
+            </div>
+          )}
+
           <p className="mut" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
             {picked.length > 1
               ? `Confirming creates ${picked.length} separate requests — no standing schedule, nothing repeats. Autopay charges each one only after that visit is completed and its photos are uploaded, never before.`
               : "Confirming creates a request. Autopay charges only after the service is completed and its photos are uploaded — never before."}
           </p>
 
-          <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={() => confirm()} disabled={unavailable || picked.length === 0 || busy}>
+          <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={() => confirm()} disabled={unavailable || picked.length === 0 || busy || needsSpot}>
             {busy
               ? "Booking…"
+              : needsSpot
+                ? "Tell us where the boat is"
               : picked.length > 1
                 ? `Book ${picked.length} visits — ${formatPrice(totalPrice)}`
                 : pickedIsRush
