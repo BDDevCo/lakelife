@@ -604,6 +604,21 @@ describe("0145 wiring: custody is read from the service, not guessed", () => {
     expect(d).toMatch(/storage_type/);
   });
 
+  it("BOTH claim-board callers pass the flag — a gate nobody calls is not a gate", () => {
+    // canClaim's first line refuses custody, and for as long as neither caller
+    // passed `storage` it was dead code: the board listed a standalone custody
+    // job as claimable and the action wrote the claim. The behaviour is proved
+    // in src/app/vendor/custody-claim-board.test.ts; this is the cheap scan
+    // that catches the field being dropped from either select() later.
+    for (const f of ["../app/vendor/open-data.ts", "../app/vendor/open-actions.ts"]) {
+      const d = src(f);
+      expect(d, `${f}: takes_custody must be SELECTED or it is always undefined`)
+        .toMatch(/services\([^)]*takes_custody/);
+      expect(d, `${f}: the flag must reach canClaim as storage`)
+        .toMatch(/storage:\s*svc\??\.takes_custody/);
+    }
+  });
+
   it("never makes the insurance check conditional on the tier", () => {
     const g = src("./dispatch.ts");
     const gate = g.match(/if \(input\.storage\) \{[\s\S]*?\n  \}/)?.[0] ?? "";
