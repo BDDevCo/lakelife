@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { execSync } from "node:child_process";
 import { holdRefusal, recipientIsHeld } from "./notice-hold";
 
 /**
@@ -165,7 +166,6 @@ describe("the hold is visible on every park screen", () => {
     // 14 call sites used to spell out two props each. If one reverts, the
     // banner silently stops appearing on that screen.
     const app = fileURLToPath(new URL("../app", import.meta.url));
-    const { execSync } = require("node:child_process") as typeof import("node:child_process");
     const out = execSync(`grep -rn "<ParkNav" ${JSON.stringify(app)} || true`).toString();
     const lines = out.trim().split("\n").filter(Boolean);
     expect(lines.length).toBeGreaterThan(10);

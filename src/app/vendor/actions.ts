@@ -1,6 +1,7 @@
 "use server";
 
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createHash } from "node:crypto";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { getMyVendorId } from "./data";
 import { sendSms } from "@/lib/sms";
@@ -91,13 +92,51 @@ export async function uploadJobPhoto(jobId: string, form: FormData): Promise<Act
   const path = `${jobId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   const bytes = new Uint8Array(await file.arrayBuffer());
 
+  // WHAT MAKES THIS A PIECE OF EVIDENCE AND NOT JUST A PICTURE (0146).
+  //
+  // A custody photo has to survive an argument six months later, so three
+  // things are captured that the old four-column row could not hold.
+  //
+  // The HASH is of the bytes we actually stored, taken before the upload, so
+  // "this is the same file, unaltered" is answerable against the object.
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+
+  // The SLOT is which named shot this is — the list lives on
+  // services.required_photo_slots. Free text is refused rather than stored:
+  // a typo'd slot is worse than none, because the screen would show a gap
+  // where a photo actually exists. An unlabelled extra photo is fine.
+  const rawSlot = form.get("slot");
+  const slot = typeof rawSlot === "string" && rawSlot.trim() ? rawSlot.trim().slice(0, 40) : null;
+
+  // The DEVICE TIME is the file's own modified time, kept BESIDE taken_at and
+  // never instead of it. It is NOT EXIF and must never be called capture time.
+  // Its worth is that it can DISAGREE with the server clock.
+  const deviceTime = Number.isFinite(file.lastModified) && file.lastModified > 0
+    ? new Date(file.lastModified).toISOString()
+    : null;
+
+  // WHO uploaded it. jobs.vendor_id is the company; a dispute asks who was
+  // standing at the dock. Best-effort by design — a failed session read must
+  // not refuse a photo the crew is standing there trying to send.
+  let takenBy: string | null = null;
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    takenBy = user?.id ?? null;
+  } catch {
+    // logged rather than surfaced: the photo matters more than its author
+    console.error("[LakeLife] could not attribute a job photo to a person");
+  }
+
   const { error: upErr } = await admin.storage.from("job-photos").upload(path, bytes, {
     contentType: file.type,
     upsert: false,
   });
   if (upErr) return { ok: false, error: upErr.message };
 
-  const { error: rowErr } = await admin.from("job_photos").insert({ job_id: jobId, url: path });
+  const { error: rowErr } = await admin.from("job_photos").insert({
+    job_id: jobId, url: path, slot, sha256, taken_by: takenBy, device_time: deviceTime,
+  });
   if (rowErr) return { ok: false, error: rowErr.message };
 
   // Stamp the crew's clock-in on the first photo (scoring: actual job duration).
