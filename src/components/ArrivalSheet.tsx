@@ -76,6 +76,7 @@ export function ArrivalSheet({
   serviceName,
   address,
   needsInteriorAccess,
+  needsRelease,
   onClose,
   onHeld,
   onNoShow,
@@ -84,6 +85,8 @@ export function ArrivalSheet({
   serviceName: string;
   address: string;
   needsInteriorAccess: boolean;
+  /** 0150: a third party has to hand the boat over before this can start. */
+  needsRelease: boolean;
   onClose: () => void;
   onHeld: () => void;
   onNoShow: () => void;
@@ -309,10 +312,10 @@ export function ArrivalSheet({
                   whether they need to get inside, so a tired crew at the end of
                   a hot afternoon is never the one deciding. */}
               <p style={{ fontSize: 15, marginTop: 0, lineHeight: 1.55 }}>
-                {noAnswerExplainer({ needs_interior_access: needsInteriorAccess }, serviceName)}
+                {noAnswerExplainer({ needs_interior_access: needsInteriorAccess, needs_release: needsRelease }, serviceName)}
               </p>
 
-              {!needsInteriorAccess ? (
+              {!needsInteriorAccess && !needsRelease ? (
                 <button className="ll-btn gold" style={{ width: "100%", marginTop: 6 }} onClick={onClose}>
                   Got it — doing it as booked
                 </button>

@@ -272,6 +272,7 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
           serviceName={stop.service_name ?? "this job"}
           address={stop.address ?? "this stop"}
           needsInteriorAccess={stop.needs_interior_access}
+          needsRelease={stop.needs_release}
           onClose={() => setArriveOpen(false)}
           onHeld={() => { setArriveOpen(false); setHeld(true); router.refresh(); }}
           onNoShow={() => { setArriveOpen(false); setNoShow(true); router.refresh(); }}

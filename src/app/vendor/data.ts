@@ -45,6 +45,8 @@ export interface VendorStop {
   stood_down_reason: string | null;
   /** Decides what "nobody's answering" means for this service. */
   needs_interior_access: boolean;
+  /** 0150: a third party must release the boat before this can start. */
+  needs_release: boolean;
   /** Minutes budgeted for THIS visit (0083) — how long to expect to be there. */
   est_minutes: number | null;
 }
@@ -326,6 +328,7 @@ export async function getVendorDay(dateISO?: string): Promise<{ date: string; st
     stood_down_at: r.stood_down_at ?? null,
     stood_down_reason: r.stood_down_reason ?? null,
     needs_interior_access: !!r.needs_interior_access,
+    needs_release: !!r.needs_release,
     est_minutes: r.est_minutes ?? null,
   }));
 

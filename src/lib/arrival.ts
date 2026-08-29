@@ -38,6 +38,8 @@ export type TimedRule = ServiceRule & {
   est_minutes?: number | null;
   duration_bands?: DurationBands | null;
   needs_interior_access?: boolean | null;
+  /** 0150: a third party must hand the customer's property over first. */
+  needs_release?: boolean | null;
 };
 
 /** The profile fields a crew is allowed to correct. Mirrors sanitizeProposed. */
@@ -282,20 +284,49 @@ export type NoAnswerOutcome = "proceed_as_booked" | "no_show";
  * The crew cannot reach the homeowner. Whether that stops the visit depends on
  * one fact the service already carries: do they need to get inside?
  */
-export function noAnswerOutcome(rule: Pick<TimedRule, "needs_interior_access">): NoAnswerOutcome {
-  return rule.needs_interior_access ? "no_show" : "proceed_as_booked";
+/**
+ * WHAT THE CREW CANNOT DO ON THEIR OWN (0150).
+ *
+ * `needs_release` is REQUIRED here, deliberately. The rule below is a guard,
+ * and the defect this codebase keeps producing is a guard whose input nobody
+ * passes: an optional field type-checks at every call site that forgets it,
+ * and the forgetting is silent. Required means the compiler names every reader
+ * that has not been told about a release.
+ */
+export type AccessRule = {
+  needs_interior_access?: boolean | null;
+  needs_release: boolean | null;
+};
+
+/**
+ * THE DRIVEWAY RULE, in one function.
+ *
+ * The crew cannot reach the homeowner. Whether that stops the visit depends on
+ * whether they can get at the thing at all — through a door somebody has to
+ * open, or through a gate somebody has to open. Both are the same rule, which
+ * the owner stated once: if you don't need to get IN, do the work.
+ */
+export function noAnswerOutcome(rule: AccessRule): NoAnswerOutcome {
+  return rule.needs_interior_access || rule.needs_release ? "no_show" : "proceed_as_booked";
 }
 
-export function noAnswerExplainer(
-  rule: Pick<TimedRule, "needs_interior_access">,
-  serviceName: string,
-): string {
-  return noAnswerOutcome(rule) === "proceed_as_booked"
-    ? `No answer is fine for ${serviceName} — do the work as booked and we'll bill the ` +
-      `original amount. Anything you flagged goes to them separately.`
-    : `${serviceName} needs to get inside. If you can't, record a no-show — don't ` +
-      `mark it complete. We'll ask them to reschedule; if they'd rather not, the ` +
-      `cancellation policy applies.`;
+export function noAnswerExplainer(rule: AccessRule, serviceName: string): string {
+  if (noAnswerOutcome(rule) === "proceed_as_booked") {
+    return `No answer is fine for ${serviceName} — do the work as booked and we'll bill the ` +
+      `original amount. Anything you flagged goes to them separately.`;
+  }
+  // A crew who cannot get a boat released must not be told to knock harder:
+  // there is no door here, and the thing they came for is behind somebody
+  // else's gate. Same outcome, different sentence, because the next thing
+  // they should do is different.
+  if (rule.needs_release) {
+    return `${serviceName} needs whoever's holding the boat to release it. If they won't, ` +
+      `record a no-show — don't mark it complete, and don't take the boat any other way. ` +
+      `We'll ask the owner to sort it out and reschedule.`;
+  }
+  return `${serviceName} needs to get inside. If you can't, record a no-show — don't ` +
+    `mark it complete. We'll ask them to reschedule; if they'd rather not, the ` +
+    `cancellation policy applies.`;
 }
 
 /**

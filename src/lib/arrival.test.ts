@@ -141,28 +141,53 @@ describe("durations a person can read at 7:45am", () => {
 });
 
 describe("THE DRIVEWAY RULE — nobody is answering", () => {
+  // 0150 made needs_release a REQUIRED field of AccessRule, so every caller —
+  // these tests included — has to say what it is. That is the point: an
+  // optional flag is a guard whose input nobody passes.
+  const access = (over: Partial<{ needs_interior_access: boolean | null; needs_release: boolean | null }> = {}) =>
+    ({ needs_interior_access: false, needs_release: false, ...over });
+
   it("outdoor work goes ahead at the scope booked", () => {
-    expect(noAnswerOutcome(PIER)).toBe("proceed_as_booked");
-    expect(noAnswerOutcome(LAWN)).toBe("proceed_as_booked");
+    expect(noAnswerOutcome({ ...PIER, needs_release: false })).toBe("proceed_as_booked");
+    expect(noAnswerOutcome({ ...LAWN, needs_release: false })).toBe("proceed_as_booked");
   });
 
   it("work that needs to get inside becomes a no-show", () => {
-    expect(noAnswerOutcome(CLEAN)).toBe("no_show");
+    expect(noAnswerOutcome({ ...CLEAN, needs_release: false })).toBe("no_show");
+  });
+
+  it("work that needs a BOAT RELEASED is also a no-show (0150)", () => {
+    // The live defect this fixed: both collection services carried
+    // needs_interior_access = false, so the rule said proceed_as_booked and
+    // the crew was told to do the work and bill it — for a boat behind
+    // somebody else's locked gate.
+    expect(noAnswerOutcome(access({ needs_release: true }))).toBe("no_show");
   });
 
   it("tells the crew what to do rather than making them decide", () => {
-    expect(noAnswerExplainer(LAWN, "Lawn mowing & trim")).toContain("do the work as booked");
-    const inside = noAnswerExplainer(CLEAN, "Housekeeping");
+    expect(noAnswerExplainer({ ...LAWN, needs_release: false }, "Lawn mowing & trim"))
+      .toContain("do the work as booked");
+    const inside = noAnswerExplainer({ ...CLEAN, needs_release: false }, "Housekeeping");
     expect(inside).toContain("record a no-show");
     expect(inside).toContain("don't");            // ...mark it complete
     expect(inside).toContain("cancellation policy");
   });
 
-  it("a service with the flag unset is treated as outdoor work", () => {
+  it("does NOT tell a crew with no boat to knock harder", () => {
+    // Same outcome as interior access, different next action. Sending somebody
+    // to look for a door at a storage yard is the kind of instruction that
+    // gets ignored, and then so is the rest of the sentence.
+    const rel = noAnswerExplainer(access({ needs_release: true }), "Boat return & splash");
+    expect(rel).toContain("release it");
+    expect(rel).toContain("record a no-show");
+    expect(rel, "there is no door here").not.toContain("get inside");
+  });
+
+  it("a service with both flags unset is treated as outdoor work", () => {
     // Fail toward doing the work. Refusing to mow a lawn because a column was
     // never set would be a worse failure than mowing it.
-    expect(noAnswerOutcome({ needs_interior_access: null })).toBe("proceed_as_booked");
-    expect(noAnswerOutcome({})).toBe("proceed_as_booked");
+    expect(noAnswerOutcome({ needs_interior_access: null, needs_release: null })).toBe("proceed_as_booked");
+    expect(noAnswerOutcome(access())).toBe("proceed_as_booked");
   });
 });
 
