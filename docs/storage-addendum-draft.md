@@ -414,12 +414,15 @@ version before your next storage booking.
 Ordered by what would hurt most. The first is a live defect and is not an
 addendum problem at all.
 
-1. **Close the claim-board custody hole.** A Crew with no garagekeepers policy
-   can claim a boat today, on all three bookable custody services. The rule
-   exists — `canClaim` refuses `input.storage` — but neither caller passes it
-   (`open-data.ts:255`, `open-actions.ts:244`), so the branch is dead code and
-   the board's only custody filter is "no package envelope", which all three
-   satisfy. Same defect 0145 fixed for auto-dispatch, in the larger doorway.
+1. ~~**Close the claim-board custody hole.**~~ **DONE — bf82a8d, merged c27e9e3
+   (29 Aug).** A Crew with no garagekeepers policy could claim a boat off the
+   open board, on all three bookable custody services: `canClaim`'s custody
+   refusal was dead code because neither caller passed `storage`. Both callers
+   now select `takes_custody` and pass it, and the claim ACTION is guarded as
+   well as the listing — hiding a row is a courtesy, the POST is the boundary.
+   The gap-offer path is closed by construction (it keys on `rate_too_high`,
+   and the custody refusal short-circuits first). Verified by reverting each
+   caller in turn.
 
 2. **Decide what the three standalone custody services are.** "Boat storage &
    winterize", "Jet ski winterize & store" and "Water toy prep & storage" are
