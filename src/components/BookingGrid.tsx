@@ -19,6 +19,8 @@ interface Service {
   is_water_work: boolean;
   /** 0148 — spring collection: this visit does NOT happen at their property. */
   needs_pickup_spot: boolean;
+  /** 0150 — somebody else has to hand the boat over before the crew can start. */
+  needs_release: boolean;
 }
 interface Season {
   start: string | null;
@@ -89,8 +91,14 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   const [rushFallback, setRushFallback] = useState<"roll" | "cancel">("roll");
   const [busy, setBusy] = useState(false);
   // 0148: where the boat wintered. Only ever asked by services that say so.
-  const [pickup, setPickup] = useState<{ address: string; lat: number | null; lng: number | null }>(
-    { address: "", lat: null, lng: null },
+  const [pickup, setPickup] = useState<{
+    address: string; lat: number | null; lng: number | null;
+    contact: string; phone: string; releaseConfirmed: boolean;
+  }>(
+    // releaseConfirmed starts FALSE and must stay that way. A pre-ticked box
+    // asserting a fact about the world is how 19 leases got written that
+    // nobody had signed.
+    { address: "", lat: null, lng: null, contact: "", phone: "", releaseConfirmed: false },
   );
   const [tosOpen, setTosOpen] = useState(false);
   /** What came back from a batch that only partly landed — stays on screen
@@ -189,6 +197,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   // Blank until they answer. The SERVER is what actually refuses (the form can
   // be bypassed); this only stops them tapping a button that cannot succeed.
   const needsSpot = service.needs_pickup_spot && pickup.address.trim() === "";
+  const needsRelease = service.needs_release && !pickup.releaseConfirmed;
   const totalPrice = picked.length === 0
     ? 0
     : service.price * (picked.length - (pickedIsRush ? 1 : 0)) + (pickedIsRush ? rushAllIn : 0);
@@ -535,12 +544,52 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
               <AddressAutocomplete
                 value={pickup.address}
                 onChange={(address) => setPickup((p) => ({ ...p, address, lat: null, lng: null }))}
-                onSelect={(sel) => setPickup({ address: sel.address, lat: sel.lat, lng: sel.lng })}
+                onSelect={(sel) => setPickup((p) => ({ ...p, address: sel.address, lat: sel.lat, lng: sel.lng }))}
               />
               <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
                 The marina, storage yard or barn it wintered in — that&apos;s where the crew
-                will collect it. Make sure whoever&apos;s holding it knows we&apos;re coming.
+                will collect it.
               </p>
+
+              {/* WHO OPENS THE GATE (0151). A yard does not hand a boat to a
+                  stranger with a trailer. Name and number are optional — not
+                  every barn has a front desk — but the confirmation is not,
+                  because it is the thing that makes the customer go and do it. */}
+              {service.needs_release && (
+                <div style={{ marginTop: 12 }}>
+                  <label style={{ fontSize: 13, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                    Who should the crew ask for? <span className="mut" style={{ fontWeight: 400 }}>(optional)</span>
+                  </label>
+                  <input
+                    className="ll-input"
+                    value={pickup.contact}
+                    onChange={(e) => setPickup((p) => ({ ...p, contact: e.target.value }))}
+                    placeholder="e.g. Miller's Marine, or Dave next door"
+                    style={{ width: "100%" }}
+                  />
+                  <input
+                    className="ll-input"
+                    type="tel"
+                    inputMode="tel"
+                    value={pickup.phone}
+                    onChange={(e) => setPickup((p) => ({ ...p, phone: e.target.value }))}
+                    placeholder="Their phone number (optional)"
+                    style={{ width: "100%", marginTop: 8 }}
+                  />
+                  <label style={{ display: "flex", gap: 10, alignItems: "flex-start", marginTop: 12, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={pickup.releaseConfirmed}
+                      onChange={(e) => setPickup((p) => ({ ...p, releaseConfirmed: e.target.checked }))}
+                      style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
+                    />
+                    <span style={{ fontSize: 13, lineHeight: 1.5 }}>
+                      I&apos;ve told them a LakeLife crew is collecting it. They won&apos;t
+                      release the boat to us otherwise.
+                    </span>
+                  </label>
+                </div>
+              )}
             </div>
           )}
 
@@ -550,11 +599,13 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
               : "Confirming creates a request. Autopay charges only after the service is completed and its photos are uploaded — never before."}
           </p>
 
-          <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={() => confirm()} disabled={unavailable || picked.length === 0 || busy || needsSpot}>
+          <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={() => confirm()} disabled={unavailable || picked.length === 0 || busy || needsSpot || needsRelease}>
             {busy
               ? "Booking…"
               : needsSpot
                 ? "Tell us where the boat is"
+              : needsRelease
+                ? "Confirm you've told them we're coming"
               : picked.length > 1
                 ? `Book ${picked.length} visits — ${formatPrice(totalPrice)}`
                 : pickedIsRush

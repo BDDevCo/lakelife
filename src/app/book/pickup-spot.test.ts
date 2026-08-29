@@ -111,6 +111,76 @@ describe("the customer is actually asked", () => {
   });
 });
 
+describe("THE RELEASE — somebody has to open the gate (0150/0151)", () => {
+  const grid = () => code("src/components/BookingGrid.tsx");
+
+  const releaseGate = () => {
+    const fn = batchFn();
+    const m = fn.match(/if \(service\.needs_release && !pickup\?\.releaseConfirmed\) \{[\s\S]*?\n  \}/);
+    return m?.[0] ?? "";
+  };
+
+  it("the booking is refused until the customer says they've told the holder", () => {
+    const block = releaseGate();
+    expect(block, "no release gate — the crew drives to a gate nobody expects them at")
+      .not.toBe("");
+    expect(block, "the refusal must return an error").toMatch(/ok: false/);
+  });
+
+  it("THE TICK STARTS EMPTY", () => {
+    // A pre-ticked box asserting a fact about the world is how 19 leases got
+    // written that nobody had signed. This is the same shape of claim.
+    expect(grid(), "releaseConfirmed must initialise false")
+      .toMatch(/releaseConfirmed:\s*false/);
+    expect(grid(), "and the checkbox must be bound to it, not defaulted on")
+      .toMatch(/checked=\{pickup\.releaseConfirmed\}/);
+  });
+
+  it("the confirmation is stamped from the SERVER clock", () => {
+    // A timestamp the browser supplied is a timestamp the browser chose.
+    const fn = batchFn();
+    expect(fn).toMatch(/release_confirmed_at: service\.needs_release \? new Date\(\)\.toISOString\(\)/);
+  });
+
+  it("says what the dead button is waiting for", () => {
+    expect(grid()).toMatch(/Confirm you've told them we're coming/);
+  });
+
+  it("a refused release is a NO-SHOW, not proceed-and-bill", () => {
+    // The live defect 0150 fixed: both collection services had
+    // needs_interior_access = false, so the driveway rule told the crew to do
+    // the work as booked — for a boat behind a locked gate.
+    const arrival = code("src/lib/arrival.ts");
+    expect(arrival, "the rule must consider a release, not just a door")
+      .toMatch(/rule\.needs_interior_access \|\| rule\.needs_release/);
+    expect(arrival, "needs_release must be REQUIRED, so no caller can forget it")
+      .toMatch(/needs_release: boolean \| null;/);
+  });
+
+  it("the crew gets the name, the number, and the truth about the number", () => {
+    const page = code("src/app/vendor/jobs/[id]/page.tsx");
+    expect(page, "who to ask for").toMatch(/job\.pickupContact/);
+    expect(page, "a tappable number").toMatch(/tel:\$\{job\.pickupPhone/);
+    // "No number on file" changes what the crew does before setting off, so
+    // its absence is a fact rather than a blank.
+    expect(page, "the absence of a number must be stated").toMatch(/No number on file/);
+  });
+
+  it("a make-it-right visit still knows where the boat is", () => {
+    // The clone carried property_id and service_id and nothing about where
+    // the thing actually is, so a correction on a collection sent the crew to
+    // the customer's house — where there is no boat, and never was.
+    const d = code("src/lib/disputes.ts");
+    const insert = d.match(/\.insert\(\{[\s\S]*?correction_of: job\.id,[\s\S]*?\}\)/)?.[0] ?? "";
+    expect(insert, "the correction insert was not found — scan is stale").not.toBe("");
+    for (const f of ["pickup_address", "pickup_contact", "pickup_phone", "release_confirmed_at"]) {
+      expect(insert, `${f} is not carried onto the correction visit`)
+        .toMatch(new RegExp(`${f}: job\\.${f}`));
+    }
+    expect(d, "and it must be SELECTED, or it copies undefined").toMatch(/pickup_contact/);
+  });
+});
+
 describe("somebody reads it", () => {
   it("the crew job page shows the pickup, and does NOT lose the property", () => {
     const page = code("src/app/vendor/jobs/[id]/page.tsx");

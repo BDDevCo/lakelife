@@ -37,6 +37,8 @@ interface ServiceRow extends ServiceRule {
   frequency_options: string[];
   /** 0148: this service must be told where the boat is (spring collection). */
   needs_pickup_spot: boolean;
+  /** 0150: a third party has to hand the boat over before the visit starts. */
+  needs_release: boolean;
 }
 
 /** Where the boat actually is, when that is not the customer's property. */
@@ -44,6 +46,14 @@ export interface PickupSpot {
   address: string;
   lat: number | null;
   lng: number | null;
+  /** 0151: who to ask for at the gate, and a number to ring first. Optional —
+   *  not every barn has a front desk, and "no number on file" is itself worth
+   *  telling the crew before a forty-minute drive. */
+  contact?: string;
+  phone?: string;
+  /** 0151: the customer's own statement that they told the holder we're
+   *  coming. Never our authorisation — courier, not witness. */
+  releaseConfirmed?: boolean;
 }
 
 async function loadService(serviceId: string): Promise<ServiceRow | null> {
@@ -53,7 +63,7 @@ async function loadService(serviceId: string): Promise<ServiceRow | null> {
   // white and clickable. A failed read must not reach that branch.
   const data = mustRead("this service", await supabase
     .from("services")
-    .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, is_water_work, daily_capacity, frequency_options, kind, active, needs_pickup_spot")
+    .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, is_water_work, daily_capacity, frequency_options, kind, active, needs_pickup_spot, needs_release")
     .eq("id", serviceId)
     .eq("active", true)
     .or("kind.eq.standalone,solo_bookable.eq.true") // standalone, OR a package leg opened for solo booking (0147 — spring entry)
@@ -385,10 +395,35 @@ export async function createBookingBatch(
       error: "Tell us where the boat is spending the winter, so the crew knows where to collect it.",
     };
   }
+  // HAS ANYBODY TOLD THE YARD? (0151)
+  //
+  // A marina does not hand a boat to a stranger with a trailer. The only
+  // person who can arrange that is the one who put it there, and if they
+  // haven't, the crew makes the drive and comes back empty — which 0150 now
+  // correctly records as a no-show, but a no-show nobody needed.
+  //
+  // Refused server-side, like everything else that matters here. What is
+  // stored is the CUSTOMER'S statement, timestamped; we are not a party to it
+  // and never claim the yard agreed to anything.
+  if (service.needs_release && !pickup?.releaseConfirmed) {
+    return {
+      ok: false,
+      error: "Let whoever's holding the boat know our crew is collecting it, then tick the box — they won't release it to us otherwise.",
+    };
+  }
   // Never carried on a service that did not ask. A stray spot on a mow would
   // be a location the crew has no reason to drive to.
   const pickupCols = service.needs_pickup_spot && pickupAddress !== ""
-    ? { pickup_address: pickupAddress, pickup_lat: pickup?.lat ?? null, pickup_lng: pickup?.lng ?? null }
+    ? {
+        pickup_address: pickupAddress,
+        pickup_lat: pickup?.lat ?? null,
+        pickup_lng: pickup?.lng ?? null,
+        pickup_contact: pickup?.contact?.trim() || null,
+        pickup_phone: pickup?.phone?.trim() || null,
+        // Stamped from the SERVER clock at the moment the booking is accepted,
+        // never from anything the browser sent.
+        release_confirmed_at: service.needs_release ? new Date().toISOString() : null,
+      }
     : {};
 
   // Nothing vanishes: garbage dates and anything past the batch cap come back

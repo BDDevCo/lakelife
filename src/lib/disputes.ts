@@ -199,7 +199,7 @@ export async function crewChooseFix(crewToken: string, dateISO: string): Promise
 
   const { data: job, error: jobErr } = await admin
     .from("jobs")
-    .select("id, property_id, service_id, vendor_id, properties(address, nickname, users(phone, email)), services(name)")
+    .select("id, property_id, service_id, vendor_id, pickup_address, pickup_lat, pickup_lng, pickup_contact, pickup_phone, release_confirmed_at, properties(address, nickname, users(phone, email)), services(name)")
     .eq("id", d.job_id).maybeSingle();
   if (jobErr) return { ok: false, error: readFailedMessage("this job", jobErr) };
   if (!job) return { ok: false, error: "Job not found." };
@@ -212,6 +212,18 @@ export async function crewChooseFix(crewToken: string, dateISO: string): Promise
       property_id: job.property_id, service_id: job.service_id, vendor_id: job.vendor_id,
       date: dateISO, status: "scheduled", customer_price: 0, vendor_cost: 0, margin: 0,
       correction_of: job.id,
+      // THE BOAT HAS NOT MOVED (0151). This clone carried property_id and
+      // service_id and nothing about where the thing actually is, so a
+      // make-it-right on a collection sent the crew to the customer's house —
+      // where there is no boat, and never was. The original visit's pickup
+      // details are the only ones that can be true here; the customer is not
+      // booking anything, so there is nobody to ask again.
+      pickup_address: job.pickup_address ?? null,
+      pickup_lat: job.pickup_lat ?? null,
+      pickup_lng: job.pickup_lng ?? null,
+      pickup_contact: job.pickup_contact ?? null,
+      pickup_phone: job.pickup_phone ?? null,
+      release_confirmed_at: job.release_confirmed_at ?? null,
     })
     .select("id").single();
   if (insErr || !fixJob) return { ok: false, error: insErr?.message ?? "Couldn't book the visit." };

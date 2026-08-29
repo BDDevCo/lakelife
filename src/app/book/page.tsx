@@ -225,6 +225,7 @@ export default async function BookPage() {
             frequency_options: s.frequency_options,
             is_water_work: s.is_water_work,
             needs_pickup_spot: s.needs_pickup_spot,
+            needs_release: s.needs_release,
           }))}
           season={{ start: lake?.ice_out_actual ?? null, end: lake?.pull_deadline ?? null, lake: lake?.name ?? null, provisional: seasonProvisional }}
         />

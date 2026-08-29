@@ -52,7 +52,7 @@ export async function assertVendorJob(jobId: string) {
       // Deliberately NO customer_price / vendor_cost: this is the crew code path,
       // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
       // those columns out of reach by construction (settleJob re-loads them ops-side).
-      .select("id, status, vendor_id, service_id, date, property_id, group_id, pickup_address, pickup_lat, pickup_lng, services(name, min_photos, required_photo_slots)")
+      .select("id, status, vendor_id, service_id, date, property_id, group_id, pickup_address, pickup_lat, pickup_lng, pickup_contact, pickup_phone, release_confirmed_at, services(name, min_photos, required_photo_slots)")
       .eq("id", jobId)
       .maybeSingle(),
   );
@@ -117,6 +117,12 @@ export interface CrewJobDetail {
   pickupAddress: string | null;
   pickupLat: number | null;
   pickupLng: number | null;
+  /** 0151: who to ask for, and a number to ring before driving out. */
+  pickupContact: string | null;
+  pickupPhone: string | null;
+  /** 0151: when the OWNER said they'd told the holder we're coming. Their
+   *  statement, not our authorisation — the crew still asks at the gate. */
+  releaseConfirmedAt: string | null;
   lakeName: string | null;
   ownerName: string | null;
   facts: string;
@@ -349,6 +355,9 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
     pickupAddress: (job.pickup_address as string | null) ?? null,
     pickupLat: (job.pickup_lat as number | null) ?? null,
     pickupLng: (job.pickup_lng as number | null) ?? null,
+    pickupContact: (job.pickup_contact as string | null) ?? null,
+    pickupPhone: (job.pickup_phone as string | null) ?? null,
+    releaseConfirmedAt: (job.release_confirmed_at as string | null) ?? null,
     lakeName,
     ownerName,
     facts: stop?.facts ?? "",
