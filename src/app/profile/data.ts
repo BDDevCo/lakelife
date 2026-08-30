@@ -117,6 +117,10 @@ export interface PricedService {
   price: number;
   frequency_options: string[];
   is_water_work: boolean;
+  /** 0148: booking this alone must ask where the boat wintered. */
+  needs_pickup_spot: boolean;
+  /** 0150: a third party must release the boat before the crew can start. */
+  needs_release: boolean;
 }
 
 /**
@@ -325,9 +329,9 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
   const isGrounds = p.groundsForParkId != null;
   const menuQuery = supabase
     .from("services")
-    .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work, park_only")
+    .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work, park_only, needs_pickup_spot, needs_release")
     .eq("active", true)
-    .eq("kind", "standalone"); // components/add-ons price inside packages, never as menu tiles
+    .or("kind.eq.standalone,solo_bookable.eq.true"); // standalone, OR a package leg opened for solo booking (0147 — spring entry)
   const services = mustRead(
     "the service menu",
     isGrounds
@@ -356,6 +360,8 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
     price: priceService(withParkRate(s, rates) as unknown as ServiceRule, pp),
     frequency_options: s.frequency_options ?? [],
     is_water_work: s.is_water_work ?? false,
+    needs_pickup_spot: s.needs_pickup_spot ?? false,
+    needs_release: s.needs_release ?? false,
   }));
 }
 

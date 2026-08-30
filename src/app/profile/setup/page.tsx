@@ -50,7 +50,7 @@ export default async function SetupPage({
     // Published parks only — an unpublished one is still being set up and its
     // owner has not asked to be listed anywhere.
     supabase.from("parks").select("id, name").eq("active", true).order("name"),
-    supabase.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing").eq("active", true).eq("kind", "standalone"),
+    supabase.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing").eq("active", true).or("kind.eq.standalone,solo_bookable.eq.true"),
     // When adding a new property, start blank; otherwise load the active one.
     addingNew ? Promise.resolve(null) : getFullProfile(),
   ]);

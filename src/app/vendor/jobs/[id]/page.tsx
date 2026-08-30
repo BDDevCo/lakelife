@@ -151,6 +151,49 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
           </p>
         )}
 
+        {/* THE BOAT IS NOT AT THE HOUSE (0148).
+            Spring collection is the only work where the first stop is not the
+            customer's property. Both addresses show, in the order the crew
+            drives them — the pickup NEVER replaces the property, because the
+            boat is being brought back to it. */}
+        {job.pickupAddress ? (
+          <>
+            <div style={{ padding: "10px 12px", background: "var(--sun-soft)", border: "1px solid #ecd9ad", borderRadius: 10, margin: "0 0 10px" }}>
+              <p style={{ fontSize: 12.5, fontWeight: 700, margin: "0 0 2px", color: "#7a5a1e" }}>
+                ⛵ Collect the boat here first
+              </p>
+              <p style={{ fontSize: 14, margin: "0 0 8px" }}>{job.pickupAddress}</p>
+              <CrewNavigateButton lat={job.pickupLat} lng={job.pickupLng} address={job.pickupAddress} />
+              {job.pickupContact && (
+                <p style={{ fontSize: 13, margin: "8px 0 0" }}>
+                  Ask for <b>{job.pickupContact}</b>
+                </p>
+              )}
+              {/* A NUMBER IS WORTH A FORTY-MINUTE DRIVE. Its absence is shown
+                  rather than hidden — "no number" changes what the crew does
+                  before setting off, so it is a fact, not a blank. */}
+              {job.pickupPhone ? (
+                <p style={{ fontSize: 13, margin: "4px 0 0" }}>
+                  <a href={`tel:${job.pickupPhone.replace(/[^\d+]/g, "")}`} style={{ color: "var(--teal)", fontWeight: 700 }}>
+                    📞 {job.pickupPhone}
+                  </a>{" "}
+                  — ring before you set off.
+                </p>
+              ) : (
+                <p className="mut" style={{ fontSize: 12.5, margin: "4px 0 0" }}>
+                  No number on file for them.
+                </p>
+              )}
+              <p className="mut" style={{ fontSize: 12, margin: "8px 0 0", lineHeight: 1.5 }}>
+                {job.releaseConfirmedAt
+                  ? "The owner says they've told them you're collecting it — still ask at the gate. If they won't release it, record a no-show; don't take it any other way."
+                  : "Nobody has confirmed the owner cleared this with them — ring first."}
+              </p>
+            </div>
+            <p className="mut" style={{ fontSize: 12.5, fontWeight: 700, margin: "0 0 2px" }}>Then to the property</p>
+          </>
+        ) : null}
+
         <p style={{ fontSize: 14, margin: "0 0 2px" }}>{job.address ?? "Address on file"}</p>
         {subline && <p className="mut" style={{ fontSize: 12.5, margin: "0 0 10px" }}>{subline}</p>}
 

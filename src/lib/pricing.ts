@@ -83,6 +83,20 @@ export interface PricingParams {
   per_engine_hp_tiers?: Array<{ max: number | null; price: number }>;
   /** generic additive terms applied on top of the model price. */
   add?: AddTerm[];
+  /**
+   * TRANSPORT (0149). Collection work only — the boat is not at the property,
+   * so the visit carries a tow whose length is a property of the BOOKING, not
+   * of the home. Every other input to pricing comes off the profile; this one
+   * cannot.
+   *
+   * `included_miles` is covered by the model price; past it,
+   * `per_mile_beyond` is charged on the excess only. Both default to 0, which
+   * is the INERT state: no radius, no rate, and the service prices exactly as
+   * a flat service always has. That is the shape the market bills in — the
+   * research file's Pointe Marine: free within ~20 miles, then $3.60/mile.
+   */
+  included_miles?: number;
+  per_mile_beyond?: number;
 }
 
 /** A pricing rule as stored in the `services` table. */
@@ -235,6 +249,44 @@ export function priceService(rule: ServiceRule, p: PricingProfile): number {
   }
 
   return Math.max(0, Math.round(price));
+}
+
+/**
+ * TRANSPORT SURCHARGE for a collection visit (0149).
+ *
+ * DELIBERATELY NOT PART OF `priceService`. That function has 25 call sites —
+ * menus, tiles, the crew's own rate card, margin health, autopilot — and not
+ * one of them knows where a boat wintered. Threading a distance through it
+ * would make 24 of them price at zero miles, which is precisely how 0115 put
+ * three money bugs live from one change. So this is additive and opt-in: a
+ * caller that knows the distance adds it, and everything else is untouched
+ * and returns exactly what it returned before.
+ *
+ * `miles` is the ONE-WAY tow, matching how the market bills (research:
+ * "transport is billed per one-way move"). Returns whole dollars ≥ 0.
+ *
+ * Returns 0 — meaning "the model price already covers it" — when:
+ *   · no rate is configured (the inert default, and today's live state)
+ *   · the distance is unknown (null); the CALLER decides what to do about
+ *     that, because silently charging nothing is an undercharge and this
+ *     function must not make that call on its own
+ *   · the tow is inside the included radius
+ */
+export function transportFee(rule: ServiceRule, miles: number | null): number {
+  const cfg: PricingParams = rule.band_pricing ?? {};
+  const rate = Number(cfg.per_mile_beyond) || 0;
+  if (rate <= 0) return 0; // inert: no mileage pricing on this service
+  if (miles == null || !Number.isFinite(miles) || miles < 0) return 0;
+  const included = Math.max(0, Number(cfg.included_miles) || 0);
+  const excess = miles - included;
+  if (excess <= 0) return 0;
+  return Math.max(0, Math.round(excess * rate));
+}
+
+/** Does this service bill by distance at all? Drives whether a booking must
+ *  know where the boat is before it can quote one all-in price. */
+export function billsByDistance(rule: ServiceRule): boolean {
+  return (Number(rule.band_pricing?.per_mile_beyond) || 0) > 0;
 }
 
 /** Format a price the way the customer sees it — one all-in dollar figure. */

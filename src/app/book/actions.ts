@@ -4,7 +4,8 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { withParkRate } from "@/lib/park-rates";
 import { loadParkRatesChecked } from "@/app/park/rate-data";
 import { getFullProfile, toPricingProfile, getActivePropertyId } from "@/app/profile/data";
-import { priceService, type ServiceRule } from "@/lib/pricing";
+import { priceService, transportFee, billsByDistance, type ServiceRule } from "@/lib/pricing";
+import { milesBetween } from "@/lib/dispatch";
 import { serviceMinutes } from "@/lib/duration";
 import { todayLakeDate } from "@/lib/booking";
 import {
@@ -34,6 +35,25 @@ interface ServiceRow extends ServiceRule {
   is_water_work: boolean;
   daily_capacity: number;
   frequency_options: string[];
+  /** 0148: this service must be told where the boat is (spring collection). */
+  needs_pickup_spot: boolean;
+  /** 0150: a third party has to hand the boat over before the visit starts. */
+  needs_release: boolean;
+}
+
+/** Where the boat actually is, when that is not the customer's property. */
+export interface PickupSpot {
+  address: string;
+  lat: number | null;
+  lng: number | null;
+  /** 0151: who to ask for at the gate, and a number to ring first. Optional —
+   *  not every barn has a front desk, and "no number on file" is itself worth
+   *  telling the crew before a forty-minute drive. */
+  contact?: string;
+  phone?: string;
+  /** 0151: the customer's own statement that they told the holder we're
+   *  coming. Never our authorisation — courier, not witness. */
+  releaseConfirmed?: boolean;
 }
 
 async function loadService(serviceId: string): Promise<ServiceRow | null> {
@@ -43,10 +63,10 @@ async function loadService(serviceId: string): Promise<ServiceRow | null> {
   // white and clickable. A failed read must not reach that branch.
   const data = mustRead("this service", await supabase
     .from("services")
-    .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, is_water_work, daily_capacity, frequency_options, kind, active")
+    .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, is_water_work, daily_capacity, frequency_options, kind, active, needs_pickup_spot, needs_release")
     .eq("id", serviceId)
     .eq("active", true)
-    .eq("kind", "standalone") // components/add-ons book only inside packages
+    .or("kind.eq.standalone,solo_bookable.eq.true") // standalone, OR a package leg opened for solo booking (0147 — spring entry)
     .maybeSingle());
   return (data as ServiceRow | null) ?? null;
 }
@@ -170,8 +190,9 @@ export async function createBooking(
   frequency: string,
   rushFallback?: string, // same-day only: 'roll' (tomorrow at standard price) | 'cancel'
   tosAccepted?: boolean, // set by the agree modal's retry — stamps and proceeds
+  pickup?: PickupSpot, // 0148: required for spring collection work
 ): Promise<BookingResult> {
-  const res = await createBookingBatch(serviceId, [date], frequency, rushFallback, tosAccepted);
+  const res = await createBookingBatch(serviceId, [date], frequency, rushFallback, tosAccepted, pickup);
   if (res.ok) return { ok: true };
   return {
     ok: false,
@@ -273,6 +294,7 @@ export async function createBookingBatch(
   frequency: string,
   rushFallback?: string, // same-day only: 'roll' (tomorrow at standard price) | 'cancel'
   tosAccepted?: boolean, // set by the agree modal's retry — stamps and proceeds
+  pickup?: PickupSpot, // 0148: where the boat is, for services that ask
 ): Promise<BatchBookingResult> {
   const supabase = await createClient();
   const {
@@ -352,6 +374,57 @@ export async function createBookingBatch(
     return { ok: false, error: readFailedMessage("this service", e) };
   }
   if (!service) return { ok: false, error: "That service isn't available." };
+
+  // WHERE IS THE BOAT? (0148)
+  //
+  // Spring collection is the first work LakeLife sells that does NOT happen at
+  // the customer's property. Every other service is silent about location
+  // because the property IS the location; these two are not, and a crew sent
+  // to a lake house to collect a boat wintering twenty miles away finds
+  // nothing there.
+  //
+  // Checked HERE, server-side, because the booking action is the authority —
+  // the form can be bypassed, and a job written without a spot is a visit
+  // nobody can perform. `group_id` plays no part: this path only ever creates
+  // standalone jobs. Inside a package the boat is in OUR yard and
+  // storage_stays says which, so the question is never asked.
+  const pickupAddress = pickup?.address?.trim() ?? "";
+  if (service.needs_pickup_spot && pickupAddress === "") {
+    return {
+      ok: false,
+      error: "Tell us where the boat is spending the winter, so the crew knows where to collect it.",
+    };
+  }
+  // HAS ANYBODY TOLD THE YARD? (0151)
+  //
+  // A marina does not hand a boat to a stranger with a trailer. The only
+  // person who can arrange that is the one who put it there, and if they
+  // haven't, the crew makes the drive and comes back empty — which 0150 now
+  // correctly records as a no-show, but a no-show nobody needed.
+  //
+  // Refused server-side, like everything else that matters here. What is
+  // stored is the CUSTOMER'S statement, timestamped; we are not a party to it
+  // and never claim the yard agreed to anything.
+  if (service.needs_release && !pickup?.releaseConfirmed) {
+    return {
+      ok: false,
+      error: "Let whoever's holding the boat know our crew is collecting it, then tick the box — they won't release it to us otherwise.",
+    };
+  }
+  // Never carried on a service that did not ask. A stray spot on a mow would
+  // be a location the crew has no reason to drive to.
+  const pickupCols = service.needs_pickup_spot && pickupAddress !== ""
+    ? {
+        pickup_address: pickupAddress,
+        pickup_lat: pickup?.lat ?? null,
+        pickup_lng: pickup?.lng ?? null,
+        pickup_contact: pickup?.contact?.trim() || null,
+        pickup_phone: pickup?.phone?.trim() || null,
+        // Stamped from the SERVER clock at the moment the booking is accepted,
+        // never from anything the browser sent.
+        release_confirmed_at: service.needs_release ? new Date().toISOString() : null,
+      }
+    : {};
 
   // Nothing vanishes: garbage dates and anything past the batch cap come back
   // NAMED, alongside whatever the calendar itself refuses below.
@@ -435,7 +508,7 @@ export async function createBookingBatch(
   const priceRule = profile.groundsForParkId
     ? withParkRate(service, parkRates)
     : service;
-  const standardPrice = priceService(priceRule, toPricingProfile(profile));
+  let standardPrice = priceService(priceRule, toPricingProfile(profile));
   // SIM-FOUND (Wave 1): a $0 price means the profile has none of what this
   // service counts (0 PWC lifts booking a PWC pull). A $0 job can never
   // assign and sits as phantom "demand" — refuse with the honest fix.
@@ -447,6 +520,52 @@ export async function createBookingBatch(
         : `${service.name} prices to $0 for your place — your profile shows none of the equipment it covers. Update your property profile and the real price appears.`,
     };
   }
+  // TRANSPORT ON A COLLECTION VISIT (0149).
+  //
+  // Every other pricing input comes off the property profile. This one cannot:
+  // the tow is as long as wherever the boat happened to winter, which is a
+  // fact about THIS booking. Shape is the market's (research billingNorms[7],
+  // Pointe Marine): the model price covers an included radius, and only the
+  // miles beyond it are charged.
+  //
+  // Priced HERE, server-side, off the coordinates — never off anything the
+  // browser sent as a number. Added after the $0 refusal above so that guard
+  // still judges the service's own price, and before the rush multiplier so
+  // there is one all-in figure and one code path.
+  //
+  // INERT TODAY: no service carries a per-mile rate, so `billsByDistance` is
+  // false everywhere and this block does nothing at all.
+  let transport = 0;
+  if (billsByDistance(priceRule)) {
+    const geo = await createServiceClient()
+      .from("properties").select("lat, lng").eq("id", profile.propertyId).maybeSingle();
+    // A price is about to be charged against this. An unread row would leave
+    // the coordinates null, the distance unmeasurable, and the tow free.
+    if (geo.error) return { ok: false, error: readFailedMessage("where this job is going", geo.error) };
+    const propLat = geo.data?.lat != null ? Number(geo.data.lat) : null;
+    const propLng = geo.data?.lng != null ? Number(geo.data.lng) : null;
+    if (propLat == null || propLng == null) {
+      // OUR data, not theirs — so it must not read as their mistake.
+      return {
+        ok: false,
+        error: "We don't have your property pinned on the map yet, so we can't work out the tow. Re-save your address on your profile and it'll price straight away.",
+      };
+    }
+    const miles = milesBetween(pickup?.lat ?? null, pickup?.lng ?? null, propLat, propLng);
+    if (!Number.isFinite(miles)) {
+      // Charging nothing for an unmeasured tow is an undercharge, and quoting
+      // a price we cannot stand behind is worse. Ask for the one thing that
+      // fixes it. (Straight-line miles: shorter than the road, so the radius
+      // is generous by construction rather than by accident.)
+      return {
+        ok: false,
+        error: "Pick the boat's location from the suggestions rather than typing it — we need the spot on the map to work out the tow.",
+      };
+    }
+    transport = transportFee(priceRule, miles);
+    standardPrice += transport;
+  }
+
   const rushAllIn = rushPrice(standardPrice, settings.sameDaySurchargePct);
 
   // HOW LONG, from the same profile that decided how much (0083). Frozen onto
@@ -479,6 +598,7 @@ export async function createBookingBatch(
         customer_price: price,
         est_minutes: estMinutes,
         ...(day.isRush ? { is_rush: true, rush_fallback: validRushFallback(rushFallback) } : {}),
+        ...pickupCols, // 0148 — empty for everything that happens at the property
       })
       .select("id")
       .single();

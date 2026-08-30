@@ -98,7 +98,7 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
   // any of it against. The page fails to the error boundary rather than
   // publish a number it could not read.
   const [servicesRes, crewsRes, completedRes, thumbsRes, hoaRes] = await Promise.all([
-    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work").eq("active", true).eq("kind", "standalone").order("name"),
+    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work").eq("active", true).or("kind.eq.standalone,solo_bookable.eq.true").order("name"),
     // FIXTURE CREWS ARE NOT A CREW BENCH. This is a public, SEO-indexed page
     // that prints "N insured local crews serving <lake>". Two of the three
     // vendors are the owner's own scratch accounts, so every lake advertised

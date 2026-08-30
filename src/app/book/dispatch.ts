@@ -399,7 +399,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   // carries no reasonNoFit — we don't know why, and won't pretend to.
   const jobRes = await admin
     .from("jobs")
-    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, est_minutes, services(name, pricing_model, est_minutes, takes_custody, band_pricing)")
+    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, est_minutes, pickup_lat, pickup_lng, services(name, pricing_model, est_minutes, takes_custody, band_pricing)")
     .eq("id", jobId)
     .maybeSingle();
   if (jobRes.error) {
@@ -548,8 +548,11 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     marginFloor: settings.marginFloor,
     preferredVendorId: (prop?.preferred_vendor as string) ?? null,
     lakeId: (prop?.lake_id as string) ?? null,
-    jobLat: prop?.lat != null ? Number(prop.lat) : null,
-    jobLng: prop?.lng != null ? Number(prop.lng) : null,
+    // 0148: a collection job's first stop is the BOAT, not the house. Ranking
+    // by the property would hand the job to the crew nearest an address they
+    // do not visit first. Falls back to the property, which is every other job.
+    jobLat: job.pickup_lat != null ? Number(job.pickup_lat) : prop?.lat != null ? Number(prop.lat) : null,
+    jobLng: job.pickup_lng != null ? Number(job.pickup_lng) : prop?.lng != null ? Number(prop.lng) : null,
     componentNames: components?.map((c) => c.serviceName),
     jobMinutes,
     storage,

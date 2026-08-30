@@ -52,7 +52,7 @@ export async function assertVendorJob(jobId: string) {
       // Deliberately NO customer_price / vendor_cost: this is the crew code path,
       // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
       // those columns out of reach by construction (settleJob re-loads them ops-side).
-      .select("id, status, vendor_id, service_id, date, property_id, group_id, services(name, min_photos, required_photo_slots)")
+      .select("id, status, vendor_id, service_id, date, property_id, group_id, pickup_address, pickup_lat, pickup_lng, pickup_contact, pickup_phone, release_confirmed_at, services(name, min_photos, required_photo_slots)")
       .eq("id", jobId)
       .maybeSingle(),
   );
@@ -108,6 +108,21 @@ export interface CrewJobDetail {
   address: string | null;
   lat: number | null;
   lng: number | null;
+  /**
+   * WHERE THE BOAT IS (0148), when that is not the property above. Spring
+   * collection only. Null on every ordinary visit, and the UI must show the
+   * property address in that case — this never REPLACES the address, because
+   * the boat comes back to the property afterwards.
+   */
+  pickupAddress: string | null;
+  pickupLat: number | null;
+  pickupLng: number | null;
+  /** 0151: who to ask for, and a number to ring before driving out. */
+  pickupContact: string | null;
+  pickupPhone: string | null;
+  /** 0151: when the OWNER said they'd told the holder we're coming. Their
+   *  statement, not our authorisation — the crew still asks at the gate. */
+  releaseConfirmedAt: string | null;
   lakeName: string | null;
   ownerName: string | null;
   facts: string;
@@ -337,6 +352,12 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
     address,
     lat,
     lng,
+    pickupAddress: (job.pickup_address as string | null) ?? null,
+    pickupLat: (job.pickup_lat as number | null) ?? null,
+    pickupLng: (job.pickup_lng as number | null) ?? null,
+    pickupContact: (job.pickup_contact as string | null) ?? null,
+    pickupPhone: (job.pickup_phone as string | null) ?? null,
+    releaseConfirmedAt: (job.release_confirmed_at as string | null) ?? null,
     lakeName,
     ownerName,
     facts: stop?.facts ?? "",

@@ -614,7 +614,7 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
 
   const admin = createServiceClient();
   const ruleRes = await admin
-    .from("services").select("name, needs_interior_access")
+    .from("services").select("name, needs_interior_access, needs_release")
     .eq("id", job.service_id as string).maybeSingle();
   // THE GUARD BELOW IS GUARDED BY `rule &&`, SO A FAILED READ SKIPPED IT.
   //
@@ -628,13 +628,13 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
   }
   const rule = ruleRes.data;
 
-  if (rule && noAnswerOutcome(rule as { needs_interior_access?: boolean | null }) === "proceed_as_booked") {
+  if (rule && noAnswerOutcome(rule as { needs_interior_access?: boolean | null; needs_release: boolean | null }) === "proceed_as_booked") {
     return {
       ok: false,
       error:
-        `${(rule.name as string) ?? "This work"} doesn't need anyone to let you in — ` +
-        `go ahead and do it as booked. If something is genuinely in the way, ` +
-        `flag it instead so the owner can sort it.`,
+        `${(rule.name as string) ?? "This work"} doesn't need anyone to let you in or ` +
+        `hand anything over — go ahead and do it as booked. If something is genuinely ` +
+        `in the way, flag it instead so the owner can sort it.`,
     };
   }
 
