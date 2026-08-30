@@ -27,8 +27,11 @@ with no storage or transport section. These ship together or not at all.
 **4. Conventions.** Plain text = checked against the code. **[DECISION — …]** =
 your call, not a description. Nothing ships with a `[DECISION]` in it.
 
-**The one that matters most is §8.** Nothing checks that a Crew towing your boat
-is insured to tow it.
+**§8 is now settled.** We check a certificate is unexpired and belongs to the
+Crew that sent it, and we check nothing else — the owner's decision of 30 Aug,
+built in 0152. No transport-specific cover is required. What remains open there
+is whether to tell customers to keep their own hull insurance, which I think
+you should.
 
 ---
 
@@ -224,53 +227,35 @@ on file — the same as every other job.
 ## 8. What LakeLife checks — and what it does not
 
 **8.1 What we check.** A Crew cannot go live without an insurance certificate
-and a W-9 on file, and without giving us an expiry date for the certificate that
-has not passed. That expiry is re-checked every time a job is routed or claimed,
-and a lapsed one stops both.
+and a W-9 on file. For the certificate we check two things, and only two: that
+the expiry date has not passed, and that the business named on it is the
+business we are dealing with. The expiry is re-checked every time a job is
+routed or claimed, and a lapsed one stops both.
 
-**8.2 What we do not do.** Nobody at LakeLife opens either document, verifies
-the numbers on it, or confirms what the cover actually is — the expiry date is
-typed in by the Crew. We do not perform the work, supervise a Crew, or inspect
-anybody's truck or trailer. We do not value your boat.
+**8.2 What we do not do.** We do not judge the policy. We do not check what it
+covers, whether the limits are adequate for your boat, or whether the cover
+suits the work — that is between your Crew and their insurer, and we are not
+qualified to have an opinion on it. **We do not require a Crew to carry
+transport-specific cover** for collecting your boat, beyond the general
+certificate every Crew has. We do not value your boat, we do not perform the
+work, and we do not inspect anybody's truck or trailer.
 
-> **[DECISION — THE BIG ONE. Nothing checks that a Crew towing your boat is
-> insured to tow it.]** This is the most important thing in the document and it
-> is a gap, not a feature.
+> **[DECIDED 30 Aug 2026 — no transport-specific cover is required, and §8.2
+> has to say so out loud.]** The owner's call. It is a legitimate one: LakeLife
+> is a third-party administrator, the service agreement is Customer ↔ Crew, and
+> requiring a policy we would then have to assess is a step toward the very
+> liability the whole posture avoids.
 >
-> These two services carry `takes_custody = false` — correctly; a collection is
-> not six months of holding a boat. But that flag is what runs the insurance
-> gate. A storage Crew must show a garagekeepers/bailee policy before a boat is
-> routed to them. **A collection Crew must show nothing beyond the general
-> certificate every Crew already has** — and 0145's header states plainly that a
-> standard liability certificate *excludes damage to property in the vendor's
-> care, custody and control*, which is exactly what a boat on their trailer is.
+> But it means a customer should be told, in the document, that the general
+> certificate a Crew carries **expressly excludes damage to property in that
+> Crew's care, custody and control** — which is what a boat on their trailer
+> is. §8.2 above says we require nothing further; it does not yet say what that
+> leaves. The honest sentence, and the one I would add, is the same one every
+> storage yard in the Midwest prints: **keep your own boat insurance in force.**
+> Yours is the policy you control and the only one anybody has checked exists.
 >
-> So the chain is: your boat, a stranger's trailer, a public road, and no
-> verified coverage for the boat itself. Live, not one Crew has any custody or
-> transport policy on file.
->
-> **The fix is the shape of a column that already exists.** Decide whether an
-> on-hook / in-tow policy is required before a collection can be routed. If yes,
-> it is a document kind plus an expiry, beside the two policies you already
-> date-check. If no, that is a legitimate choice — but it is yours, and §8.2 has
-> to say so to the customer in plain words.
->
-> Until it is decided, **this addendum must not use the word "insured" about a
-> collection.** The live Terms promise nothing about transport, which is
-> currently accurate and worth keeping that way.
-
-> **[DECISION — and a collection can be self-claimed by a stranger Crew.]** The
-> fix that landed today stops an uninsured Crew claiming a *storage* job off the
-> open board, because that check keys on `takes_custody`. These are not custody,
-> so the board will offer them. Once active, a Crew nobody chose can take a
-> $40,000 boat on a trailer for an afternoon — and the claim board has no
-> geographic gate at all, so not even the lake check applies.
->
-> If the answer is "routed only", it is **two** lines in each of the two callers:
-> the condition, *and* the `services(...)` select that has to fetch the column
-> the condition tests. A condition widened without its select compiles, reads
-> `undefined`, and silently does nothing — the exact hole the claim-board fix
-> closed this morning.
+> That sentence is a customer obligation, not a description of the build, which
+> is why it is still a decision rather than text.
 
 ## 9. The record
 
@@ -320,8 +305,11 @@ Rates and distances published on the Platform can change.
 
 **Ordered by what would hurt most.**
 
-1. **Decide the transport insurance question (§8).** Everything below is smaller
-   than this one.
+1. ~~**Decide the transport insurance question (§8).**~~ **DECIDED 30 Aug** —
+   no transport-specific cover is required beyond the general certificate, and
+   the certificate check itself is now built (0152: unexpired, and named to the
+   Crew that sent it). What is left is one sentence: whether §8.2 tells
+   customers to keep their own hull insurance in force. I would.
 
 2. **Decide whether a collection can be self-claimed** or is routed only — and
    if routed only, remember it is the condition *and* the select, in both

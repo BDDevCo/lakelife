@@ -104,6 +104,8 @@ export function VendorOnboarding({
   const gaps = activationGaps(
     {
       coi_url: vendor.coi_url,
+      coi_named_insured: vendor.coi_named_insured,
+      company: vendor.company,
       coi_expiry: vendor.coi_expiry,
       w9_url: vendor.w9_url,
       service_types: vendor.service_types,
@@ -219,6 +221,7 @@ function DocStep({
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [expiry, setExpiry] = useState("");
+  const [insured, setInsured] = useState("");
   const [pending, startTransition] = useTransition();
 
   function submit() {
@@ -231,9 +234,13 @@ function DocStep({
       toast("Add the COI's expiry date.");
       return;
     }
+    if (kind === "coi" && !insured.trim()) {
+      toast("Add the insured business name off the certificate.");
+      return;
+    }
     const form = new FormData();
     form.set("file", file);
-    if (kind === "coi") form.set("expiry", expiry);
+    if (kind === "coi") { form.set("expiry", expiry); form.set("named_insured", insured.trim()); }
     startTransition(async () => {
       const res = await uploadVendorDoc(kind, form);
       if (!res.ok) {
@@ -282,15 +289,28 @@ function DocStep({
       </label>
 
       {kind === "coi" && (
-        <label className="ll-field" style={{ display: "block", marginTop: 10 }}>
-          <span className="mut" style={{ fontSize: 13 }}>Expiry date</span>
-          <input
-            type="date"
-            value={expiry}
-            onChange={(e) => setExpiry(e.target.value)}
-            style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
-          />
-        </label>
+        <>
+          <label className="ll-field" style={{ display: "block", marginTop: 10 }}>
+            <span className="mut" style={{ fontSize: 13 }}>Expiry date</span>
+            <input
+              type="date"
+              value={expiry}
+              onChange={(e) => setExpiry(e.target.value)}
+              style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
+            />
+          </label>
+          {/* 0152 — the name we compare against their business name. */}
+          <label className="ll-field" style={{ display: "block", marginTop: 10 }}>
+            <span className="mut" style={{ fontSize: 13 }}>Insured business name, exactly as printed</span>
+            <input
+              value={insured}
+              onChange={(e) => setInsured(e.target.value)}
+              placeholder="e.g. Northshore Docks, LLC"
+              maxLength={200}
+              style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
+            />
+          </label>
+        </>
       )}
 
       <button

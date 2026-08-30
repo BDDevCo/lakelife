@@ -1,3 +1,4 @@
+import { checkNamedInsured } from "@/lib/named-insured";
 // Pure helpers for vendor onboarding — no server imports, so vitest loads cleanly.
 
 /** Only these upload MIME types are accepted (matches the vendor-docs bucket). */
@@ -49,6 +50,14 @@ export function validExpiry(raw: unknown, today: string): string | null {
 export interface ActivationInput {
   coi_url: string | null;
   coi_expiry: string | null;
+  /**
+   * The insured business name the crew typed off their certificate (0152),
+   * and the business name on their account. REQUIRED FIELDS, not optional:
+   * the compiler names every caller that forgets them, which is the only
+   * reason the claim-board hole took a morning to find rather than a season.
+   */
+  coi_named_insured: string | null;
+  company: string | null;
   w9_url: string | null;
   service_types: string[] | null;
   service_lakes: string[] | null;
@@ -59,6 +68,14 @@ export function activationGaps(v: ActivationInput, today: string): string[] {
   const gaps: string[] = [];
   if (!v.coi_url) gaps.push("Upload your insurance certificate (COI)");
   else if (v.coi_expiry == null || String(v.coi_expiry) <= today) gaps.push("Your COI is missing an expiry or already expired — upload a current one");
+  else {
+    // THE CERTIFICATE HAS TO BELONG TO THIS BUSINESS (0152). The owner's
+    // rule, and until 0152 nothing anywhere checked it. Only reached when a
+    // certificate is actually on file, so a crew who has uploaded nothing is
+    // told to upload rather than told their name is wrong.
+    const named = checkNamedInsured(v.coi_named_insured, v.company);
+    if (!named.ok) gaps.push(named.message);
+  }
   if (!v.w9_url) gaps.push("Upload your W-9");
   if (!v.service_types || v.service_types.length === 0) gaps.push("Pick at least one kind of work you do");
   if (!v.service_lakes || v.service_lakes.length === 0) gaps.push("Choose the lakes you service");

@@ -118,6 +118,8 @@ const vendor = {
   status: "active" as const,
   coi_url: null,
   coi_expiry: "2027-01-01",
+  coi_named_insured: "Twin Lakes Crew",
+  coi_expiry_confirmed_at: null,
   w9_url: null,
   service_types: [CUSTODY, MOW],
   work_days: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],

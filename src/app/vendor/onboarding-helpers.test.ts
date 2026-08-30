@@ -62,6 +62,8 @@ describe("safeExt", () => {
 const fullCrew: ActivationInput = {
   coi_url: "v/coi-1.pdf",
   coi_expiry: "2026-12-31",
+    coi_named_insured: "Northshore Docks",
+    company: "Northshore Docks",
   w9_url: "v/w9-1.pdf",
   service_types: ["Pier install"],
   service_lakes: ["lake-a"],

@@ -3,7 +3,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
 import { getVendorScores } from "@/lib/scoring-data";
 import { computeScore, type CrewTier } from "@/lib/scoring";
-import { coiState, type CoiState } from "./crews-coi";
+import { checkNamedInsured } from "@/lib/named-insured";
+import { coiState, docConfirmState, type CoiState, type DocConfirmState } from "./crews-coi";
 import { mustRead } from "@/lib/must-read";
 import { isCoolingDown } from "@/lib/lake-standing";
 import { getPlatformSettings } from "@/lib/settings";
@@ -31,6 +32,11 @@ export interface OpsCrew {
   work_days: string[];
   coi_expiry: string | null;
   coiState: CoiState;
+  /** Has a person opened the file and agreed the typed expiry? (0152) */
+  coiConfirm: DocConfirmState;
+  /** The insured name the crew typed off it, and whether it matches (0152). */
+  coi_named_insured: string | null;
+  namedInsuredMismatch: boolean;
   hasCoiDoc: boolean;
   hasW9Doc: boolean;
   coiSignedUrl: string | null;
@@ -72,6 +78,8 @@ interface CrewRaw {
   work_days: string[] | null;
   coi_url: string | null;
   coi_expiry: string | null;
+  coi_named_insured: string | null;
+  coi_expiry_confirmed_at: string | null;
   w9_url: string | null;
   created_at: string;
   users: Embed<{ name: string | null; email: string | null; phone: string | null }>;
@@ -92,7 +100,7 @@ export async function getCrews(): Promise<OpsCrew[]> {
           // Named for the same reason as the COI cron: two FKs from vendors to
         // users, so a bare users(...) is PGRST201. Unguarded this showed an
         // empty Crews tab reading "nobody invited yet"; guarded it threw.
-        "coi_url, coi_expiry, w9_url, created_at, users!vendors_user_id_fkey(name, email, phone)",
+        "coi_url, coi_expiry, coi_named_insured, coi_expiry_confirmed_at, w9_url, created_at, users!vendors_user_id_fkey(name, email, phone)",
       ),
     getVendorScores(),
     admin.from("job_confirmations").select("vendor_id, verdict").not("verdict", "is", null),
@@ -173,6 +181,13 @@ export async function getCrews(): Promise<OpsCrew[]> {
         work_days: r.work_days ?? [],
         coi_expiry: r.coi_expiry ?? null,
         coiState: coiState(r.coi_url, r.coi_expiry, today),
+        coiConfirm: docConfirmState(r.coi_url as string | null, r.coi_expiry_confirmed_at as string | null),
+        coi_named_insured: (r.coi_named_insured as string | null) ?? null,
+        // Grandfathered like every other gate: a crew who predates the field
+        // is not "mismatched", they are unasked.
+        namedInsuredMismatch:
+          r.coi_named_insured != null &&
+          !checkNamedInsured(r.coi_named_insured as string, r.company as string | null).ok,
         hasCoiDoc: !!r.coi_url,
         hasW9Doc: !!r.w9_url,
         coiSignedUrl,

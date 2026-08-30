@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { approveCrew, suspendCrew, reactivateCrew, setCrewCapacity } from "@/app/ops/crews-actions";
+import { approveCrew, suspendCrew, reactivateCrew, setCrewCapacity, confirmCoiExpiry } from "@/app/ops/crews-actions";
 import { inviteCrew } from "@/app/ops/crews-invite";
 import type { OpsCrew } from "@/app/ops/crews-data";
 
@@ -147,7 +147,12 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
   const pill = STATUS_PILL[crew.status];
   const tierPill = TIER_PILL[crew.tier];
   const showTier = crew.status === "active" || crew.completedCount > 0;
-  const docsComplete = crew.hasCoiDoc && crew.hasW9Doc && crew.coiState !== "missing" && crew.coiState !== "expired";
+  const docsComplete =
+    crew.hasCoiDoc && crew.hasW9Doc &&
+    crew.coiState !== "missing" && crew.coiState !== "expired" &&
+    // 0152 — the certificate has to be THEIRS. This is the owner's rule and
+    // it blocks approval, exactly as the expiry does.
+    !crew.namedInsuredMismatch;
   const approveHint = !crew.hasCoiDoc
     ? "Waiting on the insurance certificate (COI)."
     : !crew.hasW9Doc
@@ -156,7 +161,9 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
         ? "The COI on file has expired — need a current one."
         : crew.coiState === "missing"
           ? "The COI has no expiry date — can't verify it."
-          : "";
+          : crew.namedInsuredMismatch
+            ? `The certificate names “${crew.coi_named_insured ?? ""}” but this crew is “${crew.company ?? ""}” — check which is wrong before approving.`
+            : "";
 
   async function run(fn: () => Promise<{ ok: boolean; error?: string }>, okMsg: string) {
     if (busy) return;
@@ -206,6 +213,29 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
           url={crew.coiSignedUrl}
         />
         <W9Chip has={crew.hasW9Doc} url={crew.w9SignedUrl} />
+        {/* 0152 — THE EXPIRY IS A DATE THE CREW TYPED. Until somebody here has
+            opened the file and agreed it, say so plainly rather than letting
+            the COI chip imply we checked. One tap records who confirmed it. */}
+        {crew.coiConfirm === "unconfirmed" && (
+          <button
+            className="ll-pill gold"
+            disabled={busy}
+            title="Open the certificate, check the expiry printed on it, then confirm."
+            onClick={() => run(() => confirmCoiExpiry(crew.id), "Expiry confirmed.")}
+            style={{ border: 0, cursor: busy ? "default" : "pointer", textTransform: "none", letterSpacing: "normal" }}
+          >
+            expiry unconfirmed — confirm it
+          </button>
+        )}
+        {crew.namedInsuredMismatch && (
+          <span
+            className="ll-pill red"
+            title={`Certificate: ${crew.coi_named_insured ?? "—"} · Account: ${crew.company ?? "—"}`}
+            style={{ textTransform: "none", letterSpacing: "normal" }}
+          >
+            certificate names a different business
+          </span>
+        )}
         <span style={{ width: 1, height: 18, background: "var(--line)" }} />
         {crew.service_types.length === 0 ? (
           <span className="ll-pill slate">generalist (all work)</span>

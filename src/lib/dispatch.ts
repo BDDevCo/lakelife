@@ -8,11 +8,19 @@
  * private rate; margin = menu − crew rate, and a floor protects LakeLife.
  */
 import { fitsTimeBudget, DEFAULT_JOB_MINUTES } from "@/lib/fleet";
+import { checkNamedInsured } from "@/lib/named-insured";
 
 export interface CrewCandidate {
   vendorId: string;
   status: string; // 'active' | 'invited' | 'suspended'
   coiExpiry: string | null; // YYYY-MM-DD
+  /**
+   * The insured name typed off the certificate, and the business name on the
+   * account (0152). NULL named-insured means a crew who onboarded before the
+   * check existed — see the grandfather rule in isEligible.
+   */
+  coiNamedInsured?: string | null;
+  company?: string | null;
   serviceTypes: string[]; // service NAMES the crew does
   serviceLakes: string[]; // lake IDs the crew services (Phase B geo gate)
   workDays: string[]; // e.g. ['Mon','Tue',...]
@@ -103,6 +111,19 @@ export interface DispatchDecision {
 export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
   if (c.status !== "active") return false;
   if (!c.coiExpiry || String(c.coiExpiry) < input.todayISO) return false; // no COI, no jobs
+
+  // THE CERTIFICATE HAS TO BELONG TO THIS CREW (0152). Activation checks this
+  // too, but activation runs once — a crew who goes live and then replaces
+  // their certificate with one naming a different business would otherwise
+  // keep being routed forever on paperwork that is not theirs.
+  //
+  // GRANDFATHERED ON PURPOSE. A null named-insured is a crew who onboarded
+  // before the field existed, not a crew who failed the check — and refusing
+  // them here would have stopped routing for every crew on the platform the
+  // moment this shipped. That is the "migration breaks what already worked"
+  // failure, and it would have been silent: an empty board, no error. Only a
+  // name that is PRESENT and WRONG blocks.
+  if (c.coiNamedInsured != null && !checkNamedInsured(c.coiNamedInsured, c.company).ok) return false;
   // Capability: single-service jobs check the one name; package visits
   // demand EVERY component — the legs ARE the capability flags.
   const needed = input.componentNames?.length ? input.componentNames : [input.serviceName];
@@ -273,6 +294,14 @@ export function canClaim(
   }
   if (c.status !== "active") return { ok: false, blocker: "not_active" };
   if (!c.coiExpiry || String(c.coiExpiry) < input.todayISO) return { ok: false, blocker: "no_coi" };
+  // Same rule, third doorway (0152). Grandfathered identically: a null name is
+  // a crew who predates the field, a present-and-wrong one is somebody else's
+  // certificate. Reported as `no_coi` rather than a new blocker because the
+  // crew-facing sentence is the same either way — their paperwork is not in
+  // order, and the detail belongs on their own documents page, not on a board.
+  if (c.coiNamedInsured != null && !checkNamedInsured(c.coiNamedInsured, c.company).ok) {
+    return { ok: false, blocker: "no_coi" };
+  }
   if (!c.serviceTypes.includes(input.serviceName)) return { ok: false, blocker: "wrong_service" };
   if (!c.workDays.includes(input.weekday)) return { ok: false, blocker: "off_day" };
   if (c.blockedThatDay) return { ok: false, blocker: "day_blocked" };

@@ -339,31 +339,46 @@ the rails and to check documents.
 **10.1 What we check.** Before storage work is routed to a Crew, that Crew must
 have on file an unexpired general certificate of insurance **and** an unexpired
 garagekeepers/bailee policy — the coverage that applies to property in a
-business's own care, which an ordinary liability certificate excludes. A Crew
+business's own care, which an ordinary liability certificate excludes. For each
+certificate we check two things, and only two: that the expiry has not passed,
+and that the business named on it is the business we are dealing with. A Crew
 must also have declared enough unused space for the length being stored, and
 where a package names indoor or outdoor storage, a building of that type.
 
-**10.2 What we do not do.** We do not perform storage, supervise a Crew, or
-inspect a building. We do not value your boat, and we never see the limit on
-your Crew's policy — there is no field in our records for one.
+**10.2 What we do not do.** We do not judge the policy. We do not check what it
+covers, whether the limits are adequate for your boat, or whether the cover
+suits the work — that is between your Crew and their insurer, and we are not
+qualified to have an opinion on it. We do not perform storage, supervise a
+Crew, or inspect a building. We do not value your boat, and we never see the
+limit on your Crew's policy.
 
-> **[DECISION — 10.1 currently claims more than the software does, in four
-> ways, and the live Terms already claim it too.]** Every one must be closed or
-> the paragraph reworded, because `src/lib/terms-content.ts:71` tells every
-> customer today that "storage crews additionally carry custody coverage":
+> **[PARTLY SETTLED 30 Aug 2026 — two of the four gaps are closed, two remain.]**
+> The owner's posture: check the certificate is unexpired and belongs to the
+> business that sent it, and check nothing else. Built in 0152.
 >
-> 1. **Nobody opens the document.** The Platform checks a file was uploaded,
->    that it is a document type, and that it is under 10MB. The expiry date is
->    **typed in by the Crew** (`onboarding-actions.ts:397` says so itself).
-> 2. **It is checked once and never again.** `sendCoiRevalidations`
->    (`automation.ts:2058`) reads `coi_expiry` only — `garagekeepers_expiry`
->    appears nowhere in it. A custody policy lapsing in January produces no
->    reminder to the Crew, no alert to ops, and no flag on the stay. The
->    sticky-custody health check at ice-out has the same blind spot.
-> 3. **The claim board bypasses it entirely** — see go-live item 1.
-> 4. **A Crew activates itself.** No human approves a Crew; activation needs a
->    certificate, a W-9, a trade list, a lake list and a capacity number.
->    Nothing about custody is among them.
+> **Closed:**
+>
+> 1. ~~Nothing checked whose certificate it was.~~ The Crew now types the
+>    insured business name off the document, it is compared to their account
+>    name, and a mismatch blocks activation, routing and claiming.
+> 2. ~~Nobody ever opened the document.~~ The expiry is still typed by the
+>    Crew — that has not changed — but ops now sees an "expiry unconfirmed"
+>    marker against every certificate until a named person has opened the file
+>    and agreed the date, and the confirmation is cleared automatically the
+>    moment the document is replaced.
+>
+> **Still open, and both are yours:**
+>
+> 3. **Nothing re-checks a lapsing custody policy.** `sendCoiRevalidations`
+>    reads `coi_expiry` only — `garagekeepers_expiry` appears nowhere in it. A
+>    custody policy lapsing in January produces no reminder to the Crew, no
+>    alert to ops, and no flag on the stay. The ice-out sticky-custody check has
+>    the same blind spot.
+> 4. **A Crew still activates itself.** No human approves one. The new checks
+>    are gates, not an approval step, and confirming an expiry is something ops
+>    *may* do rather than something activation waits for. If you want a human in
+>    the loop before a Crew can take a boat, that is a different decision and
+>    I have not made it for you.
 
 > **[DECISION — tell customers to keep their own cover.]** Proposed for §10.2:
 > *"Keep your own boat insurance in force through the winter. We check that

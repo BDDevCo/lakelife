@@ -74,6 +74,10 @@ export interface MyVendor {
   status: "invited" | "active" | "suspended";
   coi_url: string | null;
   coi_expiry: string | null;
+  /** The insured name typed off the certificate (0152). Null = legacy crew. */
+  coi_named_insured: string | null;
+  /** Has anybody at LakeLife opened the file and agreed the date? (0152) */
+  coi_expiry_confirmed_at: string | null;
   w9_url: string | null;
   service_types: string[];
   work_days: string[];
@@ -94,7 +98,7 @@ export async function getMyVendor(): Promise<MyVendor | null> {
     "your crew profile",
     await supabase
       .from("vendors")
-      .select("id, company, status, coi_url, coi_expiry, w9_url, service_types, work_days, service_lakes, daily_capacity, base_lat, base_lng")
+      .select("id, company, status, coi_url, coi_expiry, coi_named_insured, coi_expiry_confirmed_at, w9_url, service_types, work_days, service_lakes, daily_capacity, base_lat, base_lng")
       .eq("user_id", user.id)
       .maybeSingle(),
   );
@@ -105,6 +109,8 @@ export async function getMyVendor(): Promise<MyVendor | null> {
     status: (data.status as MyVendor["status"]) ?? "invited",
     coi_url: (data.coi_url as string | null) ?? null,
     coi_expiry: (data.coi_expiry as string | null) ?? null,
+    coi_named_insured: (data.coi_named_insured as string | null) ?? null,
+    coi_expiry_confirmed_at: (data.coi_expiry_confirmed_at as string | null) ?? null,
     w9_url: (data.w9_url as string | null) ?? null,
     service_types: (data.service_types as string[] | null) ?? [],
     work_days: (data.work_days as string[] | null) ?? [],

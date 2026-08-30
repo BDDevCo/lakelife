@@ -124,7 +124,7 @@ export async function buildCandidates(
     ? opts.components
     : [{ serviceId: opts.serviceId, serviceName: opts.serviceName, pricingModel: opts.pricingModel }];
   const [vendorsRes, ratesRes, dayJobsRes, blocksRes, scores, staysRes, unitsRes] = await Promise.all([
-    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, storage_capacity_feet, storage_types, garagekeepers_expiry, users!vendors_user_id_fkey!inner(is_fixture)").eq("users.is_fixture", false),
+    admin.from("vendors").select("id, status, coi_expiry, coi_named_insured, company, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, storage_capacity_feet, storage_types, garagekeepers_expiry, users!vendors_user_id_fkey!inner(is_fixture)").eq("users.is_fixture", false),
     admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing").in("service_id", comps.map((c) => c.serviceId)),
     admin.from("jobs").select("vendor_id, group_id, est_minutes, services(est_minutes), job_items(services(est_minutes))").eq("date", opts.dateISO).in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null),
     admin.from("vendor_availability").select("vendor_id").eq("date", opts.dateISO).eq("status", "blocked"),
@@ -227,6 +227,8 @@ export async function buildCandidates(
       vendorId: v.id as string,
       status: v.status as string,
       coiExpiry: (v.coi_expiry as string) ?? null,
+      coiNamedInsured: (v.coi_named_insured as string | null) ?? null,
+      company: (v.company as string | null) ?? null,
       serviceTypes: [
         ...(((v.service_types as string[]) ?? [])),
         ...(rateNamesByVendor.get(v.id as string) ?? []),
@@ -287,7 +289,7 @@ export async function getServiceAvailability(
   const today = todayLakeDate();
 
   const [vendorsRes, blocksRes, dayJobsRes, unitsRes] = await Promise.all([
-    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, users!vendors_user_id_fkey!inner(is_fixture)").eq("users.is_fixture", false),
+    admin.from("vendors").select("id, status, coi_expiry, coi_named_insured, company, service_types, service_lakes, work_days, daily_capacity, users!vendors_user_id_fkey!inner(is_fixture)").eq("users.is_fixture", false),
     admin.from("vendor_availability").select("vendor_id, date").eq("status", "blocked").gte("date", from).lte("date", to),
     admin.from("jobs").select("vendor_id, date").in("status", ["scheduled", "in_progress"]).not("vendor_id", "is", null).gte("date", from).lte("date", to),
     admin.from("crew_units").select("vendor_id, capacity").eq("active", true),
@@ -359,6 +361,8 @@ export async function getServiceAvailability(
       vendorId: v.id as string,
       status: v.status as string,
       coiExpiry: (v.coi_expiry as string) ?? null,
+      coiNamedInsured: (v.coi_named_insured as string | null) ?? null,
+      company: (v.company as string | null) ?? null,
       serviceTypes: (v.service_types as string[]) ?? [],
       serviceLakes: (v.service_lakes as string[]) ?? [],
       workDays: (v.work_days as string[]) ?? [],

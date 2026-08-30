@@ -79,10 +79,24 @@ export async function uploadVendorDoc(kind: "coi" | "w9" | "garagekeepers", form
 
   // COI and garagekeepers both need a valid future expiry BEFORE we store anything.
   let expiry: string | null = null;
+  let namedInsured: string | null = null;
   if (kind === "coi" || kind === "garagekeepers") {
     expiry = validExpiry(form.get("expiry"), todayLakeDate());
     const label = kind === "coi" ? "COI" : "garagekeepers policy";
     if (!expiry) return { ok: false, error: `Enter the ${label}'s expiry date — it must be in the future.` };
+
+    // THE NAME ON THE CERTIFICATE (0152). Required, because a policy with no
+    // named insured tells us nothing about whose it is.
+    const rawName = form.get("named_insured");
+    namedInsured = typeof rawName === "string" ? rawName.trim().slice(0, 200) : "";
+    if (!namedInsured) {
+      return { ok: false, error: `Type the insured business name exactly as it appears on the ${label}.` };
+    }
+    // A MISMATCH DOES NOT REFUSE THE UPLOAD. The document is filed either way
+    // — a genuine DBA is a conversation, and throwing the paperwork away
+    // because the legal name differs would make that conversation harder. It
+    // becomes an activation gap instead (activationGaps / assertRoutable),
+    // which is what "mismatch blocks activation" means.
   }
 
   const file = form.get("file");
@@ -103,9 +117,21 @@ export async function uploadVendorDoc(kind: "coi" | "w9" | "garagekeepers", form
   });
   if (upErr) return { ok: false, error: upErr.message };
 
+  // The confirmation columns are nulled here as well as by 0152's trigger.
+  // The trigger is what makes it TRUE for every writer; this is what makes it
+  // legible at the place a person will read the code.
   const patch =
-    kind === "coi" ? { coi_url: path, coi_expiry: expiry }
-    : kind === "garagekeepers" ? { garagekeepers_url: path, garagekeepers_expiry: expiry }
+    kind === "coi"
+      ? {
+          coi_url: path, coi_expiry: expiry, coi_named_insured: namedInsured,
+          coi_expiry_confirmed_at: null, coi_expiry_confirmed_by: null,
+        }
+    : kind === "garagekeepers"
+      ? {
+          garagekeepers_url: path, garagekeepers_expiry: expiry,
+          garagekeepers_named_insured: namedInsured,
+          garagekeepers_expiry_confirmed_at: null, garagekeepers_expiry_confirmed_by: null,
+        }
     : { w9_url: path };
   const { error: rowErr } = await admin.from("vendors").update(patch).eq("id", vendor.id);
   if (rowErr) return { ok: false, error: rowErr.message };
@@ -435,7 +461,7 @@ export async function finishOnboarding(tosAccepted?: boolean): Promise<Onboardin
   const admin = createServiceClient();
   const vRes = await admin
     .from("vendors")
-    .select("coi_url, coi_expiry, w9_url, service_types, service_lakes, daily_capacity")
+    .select("coi_url, coi_expiry, coi_named_insured, company, w9_url, service_types, service_lakes, daily_capacity")
     .eq("id", vendor.id)
     .maybeSingle();
   // The refusal below asserts the account does not exist. On a failed read it
@@ -449,6 +475,8 @@ export async function finishOnboarding(tosAccepted?: boolean): Promise<Onboardin
     {
       coi_url: (v.coi_url as string | null) ?? null,
       coi_expiry: (v.coi_expiry as string | null) ?? null,
+      coi_named_insured: (v.coi_named_insured as string | null) ?? null,
+      company: (v.company as string | null) ?? null,
       w9_url: (v.w9_url as string | null) ?? null,
       service_types: (v.service_types as string[] | null) ?? [],
       service_lakes: (v.service_lakes as string[] | null) ?? [],

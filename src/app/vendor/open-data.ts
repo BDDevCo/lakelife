@@ -239,6 +239,8 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       vendorId: vendor.id,
       status: vendor.status,
       coiExpiry: vendor.coi_expiry,
+      coiNamedInsured: vendor.coi_named_insured,
+      company: vendor.company,
       serviceTypes: vendor.service_types,
       serviceLakes: vendor.service_lakes,
       workDays: vendor.work_days,

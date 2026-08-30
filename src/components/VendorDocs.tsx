@@ -131,6 +131,7 @@ function DocUpload({
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [expiry, setExpiry] = useState("");
+  const [insured, setInsured] = useState("");
   const [busy, start] = useTransition();
 
   return (
@@ -164,10 +165,25 @@ function DocUpload({
         accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
       />
       {kind === "coi" && (
-        <label className="ll-field" style={{ display: "block", marginTop: 8 }}>
-          <span className="mut" style={{ fontSize: 12.5 }}>Expiry date on the certificate</span>
-          <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
-        </label>
+        <>
+          <label className="ll-field" style={{ display: "block", marginTop: 8 }}>
+            <span className="mut" style={{ fontSize: 12.5 }}>Expiry date on the certificate</span>
+            <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
+          </label>
+          {/* 0152. We check the certificate belongs to this business — and we
+              check it against what THEY type, because nobody here opens the
+              document. The helper text says which name we want, since the
+              legal name on a policy is often not the trading name. */}
+          <label className="ll-field" style={{ display: "block", marginTop: 8 }}>
+            <span className="mut" style={{ fontSize: 12.5 }}>Insured business name, exactly as printed</span>
+            <input
+              value={insured}
+              onChange={(e) => setInsured(e.target.value)}
+              placeholder="e.g. Northshore Docks, LLC"
+              maxLength={200}
+            />
+          </label>
+        </>
       )}
 
       <button
@@ -179,14 +195,16 @@ function DocUpload({
             const file = fileRef.current?.files?.[0];
             if (!file) { toast("Pick a file first."); return; }
             if (kind === "coi" && !expiry) { toast("Add the expiry date off the certificate."); return; }
+            if (kind === "coi" && !insured.trim()) { toast("Add the insured business name off the certificate."); return; }
             const form = new FormData();
             form.set("file", file);
-            if (kind === "coi") form.set("expiry", expiry);
+            if (kind === "coi") { form.set("expiry", expiry); form.set("named_insured", insured.trim()); }
             const res = await uploadVendorDoc(kind, form);
             if (!res.ok) { toast(res.error ?? "Couldn't upload that."); return; }
             toast(`${title} saved.`);
             if (fileRef.current) fileRef.current.value = "";
             setExpiry("");
+            setInsured("");
             router.refresh();
           })
         }

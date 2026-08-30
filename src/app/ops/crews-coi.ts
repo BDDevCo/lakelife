@@ -31,3 +31,29 @@ export function coiState(
   if (days < 30) return "expiring";
   return "ok";
 }
+
+/**
+ * HAS ANYBODY ACTUALLY LOOKED AT THE CERTIFICATE? (0152)
+ *
+ * The expiry on file is a date the CREW typed into a form — nobody at
+ * LakeLife opens the document. That is a defensible posture, and it is the
+ * owner's, but it means "unexpired" is a claim by the crew until somebody
+ * confirms it against the file. This is what ops needs to see.
+ *
+ *   'none'        — no certificate on file; nothing to confirm
+ *   'unconfirmed' — a file is on file and nobody has opened it
+ *   'confirmed'   — somebody opened it and agreed the typed date
+ *
+ * A confirmation is cleared automatically whenever the document is replaced
+ * (0152's trigger), so this state goes back to 'unconfirmed' on every new
+ * upload — which is correct: it is a different file.
+ */
+export type DocConfirmState = "none" | "unconfirmed" | "confirmed";
+
+export function docConfirmState(
+  docUrl: string | null | undefined,
+  confirmedAt: string | null | undefined,
+): DocConfirmState {
+  if (!docUrl) return "none";
+  return confirmedAt ? "confirmed" : "unconfirmed";
+}

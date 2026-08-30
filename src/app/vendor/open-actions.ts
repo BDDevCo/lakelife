@@ -58,7 +58,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const admin = createServiceClient();
   const vendorRes = await admin
     .from("vendors")
-    .select("id, status, coi_expiry, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, company")
+    .select("id, status, coi_expiry, coi_named_insured, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, company")
     .eq("user_id", user.id)
     .maybeSingle();
   // "Your crew account isn't set up yet" is a sentence about their account, and
@@ -227,6 +227,8 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     vendorId: vendor.id as string,
     status: vendor.status as string,
     coiExpiry: (vendor.coi_expiry as string) ?? null,
+    coiNamedInsured: (vendor.coi_named_insured as string | null) ?? null,
+    company: (vendor.company as string | null) ?? null,
     serviceTypes: (vendor.service_types as string[]) ?? [],
     serviceLakes: (vendor.service_lakes as string[]) ?? [],
     workDays: (vendor.work_days as string[]) ?? [],

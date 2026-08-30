@@ -1,5 +1,6 @@
 "use server";
 
+import { checkNamedInsured } from "@/lib/named-insured";
 import { createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate } from "@/lib/booking";
 import { assertOps } from "./data";
@@ -25,7 +26,7 @@ function validCapacity(n: unknown): number | null {
 async function assertRoutable(admin: ReturnType<typeof createServiceClient>, vendorId: string): Promise<string | null> {
   const res = await admin
     .from("vendors")
-    .select("id, coi_url, w9_url, coi_expiry")
+    .select("id, coi_url, w9_url, coi_expiry, coi_named_insured, company")
     .eq("id", vendorId)
     .maybeSingle();
   // THIS IS THE GATE THAT DECIDES WHETHER A CREW MAY BE ROUTED, and every
@@ -39,6 +40,12 @@ async function assertRoutable(admin: ReturnType<typeof createServiceClient>, ven
   if (!v.w9_url) return "No W-9 on file — the crew must upload one before they can be routed.";
   if (v.coi_expiry == null || String(v.coi_expiry) < todayLakeDate()) {
     return "The COI on file is missing an expiry or already expired — get a current certificate first.";
+  }
+  // AND IT HAS TO BE THEIRS (0152). Grandfathered the same way as dispatch: a
+  // null name is a crew who predates the field, not one who failed the check.
+  if (v.coi_named_insured != null) {
+    const named = checkNamedInsured(v.coi_named_insured as string, v.company as string | null);
+    if (!named.ok) return named.message;
   }
   return null;
 }
@@ -69,6 +76,40 @@ export async function approveCrew(vendorId: string, dailyCapacity: number): Prom
 }
 
 /** Take a crew off the board — no new routing until reactivated. */
+/**
+ * CONFIRM THAT SOMEBODY OPENED THE CERTIFICATE (0152).
+ *
+ * The expiry on a crew's row is a date THEY typed. This records that a named
+ * person at LakeLife opened the file and agreed it. It is the whole of the
+ * "we look at the certs" half of the owner's posture — and deliberately not
+ * one inch more: it says a human read a date, not that the cover is adequate,
+ * not that the policy is real, not that the limit is enough. Those are not
+ * our job and nothing here should ever imply they are.
+ *
+ * Confirming something that is not there would be a claim about a document
+ * nobody has, so a crew with no certificate on file is refused.
+ */
+export async function confirmCoiExpiry(vendorId: string): Promise<CrewResult> {
+  const ops = await assertOps();
+  if (!ops) return { ok: false, error: "Ops only." };
+  if (!vendorId) return { ok: false, error: "No crew selected." };
+
+  const admin = createServiceClient();
+  const res = await admin.from("vendors").select("coi_url, coi_expiry").eq("id", vendorId).maybeSingle();
+  // A failed read here would otherwise confirm a certificate we could not see.
+  if (res.error) return { ok: false, error: readFailedMessage("that crew's certificate", res.error) };
+  if (!res.data) return { ok: false, error: "That crew doesn't exist." };
+  if (!res.data.coi_url) return { ok: false, error: "There's no certificate on file to confirm." };
+  if (!res.data.coi_expiry) return { ok: false, error: "That certificate has no expiry date on it yet." };
+
+  const { error } = await admin
+    .from("vendors")
+    .update({ coi_expiry_confirmed_at: new Date().toISOString(), coi_expiry_confirmed_by: ops.id })
+    .eq("id", vendorId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
 export async function suspendCrew(vendorId: string): Promise<CrewResult> {
   const ops = await assertOps();
   if (!ops) return { ok: false, error: "Ops only." };

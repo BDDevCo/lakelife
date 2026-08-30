@@ -169,12 +169,17 @@ function GaragekeepersUpload({
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [expiry, setExpiry] = useState("");
+  const [insured, setInsured] = useState("");
   const [pending, startTransition] = useTransition();
 
   function submit() {
     const file = fileRef.current?.files?.[0];
     if (!file) {
       toast("Pick a file first.");
+      return;
+    }
+    if (!insured.trim()) {
+      toast("Add the insured business name off the policy.");
       return;
     }
     if (!expiry) {
@@ -184,6 +189,7 @@ function GaragekeepersUpload({
     const form = new FormData();
     form.set("file", file);
     form.set("expiry", expiry);
+    form.set("named_insured", insured.trim());
     startTransition(async () => {
       const res = await uploadVendorDoc("garagekeepers", form);
       if (!res.ok) {
@@ -193,6 +199,7 @@ function GaragekeepersUpload({
       toast("Garagekeepers insurance saved.");
       if (fileRef.current) fileRef.current.value = "";
       setExpiry("");
+      setInsured("");
       onDone();
     });
   }
@@ -226,6 +233,17 @@ function GaragekeepersUpload({
           type="date"
           value={expiry}
           onChange={(e) => setExpiry(e.target.value)}
+          style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
+        />
+      </label>
+
+      <label className="ll-field" style={{ display: "block", marginTop: 10 }}>
+        <span className="mut" style={{ fontSize: 13 }}>Insured business name, exactly as printed</span>
+        <input
+          value={insured}
+          onChange={(e) => setInsured(e.target.value)}
+          placeholder="e.g. Northshore Docks, LLC"
+          maxLength={200}
           style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
         />
       </label>
