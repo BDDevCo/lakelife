@@ -100,10 +100,14 @@ deadline, rather than failing later.
 storage when the fall visit is completed and photo-verified — not when you
 booked it, and not when the Crew set off.
 
-**4.4 You do not have to be there.** Nobody has to let a Crew in to take a boat
-off a lift, so if no one answers the door the work goes ahead as booked and is
-billed as booked. Your Crew is not permitted to record it as a missed visit.
-The same is true in the spring.
+**4.4 You do not have to be there for a visit to your own property.** Nobody has
+to let a Crew in to take a boat off your own lift, so if no one answers the door
+the work goes ahead as booked and is billed as booked. Your Crew is not
+permitted to record it as a missed visit.
+
+**A collection is different — see §6.5.** If the boat is behind somebody else's
+gate, a Crew who is not handed it leaves with an empty trailer, and that visit
+is recorded as a missed one rather than done-and-billed.
 
 ## 5. The winter
 
@@ -180,6 +184,38 @@ change.
 **6.4 The price we quoted is the price you pay.** Your spring work is billed at
 the figure quoted when you booked in the fall, even if the published menu has
 moved over the winter. The booking-time promise wins.
+
+**6.5 If your boat wintered somewhere else.** Where a Crew is collecting your
+boat from a marina, a yard or anyone else's building, three things are true
+that are not true of a visit to your own property:
+
+- **You tell us where it is** — an address, which is not assumed to be your home.
+- **You confirm you have cleared the collection.** A yard does not hand a boat
+  to a stranger with a trailer. You give us a name to ask for and a number to
+  ring, and you confirm you have told them we are coming. We do not contact the
+  yard, hold an authorisation, or collect anyone's signature — we pass your Crew
+  what you told us, and they still ask at the gate.
+- **If nobody hands the boat over, the visit is a missed one,** not work done and
+  billed. Nothing is charged for the trip.
+
+> **[DECISION — this is the season you are actually selling into, and this
+> document is not about it.]** 0147's own header records the call you made on
+> 29 August: the 2026 fall season is gone — boats come out 12–16 November and
+> The Haven does not close until 15 December — so the first season LakeLife can
+> sell into is **spring 2027**, collecting boats that wintered in somebody
+> else's yard.
+>
+> This addendum describes the fall-entry season: your Crew takes the boat in,
+> holds it all winter, splashes it in spring. That product is a 2027-fall
+> proposition at the earliest, and §2 through §5 assume a custody record that
+> only a package creates.
+>
+> The spring-2027 collection path has different terms — no custody, no season,
+> no per-diem, and a release confirmation instead — and it now has code
+> (0147–0151), while both its services sit `active = false` waiting on you.
+> §6.5 above is the minimum that keeps this document honest, but I think that
+> path wants **its own short addendum** rather than a subsection of this one.
+> Say the word and I will draft it.
 
 ## 7. Photographs
 
