@@ -812,6 +812,35 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
         if (index[target as Target] === undefined) index[target as Target] = col as number;
       }
     }
+
+    /**
+     * AND GIVE EVERY COLUMN A ROLE, which is what makes the rest of this file
+     * work.
+     *
+     * `roles` is built from header cells, so a headerless roll left it EMPTY.
+     * The per-cell loop below — the one that carries unmapped columns to notes
+     * AND infers an email or a phone from an unnamed column — iterates
+     * `roles`, so on a headerless roll it did nothing at all. Every column
+     * past the inferred three was discarded in silence, including every email
+     * and every phone number.
+     *
+     * That loop's own comment says it is there for rolls that "arrive with
+     * 'Contact', 'Info', or no header at all". It was written for this case
+     * and could not reach it.
+     *
+     * Email plus phone is the stated prerequisite for the 1 January leases,
+     * and a headerless roll — a printout, a phone list, anything without a
+     * title row — is exactly the shape a seller's own list arrives in.
+     */
+    const widest = rawLines
+      .map((l) => splitLine(l, delimiter).map((c) => c.trim()))
+      .reduce((n, cells) => Math.max(n, cells.length), 0);
+    const byIndex = new Map<number, Target>();
+    for (const [target, col] of Object.entries(index)) byIndex.set(col as number, target as Target);
+    for (let i = 0; i < widest; i += 1) {
+      const t = byIndex.get(i);
+      roles.push(t ? { kind: "field", target: t } : { kind: "unrecognised", label: "" });
+    }
   }
 
   const columns: ColumnMap = { roles, index, unrecognised, refused };

@@ -791,3 +791,88 @@ describe("a name the seller split in two", () => {
     expect(r.rows[0].name.value).toBe("Ray Kastner");
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// A ROLL WITH NO HEADER ROW THREW AWAY EVERY EMAIL AND PHONE.
+//
+// `roles` is built from header cells, so a headerless roll left it empty. The
+// per-cell loop — the one that carries unmapped columns to notes AND infers an
+// email or a phone from an unnamed column — iterates `roles`, so it did
+// nothing at all. Columns past the inferred three vanished in silence, and the
+// only thing said about it was a sentence naming the three columns that WERE
+// read.
+//
+// The loop's own comment says it exists for rolls that "arrive with 'Contact',
+// 'Info', or no header at all". It was written for this case and could not
+// reach it. Email plus phone is the stated prerequisite for the 1 January
+// leases, and a printout or a phone list is exactly this shape.
+// ---------------------------------------------------------------------------
+describe("a roll with no header row", () => {
+  const HAVEN = ["6", "7", "9"];
+  const parse = (csv: string) => parseRentRoll(csv, { knownLots: HAVEN });
+
+  it("still reads the lot, the name and the rent", () => {
+    // Three rows minimum: inferColumns refuses to guess a shape from fewer,
+    // which is right — two rows is not evidence.
+    const r = parse("6,Donna Wexler,385\n7,Ray Kastner,385\n9,Ana Ruiz,400");
+    expect(r.rows.map((x) => x.lot.value)).toEqual(["6", "7", "9"]);
+    expect(r.rows[0].name.value).toBe("Donna Wexler");
+  });
+
+  it("declines to guess a rent column of bare whole numbers, and says so", () => {
+    // KNOWN AND DELIBERATE. "385" and "6" are the same shape, so calling one
+    // of them money would be a coin flip between the rent and the lot number.
+    // The inference declines, and the screen raises a question rather than
+    // filing a rent nobody stated. A roll that writes "$385" or "385.00" is
+    // read normally.
+    const bare = parse("6,Donna Wexler,385\n7,Ray Kastner,385\n9,Ana Ruiz,400");
+    expect(bare.rows[0].rent.value).toBeNull();
+    expect(bare.blockQuestions.map((q) => q.code)).toContain("NO_RENT_COLUMN");
+
+    const withCents = parse("6,Donna Wexler,385.00\n7,Ray Kastner,385.00\n9,Ana Ruiz,400.00");
+    expect(withCents.rows[0].rent.value).toBe(385);
+  });
+
+  it("finds the email and the phone in the unnamed columns", () => {
+    const r = parse([
+      "6,Donna Wexler,385,donna@example.com,260-555-0100",
+      "7,Ray Kastner,385,ray@example.com,260-555-0101",
+    ].join("\n"));
+    expect(r.rows[0].email.value, "the email was discarded").toBe("donna@example.com");
+    expect(r.rows[0].phone.value, "the phone was discarded").toBeTruthy();
+    expect(r.rows[1].email.value).toBe("ray@example.com");
+  });
+
+  it("marks them INFERRED, because nothing said which column was which", () => {
+    const r = parse("6,Donna Wexler,385,donna@example.com,260-555-0100");
+    expect(r.rows[0].email.confidence).toBe("inferred");
+    expect(r.rows[0].email.why ?? "").toMatch(/Read as an email/);
+  });
+
+  it("keeps an unnamed column that is neither, as a note", () => {
+    // Works even when inferColumns declines (too few rows to guess a shape):
+    // the roles are synthesised regardless, so nothing is discarded silently.
+    const r = parse("6,Donna Wexler,385,paid thru 11/1");
+    expect(r.rows[0].notes.join(" "), "the column vanished").toMatch(/paid thru/);
+  });
+
+  it("says out loud that it guessed", () => {
+    const r = parse("6,Donna Wexler,385\n7,Ray Kastner,385\n9,Ana Ruiz,400");
+    expect(r.blockQuestions.map((q) => q.code)).toContain("COLUMNS_INFERRED");
+  });
+
+  it("still refuses a social security number in an unnamed column", () => {
+    // The SSN catch lives in the same loop that was dead here, so a headerless
+    // roll had no protection at all.
+    const r = parse("6,Donna Wexler,385,123-45-6789");
+    expect(JSON.stringify(r.rows[0])).not.toMatch(/123-45-6789/);
+    expect(r.rows[0].notes.join(" ")).toMatch(/not imported/);
+  });
+
+  it("leaves a HEADED roll exactly as it was", () => {
+    const r = parse("Lot,Tenant,Rent,Email\n6,Donna Wexler,385,d@example.com");
+    expect(r.blockQuestions.map((q) => q.code)).not.toContain("COLUMNS_INFERRED");
+    expect(r.rows[0].email.confidence).toBe("stated");
+  });
+});
