@@ -11,7 +11,7 @@ import {
   statedTotalFrom,
   importBlockerText,
   MAX_LOT_LABEL,
-  type ImportBlocker, emptyLotsFrom,
+  type ImportBlocker, emptyLotsFrom, reconcileRoll,
 } from "./import-helpers";
 
 const CUTOVER = "2026-08-01";
@@ -636,5 +636,137 @@ describe("a row lost between the read and the commit is NAMED", () => {
     // Client state would have lost it on refresh — and the receipt is a page
     // he comes back to.
     expect(src).toMatch(/failed: failures\.length,[\s\S]{0,120}?failures,/);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// DOES THIS SHEET NUMBER THE PADS THE WAY THE PARK DOES?
+//
+// The most likely way tomorrow goes wrong, and it produces a screen that looks
+// fine. The Haven's pads are 1, 2, 6, 7, 9, 10, 11, 14, 15-24, 26, 27, 28 —
+// not 1-21. A seller whose book numbers his tenants 1..21 produces a file
+// where FIFTEEN rows match a real pad by coincidence, import silently with no
+// blocker and nothing to answer, and put fifteen households on lots that are
+// not theirs. The other six become "Create lot 3" buttons whose obvious answer
+// is yes, taking the park to 27 lots — the denominator every shared cost is
+// divided by, so the $142.53 fee built on 21 quietly dilutes.
+//
+// Verified against the real parser before writing this: a 1..21 sheet against
+// the real pads returns matched=[1,2,6,7,9,10,11,14,15,16,17,18,19,20,21] with
+// verdict "import", and lots 3,4,5,8,12,13 as "ask".
+// ---------------------------------------------------------------------------
+describe("the sheet's lots against the park's lots", () => {
+  const HAVEN = ["1","2","6","7","9","10","11","14","15","16","17","18","19","20","21","22","23","24","26","27","28"];
+  const f = (matched: string | null, raw: string) => ({ matched, raw });
+
+  it("catches the mis-numbered seller roll — the whole point", () => {
+    // What a 1..21 book actually produces through the parser.
+    const file = [
+      ...["1","2","6","7","9","10","11","14","15","16","17","18","19","20","21"].map((l) => f(l, l)),
+      ...["3","4","5","8","12","13"].map((l) => f(null, l)),
+    ];
+    const r = reconcileRoll(HAVEN, file);
+
+    expect(r.matched).toHaveLength(15);
+    expect(r.wouldCreate).toEqual(["3","4","5","8","12","13"]);
+    expect(r.neverMentioned).toEqual(["22","23","24","26","27","28"]);
+    expect(r.looksMisnumbered, "the signature is BOTH lists at once").toBe(true);
+  });
+
+  it("stays quiet for a roll that uses the park's own numbers", () => {
+    const r = reconcileRoll(HAVEN, HAVEN.map((l) => f(l, l)));
+    expect(r.wouldCreate).toEqual([]);
+    expect(r.neverMentioned).toEqual([]);
+    expect(r.looksMisnumbered).toBe(false);
+  });
+
+  it("does not cry mismatch over one new pad", () => {
+    // A genuinely new site is ordinary. One unknown label alone is not a
+    // numbering problem, and a warning that fires on the ordinary case is a
+    // warning he learns to click past.
+    const r = reconcileRoll(HAVEN, [...HAVEN.map((l) => f(l, l)), f(null, "29")]);
+    expect(r.wouldCreate).toEqual(["29"]);
+    expect(r.neverMentioned).toEqual([]);
+    expect(r.looksMisnumbered).toBe(false);
+  });
+
+  it("does not cry mismatch over a seller who omitted his empties", () => {
+    // The other ordinary case: 19 occupied lots listed, 2 empties left off.
+    const listed = HAVEN.slice(0, 19);
+    const r = reconcileRoll(HAVEN, listed.map((l) => f(l, l)));
+    expect(r.wouldCreate).toEqual([]);
+    expect(r.neverMentioned).toEqual(["27","28"]);
+    expect(r.looksMisnumbered, "quiet pads alone are a vacancy, not a mismatch").toBe(false);
+  });
+
+  it("still reports both lists even when it does not raise the alarm", () => {
+    // The card shows the comparison whenever there is anything to compare —
+    // the alarm is the loud branch, not the only one.
+    const r = reconcileRoll(HAVEN, HAVEN.slice(0, 19).map((l) => f(l, l)));
+    expect(r.neverMentioned.length).toBeGreaterThan(0);
+    expect(r.parkLots).toHaveLength(21);
+  });
+
+  it("counts a raw label the park DOES have as matched, not as new", () => {
+    // planImport resolves most labels, but a row can arrive unresolved with a
+    // raw that is nonetheless one of his pads. Creating it would duplicate.
+    const r = reconcileRoll(HAVEN, [f(null, "6"), f(null, " 07 ")]);
+    expect(r.wouldCreate).toEqual([]);
+    expect(r.matched).toContain("6");
+  });
+
+  it("ignores a line with no lot at all rather than inventing one", () => {
+    const r = reconcileRoll(HAVEN, [f(null, ""), f(null, "   ")]);
+    expect(r.wouldCreate).toEqual([]);
+  });
+
+  it("lists a repeated new lot once", () => {
+    const r = reconcileRoll(HAVEN, [f(null, "3"), f(null, "3")]);
+    expect(r.wouldCreate).toEqual(["3"]);
+  });
+
+  it('lists "3" and "03" separately, because that is what would be created', () => {
+    // Tempting to fold these together, and it would be a lie: neither matches
+    // a pad, so approving both really does make two lots. The card predicts
+    // the import, and seeing "3, 03" side by side is itself the useful signal
+    // that something in the sheet is inconsistent.
+    const r = reconcileRoll(HAVEN, [f(null, "3"), f(null, "03")]);
+    expect(r.wouldCreate).toEqual(["3", "03"]);
+  });
+});
+
+
+describe("the comparison reaches the screen", () => {
+  // The helper being right is half of it; a card nothing renders is the other
+  // half of every defect in this codebase.
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+  it("the loader computes it", () => {
+    const actions = read("./import-actions.ts");
+    expect(actions, "reconcileRoll is not called").toMatch(/reconciliation: reconcileRoll\(/);
+    expect(actions, "it must be fed the park's real lots").toMatch(/lots\.map\(\(l\) => l\.lotNumber\)/);
+  });
+
+  it("the page hands it to the component", () => {
+    expect(read("./import/[batchId]/page.tsx")).toMatch(/reconciliation: batch\.reconciliation/);
+  });
+
+  it("the component renders both directions and the alarm", () => {
+    const c = read("../../components/ParkImportRead.tsx");
+    expect(c).toMatch(/reconciliation\.wouldCreate/);
+    expect(c).toMatch(/reconciliation\.neverMentioned/);
+    expect(c, "the loud branch is the whole reason for the card")
+      .toMatch(/reconciliation\.looksMisnumbered/);
+    expect(c, "it must name the lots, not just count them")
+      .toMatch(/wouldCreate\.join\(", "\)/);
+  });
+
+  it("says what creating them does to the denominator", () => {
+    // Every shared cost is divided by the lot count. Going to 27 lots dilutes
+    // the $142.53 fee and the park eats the difference.
+    const c = read("../../components/ParkImportRead.tsx");
+    expect(c).toMatch(/every shared cost is divided by that number/);
   });
 });

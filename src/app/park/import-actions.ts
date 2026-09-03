@@ -12,6 +12,8 @@ import {
   importBlockerText,
   statedTotalFrom,
   emptyLotsFrom,
+  reconcileRoll,
+  type RollReconciliation,
   type ImportPlan,
   type RowOverride,
   type SeasonWindow,
@@ -252,6 +254,12 @@ export interface LoadedBatch {
    * before he goes looking for it later.
    */
   refusedColumns: string[];
+  /**
+   * The sheet's lot labels against the pads the park already has, in BOTH
+   * directions. A seller's book numbered 1..21 matches fifteen of The Haven's
+   * real pads by coincidence; nothing on any screen said so.
+   */
+  reconciliation: RollReconciliation;
 }
 
 /**
@@ -383,6 +391,17 @@ export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
     counts: (batch.counts as Record<string, unknown>) ?? {},
     statedTotal: statedTotalFrom(parsed.totals.map((t) => t.text)),
     refusedColumns: parsed.columns.refused,
+    // BOTH LISTS, SIDE BY SIDE. Nothing has ever compared the sheet's lot
+    // labels against the pads he already has, in either direction — so a
+    // seller's book numbered 1..21 matched fifteen of The Haven's pads by
+    // coincidence and imported them without a word.
+    reconciliation: reconcileRoll(
+      lots.map((l) => l.lotNumber),
+      parsed.rows.map((r) => ({
+        matched: (r.lot?.value as string | null) ?? null,
+        raw: (r.lot?.raw as string) ?? "",
+      })),
+    ),
   };
 }
 

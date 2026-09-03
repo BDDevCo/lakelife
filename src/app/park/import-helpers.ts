@@ -779,3 +779,74 @@ export function whyNotReadable(fileName: string, head: string): string | null {
   }
   return null;
 }
+
+
+/**
+ * ============ DOES THIS SHEET NUMBER THE PADS THE WAY THE PARK DOES? ============
+ *
+ * The single most likely way a takeover import goes wrong, and it produces a
+ * screen that looks fine.
+ *
+ * The Haven's pads are 1, 2, 6, 7, 9, 10, 11, 14, 15-24, 26, 27, 28 — not
+ * 1-21. A seller whose book simply numbers his tenants 1..21 produces a file
+ * where FIFTEEN rows match a real pad by coincidence and six do not. The
+ * fifteen import silently, with no blocker and nothing to answer: fifteen
+ * households filed onto pads that are not theirs. The six become "Create lot
+ * 3" buttons whose obvious answer is yes, and the park ends up with 27 lots —
+ * which is the denominator every shared cost is divided by, so the $142.53 fee
+ * built on 21 quietly dilutes and the park eats the difference.
+ *
+ * Matching by number is right when the numbering agrees, and the software
+ * cannot tell whose numbering it is. What it CAN do is put both lists side by
+ * side, which no screen has ever done in either direction.
+ *
+ * The tell is the shape, not either list alone: a file that names pads the
+ * park does not have WHILE leaving pads the park does have unmentioned. One
+ * of those is ordinary — a new pad, or a vacancy the seller omitted. Both at
+ * once, several times over, is a numbering mismatch.
+ */
+export interface RollReconciliation {
+  /** Pads the park already has. */
+  parkLots: string[];
+  /** Pads the file names that the park has. */
+  matched: string[];
+  /** Labels in the file that match no pad — importing creates these. */
+  wouldCreate: string[];
+  /** Pads the park has that the file never names at all. */
+  neverMentioned: string[];
+  /** Both lists non-trivially non-empty: the signature of a mismatch. */
+  looksMisnumbered: boolean;
+}
+
+export function reconcileRoll(
+  parkLots: readonly string[],
+  fileLabels: readonly { matched: string | null; raw: string }[],
+): RollReconciliation {
+  const seen = new Set<string>();
+  const wouldCreate: string[] = [];
+
+  for (const f of fileLabels) {
+    if (f.matched != null) { seen.add(f.matched); continue; }
+    const raw = (f.raw ?? "").trim();
+    if (!raw) continue;                       // a line with no lot at all
+
+    // THE SAME MATCHER THE IMPORT ITSELF USES, not a second rule that happens
+    // to agree today. `normaliseLotLabel` knows "Lot 6" and "07" are pads 6 and
+    // 7 while "12A" is not pad 12; a card that predicted something else would
+    // be a confident sentence about a different import than the one he is
+    // about to run.
+    const hit = normaliseLotLabel(raw, parkLots);
+    if (hit != null) { seen.add(hit); continue; }
+    if (!wouldCreate.some((w) => lotKey(w) === lotKey(raw))) wouldCreate.push(raw);
+  }
+
+  const matched = parkLots.filter((l) => seen.has(l));
+  const neverMentioned = parkLots.filter((l) => !seen.has(l));
+
+  // TWO IS THE THRESHOLD, deliberately. One unknown label and one quiet pad is
+  // an ordinary Tuesday — a new site, a vacancy the seller left off. Several of
+  // both at once is the only shape a numbering mismatch makes.
+  const looksMisnumbered = wouldCreate.length >= 2 && neverMentioned.length >= 2;
+
+  return { parkLots: [...parkLots], matched, wouldCreate, neverMentioned, looksMisnumbered };
+}

@@ -11,6 +11,7 @@ import {
   checkTotals,
   type PlannedRow,
   type ImportBlocker,
+  type RollReconciliation,
 } from "@/app/park/import-helpers";
 
 /**
@@ -46,6 +47,7 @@ export interface ReadView {
    *  didn't take. Read through `num()` / `commitFailures()` below. */
   counts: Record<string, unknown>;
   refusedColumns: string[];
+  reconciliation: RollReconciliation;
   statedTotal: number | null;
 }
 
@@ -287,6 +289,63 @@ export function ParkImportRead({ view }: { view: ReadView }) {
             <AskCard key={r.lineNo} row={r} onAnswer={answer} busy={pending} />
           ))}
         </section>
+      )}
+
+      {/* ---- DOES THIS SHEET NUMBER THE PADS THE WAY YOU DO? -------------
+           The most likely way a takeover import goes wrong, and until now it
+           produced a screen that looked fine: The Haven's pads are 1, 2, 6, 7,
+           9, 10, 11, 14, 15-24, 26, 27, 28, so a seller's book numbered 1..21
+           matches FIFTEEN of them by coincidence and imports them without a
+           word. Nothing anywhere compared the two lists. */}
+      {(view.reconciliation.wouldCreate.length > 0 ||
+        view.reconciliation.neverMentioned.length > 0) && (
+        <div
+          className="ll-card ll-card-pad"
+          style={{
+            marginTop: 14,
+            borderLeft: view.reconciliation.looksMisnumbered ? "4px solid var(--gold)" : undefined,
+          }}
+        >
+          <strong style={{ fontSize: 15 }}>
+            {view.reconciliation.looksMisnumbered
+              ? "This list may be numbered differently from your lots"
+              : "How this list lines up with your lots"}
+          </strong>
+
+          {view.reconciliation.looksMisnumbered && (
+            <p style={{ fontSize: 13.5, margin: "6px 0 0", lineHeight: 1.55 }}>
+              It names {view.reconciliation.wouldCreate.length} lots you
+              don&apos;t have and never mentions{" "}
+              {view.reconciliation.neverMentioned.length} you do. That usually
+              means whoever wrote it numbered their own list rather than using
+              your lot numbers — in which case the ones that <em>did</em> match
+              are matching by coincidence, and those households would go onto
+              the wrong lots. Worth a phone call before you put anyone in.
+            </p>
+          )}
+
+          <ul className="mut" style={{ fontSize: 13.5, margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
+            <li>
+              Matched {view.reconciliation.matched.length} of your{" "}
+              {view.reconciliation.parkLots.length} lots.
+            </li>
+            {view.reconciliation.wouldCreate.length > 0 && (
+              <li>
+                Not in your park:{" "}
+                <strong>{view.reconciliation.wouldCreate.join(", ")}</strong>.
+                {" "}Creating {view.reconciliation.wouldCreate.length === 1 ? "it" : "them"} would
+                take you to {view.reconciliation.parkLots.length + view.reconciliation.wouldCreate.length} lots,
+                and every shared cost is divided by that number.
+              </li>
+            )}
+            {view.reconciliation.neverMentioned.length > 0 && (
+              <li>
+                Your lots this list never mentions:{" "}
+                <strong>{view.reconciliation.neverMentioned.join(", ")}</strong>.
+              </li>
+            )}
+          </ul>
+        </div>
       )}
 
       {/* ---- WHAT WE REFUSED TO KEEP ------------------------------------- */}
