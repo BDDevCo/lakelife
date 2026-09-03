@@ -405,14 +405,16 @@ export function ParkRentRoll({
         <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
           <h3 style={{ fontSize: 17, margin: "0 0 6px" }}>Your rent roll starts here</h3>
           <p className="mut" style={{ fontSize: 14, marginBottom: 14, lineHeight: 1.5 }}>
-            Paste whatever the seller gave you and we&apos;ll read what we can.
+            Pick the file the seller sent and we&apos;ll read what we can.
             Or add your lots one at a time.
           </p>
-          {/* The paste is PRIMARY. On closing day he has a seller's rent roll
+          {/* THE ROLL IS PRIMARY. On closing day he has a seller's rent roll
               and a notebook, and typing 79 lots by hand is the reason the
-              notebook wins. */}
+              notebook wins. The button said "Paste my rent roll" — telling him
+              to do the one thing he has said he never wants to do — for a
+              screen that takes a file now. */}
           <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
-            <Link className="ll-btn" href="/park/import">Paste my rent roll</Link>
+            <Link className="ll-btn" href="/park/import">Load the seller&apos;s roll</Link>
             <Link className="ll-btn ghost" href="/park/lots">Add lots one by one</Link>
           </div>
         </div>

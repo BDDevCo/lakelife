@@ -47,11 +47,24 @@ function firstBill(cutoverISO: string): string | null {
   return first == null ? null : prettyMonth(first);
 }
 
-export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO: string }) {
+export function ParkImportPaste({ parkId, todayISO, parkCutover }: { parkId: string; todayISO: string; parkCutover: string | null }) {
   const [text, setText] = useState("");
-  // Today, because the common case is doing this the day it happens — and
-  // never a value he did not choose that would silently claim a whole month.
-  const [cutover, setCutover] = useState(todayISO);
+  /**
+   * THE PARK ALREADY KNOWS THIS DAY, AND THE BOX WAS ASKING AGAIN.
+   *
+   * `cutover_date` is set in Park setup — The Haven's is 2027-01-01 — and this
+   * box defaulted to TODAY and never consulted it. That default is not a
+   * cosmetic wrong answer: `rangeForTerm` dates EVERY tenancy this import
+   * writes as `{start: cutover, end: cutover + 1 year}`. Accepting today on
+   * 4 September files all 21 households as living there from September 2026,
+   * three months before he owns the park — and `lot_no_double_booking`, an
+   * EXCLUDE constraint, would then refuse the real 1 January lease on every
+   * one of those lots.
+   *
+   * So the stored answer wins, and today is only the fallback for a park that
+   * has not set one yet.
+   */
+  const [cutover, setCutover] = useState(parkCutover ?? todayISO);
   const [dup, setDup] = useState<{ id: string; when: string; committed: boolean } | null>(null);
   const [pending, start] = useTransition();
   const [fileName, setFileName] = useState<string | null>(null);
@@ -125,7 +138,14 @@ export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO
           <span className="mut">Choose the file</span>
           <input
             type="file"
-            accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain"
+            /* DELIBERATELY WIDE, and this was wrong the first time.
+               A narrow accept list greys the file out in the picker: he taps
+               "Choose the file", cannot select the Rent Roll.xlsx Mike just
+               emailed him, and NOTHING explains why — while the careful
+               "File → Save As → CSV" sentence below can only ever fire for a
+               file that lies about its own extension. Letting him pick it and
+               then telling him what to do is the whole point. */
+            accept=".csv,.tsv,.txt,.xlsx,.xls,.numbers,.ods,.pdf,text/csv,text/tab-separated-values,text/plain"
             onChange={(e) => { void pickFile(e.target.files?.[0]); e.target.value = ""; }}
             /* 16, not 14: anything smaller zooms Safari on focus, which is
                what design-system-holds.test.ts is there to catch — and did. */

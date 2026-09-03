@@ -33,6 +33,8 @@ export interface MyPark {
    * assume a silent product was broken rather than obedient.
    */
   noticesHeldAt: string | null;
+  /** The day he takes over. Set in Park setup; null until he has. */
+  cutoverDate: string | null;
   noticesHeldReason: string | null;
   role: "owner" | "manager";
   name: string;
@@ -79,7 +81,7 @@ export async function getMyPark(): Promise<MyPark | null> {
     // One string literal, deliberately: supabase-js parses the select at the
     // TYPE level, and a concatenated string widens to `string`, which collapses
     // every column to GenericStringError.
-    .select("id, name, slug, address, lake_id, park_type, age_restricted, approval_required, season_open_month, season_open_day, season_close_month, season_close_day, included_utilities, house_rules, active, notices_held_at, notices_held_reason")
+    .select("id, name, slug, address, lake_id, park_type, age_restricted, approval_required, season_open_month, season_open_day, season_close_month, season_close_day, included_utilities, house_rules, active, notices_held_at, notices_held_reason, cutover_date")
     .in("id", parkIds)
     .order("name"));
   const park = parks?.[0];
@@ -114,6 +116,10 @@ export async function getMyPark(): Promise<MyPark | null> {
     includedUtilities: (park.included_utilities as string[] | null) ?? [],
     houseRules: (park.house_rules as string | null) ?? null,
     active: !!park.active,
+    // THE DAY HE TAKES OVER, already decided and stored. The roll importer was
+    // asking him for it again and defaulting the box to TODAY — and that date
+    // dates every tenancy it writes.
+    cutoverDate: (park.cutover_date as string | null) ?? null,
   };
 }
 
