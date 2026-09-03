@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   payersFor, monthlyIncome, checkCoverage, coverageSummary, feesForTenancy, feePayableCount,
   type ParkFee, nightlyRecoveryTarget, nightlyRecoveryLine,
@@ -344,5 +346,65 @@ describe("a fee never lands on a tenancy the park inherited", () => {
     ])).toBe(1);
     expect(feePayableCount([])).toBe(0);
     expect(feePayableCount([{ origin: "application" }, {}])).toBe(2);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE ROLL AND THE BILLER DISAGREEING ABOUT MONEY.
+//
+// /park computed what each household owes by inlining ONE HALF of
+// feesForTenancy — the short_term check — and dropping the grandfathered one.
+// Every tenancy the roll importer writes is origin:'grandfathered' and carries
+// no park fees, so after Mike's roll lands the tile would have shown each
+// household owing $542.53 while the charge run raised $400. Two screens, the
+// same morning, different money — and the tile is the default landing screen,
+// so it is the one he would believe.
+//
+// It could not have called the real rule: `origin` was in neither the Stay
+// type nor the roll's select, so the check would have read undefined,
+// compiled, and silently never fired. The twin of this codebase's oldest
+// defect — a condition widened without its select.
+// ---------------------------------------------------------------------------
+describe("the rent roll uses the biller's own fee rule", () => {
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+  it("calls feesForTenancy rather than reimplementing half of it", () => {
+    const page = read("./page.tsx");
+    expect(page, "the short_term half is inlined again")
+      .not.toMatch(/fees: r\.lot\.rentalMode === "short_term" \? \[\] : monthlyFees/);
+    expect(page).toMatch(/fees: feesForTenancy\(/);
+  });
+
+  it("hands it the origin, or the grandfathered rule can never fire", () => {
+    const page = read("./page.tsx");
+    const call = page.match(/feesForTenancy\([\s\S]{0,240}?\),/)?.[0] ?? "";
+    expect(call, "the feesForTenancy call is gone").not.toBe("");
+    expect(call, "origin is not passed — the check reads undefined")
+      .toMatch(/origin: r\.current\.origin/);
+  });
+
+  it("origin is in the query, or it is undefined at runtime", () => {
+    // The select is one string literal on purpose; a column missing from it
+    // makes stay.origin undefined and the rule silently permissive.
+    const data = read("./data.ts");
+    const select = data.match(/\.select\("id, park_lot_id, renter_id[^"]*"\)/)?.[0] ?? "";
+    expect(select, "the roll's reservation select is gone").not.toBe("");
+    expect(select, "origin is not selected").toMatch(/origin/);
+  });
+
+  it("and origin survives the mapping into a Stay", () => {
+    const helpers = read("./park-helpers.ts");
+    expect(helpers).toMatch(/origin: \(r as \{ origin\?: string \| null \}\)\.origin/);
+  });
+
+  it("the rule itself still refuses fees on a grandfathered tenancy", () => {
+    expect(feesForTenancy([{ id: "f" }], { rental_mode: "long_term" }, { origin: "grandfathered" }))
+      .toEqual([]);
+    expect(feesForTenancy([{ id: "f" }], { rental_mode: "long_term" }, { origin: "application" }))
+      .toEqual([{ id: "f" }]);
+    expect(feesForTenancy([{ id: "f" }], { rental_mode: "short_term" }, { origin: "application" }))
+      .toEqual([]);
   });
 });

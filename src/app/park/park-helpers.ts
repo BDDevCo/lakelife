@@ -53,6 +53,13 @@ export interface Stay {
   quotedAmount: number | null;
   dueDay: number | null;
   amountSource: string | null;
+  /**
+   * How this tenancy came to exist. 'grandfathered' means it predates our
+   * involvement and carries no park fees — a rule `feesForTenancy` enforces
+   * and which the rent roll could not consult, because this field was in
+   * neither the type nor the query.
+   */
+  origin: string | null;
   status: string;
   decidedAt: string | null;
   createdAt: string | null;
@@ -78,6 +85,7 @@ export function toStay(r: RawReservation): Stay {
     quotedAmount: r.quoted_amount,
     dueDay: r.due_day ?? null,
     amountSource: r.amount_source ?? null,
+    origin: (r as { origin?: string | null }).origin ?? null,
     status: r.status,
     decidedAt: r.decided_at,
     createdAt: r.created_at,

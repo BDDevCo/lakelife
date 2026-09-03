@@ -15,6 +15,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { periodIsBillable, firstBillablePeriod } from "@/lib/billing-start";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 import { mustRead } from "@/lib/must-read";
+import { feesForTenancy } from "@/app/park/fee-helpers";
 
 /**
  * The park owner's home screen — the rent roll. Everything here is scoped to
@@ -128,7 +129,24 @@ export default async function ParkPage() {
       month: thisMonth,
       stay: r.current.range,
       rent: r.current.quotedAmount,
-      fees: r.lot.rentalMode === "short_term" ? [] : monthlyFees,
+      // THE SAME RULE THE BILLER USES, not a copy of half of it.
+      //
+      // This inlined only the short_term half of `feesForTenancy` and dropped
+      // the grandfathered half. Every tenancy the roll importer writes is
+      // `origin: 'grandfathered'` and carries no park fees — so after Mike's
+      // roll lands, this tile would have shown each household owing $542.53
+      // and the charge run would have raised $400. Two screens, the same
+      // morning, different money, and the tile is the default landing screen
+      // so it is the one he would believe.
+      //
+      // It could not have called the real rule before this: `origin` was in
+      // neither the Stay type nor the roll's select, so the check would have
+      // read undefined, compiled, and silently never fired.
+      fees: feesForTenancy(
+        monthlyFees,
+        { rental_mode: r.lot.rentalMode },
+        { origin: r.current.origin },
+      ),
       dueDay: (parkRow?.rent_due_day as number) ?? 1,
     });
     statements.push(st);
