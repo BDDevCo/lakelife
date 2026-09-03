@@ -339,8 +339,14 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
           </p>
         ) : view.reported.length === 0 ? (
           <p className="mut" style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.55 }}>
-            Nothing yet. The sticker on your pedestal opens a form — no login,
-            no app.
+            {/* THE STICKER HAS TO EXIST TO BE SCANNED. `park_lots.qr_token` is
+                null until the office mints and physically fixes one, and no
+                lot at The Haven has one — so this told a household with a
+                leaking riser to go outside and scan something that is not
+                there, from a card that offers her no other button. */}
+            {view.hasSticker
+              ? "Nothing yet. The sticker on your pedestal opens a form — no login, no app."
+              : "Nothing yet. Tell the office and they'll log it for you. When they put a sticker on your pedestal, scanning it will open the same form — no login, no app."}
           </p>
         ) : (
           <div style={{ marginTop: 6 }}>

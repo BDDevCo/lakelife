@@ -177,6 +177,19 @@ export async function enableBookingForMyLot(): Promise<BookingSetupResult> {
     // inactive service never renders — and they appear the day they are
     // switched on, rather than needing this list edited again.
     wanted_services: [
+      // THE MOW. Absent until now, which made three things disagree at once:
+      // this action sets `lawn_band: 'small'` a few lines above — a column
+      // that exists only to price "Lawn mowing & trim" — the card she taps
+      // says "Book a mow or a clean for your lot", and /book then filtered
+      // the mow out of her menu because it was not on this list. Her menu
+      // after the tap was three tiles, and the one the sentence leads with
+      // was not among them.
+      //
+      // Not a pricing or applicability problem: the service is active,
+      // park_only = false, and band pricing puts a small pad at $65. Every
+      // other exclusion below is argued for by name; this one was never
+      // argued for at all, and the lawn_band line is the author saying so.
+      "Lawn mowing & trim",
       "Mobile home winterization",
       "Mobile home de-winterization",
       "Housekeeping",

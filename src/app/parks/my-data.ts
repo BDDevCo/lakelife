@@ -56,6 +56,8 @@ export interface Bill {
 export interface RenterHome {
   parkName: string;
   lotNumber: string;
+  /** Her pedestal has a scannable sticker. False for every Haven lot today. */
+  hasSticker: boolean;
   displayName: string;
   /** Their tenancy's start, for "living here since". */
   since: string | null;
@@ -214,7 +216,12 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // whether a Pay button appears at all, the percentage added if she uses it,
   // what she owes, what she has paid, and her deposit.
   const [lotRes, parkRes, cardsRes, chargesRes, paysRes, propsRes, reqsRes] = await Promise.all([
-    admin.from("park_lots").select("lot_number").eq("id", stay.park_lot_id as string).maybeSingle(),
+    // `qr_token` because the "What you reported" card asserts a sticker on
+    // her pedestal. No lot at The Haven has one — a token exists only after
+    // the office runs mintStickers and physically fixes them — so the card
+    // sent a household with a leaking riser outside to scan something that is
+    // not there, from a screen with no other way to report anything.
+    admin.from("park_lots").select("lot_number, qr_token").eq("id", stay.park_lot_id as string).maybeSingle(),
     admin.from("parks").select("name, accepts_online_rent, card_fee_pct").eq("id", file.park_id as string).maybeSingle(),
     admin.from("payment_methods").select("id", { count: "exact", head: true }).eq("user_id", user.id),
     admin
@@ -395,6 +402,8 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     cardFeePct: Number(park?.card_fee_pct ?? 0),
     today: todayLakeDate(),
     lotNumber: (lot?.lot_number as string) ?? "—",
+    // Whether the sticker the report card talks about actually exists.
+    hasSticker: lot?.qr_token != null,
     displayName: (file.display_name as string) ?? "Resident",
     // WHEN SHE ARRIVED, NOT WHEN THE PAPERWORK STARTED. This read the
     // agreement window's start and labelled it "living here since" — two facts
