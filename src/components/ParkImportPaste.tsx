@@ -6,6 +6,7 @@ import Link from "next/link";
 import { toast } from "@/components/Toast";
 import { readPaste } from "@/app/park/import-actions";
 import { firstBillablePeriod } from "@/lib/billing-start";
+import { whyNotReadable } from "@/app/park/import-helpers";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 
 /**
@@ -53,7 +54,47 @@ export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO
   const [cutover, setCutover] = useState(todayISO);
   const [dup, setDup] = useState<{ id: string; when: string; committed: boolean } | null>(null);
   const [pending, start] = useTransition();
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const router = useRouter();
+
+  /**
+   * THE FILE DOOR.
+   *
+   * The only way in was this screen's textarea, and his standing rule is
+   * "I dont ever want to copy paste. I will screw something up." The roll
+   * arrives from the seller as a file; selecting a spreadsheet and pasting it
+   * into a box on a phone is exactly the act he asked never to perform, and it
+   * fails SILENTLY — a short selection reads as a shorter roll, not an error.
+   *
+   * `readPaste` takes text, so this changes no parsing whatsoever. It reads the
+   * file into the same box, which also means he can still SEE and correct what
+   * we got before anything is read.
+   */
+  async function pickFile(file: File | null | undefined) {
+    if (!file) return;
+    setDup(null);
+    let raw: string;
+    try {
+      raw = await file.text();
+    } catch {
+      setFileName(null);
+      setFileError("We couldn't open that file. Try saving it as a CSV.");
+      return;
+    }
+    // Sniffed on the real bytes, not the extension alone.
+    const why = whyNotReadable(file.name, raw.slice(0, 64));
+    if (why) {
+      setFileName(null);
+      setFileError(why);
+      // The box is left ALONE on a refusal. Filling it with binary, or
+      // emptying work he had already typed, are both worse than nothing.
+      return;
+    }
+    setFileError(null);
+    setFileName(file.name);
+    setText(raw);
+  }
 
   function submit(force: boolean) {
     start(async () => {
@@ -72,14 +113,39 @@ export function ParkImportPaste({ parkId, todayISO }: { parkId: string; todayISO
 
       <h1 style={{ fontSize: 26, margin: "14px 0 8px" }}>Your rent roll starts here</h1>
       <p className="mut" style={{ marginTop: 0, lineHeight: 1.5 }}>
-        Paste whatever you&apos;ve got — a spreadsheet, the page from the
-        lawyer, the list you keep in your phone. We&apos;ll read what we can and
-        be straight with you about the rest.
+        Pick the file the seller sent you, or paste whatever you&apos;ve got —
+        the page from the lawyer, the list you keep in your phone. We&apos;ll
+        read what we can and be straight with you about the rest.
       </p>
 
       <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
+        {/* THE FILE FIRST, because that is how the roll actually arrives. The
+            box below stays for the closing-table moment it was built for. */}
         <label className="ll-field" style={{ fontSize: 13 }}>
-          <span className="mut">Paste here</span>
+          <span className="mut">Choose the file</span>
+          <input
+            type="file"
+            accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain"
+            onChange={(e) => { void pickFile(e.target.files?.[0]); e.target.value = ""; }}
+            /* 16, not 14: anything smaller zooms Safari on focus, which is
+               what design-system-holds.test.ts is there to catch — and did. */
+            style={{ fontSize: 16, padding: "8px 0" }}
+          />
+        </label>
+        {fileName && (
+          <p className="mut" style={{ fontSize: 13, margin: "2px 0 0" }}>
+            Read <strong>{fileName}</strong> into the box below. Have a look
+            before you go on — nothing is saved yet.
+          </p>
+        )}
+        {fileError && (
+          <p style={{ fontSize: 13, margin: "2px 0 0", lineHeight: 1.5, color: "var(--ink-warn)" }}>
+            {fileError}
+          </p>
+        )}
+
+        <label className="ll-field" style={{ fontSize: 13, marginTop: 14 }}>
+          <span className="mut">Or paste it here</span>
           <textarea
             value={text}
             onChange={(e) => { setText(e.target.value); setDup(null); }}

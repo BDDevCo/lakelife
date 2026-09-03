@@ -21,7 +21,9 @@ const TABS = [
   // and generating lots is the first thing an owner is told to do — the paste
   // box became unreachable, and the fallback was the three hours of manual
   // typing it exists to prevent. It is not a first-run wizard; it is a tool.
-  { href: "/park/import", label: "Paste a roll" },
+  // NOT "Paste a roll" any more — the screen takes a file now, and that is
+  // the door that matters: the roll arrives from the seller by email.
+  { href: "/park/import", label: "Load the roll" },
   { href: "/park/rent", label: "Rent" },
   { href: "/park/costs", label: "Costs" },
   { href: "/park/statements", label: "Statements" },

@@ -416,12 +416,74 @@ export function detectDelimiter(lines: string[]): Delimiter {
   return bestScore >= 0.34 ? best : "none";
 }
 
+/**
+ * ============ A NAME WITH A COMMA IN IT ============
+ *
+ * Rent rolls write names "Wexler, Donna". A spreadsheet saving that to CSV
+ * quotes the field — `1,"Wexler, Donna",385,300,4/1/15` — and a naive split on
+ * commas turns one row into six cells instead of five:
+ *
+ *   lot  "1"          correct
+ *   name '"Wexler'    truncated
+ *   rent 'Donna"'     -> null, "We couldn't read that as an amount"
+ *   ...and EVERY COLUMN AFTER THE NAME SHIFTS BY ONE. Her $385 rent lands in
+ *   the deposit note and her $300 deposit lands in the move-in date.
+ *
+ * It is silent. The row still parses, still shows a lot number, and still has
+ * a name that looks nearly right. Twenty-one of those is a rent roll that is
+ * wrong in a way nobody would catch by glancing at it.
+ *
+ * This never bit before because the screen only took a PASTE, and pasting from
+ * a spreadsheet gives TAB-separated cells, which are not quoted. Adding a file
+ * door made real CSV reachable for the first time.
+ *
+ * RFC 4180, and only where it is unambiguous: a quote opens a field ONLY as
+ * that field's first character, `""` inside a quoted field is a literal quote,
+ * and an unterminated quote falls back to the old naive split for that line —
+ * so a stray `"` in somebody's note can never make a line worse than it was.
+ */
+function splitQuoted(line: string, sep: string): string[] {
+  const out: string[] = [];
+  let cell = "";
+  let i = 0;
+  while (i <= line.length) {
+    if (i === line.length) { out.push(cell); break; }
+    const ch = line[i];
+    if (ch === '"' && cell === "") {
+      // A quoted field. Read to the closing quote, "" meaning one quote.
+      let j = i + 1;
+      let val = "";
+      let closed = false;
+      while (j < line.length) {
+        if (line[j] === '"') {
+          if (line[j + 1] === '"') { val += '"'; j += 2; continue; }
+          closed = true; j += 1; break;
+        }
+        val += line[j]; j += 1;
+      }
+      // Unbalanced: give up on the whole line rather than guess.
+      if (!closed) return line.split(sep);
+      cell = val;
+      // Anything between the closing quote and the next separator is junk we
+      // keep, so nothing is silently dropped.
+      while (j < line.length && line[j] !== sep) { cell += line[j]; j += 1; }
+      i = j;
+      continue;
+    }
+    if (ch === sep) { out.push(cell); cell = ""; i += 1; continue; }
+    cell += ch; i += 1;
+  }
+  return out;
+}
+
 function splitLine(line: string, d: Delimiter): string[] {
   switch (d) {
-    case "tab":        return line.split("\t");
-    case "pipe":       return line.split("|");
+    // Tab and pipe get the same treatment: Excel quotes a TSV field too when
+    // it contains a quote or a newline, and the rule is a no-op otherwise.
+    case "tab":        return splitQuoted(line, "\t");
+    case "pipe":       return splitQuoted(line, "|");
     case "multispace": return line.split(/ {2,}/);
-    case "comma":      return line.split(",");
+    case "comma":      return splitQuoted(line, ",");
     case "none":       return [line];
   }
 }

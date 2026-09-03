@@ -507,3 +507,113 @@ describe("placeholders are not people", () => {
     expect(res.rows[0].name.value).toBeNull();
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// A NAME WITH A COMMA IN IT.
+//
+// Rent rolls write names "Wexler, Donna". A spreadsheet saving that to CSV
+// quotes the field, and a naive split on commas made one row into six cells
+// instead of five: the name truncated to '"Wexler', the rent read as 'Donna"'
+// and refused, and EVERY COLUMN AFTER THE NAME SHIFTED BY ONE — her $385 rent
+// landing in the deposit note, her $300 deposit landing in the move-in date.
+//
+// Silent, too. The row still parsed, still had a lot number, and still had a
+// name that looked nearly right. Twenty-one of those is a rent roll nobody
+// would catch by glancing at it.
+//
+// It had never bitten because the screen only took a PASTE, and pasting from a
+// spreadsheet gives TAB-separated cells, which are not quoted. Adding a file
+// door for the roll Mike actually emails made real CSV reachable, and this
+// with it. Found by feeding the parser a realistic Haven roll before he did.
+// ---------------------------------------------------------------------------
+describe("quoted CSV, which is how every real rent roll writes a name", () => {
+  const HAVEN = ["1", "2", "6", "11", "26", "28"];
+  const parse = (csv: string) => parseRentRoll(csv, { knownLots: HAVEN });
+
+  it("keeps a Last, First name whole and the rent in the rent column", () => {
+    const r = parse('Space,Tenant,Monthly Rent,Deposit\n1,"Wexler, Donna",385,300');
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0].name?.value).toBe("Wexler, Donna");
+    expect(r.rows[0].rent?.value).toBe(385);
+  });
+
+  it("does not shift the columns after the quoted one", () => {
+    // The damage was never really the name — it was everything downstream of
+    // it landing one column to the left.
+    const naive = 'Space,Tenant,Monthly Rent,Deposit\n2,"Kastner, Ray",385,300';
+    const r = parse(naive);
+    expect(r.rows[0].rent?.value).toBe(385);
+    expect(r.rows[0].rent?.value).not.toBe(300);
+  });
+
+  it("reads a quoted thousands separator as one number", () => {
+    // "1,200" is two cells to a naive split and $1,200 to a person.
+    const r = parse('Space,Tenant,Monthly Rent\n26,"Trombley, Ken & Sue","1,200"');
+    expect(r.rows[0].rent?.value).toBe(1200);
+    expect(r.rows[0].name?.value).toBe("Trombley, Ken & Sue");
+  });
+
+  it('treats "" inside a quoted field as one literal quote', () => {
+    const r = parse('Space,Tenant,Monthly Rent\n6,"Ordonez, ""Mari"" Maria",400');
+    expect(r.rows[0].name?.value).toBe('Ordonez, "Mari" Maria');
+    expect(r.rows[0].rent?.value).toBe(400);
+  });
+
+  it("leaves an UNQUOTED comma file exactly as it was", () => {
+    // The old behaviour is still the behaviour when there are no quotes —
+    // this fix must not move any line that was already right.
+    const r = parse("Space,Tenant,Monthly Rent\n1,Donna Wexler,385");
+    expect(r.rows[0].name?.value).toBe("Donna Wexler");
+    expect(r.rows[0].rent?.value).toBe(385);
+  });
+
+  it("falls back to the old split on an unbalanced quote", () => {
+    // A stray quote must never make a line WORSE than it was before this fix.
+    // The quote has to OPEN the field to reach the quoted branch at all — my
+    // first version of this test put it mid-field, where the branch is never
+    // entered, so it passed with the fallback deleted. Caught by mutation.
+    const r = parse('Space,Tenant,Monthly Rent\n1,"hi there,385');
+    expect(r.rows[0].rent?.value, "an unterminated quote swallowed the rent").toBe(385);
+  });
+
+  it("a quote in the MIDDLE of a field is a literal quote, not an opener", () => {
+    // Only a quote at the field's first character opens a quoted field. Treat
+    // any quote as an opener and everything before it is discarded — the name
+    // below loses "He said " entirely.
+    const r = parse('Space,Tenant,Monthly Rent\n1,He said "hi there" ok,385');
+    expect(r.rows[0].name?.value, "text before a mid-field quote was dropped")
+      .toMatch(/He said/);
+    expect(r.rows[0].rent?.value).toBe(385);
+  });
+
+  it("still accounts for every line — nothing is quietly dropped", () => {
+    const r = parse('Space,Tenant,Monthly Rent\n1,"Wexler, Donna",385\n2,"Kastner, Ray",385');
+    expect(r.accounting.unaccounted).toEqual([]);
+    expect(r.accounting.accounted).toBe(r.accounting.totalLines);
+  });
+
+  it("a lot that is not in the park is ASKED about, not silently imported", () => {
+    // The Haven's lots are not 1-21. A roll row for a lot that does not exist
+    // must stop and ask rather than invent one.
+    const r = parse('Space,Tenant,Monthly Rent\n99,"Nobody, Here",400');
+    expect(r.rows[0].verdict).toBe("ask");
+    expect(JSON.stringify(r.rows[0])).toMatch(/no lot with that number/i);
+  });
+
+  it("the whole realistic Haven roll reads correctly end to end", () => {
+    const r = parse([
+      "Space,Tenant,Monthly Rent,Deposit,Move In",
+      '1,"Wexler, Donna",385,300,4/1/15',
+      '2,"Kastner, Ray",385,,6/15/09',
+      '6,"Ordonez, Maria",400,300,3/1/21',
+      '26,"Trombley, Ken & Sue","1,200",500,8/1/18',
+      '28,"Bui, Anh",400,300,2/1/24',
+    ].join("\n"));
+    expect(r.rows.map((x) => x.name?.value)).toEqual([
+      "Wexler, Donna", "Kastner, Ray", "Ordonez, Maria", "Trombley, Ken & Sue", "Bui, Anh",
+    ]);
+    expect(r.rows.map((x) => x.rent?.value)).toEqual([385, 385, 400, 1200, 400]);
+    expect(r.accounting.unaccounted).toEqual([]);
+  });
+});

@@ -723,3 +723,59 @@ export function emptyLotsFrom(
   }
   return out;
 }
+
+/**
+ * ============ IS THIS FILE SOMETHING WE CAN READ AS TEXT? ============
+ *
+ * The roll intake had exactly one door: a textarea. That door was designed for
+ * a real moment — him on his phone at a closing table, reading a list off a
+ * page — and it is the wrong door for the one that actually matters, which is
+ * a file arriving from the seller by email.
+ *
+ * His standing rule is verbatim: "I dont ever want to copy paste. I will screw
+ * something up." Selecting a spreadsheet and pasting it into a box on a phone
+ * is precisely the act he asked never to have to perform, and the failure mode
+ * is silent — a truncated selection reads as a shorter roll, not as an error.
+ *
+ * `readPaste` takes TEXT, so a file door needs no change to any parsing. It
+ * needs only this: refuse, in words, the files that are not text, rather than
+ * filling the box with binary and letting the parser find nothing in it.
+ *
+ * A .xlsx is a ZIP (starts "PK") and a .pdf starts "%PDF". Read as text they
+ * produce line noise, and line noise in a paste box looks like our bug.
+ */
+export function whyNotReadable(fileName: string, head: string): string | null {
+  const name = fileName.toLowerCase();
+  const ext = name.slice(name.lastIndexOf("."));
+
+  // SNIFFED, NOT MERELY NAMED: a spreadsheet saved with the wrong extension is
+  // still a spreadsheet, and a .txt that is really a PDF is still a PDF.
+  if (head.startsWith("PK")) {
+    return "That's an Excel or Numbers file. Open it and choose File \u2192 Save As \u2192 CSV, "
+         + "then pick the CSV \u2014 or ask for it as a CSV in the first place.";
+  }
+  if (head.startsWith("%PDF")) {
+    return "That's a PDF, and a PDF has no columns we can read. If it's a "
+         + "spreadsheet printed to PDF, ask for the spreadsheet itself as a CSV.";
+  }
+  if (ext === ".xls" || ext === ".xlsx" || ext === ".numbers" || ext === ".ods") {
+    return "Spreadsheet files need saving as CSV first \u2014 open it and choose "
+         + "File \u2192 Save As \u2192 CSV, then pick that.";
+  }
+  if (ext === ".pdf" || ext === ".doc" || ext === ".docx" || ext === ".pages") {
+    return "We can only read a CSV, a TSV or a plain text list. If this came "
+         + "from a spreadsheet, ask for it as a CSV.";
+  }
+  if (ext === ".heic" || ext === ".jpg" || ext === ".jpeg" || ext === ".png") {
+    return "That's a photo. We can't read a picture of a roll \u2014 ask for the "
+         + "list as a CSV, or type what you can into the box below.";
+  }
+  // A NUL byte means binary whatever the name says.
+  if (head.includes("\u0000")) {
+    return "That file isn't text we can read. A CSV works best.";
+  }
+  if (!head.trim()) {
+    return "That file is empty.";
+  }
+  return null;
+}
