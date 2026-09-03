@@ -133,9 +133,18 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
         <div className="ll-card ll-card-pad"
           style={{ marginBottom: 14, background: short ? "rgba(200,60,40,.07)" : undefined }}>
           <strong style={{ fontSize: 15 }}>{coverageSummary(c, page.coveragePayers, page.fees.length)}</strong>
-          {page.monthsObserved > 1 && (
+          {/* HOW THIN THE EVIDENCE IS, and the one-month case said NOTHING.
+              Over two months or more this read "averaged over N months"; at
+              exactly one it was silent — so the thinnest possible evidence was
+              the only case presented without a caveat, in the sentence whose
+              own job is to decide whether he changes the fee. One month is
+              also a SEASON: a June of mowing is not a January of ploughing,
+              and a fee set on it is set for a year. */}
+          {c.actualCost > 0 && (
             <div className="mut" style={{ fontSize: 13, marginTop: 6 }}>
-              Averaged over {page.monthsObserved} months of bills.
+              {page.monthsObserved > 1
+                ? `Averaged over ${page.monthsObserved} months of bills.`
+                : "From one month of bills — thin evidence for a number you set for a year."}
             </div>
           )}
           {c.uncovered.length > 0 && (
