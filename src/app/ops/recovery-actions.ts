@@ -4,7 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { todayLakeDate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
-import { LakeLifePayments } from "@/lib/payments";
+import { takePayment } from "@/lib/charge-gate";
 import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge } from "@/lib/automation";
 import {
@@ -144,7 +144,7 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
     }
     const pm = pmRes.data;
     if (pm?.token) {
-      const charge = await LakeLifePayments.charge({
+      const charge = await takePayment({
         token: pm.token as string,
         amountCents: Math.round(amount * 100),
         description: statementDescriptor("visit_fee"),

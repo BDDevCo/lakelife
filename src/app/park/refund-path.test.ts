@@ -24,12 +24,15 @@ const fnBody = (src: string, name: string, min = 400) => {
   return fn;
 };
 
+// The processor call is now `giveRefund` (src/lib/charge-gate.ts) rather than
+// LakeLifePayments.refund directly — a mock must not be able to record a
+// refund nobody made. The ORDERING invariant these scans hold is unchanged.
 describe("refundParkPayment moves money before it records it", () => {
   const body = () => fnBody(code("app/park/ledger-actions.ts"), "refundParkPayment");
 
   it("asks the processor BEFORE inserting the refund row", () => {
     const fn = body();
-    const processor = fn.indexOf("LakeLifePayments.refund");
+    const processor = fn.indexOf("giveRefund(");
     const insert = fn.indexOf('.from("park_refunds")');
     expect(processor, "no processor call — this would file refunds that never happened")
       .toBeGreaterThan(-1);
@@ -44,7 +47,7 @@ describe("refundParkPayment moves money before it records it", () => {
   it("proves the park is yours on the first line", () => {
     const fn = body();
     const park = fn.indexOf("assertMyPark");
-    const processor = fn.indexOf("LakeLifePayments.refund");
+    const processor = fn.indexOf("giveRefund(");
     expect(park, "no membership check").toBeGreaterThan(-1);
     expect(park, "membership is checked before any money moves").toBeLessThan(processor);
   });
@@ -54,7 +57,7 @@ describe("refundParkPayment moves money before it records it", () => {
     expect(fn, "no idempotency key guard — a double submit is two refunds")
       .toMatch(/idempotencyKey/);
     const guard = fn.search(/if \(!String\(input\.idempotencyKey/);
-    const processor = fn.indexOf("LakeLifePayments.refund");
+    const processor = fn.indexOf("giveRefund(");
     expect(guard, "the key is not checked at all").toBeGreaterThan(-1);
     expect(guard, "an unkeyed refund must be refused before the processor is called")
       .toBeLessThan(processor);
@@ -88,7 +91,7 @@ describe("refundParkPayment moves money before it records it", () => {
   it("never asks the processor for a refund it has not validated", () => {
     const fn = body();
     const refusal = fn.indexOf("refundAmountRefusal");
-    const processor = fn.indexOf("LakeLifePayments.refund");
+    const processor = fn.indexOf("giveRefund(");
     expect(refusal, "the typed amounts are not checked").toBeGreaterThan(-1);
     expect(refusal, "amounts must be validated before money moves").toBeLessThan(processor);
   });

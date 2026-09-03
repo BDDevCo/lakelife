@@ -2,7 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { LakeLifePayments } from "@/lib/payments";
+import { takePayment, paymentsAreLive } from "@/lib/charge-gate";
 import { rentDescriptor } from "@/lib/descriptor";
 import { todayLakeDate } from "@/lib/booking";
 import { sendEmail } from "@/lib/email";
@@ -186,7 +186,7 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
   const total = Math.round((owed + fee) * 100) / 100;
 
   // ---- take it -----------------------------------------------------------
-  const charged = await LakeLifePayments.charge({
+  const charged = await takePayment({
     token: pm.token as string,
     amountCents: Math.round(total * 100),
     // The park's name on the statement, not LakeLife's — it is their rent, and
@@ -195,6 +195,16 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
     idempotencyKey,
   });
   if (!charged.ok || !charged.ref) {
+    // "TRY AGAIN" IS ONLY TRUE OF A DECLINE. When the cause is that no
+    // processor is connected, trying again can never work — and telling a
+    // resident to retry a path that cannot succeed is the same defect as the
+    // unique-index retry loop. Say which it is.
+    if (!paymentsAreLive()) {
+      return {
+        ok: false,
+        error: "Card payments aren't switched on for this park yet — ring the office and they'll take it another way.",
+      };
+    }
     return { ok: false, error: "That payment didn't go through. Try again, or ring the office." };
   }
 

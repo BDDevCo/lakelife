@@ -177,7 +177,9 @@ describe("the resident's card path carries the key end to end", () => {
   });
 
   it("sends it to the processor, not just onto the row", () => {
-    const chargeCall = src.slice(src.indexOf("LakeLifePayments.charge("), src.indexOf("if (!charged.ok"));
+    // `takePayment` (src/lib/charge-gate.ts) now stands in front of the
+    // processor so a mock cannot credit a bill; the key still has to reach it.
+    const chargeCall = src.slice(src.indexOf("takePayment("), src.indexOf("if (!charged.ok"));
     expect(chargeCall).toContain("idempotencyKey");
   });
 

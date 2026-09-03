@@ -12,7 +12,7 @@ import { feesForTenancy } from "./fee-helpers";
 import { planRun, toRows, summarise, currentPeriod, prettyMonth, nothingToBillReason, type Charge, type LedgerRow, type LedgerSummary, type RunPlan, dueDayFor } from "./ledger-helpers";
 import { preCutoverRefusal } from "@/lib/billing-start";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
-import { LakeLifePayments } from "@/lib/payments";
+import { giveRefund } from "@/lib/charge-gate";
 import { remainingRefundable, refundRefusal, refundAmountRefusal, refundCents, refundSignal } from "./refund-helpers";
 import { sendEmail } from "@/lib/email";
 import { receiptBody, type ReceiptLines } from "./receipt-helpers";
@@ -1516,7 +1516,7 @@ export async function refundParkPayment(
   const chargeRef = String(refRes.data?.reference ?? "").trim();
   if (!chargeRef) return { ok: false, error: "That payment has no processor reference to refund against." };
 
-  const done = await LakeLifePayments.refund({ chargeRef, amountCents: refundCents(amount, feeAmount) });
+  const done = await giveRefund({ chargeRef, amountCents: refundCents(amount, feeAmount) });
   if (!done.ok || !done.ref) {
     return {
       ok: false,

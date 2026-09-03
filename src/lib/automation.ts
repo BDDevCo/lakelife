@@ -3,7 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { notify } from "@/lib/notify";
 import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
-import { LakeLifePayments } from "@/lib/payments";
+import { takePayment } from "@/lib/charge-gate";
 import { statementDescriptor } from "@/lib/descriptor";
 import { revalidateJob } from "@/app/book/dispatch";
 import { todayLakeDate, effectiveSeason, seasonIsProvisional } from "@/lib/booking";
@@ -778,7 +778,7 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
           });
         }
       } else if (pm?.token) {
-        const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(cashDue * 100), description: statementDescriptor("service") });
+        const charge = await takePayment({ token: pm.token as string, amountCents: Math.round(cashDue * 100), description: statementDescriptor("service") });
         const { error: payErr } = await admin.from("payments").insert({
           invoice_id: invoice.id,
           amount: cashDue,
@@ -1441,7 +1441,7 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
       }
       if (!pm?.token) continue; // still no card — try again tomorrow
       retried++;
-      const charge = await LakeLifePayments.charge({ token: pm.token as string, amountCents: Math.round(fee * 100), description: statementDescriptor("cancel_fee") });
+      const charge = await takePayment({ token: pm.token as string, amountCents: Math.round(fee * 100), description: statementDescriptor("cancel_fee") });
       await admin.from("payments").insert({ invoice_id: inv.id, amount: fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null });
       if (!charge.ok) continue;
       await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null }).eq("id", inv.id);

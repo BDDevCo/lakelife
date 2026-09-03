@@ -1,6 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
-import { LakeLifePayments } from "@/lib/payments";
+import { giveRefund } from "@/lib/charge-gate";
 import {
   refundableRemaining, defaultClawback, clampClawback, planClawback,
   invoiceStatusAfter, type PayoutSnapshot,
@@ -157,7 +157,7 @@ export async function executeRefund(input: {
   }
 
   // Processor (mock today; the real adapter slots in behind the same shape).
-  const res = await LakeLifePayments.refund({
+  const res = await giveRefund({
     chargeRef: (payment.processor_ref as string) ?? "",
     amountCents: Math.round(amount * 100),
   });

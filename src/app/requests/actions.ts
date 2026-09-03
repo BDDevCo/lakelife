@@ -9,7 +9,7 @@ import { suggestTip, validateTip, tipSplit, canTip, tipDaysLeft } from "@/lib/ti
 import { revalidatePath } from "next/cache";
 import { autoAssignJob } from "@/app/book/dispatch";
 import { getAvailability } from "@/app/book/actions";
-import { LakeLifePayments } from "@/lib/payments";
+import { takePayment } from "@/lib/charge-gate";
 import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge } from "@/lib/automation";
 import { notify } from "@/lib/notify";
@@ -312,7 +312,7 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
       await admin.from("invoices").update({ status: "paid" }).eq("id", invoice.id);
       charged = true;
     } else if (pm?.token) {
-      const charge = await LakeLifePayments.charge({
+      const charge = await takePayment({
         token: pm.token as string,
         amountCents: Math.round(q.fee * 100),
         description: statementDescriptor("cancel_fee"),
@@ -810,7 +810,7 @@ export async function addTip(
   // been recorded. The comment above claimed this mirrored the late-cancel
   // path; it copied that path's ORDER and not its lookup-first, which is the
   // part that made the order survivable.
-  const charge = await LakeLifePayments.charge({
+  const charge = await takePayment({
     token: pm.token as string,
     amountCents: Math.round(v.amount * 100),
     description: statementDescriptor("tip"),
