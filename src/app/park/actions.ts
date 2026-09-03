@@ -5,6 +5,7 @@ import { resyncParkProperties } from "@/lib/park-properties";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
+import { liftedNoticesSignal } from "@/lib/send-capability";
 import { toDaterange, parseDaterange, type Lot, effectiveSeason } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
 // Pure date maths, already used by the re-rate path — no need for a second copy.
@@ -643,7 +644,13 @@ export async function setNoticeHold(
     ok: true,
     signal: held
       ? "Held. Nothing will reach your households until you lift it."
-      : "Lifted. Notices can now reach your households.",
+      // "Notices can now reach your households" is a claim about the world,
+      // and it was false in both channels at once: an unset EMAIL_FROM sends
+      // from a sandbox that only reaches our own inbox, and texts without a
+      // Messaging Service are unregistered and dropped. This is the last
+      // sentence he reads before believing twenty households have been told
+      // about their rent, so it says which channels actually work.
+      : liftedNoticesSignal(),
   };
 }
 
