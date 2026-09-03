@@ -850,3 +850,50 @@ export function reconcileRoll(
 
   return { parkLots: [...parkLots], matched, wouldCreate, neverMentioned, looksMisnumbered };
 }
+
+
+/**
+ * ============ DECODING THE SELLER'S FILE ============
+ *
+ * `File.text()` decodes UTF-8 unconditionally, and Excel on Windows does not
+ * write UTF-8. "Save As -> CSV (Comma delimited)" writes windows-1252, where a
+ * curly apostrophe is a single byte 0x92. Decoded as UTF-8 that is invalid, and
+ * the browser substitutes U+FFFD — so O'Neil arrives as a name with a black
+ * diamond in it, passes every check we have (it is not a NUL byte, it is not
+ * empty, it parses as a stated name), and is filed against that household
+ * permanently.
+ *
+ * Two decoders, in the only order that is safe:
+ *
+ *   UTF-8 FIRST, and STRICTLY. `fatal: true` throws on a byte sequence that is
+ *   not valid UTF-8 rather than papering over it. A file that decodes cleanly
+ *   as UTF-8 IS UTF-8 — the encodings agree byte-for-byte on plain ASCII, so
+ *   the only files that reach the fallback are the ones UTF-8 genuinely cannot
+ *   read.
+ *
+ *   THEN windows-1252, which has a definition for all 256 byte values and so
+ *   never fails. Wrong only if the file was some third encoding, and then it
+ *   is wrong in the same way `File.text()` already was.
+ *
+ * AND THE BYTE ORDER MARK, which is handled and needs no code. "CSV UTF-8
+ * (Comma delimited)" — the option worth asking a seller for, because it is the
+ * one that avoids everything above — writes a BOM, which would otherwise make
+ * the first header "﻿Lot" and stop the first column being the lot column.
+ * `TextDecoder` strips a leading UTF-8 BOM by default (it would keep it only
+ * with `ignoreBOM: true`), so there is nothing to do here.
+ *
+ * I wrote a guard for it anyway and then could not make it fail: unreachable
+ * defensive code with a comment claiming it mattered is worse than none, so it
+ * is gone and `import-helpers.test.ts` pins the behaviour instead — a BOM'd
+ * file's first column is still the lot column.
+ */
+export function decodeRoll(bytes: ArrayBuffer | Uint8Array): string {
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } catch {
+    text = new TextDecoder("windows-1252").decode(buf);
+  }
+  return text;
+}

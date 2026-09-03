@@ -11,7 +11,7 @@ import {
   statedTotalFrom,
   importBlockerText,
   MAX_LOT_LABEL,
-  type ImportBlocker, emptyLotsFrom, reconcileRoll,
+  type ImportBlocker, emptyLotsFrom, reconcileRoll, decodeRoll,
 } from "./import-helpers";
 
 const CUTOVER = "2026-08-01";
@@ -768,5 +768,72 @@ describe("the comparison reaches the screen", () => {
     // the $142.53 fee and the park eats the difference.
     const c = read("../../components/ParkImportRead.tsx");
     expect(c).toMatch(/every shared cost is divided by that number/);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE SELLER'S FILE IS PROBABLY NOT UTF-8.
+//
+// File.text() decodes UTF-8 unconditionally. Excel on Windows writes
+// windows-1252 for "Save As -> CSV (Comma delimited)", where a curly
+// apostrophe is one byte, 0x92. Decoded as UTF-8 that is invalid and becomes
+// U+FFFD, so O'Neil arrives with a black diamond in the middle of it — and
+// passes every check we have, because it is not a NUL byte, not empty, and
+// parses as a perfectly good stated name. That household is then filed under
+// that spelling permanently.
+// ---------------------------------------------------------------------------
+describe("decoding whatever the seller actually sent", () => {
+  const utf8 = (s: string) => new TextEncoder().encode(s);
+  /** windows-1252: one byte per character, 0x92 being the curly apostrophe. */
+  const cp1252 = (bytes: number[]) => new Uint8Array(bytes);
+
+  it("reads a plain UTF-8 file unchanged", () => {
+    expect(decodeRoll(utf8("Lot,Tenant\n6,Ordoñez"))).toBe("Lot,Tenant\n6,Ordoñez");
+  });
+
+  it("reads Excel-on-Windows apostrophes as apostrophes", () => {
+    // "6,O’Neil" with the curly apostrophe as windows-1252 byte 0x92.
+    const bytes = cp1252([0x36, 0x2c, 0x4f, 0x92, 0x4e, 0x65, 0x69, 0x6c]);
+    const out = decodeRoll(bytes);
+    expect(out, "the apostrophe became a replacement character").not.toMatch(/�/);
+    expect(out).toBe("6,O’Neil");
+  });
+
+  it("reads a windows-1252 accented name rather than mangling it", () => {
+    // "Ordoñez" — ñ is byte 0xF1, invalid on its own as UTF-8.
+    const bytes = cp1252([0x4f, 0x72, 0x64, 0x6f, 0xf1, 0x65, 0x7a]);
+    expect(decodeRoll(bytes)).toBe("Ordoñez");
+    expect(decodeRoll(bytes)).not.toMatch(/�/);
+  });
+
+  it("never leaves a replacement character behind for either encoding", () => {
+    // The tell that something was decoded wrongly. If this can happen, a name
+    // is wrong on screen and nothing anywhere says so.
+    for (const b of [utf8("Ordoñez"), cp1252([0x4f, 0xf1, 0x7a]), cp1252([0x92, 0x93, 0x94])]) {
+      expect(decodeRoll(b)).not.toMatch(/�/);
+    }
+  });
+
+  it("loses the BOM that 'CSV UTF-8' writes", () => {
+    // The option worth asking a seller for is the one that adds a BOM, which
+    // would otherwise make the first header "﻿Lot" instead of "Lot".
+    // TextDecoder strips it for us — pinned here rather than guarded in code,
+    // because a guard for it turned out to be unreachable.
+    const out = decodeRoll(utf8("﻿Lot,Tenant\n6,Maria"));
+    expect(out.startsWith("Lot,")).toBe(true);
+    expect(out).not.toMatch(/﻿/);
+  });
+
+  it("and the header still matches after the BOM is gone", () => {
+    const r = parseRentRoll(decodeRoll(utf8("﻿Lot,Tenant,Rent\n6,Maria,400")), { knownLots: ["6"] });
+    expect(r.columns.index.lot, "the first column stopped being the lot column").toBe(0);
+    expect(r.rows[0].lot.value).toBe("6");
+  });
+
+  it("leaves an ASCII file byte-identical, whichever decoder ran", () => {
+    // The encodings agree on ASCII, which is why trying UTF-8 first is safe.
+    const plain = "Lot,Tenant,Rent\n6,Maria,400\n";
+    expect(decodeRoll(utf8(plain))).toBe(plain);
   });
 });

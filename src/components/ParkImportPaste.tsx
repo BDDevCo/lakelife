@@ -6,7 +6,7 @@ import Link from "next/link";
 import { toast } from "@/components/Toast";
 import { readPaste } from "@/app/park/import-actions";
 import { firstBillablePeriod } from "@/lib/billing-start";
-import { whyNotReadable } from "@/app/park/import-helpers";
+import { whyNotReadable, decodeRoll } from "@/app/park/import-helpers";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 
 /**
@@ -89,7 +89,11 @@ export function ParkImportPaste({ parkId, todayISO, parkCutover }: { parkId: str
     setDup(null);
     let raw: string;
     try {
-      raw = await file.text();
+      // NOT file.text(), which assumes UTF-8. Excel on Windows writes
+      // windows-1252 for a plain CSV, and an apostrophe decoded as UTF-8
+      // becomes a replacement character that nothing downstream can tell from
+      // a real one. decodeRoll picks the encoding and drops a BOM.
+      raw = decodeRoll(await file.arrayBuffer());
     } catch {
       setFileName(null);
       setFileError("We couldn't open that file. Try saving it as a CSV.");
