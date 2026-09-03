@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   parseRentRoll, parseMoney, parseLot, parseName, detectDelimiter, contentHash,
   isPlaceholderName, redactSensitive,
@@ -615,5 +616,105 @@ describe("quoted CSV, which is how every real rent roll writes a name", () => {
     ]);
     expect(r.rows.map((x) => x.rent?.value)).toEqual([385, 385, 400, 1200, 400]);
     expect(r.accounting.unaccounted).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// A COLUMN THAT IS MAPPED AND THEN THROWN AWAY.
+//
+// `cellAt` is called for lot, name, rent, term, email and phone — and nothing
+// else. `moveIn` and `dueDay` were matched by header, consumed their column,
+// and were dropped; and because the column counted as a mapped FIELD, the
+// notes loop skipped it too. A sheet with "Move-in" and "Past Due" columns
+// lost the tenancy start dates and the arrears figure in silence, while the
+// refused-columns card named only the ones we refuse on purpose.
+//
+// Worse, CARRY explicitly lists "past due" — meaning keep it — and the loose
+// containment pass ran first, where dueDay's synonym "due" is a substring of
+// it. A list that says "keep this" was losing to a substring.
+// ---------------------------------------------------------------------------
+describe("no column is consumed by a field nothing reads", () => {
+  const parse = (csv: string) => parseRentRoll(csv, { knownLots: ["6"] });
+
+  it("keeps the arrears figure Mike is most likely to send", () => {
+    const r = parse('Lot,Tenant,Rent,Past Due\n6,"Ordonez, Maria",400,125.00');
+    expect(r.rows[0].notes.join(" "), "the arrears vanished").toMatch(/125\.00/);
+  });
+
+  it("keeps a move-in date instead of swallowing the column", () => {
+    const r = parse('Lot,Tenant,Rent,Move-in\n6,"Ordonez, Maria",400,3/1/21');
+    expect(r.rows[0].notes.join(" ")).toMatch(/3\/1\/21/);
+  });
+
+  it("keeps them for the exact header too, not only a fuzzy one", () => {
+    const r = parse('Lot,Tenant,Rent,Due Date\n6,"Ordonez, Maria",400,the 5th');
+    expect(r.rows[0].notes.join(" ")).toMatch(/5th/);
+  });
+
+  it("still maps the columns that DO have readers", () => {
+    const r = parse('Lot,Tenant,Monthly Rent,Email,Phone\n6,"Ordonez, Maria",400,m@example.com,260-555-0134');
+    expect(r.rows[0].lot.value).toBe("6");
+    expect(r.rows[0].name.value).toBe("Ordonez, Maria");
+    expect(r.rows[0].rent.value).toBe(400);
+    expect(r.rows[0].email.value).toBe("m@example.com");
+    expect(r.rows[0].phone.value).toBeTruthy();
+  });
+
+  it("an explicit CARRY word still beats a fuzzy field hit", () => {
+    // "Balance" was already safe; "Deposit" too. The ordering change must not
+    // let a field claim either of them.
+    const r = parse('Lot,Tenant,Rent,Balance,Deposit\n6,"Ordonez, Maria",400,125.00,300');
+    const notes = r.rows[0].notes.join(" ");
+    expect(notes).toMatch(/Balance/);
+    expect(notes).toMatch(/Deposit/);
+  });
+
+  it('keeps "Paid Thru", which the term matcher would otherwise swallow', () => {
+    // The case that makes the CARRY-before-containment ordering load-bearing:
+    // `term`'s synonym "paid" is a substring of "paid thru", and term HAS a
+    // reader — so containment would consume the column and the date would be
+    // parsed as a billing cadence, fail, and leave nothing behind. How far
+    // each household has paid is one of the more useful things on a roll.
+    for (const header of ["Paid Thru", "Paid Through", "Last Paid"]) {
+      const r = parse(`Lot,Tenant,Rent,${header}\n6,"Ordonez, Maria",400,11/1/26`);
+      expect(r.rows[0].notes.join(" "), `${header} was swallowed`).toMatch(/11\/1\/26/);
+    }
+  });
+
+  it("and a refused column is still refused, ahead of everything", () => {
+    // REFUSE runs before CARRY and before any field. Moving CARRY up must not
+    // have let a social security column become a note.
+    const r = parse('Lot,Tenant,Rent,SSN\n6,"Ordonez, Maria",400,123-45-6789');
+    expect(r.columns.refused.join(" ")).toMatch(/SSN/i);
+    expect(JSON.stringify(r.rows[0])).not.toMatch(/123-45-6789/);
+  });
+
+  it("THE LIST CANNOT ROT: every readerless target is declared", () => {
+    // The guard that keeps this true as readers get built. If somebody adds a
+    // cellAt("moveIn"), this fails and tells them to delete it from NO_READER.
+    const src = readFileSync(
+      fileURLToPath(new URL("./roll-parse.ts", import.meta.url)),
+      "utf8",
+    );
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+    const targets = [...(code.match(/const SYN: Record<Target, string\[\]> = \{([\s\S]*?)\n\};/)?.[1] ?? "")
+      .matchAll(/^\s{2}(\w+):/gm)].map((m) => m[1]);
+    expect(targets.length, "SYN not found — this scan is measuring nothing").toBeGreaterThan(5);
+
+    const read = new Set([...code.matchAll(/cellAt\("(\w+)"\)/g)].map((m) => m[1]));
+    expect(read.size, "no cellAt calls found").toBeGreaterThan(3);
+
+    const declared = new Set(
+      [...(code.match(/const NO_READER: Target\[\] = \[([^\]]*)\]/)?.[1] ?? "")
+        .matchAll(/"(\w+)"/g)].map((m) => m[1]),
+    );
+
+    const unread = targets.filter((t) => !read.has(t) && !declared.has(t));
+    expect(unread, "these targets consume a column and nothing reads them").toEqual([]);
+
+    const nowRead = [...declared].filter((t) => read.has(t));
+    expect(nowRead, "these have a reader now — delete them from NO_READER").toEqual([]);
   });
 });

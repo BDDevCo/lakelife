@@ -190,6 +190,26 @@ const CARRY = [
   "lease", "paid thru", "paid through", "last paid",
 ];
 
+/**
+ * TARGETS NOTHING READS.
+ *
+ * `cellAt` is called for lot, name, rent, term, email and phone — and for
+ * nothing else. `moveIn` and `dueDay` were matched by header, consumed their
+ * column, and were then dropped: the value never reached a field, and because
+ * the column counted as a mapped FIELD it was skipped by the notes loop too.
+ * So a sheet with "Move-in" and "Past Due" columns lost both, in silence, with
+ * the refused-columns card on screen naming only the ones we refuse on purpose.
+ *
+ * A column with no reader must not consume a column. Until something reads
+ * them, they carry to notes like any other column we cannot map — the owner
+ * keeps his tenancy start dates and his arrears as text on the household file
+ * instead of losing them.
+ *
+ * DELETE A NAME FROM HERE the day it gets a reader; `roll-parse.test.ts`
+ * checks this list against the actual `cellAt` calls, so it cannot rot.
+ */
+const NO_READER: Target[] = ["moveIn", "dueDay"];
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 function targetFor(header: string): { target: Target; term?: Term } | "carry" | "refuse" | null {
@@ -217,10 +237,18 @@ function targetFor(header: string): { target: Target; term?: Term } | "carry" | 
           if (h.includes("month")) return { target: "rent", term: "monthly" };
           if (h.includes("week")) return { target: "rent", term: "weekly" };
         }
-        return { target: t };
+        return NO_READER.includes(t) ? "carry" : { target: t };
       }
     }
   }
+  // AN EXPLICIT CARRY BEATS A FUZZY HIT, and this used to be the other way
+  // round. CARRY names "past due" deliberately — it is money the owner is owed
+  // and wants to keep — but the containment pass ran first and `dueDay`'s
+  // synonym "due" is a substring of it, so "Past Due" was claimed by a
+  // due-day mapper and the arrears figure vanished without a note. A list that
+  // says "keep this" should not lose to a substring.
+  if (CARRY.some((c) => c.length >= 2 && h.includes(c))) return "carry";
+
   // Looser containment pass, after exact — so "Lot Rent" maps to rent, not lot.
   for (const t of ["rent", "name", "lot", "moveIn", "email", "term", "dueDay"] as Target[]) {
     if (SYN[t].some((syn) => { const n = usable(syn); return n != null && h.includes(n); })) {
@@ -228,10 +256,9 @@ function targetFor(header: string): { target: Target; term?: Term } | "carry" | 
         if (h.includes("month")) return { target: "rent", term: "monthly" };
         if (h.includes("week")) return { target: "rent", term: "weekly" };
       }
-      return { target: t };
+      return NO_READER.includes(t) ? "carry" : { target: t };
     }
   }
-  if (CARRY.some((c) => c.length >= 2 && h.includes(c))) return "carry";
   return null;
 }
 
