@@ -553,16 +553,46 @@ export function parseMoney(raw: string): Field<number> {
 
 /** A lot number, normalised but never invented. Leading zeros are ambiguous —
  *  "01" and "1" are different keys and only the owner knows which his park uses. */
+/**
+ * THE WORD A SELLER WRITES IN FRONT OF THE NUMBER.
+ *
+ * The Haven's own roll reads "Lot 4" on every line — `emptyLotsFrom` says so
+ * in its comment, from a previous look at the real due-diligence packet. And
+ * "Lot 26" matched none of his lots, because this function collapsed the
+ * whitespace FIRST ("LOT26") and then compared that against "26".
+ *
+ * `normaliseLotLabel` in import-helpers has always known about the word — it
+ * strips it before removing the space, so its `\b` fires. Two matchers, one
+ * of which knew "Lot" was a word. Every row of a "Lot n" roll came back
+ * `lot_unknown`, and the only control the review screen offers for that is
+ * "Create lot LOT26" — twenty-one times, leaving 42 lots where 21 exist, and
+ * halving the denominator every shared cost is divided by.
+ *
+ * Stripped BEFORE the shape check too: that check allowed three leading
+ * letters, so "Lot 6" squeaked through and "Space 6" did not.
+ */
+// NOT `\b` after the word. There is no word boundary between "t" and "2", so
+// `\b` strips "Lot 26" and leaves "Lot26" — which is exactly how the old
+// matcher failed. A lookahead for the digit does both, and refuses to strip
+// anything that is not a lot label ("Lotus" keeps its Lot).
+const LOT_WORD = /^(?:lot|site|space|unit|stall|pad)[\s.:#-]*(?=\d)/i;
+
 export function parseLot(raw: string, knownLots?: readonly string[]): Field<string> {
   const s = (raw ?? "").trim().replace(/^#\s*/, "");
   if (!s) return unknownField<string>(raw ?? "");
-  if (!/^[A-Za-z]{0,3}[-\s]?\d{1,4}[A-Za-z]?$/.test(s)) {
+
+  const bare = s.replace(LOT_WORD, "").trim();
+  if (!/^[A-Za-z]{0,3}[-\s]?\d{1,4}[A-Za-z]?$/.test(bare)) {
     return unknownField<string>(s, "We couldn't tell if that's a lot number.");
   }
-  const tidy = s.replace(/\s+/g, "").toUpperCase();
+  const tidy = bare.replace(/\s+/g, "").toUpperCase();
 
   if (knownLots && knownLots.length > 0) {
-    const exact = knownLots.find((k) => k.toUpperCase() === tidy);
+    // THE WHOLE LABEL FIRST. A park that has genuinely stored a lot as "LOT26"
+    // must still win against its own spelling before we try the stripped form.
+    const whole = s.replace(/\s+/g, "").toUpperCase();
+    const exact = knownLots.find((k) => k.toUpperCase() === whole)
+               ?? knownLots.find((k) => k.toUpperCase() === tidy);
     if (exact) return stated(exact, s);
     // A leading zero is the classic ambiguity: 01 vs 1.
     const loose = knownLots.filter((k) => k.replace(/^0+/, "").toUpperCase() === tidy.replace(/^0+/, ""));

@@ -87,7 +87,10 @@ export function normaliseLotLabel(
   const key = (s: string) =>
     s
       .toLowerCase()
-      .replace(/^(lot|site|space|unit|stall|pad)\b/, "")
+      // Lookahead, not \b: there is no word boundary between "t" and "2", so
+      // \b handles "lot 26" and leaves "lot26" untouched. parseLot uses the
+      // same rule, and a test asserts the two agree.
+      .replace(/^(lot|site|space|unit|stall|pad)[\s.:#-]*(?=\d)/, "")
       .replace(/[^a-z0-9]/g, "");
 
   const k = key(raw);
@@ -695,10 +698,10 @@ export function emptyLotsFrom(
     //
     // This used to force `LOT` onto the front of every empty pad, on the
     // stated grounds that it matched "the shape the parser emits for a billed
-    // lot". That is true of The Haven's roll, whose every line reads "Lot 4",
-    // and false of every roll that writes a bare number — including the one
-    // in this app's own paste-box placeholder. parseLot("Lot 4") is "LOT4";
-    // parseLot("4") is "4".
+    // lot". That was true of parseLot at the time — it collapsed "Lot 4" to
+    // "LOT4" — and it was the wrong shape on BOTH sides: nobody paints "LOT4"
+    // on a post, the lot is number 4. parseLot now strips the seller's word
+    // and both sides read "4".
     //
     // So a bare-number roll produced billed lots 1..21 and empty pads LOT6 and
     // LOT19, and the park ended up with 23 lots for 21 pads. Occupancy read

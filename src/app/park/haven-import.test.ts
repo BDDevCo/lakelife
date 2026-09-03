@@ -130,9 +130,9 @@ describe("The Haven — the roll becomes a denominator", () => {
   );
 
   it("separates the gap in the numbering from the pads he has not built", () => {
-    expect(empties.filter((e) => e.rentable).map((e) => e.label)).toEqual(["LOT3"]);
+    expect(empties.filter((e) => e.rentable).map((e) => e.label)).toEqual(["3"]);
     expect(empties.filter((e) => !e.rentable).map((e) => e.label))
-      .toEqual(["LOT22", "LOT23", "LOT24", "LOT25"]);
+      .toEqual(["22", "23", "24", "25"]);
   });
 
   it("creates all five, so nothing is invisible on the reconcile screen", () => {
@@ -145,7 +145,7 @@ describe("The Haven — the roll becomes a denominator", () => {
       namelessRoll: !parsed.shape.hasNameColumn,
       emptyLots: empties,
     });
-    for (const label of ["LOT3", "LOT22", "LOT23", "LOT24", "LOT25"]) {
+    for (const label of ["3", "22", "23", "24", "25"]) {
       expect(plan.lotsToCreate).toContain(label);
     }
   });
@@ -187,7 +187,7 @@ describe("The Haven — the roll becomes a denominator", () => {
         lotId: `l${label}`, lotNumber: label, reservationId: `r${i}`,
       })),
       // The gap at Lot 3 — a real pad with nobody on it.
-      { lotId: "lLOT3", lotNumber: "LOT3", reservationId: null },
+      { lotId: "l3", lotNumber: "3", reservationId: null },
       // His own double-wide, once he has answered the importer's question.
       // In the divisor, never a payer.
       { lotId: "lLOT7", lotNumber: "LOT7", reservationId: null, parkOwned: true },

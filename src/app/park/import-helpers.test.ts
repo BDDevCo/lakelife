@@ -454,7 +454,7 @@ describe("the lots nobody is on", () => {
     //
     // That is true of The Haven's roll, where every line reads "Lot 4", and
     // FALSE of any roll written as bare numbers — including the one in this
-    // app's own paste-box placeholder. parseLot("Lot 3") is "LOT3";
+    // app's own paste-box placeholder. parseLot now reads "Lot 3" as "3";
     // parseLot("12") is "12". So a bare-number roll billed lots 1..21 and
     // then created empty pads LOT6 and LOT19 beside the real 6 and 19: 23
     // lots for 21 pedestals, occupancy reading 18/23, and every shared cost
@@ -466,14 +466,15 @@ describe("the lots nobody is on", () => {
       { text: "#7" },
       { text: "12" },
       { text: "Site 9  (needs skirting)" },
-    ]).map((e) => e.label)).toEqual(["LOT3", "LOT22", "7", "12", "9"]);
+    ]).map((e) => e.label)).toEqual(["3", "22", "7", "12", "9"]);
   });
 
   it("cannot disagree with the billed side, whichever way the roll is written", () => {
     // The property that matters, stated directly: for any text, the empty-pad
     // label equals what a billed row with that lot cell would be called.
     for (const [cell, expected] of [
-      ["Lot 3", "LOT3"], ["LOT 3", "LOT3"], ["3", "3"], ["#3", "3"], ["12A", "12A"],
+      ["Lot 3", "3"], ["LOT 3", "3"], ["3", "3"], ["#3", "3"], ["12A", "12A"],
+      ["Site 9", "9"], ["Space 6", "6"], ["Pad 14", "14"],
     ] as const) {
       const [only] = emptyLotsFrom([{ text: cell }]);
       expect(only?.label, cell).toBe(expected);
@@ -504,14 +505,14 @@ describe("the lots nobody is on", () => {
   it("does not re-create a lot the park already has", () => {
     expect(emptyLotsFrom(
       [{ text: "Lot 3" }, { text: "Lot 22" }],
-      [{ lotNumber: "LOT3" }],
-    ).map((e) => e.label)).toEqual(["LOT22"]);
+      [{ lotNumber: "3" }],
+    ).map((e) => e.label)).toEqual(["22"]);
   });
 
   it("says each one once, however many times the sheet mentions it", () => {
     expect(emptyLotsFrom([
       { text: "Lot 22" }, { text: "lot 22" }, { text: "Lot 22 — vacant" },
-    ]).map((e) => e.label)).toEqual(["LOT22"]);
+    ]).map((e) => e.label)).toEqual(["22"]);
   });
 });
 
@@ -525,7 +526,7 @@ describe("a pad that exists versus one that does not yet", () => {
 
   it("treats a gap inside the numbering as a real empty pad", () => {
     const [three] = emptyLotsFrom([{ text: "Lot 3" }], [], billed);
-    expect(three).toEqual({ label: "LOT3", rentable: true });
+    expect(three).toEqual({ label: "3", rentable: true });
   });
 
   it("treats pads beyond the last billed lot as not built yet", () => {
@@ -534,7 +535,7 @@ describe("a pad that exists versus one that does not yet", () => {
       [], billed,
     );
     expect(future.every((e) => e.rentable === false)).toBe(true);
-    expect(future.map((e) => e.label)).toEqual(["LOT22","LOT23","LOT24","LOT25"]);
+    expect(future.map((e) => e.label)).toEqual(["22","23","24","25"]);
   });
 
   it("keeps The Haven at 21 rentable lots, not 25", () => {
@@ -555,7 +556,7 @@ describe("a pad that exists versus one that does not yet", () => {
   // A lettered pad that DOES carry a number sits on the line normally.
   it("places a lettered pad by its number", () => {
     expect(emptyLotsFrom([{ text: "Lot 12A" }], [], billed)[0])
-      .toEqual({ label: "LOT12A", rentable: true });
+      .toEqual({ label: "12A", rentable: true });
     expect(emptyLotsFrom([{ text: "Lot 30B" }], [], billed)[0].rentable).toBe(false);
   });
 });
@@ -879,5 +880,96 @@ describe("a lot the seller simply left off", () => {
 
   it("and names them, so he knows which ones to walk", () => {
     expect(c).toMatch(/not on this list at all/);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// "LOT 26" MATCHED NONE OF HIS LOTS.
+//
+// The Haven's own roll reads "Lot 4" on every line — emptyLotsFrom says so in
+// its comment, from a look at the real due-diligence packet. And parseLot
+// collapsed the whitespace FIRST, so "Lot 26" became "LOT26" and was compared
+// against a park whose lots are "26". Every row of such a roll came back
+// lot_unknown, and the only control the review screen offers for that is
+// "Create lot LOT26" — twenty-one times, leaving 42 lots where 21 exist and
+// halving the denominator every shared cost divides by.
+//
+// normaliseLotLabel in import-helpers had always known about the word: it
+// strips it BEFORE removing the space, so its \b fires. Two matchers, one of
+// which knew "Lot" was a word.
+// ---------------------------------------------------------------------------
+describe("the word the seller writes in front of the number", () => {
+  const HAVEN = ["1", "2", "6", "7", "9", "11", "26", "28"];
+
+  it("matches a Lot-prefixed cell to the bare lot the park has", () => {
+    for (const cell of ["Lot 26", "LOT 26", "lot 26", "Lot26", "Lot. 26", "Lot #26"]) {
+      expect(parseLot(cell, HAVEN).value, cell).toBe("26");
+    }
+  });
+
+  it("handles the other words a seller uses for the same thing", () => {
+    // "Space" is five letters and the shape check allowed three, so this one
+    // failed even earlier — before any matching was attempted.
+    for (const [cell, want] of [
+      ["Site 9", "9"], ["Space 6", "6"], ["Unit 7", "7"], ["Pad 11", "11"], ["Stall 2", "2"],
+    ] as const) {
+      expect(parseLot(cell, HAVEN).value, cell).toBe(want);
+    }
+  });
+
+  it("a whole Lot-prefixed roll imports instead of blocking every row", () => {
+    // The end-to-end shape of the failure: 0 ready, every row lot_unknown.
+    const lots = HAVEN.map((n) => ({ id: `lot-${n}`, lotNumber: n }));
+    const parsed = parseRentRoll([
+      "Lot,Tenant,Rent",
+      'Lot 1,"Wexler, Donna",385',
+      'Lot 26,"Trombley, Ken",400',
+      'Lot 28,"Bui, Anh",400',
+    ].join("\n"), { knownLots: HAVEN });
+
+    const plan = planImport({
+      rows: parsed.rows, lots, liveStays: [], cutoverISO: "2027-01-01",
+      season: null, namelessRoll: !parsed.shape.hasNameColumn,
+    });
+
+    expect(plan.ready.length, "rows still blocked on a Lot-prefixed roll").toBe(3);
+    expect(plan.needsYou.length).toBe(0);
+    expect(plan.lotsToCreate, "it would have offered to create phantom lots").toEqual([]);
+    expect(plan.rows.map((r) => r.lotLabel)).toEqual(["1", "26", "28"]);
+  });
+
+  it("still refuses a lot the park genuinely does not have", () => {
+    // The fix must not turn "no such lot" into a silent match.
+    expect(parseLot("Lot 3", HAVEN).value).toBeNull();
+    expect(parseLot("Lot 99", HAVEN).value).toBeNull();
+  });
+
+  it("a park that really stored a lot as LOT26 still wins on its own spelling", () => {
+    expect(parseLot("Lot 26", ["LOT26"]).value).toBe("LOT26");
+    expect(parseLot("LOT26", ["LOT26"]).value).toBe("LOT26");
+  });
+
+  it("names a new lot by its number, not by the seller's wording", () => {
+    // With no known lots — a park's first roll — "Lot 4" creates lot 4.
+    // Nobody paints "LOT4" on a post.
+    expect(parseLot("Lot 4").value).toBe("4");
+    expect(parseLot("Site 9").value).toBe("9");
+  });
+
+  it("THE TWO MATCHERS AGREE, which is the defect that caused this", () => {
+    // parseLot and normaliseLotLabel resolve a label independently. They
+    // disagreed on exactly the shape The Haven's roll uses.
+    // The no-space spellings matter most: `\b` and the lookahead agree on
+    // "Lot 26" and differ on "Lot26", so a list without them lets the two
+    // drift apart again. A mutation reverting normaliseLotLabel to \b passed
+    // until these were here.
+    for (const cell of [
+      "Lot 26", "26", "#26", "Site 9", "Space 6", "lot 6", "Pad 11", "07",
+      "Lot26", "Site9", "Pad11", "SPACE6", "Lot.26", "Lotus",
+    ]) {
+      expect(normaliseLotLabel(cell, HAVEN), `normaliseLotLabel vs parseLot on ${cell}`)
+        .toBe(parseLot(cell, HAVEN).value);
+    }
   });
 });
