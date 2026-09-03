@@ -3,7 +3,8 @@ import {
   type DateRange,
   type Term,
 } from "@/lib/parks";
-import { parseLot } from "@/lib/roll-parse";
+import { parseLot, splitLine } from "@/lib/roll-parse";
+import type { Delimiter } from "@/lib/roll-parse";
 import type { ParsedRow } from "@/lib/roll-parse";
 
 /**
@@ -570,10 +571,43 @@ export interface TotalsCheck {
  * totals row often carries a lot count and a column of subtotals beside the
  * figure that matters.
  */
-export function statedTotalFrom(lines: readonly string[]): number | null {
+export function statedTotalFrom(
+  lines: readonly string[],
+  /**
+   * How the sheet separates its columns, when the caller knows.
+   *
+   * WITHOUT IT THIS CANNOT BE RIGHT. "TOTAL,,800,600" is two whole-dollar
+   * fields to a CSV and the single number 800,600 to anybody reading it as
+   * prose — the two readings are indistinguishable, and the grouped one is a
+   * perfectly valid thousands separator. Guessing lands on $800,600 and this
+   * function takes the LARGEST figure it finds, so the guess wins and the
+   * panel that checks the seller's arithmetic reports a number three orders
+   * of magnitude out at the closing table.
+   *
+   * Splitting the fields first removes the ambiguity entirely. A quoted
+   * "6,700.00" stays one cell and still reads as 6700.
+   */
+  delimiter?: Delimiter,
+): number | null {
   let best: number | null = null;
-  for (const line of lines) {
-    for (const m of line.matchAll(/\$?\s*(\d[\d,]*(?:\.\d{1,2})?)/g)) {
+  const scanLines = delimiter && delimiter !== "none"
+    ? lines.flatMap((l) => splitLine(l, delimiter))
+    : lines;
+  for (const line of scanLines) {
+    // A COMMA IS A THOUSANDS SEPARATOR ONLY WHEN IT SEPARATES THOUSANDS.
+    //
+    // `\d[\d,]*` ran straight through the CSV field separator, so a totals row
+    // of whole dollars — "TOTAL,,6700,1200" — read as ONE number, 67,001,200,
+    // and this function takes the LARGEST it finds, so that is what won. The
+    // panel whose entire job is checking the seller's arithmetic against his
+    // own rows would have told him at the closing table that his sheet claims
+    // a figure seven orders of magnitude out. It behaved only when every
+    // number in the row happened to carry cents.
+    //
+    // Grouped form first, so "6,700.00" is one number; plain digits second,
+    // bounded by (?!\d) so a run cannot swallow the next field.
+    const MONEY = /\$?\s*(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)(?!\d)/g;
+    for (const m of line.matchAll(MONEY)) {
       const n = Number(m[1].replace(/,/g, ""));
       // Below this it is a lot count or a page number, not a rent roll total.
       if (Number.isFinite(n) && n >= 100 && (best == null || n > best)) best = n;

@@ -503,7 +503,7 @@ function splitQuoted(line: string, sep: string): string[] {
   return out;
 }
 
-function splitLine(line: string, d: Delimiter): string[] {
+export function splitLine(line: string, d: Delimiter): string[] {
   switch (d) {
     // Tab and pipe get the same treatment: Excel quotes a TSV field too when
     // it contains a quote or a newline, and the rule is a no-op otherwise.

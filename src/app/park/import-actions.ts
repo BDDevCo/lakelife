@@ -389,7 +389,7 @@ export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
     others,
     blockQuestions: parsed.blockQuestions,
     counts: (batch.counts as Record<string, unknown>) ?? {},
-    statedTotal: statedTotalFrom(parsed.totals.map((t) => t.text)),
+    statedTotal: statedTotalFrom(parsed.totals.map((t) => t.text), parsed.shape.delimiter),
     refusedColumns: parsed.columns.refused,
     // BOTH LISTS, SIDE BY SIDE. Nothing has ever compared the sheet's lot
     // labels against the pads he already has, in either direction — so a

@@ -973,3 +973,71 @@ describe("the word the seller writes in front of the number", () => {
     }
   });
 });
+
+
+describe("the seller's own total, read across a CSV", () => {
+  // `\d[\d,]*` ran straight through the field separator, so a totals row of
+  // whole dollars — "TOTAL,,6700,1200" — read as one number, 67,001,200. This
+  // function takes the LARGEST it finds, so that is what won, and the panel
+  // whose whole job is checking his arithmetic against his own rows would
+  // have told him at the closing table that his sheet claims a figure seven
+  // orders of magnitude out. It behaved only when every number in the row
+  // happened to carry cents.
+  it("does not read two CSV fields as one number", () => {
+    // Told the delimiter, the ambiguity disappears: these are fields, not a
+    // thousands separator.
+    expect(statedTotalFrom(["TOTAL,,6700,1200"], "comma")).toBe(6700);
+    expect(statedTotalFrom(["Total,,800,600"], "comma")).toBe(800);
+    expect(statedTotalFrom(["Total\t\t6700\t1200"], "tab")).toBe(6700);
+  });
+
+  it("a quoted thousands separator survives the split", () => {
+    expect(statedTotalFrom(['TOTAL,,"6,700.00"'], "comma")).toBe(6700);
+    expect(statedTotalFrom(['TOTAL,,"10,850.60"'], "comma")).toBe(10850.6);
+  });
+
+  it("even with no delimiter, a run of digits cannot swallow the next field", () => {
+    // The regex earns its place on this path: a caller that does not know the
+    // delimiter still must not read "6700,1200" as sixty-seven million. It
+    // cannot resolve the genuinely ambiguous "800,600" — only the split can —
+    // but it refuses the unambiguous case.
+    expect(statedTotalFrom(["Total 6700,1200"])).toBe(6700);
+  });
+
+  it("without a delimiter it still reads prose, which is all it can do", () => {
+    // The honest limit: "800,600" alone is a valid grouping and there is
+    // nothing to tell it apart from two fields. The caller knows, and passes.
+    expect(statedTotalFrom(["Total  $10,850.60"])).toBe(10850.6);
+    expect(statedTotalFrom(["Total 6700"])).toBe(6700);
+  });
+
+  it("still reads a real thousands separator", () => {
+    expect(statedTotalFrom(["Total  $10,850.60"], "multispace")).toBe(10850.6);
+    expect(statedTotalFrom(["Grand total 12,345,678"], "none")).toBe(12345678);
+  });
+
+  it("still takes the largest figure on the line", () => {
+    // A totals row often carries a lot count and subtotals beside the figure
+    // that matters.
+    expect(statedTotalFrom(["21 lots,,6700.00,1200.00"], "comma")).toBe(6700);
+  });
+
+  it("the loader hands it the delimiter — a default it never passes is no fix", () => {
+    const actions = readFileSync(
+      fileURLToPath(new URL("./import-actions.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(actions, "statedTotalFrom is called without the delimiter again")
+      .toMatch(/statedTotalFrom\([\s\S]{0,140}?parsed\.shape\.delimiter\)/);
+  });
+
+  it("keeps ignoring numbers too small to be a roll total", () => {
+    expect(statedTotalFrom(["Page 2 of 3"])).toBeNull();
+    expect(statedTotalFrom(["21 lots"])).toBeNull();
+  });
+
+  it("reads the plain unseparated case unchanged", () => {
+    expect(statedTotalFrom(["Total 6700"], "none")).toBe(6700);
+    expect(statedTotalFrom(["Total\t6700.00"], "tab")).toBe(6700);
+  });
+});
