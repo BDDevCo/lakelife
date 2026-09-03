@@ -7,7 +7,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { sendEmail } from "@/lib/email";
 import { getLedger } from "./ledger-actions";
 import {
-  planReminders, ownerDigest,
+  planReminders, ownerDigest, whyItDidntGo, reminderSignal,
   type RenterContact, type ReminderPlan,
 } from "./reminder-helpers";
 import type { ParkResult } from "./actions";
@@ -146,7 +146,7 @@ export async function previewReminders(
 export async function sendReminders(
   parkId: string,
   month?: string,
-): Promise<ParkResult & { sent?: number; printed?: number; blocked?: number }> {
+): Promise<ParkResult & { sent?: number; printed?: number; blocked?: number; failed?: number }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
   // Same catch as the preview, and the sentence answers the owner's first
   // question out loud: the ledger read failed BEFORE any email was addressed,
@@ -173,6 +173,8 @@ export async function sendReminders(
   const admin = createServiceClient();
   const log: Record<string, unknown>[] = [];
   let sent = 0;
+  /** Why each one didn't go. Length is the count; the reasons name the cause. */
+  const failed: string[] = [];
 
   for (const r of plan.toSend) {
     const contact = await emailFor(admin, r.renterId);
@@ -189,6 +191,9 @@ export async function sendReminders(
       continue;
     }
     if (!contact.email) {
+      // Counted, not merely logged. This was in none of the three numbers the
+      // result sentence is built from either.
+      failed.push("no email address on file");
       log.push({
         park_id: parkId, charge_id: r.chargeId, party: "resident",
         channel: "email", outcome: "failed", reason: "No email address on file.",
@@ -202,10 +207,24 @@ export async function sendReminders(
       html: asHtml(r.body),
     });
     if (res?.ok === false) {
+      // THE REASON WAS HARDCODED AND `res.error` WAS THROWN AWAY.
+      //
+      // Every refusal became "check the address" in a PERMANENT ledger row —
+      // including the one that is true today. Notices are held by default
+      // until he says otherwise, so pressing this button on 1 January would
+      // have written twenty rows blaming twenty perfectly good addresses for
+      // a hold he set himself. An unset RESEND_API_KEY and a Resend 5xx read
+      // the same way.
+      //
+      // sendEmail's own refusals are already sentences written for a person
+      // ("Notices are on hold for this park — …"). The rest are technical and
+      // are labelled as such rather than translated into a guess.
+      const why = whyItDidntGo(res.error);
+      failed.push(why);
       log.push({
         park_id: parkId, charge_id: r.chargeId, party: "resident",
         channel: "email", outcome: "failed",
-        reason: "The email didn't go — check the address.", body: r.body,
+        reason: why, body: r.body,
       });
       continue;
     }
@@ -312,14 +331,17 @@ export async function sendReminders(
     sent,
     printed: plan.toPrint.length,
     blocked: plan.blocked.length,
-    signal:
-      `${sent} emailed` +
-      (plan.toPrint.length ? `, ${plan.toPrint.length} to print` : "") +
-      (plan.blocked.length ? `, ${plan.blocked.length} couldn't be reached` : "") +
-      (toldOwners > 0 ? `. ${toldOwners === 1 ? "The owner was" : "Owners were"} sent a summary` : "") +
-      (ownerLookupFailed ? ". We couldn't check who else to send a summary to, so assume they weren't told" : "") +
-      (logSaved ? "" : ". These sends didn't get recorded, so don't send again until that's checked — they'd be chased twice") +
-      ".",
+    failed: failed.length,
+    // ASSEMBLED IN A PURE HELPER, not inline. The first version of this fix
+    // left the assembly here and tested a copy of it in the test file — so
+    // deleting the failure clause from THIS expression kept every test green.
+    // A sentence worth fixing is worth testing where it is actually built.
+    signal: reminderSignal({
+      sent, failed,
+      printed: plan.toPrint.length,
+      blocked: plan.blocked.length,
+      toldOwners, ownerLookupFailed, logSaved,
+    }),
   };
 }
 

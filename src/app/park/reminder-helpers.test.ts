@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   planReminders, channelFor, reminderBody, reminderSummary, ownerDigest,
+  whyItDidntGo, commonestReason, reminderSignal,
   type RenterContact, type ReminderOptions,
 } from "./reminder-helpers";
 import { toRows, type Charge } from "./ledger-helpers";
@@ -229,5 +232,171 @@ describe("never chase somebody who says they already paid", () => {
     const plan = planReminders(rows, new Map([["a", contact()]]), "2026-08", OPTS);
     expect(reminderSummary(plan)).toMatch(/say they've already paid/);
     expect(reminderSummary(plan)).not.toMatch(/Nobody is late/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "0 EMAILED." — TWENTY TIMES, WITH TWENTY ROWS BLAMING THE ADDRESSES.
+//
+// He presses "Send N and log the rest" on 1 January. Notices are held by
+// default — his own standing rule, that nothing reaches a household until the
+// roll is loaded and the leases are executed. So sendEmail refuses every one.
+//
+// The reason written to the permanent ledger was hardcoded: "The email didn't
+// go — check the address." And the result sentence is assembled from `sent`,
+// `toPrint` and `blocked`, which between them cannot describe a send that was
+// attempted and refused. So he read "0 emailed." and got twenty log rows
+// telling him twenty good addresses were wrong.
+// ---------------------------------------------------------------------------
+describe("why a reminder didn't go", () => {
+  it("passes a hold refusal through — it is already written for him", () => {
+    const held = "Notices are on hold for this park. Lift the hold in Park setup when everyone is ready.";
+    expect(whyItDidntGo(held)).toBe(held);
+  });
+
+  it("passes the couldn't-check refusal through too", () => {
+    const s = "We couldn't check whether this park is holding notices, so nothing was sent. Try again in a minute.";
+    expect(whyItDidntGo(s)).toBe(s);
+  });
+
+  it("never claims a bad address for a transport error", () => {
+    // The whole defect: a Resend 5xx and a held park both became "check the
+    // address", permanently, in a row nobody can edit.
+    const out = whyItDidntGo("Resend 503: upstream unavailable");
+    expect(out).toContain("Resend 503");
+    expect(out).not.toMatch(/check the address/i);
+  });
+
+  it("admits when nothing came back rather than inventing a cause", () => {
+    expect(whyItDidntGo(undefined)).toMatch(/no reason came back/);
+    expect(whyItDidntGo(undefined)).not.toMatch(/address/i);
+  });
+
+  it("no cause is ever rendered as a guess about the recipient", () => {
+    for (const e of [undefined, "Resend 422: invalid", "fetch failed", "Notices are on hold for this park — closing"]) {
+      expect(whyItDidntGo(e), `${e}`).not.toMatch(/check the address/i);
+    }
+  });
+});
+
+describe("the one reason worth putting in the result sentence", () => {
+  const HOLD = "Notices are on hold for this park. Lift the hold in Park setup when everyone is ready.";
+
+  it("names the cause when they all failed the same way — the normal case", () => {
+    const out = commonestReason(Array(20).fill(HOLD));
+    expect(out).toMatch(/notices are on hold/);
+    // Lower-cased because it lands after an em dash, mid-sentence.
+    expect(out.startsWith("N")).toBe(false);
+  });
+
+  it("does not pick a winner when the causes differ", () => {
+    const out = commonestReason([HOLD, HOLD, "The email didn't go — Resend 422"]);
+    expect(out).toMatch(/2 of 3/);
+    expect(out).toMatch(/the rest for other reasons/);
+  });
+
+  it("keeps the technical detail intact inside our own sentence", () => {
+    // Everything reaching this has been through whyItDidntGo, so it is always
+    // one of our sentences with the transport string carried inside it. That
+    // is what makes lower-casing the first word safe.
+    const out = commonestReason([whyItDidntGo("Resend 503: upstream unavailable")]);
+    expect(out).toBe("the email didn't go — Resend 503: upstream unavailable");
+  });
+
+  it("is empty when nothing failed, so the sentence stays quiet", () => {
+    expect(commonestReason([])).toBe("");
+  });
+});
+
+describe("the sentence he actually reads", () => {
+  // THE REAL ASSEMBLY. The first version of these tests rebuilt the clause
+  // here instead, and deleting the failure clause from the action left every
+  // test green — the mutation proved the test was measuring a copy.
+  const HOLD = "Notices are on hold for this park. Lift the hold in Park setup when everyone is ready.";
+  const sig = (over: Partial<Parameters<typeof reminderSignal>[0]> = {}) =>
+    reminderSignal({
+      sent: 0, failed: [], printed: 0, blocked: 0,
+      toldOwners: 0, ownerLookupFailed: false, logSaved: true, ...over,
+    });
+
+  it("twenty held sends are no longer silent", () => {
+    const signal = sig({ failed: Array(20).fill(HOLD) });
+    expect(signal).toMatch(/20 didn't go/);
+    expect(signal).toMatch(/notices are on hold/);
+    expect(signal).not.toBe("0 emailed.");
+  });
+
+  it("1 January, exactly: nothing sent, everything held", () => {
+    expect(sig({ failed: Array(20).fill(HOLD) }))
+      .toBe("0 emailed, 20 didn't go — notices are on hold for this park. "
+          + "Lift the hold in Park setup when everyone is ready.");
+  });
+
+  it("says nothing extra when everything sent", () => {
+    expect(sig({ sent: 3 })).toBe("3 emailed.");
+  });
+
+  it("still carries every other clause it always did", () => {
+    const s = sig({ sent: 2, printed: 3, blocked: 1, toldOwners: 2, logSaved: false });
+    expect(s).toMatch(/2 emailed/);
+    expect(s).toMatch(/3 to print/);
+    expect(s).toMatch(/1 couldn't be reached/);
+    expect(s).toMatch(/Owners were sent a summary/);
+    expect(s).toMatch(/didn't get recorded/);
+  });
+
+  it("warns that the owner summary is unverified when the lookup failed", () => {
+    expect(sig({ ownerLookupFailed: true })).toMatch(/assume they weren't told/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AND THE ACTION ACTUALLY USES IT.
+//
+// Two mutations got through the tests above before this section existed: one
+// deleted the failure clause from an assembly the tests had COPIED rather
+// than called, and one left the real helper intact while the action passed it
+// an empty array. Both are the same question — who calls this, and with what?
+// reminder-actions.ts is server-only and database-bound, so it is read as
+// source; the failure both mutations model is a count of zero, not of one.
+// ---------------------------------------------------------------------------
+describe("the reminder action is wired to these", () => {
+  const raw = readFileSync(
+    fileURLToPath(new URL("./reminder-actions.ts", import.meta.url)),
+    "utf8",
+  );
+  // CODE, NOT PROSE. The comment explaining this fix quotes the sentence the
+  // fix removed, and the first version of the assertion below flagged its own
+  // documentation. Same trap as the send-capability header.
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  it("strips comments — the file's own prose quotes the removed sentence", () => {
+    expect(raw, "the explanation is still in the file").toMatch(/check the address/i);
+    expect(src, "but not in the code").not.toMatch(/check the address/i);
+  });
+
+  it("builds its sentence with the helper rather than inline", () => {
+    expect(src, "the signal is being assembled inline again").toMatch(/signal:\s*reminderSignal\(\{/);
+  });
+
+  it("hands it the real failures, not an empty list", () => {
+    const call = src.match(/reminderSignal\(\{[\s\S]*?\}\)/)?.[0] ?? "";
+    expect(call, "the reminderSignal call is gone — this scan is measuring nothing").not.toBe("");
+    expect(call, "the action reports no failures however many there were")
+      .not.toMatch(/failed:\s*\[\]/);
+    expect(call).toMatch(/\bfailed\b/);
+  });
+
+  it("records a failure on BOTH paths that can fail", () => {
+    // A refused send, and a household with no address at all. Neither was
+    // counted anywhere before.
+    expect((src.match(/failed\.push\(/g) ?? []).length,
+      "one push per failure path: the refused send and the missing address").toBe(2);
+  });
+
+  it("writes the real reason to the ledger instead of guessing", () => {
+    expect(src, "the hardcoded address blame is back")
+      .not.toMatch(/check the address/i);
+    expect(src).toMatch(/whyItDidntGo\(res\.error\)/);
   });
 });

@@ -299,3 +299,95 @@ export function ownerDigest(plan: ReminderPlan, parkName: string, month: string)
   }
   return lines.join("\n");
 }
+
+/**
+ * WHY A REMINDER DIDN'T GO, IN WORDS THAT ARE TRUE.
+ *
+ * The reason was hardcoded to "The email didn't go — check the address." and
+ * `sendEmail`'s own error was discarded, so every cause wrote the same
+ * permanent ledger row: a held park, a missing API key, a Resend 5xx and an
+ * actually-bad address were indistinguishable. On 1 January, with notices
+ * held by default, that is twenty rows blaming twenty good addresses for
+ * something the owner did on purpose.
+ *
+ * `sendEmail` refuses in two registers. The hold refusals are already written
+ * for a person and are passed through untouched. A transport error is
+ * technical, so it is LABELLED as the technical thing it is rather than
+ * translated into a guess about the recipient.
+ */
+export function whyItDidntGo(error?: string): string {
+  if (!error) return "The email didn't go, and no reason came back.";
+  // notice-hold.ts writes both of these to be read by the park owner.
+  if (/^Notices are on hold|^We couldn't check whether/.test(error)) return error;
+  return `The email didn't go — ${error}`;
+}
+
+/**
+ * The one reason to put in the result sentence.
+ *
+ * "20 didn't go" with no cause sends him to look at twenty addresses. When
+ * they all failed the same way — which is the normal case, because the normal
+ * cause is a setting — say which. When they didn't, say that instead of
+ * picking a winner.
+ */
+export function commonestReason(reasons: string[]): string {
+  if (reasons.length === 0) return "";
+  const counts = new Map<string, number>();
+  for (const r of reasons) counts.set(r, (counts.get(r) ?? 0) + 1);
+  if (counts.size === 1) return lowerFirst(reasons[0]);
+  const [top, n] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  return `${lowerFirst(top)} (${n} of ${reasons.length}; the rest for other reasons)`;
+}
+
+/**
+ * "Notices are on hold…" reads wrong mid-sentence after an em dash.
+ *
+ * Every input here is a `whyItDidntGo` output, so it is always one of our own
+ * sentences — "Notices are on hold…", "We couldn't check…", "The email didn't
+ * go — …". Lower-casing the first word of one of those is right. A raw
+ * transport string like "Resend 503" never reaches this, because
+ * `whyItDidntGo` has already put "The email didn't go — " in front of it.
+ */
+function lowerFirst(s: string): string {
+  return /^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s;
+}
+
+/**
+ * THE SENTENCE HE READS AFTER PRESSING "SEND N AND LOG THE REST".
+ *
+ * It used to be assembled from `sent`, `printed` and `blocked` — three
+ * numbers that between them cannot describe a send that was ATTEMPTED and
+ * REFUSED. With notices held (the default, and his own standing rule) all
+ * twenty were refused and the sentence read "0 emailed." A true number and a
+ * completely misleading sentence, on the morning he chases rent for the first
+ * time.
+ *
+ * It lives here, pure, rather than inline in the action — the first attempt at
+ * this fix built it inline and tested a COPY of the expression, so deleting
+ * the failure clause from the real one kept every test green.
+ */
+export function reminderSignal(r: {
+  sent: number;
+  /** One entry per failure, already in words. Length is the count. */
+  failed: string[];
+  printed: number;
+  blocked: number;
+  toldOwners: number;
+  ownerLookupFailed: boolean;
+  logSaved: boolean;
+}): string {
+  const body =
+    `${r.sent} emailed` +
+    // Named, because "20 didn't go" with no cause sends him to look at twenty
+    // addresses — which is exactly what the old hardcoded reason told him to do.
+    (r.failed.length ? `, ${r.failed.length} didn't go — ${commonestReason(r.failed)}` : "") +
+    (r.printed ? `, ${r.printed} to print` : "") +
+    (r.blocked ? `, ${r.blocked} couldn't be reached` : "") +
+    (r.toldOwners > 0 ? `. ${r.toldOwners === 1 ? "The owner was" : "Owners were"} sent a summary` : "") +
+    (r.ownerLookupFailed ? ". We couldn't check who else to send a summary to, so assume they weren't told" : "") +
+    (r.logSaved ? "" : ". These sends didn't get recorded, so don't send again until that's checked — they'd be chased twice");
+
+  // The failure reason is a whole sentence and ends in its own full stop, so
+  // appending one unconditionally produced "…when everyone is ready..".
+  return body.endsWith(".") ? body : `${body}.`;
+}
