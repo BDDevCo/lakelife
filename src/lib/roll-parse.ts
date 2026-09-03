@@ -764,14 +764,39 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
   const index: Partial<Record<Target, number>> = {};
   const unrecognised: string[] = [];
   const refused: string[] = [];
+  /**
+   * EVERY COLUMN THAT CLAIMS THE NAME, in order.
+   *
+   * "First Name" and "Last Name" both hit the `name` synonym list, only the
+   * first index was kept, and the second column's role was still `field` — so
+   * the notes loop skipped it too. A roll in that very ordinary shape imported
+   * twenty-one households called "Donna", "Ray", "Ana", with verdict READY and
+   * nothing asked. Those first names are what would print on the 1 January
+   * leases and every letter after them.
+   */
+  const nameCols: { i: number; label: string }[] = [];
+
   headerCells.forEach((label, i) => {
     const t = targetFor(label);
     if (t === null) { roles.push({ kind: "unrecognised", label }); unrecognised.push(label); return; }
     // Not carried, not mapped, not kept. The cell is never read again.
     if (t === "refuse") { roles.push({ kind: "refused", label }); refused.push(label); return; }
     if (t === "carry") { roles.push({ kind: "carry", label }); return; }
+
+    if (t.target === "name") nameCols.push({ i, label });
+
+    // A SECOND COLUMN CLAIMING A TAKEN TARGET IS NOT A FIELD. Left as one it
+    // is read by nothing and skipped by the notes loop — the cell simply
+    // disappears. The name pair is the exception: it is composed below rather
+    // than carried, so it does not arrive twice.
+    if (index[t.target] !== undefined) {
+      if (t.target !== "name") { roles.push({ kind: "carry", label }); return; }
+      roles.push({ kind: "field", target: t.target, ...(t.term ? { term: t.term } : {}) });
+      return;
+    }
+
     roles.push({ kind: "field", target: t.target, ...(t.term ? { term: t.term } : {}) });
-    if (index[t.target] === undefined) index[t.target] = i;
+    index[t.target] = i;
   });
   // NO HEADER? Infer the shape from the body rather than giving up. Reported,
   // never silent — the screen says what we guessed and lets him correct it.
@@ -868,6 +893,22 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     const cells = splitLine(line, delimiter).map((c) => c.trim());
     const cellAt = (t: Target) => (index[t] !== undefined ? (cells[index[t]!] ?? "") : "");
 
+    /**
+     * The whole name, however many columns the seller split it across.
+     *
+     * Joined in COLUMN ORDER, unless the first of them says it is the
+     * surname — "Last Name, First Name" is as common on a rent roll as the
+     * other way round, and "Wexler Donna" is not a person's name.
+     */
+    const nameCell = (): string => {
+      if (nameCols.length < 2) return cellAt("name");
+      const parts = nameCols.map((c) => (cells[c.i] ?? "").trim());
+      const given = parts.filter(Boolean);
+      if (given.length < 2) return given[0] ?? "";
+      const surnameFirst = /\b(last|sur)/i.test(nameCols[0].label);
+      return surnameFirst ? `${given[0]}, ${given[1]}` : given.join(" ");
+    };
+
     if (FACILITY_RE.test(text) && !cellAt("name")) {
       facilities.push({ lines: [lineNo], text }); continue;
     }
@@ -882,7 +923,7 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     }
 
     const lot = noLotColumn ? unknownField<string>("") : parseLot(cellAt("lot"), opts.knownLots);
-    const name = noNameColumn ? unknownField<string>("") : parseName(cellAt("name"));
+    const name = noNameColumn ? unknownField<string>("") : parseName(nameCell());
     const rent = index.rent === undefined ? unknownField<number>("") : parseMoney(cellAt("rent"));
 
     let term: Field<Term> = unknownField<Term>("");

@@ -718,3 +718,76 @@ describe("no column is consumed by a field nothing reads", () => {
     expect(nowRead, "these have a reader now — delete them from NO_READER").toEqual([]);
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// A NAME SPLIT ACROSS TWO COLUMNS.
+//
+// "First Name" and "Last Name" both hit the `name` synonym list. Only the
+// first index was kept, and the second column's role was still `field` — so
+// the notes loop, which carries only `carry` and `unrecognised`, skipped it
+// too. The surname was not in the field, not in the notes, not in a flag, and
+// nothing on the review screen mentioned the column.
+//
+// I ran it: three rows, verdict READY, zero blockers, names "Donna", "Ray",
+// "Ana". commitImport writes display_name verbatim, so twenty-one households
+// would be created under their first names — which is then what prints on the
+// 1 January leases and on every letter after them.
+// ---------------------------------------------------------------------------
+describe("a name the seller split in two", () => {
+  const parse = (csv: string) => parseRentRoll(csv, { knownLots: ["6", "7"] });
+
+  it("puts First Name and Last Name back together", () => {
+    const r = parse("Lot,First Name,Last Name,Rent\n6,Donna,Wexler,385");
+    expect(r.rows[0].name.value).toBe("Donna Wexler");
+  });
+
+  it("reads Last Name, First Name in the order a person would", () => {
+    // As common on a rent roll as the other way round, and "Wexler Donna" is
+    // not anybody's name.
+    const r = parse("Lot,Last Name,First Name,Rent\n6,Wexler,Donna,385");
+    expect(r.rows[0].name.value).toBe("Wexler, Donna");
+  });
+
+  it("copes when one half is blank", () => {
+    const r = parse("Lot,First Name,Last Name,Rent\n6,,Wexler,385");
+    expect(r.rows[0].name.value).toBe("Wexler");
+  });
+
+  it("leaves a single name column exactly as it was", () => {
+    const r = parse('Lot,Tenant,Rent\n6,"Wexler, Donna",385');
+    expect(r.rows[0].name.value).toBe("Wexler, Donna");
+  });
+
+  it("still refuses a placeholder after composing", () => {
+    // The composed string goes through parseName like any other, so a
+    // placeholder spread over two columns is still not a person. "VACANT" is
+    // caught even earlier — the line never becomes a row at all — so this uses
+    // a placeholder that only parseName rejects.
+    const r = parse("Lot,First Name,Last Name,Rent\n6,SEE,NOTE,385");
+    expect(r.rows[0].name.value).toBeNull();
+    expect(r.rows[0].verdict).toBe("ask");
+  });
+
+  it("a VACANT line stays a declared vacancy, not a household", () => {
+    const r = parse("Lot,First Name,Last Name,Rent\n6,VACANT,,");
+    expect(r.rows).toHaveLength(0);
+    expect(r.vacantDeclared).toHaveLength(1);
+  });
+
+  it("a SECOND column claiming any other taken target is carried, not lost", () => {
+    // The general form of the same defect: a duplicate `field` role is read by
+    // nothing and skipped by the notes loop, so the cell disappears.
+    const r = parse("Lot,Tenant,Rent,Rent\n6,Maria,400,425");
+    expect(r.rows[0].rent.value, "the first rent column still wins").toBe(400);
+    expect(r.rows[0].notes.join(" "), "the second rent column vanished").toMatch(/425/);
+  });
+
+  it("the composed name is what the row reports, not just a note", () => {
+    // display_name is written from this field verbatim.
+    const r = parse("Lot,First Name,Last Name,Rent\n7,Ray,Kastner,385");
+    expect(r.rows[0].name.confidence).toBe("stated");
+    expect(r.rows[0].verdict).toBe("import");
+    expect(r.rows[0].name.value).toBe("Ray Kastner");
+  });
+});
