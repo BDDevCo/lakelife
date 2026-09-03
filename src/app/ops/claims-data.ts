@@ -75,10 +75,17 @@ export async function getStuckHouseholds(): Promise<StuckHousehold[]> {
 
   const byRenter = new Map<string, typeof events>();
   for (const e of events) {
-    const id = e.renter_id as string;
+    // Since 0153 a refusal may name no household — a wrong lot number, or a
+    // code typed against a park with no such lot. Those are real refusals and
+    // they COUNT in the tally, but there is nobody to ring about them, so
+    // they cannot join a list whose every row is a person to call. Skipping
+    // them here rather than at the query keeps that distinction one place.
+    const id = e.renter_id as string | null;
+    if (id == null) continue;
     const list = byRenter.get(id);
     if (list) list.push(e); else byRenter.set(id, [e]);
   }
+  if (byRenter.size === 0) return [];
 
   const ids = [...byRenter.keys()];
   // These two DECIDE WHO APPEARS. The refusals are already in hand at this
@@ -143,6 +150,13 @@ export interface ClaimTally {
   slipsPrinted: number;
   claimed: number;
   refused: number;
+  /**
+   * Refusals with no household to trace them to (0153): a wrong lot number,
+   * or a code typed against a park that has no such lot. They are somebody's
+   * bad morning, but nobody's phone number — so the card must not fold them
+   * into a sentence about people who "got in or said no thanks".
+   */
+  refusedUnattributed: number;
   declined: number;
   /** True when the log has never been written to at all. */
   empty: boolean;
@@ -161,7 +175,7 @@ export async function getClaimTally(): Promise<ClaimTally> {
 
   const { data, error } = await admin
     .from("park_renter_claim_events")
-    .select("event")
+    .select("event, renter_id")
     .gte("occurred_at", since);
 
   if (error) {
@@ -171,7 +185,10 @@ export async function getClaimTally(): Promise<ClaimTally> {
     // on OpsStuckClaims — "we couldn't check" — rather than a different value
     // for a flag that only has two meanings. Until then it at least logs, and
     // /ops no longer manufactures this branch out of the OTHER read's failure.
-    return { invitesSent: 0, slipsPrinted: 0, claimed: 0, refused: 0, declined: 0, empty: true };
+    return {
+      invitesSent: 0, slipsPrinted: 0, claimed: 0,
+      refused: 0, refusedUnattributed: 0, declined: 0, empty: true,
+    };
   }
 
   const n = (kind: string) => (data ?? []).filter((r) => r.event === kind).length;
@@ -180,6 +197,9 @@ export async function getClaimTally(): Promise<ClaimTally> {
     slipsPrinted: n("code_issued"),
     claimed: n("claimed"),
     refused: n("refused"),
+    refusedUnattributed: (data ?? []).filter(
+      (r) => r.event === "refused" && r.renter_id == null,
+    ).length,
     declined: n("declined"),
     empty: (data ?? []).length === 0,
   };

@@ -49,7 +49,14 @@ export function OpsStuckClaims({
         <p className="mut" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.5 }}>
           {tally.refused === 0
             ? "No refusals at all."
-            : `${tally.refused} attempt${tally.refused === 1 ? "" : "s"} were refused, but everyone since got in or said no thanks.`}
+            : tally.refusedUnattributed === tally.refused
+              // Every refusal named no household. "Everyone since got in" would
+              // be a claim about people this log cannot identify — the wrong
+              // sentence, and the reassuring one.
+              ? `${tally.refused} attempt${tally.refused === 1 ? " was" : "s were"} refused with no household to trace ${tally.refused === 1 ? "it" : "them"} to — a wrong lot number, or a slip held against the wrong park.`
+              : tally.refusedUnattributed > 0
+                ? `${tally.refused} attempts were refused. ${tally.refusedUnattributed} of those named no household — a wrong lot number, or a slip held against the wrong park — and everyone else got in or said no thanks.`
+                : `${tally.refused} attempt${tally.refused === 1 ? "" : "s"} were refused, but everyone since got in or said no thanks.`}
         </p>
       </div>
     );

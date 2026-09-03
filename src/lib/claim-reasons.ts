@@ -26,6 +26,11 @@ const OPS_REASON: Record<string, string> = {
   claim_member_may_not_claim: "they're signed in as park staff",
   claim_no_open_lot: "no current tenancy matched",
   claim_file_merged: "their record was merged into another",
+  // Reachable, and until 0153 unloggable — the four refusals that happen
+  // before a file is resolved wrote no row at all, so /ops read them as
+  // "No refusals at all." Two of them still have no household to name.
+  claim_park_not_open: "no park matched the name on their slip",
+  claim_not_signed_in: "they weren't signed in",
   invite_wrong_account: "signed in with a different email from the invite",
   invite_expired: "their invite link had expired",
   invite_unknown: "the link no longer matches anything",

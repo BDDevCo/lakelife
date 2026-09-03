@@ -137,7 +137,10 @@ export default async function OpsPage() {
   if (stuckRes.status === "fulfilled") stuck = stuckRes.value;
   else console.error("[ops] stuck households unavailable", why(stuckRes));
 
-  let tally = { invitesSent: 0, slipsPrinted: 0, claimed: 0, refused: 0, declined: 0, empty: true };
+  let tally = {
+    invitesSent: 0, slipsPrinted: 0, claimed: 0,
+    refused: 0, refusedUnattributed: 0, declined: 0, empty: true,
+  };
   if (tallyRes.status === "fulfilled") tally = tallyRes.value;
   else console.error("[ops] claim tally unavailable", why(tallyRes));
 
