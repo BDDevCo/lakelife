@@ -92,6 +92,15 @@ export function ParkImportRead({ view }: { view: ReadView }) {
   // The walk list: lots his roll never accounted for. An empty lot and a cash
   // tenant the seller forgot look exactly the same on paper.
   const walk = view.others.filter((o) => o.verdict === "vacant");
+  /**
+   * HIS LOTS THAT THE SHEET NEVER NAMES.
+   *
+   * `walk` is built from lines that were in the file. A seller who lists only
+   * his 19 occupied lots and never mentions the 2 empties produced "0 empty"
+   * here — and the empties are exactly what the park carries, so they are the
+   * ones that matter for every shared cost.
+   */
+  const absent = view.reconciliation.neverMentioned;
   const skipped = view.others.filter((o) => o.verdict !== "vacant");
 
   // WHAT THE LIST SAYS, NOT WHAT IS READY TO WRITE.
@@ -159,16 +168,29 @@ export function ParkImportRead({ view }: { view: ReadView }) {
       ))}
 
       {/* ---- Section 1: WALK THESE FIRST. Deliberately above everything. --- */}
-      {walk.length > 0 && (
+      {(walk.length > 0 || absent.length > 0) && (
         <section className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
           <h2 style={{ fontSize: 18, margin: "0 0 10px" }}>
-            {walk.length} {walk.length === 1 ? "lot has" : "lots have"} nobody on this list
+            {walk.length + absent.length}{" "}
+            {walk.length + absent.length === 1 ? "lot has" : "lots have"} nobody on this list
           </h2>
           <ul style={{ margin: "0 0 12px", paddingLeft: 18, lineHeight: 1.7 }}>
             {walk.map((w) => (
               <li key={w.lineNo}>
                 <strong>{w.text}</strong>
                 {w.why ? <span className="mut"> — {w.why}</span> : null}
+              </li>
+            ))}
+            {/* NOT ON THE SHEET AT ALL. The list above is built from lines
+                that were physically in the file, so a pad the seller simply
+                left off was invisible here and counted as "0 empty" on the
+                bar — a false statement at the moment of decision, on the one
+                screen whose whole job is to be the output he could not have
+                produced himself. */}
+            {absent.map((label) => (
+              <li key={`absent-${label}`}>
+                <strong>Lot {label}</strong>
+                <span className="mut"> — not on this list at all</span>
               </li>
             ))}
           </ul>
@@ -516,8 +538,8 @@ export function ParkImportRead({ view }: { view: ReadView }) {
         >
           <span className="mut" style={{ flex: 1, fontSize: 14 }}>
             {view.namelessRoll
-              ? `${view.rates.length} lots · no names on this list · ${walk.length} empty`
-              : `${view.ready.length} ready · ${view.needsYou.length} need you · ${walk.length} empty`}
+              ? `${view.rates.length} lots · no names on this list · ${walk.length + absent.length} empty`
+              : `${view.ready.length} ready · ${view.needsYou.length} need you · ${walk.length + absent.length} empty`}
           </span>
           <button
             className="ll-btn"

@@ -397,10 +397,17 @@ export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
     // coincidence and imported them without a word.
     reconciliation: reconcileRoll(
       lots.map((l) => l.lotNumber),
-      parsed.rows.map((r) => ({
-        matched: (r.lot?.value as string | null) ?? null,
-        raw: (r.lot?.raw as string) ?? "",
-      })),
+      [
+        ...parsed.rows.map((r) => ({
+          matched: (r.lot?.value as string | null) ?? null,
+          raw: (r.lot?.raw as string) ?? "",
+        })),
+        // A LOT THE SHEET CALLS VACANT IS MENTIONED. It just has nobody on it.
+        // Counting only tenancy rows would report every declared-empty pad as
+        // one the seller never mentioned, which is the opposite of true and
+        // would fire the mis-numbering alarm on a perfectly good roll.
+        ...(plan.emptyLots ?? []).map((e) => ({ matched: null, raw: e.label })),
+      ],
     ),
   };
 }

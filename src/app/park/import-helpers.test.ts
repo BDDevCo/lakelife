@@ -721,6 +721,18 @@ describe("the sheet's lots against the park's lots", () => {
     expect(r.wouldCreate).toEqual([]);
   });
 
+  it("a lot the sheet calls VACANT counts as mentioned", () => {
+    // Otherwise every declared-empty pad reads as one the seller never
+    // mentioned — the opposite of true, and enough of them to fire the
+    // mis-numbering alarm on a perfectly good roll.
+    const occupied = HAVEN.slice(0, 19).map((l) => f(l, l));
+    const vacant = ["27", "28"].map((l) => f(null, l));   // how emptyLots arrive
+    const r = reconcileRoll(HAVEN, [...occupied, ...vacant]);
+    expect(r.neverMentioned).toEqual([]);
+    expect(r.wouldCreate).toEqual([]);
+    expect(r.looksMisnumbered).toBe(false);
+  });
+
   it("lists a repeated new lot once", () => {
     const r = reconcileRoll(HAVEN, [f(null, "3"), f(null, "3")]);
     expect(r.wouldCreate).toEqual(["3"]);
@@ -835,5 +847,37 @@ describe("decoding whatever the seller actually sent", () => {
     // The encodings agree on ASCII, which is why trying UTF-8 first is safe.
     const plain = "Lot,Tenant,Rent\n6,Maria,400\n";
     expect(decodeRoll(utf8(plain))).toBe(plain);
+  });
+});
+
+
+describe("a lot the seller simply left off", () => {
+  // "0 empty" was a false statement at the moment of decision. `walk` is built
+  // from lines that were physically in the file, so a park with 21 lots and a
+  // sheet listing only the 19 occupied ones showed "19 ready · 0 need you ·
+  // 0 empty" — and the empties are exactly what the park carries, so they are
+  // the lots that matter for every shared cost.
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const c = read("../../components/ParkImportRead.tsx");
+
+  it("the walk list counts his lots too, not just the file's lines", () => {
+    expect(c, "absent is gone — the count is from the file again")
+      .toMatch(/const absent = view\.reconciliation\.neverMentioned/);
+  });
+
+  it("the section appears even when the file declared no vacancies", () => {
+    expect(c).toMatch(/walk\.length > 0 \|\| absent\.length > 0/);
+  });
+
+  it("the commit bar counts both", () => {
+    const bar = c.match(/\$\{view\.ready\.length\} ready[^`]*/)?.[0] ?? "";
+    expect(bar, "the bar line is gone — this scan is measuring nothing").not.toBe("");
+    expect(bar, "the bar still counts only the file's vacant lines")
+      .toMatch(/walk\.length \+ absent\.length/);
+  });
+
+  it("and names them, so he knows which ones to walk", () => {
+    expect(c).toMatch(/not on this list at all/);
   });
 });
