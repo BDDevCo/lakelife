@@ -788,20 +788,30 @@ export function whyNotReadable(fileName: string, head: string): string | null {
   // SNIFFED, NOT MERELY NAMED: a spreadsheet saved with the wrong extension is
   // still a spreadsheet, and a .txt that is really a PDF is still a PDF.
   if (head.startsWith("PK")) {
-    return "That's an Excel or Numbers file. Open it and choose File \u2192 Save As \u2192 CSV, "
-         + "then pick the CSV \u2014 or ask for it as a CSV in the first place.";
+    // BOTH WORDINGS, because the menu is not the same on the two programs
+    // this file opens in. Excel has File -> Save As -> CSV; Numbers, which is
+    // what a spreadsheet opens in on a Mac, has File -> Export To -> CSV.
+    // Naming only Excel's sends a Mac owner looking for a menu item that is
+    // not there, which is a dead end dressed as help.
+    return "That's a spreadsheet. Save a copy as CSV and pick that instead \u2014 "
+         + "in Excel it's File \u2192 Save As \u2192 CSV, in Numbers it's "
+         + "File \u2192 Export To \u2192 CSV. Or just ask for it as a CSV.";
   }
   if (head.startsWith("%PDF")) {
-    return "That's a PDF, and a PDF has no columns we can read. If it's a "
-         + "spreadsheet printed to PDF, ask for the spreadsheet itself as a CSV.";
+    return "That's a PDF, and a PDF has no columns we can read. A rent roll is "
+         + "almost always printed from a spreadsheet \u2014 ask whoever sent it "
+         + "for that file, saved as a CSV. If it's a scan of something written "
+         + "by hand, there is no file behind it, and the box below is the way in.";
   }
   if (ext === ".xls" || ext === ".xlsx" || ext === ".numbers" || ext === ".ods") {
-    return "Spreadsheet files need saving as CSV first \u2014 open it and choose "
-         + "File \u2192 Save As \u2192 CSV, then pick that.";
+    return "Spreadsheet files need saving as CSV first \u2014 in Excel that's "
+         + "File \u2192 Save As \u2192 CSV, in Numbers it's File \u2192 Export To "
+         + "\u2192 CSV. Or ask for it as a CSV.";
   }
   if (ext === ".pdf" || ext === ".doc" || ext === ".docx" || ext === ".pages") {
-    return "We can only read a CSV, a TSV or a plain text list. If this came "
-         + "from a spreadsheet, ask for it as a CSV.";
+    return "We can only read a CSV, a TSV or a plain text list. This was almost "
+         + "certainly printed from a spreadsheet \u2014 ask whoever sent it for "
+         + "that file, saved as a CSV.";
   }
   if (ext === ".heic" || ext === ".jpg" || ext === ".jpeg" || ext === ".png") {
     return "That's a photo. We can't read a picture of a roll \u2014 ask for the "

@@ -48,14 +48,14 @@ describe("which files we can read", () => {
 
   it("catches a spreadsheet hiding behind the wrong extension", () => {
     // Renaming a file does not change what it is, and the sniff runs first.
-    expect(whyNotReadable("roll.csv", "PK")).toMatch(/Excel or Numbers/);
+    expect(whyNotReadable("roll.csv", "PK")).toMatch(/spreadsheet/i);
     expect(whyNotReadable("roll.txt", "%PDF-1.7")).toMatch(/PDF/);
   });
 
   it("refuses a PDF, and says what to ask for instead", () => {
     const why = whyNotReadable("rent roll.pdf", "%PDF-1.4");
     expect(why).toMatch(/no columns/);
-    expect(why).toMatch(/ask for the spreadsheet/);
+    expect(why).toMatch(/ask whoever sent it/);
   });
 
   it("refuses a photo of a roll without pretending it might work", () => {
@@ -69,6 +69,29 @@ describe("which files we can read", () => {
 
   it("says an empty file is empty rather than reading nothing", () => {
     expect(whyNotReadable("roll.csv", "   \n  ")).toMatch(/empty/);
+  });
+
+  it("names the menu for BOTH programs a spreadsheet opens in", () => {
+    // "File -> Save As -> CSV" is Excel's wording. On a Mac the roll opens in
+    // Numbers, where it is File -> Export To -> CSV — so naming only Excel
+    // sends him looking for a menu item that is not there, which is a dead end
+    // dressed as help. (My own copy, written this morning, said only Excel.)
+    for (const why of [whyNotReadable("r.xlsx", "PK"), whyNotReadable("r.numbers", "junk")]) {
+      expect(why).toMatch(/Excel/);
+      expect(why).toMatch(/Numbers/);
+      expect(why).toMatch(/Export To/);
+    }
+  });
+
+  it("tells him where a PDF's real file is, and admits when there isn't one", () => {
+    // The likeliest shape of the Haven roll, per this repo's own fixture: a
+    // scan of a handwritten sheet, with no file behind it at all. Saying "ask
+    // for the spreadsheet" to somebody holding a photograph of handwriting is
+    // advice that cannot be followed.
+    const why = whyNotReadable("roll.pdf", "%PDF-1.4");
+    expect(why).toMatch(/ask whoever sent it/);
+    expect(why).toMatch(/written by hand/);
+    expect(why, "and points at the one route that still works").toMatch(/box below/);
   });
 
   it("names a next step in EVERY refusal — never just 'unsupported'", () => {
