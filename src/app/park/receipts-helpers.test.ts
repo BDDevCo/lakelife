@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, type Receipt, type OtherReceipt } from "./receipts-helpers";
 
 const TODAY = "2026-08-11";
@@ -555,5 +557,83 @@ describe("the file adds up to the bank", () => {
   it("still carries the payment id, so a row can be traced", () => {
     const csv = receiptsCsv([], [other({ paymentId: "pay-xyz" })], { parkName: "P", generatedAt: "t" });
     expect(csv).toContain("pay-xyz");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE COUNT ON THE BUTTON IS THE ROW COUNT OF THE FILE.
+//
+// "Download N payments for your accountant" is a promise about a spreadsheet
+// somebody else opens. It has now been broken twice by the same mechanism:
+// the count was ASSEMBLED on the screen from the screen's own totals, while
+// the file was built from arrays. First `s.count` excluded reversed payments
+// and the file included them — 11 promised, 12 delivered. That was patched by
+// adding the reversed length. Then the export route started writing
+// `otherReceipts` as well, and the gap reopened one array later.
+//
+// The fix is not a third addend. It is to derive the count from exactly what
+// the file is built from.
+// ---------------------------------------------------------------------------
+describe("the button's count and the file's rows", () => {
+  const dataRows = (csv: string) => csv.split("\r\n").length - 1; // less header
+
+  const other = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
+    paymentId: "p-other", kind: "deposit", receivedOn: "2026-07-09",
+    amountCents: 50000, feeCents: 0, method: "check", reference: null, ...over,
+  });
+
+  it("a file of rent, a bounced cheque and a deposit is three rows", () => {
+    const receipts = [
+      receipt({ paymentId: "a" }),
+      receipt({ paymentId: "b", reversedAt: "2026-07-20T00:00:00Z", reversedReason: "bounced" }),
+    ];
+    const others = [other()];
+    const csv = receiptsCsv(receipts, others, { parkName: "The Haven", generatedAt: "t" });
+
+    // What the screen now computes: page.receipts.length + page.otherReceipts.length.
+    expect(dataRows(csv)).toBe(receipts.length + others.length);
+    expect(dataRows(csv)).toBe(3);
+  });
+
+  it("the deposit is NOT in the rent summary — which is why the old sum was short", () => {
+    // summariseReceipts never sees otherReceipts, and correctly so: a deposit
+    // is not rent. That is exactly why a count built from the summary could
+    // never match a file that carries both.
+    const s = summariseReceipts([receipt({ paymentId: "a" })], JULY);
+    expect(s.count).toBe(1);
+    const csv = receiptsCsv([receipt({ paymentId: "a" })], [other()], { parkName: "P", generatedAt: "t" });
+    expect(dataRows(csv)).toBe(2);
+    expect(dataRows(csv)).toBeGreaterThan(s.count + s.reversed.length);
+  });
+
+  it("and the button on the screen uses that, not the summary", () => {
+    // receipts-helpers is pure and testable; ParkStatements is a client
+    // component whose only job here is to print a number. Read as source
+    // because the arithmetic, not the markup, is what went wrong twice.
+    const src = readFileSync(
+      fileURLToPath(new URL("../../components/ParkStatements.tsx", import.meta.url)),
+      "utf8",
+    );
+    const decl = src.match(/const fileRows = [^\n]*/)?.[0] ?? "";
+    expect(decl, "fileRows is gone — the count is being assembled again").not.toBe("");
+    expect(decl).toMatch(/page\.receipts\.length/);
+    expect(decl).toMatch(/page\.otherReceipts\.length/);
+
+    // And the button prints THAT, not a figure rebuilt from the screen totals.
+    const button = src.match(/\{fileRows > 0[\s\S]{0,300}?\}/)?.[0] ?? "";
+    expect(button, "the download button no longer reads fileRows").not.toBe("");
+    expect(button, "the summary count is back on the button")
+      .not.toMatch(/s\.count/);
+  });
+
+  it("holds for every mix, including none of one kind", () => {
+    for (const nR of [0, 1, 3]) {
+      for (const nO of [0, 1, 2]) {
+        const receipts = Array.from({ length: nR }, (_, i) => receipt({ paymentId: `r${i}` }));
+        const others = Array.from({ length: nO }, (_, i) => other({ paymentId: `o${i}` }));
+        const csv = receiptsCsv(receipts, others, { parkName: "P", generatedAt: "t" });
+        expect(dataRows(csv), `${nR} rent + ${nO} other`).toBe(nR + nO);
+      }
+    }
   });
 });

@@ -352,7 +352,7 @@ function Reminders({
       .map((r) => `<section><h2>Lot ${esc(r.lotNumber)}</h2><pre>${esc(r.body)}</pre></section>`)
       .join("");
     w.document.write(
-      `<!doctype html><title>${esc(month)} notices</title><style>
+      `<!doctype html><title>${esc(prettyMonth(month))} notices</title><style>
         body{font:15px/1.6 -apple-system,Segoe UI,sans-serif;margin:0}
         section{padding:56px 60px;page-break-after:always}
         h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#666;margin:0 0 28px}

@@ -10,6 +10,7 @@ import {
   giveNotice, clearNotice,
 } from "@/app/park/actions";
 import type { TenantInput, TenantEditInput } from "@/app/park/park-helpers";
+import { prettyMonth } from "@/app/park/ledger-helpers";
 
 /**
  * The park owner's home screen: every lot, who is on it, and who is asking.
@@ -303,7 +304,13 @@ export function ParkRentRoll({
             sub={
               disputedAmount
                 ? `plus $${disputedAmount.toLocaleString("en-US", { maximumFractionDigits: 0 })} disputed`
-                : owedBlocked ? `${owedBlocked} can't be totalled` : (owedMonth ?? "")
+                // HOUSE RULE: any month a person reads is "January 2027",
+                // never "2027-01". This slot fell through to the raw period —
+                // the ordinary state once January is billed and nothing is
+                // disputed — so the tile read "Owed this month / $10,851 /
+                // 2027-01". Every other month string on these screens already
+                // goes through prettyMonth.
+                : owedBlocked ? `${owedBlocked} can't be totalled` : (owedMonth ? prettyMonth(owedMonth) : "")
             }
           />
         )}

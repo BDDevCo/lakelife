@@ -550,3 +550,45 @@ describe("why a charge run raised nothing", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// A MONTH A PERSON READS IS "JANUARY 2027".
+//
+// The house rule, and it keeps leaking at the edges — the slot that falls
+// through to a raw value, the print-window title nobody looks at twice. Two
+// found together: the rent roll's "Owed this month" tile, whose sub-line read
+// "2027-01" in the ordinary state (nothing disputed, nothing blocked), and
+// the reminder notices' print title, on pages he folds and puts through
+// twenty doors.
+//
+// A repo-wide sweep for this is not viable — every Intl.DateTimeFormat option
+// bag in the codebase mentions a month and drowns the signal. So these pin
+// the two screens that were actually wrong, by reading the source of the
+// expression that renders them.
+// ---------------------------------------------------------------------------
+describe("no raw YYYY-MM reaches a person", () => {
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+  it("prettyMonth is what makes the difference", () => {
+    expect(prettyMonth("2027-01")).toBe("January 2027");
+    // And it passes through anything that is not a period, rather than
+    // mangling it — the tile's sub-line shares a slot with other sentences.
+    expect(prettyMonth("3 can't be totalled")).toBe("3 can't be totalled");
+    expect(prettyMonth("")).toBe("");
+  });
+
+  it("the rent roll's owed-this-month sub-line formats its month", () => {
+    const src = read("../../components/ParkRentRoll.tsx");
+    const sub = src.match(/owedBlocked \?[^\n]*\n?[^\n]*owedMonth[^\n]*/)?.[0] ?? "";
+    expect(sub, "the owedMonth fallback is gone — this scan is measuring nothing").not.toBe("");
+    expect(sub, 'the tile falls through to a raw "2027-01"').toMatch(/prettyMonth\(/);
+  });
+
+  it("the printed notices are titled in words", () => {
+    const src = read("../../components/ParkRent.tsx");
+    const title = src.match(/<title>\$\{[^}]*\}[^<]*<\/title>/)?.[0] ?? "";
+    expect(title, "the print title is gone — this scan is measuring nothing").not.toBe("");
+    expect(title).toMatch(/prettyMonth\(/);
+  });
+});

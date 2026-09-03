@@ -97,6 +97,12 @@ export function ParkStatements({
   }
 
   const s = page.summary;
+  // EXACTLY WHAT THE FILE CONTAINS. `receiptsCsv(page.receipts,
+  // page.otherReceipts, …)` writes one row per entry of each, so this is the
+  // row count of the spreadsheet he forwards to his accountant — not a figure
+  // reassembled from the screen's totals, which exclude different things for
+  // good reasons of their own.
+  const fileRows = page.receipts.length + page.otherReceipts.length;
   const year = Number(today.slice(0, 4));
   const href =
     `/park/statements/export?from=${page.period.from}&to=${page.period.to}`;
@@ -269,15 +275,20 @@ export function ParkStatements({
       <section style={{ marginTop: 18 }}>
         <a className="ll-btn" href={href} style={{ display: "inline-block", textDecoration: "none" }}>
           {/* THE BUTTON PROMISED A ROW COUNT THE FILE DID NOT HONOUR.
-              `s.count` excludes reversed payments — every total on this screen
-              does, and it says so. The FILE is built from a date filter alone,
-              so a bounced cheque is in it. "Download 11 payments" produced a
-              spreadsheet with 12 rows, the twelfth carrying the bounced amount.
-              The rows now carry a "Taken back" column, so the honest count is
-              every row in the file, with the taken-back ones named separately
-              rather than quietly folded in. */}
-          {s.count + s.reversed.length > 0
-            ? `Download ${s.count + s.reversed.length} ${s.count + s.reversed.length === 1 ? "payment" : "payments"} for your accountant`
+              Twice. First `s.count` excluded reversed payments while the file
+              included them, so "Download 11 payments" produced 12 rows. That
+              was patched by adding `s.reversed.length` — and then the export
+              route started writing `otherReceipts` too (deposits, money on
+              account, amenity income), and the same defect reopened one array
+              later.
+
+              So the count is no longer ASSEMBLED from parts that have to be
+              kept in step with the file. It is taken from the two arrays the
+              route literally passes to `receiptsCsv`, which is one row each.
+              Derive, don't denormalise: the only way to be wrong now is to
+              pass a third array to the file and not to this. */}
+          {fileRows > 0
+            ? `Download ${fileRows} ${fileRows === 1 ? "payment" : "payments"} for your accountant`
             : "Download the empty file anyway"}
         </a>
         <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
@@ -285,6 +296,13 @@ export function ParkStatements({
           paid, which lot and what the bill was made up of.{" "}
           {s.reversed.length > 0
             ? `${s.reversed.length} taken-back ${s.reversed.length === 1 ? "payment is" : "payments are"} in the file too, marked "Taken back" — they're excluded from the totals above, so don't sum the Amount column without filtering that out.`
+            : ""}{" "}
+          {/* These rows have no lot and no bill — a deposit isn't rent. Said
+              here because the sentence above promises "which lot and what the
+              bill was made up of" for every line, and for these it is blank
+              on purpose rather than missing. */}
+          {page.otherReceipts.length > 0
+            ? `${page.otherReceipts.length} ${page.otherReceipts.length === 1 ? "line is" : "lines are"} money that isn't rent — deposits, money on account and anything you rent out. They're in the file with the Kind saying which, and no lot or bill against them.`
             : ""}{" "}
           Nothing is rounded
           or summarised in it.
