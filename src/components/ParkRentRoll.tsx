@@ -34,6 +34,15 @@ export interface RollRowView {
   /** The FILE, not the tenancy — a slip is issued against the household. */
   currentRenterId: string | null;
   /**
+   * The household a claim slip should go to, whether they have arrived yet or
+   * not. Distinct from currentRenterId, which is who is on the lot TODAY —
+   * after importing a roll dated from a future takeover, that is nobody.
+   */
+  slipRenterId: string | null;
+  slipRenterName: string | null;
+  /** Set when they have not moved in yet, so the slip can say so. */
+  slipArrivesOn: string | null;
+  /**
    * What the office may know about this household's slip: 'none' | 'open' |
    * 'used' | 'expired' | 'locked' | 'declined'.
    *
@@ -459,10 +468,16 @@ export function ParkRentRoll({
                         and nothing could ever claim it. This is the button
                         that ends that, and the states it shows are facts about
                         a CODE, never about the person. */}
-                    {r.state === "occupied" && r.currentRenterId && slug && (
+                    {/* NOT GATED ON "occupied". A household arriving at the
+                        takeover date is exactly who needs a slip in the months
+                        before it — and after importing a roll dated from that
+                        date, no lot is occupied, so this control vanished from
+                        every row on the screen. `next` was already computed
+                        and read by nothing but the word "reserved". */}
+                    {r.slipRenterId && slug && (
                       <ClaimSlip
-                        renterId={r.currentRenterId}
-                        displayName={r.currentRenter ?? "This household"}
+                        renterId={r.slipRenterId}
+                        displayName={r.slipRenterName ?? "This household"}
                         lotNumber={r.lotNumber}
                         parkName={parkName}
                         parkSlug={slug}

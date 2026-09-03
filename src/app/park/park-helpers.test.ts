@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   toStay, buildRentRoll, summarise, coversDay, canApprove, decideProblemText,
   buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
@@ -1276,5 +1278,66 @@ describe("how long one new agreement runs", () => {
       3,
     );
     expect(r.tenancy!.end).toBe("2027-04-01");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE SLIP BUTTON THAT VANISHED FROM EVERY ROW.
+//
+// Import Mike's roll on 4 September with the takeover date of 1 January and
+// every tenancy is dated [2027-01-01, 2028-01-01). buildRentRoll only calls a
+// stay `current` if its range covers TODAY, so all 21 rows come back
+// state="reserved" with current=null — and Print-a-slip was gated on
+// `state === "occupied" && currentRenterId`. He imports the names and the
+// screen goes inert for four months: exactly the months he needs to get
+// everybody claimed BEFORE the first billing.
+//
+// `next` — "the next decided stay that has not started yet" — was already
+// computed on every row and read by nothing except the word "reserved".
+// ---------------------------------------------------------------------------
+describe("who a claim slip is for", () => {
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const roll = read("../../components/ParkRentRoll.tsx");
+  const page = read("./page.tsx");
+
+  it("the slip is not gated on somebody living there today", () => {
+    expect(roll, "the slip is behind state === occupied again")
+      .not.toMatch(/r\.state === "occupied" && r\.currentRenterId && slug/);
+    expect(roll).toMatch(/\{r\.slipRenterId && slug && \(/);
+  });
+
+  it("the page falls back to the household who arrives", () => {
+    expect(page, "slipFor is gone — the roll only knows about today again")
+      .toMatch(/const slipFor = r\.current \?\? r\.next;/);
+    expect(page).toMatch(/slipRenterId: slipFor\?\.renterId/);
+  });
+
+  it("the claim status and email follow the same household", () => {
+    // Otherwise the slip prints for the arriving tenant and reports the
+    // claim state of nobody.
+    // THE ASSIGNMENT, not the first line that happens to share the name. My
+    // first version matched the type declaration `invitedAt: string | null`
+    // and would have passed against a type forever.
+    for (const [field, marker] of [
+      ["claimStatus", "claimStatuses\\["],
+      ["renterEmail", "contact\\.get\\("],
+      ["invitedAt", "contact\\.get\\("],
+    ] as const) {
+      const line = page.match(new RegExp(`${field}: [^\\n]*${marker}[^\\n]*`))?.[0] ?? "";
+      expect(line, `${field}'s assignment is missing`).not.toBe("");
+      expect(line, `${field} still reads r.current`).toMatch(/slipFor/);
+    }
+  });
+
+  it("occupancy itself is untouched — the roll must not claim they live there", () => {
+    // currentRenter / currentUntil / currentRent stay keyed on `current`, so
+    // "Occupied" still means occupied.
+    for (const field of ["currentRenter:", "currentUntil:", "currentRent:"]) {
+      const line = page.match(new RegExp(`${field} [^\\n]*`))?.[0] ?? "";
+      expect(line, `${field} missing`).not.toBe("");
+      expect(line, `${field} now reads the arriving tenant`).not.toMatch(/slipFor/);
+    }
   });
 });

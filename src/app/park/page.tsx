@@ -236,7 +236,27 @@ export default async function ParkPage() {
     }
   }
 
-  const rows: RollRowView[] = roll.rows.map((r) => ({
+  const rows: RollRowView[] = roll.rows.map((r) => {
+  /**
+   * WHO THE SLIP IS FOR — which is not the same as who lives there today.
+   *
+   * `current` is the stay covering today. Import Mike's roll on 4 September
+   * with the takeover date of 1 January and there is no such stay for any
+   * lot: every row is "reserved", `current` is null, and the Print-a-slip
+   * control — gated on state === "occupied" — disappeared from all 21 rows.
+   * He would import the names and watch the screen go inert for four months,
+   * which are precisely the months he needs to get everybody claimed BEFORE
+   * the first billing.
+   *
+   * `next` was already computed here and read by nothing except the word
+   * "reserved". A household who arrives on 1 January is exactly who needs a
+   * slip in October.
+   *
+   * Kept SEPARATE from the occupancy fields on purpose: the roll must not
+   * start saying somebody lives on a lot before they do.
+   */
+  const slipFor = r.current ?? r.next;
+  return {
     lotId: r.lot.id,
     lotNumber: r.lot.lotNumber,
     siteType: r.lot.siteType,
@@ -247,9 +267,13 @@ export default async function ParkPage() {
     currentUntil: r.current?.range?.end ?? null,
     currentReservationId: r.current?.id ?? null,
     currentRenterId: r.current?.renterId ?? null,
-    claimStatus: r.current?.renterId ? claimStatuses[r.current.renterId] ?? "none" : null,
-    renterEmail: r.current?.renterId ? contact.get(r.current.renterId)?.email ?? null : null,
-    invitedAt: r.current?.renterId ? contact.get(r.current.renterId)?.invitedAt ?? null : null,
+    // The household a slip should go to, whether they are here yet or not.
+    slipRenterId: slipFor?.renterId ?? null,
+    slipRenterName: slipFor ? roll.renterNames.get(slipFor.renterId) ?? "Renter" : null,
+    slipArrivesOn: r.current ? null : r.next?.range?.start ?? null,
+    claimStatus: slipFor?.renterId ? claimStatuses[slipFor.renterId] ?? "none" : null,
+    renterEmail: slipFor?.renterId ? contact.get(slipFor.renterId)?.email ?? null : null,
+    invitedAt: slipFor?.renterId ? contact.get(slipFor.renterId)?.invitedAt ?? null : null,
     currentRent: r.current?.quotedAmount ?? null,
     currentDueDay: r.current?.dueDay ?? null,
     currentSource: r.current?.amountSource ?? null,
@@ -281,7 +305,8 @@ export default async function ParkPage() {
         p.renterUnitId ? roll.units.get(p.renterUnitId) : undefined,
       ),
     })),
-  }));
+  };
+  });
 
   return (
     <>
