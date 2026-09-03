@@ -24,6 +24,7 @@ import { onlineRentCautions } from "@/app/park/park-helpers";
  */
 export function ParkOnlineRent({
   parkId, initialAccepting, initialFeePct, ceiling, canChange, households, unclaimed,
+  processorLive,
 }: {
   parkId: string;
   initialAccepting: boolean;
@@ -34,6 +35,13 @@ export function ParkOnlineRent({
   households: number;
   /** On the roll, no account yet. The switch does nothing for these. */
   unclaimed: number;
+  /**
+   * Is a processor connected at all? He owns the switch; he does not own
+   * whether there is a rail behind it. With the switch On and no processor,
+   * this card said "Residents can pay rent in the app" while every charge was
+   * declined — and its OFF branch was the more accurate of the two.
+   */
+  processorLive: boolean;
 }) {
   const router = useRouter();
   const [accepting, setAccepting] = useState(initialAccepting);
@@ -103,7 +111,19 @@ export function ParkOnlineRent({
           {accepting ? "On" : "Off"}
         </button>
         <div style={{ fontSize: 13.5, lineHeight: 1.5, flex: 1, minWidth: 220 }}>
-          {accepting ? (
+          {accepting && !processorLive ? (
+            // THE SWITCH IS ON AND THERE IS NO RAIL. Not a caution to scroll
+            // past: it is the whole answer to "can residents pay in the app?"
+            // Said here, in the one place he decides it, rather than left for
+            // a resident to discover by tapping a gold button.
+            <>
+              <b>Not yet — we have no card processor connected.</b> Your switch
+              is on and it will start working the day that changes, but until
+              then the pay button stays hidden and every card would be
+              refused. Residents pay you the way they do now, and can still
+              tell you they&apos;ve paid.
+            </>
+          ) : accepting ? (
             <>
               <b>Residents can pay rent in the app.</b>{" "}
               {/* THE COUNT IS OF ACCOUNTS, NOT TENANCIES. Every tenancy the

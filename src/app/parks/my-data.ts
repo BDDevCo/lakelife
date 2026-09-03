@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 import { parseDaterange } from "@/lib/parks";
 import { todayLakeDate, lakeDaysSince } from "@/lib/booking";
+import { paymentsAreLive } from "@/lib/charge-gate";
 import { mustRead, mustCount, softRead } from "@/lib/must-read";
 
 /**
@@ -379,7 +380,16 @@ export async function getRenterHome(): Promise<RenterHome | null> {
 
   return {
     parkName: (park?.name as string) ?? "your park",
-    acceptsOnlineRent: Boolean(park?.accepts_online_rent),
+    // TWO CONDITIONS, NOT ONE. `accepts_online_rent` is the park's WISH; a
+    // connected processor is what makes it possible. The Haven has the flag on
+    // and there is no processor, so this rendered a gold "Pay $542.53" button,
+    // a confirm panel naming her card, and a decline every single time. The
+    // charge gate made that failure honest; it left the offer standing.
+    //
+    // Hidden rather than disabled on purpose: right below it is the "I already
+    // paid" form, which is the path that actually works today. A dead button
+    // above a live one teaches her the screen is broken.
+    acceptsOnlineRent: Boolean(park?.accepts_online_rent) && paymentsAreLive(),
     hasCard: (cards ?? 0) > 0,
     bookingReady: (lotProps ?? 0) > 0,
     cardFeePct: Number(park?.card_fee_pct ?? 0),

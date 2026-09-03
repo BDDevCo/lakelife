@@ -8,6 +8,7 @@ import { assertMyPark } from "./data";
 import { liftedNoticesSignal } from "@/lib/send-capability";
 import { toDaterange, parseDaterange, type Lot, effectiveSeason } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
+import { paymentsAreLive } from "@/lib/charge-gate";
 // Pure date maths, already used by the re-rate path — no need for a second copy.
 import { addDays as addDaysISO } from "./rerate-helpers";
 import {
@@ -1259,6 +1260,14 @@ export async function getOnlineRent(parkId: string): Promise<{
   households: number;
   /** On the roll but with no account yet, so the switch does nothing for them. */
   unclaimed: number;
+  /**
+   * Is there a processor at all? The switch and the fee are the park's to
+   * set, but neither one conjures a rail. Until LAKELIFE_PAYMENTS_LIVE is
+   * set, `takePayment` declines every charge — so a card asserting
+   * "Residents can pay rent in the app" describes something that cannot
+   * happen. The dial says what he WANTS; this says what the deployment CAN.
+   */
+  processorLive: boolean;
 } | null> {
   const membership = await assertMyPark(parkId);
   if (!membership) return null;
@@ -1313,6 +1322,7 @@ export async function getOnlineRent(parkId: string): Promise<{
     canChange: canEnableParkServices(membership.role),
     households,
     unclaimed,
+    processorLive: paymentsAreLive(),
   };
 }
 
