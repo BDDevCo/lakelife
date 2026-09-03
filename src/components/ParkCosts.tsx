@@ -26,7 +26,19 @@ const money = (n: number) =>
 // metered to that home and billed directly, never divided across the lots.
 // `canSplit` in cost-helpers is the rule; this list is the courtesy.
 const CATEGORIES: CostCategory[] = [
-  "water", "sewer", "trash", "common_electric", "grounds", "snow", "other",
+  "water", "sewer", "trash", "common_electric", "grounds", "snow",
+  // TAX AND INSURANCE BELONG HERE because a reminder can be SET for them.
+  // `SCHEDULABLE_CATEGORIES` has carried both since 0123 and this list did
+  // not, so /park/today could raise "Property tax for 2027 is due about now",
+  // link to this page, and refuse to be dismissed — while the form it sent
+  // him to had no way to enter one. `recordCost` accepts both and the
+  // park_costs CHECK allows both; only the dropdown was missing them.
+  //
+  // cost-helpers spells out this exact hazard for `unit_electric` — "the
+  // reminder would send him to a screen where it is not in the dropdown" —
+  // and then tax and insurance were added to one list and not the other.
+  "tax", "insurance",
+  "other",
 ];
 
 export function ParkCosts({

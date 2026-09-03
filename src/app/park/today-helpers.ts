@@ -36,6 +36,15 @@ import { prettyMonth } from "./ledger-helpers";
 export const RENEWAL_LEAD_DAYS = 45;
 export const NOTICE_WARN_DAYS = 7;
 export const BILL_WARN_DAYS = 3;
+/**
+ * How much warning a recurring bill gets before "due about now" is true.
+ *
+ * 28, so that MONTHLY behaviour is untouched — the longest gap between the
+ * start of a monthly period and its due day is 27 (due on the 28th, seen on
+ * the 1st). Quarterly and annual schedules used to claim "due about now" from
+ * the first day of their period, which for the property tax was 313 days out.
+ */
+export const BILL_DUE_LEAD_DAYS = 28;
 
 const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -491,7 +500,28 @@ export function generateTasks(f: TaskFacts): Task[] {
   // entered three weeks late still bills correctly — it is only the FORGOTTEN
   // one that costs money.
   for (const b of f.billsDue) {
-    const late = daysBetween(f.today, b.dueOn) < 0;
+    const daysToDue = daysBetween(f.today, b.dueOn);
+    const late = daysToDue < 0;
+
+    // "DUE ABOUT NOW" HAS TO BE ABOUT NOW.
+    //
+    // Nothing used to bound this: a schedule with no cost recorded in its
+    // period produced a card on the FIRST DAY of that period. For a monthly
+    // bill that is a few weeks and reads correctly. For the annual property
+    // tax it meant 1 January 2027 greeting him with "Property tax for 2027 is
+    // due about now" — 313 days early, undismissable, and sitting on his
+    // morning screen for ten months teaching him the list contains chores
+    // that never go away. A quarterly schedule claimed it for three months.
+    //
+    // 28 days is chosen so MONTHLY IS UNCHANGED: the longest a monthly bill
+    // can sit between the start of its period and its due day is 27 (due on
+    // the 28th, seen on the 1st). So this clips the long cadences and leaves
+    // the behaviour the monthly tests pin exactly where it was.
+    //
+    // A LATE bill is never clipped. Once the due day is past, the reminder is
+    // the whole point and it stays until the bill is entered.
+    if (!late && daysToDue > BILL_DUE_LEAD_DAYS) continue;
+
     out.push({
       // KEYED ON THE BILL'S OWN PERIOD, not the calendar month. A tax bill is
       // one task called "Property tax for 2026" — keying it on the month made

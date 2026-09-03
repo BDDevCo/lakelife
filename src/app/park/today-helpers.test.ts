@@ -578,6 +578,64 @@ describe("bills that come round again", () => {
   it("is silent for a park that has set none up", () => {
     expect(generateTasks(facts({ billsDue: [] }))).toEqual([]);
   });
+
+  // -------------------------------------------------------------------------
+  // "DUE ABOUT NOW" HAS TO BE ABOUT NOW.
+  //
+  // Only the monthly case was ever tested, which is why this survived: a
+  // schedule with no cost in its period raised a card on the FIRST DAY of
+  // that period. The Haven has a real annual `tax` schedule, due 10 November.
+  // On the morning of 1 January 2027 — the morning twenty households are
+  // billed for the first time — his Needs-you list opened with "Property tax
+  // for 2027 is due about now", 313 days early, and `canDismiss: false`.
+  // -------------------------------------------------------------------------
+  const tax = (over: Record<string, unknown> = {}) => [{
+    scheduleId: "s9", category: "tax", label: "Property tax",
+    periodKey: "2026", periodLabel: "2026",
+    dueOn: "2026-11-10", typical: 3517.96, ...over,
+  }];
+
+  it("does not claim an annual bill is due 313 days out", () => {
+    // TODAY is 2026-08-11; a bill due 2027-11-10 is well over a year away.
+    expect(generateTasks(facts({ billsDue: tax({ dueOn: "2027-11-10", periodLabel: "2027" }) })))
+      .toEqual([]);
+  });
+
+  it("raises it once it is genuinely about now", () => {
+    // TODAY is 2026-08-11; +28 days = 2026-09-08, the edge of the window.
+    const [t] = generateTasks(facts({ billsDue: tax({ dueOn: "2026-09-08" }) }));
+    expect(t?.title).toBe("Property tax for 2026 is due about now");
+    expect(t?.urgency).toBe("soon");
+  });
+
+  it("stays quiet one day outside the window", () => {
+    expect(generateTasks(facts({ billsDue: tax({ dueOn: "2026-09-09" }) }))).toEqual([]);
+  });
+
+  it("never clips a LATE bill, however long ago it was due", () => {
+    // The forgotten bill is the whole point of the reminder — a year late is
+    // the case that costs money, not the case to hide.
+    const [t] = generateTasks(facts({ billsDue: tax({ dueOn: "2025-11-10" }) }));
+    expect(t?.title).toBe("Property tax for 2026 still isn't entered");
+    expect(t?.urgency).toBe("overdue");
+    expect(t?.canDismiss).toBe(false);
+  });
+
+  it("leaves every monthly bill exactly where it was", () => {
+    // 28 is chosen for this. The worst case a monthly schedule can produce is
+    // the first of the month looking at a bill due on the 28th — 27 days, one
+    // inside the window. A shorter lead would silence the sewer bill, which
+    // is 82% of what the park spends on its residents' behalf: a worse bug
+    // than the one being fixed.
+    for (const day of ["01", "05", "14", "28"]) {
+      const [t] = generateTasks(facts({
+        today: "2026-09-01",
+        billsDue: sewer({ dueOn: `2026-09-${day}`, periodLabel: "September 2026" }),
+      }));
+      expect(t?.title, `sewer due 2026-09-${day} vanished`)
+        .toMatch(/Sewer for September 2026/);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
