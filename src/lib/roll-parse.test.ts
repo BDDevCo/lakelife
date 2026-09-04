@@ -876,3 +876,40 @@ describe("a roll with no header row", () => {
     expect(r.rows[0].email.confidence).toBe("stated");
   });
 });
+
+
+describe("a unit the park itself owns is not a household", () => {
+  // The Haven's Lot 11 is the park-owned home. "PARK OWNED HOME" walked
+  // through the guard — NOT_A_PERSON matches the whole cell and holds "park"
+  // and "owner", but not the phrase — so a roll filed a household called PARK
+  // OWNED HOME. On a lease, on a rent-due text, on the office wall.
+  it("refuses the ways a seller writes it", () => {
+    for (const s of [
+      "PARK OWNED HOME", "Park Owned", "park-owned trailer", "PARK MODEL",
+      "Company Owned", "MANAGEMENT UNIT", "landlord home",
+    ]) {
+      expect(isPlaceholderName(s), s).toBe(true);
+    }
+  });
+
+  it("does NOT refuse people whose surname is Park", () => {
+    // The reason the rule needs a separator and a noun rather than a prefix.
+    for (const s of ["Park, Owen", "Park Owens", "Parker, Dale", "Parkinson, Ruth", "Park, Ji-woo"]) {
+      expect(isPlaceholderName(s), s).toBe(false);
+    }
+  });
+
+  it("still lets every ordinary name through", () => {
+    for (const s of ["Blasius, Carlton", "Van Dyke, John", "Girardot, Jack & Jami L."]) {
+      expect(isPlaceholderName(s), s).toBe(false);
+    }
+  });
+
+  it("the row becomes an ASK, not a silent import", () => {
+    const r = parseRentRoll("Lot,Tenant,Rent\n11,PARK OWNED HOME,\n1,Blasius,375",
+      { knownLots: ["1", "11"] });
+    const lot11 = r.rows.find((x) => x.lot.value === "11");
+    expect(lot11?.name.value).toBeNull();
+    expect(lot11?.verdict).toBe("ask");
+  });
+});

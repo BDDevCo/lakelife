@@ -630,12 +630,29 @@ const EXCEL_POISON_RE = /^#(ref|n\/a|value|div\/0|name|null|num|spill|calc)[!?]?
 /** "SEE NOTE — son living in home, mother in nursing home since Feb". */
 const SEE_SOMETHING_RE = /^see\s+(note|notes|above|below|attached|attachment|lease|file|memo|comment)\b/i;
 
+/**
+ * A UNIT THE PARK ITSELF OWNS IS NOT A HOUSEHOLD.
+ *
+ * The Haven's Lot 11 is the park-owned home, and "PARK OWNED HOME" walked
+ * straight through this guard: NOT_A_PERSON matches the WHOLE cell, and it
+ * holds "park" and "owner" but not the phrase. So the roll filed a household
+ * called PARK OWNED HOME, on a lease, on a rent-due text, on the office wall —
+ * which is the precise failure this guard exists to prevent.
+ *
+ * REQUIRES A SEPARATOR AND A NOUN, not a loose prefix. "Park" is a surname:
+ * "Park, Owen" and "Park Owens" must both survive, and they do — the comma
+ * fails `[\s-]+`, and "owen" is not "own".
+ */
+const PARK_OWNED_RE =
+  /^(park|company|corporate|landlord|management|mgmt)[\s-]+(owned|own|model|unit|home|house|trailer|rental)\b/i;
+
 export function isPlaceholderName(s: string): boolean {
   const t = s.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
   if (!t) return true;
   if (NOT_A_PERSON.has(t)) return true;
   if (EXCEL_POISON_RE.test(t)) return true;
   if (SEE_SOMETHING_RE.test(t)) return true;
+  if (PARK_OWNED_RE.test(t)) return true;
   return false;
 }
 
