@@ -25,6 +25,33 @@ import { describe, it, expect } from "vitest";
  * dollar against the figures stated on the due-diligence packet's own summary,
  * $5,200 of lot rent and $6,700 in total. A transcription that ties exactly is
  * a different kind of evidence from one that nearly does.
+ *
+ * ============ AND IT WAS ALREADY OUT OF DATE — 4 September 2026 ============
+ *
+ * The transcription is faithful. The DOCUMENT it was taken from was not
+ * current, and nothing said so.
+ *
+ * The seller's September roster and eighteen signed leases give the same
+ * eighteen leased lots as $5,625/month, against $4,950 here. Lot 22 dates it:
+ * this roll says $250, and Denver Preston's signed lease of 2 November 2025
+ * says $300 — so the sheet in the diligence packet predates November 2025 and
+ * still carried R. Clark, who sold that home at the end of that year.
+ *
+ * The $6,700 banner reconciles to today's $5,625 exactly, three ways:
+ *
+ *     Lot 11 imputed at $1,500, and NOBODY PAYS IT      -1,500
+ *     Lot 2, earning $250 then, now vacant                -250
+ *     across-the-board increases on the 18 leased lots     +675
+ *                                                      --------
+ *                                                        -1,075   ($12,900/yr)
+ *
+ * Lot 11 is the owner's own house. He does not pay himself rent, so a fifth of
+ * the stated roll was never income — it is a market rent for a house that
+ * comes with the park, and it goes to zero the day he moves out.
+ *
+ * KEEP THIS FILE ANYWAY. It is still the only readable copy of what the packet
+ * said, and it is now also the evidence of the gap. See the memory note
+ * `the-haven-roll-from-mike`.
  */
 
 /** Lot number -> monthly rent, as inherited. Lot 6 is vacant and had no card. */
