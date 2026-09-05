@@ -88,6 +88,24 @@ describe("every gate tests the field AND its query fetches it", () => {
       reads: ["src/app/ops/crews-actions.ts#assertRoutable"],
     },
     {
+      // THE FOURTH DOORWAY, and the one this list forgot.
+      //
+      // assertRoutable gates activation, isEligible gates auto-dispatch and
+      // canClaim gates the claim board. `assignAndSchedule` is ops putting a
+      // crew on a job BY HAND from the Job board, and it validated status,
+      // is_fixture and coi_expiry only. So the single crew the platform
+      // refuses to route — because the certificate on file belongs to somebody
+      // else — was the crew ops could still send to a real property.
+      //
+      // It matters most right now, not least: there are no active crews, so
+      // The Haven's first jobs get assigned by hand, through exactly this
+      // function. The select already carried `company`; only the comparison
+      // was missing.
+      gate: "src/app/ops/actions.ts",
+      needle: /checkNamedInsured\(/,
+      reads: ["src/app/ops/actions.ts#assignAndSchedule"],
+    },
+    {
       gate: "src/lib/dispatch.ts",
       needle: /c\.coiNamedInsured != null && !checkNamedInsured\(/,
       // open-data.ts takes the crew as a PARAMETER (MyVendor), so its read is
@@ -150,6 +168,16 @@ describe("the grandfather rule, which is what stops this emptying the board", ()
 
   it("and the ops gate grandfathers them the same way", () => {
     expect(code("src/app/ops/crews-actions.ts")).toMatch(/v\.coi_named_insured != null/);
+  });
+
+  it("so does the hand-assign, or every legacy crew stops being assignable", () => {
+    // Same reasoning as dispatch: all three production vendors carry a null
+    // named insured. An unguarded check here would refuse every hand-assign on
+    // the platform, on a screen with no other way through.
+    const fn = code("src/app/ops/actions.ts")
+      .match(/function assignAndSchedule\b[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn, "assignAndSchedule not found — this scan is measuring nothing").not.toBe("");
+    expect(fn).toMatch(/coi_named_insured != null/);
   });
 
   it("but activation does NOT grandfather — a new crew must give the name", () => {

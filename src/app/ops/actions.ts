@@ -2,6 +2,7 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import { notify } from "@/lib/notify";
+import { checkNamedInsured } from "@/lib/named-insured";
 import { todayLakeDate, dayStatus, effectiveSeason, validateSeasonDates } from "@/lib/booking";
 import { runRouteBuild } from "@/lib/automation";
 import { getPlatformSettings } from "@/lib/settings";
@@ -122,7 +123,10 @@ export async function assignAndSchedule(
     // `is_fixture` comes along because the DROPDOWN is not a guard — the
     // vendorId arrives from a browser and this action is the only thing
     // between it and a real job row.
-    .select("id, company, status, coi_expiry, user_id, users!vendors_user_id_fkey(is_fixture)")
+    // `coi_named_insured` comes along for the gate below it. Adding the
+    // comparison without adding the column is this repo's most repeated
+    // mistake — it compiles, reads `undefined`, and refuses nobody.
+    .select("id, company, status, coi_expiry, coi_named_insured, user_id, users!vendors_user_id_fkey(is_fixture)")
     .eq("id", input.vendorId)
     .maybeSingle();
   // "That vendor isn't active" and "That vendor's insurance is expired" are both
@@ -140,6 +144,23 @@ export async function assignAndSchedule(
   }
   if (vendor.coi_expiry == null || String(vendor.coi_expiry) < todayLakeDate()) {
     return { ok: false, error: "That vendor's insurance (COI) is missing or expired — can't route them." };
+  }
+  // AND IT HAS TO BE THEIRS (0152) — the fourth doorway.
+  //
+  // assertRoutable gates activation, isEligible gates auto-dispatch, canClaim
+  // gates the claim board. This is ops putting a crew on a job by hand, and it
+  // was the one door the rule did not reach: the single crew the platform
+  // refuses to route, because the certificate on file belongs to somebody
+  // else, was the crew ops could still send to a real property. With no active
+  // crews yet, this is the path The Haven's first jobs actually take.
+  //
+  // Grandfathered exactly as the other three are: a null name is a crew who
+  // predates the field — which is all three production vendors — and refusing
+  // them would make every hand-assign on the platform impossible. Ops gets the
+  // full sentence, with both names, because ops is who can fix it.
+  if (vendor.coi_named_insured != null) {
+    const named = checkNamedInsured(vendor.coi_named_insured as string, vendor.company as string | null);
+    if (!named.ok) return { ok: false, error: named.message };
   }
 
   // Validate the cost / margin. Quantize the cost to whole cents BEFORE the
