@@ -30,6 +30,52 @@ export type CostCategory =
   | "unit_electric" | "other" | "tax" | "insurance";
 
 /**
+ * WHICH COST CATEGORY IS THIS PIECE OF WORK?
+ *
+ * 0144 added `snow` so a bill could finally carry it, and its commit says the
+ * point was making snow "mean the same thing in all four places" — warning that
+ * "a category nothing can file is a column with no writer." It widened both
+ * dropdowns, the label map and the fee vocabulary, and missed a fifth list: the
+ * ONE-TAP writer on the costs screen passed a hardcoded `"grounds"` for
+ * whatever the job had been.
+ *
+ * That button is the path the screen pushes hardest — "nothing to retype" — and
+ * `BillableParkJob` carries the service NAME but no category, so a mow, a leaf
+ * haul and a whole-park plough all filed as groundskeeping.
+ *
+ * IT IS MONEY, NOT TIDINESS. The Haven's only active fee covers
+ * [water, sewer, trash, common_electric, grounds, other] — `grounds` yes,
+ * `snow` NO. `recordCost` asks `feeCovering(parkId, category)`; a hit files the
+ * bill `fee_covered`, absorbs the whole amount into the park, and writes no lot
+ * shares. So every plough all winter was carried by the park, where the same
+ * bill typed manually as "Snow clearing" finds no covering fee and splits
+ * across the households. And `checkCoverage`'s "categories no fee claims"
+ * warning — the one that answers "is my $142.53 set right?" — can never fire
+ * for snow while snow is filed as grounds.
+ *
+ * NAMES, NOT IDS, because that is what the billable-job row carries. Matching
+ * is on the exact catalogue name; anything unrecognised falls to `other`
+ * rather than `grounds`, so a service added later cannot silently claim to have
+ * been groundskeeping. The screen prints the category on the button, so a
+ * fallback is visible before it is committed.
+ */
+const COST_CATEGORY_BY_SERVICE: Record<string, CostCategory> = {
+  "Snow clearing — roads & common drives": "snow",
+  "Park grounds mowing & trim": "grounds",
+  "Common-area spring cleanup": "grounds",
+  "Common-area fall cleanup & leaf haul": "grounds",
+  // A park can buy these too (park_bookable). There is no pier category, and
+  // The Haven's existing pier cost row already sits in `other` saying so.
+  "Pier install / removal": "other",
+  "Boat lift set / pull": "other",
+  "PWC lift set / pull": "other",
+};
+
+export function costCategoryForService(serviceName: string | null | undefined): CostCategory {
+  return COST_CATEGORY_BY_SERVICE[(serviceName ?? "").trim()] ?? "other";
+}
+
+/**
  * MAY THIS COST BE SPLIT ACROSS THE LOTS AT ALL?
  *
  * `unit_electric` is power for a home the PARK owns and rents out. Its own

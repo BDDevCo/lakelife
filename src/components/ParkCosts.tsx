@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { previewCostSplit, recordCost, removeCost, type CostRow, type BillableParkJob } from "@/app/park/cost-actions";
 import {
-  COST_CATEGORY_LABEL, allocationSummary,
+  COST_CATEGORY_LABEL, costCategoryForService, allocationSummary,
   type CostCategory, type CostAllocation, carriedLine,
 } from "@/app/park/cost-helpers";
 import type { recoveryByCategory } from "@/app/park/cost-helpers";
@@ -100,8 +100,13 @@ export function ParkCosts({
   function fillFrom(j: BillableParkJob) {
     setFillingId(j.jobId);
     start(async () => {
+      // THE WORK IT ACTUALLY WAS, not a literal. This passed "grounds" for
+      // every park job, so a whole-park plough filed as groundskeeping — and
+      // The Haven's fee covers `grounds` but not `snow`, so the park absorbed
+      // every winter's ploughing instead of splitting it. See
+      // costCategoryForService.
       const res = await recordCost(
-        parkId, "grounds", j.periodStart, j.periodEnd, j.amount, j.note, j.jobId,
+        parkId, costCategoryForService(j.service), j.periodStart, j.periodEnd, j.amount, j.note, j.jobId,
       );
       setFillingId(null);
       if (!res.ok) { toast(res.error ?? "Couldn't save that."); return; }
@@ -220,9 +225,11 @@ export function ParkCosts({
 
           <p className="mut" style={{ fontSize: 12.5, margin: "0 0 8px", lineHeight: 1.5 }}>
 
-            Work on the common ground. One tap splits it across the lots the
+            Work on the common ground. One tap files it under the right kind of
 
-            same way a water bill splits — nothing to retype.
+            cost — split across the lots, or carried by a fee that already covers
+
+            it — with nothing to retype.
 
           </p>
 
@@ -250,7 +257,11 @@ export function ParkCosts({
 
                 onClick={() => fillFrom(j)}>
 
-                {fillingId === j.jobId ? "Splitting…" : "Split across the lots"}
+                {fillingId === j.jobId
+
+                  ? "Filing…"
+
+                  : `File as ${COST_CATEGORY_LABEL[costCategoryForService(j.service)]}`}
 
               </button>
 

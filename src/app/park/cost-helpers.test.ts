@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  costCategoryForService, COST_CATEGORY_LABEL,
   allocateCost, allocationSummary, recoveryByCategory,
   type CostLot, type CostCategory, canSplit, whyNotSplit,
   carriedLine,
@@ -9,6 +10,7 @@ import {
 import { addDays } from "./today-helpers";
 import { overlaps } from "@/lib/parks";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 /** The Haven: 19 occupied lots, 2 empty (3 and 22). */
@@ -679,5 +681,104 @@ describe("the one-tap 'pass this on' period", () => {
     ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
     expect(src).toContain("periodEnd: addDays(date, 1)");
     expect(src).not.toMatch(/periodEnd: date,/);
+  });
+});
+
+describe("a park job files itself under the work it actually was", () => {
+  /**
+   * 0144 ADDED `snow` SO A BILL COULD CARRY IT, AND MISSED THE FIFTH LIST.
+   *
+   * Its own commit says the point was making snow "mean the same thing in all
+   * four places", and warns that "a category nothing can file is a column with
+   * no writer." It widened both dropdowns, the label map and the fee vocabulary
+   * — and left the ONE-TAP writer passing a hardcoded literal:
+   *
+   *     recordCost(parkId, "grounds", j.periodStart, ...)
+   *
+   * That button is the path the screen pushes hardest ("nothing to retype"), and
+   * `BillableParkJob` carries the service NAME but no category, so every park
+   * job filed through it — a mow, a leaf haul, a whole-park plough — was
+   * recorded as `grounds`.
+   *
+   * WHY THAT IS MONEY, not tidiness. The Haven's only active fee is the $142.53
+   * Grounds fee, and its `covers` array is
+   *   [water, sewer, trash, common_electric, grounds, other]
+   * — `grounds` yes, `snow` NO. `recordCost` asks `feeCovering(parkId, category)`:
+   * a hit writes allocation_method 'fee_covered', park_absorbed = the whole
+   * amount, and NO lot_cost_shares. So every plough all winter is absorbed
+   * 100% by the park. Typing the same bill into the form below and choosing
+   * "Snow clearing" finds no covering fee and splits it across 21 households.
+   * One tap versus one dropdown.
+   *
+   * And it silences the warning he most needs: `checkCoverage` reports
+   * categories the park pays for that NO fee claims. Snow filed as grounds can
+   * never appear there — on the screen built to answer "is my $142.53 right?",
+   * weeks before that number goes into twenty leases.
+   */
+  it("sends a whole-park plough to snow, not grounds", () => {
+    expect(costCategoryForService("Snow clearing — roads & common drives")).toBe("snow");
+  });
+
+  it("keeps mowing and the two cleanups on grounds", () => {
+    for (const name of [
+      "Park grounds mowing & trim",
+      "Common-area spring cleanup",
+      "Common-area fall cleanup & leaf haul",
+    ]) {
+      expect(costCategoryForService(name), name).toBe("grounds");
+    }
+  });
+
+  it("files a pier or a lift as other, which is where the park's own pier bill already sits", () => {
+    // A park can buy these too (park_bookable). There is no pier category, and
+    // the existing Haven park_costs row for the pier says so in its own note.
+    for (const name of ["Pier install / removal", "Boat lift set / pull", "PWC lift set / pull"]) {
+      expect(costCategoryForService(name), name).toBe("other");
+    }
+  });
+
+  it("never guesses a service it has not been taught", () => {
+    // `other` and `grounds` are BOTH covered by The Haven's fee, so either
+    // default would be absorbed — the difference is that `other` does not
+    // claim the bill was groundskeeping. The screen names the category on the
+    // button, so a wrong guess is visible before it is committed.
+    expect(costCategoryForService("Something we added next year")).toBe("other");
+    expect(costCategoryForService("")).toBe("other");
+  });
+
+  it("only ever returns a category the database will accept", () => {
+    const legal: CostCategory[] = [
+      "water", "sewer", "trash", "common_electric", "grounds", "snow",
+      "unit_electric", "other", "tax", "insurance",
+    ];
+    for (const name of [
+      "Snow clearing — roads & common drives", "Park grounds mowing & trim",
+      "Common-area spring cleanup", "Common-area fall cleanup & leaf haul",
+      "Pier install / removal", "anything at all",
+    ]) {
+      expect(legal, name).toContain(costCategoryForService(name));
+    }
+  });
+});
+
+describe("the one-tap button asks the mapper, and says what it is filing", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("../../components/ParkCosts.tsx", import.meta.url)),
+    "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+
+  it("no longer passes a hardcoded category", () => {
+    const fn = src.match(/function fillFrom[\s\S]*?\n  \}/)?.[0] ?? "";
+    expect(fn, "fillFrom is gone — this scan measures nothing").not.toBe("");
+    expect(fn, 'every park job is still filed as "grounds", whatever it was')
+      .not.toMatch(/recordCost\(\s*\n?\s*parkId,\s*"grounds"/);
+    expect(fn, "nothing derives the category from the service").toMatch(/costCategoryForService\(/);
+  });
+
+  it("names the category on the button, so a wrong guess is visible first", () => {
+    // The mapping cannot know a service added next year. Printing what it is
+    // about to file turns a silent misfiling into something he can see.
+    expect(src, "the button still says only 'Split across the lots'")
+      .toMatch(/COST_CATEGORY_LABEL\[/);
   });
 });
