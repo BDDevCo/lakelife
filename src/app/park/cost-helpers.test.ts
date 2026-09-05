@@ -782,3 +782,42 @@ describe("the one-tap button asks the mapper, and says what it is filing", () =>
       .toMatch(/COST_CATEGORY_LABEL\[/);
   });
 });
+
+describe("the note on a bill is actually shown to the man who typed it", () => {
+  /**
+   * A PROMISE THE SCREEN CANNOT KEEP.
+   *
+   * Under the list of bills: "Every bill keeps the note you typed, so a
+   * resident asking 'what is this $20?' has an answer with a date on it."
+   *
+   * `source_note` is written by all three recordCost branches and read back
+   * into CostRow — and then the ONLY thing in the whole app that touches it is
+   * `rows.some((r) => r.sourceNote)`, an existence test gating that very
+   * sentence. The note is never rendered, exported, or shown anywhere else.
+   * So the app tells him he has the answer, and the only way to read it is the
+   * database.
+   *
+   * It is not hypothetical. The Haven's four cost rows carry exactly the notes
+   * a resident question needs — the three NIPSCO account numbers, the LaGrange
+   * sewer account and its flat-rate warning, where the pier figure came from —
+   * hundreds of words each, none of it on screen.
+   */
+  const src = readFileSync(
+    fileURLToPath(new URL("../../components/ParkCosts.tsx", import.meta.url)),
+    "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+
+  it("still makes the promise", () => {
+    // If this sentence goes, the test below is guarding nothing.
+    expect(src).toMatch(/keeps the note you typed/);
+  });
+
+  it("renders the note itself, not merely a test that one exists", () => {
+    const reads = [...src.matchAll(/\br\.sourceNote\b/g)].length;
+    expect(
+      reads,
+      "sourceNote is only ever tested for existence — the note the sentence " +
+        "promises is never put on screen.",
+    ).toBeGreaterThan(1);
+  });
+});

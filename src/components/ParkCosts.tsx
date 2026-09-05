@@ -439,6 +439,25 @@ export function ParkCosts({
                   }>
                   Remove
                 </button>
+                {/* THE NOTE, WHICH THE SENTENCE BELOW PROMISES.
+                    source_note was written by every recordCost branch and read
+                    back onto the row, and the only thing in the app that ever
+                    touched it was `rows.some(r => r.sourceNote)` — an existence
+                    test gating that promise. The note was never rendered, so
+                    "a resident asking what is this $20 has an answer" was true
+                    only of the database. The Haven's four rows carry the three
+                    NIPSCO account numbers, the LaGrange sewer account and its
+                    flat-rate warning, and where the pier figure came from —
+                    hundreds of words, none of it on screen.
+                    pre-wrap because these notes are written in paragraphs. */}
+                {r.sourceNote && (
+                  <p className="mut" style={{
+                    flexBasis: "100%", fontSize: 12.5, margin: "6px 0 0",
+                    lineHeight: 1.5, whiteSpace: "pre-wrap",
+                  }}>
+                    {r.sourceNote}
+                  </p>
+                )}
               </div>
             ))}
           </div>
