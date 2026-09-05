@@ -81,6 +81,15 @@ export interface FullProfile {
   propertyId?: string;
   lake?: string | null;
   address?: string | null;
+  /**
+   * THE MAP PIN, read back for exactly the reason park_id is: so an edit
+   * cannot silently erase it. Guided setup round-trips every field it does not
+   * ask about, and this one was missing from the read, so it round-tripped to
+   * NULL. Readers are the crew's map to the job, distance on the open board,
+   * dispatch ranking, and the distance-priced booking guard.
+   */
+  lat?: number | null;
+  lng?: number | null;
   place_id?: string | null;
   /** Self-declared park (0085). Read back so an edit cannot silently erase it. */
   park_id?: string | null;
@@ -167,7 +176,11 @@ export async function getFullProfile(
   const base = targetId
     ? supabase
         .from("properties")
-        .select("id, address, place_id, park_id, sqft, beds, baths, gate_code_encrypted, lakes(name)")
+        // lat/lng RIDE ALONG so guided setup can hand them back. Without them
+        // `initial` cannot carry a pin, ProfileWizard defaults it to null, and
+        // saveProfile writes NULL over a real one on every save — a round trip
+        // that read nothing and erased the field the crew's map depends on.
+        .select("id, address, lat, lng, place_id, park_id, sqft, beds, baths, gate_code_encrypted, lakes(name)")
         .eq("id", targetId)
     : null;
 
@@ -263,6 +276,8 @@ export async function getFullProfile(
     propertyId: property.id,
     lake: lakeName ?? null,
     address: property.address,
+    lat: (property as { lat?: number | null }).lat ?? null,
+    lng: (property as { lng?: number | null }).lng ?? null,
     place_id: (property as { place_id?: string | null }).place_id ?? null,
     park_id: (property as { park_id?: string | null }).park_id ?? null,
     lots,

@@ -140,7 +140,27 @@ export default async function BookPage() {
   const applicable = priced.filter((s) => s.price > 0);
 
   // Show the services this customer chose (fall back to all if none chosen).
-  const wanted = profile.wanted_services.length
+  //
+  // NEVER FOR A PARK'S GROUNDS, and that exception is load-bearing.
+  //
+  // `wanted_services` is a homeowner's "what do I care about" filter, and the
+  // only thing that writes it is ProfileWizard's SERVICE_GROUPS — ten hardcoded
+  // LAKE-HOUSE names. A park's grounds menu is the four park_only services plus
+  // whatever park_bookable opens, and not one of those names appears in that
+  // list. So any selection at all intersects to nothing: tick "Lawn mowing &
+  // trim", the obvious choice for a park, and The Haven's $100 mow and
+  // January's snow both disappear from this page.
+  //
+  // It could not be undone either — the wizard refuses to advance with an empty
+  // selection, and its list never contains a park service name. Meanwhile
+  // /profile prints "None chosen yet — pick your services" as a link straight
+  // into that wizard.
+  //
+  // The grounds menu is already fenced by park_only/park_bookable in
+  // getPricedServices, which is the fence that belongs here. This one can only
+  // ever subtract from it.
+  const isGrounds = profile.groundsForParkId != null;
+  const wanted = !isGrounds && profile.wanted_services.length
     ? applicable.filter((s) => profile.wanted_services.includes(s.name))
     : applicable;
 

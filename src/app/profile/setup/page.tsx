@@ -71,6 +71,11 @@ export default async function SetupPage({
       ? {
           lake: profile.lake ?? undefined,
           address: profile.address ?? undefined,
+          // The pin. Absent here, ProfileWizard defaults it to null and the
+          // save wipes it — on his lake house, on The Haven's grounds, and on
+          // Lot 11, all of which carry real coordinates.
+          lat: profile.lat ?? undefined,
+          lng: profile.lng ?? undefined,
           place_id: profile.place_id ?? undefined,
           park_id: profile.park_id ?? undefined,
           wanted: profile.wanted_services,

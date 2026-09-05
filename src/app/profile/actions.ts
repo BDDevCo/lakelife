@@ -96,10 +96,15 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
 
   // Edit a specific property when an id is given; otherwise create a new one.
   let propertyId: string | undefined;
+  // THE PIN ALREADY ON THE ROW, so a caller that sends no coordinates cannot
+  // erase one. See the note above propertyFields.
+  let existingLat: number | null = null;
+  let existingLng: number | null = null;
+  let existingAddress: string | null = null;
   if (input.propertyId) {
     const existingRes = await supabase
       .from("properties")
-      .select("id")
+      .select("id, lat, lng, address")
       .eq("owner_id", user.id)
       .eq("id", input.propertyId)
       .maybeSingle();
@@ -111,6 +116,9 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
     }
     const existing = existingRes.data;
     propertyId = existing?.id as string | undefined;
+    existingLat = (existing?.lat as number | null) ?? null;
+    existingLng = (existing?.lng as number | null) ?? null;
+    existingAddress = (existing?.address as string | null) ?? null;
     if (!propertyId) {
       // The property being edited is gone (removed in another tab?). Fail
       // loudly rather than silently creating a duplicate.
@@ -118,12 +126,37 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
     }
   }
 
+  // KEEP THE PIN WHEN THE ADDRESS DID NOT CHANGE.
+  //
+  // saveProfile writes the WHOLE property row, so every field it is not given
+  // is erased. lat/lng were the one pair nothing read back: getFullProfile did
+  // not select them, so `initial` could not carry them, ProfileWizard defaulted
+  // `initial.lat ?? null`, and one pass through "Edit in guided setup" wiped
+  // the coordinates from his lake house, The Haven's grounds and Lot 11 — the
+  // pins set on 29 Aug when Maps was finally switched on. What reads them: the
+  // crew's map to the job, distance on the open-jobs board, dispatch ranking,
+  // and the distance-priced booking guard.
+  //
+  // The read-back above is the real fix; this is the guard, so no future caller
+  // can erase a pin by forgetting to send one.
+  //
+  // ONLY WHEN THE ADDRESS IS THE SAME, and that condition is the whole point.
+  // Typing an address by hand deliberately sends {lat: null, lng: null,
+  // placeId: null} — "keeps us from claiming a pin we were never given" — so
+  // holding the old coordinates under a NEW address would send the crew to the
+  // previous house. That is worse than no pin, which book/actions.ts already
+  // has an honest sentence for.
+  const nextAddress = input.address || null;
+  const sameAddress =
+    propertyId != null && existingAddress != null && nextAddress === existingAddress;
+  const keepPin = sameAddress && input.lat == null && input.lng == null;
+
   const propertyFields = {
     owner_id: user.id,
     lake_id: lakeId,
-    address: input.address || null,
-    lat: input.lat ?? null,
-    lng: input.lng ?? null,
+    address: nextAddress,
+    lat: keepPin ? existingLat : input.lat ?? null,
+    lng: keepPin ? existingLng : input.lng ?? null,
     place_id: input.place_id ?? null,
     park_id: input.park_id ?? null,
     sqft: input.sqft || null,
