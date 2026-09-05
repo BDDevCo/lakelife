@@ -221,3 +221,54 @@ describe("the screen and the server both ask the helper", () => {
       .toMatch(/band_pricing/);
   });
 });
+
+describe("the rate desk says what the number he types actually is", () => {
+  /**
+   * THE MOST EXPENSIVE MISUNDERSTANDING AVAILABLE TO HIM, and the screen
+   * never mentions it.
+   *
+   * The box asks for a price. Every word around it — "what you pay", "every
+   * park pays a different number for these" — reads as *what the crew charges
+   * me*. It is not. The number becomes `jobs.customer_price`, the ALL-IN price,
+   * and the margin floor then caps what a crew can be paid at
+   * price x (1 - marginFloor).
+   *
+   * The Haven's mow is on file at $100, noted "From the seller: $100/week" —
+   * which is exactly the natural act: type what the current mower charges. At
+   * the 0.20 floor that caps a crew at $80.00 for mowing 21 lots, while the
+   * park's own cost line puts that work at ~$99 a cut. No crew can take it. The
+   * job simply sits on "Finding a crew", and nothing on this screen ever
+   * explains why.
+   *
+   * The fix is NOT to invent a price — an unpriced park service is the safe
+   * state and his number is his. It is to stop the screen implying the figure
+   * means something it does not, on the screen where the mistake is made.
+   */
+  const src = readFileSync(
+    fileURLToPath(new URL("../../components/ParkServices.tsx", import.meta.url)),
+    "utf8",
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+    // `//` LINES TOO. Without this the "no price of its own" check below
+    // matched a COMMENT explaining a past rounding bug ("previewed $277.50 for
+    // a rate that actually charged $278") — prose, not copy. A scanner that
+    // reads comments is measuring the wrong thing, which is this repo's
+    // standing rule for source scans.
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  it("tells him the figure is all-in, not the crew's fee", () => {
+    expect(
+      src,
+      "nothing on the rate desk says the number is the all-in price rather " +
+        "than what the crew is paid — so typing the mower's quote caps the crew " +
+        "below it, and the job never fills.",
+    ).toMatch(/all-in|what the crew is paid|the crew's share comes out of it/i);
+  });
+
+  it("and does not quote a price of its own", () => {
+    // `prices-come-as-we-go`: an unpriced park service is the SAFE state.
+    // Naming a number here would be inventing his rate for him.
+    expect(src, "the desk now suggests a figure").not.toMatch(/\$\d/);
+  });
+});

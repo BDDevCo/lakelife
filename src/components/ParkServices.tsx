@@ -108,6 +108,21 @@ export function ParkServices({
             </p>
           )}
 
+          {/* WHAT THE NUMBER IS. Every other word on this screen — "what you
+              pay", "every park pays a different number" — reads as *what the
+              crew charges me*, and it is not: it becomes the ALL-IN price, and
+              the crew's share is capped below it. Type the figure your current
+              contractor quotes and no crew can clear the floor, so the job sits
+              on "Finding a crew" and nothing here ever says why.
+              No figure is suggested — an unpriced park service is the safe
+              state, and his number is his. */}
+          <p className="mut" style={{ fontSize: 12.5, margin: "10px 0 0", lineHeight: 1.5 }}>
+            These are <b>all-in prices</b> — what the park is billed for the
+            visit. The crew&apos;s share comes out of it, so a figure set at
+            exactly what a contractor quotes you leaves nothing in between, and
+            no crew can take the job.
+          </p>
+
           <button
             className="ll-btn"
             style={{ marginTop: 10, minHeight: 44 }}
