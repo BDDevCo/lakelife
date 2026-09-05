@@ -94,7 +94,7 @@ export default async function VendorTodayPage() {
     // could not check, which is the one thing an empty card cannot say.
     getNeedsYou(vendorId).catch((e) => {
       console.error("[vendor] couldn't build what-needs-you:", e);
-      return { held: [], pausedLakes: [], checkFailed: true };
+      return { held: [], pausedLakes: [], unpriced: [], checkFailed: true };
     }),
   ]);
   const confRows = mustRead("your customer feedback", confRes);

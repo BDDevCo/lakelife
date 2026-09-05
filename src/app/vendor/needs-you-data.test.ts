@@ -15,7 +15,10 @@ vi.mock("@/lib/settings", () => ({
 }));
 
 type Row = Record<string, unknown>;
-const db: Record<string, Row[]> = { disputes: [], jobs: [], vendor_lake_demotions: [] };
+const db: Record<string, Row[]> = {
+  disputes: [], jobs: [], vendor_lake_demotions: [],
+  vendors: [], vendor_rates: [], services: [],
+};
 /** Tables set here resolve to {data:null,error} — a FAILED read, not an empty one. */
 const failing = new Set<string>();
 
@@ -26,6 +29,18 @@ class Q implements PromiseLike<{ data: Row[] | null; error: { message: string } 
   eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
   in(c: string, v: unknown[]) { this.fs.push((r) => v.includes(r[c])); return this; }
   is(c: string, v: unknown) { this.fs.push((r) => (v === null ? r[c] == null : r[c] === v)); return this; }
+  maybeSingle() {
+    const t = this.t, fs = this.fs;
+    return {
+      then<A, B>(ok?: ((x: { data: Row | null; error: { message: string } | null }) => A | PromiseLike<A>) | null,
+                 bad?: ((e: unknown) => B | PromiseLike<B>) | null): PromiseLike<A | B> {
+        const res = failing.has(t)
+          ? { data: null, error: { message: "connection reset" } }
+          : { data: (db[t] ?? []).filter((r) => fs.every((f) => f(r)))[0] ?? null, error: null };
+        return Promise.resolve(res).then(ok, bad);
+      },
+    };
+  }
   then<A, B>(ok?: ((x: { data: Row[] | null; error: { message: string } | null }) => A | PromiseLike<A>) | null,
              bad?: ((e: unknown) => B | PromiseLike<B>) | null): PromiseLike<A | B> {
     const res = failing.has(this.t)
@@ -48,6 +63,9 @@ beforeEach(() => {
   db.disputes = [];
   db.jobs = [];
   db.vendor_lake_demotions = [];
+  db.vendors = [{ id: MINE, service_types: [] }, { id: THEIRS, service_types: [] }];
+  db.vendor_rates = [];
+  db.services = [];
   failing.clear();
 });
 
@@ -129,12 +147,76 @@ describe("a failed read never renders as 'nothing needs you'", () => {
 
   it("is quiet — and cheap — for a crew with nothing waiting", async () => {
     const out = await getNeedsYou(MINE);
-    expect(out).toEqual({ held: [], pausedLakes: [] });
+    expect(out).toEqual({ held: [], pausedLakes: [], unpriced: [] });
   });
 
   it("returns empty without touching the database for a non-vendor", async () => {
     failing.add("disputes");
     failing.add("vendor_lake_demotions");
-    expect(await getNeedsYou(null)).toEqual({ held: [], pausedLakes: [] });
+    expect(await getNeedsYou(null)).toEqual({ held: [], pausedLakes: [], unpriced: [] });
+  });
+});
+
+
+describe("work you said you do but never priced", () => {
+  /**
+   * THE SILENT WAY TO BE LIVE AND INVISIBLE.
+   *
+   * `activationGaps` asks for a COI, a W-9, work types, lakes and a capacity.
+   * It does NOT ask for a rate — deliberately, because a rate is a business
+   * decision and the gate is meant to be mechanical. But `canClaim` refuses
+   * with `no_rate` and `isEligible` drops them from dispatch, so a crew who
+   * goes live without one is offered nothing, for ever, having just been told
+   * "jobs start routing".
+   *
+   * There was no screen that said so. The rates page shows blank boxes, which
+   * look like a form waiting to be filled rather than the reason the day is
+   * empty — and a crew with an empty day does not go looking at their rate
+   * card, they assume there is no work.
+   *
+   * It lands hardest on the park work Brendon is recruiting for: snow and park
+   * mowing are new to the catalogue, so EVERY crew who ticks them starts here.
+   */
+  beforeEach(() => {
+    db.services = [
+      { id: "s-mow", name: "Park grounds mowing & trim", active: true },
+      { id: "s-snow", name: "Snow clearing — roads & common drives", active: true },
+      { id: "s-lawn", name: "Lawn mowing & trim", active: true },
+    ];
+  });
+
+  it("names the work with no rate behind it", async () => {
+    db.vendors = [{ id: MINE, service_types: ["Park grounds mowing & trim", "Snow clearing — roads & common drives"] }];
+    db.vendor_rates = [{ vendor_id: MINE, service_id: "s-mow" }];
+    const out = await getNeedsYou(MINE);
+    expect(out.unpriced).toEqual(["Snow clearing — roads & common drives"]);
+  });
+
+  it("is quiet when every ticked service is priced", async () => {
+    db.vendors = [{ id: MINE, service_types: ["Lawn mowing & trim"] }];
+    db.vendor_rates = [{ vendor_id: MINE, service_id: "s-lawn" }];
+    expect((await getNeedsYou(MINE)).unpriced).toEqual([]);
+  });
+
+  it("never counts another crew's rate as this crew's", async () => {
+    db.vendors = [{ id: MINE, service_types: ["Lawn mowing & trim"] }];
+    db.vendor_rates = [{ vendor_id: THEIRS, service_id: "s-lawn" }];
+    expect((await getNeedsYou(MINE)).unpriced).toEqual(["Lawn mowing & trim"]);
+  });
+
+  it("says nothing about work they never ticked", async () => {
+    db.vendors = [{ id: MINE, service_types: [] }];
+    expect((await getNeedsYou(MINE)).unpriced).toEqual([]);
+  });
+
+  it("a failed read never reports 'everything is priced'", async () => {
+    // The whole point of this card is a reassuring sentence. It must not be
+    // guessed at — same rule as the two lists above it.
+    db.vendors = [{ id: MINE, service_types: ["Lawn mowing & trim"] }];
+    for (const t of ["vendors", "vendor_rates", "services"]) {
+      failing.clear();
+      failing.add(t);
+      await expect(getNeedsYou(MINE), t).rejects.toBeInstanceOf(ReadFailed);
+    }
   });
 });

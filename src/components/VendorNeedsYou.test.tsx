@@ -14,8 +14,8 @@ const held = (over: Partial<Record<string, unknown>> = {}) => ({
   disputeId: "d1", jobId: "j1", service: "Weekly mow", where: "Blue Heron",
   respondBy: "2026-08-21T17:00:00Z", token: "tok1", ...over,
 });
-const render = (data: Parameters<typeof VendorNeedsYou>[0]["data"]) =>
-  renderToStaticMarkup(<VendorNeedsYou data={data} today={TODAY} />);
+const render = (data: Partial<Parameters<typeof VendorNeedsYou>[0]["data"]>) =>
+  renderToStaticMarkup(<VendorNeedsYou data={{ held: [], pausedLakes: [], unpriced: [], ...data }} today={TODAY} />);
 
 describe("quiet when there is nothing", () => {
   it("renders nothing at all for a crew with nothing waiting", () => {

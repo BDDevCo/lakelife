@@ -45,6 +45,14 @@ export interface NeedsYou {
   /** Lakes they have been paused off, and when each pause lifts. */
   pausedLakes: Array<{ lake: string; liftsOn: string }>;
   /**
+   * Work they ticked but never priced. `activationGaps` does not ask for a
+   * rate — a rate is a business decision, and the gate is meant to be
+   * mechanical — but `canClaim` refuses with `no_rate` and `isEligible` drops
+   * them from dispatch, so a crew who goes live without one is offered nothing
+   * for ever, having just been told "jobs start routing".
+   */
+  unpriced: string[];
+  /**
    * True when a read failed and we do not actually know. An empty card and a
    * card we could not fill look identical, and only one of them means
    * "nothing needs you" — so the difference gets carried, and said out loud.
@@ -56,7 +64,7 @@ export interface NeedsYou {
 const OPEN_TO_CREW = ["crew_review", "verifying", "talk", "fixing"] as const;
 
 export async function getNeedsYou(vendorId: string | null): Promise<NeedsYou> {
-  const empty: NeedsYou = { held: [], pausedLakes: [] };
+  const empty: NeedsYou = { held: [], pausedLakes: [], unpriced: [] };
   if (!vendorId) return empty;
 
   const admin = createServiceClient();
@@ -70,7 +78,7 @@ export async function getNeedsYou(vendorId: string | null): Promise<NeedsYou> {
   //
   // Scoping still holds: the jobs read carries `.eq("vendor_id", vendorId)`,
   // so a dispute on somebody else's job finds no job here and drops out.
-  const [disputesRes, pausesRes, settings] = await Promise.all([
+  const [disputesRes, pausesRes, settings, vendorRes, ratesRes, svcRes] = await Promise.all([
     admin
       .from("disputes")
       .select("id, job_id, status, respond_by, crew_token")
@@ -81,12 +89,26 @@ export async function getNeedsYou(vendorId: string | null): Promise<NeedsYou> {
       .select("lake_id, demoted_at, lakes(name)")
       .eq("vendor_id", vendorId),
     getPlatformSettings(),
+    // THE THIRD THING WAITING ON THEM, and the quietest.
+    //
+    // service_types holds NAMES and vendor_rates holds service ids, so the
+    // catalogue is what joins them. All three are read together because all
+    // three are needed to answer one question.
+    admin.from("vendors").select("service_types").eq("id", vendorId).maybeSingle(),
+    admin.from("vendor_rates").select("service_id").eq("vendor_id", vendorId),
+    admin.from("services").select("id, name").eq("active", true),
   ]);
 
   // An empty list here reads as "nothing needs you", which is the single most
   // reassuring sentence on the page and the one it must never guess at.
   const disputes = mustRead("what's waiting on you", disputesRes);
   const pauses = mustRead("your standing on each lake", pausesRes);
+  // Same rule for all three of these: an empty answer here reads as "every
+  // kind of work you do is priced", which is the sentence that keeps a crew
+  // sitting at home. It must never be a dropped connection.
+  const me = mustRead("the work you signed up for", vendorRes);
+  const myRates = mustRead("the rates you've set", ratesRes);
+  const catalogue = mustRead("the list of services", svcRes);
 
   const disputedJobIds = [...new Set((disputes ?? []).map((d) => d.job_id as string).filter(Boolean))];
   const jobs = disputedJobIds.length
@@ -134,5 +156,18 @@ export async function getNeedsYou(vendorId: string | null): Promise<NeedsYou> {
     })
     .sort((a, b) => a.liftsOn.localeCompare(b.liftsOn));
 
-  return { held, pausedLakes };
+  // WORK THEY TICKED AND NEVER PRICED. Ordered as the catalogue orders it, so
+  // the same crew sees the same list in the same order every morning.
+  const idByName = new Map((catalogue ?? []).map((s) => [s.name as string, s.id as string]));
+  const priced = new Set((myRates ?? []).map((r) => r.service_id as string));
+  const ticked: string[] = (me?.service_types as string[] | null) ?? [];
+  const unpriced = ticked.filter((name) => {
+    const id = idByName.get(name);
+    // A name with no live service behind it is a different problem — the
+    // service was retired — and dispatch already ignores it. Saying "you
+    // haven't priced X" about work nobody can book is a false errand.
+    return id != null && !priced.has(id);
+  });
+
+  return { held, pausedLakes, unpriced };
 }

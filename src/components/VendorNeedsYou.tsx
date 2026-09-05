@@ -15,8 +15,8 @@ import type { NeedsYou } from "@/app/vendor/needs-you-data";
  * there on the morning it matters. Same reasoning as VendorDocs above it.
  */
 export function VendorNeedsYou({ data, today }: { data: NeedsYou; today: string }) {
-  const { held, pausedLakes, checkFailed } = data;
-  if (held.length === 0 && pausedLakes.length === 0 && !checkFailed) return null;
+  const { held, pausedLakes, unpriced, checkFailed } = data;
+  if (held.length === 0 && pausedLakes.length === 0 && unpriced.length === 0 && !checkFailed) return null;
 
   const day = (iso: string | null) =>
     iso ? new Date(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : null;
@@ -72,6 +72,26 @@ export function VendorNeedsYou({ data, today }: { data: NeedsYou; today: string 
             </p>
           </div>
         ))}
+
+        {/* WORK WITH NO PRICE ON IT — the quietest way to be live and idle.
+            canClaim refuses with `no_rate` and dispatch drops them, so this is
+            not a tidy-up: it is the reason the day is empty. The rates page
+            shows blank boxes, which read as a form waiting to be filled rather
+            than as the cause. */}
+        {unpriced.length > 0 && (
+          <div style={{ borderTop: "1px solid var(--line)", paddingTop: 10, marginTop: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>
+              {unpriced.length === 1 ? "One kind of work has no rate yet" : `${unpriced.length} kinds of work have no rate yet`}
+            </div>
+            <p style={{ fontSize: 13, margin: "4px 0 0", lineHeight: 1.5, color: "var(--ink-warn)" }}>
+              You won&apos;t be offered {unpriced.length === 1 ? "it" : "any of them"} until
+              you say what you charge — {unpriced.join(", ")}.
+            </p>
+            <div style={{ marginTop: 8 }}>
+              <Link className="ll-btn sm" href="/vendor/rates">Set my rates</Link>
+            </div>
+          </div>
+        )}
     </div>
   );
 }
