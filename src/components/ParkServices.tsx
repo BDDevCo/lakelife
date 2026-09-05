@@ -9,6 +9,7 @@ import {
   enableParkServices, focusParkProperty, setParkServiceRate,
   type ParkServiceRow,
 } from "@/app/park/service-actions";
+import { usesPerLotRate } from "@/app/park/service-helpers";
 
 /**
  * THE PARK'S OWN SERVICE DESK.
@@ -157,6 +158,8 @@ function RateRow({
   // previewed $277.50 for a rate that actually charged $278 — LakeLife prices
   // in whole dollars, and a preview that does not know that is a lie the owner
   // only finds out about on a bill.
+  // Does the engine read the per-lot number for THIS service? Snow does not.
+  const perLot = usesPerLotRate(row.pricingModel, row.bandPricing);
   const preview = priceService(
     {
       name: row.name,
@@ -209,35 +212,64 @@ function RateRow({
         }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <div className="ll-field" style={{ marginBottom: 0, width: 130 }}>
-              <label htmlFor={`base-${row.id}`}>Flat, per visit</label>
+              <label htmlFor={`base-${row.id}`}>{perLot ? "Flat, per visit" : "Per visit"}</label>
               <input
                 id={`base-${row.id}`} inputMode="decimal" value={base}
                 onChange={(e) => setBase(e.target.value)} placeholder="0.00"
               />
             </div>
-            <div className="ll-field" style={{ marginBottom: 0, width: 130 }}>
-              <label htmlFor={`per-${row.id}`}>Plus, per live lot</label>
-              <input
-                id={`per-${row.id}`} inputMode="decimal" value={per}
-                onChange={(e) => setPer(e.target.value)} placeholder="0.00"
-              />
-            </div>
+            {/* ONLY WHEN THE ENGINE READS IT. Snow clearing is priced `flat`,
+                and priceService returns base alone — a per-lot number typed
+                here was swallowed whole, and the preview called the gap
+                rounding. See usesPerLotRate. */}
+            {perLot && (
+              <div className="ll-field" style={{ marginBottom: 0, width: 130 }}>
+                <label htmlFor={`per-${row.id}`}>Plus, per live lot</label>
+                <input
+                  id={`per-${row.id}`} inputMode="decimal" value={per}
+                  onChange={(e) => setPer(e.target.value)} placeholder="0.00"
+                />
+              </div>
+            )}
           </div>
 
           <div style={{ fontSize: 13, fontWeight: 800, marginTop: 8 }}>
-            {/* The arithmetic, out loud, at his real lot count. */}
-            ${b.toFixed(2)} + ${u.toFixed(2)} &times; {liveLots}{" "}
-            {liveLots === 1 ? "lot" : "lots"} = ${preview.toFixed(2)} a visit
-            {Math.abs(b + u * liveLots - preview) > 0.005 && (
+            {/* The arithmetic, out loud, at his real lot count — and only the
+                arithmetic the engine will actually do. */}
+            {perLot ? (
+              <>
+                ${b.toFixed(2)} + ${u.toFixed(2)} &times; {liveLots}{" "}
+                {liveLots === 1 ? "lot" : "lots"} = ${preview.toFixed(2)} a visit
+              </>
+            ) : (
+              <>${preview.toFixed(2)} a visit</>
+            )}
+            {/* A ROUNDING DIFFERENCE IS UNDER A DOLLAR, BY CONSTRUCTION.
+                Unbounded, this sentence explained a $315 structural gap as
+                rounding. The gap is gone; the bound is what stops the sentence
+                ever being asked to cover one again. */}
+            {(() => {
+              const gap = Math.abs((perLot ? b + u * liveLots : b) - preview);
+              return gap > 0.005 && gap < 1;
+            })() && (
               <span className="mut" style={{ fontWeight: 600 }}>
                 {" "}(rounded to the dollar)
               </span>
             )}
           </div>
           <p className="mut" style={{ fontSize: 12, margin: "4px 0 8px", lineHeight: 1.5 }}>
-            Put the whole amount in &ldquo;flat&rdquo; if what you pay doesn&apos;t
-            change when lots fill or empty. Use the per-lot box when it does &mdash;
-            then adding a lot reprices this on its own.
+            {perLot ? (
+              <>
+                Put the whole amount in &ldquo;flat&rdquo; if what you pay doesn&apos;t
+                change when lots fill or empty. Use the per-lot box when it does &mdash;
+                then adding a lot reprices this on its own.
+              </>
+            ) : (
+              <>
+                One amount each time it&apos;s done. This one doesn&apos;t change
+                when lots fill or empty &mdash; the whole park gets it either way.
+              </>
+            )}
           </p>
 
           <button

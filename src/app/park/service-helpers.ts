@@ -193,3 +193,34 @@ export function buildOwnedHomeRow(input: OwnedHomeInput): OwnedHomeResult {
 export function ownedHomeAddress(lotNumber: string, parkName: string, parkAddress: string): string {
   return `Lot ${lotNumber}, ${parkName}, ${parkAddress}`;
 }
+
+/**
+ * DOES THIS SERVICE'S PRICE ACTUALLY MOVE WITH THE LOT COUNT?
+ *
+ * The rate editor offers two boxes — a flat amount and a per-live-lot amount —
+ * and drew both for every grounds service. Production's four split two ways:
+ *
+ *   per_section + band_pricing.count_field "lots"  →  base + unit_rate × lots
+ *   flat (snow clearing, band_pricing null)        →  base. unit_rate unread.
+ *
+ * So pricing a snow push at "nothing flat, $15 a lot" previewed
+ * `$0.00 + $15.00 × 21 lots = $0.00 a visit`, blamed the $315 on rounding, and
+ * left Save disabled with no other explanation. It is the one number that has
+ * to be right before the first snow of the season.
+ *
+ * The `?? "pier_sections"` default in priceService is the second trap: a
+ * per_section service with NO band_pricing counts pier sections, and a park's
+ * grounds has none — so the per-lot box would multiply by zero, silently. Only
+ * an explicit "lots" counts.
+ *
+ * Kept as one exported predicate rather than a condition written twice: the
+ * screen that draws the box and the action that stores the number have to
+ * agree, and two copies of a rule are two rules.
+ */
+export function usesPerLotRate(
+  pricingModel: string | null | undefined,
+  bandPricing: Record<string, unknown> | null | undefined,
+): boolean {
+  if (pricingModel !== "per_section") return false;
+  return bandPricing?.count_field === "lots";
+}

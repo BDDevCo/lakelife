@@ -8,7 +8,7 @@ import { assertMyPark } from "./data";
 import { withParkRate } from "@/lib/park-rates";
 import { loadParkRates } from "./rate-data";
 import {
-  buildParkBlockers, buildGroundsPropertyRow, canEnableParkServices,
+  buildParkBlockers, buildGroundsPropertyRow, canEnableParkServices, usesPerLotRate,
   buildOwnedHomeRow, ownedHomeAddress,
   type ParkReadiness, type OwnedHomeInput,
 } from "./service-helpers";
@@ -310,7 +310,7 @@ export async function setParkServiceRate(
   // question this paragraph exists to ask.
   const svcRes = await admin
     .from("services")
-    .select("id, name, park_only, active")
+    .select("id, name, park_only, active, pricing_model, band_pricing")
     .eq("id", serviceId)
     .maybeSingle();
   if (svcRes.error) {
@@ -323,6 +323,19 @@ export async function setParkServiceRate(
   }
   if (svc.active === false) {
     return { ok: false, error: `${svc.name} isn't offered at the moment, so there's nothing to price.` };
+  }
+  // A PER-LOT RATE THE ENGINE WILL NEVER READ IS A NUMBER THAT LIES ON THE CARD.
+  //
+  // Snow clearing is priced `flat`, and priceService returns `rule.base` —
+  // unit_rate is not looked at. Stored anyway it shows back on the services
+  // list, reads as part of the price, and is worth nothing at booking. The
+  // editor no longer offers the box; this is the same rule on the server,
+  // where the numbers actually arrive from a browser.
+  if (unitRate > 0 && !usesPerLotRate(svc.pricing_model as string, svc.band_pricing as Record<string, unknown> | null)) {
+    return {
+      ok: false,
+      error: `${svc.name} is priced once per visit, not per lot — put the whole amount in the per-visit box.`,
+    };
   }
   const { error } = await admin
     .from("park_service_rates")
