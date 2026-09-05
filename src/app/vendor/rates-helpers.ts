@@ -61,6 +61,14 @@ export interface RateForm {
 export function unitNounFor(model: PricingModel, countField?: string | null): string {
   if (model === "per_foot") return "foot";
   switch (countField) {
+    // A PARK'S LOTS. All three per_section park services count these, and
+    // without a case here the label fell to "unit" — which a mowing crew reads
+    // as "per visit", because that is how mowing is quoted everywhere. Typing
+    // the whole-job number then stores it as a PER-LOT rate: $100 becomes
+    // $2,100 at The Haven's 21 lots, the margin floor drops them, and the
+    // screen says "Saved." The reverse costs them just as much.
+    case "lots":
+      return "lot";
     case "pier_sections":
       return "pier section";
     case "boat_lifts":

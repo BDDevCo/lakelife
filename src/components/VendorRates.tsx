@@ -146,6 +146,22 @@ function RateCard({ rate }: { rate: MyRate }) {
         ))}
       </div>
 
+      {/* THE MULTIPLIER, SAID OUT LOUD.
+          A label alone still lets somebody read "per lot" and type the number
+          they quote for the whole job — mowing is quoted per visit everywhere
+          in the trade. At The Haven that turns $100 into $2,100, the margin
+          floor drops them silently, and the screen says "Saved."
+          The count is genuinely per-park — one rate card serves every park a
+          crew works, each with its own lot count — so this says what happens
+          rather than quoting a figure it cannot know here. */}
+      {rate.form.unitNoun === "lot" && (
+        <p className="mut" style={{ fontSize: 12.5, marginTop: 8, lineHeight: 1.5 }}>
+          This one is charged for <b>every lot in the park</b>, so it&apos;s multiplied
+          by however many lots that park has — a 21-lot park pays your per-lot rate
+          twenty-one times. Put a whole-visit price in the base charge instead.
+        </p>
+      )}
+
       <button
         className="ll-btn gold"
         onClick={save}

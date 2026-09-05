@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   unitNounFor,
   tierKey,
@@ -125,5 +127,62 @@ describe("computeRateRow", () => {
     const r = computeRateRow({ pricing_model: "flat", band_pricing: null }, { base: "-5" });
     expect(r.ok).toBe(false);
     expect(r.error).toBeTruthy();
+  });
+});
+
+describe("a park mow is priced PER LOT, and the box has to say so", () => {
+  /**
+   * THE 21× TYPO, ON THE FIRST SCREEN A NEW CREW TOUCHES.
+   *
+   * `unitNounFor` knew pier sections, boat lifts, jet skis, PWC lifts and toy
+   * lifts — every count a LAKE HOUSE has. It had no case for "lots", the
+   * count_field on all three per_section park services, so the label fell to
+   * the default and read "Your rate per unit".
+   *
+   * A crew invited to mow The Haven opens their rate card, reads "per unit" as
+   * "per visit" — which is how mowing is quoted everywhere in the trade — and
+   * types 100. That is stored as $100 A LOT. Priced against the park it becomes
+   * $100 × 21 = $2,100, the margin floor drops them instantly, and the screen
+   * says "Saved." They are then live, invisible, and certain their rate is on
+   * file. The reverse costs them just as much: meaning $100 a lot and being
+   * paid $100 for the day.
+   *
+   * The count is genuinely per-park — a crew's one rate applies at every park
+   * they serve, and each has its own lot count — so the honest label names the
+   * unit and says what multiplies it, rather than promising a number.
+   */
+  it("names the lot, which is what the engine actually multiplies", () => {
+    expect(unitNounFor("per_section", "lots")).toBe("lot");
+  });
+
+  it("still says 'unit' for a count nobody has taught it", () => {
+    // The default is right for an unknown field — inventing a noun would be
+    // worse than admitting we don't know.
+    expect(unitNounFor("per_section", "mystery")).toBe("unit");
+  });
+
+  it("the built form carries the lot noun through to the box's label", () => {
+    // unitNounFor could be perfect and the form still read "per unit" — the
+    // label is assembled separately, and that assembly is what a crew reads.
+    const form = buildRateForm(
+      { pricing_model: "per_section", band_pricing: { count_field: "lots" } },
+      null,
+    );
+    expect(form.unitNoun).toBe("lot");
+    const unitField = form.fields.find((f) => f.kind === "unit");
+    expect(unitField, "the per-unit box is gone — this scan measures nothing").toBeTruthy();
+    expect(unitField!.label).toBe("Your rate per lot");
+  });
+
+  it("and the screen warns that a park multiplies it", () => {
+    // A label alone still lets somebody read "per lot" and type the whole-job
+    // number. The count varies by park, so the screen says what happens rather
+    // than quoting a figure it cannot know here.
+    const src = readFileSync(
+      fileURLToPath(new URL("../../components/VendorRates.tsx", import.meta.url)),
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+    expect(src, "nothing on the rate card explains the lot multiplier")
+      .toMatch(/every lot in the park|multiplied by the park/i);
   });
 });

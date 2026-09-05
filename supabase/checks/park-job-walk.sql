@@ -252,8 +252,8 @@ begin
                from information_schema.role_table_grants
               where table_schema='public' and table_name='jobs' and grantee='authenticated')
          || E'\n  policies on jobs                             : '
-         || (select coalesce(string_agg(polname, ', '), 'NONE'))
-      from pg_policy where polrelid = 'public.jobs'::regclass;
+         || (select coalesce(string_agg(polname, ', '), 'NONE')
+               from pg_policy where polrelid = 'public.jobs'::regclass);
 
   raise exception E'RULE 1 RLS WALK%', t;
 end $$;
