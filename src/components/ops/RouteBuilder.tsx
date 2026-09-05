@@ -35,7 +35,7 @@ export function RouteBuilder({ routes, date }: { routes: RouteSummary[]; date: s
         <div>
           <b style={{ fontSize: 16 }}>Tomorrow&apos;s routes — {pretty}</b>
           <p className="mut" style={{ fontSize: 12.5, marginTop: 2 }}>
-            The scheduler runs this automatically at 8pm. Build early any time — it&apos;s a clean rebuild, and each crew gets their map link by text.
+            The scheduler runs this automatically at 8pm. Build early any time — it&apos;s a clean rebuild, and each crew gets their map link by email and text.
           </p>
         </div>
         <button className="ll-btn gold" onClick={build} disabled={busy}>

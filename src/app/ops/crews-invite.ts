@@ -109,11 +109,26 @@ export async function inviteCrew(input: {
   const lakeList = shortNames.length > 1
     ? `${shortNames.slice(0, -1).join(", ")} &amp; ${shortNames[shortNames.length - 1]}`
     : shortNames[0] ?? "your local lakes";
+  // BOTH DOORS, AND NO CLOCK ON THE MONEY.
+  //
+  // This paragraph used to say "your day's stops arrive by text, in drive
+  // order, and payouts release the moment a job is photo-verified complete."
+  // Text has delivered 0 of 81 since 19 July — the A2P registration was
+  // rejected twice and the EIN is too new — while `notify()` sends by both
+  // doors at once, so the route link a crew actually receives comes by EMAIL.
+  // Naming only the dead channel tells a stranger to watch their phone for the
+  // one thing that decides whether they make money that day.
+  //
+  // And "the moment" was a promise about timing. Photo verification really
+  // does release the payout — that is the crew's protection and it is worth
+  // saying — but the money moves in a batch, and no money can move at all
+  // until the processor is live. So the sentence now describes what photo
+  // verification DOES, and dates nothing.
   const sent = await sendEmail({
     to: email,
     subject: `${company} — you're invited to LakeLife crews`,
     html: `<p>Hi ${company},</p>
-<p>LakeLife routes lake-home jobs on ${lakeList} to trusted local crews — your day's stops arrive by text, in drive order, and payouts release the moment a job is photo-verified complete.</p>
+<p>LakeLife routes lake-home jobs on ${lakeList} to trusted local crews. Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice.</p>
 <p><b>Getting started takes 3 steps:</b></p>
 <ol>
 <li>Create your account at <a href="${site}">${site}</a> — use THIS email address (${email}).</li>

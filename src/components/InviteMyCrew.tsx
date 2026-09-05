@@ -17,6 +17,11 @@ export function InviteMyCrew() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
+  // "✓ Invite sent" was asserted unconditionally behind a fire-and-forget send.
+  // When the mail is refused the crew is still bound as preferred — so the card
+  // must say the true half and hand over the link, because the duplicate-invite
+  // guard means this button cannot be pressed again for that address.
+  const [warning, setWarning] = useState<string | null>(null);
 
   async function invite() {
     const co = company.trim();
@@ -32,6 +37,7 @@ export function InviteMyCrew() {
       toast(res.error ?? "Couldn't send that invite.");
       return;
     }
+    setWarning(res.warning ?? null);
     setSentTo(res.company ?? co);
     setCompany("");
     setEmail("");
@@ -42,10 +48,16 @@ export function InviteMyCrew() {
       <h3 style={{ fontSize: 18, margin: "0 0 6px" }}>Already have a crew you love? 🌊</h3>
 
       {sentTo ? (
-        <p style={{ fontSize: 14, margin: 0, color: "var(--teal-dark)", fontWeight: 600 }}>
-          ✓ Invite sent to {sentTo} — they&rsquo;ll get an email to join, and they&rsquo;re
-          set as your preferred crew.
-        </p>
+        warning ? (
+          <p style={{ fontSize: 14, margin: 0, color: "var(--ink-warn)", fontWeight: 600 }}>
+            {warning}
+          </p>
+        ) : (
+          <p style={{ fontSize: 14, margin: 0, color: "var(--teal-dark)", fontWeight: 600 }}>
+            ✓ Invite sent to {sentTo} — they&rsquo;ll get an email to join, and they&rsquo;re
+            set as your preferred crew.
+          </p>
+        )
       ) : (
         <>
           <p className="mut" style={{ fontSize: 14, margin: "0 0 14px", maxWidth: 540 }}>

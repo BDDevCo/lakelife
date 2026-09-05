@@ -10,6 +10,10 @@ export interface InviteContractorResult {
   ok: boolean;
   error?: string;
   company?: string;
+  /** Set when the crew was bound as preferred but the invitation email did not
+   *  go. Same shape as ops' InviteResult — the caller must show it, because
+   *  the duplicate-invite guard makes a second attempt impossible. */
+  warning?: string;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -114,12 +118,26 @@ export async function inviteMyContractor(company: string, email: string): Promis
   // impersonal. Log it and send.
   if (meRes.error) console.error("[read failed] your name for the invite email:", meRes.error);
   const ownerName = (meRes.data?.name as string) ?? "your customer";
-  void sendEmail({
+  // AWAITED, FOR THE REASON crews-invite.ts SPELLS OUT — and this is the file
+  // that still `void`ed it.
+  //
+  // The invitation IS the email: the vendors row above is unreachable until
+  // somebody signs in with that exact address. A refused send therefore leaves
+  // an invite nobody can claim — and the duplicate guard forty lines up then
+  // refuses the retry with "There's already an open invite out to that email."
+  // Meanwhile this returned `ok: true` and the card said "✓ Invite sent". A
+  // homeowner whose crew never heard from us was told they had, and could
+  // never send it again.
+  //
+  // The copy below carried the same two false promises as the ops invite: text
+  // has delivered 0 of 81 since July (notify() sends both doors; email is the
+  // one that lands), and no payout can move until the processor is live.
+  const sent = await sendEmail({
     to: addr,
     subject: `${ownerName} wants to keep working with you — on LakeLife`,
     html: `<p>Hi ${co},</p>
 <p><b>${ownerName}</b> asked to keep you as their crew through LakeLife — you keep your customer, we just handle the scheduling, invoicing and payment behind the scenes.</p>
-<p>Your day's stops arrive by text in drive order, and your payout releases the moment a job is photo-verified complete. Joining is free.</p>
+<p>Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice. Joining is free.</p>
 <p><b>3 steps:</b></p>
 <ol>
 <li>Create your account at <a href="${site}">${site}</a> — use THIS email (${addr}).</li>
@@ -128,6 +146,20 @@ export async function inviteMyContractor(company: string, email: string): Promis
 </ol>
 <p>You'll be set as ${ownerName}'s preferred crew, so their jobs come to you first. 🌊</p>`,
   });
+
+  // The row is already created and bound as this property's preferred crew, so
+  // refusing here would report "nothing happened" when plenty has. Say what is
+  // true instead: they're your crew, but we couldn't reach them — and hand over
+  // the link, because the duplicate guard means this button won't work twice.
+  if (!sent.ok) {
+    return {
+      ok: true,
+      company: co,
+      warning:
+        `${co} is set as your crew, but we couldn't send their invite ` +
+        `(${sent.error ?? "unknown"}). Send them this link yourself: ${site}`,
+    };
+  }
 
   return { ok: true, company: co };
 }
