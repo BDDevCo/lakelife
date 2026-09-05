@@ -167,3 +167,93 @@ begin
 
   raise exception E'PARK JOB WALK%', t;
 end $$;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- PART TWO — RULE 1, AT THE DATABASE RATHER THAN IN THE TYPES.
+--
+-- CLAUDE.md rule 1: "Vendors NEVER see customer prices or margin. Enforce at
+-- the API/RLS level, not just the UI."
+--
+-- The TypeScript half is genuinely good — `OpenJob` has no customer_price and
+-- no margin field at all, so the claim board cannot leak one by accident, and
+-- open-data.ts marks the price "server-side only — never returned". But a type
+-- is not RLS, and rule 1 names RLS specifically.
+--
+-- RUN AGAINST PRODUCTION 5 Sep 2026:
+--
+--   the crew holding the job can read the job row : 0
+--   ... and can read its customer_price           : 0
+--   a DIFFERENT signed-in user can read that job  : 0
+--   jobs column grants for authenticated          : SELECT
+--
+-- Zero for the crew who HOLDS the job. The reason is stronger than hiding a
+-- column: `jobs` carries exactly ONE policy —
+--
+--   jobs_ops : ll_is_ops()
+--
+-- — so the table is shut to every client that is not ops. A crew's screens are
+-- server-rendered through the service role, which selects only safe columns
+-- (vendor/data.ts even notes that job_items carries customer_price/vendor_cost
+-- "which we never select"). There is no API path by which a price reaches a
+-- crew's browser, because there is no API path to the table.
+--
+-- Worth re-running if a policy is ever ADDED to jobs. A well-meaning
+-- "vendors can see their own jobs" policy would open the row — and with it
+-- every column on it, since Postgres RLS is row-level and the column grant
+-- above is a blanket SELECT.
+
+do $$
+declare
+  v_park uuid := 'facade00-0000-4000-8000-000000000001';
+  v_prop uuid; v_lake uuid; v_mow uuid;
+  v_crewusr uuid := gen_random_uuid();
+  v_other   uuid := gen_random_uuid();
+  v_vendor uuid; v_job uuid;
+  n_price int; n_rows int; n_other int;
+  t text := '';
+begin
+  select service_property_id, lake_id into v_prop, v_lake from public.parks where id = v_park;
+  select id into v_mow from public.services where name = 'Park grounds mowing & trim';
+
+  insert into auth.users (id) values (v_crewusr), (v_other);
+  insert into public.vendors
+    (user_id, company, status, coi_url, coi_expiry, coi_named_insured, w9_url,
+     service_types, service_lakes, daily_capacity)
+  values (v_crewusr, 'zz-rls crew', 'active', 'x/coi.pdf', current_date + 200,
+     'zz-rls crew', 'x/w9.pdf', array['Park grounds mowing & trim'], array[v_lake], 2)
+  returning id into v_vendor;
+
+  insert into public.jobs
+    (property_id, service_id, status, date, slot, customer_price, vendor_id, vendor_cost, margin)
+  values (v_prop, v_mow, 'scheduled', current_date, '8a', 100, v_vendor, 80, 20)
+  returning id into v_job;
+
+  -- Sign in as the crew who HOLDS the job, as the client role. Not the service
+  -- role — that is the whole point; the service role is meant to see this.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_crewusr::text, 'role','authenticated')::text, true);
+  set local role authenticated;
+  select count(*) into n_rows from public.jobs where id = v_job;
+  begin
+    select count(*) into n_price from public.jobs where id = v_job and customer_price is not null;
+  exception when others then n_price := -1; end;
+  reset role;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_other::text, 'role','authenticated')::text, true);
+  set local role authenticated;
+  select count(*) into n_other from public.jobs where id = v_job;
+  reset role;
+
+  t := t || E'\n  the crew holding it can read the job row      : ' || n_rows
+         || E'\n  ... and can read its customer_price           : ' || n_price
+         || E'\n  a DIFFERENT signed-in user can read that job  : ' || n_other
+         || E'\n  jobs column grants for authenticated          : '
+         || (select coalesce(string_agg(distinct privilege_type, ', '), 'none')
+               from information_schema.role_table_grants
+              where table_schema='public' and table_name='jobs' and grantee='authenticated')
+         || E'\n  policies on jobs                             : '
+         || (select coalesce(string_agg(polname, ', '), 'NONE'))
+      from pg_policy where polrelid = 'public.jobs'::regclass;
+
+  raise exception E'RULE 1 RLS WALK%', t;
+end $$;
