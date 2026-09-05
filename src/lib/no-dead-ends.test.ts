@@ -143,3 +143,74 @@ describe("the resident with no lot is not sent to the phone", () => {
     expect(page).not.toMatch(/ring them and they can join the two up/);
   });
 });
+
+describe("a certificate in a different legal name can actually be straightened out", () => {
+  /**
+   * THE ONE REMEDY THIS PRODUCT NAMES THREE TIMES AND HAS NEVER OFFERED.
+   *
+   * 0152 made the insurance rule real: a certificate must be unexpired AND
+   * named to the business that sent it. A mismatch is deliberately not a
+   * refusal — the document is filed, both names are recorded, and it becomes
+   * something a person looks at. That design is right, and it rests entirely
+   * on somebody being able to fix the name afterwards:
+   *
+   *   named-insured.ts — "a genuine DBA is a thirty-second conversation and
+   *                       an edit to `vendors.company`"
+   *   the crew's message — "send us a message and we'll get it straightened out"
+   *   the ops board — "check which is wrong before approving"
+   *
+   * `vendors.company` was written in exactly two places, both INSERTs, both
+   * invite paths. It appears in no UPDATE anywhere in src. So all three
+   * sentences pointed at an edit nobody could make, and the mismatch blocked
+   * activation, auto-dispatch and the claim board at once.
+   *
+   * It is likeliest on the path Brendon is about to use most: he types the
+   * name he knows a crew by — "Bob's Mowing" — and Bob's policy is issued to
+   * "Robert Klein Landscaping LLC". A homeowner inviting their own guy is
+   * likelier still.
+   *
+   * OPS-ONLY, AND THAT IS THE POINT. Letting the crew edit their own business
+   * name would make the gate self-certifying: type whatever the certificate
+   * says and every certificate matches. named-insured.ts refuses fuzzy
+   * matching for exactly that reason, and a self-serve name field would hand
+   * back the failure it was avoiding.
+   */
+  const actions = code("../app/ops/crews-actions.ts");
+  const board = code("../components/ops/CrewBoard.tsx");
+
+  it("the mismatch message still promises somebody will sort it out", () => {
+    // If this sentence ever goes, the tests below are guarding a promise
+    // nobody makes any more.
+    expect(code("./named-insured.ts")).toMatch(/straightened out/);
+  });
+
+  it("ops has a writer for the business name", () => {
+    expect(
+      actions,
+      "vendors.company is still write-once at invite. The DBA conversation " +
+        "the mismatch message promises has no edit behind it.",
+    ).toMatch(/update\(\{\s*company/);
+  });
+
+  it("and it is ops-only, never the crew's own field", () => {
+    expect(actions).toMatch(/export async function setCrewCompany/);
+    expect(
+      actions.slice(actions.indexOf("setCrewCompany")),
+      "an ops action that doesn't assert ops",
+    ).toMatch(/assertOps\(\)/);
+    // The crew's own self-serve actions must never gain one.
+    expect(
+      code("../app/vendor/onboarding-actions.ts"),
+      "a crew can rename their own business, which makes the insurance gate " +
+        "self-certifying — any certificate matches once you can retype the account",
+    ).not.toMatch(/update\(\{\s*company/);
+  });
+
+  it("the board offers the control on the card that reports the mismatch", () => {
+    expect(board).toMatch(/setCrewCompany\(/);
+    expect(
+      board,
+      "the board names the mismatch but the fix is somewhere else",
+    ).toMatch(/namedInsuredMismatch/);
+  });
+});

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { approveCrew, suspendCrew, reactivateCrew, setCrewCapacity, confirmCoiExpiry } from "@/app/ops/crews-actions";
+import { approveCrew, suspendCrew, reactivateCrew, setCrewCapacity, setCrewCompany, confirmCoiExpiry } from "@/app/ops/crews-actions";
 import { inviteCrew } from "@/app/ops/crews-invite";
 import type { OpsCrew } from "@/app/ops/crews-data";
 
@@ -316,10 +316,117 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
         ) : null}
       </div>
 
-      {crew.status !== "active" && !docsComplete && (
+      {/* The mismatch has its own line below, with the control attached — two
+          paragraphs saying the same thing is how the one with no button gets
+          read first. */}
+      {crew.status !== "active" && !docsComplete && !crew.namedInsuredMismatch && (
         <p style={{ color: "var(--warn)", fontSize: 12, margin: 0 }}>{approveHint}</p>
       )}
+
+      {/* THE FIX SITS ON THE SENTENCE THAT REPORTS THE PROBLEM.
+          "check which is wrong before approving" was the only guidance, and
+          vendors.company appeared in no UPDATE anywhere — so the answer "the
+          account is wrong" had nowhere to go. Shown for an ACTIVE crew too:
+          a renewal is when a mismatch most often appears, and it drops them
+          out of dispatch and the claim board with no other trace. */}
+      {crew.namedInsuredMismatch && (
+        <CompanyFix
+          vendorId={crew.id}
+          company={crew.company}
+          namedInsured={crew.coi_named_insured}
+          active={crew.status === "active"}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Correct the business name on the account when the certificate disagrees
+ * with it. Ops-only by construction — this action lives in crews-actions.ts
+ * behind assertOps, and a crew who could edit their own name would make the
+ * insurance gate self-certifying.
+ */
+function CompanyFix({
+  vendorId,
+  company,
+  namedInsured,
+  active,
+}: {
+  vendorId: string;
+  company: string | null;
+  namedInsured: string | null;
+  active: boolean;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState(company ?? "");
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    if (busy) return;
+    setBusy(true);
+    const res = await setCrewCompany(vendorId, name);
+    setBusy(false);
+    if (!res.ok) return toast(res.error ?? "That didn't go through.");
+    toast("Business name updated.");
+    setOpen(false);
+    router.refresh();
+  }
+
+  if (!open) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <p style={{ color: "var(--ink-warn)", fontSize: 12, margin: 0, flex: 1, minWidth: 200 }}>
+          {active
+            ? `The certificate names “${namedInsured ?? ""}” but this crew is “${company ?? ""}” — they're not being routed until these agree.`
+            : `The certificate names “${namedInsured ?? ""}” but this crew is “${company ?? ""}”.`}
+        </p>
+        <button className="ll-btn ghost sm" onClick={() => setOpen(true)} style={{ minHeight: 44 }}>
+          Fix the name
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form
+      onSubmit={(e) => { e.preventDefault(); save(); }}
+      style={{ display: "grid", gap: 8 }}
+    >
+      <p className="mut" style={{ fontSize: 12, margin: 0 }}>
+        If the policy is right and the account is wrong, put the legal name here.
+        If the account is right, the crew needs a certificate in that name — this
+        box won&apos;t fix that.
+      </p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={120}
+          autoFocus
+          aria-label="Business name on the account"
+          placeholder={namedInsured ?? "Legal business name"}
+          style={{
+            padding: "9px 12px", border: "1.5px solid var(--line)", borderRadius: 10,
+            fontWeight: 700, fontFamily: "inherit", color: "var(--text)",
+            background: "#fff", minHeight: 44, flex: 1, minWidth: 200,
+          }}
+        />
+        <button type="submit" className="ll-btn sm" disabled={busy} style={{ minHeight: 44 }}>
+          {busy ? "Saving…" : "Save name"}
+        </button>
+        <button
+          type="button"
+          className="ll-btn ghost sm"
+          onClick={() => { setOpen(false); setName(company ?? ""); }}
+          disabled={busy}
+          style={{ minHeight: 44 }}
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 

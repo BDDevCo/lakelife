@@ -153,3 +153,46 @@ export async function setCrewCapacity(vendorId: string, n: number): Promise<Crew
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
+
+/**
+ * CORRECT A CREW'S BUSINESS NAME — the edit three sentences already promise.
+ *
+ * `vendors.company` was written in exactly two places, both INSERTs, both
+ * invite paths, and appeared in no UPDATE anywhere. Meanwhile 0152's insurance
+ * rule compares that name to the one printed on the certificate, and a
+ * mismatch blocks activation, auto-dispatch and the claim board at once. The
+ * remedy named by named-insured.ts ("a thirty-second conversation and an edit
+ * to vendors.company"), by the crew's own message ("send us a message and
+ * we'll get it straightened out") and by the ops board ("check which is wrong
+ * before approving") had no control behind it in any of the three places.
+ *
+ * It bites hardest on the path about to get the most use: ops types the name
+ * they know a crew by — "Bob's Mowing" — while Bob's policy is issued to
+ * "Robert Klein Landscaping LLC". `inviteMyContractor` makes it likelier
+ * still, because a homeowner types whatever they call their guy.
+ *
+ * OPS-ONLY, DELIBERATELY. A crew who could rename their own business would
+ * make the insurance gate self-certifying — retype the account to whatever the
+ * certificate says and every certificate matches. named-insured.ts refuses
+ * fuzzy matching for precisely that reason; a self-serve field here would hand
+ * back the failure it was avoiding.
+ *
+ * It does NOT re-run assertRoutable. This is the fix FOR a failing gate, so
+ * gating it on the gate is the loop that made the suspended-crew COI upload
+ * unreachable. It changes one text column and nothing about status.
+ */
+export async function setCrewCompany(vendorId: string, name: string): Promise<CrewResult> {
+  const ops = await assertOps();
+  if (!ops) return { ok: false, error: "Ops only." };
+  if (!vendorId) return { ok: false, error: "No crew selected." };
+
+  // Same bound as both invite paths, so a name that can be typed in one place
+  // can be corrected in the other.
+  const company = (name ?? "").trim().slice(0, 120);
+  if (!company) return { ok: false, error: "Give the crew a business name." };
+
+  const admin = createServiceClient();
+  const { error } = await admin.from("vendors").update({ company }).eq("id", vendorId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
