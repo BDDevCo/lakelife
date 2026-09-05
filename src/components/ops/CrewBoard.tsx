@@ -4,11 +4,17 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { approveCrew, suspendCrew, reactivateCrew, setCrewCapacity, setCrewCompany, confirmCoiExpiry } from "@/app/ops/crews-actions";
-import { inviteCrew } from "@/app/ops/crews-invite";
+import { inviteCrew, resendCrewInvite } from "@/app/ops/crews-invite";
 import type { OpsCrew } from "@/app/ops/crews-data";
 
 const GROUPS: Array<{ key: OpsCrew["status"]; label: string; tone: string; blurb: string }> = [
-  { key: "invited", label: "Onboarding", tone: "warn", blurb: "Invited — waiting on documents and approval." },
+  // NOT "approval" — there isn't one. finishOnboarding's own header calls this
+  // "ZERO-OPS SELF-ACTIVATION (Phase A) ... no ops approval", and the invite
+  // card eighty lines below says the same thing back to ops: "they go live
+  // THEMSELVES — zero touch from you. This board is visibility, not a queue."
+  // Two contradictory sentences on one screen, and the one he would have acted
+  // on is the one sitting next to the crew who appears to be stuck.
+  { key: "invited", label: "Onboarding", tone: "warn", blurb: "Invited — setting themselves up. Nothing here is waiting on you." },
   { key: "active", label: "Active crews", tone: "ok", blurb: "Routable now (valid insurance on file)." },
   { key: "suspended", label: "Suspended", tone: "slate", blurb: "Off the board — not being routed." },
 ];
@@ -24,6 +30,14 @@ const TIER_PILL: Record<OpsCrew["tier"], { tone: string; label: string }> = {
   building: { tone: "teal", label: "Building" },
   new: { tone: "slate", label: "New" },
 };
+
+/** A timestamp a person reads — "3 Sep, 2:14pm". Dates in words, never ISO. */
+function prettyDateTime(ts: string | null): string {
+  if (!ts) return "at an unknown time";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "at an unknown time";
+  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
 
 function prettyDate(d: string | null): string {
   if (!d) return "—";
@@ -329,6 +343,18 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
           account is wrong" had nowhere to go. Shown for an ACTIVE crew too:
           a renewal is when a mismatch most often appears, and it drops them
           out of dispatch and the claim board with no other trace. */}
+      {/* DID THEY EVER HEAR FROM US? Three states that used to render as one.
+          Only for an invite still waiting to be claimed — a crew who has signed
+          up is past all of this. */}
+      {crew.status === "invited" && crew.contact.unclaimed && (
+        <InviteState
+          vendorId={crew.id}
+          email={crew.invite_email}
+          sentAt={crew.inviteSentAt}
+          error={crew.inviteError}
+        />
+      )}
+
       {crew.namedInsuredMismatch && (
         <CompanyFix
           vendorId={crew.id}
@@ -337,6 +363,66 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
           active={crew.status === "active"}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * WHETHER THE INVITATION ACTUALLY LEFT, and the way to send it again.
+ *
+ * The only place a failed send was ever reported is a toast, and Toast.tsx
+ * clears it after 3800ms. After that a bounced invite, a spam-foldered invite
+ * and one somebody simply hasn't opened all rendered as the same card. There
+ * was no resend, and `inviteCrew` refuses a duplicate open invite — so the only
+ * recovery was a database edit.
+ */
+function InviteState({
+  vendorId,
+  email,
+  sentAt,
+  error,
+}: {
+  vendorId: string;
+  email: string | null;
+  sentAt: string | null;
+  error: string | null;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+
+  async function resend() {
+    if (busy) return;
+    setBusy(true);
+    const res = await resendCrewInvite(vendorId);
+    setBusy(false);
+    if (!res.ok) return toast(res.error ?? "That didn't go through.");
+    toast(`Invitation sent again to ${res.email ?? email ?? "them"}. 🌊`);
+    router.refresh();
+  }
+
+  // A REFUSAL OUTRANKS A DATE. If the last attempt failed, that is the fact
+  // that decides what ops does next, whatever happened before it.
+  const line = error
+    ? `The invitation didn't send — ${error}`
+    : sentAt
+      ? `Invitation sent ${prettyDateTime(sentAt)} — nothing back yet.`
+      : // Both the never-sent case and every row that predates 0154. Saying
+        // "we can't tell" beats inventing a date, and the button is the same.
+        "We have no record this invitation was ever sent.";
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <p
+        style={{
+          fontSize: 12, margin: 0, flex: 1, minWidth: 200,
+          color: error || !sentAt ? "var(--ink-warn)" : "var(--sub)",
+        }}
+      >
+        {line}
+      </p>
+      <button className="ll-btn ghost sm" onClick={resend} disabled={busy} style={{ minHeight: 44 }}>
+        {busy ? "Sending…" : "Resend invite"}
+      </button>
     </div>
   );
 }

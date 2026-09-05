@@ -26,6 +26,15 @@ export interface OpsCrew {
   company: string | null;
   status: "invited" | "active" | "suspended";
   invite_email: string | null;
+  /**
+   * WHETHER THE INVITATION EVER LEFT (0154). NULL means it has not — including
+   * rows that predate the column, which is why the card says "date unknown"
+   * rather than inventing one. Without this, a bounced invite and one somebody
+   * simply hasn't opened render identically, forever.
+   */
+  inviteSentAt: string | null;
+  /** The last refusal, verbatim, when a send failed. */
+  inviteError: string | null;
   contact: OpsCrewContact;
   service_types: string[];
   daily_capacity: number;
@@ -72,6 +81,8 @@ interface CrewRaw {
   company: string | null;
   status: string;
   invite_email: string | null;
+  invite_sent_at: string | null;
+  invite_error: string | null;
   service_types: string[] | null;
   service_lakes: string[] | null;
   daily_capacity: number | null;
@@ -96,7 +107,8 @@ export async function getCrews(): Promise<OpsCrew[]> {
     admin
       .from("vendors")
       .select(
-        "id, company, status, invite_email, service_types, service_lakes, daily_capacity, work_days, " +
+        "id, company, status, invite_email, invite_sent_at, invite_error, " +
+        "service_types, service_lakes, daily_capacity, work_days, " +
           // Named for the same reason as the COI cron: two FKs from vendors to
         // users, so a bare users(...) is PGRST201. Unguarded this showed an
         // empty Crews tab reading "nobody invited yet"; guarded it threw.
@@ -170,6 +182,8 @@ export async function getCrews(): Promise<OpsCrew[]> {
         company: r.company ?? null,
         status,
         invite_email: r.invite_email ?? null,
+        inviteSentAt: (r.invite_sent_at as string | null) ?? null,
+        inviteError: (r.invite_error as string | null) ?? null,
         contact: {
           name: u?.name ?? null,
           email: (u?.email ?? r.invite_email) ?? null,

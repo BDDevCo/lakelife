@@ -94,21 +94,54 @@ export async function inviteCrew(input: {
   if (insErr) return { ok: false, error: insErr.message };
 
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  const sent = await sendInvitation(admin, { company, email, site });
+
+  // THE SEND USED TO BE `void`ed, WHICH STOPPED BEING SAFE AT 0126. The invite
+  // IS the email — the crew row is unreachable until somebody signs in with
+  // that address — so a refused send leaves an invite nobody can claim and an
+  // ops screen saying "invited". Worse, the row now blocks a second attempt:
+  // inviteCrew above refuses a duplicate open invite. Ops has to hear it here
+  // or not at all.
+  //
+  // AND NOW IT IS WRITTEN DOWN (0154). The toast above was the only place this
+  // was ever said, and Toast.tsx clears it after 3800ms — after which a bounced
+  // invite and an ignored one looked identical on the board forever.
+  await stampInvite(admin, email, sent);
+  if (!sent.ok) {
+    return {
+      ok: true,
+      warning: `Crew added, but the invite email didn't send (${sent.error ?? "unknown"}). Send them the link yourself: ${site} — or press Resend on their card.`,
+    };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * THE INVITATION ITSELF — built once, so the first send and every resend say
+ * the same thing. Two copies would be two sets of promises to keep true, and
+ * the copy corrections below would have to be made twice.
+ */
+async function sendInvitation(
+  admin: ReturnType<typeof createServiceClient>,
+  { company, email, site }: { company: string; email: string; site: string },
+): Promise<{ ok: boolean; error?: string }> {
   // Lake list is DYNAMIC — an invite sent the day a new lake launches must
   // name it. Fixtures excluded by lakes.is_fixture (0124): this list goes out
   // in a real email to a real crew, so a scratch lake here is not a cosmetic
   // slip, it is a fake place named in correspondence.
   const lakeRes = await admin
     .from("lakes").select("name").eq("is_fixture", false).order("name");
-  // Soft on purpose: the vendors row is already inserted above, so refusing here
-  // would leave an invite nobody can claim (see the send comment below). The
-  // fallback names no place that doesn't exist — but it logs, because "your
-  // local lakes" going out in real correspondence is worth knowing about.
+  // Soft on purpose: the vendors row is already inserted by the caller, so
+  // refusing here would leave an invite nobody can claim. The fallback names no
+  // place that doesn't exist — but it logs, because "your local lakes" going
+  // out in real correspondence is worth knowing about.
   if (lakeRes.error) console.error("[read failed, degraded] the lakes named in the invite email:", lakeRes.error);
   const shortNames = (lakeRes.data ?? []).map((l) => (l.name as string).replace(/ Lake$/, ""));
   const lakeList = shortNames.length > 1
     ? `${shortNames.slice(0, -1).join(", ")} &amp; ${shortNames[shortNames.length - 1]}`
     : shortNames[0] ?? "your local lakes";
+
   // BOTH DOORS, AND NO CLOCK ON THE MONEY.
   //
   // This paragraph used to say "your day's stops arrive by text, in drive
@@ -122,36 +155,106 @@ export async function inviteCrew(input: {
   // And "the moment" was a promise about timing. Photo verification really
   // does release the payout — that is the crew's protection and it is worth
   // saying — but the money moves in a batch, and no money can move at all
-  // until the processor is live. So the sentence now describes what photo
+  // until the processor is live. So the sentence describes what photo
   // verification DOES, and dates nothing.
-  const sent = await sendEmail({
+  //
+  // THE THIRD STEP USED TO SAY "LakeLife reviews and jobs start routing."
+  // There is no review. finishOnboarding's own header calls this "ZERO-OPS
+  // SELF-ACTIVATION (Phase A) — the crew flips THEMSELVES from 'invited' to
+  // 'active' ... no ops approval", and the Crews board says the same back to
+  // ops: "they go live THEMSELVES — zero touch from you." So the sentence
+  // invented a queue and sat the crew in it, waiting for something nobody was
+  // going to do. It also named three steps while five gate go-live — the lakes
+  // and the daily number were never mentioned at all, and neither was the
+  // button. A crew who does every step in this list is still not live.
+  return sendEmail({
     to: email,
     subject: `${company} — you're invited to LakeLife crews`,
     html: `<p>Hi ${company},</p>
 <p>LakeLife routes lake-home jobs on ${lakeList} to trusted local crews. Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice.</p>
-<p><b>Getting started takes 3 steps:</b></p>
+<p><b>You set yourself up — there's no queue and nobody to wait for:</b></p>
 <ol>
 <li>Create your account at <a href="${site}">${site}</a> — use THIS email address (${email}).</li>
 <li>Upload your insurance certificate (COI) and W-9.</li>
-<li>Tell us what work you do — LakeLife reviews and jobs start routing.</li>
+<li>Tell us what work you do, which lakes you cover, and how many jobs a day you can take.</li>
+<li>Set what you charge for each kind of work — we never offer you a job you haven't priced.</li>
+<li>Tap <b>Go live</b>. Jobs start reaching you from that moment.</li>
 </ol>
 <p>No insurance on file, no jobs — it's how we keep every dock covered. 🌊</p>`,
   });
+}
 
-  // THE SEND USED TO BE `void`ed, WHICH STOPPED BEING SAFE AT 0126. The invite
-  // IS the email — the crew row is unreachable until somebody signs in with
-  // that address — so a refused send leaves an invite nobody can claim and an
-  // ops screen saying "invited". Worse, the row now blocks a second attempt:
-  // inviteCrew above refuses a duplicate open invite. Ops has to hear it here
-  // or not at all.
-  if (!sent.ok) {
-    return {
-      ok: true,
-      warning: `Crew added, but the invite email didn't send (${sent.error ?? "unknown"}). Send them the link yourself: ${site}`,
-    };
+/**
+ * Write down what happened to the invitation (0154). NULL invite_sent_at means
+ * it has never left our hands, which is what lets the board tell a bounced
+ * invite from one somebody simply hasn't opened.
+ *
+ * DELIBERATELY NOT FATAL. The email has already gone (or already failed) by the
+ * time this runs, and failing the action over the bookkeeping would report
+ * "invite not sent" about one sitting in the crew's inbox. It logs instead.
+ */
+async function stampInvite(
+  admin: ReturnType<typeof createServiceClient>,
+  email: string,
+  sent: { ok: boolean; error?: string },
+): Promise<void> {
+  const patch = sent.ok
+    ? { invite_sent_at: new Date().toISOString(), invite_error: null }
+    : { invite_error: (sent.error ?? "unknown").slice(0, 500) };
+  const { error } = await admin
+    .from("vendors").update(patch).eq("invite_email", email).is("user_id", null);
+  if (error) console.error("[write failed] recording the invite send for", email, error);
+}
+
+export interface ResendResult {
+  ok: boolean;
+  error?: string;
+  /** The address it went to, for the confirmation. */
+  email?: string;
+}
+
+/**
+ * SEND THE INVITATION AGAIN — the recovery that did not exist.
+ *
+ * `inviteCrew` refuses a duplicate open invite, which is right and is exactly
+ * what made a failed send a dead end: the only way through was a database edit.
+ * This is the same email to the same still-open row, so the duplicate guard
+ * stays untouched.
+ *
+ * ONLY A STILL-OPEN INVITE. `.is("user_id", null)` on the lookup: a crew who
+ * has signed up does not need an invitation, and re-sending one to somebody
+ * already working reads as us having lost track of them.
+ */
+export async function resendCrewInvite(vendorId: string): Promise<ResendResult> {
+  const ops = await assertOps();
+  if (!ops) return { ok: false, error: "Ops only." };
+  if (!vendorId) return { ok: false, error: "No crew selected." };
+
+  const admin = createServiceClient();
+  const res = await admin
+    .from("vendors")
+    .select("id, company, invite_email")
+    .eq("id", vendorId)
+    .is("user_id", null)
+    .maybeSingle();
+  // "They've already signed up" is a claim about the crew's account, and a
+  // dropped read has no standing to make it — ops would stop chasing somebody
+  // who never heard from us.
+  if (res.error) return { ok: false, error: readFailedMessage("that crew's invite", res.error) };
+  const v = res.data;
+  if (!v) return { ok: false, error: "That crew has already signed up — nothing to resend." };
+  const email = (v.invite_email as string | null) ?? "";
+  if (!EMAIL_RE.test(email)) {
+    return { ok: false, error: "There's no valid email on that invite — add the crew again with the right address." };
   }
 
-  return { ok: true };
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  const sent = await sendInvitation(admin, { company: (v.company as string) ?? "there", email, site });
+  await stampInvite(admin, email, sent);
+  if (!sent.ok) {
+    return { ok: false, error: `Still couldn't send it (${sent.error ?? "unknown"}). Send them this link yourself: ${site}` };
+  }
+  return { ok: true, email };
 }
 
 /**

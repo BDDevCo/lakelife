@@ -125,7 +125,10 @@ describe("an invitation IS the email, so a refused send may never read as sent",
           `vendors row nobody can claim, and the duplicate-invite guard makes ` +
           `the retry impossible. Await it and say so.`,
       ).not.toMatch(/void\s+sendEmail\(/);
-      expect(src, "the send result is never looked at").toMatch(/(const|let)\s+\w+\s*=\s*await sendEmail\(/);
+      // Bound to a name, or returned to a caller that binds it. What must never
+      // happen is the result going nowhere.
+      expect(src, "the send result is never looked at")
+        .toMatch(/(const|let)\s+\w+\s*=\s*await send(Email|Invitation)\(|return sendEmail\(/);
     });
   }
 
@@ -134,5 +137,74 @@ describe("an invitation IS the email, so a refused send may never read as sent",
       expect(read(file), `${file} no longer guards duplicate invites`)
         .toMatch(/open invite/i);
     }
+  });
+});
+
+describe("an invite that never arrived can be told apart, and sent again", () => {
+  /**
+   * THE INVITATION IS THE EMAIL, AND THERE WAS NO RECORD THAT IT WENT.
+   *
+   * `inviteCrew` inserts an unclaimed vendors row and mails a join link. The
+   * row is unreachable until somebody signs in with that exact address, so a
+   * refused send — a bounce, a typo'd domain, a fixture recipient, Resend down
+   * — leaves an invite nobody can claim.
+   *
+   * The only place that was ever said is a toast, and Toast.tsx clears it after
+   * 3800ms. After that, a bounced invite, a spam-foldered invite and one
+   * somebody simply hasn't opened all render identically on the Crews board:
+   * "Invited — waiting on documents and approval", "hasn't signed up yet".
+   *
+   * And it could not be sent again: `inviteCrew` refuses a duplicate open
+   * invite, which is correct and is exactly what makes the missing resend a
+   * dead end. The only recovery was a database edit — on the board that exists
+   * to onboard crews, in the month he starts onboarding crews.
+   *
+   * 0154 adds invite_sent_at (NULL = never left our hands) and invite_error
+   * (the last refusal, verbatim), plus the resend that acts on them.
+   */
+  const invite = read("app/ops/crews-invite.ts");
+  const board = read("components/ops/CrewBoard.tsx");
+  const data = read("app/ops/crews-data.ts");
+
+  it("records WHEN a send actually succeeded", () => {
+    expect(invite, "nothing writes invite_sent_at, so the board cannot date an invite")
+      .toMatch(/invite_sent_at/);
+  });
+
+  it("and keeps the refusal, rather than only flashing it in a toast", () => {
+    expect(invite, "a failed send leaves no trace once the toast clears")
+      .toMatch(/invite_error/);
+  });
+
+  it("offers a resend, which is the whole point of knowing", () => {
+    expect(invite).toMatch(/export async function resendCrewInvite/);
+    const fn = invite.match(/export async function resendCrewInvite[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn, "resendCrewInvite not found — this scan is measuring nothing").not.toBe("");
+    expect(fn, "an ops action that does not assert ops").toMatch(/assertOps\(\)/);
+    expect(fn, "a resend must only ever go to a still-open invite").toMatch(/is\("user_id", null\)/);
+  });
+
+  it("builds ONE invitation, so the resend cannot drift from the first send", () => {
+    // Two copies of this email would be two sets of promises to keep true, and
+    // the copy fixes above would have to be made twice.
+    expect(invite).toMatch(/function sendInvitation/);
+    expect(
+      (invite.match(/stops come to you in drive order/g) ?? []).length,
+      "the invitation body appears more than once — the resend will drift",
+    ).toBe(1);
+  });
+
+  it("the board reads both columns, or the resend has nothing to act on", () => {
+    const select = data.match(/"id, company, status, invite_email[^"]*"/)?.[0] ?? "";
+    expect(select, "the crews select is gone — this scan is stale").not.toBe("");
+    expect(select, "a card that cannot say whether the invite ever left")
+      .toMatch(/invite_sent_at/);
+    expect(select).toMatch(/invite_error/);
+  });
+
+  it("and the card actually says which of the three states it is in", () => {
+    expect(board).toMatch(/resendCrewInvite\(/);
+    expect(board, "the board never distinguishes 'never sent' from 'sent and quiet'")
+      .toMatch(/inviteSentAt/);
   });
 });

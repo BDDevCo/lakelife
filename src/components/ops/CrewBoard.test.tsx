@@ -8,12 +8,16 @@ vi.mock("@/app/ops/crews-actions", () => ({
   approveCrew: async () => ({ ok: true }), suspendCrew: async () => ({ ok: true }),
   reactivateCrew: async () => ({ ok: true }), setCrewCapacity: async () => ({ ok: true }),
 }));
-vi.mock("@/app/ops/crews-invite", () => ({ inviteCrew: async () => ({ ok: true }) }));
+vi.mock("@/app/ops/crews-invite", () => ({
+  inviteCrew: async () => ({ ok: true }),
+  resendCrewInvite: async () => ({ ok: true }),
+}));
 
 const { CrewBoard } = await import("./CrewBoard");
 
 const crew = (over: Partial<OpsCrew> = {}): OpsCrew => ({
   id: "v1", company: "Shoreline Docks", status: "active", invite_email: null,
+  inviteSentAt: null, inviteError: null,
   contact: { name: "Dale", email: "d@x.co", phone: "+12605550100", unclaimed: false },
   service_types: ["Pier install / removal"], daily_capacity: 5, work_days: ["mon"],
   coi_expiry: "2027-01-01", coiState: "ok",
