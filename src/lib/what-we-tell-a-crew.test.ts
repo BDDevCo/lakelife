@@ -208,3 +208,48 @@ describe("an invite that never arrived can be told apart, and sent again", () =>
       .toMatch(/inviteSentAt/);
   });
 });
+
+describe("a truck with its own number still reaches its crew", () => {
+  /**
+   * THE COPY I SHIPPED THIS MORNING SAYS "by email and text". THIS PATH MADE
+   * THAT FALSE.
+   *
+   * The route build sends each truck its day. `crew_units` carries a `phone`
+   * and no email column, so the code chose:
+   *
+   *     const email = tp.truck.phone ? null : vendorContact.email;
+   *
+   * — and said so in its own comment: "Where it doesn't, the route still rides
+   * the dead channel alone." A crew who names a truck and gives it a number
+   * therefore gets their stops by SMS ONLY, and SMS has delivered 0 of 81 since
+   * 19 July. They get nothing at all.
+   *
+   * The truck's own number is still the right PRIMARY — that is the driver who
+   * is actually going out. But the company's email is a backstop that costs
+   * nothing and is the only door currently delivering, and the vendor owns
+   * every truck on their account, so it is their mail either way.
+   *
+   * `crew_units` holds 0 rows in production, so nobody has been bitten. The
+   * first crew Brendon onboards for The Haven who adds a truck would be.
+   */
+  const src = read("lib/automation.ts");
+
+  it("does not drop the email door when a truck has its own phone", () => {
+    expect(
+      src,
+      "a truck with its own number is sent its route on the dead channel alone",
+    ).not.toMatch(/const email = tp\.truck\.phone \? null : vendorContact\.email/);
+  });
+
+  it("still sends to the truck's own number when it has one", () => {
+    // The fix must not quietly reroute the driver's text to the office.
+    expect(src).toMatch(/tp\.truck\.phone \?\? vendorContact\.phone/);
+  });
+
+  it("and the crew's email is what the route falls back to", () => {
+    const block = src.match(/const phone = tp\.truck\.phone[\s\S]{0,600}?notify\(/)?.[0] ?? "";
+    expect(block, "the truck-route send block moved — this scan is stale").not.toBe("");
+    expect(block, "vendorContact.email is never reached on the truck path")
+      .toMatch(/vendorContact\.email/);
+  });
+});

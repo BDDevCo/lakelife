@@ -288,11 +288,23 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
       routes++; stops += tp.ordered.length; trucks++;
       if (!tp.fitsHours) hoursBust++;
       const phone = tp.truck.phone ?? vendorContact.phone;
-      // A truck with its OWN number is its own crew, and crew_units holds no
-      // email address — so the second door exists only where this falls back
-      // to the vendor's own number. Where it doesn't, the route still rides
-      // the dead channel alone and `notify` is what says so out loud.
-      const email = tp.truck.phone ? null : vendorContact.email;
+      // BOTH DOORS, ALWAYS — this used to be
+      //   `tp.truck.phone ? null : vendorContact.email`
+      // and its own comment admitted the consequence: "the route still rides
+      // the dead channel alone." A crew who names a truck and gives it a number
+      // got their stops by SMS only, and SMS has delivered 0 of 81 since 19
+      // July. They received nothing, on the one message that decides whether
+      // they make money that day — while the invitation promises their stops
+      // arrive "by email and text".
+      //
+      // The truck's own number stays the PRIMARY, above: that is the driver
+      // actually going out, and this must never reroute their text to the
+      // office. The company address is a backstop that costs nothing, is the
+      // only door currently delivering, and is the vendor's own mail either way
+      // — they own every truck on the account. `crew_units` has no email column
+      // of its own; when it gets one, prefer it here and keep this as the
+      // fallback.
+      const email = vendorContact.email;
       if (phone || email) {
         let msg = `LakeLife route for ${prettyDate(date)} — ${tp.truck.name}: ${tp.ordered.length} stops, ~${tp.driveMinutes} min drive.${mapUrl ? " Map: " + mapUrl : ""} 🌊`;
         if (!tp.fitsHours) msg += " Heads up: this day runs past your hours — tap Availability to adjust.";
