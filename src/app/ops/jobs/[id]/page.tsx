@@ -84,8 +84,17 @@ function payoutStatusLine(status: string): string {
     // `openDispute ? "held" : job.vendor_cost != null ? "released" : "pending"`
     // — so pending means we have no vendor_cost and don't know what to pay.
     // And settleJob only runs on a job already complete/paid, which completeJob
-    // refuses to set until photoCount >= minPhotos. So a payout row existing at
-    // all proves the gate passed; the same page prints "gate clear" beside it.
+    // refuses to set until photoCount >= minPhotos.
+    //
+    // NOT "a payout row existing at all proves the gate passed", which is what
+    // this said and is false. settleJob is not the only writer of a released
+    // payout: the late-cancellation step (automation.ts, retryCancellationFees)
+    // inserts one for a CANCELLED job — the crew's proportional share of the
+    // 25% fee — and no work was done, so there are no photos and none are owed.
+    // Rule 2 is about paying for WORK; that row is compensation for a lost
+    // slot. The claim only holds for SETTLEMENT payouts, and a reader who
+    // believed the wider version would be entitled to stop checking the count.
+    // The line further down prints the real count either way.
     // Ops went chasing photos already on file instead of setting the missing
     // crew cost, and the payout kept missing every month-end batch.
     case "pending": return "pending — no crew cost recorded on this job yet, so there's nothing to pay out";
