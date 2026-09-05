@@ -10,6 +10,7 @@ import { AvailabilityGrid, type DayRow, type SlotStatus } from "./AvailabilityGr
 import { SLOT_TIMES } from "./slots";
 import { WorkDayChips } from "./WorkDayChips";
 import { MyLakesEditor } from "@/components/MyLakesEditor";
+import { MyServicesEditor } from "@/components/MyServicesEditor";
 import { VendorStorage } from "@/components/VendorStorage";
 import { MyTrucks } from "@/components/MyTrucks";
 import { getMyTrucks } from "@/app/vendor/trucks-data";
@@ -51,11 +52,12 @@ export default async function VendorAvailabilityPage() {
     "your crew profile",
     await supabase
       .from("vendors")
-      .select("work_days, service_lakes, storage_capacity_feet, storage_types, garagekeepers_url, garagekeepers_expiry")
+      .select("work_days, service_types, service_lakes, storage_capacity_feet, storage_types, garagekeepers_url, garagekeepers_expiry")
       .eq("id", vendorId)
       .maybeSingle(),
   );
   const workDays: string[] = (vendor?.work_days as string[] | null) ?? [];
+  const serviceTypes: string[] = (vendor?.service_types as string[] | null) ?? [];
   const serviceLakes: string[] = (vendor?.service_lakes as string[] | null) ?? [];
   const storageCapacityFeet: number = (vendor?.storage_capacity_feet as number | null) ?? 0;
   const storageTypes: string[] = (vendor?.storage_types as string[] | null) ?? [];
@@ -66,6 +68,20 @@ export default async function VendorAvailabilityPage() {
   const admin = createServiceClient();
   const lakeRows = mustRead("the lake list", await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name"));
   const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
+
+  // And every kind of work, for the "Work I do" editor. `park_only` rides
+  // along so the editor can separate a park's common ground from a lake
+  // home's — the catalogue holds "Lawn mowing & trim" AND "Park grounds
+  // mowing & trim", and a crew who taps the wrong one is silently invisible
+  // to every job of the other kind.
+  const svcRows = mustRead(
+    "the service list",
+    await admin.from("services").select("name, park_only").eq("active", true).order("name"),
+  );
+  const services = (svcRows ?? []).map((s) => ({
+    name: s.name as string,
+    parkOnly: s.park_only === true,
+  }));
 
   // The next 5 days the vendor actually works, starting today (lake time).
   const today = todayLakeDate();
@@ -133,6 +149,17 @@ export default async function VendorAvailabilityPage() {
           ) : (
             <AvailabilityGrid days={rows} />
           )}
+        </section>
+
+        <section style={{ marginTop: 28 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>Work I do</h2>
+          <div className="ll-card ll-card-pad">
+            <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
+              You&apos;re only ever offered work you&apos;ve ticked here. Changes take
+              effect on tomorrow&apos;s dispatch.
+            </p>
+            <MyServicesEditor services={services} selected={serviceTypes} />
+          </div>
         </section>
 
         <section style={{ marginTop: 28 }}>
