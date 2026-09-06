@@ -73,9 +73,23 @@ export function paymentsAreLive(): boolean {
  */
 export const NO_PROCESSOR_REASON = "no_processor" as const;
 
+/**
+ * NOT A DECLINE — A NON-ATTEMPT, and it has to say so.
+ *
+ * Every caller read this as the bank refusing: settleJob filed a `payments`
+ * row with `status: "failed"`, and the nightly emailed the customer "Your card
+ * on file was declined." Nobody asked their card. Worse, the retry cap counts
+ * those rows, so five nights of a processor that does not exist capped the
+ * invoice and it could never settle again — the work done, the money
+ * unreachable even after a real processor is wired in.
+ *
+ * `reason` is what lets a caller tell the two apart. It was already named
+ * below and read by nobody.
+ */
 const declined: ChargeResult = {
   ok: false,
   error: "No payment processor is connected yet, so nothing was charged.",
+  reason: NO_PROCESSOR_REASON,
 };
 
 /**

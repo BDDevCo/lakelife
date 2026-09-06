@@ -4,7 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { todayLakeDate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
-import { takePayment, chargeKey } from "@/lib/charge-gate";
+import { takePayment, NO_PROCESSOR_REASON, chargeKey } from "@/lib/charge-gate";
 import { crewShareOfFee } from "@/lib/cancellation";
 import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge } from "@/lib/automation";
@@ -166,6 +166,12 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
         description: statementDescriptor("visit_fee"),
         idempotencyKey: chargeKey("visit_fee", invoice.id as string, declinesRes.count ?? 0),
       });
+      // A NON-ATTEMPT IS NOT A DECLINE (see charge-gate). With no processor
+      // connected nobody's card was asked, so there is no attempt to file and
+      // nothing to blame them for.
+      if (!charge.ok && charge.reason === NO_PROCESSOR_REASON) {
+        return { ok: false, error: "Card payments aren't switched on yet — nothing was charged, and the fee is still proposed." };
+      }
       const { error: payErr } = await admin.from("payments").insert({
         invoice_id: invoice.id, amount,
         status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null,

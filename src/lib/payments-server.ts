@@ -52,6 +52,12 @@ export interface ChargeResult {
   error?: string;
   ref?: string;
   amountCents?: number;
+  /**
+   * WHY it failed, when the answer is not "the bank said no". Set only by the
+   * gate, and only to NO_PROCESSOR_REASON — a caller that sees it knows no
+   * card was ever asked, so there is no attempt to record and nobody to blame.
+   */
+  reason?: "no_processor";
 }
 
 /**

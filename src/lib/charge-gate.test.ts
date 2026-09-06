@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { paymentsAreLive, chargeKey } from "./charge-gate";
+import { paymentsAreLive, chargeKey, takePayment, NO_PROCESSOR_REASON } from "./charge-gate";
 
 /**
  * A MOCK MUST NEVER CREDIT A BILL.
@@ -389,5 +389,80 @@ describe("real processor keys never ship to the browser", () => {
       return /^\s*["']use client["']/.test(s) && /payments-server/.test(s);
     }).map(rel);
     expect(offenders, "a client import puts the processor's keys in the browser bundle").toEqual([]);
+  });
+});
+
+describe("a decline nobody asked for is not a decline", () => {
+  /**
+   * THE GATE'S REFUSAL IS NOT A CARD'S REFUSAL, AND EVERY CALLER TREATED IT
+   * AS ONE.
+   *
+   * With no processor connected `takePayment` returns `{ok: false}`. settleJob
+   * reads that exactly as it reads a bank saying no: it writes a `payments`
+   * row with `status: "failed"`, leaves the invoice due, and the nightly then
+   * emails the customer "Your card on file was declined."
+   *
+   * Nobody asked their card. There is no processor to ask.
+   *
+   * And the lie compounds. `reconcileUnsettledJobs` counts `failed` rows to
+   * decide when to stop retrying; at five it caps the invoice and never settles
+   * it again. So a job completed at The Haven between today and go-live earns
+   * five phantom declines, sends the customer five emails blaming their card,
+   * and then becomes permanently uncollectable — the work done, the money
+   * unreachable even after a real processor is wired in.
+   *
+   * `NO_PROCESSOR_REASON` has been exported for exactly this distinction since
+   * the gate was written, and a grep across src found NO caller reading it —
+   * this repo's own "a column with no reader" shape, sitting on the money path.
+   *
+   * The fix is at the WRITE, not the wording: with no processor there is no
+   * attempt, so there is no attempt to record.
+   */
+  it("says WHY it refused, so a caller can tell the two apart", async () => {
+    const before = process.env.LAKELIFE_PAYMENTS_LIVE;
+    delete process.env.LAKELIFE_PAYMENTS_LIVE;
+    const res = await takePayment({ token: "tok_x", amountCents: 1000 });
+    if (before !== undefined) process.env.LAKELIFE_PAYMENTS_LIVE = before;
+    expect(res.ok).toBe(false);
+    expect(
+      res.reason,
+      "the gate refuses without saying it was the gate, so every caller has to " +
+        "guess — and they all guess 'the card said no'",
+    ).toBe(NO_PROCESSOR_REASON);
+  });
+
+  it("and a real decline carries no such reason", async () => {
+    // Only the absence of a processor gets the marker. A bank's refusal is a
+    // refusal and must keep reading like one.
+    const before = process.env.LAKELIFE_PAYMENTS_LIVE;
+    process.env.LAKELIFE_PAYMENTS_LIVE = "true";
+    const res = await takePayment({ token: "tok_declineme", amountCents: 1000 });
+    if (before === undefined) delete process.env.LAKELIFE_PAYMENTS_LIVE;
+    else process.env.LAKELIFE_PAYMENTS_LIVE = before;
+    expect(res.reason).toBeUndefined();
+  });
+
+  it("no charge path records a failed payment for a charge nobody attempted", () => {
+    // THE CLASS, not the instance. Both settle doors write
+    // `status: charge.ok ? "captured" : "failed"`, and a third would too.
+    // Every one of them must first ask whether anybody was asked.
+    const offenders: string[] = [];
+    for (const f of ["src/lib/automation.ts", "src/app/requests/actions.ts", "src/app/ops/recovery-actions.ts"]) {
+      const src = code(f);
+      const writes = (src.match(/status: charge\.ok \? "captured" : "failed"/g) ?? []).length;
+      if (!writes) continue;
+      // THE GUARD EXPRESSION, not the symbol. Matching NO_PROCESSOR_REASON
+      // anywhere in the file passes on the IMPORT LINE alone — I proved that
+      // by deleting a guard and watching this stay green. One guard per
+      // failed-row writer, counted.
+      const guards = (src.match(/charge\.reason === NO_PROCESSOR_REASON/g) ?? []).length;
+      if (guards < writes) offenders.push(`${f} (${writes} write(s), ${guards} guard(s))`);
+    }
+    expect(
+      offenders,
+      "these write a 'failed' payment row without ever asking whether a " +
+        "processor exists, so the gate's own refusal is filed as the customer's " +
+        "card being declined — and five of them cap the invoice forever.",
+    ).toEqual([]);
   });
 });

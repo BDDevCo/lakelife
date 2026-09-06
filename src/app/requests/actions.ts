@@ -9,7 +9,7 @@ import { suggestTip, validateTip, tipSplit, canTip, tipDaysLeft } from "@/lib/ti
 import { revalidatePath } from "next/cache";
 import { autoAssignJob } from "@/app/book/dispatch";
 import { getAvailability } from "@/app/book/actions";
-import { takePayment, chargeKey } from "@/lib/charge-gate";
+import { takePayment, NO_PROCESSOR_REASON, chargeKey } from "@/lib/charge-gate";
 import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge, alertOpsCrewUnpaid } from "@/lib/automation";
 import { notify } from "@/lib/notify";
@@ -330,6 +330,12 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
         description: statementDescriptor("cancel_fee"),
         idempotencyKey: chargeKey("cancel_fee", invoice.id as string, declines),
       });
+      // A NON-ATTEMPT IS NOT A DECLINE (see charge-gate). With no processor
+      // connected nobody's card was asked, so there is no attempt to file and
+      // nothing to blame them for.
+      if (!charge.ok && charge.reason === NO_PROCESSOR_REASON) {
+        return { ok: false, error: "Card payments aren't switched on yet — nothing was charged. The office can take this one." };
+      }
       const { error: payErr } = await admin.from("payments").insert({
         invoice_id: invoice.id, amount: q.fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null,
       });
@@ -883,6 +889,14 @@ export async function addTip(
     idempotencyKey: chargeKey("tip", jobId, failedRes.count ?? 0),
   });
 
+  // A NON-ATTEMPT IS NOT A DECLINE. The claim above is released by the
+  // declined branch, so the visit is free to be tipped again once a processor
+  // exists — filing a phantom `failed` row here would leave the tip looking
+  // attempted and refused.
+  if (!charge.ok && charge.reason === NO_PROCESSOR_REASON) {
+    await releaseClaim();
+    return { ok: false, error: "Card payments aren't switched on yet, so nothing was charged." };
+  }
   const { error: payErr } = await admin.from("payments").insert({
     tip_job_id: jobId,
     amount: v.amount,

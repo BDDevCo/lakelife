@@ -3,7 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { notify } from "@/lib/notify";
 import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
-import { takePayment, chargeKey } from "@/lib/charge-gate";
+import { takePayment, NO_PROCESSOR_REASON, chargeKey } from "@/lib/charge-gate";
 import { crewShareOfFee } from "@/lib/cancellation";
 import { statementDescriptor } from "@/lib/descriptor";
 import { revalidateJob } from "@/app/book/dispatch";
@@ -875,6 +875,15 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
           description: statementDescriptor("service"),
           idempotencyKey: chargeKey("service", invoice.id as string, declines ?? 0),
         });
+        // A NON-ATTEMPT IS NOT A DECLINE. With no processor connected the gate
+        // refuses without asking anybody, and filing that as a `failed` payment
+        // told the customer their card was declined AND burned one of the five
+        // retries that cap this invoice forever. Record nothing, leave the
+        // invoice due, and let the run's own notes carry it to ops.
+        if (!charge.ok && charge.reason === NO_PROCESSOR_REASON) {
+          notes.push(`Job ${jobId}: no payment processor is connected, so nothing was attempted — the invoice stays due and no card was blamed.`);
+          return { ok: true, invoiced: true, charged: false, notes };
+        }
         const { error: payErr } = await admin.from("payments").insert({
           invoice_id: invoice.id,
           amount: cashDue,
@@ -1564,6 +1573,12 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
       // THE INSERT'S RESULT WAS THROWN AWAY ENTIRELY: no error captured, no
       // alert, and the next line flipped the invoice to paid regardless. A
       // real charge with no row behind it, on the one path nobody watches.
+      // Same non-attempt rule as settleJob above: no processor, no attempt,
+      // nothing to file, and no email blaming a card nobody asked.
+      if (!charge.ok && charge.reason === NO_PROCESSOR_REASON) {
+        skipped.push(`Job ${j.id}: no payment processor is connected, so the cancellation fee was not attempted.`);
+        continue;
+      }
       const { error: payErr } = await admin.from("payments").insert({ invoice_id: inv.id, amount: fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null });
       if (charge.ok && payErr) {
         // Money left the customer and nothing records it. The invoice stays
