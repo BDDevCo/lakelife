@@ -14,6 +14,17 @@ export interface RefundablePayment {
   method: string | null;
   reference: string | null;
   reversed_at: string | null;
+  /**
+   * The bank pulled this money back. NOT `returned_on`, which is a security
+   * deposit handed back to a departing tenant (0102) — the two names are one
+   * letter apart and mean opposite things, so they are never both read here.
+   *
+   * Optional because the guard that actually holds is 0155's, inside
+   * `guard_park_refund`. This is the sentence a person reads instead of a
+   * constraint name, and it only reaches them once `refundableOn` selects the
+   * column — until then it is undefined and this test is simply skipped.
+   */
+  returned_at?: string | null;
 }
 
 /** Only the parts of a refund row the remaining maths depends on. */
@@ -66,6 +77,13 @@ export function remainingRefundable(
  * so "already reversed" never surfaces as "wrong payment method".
  */
 export function refundRefusal(pay: RefundablePayment, left: Remaining): string | null {
+  // A RETURN IS NOT A REFUND, AND IT COMES FIRST. An ACH debit can succeed and
+  // then be pulled back by the bank days later. Refunding it would send the
+  // money out a second time, out of the park's own account, against a debit
+  // that never settled. 0155's guard refuses the row; this is the sentence.
+  if (pay.returned_at) {
+    return "The bank took that payment back, so it never settled — there is nothing to send back, and sending it would be the park's own money.";
+  }
   if (pay.reversed_at) {
     return "That payment is recorded as never having arrived, so there is nothing to send back.";
   }
@@ -78,7 +96,11 @@ export function refundRefusal(pay: RefundablePayment, left: Remaining): string |
     // tell the processor which charge to reverse.
     return "That payment has no processor reference, so we cannot ask the processor to return it. Ring them with the receipt number.";
   }
-  if (left.amount <= 0) {
+  // BOTH HALVES, NOT JUST THE RENT. The surcharge is separate money charged on
+  // top (0109), so a payment whose rent has all gone back can still owe its fee
+  // — and a household surcharged in error on a debit card, which network rules
+  // forbid, has nothing else left to be made whole with.
+  if (left.amount <= 0 && left.fee <= 0) {
     return "All of that payment has already gone back.";
   }
   return null;
@@ -96,13 +118,25 @@ export function refundAmountRefusal(
   feeAmount: number,
   left: Remaining,
 ): string | null {
-  if (!Number.isFinite(amount) || amount <= 0) {
+  // ZERO RENT IS A REAL REFUND WHEN THE FEE IS NOT ZERO.
+  //
+  // A wrongly-applied 3% surcharge is refunded on its own: the rent was right
+  // and stays put. The old rule refused any amount of 0, so the only way to
+  // return a surcharge was to return rent with it — which would have been a
+  // second error, undoing a charge nobody disputed.
+  //
+  // What stays refused is a refund that moves nothing (both zero) and a
+  // NEGATIVE rent, which is a charge wearing a refund's clothes. The finite
+  // check on the fee is left to its own rule below, so `0` rent with a
+  // mistyped fee is told which field is wrong.
+  const feeIsNumber = Number.isFinite(feeAmount);
+  if (!Number.isFinite(amount) || amount < 0 || (feeIsNumber && amount + feeAmount <= 0)) {
     return "Enter how much to send back.";
   }
   if (round2(amount) > left.amount) {
     return `That's more than is left on this payment — at most $${left.amount.toFixed(2)} can still go back.`;
   }
-  if (!Number.isFinite(feeAmount) || feeAmount < 0) {
+  if (!feeIsNumber || feeAmount < 0) {
     return "The card fee to return has to be a number, or nothing.";
   }
   if (round2(feeAmount) > left.fee) {
@@ -127,9 +161,23 @@ export function refundCents(amount: number, feeAmount: number): number {
 
 /** What the office is told once the money is on its way. */
 export function refundSignal(amount: number, feeAmount: number, hasCharge: boolean): string {
-  const fee = feeAmount > 0 ? ` plus $${feeAmount.toFixed(2)} of card fee` : "";
+  // A FEE-ONLY REFUND IS NOT "$0.00 PLUS $12.00". That sentence reads as a bug
+  // to the person who just pressed the button, and it is the one they will
+  // quote to the household. Say what actually went back.
+  const what =
+    amount <= 0
+      ? `$${feeAmount.toFixed(2)} card fee`
+      : `$${amount.toFixed(2)}${feeAmount > 0 ? ` plus $${feeAmount.toFixed(2)} of card fee` : ""}`;
+  // AND THE BILL DID NOT MOVE. `recompute_charge_paid` subtracts
+  // `park_refunds.amount` — the rent — and never the surcharge, because the
+  // surcharge was never in `paid_total` to begin with (0109). So a fee-only
+  // refund leaves the balance exactly where it was, and saying otherwise sends
+  // the office looking for a number that did not change.
+  if (amount <= 0) {
+    return `${what} sent back to their card. The rent on it is untouched, and the record shows why.`;
+  }
   return (
-    `$${amount.toFixed(2)}${fee} sent back to their card. ` +
+    `${what} sent back to their card. ` +
     (hasCharge
       ? "The bill is outstanding again by that much, and the record shows why."
       : "It's off the household's account, and the record shows why.")
