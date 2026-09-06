@@ -119,8 +119,28 @@ export interface EarlyPayoutResult {
  * the early_payout_fee_pct dial. Race-safe: the batch row is created
  * first, then payout rows are CLAIMED by a guarded update (batch_id null
  * → this batch) — a double-tap's second claim gets zero rows and the
- * empty batch is deleted. The queued batch is what the automated banking
- * layer executes; nothing here waits on a human.
+ * empty batch is deleted.
+ *
+ * ============ WHAT THE 2% ACTUALLY BUYS ============
+ *
+ * The line above used to end "nothing here waits on a human". It does. There
+ * is no automated banking layer: an 'early' batch queues and then waits for
+ * exactly the same thing a free month-end batch waits for — somebody opening
+ * /ops and clicking Download ACH batch — and nobody was ever told one was
+ * there. A crew paid 2% for speed that depended on somebody happening to look
+ * at a screen.
+ *
+ * That is this repo's own "a switch is a wish, a processor is a rail". The
+ * capability being sold here is a PERSON, so the honest version is: check the
+ * person exists BEFORE taking the fee, and tell them the moment it queues.
+ *
+ * If there is nobody to tell, this refuses and takes nothing. Nothing is lost
+ * — the payouts stay released and un-batched and go out free at month-end,
+ * which is what the refusal says.
+ *
+ * WHAT THIS DOES NOT DECIDE: the fee itself. Whether an early pull should cost
+ * 2%, or anything, is the owner's dial (`early_payout_fee_pct`) and is not
+ * touched here.
  */
 export async function requestEarlyPayout(): Promise<EarlyPayoutResult> {
   const supabase = await createClient();
@@ -149,6 +169,26 @@ export async function requestEarlyPayout(): Promise<EarlyPayoutResult> {
   }
   const acct = acctRes.data;
   if (!acct) return { ok: false, error: "Add your bank details first — that's where the money lands." };
+
+  // THE CAPABILITY CHECK, BEFORE A SINGLE CENT OF FEE IS COMMITTED.
+  //
+  // An early batch is only faster than month-end if a human pulls the bank
+  // file today. Read who that could be first: a failed read is not "there is
+  // no ops team", and refusing on either is the direction that never charges
+  // for something we cannot deliver.
+  const opsRes = await admin.from("users").select("id, phone, email").eq("role", "ops");
+  if (opsRes.error) {
+    return { ok: false, error: readFailedMessage("who could send your payout today", opsRes.error, { money: true }) };
+  }
+  const opsContacts = (opsRes.data ?? []).filter((o) => o.phone || o.email);
+  if (opsContacts.length === 0) {
+    return {
+      ok: false,
+      error:
+        "We can't get money out any faster than usual right now, so we're not going to charge you for it. " +
+        "Your pay goes out with the month-end batch, free, and nothing has been taken.",
+    };
+  }
 
   // Create the envelope INVISIBLE to the exporter ('building'), claim rows
   // into it, then write totals + flip to 'queued' in ONE checked update —
@@ -214,6 +254,32 @@ export async function requestEarlyPayout(): Promise<EarlyPayoutResult> {
     await unclaimAndDrop(); // money goes back to the pool, nothing stranded
     return { ok: false, error: "Couldn't queue the payout — nothing was taken, try again." };
   }
+
+  // THE HALF THE FEE IS FOR. Told the moment it queues, to every ops door
+  // that is open, and never with a bank number in it — the crew's account is
+  // not ops' business and this message travels by email and text.
+  try {
+    for (const o of opsContacts) {
+      const told = await notify(
+        "ops that a crew has paid to be paid early and the bank file needs pulling",
+        { phone: o.phone as string | null, email: o.email as string | null },
+        {
+          sms:
+            `LakeLife: ${vendor.company ?? "a crew"} pulled an early payout — $${net.toFixed(2)} ` +
+            `(they paid a $${fee.toFixed(2)} early fee). Download the ACH batch in /ops today. 🌊`,
+          subject: `Early payout queued — $${net.toFixed(2)} needs the ACH file pulled`,
+          body:
+            `${vendor.company ?? "A crew"} asked for an early payout and paid a $${fee.toFixed(2)} fee for it.\n\n` +
+            `  $${net.toFixed(2)} is queued and waiting on the ACH download.\n\n` +
+            `That fee only buys them anything if the file goes up today — ` +
+            `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/ops`,
+        },
+      );
+      // The batch IS queued and the crew has been charged, so this cannot
+      // refuse anything any more. It must not be silent either.
+      if (!told.reached && told.note) console.error(`[early payout] ${told.note}`);
+    }
+  } catch { /* best effort */ }
 
   // The receipt text — the number they'll see land.
   try {
