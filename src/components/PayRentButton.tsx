@@ -26,7 +26,12 @@ export function PayRentButton({
   amount: number;
   parkName: string;
   hasCard: boolean;
-  /** Percent added for paying by card. Disclosed BEFORE the tap, never after. */
+  /**
+   * Percent that will actually be added to THIS card — already resolved by
+   * `my-data.ts` through the same gate the charge uses, so a debit card
+   * arrives here as 0. Disclosed BEFORE the tap, never after, and disclosed
+   * when it is zero too.
+   */
   cardFeePct: number;
   /** A disputed bill — the screen explains why; this stays out of the way. */
   disabled?: boolean;
@@ -64,10 +69,13 @@ export function PayRentButton({
   const money = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
   const usd = money(amount);
   // DISCLOSED AT THE POINT OF SALE, which the card networks require and which
-  // is anyway the only honest way to charge somebody extra. Rounded the same
-  // way the server rounds it, so the confirm and the receipt agree.
-  const fee = cardFeePct > 0 ? Math.round(amount * cardFeePct) / 100 : 0;
-  const total = Math.round((amount + fee) * 100) / 100;
+  // is anyway the only honest way to charge somebody extra. Cents, once, the
+  // same arithmetic the server does (card-fee.ts), so the confirm panel and
+  // the receipt cannot disagree by a penny.
+  const amountCents = Math.round(amount * 100);
+  const feeCents = cardFeePct > 0 ? Math.round((amountCents * cardFeePct) / 100) : 0;
+  const fee = feeCents / 100;
+  const total = (amountCents + feeCents) / 100;
 
   return (
     <div style={{ marginTop: 12 }}>
@@ -80,12 +88,29 @@ export function PayRentButton({
           <p style={{ fontSize: 13.5, margin: "0 0 8px", lineHeight: 1.55 }}>
             Pay <strong>{money(total)}</strong> to {parkName} from your saved card?
           </p>
-          {fee > 0 && (
-            <p className="mut" style={{ fontSize: 12.5, margin: "0 0 8px", lineHeight: 1.5 }}>
-              {usd} rent plus a {cardFeePct}% card fee of {money(fee)}. Paying
-              by bank transfer costs nothing extra.
-            </p>
-          )}
+          {/*
+            THE FEE, OR ITS ABSENCE, BEFORE THE TAP.
+            The zero case used to render nothing at all, so "no fee" and "a fee
+            nobody mentioned" looked identical on screen — and a zero here is
+            now the ordinary case, because a debit card is never surcharged.
+            Say which it is either way.
+
+            AND NO BANK TRANSFER. This line used to read "Paying by bank
+            transfer costs nothing extra". There is no ACH tender path in the
+            product — `payRent` hard-codes method 'card' — so it sent her
+            looking for a button nobody has built. Paying at the office is the
+            fee-free route that actually exists today.
+          */}
+          <p className="mut" style={{ fontSize: 12.5, margin: "0 0 8px", lineHeight: 1.5 }}>
+            {feeCents > 0 ? (
+              <>
+                {usd} rent plus a {cardFeePct}% card fee of {money(fee)}. Paying
+                at the office by cash or cheque costs nothing extra.
+              </>
+            ) : (
+              <>No card fee — you pay {usd} and nothing more.</>
+            )}
+          </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               className="ll-btn gold"

@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { takePayment, paymentsAreLive } from "@/lib/charge-gate";
+import { surchargePct, cardFeeCents } from "@/app/parks/card-fee";
 import { rentDescriptor } from "@/lib/descriptor";
 import { todayLakeDate } from "@/lib/booking";
 import { sendEmail } from "@/lib/email";
@@ -157,12 +158,19 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
     };
   }
 
-  const owed = Math.round((Number(charge.amount ?? 0) - Number(charge.paid_total ?? 0)) * 100) / 100;
-  if (owed <= 0) return { ok: false, error: "That bill is already settled." };
+  // CENTS, ONCE. Everything downstream — the fee, and the total that goes on
+  // the wire — is integer arithmetic from here, so nothing is rounded twice on
+  // its way to the processor.
+  const owedCents = Math.round((Number(charge.amount ?? 0) - Number(charge.paid_total ?? 0)) * 100);
+  const owed = owedCents / 100;
+  if (owedCents <= 0) return { ok: false, error: "That bill is already settled." };
 
+  // `funding` decides whether the park's card fee may be applied at all — see
+  // card-fee.ts. Read here rather than inferred from `brand`, because a brand
+  // has never said how a card is funded.
   const pmRes = await admin
     .from("payment_methods")
-    .select("token, last4")
+    .select("token, last4, funding")
     .eq("user_id", user.id)
     .order("is_default", { ascending: false })
     .limit(1)
@@ -171,24 +179,28 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
   const pm = pmRes.data;
   if (!pm?.token) return { ok: false, error: "Add a payment method first." };
 
-  // ---- the card costs more than a bank transfer --------------------------
+  // ---- what this card is allowed to cost ---------------------------------
   // A percentage of the rent, charged ON TOP and never added to `amount`, so
   // paid_total, the receipt and the arrears maths keep meaning what they meant
   // before online payments existed. ACH is not surcharged; 0109 refuses it at
   // the database.
   //
-  // NOT SAFE ON A DEBIT CARD. Network rules forbid surcharging debit at any
-  // rate, and payment_methods records a brand but not a funding type — so
-  // until the processor tells us which it is, a park that has set a fee is
-  // taking a risk this code cannot see.
-  const feePct = Number(park.card_fee_pct ?? 0);
-  const fee = feePct > 0 ? Math.round(owed * feePct) / 100 : 0;
-  const total = Math.round((owed + fee) * 100) / 100;
+  // ONLY ON A CREDIT CARD. Network rules forbid surcharging debit at any rate
+  // in every state. This line used to read the park's dial straight off the
+  // row, so The Haven's 3% reached every card alike — a rule violation on
+  // every debit payment the day a processor connects. `surchargePct` is the
+  // one gate both this action and the screen that discloses the fee go
+  // through; 0156 gave it the fact it needs, and 'unknown' — which is every
+  // card on file today — is surcharged nothing.
+  const feePct = surchargePct(park.card_fee_pct, pm.funding);
+  const feeCents = cardFeeCents(owedCents, feePct);
+  const fee = feeCents / 100;
+  const totalCents = owedCents + feeCents;
 
   // ---- take it -----------------------------------------------------------
   const charged = await takePayment({
     token: pm.token as string,
-    amountCents: Math.round(total * 100),
+    amountCents: totalCents,
     // The park's name on the statement, not LakeLife's — it is their rent, and
     // an unrecognised line on a bank statement is a chargeback.
     description: rentDescriptor(park.name as string),
@@ -219,7 +231,7 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
     received_on: todayLakeDate(),
     reference: charged.ref,
     kind: "rent",
-    fee_amount: fee > 0 ? fee : null,
+    fee_amount: feeCents > 0 ? fee : null,
     idempotency_key: idempotencyKey,
   });
   if (error) {
@@ -241,7 +253,7 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
   revalidatePath("/parks/my");
   return {
     ok: true,
-    signal: fee > 0
+    signal: feeCents > 0
       ? `Paid — ${owed.toFixed(2)} rent plus a ${feePct}% card fee of ${fee.toFixed(2)}.`
       : `Paid — thank you. It's on your ledger straight away.`,
   };
