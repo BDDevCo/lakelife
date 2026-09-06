@@ -100,3 +100,98 @@ update public.parks set card_fee_pct = 3.00;
 | Statement descriptor | `src/lib/descriptor.ts` (`rentDescriptor`) |
 | The mock rail | `src/lib/payments.ts` |
 | Park's online-rent switch | `parks.accepts_online_rent` (0108) |
+
+---
+
+## Five more, from the go-live audit (5 Sep 2026)
+
+Written after auditing every money path **as if the switch were already
+flipped** — six lenses, 46 findings, 22 upheld by three independent skeptics
+each. The four original questions above still stand. These are the ones the
+audit added, and each one changes code rather than just settling a policy.
+
+### 5. Idempotency — the key, and how long they honour it
+
+The audit's single largest finding: **five of our six charge paths send no
+idempotency key**, and every one charges the card *before* writing the row that
+records it. A timeout between the two leaves money taken and nothing saying so,
+and the nightly then charges again. We are fixing our half. Theirs:
+
+- What do they call the field, and is it on the request or a header?
+- **How long is a key honoured?** Ours is a nightly retry, so a 24-hour window
+  is the exact boundary: too short and a crash is re-charged, too long and a
+  genuinely declined card replays yesterday's decline instead of trying again.
+- **Does a replayed key with a DIFFERENT amount replay, or error?** A customer's
+  referral credit can change between attempts, so the amount can legitimately
+  differ. We need to know which of the two happens.
+- Does a key protect refunds as well as charges? Our refund door has no key at
+  all today.
+
+### 6. The webhook — names, signature, and redelivery
+
+We have built the door (`POST /api/processor/webhook`, migration 0157) and it
+records events verbatim without acting on them, because the state machine
+cannot be designed until these answers exist.
+
+- **Which header carries the signature, and what exactly is signed** — the bare
+  body, or a timestamped string? Ours is HMAC-SHA256 over the raw body; the one
+  function that changes is `signatureMatches`.
+- **The exact event names** for: capture settled, refund completed, ACH return,
+  dispute opened, dispute lost. We file events under whatever they send; the
+  handler that drains them needs the real names.
+- What id do they put on a delivery, and do they redeliver on a non-200?
+- How long do they retry before giving up?
+
+### 7. Funding type, before the charge — now a blocker, not a nicety
+
+Question 2 above asked this. The audit makes it a **hard blocker**: The Haven
+has `card_fee_pct = 3.00` and `accepts_online_rent = true` in production, and
+the code applies that surcharge to every card. The day the switch flips, every
+rent payment on a debit card is a network-rule violation.
+
+Our fix surcharges **only** when funding is known to be `credit` — debit,
+prepaid and unknown all surcharge zero, because unknown has to fail safe. So:
+
+- Does `tokenize()` return the funding type, at save time, before any charge?
+- If not, is it on the charge response — and if it is only there, we cannot
+  surcharge at all and the dial stays at 0.
+
+### 8. Settlement, so the two ledgers can be compared
+
+There is no place today to sit what they say they settled beside what our
+ledger says we collected, and with a real processor the two *will* diverge.
+
+- Is there a settlement/payout report per day, with our `processor_ref` on each
+  line, that we can pull by API?
+- When does a card capture actually settle, and an ACH debit clear?
+- What return codes should we expect on an ACH return, and do they map to
+  anything we should show a resident?
+
+### 9. The payout side — the bank, not the processor
+
+Crews are paid by a CSV we hand a bank (`/api/ops/payout-export`), which
+decrypts every crew's routing and account number into one download.
+
+- Is there an API to originate these instead, so the file stops existing?
+- **What comes back when a payout is returned** (wrong account, closed
+  account), in what form, and how fast? Today a returned payout has nowhere to
+  land: the batch stays `paid` and the crew's rows stay batched forever.
+- Do they support a debit against a crew who owes us money after a clawback, or
+  is netting against future earnings the only rail? (Today it is the only one,
+  and a crew who ends up net-negative silently drops out of every run.)
+
+---
+
+## What is already fixed, so it is not re-asked
+
+Branches from the 5 Sep audit, not yet merged: idempotency keys on every charge
+and refund path; a charge that succeeded with a row that failed now always
+alerts; the tip is claimed before the card is charged; a fixture crew can never
+be paid; the webhook door and `processor_events`; the debit-surcharge fail-safe;
+a database-level shape guard on `payment_methods.token`; the ACH-return column
+on `park_payments` with `recompute_charge_paid` excluding returned rows.
+
+**Still not built, deliberately**, because it is policy and not mechanism: what
+an ACH return *does* — to the resident's receipt, their late fees, their
+standing, and to a crew who has already been paid out of that money. That is
+the first thing to decide once questions 6 and 8 are answered.
