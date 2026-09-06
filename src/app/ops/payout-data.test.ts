@@ -26,9 +26,20 @@ const errors: Record<string, string | null> = {};
 
 class Q implements PromiseLike<{ data: Row[] | null; error: { message: string } | null }> {
   private fs: Array<(r: Row) => boolean> = [];
+  /**
+   * TWO READS HIT `payout_batches` — the queue and the returned list — so a
+   * failure keyed on the table alone cannot say which one it broke. Without
+   * this, the "fails on a dropped read" test below passed by failing the
+   * OTHER query and proved nothing about the one it names.
+   */
+  private statusEq: string | null = null;
   constructor(private t: string) {}
   select() { return this; }
-  eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
+  eq(c: string, v: unknown) {
+    if (c === "status" && typeof v === "string") this.statusEq = v;
+    this.fs.push((r) => r[c] === v);
+    return this;
+  }
   in(c: string, v: unknown[]) { this.fs.push((r) => v.includes(r[c])); return this; }
   is(c: string, v: unknown) { this.fs.push((r) => (v === null ? r[c] == null : r[c] === v)); return this; }
   not(c: string, _op: string, v: unknown) { this.fs.push((r) => (v === null ? r[c] != null : r[c] !== v)); return this; }
@@ -38,7 +49,7 @@ class Q implements PromiseLike<{ data: Row[] | null; error: { message: string } 
     ok?: ((x: { data: Row[] | null; error: { message: string } | null }) => A | PromiseLike<A>) | null,
     bad?: ((e: unknown) => B | PromiseLike<B>) | null,
   ): PromiseLike<A | B> {
-    const forced = errors[this.t];
+    const forced = (this.statusEq ? errors[`${this.t}:${this.statusEq}`] : null) ?? errors[this.t];
     const res = forced
       ? { data: null, error: { message: forced } }
       : { data: (db[this.t] ?? []).filter((r) => this.fs.every((f) => f(r))), error: null };
@@ -101,5 +112,70 @@ describe("crews who owe", () => {
   it("fails rather than reporting nobody in the red on a dropped read", async () => {
     errors.payouts = "connection reset";
     await expect(getPayoutQueue()).rejects.toThrow();
+  });
+});
+
+/**
+ * A RETURNED PAYOUT WAS INVISIBLE, WHICH MADE THE FIX UNREACHABLE.
+ *
+ * 0158 gave a returned batch somewhere to land and `markBatchesReturned`
+ * writes it. But this query asked for `status in ('queued','exported')`, so
+ * the moment a batch went to 'failed' it vanished from the only screen that
+ * shows payouts — taking `returned_reason`, the one thing that tells anybody
+ * what to fix, with it.
+ */
+function returnedBatch(id: string, company: string, net: number, when: string, reason: string | null) {
+  db.payout_batches.push({
+    id,
+    kind: "monthly",
+    net,
+    status: "failed",
+    created_at: "2027-01-31T00:00:00Z",
+    returned_at: when,
+    returned_reason: reason,
+    vendors: { company },
+    users: { name: null },
+  });
+}
+
+describe("payouts the bank sent back", () => {
+  it("names the crew, the money and what the bank said", async () => {
+    returnedBatch("b-1", "Twin Lakes Crew", 640, "2027-02-04T00:00:00Z", "R02 account closed");
+
+    const q = await getPayoutQueue();
+
+    expect(q.returned, "a returned payout is invisible on every screen").toHaveLength(1);
+    expect(q.returned[0].payee).toBe("Twin Lakes Crew");
+    expect(q.returned[0].net).toBe(640);
+    expect(q.returned[0].reason).toBe("R02 account closed");
+  });
+
+  it("keeps a returned batch out of the queued and exported totals", async () => {
+    // The money is back in the un-batched pool the moment it is marked
+    // returned. Counting it here as well would show it twice and overstate
+    // what is in flight to the bank.
+    returnedBatch("b-1", "Twin Lakes Crew", 640, "2027-02-04T00:00:00Z", "R02 account closed");
+    const q = await getPayoutQueue();
+    expect(q.queuedCount).toBe(0);
+    expect(q.exportedCount).toBe(0);
+    expect(q.queuedTotal).toBe(0);
+    expect(q.exportedTotal).toBe(0);
+    expect(q.rows).toEqual([]);
+  });
+
+  it("says so plainly when an old row carries no reason", async () => {
+    // The action refuses a blank reason, so this can only be a row written
+    // before it existed. Rendering nothing would read as "no problem here".
+    returnedBatch("b-1", "Twin Lakes Crew", 640, "2027-02-04T00:00:00Z", "   ");
+    const q = await getPayoutQueue();
+    expect(q.returned[0].reason).toBe("No reason was recorded.");
+  });
+
+  it("fails rather than reporting nothing came back on a dropped read", async () => {
+    // Keyed to the RETURNED read specifically, and asserted on WHICH read
+    // threw. On the bare table key this passed by breaking the queue read
+    // instead — green, and proving nothing about the line it names.
+    errors["payout_batches:failed"] = "connection reset";
+    await expect(getPayoutQueue()).rejects.toThrow(/the payouts the bank sent back/);
   });
 });

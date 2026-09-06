@@ -20,6 +20,25 @@ export interface PayoutQueueRow {
   created_at: string;
 }
 
+/**
+ * A batch the bank handed back.
+ *
+ * WHY THIS IS A SEPARATE READ rather than another status in the queue query.
+ * A returned batch is never closed out — there is no "resolved" act for one —
+ * so they accumulate for the life of the park, and folding them into a query
+ * that is `order by created_at desc limit 100` would eventually let a wall of
+ * old returns push the actionable queue off the end of the list. Its own read,
+ * its own small limit, and the queue keeps meaning what it says.
+ */
+export interface PayoutReturnedRow {
+  id: string;
+  payee: string;
+  net: number;
+  returnedAt: string;
+  /** What the bank said. Never blank — the action refuses without it. */
+  reason: string;
+}
+
 /** A crew whose released, un-batched pay adds up to LESS than nothing. */
 export interface CrewInTheRed {
   vendorId: string;
@@ -45,6 +64,17 @@ export interface PayoutQueue {
    * sit in the red for months while every run reports a clean night.
    */
   owing: CrewInTheRed[];
+  /**
+   * THE BANK GAVE THESE BACK, AND THE CREW IS STILL UNPAID.
+   *
+   * `markBatchesReturned` frees the payout rows so the next run picks them up
+   * — but it sends them to the SAME bank details that just bounced. The only
+   * thing that breaks that loop is a person ringing the crew, and the only
+   * place that was ever said was the action's success toast, which Toast.tsx
+   * clears after 3800ms. So it is said here instead, where it stays until
+   * somebody has done it.
+   */
+  returned: PayoutReturnedRow[];
 }
 
 type Embed<T> = T | T[] | null;
@@ -64,7 +94,16 @@ interface RawRow {
   users: Embed<{ name: string | null }>;
 }
 
-const EMPTY: PayoutQueue = { queuedCount: 0, queuedTotal: 0, exportedCount: 0, exportedTotal: 0, rows: [], owing: [] };
+const EMPTY: PayoutQueue = { queuedCount: 0, queuedTotal: 0, exportedCount: 0, exportedTotal: 0, rows: [], owing: [], returned: [] };
+
+interface RawReturned {
+  id: string;
+  net: number | string | null;
+  returned_at: string;
+  returned_reason: string | null;
+  vendors: Embed<{ company: string | null }>;
+  users: Embed<{ name: string | null }>;
+}
 
 interface RawOwed {
   vendor_id: string;
@@ -161,6 +200,33 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
       .not("vendor_id", "is", null),
   );
 
+  // "Nothing has come back from the bank" is a claim about money that is
+  // sitting unpaid, so a dropped read must fail the screen rather than make it.
+  const back = mustRead(
+    "the payouts the bank sent back",
+    await admin
+      .from("payout_batches")
+      .select("id, net, returned_at, returned_reason, vendors(company), users(name)")
+      .eq("status", "failed")
+      .not("returned_at", "is", null)
+      .order("returned_at", { ascending: false })
+      .limit(25),
+  );
+
+  const returned: PayoutReturnedRow[] = ((back ?? []) as unknown as RawReturned[]).map((r) => {
+    const vendor = first(r.vendors) as { company?: string | null } | null;
+    const payeeUser = first(r.users) as { name?: string | null } | null;
+    return {
+      id: r.id,
+      payee: vendor?.company || payeeUser?.name || "Unknown payee",
+      net: Number(r.net ?? 0),
+      returnedAt: r.returned_at,
+      // The action refuses a blank reason, so this is only ever empty for a
+      // row written before it existed. Say so rather than render nothing.
+      reason: (r.returned_reason ?? "").trim() || "No reason was recorded.",
+    };
+  });
+
   return {
     queuedCount,
     queuedTotal: Math.round(queuedTotal * 100) / 100,
@@ -168,5 +234,6 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
     exportedTotal: Math.round(exportedTotal * 100) / 100,
     rows,
     owing: crewsInTheRed((owed ?? []) as unknown as RawOwed[]),
+    returned,
   };
 }

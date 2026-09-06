@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
 
 /**
  * AN ACH RETURN OF A PAYOUT HAD NOWHERE TO LAND.
@@ -131,5 +132,49 @@ describe("marking paid still works", () => {
     const res = await markBatchesPaid(["b-1"]);
     expect(res.ok).toBe(true);
     expect(db.payout_batches[0].status).toBe("paid");
+  });
+});
+
+/**
+ * AND SOMETHING HAS TO BE ABLE TO CALL IT.
+ *
+ * Everything above passed while `markBatchesReturned` had NO CALLER anywhere
+ * in the app. The action was correct, the migration was applied, the tests
+ * were green — and there was no button, so a returned payout still could not
+ * be recorded and the crew still could not be paid. A tested action nobody
+ * can reach is the same defect as an untested one, wearing a passing suite.
+ */
+describe("the screen can reach it", () => {
+  const strip = (s: string) =>
+    s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const ui = strip(
+    readFileSync(new URL("../../components/ops/PayoutQueue.tsx", import.meta.url), "utf8"),
+  );
+
+  it("is looking at the payout screen at all", () => {
+    // The scanner must be proven to find things, or every assertion below is
+    // green against an empty string.
+    expect(ui.length, "PayoutQueue.tsx did not load — this scan measures nothing")
+      .toBeGreaterThan(500);
+    expect(ui, "the screen that closes a batch out no longer calls markBatchesPaid")
+      .toMatch(/markBatchesPaid\(/);
+  });
+
+  it("CALLS markBatchesReturned, not merely imports it", () => {
+    // The call, not the symbol: matching the bare name passes on the import
+    // line alone, which is exactly how a dead action hides.
+    expect(ui, "no screen can record a returned payout").toMatch(/markBatchesReturned\(/);
+  });
+
+  it("makes the reason a condition of the button, not a hope", () => {
+    // The action refuses a blank reason. A button that submits anyway turns
+    // that refusal into an error message instead of a disabled control.
+    expect(ui).toMatch(/disabled=\{[^}]*!why\.trim\(\)[^}]*\}/);
+  });
+
+  it("renders what the bank said, so the reason is not written and then lost", () => {
+    // The `source_note` lesson: written by three paths, read onto the row,
+    // rendered nowhere, and the screen still promised it was there.
+    expect(ui).toMatch(/r\.reason/);
   });
 });
