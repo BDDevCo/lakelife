@@ -9,9 +9,9 @@ import { suggestTip, validateTip, tipSplit, canTip, tipDaysLeft } from "@/lib/ti
 import { revalidatePath } from "next/cache";
 import { autoAssignJob } from "@/app/book/dispatch";
 import { getAvailability } from "@/app/book/actions";
-import { takePayment } from "@/lib/charge-gate";
+import { takePayment, chargeKey } from "@/lib/charge-gate";
 import { statementDescriptor } from "@/lib/descriptor";
-import { alertOpsDoubleCharge } from "@/lib/automation";
+import { alertOpsDoubleCharge, alertOpsCrewUnpaid } from "@/lib/automation";
 import { notify } from "@/lib/notify";
 import { sendEmail } from "@/lib/email";
 import { readFailedMessage } from "@/lib/must-read";
@@ -302,31 +302,50 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
     // paragraph above describes, reopened by the failure path instead of the
     // ordering. Not knowing whether it was collected means not collecting it:
     // the invoice stays 'due' and can be settled once reads work again.
+    //
+    // ONE READ, TWO ANSWERS. It also counts how many times this card has
+    // already declined on this invoice, because that number is part of the
+    // idempotency key — see `chargeKey`. Reading it here rather than in a
+    // second query keeps both facts behind the same failure: if we cannot see
+    // this invoice's payments we do not charge at all.
     const capRes = await admin
-      .from("payments").select("id").eq("invoice_id", invoice.id)
-      .eq("status", "captured").limit(1);
-    const alreadyCaptured = capRes.data;
+      .from("payments").select("id, status").eq("invoice_id", invoice.id)
+      .in("status", ["captured", "failed"]);
+    const seen = capRes.data ?? [];
+    const alreadyCaptured = seen.filter((p) => p.status === "captured");
+    const declines = seen.filter((p) => p.status === "failed").length;
     if (capRes.error) {
       console.error("[read failed] this fee's payments:", capRes.error.code ?? "", capRes.error.message ?? capRes.error);
-    } else if (alreadyCaptured && alreadyCaptured.length > 0) {
+    } else if (alreadyCaptured.length > 0) {
       await admin.from("invoices").update({ status: "paid" }).eq("id", invoice.id);
       charged = true;
     } else if (pm?.token) {
+      // THE SAME KEY THE NIGHTLY RETRY SENDS. `retryCancellationFees` comes
+      // back for this invoice every night until it settles; if the two doors
+      // built different keys, a fee collected here and lost in a crash would
+      // be charged a SECOND time tonight instead of replayed.
       const charge = await takePayment({
         token: pm.token as string,
         amountCents: Math.round(q.fee * 100),
         description: statementDescriptor("cancel_fee"),
+        idempotencyKey: chargeKey("cancel_fee", invoice.id as string, declines),
       });
       const { error: payErr } = await admin.from("payments").insert({
         invoice_id: invoice.id, amount: q.fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null,
       });
-      // A 23505 here means the processor took the money and the ledger refused
-      // to record it. That is the one case a human has to hear about the same
-      // night, because only a human can give it back.
-      if (payErr?.code === "23505" && charge.ok) {
+      // THE PROCESSOR TOOK THE MONEY AND THE LEDGER REFUSED TO RECORD IT —
+      // for any reason, not only a duplicate. The old condition named 23505
+      // alone, so a dropped connection took the fee, marked the invoice paid,
+      // and told nobody. Only a human can give that back.
+      //
+      // The invoice deliberately stays 'due' when the row failed: the nightly
+      // retry finds it, sends the identical key, and the processor replays
+      // rather than charges — so the row gets another chance and the card is
+      // never touched twice.
+      if (charge.ok && payErr) {
         await alertOpsDoubleCharge(admin, invoice.id as string, q.fee, charge.ref ?? null);
       }
-      if (charge.ok) await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null }).eq("id", invoice.id);
+      if (charge.ok && !payErr) await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null }).eq("id", invoice.id);
       charged = charge.ok;
     }
   }
@@ -810,10 +829,58 @@ export async function addTip(
   // been recorded. The comment above claimed this mirrored the late-cancel
   // path; it copied that path's ORDER and not its lookup-first, which is the
   // part that made the order survivable.
+  // HOW MANY TIMES A CARD HAS ALREADY BEEN REFUSED FOR THIS TIP. It is half
+  // the idempotency key: a crash must REPLAY (no second debit) and a genuine
+  // decline must RETRY (so a second card can be tried, rather than being
+  // answered with a replay of yesterday's refusal). Read before the claim
+  // below, because a failed read must leave the visit exactly as it found it.
+  const failedRes = await admin
+    .from("payments").select("id", { count: "exact", head: true })
+    .eq("tip_job_id", jobId).eq("status", "failed");
+  if (failedRes.error) return { ok: false, error: readFailedMessage("this visit's card attempts", failedRes.error, { money: true }) };
+
+  // CLAIM THE VISIT BEFORE TOUCHING THE CARD.
+  //
+  // The stamp used to happen AFTER the charge, guarded by `.is("tip_amount",
+  // null)` — which meant two tabs, or one impatient retry, each charged the
+  // card and only the second stamp found nothing to update. The customer was
+  // debited twice for one thank-you and the ledger held two captures with
+  // nothing to distinguish them. `cancelRequest` has always claimed first;
+  // this is the same order.
+  //
+  // The UPDATE is the lock: `tip_amount IS NULL` is checked by the database
+  // in the same statement that sets it, so exactly one caller can win.
+  const { data: claimed, error: claimErr } = await admin
+    .from("jobs")
+    .update({ tip_amount: v.amount, tipped_at: new Date().toISOString() })
+    .eq("id", jobId)
+    .is("tip_amount", null)
+    .select("id");
+  if (claimErr) return { ok: false, error: claimErr.message };
+  if (!claimed || claimed.length === 0) {
+    // Somebody — probably them, a second ago — already answered this one.
+    return { ok: false, error: "A thank-you is already recorded for this visit." };
+  }
+
+  /** Hand the visit back, so another card can be tried. */
+  const releaseClaim = async () => {
+    const { error } = await admin
+      .from("jobs").update({ tip_amount: null, tipped_at: null }).eq("id", jobId);
+    // Nothing to unwind but the stamp itself. If even that fails the visit
+    // reads as "already tipped" with no payment behind it — wrong, but a
+    // screen can say so; a double charge cannot be talked back.
+    if (error) console.error("[write failed] releasing an unpaid tip claim:", error.code ?? "", error.message ?? error);
+  };
+
   const charge = await takePayment({
     token: pm.token as string,
     amountCents: Math.round(v.amount * 100),
     description: statementDescriptor("tip"),
+    // KEYED ON THE JOB, NOT AN INVOICE. A tip has no invoice by design (0097)
+    // and `payments_one_captured_tip_per_job` makes the visit the unit that
+    // may be tipped once. Handing a real processor an invoice key for an
+    // amount it never saw gets the replay rejected outright.
+    idempotencyKey: chargeKey("tip", jobId, failedRes.count ?? 0),
   });
 
   const { error: payErr } = await admin.from("payments").insert({
@@ -837,7 +904,11 @@ export async function addTip(
   // which makes this the one branch that must not be optimistic. So: stop.
   // Nothing is stamped, no payout is released, and a human hears about it
   // tonight — only a person can hand the money back.
-  if (payErr && charge.ok) {
+  if (charge.ok && payErr) {
+    // THE CLAIM STAYS. Money has left this customer, so the visit must not
+    // come back up for tipping — a second attempt would be a second charge for
+    // the same thank-you. It is stamped, unpaid to the crew, and on a person's
+    // desk tonight.
     await alertOpsDoubleCharge(admin, jobId, v.amount, charge.ref ?? null, "tip");
     return {
       ok: false,
@@ -846,21 +917,21 @@ export async function addTip(
   }
 
   if (!charge.ok) {
-    // Nothing is stamped on the job, so they can try again with another card.
-    // The failed row stays: a declined attempt is a record of trying, and 0097
-    // only makes the CAPTURED one unique.
+    // The claim goes back so they can try another card. The failed row stays:
+    // a declined attempt is a record of trying, it is what moves the
+    // idempotency key on for the next attempt, and 0097 only makes the
+    // CAPTURED one unique.
+    await releaseClaim();
     return { ok: false, error: "That card was declined — nothing has been sent." };
   }
 
-  const { error } = await admin
-    .from("jobs")
-    .update({ tip_amount: v.amount, tipped_at: new Date().toISOString() })
-    .eq("id", jobId)
-    .is("tip_amount", null);          // never twice
-  if (error) return { ok: false, error: error.message };
-
   // Now, and only now, the crew's share — which is all of it.
-  await admin.from("payouts").insert({
+  //
+  // FIRE-AND-FORGET WAS THE BUG: the customer is charged, the visit is stamped
+  // immutable, and a refused insert here left the crew unpaid with nothing
+  // retrying it and nobody told. The customer's receipt, two paragraphs below,
+  // says every cent went to them.
+  const { error: payoutErr } = await admin.from("payouts").insert({
     vendor_id: row.vendor_id,
     job_id: jobId,
     amount: tipSplit(v.amount).toCrew,
@@ -868,6 +939,10 @@ export async function addTip(
     status: "released",
     kind: "tip",
   });
+  if (payoutErr) {
+    console.error("[write failed] the crew's share of a tip:", payoutErr.code ?? "", payoutErr.message ?? payoutErr);
+    await alertOpsCrewUnpaid(admin, jobId, tipSplit(v.amount).toCrew, "a thank-you for the crew");
+  }
 
   // A RECEIPT, BECAUSE A TIP IS A CHARGE. Three screens promise "Receipts &
   // invoices always send by email so you never miss a charge", and `rcpt` is

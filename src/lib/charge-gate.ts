@@ -1,11 +1,16 @@
 import "server-only";
-import { LakeLifePayments, type ChargeInput, type ChargeResult } from "@/lib/payments";
+import {
+  LakeLifePaymentsServer,
+  type ChargeInput,
+  type ChargeResult,
+  type RefundInput,
+} from "@/lib/payments-server";
 
 /**
  * A MOCK MUST NEVER CREDIT A BILL.
  *
- * `LakeLifePayments` is a faithful mock of a processor contract (CLAUDE.md
- * rule 4) and its `charge()` returns `{ ok: true, ref: "ch_mock_…" }` for any
+ * `LakeLifePaymentsServer` is a faithful mock of a processor contract
+ * (CLAUDE.md rule 4) and its `charge()` returns `{ ok: true, ref: "ch_mock_…" }` for any
  * valid token. That is correct for a mock and correct for the tests that hold
  * the contract down. It is catastrophic as the thing standing between a
  * resident and a bill marked PAID.
@@ -37,15 +42,20 @@ import { LakeLifePayments, type ChargeInput, type ChargeResult } from "@/lib/pay
  * ============ THE DOORWAY ============
  *
  * App code must call `takePayment` / `giveRefund` and never
- * `LakeLifePayments.charge` / `.refund` directly, or the guard is only on the
- * doors somebody remembered — which is the defect this codebase keeps paying
- * for. `src/lib/charge-gate.test.ts` scans for that and fails if a direct call
- * comes back.
+ * `LakeLifePaymentsServer.charge` / `.refund` directly, or the guard is only on
+ * the doors somebody remembered — which is the defect this codebase keeps
+ * paying for. `src/lib/charge-gate.test.ts` scans for that and fails if a
+ * direct call comes back.
+ *
+ * This module is the ONLY importer of `payments-server.ts`, which is where
+ * `charge()` and `refund()` now live behind `import "server-only"` — the half
+ * a real processor authenticates with a secret key, and therefore the half
+ * that must never be reachable from a `"use client"` file.
  *
  * ============ SWITCHING IT ON ============
  *
  * Set `LAKELIFE_PAYMENTS_LIVE=true` in the server environment, and only once
- * real processor keys are wired into `LakeLifePayments`. It is deliberately
+ * real processor keys are wired into `payments-server.ts`. It is deliberately
  * NOT `NEXT_PUBLIC_` — a browser has no business knowing or setting this — and
  * deliberately opt-in: an unset variable means no processor, which is the
  * truth today and the safe default forever.
@@ -68,10 +78,45 @@ const declined: ChargeResult = {
   error: "No payment processor is connected yet, so nothing was charged.",
 };
 
+/**
+ * THE KEY THE PROCESSOR DEDUPES ON, BUILT ONE WAY.
+ *
+ * A charge that reaches the bank and a row that records it are two separate
+ * things, and everything between them — a timeout, a cold start, a double-
+ * tapped button, a nightly run overlapping itself — is a moment where the card
+ * can be debited twice. `payments_one_capture_per_invoice` refuses the second
+ * ROW; only the processor can refuse the second DEBIT, and it does that on
+ * this key.
+ *
+ * `unitId` is the thing that may be charged exactly once: the invoice for
+ * service work and fees, the JOB for a tip (a tip has no invoice at all —
+ * 0097 hangs it off `payments.tip_job_id`).
+ *
+ * `priorDeclines` is the part that is easy to get wrong. A processor replays a
+ * DECLINE for the same key for about 24 hours, and the nightly runs exactly 24
+ * hours apart — so a key that never moves answers every retry with yesterday's
+ * refusal, and the five-night retry cap gets burned on attempts that never
+ * reached a bank. Counting the `failed` rows already on file moves the key
+ * only when a real attempt was really refused: a crash REPLAYS, a decline
+ * RETRIES.
+ *
+ * Both cancellation-fee doors — the customer cancelling, and the nightly
+ * retrying — must produce the SAME string for the same invoice, or the retry
+ * is a second debit rather than a replay. That is why this is a function and
+ * not a template literal written out at four call sites.
+ */
+export function chargeKey(
+  purpose: "service" | "cancel_fee" | "visit_fee" | "tip",
+  unitId: string,
+  priorDeclines: number,
+): string {
+  return `${purpose}:${unitId}:${Math.max(0, Math.trunc(priorDeclines))}`;
+}
+
 /** Charge a card — refusing, like a decline, until a processor exists. */
 export async function takePayment(input: ChargeInput): Promise<ChargeResult> {
   if (!paymentsAreLive()) return declined;
-  return LakeLifePayments.charge(input);
+  return LakeLifePaymentsServer.charge(input);
 }
 
 /**
@@ -80,10 +125,17 @@ export async function takePayment(input: ChargeInput): Promise<ChargeResult> {
  * A refund the processor never made is the same lie as a payment it never
  * took, and `park_refunds` (0142) is an append-only ledger: a row saying money
  * went back is not something a later correction can unsay.
+ *
+ * `idempotencyKey` is not optional in spirit — it had simply never existed on
+ * this side. Both refund paths call the processor BEFORE writing their row,
+ * deliberately (money that reached a card and was not filed is recoverable; a
+ * filed refund nobody sent is a household ringing about money that never
+ * arrived). That order makes the key the only thing standing between a double-
+ * submitted form and two refunds, one of which nothing in the ledger records.
  */
-export async function giveRefund(input: { chargeRef: string; amountCents: number }): Promise<ChargeResult> {
+export async function giveRefund(input: RefundInput): Promise<ChargeResult> {
   if (!paymentsAreLive()) {
     return { ok: false, error: "No payment processor is connected yet, so nothing was refunded." };
   }
-  return LakeLifePayments.refund(input);
+  return LakeLifePaymentsServer.refund(input);
 }

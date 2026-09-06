@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cancellationQuote, hoursUntilStart, type CancelDials } from "./cancellation";
+import { cancellationQuote, hoursUntilStart, lateFee, crewShareOfFee, type CancelDials } from "./cancellation";
 
 const dials: CancelDials = { cancelFeePct: 0.25, cancelRoutineHours: 48, cancelWaterDays: 7 };
 
@@ -91,5 +91,44 @@ describe("cancellationQuote — who owes nothing", () => {
     const q = cancellationQuote({ ...base, jobDateISO: "2026-07-23", customerPrice: -50, vendorCost: -10 }, dials);
     expect(q.fee).toBe(0);
     expect(q.crewShare).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ONE HOME FOR THE CREW'S SHARE
+// ---------------------------------------------------------------------------
+/**
+ * The nightly's cancellation-fee retry and the ops visit-fee recovery each
+ * carried their own copy of this multiplication, and one of them never rounded
+ * at all — so a payouts row could hold a fraction of a cent, and the same crew
+ * on the same job could be owed two different numbers depending on which path
+ * collected the money.
+ */
+describe("crewShareOfFee — the only place this multiplication lives", () => {
+  it("is the crew's rate times the same share the fee is of the price", () => {
+    expect(crewShareOfFee(0.25, 59)).toBe(14.75);
+    expect(crewShareOfFee(0.25, 400)).toBe(100);
+  });
+
+  it("ALWAYS LANDS ON WHOLE CENTS — the recovery path never rounded", () => {
+    // 0.25 × 70.01 = 17.5025. Unrounded, that reached a payouts row.
+    expect(crewShareOfFee(0.25, 70.01)).toBe(17.5);
+    expect(crewShareOfFee(0.25, 70.02)).toBe(17.51);
+    const s = crewShareOfFee(0.25, 33.33);
+    expect(Math.round(s * 100)).toBe(s * 100);
+  });
+
+  it("a fee that does not exist owes the crew nothing", () => {
+    expect(crewShareOfFee(0, 400)).toBe(0);
+    expect(crewShareOfFee(-0.25, 400)).toBe(0);
+  });
+
+  it("never returns a negative, whatever the row says the crew costs", () => {
+    expect(crewShareOfFee(0.25, -400)).toBe(0);
+    expect(crewShareOfFee(0.25, null)).toBe(0);
+  });
+
+  it("is what lateFee itself uses, so the quote and the retry cannot drift", () => {
+    expect(lateFee(0.25, 236, 59).crewShare).toBe(crewShareOfFee(0.25, 59));
   });
 });

@@ -3,7 +3,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { notify } from "@/lib/notify";
 import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
-import { takePayment } from "@/lib/charge-gate";
+import { takePayment, chargeKey } from "@/lib/charge-gate";
+import { crewShareOfFee } from "@/lib/cancellation";
 import { statementDescriptor } from "@/lib/descriptor";
 import { revalidateJob } from "@/app/book/dispatch";
 import { todayLakeDate, effectiveSeason, seasonIsProvisional } from "@/lib/booking";
@@ -355,6 +356,61 @@ export interface SettleOutcome {
 }
 
 /**
+ * THE CUSTOMER PAID AND THE CREW'S SHARE WAS NEVER FILED.
+ *
+ * The mirror image of the alert below, on the other side of the same job. A
+ * tip is charged, the visit is stamped so it can never be tipped again, and
+ * then the crew's payout is inserted — and that insert's error was thrown
+ * away. Nothing retries a tip payout and no screen shows its absence: the crew
+ * is simply never paid money the customer has already handed over, and the
+ * receipt has already told the customer every cent went to them.
+ *
+ * Never throws at its caller, for the same reason the alert below never does:
+ * it runs after the card has moved.
+ */
+export async function alertOpsCrewUnpaid(
+  admin: ReturnType<typeof createServiceClient>,
+  jobId: string,
+  amount: number,
+  what: string,
+): Promise<{ notified: number }> {
+  let notified = 0;
+  try {
+    const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+    const { data: opsUsers, error: opsErr } = await admin
+      .from("users").select("email").eq("role", "ops").not("email", "is", null);
+    if (opsErr) console.error("[read failed] the ops emails for a CREW-NOT-PAID alert:", opsErr);
+    for (const u of opsUsers ?? []) {
+      const to = u.email as string | null;
+      if (!to) continue;
+      const res = await sendEmail({
+        to,
+        subject: `⚠️ CREW NOT PAID — ${amt}`,
+        html:
+          `<p>A customer was charged <b>${amt}</b> for ${what} on visit <code>${jobId}</code>, ` +
+          `and the crew's payout row was refused.</p>` +
+          `<p>The money is ours and the crew's share is not on their earnings. ` +
+          `<b>Nothing retries this</b> — it needs raising by hand.</p>`,
+      });
+      if (res.ok) notified++;
+    }
+  } catch {
+    /* nothing here may throw into a payment path */
+  }
+  if (notified === 0) {
+    try {
+      console.error(
+        `[alert unsent] ${what} of $${Number(amount).toFixed(2)} was collected on job ${jobId} ` +
+        `and the crew's payout was refused — and NOBODY WAS EMAILED. Raise it by hand.`,
+      );
+    } catch {
+      console.error("[alert unsent] a crew's share was refused and nobody was emailed.", jobId);
+    }
+  }
+  return { notified };
+}
+
+/**
  * MONEY LEFT THE CUSTOMER AND THE LEDGER REFUSED TO RECORD IT.
  *
  * `payments_one_capture_per_invoice` (0024) permits exactly one captured row
@@ -379,11 +435,15 @@ export async function alertOpsDoubleCharge(
   let notified = 0;
   try {
     const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+    // NAMES THE FACT, NOT A CAUSE IT DOESN'T KNOW. This used to assert "an
+    // earlier capture already exists", because it was only ever called on a
+    // 23505. It is now called on ANY failure to record a real charge — a
+    // dropped connection reads the same to the customer and needs the same
+    // human — so the sentence says what happened and leaves the diagnosis to
+    // whoever opens the row.
     const what = against === "tip"
-      ? `as a tip on visit <code>${subjectId}</code> and the ledger refused the ` +
-        `payment row — a captured tip already exists for that visit`
-      : `against invoice <code>${subjectId}</code> and the ledger refused the ` +
-        `payment row — an earlier capture already exists for that invoice`;
+      ? `as a tip on visit <code>${subjectId}</code> and the ledger refused the payment row`
+      : `against invoice <code>${subjectId}</code> and the ledger refused the payment row`;
     const { data: opsUsers, error: opsErr } = await admin
       .from("users").select("email").eq("role", "ops").not("email", "is", null);
     // Nothing retries this, so the log is the last line of defence: a real
@@ -790,15 +850,44 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
           });
         }
       } else if (pm?.token) {
-        const charge = await takePayment({ token: pm.token as string, amountCents: Math.round(cashDue * 100), description: statementDescriptor("service") });
+        // HOW MANY TIMES THIS CARD HAS ALREADY SAID NO, because that decides
+        // the idempotency key. A processor replays a decline for the same key
+        // for ~24h and this runner is exactly 24h apart, so a key that never
+        // moves answers tonight's attempt with last night's refusal — and
+        // burns the retry allowance on attempts that never reached a bank.
+        // Counting the failures makes a CRASH replay and a DECLINE retry.
+        //
+        // A failed read here is not zero. It would build a key for an attempt
+        // count we do not have, and a key that differs from the one the
+        // interrupted run used is a second debit — the exact thing the key
+        // exists to prevent. So it waits a night, like every other read on
+        // this path that decides what the card is charged.
+        const { count: declines, error: declinesErr } = await admin
+          .from("payments").select("id", { count: "exact", head: true })
+          .eq("invoice_id", invoice.id).eq("status", "failed");
+        if (declinesErr) {
+          console.error(`[read failed] how many times this card has already declined (${jobId}):`, declinesErr);
+          return { ok: false, error: "couldn't read this invoice's declined attempts" };
+        }
+        const charge = await takePayment({
+          token: pm.token as string,
+          amountCents: Math.round(cashDue * 100),
+          description: statementDescriptor("service"),
+          idempotencyKey: chargeKey("service", invoice.id as string, declines ?? 0),
+        });
         const { error: payErr } = await admin.from("payments").insert({
           invoice_id: invoice.id,
           amount: cashDue,
           status: charge.ok ? "captured" : "failed",
           processor_ref: charge.ref ?? null,
         });
-        // Charged, and the ledger wouldn't take it. See alertOpsDoubleCharge.
-        if (payErr?.code === "23505" && charge.ok) {
+        // CHARGED, AND THE LEDGER WOULDN'T TAKE IT — for ANY reason, not just
+        // a duplicate. The old condition read `payErr?.code === "23505"`, so a
+        // dropped connection or a constraint nobody had thought of went by in
+        // silence and the next line marked the invoice paid anyway: money
+        // taken, bill settled, no payments row, nobody told. refund-core then
+        // tells whoever rings that "nothing was captured on this job".
+        if (charge.ok && payErr) {
           const alerted = await alertOpsDoubleCharge(admin, invoice.id as string, cashDue, charge.ref ?? null);
           // The alert IS the safety net here, and it hangs off a read of its
           // own (the ops mailboxes). If that read failed — or there was nobody
@@ -808,8 +897,15 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
             notes.push(`a card was charged $${cashDue.toFixed(2)} and the ledger refused the payment row — and the CHARGED-BUT-NOT-RECORDED alert reached nobody. Needs a refund today.`);
           }
         }
-        await admin.from("invoices").update({ status: charge.ok ? "paid" : "due", processor_ref: charge.ref ?? null }).eq("id", invoice.id);
-        charged = charge.ok;
+        // PAID MEANS A PAYMENT ROW SAYS SO. When the charge worked and the row
+        // did not, the invoice stays 'due' on purpose: tomorrow's run finds it
+        // again, sends the SAME key (the decline count has not moved), and the
+        // processor replays rather than debits — so the row gets its second
+        // chance and nobody's card is touched twice. A 'paid' invoice with no
+        // payment behind it is the state nothing can recover from.
+        const recorded = charge.ok && !payErr;
+        await admin.from("invoices").update({ status: recorded ? "paid" : "due", processor_ref: charge.ref ?? null }).eq("id", invoice.id);
+        charged = recorded;
         const owner = one((prop as { users?: unknown } | null)?.users) as { email?: string; name?: string } | null;
         if (charge.ok && owner?.email) {
           const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cashDue);
@@ -1453,8 +1549,37 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
       }
       if (!pm?.token) continue; // still no card — try again tomorrow
       retried++;
-      const charge = await takePayment({ token: pm.token as string, amountCents: Math.round(fee * 100), description: statementDescriptor("cancel_fee") });
-      await admin.from("payments").insert({ invoice_id: inv.id, amount: fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null });
+      // THE SAME KEY THE CUSTOMER'S OWN CANCEL SENT. `cancelRequest` charges
+      // this fee the moment they cancel; this retries it every night until it
+      // sticks. Two doors onto ONE invoice, so a key built any other way here
+      // turns tonight's retry into a second debit of a fee that was already
+      // collected but never recorded. `failCount` is read above and is the
+      // same number both doors count.
+      const charge = await takePayment({
+        token: pm.token as string,
+        amountCents: Math.round(fee * 100),
+        description: statementDescriptor("cancel_fee"),
+        idempotencyKey: chargeKey("cancel_fee", inv.id as string, failCount ?? 0),
+      });
+      // THE INSERT'S RESULT WAS THROWN AWAY ENTIRELY: no error captured, no
+      // alert, and the next line flipped the invoice to paid regardless. A
+      // real charge with no row behind it, on the one path nobody watches.
+      const { error: payErr } = await admin.from("payments").insert({ invoice_id: inv.id, amount: fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null });
+      if (charge.ok && payErr) {
+        // Money left the customer and nothing records it. The invoice stays
+        // 'due', so tomorrow finds it again with the same key and replays
+        // instead of charging — but that is a recovery, not a fix, and only a
+        // person can decide whether to refund it tonight.
+        const alerted = await alertOpsDoubleCharge(admin, inv.id as string, fee, charge.ref ?? null);
+        if (alerted.notified === 0) {
+          skipped.push(`cancellation fee on job ${j.id}: a card was charged $${fee.toFixed(2)} and the ledger refused the payment row — and the alert reached NOBODY. Needs a refund today.`);
+        } else {
+          skipped.push(`cancellation fee on job ${j.id}: a card was charged $${fee.toFixed(2)} and the ledger refused the payment row — ops has been emailed.`);
+        }
+        continue;
+      }
+      // The card said no. The failed row above is the record of the attempt
+      // and is what moves the key on for tomorrow night.
       if (!charge.ok) continue;
       await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null }).eq("id", inv.id);
     }
@@ -1466,7 +1591,12 @@ export async function reconcileCancelledFees(): Promise<{ ok: boolean; retried: 
     const price = Number(j.customer_price ?? 0);
     const cost = Number(j.vendor_cost ?? 0);
     if (j.vendor_id && price > 0 && cost > 0) {
-      const crewShare = Math.round((fee / price) * cost * 100) / 100;
+      // ONE HOME for this arithmetic (@/lib/cancellation). The dial that set
+      // the fee is not knowable here — the fee was quoted whenever the customer
+      // cancelled, and the dial may have moved since — so the share is
+      // reconstructed from the fee actually collected. Same function, same
+      // rounding, as the door the customer came through.
+      const crewShare = crewShareOfFee(fee / price, cost);
       if (crewShare > 0) {
         const { data: existing, error: existingErr } = await admin.from("payouts").select("id").eq("job_id", j.id as string).eq("kind", "earning").maybeSingle();
         // FAILS OPEN IF IGNORED: null reads as "no payout yet" and releases the
@@ -3316,7 +3446,19 @@ export async function runMonthlyPayoutBatches(force = false): Promise<{ ok: bool
   let batches = 0, total = 0;
   for (const [vendorId, sum] of byVendor) {
     if (sum <= 0) continue;
-    const { data: v, error: vErr } = await admin.from("vendors").select("user_id").eq("id", vendorId).maybeSingle();
+    // FENCED, BY THE OWNER (0126) — the same join dispatch and the broadcast
+    // pool already use. A crew is a fixture because the USER behind it is, and
+    // nothing in this batch knew what a fixture was: production holds three
+    // released payouts totalling $224 to GreenEdge Lawn Co., whose owner is
+    // `is_fixture`. Today that money goes nowhere because no bank rail exists.
+    // The morning one does, this loop is what would send it.
+    //
+    // A fixture drops out as "no crew behind this payout", which is the
+    // truthful reading — there is nobody to pay — and its payouts keep
+    // accumulating rather than being consumed by a batch.
+    const { data: v, error: vErr } = await admin
+      .from("vendors").select("user_id, users!vendors_user_id_fkey!inner(is_fixture)")
+      .eq("id", vendorId).eq("users.is_fixture", false).maybeSingle();
     // Neither of these failing means what its empty case means. Skipping is the
     // safe direction — the money keeps accumulating — but it must be visible.
     if (vErr) {
