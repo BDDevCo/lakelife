@@ -91,3 +91,63 @@ describe("the three states of that card stay distinct", () => {
     expect(w).not.toMatch(/Nothing yet/);
   });
 });
+
+/**
+ * THE SCREEN THAT WOULD HAVE CONTRADICTED ITSELF.
+ *
+ * A bank return reopens the bill — `recompute_charge_paid` drops it from
+ * paid_total (0155) — so the rent card correctly goes back to OPEN. The
+ * payments list below it filtered `reversed_at` alone, so the payment stayed
+ * on screen with its receipt number. One screen, two answers, and a resident
+ * ringing the office quoting a receipt for money that is not there.
+ *
+ * Rendered rather than scanned, because the question is what a person SEES and
+ * a source scan cannot tell a rendered line from a dead branch.
+ */
+type PaymentRow = RenterHomeView["payments"][number];
+
+const PAID: PaymentRow = {
+  on: "2027-01-03",
+  amount: 542.53,
+  fee: null,
+  method: "ach",
+  receiptNo: 104,
+  bankReturnedOn: null,
+};
+
+describe("a payment the bank sent back", () => {
+  const returned: PaymentRow = { ...PAID, bankReturnedOn: "2027-02-04T00:00:00Z" };
+
+  it("is drawing the real list at all", () => {
+    // Otherwise every assertion below is green against a screen with no
+    // payments section on it.
+    expect(words(view({ payments: [PAID] }))).toMatch(/#104/);
+  });
+
+  it("says so, on the row, in words a resident can act on", () => {
+    const w = words(view({ payments: [returned] }));
+    expect(w, "the resident is not told their payment came back")
+      .toMatch(/bank sent this payment back/);
+    // The consequence, not just the event — this is the sentence that stops
+    // the phone call, because the rent card above now says OPEN.
+    expect(w).toMatch(/showing as unpaid again/);
+  });
+
+  it("keeps the row rather than hiding it", () => {
+    // A REVERSAL is dropped from this list, because it says the payment never
+    // happened. A RETURN happened and then came back, and their own bank
+    // statement shows both legs — quietly dropping our copy would make us look
+    // wrong about their money.
+    expect(words(view({ payments: [returned] }))).toMatch(/#104/);
+    expect(renderToStaticMarkup(<RenterHome view={view({ payments: [returned] })} />))
+      .toMatch(/line-through/);
+  });
+
+  it("says nothing of the kind about a payment that stood", () => {
+    // The other half of the mutation: a banner that always shows passes the
+    // test above and terrifies everybody who paid on time.
+    const html = renderToStaticMarkup(<RenterHome view={view({ payments: [PAID] })} />);
+    expect(html).not.toMatch(/bank sent this payment back/);
+    expect(html).not.toMatch(/line-through/);
+  });
+});
