@@ -5,6 +5,7 @@ import { parseDaterange } from "@/lib/parks";
 import { todayLakeDate, lakeDaysSince } from "@/lib/booking";
 import { paymentsAreLive } from "@/lib/charge-gate";
 import { mustRead, mustCount, softRead } from "@/lib/must-read";
+import { surchargePct } from "@/app/parks/card-fee";
 
 /**
  * THE RESIDENT'S OWN SCREEN.
@@ -80,7 +81,14 @@ export interface RenterHome {
   hasCard: boolean;
   /** True once their lot has been minted as a bookable place. */
   bookingReady: boolean;
-  /** Percent added if they pay rent by card. 0 = no fee. */
+  /**
+   * Percent that will ACTUALLY be added when they tap Pay, on the card that
+   * will actually be charged. 0 = no fee, and the screen says so out loud.
+   *
+   * Not `parks.card_fee_pct` — that is the park's dial, and it may only reach
+   * a credit card (card-fee.ts). Quoting the dial to somebody holding a debit
+   * card would name a fee the charge never takes.
+   */
   cardFeePct: number;
   /**
    * Lake-local today, so "when did you pay it?" cannot offer tomorrow. Taken
@@ -223,7 +231,12 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     // not there, from a screen with no other way to report anything.
     admin.from("park_lots").select("lot_number, qr_token").eq("id", stay.park_lot_id as string).maybeSingle(),
     admin.from("parks").select("name, accepts_online_rent, card_fee_pct").eq("id", file.park_id as string).maybeSingle(),
-    admin.from("payment_methods").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+    // THE CARD payRent WILL ACTUALLY CHARGE, not a head-count of cards.
+    // Same table, same `is_default` ordering, same limit as the action — the
+    // fee quoted on the confirm panel has to be resolved from the same row the
+    // charge is resolved from, or the screen names one number and the
+    // processor takes another.
+    admin.from("payment_methods").select("funding").eq("user_id", user.id).order("is_default", { ascending: false }).limit(1),
     admin
       .from("park_charges")
       .select("id, period_month, due_on, amount, paid_total, status, lines")
@@ -257,7 +270,11 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   ]);
   const lot = mustRead("your lot", lotRes);
   const park = mustRead("your park", parkRes);
-  const cards = mustCount("your saved cards", cardsRes);
+  // Their default card, which is the one payRent charges. mustRead, so a
+  // failed read still refuses rather than rendering "add a way to pay" at
+  // somebody who has one.
+  const cards = mustRead("your saved cards", cardsRes) as Array<{ funding: string | null }> | null;
+  const defaultCard = (cards ?? [])[0] ?? null;
 
   // ---- the bill -----------------------------------------------------------
   // The LATEST charge, not "this month's". A month the park has not billed yet
@@ -397,9 +414,9 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     // paid" form, which is the path that actually works today. A dead button
     // above a live one teaches her the screen is broken.
     acceptsOnlineRent: Boolean(park?.accepts_online_rent) && paymentsAreLive(),
-    hasCard: (cards ?? 0) > 0,
+    hasCard: defaultCard != null,
     bookingReady: (lotProps ?? 0) > 0,
-    cardFeePct: Number(park?.card_fee_pct ?? 0),
+    cardFeePct: surchargePct(park?.card_fee_pct, defaultCard?.funding),
     today: todayLakeDate(),
     lotNumber: (lot?.lot_number as string) ?? "—",
     // Whether the sticker the report card talks about actually exists.
