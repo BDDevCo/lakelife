@@ -34,14 +34,117 @@ export async function assertOps(): Promise<OpsUser | null> {
   return { id: data.id as string, name: (data.name as string) ?? null };
 }
 
+// ---- Refunds: the money that went back out --------------------------------
+
+/**
+ * A REFUND NEVER RESTATED REVENUE OR MARGIN.
+ *
+ * Both money reports below sum `jobs.customer_price` and `jobs.margin`, and
+ * neither looked at the refunds ledger. `refund-core` writes its refund row,
+ * pays the customer, claws back the crew — and walks away; nothing goes back
+ * to the job. So a refunded job kept contributing its whole price to the
+ * week's revenue and its whole margin to the blended percentage, for ever, on
+ * the console that is read twenty times a day. Refund a job and the number
+ * did not move.
+ *
+ * TWO NUMBERS, NOT ONE. The customer gets `amount` back. `crew_clawback` is
+ * the part of that recovered from the crew, so a $200 refund with a $140
+ * clawback costs LakeLife $60 of margin and the crew $140 of pay. Taking the
+ * whole $200 off margin would overstate the damage exactly as badly as taking
+ * nothing off understated it.
+ */
+interface JobRefund {
+  refundedCents: number;
+  clawbackCents: number;
+}
+
+const NO_REFUND: JobRefund = { refundedCents: 0, clawbackCents: 0 };
+
+/**
+ * Durable refunds, indexed by job. THE one doorway both reports go through.
+ *
+ * DURABLE means `processor_ref` is stamped — the same test refund-core and
+ * reconcileRefunds already use for "the processor honoured this". A row
+ * without one is a CLAIM, not money: refund-core inserts it, calls the
+ * processor, and deletes it again on a decline; the nightly sweeps any the
+ * crash window stranded. Counting a claim would take money off revenue that
+ * never left the building.
+ *
+ * Read whole rather than `.in("job_id", …)`. A refund is a rare event — three
+ * payments and no refunds exist in production today — while the by-service
+ * report's own jobs read is unbounded, so an id list built from it is the
+ * thing that would break first.
+ *
+ * mustRead, because a dropped connection here reads as "nothing was refunded",
+ * which overstates revenue at precisely the moment something is wrong.
+ */
+async function refundsByJob(
+  admin: ReturnType<typeof createServiceClient>,
+): Promise<Map<string, JobRefund>> {
+  const rows = mustRead(
+    "the refunds against these jobs",
+    await admin
+      .from("refunds")
+      .select("job_id, amount, crew_clawback")
+      .not("processor_ref", "is", null),
+  );
+  const byJob = new Map<string, JobRefund>();
+  for (const r of rows ?? []) {
+    // 0043 nulls job_id when the job is deleted. A refund with no job has no
+    // service line to come off, and must not be attributed to somebody else's.
+    const jobId = (r.job_id as string) ?? null;
+    if (!jobId) continue;
+    const cur = byJob.get(jobId) ?? { refundedCents: 0, clawbackCents: 0 };
+    // MONEY IS CENTS, rounded once, here, on the way in from `numeric`.
+    cur.refundedCents += Math.round(Number(r.amount ?? 0) * 100);
+    cur.clawbackCents += Math.round(Number(r.crew_clawback ?? 0) * 100);
+    byJob.set(jobId, cur);
+  }
+  return byJob;
+}
+
+/**
+ * Booked, less what went back. Whole cents in, whole cents out — the reports
+ * divide by 100 once, at the end, so no figure is rounded twice.
+ *
+ * The clawback comes off VENDOR COST, not off margin: it is money the crew
+ * returned, so it stays ours. Netting all three the same way is what keeps
+ * customer − vendor = margin true after a refund, which is the arithmetic a
+ * person does in their head reading the table. `vendorCostCents` is optional
+ * because the KPI strip does not carry a vendor figure.
+ */
+function netOfRefunds(
+  booked: { revenueCents: number; marginCents: number; vendorCostCents?: number },
+  refund: JobRefund,
+): { revenueCents: number; vendorCostCents: number; marginCents: number } {
+  return {
+    revenueCents: booked.revenueCents - refund.refundedCents,
+    vendorCostCents: (booked.vendorCostCents ?? 0) - refund.clawbackCents,
+    marginCents: booked.marginCents - (refund.refundedCents - refund.clawbackCents),
+  };
+}
+
+const toDollars = (cents: number) => cents / 100;
+
 // ---- KPI header -----------------------------------------------------------
 
 export interface OpsSummary {
   requestsWaiting: number;
   jobsThisWeek: number;
-  weekRevenue: number; // sum of customer_price on this week's scheduled+ jobs
-  weekMargin: number; // sum of margin on this week's scheduled+ jobs
-  weekMarginPct: number; // blended
+  /** customer_price on this week's scheduled+ jobs, NET of refunds on them. */
+  weekRevenue: number;
+  /** margin on those jobs, NET of what the refunds cost us after clawback. */
+  weekMargin: number;
+  weekMarginPct: number; // blended, net over net
+  /** The same two figures BEFORE refunds — kept so the pair is distinguishable
+   *  rather than one quietly overwriting the other. jobs.margin itself stays
+   *  the booked number the DB trigger enforces against price − cost. */
+  weekRevenueBooked: number;
+  weekMarginBooked: number;
+  /** Customer money returned on this week's jobs, and the part of it recovered
+   *  from the crew. */
+  weekRefunded: number;
+  weekClawback: number;
 }
 
 function weekBounds(): { start: string; end: string } {
@@ -70,25 +173,48 @@ export async function getOpsSummary(): Promise<OpsSummary> {
       .eq("status", "requested"),
   );
 
-  const week = mustRead(
-    "this week's jobs",
-    await admin
+  // `id` is selected so a refund can find its job. Refunds are attributed to
+  // the job's week, not to the day the money went back: a week's revenue is
+  // the revenue of the jobs IN it, and crediting a refund to the week it was
+  // issued could drive a quiet week negative against work it never contained.
+  const [weekRes, refunds] = await Promise.all([
+    admin
       .from("jobs")
-      .select("customer_price, margin")
+      .select("id, customer_price, margin")
       .gte("date", start)
       .lte("date", end)
       .in("status", ["scheduled", "in_progress", "complete", "paid"]),
-  );
+    refundsByJob(admin),
+  ]);
+  const rows = mustRead("this week's jobs", weekRes) ?? [];
 
-  const rows = week ?? [];
-  const weekRevenue = rows.reduce((s, r) => s + Number(r.customer_price ?? 0), 0);
-  const weekMargin = rows.reduce((s, r) => s + Number(r.margin ?? 0), 0);
+  let bookedRevenueCents = 0;
+  let bookedMarginCents = 0;
+  let refundedCents = 0;
+  let clawbackCents = 0;
+  for (const r of rows) {
+    bookedRevenueCents += Math.round(Number(r.customer_price ?? 0) * 100);
+    bookedMarginCents += Math.round(Number(r.margin ?? 0) * 100);
+    const back = refunds.get(r.id as string) ?? NO_REFUND;
+    refundedCents += back.refundedCents;
+    clawbackCents += back.clawbackCents;
+  }
+  const net = netOfRefunds(
+    { revenueCents: bookedRevenueCents, marginCents: bookedMarginCents },
+    { refundedCents, clawbackCents },
+  );
   return {
     requestsWaiting,
     jobsThisWeek: rows.length,
-    weekRevenue,
-    weekMargin,
-    weekMarginPct: weekRevenue > 0 ? Math.round((weekMargin / weekRevenue) * 1000) / 10 : 0,
+    weekRevenue: toDollars(net.revenueCents),
+    weekMargin: toDollars(net.marginCents),
+    // The blended figure follows the two numbers above it. A net margin over a
+    // booked revenue is a third number that means nothing.
+    weekMarginPct: net.revenueCents > 0 ? Math.round((net.marginCents / net.revenueCents) * 1000) / 10 : 0,
+    weekRevenueBooked: toDollars(bookedRevenueCents),
+    weekMarginBooked: toDollars(bookedMarginCents),
+    weekRefunded: toDollars(refundedCents),
+    weekClawback: toDollars(clawbackCents),
   };
 }
 
@@ -326,59 +452,108 @@ export async function getActiveVendors(): Promise<ActiveVendor[]> {
 export interface MarginRow {
   service_name: string;
   jobs: number;
+  /** All three NET of refunds: what the customer kept, what the crew kept, and
+   *  what was left for us. customer_total − vendor_total = margin_total still
+   *  holds, which is the sum a person does reading the row. */
   customer_total: number;
   vendor_total: number;
   margin_total: number;
-  margin_pct: number;
+  margin_pct: number; // net over net
+  /** The same three BEFORE refunds, so the pair stays distinguishable instead
+   *  of one quietly overwriting the other. */
+  customer_booked: number;
+  vendor_booked: number;
+  margin_booked: number;
+  /** What came off, and how much of it the crew gave back. */
+  refunded_total: number;
+  clawback_total: number;
+}
+
+/** Cents in, "$1,234.56" out — for the one line of this table's copy that is
+ *  written here rather than in the component. */
+const usd = (cents: number) =>
+  `$${toDollars(cents).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+interface ServiceAcc {
+  name: string;
+  jobs: number;
+  revenueCents: number;
+  vendorCents: number;
+  marginCents: number;
+  refundedCents: number;
+  clawbackCents: number;
 }
 
 export async function getMarginByService(): Promise<{ rows: MarginRow[]; total: MarginRow }> {
   const admin = createServiceClient();
-  const data = mustRead(
-    "revenue and margin by service",
-    await admin
+  // `id` is selected so a refund can find the service line it belongs to.
+  const [jobsRes, refunds] = await Promise.all([
+    admin
       .from("jobs")
-      .select("customer_price, vendor_cost, margin, services(name)")
+      .select("id, customer_price, vendor_cost, margin, services(name)")
       .in("status", ["scheduled", "in_progress", "complete", "paid"]),
-  );
+    refundsByJob(admin),
+  ]);
+  const data = mustRead("revenue and margin by service", jobsRes);
 
-  const byName = new Map<string, MarginRow>();
+  const byName = new Map<string, ServiceAcc>();
   for (const r of data ?? []) {
     const svc = Array.isArray(r.services) ? r.services[0] : r.services;
     const name = (svc as { name?: string } | null)?.name ?? "Unassigned service";
-    const row = byName.get(name) ?? {
-      service_name: name,
-      jobs: 0,
-      customer_total: 0,
-      vendor_total: 0,
-      margin_total: 0,
-      margin_pct: 0,
+    const acc = byName.get(name) ?? {
+      name, jobs: 0, revenueCents: 0, vendorCents: 0, marginCents: 0, refundedCents: 0, clawbackCents: 0,
     };
-    row.jobs += 1;
-    row.customer_total += Number(r.customer_price ?? 0);
-    row.vendor_total += Number(r.vendor_cost ?? 0);
-    row.margin_total += Number(r.margin ?? 0);
-    byName.set(name, row);
+    acc.jobs += 1;
+    acc.revenueCents += Math.round(Number(r.customer_price ?? 0) * 100);
+    acc.vendorCents += Math.round(Number(r.vendor_cost ?? 0) * 100);
+    acc.marginCents += Math.round(Number(r.margin ?? 0) * 100);
+    const back = refunds.get(r.id as string) ?? NO_REFUND;
+    acc.refundedCents += back.refundedCents;
+    acc.clawbackCents += back.clawbackCents;
+    byName.set(name, acc);
   }
 
-  const rows = [...byName.values()].map((r) => ({
-    ...r,
-    margin_pct: r.customer_total > 0 ? Math.round((r.margin_total / r.customer_total) * 1000) / 10 : 0,
-  }));
+  const toRow = (a: ServiceAcc, label: string): MarginRow => {
+    const net = netOfRefunds(
+      { revenueCents: a.revenueCents, vendorCostCents: a.vendorCents, marginCents: a.marginCents },
+      { refundedCents: a.refundedCents, clawbackCents: a.clawbackCents },
+    );
+    return {
+      service_name: label,
+      jobs: a.jobs,
+      customer_total: toDollars(net.revenueCents),
+      vendor_total: toDollars(net.vendorCostCents),
+      margin_total: toDollars(net.marginCents),
+      margin_pct: net.revenueCents > 0 ? Math.round((net.marginCents / net.revenueCents) * 1000) / 10 : 0,
+      customer_booked: toDollars(a.revenueCents),
+      vendor_booked: toDollars(a.vendorCents),
+      margin_booked: toDollars(a.marginCents),
+      refunded_total: toDollars(a.refundedCents),
+      clawback_total: toDollars(a.clawbackCents),
+    };
+  };
+
+  const accs = [...byName.values()];
+  const rows = accs.map((a) => toRow(a, a.name));
   rows.sort((a, b) => b.customer_total - a.customer_total);
 
-  const total = rows.reduce(
-    (t, r) => ({
-      service_name: "Total",
-      jobs: t.jobs + r.jobs,
-      customer_total: t.customer_total + r.customer_total,
-      vendor_total: t.vendor_total + r.vendor_total,
-      margin_total: t.margin_total + r.margin_total,
-      margin_pct: 0,
+  const sum = accs.reduce<ServiceAcc>(
+    (t, a) => ({
+      name: "Total",
+      jobs: t.jobs + a.jobs,
+      revenueCents: t.revenueCents + a.revenueCents,
+      vendorCents: t.vendorCents + a.vendorCents,
+      marginCents: t.marginCents + a.marginCents,
+      refundedCents: t.refundedCents + a.refundedCents,
+      clawbackCents: t.clawbackCents + a.clawbackCents,
     }),
-    { service_name: "Total", jobs: 0, customer_total: 0, vendor_total: 0, margin_total: 0, margin_pct: 0 } as MarginRow,
+    { name: "Total", jobs: 0, revenueCents: 0, vendorCents: 0, marginCents: 0, refundedCents: 0, clawbackCents: 0 },
   );
-  total.margin_pct = total.customer_total > 0 ? Math.round((total.margin_total / total.customer_total) * 1000) / 10 : 0;
+  // The footer is the whole of this table's copy that comes from here, and a
+  // total that has quietly moved is the same lie in the other direction. Say
+  // it only when there is something to say — a claim that money was netted
+  // when none was is a number nobody set, and the amount earns the sentence.
+  const total = toRow(sum, sum.refundedCents > 0 ? `Total · net of ${usd(sum.refundedCents)} refunded` : "Total");
 
   return { rows, total };
 }
@@ -588,6 +763,14 @@ type MarginHealthRowInternal = MarginHealthRow & { suggestionFull?: MenuSuggesti
  * ops board shows, from ONE formula, via computeMenuSuggestions below. Never
  * checks role — the caller authorizes (getMarginHealth's assertOps gate, or
  * the cron route's CRON_SECRET).
+ *
+ * DELIBERATELY BOOKED, NOT NET OF REFUNDS — a menu price, not a money report.
+ * Its margin_pct answers "is the menu priced right against the crews' rates
+ * here", and the nightly pass raises real prices off the same numbers. A
+ * refund is a job that went wrong, not a rate that is thin: netting one in
+ * would push the menu up for every household on the lake because one crew
+ * botched one visit. The two reports above are the ones that state what we
+ * earned, and they net. This one states what we charge, and it must not.
  */
 async function computeMarginHealthRows(
   admin: ReturnType<typeof createServiceClient>,
