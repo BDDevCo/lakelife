@@ -4,7 +4,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { todayLakeDate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
-import { takePayment } from "@/lib/charge-gate";
+import { takePayment, chargeKey } from "@/lib/charge-gate";
+import { crewShareOfFee } from "@/lib/cancellation";
 import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge } from "@/lib/automation";
 import {
@@ -144,21 +145,44 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
     }
     const pm = pmRes.data;
     if (pm?.token) {
+      // HOW MANY TIMES THIS CARD HAS ALREADY DECLINED ON THIS INVOICE. It is
+      // half the idempotency key: an interrupted attempt must REPLAY rather
+      // than debit a second time, and a real decline must be free to RETRY
+      // rather than be answered with a replay of the refusal.
+      //
+      // A failed read is not zero. A key built from a count we never saw is a
+      // key that differs from the interrupted attempt's, which is precisely a
+      // second charge — so the row goes back on the queue instead.
+      const declinesRes = await admin
+        .from("payments").select("id", { count: "exact", head: true })
+        .eq("invoice_id", invoice.id).eq("status", "failed");
+      if (declinesRes.error) {
+        await admin.from("jobs").update({ recovery_state: "fee_proposed" }).eq("id", jobId);
+        return { ok: false, error: readFailedMessage("that visit's card attempts", declinesRes.error, { money: true }) };
+      }
       const charge = await takePayment({
         token: pm.token as string,
         amountCents: Math.round(amount * 100),
         description: statementDescriptor("visit_fee"),
+        idempotencyKey: chargeKey("visit_fee", invoice.id as string, declinesRes.count ?? 0),
       });
       const { error: payErr } = await admin.from("payments").insert({
         invoice_id: invoice.id, amount,
         status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null,
       });
-      if (payErr?.code === "23505" && charge.ok) {
+      // ANY failure to record a real charge, not only a duplicate. The old
+      // condition named 23505 alone, so a dropped connection took the fee and
+      // told nobody — and the sentence at the bottom of this function would
+      // have said the money was charged while the ledger held nothing.
+      if (charge.ok && payErr) {
         await alertOpsDoubleCharge(admin, invoice.id as string, amount, charge.ref ?? null);
       }
       charged = charge.ok;
       ref = charge.ref ?? null;
-      if (charged) {
+      // 'paid' means a payment row says so. When the charge worked and the row
+      // did not, the invoice stays 'due' and the alert above is what carries
+      // it to a person — there is no nightly retry for a visit fee.
+      if (charged && !payErr) {
         await admin.from("invoices").update({ status: "paid", processor_ref: ref }).eq("id", invoice.id);
       }
     }
@@ -195,7 +219,10 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
       }
       const full = fullRes.data;
       const dials = await getPlatformSettings();
-      const share = Math.max(0, Number(full?.vendor_cost ?? 0)) * dials.cancelFeePct;
+      // ONE HOME (@/lib/cancellation). This multiplied and never rounded, so
+      // the crew's share of a visit fee could differ in the cents from the
+      // same crew's share of a late cancellation on an identical job.
+      const share = crewShareOfFee(dials.cancelFeePct, Number(full?.vendor_cost ?? 0));
 
       // FAILS OPEN, AND IT PAYS TWICE. This read is the ONLY thing that knows
       // the crew already had the flat trip fee. `data: null` on a dropped

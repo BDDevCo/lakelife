@@ -66,8 +66,29 @@ export function lateFee(
   if (!(feePct > 0)) return { fee: 0, crewShare: 0 };
   return {
     fee: cents(feePct * Math.max(0, customerPrice)),
-    crewShare: cents(feePct * Math.max(0, vendorCost ?? 0)),
+    crewShare: crewShareOfFee(feePct, vendorCost),
   };
+}
+
+/**
+ * WHAT THE CREW IS OWED OUT OF A FEE — the same share of THEIR rate as the fee
+ * is of the customer's price, to the cent.
+ *
+ * Three places computed this and no two agreed on the rounding: here it was
+ * `cents(pct * cost)`, the nightly's cancellation-fee retry wrote
+ * `Math.round((fee / price) * cost * 100) / 100` inline, and the visit-fee
+ * recovery multiplied and never rounded at all — so a fraction of a cent could
+ * reach a payouts row, and the same job's crew share depended on which door
+ * collected the money.
+ *
+ * The callers legitimately differ in what they know — the cancel path holds
+ * the DIAL, the nightly retry knows only the fee it actually collected and
+ * reconstructs the share from `fee / price` — but the arithmetic they hand it
+ * to lives here, once, and always lands on whole cents.
+ */
+export function crewShareOfFee(feePct: number, vendorCost: number | null): number {
+  if (!(feePct > 0)) return 0;
+  return cents(feePct * Math.max(0, vendorCost ?? 0));
 }
 
 export function cancellationQuote(

@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/sms", () => ({ sendSms: vi.fn(async () => ({ ok: true })) }));
 vi.mock("@/lib/email", () => ({ sendEmail: vi.fn(async () => ({ ok: true })) }));
-vi.mock("@/lib/payments", () => ({ LakeLifePayments: { charge: vi.fn(async () => ({ ok: true, ref: "ref_test" })) } }));
+vi.mock("@/lib/payments-server", () => ({ LakeLifePaymentsServer: { charge: vi.fn(async () => ({ ok: true, ref: "ref_test" })) } }));
 vi.mock("@/app/book/dispatch", () => ({
   revalidateJob: vi.fn(async () => {}),
   autoAssignJob: vi.fn(async () => null),

@@ -1516,7 +1516,11 @@ export async function refundParkPayment(
   const chargeRef = String(refRes.data?.reference ?? "").trim();
   if (!chargeRef) return { ok: false, error: "That payment has no processor reference to refund against." };
 
-  const done = await giveRefund({ chargeRef, amountCents: refundCents(amount, feeAmount) });
+  // The key the form minted is what the `park_refunds` unique index catches a
+  // twin submit with — but the row is written AFTER the money moves, so until
+  // now the key reached the index and never the processor. The second submit
+  // was refunded and then refused a record of it.
+  const done = await giveRefund({ chargeRef, amountCents: refundCents(amount, feeAmount), idempotencyKey: input.idempotencyKey });
   if (!done.ok || !done.ref) {
     return {
       ok: false,

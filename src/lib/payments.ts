@@ -11,6 +11,13 @@
  * IMPORTANT: even here, the raw card number is used only to derive brand/last4
  * client-side and is never returned or sent to our server. Only the token +
  * display details leave this function.
+ *
+ * THIS FILE IS REACHED BY THE BROWSER, ON PURPOSE. `PaymentMethods.tsx` is a
+ * `"use client"` component and imports it, which is exactly right for hosted
+ * fields and exactly wrong for anything holding a processor's secret key — so
+ * `charge()` and `refund()` no longer live here. They are in
+ * `payments-server.ts` behind `import "server-only"`, and only
+ * `charge-gate.ts` may call them.
  */
 
 export interface CardInput {
@@ -59,40 +66,6 @@ export interface TokenizeResult {
   token?: PaymentToken;
 }
 
-/**
- * What the mock has already charged, by idempotency key.
- *
- * A real processor keeps this for 24 hours on its own side; in a serverless
- * runtime this map does not survive a cold start, and that is fine — it exists
- * to model the CONTRACT so the adapter is a drop-in and so a test can prove a
- * repeated key takes one payment. The durable guard is the unique index on
- * park_payments.idempotency_key.
- */
-const chargeReplays = new Map<string, ChargeResult>();
-
-export interface ChargeInput {
-  token: string;
-  amountCents: number;
-  description?: string;
-  /**
-   * SENT TO THE PROCESSOR, not just used by us.
-   *
-   * Every processor worth using (Stripe, Helcim) dedupes on this: the same key
-   * replays the FIRST result instead of taking a second payment. It is the
-   * answer to "what stops a duplicate charge", and it belongs on the request
-   * rather than only on our own row — our unique index can refuse a second
-   * ledger row, but by then the card has already been debited twice.
-   */
-  idempotencyKey?: string;
-}
-
-export interface ChargeResult {
-  ok: boolean;
-  error?: string;
-  ref?: string;
-  amountCents?: number;
-}
-
 export const LakeLifePayments = {
   /**
    * Mock of the processor's tokenize(). Validates the card, then returns a
@@ -118,15 +91,16 @@ export const LakeLifePayments = {
     const last4 = digits.slice(-4);
     // A stand-in vault token. The real one comes from the processor.
     //
-    // The tail must never contain a long digit run, because charge() below
-    // REFUSES any token matching /\d{12,}/ as a leaked-PAN defence (rule 4).
-    // The previous version claimed in a comment that its tail was "base36
-    // (letters + digits), so the token can never contain a long digit run" —
-    // but crypto.randomUUID() is HEX, and hex is ten digits out of sixteen
-    // symbols. About one token in a few hundred came out with twelve or more
-    // digits in a row, and our own charge() then rejected our own token. It
-    // surfaced as a ~1-in-900 test flake; the real cost was a payment that
-    // failed for no reason a customer could understand.
+    // The tail must never contain a long digit run, because charge() in
+    // `payments-server.ts` REFUSES any token matching /\d{12,}/ as a
+    // leaked-PAN defence (rule 4). The previous version claimed in a comment
+    // that its tail was "base36 (letters + digits), so the token can never
+    // contain a long digit run" — but crypto.randomUUID() is HEX, and hex is
+    // ten digits out of sixteen symbols. About one token in a few hundred came
+    // out with twelve or more digits in a row, and our own charge() then
+    // rejected our own token. It surfaced as a ~1-in-900 test flake; the real
+    // cost was a payment that failed for no reason a customer could
+    // understand.
     //
     // Now bounded BY CONSTRUCTION: groups of five, joined by a letter, so the
     // longest possible digit run is five whatever the random source does.
@@ -138,71 +112,5 @@ export const LakeLifePayments = {
     const token = `tok_mock_${last4}_${rand}`;
 
     return { ok: true, token: { token, brand, last4, exp_month, exp_year } };
-  },
-
-  /**
-   * Mock of the processor's charge(). In production the processor charges the
-   * vault token and hands back the real `ref`; we never see a card number here.
-   * Amounts are integer cents to avoid float drift. This mock also refuses
-   * anything that looks like a raw PAN, defending CLAUDE.md rule 4 in depth.
-   */
-  async charge(input: ChargeInput): Promise<ChargeResult> {
-    // REPLAY, DO NOT RE-CHARGE. A real processor holds this server-side for
-    // 24h; this mock holds it in memory, which is enough to model the contract
-    // and to let a test prove that two calls with one key take one payment.
-    if (input.idempotencyKey) {
-      const seen = chargeReplays.get(input.idempotencyKey);
-      if (seen) return seen;
-    }
-    if (!input.token.startsWith("tok_")) {
-      return { ok: false, error: "Invalid payment token." };
-    }
-    // A real processor charges a vault token, never a card number — refuse a
-    // long digit run that could be (or hide) a leaked PAN.
-    if (/\d{12,}/.test(input.token)) {
-      return {
-        ok: false,
-        error: "Refusing to charge what looks like a raw card number.",
-      };
-    }
-    if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
-      return {
-        ok: false,
-        error: "Charge amount must be a positive whole number of cents.",
-      };
-    }
-
-    // A stand-in charge reference. The real one comes from the processor.
-    const rand =
-      typeof crypto !== "undefined" && crypto.randomUUID
-        ? "x" + crypto.randomUUID().replace(/-/g, "").slice(0, 15)
-        : "x" + Math.random().toString(36).slice(2, 17);
-    const result: ChargeResult = { ok: true, ref: `ch_mock_${rand}`, amountCents: input.amountCents };
-    if (input.idempotencyKey) chargeReplays.set(input.idempotencyKey, result);
-    return result;
-  },
-
-  /**
-   * Mock of the processor's refund(). Real processors refund against the
-   * original charge reference, never the card; same shape here so the real
-   * adapter is a drop-in (docs/refunds-design.md). A charge ref containing
-   * "rf_fail" refuses deterministically — the test hook for the failure
-   * path, mirroring how declining cards are staged for charge().
-   */
-  async refund(input: { chargeRef: string; amountCents: number }): Promise<ChargeResult> {
-    if (!input.chargeRef || !input.chargeRef.startsWith("ch_")) {
-      return { ok: false, error: "Invalid charge reference." };
-    }
-    if (input.chargeRef.includes("rf_fail")) {
-      return { ok: false, error: "Processor refused the refund." };
-    }
-    if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
-      return { ok: false, error: "Refund amount must be a positive whole number of cents." };
-    }
-    const rand =
-      typeof crypto !== "undefined" && crypto.randomUUID
-        ? "x" + crypto.randomUUID().replace(/-/g, "").slice(0, 15)
-        : "x" + Math.random().toString(36).slice(2, 17);
-    return { ok: true, ref: `rf_mock_${rand}`, amountCents: input.amountCents };
   },
 };

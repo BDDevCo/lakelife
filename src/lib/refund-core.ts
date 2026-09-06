@@ -160,6 +160,13 @@ export async function executeRefund(input: {
   const res = await giveRefund({
     chargeRef: (payment.processor_ref as string) ?? "",
     amountCents: Math.round(amount * 100),
+    // KEYED ON THE CLAIM ROW, which is the one thing that exists before the
+    // money moves and identifies exactly this refund. The processor was being
+    // asked with no key at all: the ops modal's own key (when it had one) only
+    // ever reached the `refunds` insert, so a double-submit that got past the
+    // ledger lock — or a retry after a timeout on the processor call itself —
+    // sent the money back twice while the office was told it went once.
+    idempotencyKey: `refund:${claim.id}`,
   });
   if (!res.ok) {
     await admin.from("refunds").delete().eq("id", claim.id);

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { detectBrand, luhnValid, LakeLifePayments } from "./payments";
+import { LakeLifePaymentsServer } from "./payments-server";
 
 describe("card brand detection", () => {
   it("Visa starts with 4", () => expect(detectBrand("4242424242424242")).toBe("Visa"));
@@ -49,38 +50,38 @@ describe("tokenize (mock) — never returns the raw card number", () => {
 
 describe("LakeLifePayments.charge", () => {
   it("charges a valid token + positive integer cents", async () => {
-    const res = await LakeLifePayments.charge({ token: "tok_mock_4242_xabc123", amountCents: 12500 });
+    const res = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_xabc123", amountCents: 12500 });
     expect(res.ok).toBe(true);
     expect(res.ref!.startsWith("ch_mock_")).toBe(true);
     expect(res.amountCents).toBe(12500);
   });
 
   it("rejects a token that doesn't start with tok_", async () => {
-    const res = await LakeLifePayments.charge({ token: "card_4242", amountCents: 12500 });
+    const res = await LakeLifePaymentsServer.charge({ token: "card_4242", amountCents: 12500 });
     expect(res.ok).toBe(false);
     expect(res.error).toBe("Invalid payment token.");
   });
 
   it("refuses a token that hides a raw PAN (16-digit run)", async () => {
-    const res = await LakeLifePayments.charge({ token: "tok_4242424242424242", amountCents: 12500 });
+    const res = await LakeLifePaymentsServer.charge({ token: "tok_4242424242424242", amountCents: 12500 });
     expect(res.ok).toBe(false);
     expect(res.error).toBe("Refusing to charge what looks like a raw card number.");
   });
 
   it("rejects a zero amount", async () => {
-    const res = await LakeLifePayments.charge({ token: "tok_mock_4242_xabc123", amountCents: 0 });
+    const res = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_xabc123", amountCents: 0 });
     expect(res.ok).toBe(false);
     expect(res.error).toBe("Charge amount must be a positive whole number of cents.");
   });
 
   it("rejects a negative amount", async () => {
-    const res = await LakeLifePayments.charge({ token: "tok_mock_4242_xabc123", amountCents: -500 });
+    const res = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_xabc123", amountCents: -500 });
     expect(res.ok).toBe(false);
     expect(res.error).toBe("Charge amount must be a positive whole number of cents.");
   });
 
   it("rejects a non-integer amount", async () => {
-    const res = await LakeLifePayments.charge({ token: "tok_mock_4242_xabc123", amountCents: 10.5 });
+    const res = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_xabc123", amountCents: 10.5 });
     expect(res.ok).toBe(false);
     expect(res.error).toBe("Charge amount must be a positive whole number of cents.");
   });
@@ -108,7 +109,7 @@ describe("mock token never trips our own leaked-PAN guard", () => {
       const t = await LakeLifePayments.tokenize({
         number: "4242 4242 4242 4242", exp: "12/30", cvc: "123",
       });
-      const charged = await LakeLifePayments.charge({ token: t.token!.token, amountCents: 1000 });
+      const charged = await LakeLifePaymentsServer.charge({ token: t.token!.token, amountCents: 1000 });
       expect(charged.ok).toBe(true);
     }
   });
@@ -130,8 +131,8 @@ describe("an idempotency key takes ONE payment, not two", () => {
    */
   it("replays the first result rather than charging again", async () => {
     const key = `test-${Math.random().toString(36).slice(2)}`;
-    const first = await LakeLifePayments.charge({ token: "tok_mock_4242_aaa111", amountCents: 45500, idempotencyKey: key });
-    const second = await LakeLifePayments.charge({ token: "tok_mock_4242_aaa111", amountCents: 45500, idempotencyKey: key });
+    const first = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_aaa111", amountCents: 45500, idempotencyKey: key });
+    const second = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_aaa111", amountCents: 45500, idempotencyKey: key });
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
     // The SAME reference — one payment at the processor, not two.
@@ -139,14 +140,14 @@ describe("an idempotency key takes ONE payment, not two", () => {
   });
 
   it("a different key is a different payment", async () => {
-    const a = await LakeLifePayments.charge({ token: "tok_mock_4242_bbb222", amountCents: 1000, idempotencyKey: `k-${Math.random()}` });
-    const b = await LakeLifePayments.charge({ token: "tok_mock_4242_bbb222", amountCents: 1000, idempotencyKey: `k-${Math.random()}` });
+    const a = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_bbb222", amountCents: 1000, idempotencyKey: `k-${Math.random()}` });
+    const b = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_bbb222", amountCents: 1000, idempotencyKey: `k-${Math.random()}` });
     expect(a.ref).not.toBe(b.ref);
   });
 
   it("no key at all still charges — the mock does not invent one", async () => {
-    const a = await LakeLifePayments.charge({ token: "tok_mock_4242_ccc333", amountCents: 500 });
-    const b = await LakeLifePayments.charge({ token: "tok_mock_4242_ccc333", amountCents: 500 });
+    const a = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_ccc333", amountCents: 500 });
+    const b = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_ccc333", amountCents: 500 });
     expect(a.ref).not.toBe(b.ref);
   });
 
@@ -154,15 +155,15 @@ describe("an idempotency key takes ONE payment, not two", () => {
     // Guards the guard: the replay cache must not let a bad token through by
     // returning a cached success for a different token under the same key.
     const key = `guard-${Math.random()}`;
-    const good = await LakeLifePayments.charge({ token: "tok_mock_4242_ddd444", amountCents: 100, idempotencyKey: key });
+    const good = await LakeLifePaymentsServer.charge({ token: "tok_mock_4242_ddd444", amountCents: 100, idempotencyKey: key });
     expect(good.ok).toBe(true);
-    const replayed = await LakeLifePayments.charge({ token: "tok_4242424242424242", amountCents: 100, idempotencyKey: key });
+    const replayed = await LakeLifePaymentsServer.charge({ token: "tok_4242424242424242", amountCents: 100, idempotencyKey: key });
     // It replays the FIRST result, which is the processor's real contract —
     // the key is the identity of the ATTEMPT, so this is correct. Documented
     // here so nobody mistakes it for the PAN guard being bypassable: a fresh
     // key still refuses the raw number.
     expect(replayed.ref).toBe(good.ref);
-    const fresh = await LakeLifePayments.charge({ token: "tok_4242424242424242", amountCents: 100, idempotencyKey: `fresh-${Math.random()}` });
+    const fresh = await LakeLifePaymentsServer.charge({ token: "tok_4242424242424242", amountCents: 100, idempotencyKey: `fresh-${Math.random()}` });
     expect(fresh.ok).toBe(false);
   });
 });
