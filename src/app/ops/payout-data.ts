@@ -20,12 +20,31 @@ export interface PayoutQueueRow {
   created_at: string;
 }
 
+/** A crew whose released, un-batched pay adds up to LESS than nothing. */
+export interface CrewInTheRed {
+  vendorId: string;
+  payee: string;
+  /** Negative dollars. What they owe, in the sign the ledger holds it in. */
+  amount: number;
+}
+
 export interface PayoutQueue {
   queuedCount: number;
   queuedTotal: number;
   exportedCount: number;
   exportedTotal: number;
   rows: PayoutQueueRow[];
+  /**
+   * THE CREWS EVERY MONTH-END RUN DROPS WITHOUT SAYING SO.
+   *
+   * A clawback after a batch has gone out lands as a negative released payout,
+   * and it is only ever recovered out of future earnings. Until those earnings
+   * arrive the crew's released-and-unbatched sum is below zero, and
+   * `runMonthlyPayoutBatches` skips them on a bare `if (sum <= 0) continue`:
+   * no batch, no line in the run's skipped list, nothing anywhere. A crew can
+   * sit in the red for months while every run reports a clean night.
+   */
+  owing: CrewInTheRed[];
 }
 
 type Embed<T> = T | T[] | null;
@@ -45,7 +64,41 @@ interface RawRow {
   users: Embed<{ name: string | null }>;
 }
 
-const EMPTY: PayoutQueue = { queuedCount: 0, queuedTotal: 0, exportedCount: 0, exportedTotal: 0, rows: [] };
+const EMPTY: PayoutQueue = { queuedCount: 0, queuedTotal: 0, exportedCount: 0, exportedTotal: 0, rows: [], owing: [] };
+
+interface RawOwed {
+  vendor_id: string;
+  amount: number | string | null;
+  vendors: Embed<{ company: string | null; users: Embed<{ is_fixture: boolean | null }> }>;
+}
+
+/**
+ * Sum released, un-batched pay per crew and keep only the ones below zero.
+ *
+ * CENTS, ONCE. Two clawbacks of -59.99 and one earning of 119.98 must come to
+ * exactly zero and drop off this list, not to -0.0000000001 and stay on it as
+ * a crew somebody is told to ring about a debt of nothing.
+ */
+function crewsInTheRed(rows: RawOwed[]): CrewInTheRed[] {
+  const cents = new Map<string, number>();
+  const name = new Map<string, string>();
+
+  for (const r of rows) {
+    const vendor = first(r.vendors) as
+      { company?: string | null; users?: Embed<{ is_fixture: boolean | null }> } | null;
+    // Same fence as dispatch and the ACH export, derived from the OWNER: an
+    // account we invented ourselves is not somebody to ring about a debt.
+    if ((first(vendor?.users) as { is_fixture?: boolean | null } | null)?.is_fixture === true) continue;
+    const id = r.vendor_id;
+    cents.set(id, (cents.get(id) ?? 0) + Math.round(Number(r.amount ?? 0) * 100));
+    if (!name.has(id)) name.set(id, vendor?.company || "Unknown crew");
+  }
+
+  return [...cents.entries()]
+    .filter(([, c]) => c < 0)
+    .map(([id, c]) => ({ vendorId: id, payee: name.get(id) ?? "Unknown crew", amount: c / 100 }))
+    .sort((a, b) => a.amount - b.amount); // deepest in the red first
+}
 
 export async function getPayoutQueue(): Promise<PayoutQueue> {
   const ops = await assertOps();
@@ -95,11 +148,25 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
     })
     .sort((a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9));
 
+  // The same shape the month-end run sums, asked of the same rows. An empty
+  // answer here means "nobody is in the red", which is a claim about money,
+  // so a dropped read must fail the screen rather than make it.
+  const owed = mustRead(
+    "the crews carrying a balance",
+    await admin
+      .from("payouts")
+      .select("vendor_id, amount, vendors(company, users!vendors_user_id_fkey(is_fixture))")
+      .eq("status", "released")
+      .is("batch_id", null)
+      .not("vendor_id", "is", null),
+  );
+
   return {
     queuedCount,
     queuedTotal: Math.round(queuedTotal * 100) / 100,
     exportedCount,
     exportedTotal: Math.round(exportedTotal * 100) / 100,
     rows,
+    owing: crewsInTheRed((owed ?? []) as unknown as RawOwed[]),
   };
 }
