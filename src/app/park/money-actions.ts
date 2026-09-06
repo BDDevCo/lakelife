@@ -167,7 +167,7 @@ export async function applyOnAccount(
 
   const payRes = await admin
     .from("park_payments")
-    .select("id, park_id, renter_id, amount, charge_id, kind, reversed_at")
+    .select("id, park_id, renter_id, amount, charge_id, kind, reversed_at, returned_at")
     .eq("id", paymentId).eq("park_id", parkId).maybeSingle();
   // Every check below — already applied, reversed, a deposit, whose money it
   // is, whether it would strand change — reads off this one row.
@@ -178,6 +178,15 @@ export async function applyOnAccount(
   if (!pay) return { ok: false, error: "That payment isn't here." };
   if (pay.charge_id) return { ok: false, error: "That one is already against a bill." };
   if (pay.reversed_at) return { ok: false, error: "That payment was reversed." };
+  // A RETURN IS NOT A REVERSAL AND IT IS NOT A REFUND (0155). The bank pulled
+  // this money back, so it is not sitting on account and cannot settle a bill.
+  // `recompute_charge_paid` would leave the charge at the same paid_total, and
+  // the row would simply disappear off the on-account list having paid nothing
+  // — which is how a household ends up chased for rent the screen said was
+  // applied. Refuse it here so somebody reads why.
+  if (pay.returned_at) {
+    return { ok: false, error: "The bank took that payment back — it never settled, so it can't pay a bill." };
+  }
   // The database refuses this too. Saying it in words first means the office
   // gets a sentence instead of a constraint name.
   if (pay.kind === "deposit") {
@@ -330,7 +339,10 @@ export async function returnDeposit(
   const admin = createServiceClient();
   const depRes = await admin
     .from("park_payments")
-    .select("id, park_id, kind, amount, returned_on, reversed_at")
+    // `returned_on` is THIS deposit going back to the tenant; `returned_at` is
+    // the bank pulling the original payment back. One letter apart, opposite
+    // meanings, and both have to be read before money leaves the office.
+    .select("id, park_id, kind, amount, returned_on, reversed_at, returned_at")
     .eq("id", paymentId).eq("park_id", parkId).maybeSingle();
   // The deposit is the single most argued-about number in this business.
   // "That deposit isn't here" is never a thing to say on a failed read.
@@ -341,6 +353,12 @@ export async function returnDeposit(
   if (!dep) return { ok: false, error: "That deposit isn't here." };
   if (dep.kind !== "deposit") return { ok: false, error: "That isn't a deposit." };
   if (dep.reversed_at) return { ok: false, error: "That deposit was reversed." };
+  // HANDING BACK A DEPOSIT THE BANK ALREADY TOOK BACK PAYS THEM TWICE, and the
+  // second payment is the park's own money. The deposit screen has no idea:
+  // the row still reads as $500 held.
+  if (dep.returned_at) {
+    return { ok: false, error: "The bank took that deposit back — it never settled, so there is nothing of theirs to return." };
+  }
   if (dep.returned_on) return { ok: false, error: "That deposit has already been returned." };
   if (amount > Number(dep.amount)) {
     return { ok: false, error: `They only ever paid $${Number(dep.amount).toFixed(2)} — you can't return more.` };
@@ -410,13 +428,20 @@ export async function getHeldMoney(parkId: string): Promise<{
   // read of every payment the park has ever taken filtered in JavaScript.
   // ONE literal string. A `+`-joined select turns every column into a
   // GenericStringError at the type level and silently into nothing at runtime.
-  const cols = "id, renter_id, amount, fee_amount, method, received_on, reference, receipt_no, kind, charge_id, returned_on, returned_amount, return_note, note, reversed_at";
+  const cols = "id, renter_id, amount, fee_amount, method, received_on, reference, receipt_no, kind, charge_id, returned_on, returned_amount, return_note, note, reversed_at, returned_at";
+  // MONEY THE BANK TOOK BACK IS NOT MONEY THE PARK IS HOLDING, and neither of
+  // these piles has a charge for `recompute_charge_paid` to correct — that is
+  // the whole point of 0102's anchor. So the filter has to be here, beside the
+  // reversal filter it sits with, or both totals overstate the park's cash for
+  // as long as nobody reconciles the bank.
   const [acctRes, depRes] = await Promise.all([
     admin.from("park_payments").select(cols)
-      .eq("park_id", parkId).is("reversed_at", null).eq("kind", "rent").is("charge_id", null)
+      .eq("park_id", parkId).is("reversed_at", null).is("returned_at", null)
+      .eq("kind", "rent").is("charge_id", null)
       .order("received_on", { ascending: false }),
     admin.from("park_payments").select(cols)
-      .eq("park_id", parkId).is("reversed_at", null).eq("kind", "deposit")
+      .eq("park_id", parkId).is("reversed_at", null).is("returned_at", null)
+      .eq("kind", "deposit")
       .order("received_on", { ascending: false }),
   ]);
   // `empty` above means "$0 on account, $0 held". Told to a household whose
