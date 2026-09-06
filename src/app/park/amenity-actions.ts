@@ -119,8 +119,8 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
       : Promise.resolve({ data: [] as { id: string; park_lot_id: string }[], error: null }),
     bookingIds.length
       ? admin.from("park_payments")
-          .select("id, amenity_booking_id, amount, method, received_on, reversed_at").in("amenity_booking_id", bookingIds)
-      : Promise.resolve({ data: [] as { id: string; amenity_booking_id: string; amount: number; method: string; received_on: string; reversed_at: string | null }[], error: null }),
+          .select("id, amenity_booking_id, amount, method, received_on, reversed_at, returned_at").in("amenity_booking_id", bookingIds)
+      : Promise.resolve({ data: [] as { id: string; amenity_booking_id: string; amount: number; method: string; received_on: string; reversed_at: string | null; returned_at: string | null }[], error: null }),
   ]);
   const names = mustRead("who has them booked", namesRes);
   const stays = mustRead("their stays", staysRes);
@@ -139,7 +139,12 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
   const collectedByBooking = new Map<string, number>();
   const paymentsByBooking = new Map<string, Array<{ id: string; amount: number; method: string; on: string }>>();
   for (const p of paid ?? []) {
-    if (p.reversed_at) continue;   // a bounced payment is not money
+    // A bounced payment is not money, and there are TWO ways to bounce: the
+    // office un-recording it, and the bank pulling it back after it settled
+    // (0155). 0142 forbids reversing a card or ACH payment, so the second is
+    // the ONLY way an electronic amenity payment can fail — which is most of
+    // them, since a guest books with a card.
+    if (p.reversed_at || p.returned_at) continue;
     const k = p.amenity_booking_id as string;
     collectedByBooking.set(k, Math.round(((collectedByBooking.get(k) ?? 0) + Number(p.amount ?? 0)) * 100) / 100);
     const list = paymentsByBooking.get(k) ?? [];

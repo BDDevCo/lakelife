@@ -189,14 +189,17 @@ export async function loadGuestView(token: string): Promise<GuestView | null> {
         "what you've already settled",
         await admin
           .from("park_payments")
-          .select("amenity_booking_id, amount, reversed_at")
+          .select("amenity_booking_id, amount, reversed_at, returned_at")
           .in("amenity_booking_id", myBookingIds),
       )
     : [];
   const paidByBooking = new Map<string, number>();
   for (const p of paidRows ?? []) {
-    // A reversed payment is money that came back — it is owed again.
-    if (p.reversed_at != null) continue;
+    // Money that came back is owed again, by either route: the office
+    // un-recording it, or the bank pulling it back after it settled (0155).
+    // A guest pays by card, and 0142 forbids REVERSING a card payment — so
+    // for this reader the bank route is the only one that can ever fire.
+    if (p.reversed_at != null || p.returned_at != null) continue;
     const k = p.amenity_booking_id as string;
     paidByBooking.set(k, (paidByBooking.get(k) ?? 0) + Number(p.amount ?? 0));
   }

@@ -226,9 +226,15 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const payments = mustRead(
     "the money that's come in",
     await admin.from("park_payments")
-      .select("id, charge_id, kind, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason")
+      .select("id, charge_id, kind, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason, returned_at, return_code")
       .eq("park_id", parkId)
-      .is("reversed_at", null),
+      .is("reversed_at", null)
+      // MONEY THE BANK PULLED BACK IS NOT MONEY THAT CAME IN. This screen
+      // answers "what have we taken", and 0142 forbids reversing a card or
+      // ACH payment — so `reversed_at` alone can never exclude a returned
+      // ACH debit, which is the likeliest way this figure goes wrong once
+      // the rail is live.
+      .is("returned_at", null),
   );
 
   const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
@@ -248,6 +254,11 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
       receivedOn: p.received_on as string,
       reversedAt: (p.reversed_at as string) ?? null,
       reversedReason: (p.reversed_reason as string) ?? null,
+      // Always null here — the query above excludes them — but carried so
+      // this row is a whole Receipt and the next reader of it is not handed
+      // a half-populated one.
+      bankReturnedAt: (p.returned_at as string) ?? null,
+      returnCode: (p.return_code as string) ?? null,
       lotNumber: lotName.get(c?.park_lot_id as string) ?? "?",
       payerName: null,
       periodMonth: (c?.period_month as string) ?? "",

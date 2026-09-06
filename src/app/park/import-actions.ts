@@ -996,7 +996,13 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
       .select("id", { count: "exact", head: true })
       .in("renter_id", renterIds)
       .is("charge_id", null)
-      .is("reversed_at", null);
+      .is("reversed_at", null)
+      // AND MONEY THE BANK TOOK BACK IS NOT MONEY HELD. This count exists to
+      // block an undo while the park is still holding somebody's cash; a
+      // payment that bounced is not cash, and counting it would refuse the
+      // undo forever with no way to clear it — the park cannot "apply or give
+      // back" money that is not there.
+      .is("returned_at", null);
     if (heldRes.error) {
       return { ok: false, error: readFailedMessage("money held on account", heldRes.error, { money: true }) };
     }

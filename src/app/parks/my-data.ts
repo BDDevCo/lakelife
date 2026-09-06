@@ -136,7 +136,20 @@ export interface RenterHome {
    * their sum and the rent ledger shows only the first — a resident comparing
    * the two deserves to find the difference here rather than ring the office.
    */
-  payments: { on: string; amount: number; fee: number | null; method: string; receiptNo: number | null }[];
+  payments: {
+    on: string;
+    amount: number;
+    fee: number | null;
+    method: string;
+    receiptNo: number | null;
+    /**
+     * The day the BANK pulled this payment back after it had settled — an ACH
+     * return or a chargeback. Not `returned_on`, which is a deposit the park
+     * handed back. Non-null means the money is gone again and the bill it paid
+     * has reopened, so the row must not read as money received.
+     */
+    bankReturnedOn: string | null;
+  }[];
 
   /** Reported from their lot, during their tenancy. */
   reported: { note: string; status: string; resolutionNote: string | null; ageDays: number }[];
@@ -246,7 +259,11 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       .limit(24),
     admin
       .from("park_payments")
-      .select("amount, fee_amount, method, received_on, receipt_no, kind, returned_on, reversed_at")
+      // `returned_at` is the BANK pulling a settled payment back (0155), and
+      // it is not `returned_on`, which is this park handing a deposit back to
+      // a departing tenant. Both are on this row, one letter apart, and the
+      // list below reads both.
+      .select("amount, fee_amount, method, received_on, receipt_no, kind, returned_on, reversed_at, returned_at")
       .eq("renter_id", file.id as string)
       .order("received_on", { ascending: false })
       .limit(24),
@@ -361,7 +378,15 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // A deposit is money of theirs the park is holding — the single most
   // disputed number in this business, eighteen months later at move-out. It
   // sits on the front page all year so that argument never happens.
-  const heldDeposits = live.filter((p) => p.kind === "deposit" && p.returned_on == null);
+  // THREE WAYS A DEPOSIT STOPS BEING HELD, and only two were checked. It can
+  // be reversed (`live`, above — it never happened), handed back at move-out
+  // (`returned_on`), or the bank can pull the original debit back after it
+  // settled (`returned_at`, 0155). The third arrived with its balance readers
+  // wired and its DISPLAY readers not, so this figure would have gone on
+  // claiming the park holds money that left its account days ago.
+  const heldDeposits = live.filter(
+    (p) => p.kind === "deposit" && p.returned_on == null && p.returned_at == null,
+  );
   const depositTotal = heldDeposits.reduce((s, p) => s + Number(p.amount ?? 0), 0);
   const depositSince = heldDeposits
     .map((p) => p.received_on as string)
@@ -449,6 +474,13 @@ export async function getRenterHome(): Promise<RenterHome | null> {
         fee: p.fee_amount == null ? null : Number(p.fee_amount),
         method: (p.method as string) ?? "payment",
         receiptNo: (p.receipt_no as number) ?? null,
+        // KEPT ON THE LIST, NOT HIDDEN, and this is the difference between the
+        // two words. A REVERSAL says the payment never happened, so `live`
+        // drops it. A BANK RETURN says it did happen and then came back — the
+        // resident's own statement shows both legs, and a screen that quietly
+        // dropped our copy would make us look wrong about their money. It
+        // shows, labelled, and counts toward nothing.
+        bankReturnedOn: (p.returned_at as string) ?? null,
       })),
     reported,
     reportedFailed,

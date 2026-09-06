@@ -74,14 +74,20 @@ describe("an amenity payment can be taken back", () => {
     const s = src("../app/park/amenity-actions.ts");
     expect(s).toMatch(/payments: Array<\{ id: string; amount: number; method: string; on: string \}>/);
     expect(s).toMatch(/paymentsByBooking/);
-    // The read has to carry the id, or nothing can be reversed.
-    expect(s).toMatch(/select\("id, amenity_booking_id, amount, method, received_on, reversed_at"\)/);
+    // The read has to carry the id, or nothing can be reversed — and
+    // `returned_at`, or a bank-returned amenity payment reads as collected.
+    // A guest books with a CARD, and 0142 forbids reversing a card payment,
+    // so the bank route is the only way one of these can ever fail.
+    expect(s).toMatch(/select\("id, amenity_booking_id, amount, method, received_on, reversed_at, returned_at"\)/);
   });
 
-  it("a reversed payment is still excluded from what was collected", () => {
-    // The pre-existing rule: a bounced payment is not money.
+  it("a payment that bounced is still excluded from what was collected", () => {
+    // The pre-existing rule: a bounced payment is not money. WIDENED, because
+    // there are two ways to bounce now — the office un-recording it, and the
+    // bank pulling it back after it settled (0155) — and only the second one
+    // can happen to the card a guest actually paid with.
     const s = src("../app/park/amenity-actions.ts");
-    expect(s).toMatch(/if \(p\.reversed_at\) continue;/);
+    expect(s).toMatch(/if \(p\.reversed_at \|\| p\.returned_at\) continue;/);
   });
 
   it("the control exists, and asks why", () => {
@@ -202,10 +208,13 @@ describe("what the guest still owes is not what she was quoted", () => {
     expect(s).toMatch(/\.in\("amenity_booking_id", myBookingIds\)/);
   });
 
-  it("a reversed payment is owed again", () => {
-    // A bounced cheque coming back must not leave her marked as settled.
+  it("a payment that bounced is owed again", () => {
+    // A bounced cheque coming back must not leave her marked as settled — and
+    // neither must an ACH the bank reclaimed, which is the only one of the two
+    // that can happen to a card-paying guest (0142 forbids the other).
     const s = src("./amenity-guest-server.ts");
-    expect(s).toMatch(/if \(p\.reversed_at != null\) continue;/);
+    expect(s).toMatch(/if \(p\.reversed_at != null \|\| p\.returned_at != null\) continue;/);
+    expect(s).toMatch(/select\("amenity_booking_id, amount, reversed_at, returned_at"\)/);
   });
 });
 

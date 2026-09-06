@@ -69,7 +69,25 @@ describe("the four sites use it", () => {
 
   it("the accountant's CSV dates a reversal on the same clock as the rest of the row", () => {
     const r = code(read("../app/park/receipts-helpers.ts"));
-    expect(r).toMatch(/lakeDateOf\(String\(r\.reversedAt\)\)/);
+    // WIDENED WITH THE COLUMN IT GUARDS. There are two ways money stops
+    // counting now — an office reversal and a bank return (0155) — and both
+    // print into this one date cell, so both must be sliced on the lake's
+    // clock. `notCollectedAt` is the expression that returns whichever
+    // happened; pinning it here keeps the original rule ("not sliced from
+    // UTC") true for the route that did not exist when the rule was written.
+    expect(r).toMatch(/lakeDateOf\(String\(notCollectedAt\(r\)\)\)/);
+    // And the reason the rule exists: a raw UTC slice put a reversal recorded
+    // at 7:30pm on 31 Dec into the following year.
+    expect(r).not.toMatch(/String\(r\.reversedAt\)\.slice/);
+  });
+
+  it("both routes out of the total go through one expression", () => {
+    // The instance-vs-class rule. Six places asked "was this reversed?"; a
+    // seventh route appeared and the danger is fixing the totals and missing
+    // the CSV, or the reverse. One helper, so there is one place to be wrong.
+    const r = code(read("../app/park/receipts-helpers.ts"));
+    expect(r).toMatch(/export function notCollectedAt/);
+    expect(r).toMatch(/r\.reversedAt \?\? r\.bankReturnedAt/);
   });
 });
 

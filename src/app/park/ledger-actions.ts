@@ -1317,6 +1317,15 @@ export async function reversePayment(
   // every cheque taken before the bill existed. So money recorded by mistake
   // at the window could never be taken back, and the office was told "That
   // isn't here" about a payment sitting on their own screen.
+  // NO `returned_at` HERE, AND THAT IS DELIBERATE — checked against production
+  // rather than assumed. A reversal of a returned payment is impossible twice
+  // over: `park_payments_only_electronic_is_returned` means only card and ACH
+  // can carry `returned_at`, and `guard_park_payment` raises on any attempt to
+  // set `reversed_at` on a card or ACH payment. So the database refuses before
+  // this function could, and the office cannot reach the dead end anyway — the
+  // statement screen hides both controls on money that did not stay.
+  //
+  // Every OTHER reader of these rows does filter it; this is the one exemption.
   const payRes = await admin
     .from("park_payments")
     .select("id, amount, receipt_no, reversed_at, park_id, kind, charge_id, method")
@@ -1421,7 +1430,14 @@ export async function refundableOn(parkId: string, paymentId: string): Promise<R
 
   const payRes = await admin
     .from("park_payments")
-    .select("id, amount, fee_amount, method, reference, reversed_at")
+    // EVERY FIELD `RefundablePayment` READS, and `returned_at` is why this
+    // comment exists. refundRefusal has always had a branch for it — the
+    // first branch, before every other refusal — and this select did not
+    // fetch the column, so `pay.returned_at` was undefined, the branch never
+    // fired, and the screen offered "Refund to card" on money the bank had
+    // already taken back. A condition widened without its select compiles,
+    // reads undefined, and refuses nobody.
+    .select("id, amount, fee_amount, method, reference, reversed_at, returned_at")
     .eq("id", paymentId)
     .eq("park_id", parkId)
     .maybeSingle();

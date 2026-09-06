@@ -291,7 +291,19 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 padding: "6px 0", borderTop: "1px solid var(--line)", flexWrap: "wrap",
               }}>
                 <span className="mut">{pretty(p.on)} · {p.method}</span>
-                <span style={{ marginLeft: "auto", fontWeight: 700 }}>{usd(p.amount)}</span>
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    fontWeight: 700,
+                    // Struck through, not deleted. Their bank statement shows
+                    // the debit AND the reversal; a row that quietly vanished
+                    // from our copy would make us look wrong about their money.
+                    textDecoration: p.bankReturnedOn ? "line-through" : undefined,
+                    opacity: p.bankReturnedOn ? 0.55 : undefined,
+                  }}
+                >
+                  {usd(p.amount)}
+                </span>
                 {/* The receipt number is the thing they can quote at the
                     window. It is why assign_receipt_no exists. */}
                 {p.receiptNo != null && (
@@ -306,6 +318,18 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 {p.fee != null && p.fee > 0 && (
                   <span className="mut" style={{ flexBasis: "100%", fontSize: 12, lineHeight: 1.4 }}>
                     plus {usd(p.fee)} card fee &mdash; {usd(p.amount + p.fee)} left your card
+                  </span>
+                )}
+                {/* WITHOUT THIS LINE THE SCREEN CONTRADICTS ITSELF. A returned
+                    payment reopens its bill (recompute_charge_paid excludes it,
+                    0155), so the rent card above says OPEN while this list still
+                    shows the payment and its receipt number. The resident rings
+                    the office quoting a receipt for money that is not there.
+                    Says what happened and what it means, in that order. */}
+                {p.bankReturnedOn && (
+                  <span style={{ flexBasis: "100%", fontSize: 12, lineHeight: 1.4, color: "var(--danger)" }}>
+                    Your bank sent this payment back on {pretty(p.bankReturnedOn)}, so this
+                    month is showing as unpaid again.
                   </span>
                 )}
               </div>

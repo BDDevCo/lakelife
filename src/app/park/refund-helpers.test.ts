@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import {
   remainingRefundable,
@@ -17,6 +18,7 @@ const CARD: RefundablePayment = {
   method: "card",
   reference: "ch_mock_abc",
   reversed_at: null,
+  returned_at: null,
 };
 
 describe("what is still refundable", () => {
@@ -256,5 +258,75 @@ describe("0155 is on disk, not only in somebody's head", () => {
     // returned_at reduces a bill's paid_total. A resident who could write it
     // could erase their own rent.
     expect(sql()).toMatch(/has_table_privilege\('authenticated', 'public\.park_payments', 'UPDATE'\)/);
+  });
+});
+
+/**
+ * THE GUARD THAT READ A COLUMN NOBODY FETCHED.
+ *
+ * `refundRefusal`'s FIRST branch has always been "the bank took that payment
+ * back". `refundableOn` — its only caller — selected
+ * `id, amount, fee_amount, method, reference, reversed_at` and stopped there.
+ * So `pay.returned_at` was `undefined` on every real call, the branch never
+ * fired, and the statement screen offered "Refund to card" on money that had
+ * already been reclaimed. It compiled, it passed, and it refused nobody.
+ *
+ * TypeScript cannot catch this: the row comes back from supabase-js loosely
+ * typed and the call site cast it with `as never`, which switches off the one
+ * check that would have noticed. So the select is pinned here instead —
+ * against the TYPE, not against a copy of the list, so adding a field to
+ * `RefundablePayment` and forgetting the query fails rather than passes.
+ */
+describe("the query fetches every column the guard reads", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("./ledger-actions.ts", import.meta.url)),
+    "utf8",
+  );
+  const helpers = readFileSync(
+    fileURLToPath(new URL("./refund-helpers.ts", import.meta.url)),
+    "utf8",
+  );
+
+  /** The select string inside refundableOn, and only that one. */
+  const select = (() => {
+    const fn = src.match(/export async function refundableOn[\s\S]*?\n}/)?.[0] ?? "";
+    return fn.match(/\.select\("([^"]+)"\)/)?.[1] ?? "";
+  })();
+
+  /** Every field name declared on RefundablePayment. */
+  const declared = (() => {
+    const body = helpers.match(/export interface RefundablePayment \{([\s\S]*?)\n\}/)?.[1] ?? "";
+    const withoutComments = body
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    return [...withoutComments.matchAll(/^\s*(\w+)\??\s*:/gm)].map((m) => m[1]);
+  })();
+
+  it("found both halves — otherwise this proves nothing", () => {
+    expect(select, "refundableOn's select was not found — did the function move?")
+      .toContain("amount");
+    expect(declared.length, "RefundablePayment's fields were not parsed").toBeGreaterThan(4);
+    expect(declared, "the field this whole test exists for is gone").toContain("returned_at");
+  });
+
+  it("selects every field RefundablePayment declares", () => {
+    const columns = select.split(",").map((c) => c.trim());
+    const missing = declared.filter((f) => !columns.includes(f));
+    expect(
+      missing,
+      "refundRefusal reads these and refundableOn does not fetch them, so each " +
+        "one is `undefined` at runtime and the branch that reads it silently " +
+        "never fires. Add them to the select.",
+    ).toEqual([]);
+  });
+
+  it("checks the return BEFORE it checks anything else", () => {
+    // Order is load-bearing: a returned payment also has nothing left to give
+    // back, so the "all of that has already gone back" branch would otherwise
+    // answer first and tell the office something true but useless.
+    const fn = helpers.match(/export function refundRefusal[\s\S]*?\n}/)?.[0] ?? "";
+    expect(fn.length, "refundRefusal was not found").toBeGreaterThan(100);
+    expect(fn.indexOf("pay.returned_at")).toBeGreaterThan(0);
+    expect(fn.indexOf("pay.returned_at")).toBeLessThan(fn.indexOf("pay.reversed_at"));
   });
 });

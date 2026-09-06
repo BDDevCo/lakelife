@@ -98,6 +98,35 @@ export interface Receipt {
    */
   reversedAt: string | null;
   reversedReason: string | null;
+  /**
+   * THE BANK PULLED IT BACK — an ACH return or a card chargeback (0155).
+   *
+   * NOT a second name for `reversedAt`, and the distinction is forced by the
+   * database rather than chosen here: since 0142 a card or ACH payment CANNOT
+   * be reversed, because the money genuinely moved. So every chargeback and
+   * every ACH return in this product's future arrives on this field and on no
+   * other — and until it existed, the statement had no way to represent the
+   * single most likely way money leaves again once ACH is live.
+   *
+   * An accountant needs both words. A reversal says the payment was never
+   * real; a return says it was real, and then it was not. Both are excluded
+   * from every total, which is the part that matters for tax.
+   */
+  bankReturnedAt: string | null;
+  /** The processor's own code for the return — R01, R02, R10. Free text. */
+  returnCode: string | null;
+}
+
+/**
+ * Money that was recorded and then did not stay, by either route.
+ *
+ * One place, because the alternative is `reversedAt` checked in six places
+ * and `bankReturnedAt` remembered in four of them — which is how this file
+ * came to exclude bounced cheques from the totals and would have gone on
+ * counting bounced ACH debits as income.
+ */
+export function notCollectedAt(r: Receipt): string | null {
+  return r.reversedAt ?? r.bankReturnedAt;
 }
 
 export interface Period {
@@ -197,10 +226,17 @@ export interface ReceiptSummary {
    */
   againstVoided: Receipt[];
   /**
-   * MONEY THAT WAS RECORDED AND THEN TAKEN BACK. Kept out of every total —
-   * a bounced check is not income — and reported HERE rather than silently
-   * dropped, because a statement that quietly loses a receipt number is
-   * exactly what makes an accountant stop trusting the whole file.
+   * MONEY THAT WAS RECORDED AND THEN TAKEN BACK, by either route — an office
+   * reversal (a bounced cheque, a transposed digit) or a bank return (an ACH
+   * that came back, a chargeback). Kept out of every total, because neither
+   * is income, and reported HERE rather than silently dropped: a statement
+   * that quietly loses a receipt number is exactly what makes an accountant
+   * stop trusting the whole file.
+   *
+   * The two are distinguishable per row — `reversedAt` vs `bankReturnedAt` —
+   * and the CSV prints them in separate columns. They are pooled here because
+   * the accountant's question at this level is one question: how much of what
+   * arrived did not stay?
    */
   reversed: Receipt[];
   reversedCents: number;
@@ -227,9 +263,11 @@ export function summariseReceipts(all: readonly Receipt[], period: Period): Rece
   // typed wrong, and counting it as income is how a park pays tax on money it
   // never had. Split out rather than dropped — the receipt number still exists
   // and a statement that quietly loses one is a statement nobody trusts.
-  const reversed = inWindow.filter((r) => r.reversedAt != null);
+  // BOTH ROUTES, or the file overstates income by exactly the ACH that
+  // bounced. `notCollectedAt` is the single place that decides.
+  const reversed = inWindow.filter((r) => notCollectedAt(r) != null);
   const reversedCents = reversed.reduce((n, r) => n + r.amountCents, 0);
-  const rows = inWindow.filter((r) => r.reversedAt == null);
+  const rows = inWindow.filter((r) => notCollectedAt(r) == null);
 
   const byMethod = new Map<string, Bucket>();
   const byMonth = new Map<string, Bucket>();
@@ -393,7 +431,19 @@ const HEADERS = [
   // The row STAYS and is marked, rather than being dropped: receipt numbers
   // run in a sequence, and a file with a hole in it is a file an auditor has
   // to ask about.
-  "Taken back", "Taken back on", "Reason",
+  //
+  // WIDENED RATHER THAN DUPLICATED. There are now two ways money does not
+  // stay — an office reversal and a bank return (0155) — and the obvious move
+  // was a second set of columns beside these. That would have been the same
+  // bug again: an accountant who filters "Taken back = YES", exactly as this
+  // column was designed to be filtered, would get the right answer for
+  // bounced cheques and silently book every returned ACH as income. So the
+  // column keeps its meaning — this did not stay — and covers both routes.
+  //
+  // "How" is separate because the two reconcile differently: a bank return
+  // appears on the bank statement as a second line, an office correction
+  // never touches the bank at all.
+  "Taken back", "Taken back how", "Taken back on", "Reason",
   "Lot", "Payer", "Bill month", "Bill total", "Bill status", "Bill breakdown",
   "Payment ID", "Charge ID",
 ] as const;
@@ -429,12 +479,23 @@ export function receiptsCsv(
       csvText(r.reference),
       // "YES" rather than a date alone, so it survives a spreadsheet filter and
       // is legible to somebody scanning the column rather than reading rows.
-      csvText(r.reversedAt ? "YES" : ""),
+      csvText(notCollectedAt(r) ? "YES" : ""),
+      // Which route, because they reconcile against different documents.
+      csvText(r.bankReturnedAt ? "bank return" : r.reversedAt ? "office correction" : ""),
       // Lake-local, like `receivedOn` and the period bounds beside it. Sliced
       // from UTC, a reversal recorded at 7:30pm on 31 Dec printed 2027-01-01 —
       // a date outside the very window the statement was generated for.
-      csvText(r.reversedAt ? lakeDateOf(String(r.reversedAt)) ?? "" : ""),
-      csvText(r.reversedAt ? (r.reversedReason ?? "") : ""),
+      csvText(notCollectedAt(r) ? lakeDateOf(String(notCollectedAt(r))) ?? "" : ""),
+      // The bank's own code is the reason for a return, and it is the thing
+      // the crew or resident has to act on. An office reversal carries the
+      // words somebody typed.
+      csvText(
+        r.bankReturnedAt
+          ? (r.returnCode ?? "returned by the bank")
+          : r.reversedAt
+            ? (r.reversedReason ?? "")
+            : "",
+      ),
       csvText(r.lotNumber),
       csvText(r.payerName),
       csvText(r.periodMonth),
@@ -460,7 +521,12 @@ export function receiptsCsv(
       csvText(decimal(o.amountCents + o.feeCents)),
       csvText(METHOD_LABEL[o.method as Method] ?? o.method),
       csvText(o.reference ?? ""),
-      csvText(""), csvText(""), csvText(""),   // taken back / on / reason
+      // taken back / how / on / reason. FOUR, matching HEADERS. This list is
+      // hand-counted against a list in another function, so adding a column
+      // there silently shifts every cell after this point in these rows — a
+      // payment ID landing under "Bill status". The width assertion in the
+      // test file is what makes that impossible rather than merely unlikely.
+      csvText(""), csvText(""), csvText(""), csvText(""),
       csvText(""), csvText(""),                // lot / payer
       csvText(""), csvText(""), csvText(""), csvText(""),  // bill month/total/status/breakdown
       csvText(o.paymentId),

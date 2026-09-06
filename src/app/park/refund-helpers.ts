@@ -19,12 +19,17 @@ export interface RefundablePayment {
    * deposit handed back to a departing tenant (0102) — the two names are one
    * letter apart and mean opposite things, so they are never both read here.
    *
-   * Optional because the guard that actually holds is 0155's, inside
-   * `guard_park_refund`. This is the sentence a person reads instead of a
-   * constraint name, and it only reaches them once `refundableOn` selects the
-   * column — until then it is undefined and this test is simply skipped.
+   * REQUIRED, and it used to be optional. Optional meant `refundableOn` could
+   * omit it from its select and still compile, which is exactly what happened:
+   * the branch below read `undefined`, never fired, and the screen offered
+   * "Refund to card" on a payment the bank had already reclaimed. The refusal
+   * that actually holds is 0155's `guard_park_refund`, but a person meeting a
+   * constraint name instead of a sentence is a defect of its own.
+   *
+   * `?` on a field a guard reads is how a guard gets switched off silently.
+   * The select is pinned in refund-helpers.test.ts.
    */
-  returned_at?: string | null;
+  returned_at: string | null;
 }
 
 /** Only the parts of a refund row the remaining maths depends on. */

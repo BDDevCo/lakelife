@@ -7,6 +7,7 @@ import { getStatement, type StatementPage } from "@/app/park/receipts-actions";
 import { reversePayment, refundParkPayment, refundableOn } from "@/app/park/ledger-actions";
 import {
   money, receiptsHeadline, monthPeriod, quarterPeriod, yearPeriod, customPeriod,
+  notCollectedAt,
   type Period,
 } from "@/app/park/receipts-helpers";
 
@@ -326,11 +327,18 @@ export function ParkStatements({
                   {r.method}{r.reference ? ` ${r.reference}` : ""}
                 </span>
                 {r.chargeStatus === "void" && <span className="ll-pill warn">bill cancelled</span>}
-                {r.reversedAt && <span className="ll-pill slate">taken back</span>}
+                {/* TWO WORDS, BECAUSE THEY ARE TWO EVENTS. "Taken back" is the
+                    office un-recording something. A bank return is the bank
+                    reaching in after the money had settled — it shows on the
+                    park's own statement as a second line, and somebody has to
+                    chase the household. Calling both "taken back" would hide
+                    the one that needs a phone call. */}
+                {r.bankReturnedAt && <span className="ll-pill red">bank returned it</span>}
+                {r.reversedAt && !r.bankReturnedAt && <span className="ll-pill slate">taken back</span>}
                 <span style={{ minWidth: 88, textAlign: "right", fontWeight: 700,
                                fontVariantNumeric: "tabular-nums",
-                               textDecoration: r.reversedAt ? "line-through" : undefined,
-                               opacity: r.reversedAt ? 0.55 : 1 }}>
+                               textDecoration: notCollectedAt(r) ? "line-through" : undefined,
+                               opacity: notCollectedAt(r) ? 0.55 : 1 }}>
                   {money(r.amountCents)}
                 </span>
                 {/* TWO DIFFERENT ACTS, AND THE METHOD DECIDES WHICH IS HONEST.
@@ -338,7 +346,12 @@ export function ParkStatements({
                     anybody's account. Card and ACH money demonstrably moved, so
                     the only truthful correction is sending it back — 0142 makes
                     the database refuse the other one. */}
-                {!r.reversedAt && (r.method === "card" || r.method === "ach") && (
+                {/* NOT OFFERED ON MONEY THAT NEVER STAYED. guard_park_refund
+                    (0155) refuses a refund against a returned payment — "it
+                    never settled, so it cannot also be refunded" — so this
+                    button was a control that could only ever produce an error,
+                    on the screen where somebody is trying to fix money. */}
+                {!notCollectedAt(r) && (r.method === "card" || r.method === "ach") && (
                   <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
                     onClick={() => openRefund(r.paymentId)}>
                     Refund to card
@@ -346,7 +359,7 @@ export function ParkStatements({
                 )}
                 {/* A TRANSPOSED DIGIT USED TO BE PERMANENT. The row survives
                     with its receipt number; only the money stops counting. */}
-                {!r.reversedAt && r.method !== "card" && r.method !== "ach" && (
+                {!notCollectedAt(r) && r.method !== "card" && r.method !== "ach" && (
                   <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
                     onClick={() => setReversing(r.paymentId)}>
                     Take it back

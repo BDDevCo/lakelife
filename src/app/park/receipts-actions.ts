@@ -123,6 +123,12 @@ export async function getStatement(
       .eq("park_id", parkId)
       .is("charge_id", null)
       .is("reversed_at", null)
+      // AND THE BANK ROUTE. These rows become deposit, on-account and amenity
+      // lines in the accountant's file, and amenity money is paid by CARD —
+      // which 0142 forbids reversing, so `reversed_at` alone could never have
+      // excluded a single failed one. A returned deposit counted here is a
+      // liability the park does not owe and income it never had.
+      .is("returned_at", null)
       .gte("received_on", period.from)
       .lte("received_on", period.to),
   );
@@ -198,7 +204,7 @@ export async function getStatement(
   const [paymentsRes, lotsRes, rentersRes, feesRes] = await Promise.all([
     admin
       .from("park_payments")
-      .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason")
+      .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason, returned_at, return_code")
       .in("charge_id", chargeIds),
     admin.from("park_lots").select("id, lot_number").eq("park_id", parkId),
     admin.from("park_renters").select("id, display_name").eq("park_id", parkId),
@@ -245,6 +251,11 @@ export async function getStatement(
       chargeLines,
       reversedAt: (p.reversed_at as string) ?? null,
       reversedReason: (p.reversed_reason as string) ?? null,
+      // 0142 forbids REVERSING a card or ACH payment, so every chargeback and
+      // every ACH return reaches this statement on these two fields and no
+      // others. Without them the file counts a bounced ACH as collected rent.
+      bankReturnedAt: (p.returned_at as string) ?? null,
+      returnCode: (p.return_code as string) ?? null,
     };
   });
 

@@ -16,6 +16,8 @@ function receipt(over: Partial<Receipt> = {}): Receipt {
     receivedOn: "2026-07-03",
     reversedAt: null,
     reversedReason: null,
+    bankReturnedAt: null,
+    returnCode: null,
     lotNumber: "3",
     payerName: "Roy Amberg",
     periodMonth: "2026-07",
@@ -635,5 +637,121 @@ describe("the button's count and the file's rows", () => {
         expect(dataRows(csv), `${nR} rent + ${nO} other`).toBe(nR + nO);
       }
     }
+  });
+});
+
+/**
+ * A BOUNCED ACH IS NOT INCOME EITHER.
+ *
+ * The reversal handling in this file exists because "a bounced check counted
+ * as income is how a park pays tax on money it never had". 0142 then made the
+ * database REFUSE to reverse a card or ACH payment — correctly, the money
+ * really moved — which means every chargeback and every ACH return arrives on
+ * `bankReturnedAt` and on no other field. Until it was threaded through here,
+ * this file excluded the bounced cheque and counted the bounced ACH.
+ */
+function csvCells(line: string): string[] {
+  // A real parse, not split(","): the bill-breakdown cell contains commas and
+  // is quoted, so a naive split reports the wrong width and the assertion
+  // below would pass on a file that is genuinely ragged.
+  const out: string[] = [];
+  let cur = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else quoted = false;
+      } else cur += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") { out.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+describe("money the bank pulled back", () => {
+  // JULY, the file's existing non-null period, rather than a second one.
+  const returned = receipt({
+    paymentId: "bounced-ach",
+    amountCents: 54253,
+    method: "ach",
+    bankReturnedAt: "2026-07-20T12:00:00Z",
+    returnCode: "R01 insufficient funds",
+  });
+
+  it("stays out of the total, exactly as a reversal does", () => {
+    const s = summariseReceipts([receipt(), returned], JULY);
+    expect(s.totalCents, "a returned ACH was counted as rent collected").toBe(45500);
+    expect(s.count).toBe(1);
+  });
+
+  it("is reported rather than dropped, so the receipt number is not lost", () => {
+    const s = summariseReceipts([receipt(), returned], JULY);
+    expect(s.reversed.map((r) => r.paymentId)).toContain("bounced-ach");
+    expect(s.reversedCents).toBe(54253);
+  });
+
+  it("keeps a plain reversal working alongside it", () => {
+    const office = receipt({ paymentId: "bounced-cheque", amountCents: 30000, reversedAt: "2026-07-21T12:00:00Z", reversedReason: "cheque bounced" });
+    const s = summariseReceipts([receipt(), returned, office], JULY);
+    expect(s.totalCents).toBe(45500);
+    expect(s.reversedCents).toBe(54253 + 30000);
+  });
+
+  it("is marked in the file an accountant actually sums", () => {
+    const csv = receiptsCsv([returned], [], { parkName: "The Haven", generatedAt: "2026-08-11T00:00:00Z" });
+    const head = csvCells(csv.split("\r\n")[0]);
+    const row = csvCells(csv.split("\r\n")[1]);
+    const at = (col: string) => row[head.indexOf(col)];
+
+    // Filtering "Taken back = YES" is how this column was designed to be used.
+    // If a bank return did not set it, that filter books the ACH as income.
+    expect(at("Taken back"), "a returned ACH is not marked in the CSV").toBe("YES");
+    expect(at("Taken back how")).toBe("bank return");
+    expect(at("Taken back on")).toBe("2026-07-20");
+    expect(at("Reason")).toBe("R01 insufficient funds");
+  });
+
+  it("still says 'office correction' for a reversal", () => {
+    const office = receipt({ reversedAt: "2026-07-21T12:00:00Z", reversedReason: "entered twice" });
+    const csv = receiptsCsv([office], [], { parkName: "The Haven", generatedAt: "2026-08-11T00:00:00Z" });
+    const head = csvCells(csv.split("\r\n")[0]);
+    const row = csvCells(csv.split("\r\n")[1]);
+    const at = (col: string) => row[head.indexOf(col)];
+    expect(at("Taken back")).toBe("YES");
+    expect(at("Taken back how")).toBe("office correction");
+    expect(at("Reason")).toBe("entered twice");
+  });
+});
+
+describe("every CSV row is as wide as the header", () => {
+  it("holds for payment rows and for the billless ones beside them", () => {
+    // THE FAILURE THIS PREVENTS: the two row writers in receipts-helpers.ts
+    // list their cells by hand, in two places, and the second pads the
+    // taken-back columns with hand-counted blanks. Adding "Taken back how" to
+    // HEADERS shifted every later cell in those rows by one — a payment ID
+    // printed under "Bill status" — and the only thing that caught it was an
+    // unrelated assertion about an empty bill column.
+    const csv = receiptsCsv(
+      [
+        receipt(),
+        receipt({ paymentId: "r2", reversedAt: "2026-07-21T00:00:00Z", reversedReason: "typed twice" }),
+        receipt({ paymentId: "r3", bankReturnedAt: "2026-07-22T00:00:00Z", returnCode: "R02" }),
+      ],
+      [
+        { paymentId: "o1", kind: "deposit", amountCents: 50000, feeCents: 0, method: "check", reference: "88", receivedOn: "2026-07-04" } as OtherReceipt,
+        { paymentId: "o2", kind: "amenity", amountCents: 7500, feeCents: 225, method: "card", reference: null, receivedOn: "2026-07-06" } as OtherReceipt,
+      ],
+      { parkName: "The Haven", generatedAt: "2026-08-11T00:00:00Z" },
+    );
+    const lines = csv.split("\r\n");
+    const width = csvCells(lines[0]).length;
+    expect(width, "the header collapsed — this assertion would pass on anything")
+      .toBeGreaterThan(15);
+    lines.forEach((line, i) => {
+      expect(csvCells(line).length, `row ${i} has the wrong number of cells`).toBe(width);
+    });
   });
 });
