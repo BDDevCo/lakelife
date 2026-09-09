@@ -13,6 +13,8 @@ const TYPE_LABEL: Record<string, string> = {
   lift: "Extra boat/PWC lift on site",
   lawn: "Lawn is larger than your profile",
   toys: "Water toys not in your profile",
+  panes: "Window pane count differs from your profile",
+  drive: "Driveway is bigger than your profile",
   other: "A note from the crew",
 };
 
@@ -25,6 +27,10 @@ const FIELD_LABEL: Record<string, string> = {
   lawn_size: "Lawn size",
   toys: "Water toys",
   water_toys: "Water toys",
+  // Without these the fallback prints the column name — "Drive band: large" —
+  // on the screen where somebody authorises a price change.
+  panes: "Window panes",
+  drive_band: "Driveway size",
 };
 
 function labelForField(key: string) {

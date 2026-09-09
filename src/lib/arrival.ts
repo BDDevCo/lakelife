@@ -45,6 +45,10 @@ export type TimedRule = ServiceRule & {
 /** The profile fields a crew is allowed to correct. Mirrors sanitizeProposed. */
 export const CORRECTABLE = [
   "pier_sections", "boat_lifts", "pwc_lifts", "jet_skis", "toy_lifts", "lawn_band",
+  // 0159. A crew standing on a 300-foot driveway, or counting a wall of glass
+  // the profile says is eight panes, had no way to say so — and these two
+  // facts SET THE PRICE, so being wrong about them is being wrong about money.
+  "panes", "drive_band",
 ] as const;
 export type CorrectableField = (typeof CORRECTABLE)[number];
 
@@ -56,6 +60,8 @@ export const FIELD_LABEL: Record<CorrectableField, string> = {
   jet_skis: "jet skis",
   toy_lifts: "toy lifts",
   lawn_band: "lawn size",
+  panes: "window panes",
+  drive_band: "driveway size",
 };
 
 const LAWN_WORD: Record<string, string> = {
@@ -64,8 +70,21 @@ const LAWN_WORD: Record<string, string> = {
   large: "large (over ½ acre)",
 };
 
+/**
+ * A DRIVEWAY IS NOT MEASURED IN ACRES. Reusing LAWN_WORD would have shown a
+ * homeowner "medium (¼–½ acre)" for their drive — the machine word would have
+ * been right and the sentence nonsense, on the screen where they approve a
+ * price change.
+ */
+const DRIVE_WORD: Record<string, string> = {
+  small: "small (a car or two)",
+  medium: "medium (up to about 100 ft)",
+  large: "large (over 100 ft, or a turnaround)",
+};
+
 function readable(field: CorrectableField, value: unknown): string {
   if (field === "lawn_band") return LAWN_WORD[String(value)] ?? String(value);
+  if (field === "drive_band") return DRIVE_WORD[String(value)] ?? String(value);
   return String(value);
 }
 

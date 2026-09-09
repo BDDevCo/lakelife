@@ -18,16 +18,26 @@ import {
 import { planRecovery } from "@/lib/recovery";
 
 // Only these profile fields may be changed by a crew flag, with safe values.
-const COUNT_FIELDS = new Set(["pier_sections", "boat_lifts", "pwc_lifts", "jet_skis", "toy_lifts"]);
-const LAWN_BANDS = new Set(["small", "medium", "large"]);
+// THE CEILING IS PER FIELD, NOT GLOBAL. 99 was chosen for pier sections and
+// boat lifts. A lakefront wall of glass routinely runs past 99 panes, and the
+// old shared clamp would have DROPPED the key — sanitizeProposed then returns
+// null if it was the only one, and the crew's correction is filed as a bare
+// note with no error. 999 matches the CHECK on the column (0159).
+const COUNT_MAX: Record<string, number> = {
+  pier_sections: 99, boat_lifts: 99, pwc_lifts: 99, jet_skis: 99, toy_lifts: 99,
+  panes: 999,
+};
+const BAND_FIELDS = new Set(["lawn_band", "drive_band"]);
+const BANDS = new Set(["small", "medium", "large"]);
 function sanitizeProposed(input: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!input || typeof input !== "object") return null;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(input)) {
-    if (COUNT_FIELDS.has(k)) {
+    const max = COUNT_MAX[k];
+    if (max !== undefined) {
       const n = Math.floor(Number(v));
-      if (Number.isFinite(n) && n >= 0 && n <= 99) out[k] = n;
-    } else if (k === "lawn_band" && typeof v === "string" && LAWN_BANDS.has(v)) {
+      if (Number.isFinite(n) && n >= 0 && n <= max) out[k] = n;
+    } else if (BAND_FIELDS.has(k) && typeof v === "string" && BANDS.has(v)) {
       out[k] = v;
     }
   }

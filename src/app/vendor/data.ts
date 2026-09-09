@@ -121,6 +121,13 @@ export async function getMyVendor(): Promise<MyVendor | null> {
   };
 }
 
+/**
+ * THE SIZE LINE ON THE CREW'S ROUTE CARD — their only brief before arriving.
+ *
+ * Anything unmatched fell through to "", so a crew sent to a job whose size
+ * this list did not know arrived with no idea whether it was 20 panes or 120,
+ * a 40-foot drive or a 300-foot one. The card is what they plan the day from.
+ */
 function factsFor(row: {
   service_name: string | null;
   pier_sections: number | null;
@@ -128,11 +135,20 @@ function factsFor(row: {
   pwc_lifts: number | null;
   jet_skis: number | null;
   lawn_band: string | null;
+  panes: number | null;
+  drive_band: string | null;
 }): string {
   const n = row.service_name ?? "";
   if (/pier/i.test(n)) return `${row.pier_sections ?? 0} pier sections`;
   if (/boat lift/i.test(n)) return `${row.boat_lifts ?? 0} boat lift(s)`;
   if (/pwc|jet ski/i.test(n)) return `${row.jet_skis ?? 0} jet ski(s), ${row.pwc_lifts ?? 0} PWC lift(s)`;
+  if (/window|glass/i.test(n)) return `${row.panes ?? 0} panes`;
+  // NO `?? "medium"` HERE, unlike the lawn line below it. A driveway nobody
+  // has measured must read as unmeasured — a crew told "medium driveway"
+  // about a home nobody has looked at will load the wrong machine.
+  if (/snow|plough|plow/i.test(n)) {
+    return row.drive_band ? `${row.drive_band} driveway` : "driveway size not on file";
+  }
   if (/lawn|mow/i.test(n)) return `${row.lawn_band ?? "medium"} lawn`;
   return "";
 }

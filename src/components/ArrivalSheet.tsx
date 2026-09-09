@@ -67,6 +67,16 @@ const WHAT_CHANGED: Array<{
     prompt: "How big is the lawn really?",
     showFor: (s) => /lawn|mow/i.test(s),
   },
+  {
+    key: "panes", field: "panes", kind: "count",
+    prompt: "How many panes are actually there?",
+    showFor: (s) => /window|glass/i.test(s),
+  },
+  {
+    key: "drive_band", field: "drive_band", kind: "band",
+    prompt: "How big is the driveway really?",
+    showFor: (s) => /snow|plough|plow|drive/i.test(s),
+  },
 ];
 
 type Step = "ask" | "different" | "noanswer";
@@ -115,8 +125,12 @@ export function ArrivalSheet({
 
   async function sendCorrection() {
     if (busy) return;
+    // `chosen.field`, NOT a hardcoded key. The count branch was already
+    // generic; the band branch wrote `lawn_band` literally, so a driveway
+    // correction would have been filed against the customer's LAWN — a wrong
+    // fact, approved by the homeowner, repricing the wrong service.
     const proposed: Record<string, unknown> =
-      chosen.kind === "band" ? { lawn_band: band } : { [chosen.field]: Number(countVal) };
+      chosen.kind === "band" ? { [chosen.field]: band } : { [chosen.field]: Number(countVal) };
 
     if (chosen.kind === "count" && !countVal.trim()) {
       toast("Put the real number in — that's what the owner approves.");

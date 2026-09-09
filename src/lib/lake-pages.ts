@@ -24,10 +24,17 @@ export function fromPrice(rule: Pick<ServiceRule, "pricing_model" | "base" | "un
       // The unit is whatever the service actually counts (pier sections,
       // boat lifts, PWC lifts) — band_pricing.count_field names it.
       const cf = (rule.band_pricing as { count_field?: string } | null)?.count_field ?? "pier_sections";
+      // THE SECOND NOUN TABLE, and the only customer-facing one — this renders
+      // on /lakes/[slug], on the open internet. The fallback is "per pier
+      // section", so a service counting anything unlisted advertises itself in
+      // the wrong unit, publicly, with no error anywhere. Its twin is
+      // unitNounFor in vendor/rates-helpers.ts; widen them together.
       const label =
         cf === "boat_lifts" ? "per lift" :
         cf === "pwc_lifts" ? "per PWC lift" :
-        cf === "jet_skis" ? "per jet ski" : "per pier section";
+        cf === "jet_skis" ? "per jet ski" :
+        cf === "panes" ? "per pane" :
+        cf === "lots" ? "per lot" : "per pier section";
       return unit > 0 ? { amount: unit, unit: label, from: true } : null;
     }
     case "per_foot":

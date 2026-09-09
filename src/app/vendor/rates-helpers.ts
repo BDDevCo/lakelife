@@ -69,6 +69,10 @@ export function unitNounFor(model: PricingModel, countField?: string | null): st
     // screen says "Saved." The reverse costs them just as much.
     case "lots":
       return "lot";
+    case "panes":
+      // "per unit" on a window job reads as "per window" or "per visit"
+      // depending on the crew. Same failure the `lots` case above exists for.
+      return "pane";
     case "pier_sections":
       return "pier section";
     case "boat_lifts":
@@ -240,6 +244,15 @@ export function computeRateRow(service: RateService, payload: RatePayload): Rate
 
     case "band": {
       const out: PricingParams = {};
+      // CARRY THE BAND FIELD THROUGH. This branch rebuilt band_pricing from
+      // BAND_KEYS alone, so a crew's own rate override on a band service
+      // DROPPED `band_field` — and open-data.ts reads that stored object
+      // straight back into priceService. The customer would have been priced
+      // off the driveway and the crew's cost off the LAWN: a margin bug with
+      // no error on any screen. The per_section branch already carries
+      // count_field for exactly this reason.
+      const carried = (service.band_pricing as PricingParams | null)?.band_field;
+      if (carried) out.band_field = carried;
       for (const k of BAND_KEYS) {
         const r = coerceRate(band[k]);
         if (!r.ok) return { ok: false, error: `Enter a valid ${BAND_LABEL[k].toLowerCase()} amount.` };

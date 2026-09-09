@@ -13,11 +13,25 @@ import { WalkAround } from "@/components/WalkAround";
 import { toast } from "@/components/Toast";
 import type { VendorStop } from "@/app/vendor/data";
 
-const FLAG_TYPES: Array<{ value: string; label: string; countField?: string; countLabel?: string }> = [
+// THE SECOND FLAG FORM. This file's own header promises the crew raises a
+// flag "through the exact same form the Today card uses — one wording, one
+// sanitizer", and that promise is only true while BOTH lists are kept level.
+// ArrivalSheet.tsx's WHAT_CHANGED is the other one. A correction offered here
+// and not there (or the reverse) is a crew who can fix a fact from one screen
+// and not the other, with nothing saying why.
+const FLAG_TYPES: Array<{ value: string; label: string; countField?: string; countLabel?: string; bandField?: string }> = [
   { value: "pier", label: "Pier has more/fewer sections than the profile", countField: "pier_sections", countLabel: "Correct number of sections" },
   { value: "lift", label: "Extra boat lift on site", countField: "boat_lifts", countLabel: "Correct number of boat lifts" },
   { value: "toys", label: "Water toys / jet skis not in the profile", countField: "jet_skis", countLabel: "Correct number of jet skis" },
-  { value: "lawn", label: "Lawn is larger than the profile" },
+  // PWC LIFTS AND TOY LIFTS WERE CORRECTABLE FROM THE TODAY CARD AND NOT FROM
+  // HERE — a pre-existing split between two lists that this file's header
+  // says are one form. Found by lists-that-must-agree.test.ts on its first
+  // run, not by anybody reading either file.
+  { value: "pwc", label: "Extra PWC lift on site", countField: "pwc_lifts", countLabel: "Correct number of PWC lifts" },
+  { value: "toylift", label: "Extra toy lift on site", countField: "toy_lifts", countLabel: "Correct number of toy lifts" },
+  { value: "panes", label: "More/fewer window panes than the profile", countField: "panes", countLabel: "Correct number of panes" },
+  { value: "lawn", label: "Lawn is larger than the profile", bandField: "lawn_band" },
+  { value: "drive", label: "Driveway is bigger than the profile", bandField: "drive_band" },
   { value: "other", label: "Something else (describe below)" },
 ];
 
@@ -312,7 +326,9 @@ export function FlagModal({
   const [type, setType] = useState(FLAG_TYPES[0].value);
   const [note, setNote] = useState("");
   const [countVal, setCountVal] = useState("");
-  const [lawn, setLawn] = useState("large");
+  // One control, two facts — a lawn size or a driveway size. Named for what
+  // it holds rather than the first thing that used it.
+  const [band, setBand] = useState("large");
   const [busy, setBusy] = useState(false);
   const def = FLAG_TYPES.find((f) => f.value === type)!;
 
@@ -320,7 +336,10 @@ export function FlagModal({
     setBusy(true);
     let proposed: Record<string, unknown> | null = null;
     if (def.countField && countVal.trim()) proposed = { [def.countField]: Number(countVal) };
-    if (type === "lawn") proposed = { lawn_band: lawn };
+    // `def.bandField`, not `type === "lawn"`. Keyed off the row like the count
+    // branch beside it, so adding a band correction is a list entry rather
+    // than a second place to remember.
+    if (def.bandField) proposed = { [def.bandField]: band };
     await onSubmit(type, note, proposed);
     setBusy(false);
   }
@@ -353,13 +372,26 @@ export function FlagModal({
               <input inputMode="numeric" value={countVal} onChange={(e) => setCountVal(e.target.value)} placeholder="e.g. 12" />
             </div>
           )}
-          {type === "lawn" && (
+          {def.bandField && (
             <div className="ll-field">
-              <label>Correct lawn size</label>
-              <select value={lawn} onChange={(e) => setLawn(e.target.value)} style={selectStyle}>
-                <option value="small">Small</option>
-                <option value="medium">Medium</option>
-                <option value="large">Large</option>
+              <label>{def.bandField === "drive_band" ? "Correct driveway size" : "Correct lawn size"}</label>
+              <select value={band} onChange={(e) => setBand(e.target.value)} style={selectStyle}>
+                {/* A DRIVEWAY IS NOT MEASURED IN ACRES. The words follow the
+                    field, or a crew picks "¼–½ acre" for a driveway and the
+                    homeowner approves a sentence that means nothing. */}
+                {def.bandField === "drive_band" ? (
+                  <>
+                    <option value="small">Small — a car or two</option>
+                    <option value="medium">Medium — up to about 100 ft</option>
+                    <option value="large">Large — over 100 ft, or a turnaround</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="small">Small</option>
+                    <option value="medium">Medium</option>
+                    <option value="large">Large</option>
+                  </>
+                )}
               </select>
             </div>
           )}
