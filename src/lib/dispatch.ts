@@ -108,7 +108,38 @@ export interface DispatchDecision {
 }
 
 /** Hard eligibility gates every crew must clear for a given date + service. */
-export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
+/**
+ * COULD THIS CREW EVER DO THIS WORK — the half of eligibility that has nothing
+ * to do with a date.
+ *
+ * Split out of `isEligible`, which asks a narrower question than it appears
+ * to: it answers "can this crew take THIS job on THIS day", so a `false` from
+ * it means any of "they are booked", "they do not work Tuesdays", "their
+ * certificate lapsed", or "nobody on this platform does this at all". Those
+ * are wildly different problems and only the last one is a hole you can do
+ * something about three months early.
+ *
+ * `isEligible` calls this first, so the two can never drift apart — a coverage
+ * board built on a hand-copied version of these rules would agree with
+ * dispatch today and quietly disagree the first time either changed.
+ *
+ * DELIBERATELY EXCLUDED: work days, day blocks, daily capacity, the fleet
+ * minute budget, and the storage gates. Every one is about a particular day or
+ * a particular job, not about capability.
+ */
+export type CrewCapability = Pick<
+  CrewCandidate,
+  "status" | "coiExpiry" | "coiNamedInsured" | "company" | "serviceTypes" | "serviceLakes"
+>;
+
+export function canEverDo(
+  // NARROWED TO WHAT IT ACTUALLY READS. Taking a whole CrewCandidate would
+  // force a caller who only knows capability — the coverage board — to invent
+  // a daily capacity and a home base, and an invented number in a gate is how
+  // a gate starts lying.
+  c: CrewCapability,
+  input: Pick<DispatchInput, "serviceName" | "componentNames" | "lakeId" | "todayISO">,
+): boolean {
   if (c.status !== "active") return false;
   if (!c.coiExpiry || String(c.coiExpiry) < input.todayISO) return false; // no COI, no jobs
 
@@ -128,6 +159,15 @@ export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
   // demand EVERY component — the legs ARE the capability flags.
   const needed = input.componentNames?.length ? input.componentNames : [input.serviceName];
   if (!needed.every((n) => c.serviceTypes.includes(n))) return false;
+  // Geo gate: when the job has a lake, the crew must service it. A crew with no
+  // lakes serves nowhere. (lakeId null ⇒ no gate, e.g. a property without a lake.)
+  if (input.lakeId && !(c.serviceLakes ?? []).includes(input.lakeId)) return false;
+  return true;
+}
+
+export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
+  // Capability, insurance, standing and geography — one shared rule.
+  if (!canEverDo(c, input)) return false;
   // Custody gates (storage visits only): unexpired garagekeepers doc, the
   // right building, and free feet in the seasonal pool. Hard by owner decision.
   if (input.storage) {
@@ -140,9 +180,6 @@ export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
     const free = (c.storageCapacityFeet ?? 0) - (c.storageCommittedFeet ?? 0);
     if (free < input.storage.boatFeet) return false;
   }
-  // Geo gate: when the job has a lake, the crew must service it. A crew with no
-  // lakes serves nowhere. (lakeId null ⇒ no gate, e.g. a property without a lake.)
-  if (input.lakeId && !(c.serviceLakes ?? []).includes(input.lakeId)) return false;
   if (!c.workDays.includes(input.weekday)) return false;
   if (c.blockedThatDay) return false;
   const cap = c.dailyCapacity > 0 ? c.dailyCapacity : 0;

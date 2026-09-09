@@ -4,6 +4,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { getVendorScores } from "@/lib/scoring-data";
 import { computeScore, type CrewTier } from "@/lib/scoring";
 import { checkNamedInsured } from "@/lib/named-insured";
+import { canEverDo } from "@/lib/dispatch";
 import { coiState, docConfirmState, type CoiState, type DocConfirmState } from "./crews-coi";
 import { mustRead } from "@/lib/must-read";
 import { isCoolingDown } from "@/lib/lake-standing";
@@ -247,4 +248,109 @@ export async function getActiveServiceNames(): Promise<string[]> {
     await admin.from("services").select("name").eq("active", true).order("name", { ascending: true }),
   );
   return [...new Set((data ?? []).map((s) => s.name as string))];
+}
+
+// ---- Who can do what, and where ------------------------------------------
+
+/** One service on one lake, and how many crews could ever take it. */
+export interface CoverageCell {
+  service: string;
+  lakeId: string;
+  lakeName: string;
+  /** Crews who could EVER take this work — capability, insurance, standing,
+   *  geography. Not "free on Tuesday". */
+  crews: number;
+  /** Protective work (0053) the nightly refuses to auto-cancel. A hole here
+   *  strands somebody rather than merely disappointing them. */
+  protective: boolean;
+}
+
+export interface CrewCoverage {
+  /** Every (active service x lake) pair with NOBODY who can do it. */
+  holes: CoverageCell[];
+  /** How many pairs were examined, so "3 holes" has a denominator. */
+  pairs: number;
+  /** Crews who count at all: active status, real (non-fixture) account. */
+  liveCrews: number;
+  /** Services active but with no crew ANYWHERE, on any lake. */
+  orphanServices: string[];
+}
+
+/**
+ * WHICH WORK CAN NOBODY DO — asked three months early, not on the morning.
+ *
+ * The dispatch board (ops/dispatch-data.ts) answers a different question: which
+ * JOBS failed to find a crew. That is the right question once a job exists, and
+ * the wrong one before then — it cannot fire until somebody has already booked
+ * work nobody can take, which for protective work in January is the moment it
+ * is too late to fix.
+ *
+ * This asks the structural version. It reuses `canEverDo`, the half of
+ * dispatch's own eligibility rule that has nothing to do with a date, so the
+ * board and the router can never disagree about who is capable. Copying those
+ * rules here would have agreed today and drifted at the first change.
+ *
+ * FIXTURES ARE EXCLUDED, exactly as dispatch excludes them. That is the whole
+ * point of the number: production holds three vendors and all three are test
+ * accounts, so the honest answer for every service today is ZERO — and nothing
+ * anywhere said so.
+ */
+export async function getCrewCoverage(): Promise<CrewCoverage> {
+  const admin = createServiceClient();
+  const today = todayLakeDate();
+
+  const [vendorsRes, servicesRes, lakesRes] = await Promise.all([
+    // The SAME fence dispatch uses: a fixture crew may never be counted as
+    // coverage any more than it may be dispatched or paid.
+    admin
+      .from("vendors")
+      .select("id, status, coi_expiry, coi_named_insured, company, service_types, service_lakes, users!vendors_user_id_fkey!inner(is_fixture)")
+      .eq("users.is_fixture", false),
+    admin.from("services").select("name, criticality, park_only").eq("active", true),
+    admin.from("lakes").select("id, name").eq("is_fixture", false),
+  ]);
+
+  // EMPTY MEANS "NOBODY IS COVERED", which is the loudest sentence on this
+  // screen. A dropped read must not be allowed to say it.
+  const vendors = mustRead("the crews who could take work", vendorsRes) ?? [];
+  const services = mustRead("the bookable services", servicesRes) ?? [];
+  const lakes = mustRead("your lakes", lakesRes) ?? [];
+
+  const candidates = vendors.map((v) => ({
+    vendorId: v.id as string,
+    status: (v.status as string) ?? "",
+    coiExpiry: (v.coi_expiry as string | null) ?? null,
+    coiNamedInsured: (v.coi_named_insured as string | null) ?? null,
+    company: (v.company as string | null) ?? null,
+    serviceTypes: (v.service_types as string[] | null) ?? [],
+    serviceLakes: (v.service_lakes as string[] | null) ?? [],
+  }));
+
+  const holes: CoverageCell[] = [];
+  const coveredSomewhere = new Set<string>();
+  let pairs = 0;
+
+  for (const s of services) {
+    const name = s.name as string;
+    const protective = (s.criticality as string) === "protective";
+    for (const lk of lakes) {
+      pairs += 1;
+      const crews = candidates.filter((c) =>
+        canEverDo(c, { serviceName: name, lakeId: lk.id as string, todayISO: today }),
+      ).length;
+      if (crews > 0) coveredSomewhere.add(name);
+      else holes.push({ service: name, lakeId: lk.id as string, lakeName: (lk.name as string) ?? "—", crews, protective });
+    }
+  }
+
+  return {
+    holes: holes.sort((a, b) =>
+      Number(b.protective) - Number(a.protective) || a.service.localeCompare(b.service)),
+    pairs,
+    liveCrews: candidates.filter((c) => c.status === "active").length,
+    orphanServices: services
+      .map((s) => s.name as string)
+      .filter((n) => !coveredSomewhere.has(n))
+      .sort(),
+  };
 }

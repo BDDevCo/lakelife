@@ -7,6 +7,7 @@ import { LakeConditions } from "./LakeConditions";
 import { RouteBuilder } from "./RouteBuilder";
 import { MessageBoard } from "./MessageBoard";
 import { CrewBoard } from "./CrewBoard";
+import { CrewCoverage } from "./CrewCoverage";
 import { NeedsAttention } from "./NeedsAttention";
 import { PlatformSettingsCard } from "./PlatformSettingsCard";
 import type { NeedsAttentionJob, PropertyPreferred } from "@/app/ops/dispatch-data";
@@ -16,6 +17,7 @@ import { StorageLedger } from "./StorageLedger";
 import type { StorageLedger as StorageLedgerData } from "@/app/ops/storage-data";
 import { PayoutQueue } from "./PayoutQueue";
 import type { PayoutQueue as PayoutQueueData } from "@/app/ops/payout-data";
+import type { CrewCoverage as Coverage } from "@/app/ops/crews-data";
 import type { OpsJob, ActiveVendor, MarginRow, LakeCondition, RouteSummary } from "@/app/ops/data";
 import type { OpsThread } from "@/app/ops/messages-data";
 import type { OpsCrew } from "@/app/ops/crews-data";
@@ -49,6 +51,7 @@ export function OpsShell({
   threads,
   crews,
   crewServiceNames,
+  coverage,
   needsAttention,
   preferredJobIds,
   preferredProps,
@@ -69,6 +72,7 @@ export function OpsShell({
   threads: OpsThread[];
   crews: OpsCrew[];
   crewServiceNames: string[];
+  coverage: Coverage;
   needsAttention: NeedsAttentionJob[];
   preferredJobIds: string[];
   preferredProps: PropertyPreferred[];
@@ -127,7 +131,15 @@ export function OpsShell({
       {tab === "lakes" && <LakeConditions lakes={lakes} />}
       {tab === "routing" && <RouteBuilder routes={routes} date={routeDate} />}
 
-      {tab === "crews" && <CrewBoard crews={crews} activeServiceNames={crewServiceNames} />}
+      {tab === "crews" && (
+        <>
+          {/* ABOVE the roster on purpose. The roster answers "who have we
+              got"; this answers "is that enough", and the second question is
+              the one nobody thinks to ask until a job is already stuck. */}
+          <CrewCoverage coverage={coverage} />
+          <CrewBoard crews={crews} activeServiceNames={crewServiceNames} />
+        </>
+      )}
 
       {tab === "messages" && <MessageBoard threads={threads} />}
       {tab === "parks" && <ParkBoard parks={parks} lakes={lakes.map((l) => ({ id: l.id, name: l.name }))} />}
