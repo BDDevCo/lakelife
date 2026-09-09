@@ -186,7 +186,7 @@ function makeProfile(): PricingProfile {
     toy_lifts: ri(0, 2),
     jet_skis: ri(0, 4),
     pwc_lifts: ri(0, 3),
-    lawn_band: sqft < 2000 ? "small" : sqft < 3800 ? "medium" : "large",
+    panes: 0, lawn_band: sqft < 2000 ? "small" : sqft < 3800 ? "medium" : "large",
     boats,
     toys,
   };

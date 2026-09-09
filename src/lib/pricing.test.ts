@@ -90,6 +90,7 @@ const PROFILE: PricingProfile = {
   toy_lifts: 1,
   jet_skis: 2,
   pwc_lifts: 1,
+  panes: 0,
   lawn_band: "medium",
   boats: [{ type: "Pontoon", length_ft: 24 }],
   toys: [{ name: "Kayak" }, { name: "Kayak" }, { name: "Paddleboard" }, { name: "Water trampoline" }],
@@ -366,5 +367,90 @@ describe("park grounds pricing", () => {
   // of grass. Pricing cannot keep a lake-house winterization off a park menu.
   it("a flat lake-house service still prices against a park — the flag is the fence, not the maths", () => {
     expect(priceService(RULES.opening, grounds)).toBe(430);
+  });
+});
+
+/**
+ * A SECOND BAND SERVICE, AND THE MOW IT MUST NOT DISTURB.
+ *
+ * `band` was written for one service and read `p.lawn_band` by name — the only
+ * pricing model whose input was a categorical fact belonging to one named
+ * service. Snow priced by driveway size would have quoted off the customer's
+ * LAWN: a real, bookable, wrong number, which is worse than a missing one.
+ */
+describe("a band rule can say which size it reads", () => {
+  const SNOW: ServiceRule = {
+    name: "Snow removal — drive & walks",
+    pricing_model: "band",
+    base: 0,
+    unit_rate: 0,
+    band_pricing: { band_field: "drive_band", small: 45, medium: 65, large: 95 },
+  };
+
+  it("prices off the driveway, not the lawn", () => {
+    const p = { ...PROFILE, lawn_band: "small" as const, drive_band: "large" as const };
+    expect(priceService(SNOW, p), "snow quoted off the customer's lawn").toBe(95);
+  });
+
+  it("moves with the driveway while the lawn stands still", () => {
+    const lawn = { ...PROFILE, lawn_band: "medium" as const };
+    expect(priceService(SNOW, { ...lawn, drive_band: "small" })).toBe(45);
+    expect(priceService(SNOW, { ...lawn, drive_band: "medium" })).toBe(65);
+    expect(priceService(SNOW, { ...lawn, drive_band: "large" })).toBe(95);
+  });
+
+  it("offers NOTHING for a driveway nobody has measured", () => {
+    // Not a guess, not `rule.base`, and not the lawn's answer. An unanswered
+    // driveway is the reason drive_band is nullable at all.
+    const p = { ...PROFILE, drive_band: null };
+    expect(serviceApplies(SNOW, p), "a snow tile appeared for an unmeasured driveway").toBe(false);
+    expect(priceService(SNOW, p)).toBe(0);
+  });
+
+  it("leaves the mow reading the lawn, with no band_field of its own", () => {
+    // THE REGRESSION THIS WHOLE CHANGE RISKS. The live 'Lawn mowing & trim'
+    // row carries {small, medium, large} and NO band_field. Lose the
+    // `?? "lawn_band"` default and cfg[p[undefined]] is undefined, the
+    // expression falls to rule.base — which is 0 on that row — and every mow
+    // on the platform, lake house and park lot alike, silently prices at $0.
+    const mow: ServiceRule = {
+      name: "Lawn mowing & trim",
+      pricing_model: "band", base: 0, unit_rate: 0,
+      band_pricing: { small: 65, medium: 85, large: 110 },
+    };
+    expect(priceService(mow, { ...PROFILE, lawn_band: "small" })).toBe(65);
+    expect(priceService(mow, { ...PROFILE, lawn_band: "large" })).toBe(110);
+    // And a mow still applies even though it counts nothing.
+    expect(serviceApplies(mow, { ...PROFILE, drive_band: null })).toBe(true);
+  });
+});
+
+describe("window washing counts panes", () => {
+  const WINDOWS: ServiceRule = {
+    name: "Window washing",
+    pricing_model: "per_section",
+    base: 60,
+    unit_rate: 7,
+    band_pricing: { count_field: "panes" },
+  };
+
+  it("is the visit fee plus a rate a pane", () => {
+    expect(priceService(WINDOWS, { ...PROFILE, panes: 24 })).toBe(60 + 7 * 24);
+  });
+
+  it("offers nothing to a property with no panes on file", () => {
+    // Same gate that keeps a pier tile off a house with no pier — audit bug 5.
+    // It is why panes is a COUNT and not a band: zero is a real answer.
+    expect(serviceApplies(WINDOWS, { ...PROFILE, panes: 0 })).toBe(false);
+    expect(priceService(WINDOWS, { ...PROFILE, panes: 0 })).toBe(0);
+  });
+
+  it("does not disturb the pier, which counts the same way", () => {
+    const pier: ServiceRule = {
+      name: "Pier install / removal",
+      pricing_model: "per_section", base: 220, unit_rate: 48,
+      band_pricing: { count_field: "pier_sections" },
+    };
+    expect(priceService(pier, { ...PROFILE, panes: 0 })).toBe(220 + 48 * PROFILE.pier_sections);
   });
 });

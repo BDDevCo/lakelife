@@ -60,7 +60,14 @@ export async function loadPricingProfileById(
     toy_lifts: Number(pp?.toy_lifts ?? 0),
     jet_skis: Number(pp?.jet_skis ?? 0),
     pwc_lifts: Number(pp?.pwc_lifts ?? 0),
+    panes: Number(pp?.panes ?? 0),
     lawn_band: (pp?.lawn_band as PricingProfile["lawn_band"]) ?? "medium",
+    // NO `?? "medium"` HERE, deliberately, and it is the one line in this
+    // object that breaks the pattern above it. lawn_band coerces a default
+    // because it is non-null in the type; a driveway nobody has measured must
+    // stay NULL so serviceApplies gives the property no snow tile at all.
+    // Defaulting it would quote a real price off an invented fact.
+    drive_band: (pp?.drive_band as PricingProfile["drive_band"]) ?? null,
     boats: (boats ?? []).map((b) => ({ type: b.type ?? undefined, length_ft: Number(b.length_ft) || 0 })),
     toys: (toys ?? []).map((t) => ({ name: t.name ?? undefined })),
   };

@@ -145,6 +145,13 @@ export function ProfileWizard({
     pier_sections: draft.pier_sections, boat_lifts: draft.boat_lifts, toy_lifts: 0,
     jet_skis: draft.jet_skis, pwc_lifts: draft.pwc_lifts,
     lawn_band: draft.lawn_band, boats: draft.boats,
+    // NOT ASKED IN THIS WIZARD YET. Stated explicitly rather than left off:
+    // the preview prices whatever it is handed, and an absent `panes` would
+    // make a window-washing tile quote off `undefined`. 0 panes and an
+    // unmeasured driveway both mean "no tile", which is the honest preview
+    // until the steps that ask for them exist.
+    panes: 0,
+    drive_band: null,
     toys: draft.toys.map((name) => ({ name })),
   });
   const rule = (name: string) => services.find((s) => s.name === name);
@@ -241,6 +248,23 @@ export function ProfileWizard({
       jet_skis: keep(askedJet, draft.jet_skis, initial.jet_skis, 0),
       pwc_lifts: keep(askedJet, draft.pwc_lifts, initial.pwc_lifts, 0),
       lawn_band: keep(askedLawn, draft.lawn_band, initial.lawn_band, "medium"),
+      // NO STEP ASKS FOR THESE YET — the wizard questions land with the
+      // services themselves. Stated anyway, and stated as PRESERVING rather
+      // than defaulting: `initial.X` keeps whatever the profile already holds,
+      // so a save from this wizard can never wipe a pane count a crew
+      // corrected, nor invent a driveway size.
+      //
+      // Note the last argument. Every line above passes a "nobody was asked"
+      // value and lawn_band's is "medium" — which is why a customer who never
+      // opened the lawn step has a medium lawn asserted about them in three
+      // places. drive_band's is NULL, on purpose, and must stay null when the
+      // step is added.
+      // NEITHER PANE COUNT NOR DRIVEWAY IS SENT, and that is the correct
+      // preservation rather than an omission. This wizard has no step for
+      // them yet, so it knows nothing to send — and a PostgREST upsert only
+      // SETs the columns present in its payload, so leaving them out keeps
+      // whatever the profile already holds. Sending `0`/`null` "to be safe"
+      // is what would wipe a pane count a crew had just corrected.
       // `initial.boats` comes off the database, where the engine fields are
       // nullable; the payload type wants them absent rather than null.
       boats: askedBoats

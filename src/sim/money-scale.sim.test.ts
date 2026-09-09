@@ -232,6 +232,7 @@ function buildWorld(rng: () => number) {
           toy_lifts: Math.floor(rng() * 3),
           jet_skis: Math.floor(rng() * 4),
           pwc_lifts: Math.floor(rng() * 3),
+          panes: 0,
           lawn_band: (["small", "medium", "large"] as const)[Math.floor(rng() * 3)],
           boats,
           toys: Array.from({ length: Math.floor(rng() * 5) }, () => ({ name: "toy" })),
@@ -1317,7 +1318,7 @@ describe("SIM-FOUND defects — minimal repros (assert CURRENT behavior)", () =>
     };
     const profile = (sections: number): PricingProfile => ({
       sqft: 2400, beds: 3, baths: 2, pier_sections: sections, boat_lifts: 1,
-      toy_lifts: 0, jet_skis: 0, pwc_lifts: 0, lawn_band: "medium", boats: [], toys: [],
+      toy_lifts: 0, jet_skis: 0, pwc_lifts: 0, panes: 0, lawn_band: "medium", boats: [], toys: [],
     });
     const pricedAt8 = priceService(pier, profile(8)); // 604 — what dispatch quoted
     const vendorCost = R2(pricedAt8 * 0.7); // 422.80 — crew rate, 30% margin

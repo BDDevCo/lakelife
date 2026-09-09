@@ -113,7 +113,11 @@ export interface FullProfile {
   toy_lifts: number;
   jet_skis: number;
   pwc_lifts: number;
+  /** Panes of glass, for window washing. 0 = none, and no tile. */
+  panes: number;
   lawn_band: "small" | "medium" | "large";
+  /** Driveway size, or NULL when nobody has been asked. Never defaulted. */
+  drive_band: "small" | "medium" | "large" | null;
   boats: Array<{ type: string; length_ft: number; engine_type?: string | null; engine_hp?: number | null; engines?: number | null }>;
   toys: Array<{ name: string }>;
   wanted_services: string[];
@@ -205,7 +209,11 @@ export async function getFullProfile(
       toy_lifts: 0,
       jet_skis: 0,
       pwc_lifts: 0,
+      panes: 0,
       lawn_band: "medium",
+      // NULL, not "medium". Nobody has been asked, and a default here is a
+      // fact asserted about a home nobody has looked at.
+      drive_band: null,
       boats: [],
       toys: [],
       wanted_services: [],
@@ -294,7 +302,9 @@ export async function getFullProfile(
     toy_lifts: profile?.toy_lifts ?? 0,
     jet_skis: profile?.jet_skis ?? 0,
     pwc_lifts: profile?.pwc_lifts ?? 0,
+    panes: profile?.panes ?? 0,
     lawn_band: (profile?.lawn_band as FullProfile["lawn_band"]) ?? "medium",
+    drive_band: (profile?.drive_band as FullProfile["drive_band"]) ?? null,
     boats: boatList,
     toys: (toys ?? []).map((t) => ({ name: t.name ?? "" })),
     wanted_services: (profile?.wanted_services as string[] | null) ?? [],
@@ -316,7 +326,10 @@ export function toPricingProfile(p: FullProfile): PricingProfile {
     toy_lifts: p.toy_lifts,
     jet_skis: p.jet_skis,
     pwc_lifts: p.pwc_lifts,
+    panes: p.panes,
     lawn_band: p.lawn_band,
+    // Carried through as null when unanswered — see PricingProfile.drive_band.
+    drive_band: p.drive_band,
     boats: p.boats,
     toys: p.toys,
   };

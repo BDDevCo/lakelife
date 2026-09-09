@@ -9,7 +9,8 @@ import type { PricingProfile } from "./pricing";
 
 const P = (o: Partial<PricingProfile> = {}): PricingProfile => ({
   sqft: 2400, beds: 3, baths: 2, pier_sections: 8, boat_lifts: 1, toy_lifts: 0,
-  jet_skis: 0, pwc_lifts: 0, lawn_band: "medium", boats: [], toys: [], ...o,
+  jet_skis: 0, pwc_lifts: 0, panes: 0, lawn_band: "medium", drive_band: null,
+  boats: [], toys: [], ...o,
 });
 
 // The real seeded rules.

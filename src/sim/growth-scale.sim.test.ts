@@ -132,6 +132,7 @@ function makeProfile(rnd: () => number): PricingProfile {
     toy_lifts: rnd() < 0.3 ? 1 + Math.floor(rnd() * 2) : 0,
     jet_skis: rnd() < 0.35 ? 1 + Math.floor(rnd() * 3) : 0,
     pwc_lifts: rnd() < 0.25 ? 1 + Math.floor(rnd() * 2) : 0,
+    panes: 0,
     lawn_band: (["small", "medium", "large"] as const)[Math.floor(rnd() * 3)],
     boats,
     toys: Array.from({ length: Math.floor(rnd() * 4) }, () => ({ name: "toy" })),

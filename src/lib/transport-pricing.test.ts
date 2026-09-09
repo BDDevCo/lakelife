@@ -82,7 +82,7 @@ describe("INERT unless somebody sets a rate", () => {
     // The 0115 property: adding dials to a service must not move its own price.
     const profile = {
       sqft: 2000, beds: 3, baths: 2, pier_sections: 0, boat_lifts: 0, toy_lifts: 0,
-      jet_skis: 0, pwc_lifts: 0, lawn_band: "medium", boats: [], toys: [],
+      jet_skis: 0, pwc_lifts: 0, panes: 0, lawn_band: "medium", boats: [], toys: [],
     } as PricingProfile;
     expect(priceService(withDials(20, 3.6), profile)).toBe(priceService(rule(), profile));
   });

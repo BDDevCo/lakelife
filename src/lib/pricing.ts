@@ -49,7 +49,27 @@ export type CountableField =
   | "pwc_lifts"
   | "toys_count"
   | "beds"
-  | "baths";
+  | "baths"
+  /**
+   * PANES OF GLASS, for window washing. Counted exactly like pier sections —
+   * and, like them, a property with none gets no tile at all, because
+   * `serviceApplies` refuses a counted service at zero. That is the whole
+   * reason this is a COUNT and not a band: nobody has to be asked "how big is
+   * your house" a second time, and a cottage with eight windows is not quoted
+   * for a wall of glass.
+   */
+  | "panes";
+
+/**
+ * The categorical size fields a `band` rule may price off.
+ *
+ * `band` was written for one service and read `p.lawn_band` by name. A second
+ * band service (snow, priced by driveway size) would silently have quoted off
+ * the customer's LAWN — a real, bookable, wrong number, which is worse than a
+ * missing one. This is the `count_field` idea applied to the model that never
+ * got it.
+ */
+export type BandField = "lawn_band" | "drive_band";
 
 /** One additive term: rate × the value of a profile field. */
 export interface AddTerm {
@@ -67,6 +87,19 @@ export interface PricingParams {
    * conjure equipment from zero; serviceApplies() runs first (audit bug 5).
    */
   min_count?: number;
+  /**
+   * band: WHICH size field to read (default "lawn_band").
+   *
+   * THE DEFAULT IS LOAD-BEARING. The live 'Lawn mowing & trim' row carries
+   * band_pricing {small, medium, large} and no band_field, so removing the
+   * `?? "lawn_band"` fallback makes `cfg[p[undefined]]` undefined, the whole
+   * expression falls through to `rule.base` — which is 0 on that row — and
+   * every mow on the platform, lake house and park lot alike, silently prices
+   * at $0. Four assertions in pricing.test.ts already fail first if it goes;
+   * do not add band_field to that fixture, because that is what would disarm
+   * them.
+   */
+  band_field?: BandField;
   /** band: price per band key. */
   small?: number;
   medium?: number;
@@ -121,7 +154,23 @@ export interface PricingProfile {
   toy_lifts: number;
   jet_skis: number;
   pwc_lifts: number;
+  /** Panes of glass. 0 = none, and no window-washing tile. */
+  panes: number;
   lawn_band: "small" | "medium" | "large";
+  /**
+   * Driveway size. NULL means NOBODY HAS BEEN ASKED, and that is different
+   * from "medium".
+   *
+   * `lawn_band` is non-null and defaults to "medium" in three separate
+   * readers, so a customer who never opened the lawn step has a medium lawn
+   * asserted about them on their own profile, on the crew's card, and in the
+   * price. This one follows beds/baths instead, which service-helpers.ts
+   * leaves NULL precisely because "a home with 0 bedrooms is a false fact,
+   * and false facts are the thing this codebase keeps having to dig back
+   * out." An unanswered driveway produces no snow tile rather than a wrong
+   * price — see serviceApplies.
+   */
+  drive_band?: "small" | "medium" | "large" | null;
   boats: Array<{
     type?: string;
     length_ft: number;
@@ -182,9 +231,31 @@ export function countedFields(rule: ServiceRule): CountableField[] {
  * winterization are unaffected.
  */
 export function serviceApplies(rule: ServiceRule, p: PricingProfile): boolean {
+  // A BAND RULE WHOSE SIZE NOBODY HAS GIVEN HAS NOTHING TO PRICE.
+  //
+  // `countedFields` is empty for every band rule, so before this the model
+  // always applied — fine while the only band service was the mow, whose
+  // field is non-null and defaults to "medium". A driveway size is NULLABLE
+  // on purpose (see PricingProfile.drive_band), and an unanswered one must
+  // produce NO TILE rather than a price picked off `rule.base`. The mow is
+  // untouched: lawn_band is never null, so this returns true for it exactly
+  // as before.
+  if (rule.pricing_model === "band" && !bandValue(rule.band_pricing ?? {}, p)) return false;
+
   const fields = countedFields(rule);
   if (fields.length === 0) return true;
   return fields.some((f) => profileValue(p, f) > 0);
+}
+
+/**
+ * Which band key this rule reads on this profile, or null when the property
+ * has not been asked. One place, so the price and the applicability gate can
+ * never disagree about which field a band service is keyed on.
+ */
+function bandValue(cfg: PricingParams, p: PricingProfile): "small" | "medium" | "large" | null {
+  const field: BandField = cfg.band_field ?? "lawn_band";
+  const v = (p as unknown as Record<string, unknown>)[field];
+  return v === "small" || v === "medium" || v === "large" ? v : null;
 }
 
 /**
@@ -218,9 +289,13 @@ export function priceService(rule: ServiceRule, p: PricingProfile): number {
       price = rule.base + rule.unit_rate * boatFeet(p);
       break;
 
-    case "band":
-      price = Number(cfg[p.lawn_band] ?? rule.base) || 0;
+    case "band": {
+      // `?? "lawn_band"` keeps every existing band rule — there is exactly
+      // one, the mow — reading the field it always read. See PricingParams.
+      const key = bandValue(cfg, p);
+      price = Number((key ? cfg[key] : undefined) ?? rule.base) || 0;
       break;
+    }
 
     case "per_sqft_band": {
       const tiers = cfg.tiers ?? [];

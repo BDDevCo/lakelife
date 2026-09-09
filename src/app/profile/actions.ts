@@ -38,7 +38,19 @@ export interface WizardInput {
   jet_skis: number;
   pwc_lifts: number;
   canopy: boolean;
+  /**
+   * Panes of glass, for window washing. OPTIONAL: a caller with no step for
+   * it (the guided wizard today) omits the key entirely and the stored value
+   * is left alone. Sending 0 means "none", which is a different statement.
+   */
+  panes?: number;
   lawn_band: "small" | "medium" | "large";
+  /**
+   * Driveway size, for snow. NULL means the wizard never asked — it is NOT
+   * "medium", and it must survive a save as null so no snow tile appears for
+   * a driveway nobody has measured.
+   */
+  drive_band?: "small" | "medium" | "large" | null;
   boats: Array<{ type: string; length_ft: number; engine_type?: string; engine_hp?: number; engines?: number }>;
   toys: Array<{ name: string }>;
   wanted_services: string[];
@@ -207,6 +219,15 @@ export async function saveProfile(input: WizardInput): Promise<SaveResult> {
     pwc_lifts: input.pwc_lifts || 0,
     lawn_band: input.lawn_band,
     wanted_services: input.wanted_services ?? [],
+    // OMITTED WHEN THE CALLER HAS NOTHING TO SAY. An upsert only SETs the
+    // columns it carries, so a caller without these steps leaves the stored
+    // values untouched — which is what keeps a profile edit from wiping a
+    // pane count a crew corrected and the homeowner approved.
+    //
+    // `?? null` on the band and not `|| "medium"`: when the caller DOES
+    // answer, it must be able to answer "not measured".
+    ...(input.panes === undefined ? {} : { panes: input.panes || 0 }),
+    ...(input.drive_band === undefined ? {} : { drive_band: input.drive_band ?? null }),
   });
   if (profErr) return { ok: false, error: profErr.message };
 
