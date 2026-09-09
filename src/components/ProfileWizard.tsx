@@ -11,6 +11,24 @@ import { Stepper, ChoiceChips, ToggleChips, Toggle } from "@/components/wizard-c
 
 type Lawn = "small" | "medium" | "large";
 
+/**
+ * MAY THIS SERVICE BE OFFERED AT ALL?
+ *
+ * SERVICE_GROUPS is a hardcoded catalogue and `services` arrives filtered to
+ * ACTIVE rows, so a name here with no matching row rendered a tile whose live
+ * price read $0 — tickable, free, on the first screen a customer ever sees.
+ *
+ * Making the catalogue subordinate to the database is rule 8 (pricing lives in
+ * the DB) applied to availability as well as price. It also means a service
+ * appears by itself the day it is priced and switched on: no second deploy,
+ * and no window in which it shows wrong.
+ *
+ * Exported and pure so this can be proven without driving a five-step wizard.
+ */
+export function canOffer(services: ServiceRule[], name: string): boolean {
+  return services.some((s) => s.name === name);
+}
+
 const NOT_LISTED = "My lake isn't listed";
 
 const ENGINE_LABELS: Array<[string, string]> = [
@@ -23,6 +41,13 @@ const BOAT_TYPES = [
   "Pontoon", "Tritoon", "Wake boat", "Ski boat", "Fishing boat", "Runabout / bowrider", "Sailboat", "Other",
 ];
 const TOY_OPTIONS = ["Kayak", "Paddleboard", "Tube", "Water trampoline", "Canoe", "Floating mat", "Water slide"];
+// A DRIVEWAY IS NOT MEASURED IN ACRES. Reusing LAWN_DESC would have offered
+// "¼–½ acre mowable" as a driveway size.
+const DRIVE_DESC: Record<Lawn, string> = {
+  small: "a car or two",
+  medium: "up to about 100 ft",
+  large: "over 100 ft, or a turnaround",
+};
 const LAWN_DESC: Record<Lawn, string> = {
   small: "under ¼ acre mowable",
   medium: "¼–½ acre mowable",
@@ -40,6 +65,8 @@ const SERVICE_GROUPS: Array<{ title: string; note: string; items: Array<{ name: 
       { name: "Fall winterization", desc: "Button it up before the freeze", icon: "❄️" },
       { name: "Housekeeping", desc: "Cleaned & ready before you arrive", icon: "🧹" },
       { name: "Lawn mowing & trim", desc: "Weekly mow & blow", icon: "🌱" },
+      { name: "Window washing", desc: "Glass cleaned, outside", icon: "🪟" },
+      { name: "Snow removal — drive & walks", desc: "Drive & walks cleared after a snowfall", icon: "🌨️" },
     ],
   },
   {
@@ -84,6 +111,10 @@ interface Draft {
   jet_skis: number;
   pwc_lifts: number;
   lawn_band: Lawn;
+  /** Panes of glass. 0 = none, which is a real answer. */
+  panes: number;
+  /** Driveway size, or null when this wizard never asked. NOT defaulted. */
+  drive_band: Lawn | null;
   boats: Array<{ type: string; length_ft: number; engine_type: string; engine_hp: number; engines: number }>;
   toys: string[];
 }
@@ -127,6 +158,10 @@ export function ProfileWizard({
     jet_skis: initial.jet_skis ?? 0,
     pwc_lifts: initial.pwc_lifts ?? 0,
     lawn_band: initial.lawn_band ?? "medium",
+    panes: initial.panes ?? 0,
+    // `?? null`, never "medium". An unmeasured driveway must stay unmeasured
+    // all the way through this wizard, or the step below is decoration.
+    drive_band: initial.drive_band ?? null,
     boats: initial.boats?.length
       ? initial.boats.map((b) => ({ ...b, engine_type: b.engine_type ?? "", engine_hp: b.engine_hp ?? 0, engines: b.engines ?? 1 }))
       : [{ type: "Pontoon", length_ft: 24, engine_type: "outboard", engine_hp: 0, engines: 1 }],
@@ -145,13 +180,8 @@ export function ProfileWizard({
     pier_sections: draft.pier_sections, boat_lifts: draft.boat_lifts, toy_lifts: 0,
     jet_skis: draft.jet_skis, pwc_lifts: draft.pwc_lifts,
     lawn_band: draft.lawn_band, boats: draft.boats,
-    // NOT ASKED IN THIS WIZARD YET. Stated explicitly rather than left off:
-    // the preview prices whatever it is handed, and an absent `panes` would
-    // make a window-washing tile quote off `undefined`. 0 panes and an
-    // unmeasured driveway both mean "no tile", which is the honest preview
-    // until the steps that ask for them exist.
-    panes: 0,
-    drive_band: null,
+    panes: draft.panes,
+    drive_band: draft.drive_band,
     toys: draft.toys.map((name) => ({ name })),
   });
   const rule = (name: string) => services.find((s) => s.name === name);
@@ -162,6 +192,10 @@ export function ProfileWizard({
   const lawnPrice = (band: Lawn) => {
     const r = rule("Lawn mowing & trim");
     return r ? priceService(r, { ...pp(), lawn_band: band }) : 0;
+  };
+  const drivePrice = (band: Lawn) => {
+    const r = rule("Snow removal — drive & walks");
+    return r ? priceService(r, { ...pp(), drive_band: band }) : 0;
   };
 
   // The steps shown adapt to the services chosen.
@@ -174,6 +208,8 @@ export function ProfileWizard({
   if (wants("Boat storage & winterize")) stepKeys.push("boats");
   if (wants("Jet ski winterize & store") || wants("PWC lift set / pull")) stepKeys.push("jetskis");
   if (wants("Water toy prep & storage")) stepKeys.push("toys");
+  if (wants("Window washing")) stepKeys.push("panes");
+  if (wants("Snow removal — drive & walks")) stepKeys.push("drive");
 
   const current = Math.min(step, stepKeys.length - 1);
   const key = stepKeys[current];
@@ -182,6 +218,7 @@ export function ProfileWizard({
     place: "Your place", services: "What can we do for you?", access: "Home access",
     lawn: "Your lawn", pier: "Your pier", lifts: "Your lifts", boats: "Your boats",
     jetskis: "Jet skis / PWC", toys: "Water toys",
+    panes: "Your windows", drive: "Your driveway",
   };
 
   function next() {
@@ -222,6 +259,8 @@ export function ProfileWizard({
       shown ? typed : (onFile ?? none);
 
     const askedLawn = wants("Lawn mowing & trim");
+    const askedPanes = wants("Window washing");
+    const askedDrive = wants("Snow removal — drive & walks");
     const askedPier = wants("Pier install / removal");
     const askedLifts = wants("Boat lift set / pull");
     const askedBoats = wants("Boat storage & winterize");
@@ -259,12 +298,16 @@ export function ProfileWizard({
       // opened the lawn step has a medium lawn asserted about them in three
       // places. drive_band's is NULL, on purpose, and must stay null when the
       // step is added.
-      // NEITHER PANE COUNT NOR DRIVEWAY IS SENT, and that is the correct
-      // preservation rather than an omission. This wizard has no step for
-      // them yet, so it knows nothing to send — and a PostgREST upsert only
-      // SETs the columns present in its payload, so leaving them out keeps
-      // whatever the profile already holds. Sending `0`/`null` "to be safe"
-      // is what would wipe a pane count a crew had just corrected.
+      // Sent only when this run actually ASKED. The upsert sets just the
+      // columns it carries, so a customer who never chose window washing
+      // leaves a pane count a crew corrected exactly where it was.
+      //
+      // Note the last argument on the driveway: every line above passes a
+      // "nobody was asked" value and lawn_band's is "medium", which is why a
+      // customer who skipped the lawn step has a medium lawn asserted about
+      // them in three places. This one is NULL.
+      ...(askedPanes ? { panes: draft.panes } : {}),
+      ...(askedDrive ? { drive_band: draft.drive_band } : {}),
       // `initial.boats` comes off the database, where the engine fields are
       // nullable; the payload type wants them absent rather than null.
       boats: askedBoats
@@ -380,7 +423,7 @@ export function ProfileWizard({
                 <div style={{ fontWeight: 800, fontSize: 13.5 }}>{group.title}</div>
                 <div className="mut" style={{ fontSize: 11.5 }}>{group.note}</div>
               </div>
-              {group.items.map((svc) => {
+              {group.items.filter((svc) => canOffer(services, svc.name)).map((svc) => {
                 const on = wants(svc.name);
                 return (
                   <button
@@ -464,6 +507,55 @@ export function ProfileWizard({
             >
               <b style={{ minWidth: 66, textTransform: "capitalize" }}>{k}</b>
               <span className="mut">{LAWN_DESC[k]} — {formatPrice(lawnPrice(k))}/visit</span>
+            </button>
+          ))}
+        </>
+      )}
+
+      {key === "panes" && (
+        <>
+          <p className="mut" style={{ marginBottom: 16, fontSize: 14 }}>
+            Count the panes you want washed from outside — a divided sash counts
+            once per pane of glass. A rough count is fine; the crew corrects it
+            on the day and you approve the change before anything reprices.
+          </p>
+          <div className="ll-field">
+            <label>How many panes?</label>
+            <input
+              inputMode="numeric"
+              value={draft.panes || ""}
+              placeholder="e.g. 24"
+              onChange={(e) => set({ panes: Math.max(0, Math.min(999, Number(e.target.value.replace(/\D/g, "")) || 0)) })}
+            />
+          </div>
+          {draft.panes > 0 && (
+            <p style={{ fontSize: 14, marginTop: 12 }}>
+              {formatPrice(priceOf("Window washing"))} a visit
+            </p>
+          )}
+        </>
+      )}
+
+      {key === "drive" && (
+        <>
+          <p className="mut" style={{ marginBottom: 16, fontSize: 14 }}>
+            The drive and the walks a plough or a shovel has to clear — not the
+            road, which the county or the park does.
+          </p>
+          {(["small", "medium", "large"] as Lawn[]).map((k) => (
+            <button
+              key={k} type="button" onClick={() => set({ drive_band: k })}
+              style={{
+                display: "flex", gap: 10, alignItems: "center", width: "100%", textAlign: "left",
+                padding: "12px 14px", borderRadius: 12, marginBottom: 8, fontSize: 14, cursor: "pointer",
+                border: `1.5px solid ${draft.drive_band === k ? "var(--teal)" : "var(--line)"}`,
+                background: draft.drive_band === k ? "#F2F9FA" : "#fff",
+              }}
+            >
+              <b style={{ minWidth: 66, textTransform: "capitalize" }}>{k}</b>
+              <span className="mut">
+                {DRIVE_DESC[k]} — {formatPrice(drivePrice(k))} a push
+              </span>
             </button>
           ))}
         </>
