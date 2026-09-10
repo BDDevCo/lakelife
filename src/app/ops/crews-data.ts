@@ -257,9 +257,20 @@ export interface CoverageCell {
   service: string;
   lakeId: string;
   lakeName: string;
-  /** Crews who could EVER take this work — capability, insurance, standing,
-   *  geography. Not "free on Tuesday". */
+  /** Crews who could actually be routed this work: capable AND carrying a rate
+   *  for it. Not "free on Tuesday" — but not "capable one day either". */
   crews: number;
+  /**
+   * CAPABLE, AND STILL UNROUTABLE FOR WANT OF A NUMBER.
+   *
+   * dispatch drops a crew with no rate AFTER eligibility passes
+   * (dispatch.ts:278, `crewRate != null && > 0`), and canClaim refuses them
+   * with `no_rate`. So a crew who has ticked the work but never priced it is
+   * offered nothing — for ever, silently. Counting them as coverage is how
+   * this card would have gone green one step before the router could route,
+   * which is the precise failure it exists to catch.
+   */
+  capableButUnpriced: number;
   /** Protective work (0053) the nightly refuses to auto-cancel. A hole here
    *  strands somebody rather than merely disappointing them. */
   protective: boolean;
@@ -274,6 +285,9 @@ export interface CrewCoverage {
   liveCrews: number;
   /** Services active but with no crew ANYWHERE, on any lake. */
   orphanServices: string[];
+  /** Crews who have ticked work they never priced, anywhere. Chase them for a
+   *  number; do not go and hire somebody. */
+  unpricedCrews: number;
 }
 
 /**
@@ -299,15 +313,17 @@ export async function getCrewCoverage(): Promise<CrewCoverage> {
   const admin = createServiceClient();
   const today = todayLakeDate();
 
-  const [vendorsRes, servicesRes, lakesRes] = await Promise.all([
+  const [vendorsRes, servicesRes, lakesRes, ratesRes] = await Promise.all([
     // The SAME fence dispatch uses: a fixture crew may never be counted as
     // coverage any more than it may be dispatched or paid.
     admin
       .from("vendors")
       .select("id, status, coi_expiry, coi_named_insured, company, service_types, service_lakes, users!vendors_user_id_fkey!inner(is_fixture)")
       .eq("users.is_fixture", false),
-    admin.from("services").select("name, criticality, park_only").eq("active", true),
+    admin.from("services").select("id, name, criticality, park_only").eq("active", true),
     admin.from("lakes").select("id, name").eq("is_fixture", false),
+    // THE RATE IS A SECOND GATE, and it is the one a new crew fails for days.
+    admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"),
   ]);
 
   // EMPTY MEANS "NOBODY IS COVERED", which is the loudest sentence on this
@@ -315,6 +331,25 @@ export async function getCrewCoverage(): Promise<CrewCoverage> {
   const vendors = mustRead("the crews who could take work", vendorsRes) ?? [];
   const services = mustRead("the bookable services", servicesRes) ?? [];
   const lakes = mustRead("your lakes", lakesRes) ?? [];
+  // An empty rate list reads as "nobody has priced anything", which on this
+  // card is the loudest sentence there is. A dropped read must not say it.
+  const rates = mustRead("what the crews charge", ratesRes) ?? [];
+
+  /** Has this crew put a real number against this service? Same four shapes
+   *  the services table uses (0162) — a row of zeroes is not a rate. */
+  const priced = new Set(
+    rates
+      .filter((r) => {
+        const bp = (r.band_pricing ?? null) as Record<string, unknown> | null;
+        return (
+          Number(r.base ?? 0) > 0 ||
+          Number(r.unit_rate ?? 0) > 0 ||
+          typeof bp?.small === "number" ||
+          (Array.isArray(bp?.tiers) && (bp!.tiers as unknown[]).length > 0)
+        );
+      })
+      .map((r) => `${r.vendor_id}::${r.service_id}`),
+  );
 
   const candidates = vendors.map((v) => ({
     vendorId: v.id as string,
@@ -328,6 +363,7 @@ export async function getCrewCoverage(): Promise<CrewCoverage> {
 
   const holes: CoverageCell[] = [];
   const coveredSomewhere = new Set<string>();
+  const unpriced = new Set<string>();
   let pairs = 0;
 
   for (const s of services) {
@@ -335,11 +371,26 @@ export async function getCrewCoverage(): Promise<CrewCoverage> {
     const protective = (s.criticality as string) === "protective";
     for (const lk of lakes) {
       pairs += 1;
-      const crews = candidates.filter((c) =>
+      const capable = candidates.filter((c) =>
         canEverDo(c, { serviceName: name, lakeId: lk.id as string, todayISO: today }),
-      ).length;
-      if (crews > 0) coveredSomewhere.add(name);
-      else holes.push({ service: name, lakeId: lk.id as string, lakeName: (lk.name as string) ?? "—", crews, protective });
+      );
+      // BOTH GATES, in the order dispatch applies them: eligibility, then a
+      // rate. A crew who clears the first and not the second is counted
+      // separately rather than as coverage, because the remedy is a phone call
+      // about a number and not a hire.
+      const ready = capable.filter((c) => priced.has(`${c.vendorId}::${s.id as string}`));
+      capable.forEach((c) => { if (!priced.has(`${c.vendorId}::${s.id as string}`)) unpriced.add(c.vendorId); });
+      if (ready.length > 0) coveredSomewhere.add(name);
+      else {
+        holes.push({
+          service: name,
+          lakeId: lk.id as string,
+          lakeName: (lk.name as string) ?? "—",
+          crews: ready.length,
+          capableButUnpriced: capable.length,
+          protective,
+        });
+      }
     }
   }
 
@@ -348,6 +399,7 @@ export async function getCrewCoverage(): Promise<CrewCoverage> {
       Number(b.protective) - Number(a.protective) || a.service.localeCompare(b.service)),
     pairs,
     liveCrews: candidates.filter((c) => c.status === "active").length,
+    unpricedCrews: unpriced.size,
     orphanServices: services
       .map((s) => s.name as string)
       .filter((n) => !coveredSomewhere.has(n))

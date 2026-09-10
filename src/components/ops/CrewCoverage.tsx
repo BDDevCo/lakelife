@@ -18,7 +18,7 @@ import type { CrewCoverage as Coverage } from "@/app/ops/crews-data";
  * ZERO — and until this card existed, nothing anywhere said so.
  */
 export function CrewCoverage({ coverage }: { coverage: Coverage }) {
-  const { holes, pairs, liveCrews, orphanServices } = coverage;
+  const { holes, pairs, liveCrews, orphanServices, unpricedCrews } = coverage;
   const covered = pairs - holes.length;
   const allDark = pairs > 0 && covered === 0;
   const protectiveHoles = holes.filter((h) => h.protective);
@@ -53,7 +53,9 @@ export function CrewCoverage({ coverage }: { coverage: Coverage }) {
           <p style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.55 }}>
             {liveCrews === 0
               ? "There are no live crews at all — every vendor on the platform is a test account, and dispatch will not route to one. Until a real crew is onboarded and activated, every booking becomes a job that sits waiting for somebody who does not exist."
-              : `${liveCrews} live ${liveCrews === 1 ? "crew" : "crews"}, and none of them is set up for any service on any lake — check their service list, their lakes, and whether their certificate is in date.`}
+              : unpricedCrews > 0
+                ? `${liveCrews} live ${liveCrews === 1 ? "crew" : "crews"}, and ${unpricedCrews === 1 ? "one has" : `${unpricedCrews} have`} ticked work they never priced. Dispatch drops a crew with no rate, so they are offered nothing at all — chase the number, not a new contractor.`
+                : `${liveCrews} live ${liveCrews === 1 ? "crew" : "crews"}, and none of them is set up for any service on any lake — check their service list, their lakes, and whether their certificate is in date.`}
           </p>
         </div>
       ) : holes.length === 0 ? (
@@ -78,11 +80,29 @@ export function CrewCoverage({ coverage }: { coverage: Coverage }) {
                 <span style={{ fontWeight: 700 }}>{h.service}</span>
                 <span className="mut">on {h.lakeName}</span>
                 {h.protective && <span className="ll-pill warn">protective</span>}
-                <span className="mut" style={{ marginLeft: "auto" }}>nobody</span>
+                {/* TWO DIFFERENT HOLES, and they need different phone calls.
+                    A crew who is capable and unpriced is dropped by dispatch
+                    AFTER eligibility passes (crewRate > 0), so they are as
+                    unroutable as nobody at all — but the fix is a number, not
+                    a hire. Saying "nobody" for both sends ops looking for a
+                    contractor they already have. */}
+                <span className="mut" style={{ marginLeft: "auto" }}>
+                  {h.capableButUnpriced > 0
+                    ? `${h.capableButUnpriced} can do it — no rate set`
+                    : "nobody"}
+                </span>
               </div>
             ))}
           </div>
         </>
+      )}
+
+      {unpricedCrews > 0 && !allDark && (
+        <p className="mut" style={{ fontSize: 12.5, marginTop: 12, lineHeight: 1.5 }}>
+          {unpricedCrews === 1 ? "One crew has" : `${unpricedCrews} crews have`} ticked work
+          they never set a rate for. They will never be offered it — dispatch drops a crew
+          with no rate, and nothing tells them but their own rate card.
+        </p>
       )}
 
       {orphanServices.length > 0 && !allDark && (
