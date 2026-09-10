@@ -54,8 +54,24 @@ export default async function ClaimPage({
     // on a page reached from a slip that names her park is the moment she
     // decides the link is not from the office after all. The boundary at
     // src/app/error.tsx says the fault is ours and offers Try again.
+    //
+    // NO `.eq("active", true)`, AND THAT IS THE POINT OF THE SERVICE CLIENT.
+    //
+    // The comment above says this read uses the service client because
+    // "parks_read would hide even an active park" from an anonymous visitor —
+    // and then a hand-written active filter re-imposed by hand the exact
+    // publicity rule it was reached for. `parks.active` is not a kill switch;
+    // The Haven is active=false in production TODAY, five weeks from handing
+    // out slips, so every one of its 21 households would meet a nameless "See
+    // your lot" — the sentence above calls that "the moment she decides the
+    // link is not from the office after all" — and, because the lot-number
+    // read below is gated on `data?.id`, the wrong keyboard as well.
+    //
+    // 0153 already fixed this exact filter in `claim_park_file`, where it
+    // would have failed all 21 slips silently. This is the same rule in a
+    // fourth doorway. It leaks nothing: the visitor arrived holding the slug.
     const data = mustRead("the park on your slip", await admin
-      .from("parks").select("id, name").eq("slug", slug).eq("active", true).maybeSingle());
+      .from("parks").select("id, name").eq("slug", slug).maybeSingle());
     parkName = (data?.name as string) ?? undefined;
     if (data?.id) {
       // Degraded rather than fatal, because the failure direction is the safe

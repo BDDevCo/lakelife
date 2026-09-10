@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { getOpsParks } from "@/app/ops/parks-data";
+import { getOpsParks, getParkEnquiries } from "@/app/ops/parks-data";
 import { getStuckHouseholds, getClaimTally } from "@/app/ops/claims-data";
 import { OpsStuckClaims } from "@/components/OpsStuckClaims";
 import { getSmsHealth, type SmsHealth } from "@/app/ops/sms-health";
@@ -113,12 +113,13 @@ export default async function OpsPage() {
   // catch meant a failed stuck-households read reset a tally that had already
   // come back fine, inventing that sentence out of the other read's failure.
   // Settling them separately keeps that apart by construction.
-  const [smsRes, stuckRes, tallyRes, parksRes, feesRes] = await Promise.allSettled([
+  const [smsRes, stuckRes, tallyRes, parksRes, feesRes, enquiriesRes] = await Promise.allSettled([
     getSmsHealth(),
     getStuckHouseholds(),
     getClaimTally(),
     getOpsParks(),
     getProposedFees(),
+    getParkEnquiries(),
   ]);
 
   const why = (r: PromiseRejectedResult) =>
@@ -151,6 +152,14 @@ export default async function OpsPage() {
   let parks: Awaited<ReturnType<typeof getOpsParks>> = [];
   if (parksRes.status === "fulfilled") parks = parksRes.value;
   else console.error("ops: parks board unavailable", why(parksRes));
+
+  // Same treatment: somebody asking about us is worth knowing, and worth
+  // strictly less than the rest of this console staying up. An empty list on
+  // a failed read would read as "nobody asked" — the loader throws rather than
+  // returning [], so this catches it here and says so in the log instead.
+  let enquiries: Awaited<ReturnType<typeof getParkEnquiries>> = [];
+  if (enquiriesRes.status === "fulfilled") enquiries = enquiriesRes.value;
+  else console.error("[ops] park enquiries unavailable", why(enquiriesRes));
 
   // Newest loader on the page, so the likeliest to throw — and a fee decision
   // nobody can see is a much smaller problem than a jobs board nobody can.
@@ -276,7 +285,7 @@ export default async function OpsPage() {
         )}
 
         <OpsShell marginHealth={marginHealth} storageLedger={storageLedger} payoutQueue={payoutQueue} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} coverage={coverage} crewServiceNames={crewServiceNames} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100) }} calendarYear={calendarYear} calendarRows={calendarRows}
-          parks={parks} />
+          parks={parks} enquiries={enquiries} />
       </div>
     </>
   );

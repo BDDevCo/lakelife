@@ -4,6 +4,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { buildRentRoll, summarise, toStay, type RawReservation } from "@/app/park/park-helpers";
 import type { Lot } from "@/lib/parks";
 import { mustRead } from "@/lib/must-read";
+import { assertOps } from "./data";
 
 /**
  * Ops' read-only view of every park on the platform. Ops already sees
@@ -117,4 +118,57 @@ export async function getOpsParks(): Promise<OpsParkRow[]> {
       members: memberCount.get(p.id as string) ?? 0,
     };
   });
+}
+
+// ---- Park owners asking about us -----------------------------------------
+
+/** One enquiry from /for-parks, waiting for a reply. */
+export interface ParkEnquiry {
+  id: string;
+  createdAt: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  parkName: string | null;
+  town: string | null;
+  lots: number | null;
+  note: string | null;
+}
+
+/**
+ * THE READER THAT MAKES THE FORM REAL.
+ *
+ * 0164 says it out loud: a lead that lands in a table nobody opens is worse
+ * than no form at all, because the person who filled it in believes they have
+ * been heard. `marketing_contacts` was the obvious home and was rejected for
+ * exactly this — one writer, no reader on any ops screen.
+ *
+ * Unanswered only. An enquiry list that only ever grows is one somebody stops
+ * reading by February, which is the same failure arriving more slowly.
+ */
+export async function getParkEnquiries(): Promise<ParkEnquiry[]> {
+  if (!(await assertOps())) return [];
+  const admin = createServiceClient();
+  // "Nobody has asked about us" is a claim, and a dropped read must not make
+  // it — this is the one screen that would notice somebody waiting.
+  const rows = mustRead(
+    "park owners who have asked about us",
+    await admin
+      .from("park_enquiries")
+      .select("id, created_at, name, email, phone, park_name, town, lots, note")
+      .is("handled_at", null)
+      .order("created_at", { ascending: false })
+      .limit(50),
+  );
+  return (rows ?? []).map((r) => ({
+    id: r.id as string,
+    createdAt: r.created_at as string,
+    name: (r.name as string) ?? "—",
+    email: (r.email as string) ?? "—",
+    phone: (r.phone as string) ?? null,
+    parkName: (r.park_name as string) ?? null,
+    town: (r.town as string) ?? null,
+    lots: r.lots == null ? null : Number(r.lots),
+    note: (r.note as string) ?? null,
+  }));
 }

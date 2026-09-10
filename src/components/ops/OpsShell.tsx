@@ -8,6 +8,7 @@ import { RouteBuilder } from "./RouteBuilder";
 import { MessageBoard } from "./MessageBoard";
 import { CrewBoard } from "./CrewBoard";
 import { CrewCoverage } from "./CrewCoverage";
+import { ParkEnquiries } from "./ParkEnquiries";
 import { NeedsAttention } from "./NeedsAttention";
 import { PlatformSettingsCard } from "./PlatformSettingsCard";
 import type { NeedsAttentionJob, PropertyPreferred } from "@/app/ops/dispatch-data";
@@ -18,6 +19,7 @@ import type { StorageLedger as StorageLedgerData } from "@/app/ops/storage-data"
 import { PayoutQueue } from "./PayoutQueue";
 import type { PayoutQueue as PayoutQueueData } from "@/app/ops/payout-data";
 import type { CrewCoverage as Coverage } from "@/app/ops/crews-data";
+import type { ParkEnquiry } from "@/app/ops/parks-data";
 import type { OpsJob, ActiveVendor, MarginRow, LakeCondition, RouteSummary } from "@/app/ops/data";
 import type { OpsThread } from "@/app/ops/messages-data";
 import type { OpsCrew } from "@/app/ops/crews-data";
@@ -52,6 +54,7 @@ export function OpsShell({
   crews,
   crewServiceNames,
   coverage,
+  enquiries,
   needsAttention,
   preferredJobIds,
   preferredProps,
@@ -73,6 +76,7 @@ export function OpsShell({
   crews: OpsCrew[];
   crewServiceNames: string[];
   coverage: Coverage;
+  enquiries: ParkEnquiry[];
   needsAttention: NeedsAttentionJob[];
   preferredJobIds: string[];
   preferredProps: PropertyPreferred[];
@@ -142,7 +146,14 @@ export function OpsShell({
       )}
 
       {tab === "messages" && <MessageBoard threads={threads} />}
-      {tab === "parks" && <ParkBoard parks={parks} lakes={lakes.map((l) => ({ id: l.id, name: l.name }))} />}
+      {tab === "parks" && (
+        <>
+          {/* ABOVE the board. Somebody waiting on a reply outranks the parks
+              already running, and this is the only screen that knows. */}
+          <ParkEnquiries enquiries={enquiries} />
+          <ParkBoard parks={parks} lakes={lakes.map((l) => ({ id: l.id, name: l.name }))} />
+        </>
+      )}
     </div>
   );
 }

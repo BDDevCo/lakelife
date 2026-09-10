@@ -94,6 +94,57 @@ export default async function Home() {
           <Waves />
         </section>
 
+        {/* THE OTHER TWO PEOPLE WHO LAND HERE.
+            This hero is written for a lake house and says so — "House, lawn,
+            dock, lift, boat and toys." Until this band existed the word "park"
+            appeared nowhere on lakelife.ai, so the two people the park module
+            was built for had no door at all:
+
+              a RESIDENT who mislaid her slip, or just typed the address, made
+              an account and fell through /portal to /book — a page selling
+              dock installation, to somebody trying to pay her rent;
+
+              a park OWNER, who had nothing whatsoever.
+
+            Deliberately BELOW the hero and not a chooser in front of it: the
+            lake business is the one earning today and must not be made to
+            wait behind a question. Deliberately two plain lines rather than a
+            second pitch — a resident is looking for one specific thing and
+            wants to be told where it is. */}
+        <section className="wrap" style={{ paddingTop: 28 }}>
+          <div
+            style={{
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+            }}
+          >
+            <Link
+              href="/parks/claim"
+              className="ll-card ll-card-pad"
+              style={{ textDecoration: "none", color: "inherit", display: "block" }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 15 }}>I rent a lot in a park →</div>
+              <p className="mut" style={{ fontSize: 13.5, margin: "6px 0 0", lineHeight: 1.55 }}>
+                See your rent, your receipts and anything you&apos;ve reported. You&apos;ll
+                need your lot number and the code from your park.
+              </p>
+            </Link>
+
+            <Link
+              href="/for-parks"
+              className="ll-card ll-card-pad"
+              style={{ textDecoration: "none", color: "inherit", display: "block" }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 15 }}>I own or run a park →</div>
+              <p className="mut" style={{ fontSize: 13.5, margin: "6px 0 0", lineHeight: 1.55 }}>
+                Rent, shared costs and the crews who do the work, for mobile-home
+                and RV parks.
+              </p>
+            </Link>
+          </div>
+        </section>
+
         <section className="wrap" style={{ paddingTop: 40 }}>
           <div
             style={{
