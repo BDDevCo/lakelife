@@ -39,9 +39,15 @@ const selectStyle: React.CSSProperties = {
   borderRadius: 10, fontSize: 16, fontFamily: "inherit", background: "#fff", color: "var(--text)",
 };
 
-/** Does this crew list this service? Empty service_types = generalist. */
+/**
+ * Does this crew list this service?
+ *
+ * A SECOND COPY of the rule in ops/data.ts, and both of them used to answer
+ * TRUE for a crew who lists nothing — while dispatch offers that crew nothing.
+ * Empty means empty.
+ */
 function serviceOk(vendor: ActiveVendor, serviceName: string | null): boolean {
-  if (!vendor.service_types.length) return true;
+  if (!vendor.service_types.length) return false;
   const svc = (serviceName ?? "").toLowerCase();
   return vendor.service_types.some((t) => {
     const tt = String(t).toLowerCase();
@@ -186,7 +192,13 @@ function AssignModal({
               {options.map(({ v, service_ok }) => (
                 <option key={v.id} value={v.id} disabled={!v.coi_ok}>
                   {v.company ?? "Crew"}
-                  {!v.coi_ok ? " — COI expired/missing" : service_ok ? "" : " — doesn't list this service"}
+                  {!v.coi_ok
+                    ? " — COI expired/missing"
+                    : service_ok
+                      ? ""
+                      : v.service_types.length === 0
+                        ? " — lists no services at all"
+                        : " — doesn't list this service"}
                 </option>
               ))}
             </select>

@@ -146,3 +146,67 @@ describe("both unit-noun tables know the same counts", () => {
     expect(lakePages).toMatch(/per lot/);
   });
 });
+
+/**
+ * A CREW WHO LISTS NOTHING IS OFFERED NOTHING.
+ *
+ * Three places believed an empty `service_types` meant "generalist — does
+ * everything", and the router believed the opposite. dispatch pools only crews
+ * whose service_types INCLUDES the job's service name, so an empty list is
+ * offered nothing, ever:
+ *
+ *   CrewBoard.tsx      pill: "generalist (all work)"   <- flat lie to ops
+ *   ops/data.ts        service_ok = true               <- annotation
+ *   JobFile.tsx        serviceOk() = true              <- a SECOND copy
+ *
+ * Live in production when this was written: one active vendor with
+ * service_types = [] carrying the "generalist (all work)" pill while being
+ * dispatchable to nothing. Ops read that they do everything; the router gave
+ * them none. It also silently contradicted the new coverage card on the SAME
+ * TAB, which counts that crew as covering nothing — correctly.
+ */
+describe("what an empty service list means", () => {
+  const crewBoard = strip(read("../components/ops/CrewBoard.tsx"));
+  const jobFile = strip(read("../components/ops/JobFile.tsx"));
+  const opsData = strip(read("../app/ops/data.ts"));
+  const dispatch = strip(read("./dispatch.ts"));
+
+  it("found all four files", () => {
+    expect(crewBoard.length).toBeGreaterThan(500);
+    expect(jobFile.length).toBeGreaterThan(500);
+    expect(opsData.length).toBeGreaterThan(500);
+    expect(dispatch).toMatch(/serviceTypes/);
+  });
+
+  it("is the router's rule that everything else must match", () => {
+    // The one that actually decides. If this stops being an includes() the
+    // three assertions below are pinned to a rule that no longer exists.
+    expect(dispatch, "dispatch no longer gates on the service list")
+      .toMatch(/serviceTypes\.includes/);
+  });
+
+  it("the crews board no longer calls an empty list 'all work'", () => {
+    expect(crewBoard, "ops is told a crew who can be dispatched nothing does everything")
+      .not.toMatch(/generalist \(all work\)/);
+    expect(crewBoard).toMatch(/cannot be dispatched/);
+  });
+
+  it("the manual-assign annotation no longer matches everything", () => {
+    // `types.length === 0 ||` was the lie: it made the hint true for a crew
+    // who lists nothing.
+    expect(opsData).not.toMatch(/types\.length === 0 \|\|/);
+    expect(opsData).toMatch(/types\.length > 0 &&/);
+  });
+
+  it("the component's own second copy agrees with it", () => {
+    // Two copies of one rule; both used to return true for empty.
+    expect(jobFile).not.toMatch(/if \(!vendor\.service_types\.length\) return true;/);
+    expect(jobFile).toMatch(/if \(!vendor\.service_types\.length\) return false;/);
+  });
+
+  it("says which kind of nothing it is", () => {
+    // "doesn't list this service" is true but unhelpful for a crew who lists
+    // none at all — the remedy is different, so the sentence should be too.
+    expect(jobFile).toMatch(/lists no services at all/);
+  });
+});

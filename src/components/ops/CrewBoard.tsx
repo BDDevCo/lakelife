@@ -252,7 +252,14 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
         )}
         <span style={{ width: 1, height: 18, background: "var(--line)" }} />
         {crew.service_types.length === 0 ? (
-          <span className="ll-pill slate">generalist (all work)</span>
+          /* NOT "generalist (all work)". THE ROUTER DISAGREES: dispatch pools
+             only crews whose service_types INCLUDES the job's service name, so
+             an empty list is offered NOTHING — ever. This pill told ops the
+             exact opposite of the truth about a crew who cannot be dispatched
+             at all, in slate, as if it were a neutral fact. It is live on a
+             crew in production today.
+             Warn, not slate: this is a crew who will never get a job. */
+          <span className="ll-pill warn">no work types — cannot be dispatched</span>
         ) : (
           crew.service_types.map((t) => <span key={t} className="ll-pill slate">{t}</span>)
         )}

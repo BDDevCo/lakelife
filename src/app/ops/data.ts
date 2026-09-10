@@ -389,9 +389,16 @@ export async function getEligibleVendors(serviceName: string | null): Promise<El
   const svc = (serviceName ?? "").toLowerCase();
   return (data ?? []).map((v) => {
     const types = (v.service_types as string[] | null) ?? [];
-    // Empty service_types = generalist (matches anything); else token overlap.
+    // AN EMPTY LIST MATCHES NOTHING, not everything. Dispatch pools only crews
+    // whose service_types includes the name, so a crew listing nothing is
+    // routed nothing — and telling ops they match this job put the annotation
+    // and the router in direct contradiction.
+    //
+    // This is a HINT, not a gate: ops may still assign them by hand, and the
+    // assign action's hard block is the COI. All that changes is that the
+    // sentence beside their name is now true.
     const service_ok =
-      types.length === 0 ||
+      types.length > 0 &&
       types.some((t) => {
         const tt = String(t).toLowerCase();
         return svc.includes(tt) || tt.includes(svc.split(" ")[0]);
