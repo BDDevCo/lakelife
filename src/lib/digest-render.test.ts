@@ -1,6 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { composeNightlyDigest, type DigestSections } from "@/lib/digest-render";
 
+/**
+ * WHAT THE READER SEES, not how it is encoded.
+ *
+ * These assertions used to read the raw HTML, which worked only while the
+ * digest opted its own prose out of escaping. It no longer does — "the crew's
+ * favor" is emitted as `crew&#39;s`, which every mail client draws as an
+ * apostrophe. Decoding first keeps the invariant these tests exist for (the
+ * digest must NAME the money that moved) and makes them stricter: a
+ * double-escape would now show up as a literal `&#39;` and fail.
+ */
+const shown = (h: string) =>
+  h.replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
 const quiet: DigestSections = {
   learning: { changes: [] },
   autoPricing: { changes: [] },
@@ -22,7 +36,7 @@ describe("composeNightlyDigest — quiet night", () => {
 describe("composeNightlyDigest — money movement is never invisible", () => {
   it("quiet-closes (held money released in crew's favor) get their own sweep line", () => {
     const html = composeNightlyDigest({ ...quiet, disputeSweep: { fired: 0, escalated: 0, quietCloses: 2 } });
-    expect(html).toContain("2 closed in the crew's favor (customer went quiet)");
+    expect(shown(html)).toContain("2 closed in the crew's favor (customer went quiet)");
   });
   it("reconciled lost-👎 recoveries are reported", () => {
     const html = composeNightlyDigest({ ...quiet, disputeSweep: { fired: 0, escalated: 0, reconciled: 1 } });
@@ -32,7 +46,7 @@ describe("composeNightlyDigest — money movement is never invisible", () => {
     const html = composeNightlyDigest({ ...quiet, disputeSweep: { fired: 3, escalated: 1, quietCloses: 1, reconciled: 2 } });
     expect(html).toContain("3 auto-refunded");
     expect(html).toContain("1 escalated");
-    expect(html).toContain("1 closed in the crew's favor");
+    expect(shown(html)).toContain("1 closed in the crew's favor");
     expect(html).toContain("2 lost 👎s recovered");
   });
 });

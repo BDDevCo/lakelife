@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { asHtml } from "@/lib/html-safe";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
@@ -357,12 +358,6 @@ async function currentUserId(): Promise<string | null> {
  * the printed one. Two different wordings of the same demand is how a dispute
  * starts.
  */
-function asHtml(body: string): string {
-  const esc = body
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return `<div style="font:15px/1.6 -apple-system,Segoe UI,sans-serif;white-space:pre-wrap">${esc}</div>`;
-}
-
 /**
  * Returns the failure separately from the absence, because the two get written
  * into `park_reminders` as different sentences and the row is permanent. This

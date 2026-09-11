@@ -2,6 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/email";
+import { html } from "@/lib/html-safe";
 import { likeLiteral } from "@/lib/sql-like";
 import { assertOps } from "./data";
 import { readFailedMessage } from "@/lib/must-read";
@@ -138,8 +139,11 @@ async function sendInvitation(
   // out in real correspondence is worth knowing about.
   if (lakeRes.error) console.error("[read failed, degraded] the lakes named in the invite email:", lakeRes.error);
   const shortNames = (lakeRes.data ?? []).map((l) => (l.name as string).replace(/ Lake$/, ""));
+  // The joining `&amp;` is MARKUP, not a lake's name — so the multi-lake arm is
+  // its own `html` template: the entity stays an entity, and only the names
+  // coming out of the database are escaped.
   const lakeList = shortNames.length > 1
-    ? `${shortNames.slice(0, -1).join(", ")} &amp; ${shortNames[shortNames.length - 1]}`
+    ? html`${shortNames.slice(0, -1).join(", ")} &amp; ${shortNames[shortNames.length - 1]}`
     : shortNames[0] ?? "your local lakes";
 
   // BOTH DOORS, AND NO CLOCK ON THE MONEY.
@@ -170,7 +174,7 @@ async function sendInvitation(
   return sendEmail({
     to: email,
     subject: `${company} — you're invited to LakeLife crews`,
-    html: `<p>Hi ${company},</p>
+    html: html`<p>Hi ${company},</p>
 <p>LakeLife routes lake-home jobs on ${lakeList} to trusted local crews. Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice.</p>
 <p><b>You set yourself up — there's no queue and nobody to wait for:</b></p>
 <ol>

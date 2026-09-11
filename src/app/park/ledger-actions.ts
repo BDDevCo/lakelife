@@ -15,6 +15,7 @@ import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { giveRefund } from "@/lib/charge-gate";
 import { remainingRefundable, refundRefusal, refundAmountRefusal, refundCents, refundSignal } from "./refund-helpers";
 import { sendEmail } from "@/lib/email";
+import { html } from "@/lib/html-safe";
 import { receiptBody, type ReceiptLines } from "./receipt-helpers";
 // The ENGINE, not the action: runCharges has already asserted membership
 // twenty lines up, so going back through the authorized wrapper would just
@@ -799,9 +800,7 @@ export async function emailReceipt(
     to,
     subject: `${receipt.parkName} — receipt for $${receipt.amount.toFixed(2)}`,
     text: body,
-    html: `<pre style="font:14px/1.6 ui-monospace,Menlo,monospace;white-space:pre-wrap">${
-      body.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    }</pre>`,
+    html: html`<pre style="font:14px/1.6 ui-monospace,Menlo,monospace;white-space:pre-wrap">${body}</pre>`,
   });
   if (res?.ok === false) return { ok: false, error: "That didn't send — check the address." };
   return { ok: true, signal: "Receipt sent." };

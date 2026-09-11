@@ -7,6 +7,7 @@ import { validateSelection, anchorServiceId } from "@/lib/packages";
 import { todayLakeDate, effectiveSeason } from "@/lib/booking";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
+import { html } from "@/lib/html-safe";
 import { autoAssignJob } from "@/app/book/dispatch";
 import { getPackageViews } from "./data";
 import { ensureTos } from "@/lib/tos-server";
@@ -269,11 +270,11 @@ export async function createPackageBooking(input: {
     void sendEmail({
       to: me.email,
       subject: `Booked: ${pkg.name} 🌊`,
-      html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#20343d">
+      html: html`<div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#20343d">
           <h2>Winter's handled.</h2>
           <p><b>${pkg.name}</b> — fall visit ${pretty}</p>
-          <p style="color:#5D7681">Fall visit: <b>$${sel.fallTotal.toLocaleString()}</b>, charged after the work is complete and photos are in.${springLine ? `<br>${springLine.trim()}` : ""}</p>
-          ${sel.storageTierId ? `<p style="color:#5D7681;font-size:13px">Storage season runs through May 31 — after that a small per-day charge applies until pickup. Condition photos at every hand-off; balance due before spring splash.</p>` : ""}
+          <p style="color:#5D7681">Fall visit: <b>$${sel.fallTotal.toLocaleString()}</b>, charged after the work is complete and photos are in.${springLine ? html`<br>${springLine.trim()}` : ""}</p>
+          ${sel.storageTierId ? html`<p style="color:#5D7681;font-size:13px">Storage season runs through May 31 — after that a small per-day charge applies until pickup. Condition photos at every hand-off; balance due before spring splash.</p>` : ""}
         </div>`,
     });
   }

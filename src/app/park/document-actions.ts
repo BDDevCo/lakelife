@@ -6,6 +6,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { sendEmail } from "@/lib/email";
+import { html } from "@/lib/html-safe";
 import {
   planFiling, deliverySummary, DOCUMENT_KIND_LABEL, VERSIONED_KINDS,
   type DeliveryChannel, type DeliveryRow, type DeliveryAttempt, type DocumentKind,
@@ -379,13 +380,13 @@ async function deliver(
       const res = await sendEmail({
         to: email!,
         subject: `${doc![0].title as string} — from your park`,
-        html:
-          `<p>Your park has sent you a document: <b>${doc![0].title as string}</b>.</p>` +
-          `<p><a href="${base}/doc/${token}">Open it here</a></p>` +
+        html: html`<p>Your park has sent you a document: <b>${doc![0].title as string}</b>.</p>${
+          html`<p><a href="${base}/doc/${token}">Open it here</a></p>`
+        }${
           // THE SENTENCE THAT KEEPS THIS HONEST. It is a delivery, not a
           // request for agreement, and the email must not read as one.
-          `<p style="color:#5D7681;font-size:13px">This link just opens the document. ` +
-          `Your agreement is with the park — LakeLife handles the billing and isn't a party to it.</p>`,
+          html`<p style="color:#5D7681;font-size:13px">This link just opens the document. Your agreement is with the park — LakeLife handles the billing and isn't a party to it.</p>`
+        }`,
       });
       if (!res.ok) {
         failed.push({ name, why: "The email didn't go out — nothing was logged, so you can try again." });

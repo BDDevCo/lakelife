@@ -21,6 +21,7 @@ import { sendSms } from "@/lib/sms";
 import { notify } from "@/lib/notify";
 import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
+import { html } from "@/lib/html-safe";
 import { autoAssignJob, getServiceAvailability } from "./dispatch";
 import { ensureTos } from "@/lib/tos-server";
 import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
@@ -683,17 +684,16 @@ export async function createBookingBatch(
     void sendEmail({
       to: me.email,
       subject: solo ? `Booked: ${service.name} 🌊` : `Booked: ${visits} of ${service.name} 🌊`,
-      html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#20343d">
+      html: html`<div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#20343d">
           <h2>You're booked, ${profile.address ?? "friend"}.</h2>
           ${solo
-            ? `<p><b>${service.name}</b> — ${frequency}<br>${pretty}</p>
+            ? html`<p><b>${service.name}</b> — ${frequency}<br>${pretty}</p>
           <p style="color:#5D7681">Your price: <b>$${only.price.toLocaleString()}</b>. You're only charged after the service is completed and photos are uploaded.</p>`
-            : `<p><b>${service.name}</b> — ${visits}</p>
+            : html`<p><b>${service.name}</b> — ${visits}</p>
           <ul style="color:#20343d;padding-left:18px">${booked
-            .map((b) => `<li>${new Date(b.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })} — $${b.price.toLocaleString()}${b.isRush ? " (same-day rush)" : ""}</li>`)
-            .join("")}</ul>
+            .map((b) => html`<li>${new Date(b.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })} — $${b.price.toLocaleString()}${b.isRush ? " (same-day rush)" : ""}</li>`)}</ul>
           <p style="color:#5D7681">Total across ${visits}: <b>$${total.toLocaleString()}</b>. Each visit is charged only after it's completed and its photos are uploaded — never before, and cancelling one visit never touches the others.</p>
-          ${refused.length > 0 ? `<p style="color:#8a6d3b">We couldn't book ${prettyDateList(refused.map((r) => r.date))}: ${copy.lines.join(" ")} Pick those days again anytime.</p>` : ""}`}
+          ${refused.length > 0 ? html`<p style="color:#8a6d3b">We couldn't book ${prettyDateList(refused.map((r) => r.date))}: ${copy.lines.join(" ")} Pick those days again anytime.</p>` : ""}`}
         </div>`,
     });
   }

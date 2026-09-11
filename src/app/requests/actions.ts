@@ -14,6 +14,7 @@ import { statementDescriptor } from "@/lib/descriptor";
 import { alertOpsDoubleCharge, alertOpsCrewUnpaid } from "@/lib/automation";
 import { notify } from "@/lib/notify";
 import { sendEmail } from "@/lib/email";
+import { html } from "@/lib/html-safe";
 import { readFailedMessage } from "@/lib/must-read";
 
 export interface CancelResult {
@@ -977,12 +978,9 @@ export async function addTip(
       void sendEmail({
         to,
         subject: `Your LakeLife receipt — thank-you for the crew`,
-        html:
-          `<p>Hi ${(owner?.name as string) ?? "there"},</p>` +
-          `<p>Thank you for the ${amt} you added for the crew who did your ` +
-          `${loaded.svcName}${pm.brand ? `, charged to your ${pm.brand} ending ${pm.last4}` : ""}.</p>` +
-          `<p><b>Every cent goes to them</b> — LakeLife takes no share of a thank-you.</p>` +
-          `<p>🌊</p>`,
+        html: html`<p>Hi ${(owner?.name as string) ?? "there"},</p><p>Thank you for the ${amt} you added for the crew who did your ${loaded.svcName}${
+          pm.brand ? html`, charged to your ${pm.brand} ending ${pm.last4}` : ""
+        }.</p><p><b>Every cent goes to them</b> — LakeLife takes no share of a thank-you.</p><p>🌊</p>`,
       });
     }
   } catch {

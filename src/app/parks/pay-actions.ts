@@ -7,6 +7,7 @@ import { surchargePct, cardFeeCents } from "@/app/parks/card-fee";
 import { rentDescriptor } from "@/lib/descriptor";
 import { todayLakeDate } from "@/lib/booking";
 import { sendEmail } from "@/lib/email";
+import { html } from "@/lib/html-safe";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 
 /**
@@ -481,9 +482,7 @@ async function tellTheOffice(
         to: addr,
         subject: `${parkName} — ${c.who} says they've paid ${c.month}`,
         text: body,
-        html: `<pre style="font:14px/1.6 ui-monospace,Menlo,monospace;white-space:pre-wrap">${
-          body.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-        }</pre>`,
+        html: html`<pre style="font:14px/1.6 ui-monospace,Menlo,monospace;white-space:pre-wrap">${body}</pre>`,
       });
     }
   } catch {

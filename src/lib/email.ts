@@ -1,4 +1,5 @@
 import "server-only";
+import type { RawHtml } from "./html-safe";
 import { emailRefusal } from "@/lib/contactable";
 import { recipientIsFixture } from "@/lib/recipient-gate";
 import { recipientIsHeld, holdRefusal } from "@/lib/notice-hold";
@@ -57,7 +58,12 @@ function warnSandboxSender() {
 export async function sendEmail(opts: {
   to: string;
   subject: string;
-  html: string;
+  /**
+   * Prefer the `html` tagged template from lib/html-safe — it escapes every
+   * interpolated value and returns RawHtml, which lands here untouched. A
+   * plain string is still accepted for bodies with nothing interpolated.
+   */
+  html: string | RawHtml;
   from?: string;
   text?: string;
 }): Promise<{ ok: boolean; error?: string }> {
@@ -112,7 +118,7 @@ export async function sendEmail(opts: {
         from,
         to: opts.to,
         subject: opts.subject,
-        html: opts.html,
+        html: String(opts.html),
         ...(opts.text ? { text: opts.text } : {}),
       }),
     });

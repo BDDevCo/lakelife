@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { readFailedMessage } from "@/lib/must-read";
 import { sendEmail } from "@/lib/email";
+import { html } from "@/lib/html-safe";
 import { likeLiteral } from "@/lib/sql-like";
 import { getActivePropertyId } from "@/app/profile/data";
 
@@ -135,7 +136,7 @@ export async function inviteMyContractor(company: string, email: string): Promis
   const sent = await sendEmail({
     to: addr,
     subject: `${ownerName} wants to keep working with you — on LakeLife`,
-    html: `<p>Hi ${co},</p>
+    html: html`<p>Hi ${co},</p>
 <p><b>${ownerName}</b> asked to keep you as their crew through LakeLife — you keep your customer, we just handle the scheduling, invoicing and payment behind the scenes.</p>
 <p>Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice. Joining is free.</p>
 <p><b>3 steps:</b></p>

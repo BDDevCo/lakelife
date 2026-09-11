@@ -43,6 +43,21 @@ import {
   type DayContext,
   type DayStatus,
 } from "../lib/booking";
+
+/**
+ * WHAT THE READER SEES, not how it is encoded.
+ *
+ * These assertions used to read the raw HTML, which worked only while the
+ * digest opted its own prose out of escaping. It no longer does — "the crew's
+ * favor" is emitted as `crew&#39;s`, which every mail client draws as an
+ * apostrophe. Decoding first keeps the invariant these tests exist for (the
+ * digest must NAME the money that moved) and makes them stricter: a
+ * double-escape would now show up as a literal `&#39;` and fail.
+ */
+const shown = (h: string) =>
+  h.replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
 import { warningDue, isExpired, DEFAULT_WARNING_CATCHUP_DAYS } from "../lib/waitlist";
 import { learnedEstimate, median, MIN_REAL_MINUTES, MAX_REAL_MINUTES, MIN_SAMPLES } from "../lib/learning";
 import { seasonEndFor, overstayDays, perdiemCharge, trueLegsToQuote } from "../lib/storage";
@@ -977,7 +992,7 @@ describe("LADDER · nightly digest honesty", () => {
       expect(html, S("something happened but the digest said quiet night")).not.toBe(QUIET);
       if (moved.length > 0) {
         moneyNights++;
-        for (const phrase of moved) expect(html, S(`money moved (${phrase}) but the digest never said so`)).toContain(phrase);
+        for (const phrase of moved) expect(shown(html), S(`money moved (${phrase}) but the digest never said so`)).toContain(phrase);
       }
       // Escalated disputes — the one thing that genuinely needs a human — must
       // always be visible and counted.

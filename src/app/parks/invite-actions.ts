@@ -166,7 +166,14 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
   // here rather than delivered. A REFUSED SEND MUST NOT READ AS SENT — that was
   // the bug in the crew invites, where `void sendEmail(...)` turned a refusal
   // into "50 invited".
-  const sent = await sendEmail({ to: email, subject: copy.subject, html: copy.html, text: copy.text });
+  const sent = await sendEmail({
+    to: email,
+    subject: copy.subject,
+    // ASSEMBLED IN lib/park-invite.ts, NOT HERE. The escaping rule applies
+    // where this body is BUILT; there is no template literal in this file.
+    html: copy.html,
+    text: copy.text,
+  });
 
   // THE SAME LINK, IN THE OTHER PLACE. Sent alongside rather than instead: one
   // token, two deliveries, either one works and the first she taps spends it.

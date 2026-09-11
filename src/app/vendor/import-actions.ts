@@ -2,6 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/email";
+import { html } from "@/lib/html-safe";
 import { likeLiteral } from "@/lib/sql-like";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { parseCustomers, type ParsedCustomer } from "./import-helpers";
@@ -161,9 +162,12 @@ async function stageOne(
   const sent = await sendEmail({
     to: c.email,
     subject: `${crewName} is now booking through LakeLife`,
-    html: `<p>Hi ${first},</p>
+    // Every value here was typed by a person — the crew's company name, the
+    // customer's first name, the address off their own list. The tag escapes
+    // all of them; nothing here needs raw().
+    html: html`<p>Hi ${first},</p>
 <p><b>${crewName}</b> — the crew you already use — has moved their scheduling to LakeLife. Same crew, same work, now with photos of every visit, easy online booking, and no more phone tag.</p>
-<p>Claim your account in about 2 minutes${c.address ? ` (we've got your place at ${c.address})` : ""}: <a href="${site}">${site}</a> — sign up with this email (${c.email}).</p>
+<p>Claim your account in about 2 minutes${c.address ? html` (we've got your place at ${c.address})` : ""}: <a href="${site}">${site}</a> — sign up with this email (${c.email}).</p>
 <p>${crewName} will stay your crew — they'll always be first on your jobs. 🌊</p>
 <p style="color:#889;font-size:12px">Didn't expect this? You can ignore this email.</p>`,
   });

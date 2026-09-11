@@ -576,7 +576,20 @@ describe("D. a crew's sentence does not get eaten by the owner's mail client", (
   });
 
   it("is applied where the crew's words enter the email", () => {
-    expect(strip(read("../app/vendor/actions.ts"))).toMatch(/emailSafe\s*\(\s*detail\s*\)/);
+    // PINS `detail` SPECIFICALLY, not merely that the body uses the tag.
+    //
+    // The first rewrite of this assertion matched `html\`<p>Hi ${owner.name`
+    // and nothing else — which a body written `html\`<p>${raw(detail)}</p>\``
+    // would ALSO satisfy, while the sweep's own scanner skipped it as
+    // "tagged". The crew's sentence, the thing this whole change exists for,
+    // was pinned by nothing. It also tied an escaping test to the wording of a
+    // greeting, so a legitimate copy edit would have broken it.
+    const actions = strip(read("../app/vendor/actions.ts"));
+    const body = actions.slice(actions.indexOf("A quick check on your"));
+    expect(body, "the approval email is gone or renamed").toContain("html`");
+    // Interpolated bare — escaped by the tag — and never opted out via raw().
+    expect(body).toMatch(/\$\{detail\}/);
+    expect(body).not.toMatch(/raw\(\s*detail/);
   });
 });
 

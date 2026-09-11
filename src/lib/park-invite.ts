@@ -1,4 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
+import { html } from "@/lib/html-safe";
 
 /**
  * THE INVITE, AND WHAT IT IS ALLOWED TO SAY.
@@ -74,16 +75,18 @@ export function inviteCopy(input: {
     // The park's name first: it is the only word in the inbox they recognise.
     subject: `${parkName} — seeing your lot online, if you want to`,
     text: lines.join("\n"),
-    html: `<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.6;color:#12303a;max-width:520px">
-  <p>${esc(greeting)}</p>
-  <p><strong>${esc(parkName)}</strong> keeps its rent records with LakeLife now. This is a one-off note to say you can see your own lot — number ${esc(lotNumber)} — on your phone if you&rsquo;d like to: your rent, what it&rsquo;s made of, and your receipts.</p>
+    // `.value` because InviteCopy carries a plain string; the tag has already
+    // escaped every interpolation above.
+    html: html`<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.6;color:#12303a;max-width:520px">
+  <p>${greeting}</p>
+  <p><strong>${parkName}</strong> keeps its rent records with LakeLife now. This is a one-off note to say you can see your own lot — number ${lotNumber} — on your phone if you&rsquo;d like to: your rent, what it&rsquo;s made of, and your receipts.</p>
   <p>Nothing about how you pay is changing. If you pay by cheque or in cash at the office, carry on exactly as you do now.</p>
   <p style="margin:26px 0">
-    <a href="${esc(url)}" style="background:#0f6d7d;color:#fff;padding:13px 22px;border-radius:9px;text-decoration:none;display:inline-block;font-weight:600">See lot ${esc(lotNumber)}</a>
+    <a href="${url}" style="background:#0f6d7d;color:#fff;padding:13px 22px;border-radius:9px;text-decoration:none;display:inline-block;font-weight:600">See lot ${lotNumber}</a>
   </p>
   <p style="color:#5b7580;font-size:14px">If you&rsquo;d rather not, just ignore this — nothing happens and nobody will chase you about it.</p>
   <p style="color:#5b7580;font-size:13px">LakeLife will never ask you for card or bank details to set your lot up, and will never phone or text you asking for a code or a password.</p>
-</div>`,
+</div>`.value,
   };
 }
 
@@ -118,10 +121,6 @@ export function firstNameFrom(displayName: string | null | undefined): string | 
   }
   return name;
 }
-
-const esc = (s: string) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-   .replace(/"/g, "&quot;");
 
 // --------------------------------------------------------- what came back ---
 

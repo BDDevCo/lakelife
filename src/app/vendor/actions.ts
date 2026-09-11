@@ -16,7 +16,7 @@ import {
   arrivalFlagRefusal, arrivalNoteMessage,
   type TimedRule,
 } from "@/lib/arrival";
-import { emailSafe } from "@/lib/html-safe";
+import { html } from "@/lib/html-safe";
 import { planRecovery } from "@/lib/recovery";
 
 // Only these profile fields may be changed by a crew flag, with safe values.
@@ -555,20 +555,14 @@ export async function submitFlag(
       void sendEmail({
         to: owner.email,
         subject: `A quick check on your ${svcName}`,  // a header, not a body — not HTML
-        // emailSafe ON EVERY INTERPOLATED VALUE. `detail` now carries a
-        // sentence a crew TYPED (arrivalNoteMessage), and a note reading
-        // "gate is <4ft wide" arrives as "…you've seen this: \"gate is" —
-        // the rest, including "nothing is charged", eaten as an unknown tag.
-        // A property nickname and an owner's name are typed by people too.
-        html:
-          `<p>Hi ${emailSafe(owner.name ?? "there")},</p>` +
-          (detail
-            ? `<p>${emailSafe(detail)}</p>`
-            : `<p>The crew at ${emailSafe(where)} found something on site that doesn't match ` +
-              `what we have on file for your ${emailSafe(svcName)}.</p>`) +
-          `<p><b>Nothing has changed and nothing has been charged.</b> It waits ` +
-          `for you.</p>` +
-          `<p><a href="${site}/approvals">Take a look</a></p><p>🌊</p>`,
+        // `detail` carries a sentence a crew TYPED (arrivalNoteMessage), and
+        // the name and nickname beside it are typed by people too. The tag
+        // escapes all of them; nothing here needs raw().
+        html: html`<p>Hi ${owner.name ?? "there"},</p>${
+          detail
+            ? html`<p>${detail}</p>`
+            : html`<p>The crew at ${where} found something on site that doesn't match what we have on file for your ${svcName}.</p>`
+        }<p><b>Nothing has changed and nothing has been charged.</b> It waits for you.</p><p><a href="${site}/approvals">Take a look</a></p><p>🌊</p>`,
       });
     }
   } catch {
@@ -737,17 +731,14 @@ export async function recordNoShow(jobId: string, reason: string): Promise<Actio
       void sendEmail({
         to: owner.email,
         subject: `We couldn't get in for your ${svcName}`,
-        html:
-          `<p>Hi ${owner.name ?? "there"},</p>` +
-          `<p>Our crew was at ${where} today for your ${svcName} and couldn't get ` +
-          `inside to do the work.</p>` +
-          `<p><i>${why}</i></p>` +
-          `<p><b>You have not been charged.</b> ${plan.ask}</p>` +
-          `<p><a href="${site}/requests">Pick another day</a></p>` +
-          // WHAT SILENCE COSTS, SAID NOW. Finding out later that a window
-          // existed and closed is the version of this that makes people angry,
-          // and rightly.
-          `<p class="mut">${plan.ifNothingHappens}</p><p>🌊</p>`,
+        // `why` is a sentence the crew TYPED on the doorstep, and the nickname
+        // and name beside it are typed by people too. The tag escapes all of
+        // them; nothing here needs raw().
+        //
+        // The last line is WHAT SILENCE COSTS, SAID NOW. Finding out later that
+        // a window existed and closed is the version of this that makes people
+        // angry, and rightly.
+        html: html`<p>Hi ${owner.name ?? "there"},</p><p>Our crew was at ${where} today for your ${svcName} and couldn't get inside to do the work.</p><p><i>${why}</i></p><p><b>You have not been charged.</b> ${plan.ask}</p><p><a href="${site}/requests">Pick another day</a></p><p class="mut">${plan.ifNothingHappens}</p><p>🌊</p>`,
       });
     }
   } catch {

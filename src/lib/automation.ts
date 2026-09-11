@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { notify } from "@/lib/notify";
 import { allowsNotification } from "@/lib/notif-gate";
 import { sendEmail } from "@/lib/email";
+import { html, type RawHtml } from "@/lib/html-safe";
 import { takePayment, NO_PROCESSOR_REASON, chargeKey } from "@/lib/charge-gate";
 import { crewShareOfFee } from "@/lib/cancellation";
 import { statementDescriptor } from "@/lib/descriptor";
@@ -386,11 +387,7 @@ export async function alertOpsCrewUnpaid(
       const res = await sendEmail({
         to,
         subject: `⚠️ CREW NOT PAID — ${amt}`,
-        html:
-          `<p>A customer was charged <b>${amt}</b> for ${what} on visit <code>${jobId}</code>, ` +
-          `and the crew's payout row was refused.</p>` +
-          `<p>The money is ours and the crew's share is not on their earnings. ` +
-          `<b>Nothing retries this</b> — it needs raising by hand.</p>`,
+        html: html`<p>A customer was charged <b>${amt}</b> for ${what} on visit <code>${jobId}</code>, and the crew's payout row was refused.</p><p>The money is ours and the crew's share is not on their earnings. <b>Nothing retries this</b> — it needs raising by hand.</p>`,
       });
       if (res.ok) notified++;
     }
@@ -442,8 +439,8 @@ export async function alertOpsDoubleCharge(
     // human — so the sentence says what happened and leaves the diagnosis to
     // whoever opens the row.
     const what = against === "tip"
-      ? `as a tip on visit <code>${subjectId}</code> and the ledger refused the payment row`
-      : `against invoice <code>${subjectId}</code> and the ledger refused the payment row`;
+      ? html`as a tip on visit <code>${subjectId}</code> and the ledger refused the payment row`
+      : html`against invoice <code>${subjectId}</code> and the ledger refused the payment row`;
     const { data: opsUsers, error: opsErr } = await admin
       .from("users").select("email").eq("role", "ops").not("email", "is", null);
     // Nothing retries this, so the log is the last line of defence: a real
@@ -455,11 +452,7 @@ export async function alertOpsDoubleCharge(
       const res = await sendEmail({
         to,
         subject: `⚠️ CHARGED BUT NOT RECORDED — ${amt}`,
-        html:
-          `<p>A card was charged <b>${amt}</b> ${what}.</p>` +
-          `<p>The money left the customer. Processor reference: ` +
-          `<code>${ref ?? "none returned"}</code>.</p>` +
-          `<p><b>This needs a refund today.</b> Nothing automatic will fix it.</p>`,
+        html: html`<p>A card was charged <b>${amt}</b> ${what}.</p><p>The money left the customer. Processor reference: <code>${ref ?? "none returned"}</code>.</p><p><b>This needs a refund today.</b> Nothing automatic will fix it.</p>`,
       });
       if (res.ok) notified++;
     }
@@ -536,13 +529,7 @@ async function noteSettleFailure(
         await sendEmail({
           to: email,
           subject: `Action needed — ${amt} for your ${f.svcName}`,
-          html:
-            `<p>Hi ${(owner?.name as string) ?? "there"},</p>` +
-            `<p>Your ${f.svcName} at ${where} is done — thank you.</p>` +
-            `<p><b>${why}</b>, so the ${amt} hasn't been paid yet.</p>` +
-            `<p><a href="${site}/billing">Add or update your card</a> and we'll take care of it. ` +
-            `Nothing else is needed from you.</p>` +
-            `<p>🌊</p>`,
+          html: html`<p>Hi ${(owner?.name as string) ?? "there"},</p><p>Your ${f.svcName} at ${where} is done — thank you.</p><p><b>${why}</b>, so the ${amt} hasn't been paid yet.</p><p><a href="${site}/billing">Add or update your card</a> and we'll take care of it. Nothing else is needed from you.</p><p>🌊</p>`,
         });
       }
     }
@@ -558,12 +545,7 @@ async function noteSettleFailure(
       await sendEmail({
         to,
         subject: `Unpaid completed job — ${amt}`,
-        html:
-          `<p>${f.svcName} at ${where} completed and did not collect.</p>` +
-          `<p>Reason: <b>${f.reason === "no_card" ? "no card on file" : "card declined"}</b>. ` +
-          `Amount: <b>${amt}</b>.</p>` +
-          `<p>The crew's payout was released as normal — they did the work. ` +
-          `<a href="${site}/ops/jobs/${f.jobId}">Open the job</a>.</p>`,
+        html: html`<p>${f.svcName} at ${where} completed and did not collect.</p><p>Reason: <b>${f.reason === "no_card" ? "no card on file" : "card declined"}</b>. Amount: <b>${amt}</b>.</p><p>The crew's payout was released as normal — they did the work. <a href="${site}/ops/jobs/${f.jobId}">Open the job</a>.</p>`,
       });
     }
   } catch {
@@ -846,7 +828,7 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
           void sendEmail({
             to: owner.email,
             subject: `Your LakeLife receipt — ${svcName}`,
-            html: `<p>Hi ${owner.name ?? "there"},</p><p>Your ${svcName} at ${prop?.address ?? "your property"} is complete.</p><p><b>Covered entirely by your referral credits</b> ($${creditApplied.toFixed(2)}) — nothing charged to your card. Thanks for spreading the word. 🌊</p>`,
+            html: html`<p>Hi ${owner.name ?? "there"},</p><p>Your ${svcName} at ${prop?.address ?? "your property"} is complete.</p><p><b>Covered entirely by your referral credits</b> ($${creditApplied.toFixed(2)}) — nothing charged to your card. Thanks for spreading the word. 🌊</p>`,
           });
         }
       } else if (pm?.token) {
@@ -922,7 +904,7 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
           void sendEmail({
             to: owner.email,
             subject: `Your LakeLife receipt — ${svcName}`,
-            html: `<p>Hi ${owner.name ?? "there"},</p><p>Your ${svcName} at ${prop?.address ?? "your property"} is complete.</p><p><b>Charged: ${amt}</b>${creditLine}${pm.brand ? ` to your ${pm.brand} ending ${pm.last4}` : ""}.</p><p>Thank you. 🌊</p>`,
+            html: html`<p>Hi ${owner.name ?? "there"},</p><p>Your ${svcName} at ${prop?.address ?? "your property"} is complete.</p><p><b>Charged: ${amt}</b>${creditLine}${pm.brand ? ` to your ${pm.brand} ending ${pm.last4}` : ""}.</p><p>Thank you. 🌊</p>`,
           });
         }
         // THE CARD SAID NO. The receipt above is inside `charge.ok`, so this
@@ -1979,7 +1961,7 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
       void sendEmail({
         to: u2.email,
         subject: `Referral payout approved — $${paidThis.toFixed(2)} 🌊`,
-        html: `<p>Hi ${vendorRow?.company ?? u2.name ?? "there"},</p><p>Your referral earnings for the month are in: <b>$${paidThis.toFixed(2)}</b> approved and riding your next remittance.${maturing > 0 ? ` Another $${maturing.toFixed(2)} is maturing and lands next batch.` : ""}</p><p>Keep sharing — it stacks. 🌊</p><p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>`,
+        html: html`<p>Hi ${vendorRow?.company ?? u2.name ?? "there"},</p><p>Your referral earnings for the month are in: <b>$${paidThis.toFixed(2)}</b> approved and riding your next remittance.${maturing > 0 ? ` Another $${maturing.toFixed(2)} is maturing and lands next batch.` : ""}</p><p>Keep sharing — it stacks. 🌊</p><p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>`,
       });
     }
   }
@@ -2037,7 +2019,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
     }
     return nudgeCooling((data?.sent_at as string) ?? null, nudgeCooldownDays, now);
   };
-  const send = async (userId: string, kind: string, subject: string, html: string): Promise<boolean> => {
+  const send = async (userId: string, kind: string, subject: string, body: RawHtml): Promise<boolean> => {
     if (await optedOut(userId)) return false;
     if (await cooling(userId, kind)) return false;
     const { data: u, error: uErr } = await admin.from("users").select("email").eq("id", userId).maybeSingle();
@@ -2047,7 +2029,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
       return false;
     }
     if (!u?.email) return false;
-    void sendEmail({ to: u.email, subject, html: html + `<p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>` });
+    void sendEmail({ to: u.email, subject, html: html`${body}<p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>` });
     const logged = await admin.from("nudge_log").insert({ user_id: userId, kind });
     // POST-SEND: the email has gone. Refusing here would un-send nothing — but
     // this row IS the frequency cap, so a failure means the same person can
@@ -2071,7 +2053,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
     const ok = await send(
       userId, "credit_covers_visit",
       `You've got $${bal.toFixed(2)} in LakeLife credits 🌊`,
-      `<p>Your referral credits just crossed <b>$${bal.toFixed(2)}</b> — enough to cover a visit on us.</p><p>Book anything at <a href="${site}/book">${site}/book</a> and it applies automatically at billing. Keep sharing your link and the next one's on us too.</p><p style="font-size:12px;color:#5D7681">How credits work: ${site}/referral-terms</p>`,
+      html`<p>Your referral credits just crossed <b>$${bal.toFixed(2)}</b> — enough to cover a visit on us.</p><p>Book anything at <a href="${site}/book">${site}/book</a> and it applies automatically at billing. Keep sharing your link and the next one's on us too.</p><p style="font-size:12px;color:#5D7681">How credits work: ${site}/referral-terms</p>`,
     );
     if (ok) creditNudges++;
   }
@@ -2098,15 +2080,15 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
       if (!near) continue;
       const body =
         near.gap > 0
-          ? `<p>You're <b>$${near.gap.toFixed(2)} away</b> from your credits covering a whole visit — one more neighbor usually does it.</p><p>Your link is waiting at <a href="${site}/book">${site}/book</a>. 🌊</p>`
-          : `<p>You've got <b>$${(accruedBy.get(userId) ?? 0).toFixed(2)} maturing</b> — when it clears, your credits cross <b>$${nudgeCreditThreshold.toFixed(0)}</b> and your next visit is on us.</p><p>Nothing to do — it applies automatically at billing. Want to stack the next one? Your link's at <a href="${site}/book">${site}/book</a>. 🌊</p>`;
+          ? html`<p>You're <b>$${near.gap.toFixed(2)} away</b> from your credits covering a whole visit — one more neighbor usually does it.</p><p>Your link is waiting at <a href="${site}/book">${site}/book</a>. 🌊</p>`
+          : html`<p>You've got <b>$${(accruedBy.get(userId) ?? 0).toFixed(2)} maturing</b> — when it clears, your credits cross <b>$${nudgeCreditThreshold.toFixed(0)}</b> and your next visit is on us.</p><p>Nothing to do — it applies automatically at billing. Want to stack the next one? Your link's at <a href="${site}/book">${site}/book</a>. 🌊</p>`;
       const subject =
         near.gap > 0
           ? `You're $${near.gap.toFixed(2)} from a visit on us 🌊`
           : `Your free visit is about to unlock 🌊`;
       const ok = await send(
         userId, "near_milestone", subject,
-        body + `<p style="font-size:12px;color:#5D7681">How credits work: ${site}/referral-terms</p>`,
+        html`${body}<p style="font-size:12px;color:#5D7681">How credits work: ${site}/referral-terms</p>`,
       );
       if (ok) nearMilestoneNudges++;
     }
@@ -2196,7 +2178,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
         const ok = await send(
           v.user_id as string, "territory",
           `${best.count} homeowner${best.count === 1 ? "" : "s"} waiting on ${best.name} 🌊`,
-          `<p>Hi ${v.company ?? "there"},</p><p><b>${best.count} homeowner${best.count === 1 ? " is" : "s are"} waiting</b> for work you do on ${best.name} — at your rates that's about <b>$${best.est.toFixed(0)}</b> sitting there right now.</p><p>Add the lake in one tap and the machine starts routing you: <a href="${site}/vendor/availability">${site}/vendor/availability</a></p>`,
+          html`<p>Hi ${v.company ?? "there"},</p><p><b>${best.count} homeowner${best.count === 1 ? " is" : "s are"} waiting</b> for work you do on ${best.name} — at your rates that's about <b>$${best.est.toFixed(0)}</b> sitting there right now.</p><p>Add the lake in one tap and the machine starts routing you: <a href="${site}/vendor/availability">${site}/vendor/availability</a></p>`,
         );
         if (ok) territoryNudges++;
       }
@@ -2245,7 +2227,7 @@ export async function sendCoiRevalidations(leadDays = 30): Promise<{ ok: boolean
     void sendEmail({
       to: u.email,
       subject: "Keep your LakeLife crew active — refresh your insurance on file",
-      html: `<p>Hi ${c.company ?? u?.name ?? "there"},</p><p>Time for your yearly insurance check-in. Upload a current Certificate of Insurance so jobs keep routing to you without a gap — it takes a minute from your crew portal.</p><p><a href="${site}/vendor">Update my COI</a> 🌊</p>`,
+      html: html`<p>Hi ${c.company ?? u?.name ?? "there"},</p><p>Time for your yearly insurance check-in. Upload a current Certificate of Insurance so jobs keep routing to you without a gap — it takes a minute from your crew portal.</p><p><a href="${site}/vendor">Update my COI</a> 🌊</p>`,
     });
     emailed++;
   }
@@ -3017,12 +2999,12 @@ export async function sendSeasonalPullReminders(leadDays = 14): Promise<{ ok: bo
         lake.season_confirmed as boolean | undefined,
       );
       const deadlineLine = provisional
-        ? `We're expecting ${lake.name}'s pull deadline around <b>${deadline}</b> — an estimate until this year's ice-out is measured. That's when piers, lifts and boats need to be out ahead of the hard freeze (we build in an 8-day safety buffer), and we'll tell you if it moves.`
-        : `${lake.name}'s pull deadline is <b>${deadline}</b> — that's when piers, lifts and boats need to be out ahead of the hard freeze (we build in an 8-day safety buffer).`;
+        ? html`We're expecting ${lake.name}'s pull deadline around <b>${deadline}</b> — an estimate until this year's ice-out is measured. That's when piers, lifts and boats need to be out ahead of the hard freeze (we build in an 8-day safety buffer), and we'll tell you if it moves.`
+        : html`${lake.name}'s pull deadline is <b>${deadline}</b> — that's when piers, lifts and boats need to be out ahead of the hard freeze (we build in an 8-day safety buffer).`;
       void sendEmail({
         to: email,
         subject: `Book your fall pull on ${lake.name} before the freeze`,
-        html: `<p>Hi ${u?.name ?? "there"},</p><p>${deadlineLine} Book your fall pull now so your crew has a slot before the rush.</p><p>Open LakeLife to schedule. 🌊</p>`,
+        html: html`<p>Hi ${u?.name ?? "there"},</p><p>${deadlineLine} Book your fall pull now so your crew has a slot before the rush.</p><p>Open LakeLife to schedule. 🌊</p>`,
       });
       emailed++;
     }
@@ -3739,7 +3721,7 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number; sk
     const sentRes = await sendEmail({
       to: u.email,
       subject: `$${total.toFixed(0)} of fill-in work is open on your lakes 🌊`,
-      html: `<p>Hi ${v.company ?? "there"},</p><p><b>${count} jobs</b> on your lakes are offering posted fill-in rates right now — <b>$${total.toFixed(0)}</b> of take-home, first tap takes each one: <a href="${site}/vendor/open">${site}/vendor/open</a></p><p>Your regular rates stay yours — fill-ins are extra work at a posted price, nothing more.</p><p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>`,
+      html: html`<p>Hi ${v.company ?? "there"},</p><p><b>${count} jobs</b> on your lakes are offering posted fill-in rates right now — <b>$${total.toFixed(0)}</b> of take-home, first tap takes each one: <a href="${site}/vendor/open">${site}/vendor/open</a></p><p>Your regular rates stay yours — fill-ins are extra work at a posted price, nothing more.</p><p style="font-size:12px;color:#5D7681">Manage notifications: ${site}/settings/notifications</p>`,
     });
     if (!sentRes.ok) {
       // The cooldown row is deliberately NOT written (above), so this crew is
@@ -4210,7 +4192,7 @@ export async function sendNightlyDigest(results: {
     failures: [...(results.failures ?? []), ...readFailures],
     homesWithNoLake: lakelessHomes ?? 0,
   };
-  const html = composeNightlyDigest(sections);
+  const digestBody = composeNightlyDigest(sections);
 
   // The one read here that IS worth throwing over: without it the digest goes
   // to nobody, and "sent: 0" would be the only trace. The route's step guard
@@ -4232,7 +4214,7 @@ export async function sendNightlyDigest(results: {
     const subject = broke > 0
       ? `LakeLife nightly — ${broke} step${broke === 1 ? "" : "s"} FAILED`
       : "LakeLife nightly — the machine's report";
-    const res = await sendEmail({ to: email, subject, html });
+    const res = await sendEmail({ to: email, subject, html: digestBody });
     if (res.ok) sent++;
     else {
       console.error(`[send failed] tonight's digest to ${email}:`, res.error);

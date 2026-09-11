@@ -1,6 +1,7 @@
 import "server-only";
 import { sendSms } from "@/lib/sms";
 import { sendEmail } from "@/lib/email";
+import { asHtml } from "@/lib/html-safe";
 
 /**
  * ONE MESSAGE, EVERY DOOR THAT IS OPEN.
@@ -60,11 +61,6 @@ export interface NotifyResult {
 }
 
 /** Plain text into a mail body, escaped, newlines kept. */
-function asHtml(body: string): string {
-  const esc = body.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return `<div style="font:15px/1.6 -apple-system,Segoe UI,sans-serif;white-space:pre-wrap">${esc}</div>`;
-}
-
 /**
  * Send one message to whichever of a person's doors are open.
  *
