@@ -52,12 +52,45 @@ export async function resolveEscalationAction(
   // escalation is the one where that word is false. Ops then tells a customer
   // their money is on the way back when it never left.
   const moved = (res.refunded ?? 0) > 0;
+  // AND WHETHER THE CUSTOMER KNOWS. The customer's job page promised them an
+  // answer; opsResolveEscalated now sends one on the two paths that used to
+  // write the resolution and tell nobody, and reports whether a door took it.
+  // "Has been told" is only said when one did — otherwise the note says why,
+  // so ops can pick up the phone, and names the door that always works.
+  const customer = res.customerTold
+    ? " The customer has been told."
+    : res.customerNote
+      ? ` ${res.customerNote}${/job page/.test(res.customerNote) ? "" : " The outcome shows on their job page."}`
+      : "";
+  // WHICH $0 THIS WAS. "Nothing had been charged" is false for a big bill that
+  // was captured, refunded in full from the refund screen, and then had its
+  // escalation tapped. And when nothing had been charged, ops — who pressed
+  // "Refund the customer" — needs to hear that nothing here waived the bill:
+  // the nightly reconcile charges it once the dispute is off the job. A
+  // concurrent tap that lost the race learns neither, and says neither.
+  // "THE CREW'S PAY HAS BEEN RELEASED" IS SAID ONLY WHEN A ROW MOVED.
+  // releaseHeldPayout used to return void; these sentences asserted the
+  // release on the strength of the call. It reports a count now, and 0 is a
+  // fact with two honest readings — the write was refused, or nothing was on
+  // hold yet because the dispute predates the settle.
+  const pay =
+    (res.payoutReleased ?? 0) > 0
+      ? "the crew's pay has been released"
+      : "no pay was on hold to release";
+  const nothingToRefund =
+    res.nothingToRefundBecause === "never_charged"
+      ? `Closed. Nothing had been charged on this job, so there was nothing to refund — ${pay}, and the visit is still billed as normal; closing didn't waive it.`
+      : res.nothingToRefundBecause === "already_refunded"
+        ? `Closed. This job had already been refunded in full, so there was nothing more to refund — ${pay}.`
+        : `Closed — there was nothing left to refund, and ${pay}.`;
+  // refund-core sends the "Refund issued" notice itself and discards the
+  // result, so the money path can describe the mechanism but not a delivery.
   return {
     ok: true,
     message: outcome === "refund"
       ? moved
-        ? `Refunded ${res.refunded!.toLocaleString("en-US", { style: "currency", currency: "USD" })}. The crew's remainder has been released.`
-        : "Closed. Nothing had been charged on this job, so there was nothing to refund — the crew's pay has been released."
-      : "Closed in the crew's favour. Their pay has been released.",
+        ? `Refunded ${res.refunded!.toLocaleString("en-US", { style: "currency", currency: "USD" })}. The crew's remainder has been released, and the customer is sent a refund notice.`
+        : `${nothingToRefund}${customer}`
+      : `Closed in the crew's favour. ${(res.payoutReleased ?? 0) > 0 ? "Their pay has been released." : "No pay was on hold to release."}${customer}`,
   };
 }

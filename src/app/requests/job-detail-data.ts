@@ -74,6 +74,17 @@ export interface JobDetailMoney {
    * an unpaid job stays unpaid.
    */
   hasCardOnFile: boolean;
+  /**
+   * How many times the processor has refused this invoice's charge —
+   * payments.status='failed' rows on THIS invoice, the same count both nightly
+   * doors make before they decide whether to try again (lib/automation.ts,
+   * reconcileUnsettledJobs and reconcileCancelledFees). At DECLINE_CAP they
+   * stop, and nothing else ever runs the invoice: saving a new card does not
+   * touch `payments`, and there is no ops button for a completion or fee
+   * invoice. So this number decides whether "we'll run this on your card" is
+   * a true sentence or a promise nobody is going to keep.
+   */
+  declines: number;
   refunds: JobDetailRefund[];
   refundedTotal: number;
   /**
@@ -90,6 +101,74 @@ export interface JobDetailMoney {
    */
   tipAmount: number | null;
   tippedAt: string | null;
+}
+
+/**
+ * THE NIGHTLY'S RETRY CAP. `(failCount ?? 0) >= 5` in both of automation.ts's
+ * doors — card networks penalise a card re-attempted nightly forever, so after
+ * five declines the invoice is left visibly 'due' and the card is left alone.
+ * Named here, not imported, because automation.ts is not importable from a
+ * page loader without dragging the whole runner in; the test that owns this
+ * file reads the nightly's comparison and fails if the two ever disagree.
+ */
+export const DECLINE_CAP = 5;
+
+/** What the invoice card says. Pure — the words come from `money` alone, so
+ *  every state a customer can reach has a test that reads the sentence. */
+export function invoiceCopy(money: JobDetailMoney): { pill: string; tone: string; note: string } {
+  const s = money.invoiceStatus;
+  if (s === "refunded") {
+    return { pill: "↩ Refunded", tone: "slate", note: "We sent this one back to your card." };
+  }
+  if (s === "paid") {
+    return {
+      pill: "Paid",
+      tone: "ok",
+      note: money.paidAt
+        ? `Charged to your card on file on ${new Date(money.paidAt).toLocaleDateString("en-US", { month: "long", day: "numeric" })}.`
+        : "Charged to your card on file.",
+    };
+  }
+  if (s === "due") {
+    // AFTER THE CAP, NOTHING WILL RUN THIS. Both nightly doors skip an invoice
+    // with DECLINE_CAP failed payments, and no other door exists — not a new
+    // card (saving one writes nothing to `payments`, so the count never
+    // resets), not an ops control. The two sentences below this one each end
+    // in a promise ("we'll run this", "we'll take care of it") that is false
+    // on every night after the fifth decline, whether or not a card is on
+    // file. So this branch comes first, and it promises nothing the code
+    // cannot do: it says what happened, that it is still owed, where the card
+    // lives, and that the one control on this screen which reaches a person
+    // is the note box below — because a new card on its own changes nothing.
+    if (money.declines >= DECLINE_CAP) {
+      return {
+        pill: "Card declined",
+        tone: "warn",
+        note:
+          `We tried ${money.declines} times and your card was declined each time, so we've stopped running it — this is still owed. ` +
+          `${money.hasCardOnFile ? "Update your card" : "Add a card"} on the Billing page, then leave us a note below: a new card doesn't restart this on its own.`,
+      };
+    }
+    // The unconditional version of this told customers with NO card that we
+    // would run it on their card on file — and those are exactly the ones the
+    // settle silently did nothing for. Saying it's handled when it isn't is
+    // how an unpaid job stays unpaid.
+    return money.hasCardOnFile
+      ? { pill: "Due", tone: "warn", note: "We'll run this on your card on file. Manage your card on the Billing page." }
+      : {
+          pill: "Needs a card",
+          tone: "warn",
+          note: "We don't have a card on file for you yet, so this hasn't been paid. Add one on the Billing page and we'll take care of it.",
+        };
+  }
+  if (s === "draft") {
+    return { pill: "Not billed yet", tone: "slate", note: "This invoice hasn't gone out yet." };
+  }
+  return {
+    pill: "Nothing billed yet",
+    tone: "slate",
+    note: "You're charged only after the work is done and photo-verified — never before.",
+  };
 }
 
 /** Customer-safe Make-It-Right state. The internal status name is deliberately
@@ -226,6 +305,7 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
 
   // Invoice → was it actually collected? (payments hangs off the invoice.)
   let paidAt: string | null = null;
+  let declines = 0;
   if (invoice?.id) {
     // paidAt null renders as "not paid yet" — a swallowed error tells somebody
     // whose card was charged that it was not.
@@ -233,6 +313,16 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
       .from("payments").select("created_at, status").eq("invoice_id", invoice.id as string)
       .eq("status", "captured").order("created_at", { ascending: false }).limit(1).maybeSingle());
     paidAt = (pay?.created_at as string) ?? null;
+
+    // HOW MANY TIMES THE CARD HAS SAID NO — the same shape the nightly counts
+    // before it decides whether to try again. Per invoice, exactly as the
+    // nightly's fee door and settleJob's own idempotency key count it.
+    // FAILS OPEN IF SWALLOWED: a failed count is null, `null ?? 0` sits under
+    // the cap, and the page prints "We'll run this on your card on file" to
+    // the one customer for whom that sentence is false forever.
+    declines = mustCount("how many times your card has declined", await admin
+      .from("payments").select("id", { count: "exact", head: true })
+      .eq("invoice_id", invoice.id as string).eq("status", "failed"));
   }
 
   // Only whether one EXISTS — never the token, brand or last four. This page
@@ -334,6 +424,7 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
       invoiceAmount: invoice?.amount == null ? null : Number(invoice.amount),
       paidAt,
       hasCardOnFile,
+      declines,
       refunds,
       refundedTotal: refunds.reduce((s, r) => s + r.amount, 0),
       tipAmount: job.tip_amount == null ? null : Number(job.tip_amount),

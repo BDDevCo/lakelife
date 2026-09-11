@@ -12,7 +12,7 @@ import { getTipView, getRescheduleView } from "@/app/requests/actions";
 import { RescheduleVisit } from "@/components/RescheduleVisit";
 import { CancelRequestButton } from "@/components/CancelRequestButton";
 import { ScarcityOffers } from "@/components/ScarcityOffers";
-import { loadCustomerJobDetail, type JobDetailView } from "@/app/requests/job-detail-data";
+import { loadCustomerJobDetail, invoiceCopy, type JobDetailView } from "@/app/requests/job-detail-data";
 
 /**
  * THE CUSTOMER'S JOB FILE — /requests/[id].
@@ -236,45 +236,12 @@ function PhotosCard({ job }: { job: JobDetailView }) {
 
 /* ------------------------------------------------------------------- money */
 
-function invoiceCopy(job: JobDetailView): { pill: string; tone: string; note: string } {
-  const s = job.money.invoiceStatus;
-  if (s === "refunded") {
-    return { pill: "↩ Refunded", tone: "slate", note: "We sent this one back to your card." };
-  }
-  if (s === "paid") {
-    return {
-      pill: "Paid",
-      tone: "ok",
-      note: job.money.paidAt
-        ? `Charged to your card on file on ${new Date(job.money.paidAt).toLocaleDateString("en-US", { month: "long", day: "numeric" })}.`
-        : "Charged to your card on file.",
-    };
-  }
-  if (s === "due") {
-    // The unconditional version of this told customers with NO card that we
-    // would run it on their card on file — and those are exactly the ones the
-    // settle silently did nothing for. Saying it's handled when it isn't is
-    // how an unpaid job stays unpaid.
-    return job.money.hasCardOnFile
-      ? { pill: "Due", tone: "warn", note: "We'll run this on your card on file. Manage your card on the Billing page." }
-      : {
-          pill: "Needs a card",
-          tone: "warn",
-          note: "We don't have a card on file for you yet, so this hasn't been paid. Add one on the Billing page and we'll take care of it.",
-        };
-  }
-  if (s === "draft") {
-    return { pill: "Not billed yet", tone: "slate", note: "This invoice hasn't gone out yet." };
-  }
-  return {
-    pill: "Nothing billed yet",
-    tone: "slate",
-    note: "You're charged only after the work is done and photo-verified — never before.",
-  };
-}
-
 function MoneyCard({ job }: { job: JobDetailView }) {
-  const inv = invoiceCopy(job);
+  // The words live beside the loader (job-detail-data.ts, invoiceCopy) so the
+  // decline count that decides them and the sentence it decides are under one
+  // test. A private copy here is how "we'll run this on your card on file"
+  // kept being printed to a card the nightly had stopped running.
+  const inv = invoiceCopy(job.money);
   return (
     <div className="ll-card ll-card-pad" style={{ marginBottom: 16 }}>
       <h2 style={{ fontSize: 16, margin: "0 0 10px" }}>Your invoice</h2>

@@ -7,6 +7,36 @@ import { html, type RawHtml } from "@/lib/html-safe";
  * sendNightlyDigest (lib/automation.ts) gathers the live facts and mails it.
  */
 
+/** How an entry got onto the needs-a-look list. See DigestSections.failures. */
+export type NeedsLookKind = "failed" | "skipped" | "found";
+
+/**
+ * The needs-a-look list, counted by kind — ONE place, so the heading in the
+ * email and the subject line on the phone cannot disagree about the night.
+ * An entry with no kind counts as `failed` (see DigestSections.failures).
+ */
+export function countNeedsLook(entries: ReadonlyArray<{ kind?: NeedsLookKind }>): { total: number; failed: number; skipped: number; found: number } {
+  let failed = 0, skipped = 0, found = 0;
+  for (const e of entries) {
+    if (e.kind === "skipped") skipped++;
+    else if (e.kind === "found") found++;
+    else failed++;
+  }
+  return { total: entries.length, failed, skipped, found };
+}
+
+/**
+ * The subject line's tail for a night with a needs-a-look list. Ops reads
+ * this on a phone, in a list, at night: the count is always there, and the
+ * word FAILED only when a step actually did — "N steps FAILED" over a list
+ * of skips and findings was the same lie as the old heading, one line up.
+ */
+export function needsLookSubject(entries: ReadonlyArray<{ kind?: NeedsLookKind }>): string {
+  const c = countNeedsLook(entries);
+  const head = `${c.total} thing${c.total === 1 ? "" : "s"} need${c.total === 1 ? "s" : ""} a look`;
+  return c.failed > 0 ? `${head}, ${c.failed} step${c.failed === 1 ? "" : "s"} FAILED` : head;
+}
+
 export interface DigestSections {
   learning: { changes: Array<{ service: string; from: number; to: number; samples: number }> };
   autoPricing: { changes: Array<{ label: string; service: string }> };
@@ -59,13 +89,44 @@ export interface DigestSections {
   tipsCollected?: { count: number; total: number };
   refundsReconciled?: { orphansCleared: number; flipsCompleted: number };
   /**
-   * STEPS THAT THREW TONIGHT. The nightly wraps each of its ~27 steps in a
+   * WHAT NEEDS A LOOK TONIGHT. The nightly wraps each of its ~27 steps in a
    * guard so one failure cannot take the rest of the night down — but it
    * collected the failures and then dropped them, so a night where the charge
    * run died produced the same email as a clean one. This renders FIRST,
    * before anything that went right.
+   *
+   * The list deliberately holds more than throws (nightly-rules "rule 2": to
+   * the person reading it at 8am, "the step died" and "the step quietly
+   * didn't do it" need the same response), so each entry says which it is:
+   *   failed  — the step threw, or a read the digest itself needed failed;
+   *             it did not run tonight.
+   *   skipped — the step ran and left this one item undone (a job it could
+   *             not re-check, a settle that refused, a crew it could not
+   *             reach).
+   *   found   — nothing broke; a standing fact the machine reports rather
+   *             than acts on (the park's "N occupied lots have no bill").
+   * An entry with no kind is read as `failed` — the list's original meaning,
+   * kept for a caller that predates kinds. The route stamps every one it
+   * pushes (route.test.ts holds that), so nothing real arrives unlabelled.
    */
-  failures?: Array<{ step: string; error: string }>;
+  failures?: Array<{ step: string; error: string; kind?: NeedsLookKind }>;
+  /**
+   * WORK NOBODY HAS TAKEN, as a standing count. revalidateAssignments
+   * re-checks the whole forward book nightly and texts ops the night a
+   * service is open that no crew on the platform offers — once per service
+   * per week (nudge_log `dead_end:<service>`), because before that memory
+   * existed one unfillable booking six weeks out raised the same alarm every
+   * night until its date. That alarm was also ops' ONLY signal about unfilled
+   * work: dispatch handed the digest nothing. This is the standing fact the
+   * alarm used to stand in for, said every morning without a fresh text —
+   * the same principle 0165 states for an unpaid invoice.
+   *
+   * `jobs` are forward jobs with no crew after tonight's re-check;
+   * `crewsNotified` is how many crews the up-for-grabs notice actually
+   * reached (a door took it — not attempts); `deadEnd` names the services
+   * no active, insured, non-fixture crew offers. Zero jobs is silence.
+   */
+  unfilled?: { jobs: number; crewsNotified: number; deadEnd: string[] };
   /**
    * Homes on the books with no lake against them.
    *
@@ -84,14 +145,30 @@ export function composeNightlyDigest(sections: DigestSections): string {
   const parts: RawHtml[] = [];
   const plural = (n: number) => (n === 1 ? "" : "s");
 
-  // WHAT BROKE, ABOVE WHAT WORKED. A digest that leads with good news while a
-  // step is dying is worse than no digest — it actively reassures.
+  // WHAT NEEDS A LOOK, ABOVE WHAT WORKED. A digest that leads with good news
+  // while a step is dying is worse than no digest — it actively reassures.
+  //
+  // The heading used to say "N steps failed tonight — these did not run",
+  // which was true of a thrown step and false of everything else the route
+  // deliberately merges into this list: a job one step could not re-check, a
+  // settle that refused, the park's "N occupied lots have no bill". So the
+  // heading says only what is true of all of them, the intro counts each
+  // kind by its own name, and every line is labelled.
   if (sections.failures && sections.failures.length > 0) {
-    const n = sections.failures.length;
+    const c = countNeedsLook(sections.failures);
+    const kindOf = (f: { kind?: NeedsLookKind }): NeedsLookKind => f.kind ?? "failed";
     const items = sections.failures
-      .map((f) => html`<li><strong>${f.step}</strong> — ${f.error}</li>`);
+      .map((f) => html`<li><strong>${kindOf(f)}</strong> · <strong>${f.step}</strong> — ${f.error}</li>`);
+    // Each fragment is a sentence this function writes itself, built as a
+    // nested html`` so its counters are escaped and its words stay literal —
+    // the same construct (RawHtml[], never string[]) the Make-It-Right sweep
+    // line uses below.
+    const byKind: RawHtml[] = [];
+    if (c.failed > 0) byKind.push(html`${c.failed} step${plural(c.failed)} failed tonight and didn't finish`);
+    if (c.skipped > 0) byKind.push(html`${c.skipped} item${plural(c.skipped)} ${c.skipped === 1 ? "was" : "were"} skipped by a step that otherwise ran`);
+    if (c.found > 0) byKind.push(html`${c.found} standing finding${plural(c.found)} the machine reports rather than acts on`);
     parts.push(
-      html`<h3>⚠️ ${n} step${plural(n)} failed tonight</h3><p>The rest of the night still ran. These did not, and nothing retried them:</p><ul>${items}</ul>`,
+      html`<h3>⚠️ ${c.total} thing${plural(c.total)} need${c.total === 1 ? "s" : ""} a look</h3><p>The rest of the night still ran. ${byKind.map((b, i) => (i === 0 ? b : html`; ${b}`))}:</p><ul>${items}</ul>`,
     );
   }
 
@@ -232,6 +309,24 @@ export function composeNightlyDigest(sections: DigestSections): string {
 
   if (sections.gapSla.alerted > 0) {
     parts.push(html`<h3>Gap SLA</h3><p>${sections.gapSla.alerted} job${plural(sections.gapSla.alerted)} sat unclaimed past the SLA tonight and triggered an ops alert.</p>`);
+  }
+
+  // OPEN WORK, EVERY MORNING. This is the count the repeating dead-end text
+  // used to stand in for. Nothing here is an alarm: the ops text for a
+  // service nobody offers goes out on its own weekly memory, and this line is
+  // simply what the book looked like after tonight's re-check.
+  const uf = sections.unfilled;
+  if (uf && uf.jobs > 0) {
+    const n = uf.jobs;
+    const crews = uf.crewsNotified > 0
+      ? html`The up-for-grabs notice reached ${uf.crewsNotified} crew${plural(uf.crewsNotified)} — the first to claim a job gets it.`
+      : html`No crew was sent the up-for-grabs notice tonight.`;
+    const dead = uf.deadEnd.length > 0
+      ? html` <b>Nobody on the platform offers ${uf.deadEnd.map((s, i) => (i === 0 ? html`${s}` : html`, ${s}`))}</b> — a recruiting signal; there is nothing to dispatch until an active, insured crew offers ${uf.deadEnd.length === 1 ? "it" : "them"}.`
+      : "";
+    parts.push(
+      html`<h3>Open work</h3><p>${n} job${plural(n)} still ${n === 1 ? "has" : "have"} no crew after tonight's re-check. ${crews}${dead}</p>`,
+    );
   }
 
   if (sections.homesWithNoLake && sections.homesWithNoLake > 0) {

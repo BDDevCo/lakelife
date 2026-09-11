@@ -6,7 +6,7 @@ import { getPlatformSettings } from "@/lib/settings";
 import { decideDisputeOutcome, respondByFrom, DISPUTE_ACCEPTABLE_STATUSES, DISPUTE_ESCALATABLE_STATUSES } from "@/lib/dispute-policy";
 import { executeRefund } from "@/lib/refund-core";
 import { refundableRemaining } from "@/lib/refunds";
-import { notify } from "@/lib/notify";
+import { notify, type NotifyResult } from "@/lib/notify";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 
 /**
@@ -74,11 +74,26 @@ const one = <T,>(x: T | T[] | null | undefined): T | null => (x == null ? null :
  * needs to change, change it HERE and say why — do not widen the filter.
  */
 
-/** held→released, guarded to the loose earning row only. */
-async function releaseHeldPayout(admin: ReturnType<typeof createServiceClient>, jobId: string): Promise<void> {
-  await admin.from("payouts")
+/**
+ * held→released, guarded to the loose earning row only.
+ *
+ * REPORTS WHAT IT DID. This returned void and discarded its error, and three
+ * ops-facing sentences then asserted "the crew's pay has been released" on the
+ * strength of it having been CALLED — false when the write was refused, and
+ * false when no held row existed yet (a dispute raised before the settle
+ * ran). `released` is the row count; a caller that tells somebody about it
+ * must read it.
+ */
+async function releaseHeldPayout(
+  admin: ReturnType<typeof createServiceClient>,
+  jobId: string,
+): Promise<{ released: number; error?: unknown }> {
+  const { data, error } = await admin.from("payouts")
     .update({ status: "released" })
-    .eq("job_id", jobId).eq("kind", "earning").eq("status", "held").is("batch_id", null);
+    .eq("job_id", jobId).eq("kind", "earning").eq("status", "held").is("batch_id", null)
+    .select("id");
+  if (error) console.error("[write failed] releasing the crew's held pay:", error);
+  return { released: data?.length ?? 0, ...(error ? { error } : {}) };
 }
 
 /** released→held, guarded — money waits while the dispute is open. */
@@ -609,18 +624,114 @@ async function firePolicy(d: DisputeRow, why: string): Promise<{ ok: boolean; er
 }
 
 /**
+ * THE CUSTOMER'S SCREEN PROMISED AN ANSWER, AND CLOSING SENT NONE.
+ *
+ * Their job page reads, of an escalated report: "We're reviewing it, and when
+ * we decide you'll get an email". `opsResolveEscalated` below is the ONLY exit
+ * from `escalated` (firePolicy, the sweep and the customer's own levers all
+ * guard on the open statuses and never touch it), and two of its three
+ * outcomes wrote the resolution and told nobody: close in the crew's favour,
+ * and "refund" when nothing had been captured. The second is the common one —
+ * `decideDisputeOutcome` escalates PRECISELY BECAUSE nothing was captured, so
+ * on prod today every escalation lands there. The third, a refund with real
+ * money, is announced by `executeRefund` itself ("Refund issued — $X") and is
+ * deliberately NOT repeated here: one fact, told once.
+ *
+ * The result goes back to ops in words, because this is a sentence ops reads
+ * on a phone right after the tap, and "the customer has been told" is only
+ * true when a door actually took the message.
+ *
+ * UNGATED, like the three dispute notices above it: NOTIF_DEFS has no type for
+ * Make-It-Right, and the outcome of a report the customer raised themselves is
+ * an answer, not a preference.
+ */
+/**
+ * Why a "refund" tap ended with $0 moving. "Nothing had been charged" was the
+ * only sentence for both, and it is false for the second: a big bill that
+ * escalated over the auto-refund line, was refunded in full from the refund
+ * screen, and then had its escalation tapped. Same $0, different truth.
+ */
+export type NothingToRefundBecause = "never_charged" | "already_refunded";
+
+async function tellCustomerTheOutcome(
+  admin: ReturnType<typeof createServiceClient>,
+  d: DisputeRow,
+  outcome: "closed_for_crew" | NothingToRefundBecause,
+): Promise<NotifyResult> {
+  const { data: job, error: jobErr } = await admin
+    .from("jobs").select("properties(users(phone, email)), services(name)").eq("id", d.job_id).maybeSingle();
+  if (jobErr) {
+    // Not "no email on file" — we never got to look. Say that, so ops does not
+    // go hunting for a missing address that is probably right there.
+    console.error(`[read failed] the customer's contact details for dispute ${d.id}:`, jobErr);
+    return {
+      reached: false, bySms: false, byEmail: false,
+      note: "Couldn't look up the customer's contact details just now, so they haven't been told — the outcome shows on their job page.",
+    };
+  }
+  const owner = one((one(job?.properties) as { users?: unknown } | null)?.users) as { phone?: string; email?: string } | null;
+  const svcName = (one(job?.services) as { name?: string } | null)?.name ?? "the work";
+  // Both sentences end where the customer's job page picks up: its resolved
+  // line says "If anything's still wrong, message us below", and the Comments
+  // card under it is a real composer that dispatch reads.
+  const where = "If anything's still wrong, message us from the job page in your portal.";
+  // One opening for all three, then the one sentence about the money that is
+  // true of the state we are in.
+  const opened = `we looked into your report on the ${svcName} and have closed it`;
+  const money =
+    outcome === "closed_for_crew"
+      // Closed in the CREW's favour. This path reads nothing about the money
+      // and moves none — not "billed as normal", which is false for a bill
+      // that was refunded from the refund screen before this tap. What is
+      // true in every state: this decision changed nothing on their bill.
+      ? "The work stands as done, and nothing about your bill changes."
+      : outcome === "never_charged"
+        // Ops chose "refund", but no payment had ever been captured on this
+        // bill, so there was nothing to send back. Past tense on purpose: it
+        // says what was true when we looked and promises nothing about the
+        // bill — which nothing here waived.
+        ? "Nothing had been charged for this visit, so there was nothing to send back."
+        // Captured once, already refunded in full before this tap.
+        : "This visit had already been refunded in full, so there was nothing more to send back.";
+  const msg = {
+    sms: `LakeLife: ${opened}. ${money} ${where} 🌊`,
+    subject: `Your report on the ${svcName} — closed`,
+    body: `${opened[0].toUpperCase()}${opened.slice(1)}. ${money}\n\n${where}`,
+  };
+  return notify(
+    "the owner of the outcome of their report",
+    { phone: owner?.phone, email: owner?.email },
+    msg,
+  );
+}
+
+/**
  * The human's ONE lever for escalated disputes (nightly digest points here).
  * 'close' → crew's favor: hold releases, dispute closes. 'refund' → the
  * remaining cash goes back (held-aware clawback reduces the frozen earning
  * in place), the crew's remainder releases, dispute resolves. Either way
  * the dead end the review panel found — escalations stranding held pay
  * forever — has an exit that isn't manual SQL.
+ *
+ * `customerTold` / `customerNote` are set on the two paths this function
+ * announces itself (see tellCustomerTheOutcome); the money-refund path leaves
+ * that to executeRefund and returns neither. `nothingToRefundBecause` rides
+ * along with `refunded: 0` so the ops sentence can say which $0 this was.
  */
 export async function opsResolveEscalated(
   disputeId: string,
   outcome: "refund" | "close",
   resolvedBy: string | null,
-): Promise<{ ok: boolean; error?: string; refunded?: number }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  refunded?: number;
+  nothingToRefundBecause?: NothingToRefundBecause;
+  customerTold?: boolean;
+  customerNote?: string;
+  /** How many held earning rows this actually released — 0 is a fact, not a shrug. */
+  payoutReleased?: number;
+}> {
   const admin = createServiceClient();
   const { data, error } = await admin
     .from("disputes")
@@ -645,8 +756,9 @@ export async function opsResolveEscalated(
       return { ok: false, error: readFailedMessage("this dispute", flipErr) };
     }
     if (!flipped || flipped.length === 0) return { ok: false, error: "Already resolved by another path." };
-    await releaseHeldPayout(admin, d.job_id);
-    return { ok: true };
+    const rel = await releaseHeldPayout(admin, d.job_id);
+    const told = await tellCustomerTheOutcome(admin, d, "closed_for_crew");
+    return { ok: true, payoutReleased: rel.released, customerTold: told.reached, ...(told.note ? { customerNote: told.note } : {}) };
   }
 
   // refund: remaining cash back, clawback reduces the HELD earning in place
@@ -670,13 +782,27 @@ export async function opsResolveEscalated(
   const amount = refundableRemaining(captured, already);
   if (!(amount > 0)) {
     // Nothing left to move — close the dispute, release the crew.
-    const { data: flipped } = await admin
+    const { data: flipped, error: flipErr } = await admin
       .from("disputes")
       .update({ status: "resolved_closed", resolved_at: new Date().toISOString(), resolution: "ops: nothing left to refund" })
       .eq("id", d.id).eq("status", "escalated")
       .select("id");
-    if (flipped && flipped.length > 0) await releaseHeldPayout(admin, d.job_id);
-    return { ok: true, refunded: 0 };
+    // A FAILED WRITE IS NOT A CONCURRENT TAP. Both leave `flipped` empty, and
+    // this returned ok:true for both — so a refused UPDATE left the dispute
+    // escalated and the payout held while ops read "Closed — nothing left to
+    // refund, and the crew's pay has been released". The same failed-write-
+    // rendered-as-success shape fixed on the customer's 👎 door this morning.
+    if (flipErr) return { ok: false, error: readFailedMessage("closing this dispute", flipErr, { money: true }) };
+    // Genuinely empty: a concurrent tap closed it first; that one told the
+    // customer, and its sentence said which $0 this was.
+    if (!flipped || flipped.length === 0) return { ok: true, refunded: 0 };
+    const because: NothingToRefundBecause = captured > 0 ? "already_refunded" : "never_charged";
+    const rel = await releaseHeldPayout(admin, d.job_id);
+    const told = await tellCustomerTheOutcome(admin, d, because);
+    return {
+      ok: true, refunded: 0, nothingToRefundBecause: because, payoutReleased: rel.released,
+      customerTold: told.reached, ...(told.note ? { customerNote: told.note } : {}),
+    };
   }
   const res = await executeRefund({
     jobId: d.job_id,

@@ -26,7 +26,7 @@ import { computeScarcityOffer } from "@/app/requests/offer-data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { computeMenuSuggestions } from "@/app/ops/data";
 import { executeMenuUpdate } from "@/lib/menu-core";
-import { composeNightlyDigest, type DigestSections } from "@/lib/digest-render";
+import { composeNightlyDigest, needsLookSubject, type DigestSections, type NeedsLookKind } from "@/lib/digest-render";
 import { proposedFee, deadlinePassed, tripFeeFor } from "./recovery";
 import { withParkRate } from "@/lib/park-rates";
 import { groundsFor, loadParkRates } from "@/app/park/rate-data";
@@ -1301,10 +1301,31 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number; s
   return { ok: true, flagged, skipped };
 }
 
+/**
+ * Days between ops alarms about the SAME dead-end service. The sweep below
+ * walks the whole forward book every night, so without a memory one
+ * unfillable booking six weeks out raised the same text 42 nights running.
+ * The standing fact lives in the digest (DigestSections.unfilled); this is
+ * only how often the fresh alarm may repeat it.
+ */
+const DEAD_END_ALARM_EVERY_DAYS = 7;
+
 export async function revalidateAssignments(
   dateISO?: string,
   opts: { broadcast?: boolean } = {},
-): Promise<{ ok: boolean; checked: number; rehomed: number; unfilled: number; crewsTexted?: number; skipped: string[] }> {
+): Promise<{
+  ok: boolean;
+  checked: number;
+  rehomed: number;
+  unfilled: number;
+  /** Crews the up-for-grabs notice was ATTEMPTED to — what decides the dead-end branch. */
+  crewsTexted?: number;
+  /** Crews a door actually took it for. What the digest prints as "reached". */
+  crewsNotified: number;
+  /** Open services no active, insured, non-fixture crew offers — the recruiting signal. */
+  deadEnd: string[];
+  skipped: string[];
+}> {
   const broadcast = opts.broadcast ?? true; // intraday heartbeat passes false — no SMS every 30 min
   const admin = createServiceClient();
   // What this pass could not do, in words. The per-job reads live inside
@@ -1347,11 +1368,13 @@ export async function revalidateAssignments(
   // claiming a new lake opts them into it). One text per crew per night. Ops
   // only hears about jobs NO crew could even be asked about (true dead end).
   let crewsTexted = 0;
+  let crewsNotified = 0;
+  let deadEnd: string[] = [];
   const unfilled = unfilledIds.length;
   if (broadcast && unfilled > 0) {
     const today = todayLakeDate();
     const [openJobsRes, crewsRes] = await Promise.all([
-      admin.from("jobs").select("id, services(name)").in("id", unfilledIds),
+      admin.from("jobs").select("id, group_id, services(name)").in("id", unfilledIds),
       // FENCED. This pool decides two things and a fixture corrupts both: who
       // gets "a job is up for grabs", and — when NOBODY can claim a service —
       // whether ops is told "no crew on the platform can take X", which is the
@@ -1365,9 +1388,17 @@ export async function revalidateAssignments(
     // statement about the whole marketplace, made from a dropped connection.
     const openJobs = mustRead("the open jobs to broadcast", openJobsRes);
     const crews = mustRead("the crews who could claim them", crewsRes);
-    const openServices = new Set(
-      (openJobs ?? []).map((j) => (one(j.services) as { name?: string } | null)?.name).filter((n): n is string => !!n),
-    );
+    // One entry PER OPEN JOB (not per service) — the per-crew count below
+    // needs the jobs, the WHO filter below needs only the set of their names.
+    // AND ONLY THE JOBS THE BOARD WILL SHOW THEM. /vendor/open hides package
+    // legs (group_id set — "routed, never cold-claimed", open-data.ts), so a
+    // crew told "3 open jobs" who taps through and sees 2 has been lied to by
+    // one. The ops-facing `unfilled` above still counts the whole book.
+    const openJobServices = (openJobs ?? [])
+      .filter((j) => j.group_id == null)
+      .map((j) => (one(j.services) as { name?: string } | null)?.name)
+      .filter((n): n is string => !!n);
+    const openServices = new Set(openJobServices);
     const claimersByService = new Map<string, number>(); // service -> how many crews were told
     const notifiable = (crews ?? []).filter((v) => {
       if (!v.coi_expiry || String(v.coi_expiry) < today) return false;
@@ -1388,47 +1419,100 @@ export async function revalidateAssignments(
       for (const v of notifiable) {
         const contact = contactByUser.get(v.user_id as string);
         if (!contact) continue;
+        // THE NUMBER IS THIS CREW'S, NOT THE MARKETPLACE'S. `unfilled` is every
+        // open job across every trade; the board at /vendor/open shows a crew
+        // only the jobs in its own service list (open-data.ts). A mow-only
+        // crew with one mow and two pier jobs open was told "3 open jobs" and
+        // shown one. Count the open jobs whose service THIS crew does — as a
+        // set, so a trade listed twice cannot count a job twice — and say that.
+        const theirTrades = new Set((v.service_types as string[]) ?? []);
+        const onTheirBoard = openJobServices.filter((n) => theirTrades.has(n)).length;
+        // Unreachable while `notifiable` is service overlap (overlap ⇒ ≥ 1 job),
+        // but the sentence "0 open jobs up for grabs" must never be sendable.
+        if (onTheirBoard === 0) continue;
         const told = await notify(
           "a crew that there is open work up for grabs near them",
           contact,
           {
-            sms: `LakeLife: ${unfilled} open job${unfilled === 1 ? "" : "s"} up for grabs near you — first crew to claim gets it: ${site}/vendor/open 🌊`,
-            subject: `${unfilled} open job${unfilled === 1 ? "" : "s"} up for grabs near you`,
+            sms: `LakeLife: ${onTheirBoard} open job${onTheirBoard === 1 ? "" : "s"} up for grabs near you — first crew to claim gets it: ${site}/vendor/open 🌊`,
+            subject: `${onTheirBoard} open job${onTheirBoard === 1 ? "" : "s"} up for grabs near you`,
             body:
-              `${unfilled} open job${unfilled === 1 ? "" : "s"} up for grabs near you — first crew to claim gets it.\n\n` +
+              `${onTheirBoard} open job${onTheirBoard === 1 ? "" : "s"} up for grabs near you — first crew to claim gets it.\n\n` +
               `  ${site}/vendor/open`,
           },
         );
         if (!told.reached && told.note) skipped.push(told.note);
+        // The attempt decides the dead-end branch below; only a door that
+        // took the message counts as a crew reached in the digest.
+        if (told.reached) crewsNotified++;
         crewsTexted++;
       }
     }
     // True dead end: a service nobody on the platform offers ⇒ recruit signal.
-    const deadEnd = [...openServices].filter((s) => !claimersByService.has(s));
+    deadEnd = [...openServices].filter((s) => !claimersByService.has(s));
     if (deadEnd.length > 0 || crewsTexted === 0) {
-      const { data: ops, error: opsErr } = await admin.from("users").select("phone, email").eq("role", "ops").not("phone", "is", null);
-      if (opsErr) {
-        console.error("[read failed] the ops phone numbers for a dead-end alert:", opsErr);
-        skipped.push(`${unfilled} job${unfilled === 1 ? "" : "s"} nobody on the platform can claim, and we couldn't read the ops phone numbers to raise it — no dead-end text went out.`);
-      }
-      const pretty = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO)
-        ? new Date(dateISO + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
-        : "the coming days";
+      // ONCE A WEEK PER SERVICE, NOT EVERY NIGHT. This sweep covers the next
+      // sixty days, so a single unfillable booking re-entered this branch on
+      // every run until its date — and texted every ops phone each time. The
+      // memory is a nudge_log row per service, the same discipline the SLA
+      // valve, the overstay meter and the fill-in digest keep. The standing
+      // fact goes to the digest every morning regardless (deadEnd, below);
+      // this is only the fresh alarm, and a fresh alarm is worth exactly one
+      // text a week. The crewsTexted === 0 branch names no dead-end service
+      // (every open service has a crew on paper and none could be asked), so
+      // it claims on each open service — or, with none named, on "open jobs".
       const what = deadEnd.length > 0 ? deadEnd.join(", ") : "open jobs";
-      for (const o of ops ?? []) {
-        const told = await notify(
-          "ops that nobody on the platform can claim this work",
-          { phone: o.phone as string | null, email: o.email as string | null },
-          {
-            sms: `LakeLife: no crew on the platform can claim ${what} for ${pretty} — recruiting signal, nothing to dispatch. 🌊`,
-            subject: `No crew on the platform can claim ${what} for ${pretty}`,
-          },
-        );
-        if (!told.reached && told.note) skipped.push(told.note);
+      const about = deadEnd.length > 0 ? deadEnd : [...openServices];
+      const keys = (about.length > 0 ? about : ["open jobs"]).map((s) => `dead_end:${s}`);
+      const cutoff = new Date(Date.now() - DEAD_END_ALARM_EVERY_DAYS * 86_400_000).toISOString();
+      const { data: recent, error: recentErr } = await admin
+        .from("nudge_log").select("kind").in("kind", keys).gte("sent_at", cutoff);
+      // FAILS OPEN IF IGNORED: null reads as "never alarmed", and the weekly
+      // hold becomes the nightly text this memory exists to stop.
+      if (recentErr) {
+        console.error("[read failed] whether this dead end was already raised with ops:", recentErr);
+        skipped.push(`no dead-end alert about ${what}: couldn't read whether ops had already been alerted this week (${recentErr.message ?? "read failed"}) — the digest still carries the count.`);
+      } else {
+        const cooling = new Set((recent ?? []).map((r) => r.kind as string));
+        const due = keys.filter((k) => !cooling.has(k));
+        if (due.length > 0) {
+          const { data: ops, error: opsErr } = await admin.from("users").select("id, phone, email").eq("role", "ops").not("phone", "is", null);
+          if (opsErr) {
+            console.error("[read failed] the ops phone numbers for a dead-end alert:", opsErr);
+            skipped.push(`${unfilled} job${unfilled === 1 ? "" : "s"} nobody on the platform can claim, and we couldn't read the ops phone numbers to raise it — no dead-end text went out.`);
+          }
+          const pretty = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO)
+            ? new Date(dateISO + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
+            : "the coming days";
+          let queuedAny = false;
+          for (const o of ops ?? []) {
+            const told = await notify(
+              "ops that nobody on the platform can claim this work",
+              { phone: o.phone as string | null, email: o.email as string | null },
+              {
+                sms: `LakeLife: no crew on the platform can claim ${what} for ${pretty} — recruiting signal, nothing to dispatch. 🌊`,
+                subject: `No crew on the platform can claim ${what} for ${pretty}`,
+              },
+            );
+            if (!told.reached && told.note) skipped.push(told.note);
+            if (told.reached) queuedAny = true;
+          }
+          // POST-SEND, and only when a door took it: a night both of ops'
+          // doors were shut must not buy a week of silence about work nobody
+          // can do. The row is the memory — without it this is the old bug.
+          if (queuedAny && ops && ops.length > 0) {
+            const logged = await admin
+              .from("nudge_log").insert(due.map((kind) => ({ user_id: ops[0].id as string, kind })));
+            if (logged.error) {
+              console.error("[write failed] the weekly memory for the dead-end alert:", logged.error);
+              skipped.push(`ops were alerted that nobody can claim ${what}, but the once-a-week memory row did not save (${logged.error.message ?? "write failed"}) — they will be texted about it again tomorrow night.`);
+            }
+          }
+        }
       }
     }
   }
-  return { ok: true, checked: (jobs ?? []).length, rehomed, unfilled, crewsTexted, skipped };
+  return { ok: true, checked: (jobs ?? []).length, rehomed, unfilled, crewsTexted, crewsNotified, deadEnd, skipped };
 }
 
 /** Night-before reminder text to each owner who has a scheduled job on `date`
@@ -4114,7 +4198,7 @@ export async function sendNightlyDigest(results: {
    * the same email as a clean one. Optional for the same reason as the money
    * fields: a caller that hasn't been wired yet still compiles.
    */
-  failures?: Array<{ step: string; error: string }>;
+  failures?: Array<{ step: string; error: string; kind?: NeedsLookKind }>;
   /**
    * MISSED VISITS WAITING ON A DECISION (0089). Not money that moved — money
    * that will not move until a person says so. It is the only branch of the
@@ -4126,6 +4210,13 @@ export async function sendNightlyDigest(results: {
   tripFees?: { paid: number; total: number; onUs: number };
   /** Tips customers gave since the last digest — pass-through, never ours. */
   tipsCollected?: { count: number; total: number };
+  /**
+   * WHAT DISPATCH FOUND ON THE FORWARD BOOK. revalidateAssignments' result,
+   * which until now went only into the HTTP response — so the weekly (once
+   * nightly) dead-end text to ops was their ONLY signal about unfilled work.
+   * The count belongs here, every morning, without a fresh alarm.
+   */
+  dispatch?: { unfilled: number; deadEnd?: string[]; crewsNotified?: number };
 }): Promise<{ ok: boolean; sent: number; skipped: string[] }> {
   const admin = createServiceClient();
   const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString();
@@ -4134,11 +4225,11 @@ export async function sendNightlyDigest(results: {
   // failed read here must not cost them the whole email. Instead each one
   // becomes a named failure IN the email, alongside the steps that broke: an
   // empty section that says "we couldn't look" rather than "nothing happened".
-  const readFailures: Array<{ step: string; error: string }> = [];
+  const readFailures: Array<{ step: string; error: string; kind: NeedsLookKind }> = [];
   const noteRead = (what: string, error: { message?: string } | null): void => {
     if (!error) return;
     console.error(`[read failed] ${what}:`, error);
-    readFailures.push({ step: `digest — ${what}`, error: error.message ?? "read failed" });
+    readFailures.push({ step: `digest — ${what}`, kind: "failed", error: error.message ?? "read failed" });
   };
 
   const { data: escalatedRows, error: escalatedErr } = await admin
@@ -4214,6 +4305,11 @@ export async function sendNightlyDigest(results: {
     tipsCollected: results.tipsCollected,
     failures: [...(results.failures ?? []), ...readFailures],
     homesWithNoLake: lakelessHomes ?? 0,
+    // The standing count of open work. Absent when the dispatch step died —
+    // which the failures list above then says by name.
+    unfilled: results.dispatch
+      ? { jobs: results.dispatch.unfilled, crewsNotified: results.dispatch.crewsNotified ?? 0, deadEnd: results.dispatch.deadEnd ?? [] }
+      : undefined,
   };
   const digestBody = composeNightlyDigest(sections);
 
@@ -4232,16 +4328,18 @@ export async function sendNightlyDigest(results: {
     const email = u.email as string | null;
     if (!email) continue;
     // THE SUBJECT LINE CARRIES THE BAD NEWS. Ops reads this on a phone, in a
-    // list, at night — a broken step must be visible without opening it.
-    const broke = (results.failures?.length ?? 0) + readFailures.length;
-    const subject = broke > 0
-      ? `LakeLife nightly — ${broke} step${broke === 1 ? "" : "s"} FAILED`
+    // list, at night — a broken step must be visible without opening it. It
+    // is worded from the same counts as the heading inside (needsLookSubject),
+    // so "N steps FAILED" can no longer sit over a list of skips and findings.
+    const needsLook = sections.failures ?? [];
+    const subject = needsLook.length > 0
+      ? `LakeLife nightly — ${needsLookSubject(needsLook)}`
       : "LakeLife nightly — the machine's report";
     const res = await sendEmail({ to: email, subject, html: digestBody });
     if (res.ok) sent++;
     else {
       console.error(`[send failed] tonight's digest to ${email}:`, res.error);
-      undelivered.push(`tonight's digest did not reach ${email} (${res.error ?? "send failed"}) — ${broke > 0 ? `${broke} failed step${broke === 1 ? "" : "s"} went unread with it` : "nothing else reports the night"}`);
+      undelivered.push(`tonight's digest did not reach ${email} (${res.error ?? "send failed"}) — ${needsLook.length > 0 ? `${needsLook.length} thing${needsLook.length === 1 ? "" : "s"} that needed a look went unread with it` : "nothing else reports the night"}`);
     }
   }
   return { ok: true, sent, skipped: undelivered };

@@ -11,6 +11,7 @@ import { applyDueRentChangesFor } from "@/lib/rent-changes";
 
 import { runParkNightly } from "@/lib/park-machine";
 import { sweepDisputeDeadlines } from "@/lib/disputes";
+import type { NeedsLookKind } from "@/lib/digest-render";
 
 export const dynamic = "force-dynamic";
 // TWENTY-SEVEN SEQUENTIAL STEPS. On the default serverless ceiling this run
@@ -36,13 +37,23 @@ export const maxDuration = 300;
  *
  * Failures are COLLECTED and returned, never swallowed. A step that dies shows
  * up by name in the response and in the digest.
+ *
+ * EVERY ENTRY SAYS WHAT KIND OF THING IT IS. This one list carries a thrown
+ * step, a per-item skip, a settle that refused and the park machine's
+ * standing findings — on purpose (see noteSkips) — and the digest used to
+ * head all of it "N steps failed tonight — these did not run", which was true
+ * of the first and false of the rest. The kind is stamped where each entry is
+ * pushed, because only the push site knows: `failed` here, `skipped` in
+ * noteSkips and the reconcile rail, `found` for the park.
  */
-const failures: { step: string; error: string }[] = [];
+// One definition, in digest-render — the renderer's and the writer's kinds
+// cannot drift apart if there is only one list of them.
+const failures: { step: string; kind?: NeedsLookKind; error: string }[] = [];
 async function step<T>(name: string, fn: () => Promise<T>): Promise<T | null> {
   try {
     return await fn();
   } catch (e) {
-    failures.push({ step: name, error: e instanceof Error ? e.message : String(e) });
+    failures.push({ step: name, kind: "failed", error: e instanceof Error ? e.message : String(e) });
     return null;
   }
 }
@@ -64,7 +75,14 @@ async function step<T>(name: string, fn: () => Promise<T>): Promise<T | null> {
  * response.
  */
 function noteSkips(name: string, r: { skipped?: string[] } | null | undefined) {
+  const from = failures.length;
   for (const s of r?.skipped ?? []) failures.push({ step: name, error: s });
+  // Everything this function pushed is a SKIP — the step ran and left one
+  // item undone — never a throw. The renderer reads an unlabelled entry as a
+  // thrown step (the list's original meaning), so the label is stamped here,
+  // after the push: the push line above is the one nightly-rules.test.ts
+  // pins verbatim as proof that a skip feeds the same list a throw does.
+  for (let i = from; i < failures.length; i++) failures[i].kind = "skipped";
 }
 
 async function run(req: Request) {
@@ -179,7 +197,7 @@ async function run(req: Request) {
   // reconcileUnsettledJobs reports `failures: string[]` rather than `skipped`,
   // because every entry is a settle that refused — the customer was not charged
   // and the crew was not paid. Same destination, so ops reads one list.
-  for (const f of reconcile?.failures ?? []) failures.push({ step: "reconcile", error: f });
+  for (const f of reconcile?.failures ?? []) failures.push({ step: "reconcile", kind: "skipped", error: f });
   // THE PARK MACHINE'S URGENT FINDINGS. It has always produced them — "N
   // occupied lots have no bill for August 2026" is the standing answer to
   // nobody having raised the rent — and they only ever reached a count in an
@@ -187,7 +205,8 @@ async function run(req: Request) {
   //
   // Reporting, never raising: billing nineteen households unattended asserts
   // that money is owed, which the park autonomy rule reserves for a human tap.
-  for (const u of park?.urgent ?? []) failures.push({ step: "park", error: u });
+  // Labelled `found`: nothing failed, and the digest must not say it did.
+  for (const u of park?.urgent ?? []) failures.push({ step: "park", kind: "found", error: u });
   // A step that died contributes its empty shape rather than blocking the
   // digest — the digest is how ops finds out, so it must survive the failure
   // it is reporting. `failures` carries what actually broke.
@@ -216,6 +235,13 @@ async function run(req: Request) {
     visitFees: visitFees ?? undefined,
     tripFees: tripFees ?? undefined,
     tipsCollected: tipsCollected ?? undefined,
+    // WHAT DISPATCH FOUND. Until now the digest received nothing from the
+    // re-validation sweep, so ops' only signal about unfilled work was the
+    // dead-end text — which repeated every night because it had no memory.
+    // Now that text is held to once a week per service, this count is the
+    // standing fact, every morning. Null when the step died, which the
+    // failures list above then says by name.
+    dispatch: dispatch ?? undefined,
   }));
   // The digest cannot report its own non-delivery by email. This lands it in
   // the cron response instead — the only place left.

@@ -136,9 +136,13 @@ export function disputeViewForCustomer(d: DisputeViewInput): DisputeView {
         payOnHold: true, needsCustomer: true,
       };
     case "escalated":
+      // "Will come back to you" was written before anything did. The only exit
+      // from this state is opsResolveEscalated, which now sends the outcome to
+      // every open door (lib/disputes.ts) — and the same page shows it. Email
+      // is the door named because it is the one that delivers; a text goes too.
       return {
         pill: "With our team",
-        line: "This one's with us now. We're reviewing it and will come back to you — nothing more for you to do.",
+        line: "This one's with us now. We're reviewing it, and when we decide you'll get an email — the outcome shows here too. Nothing more for you to do.",
         payOnHold: true, needsCustomer: false,
       };
     case "resolved_fixed":

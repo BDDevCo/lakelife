@@ -29,6 +29,44 @@ export function canOffer(services: ServiceRule[], name: string): boolean {
   return services.some((s) => s.name === name);
 }
 
+/**
+ * WHAT THE RECAP MAY SAY ABOUT THE EMAIL COPY.
+ *
+ * "We've emailed you this too." rendered the instant the profile saved — a
+ * line BEFORE the send was even dispatched, and the send itself went out as
+ * `sendWelcomeEmail().catch(() => {})`: its {ok:false, error} was never read
+ * and a rejection was swallowed. Resend unconfigured, a Resend fault, the park
+ * holding notices, a recipient we may not write to — all of them said
+ * "emailed", and every one is a live branch of sendEmail today.
+ *
+ * The past tense is earned by the thing having happened. So the status is
+ * `sending` while the call is out, `sent` on ok:true and nothing else, and
+ * `failed` on ok:false OR a throw. The Done screen never waits on this: it
+ * paints with the line pending and the line settles after.
+ */
+export type EmailCopy = "sending" | "sent" | "failed";
+
+export async function settleEmailCopy(
+  send: () => Promise<{ ok: boolean }>,
+): Promise<Exclude<EmailCopy, "sending">> {
+  try {
+    return (await send()).ok ? "sent" : "failed";
+  } catch {
+    return "failed";
+  }
+}
+
+/** The one place the sentence lives, so it cannot be true in the JSX by accident. */
+export function emailCopyLine(status: EmailCopy): string {
+  if (status === "sent") return "We've emailed you this too.";
+  if (status === "failed") {
+    // Nothing to retry and nothing lost: the recap only exists once
+    // saveProfile returned ok, and /profile shows the same thing again.
+    return "We couldn't send the email copy — everything below is saved and you can come back to it any time.";
+  }
+  return "We're emailing you a copy too.";
+}
+
 const NOT_LISTED = "My lake isn't listed";
 
 const ENGINE_LABELS: Array<[string, string]> = [
@@ -171,6 +209,7 @@ export function ProfileWizard({
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [emailCopy, setEmailCopy] = useState<EmailCopy>("sending");
 
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
   const wants = (name: string) => draft.wanted.includes(name);
@@ -328,8 +367,13 @@ export function ProfileWizard({
       toast(res.error ?? "Could not save your profile.");
       return;
     }
+    // The save path above is untouched. From here the recap is on its way:
+    // both state updates are queued before this handler yields at the await,
+    // so the Done screen paints with the email line PENDING while the send
+    // is out — it never waits on email. Then the settled status lands.
+    setEmailCopy("sending");
     setDone(true);
-    sendWelcomeEmail().catch(() => {});
+    setEmailCopy(await settleEmailCopy(sendWelcomeEmail));
   }
 
   function toggleService(name: string) {
@@ -340,7 +384,7 @@ export function ProfileWizard({
     }));
   }
 
-  if (done) return <Recap draft={draft} priceOf={priceOf} onGo={() => router.push("/book")} />;
+  if (done) return <Recap draft={draft} priceOf={priceOf} emailCopy={emailCopy} onGo={() => router.push("/book")} />;
 
   return (
     <div className="ll-card ll-card-pad" style={{ maxWidth: 560, margin: "0 auto" }}>
@@ -692,7 +736,15 @@ function jetHint(draft: Draft, priceOf: (n: string) => number): string {
 }
 
 // ---------- recap ----------
-function Recap({ draft, priceOf, onGo }: { draft: Draft; priceOf: (name: string) => number; onGo: () => void }) {
+// Exported so the three email states can be drawn without driving five steps
+// of wizard; the wizard itself is its only caller.
+export function Recap({ draft, priceOf, emailCopy, onGo }: {
+  draft: Draft;
+  priceOf: (name: string) => number;
+  /** Settled by the wizard after the send returns; "sending" until then. */
+  emailCopy: EmailCopy;
+  onGo: () => void;
+}) {
   const ft = boatFeet({ boats: draft.boats });
   const lines: Array<[string, string, string]> = draft.wanted.map((name) => {
     const price = priceOf(name);
@@ -712,7 +764,7 @@ function Recap({ draft, priceOf, onGo }: { draft: Draft; priceOf: (name: string)
       <h2 style={{ fontSize: 24, margin: "10px 0 4px" }}>You&apos;re all set! 🎉</h2>
       <p className="mut" style={{ fontSize: 14, marginBottom: 12 }}>
         {draft.address ? `${draft.address} — here` : "Here"} are the services you chose,
-        priced exactly to your place. We&apos;ve emailed you this too.
+        priced exactly to your place. {emailCopyLine(emailCopy)}
       </p>
       <div>
         {lines.map((r, i) => (

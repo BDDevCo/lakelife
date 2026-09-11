@@ -10,7 +10,10 @@ import { sendEmail } from "@/lib/email";
 /**
  * Send the warm setup recap as a welcome email via Resend.
  * No-ops gracefully if Resend isn't configured yet, so the wizard never
- * fails just because email is unavailable.
+ * fails just because email is unavailable — but it does SAY so: the wizard
+ * settles this call's result and prints "We've emailed you this too" only on
+ * ok:true (see settleEmailCopy in ProfileWizard). Every other return, and a
+ * throw, renders as "We couldn't send the email copy".
  *
  * Note: until the sending domain (lakelife.ai) is verified in Resend, this
  * sends from Resend's shared onboarding address, which only delivers to the
@@ -26,10 +29,13 @@ export async function sendWelcomeEmail(): Promise<{ ok: boolean; skipped?: boole
   } = await supabase.auth.getUser();
   if (!user?.email) return { ok: false, error: "No email on file." };
 
-  // Both of these throw now. The only caller does `.catch(() => {})`, so a
-  // rejection is swallowed silently and the welcome email simply never arrives
-  // with nothing anywhere saying so — which is the same class of quiet lie,
-  // one level up. Returning lets the caller's own error path work.
+  // Both of these throw. The wizard used to call this as `.catch(() => {})`
+  // under a recap already reading "We've emailed you this too", so a rejection
+  // here was swallowed and the screen lied — the same class of quiet lie, one
+  // level up. The wizard's settle now treats ok:false and a throw the same
+  // (both render "couldn't send"), so returning here is a courtesy rather
+  // than a necessity: it keeps the failure's text in `error` for any caller
+  // that wants it. Nothing reads it today.
   let profile, services;
   try {
     profile = await getFullProfile();
