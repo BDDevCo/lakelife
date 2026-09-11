@@ -127,7 +127,14 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
       return;
     }
     setDone(true);
-    toast("Job complete — payout released. 🌊");
+    // THE ROUTE CARD CANNOT KNOW THIS. It has no `correction_of` — the
+    // vendor_jobs view does not carry it — so it cannot tell an ordinary job
+    // from a make-it-right visit, which by design creates no payout at all.
+    // It also cannot know whether the server released one: that is the photo
+    // gate's decision, and a payout existing does not prove the gate passed.
+    // So it states the part it witnessed and sends them to the screen that
+    // actually knows.
+    toast("Job complete. Your pay shows on your earnings screen. 🌊");
     router.refresh();
   }
 
@@ -187,7 +194,10 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
 
       {done ? (
         <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span className="ll-pill ok">Done ✓ · payout released</span>
+          {/* "payout released" was a permanent green claim about money, on a
+              card that cannot tell whether any payout exists. On a make-it-
+              right visit it was simply false. */}
+          <span className="ll-pill ok">Done ✓</span>
           <Link href={`/vendor/jobs/${stop.id}`} className="ll-btn ghost sm" style={{ textDecoration: "none" }}>
             Open job
           </Link>

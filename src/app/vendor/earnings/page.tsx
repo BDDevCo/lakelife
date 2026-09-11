@@ -57,8 +57,11 @@ export default async function VendorEarningsPage() {
   const vendor = await getMyVendor();
   if (vendor && vendor.status !== "active") {
     const admin = createServiceClient();
-    const svcs = mustRead("the service list", await admin.from("services").select("name").eq("active", true).order("name"));
-    const activeServices = (svcs ?? []).map((s) => s.name as string);
+    // park_only travels with the name: onboarding groups the chips by it,
+    // because "Lawn mowing & trim" and "Park grounds mowing & trim" differ
+    // by one word and are two different jobs.
+    const svcs = mustRead("the service list", await admin.from("services").select("name, park_only").eq("active", true).order("name"));
+    const activeServices = (svcs ?? []).map((s) => ({ name: s.name as string, parkOnly: s.park_only === true }));
     const lakeRows = mustRead("the lake list", await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name"));
     const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
     return (

@@ -62,9 +62,14 @@ export function WalkAround({
                 border: `1px solid ${done ? "var(--ok)" : "var(--line)"}`,
                 background: done ? "rgba(14,122,106,.10)" : "transparent",
                 color: done ? "var(--ok)" : "inherit",
-                // 375px, gloved thumb, boat on the trailer behind them.
-                minHeight: 32,
-                padding: "4px 10px",
+                // 375px, gloved thumb, boat on the trailer behind them —
+                // which is exactly the argument for 44 and not 32. The comment
+                // named the right person and the number was set for the
+                // layout. These chips are the photo gate: a missed tap here is
+                // a shot not taken, and rule 2 means the job cannot complete
+                // and the payout cannot release without it.
+                minHeight: 44,
+                padding: "8px 12px",
               }}
               title={done ? `${label} — shot. Tap to add another.` : `Take the ${label} shot`}
             >

@@ -125,7 +125,21 @@ export function CrewJobActions({
       return;
     }
     setDone(true);
-    toast("Job complete — payout released. 🌊");
+    // NOT "payout released". Thirty lines above, this same panel tells the
+    // crew a make-it-right visit "carries no charge and no separate pay" —
+    // and then told them a payout had been released for it. Whichever they
+    // believed, one of the two sentences was a lie about their money.
+    //
+    // It is not knowable here in any case. Whether a payout row exists and is
+    // released is settled server-side by the photo gate, and this codebase has
+    // already had to correct a comment claiming the reverse — a payout
+    // existing does not prove the gate passed. So the toast says what is
+    // certainly true and points at the screen that holds the truth.
+    toast(
+      isCorrection
+        ? "Visit closed. This one carries no charge and no separate pay. 🌊"
+        : "Job complete. Your pay shows on your earnings screen. 🌊",
+    );
     router.refresh();
   }
 

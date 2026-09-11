@@ -132,6 +132,10 @@ function DocUpload({
   const fileRef = useRef<HTMLInputElement>(null);
   const [expiry, setExpiry] = useState("");
   const [insured, setInsured] = useState("");
+  // WHAT THEY PICKED. The native file chip shows a filename in ~13px system
+  // text and nothing else on the card acknowledges it, so a crew who tapped
+  // the wrong thing in a camera roll had no way to notice before uploading it.
+  const [fileName, setFileName] = useState<string | null>(null);
   const [busy, start] = useTransition();
 
   return (
@@ -159,11 +163,32 @@ function DocUpload({
       </div>
       {note && <p className="mut" style={{ fontSize: 12.5, margin: "4px 0 8px" }}>{note}</p>}
 
-      <input
-        ref={fileRef}
-        type="file"
-        accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
-      />
+      {/* THE CONTROL THE WHOLE CARD IS ABOUT, and it was the only one here
+          with no label at all — a bare OS "Choose File" chip, roughly 28px
+          tall, under a heading shouting "Until it's on file and in date we
+          can't send you jobs." globals.css gives every control a box and
+          explicitly excludes [type=file], so it was the one input on the
+          screen with no styling of any kind.
+          Labelled like its siblings, given a thumb-sized target, and it says
+          back what was picked. */}
+      <label className="ll-field" style={{ display: "block" }}>
+        <span className="mut" style={{ fontSize: 12.5 }}>
+          The document itself &mdash; a PDF or a photo of it
+        </span>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
+          onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+          style={{ minHeight: 44, width: "100%", padding: "9px 11px",
+                   border: "1.5px solid var(--line)", borderRadius: 10, background: "#fff" }}
+        />
+      </label>
+      {fileName && (
+        <p className="mut" style={{ fontSize: 12.5, margin: "6px 0 0", wordBreak: "break-word" }}>
+          Ready to send: <strong>{fileName}</strong>
+        </p>
+      )}
       {kind === "coi" && (
         <>
           <label className="ll-field" style={{ display: "block", marginTop: 8 }}>

@@ -248,6 +248,16 @@ textarea {
   padding: 7px 14px;
   font-size: 13px;
   border-radius: 8px;
+  /* A THUMB IS THE SAME SIZE ON A SMALL BUTTON.
+     `.ll-btn` lands at 44px from its padding alone and `.sm` cut that to ~35
+     — on the crew's route card, which is SEVEN of these in a wrapping row,
+     tapped in a truck at 7am with gloves on. "Add photos" and "Mark complete"
+     sit side by side with an 8px gap there, so a miss opens the camera
+     instead of closing the job, and a miss between them does nothing at all.
+     44 is already this codebase's own number: it is set by hand in 82 other
+     places. `.sm` stays visually lighter — smaller type, tighter sides — it
+     just stops being harder to hit. */
+  min-height: 44px;
 }
 
 /* ---------------- SSO buttons (Apple / Google) ---------------- */

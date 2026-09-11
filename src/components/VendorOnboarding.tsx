@@ -57,13 +57,17 @@ function StepBadge({ num, done }: { num: number; done: boolean }) {
   );
 }
 
+/** A bookable service, and whether it is a PARK's shared ground rather than
+ *  somebody's lake house. The flag is why the chips are in two groups. */
+export interface CrewService { name: string; parkOnly: boolean }
+
 export function VendorOnboarding({
   vendor,
   activeServices,
   lakes = [],
 }: {
   vendor: MyVendor;
-  activeServices: string[];
+  activeServices: CrewService[];
   lakes?: { id: string; name: string }[];
 }) {
   const router = useRouter();
@@ -334,12 +338,15 @@ function ServiceStep({
 }: {
   num: number;
   done: boolean;
-  activeServices: string[];
+  activeServices: CrewService[];
   selected: string[];
   onDone: () => void;
 }) {
   const [picked, setPicked] = useState<string[]>(selected);
   const [pending, startTransition] = useTransition();
+
+  const lakeHomeWork = activeServices.filter((s) => !s.parkOnly).map((s) => s.name);
+  const parkWork = activeServices.filter((s) => s.parkOnly).map((s) => s.name);
 
   function toggle(name: string) {
     setPicked((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
@@ -386,7 +393,36 @@ function ServiceStep({
       {activeServices.length === 0 ? (
         <p className="mut" style={{ fontSize: 14 }}>No services set up yet — email hello@lakelife.ai.</p>
       ) : (
-        <ToggleChips options={activeServices} selected={picked} onToggle={toggle} />
+        <>
+          {/* PARK WORK IS SPLIT OUT, and this is the SAME fix MyServicesEditor
+              already carries — whose own comment describes this bug in the
+              past tense ("Onboarding drew them as adjacent chips in one flat
+              list") while onboarding went on drawing them that way.
+              It was fixed on the screen a LIVE crew edits and not on the first
+              door a new one walks through, which is the only door that matters
+              for a crew being recruited to mow The Haven in January.
+              "Lawn mowing & trim" and "Park grounds mowing & trim" differ by
+              one word, are two different jobs at two different prices, and sat
+              three chips apart in one alphabetical grid. `isEligible` and
+              `canClaim` both match on exact membership, so tapping the wrong
+              one makes a crew invisible to every park mow — with no error, on
+              either side. The heading is the whole fix: a crew who does parks
+              knows they do parks. */}
+          {lakeHomeWork.length > 0 && (
+            <>
+              <p style={{ fontSize: 12.5, fontWeight: 800, margin: "0 0 6px" }}>Lake homes</p>
+              <ToggleChips options={lakeHomeWork} selected={picked} onToggle={toggle} />
+            </>
+          )}
+          {parkWork.length > 0 && (
+            <>
+              <p style={{ fontSize: 12.5, fontWeight: 800, margin: "14px 0 6px" }}>
+                Parks &mdash; a park&apos;s shared ground, priced per lot
+              </p>
+              <ToggleChips options={parkWork} selected={picked} onToggle={toggle} />
+            </>
+          )}
+        </>
       )}
 
       <button
