@@ -152,7 +152,7 @@ export function ParkImportRead({ view }: { view: ReadView }) {
     <div className="wrap" style={{ paddingTop: 24, paddingBottom: 140, maxWidth: 760 }}>
       <Link className="mut" href="/park/import" style={{ fontSize: 14 }}>← Start over</Link>
 
-      <h1 style={{ fontSize: 24, margin: "14px 0 4px" }}>
+      <h1 style={{ fontSize: 26, margin: "14px 0 4px" }}>
         We read {view.linesRead} of the {view.linesTotal} lines.
       </h1>
       <p className="mut" style={{ marginTop: 0 }}>Nothing is saved yet.</p>

@@ -83,7 +83,7 @@ export function ParkOnboard({
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
-      <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Who lives here</h1>
+      <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Who lives here</h1>
       <p className="mut" style={{ fontSize: 14, marginTop: 0, lineHeight: 1.5 }}>
         {seeds.length === 1
           ? "One lot has nobody on it yet."

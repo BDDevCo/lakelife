@@ -42,7 +42,11 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
-      <div className="mut" style={{ fontSize: 13 }}>{dow} · {view.parkName}</div>
+      {/* The page title every other park tab has — 26, like the rest of the
+          product. This tab opened straight on a dateline and then cards. The
+          dateline stays, as the subline the other tabs put under their h1. */}
+      <h1 style={{ fontSize: 26, margin: "0 0 2px" }}>Today</h1>
+      <div className="mut" style={{ fontSize: 13, marginBottom: 12 }}>{dow} · {view.parkName}</div>
 
       {/* THE DEAD-MAN LINE. A dead cron and a quiet night look identical, so
           when the check has stopped running that fact outranks everything

@@ -251,6 +251,9 @@ export function ParkRentRoll({
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
+      {/* The page title every other park tab has — this one opened straight
+          on the numbers grid. */}
+      <h1 style={{ fontSize: 26, margin: "0 0 12px" }}>Rent roll</h1>
       {/* ---- the numbers a park owner actually wants ---- */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 16 }}>
         {/* BEFORE IT IS HIS, THIS PARK IS NOT EMPTY — IT IS NOT YET HIS.
