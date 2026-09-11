@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { applyForLot, type ApplyInput } from "@/app/parks/apply-actions";
+import { SignInHere } from "@/components/SignInHere";
 
 /**
  * The renter's side: pick a lot, pick dates, tell the park what you're
@@ -120,9 +121,22 @@ export function ParkApply({
             {openLot === lot.id && (
               <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
                 {!signedIn ? (
-                  <p className="mut" style={{ fontSize: 14, margin: 0 }}>
-                    Sign in first and we&apos;ll send this to {parkName} for you.
-                  </p>
+                  <div>
+                    {/* THIS WAS A BARE SENTENCE. "Sign in first" with no link, no
+                        button, and the only sign-in on the page — the top bar's —
+                        landing her on the lake-services portal afterwards. The
+                        component that signs somebody in over the screen they are
+                        on and brings them back was already written for the claim
+                        screen; this door just never used it. */}
+                    <p className="mut" style={{ fontSize: 14, margin: "0 0 10px" }}>
+                      Sign in and we&apos;ll send this to {parkName} for you — you&apos;ll
+                      land right back here.
+                    </p>
+                    <SignInHere
+                      next={typeof window !== "undefined" ? window.location.pathname + window.location.search : "/"}
+                      label="Sign in to ask"
+                    />
+                  </div>
                 ) : (
                   <>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>

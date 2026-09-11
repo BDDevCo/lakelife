@@ -165,7 +165,10 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
               🧊 This visit: {stop.legs.join(" · ")}
             </div>
           )}
-          <div className="mut" style={{ fontSize: 13 }}>{stop.address ?? "Address on file"}</div>
+          {/* "Address on file" was the FALLBACK string — shown in precisely the case
+              where there is none. properties.address is nullable with no guard on
+              the profile wizard, so the crew read it as the address and drove nowhere. */}
+          <div className="mut" style={{ fontSize: 13 }}>{stop.address ?? "No address on file — call ops before you drive"}</div>
           <div className="mut" style={{ fontSize: 12.5 }}>
             {[
               stop.lake_name,

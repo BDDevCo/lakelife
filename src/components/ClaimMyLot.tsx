@@ -101,10 +101,10 @@ export function ClaimMyLot({
 
       {!parkSlug && (
         <label className="ll-field" style={{ display: "block", fontSize: 13, marginBottom: 12 }}>
-          <span className="mut">Park</span>
+          <span className="mut">Park name — as printed on your slip</span>
           <input
             value={slug}
-            placeholder="the-haven"
+            placeholder="The Haven"
             autoCapitalize="none"
             style={{ marginTop: 4 }}
             onChange={(e) => setSlug(e.target.value)}

@@ -40,10 +40,17 @@ import { smsConsentText, optInSays, type OptInResult } from "@/lib/sms-consent";
 async function myFile(): Promise<{
   file: { id: string; parkId: string; parkName: string } | null;
   error?: unknown;
+  /** True when there is no SESSION — a different fact from "no file". */
+  signedOut?: boolean;
 }> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { file: null };
+  // A LOST SESSION IS NOT A LOST LOT. This returned the same shape for both,
+  // so every caller told a resident whose session had expired to "have a word
+  // with the office" — about a problem the office cannot fix. The sentence
+  // for this case (`not_signed_in`) has existed in sms-consent.ts the whole
+  // time; nothing selected it.
+  if (!user) return { file: null, signedOut: true };
 
   const admin = createServiceClient();
   const res = await admin
@@ -67,9 +74,9 @@ async function myFile(): Promise<{
 
 /** Send the six-digit code to a number the resident just typed. */
 export async function startTextOptIn(phone: string): Promise<OptInResult> {
-  const { file, error: fileErr } = await myFile();
+  const { file, error: fileErr, signedOut } = await myFile();
   if (fileErr) return { ok: false, message: readFailedMessage("your park file", fileErr) };
-  if (!file) return { ok: false, message: optInSays("no_file") };
+  if (!file) return { ok: false, message: optInSays(signedOut ? "not_signed_in" : "no_file") };
 
   const e164 = toE164(String(phone ?? ""));
   if (!e164) return { ok: false, message: optInSays("bad_phone") };
@@ -113,9 +120,9 @@ export async function startTextOptIn(phone: string): Promise<OptInResult> {
  * anybody would ask about it.
  */
 export async function confirmTextOptIn(phone: string, code: string): Promise<OptInResult> {
-  const { file, error: fileErr } = await myFile();
+  const { file, error: fileErr, signedOut } = await myFile();
   if (fileErr) return { ok: false, message: readFailedMessage("your park file", fileErr) };
-  if (!file) return { ok: false, message: optInSays("no_file") };
+  if (!file) return { ok: false, message: optInSays(signedOut ? "not_signed_in" : "no_file") };
 
   const e164 = toE164(String(phone ?? ""));
   if (!e164) return { ok: false, message: optInSays("bad_phone") };
@@ -168,11 +175,11 @@ export async function confirmTextOptIn(phone: string, code: string): Promise<Opt
  * too would mean re-doing the code dance for a change of mind.
  */
 export async function stopTexts(): Promise<OptInResult> {
-  const { file, error: fileErr } = await myFile();
+  const { file, error: fileErr, signedOut } = await myFile();
   // WITHDRAWAL MUST NOT BE THE THING THAT BREAKS. Saying "we couldn't find your
   // lot" to somebody trying to stop texts reads as a refusal to let them stop.
   if (fileErr) return { ok: false, message: readFailedMessage("your park file", fileErr) };
-  if (!file) return { ok: false, message: optInSays("no_file") };
+  if (!file) return { ok: false, message: optInSays(signedOut ? "not_signed_in" : "no_file") };
 
   const admin = createServiceClient();
   const { error } = await admin

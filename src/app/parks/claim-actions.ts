@@ -1,12 +1,27 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { mintClaimCode, normalizeClaimCode } from "@/lib/claim-code";
 import {
   claimSays, claimWorked, issueSays, issueWorked, officeCanReprint,
 } from "@/lib/park-claim-copy";
 
+
+/**
+ * Accept either the park's slug ("the-haven") or its name as printed on the
+ * slip ("The Haven"). Returns the slug the RPC expects; if nothing matches,
+ * returns the input slugified so the RPC's own "park not open" answer stands.
+ */
+async function resolveParkSlug(typed: string): Promise<string> {
+  const asSlug = typed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const admin = createServiceClient();
+  const bySlug = await admin.from("parks").select("slug").eq("slug", asSlug).maybeSingle();
+  if (bySlug.data?.slug) return bySlug.data.slug as string;
+  const byName = await admin.from("parks").select("slug").ilike("name", typed).maybeSingle();
+  if (byName.data?.slug) return byName.data.slug as string;
+  return asSlug;
+}
 /**
  * THE TWO ENDS OF A SLIP OF PAPER.
  *
@@ -65,11 +80,16 @@ export async function claimMyFile(input: {
     };
   }
 
-  const parkSlug = (input.parkSlug ?? "").trim().toLowerCase();
+  const typedPark = (input.parkSlug ?? "").trim();
   const lotNumber = (input.lotNumber ?? "").trim();
-  if (!parkSlug || !lotNumber) {
+  if (!typedPark || !lotNumber) {
     return { ok: false, outcome: "claim_no_open_lot", message: claimSays("claim_no_open_lot") };
   }
+  // THE SLIP SAYS "THE HAVEN". The field was labelled "Park" and the database
+  // wanted the URL slug, so a resident typing what her slip actually says was
+  // refused with no explanation. A typed slug still works; a typed NAME is
+  // resolved to its slug here, case-insensitively, before the RPC sees it.
+  const parkSlug = await resolveParkSlug(typedPark);
 
   const { data, error } = await supabase.rpc("claim_park_file", {
     p_park_slug: parkSlug,

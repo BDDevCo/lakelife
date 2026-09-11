@@ -5,7 +5,7 @@ import { ParkEnquiryForm } from "@/components/ParkEnquiryForm";
 export const metadata = {
   title: "LakeLife for mobile-home parks",
   description:
-    "Rent, shared costs, work orders and the crews who do the work — for mobile-home and RV parks.",
+    "Rent, shared costs, and the grounds crews who do the work — for mobile-home and RV parks.",
 };
 
 /**
@@ -39,8 +39,8 @@ export default function ForParksPage() {
             LakeLife runs the money and the work for mobile-home and RV parks. Rent
             goes out on a schedule and gets recorded whether it arrives by card,
             cheque or cash across the office counter. Shared costs get split across
-            the lots that should carry them. And when something needs mowing,
-            ploughing or fixing, the crew who turns up is booked, priced and paid
+            the lots that should carry them. And when the grounds need mowing,
+            clearing or ploughing, the crew who turns up is booked, priced and paid
             through the same system.
           </p>
         </section>
@@ -68,8 +68,8 @@ export default function ForParksPage() {
             <div className="ll-card ll-card-pad">
               <div className="ll-pill teal">THE WORK</div>
               <p style={{ fontSize: 14, lineHeight: 1.6, margin: "10px 0 0" }}>
-                Mowing, ploughing and repairs, booked to insured crews at a price
-                you set, with photographs before the job counts as done.
+                Mowing, seasonal clean-ups and snow, booked to insured crews at a
+                price you set, with photographs before the job counts as done.
               </p>
             </div>
           </div>

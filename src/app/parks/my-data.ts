@@ -1,4 +1,5 @@
 import "server-only";
+import { chainReservationIds } from "@/lib/tenancy-chain";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 import { parseDaterange } from "@/lib/parks";
@@ -265,7 +266,16 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     admin
       .from("park_charges")
       .select("id, period_month, due_on, amount, paid_total, status, lines")
-      .eq("reservation_id", stay.id as string)
+      // ACROSS HER WHOLE CHAIN AT THIS PARK, not the newest row alone. A
+      // renewal is a successor row and every bill is pinned to the agreement
+      // whose month it is — so reading one id dropped every bill under the
+      // previous agreement the moment the office wrote the next one, up to 45
+      // days early, and she read "Nothing to pay right now" while her current
+      // month sat open. See lib/tenancy-chain.
+      .in("reservation_id", chainReservationIds(
+        (stays ?? []) as { id: string; renter_id: string }[],
+        stay as { id: string; renter_id: string },
+      ))
       .neq("status", "void")
       .order("period_month", { ascending: false })
       .limit(24),

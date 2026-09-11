@@ -76,6 +76,13 @@ export default async function SetupPage({
           // Lot 11, all of which carry real coordinates.
           lat: profile.lat ?? undefined,
           lng: profile.lng ?? undefined,
+          // THE TWO FIELDS 0159 ADDED, and the two this page forgot to hand
+          // over. getFullProfile returns both; without them a re-run opened
+          // the pane count blank and, with window washing still ticked, wrote
+          // panes: 0 over the saved count on finish — the same wipe the lat/lng
+          // guard above exists for.
+          panes: profile.panes ?? undefined,
+          drive_band: profile.drive_band ?? undefined,
           place_id: profile.place_id ?? undefined,
           park_id: profile.park_id ?? undefined,
           wanted: profile.wanted_services,
