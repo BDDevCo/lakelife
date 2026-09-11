@@ -380,3 +380,154 @@ describe("the job page loads the three columns it now reads", () => {
     expect(loader).not.toMatch(/\.select\("[^"]*\bmargin\b/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// WHAT THE REVIEW CAUGHT, AFTER THIS SHIPPED.
+//
+// Nine confirmed findings against the two commits above, clustering into three
+// defects — two of them mine, introduced by the very fixes in this file.
+//
+//   A. I FIXED THE CONTRADICTION ON THE CREW'S SCREEN AND REBUILT IT ON THE
+//      OWNER'S. The `nothingProposed` branch said "declining tells them to
+//      stop. Nothing bills either way." That is false whenever the crew said
+//      they COULD proceed — which is the DEFAULT on the new door — and it sat
+//      two lines under a banner saying "You'll be charged the original price",
+//      above a button reading "No — just do what I booked". Three
+//      contradictory statements on one card, at the money moment.
+//
+//      `nothingProposed` and "what does no mean" are orthogonal facts. The
+//      banner already states the decline outcome in full, from declineMeans.
+//      So the paragraph stops repeating it and says only what approve does.
+//
+//   B. WIDENING THE GUARD SILENTLY SWALLOWED A NUMBER. `arrivalFlagRefusal`
+//      was handed the SANITIZED proposal. A crew typing 120 sections (over
+//      COUNT_MAX 99) or "twelve" has their count dropped by sanitizeProposed —
+//      and with any note at all, the flag then filed as a words-only hold with
+//      the number GONE. Before this change it was correctly refused.
+//      A count we threw away is not a count nobody sent.
+//
+//   C. BOTH SIDES WERE PROMISED A RECORD NOBODY WROTE. declineMeans tells the
+//      owner "we'll note on the job what was and wasn't done" and now tells
+//      the crew the same. declineFlag only wrote that note when the flag
+//      carried a proposal.
+// ---------------------------------------------------------------------------
+
+describe("B. a count we threw away is not a count nobody sent", () => {
+  it("refuses a count the sanitizer dropped, however long the note is", () => {
+    // THE REGRESSION. 120 is over COUNT_MAX, so sanitizeProposed returns null.
+    // With a note beside it the widened guard let it through as a note-only
+    // flag — the owner approves a card showing no count, the profile stays
+    // wrong, and the crew does the bigger job for the smaller money.
+    expect(
+      arrivalFlagRefusal(null, "counted from the seawall", { pier_sections: 120 }),
+      "an out-of-range count filed as a note, with the number gone",
+    ).toBeTruthy();
+    expect(arrivalFlagRefusal(null, "counted from the seawall", { pier_sections: NaN })).toBeTruthy();
+  });
+
+  it("says the number is the problem, not that they said nothing", () => {
+    // "Say what you found" to somebody who just typed 120 into a box teaches
+    // them nothing — they DID say what they found.
+    const msg = arrivalFlagRefusal(null, "a long enough note", { pier_sections: 120 }) ?? "";
+    expect(msg).toMatch(/number/i);
+  });
+
+  it("still lets words through when no count was attempted", () => {
+    // The whole point of the fourth door: nothing was sent, nothing was lost.
+    expect(arrivalFlagRefusal(null, "The pier is already out of the water.", null)).toBeNull();
+    expect(arrivalFlagRefusal(null, "The pier is already out of the water.", {})).toBeNull();
+  });
+
+  it("still lets a good count through", () => {
+    expect(arrivalFlagRefusal({ pier_sections: 12 }, "", { pier_sections: 12 })).toBeNull();
+  });
+
+  it("is called with what the crew SENT, not only what survived", () => {
+    // A guard that cannot see the attempt cannot tell the two apart. Matching
+    // the call shape, not the mention.
+    const actions = strip(read("../app/vendor/actions.ts"));
+    expect(actions).toMatch(/arrivalFlagRefusal\(\s*proposed\s*,\s*note\s*,\s*proposedChange\s*\)/);
+  });
+});
+
+describe("A. the owner's card never contradicts its own banner", () => {
+  const base = {
+    id: "f1", type: "other", status: "pending",
+    created_at: "2026-09-10T12:00:00Z",
+    service_name: "Mowing", address: "1414 Lane Rd",
+    note: "A car is parked across the whole lawn.",
+    proposed_change: null, correction: null,
+  };
+  const card = (over: Record<string, unknown>) =>
+    renderToStaticMarkup(<ApprovalCard flag={{ ...base, ...over } as never} />);
+
+  // THE DEFAULT PATH OF THE DOOR THIS COMMIT ADDED. canProceed starts at Yes.
+  const proceeds = { at_arrival: true, crew_can_proceed: true, crew_cannot_reason: null };
+  const standsDown = { at_arrival: true, crew_can_proceed: false, crew_cannot_reason: "nothing to remove" };
+  const filedLater = { at_arrival: false, crew_can_proceed: null, crew_cannot_reason: null };
+
+  it("does not claim nothing bills when the visit goes ahead and bills", () => {
+    const html = card(proceeds);
+    expect(html).not.toMatch(/Nothing bills either way/i);
+    expect(html).not.toMatch(/declining tells them to stop/i);
+  });
+
+  it("keeps the banner's own account of what a 'no' means", () => {
+    // The banner is the single source (declineMeans). It must survive.
+    expect(card(proceeds)).toMatch(/charged the original price/i);
+    expect(card(standsDown)).toMatch(/pack up/i);
+  });
+
+  it("never says 'nothing bills' on a card whose banner says they'll be charged", () => {
+    // The contradiction itself, asserted directly: these two cannot co-occur.
+    for (const shape of [proceeds, standsDown, filedLater]) {
+      const html = card(shape);
+      if (/charged the original price/i.test(html)) {
+        expect(html, "the card promises a charge and denies one").not.toMatch(/[Nn]othing bills/);
+      }
+    }
+  });
+
+  it("tells an at-arrival card what approving does, and never denies the bill", () => {
+    // Pinning the branch positively as well as negatively. Collapsing this to
+    // the non-arrival wording puts "Nothing here moves your profile or your
+    // bill" on a visit that goes ahead and bills — a different sentence, the
+    // same lie, which the absence-checks above sail straight past.
+    for (const shape of [proceeds, standsDown]) {
+      const html = card(shape);
+      expect(html).toMatch(/tells the crew to go ahead/i);
+      expect(html).not.toMatch(/moves your profile or your bill/i);
+    }
+  });
+
+  it("does not say a crew is waiting on a flag filed away from site", () => {
+    // FlagModal's "other" type also has a null proposed_change, and nothing is
+    // held. Asserting somebody is standing in their driveway is a lie.
+    const html = card(filedLater);
+    expect(html).not.toMatch(/crew is waiting/i);
+    expect(html).not.toMatch(/crew is at your place/i);
+    // Nor that approving releases anybody: nothing is held, and the crew who
+    // filed this from a finished job left hours ago.
+    expect(html).not.toMatch(/go ahead/i);
+    expect(html).toMatch(/note for your records/i);
+  });
+
+  it("still tells an ordinary correction what approving does", () => {
+    // The other half: the true sentence must survive for the flag it is true of.
+    expect(
+      card({ ...filedLater, type: "pier", proposed_change: { pier_sections: 12 } }),
+    ).toMatch(/updates your profile/i);
+  });
+});
+
+describe("C. the note both sides were promised gets written", () => {
+  const actions = strip(read("../app/approvals/actions.ts"));
+
+  it("builds the scope note even when the flag carried no counts", () => {
+    // declineMeans promises BOTH the owner and (since this commit) the crew
+    // "we'll note on the job what was and wasn't done". scopeNoteFor already
+    // handles an empty diff; only the guard in front of it refused.
+    expect(actions).not.toMatch(/if\s*\(proposed\s*&&\s*svcId\s*&&\s*ctx\.propertyId\)/);
+    expect(actions).toMatch(/scopeNoteFor\s*\(/);
+  });
+});

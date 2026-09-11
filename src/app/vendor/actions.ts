@@ -397,7 +397,9 @@ export async function submitFlag(
   // which is why the arrival sheet had no door for a problem that isn't a
   // number — and why a crew whose pier was already out of the water had to
   // invent one, for the owner to approve into their profile.
-  const arrivalRefusal = atArrival ? arrivalFlagRefusal(proposed, note) : null;
+  // `proposedChange` (raw) as well as `proposed` (sanitized): a count the
+  // sanitizer dropped must be refused, not quietly refiled as a note.
+  const arrivalRefusal = atArrival ? arrivalFlagRefusal(proposed, note, proposedChange) : null;
   if (arrivalRefusal) return { ok: false, error: arrivalRefusal };
   if (atArrival && scope && !scope.canProceed && !scope.cannotReason?.trim()) {
     // The owner is being asked to choose between two outcomes. They cannot

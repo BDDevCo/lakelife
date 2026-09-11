@@ -221,10 +221,27 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
             </div>
           )}
 
+          {/* WHAT APPROVING DOES. Deliberately NOT what declining does — for an
+              at-arrival flag the banner directly above states that in full,
+              from declineMeans, and a second account of it is how this card
+              ended up saying "declining tells them to stop. Nothing bills
+              either way." two lines under "You'll be charged the original
+              price", above a button reading "No — just do what I booked".
+
+              That sentence branched on `nothingProposed`, which has nothing to
+              do with what a "no" means. The crew's default answer to "can you
+              still do what was booked?" is YES, so on the commonest shape of
+              the new door declining does NOT stop them and the visit DOES
+              bill. Two orthogonal facts, one branch — the same defect this
+              commit fixed on the crew's screen, rebuilt on the owner's. */}
           <p className="mut" style={{ fontSize: 13, margin: "12px 0 0" }}>
-            {nothingProposed
-              ? "The crew is waiting on your answer. Approving tells them to go ahead; declining tells them to stop. Nothing bills either way."
-              : "Approving updates your profile and re-prices future visits. Declining changes nothing. Nothing bills until you approve."}
+            {flag.at_arrival
+              ? nothingProposed
+                ? "Approving tells the crew to go ahead with what they found."
+                : "Approving updates your profile, re-prices your future visits, and tells the crew to go ahead."
+              : nothingProposed
+                ? "This is a note for your records — there's no change to agree to. Nothing here moves your profile or your bill."
+                : "Approving updates your profile and re-prices future visits. Declining changes nothing. Nothing bills until you approve."}
           </p>
           <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
             <button

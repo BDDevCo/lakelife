@@ -300,13 +300,31 @@ export function declineMeans(
  * and a crew cannot be left standing in a driveway waiting on an answer to a
  * question nobody can read. So counts OR words, and never neither.
  *
+ * A COUNT WE THREW AWAY IS NOT A COUNT NOBODY SENT, which is the half this
+ * guard missed on its first outing. `proposed` here is the SANITIZED object:
+ * a crew typing 120 sections (over COUNT_MAX 99), or "twelve", has their
+ * number dropped and arrives looking exactly like somebody who sent no number
+ * at all. With any note beside it the flag then filed as a words-only hold
+ * with the count GONE — the owner approves a card showing no number, the
+ * profile stays wrong, and the crew does the bigger job for the smaller money.
+ * So `attempted` is what the crew actually sent, and a proposal that did not
+ * survive is refused however much they wrote next to it.
+ *
  * Returns the sentence to refuse with, or null to allow.
  */
 export function arrivalFlagRefusal(
   proposed: Record<string, unknown> | null,
   note: string,
+  attempted?: Record<string, unknown> | null,
 ): string | null {
-  if (proposed && Object.keys(proposed).length > 0) return null;
+  const survived = !!proposed && Object.keys(proposed).length > 0;
+  if (!survived && attempted && Object.keys(attempted).length > 0) {
+    // Name the actual problem. "Say what you found", to somebody who just
+    // typed 120 into a box, teaches them nothing — they DID say what they
+    // found, and we binned it.
+    return "That number doesn't look right — check it and send it again.";
+  }
+  if (survived) return null;
   // Long enough to be a reason. "no" and "x" are a crew tapping through, and
   // the owner is being asked to hold a job on the strength of it.
   if (note.trim().length >= 6) return null;

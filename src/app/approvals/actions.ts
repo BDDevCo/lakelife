@@ -539,7 +539,14 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
         const proposed = (ctx.flag as { proposed_change?: Record<string, unknown> | null })
           .proposed_change ?? null;
         const svcId = (ctx.flag.jobs as { service_id?: string } | null)?.service_id;
-        if (proposed && svcId && ctx.propertyId) {
+        // `proposed` IS NO LONGER REQUIRED. Both sides are promised this note —
+        // declineMeans tells the owner "we'll note on the job what was and
+        // wasn't done" and now tells the crew the same — and a note-only flag
+        // ("a car is parked across half the lawn") is exactly the case where
+        // the record matters most: there is no count to re-derive it from
+        // later. scopeNoteFor already writes the right sentence for an empty
+        // diff, so only this guard was refusing.
+        if (svcId && ctx.propertyId) {
           // mustRead, not a bare read: an unread service rule reads as "no such
           // service" and the job silently loses its scope note — the invoice
           // then says "Pier install ✓" over a pier ending in open water. It
@@ -554,12 +561,17 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
           ]);
           const rule = mustRead("this service's pricing rule", ruleRes);
           if (rule && profile?.hasProfile) {
-            const summary = summariseCorrection(
-              rule as unknown as TimedRule,
-              toPricingProfile(profile),
-              proposed as Parameters<typeof summariseCorrection>[2],
-            );
-            scopeNote = scopeNoteFor(summary.lines, {
+            // No proposal means no diff to describe — scopeNoteFor's empty
+            // branch says "done as booked; a correction was declined on X",
+            // which is the whole of what happened.
+            const lines = proposed
+              ? summariseCorrection(
+                  rule as unknown as TimedRule,
+                  toPricingProfile(profile),
+                  proposed as Parameters<typeof summariseCorrection>[2],
+                ).lines
+              : [];
+            scopeNote = scopeNoteFor(lines, {
               serviceName: (rule.name as string) ?? "This visit",
               decidedOn: todayLakeDate(),
             });
