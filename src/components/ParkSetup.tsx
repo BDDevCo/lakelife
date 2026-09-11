@@ -56,7 +56,7 @@ export function ParkSetup({ parkId, initial }: { parkId: string; initial: ParkPr
       : { ...form, seasonOpen: "", seasonClose: "" };
     startTransition(async () => {
       const res = await saveParkProfile(parkId, payload);
-      if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't save."); return; }
       toast(res.signal ?? "Saved.");
       router.refresh();
     });

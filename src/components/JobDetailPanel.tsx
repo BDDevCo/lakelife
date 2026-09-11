@@ -25,13 +25,13 @@ export function JobVerdictButtons({ jobId, serviceName }: { jobId: string; servi
     startTransition(async () => {
       const res = await submitJobVerdict(jobId, verdict, verdict === "issue" ? note : "");
       if (!res.ok) {
-        toast(res.error ?? "Couldn't record that just now.");
+        toast.err(res.error ?? "Couldn't record that just now.");
         return;
       }
       if (res.recorded === false) {
-        toast("Thanks — your answer was already in. 🌊");
+        toast.ok("Thanks — your answer was already in. 🌊");
       } else if (verdict === "good") {
-        toast("Thanks — your crew gets the credit. 🌊");
+        toast.ok("Thanks — your crew gets the credit. 🌊");
       } else {
         toast("Flagged — your crew has been told and it's on them to make it right.");
       }
@@ -114,7 +114,7 @@ export function JobMessageComposer({ jobId }: { jobId: string }) {
     startTransition(async () => {
       const res = await postJobMessage(jobId, text);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't send that — try again.");
+        toast.err(res.error ?? "Couldn't send that — try again.");
         return;
       }
       setBody("");
@@ -141,7 +141,7 @@ export function JobMessageComposer({ jobId }: { jobId: string }) {
         disabled={pending}
         aria-label="Add a comment about this job"
       />
-      <button className="ll-btn gold" onClick={send} disabled={pending || !body.trim()} style={{ minHeight: 44 }}>
+      <button className="ll-btn" onClick={send} disabled={pending || !body.trim()} style={{ minHeight: 44 }}>
         {pending ? "Sending…" : "Send"}
       </button>
     </div>
@@ -166,7 +166,7 @@ export function DisputeAnswerButtons({ jobId }: { jobId: string }) {
     startTransition(async () => {
       const res = await settleMyDispute(jobId, a);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't update that just now.");
+        toast.err(res.error ?? "Couldn't update that just now.");
         return;
       }
       toast(

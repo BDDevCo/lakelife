@@ -17,10 +17,11 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { setPayoutAccount, requestEarlyPayout } from "@/app/vendor/bank-actions";
 import type { PayoutState } from "@/app/vendor/bank-data";
+import { formatCurrency } from "@/app/vendor/earnings-helpers";
 
-function formatCurrency(n: number): string {
-  return `$${n.toFixed(2)}`;
-}
+// ONE FORMATTER. This file had its own — `$${n.toFixed(2)}`, no thousands
+// separator — so the card under "$1,234.50 released so far" read "$1234.50
+// released and ready". Same page, same crew, same number, two shapes.
 
 const BATCH_KIND_LABEL: Record<string, string> = {
   early: "Early payout ⚡",
@@ -66,12 +67,12 @@ function BankCard({ state }: { state: PayoutState }) {
     startTransition(async () => {
       const res = await setPayoutAccount({ bankName, routing, account });
       if (!res.ok) {
-        toast(res.error ?? "Couldn't save that bank info.");
+        toast.err(res.error ?? "Couldn't save that bank info.");
         return;
       }
       setBankName(""); setRouting(""); setAccount("");
       setEditing(false);
-      toast("Bank on file — encrypted and ready. 🌊");
+      toast.ok("Bank on file — encrypted and ready. 🌊");
       router.refresh();
     });
   }
@@ -169,10 +170,10 @@ function GetItNow({ state }: { state: PayoutState }) {
     startTransition(async () => {
       const res = await requestEarlyPayout();
       if (!res.ok) {
-        toast(res.error ?? "Couldn't start that payout.");
+        toast.err(res.error ?? "Couldn't start that payout.");
         return;
       }
-      toast(`Early payout queued — ${formatCurrency(res.net ?? 0)} on the way. 🌊`);
+      toast.ok(`Early payout queued — ${formatCurrency(res.net ?? 0)} on the way. 🌊`);
       router.refresh();
     });
   }

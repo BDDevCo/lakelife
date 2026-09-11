@@ -700,10 +700,17 @@ textarea {
   border-radius: 12px;
   font-size: 14px;
   font-weight: 600;
-  box-shadow: var(--shadow);
+  /* The prototype's shadow (lakelife.html:265) — the one that lifts the pill
+     off the page. var(--shadow) is the soft card shadow and read as flat
+     on a dark pill. */
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
   z-index: 200;
   max-width: 90vw;
   text-align: center;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
   /* Toasts carry email addresses — "We couldn't email {address}. Print a slip
      for them instead." — and a long one has no break opportunity, so it paints
      out of both sides of a centred pill in white on the page background and is

@@ -18,7 +18,7 @@ export function NotifPrefs({ initial }: { initial: NotifPrefState }) {
     if (!res.ok) {
       // revert
       setStates((s) => ({ ...s, [type]: { ...s[type], [channel]: cur } }));
-      toast(res.error ?? "Couldn't update that preference.");
+      toast.err(res.error ?? "Couldn't update that preference.");
     }
   }
 

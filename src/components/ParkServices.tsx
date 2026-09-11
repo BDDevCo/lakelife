@@ -133,7 +133,7 @@ export function ParkServices({
                 // switcher falls back to his oldest property, which for an
                 // owner who also has a lake house is the wrong place entirely.
                 const res = await focusParkProperty(parkId);
-                if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
+                if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
                 router.push("/book");
               })
             }

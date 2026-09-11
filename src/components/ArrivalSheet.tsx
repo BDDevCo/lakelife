@@ -199,8 +199,8 @@ export function ArrivalSheet({
       cannotReason: canProceed ? "" : cannotReason,
     });
     setBusy(false);
-    if (!res.ok) { toast(res.error ?? "Couldn't send that."); return; }
-    toast("Sent. Don't start until they say yes — you'll get a text.");
+    if (!res.ok) { toast.err(res.error ?? "Couldn't send that."); return; }
+    toast.ok("Sent. Don't start until they say yes — you'll get a text.");
     onHeld();
   }
 
@@ -210,8 +210,8 @@ export function ArrivalSheet({
     setBusy(true);
     const res = await recordNoShow(jobId, reason);
     setBusy(false);
-    if (!res.ok) { toast(res.error ?? "Couldn't record that."); return; }
-    toast("Recorded. Ops will sort the reschedule — move on to your next stop.");
+    if (!res.ok) { toast.err(res.error ?? "Couldn't record that."); return; }
+    toast.ok("Recorded. Ops will sort the reschedule — move on to your next stop.");
     onNoShow();
   }
 

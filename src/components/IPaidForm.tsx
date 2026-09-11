@@ -69,7 +69,7 @@ export function IPaidForm({
         note: note || undefined,
       });
       if (!res.ok) {
-        toast(res.error ?? "That didn't go through.");
+        toast.err(res.error ?? "That didn't go through.");
         return;
       }
       toast(res.signal ?? "Told the office.");

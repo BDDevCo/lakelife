@@ -75,7 +75,7 @@ export function MyTrucks({ trucks: initialTrucks }: { trucks: MyTruck[] }) {
       const res = await setTruckActive(truck.id, !truck.active);
       setBusyId(null);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't update that truck.");
+        toast.err(res.error ?? "Couldn't update that truck.");
         return;
       }
       toast(truck.active ? "Truck turned off." : "Truck turned back on. 🌊");
@@ -112,7 +112,7 @@ export function MyTrucks({ trucks: initialTrucks }: { trucks: MyTruck[] }) {
                   startTransition(async () => {
                     const res = await updateTruck(truck.id, input);
                     if (!res.ok) {
-                      toast(res.error ?? "Couldn't save that truck.");
+                      toast.err(res.error ?? "Couldn't save that truck.");
                       return;
                     }
                     saved("Truck updated. 🌊");
@@ -143,7 +143,7 @@ export function MyTrucks({ trucks: initialTrucks }: { trucks: MyTruck[] }) {
             startTransition(async () => {
               const res = await addTruck(input);
               if (!res.ok) {
-                toast(res.error ?? "Couldn't add that truck.");
+                toast.err(res.error ?? "Couldn't add that truck.");
                 return;
               }
               saved("Truck added. 🌊");

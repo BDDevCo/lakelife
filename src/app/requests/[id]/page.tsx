@@ -13,6 +13,8 @@ import { RescheduleVisit } from "@/components/RescheduleVisit";
 import { CancelRequestButton } from "@/components/CancelRequestButton";
 import { ScarcityOffers } from "@/components/ScarcityOffers";
 import { loadCustomerJobDetail, invoiceCopy, type JobDetailView } from "@/app/requests/job-detail-data";
+import { shortDate, lakeStamp } from "@/lib/lake-time";
+import { formatCurrency } from "@/app/vendor/earnings-helpers";
 
 /**
  * THE CUSTOMER'S JOB FILE — /requests/[id].
@@ -259,7 +261,7 @@ function MoneyCard({ job }: { job: JobDetailView }) {
           <>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontSize: 26, fontWeight: 800 }}>{formatPrice(headline)}</div>
+                <div style={{ fontSize: 26, fontWeight: 800 }}>{formatCurrency(headline)}</div>
                 <p className="mut" style={{ fontSize: 12.5, margin: "2px 0 0" }}>
                   {billedDiffers
                     ? `This is what we billed. The ${formatPrice(quoted)} quote was for the visit itself, which didn't happen.`
@@ -277,12 +279,12 @@ function MoneyCard({ job }: { job: JobDetailView }) {
       {job.money.refunds.length > 0 && (
         <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
           <div style={{ fontWeight: 800, fontSize: 13.5, marginBottom: 4 }}>
-            {`↩ Refunded to you: $${job.money.refundedTotal.toFixed(2)}`}
+            {`↩ Refunded to you: ${formatCurrency(job.money.refundedTotal)}`}
           </div>
           {job.money.refunds.map((r, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "2px 0" }}>
-              <span className="mut">{new Date(r.at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
-              <span>{`$${r.amount.toFixed(2)}`}</span>
+              <span className="mut">{shortDate(r.at)}</span>
+              <span>{formatCurrency(r.amount)}</span>
             </div>
           ))}
           <p className="mut" style={{ fontSize: 12.5, margin: "6px 0 0" }}>
@@ -300,11 +302,11 @@ function MoneyCard({ job }: { job: JobDetailView }) {
         <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
             <span style={{ fontWeight: 800 }}>Thank-you to the crew</span>
-            <span style={{ fontWeight: 800 }}>{formatPrice(job.money.tipAmount)}</span>
+            <span style={{ fontWeight: 800 }}>{formatCurrency(job.money.tipAmount)}</span>
           </div>
           <p className="mut" style={{ fontSize: 12.5, margin: "4px 0 0" }}>
             Charged separately{job.money.tippedAt
-              ? ` on ${new Date(job.money.tippedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+              ? ` on ${shortDate(job.money.tippedAt)}`
               : ""}. Every cent went to the crew — LakeLife takes no share of a thank-you.
           </p>
         </div>
@@ -365,10 +367,6 @@ function CommentsCard({ job }: { job: JobDetailView }) {
 
 /* ----------------------------------------------------------------- helpers */
 
-function shortDate(d: string): string {
-  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
 function whenLabel(iso: string): string {
-  return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return lakeStamp(iso);
 }

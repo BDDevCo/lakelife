@@ -19,7 +19,7 @@ export function MessageComposer({ propertyId }: { propertyId: string }) {
     const res = await sendOwnerMessage(propertyId, text);
     setSending(false);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't send that — try again.");
+      toast.err(res.error ?? "Couldn't send that — try again.");
       return;
     }
     setBody("");
@@ -48,7 +48,7 @@ export function MessageComposer({ propertyId }: { propertyId: string }) {
         disabled={sending}
         aria-label="Message LakeLife dispatch"
       />
-      <button className="ll-btn gold" onClick={() => void send()} disabled={sending || !body.trim()}>
+      <button className="ll-btn" onClick={() => void send()} disabled={sending || !body.trim()}>
         {sending ? "Sending…" : "Send"}
       </button>
     </div>

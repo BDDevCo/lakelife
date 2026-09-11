@@ -9,6 +9,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { sendEmail } from "@/lib/email";
 import { html } from "@/lib/html-safe";
 import { prettyMonth } from "@/app/park/ledger-helpers";
+import { longDate } from "@/lib/lake-time";
 
 /**
  * PAYING RENT FROM THE RESIDENT'S OWN SCREEN.
@@ -464,7 +465,7 @@ async function tellTheOffice(
       `${c.who} says they've already paid ${c.month}.`,
       "",
       c.amount > 0 ? `Amount on the bill:  $${c.amount.toFixed(2)}` : "",
-      c.paidOn ? `They say they paid:  ${c.paidOn}` : "They didn't give a date.",
+      c.paidOn ? `They say they paid:  ${longDate(c.paidOn)}` : "They didn't give a date.",
       c.method ? `How:                 ${c.method}` : "",
       c.reference ? `Reference:           ${c.reference}` : "",
       c.paidTo ? `Handed to:           ${c.paidTo}` : "",

@@ -34,9 +34,9 @@ function OfferCard({ offer }: { offer: ScarcityOfferView }) {
     startTransition(async () => {
       const res = await acceptScarcityOffer(offer.jobId);
       if (res.ok) {
-        toast("Locked in — a crew is on it. 🌊");
+        toast.ok("Locked in — a crew is on it. 🌊");
       } else {
-        toast(res.error ?? "Couldn't lock that in just now.");
+        toast.err(res.error ?? "Couldn't lock that in just now.");
       }
       router.refresh();
     });

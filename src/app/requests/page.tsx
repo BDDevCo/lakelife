@@ -16,6 +16,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { createServiceClient } from "@/lib/supabase/server";
 import { customerStatusLabel } from "@/lib/job-view";
 import { mustRead } from "@/lib/must-read";
+import { shortDate } from "@/lib/lake-time";
 
 // Pill COLOUR lives here; the WORDS come from customerStatusLabel
 // (src/lib/job-view, under test) so this table and the job-detail page can
@@ -167,7 +168,7 @@ export default async function RequestsPage() {
                         <Td muted>{r.frequency ?? "—"}</Td>
                         <Td>
                           <Link href={href} style={{ color: "inherit", textDecoration: "none" }}>
-                            {r.date ? new Date(r.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                            {r.date ? shortDate(r.date) : "—"}
                           </Link>
                         </Td>
                         <Td><span className={`ll-pill ${statusPill(r.status)}`}>{customerStatusLabel(r.status as string)}</span></Td>
@@ -229,9 +230,6 @@ function PackageBreakdownCell({ breakdown }: { breakdown: PackageBreakdown }) {
 // "Your boat is tucked in" status card(s) — CUSTOMER-safe fields only
 // (company name, dates, spring quote, per-diem meter). One card per active
 // stay; multiple boats in storage stack as separate cards.
-function shortDate(d: string): string {
-  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
 
 function StorageStatusCards({ cards }: { cards: StorageStatusCard[] }) {
   return (

@@ -37,7 +37,7 @@ export function CancelRequestButton({ jobId, serviceName }: { jobId: string; ser
             : "Cancelled — no charge. 🌊",
         );
       } else {
-        toast(res.error ?? "Couldn't cancel that.");
+        toast.err(res.error ?? "Couldn't cancel that.");
       }
       setQuote(null);
       router.refresh();

@@ -213,11 +213,11 @@ function AssignModal({ job, vendors, onClose }: { job: OpsJob; vendors: ActiveVe
     setBusy(true);
     const res = await assignAndSchedule(job.id, { vendorId, vendorCost: costNum, date, slot });
     if (!res.ok) {
-      toast(res.error ?? "Couldn't schedule that job.");
+      toast.err(res.error ?? "Couldn't schedule that job.");
       setBusy(false);
       return;
     }
-    toast("Scheduled — crew and homeowner notified. 🌊");
+    toast.ok("Scheduled — crew and homeowner notified. 🌊");
     router.refresh();
     onClose();
   }

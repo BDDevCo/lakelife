@@ -2,6 +2,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { isBearerToken } from "@/lib/token-format";
 import { receiptRef, METHOD_WORD } from "@/app/park/receipt-helpers";
+import { longDate } from "@/lib/lake-time";
 
 /**
  * THE RENTER'S OWN CONFIRMATION — the only part of the ledger they can act on.
@@ -172,7 +173,7 @@ export async function disputeByToken(
     asserted_by: "renter",
     note:
       `They say the receipt is wrong — it records $${Number(pay.amount).toFixed(2)} ` +
-      `taken on ${pay.received_on}. Raised from their own confirmation link.`,
+      `taken on ${longDate(pay.received_on as string)}. Raised from their own confirmation link.`,
   });
   if (error) return { ok: false, error: "That didn't save — try again." };
   return { ok: true };

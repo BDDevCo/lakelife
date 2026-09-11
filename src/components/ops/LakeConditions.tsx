@@ -59,10 +59,10 @@ function LakeCard({ lake }: { lake: LakeCondition }) {
         hardFreeze: hardFreeze || null,
       });
       if (res.ok) {
-        toast("Saved — the booking calendar will reflect these dates.");
+        toast.ok("Saved — the booking calendar will reflect these dates.");
         router.refresh();
       } else {
-        toast(res.error ?? "Couldn't save.");
+        toast.err(res.error ?? "Couldn't save.");
       }
     } finally {
       setBusy(false);

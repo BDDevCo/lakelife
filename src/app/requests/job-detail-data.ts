@@ -7,6 +7,7 @@ import { signedJobPhotos, signedJobPhotosFor, type JobPhoto } from "@/lib/photos
 import { getPackageBreakdowns } from "@/app/requests/package-data";
 import { computeScarcityOffer, type ScarcityOfferView } from "@/app/requests/offer-data";
 import { customerStatusLabel, disputeViewForCustomer } from "@/lib/job-view";
+import { longDate, longDay } from "@/lib/lake-time";
 
 /**
  * THE CUSTOMER'S JOB FILE (job detail, 2026-07-26).
@@ -125,7 +126,7 @@ export function invoiceCopy(money: JobDetailMoney): { pill: string; tone: string
       pill: "Paid",
       tone: "ok",
       note: money.paidAt
-        ? `Charged to your card on file on ${new Date(money.paidAt).toLocaleDateString("en-US", { month: "long", day: "numeric" })}.`
+        ? `Charged to your card on file on ${longDate(money.paidAt)}.`
         : "Charged to your card on file.",
     };
   }
@@ -408,7 +409,7 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
     serviceName: svc?.name ?? "Service",
     date,
     prettyDate: date
-      ? new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+      ? longDay(date)
       : null,
     slot: (job.slot as string) ?? null,
     propertyNickname: prop?.nickname ?? null,

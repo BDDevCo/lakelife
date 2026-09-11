@@ -61,7 +61,7 @@ export function ParkStatements({
     setRefundKey(crypto.randomUUID());
     start(async () => {
       const res = await refundableOn(parkId, paymentId);
-      if ("error" in res) { toast(res.error); setRefunding(null); return; }
+      if ("error" in res) { toast.err(res.error); setRefunding(null); return; }
       if (res.refusal) { toast(res.refusal); setRefunding(null); return; }
       setLeft({ amount: res.amount, fee: res.fee });
       setBackAmount(res.amount.toFixed(2));

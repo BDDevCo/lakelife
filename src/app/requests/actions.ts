@@ -16,6 +16,7 @@ import { notify } from "@/lib/notify";
 import { sendEmail } from "@/lib/email";
 import { html } from "@/lib/html-safe";
 import { readFailedMessage } from "@/lib/must-read";
+import { crewDate } from "@/lib/lake-time";
 
 export interface CancelResult {
   ok: boolean;
@@ -399,8 +400,8 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
           "the crew that a stop was cancelled late and what it pays",
           { phone: cu.phone as string | null, email: cu.email as string | null },
           {
-            sms: `LakeLife: the ${l.svcName} at ${l.address ?? "a stop"} on ${l.job.date} was cancelled late — ${payLine}. Your route will update tonight. 🌊`,
-            subject: `${l.svcName} on ${l.job.date} was cancelled late`,
+            sms: `LakeLife: the ${l.svcName} at ${l.address ?? "a stop"} on ${crewDate(l.job.date)} was cancelled late — ${payLine}. Your route will update tonight. 🌊`,
+            subject: `${l.svcName} on ${crewDate(l.job.date)} was cancelled late`,
           },
         );
       }

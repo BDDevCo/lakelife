@@ -135,7 +135,7 @@ export function ParkDocuments({ parkId, page }: { parkId: string; page: Document
                     onClick={() => start(async () => {
                       const res = await documentUrl(parkId, d.id);
                       if (res.ok && res.url) window.open(res.url, "_blank", "noopener");
-                      else toast(res.error ?? "Couldn't open that.");
+                      else toast.err(res.error ?? "Couldn't open that.");
                     })}>
                     Open
                   </button>

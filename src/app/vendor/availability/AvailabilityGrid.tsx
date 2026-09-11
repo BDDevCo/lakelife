@@ -72,7 +72,7 @@ export function AvailabilityGrid({ days }: { days: DayRow[] }) {
         delete copy[key];
         return copy;
       });
-      toast(res.error ?? "Couldn't update that slot.");
+      toast.err(res.error ?? "Couldn't update that slot.");
       return;
     }
     router.refresh();

@@ -117,7 +117,7 @@ export function ParkImportPaste({ parkId, todayISO, parkCutover }: { parkId: str
     start(async () => {
       const res = await readPaste(parkId, text, cutover, { force });
       if (res.duplicateOf && !force) { setDup(res.duplicateOf); return; }
-      if (!res.ok || !res.batchId) { toast(res.error ?? "Couldn't read that."); return; }
+      if (!res.ok || !res.batchId) { toast.err(res.error ?? "Couldn't read that."); return; }
       router.push(`/park/import/${res.batchId}`);
     });
   }

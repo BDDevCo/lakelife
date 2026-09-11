@@ -174,7 +174,7 @@ export function ParkRentRoll({
     startTransition(async () => {
       const res = await decideApplication(id, decision);
       setBusyId(null);
-      if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
       toast(res.signal ?? "Done.");
       router.refresh();
     });
@@ -192,7 +192,7 @@ export function ParkRentRoll({
     startTransition(async () => {
       const res = await endTenancy(id, "ended", lastDayISO);
       setBusyId(null);
-      if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
       toast(res.signal ?? "Done.");
       setClosingId(null);
       setLastDay("");
@@ -212,7 +212,7 @@ export function ParkRentRoll({
     startTransition(async () => {
       const res = await giveNotice(id, leavingISO);
       setBusyId(null);
-      if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
       toast(res.signal ?? "Noted.");
       setNoticeId(null);
       setLeavingOn("");
@@ -226,7 +226,7 @@ export function ParkRentRoll({
     startTransition(async () => {
       const res = await clearNotice(id);
       setBusyId(null);
-      if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
       toast(res.signal ?? "Cleared.");
       router.refresh();
     });
@@ -235,7 +235,7 @@ export function ParkRentRoll({
   function publish(next: boolean) {
     startTransition(async () => {
       const res = await setParkLive(parkId, next);
-      if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
       toast(res.signal ?? "Done.");
       router.refresh();
     });
@@ -651,7 +651,7 @@ function AddTenant({
   function save() {
     startTransition(async () => {
       const res = await addTenant(parkId, lotId, form);
-      if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't save."); return; }
       toast(res.signal ?? "Added.");
       onDone();
       router.refresh();
@@ -764,7 +764,7 @@ function EditTenant({
   function save() {
     startTransition(async () => {
       const res = await editTenancy(reservationId, form);
-      if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't save."); return; }
       toast(res.signal ?? "Saved.");
       onDone();
       router.refresh();

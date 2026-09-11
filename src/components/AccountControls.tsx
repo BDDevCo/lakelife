@@ -27,7 +27,7 @@ export function AccountControls({
     const res = await removeProperty(propertyId);
     setBusy(false);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't remove your property.");
+      toast.err(res.error ?? "Couldn't remove your property.");
       return;
     }
     setDialog(null);
@@ -41,14 +41,14 @@ export function AccountControls({
     const res = await deleteAccount();
     if (!res.ok) {
       setBusy(false);
-      toast(res.error ?? "Couldn't delete your account.");
+      toast.err(res.error ?? "Couldn't delete your account.");
       return;
     }
     // Session is now invalid — sign out locally and leave.
     try {
       await createClient().auth.signOut();
     } catch {}
-    toast("Your account has been deleted. Take care 🌊");
+    toast.ok("Your account has been deleted. Take care 🌊");
     router.push("/");
     router.refresh();
   }

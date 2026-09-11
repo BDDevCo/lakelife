@@ -131,7 +131,7 @@ export function ParkImportRead({ view }: { view: ReadView }) {
   function answer(lineNo: number, resolved: Record<string, unknown>) {
     start(async () => {
       const res = await resolveRow(view.batchId, lineNo, resolved);
-      if (!res.ok) { toast(res.error ?? "Couldn't save that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't save that."); return; }
       router.refresh();
     });
   }
@@ -140,7 +140,7 @@ export function ParkImportRead({ view }: { view: ReadView }) {
     start(async () => {
       const res = await commitImport(view.batchId);
       setConfirming(false);
-      if (!res.ok) { toast(res.error ?? "Couldn't put them in."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't put them in."); return; }
       toast(res.signal ?? "In.");
       router.refresh();
     });

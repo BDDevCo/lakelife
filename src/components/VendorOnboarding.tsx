@@ -248,7 +248,7 @@ function DocStep({
     startTransition(async () => {
       const res = await uploadVendorDoc(kind, form);
       if (!res.ok) {
-        toast(res.error ?? "Upload failed.");
+        toast.err(res.error ?? "Upload failed.");
         return;
       }
       toast(`${title} saved.`);
@@ -360,7 +360,7 @@ function ServiceStep({
     startTransition(async () => {
       const res = await setServiceTypes(picked);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't save.");
+        toast.err(res.error ?? "Couldn't save.");
         return;
       }
       toast("Work types saved.");
@@ -474,7 +474,7 @@ function LakeStep({
     startTransition(async () => {
       const res = await setServiceLakes(ids);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't save.");
+        toast.err(res.error ?? "Couldn't save.");
         return;
       }
       toast("Lakes saved.");
@@ -530,7 +530,7 @@ function CapacityStep({
     startTransition(async () => {
       const res = await setDailyCapacity(n);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't save.");
+        toast.err(res.error ?? "Couldn't save.");
         return;
       }
       toast("Daily capacity saved.");
@@ -585,7 +585,7 @@ function BaseStep({
     startTransition(async () => {
       const res = await setBaseLocation(lat, lng);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't save your home base.");
+        toast.err(res.error ?? "Couldn't save your home base.");
         return;
       }
       toast("Home base saved.");
@@ -626,7 +626,7 @@ function GoLiveCard({ onDone }: { onDone: () => void }) {
         return;
       }
       if (!res.ok) {
-        toast(res.error ?? "Couldn't go live — try again.");
+        toast.err(res.error ?? "Couldn't go live — try again.");
         return;
       }
       setTosOpen(false);

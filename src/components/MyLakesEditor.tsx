@@ -52,10 +52,10 @@ export function MyLakesEditor({
     startTransition(async () => {
       const res = await setServiceLakes(ids);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't save.");
+        toast.err(res.error ?? "Couldn't save.");
         return;
       }
-      toast("Lakes updated. 🌊");
+      toast.ok("Lakes updated. 🌊");
       router.refresh();
     });
   }
@@ -69,10 +69,10 @@ export function MyLakesEditor({
     startAddTransition(async () => {
       const res = await addLakeAndServe(name);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't add that lake.");
+        toast.err(res.error ?? "Couldn't add that lake.");
         return;
       }
-      toast(`${res.lakeName ?? name} added — jobs there route to you starting tomorrow. 🌊`);
+      toast.ok(`${res.lakeName ?? name} added — jobs there route to you starting tomorrow. 🌊`);
       setNewLakeName("");
       setAddingOpen(false);
       router.refresh();

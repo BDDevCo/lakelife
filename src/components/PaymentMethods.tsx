@@ -39,13 +39,13 @@ export function PaymentMethods({ initial }: { initial: SavedCard[] }) {
     const res = await LakeLifePayments.tokenize({ number, exp, cvc, name });
     if (!res.ok || !res.token) {
       setBusy(false);
-      toast(res.error ?? "Couldn't add that card.");
+      toast.err(res.error ?? "Couldn't add that card.");
       return;
     }
     const saved = await savePaymentMethod(res.token);
     setBusy(false);
     if (!saved.ok) {
-      toast(saved.error ?? "Couldn't save that card.");
+      toast.err(saved.error ?? "Couldn't save that card.");
       return;
     }
     setNumber(""); setExp(""); setCvc(""); setName("");
@@ -57,7 +57,7 @@ export function PaymentMethods({ initial }: { initial: SavedCard[] }) {
   async function remove(id: string) {
     const res = await removePaymentMethod(id);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't remove that card.");
+      toast.err(res.error ?? "Couldn't remove that card.");
       return;
     }
     toast("Card removed.");

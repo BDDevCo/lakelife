@@ -225,7 +225,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
     // was refused.
     if (bookedCount === 0) {
       if (lines.length > 0 && asked > 1) setOutcome({ headline: res.headline ?? "", lines });
-      else toast(res.error ?? "Couldn't book that.");
+      else toast.err(res.error ?? "Couldn't book that.");
       setReload((n) => n + 1);
       return;
     }

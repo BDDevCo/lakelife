@@ -65,7 +65,7 @@ export function WhoWasHere({ jobId }: { jobId: string }) {
     // rescheduled still knows who turned up.
     start(async () => {
       const res = await setJobWorkers(jobId, [...next]);
-      if (!res.ok) toast(res.error ?? "Couldn't note that.");
+      if (!res.ok) toast.err(res.error ?? "Couldn't note that.");
     });
   }
 

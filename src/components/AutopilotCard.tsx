@@ -48,9 +48,9 @@ export function AutopilotCard({
     startTransition(async () => {
       const res = await setAutopilot(propertyId, svc.id, on);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't update Autopilot — try again.");
+        toast.err(res.error ?? "Couldn't update Autopilot — try again.");
       } else if (on) {
-        toast(`Autopilot on — price locked at $${res.lockedPrice ?? svc.price}. We'll text you when it's time. 🌊`);
+        toast.ok(`Autopilot on — price locked at $${res.lockedPrice ?? svc.price}. We'll text you when it's time. 🌊`);
       } else {
         toast("Autopilot off — no more proposals for this one.");
       }

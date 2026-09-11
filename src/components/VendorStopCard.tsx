@@ -97,7 +97,7 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
       if (slot) fd.append("slot", slot);
       const res = await uploadJobPhoto(stop.id, fd);
       if (!res.ok) {
-        toast(res.error ?? "Photo failed to upload.");
+        toast.err(res.error ?? "Photo failed to upload.");
         continue;
       }
       landed = true;
@@ -121,7 +121,7 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
     setCompleting(true);
     const res = await completeJob(stop.id);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't complete this job.");
+      toast.err(res.error ?? "Couldn't complete this job.");
       if (res.photoCount != null) setCount(res.photoCount);
       setCompleting(false);
       return;
@@ -134,7 +134,7 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
     // gate's decision, and a payout existing does not prove the gate passed.
     // So it states the part it witnessed and sends them to the screen that
     // actually knows.
-    toast("Job complete. Your pay shows on your earnings screen. 🌊");
+    toast.ok("Job complete. Your pay shows on your earnings screen. 🌊");
     router.refresh();
   }
 
@@ -304,9 +304,9 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
           onClose={() => setFlagOpen(false)}
           onSubmit={async (type, note, proposed) => {
             const res = await submitFlag(stop.id, type, note, proposed);
-            if (!res.ok) { toast(res.error ?? "Couldn't send that flag."); return; }
+            if (!res.ok) { toast.err(res.error ?? "Couldn't send that flag."); return; }
             setFlagOpen(false);
-            toast("Sent — the owner sees it in Approvals, and Ops has a copy.");
+            toast.ok("Sent — the owner sees it in Approvals, and Ops has a copy.");
           }}
         />
       )}

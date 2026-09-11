@@ -61,7 +61,7 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
   function preview() {
     start(async () => {
       const res = await previewChargeRun(parkId, page.month);
-      if (!res.ok || !res.plan) { toast(res.error ?? "Couldn't work that out."); return; }
+      if (!res.ok || !res.plan) { toast.err(res.error ?? "Couldn't work that out."); return; }
       setPlan(res.plan);
     });
   }
@@ -69,7 +69,7 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
   function run() {
     start(async () => {
       const res = await runCharges(parkId, page.month);
-      if (!res.ok) { toast(res.error ?? "Couldn't raise those."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't raise those."); return; }
       toast(res.signal ?? "Done.");
       setPlan(null);
       router.refresh();
@@ -337,7 +337,7 @@ function Reminders({
   function preview() {
     start(async () => {
       const res = await previewReminders(parkId, month);
-      if (!res.ok || !res.plan) { toast(res.error ?? "Couldn't work that out."); return; }
+      if (!res.ok || !res.plan) { toast.err(res.error ?? "Couldn't work that out."); return; }
       setPlan(res.plan);
       setPrinted(false);
     });

@@ -55,10 +55,10 @@ export function MyServicesEditor({
     startTransition(async () => {
       const res = await setServiceTypes(picked);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't save.");
+        toast.err(res.error ?? "Couldn't save.");
         return;
       }
-      toast("Work types updated. 🌊");
+      toast.ok("Work types updated. 🌊");
       router.refresh();
     });
   }

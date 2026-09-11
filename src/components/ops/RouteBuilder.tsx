@@ -15,7 +15,7 @@ export function RouteBuilder({ routes, date }: { routes: RouteSummary[]; date: s
     setBusy(true);
     const res = await buildRoutesForDate(date);
     setBusy(false);
-    if (!res.ok) { toast(res.error ?? "Couldn't build routes."); return; }
+    if (!res.ok) { toast.err(res.error ?? "Couldn't build routes."); return; }
     toast(
       `Built ${res.routes} route${res.routes === 1 ? "" : "s"} · ${res.stops} stop${res.stops === 1 ? "" : "s"}` +
       (res.overflow ? ` · ${res.overflow} over capacity — reschedule those` : "") +

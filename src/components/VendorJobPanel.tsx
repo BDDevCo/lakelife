@@ -112,7 +112,7 @@ export function CrewJobActions({
       if (slot) fd.append("slot", slot);
       const res = await uploadJobPhoto(jobId, fd);
       if (!res.ok) {
-        toast(res.error ?? "Photo failed to upload.");
+        toast.err(res.error ?? "Photo failed to upload.");
         continue;
       }
       landed = true;
@@ -135,7 +135,7 @@ export function CrewJobActions({
     setCompleting(true);
     const res = await completeJob(jobId);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't complete this job.");
+      toast.err(res.error ?? "Couldn't complete this job.");
       if (res.photoCount != null) setCount(res.photoCount);
       setCompleting(false);
       return;
@@ -253,11 +253,11 @@ export function CrewJobActions({
           onSubmit={async (type, note, proposed) => {
             const res = await submitFlag(jobId, type, note, proposed);
             if (!res.ok) {
-              toast(res.error ?? "Couldn't send that flag.");
+              toast.err(res.error ?? "Couldn't send that flag.");
               return;
             }
             setFlagOpen(false);
-            toast("Sent — the owner sees it in Approvals, and Ops has a copy.");
+            toast.ok("Sent — the owner sees it in Approvals, and Ops has a copy.");
             router.refresh();
           }}
         />
@@ -309,7 +309,7 @@ export function CrewMakeItRight({
     const res = await crewCureJob(jobId, choice, choice === "fix" ? date : undefined);
     setBusy(null);
     if (!res.ok) {
-      toast(res.error ?? "That didn't take — give it another tap in a minute.");
+      toast.err(res.error ?? "That didn't take — give it another tap in a minute.");
       router.refresh();
       return;
     }

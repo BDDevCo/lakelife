@@ -91,7 +91,7 @@ function InviteCard({ serviceNames }: { serviceNames: string[] }) {
     setBusy(true);
     const res = await inviteCrew({ company: company.trim(), email: email.trim(), serviceTypes: types });
     setBusy(false);
-    if (!res.ok) return toast(res.error ?? "Couldn't send that invite.");
+    if (!res.ok) return toast.err(res.error ?? "Couldn't send that invite.");
     // "Invite sent" must not be said when it wasn't. The crew row exists
     // either way, and a second attempt is refused as a duplicate, so this
     // toast is ops' only chance to learn the email never left.
@@ -184,7 +184,7 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
     setBusy(true);
     const res = await fn();
     setBusy(false);
-    if (!res.ok) return toast(res.error ?? "That didn't go through.");
+    if (!res.ok) return toast.err(res.error ?? "That didn't go through.");
     toast(okMsg);
     router.refresh();
   }
@@ -300,7 +300,7 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
 
         {crew.status === "active" && (
           <button
-            className="ll-btn ghost sm"
+            className="ll-btn sm"
             disabled={busy}
             onClick={() => run(() => setCrewCapacity(crew.id, cap), "Capacity saved.")}
           >
@@ -402,7 +402,7 @@ function InviteState({
     setBusy(true);
     const res = await resendCrewInvite(vendorId);
     setBusy(false);
-    if (!res.ok) return toast(res.error ?? "That didn't go through.");
+    if (!res.ok) return toast.err(res.error ?? "That didn't go through.");
     toast(`Invitation sent again to ${res.email ?? email ?? "them"}. 🌊`);
     router.refresh();
   }
@@ -461,7 +461,7 @@ function CompanyFix({
     setBusy(true);
     const res = await setCrewCompany(vendorId, name);
     setBusy(false);
-    if (!res.ok) return toast(res.error ?? "That didn't go through.");
+    if (!res.ok) return toast.err(res.error ?? "That didn't go through.");
     toast("Business name updated.");
     setOpen(false);
     router.refresh();

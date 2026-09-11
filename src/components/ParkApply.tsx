@@ -67,7 +67,7 @@ export function ParkApply({
   function submit() {
     startTransition(async () => {
       const res = await applyForLot(form);
-      if (!res.ok) { toast(res.error ?? "Couldn't send that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't send that."); return; }
       toast(res.signal ?? "Sent.");
       setOpenLot(null);
       router.refresh();

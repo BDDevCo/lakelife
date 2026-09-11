@@ -30,6 +30,7 @@ import { getPayoutQueue } from "./payout-data";
 import { getOpsCalendar } from "./calendar-data";
 import { getPlatformSettings } from "@/lib/settings";
 import { todayLakeDate } from "@/lib/booking";
+import { crewDate } from "@/lib/lake-time";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
@@ -226,7 +227,7 @@ export default async function OpsPage() {
                   <div style={{ flex: "1 1 260px", minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>{e.service} · {e.where} · {money.format(e.customerPrice)}</div>
                     {e.note && <div className="mut" style={{ fontSize: 12.5 }}>Customer: &ldquo;{e.note}&rdquo;</div>}
-                    {e.why && <div className="mut" style={{ fontSize: 12 }}>{e.why} · opened {e.openedAt}</div>}
+                    {e.why && <div className="mut" style={{ fontSize: 12 }}>{e.why} · opened {crewDate(e.openedAt)}</div>}
                   </div>
                   <EscalationDecision disputeId={e.id} />
                 </div>

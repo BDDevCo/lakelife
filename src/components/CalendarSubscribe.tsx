@@ -12,7 +12,7 @@ export function CalendarSubscribe({ url }: { url: string }) {
   async function copy() {
     try {
       await navigator.clipboard.writeText(url);
-      toast("Copied — paste into your calendar app");
+      toast.ok("Copied — paste into your calendar app");
     } catch {
       toast("Couldn't copy — long-press the link instead.");
     }

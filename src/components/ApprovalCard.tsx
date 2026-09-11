@@ -101,7 +101,7 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
     const res = kind === "approve" ? await approveFlag(flag.id) : await declineFlag(flag.id);
     setBusy(null);
     if (!res.ok) {
-      toast(res.error ?? "Something went wrong. Please try again.");
+      toast.err(res.error ?? "Something went wrong. Please try again.");
       return;
     }
     // WHAT THE YES ACTUALLY DID. The old line said "future visits are

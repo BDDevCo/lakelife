@@ -51,7 +51,7 @@ export function ShareLakeLife({
   async function copy() {
     try {
       await navigator.clipboard.writeText(link);
-      toast("Link copied — send it to a neighbor. 🌊");
+      toast.ok("Link copied — send it to a neighbor. 🌊");
     } catch {
       toast("Couldn't copy — long-press the link instead.");
     }

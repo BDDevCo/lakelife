@@ -136,7 +136,7 @@ export function RefundModal({
       setBusy(false);
       return;
     }
-    toast(`Refunded ${money.format(res.refunded ?? amountNum)} — customer notified. 🌊`);
+    toast.ok(`Refunded ${money.format(res.refunded ?? amountNum)} — customer notified. 🌊`);
     router.refresh();
     onClose();
   }

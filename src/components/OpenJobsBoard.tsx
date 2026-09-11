@@ -51,14 +51,14 @@ function prettyDate(date: string): string {
 
 export function OpenJobsBoard({ jobs }: { jobs: OpenJob[] }) {
   if (jobs.length === 0) {
+    // One sentence, centred, muted — the shape the crew's Today and Earnings
+    // tabs already use for "nothing here". This had a bold black headline over
+    // a muted explainer, so the same fact was drawn two ways on adjacent tabs.
     return (
-      <div className="ll-card ll-card-pad">
-        <p style={{ fontSize: 15, fontWeight: 700, margin: "0 0 6px" }}>
-          No open jobs right now.
-        </p>
+      <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
         <p className="mut" style={{ fontSize: 14, margin: 0 }}>
-          When a job near you needs a crew, it shows up here first-come,
-          first-served. 🌊
+          No open jobs right now — when a job near you needs a crew, it shows up
+          here first-come, first-served. 🌊
         </p>
       </div>
     );
@@ -94,9 +94,9 @@ function JobCard({ job }: { job: OpenJob }) {
     startTransition(async () => {
       const res = await claimJob(job.id);
       if (res.ok) {
-        toast("It's yours — added to your schedule. 🌊");
+        toast.ok("It's yours — added to your schedule. 🌊");
       } else {
-        toast(res.error ?? "Couldn't claim that one — try the next.");
+        toast.err(res.error ?? "Couldn't claim that one — try the next.");
       }
       router.refresh(); // either way the board may be stale — repaint it
     });

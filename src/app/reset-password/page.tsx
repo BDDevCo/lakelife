@@ -42,7 +42,7 @@ export default function ResetPasswordPage() {
       toast(error.message);
       return;
     }
-    toast("Password updated — you're all set. 🌊");
+    toast.ok("Password updated — you're all set. 🌊");
     router.push("/portal");
     router.refresh();
   }

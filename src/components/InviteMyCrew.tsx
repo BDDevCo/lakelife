@@ -34,7 +34,7 @@ export function InviteMyCrew() {
     const res = await inviteMyContractor(co, addr);
     setBusy(false);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't send that invite.");
+      toast.err(res.error ?? "Couldn't send that invite.");
       return;
     }
     setWarning(res.warning ?? null);

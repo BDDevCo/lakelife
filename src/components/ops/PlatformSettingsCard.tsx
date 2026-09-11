@@ -23,7 +23,7 @@ export function PlatformSettingsCard({ settings }: { settings: { marginFloorPct:
         toast("Dials saved.");
         router.refresh();
       } else {
-        toast(res.error ?? "Couldn't save the dials.");
+        toast.err(res.error ?? "Couldn't save the dials.");
       }
     });
   }
@@ -64,7 +64,11 @@ export function PlatformSettingsCard({ settings }: { settings: { marginFloorPct:
         </label>
       </div>
 
-      <button className="ll-btn gold" onClick={save} disabled={pending} style={{ marginTop: 14, minHeight: 44 }}>
+      {/* Teal, not gold. Three adjacent ops tabs saved what you typed in three
+          fills — gold here, small teal on Lake conditions, outlined on Crews.
+          The prototype uses gold for a commit step (Confirm service, Send to
+          owner) and plain .btn for a save. */}
+      <button className="ll-btn" onClick={save} disabled={pending} style={{ marginTop: 14, minHeight: 44 }}>
         {pending ? "Saving…" : "Save dials"}
       </button>
     </div>

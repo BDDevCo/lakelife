@@ -40,6 +40,11 @@ describe("the receipt", () => {
     expect(b).toContain("Lot             3");
     expect(b).toContain("August 2026 rent");
     expect(b).toContain("Still owing     $155.00");
+    // AND THE DAY IN WORDS. "Date taken      2026-08-03" sat one line above
+    // "Against August 2026 rent" — the only machine date on the paper, on a
+    // receipt a resident holds next to a screen that says "August 3, 2026".
+    expect(b).toContain("Date taken      August 3, 2026");
+    expect(b).not.toContain("2026-08-03");
   });
 
   it("says plainly when nothing further is owed, rather than printing $0.00", () => {
@@ -147,7 +152,15 @@ describe("the renter's own confirmation", () => {
     const c = receiptCounterfoil(base);
     expect(c).toContain("$455.00");
     expect(c).toContain("Lot 3");
-    expect(c).toContain("2026-08-03");
+    // THE DATE IN WORDS. This pinned "2026-08-03" on the half the office signs —
+
+    // the one line on the paper that was a machine date, beside "Against
+
+    // August 2026 rent" and under a screen that says "August 3, 2026".
+
+    expect(c).toContain("August 3, 2026");
+
+    expect(c).not.toContain("2026-08-03");
     expect(c).toContain("ref 1042");
   });
 

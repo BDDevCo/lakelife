@@ -48,7 +48,7 @@ function Thread({ thread, open, onToggle }: { thread: OpsThread; open: boolean; 
     const res = await sendOpsMessage(thread.propertyId, text);
     setSending(false);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't send — try again.");
+      toast.err(res.error ?? "Couldn't send — try again.");
       return;
     }
     setBody("");
@@ -64,7 +64,7 @@ function Thread({ thread, open, onToggle }: { thread: OpsThread; open: boolean; 
     const res = await draftReplyForThread(thread.propertyId);
     setDrafting(false);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't draft a reply — try again.");
+      toast.err(res.error ?? "Couldn't draft a reply — try again.");
       return;
     }
     setBody(res.text ?? "");
@@ -174,7 +174,7 @@ function Thread({ thread, open, onToggle }: { thread: OpsThread; open: boolean; 
               disabled={sending}
               aria-label="Reply to homeowner"
             />
-            <button className="ll-btn gold" onClick={() => void send()} disabled={sending || !body.trim()}>
+            <button className="ll-btn" onClick={() => void send()} disabled={sending || !body.trim()}>
               {sending ? "Sending…" : "Send"}
             </button>
           </div>

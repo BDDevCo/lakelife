@@ -40,7 +40,7 @@ export function MarginHealth({ rows }: { rows: MarginHealthRow[] }) {
     });
     setApplyingKey(null);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't apply that price change.");
+      toast.err(res.error ?? "Couldn't apply that price change.");
       return;
     }
     toast(res.applied ?? "Menu price updated. 🌊");

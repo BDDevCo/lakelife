@@ -139,7 +139,7 @@ export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) 
   function submit() {
     startTransition(async () => {
       const res = await saveLot(parkId, editing === "new" ? null : editing, form);
-      if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't save."); return; }
       toast(res.signal ?? "Saved.");
       setEditing(null);
       router.refresh();
@@ -222,7 +222,7 @@ function LotCard({ lot, parkId, onEdit }: { lot: LotView; parkId: string; onEdit
   function saveRates() {
     startTransition(async () => {
       const res = await saveLotRates(lot.id, rates);
-      if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't save."); return; }
       toast(res.signal ?? "Saved.");
       setOpen(false);
       router.refresh();
@@ -517,7 +517,7 @@ function BulkAdd({
   function make() {
     startTransition(async () => {
       const res = await generateLots(parkId, range);
-      if (!res.ok) { toast(res.error ?? "Couldn't add those."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't add those."); return; }
       toast(res.signal ?? "Lots added.");
       setRange((r) => ({ ...r, from: "1", to: "" }));
       setOpen(false);
@@ -616,7 +616,7 @@ function BulkRates({ parkId, lotCount }: { parkId: string; lotCount: number }) {
         siteType: siteType || undefined,
         replaceExisting,
       });
-      if (!res.ok) { toast(res.error ?? "Couldn't set those."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't set those."); return; }
       toast(res.signal ?? "Rates set.");
       setOpen(false);
       setRates({});

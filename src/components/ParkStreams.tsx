@@ -56,7 +56,7 @@ export function ParkStreams({
   function save() {
     start(async () => {
       const res = await saveRevenueStreams(parkId, [...chosen]);
-      if (!res.ok) { toast(res.error ?? "Couldn't save that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't save that."); return; }
       toast(res.signal ?? "Saved.");
       setDirty(false);
       router.refresh();

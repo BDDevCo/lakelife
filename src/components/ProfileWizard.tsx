@@ -364,7 +364,7 @@ export function ProfileWizard({
     const res = await saveProfile(payload);
     setBusy(false);
     if (!res.ok) {
-      toast(res.error ?? "Could not save your profile.");
+      toast.err(res.error ?? "Could not save your profile.");
       return;
     }
     // The save path above is untouched. From here the recap is on its way:

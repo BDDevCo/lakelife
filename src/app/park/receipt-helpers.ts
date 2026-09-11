@@ -25,6 +25,7 @@
  */
 
 import { prettyMonth } from "./ledger-helpers";
+import { longDate } from "@/lib/lake-time";
 
 export interface ReceiptLines {
   parkName: string;
@@ -106,7 +107,7 @@ export function receiptBody(r: ReceiptLines): string {
 
   lines.push(
     `How             ${METHOD_WORD[r.method] ?? r.method}${r.reference ? ` ${r.reference}` : ""}`,
-    `Date taken      ${r.receivedOn}`,
+    `Date taken      ${longDate(r.receivedOn)}`,
     `Against         ${prettyMonth(r.periodMonth)} rent — ${money(r.billAmount)}`,
   );
 
@@ -162,8 +163,8 @@ export function receiptCounterfoil(r: ReceiptLines): string {
     // the signature attests to a number their bank never shows.
     `Lot ${r.lotNumber}   ${who}   ${money(r.amount + (r.feeAmount ?? 0))}   ${METHOD_WORD[r.method] ?? r.method}`,
     (r.feeAmount ?? 0) > 0
-      ? `Taken ${r.receivedOn}   ${money(r.amount)} rent + ${money(r.feeAmount ?? 0)} card fee${r.reference ? `   ref ${r.reference}` : ""}`
-      : `Taken ${r.receivedOn}${r.reference ? `   ref ${r.reference}` : ""}`,
+      ? `Taken ${longDate(r.receivedOn)}   ${money(r.amount)} rent + ${money(r.feeAmount ?? 0)} card fee${r.reference ? `   ref ${r.reference}` : ""}`
+      : `Taken ${longDate(r.receivedOn)}${r.reference ? `   ref ${r.reference}` : ""}`,
     ``,
     `I received a receipt for this and it matches what I handed over.`,
     ``,

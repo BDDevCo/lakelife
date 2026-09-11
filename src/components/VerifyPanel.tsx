@@ -86,7 +86,7 @@ export function VerifyPanel({
     const body = await res.json().catch(() => ({}));
     setBusy(false);
     if (!res.ok) {
-      toast(body.error ?? "Could not send the code.");
+      toast.err(body.error ?? "Could not send the code.");
       return;
     }
     setSent(true);
@@ -114,7 +114,7 @@ export function VerifyPanel({
     const body = await res.json().catch(() => ({}));
     setBusy(false);
     if (!res.ok) {
-      toast(body.error ?? "Verification failed.");
+      toast.err(body.error ?? "Verification failed.");
       return;
     }
     try {

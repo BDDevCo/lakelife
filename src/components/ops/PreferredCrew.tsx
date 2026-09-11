@@ -36,7 +36,7 @@ export function PreferredCrew({
     setBusy(false);
     if (!res.ok) {
       setValue(current ?? "");
-      return toast(res.error ?? "Couldn't set the preferred crew.");
+      return toast.err(res.error ?? "Couldn't set the preferred crew.");
     }
     toast(next ? "Preferred crew set — they'll get first dibs. ⭐" : "Preferred crew cleared.");
     router.refresh();

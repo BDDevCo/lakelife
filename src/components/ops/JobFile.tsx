@@ -162,11 +162,11 @@ function AssignModal({
     setBusy(true);
     const res = await assignAndSchedule(jobId, { vendorId: chosenId, vendorCost: costNum, date: day, slot: time });
     if (!res.ok) {
-      toast(res.error ?? "Couldn't schedule that job.");
+      toast.err(res.error ?? "Couldn't schedule that job.");
       setBusy(false);
       return;
     }
-    toast("Scheduled — crew and homeowner notified. 🌊");
+    toast.ok("Scheduled — crew and homeowner notified. 🌊");
     router.refresh();
     onClose();
   }
@@ -281,7 +281,7 @@ export function JobThread({
     const res = await sendOpsMessage(propertyId, text, jobId);
     setSending(false);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't send — try again.");
+      toast.err(res.error ?? "Couldn't send — try again.");
       return;
     }
     setBody("");
@@ -297,7 +297,7 @@ export function JobThread({
     const res = await draftReplyForThread(propertyId);
     setDrafting(false);
     if (!res.ok) {
-      toast(res.error ?? "Couldn't draft a reply — try again.");
+      toast.err(res.error ?? "Couldn't draft a reply — try again.");
       return;
     }
     setBody(res.text ?? "");
@@ -397,7 +397,7 @@ export function JobThread({
           disabled={sending}
           aria-label="Reply to homeowner"
         />
-        <button className="ll-btn gold" onClick={() => void send()} disabled={sending || !body.trim()}>
+        <button className="ll-btn" onClick={() => void send()} disabled={sending || !body.trim()}>
           {sending ? "Sending…" : "Send"}
         </button>
       </div>

@@ -21,7 +21,7 @@ export function NicknameEditor({ propertyId, nickname }: { propertyId: string; n
       const clean = value.trim();
       const res = await setPropertyNickname(propertyId, clean);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't save that nickname.");
+        toast.err(res.error ?? "Couldn't save that nickname.");
         return;
       }
       toast(clean ? "Nickname saved. 🌊" : "Nickname cleared.");

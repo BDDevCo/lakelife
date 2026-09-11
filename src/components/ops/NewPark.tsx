@@ -101,7 +101,7 @@ export function NewPark({ lakes }: { lakes: Array<{ id: string; name: string }> 
             start(async () => {
               const res = await findUserByEmail(ownerEmail);
               if (res.ok && res.id) setOwner({ id: res.id, label: res.label ?? ownerEmail });
-              else { setOwner(null); toast(res.error ?? "Couldn't find them."); }
+              else { setOwner(null); toast.err(res.error ?? "Couldn't find them."); }
             })
           }
         >

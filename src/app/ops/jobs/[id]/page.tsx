@@ -7,6 +7,7 @@ import { getOpsJobFile } from "@/app/ops/job-detail-data";
 import { EscalationDecision } from "@/components/ops/EscalationDecision";
 import { JobPhotoGallery } from "@/components/JobPhotoGallery";
 import { JobActions, JobThread } from "@/components/ops/JobFile";
+import { longDay, lakeStamp } from "@/lib/lake-time";
 
 /**
  * THE OPS JOB FILE — one job, everything about it, plus the levers.
@@ -57,11 +58,11 @@ const PAYOUT_KIND_LABEL: Record<string, string> = {
 
 function prettyDay(d: string | null): string {
   if (!d) return "no date yet";
-  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "long", day: "numeric", year: "numeric" });
+  return longDay(d);
 }
 function prettyStamp(iso: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return lakeStamp(iso);
 }
 function shortId(id: string | null): string {
   return id ? id.slice(0, 8) : "—";

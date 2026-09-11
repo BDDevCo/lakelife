@@ -90,7 +90,7 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
         appliesTo,
         covers: [...covers],
       });
-      if (!res.ok) { toast(res.error ?? "Couldn't save."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't save."); return; }
       toast(res.signal ?? "Saved.");
       setOpen(false); setAmount(""); setEditing(null);
       router.refresh();

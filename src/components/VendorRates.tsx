@@ -21,13 +21,10 @@ export function VendorRates({ rates }: { rates: MyRate[] }) {
     return (
       <div className="wrap" style={{ paddingTop: 24, maxWidth: 560 }}>
         <h1 style={{ fontSize: 26, marginBottom: 4 }}>Your rates</h1>
-        <div className="ll-card ll-card-pad" style={{ marginTop: 12 }}>
-          <p style={{ fontSize: 15, fontWeight: 700, margin: "0 0 6px" }}>
-            No work types yet.
-          </p>
+        <div className="ll-card ll-card-pad" style={{ marginTop: 12, textAlign: "center" }}>
           <p className="mut" style={{ fontSize: 14, margin: 0 }}>
-            Pick the kinds of work your crew does on the Today tab first — then set a
-            rate here. No rate, no routing.
+            No work types yet — pick the kinds of work your crew does on the Today
+            tab first, then set a rate here. No rate, no routing.
           </p>
         </div>
       </div>
@@ -106,7 +103,7 @@ function RateCard({ rate }: { rate: MyRate }) {
     startTransition(async () => {
       const res = await setMyRate(rate.service_id, payload);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't save that rate.");
+        toast.err(res.error ?? "Couldn't save that rate.");
         return;
       }
       setSaved(true);

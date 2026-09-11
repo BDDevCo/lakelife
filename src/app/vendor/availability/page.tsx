@@ -141,8 +141,8 @@ export default async function VendorAvailabilityPage() {
         <section>
           <h2 style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>Next 5 working days</h2>
           {rows.length === 0 ? (
-            <div className="ll-card ll-card-pad">
-              <p className="mut" style={{ fontSize: 14 }}>
+            <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
+              <p className="mut" style={{ fontSize: 14, margin: 0 }}>
                 Pick the days you work above and they&apos;ll show up here.
               </p>
             </div>

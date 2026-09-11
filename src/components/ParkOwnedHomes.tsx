@@ -73,7 +73,7 @@ export function ParkOwnedHomes({
                 onClick={() =>
                   start(async () => {
                     const res = await focusOwnedHome(parkId, h.lotId);
-                    if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
+                    if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
                     router.push("/book");
                   })
                 }

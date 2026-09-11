@@ -84,7 +84,7 @@ export function ParkCosts({
   function doPreview() {
     start(async () => {
       const res = await previewCostSplit(parkId, category, from, to, amountNum());
-      if (!res.ok || !res.preview) { toast(res.error ?? "Couldn't work that out."); return; }
+      if (!res.ok || !res.preview) { toast.err(res.error ?? "Couldn't work that out."); return; }
       setPreview(res.preview.allocation);
     });
   }
@@ -109,7 +109,7 @@ export function ParkCosts({
         parkId, costCategoryForService(j.service), j.periodStart, j.periodEnd, j.amount, j.note, j.jobId,
       );
       setFillingId(null);
-      if (!res.ok) { toast(res.error ?? "Couldn't save that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't save that."); return; }
       toast(res.signal ?? "Split across the lots.");
       router.refresh();
     });
@@ -118,7 +118,7 @@ export function ParkCosts({
   function save() {
     start(async () => {
       const res = await recordCost(parkId, category, from, to, amountNum(), note, null, parkCarries);
-      if (!res.ok) { toast(res.error ?? "Couldn't save that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't save that."); return; }
       toast(res.signal ?? "Saved.");
       setOpen(false); setPreview(null); setAmount(""); setNote("");
       router.refresh();

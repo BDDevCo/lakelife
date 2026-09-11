@@ -43,7 +43,7 @@ export function EnableLotBooking({ ready }: { ready: boolean }) {
         onClick={() =>
           start(async () => {
             const res = await enableBookingForMyLot();
-            if (!res.ok) { toast(res.error ?? "Couldn't do that."); return; }
+            if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
             toast(res.signal ?? "Ready.");
             router.push("/book");
           })

@@ -32,7 +32,7 @@ export function VendorImport() {
     startTransition(async () => {
       const res = await importMyCustomers(text);
       if (!res.ok) {
-        toast(res.error ?? "Couldn't send those invites.");
+        toast.err(res.error ?? "Couldn't send those invites.");
         return;
       }
       setResult(res);

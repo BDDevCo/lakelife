@@ -63,10 +63,10 @@ export function VendorStorage({
     startTransition(async () => {
       const res = await setStorageSettings({ capacityFeet: n, types });
       if (!res.ok) {
-        toast(res.error ?? "Couldn't save.");
+        toast.err(res.error ?? "Couldn't save.");
         return;
       }
-      toast("Storage settings saved. 🌊");
+      toast.ok("Storage settings saved. 🌊");
       router.refresh();
     });
   }
@@ -193,7 +193,7 @@ function GaragekeepersUpload({
     startTransition(async () => {
       const res = await uploadVendorDoc("garagekeepers", form);
       if (!res.ok) {
-        toast(res.error ?? "Upload failed.");
+        toast.err(res.error ?? "Upload failed.");
         return;
       }
       toast("Garagekeepers insurance saved.");

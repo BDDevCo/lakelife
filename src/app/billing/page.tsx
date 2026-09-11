@@ -7,6 +7,7 @@ import { formatPrice } from "@/lib/pricing";
 import { listPaymentMethods } from "@/app/profile/payment-actions";
 import { mustRead } from "@/lib/must-read";
 import { getActivePropertyId } from "@/app/profile/data";
+import { shortDate } from "@/lib/lake-time";
 
 export default async function BillingPage() {
   if (!hasSupabaseEnv()) {
@@ -154,7 +155,7 @@ export default async function BillingPage() {
                 <div>
                   <b>{j.service_name ?? "Service"}</b>
                   <div className="mut" style={{ fontSize: 12.5 }}>
-                    {j.date ? new Date(j.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "date TBD"} · {j.status}
+                    {j.date ? shortDate(j.date) : "date TBD"} · {j.status}
                   </div>
                 </div>
                 <b>{j.customer_price != null ? formatPrice(Number(j.customer_price)) : "—"}</b>
@@ -172,7 +173,7 @@ export default async function BillingPage() {
             history.map((row) => (
               <div key={row.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 0", borderBottom: "1px dashed var(--line)", fontSize: 14 }}>
                 <span className="mut">
-                  {row.when ? new Date(row.when).toLocaleDateString() : ""}
+                  {row.when ? shortDate(row.when) : ""}
                   {row.label && (
                     <span style={{ display: "block", fontSize: 12.5 }}>{row.label}</span>
                   )}

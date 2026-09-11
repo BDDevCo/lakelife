@@ -41,7 +41,7 @@ export function WorkDayChips({ workDays }: { workDays: string[] }) {
 
     if (!res.ok) {
       setSelected(previous); // roll back
-      toast(res.error ?? "Couldn't update your work days.");
+      toast.err(res.error ?? "Couldn't update your work days.");
       return;
     }
     router.refresh();

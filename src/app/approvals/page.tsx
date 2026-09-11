@@ -38,9 +38,15 @@ export default async function ApprovalsPage() {
       <div className="wrap" style={{ paddingTop: 24, maxWidth: 720 }}>
         <h1 style={{ fontSize: 26, marginBottom: 16 }}>Messages &amp; approvals</h1>
 
+        {/* THE ONE OUTLIER among the product's lone-card empty states, which
+            are centred and muted at 14 on /requests, /messages, /vendor,
+            Earnings and the ops board. This was left-aligned, 15, and ink —
+            written in the same commit as the vendor one, which already had
+            the shape. The prototype has no page-level empty state, so the
+            app's own majority is the authority here. */}
         {flags.length === 0 ? (
-          <div className="ll-card ll-card-pad">
-            <p style={{ fontSize: 15, margin: 0 }}>
+          <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
+            <p className="mut" style={{ fontSize: 14, margin: 0 }}>
               No approvals waiting. When a crew spots something that differs from your profile,
               it&apos;ll show up here for your OK.
             </p>

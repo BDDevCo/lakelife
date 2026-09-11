@@ -225,7 +225,7 @@ function DocUpload({
             form.set("file", file);
             if (kind === "coi") { form.set("expiry", expiry); form.set("named_insured", insured.trim()); }
             const res = await uploadVendorDoc(kind, form);
-            if (!res.ok) { toast(res.error ?? "Couldn't upload that."); return; }
+            if (!res.ok) { toast.err(res.error ?? "Couldn't upload that."); return; }
             toast(`${title} saved.`);
             if (fileRef.current) fileRef.current.value = "";
             // AND THE ECHO OF IT. Clearing the input but not the line that

@@ -147,7 +147,7 @@ export function DropSlips({ parkId }: { parkId: string }) {
             start(async () => {
               const res = await takeDropSlipSerials(parkId, n);
               if (!res.ok || res.from == null) {
-                toast(res.error ?? "Couldn't do that."); return;
+                toast.err(res.error ?? "Couldn't do that."); return;
               }
               const slips = dropSlipSerials(res.parkName!, res.from, n);
               const pages = slips.map((s) =>

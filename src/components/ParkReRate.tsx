@@ -50,7 +50,7 @@ export function ParkReRate({
       const n = Number(amount.replace(/[$,\s]/g, ""));
       if (!Number.isFinite(n)) { toast("That new rent isn't a number."); return; }
       const res = await previewReRate(parkId, [], n, effectiveOn);
-      if (!res.ok || !res.preview) { toast(res.error ?? "Couldn't work that out."); return; }
+      if (!res.ok || !res.preview) { toast.err(res.error ?? "Couldn't work that out."); return; }
       setPlan(res.preview.plan);
     });
   }
@@ -59,7 +59,7 @@ export function ParkReRate({
     start(async () => {
       const n = Number(amount.replace(/[$,\s]/g, ""));
       const res = await scheduleReRate(parkId, [], n, effectiveOn);
-      if (!res.ok) { toast(res.error ?? "Couldn't schedule that."); return; }
+      if (!res.ok) { toast.err(res.error ?? "Couldn't schedule that."); return; }
       toast(res.signal ?? "Scheduled.");
       setOpen(false); setPlan(null); setAmount(""); setEffectiveOn("");
       router.refresh();

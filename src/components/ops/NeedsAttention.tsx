@@ -140,9 +140,9 @@ function AttentionCard({ job, crews }: { job: NeedsAttentionJob; crews: ActiveVe
     setBusy(true);
     const res = await retryAssign(job.id);
     setBusy(false);
-    if (!res.ok) return toast(res.error ?? "Dispatch didn't run.");
+    if (!res.ok) return toast.err(res.error ?? "Dispatch didn't run.");
     if (res.assigned) {
-      toast("Placed — a crew picked it up. 🌊");
+      toast.ok("Placed — a crew picked it up. 🌊");
       router.refresh();
     } else {
       toast("Still no crew fits — recruit one for this lake.");
