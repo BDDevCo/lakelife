@@ -501,10 +501,15 @@ export async function alertOpsDoubleCharge(
  *
  * Nothing here throws. A settle must not fail because a notification did.
  */
+/** Days between customer nudges about an unpaid invoice. Once, then weekly. */
+const SETTLE_NOTICE_EVERY_DAYS = 7;
+
 async function noteSettleFailure(
   admin: ReturnType<typeof createServiceClient>,
   f: {
     jobId: string;
+    /** The invoice this is about — the notice is stamped on it (0165). */
+    invoiceId: string;
     ownerId: string | null | undefined;
     svcName: string;
     address: string | null;
@@ -517,7 +522,20 @@ async function noteSettleFailure(
     const amt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(f.amount);
     const where = f.address ?? "your property";
 
-    if (f.ownerId) {
+    // ONCE, THEN WEEKLY — NOT EVERY NIGHT. settleJob finds this invoice again
+    // tomorrow and every day after until it is paid, and this used to send the
+    // customer the same "Add or update your card ... Nothing else is needed
+    // from you" each time. The stamp is the same discipline the waitlist
+    // uses (extend_reminded_at). Ops is NOT gated: the digest carries a
+    // standing count, and an unpaid completed job should keep appearing there.
+    const stampRes = await admin
+      .from("invoices").select("settle_notice_sent_at").eq("id", f.invoiceId).maybeSingle();
+    if (stampRes.error) console.error("[read failed] whether this customer was already told:", stampRes.error);
+    const last = stampRes.data?.settle_notice_sent_at as string | null | undefined;
+    const dueAgain =
+      !last || Date.now() - new Date(last).getTime() > SETTLE_NOTICE_EVERY_DAYS * 86_400_000;
+
+    if (f.ownerId && dueAgain) {
       const { data: owner, error: ownerErr } = await admin
         .from("users").select("email, name").eq("id", f.ownerId).maybeSingle();
       if (ownerErr) console.error("[read failed] the owner's email for an uncollected job:", ownerErr);
@@ -531,6 +549,11 @@ async function noteSettleFailure(
           subject: `Action needed — ${amt} for your ${f.svcName}`,
           html: html`<p>Hi ${(owner?.name as string) ?? "there"},</p><p>Your ${f.svcName} at ${where} is done — thank you.</p><p><b>${why}</b>, so the ${amt} hasn't been paid yet.</p><p><a href="${site}/billing">Add or update your card</a> and we'll take care of it. Nothing else is needed from you.</p><p>🌊</p>`,
         });
+        // Stamp AFTER the send, so a send that threw is retried tomorrow
+        // rather than recorded as told.
+        const { error: stampErr } = await admin
+          .from("invoices").update({ settle_notice_sent_at: new Date().toISOString() }).eq("id", f.invoiceId);
+        if (stampErr) console.error("[write failed] stamping the settle notice — the customer may be told again tomorrow:", stampErr);
       }
     }
 
@@ -913,7 +936,7 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
         // was their card being retried every night.
         if (!charge.ok) {
           await noteSettleFailure(admin, {
-            jobId, ownerId, svcName,
+            jobId, invoiceId: invoice.id as string, ownerId, svcName,
             address: (prop?.address as string) ?? null,
             amount: cashDue,
             reason: "declined",
@@ -926,7 +949,7 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
         // cheerfully printed "We'll run this on your card on file" when there
         // was no card on file. Nobody found out until somebody read a ledger.
         await noteSettleFailure(admin, {
-          jobId, ownerId, svcName,
+          jobId, invoiceId: invoice.id as string, ownerId, svcName,
           address: (prop?.address as string) ?? null,
           amount: cashDue,
           reason: "no_card",

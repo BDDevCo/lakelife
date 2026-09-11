@@ -315,6 +315,7 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
   const ownerUser = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as
     { id?: string; phone?: string; email?: string } | null;
   const ownerPhone = ownerUser?.phone;
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
   let confirmLinks = "";
   // The same two links, laid out for an inbox rather than a text bubble.
   let confirmLines = "";
@@ -329,7 +330,6 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
     // isn't on this job, and the crew's trust record never hears about it.
     if (confErr) console.error("[read failed] this job's confirmation link:", confErr);
     if (conf?.confirm_token) {
-      const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
       confirmLinks = ` All good? ${site}/c/${conf.confirm_token}/good — something off? ${site}/c/${conf.confirm_token}/issue`;
       confirmLines =
         `\n\nAll good?\n  ${site}/c/${conf.confirm_token}/good` +
@@ -356,11 +356,15 @@ export async function completeJob(jobId: string): Promise<ActionResult> {
         email: doneByEmail ? ownerUser?.email : null,
       },
       {
-        sms: `LakeLife: ${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"} — ${photoCount} photos are in your property log.${confirmLinks} 🌊`,
+        // "YOUR PROPERTY LOG" DOES NOT EXIST. Every completion message — the
+        // first sentence a homeowner reads after the work — sent them to a
+        // screen with no route. The photos live on the job page, so that is
+        // what is named and linked.
+        sms: `LakeLife: ${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"} — ${photoCount} photos are on your job page: ${site}/requests/${jobId}${confirmLinks} 🌊`,
         subject: `${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"}`,
         body:
           `${svc?.name ?? "Your service"} is done at ${prop?.address ?? "your place"} — ` +
-          `${photoCount} photos are in your property log.${confirmLines}`,
+          `${photoCount} photos are on your job page:\n  ${site}/requests/${jobId}${confirmLines}`,
       },
     );
   }

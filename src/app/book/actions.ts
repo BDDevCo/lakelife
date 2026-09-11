@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { batchBookedLine, rushOfferLine } from "@/lib/booking-copy";
 import { withParkRate } from "@/lib/park-rates";
 import { loadParkRatesChecked } from "@/app/park/rate-data";
 import { getFullProfile, toPricingProfile, getActivePropertyId } from "@/app/profile/data";
@@ -215,7 +216,14 @@ export async function createBooking(
 async function blastRushToCrews(
   admin: ReturnType<typeof createServiceClient>,
   opts: { propertyId: string; serviceName: string; date: string },
-): Promise<void> {
+): Promise<{ reached: number; outToday: boolean }> {
+  // WHOM IT REACHED, SO THE CUSTOMER CAN BE TOLD THE TRUTH. This returned
+  // void, and the confirmation text said "we're offering it to crews already
+  // out on your lake right now" whether the blast had found crews out today,
+  // fallen back to every crew on the lake, or reached nobody — which, with
+  // every crew in production a fixture, is what it does today.
+  let reached = 0;
+  let outToday = false;
   try {
     // Every read in here throws and lands in this function's own catch below:
     // the blast is best-effort either way, but a failed read now says so in
@@ -225,15 +233,16 @@ async function blastRushToCrews(
     const propRow = mustRead("this property's lake", await admin.from("properties").select("lake_id, lakes(name)").eq("id", opts.propertyId).maybeSingle());
     const jobLake = (propRow?.lake_id as string) ?? null;
     const lakeName = ((Array.isArray(propRow?.lakes) ? propRow?.lakes[0] : propRow?.lakes) as { name?: string } | null)?.name ?? "your lake";
-    if (!jobLake) return;
-    const outToday = mustRead("who's out on this lake today", await admin
+    if (!jobLake) return { reached: 0, outToday: false };
+    const outTodayRows = mustRead("who's out on this lake today", await admin
       .from("jobs")
       .select("vendor_id, properties!inner(lake_id)")
       .eq("date", opts.date)
       .eq("properties.lake_id", jobLake)
       .in("status", ["scheduled", "in_progress"])
       .not("vendor_id", "is", null));
-    let crewIds = [...new Set((outToday ?? []).map((r) => r.vendor_id as string))];
+    let crewIds = [...new Set((outTodayRows ?? []).map((r) => r.vendor_id as string))];
+    outToday = crewIds.length > 0;
     if (crewIds.length === 0) {
       const lakeCrews = mustRead("the crews who work this lake", await admin
         .from("vendors")
@@ -242,10 +251,10 @@ async function blastRushToCrews(
         .contains("service_lakes", [jobLake]));
       crewIds = (lakeCrews ?? []).map((v) => v.id as string);
     }
-    if (crewIds.length === 0) return;
+    if (crewIds.length === 0) return { reached: 0, outToday: false };
     const crewRows = mustRead("those crews' accounts", await admin.from("vendors").select("user_id").in("id", crewIds).not("user_id", "is", null));
     const userIds = (crewRows ?? []).map((v) => v.user_id as string);
-    if (userIds.length === 0) return;
+    if (userIds.length === 0) return { reached: 0, outToday: false };
     // REACHABLE, NOT PHONED. This still filtered `.not("phone","is",null)`
     // after the send widened to email — so a crew with an address and no mobile
     // on file was excluded from a rush blast they could have claimed, by a
@@ -266,10 +275,12 @@ async function blastRushToCrews(
           subject: `Same-day ${opts.serviceName} just posted on ${lakeName}`,
         },
       );
+      reached += 1;
     }
   } catch {
     /* the board itself is the source of truth; the blast is best-effort */
   }
+  return { reached, outToday: outToday && reached > 0 };
 }
 
 /**
@@ -583,6 +594,11 @@ export async function createBookingBatch(
   // Only meaningful for a one-date booking, where the text says whether a crew
   // is already locked in. A batch's text speaks for the whole list instead.
   let soloAssigned = false;
+  // ACROSS THE WHOLE BATCH. `soloAssigned` is overwritten every iteration, so
+  // a three-day booking could not say how many of its days had a crew — and
+  // the text called all of them "locked in" regardless.
+  let assignedCount = 0;
+  let rushReach: { reached: number; outToday: boolean } = { reached: 0, outToday: false };
 
   // ONE DATE AT A TIME. Each day is its own job, its own price, its own crew
   // question — and its own refusal if it loses the race. Nothing here is
@@ -626,6 +642,7 @@ export async function createBookingBatch(
       try {
         const outcome = await autoAssignJob(inserted.id);
         soloAssigned = outcome.assigned;
+        if (outcome.assigned) assignedCount += 1;
         if (!outcome.assigned && outcome.decision.reasonNoFit === "all_full_or_blocked") {
           await admin.from("jobs").delete().eq("id", inserted.id);
           refused.push({ ...day, ok: false, reason: "That day just filled up — pick another date." });
@@ -635,7 +652,7 @@ export async function createBookingBatch(
         /* leave as requested; the waitlist sweeps will keep hunting */
       }
     } else {
-      await blastRushToCrews(admin, { propertyId: profile.propertyId, serviceName: service.name, date: day.date });
+      rushReach = await blastRushToCrews(admin, { propertyId: profile.propertyId, serviceName: service.name, date: day.date });
     }
     booked.push({ date: day.date, price, isRush: day.isRush });
   }
@@ -676,11 +693,18 @@ export async function createBookingBatch(
       me.phone,
       solo
         ? only.isRush
-          ? `LakeLife ⚡: got it — same-day ${service.name} at the rush rate ($${only.price}). We're offering it to crews already out on your lake right now. If nobody frees up by ${cutoffLabel}, we'll ${validRushFallback(rushFallback) === "roll" ? "move it to tomorrow at the standard price" : "cancel it — no charge"}. 🌊`
+          ? rushOfferLine({
+              serviceName: service.name, price: only.price,
+              reached: rushReach.reached, outToday: rushReach.outToday,
+              cutoffLabel, fallback: validRushFallback(rushFallback) === "roll" ? "roll" : "cancel",
+            })
           : soloAssigned
             ? `LakeLife: ${service.name} is booked for ${pretty}. We'll text you when a crew is on the way. 🌊`
             : `LakeLife: got it — ${service.name} for ${pretty}. We're lining up a crew now and you'll hear the moment one's locked in. You're never charged until the work is done. 🌊`
-        : `LakeLife: ${visits} of ${service.name} locked in — ${prettyDateList(bookedDates, 6)}.${missed} We'll text you before each one, and you're never charged until the work is done. 🌊`,
+        : batchBookedLine({
+            visits, serviceName: service.name, dateList: prettyDateList(bookedDates, 6),
+            assigned: assignedCount, total: booked.length, missed,
+          }),
     );
   }
   if (me?.email && (await allowsNotification(user.id, "book", "email"))) {
@@ -712,7 +736,9 @@ export async function createBookingBatch(
           <ul style="color:#20343d;padding-left:18px">${booked
             .map((b) => html`<li>${new Date(b.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })} — $${b.price.toLocaleString()}${b.isRush ? " (same-day rush)" : ""}</li>`)}</ul>
           <p style="color:#5D7681">Total across ${visits}: <b>$${total.toLocaleString()}</b>. Each visit is charged only after it's completed and its photos are uploaded — never before, and cancelling one visit never touches the others.</p>
-          ${refused.length > 0 ? html`<p style="color:#8a6d3b">We couldn't book ${prettyDateList(refused.map((r) => r.date))}: ${copy.lines.join(" ")} Pick those days again anytime.</p>` : ""}`}
+          ${refused.length > 0
+            ? html`<p style="color:#8a6d3b">We couldn't book every day:</p><ul style="color:#8a6d3b;padding-left:18px">${copy.lines.map((l) => html`<li>${l}</li>`)}</ul><p style="color:#8a6d3b">Pick those days again anytime.</p>`
+            : ""}`}
         </div>`,
     });
   }
