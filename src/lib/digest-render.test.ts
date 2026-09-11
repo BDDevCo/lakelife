@@ -1,19 +1,7 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { composeNightlyDigest, type DigestSections } from "@/lib/digest-render";
-
-/**
- * WHAT THE READER SEES, not how it is encoded.
- *
- * These assertions used to read the raw HTML, which worked only while the
- * digest opted its own prose out of escaping. It no longer does — "the crew's
- * favor" is emitted as `crew&#39;s`, which every mail client draws as an
- * apostrophe. Decoding first keeps the invariant these tests exist for (the
- * digest must NAME the money that moved) and makes them stricter: a
- * double-escape would now show up as a literal `&#39;` and fail.
- */
-const shown = (h: string) =>
-  h.replace(/&#39;/g, "'").replace(/&quot;/g, '"')
-   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 
 const quiet: DigestSections = {
   learning: { changes: [] },
@@ -36,7 +24,7 @@ describe("composeNightlyDigest — quiet night", () => {
 describe("composeNightlyDigest — money movement is never invisible", () => {
   it("quiet-closes (held money released in crew's favor) get their own sweep line", () => {
     const html = composeNightlyDigest({ ...quiet, disputeSweep: { fired: 0, escalated: 0, quietCloses: 2 } });
-    expect(shown(html)).toContain("2 closed in the crew's favor (customer went quiet)");
+    expect(html).toContain("2 closed in the crew's favor (customer went quiet)");
   });
   it("reconciled lost-👎 recoveries are reported", () => {
     const html = composeNightlyDigest({ ...quiet, disputeSweep: { fired: 0, escalated: 0, reconciled: 1 } });
@@ -46,7 +34,7 @@ describe("composeNightlyDigest — money movement is never invisible", () => {
     const html = composeNightlyDigest({ ...quiet, disputeSweep: { fired: 3, escalated: 1, quietCloses: 1, reconciled: 2 } });
     expect(html).toContain("3 auto-refunded");
     expect(html).toContain("1 escalated");
-    expect(shown(html)).toContain("1 closed in the crew's favor");
+    expect(html).toContain("1 closed in the crew's favor");
     expect(html).toContain("2 lost 👎s recovered");
   });
 });
@@ -216,5 +204,68 @@ describe("homes with no lake are never invisible", () => {
   it("reads properly for a single home", () => {
     expect(composeNightlyDigest({ ...quiet, homesWithNoLake: 1 }))
       .toContain("1 home has no lake set");
+  });
+});
+
+describe("the composer's own prose, versus a value it was handed", () => {
+  /**
+   * THE DISTINCTION THAT GOT MUDDLED, pinned so it cannot drift again.
+   *
+   * These sections are written in the tag, which escapes every INTERPOLATED
+   * value. The function's own literal words are not values and stay literal —
+   * "the crew's favor" keeps its apostrophe. A previous pass briefly joined
+   * those sentences into a single interpolated string, which escaped our own
+   * prose into `crew&#39;s`: harmless to a reader, but it made this file the
+   * only one that treated its own words as untrusted, and it produced a
+   * comment elsewhere asserting the opposite of what the code did.
+   */
+  it("keeps our own apostrophes as apostrophes", () => {
+    const out = composeNightlyDigest({
+      ...quiet, disputeSweep: { fired: 0, escalated: 0, quietCloses: 2 },
+    });
+    expect(out).toContain("the crew's favor");
+    expect(out).not.toContain("crew&#39;s");
+  });
+
+  it("does the same for the refund sentences beside them", () => {
+    // The construct twelve lines down was left as a plain join and so was the
+    // one literal in the file that DID escape. Same shape, same treatment.
+    const out = composeNightlyDigest({
+      ...quiet, refundsReconciled: { orphansCleared: 2, flipsCompleted: 1 },
+    } as DigestSections);
+    expect(out).toContain("(invoice flipped, referrals voided); 2 stranded claims cleared");
+    expect(out).not.toContain("&#39;");
+    expect(out).not.toContain("&amp;");
+  });
+
+  it("still escapes a value somebody typed", () => {
+    // The whole point of the tag. A service name is data, not our prose.
+    const out = composeNightlyDigest({
+      ...quiet,
+      autoPricing: { changes: [{ service: `Mowing <b>"big"</b> & trim`, label: "up" }] },
+    } as DigestSections);
+    expect(out).toContain("&lt;b&gt;");
+    expect(out).not.toContain('<b>"big"');
+    // And readable once a mail client has drawn it.
+    const shown = out.replace(/<[^>]*>/g, "")
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+    expect(shown).toContain(`Mowing <b>"big"</b> & trim`);
+  });
+
+  it("builds both prose arrays the same way — the only guard that can catch it", () => {
+    // MUTATION-HONEST NOTE. Reverting the refund array to a plain joined
+    // string does NOT fail any behavioural test above, because those two
+    // sentences happen to contain no apostrophe, ampersand or quote. That is
+    // exactly the defect: it renders correctly today by luck, and the first
+    // person to write "the crew's refund" there gets the only literal in the
+    // file that silently escapes. So the CONSTRUCT is pinned instead.
+    const src = readFileSync(
+      fileURLToPath(new URL("./digest-render.ts", import.meta.url)), "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src, "a prose array went back to string[] and will escape our own words")
+      .not.toMatch(/const bits:\s*string\[\]/);
+    // And the scanner still finds the arrays it is judging.
+    expect(src.match(/const bits:\s*RawHtml\[\]/g) ?? []).toHaveLength(2);
   });
 });

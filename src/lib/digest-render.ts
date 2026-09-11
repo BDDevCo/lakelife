@@ -213,10 +213,17 @@ export function composeNightlyDigest(sections: DigestSections): string {
     }
     const rr = sections.refundsReconciled;
     if (rr && (rr.orphansCleared > 0 || rr.flipsCompleted > 0)) {
-      const bits: string[] = [];
-      if (rr.flipsCompleted > 0) bits.push(`${rr.flipsCompleted} refund${plural(rr.flipsCompleted)} finished settling (invoice flipped, referrals voided)`);
-      if (rr.orphansCleared > 0) bits.push(`${rr.orphansCleared} stranded claim${plural(rr.orphansCleared)} cleared (no cash ever moved)`);
-      money.push(html`<li>Refunds reconciled: ${bits.join("; ")}.</li>`);
+      // SAME SHAPE AS THE SWEEP BITS ABOVE, and it was left as a plain
+      // string[] — so this one joined sentence went through the escaper while
+      // every other literal in the file did not. It renders identically today
+      // purely because these two sentences happen to contain no apostrophe,
+      // ampersand or quote. The first person to write "the crew's refund" or
+      // "invoice & referral" here would have found the only literal in the
+      // file that silently escapes. One construct, one way.
+      const bits: RawHtml[] = [];
+      if (rr.flipsCompleted > 0) bits.push(html`${rr.flipsCompleted} refund${plural(rr.flipsCompleted)} finished settling (invoice flipped, referrals voided)`);
+      if (rr.orphansCleared > 0) bits.push(html`${rr.orphansCleared} stranded claim${plural(rr.orphansCleared)} cleared (no cash ever moved)`);
+      money.push(html`<li>Refunds reconciled: ${bits.map((b, i) => (i === 0 ? b : html`; ${b}`))}.</li>`);
     }
     if (money.length > 0) {
       parts.push(html`<h3>Money moved tonight</h3><ul>${money}</ul>`);
