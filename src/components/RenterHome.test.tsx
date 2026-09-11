@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { RenterHome as RenterHomeView } from "@/app/parks/my-data";
 
 /**
@@ -35,7 +37,8 @@ vi.mock("@/components/EnableLotBooking", () => ({ EnableLotBooking: () => <i>boo
 const { RenterHome } = await import("./RenterHome");
 
 const view = (over: Partial<RenterHomeView> = {}): RenterHomeView => ({
-  parkName: "The Haven", lotNumber: "7", hasSticker: false,
+  parkName: "The Haven", parkAddress: "9085 E 500 S, Wolcottville, IN 46795",
+  lotNumber: "7", hasSticker: false,
   displayName: "Roy Amberg", since: "2015-04-01",
   textsOn: false, textNumber: null, term: "Month to month", leavingOn: null,
   acceptsOnlineRent: false, hasCard: false, bookingReady: false, cardFeePct: 0,
@@ -149,5 +152,111 @@ describe("a payment the bank sent back", () => {
     const html = renderToStaticMarkup(<RenterHome view={view({ payments: [PAID] })} />);
     expect(html).not.toMatch(/bank sent this payment back/);
     expect(html).not.toMatch(/line-through/);
+  });
+});
+
+/**
+ * THE MONEY SCREENS, IN HER FIRST MONTH AND HER LAST.
+ *
+ * Three findings from the UX review, all on the same person's screen, all
+ * about money:
+ *
+ *   she could see what she owed with no way to pay it and no sentence saying
+ *   how — and 17 of The Haven's 18 households pay cash or a cheque;
+ *
+ *   the move-out card promised "your receipts stay" over a list of six;
+ *
+ *   (the third, the portal sending a moved-out resident to /book, is pinned in
+ *   the portal's own guard — it is routing, not rendering.)
+ */
+const owing = (over: Partial<RenterHomeView> = {}) =>
+  view({
+    acceptsOnlineRent: false,
+    bill: {
+      id: "c1", monthLabel: "January 2027", dueOn: "2027-01-01",
+      amount: 542.53, paidTotal: 0, outstanding: 542.53,
+      status: "open", disputed: false, claimedPaidOn: null, lines: [],
+    },
+    ...over,
+  });
+
+describe("a household that pays cash", () => {
+  it("is told where to take the money", () => {
+    // THE WORST GAP ON THIS SCREEN. With no card rail the pay button renders
+    // nothing, and the only control left invited her to declare she had
+    // ALREADY paid.
+    const w = words(owing());
+    expect(w, "the screen shows a balance and no way to settle it").toMatch(/pay the office/i);
+    expect(w).toContain("9085 E 500 S");
+  });
+
+  it("does not pretend the park takes cards", () => {
+    // Apostrophes arrive HTML-escaped, so the assertion sits on the half of
+    // the sentence that carries the meaning.
+    expect(words(owing())).toMatch(/take card payments through LakeLife yet/i);
+  });
+
+  it("says nothing of the kind once the park takes cards", () => {
+    // The other half: a park WITH a processor must not be told to walk to the
+    // office instead of tapping the button it has.
+    expect(words(owing({ acceptsOnlineRent: true }))).not.toMatch(/pay the office/i);
+  });
+
+  it("stays quiet when she owes nothing", () => {
+    const paid = owing({
+      bill: { id: "c1", monthLabel: "January 2027", dueOn: "2027-01-01",
+        amount: 542.53, paidTotal: 542.53, outstanding: 0,
+        status: "paid", disputed: false, claimedPaidOn: null, lines: [] },
+    });
+    expect(words(paid)).not.toMatch(/pay the office/i);
+  });
+
+  it("still tells her how when only a BACK month is unpaid", () => {
+    // The case a sentence living inside the bill card would have missed: this
+    // month settled, December outstanding, so there is no current balance to
+    // hang it off — and she is the person most in need of it.
+    const backOnly = owing({
+      bill: { id: "c2", monthLabel: "January 2027", dueOn: "2027-01-01",
+        amount: 542.53, paidTotal: 542.53, outstanding: 0,
+        status: "paid", disputed: false, claimedPaidOn: null, lines: [] },
+      arrears: [{ id: "c1", monthLabel: "December 2026", dueOn: "2026-12-01",
+        amount: 542.53, paidTotal: 0, outstanding: 542.53,
+        status: "open", disputed: false, claimedPaidOn: null, lines: [] }],
+    });
+    expect(words(backOnly), "a household in arrears is told nothing").toMatch(/pay the office/i);
+  });
+
+  it("writes a usable sentence for a park with no address on file", () => {
+    // Never "pay the office at undefined".
+    const w = words(owing({ parkAddress: null }));
+    expect(w).toMatch(/pay the office/i);
+    expect(w).not.toMatch(/undefined|null/);
+  });
+});
+
+describe("the receipts promise", () => {
+  it("the copy and the cap agree about how much is shown", () => {
+    // THE PAIR THAT MUST MOVE TOGETHER. The card says "the last two years";
+    // my-data decides how many rows it hands over. When those two disagree
+    // the card is lying, which is exactly how this started — a list of six
+    // under a promise of "always".
+    const data = readFileSync(
+      fileURLToPath(new URL("../app/parks/my-data.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(data, "the payment list is capped below the two years the card promises")
+      .toMatch(/\.slice\(0,\s*24\)/);
+    // And the read must actually fetch what the slice is allowed to keep —
+    // a slice of 24 over a limit of 6 is still a list of six.
+    expect(data).toMatch(/\.limit\(24\)/);
+  });
+
+  it("no longer claims more than the screen holds", () => {
+    const w = words(view({ tenancyEnded: "2027-03-31" }));
+    expect(w, "the card promises receipts it does not show")
+      .not.toMatch(/always show what you paid/);
+    expect(w).toMatch(/last two years are below/);
+    // And it says where the rest are, rather than implying they are gone.
+    expect(w).toMatch(/by receipt number/);
   });
 });

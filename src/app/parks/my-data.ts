@@ -56,6 +56,18 @@ export interface Bill {
 
 export interface RenterHome {
   parkName: string;
+  /**
+   * WHERE SHE TAKES THE MONEY, when there is no card to pay with.
+   *
+   * The bill screen showed what she owed, offered nothing but "I've already
+   * paid this", and said nowhere to take it. Seventeen of The Haven's
+   * eighteen households pay cash or cheque, so for almost all of them the
+   * only control on the screen invited them to assert something untrue.
+   *
+   * Null when the park has no address on file — the sentence is then written
+   * without one rather than printing "undefined" at somebody.
+   */
+  parkAddress: string | null;
   lotNumber: string;
   /** Her pedestal has a scannable sticker. False for every Haven lot today. */
   hasSticker: boolean;
@@ -243,7 +255,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     // sent a household with a leaking riser outside to scan something that is
     // not there, from a screen with no other way to report anything.
     admin.from("park_lots").select("lot_number, qr_token").eq("id", stay.park_lot_id as string).maybeSingle(),
-    admin.from("parks").select("name, accepts_online_rent, card_fee_pct").eq("id", file.park_id as string).maybeSingle(),
+    admin.from("parks").select("name, address, accepts_online_rent, card_fee_pct").eq("id", file.park_id as string).maybeSingle(),
     // THE CARD payRent WILL ACTUALLY CHARGE, not a head-count of cards.
     // Same table, same `is_default` ordering, same limit as the action — the
     // fee quoted on the confirm panel has to be resolved from the same row the
@@ -429,6 +441,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
 
   return {
     parkName: (park?.name as string) ?? "your park",
+    parkAddress: ((park?.address as string) ?? "").trim() || null,
     // TWO CONDITIONS, NOT ONE. `accepts_online_rent` is the park's WISH; a
     // connected processor is what makes it possible. The Haven has the flag on
     // and there is no processor, so this rendered a gold "Pay $542.53" button,
@@ -467,7 +480,16 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       : null,
     payments: live
       .filter((p) => p.kind !== "deposit")
-      .slice(0, 6)
+      // TWENTY-FOUR, NOT SIX, AND THE SCREEN SAYS WHEN IT IS SHOWING A SLICE.
+      //
+      // The move-out card promises "Your receipts stay too, so you can always
+      // show what you paid." At six, her seventh monthly payment silently
+      // pushed the oldest off with nothing saying more existed — and this is
+      // the only payment history a resident ever sees, so it is also what she
+      // would reach for to prove she paid a month the park is chasing her for.
+      // The read above already fetches 24; the cap was throwing away rows it
+      // had paid for.
+      .slice(0, 24)
       .map((p) => ({
         on: p.received_on as string,
         amount: Number(p.amount ?? 0),

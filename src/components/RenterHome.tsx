@@ -31,6 +31,37 @@ function pretty(iso: string | null): string {
   });
 }
 
+/**
+ * HOW TO PAY, WHEN THERE IS NO BUTTON TO TAP.
+ *
+ * THE WORST GAP ON THIS SCREEN. With online rent off — every park without a
+ * processor, including The Haven in January — the pay button renders nothing,
+ * and the only control left invites her to declare she has ALREADY paid. The
+ * screen showed $542.53 owed and said nowhere on earth to take it. Seventeen
+ * of The Haven's eighteen households pay cash or a cheque, so that was almost
+ * all of them.
+ *
+ * The sentence does exist elsewhere: in the invite email and on an overdue
+ * notice. Both are messages, both sit behind `parks.notices_held_at`, and the
+ * overdue one only fires once the office has already chased her. Neither is on
+ * the screen she opens on the 1st.
+ *
+ * RENDERED ONCE, above the months, and NOT inside the bill card — a household
+ * whose January is paid and December is not has no current outstanding bill,
+ * so a sentence living in that card would vanish for exactly the person most
+ * in need of it.
+ */
+function HowToPay({ parkName, parkAddress }: { parkName: string; parkAddress: string | null }) {
+  return (
+    <p className="mut" style={{ fontSize: 13, margin: "10px 0 0", lineHeight: 1.6 }}>
+      {parkName} doesn&apos;t take card payments through LakeLife yet
+      {parkAddress ? <> — pay the office at {parkAddress}</> : " — pay the office"},
+      the same way you do now. Once you have, tap &ldquo;I&apos;ve already paid
+      this&rdquo; so it shows here while the office confirms it.
+    </p>
+  );
+}
+
 export function RenterHome({ view }: { view: RenterHomeView }) {
   const b = view.bill;
 
@@ -70,7 +101,8 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
             You moved out on {pretty(view.tenancyEnded)}. This page stays here
             while anything is still open between you and the park &mdash;{" "}
             <strong>anything you still owe, and any deposit still held.</strong>{" "}
-            Your receipts stay too, so you can always show what you paid.
+            Your receipts stay too &mdash; the last two years are below, and the
+            office holds every one of them by receipt number.
           </p>
         </div>
       )}
@@ -139,6 +171,19 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
               />
             )}
 
+            {/* HOW TO PAY IT, WHEN THERE IS NO BUTTON.
+                THE WORST GAP ON THE RESIDENT'S SCREEN. With online rent off —
+                which is every park without a processor, including The Haven in
+                January — the card above this renders nothing, and the only
+                control left invites her to declare she has ALREADY paid. The
+                screen showed her $542.53 owed and said nowhere on earth to
+                take it. Seventeen of The Haven's eighteen households pay cash
+                or a cheque, so that was almost all of them.
+                The sentence exists elsewhere — in the invite email and on an
+                overdue notice — and both are messages, both sit behind
+                `parks.notices_held_at`, and the overdue one only fires after
+                the office has already chased her. Neither is on the screen she
+                opens on the 1st. */}
             {/* "I ALREADY PAID THIS", AND IT IS NOT GATED ON acceptsOnlineRent.
                 The pay button above is — a resident must never be offered a
                 payment their landlord hasn't agreed to take. This is the
@@ -191,6 +236,17 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
           Oldest first, because that is the one to clear first, and each row
           carries the SAME two controls as the current bill: paying and saying
           "I already paid this" are exactly as necessary here. */}
+      {/* ONE SENTENCE, FOR ANY MONTH SHE STILL OWES ON — current or back.
+          Placed between the bill and the arrears so it reads as the answer to
+          "what do I owe", which is where her eye already is. */}
+      {!view.acceptsOnlineRent &&
+        ((view.bill?.outstanding ?? 0) > 0 || view.arrears.some((a) => a.outstanding > 0)) && (
+          <div className="ll-card ll-card-pad" style={{ marginTop: 12 }}>
+            <h3 style={{ fontSize: 15, margin: 0 }}>How to pay</h3>
+            <HowToPay parkName={view.parkName} parkAddress={view.parkAddress} />
+          </div>
+        )}
+
       {view.arrears.length > 0 && (
         <div className="ll-card ll-card-pad" style={{ marginTop: 12 }}>
           <h3 style={{ fontSize: 15, margin: 0 }}>
@@ -285,6 +341,11 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
           </p>
         ) : (
           <div style={{ marginTop: 6 }}>
+            {/* SAY WHEN THIS IS A SLICE. The card above promises her receipts
+                stay; a list that silently stopped at the newest few made that
+                a lie from her seventh payment onward. Two years is a sensible
+                page — and the sentence below is what keeps the promise honest
+                for a resident of eleven years, who does exist. */}
             {view.payments.map((p, i) => (
               <div key={`${p.on}-${i}`} style={{
                 display: "flex", gap: 8, fontSize: 13,

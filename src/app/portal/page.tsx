@@ -100,13 +100,31 @@ export default async function PortalPage() {
           .from("lot_reservations")
           .select("id")
           .eq("renter_id", file.id as string)
-          .in("status", ["approved", "active"])
+          .in("status", ["approved", "active", "ended"])
           .limit(1)
           .maybeSingle(),
       );
-      // A claimed file with no live tenancy is an applicant, not a resident —
-      // they carry on to the ordinary customer door rather than being sent to
-      // a screen that would only tell them they have no lot.
+      // THREE STATES, NOT TWO, AND "ended" IS THE ONE THAT HOLDS HER MONEY.
+      //
+      // This used to read approved|active, and the comment here used to say a
+      // claimed file with no LIVE tenancy is an applicant. That stopped being
+      // true when /parks/my learned to serve the move-out wrap-up: her deposit
+      // and her final prorated month — which `runCharges` deliberately raises
+      // AFTER the move-out (0101) — both live on that screen now.
+      //
+      // So the day the office closed her out, the only navigation she has
+      // ("My portal") sent her to /book, the lake-house booking page, and the
+      // screen holding her deposit became reachable only by typing the URL.
+      // She is owed no screen about a pad somebody else now lives on; she is
+      // owed the money.
+      //
+      // A GENUINE APPLICANT IS STILL SENT ON, which is what the old comment
+      // was right about: somebody who applied and was never approved has no
+      // row in ANY of these three states, so they still fall through to the
+      // ordinary customer door.
+      //
+      // One doorway of three: park/ledger-actions.ts already reads the same
+      // widened set, and parks/my-data.ts serves it. This was the straggler.
       if (stay) redirect("/parks/my");
     }
   }
