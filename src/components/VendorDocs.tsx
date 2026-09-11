@@ -228,6 +228,11 @@ function DocUpload({
             if (!res.ok) { toast(res.error ?? "Couldn't upload that."); return; }
             toast(`${title} saved.`);
             if (fileRef.current) fileRef.current.value = "";
+            // AND THE ECHO OF IT. Clearing the input but not the line that
+            // reports what is in the input leaves the card saying "Ready to
+            // send: coi-2026.pdf" over an empty picker — so the crew taps the
+            // button again and is told "Pick a file first."
+            setFileName(null);
             setExpiry("");
             setInsured("");
             router.refresh();

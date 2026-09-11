@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   declineMeans, completionBlock, arrivalFlagRefusal, arrivalNoteMessage,
 } from "@/lib/arrival";
+import { emailSafe } from "@/lib/html-safe";
 
 /**
  * THREE THINGS THE CREW COULD NOT SAY, AND ONE SCREEN THAT SAID TWO OPPOSITE
@@ -529,5 +530,68 @@ describe("C. the note both sides were promised gets written", () => {
     // handles an empty diff; only the guard in front of it refused.
     expect(actions).not.toMatch(/if\s*\(proposed\s*&&\s*svcId\s*&&\s*ctx\.propertyId\)/);
     expect(actions).toMatch(/scopeNoteFor\s*\(/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TWO MORE OF MINE, FROM THE TEN THE REVIEW NEVER GOT TO VERIFY.
+//
+//   D. THE CREW'S WORDS REACH AN HTML EMAIL UNESCAPED. `detail` was only ever
+//      machine-composed from counts and prices until I made it carry a typed
+//      sentence. A crew writing "gate is <4ft wide, truck won't fit" sends an
+//      owner an email that a mail client renders as:
+//          Your crew can't start until you've seen this: "gate is
+//      — everything from `<4ft` onward eaten as an unknown tag, including
+//      "Nothing is charged". They decide whether to hold a job on half a
+//      sentence. (The review's panel REFUTED this one. They were wrong; the
+//      arithmetic is in the test below.)
+//
+//   E. "READY TO SEND" SURVIVES THE SEND. I added the filename echo to the
+//      insurance card and cleared the input on success without clearing the
+//      echo — so the card says a file is staged when none is, the crew taps
+//      the button again and is told "Pick a file first."
+// ---------------------------------------------------------------------------
+
+describe("D. a crew's sentence does not get eaten by the owner's mail client", () => {
+  it("survives an angle bracket intact", () => {
+    const note = "gate is <4ft wide, truck won't fit";
+    const body = emailSafe(
+      arrivalNoteMessage({ note, where: "1414 Lane Rd", serviceName: "Mowing" }),
+    );
+    // What a parser leaves behind after eating tags is what the owner reads.
+    const asRendered = body.replace(/<[^>]*>?/g, "");
+    expect(asRendered, "the mail client swallowed the rest of the sentence").toContain("4ft wide");
+    expect(asRendered).toContain("Nothing is charged");
+  });
+
+  it("escapes the characters that break an HTML body, and only those", () => {
+    expect(emailSafe(`<b>&"'`)).toBe("&lt;b&gt;&amp;&quot;&#39;");
+    expect(emailSafe("a plain sentence."), "escaping ordinary text").toBe("a plain sentence.");
+  });
+
+  it("leaves the TEXT message alone — &quot; is not a thing to read aloud", () => {
+    // The same sentence goes out by SMS, where escaping would be the bug.
+    expect(arrivalNoteMessage({ note: 'he said "no"', where: "x", serviceName: "y" }))
+      .toContain('he said "no"');
+  });
+
+  it("is applied where the crew's words enter the email", () => {
+    expect(strip(read("../app/vendor/actions.ts"))).toMatch(/emailSafe\s*\(\s*detail\s*\)/);
+  });
+});
+
+describe("E. the insurance card stops saying a file is staged once it is sent", () => {
+  const docs = strip(read("./VendorDocs.tsx"));
+
+  it("clears the filename echo on a successful upload", () => {
+    // The success path clears the input, the expiry and the insured name. It
+    // has to clear this too, or the card contradicts the input beside it.
+    const success = docs.slice(docs.indexOf("toast(`${title} saved.`)"));
+    expect(success, "the echo outlives the file it describes").toMatch(/setFileName\(null\)/);
+  });
+
+  it("still says what was picked in the first place", () => {
+    expect(docs).toMatch(/Ready to send:/);
+    expect(docs).toMatch(/setFileName\(e\.target\.files/);
   });
 });

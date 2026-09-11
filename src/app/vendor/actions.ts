@@ -16,6 +16,7 @@ import {
   arrivalFlagRefusal, arrivalNoteMessage,
   type TimedRule,
 } from "@/lib/arrival";
+import { emailSafe } from "@/lib/html-safe";
 import { planRecovery } from "@/lib/recovery";
 
 // Only these profile fields may be changed by a crew flag, with safe values.
@@ -553,13 +554,18 @@ export async function submitFlag(
     if (owner?.email && apprByEmail) {
       void sendEmail({
         to: owner.email,
-        subject: `A quick check on your ${svcName}`,
+        subject: `A quick check on your ${svcName}`,  // a header, not a body — not HTML
+        // emailSafe ON EVERY INTERPOLATED VALUE. `detail` now carries a
+        // sentence a crew TYPED (arrivalNoteMessage), and a note reading
+        // "gate is <4ft wide" arrives as "…you've seen this: \"gate is" —
+        // the rest, including "nothing is charged", eaten as an unknown tag.
+        // A property nickname and an owner's name are typed by people too.
         html:
-          `<p>Hi ${owner.name ?? "there"},</p>` +
+          `<p>Hi ${emailSafe(owner.name ?? "there")},</p>` +
           (detail
-            ? `<p>${detail}</p>`
-            : `<p>The crew at ${where} found something on site that doesn't match ` +
-              `what we have on file for your ${svcName}.</p>`) +
+            ? `<p>${emailSafe(detail)}</p>`
+            : `<p>The crew at ${emailSafe(where)} found something on site that doesn't match ` +
+              `what we have on file for your ${emailSafe(svcName)}.</p>`) +
           `<p><b>Nothing has changed and nothing has been charged.</b> It waits ` +
           `for you.</p>` +
           `<p><a href="${site}/approvals">Take a look</a></p><p>🌊</p>`,
