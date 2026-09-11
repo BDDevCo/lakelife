@@ -228,9 +228,22 @@ describe("no crew is sent to a screen their role cannot open", () => {
     }
   });
 
-  it("the customer's ones still do — they have that tab", () => {
+  it("the customer's ones still do — they have that tab", async () => {
     // Guard on the carve-out, so a future sweep does not strip the true one.
-    expect(src("../app/c/[token]/issue/route.ts")).toMatch(/Messages in your portal/);
+    //
+    // It nearly did: consolidating four copies of the "already answered"
+    // sentence moved this line out of the route and into verdictPage, and this
+    // assertion caught it. Now checked where the words actually are — and by
+    // RENDERING rather than scanning, which also pins that the 👍 side does
+    // NOT get pointed at a complaints channel.
+    const { verdictPage } = await import("./verdict-page");
+    // The tab is named on the 👎 that actually opened a dispute — the state
+    // where there IS a thread to follow up in.
+    expect(verdictPage({ ok: true, recorded: true, disputeOpened: true }, "issue").body)
+      .toMatch(/Messages in your portal/);
+    // Never on the 👍 side: nothing to follow up, and no complaint to make.
+    expect(verdictPage({ ok: true, recorded: true }, "good").body)
+      .not.toMatch(/Messages in your portal/);
   });
 });
 

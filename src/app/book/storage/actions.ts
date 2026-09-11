@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { allowsNotification } from "@/lib/notif-gate";
 import { getFullProfile, toPricingProfile } from "@/app/profile/data";
 import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 import { validateSelection, anchorServiceId } from "@/lib/packages";
@@ -258,7 +259,9 @@ export async function createPackageBooking(input: {
   const springLine = sel.spring.length > 0
     ? ` Spring work (~$${sel.springTotal.toLocaleString()}) is quoted now and billed at splash.`
     : "";
-  if (me?.phone) {
+  // THE SWITCHES THE REST OF THE PRODUCT RESPECTS. These two sends consulted
+  // nothing, so a customer who turned booking messages off still got one.
+  if (me?.phone && (await allowsNotification(user.id, "book", "sms"))) {
     void sendSms(
       me.phone,
       assigned
@@ -266,13 +269,26 @@ export async function createPackageBooking(input: {
         : `LakeLife: got it — ${pkg.name} for ${pretty}. We're lining up the right crew now (storage needs the right barn and insurance) and you'll hear the moment one's locked in. You're never charged until the work is done.${springLine} 🌊`,
     );
   }
-  if (me?.email) {
+  if (me?.email && (await allowsNotification(user.id, "book", "email"))) {
     void sendEmail({
       to: me.email,
-      subject: `Booked: ${pkg.name} 🌊`,
+      // THE SAME FACT THE TEXT AND THE SCREEN ALREADY TELL THEM. `assigned`
+      // is in scope here, the SMS above branches on it, and this function
+      // returns `findingCrew: !assigned` so the wizard can branch too — which
+      // it does. This email was the one doorway of three that claimed winter
+      // was handled when no crew, no barn and no insured custodian had been
+      // found. It is the only one of the three still in front of them the
+      // next morning. (The twin of this was fixed in 02fc933; this one was
+      // left behind.)
+      subject: assigned
+        ? `Booked: ${pkg.name} 🌊`
+        : `We've got your ${pkg.name} request 🌊`,
       html: html`<div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#20343d">
-          <h2>Winter's handled.</h2>
+          <h2>${assigned ? "Winter's handled." : "We've got it."}</h2>
           <p><b>${pkg.name}</b> — fall visit ${pretty}</p>
+          ${assigned
+            ? ""
+            : html`<p style="color:#8a6d3b">We're lining up the right crew for that day now — storage needs the right barn and the right insurance, so it takes us a little longer. You'll hear the moment one is locked in, and nothing is confirmed until then.</p>`}
           <p style="color:#5D7681">Fall visit: <b>$${sel.fallTotal.toLocaleString()}</b>, charged after the work is complete and photos are in.${springLine ? html`<br>${springLine.trim()}` : ""}</p>
           ${sel.storageTierId ? html`<p style="color:#5D7681;font-size:13px">Storage season runs through May 31 — after that a small per-day charge applies until pickup. Condition photos at every hand-off; balance due before spring splash.</p>` : ""}
         </div>`,

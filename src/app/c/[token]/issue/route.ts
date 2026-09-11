@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { htmlPage, escapeHtml } from "@/app/a/[token]/respond";
+import { verdictPage } from "@/lib/verdict-page";
 import { recordJobVerdict } from "@/lib/job-verdict";
 import { signedJobPhotosOrNone } from "@/lib/photos";
 import { photoStripHtml } from "@/lib/photo-strip";
@@ -59,7 +60,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   const conf = await loadConf(token);
   if (conf === CONF_READ_FAILED) return confReadFailedPage();
   if (!conf) return htmlPage("That link isn't right", "This link doesn't match anything. 🌊", false);
-  if (conf.verdict) return htmlPage("Thanks — got it ✓", "Your feedback is already in. If anything's still unresolved, message us from your portal. 🌊");
+  // Already answered, from whichever door won. Same sentence as the two other
+  // places that say it — see verdictPage.
+  if (conf.verdict) {
+    const already = verdictPage({ ok: true, recorded: false }, "issue");
+    return htmlPage(already.title, already.body, already.ok);
+  }
 
   const job = one(conf.jobs) as { services?: unknown } | null;
   const svc = (one(job?.services) as { name?: string } | null)?.name ?? "your service";
@@ -80,7 +86,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   const conf = await loadConf(token);
   if (conf === CONF_READ_FAILED) return confReadFailedPage();
   if (!conf) return htmlPage("That link isn't right", "This link doesn't match anything. 🌊", false);
-  if (conf.verdict) return htmlPage("Thanks — got it ✓", "Your feedback is already in. 🌊");
+  if (conf.verdict) {
+    const already = verdictPage({ ok: true, recorded: false }, "issue");
+    return htmlPage(already.title, already.body, already.ok);
+  }
 
   let note = "";
   try {
@@ -94,11 +103,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   // job page both run recordJobVerdict — the guarded first-tap-wins flip, the
   // Make-It-Right dispute (which holds the crew's pay and texts them their
   // three cure links), and the annotated board post all live there.
+  // THREE STATES, NOT TWO. `recorded` alone could not tell a FAILED WRITE from
+  // a second tap, so a homeowner whose complaint did not save was told it was
+  // already in — on the one channel they have, with their crew's pay hold and
+  // their free return visit both hanging off this tap. And "they've been told"
+  // was printed even for a 👎 on a correction visit, where no dispute opens and
+  // nobody is texted. verdictPage names every state, once, for both doors.
   const res = await recordJobVerdict(conf.id as string, "issue", note);
-  if (!res.recorded) return htmlPage("Thanks — got it ✓", "Your feedback is already in. 🌊");
-
-  return htmlPage(
-    "Flagged — your crew is on it 🌊",
-    "They've been told and it's on them to make it right. You can follow up anytime from Messages in your portal — and this never costs you anything.",
-  );
+  const page = verdictPage(res, "issue");
+  return htmlPage(page.title, page.body, page.ok);
 }

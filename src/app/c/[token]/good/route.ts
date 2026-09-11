@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { verdictPage } from "@/lib/verdict-page";
 import { htmlPage } from "@/app/a/[token]/respond";
 import { recordJobVerdict } from "@/lib/job-verdict";
 import { signedJobPhotosOrNone } from "@/lib/photos";
@@ -62,7 +63,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   const conf = await loadConf(token);
   if (conf === CONF_READ_FAILED) return confReadFailedPage();
   if (!conf) return htmlPage("That link isn't right", "This link doesn't match anything. 🌊", false);
-  if (conf.verdict) return htmlPage("Thanks — got it ✓", "Your feedback is already in. See you out there. 🌊");
+  if (conf.verdict) {
+    const already = verdictPage({ ok: true, recorded: false }, "good");
+    return htmlPage(already.title, already.body, already.ok);
+  }
   return htmlPage(
     "Glad it went well? 🌊",
     `One tap and your crew gets the credit for ${svcName(conf)}.`,
@@ -80,6 +84,9 @@ export async function POST(_req: Request, ctx: { params: Promise<{ token: string
   if (!conf) return htmlPage("That link isn't right", "This link doesn't match anything. 🌊", false);
   // ONE implementation, two doors: this SMS link and the in-portal tap on the
   // job page both run recordJobVerdict, so the consequences can never drift.
-  await recordJobVerdict(conf.id as string, "good", "");
-  return htmlPage("Thanks — that's what we like to hear 🌊", "Your crew gets the credit. See you next time.");
+  // The outcome used to be DISCARDED — a bare await — so a failed write still
+  // rendered the thank-you and the customer had no reason to tap again.
+  const res = await recordJobVerdict(conf.id as string, "good", "");
+  const page = verdictPage(res, "good");
+  return htmlPage(page.title, page.body, page.ok);
 }
