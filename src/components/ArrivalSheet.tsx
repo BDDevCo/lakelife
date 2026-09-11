@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { toast } from "@/components/Toast";
 import { submitFlag, recordNoShow } from "@/app/vendor/actions";
-import { noAnswerExplainer, FIELD_LABEL } from "@/lib/arrival";
+import { noAnswerExplainer, FIELD_LABEL, declineMeans } from "@/lib/arrival";
 
 /**
  * THE FIRST THING THE CREW TAPS WHEN THEY PULL IN.
@@ -20,6 +20,11 @@ import { noAnswerExplainer, FIELD_LABEL } from "@/lib/arrival";
  *   · No, it's different — say WHAT, in counts. That holds the job until the
  *     owner decides (0084), which is the entire point: the old flow let a crew
  *     do the bigger job and get paid for the smaller one.
+ *   · Something else is wrong — in words. The pier is already out. A car is
+ *     parked across the whole lawn. It's the wrong house. This header used to
+ *     call the other three "the only three that exist", and they are not: a
+ *     crew whose problem wasn't a number had to pick a field and invent one,
+ *     which rule 6 writes into the customer's profile the moment they approve.
  *   · Nobody's answering — and what that means is NOT the crew's call to make.
  *     The service already knows whether they need to get inside.
  *
@@ -79,7 +84,48 @@ const WHAT_CHANGED: Array<{
   },
 ];
 
-type Step = "ask" | "different" | "noanswer";
+type Step = "ask" | "different" | "somethingelse" | "noanswer";
+
+/**
+ * WHAT HAPPENS NEXT, SO NOBODY STANDS THERE GUESSING.
+ *
+ * Both halves of a decline come out of `declineMeans` — the sentence the crew
+ * reads here and the sentence the owner reads on the approval card. This used
+ * to be a literal ending "If they say no, do the job as it was booked", which
+ * is true of a mow and false of a pier removal, and which sat twenty lines
+ * under a field helper saying "you pack up and go". A crew who answered "no, I
+ * can't do this without the change" was given both instructions at once.
+ *
+ * Deliberately silent about money: the crew states the count, the owner sees
+ * the price (rule 1).
+ */
+export function WhatHappensNext({
+  canProceed,
+  cannotReason,
+  serviceName,
+}: {
+  canProceed: boolean;
+  cannotReason: string;
+  serviceName: string;
+}) {
+  const means = declineMeans(
+    { crew_can_proceed: canProceed, crew_cannot_reason: cannotReason },
+    { serviceName },
+  );
+  return (
+    <div
+      style={{
+        padding: "10px 12px", borderRadius: 10, marginBottom: 12,
+        background: "var(--sun-soft)", border: "1px solid #ecd9ad", color: "#7a5a1e",
+        fontSize: 12.5, lineHeight: 1.5,
+      }}
+    >
+      This holds the job and asks the owner to confirm.{" "}
+      <b>Don&apos;t start until they answer</b> — you&apos;ll get a text either
+      way. {means.crewDetail}
+    </div>
+  );
+}
 
 export function ArrivalSheet({
   jobId,
@@ -123,17 +169,29 @@ export function ArrivalSheet({
 
   const chosen = WHAT_CHANGED.find((w) => w.field === field) ?? options[0];
 
-  async function sendCorrection() {
+  async function sendCorrection(kind: "correction" | "other") {
     if (busy) return;
     // `chosen.field`, NOT a hardcoded key. The count branch was already
     // generic; the band branch wrote `lawn_band` literally, so a driveway
     // correction would have been filed against the customer's LAWN — a wrong
     // fact, approved by the homeowner, repricing the wrong service.
-    const proposed: Record<string, unknown> =
-      chosen.kind === "band" ? { [chosen.field]: band } : { [chosen.field]: Number(countVal) };
+    //
+    // NULL for "something else": there is no number, and inventing one is the
+    // exact harm this door exists to remove. `note` carries the whole fact and
+    // the server's own guard now accepts words in place of counts.
+    const proposed: Record<string, unknown> | null =
+      kind === "other"
+        ? null
+        : chosen.kind === "band"
+          ? { [chosen.field]: band }
+          : { [chosen.field]: Number(countVal) };
 
-    if (chosen.kind === "count" && !countVal.trim()) {
+    if (kind === "correction" && chosen.kind === "count" && !countVal.trim()) {
       toast("Put the real number in — that's what the owner approves.");
+      return;
+    }
+    if (kind === "other" && note.trim().length < 6) {
+      toast("Say what you found — the owner is being asked to stop the job on it.");
       return;
     }
     if (!canProceed && !cannotReason.trim()) {
@@ -142,7 +200,7 @@ export function ArrivalSheet({
     }
     setBusy(true);
     // atArrival = true. This is the flag that STOPS the job.
-    const res = await submitFlag(jobId, chosen.field, note, proposed, true, {
+    const res = await submitFlag(jobId, kind === "other" ? "other" : chosen.field, note, proposed, true, {
       canProceed,
       cannotReason: canProceed ? "" : cannotReason,
     });
@@ -168,9 +226,17 @@ export function ArrivalSheet({
     borderRadius: 10, fontSize: 16, fontFamily: "inherit", background: "#fff", color: "var(--text)",
   };
   // Thumb-sized, because this is used one-handed, outdoors, in a hurry.
+  //
+  // THE COLUMN IS LOAD-BEARING. `.ll-btn` is `display: inline-flex` with
+  // `align-items: center`, so the two-line buttons here — a label plus a
+  // `display: block` span under it — put the span BESIDE the label as a second
+  // flex item, squeezing "It's different from the profile" into a four-line
+  // column an inch wide at 375px. `textAlign: left` does nothing to a flex
+  // child. Stacking and starting them is what that line was reaching for.
   const bigBtn: React.CSSProperties = {
     width: "100%", textAlign: "left", padding: "14px 16px", marginBottom: 10,
     fontSize: 15.5, lineHeight: 1.35,
+    flexDirection: "column", alignItems: "flex-start", justifyContent: "center",
   };
 
   return (
@@ -209,45 +275,75 @@ export function ArrivalSheet({
                 </span>
               </button>
 
+              {/* THE DOOR FOR EVERYTHING THAT ISN'T A NUMBER. The pier is
+                  already out, a car is parked across the lawn, it's the wrong
+                  house. Without this the crew's only way to say so was to pick
+                  a count field and invent a figure — which rule 6 then writes
+                  into the customer's profile when they approve it. */}
+              <button className="ll-btn ghost" style={bigBtn} onClick={() => setStep("somethingelse")}>
+                Something else is wrong
+                <span className="mut" style={{ display: "block", fontSize: 12.5, marginTop: 3 }}>
+                  Not a count — anything that means you shouldn&apos;t start
+                  until they&apos;ve seen it.
+                </span>
+              </button>
+
               <button className="ll-btn ghost" style={bigBtn} onClick={() => setStep("noanswer")}>
                 Nobody&apos;s answering
               </button>
             </>
           )}
 
-          {step === "different" && (
+          {(step === "different" || step === "somethingelse") && (
             <>
-              <div className="ll-field">
-                <label>What&apos;s different?</label>
-                <select value={field} onChange={(e) => { setField(e.target.value); setCountVal(""); }} style={selectStyle}>
-                  {options.map((o) => (
-                    <option key={o.key} value={o.field}>
-                      {FIELD_LABEL[o.field as keyof typeof FIELD_LABEL] ?? o.field}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {step === "different" ? (
+                <>
+                  <div className="ll-field">
+                    <label>What&apos;s different?</label>
+                    <select value={field} onChange={(e) => { setField(e.target.value); setCountVal(""); }} style={selectStyle}>
+                      {options.map((o) => (
+                        <option key={o.key} value={o.field}>
+                          {FIELD_LABEL[o.field as keyof typeof FIELD_LABEL] ?? o.field}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-              {chosen.kind === "count" ? (
+                  {chosen.kind === "count" ? (
+                    <div className="ll-field">
+                      <label>{chosen.prompt}</label>
+                      <input
+                        inputMode="numeric"
+                        value={countVal}
+                        onChange={(e) => setCountVal(e.target.value)}
+                        placeholder="e.g. 12"
+                        autoFocus
+                        style={{ fontSize: 17 }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="ll-field">
+                      <label>{chosen.prompt}</label>
+                      <select value={band} onChange={(e) => setBand(e.target.value)} style={selectStyle}>
+                        <option value="small">Small — under ¼ acre</option>
+                        <option value="medium">Medium — ¼ to ½ acre</option>
+                        <option value="large">Large — over ½ acre</option>
+                      </select>
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* NO SELECT, NO NUMBER. The words ARE the fact here, and they
+                   are the only thing the owner will have to go on. */
                 <div className="ll-field">
-                  <label>{chosen.prompt}</label>
+                  <label>What&apos;s wrong?</label>
                   <input
-                    inputMode="numeric"
-                    value={countVal}
-                    onChange={(e) => setCountVal(e.target.value)}
-                    placeholder="e.g. 12"
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="e.g. the pier's already out of the water"
                     autoFocus
                     style={{ fontSize: 17 }}
                   />
-                </div>
-              ) : (
-                <div className="ll-field">
-                  <label>{chosen.prompt}</label>
-                  <select value={band} onChange={(e) => setBand(e.target.value)} style={selectStyle}>
-                    <option value="small">Small — under ¼ acre</option>
-                    <option value="medium">Medium — ¼ to ½ acre</option>
-                    <option value="large">Large — over ½ acre</option>
-                  </select>
                 </div>
               )}
 
@@ -274,39 +370,38 @@ export function ArrivalSheet({
                     placeholder="e.g. removal — leaving 4 in the water would wreck them over winter"
                     autoFocus
                   />
+                  {/* WHAT HAPPENS IF THEY STILL SAY NO used to be spelled out
+                      here as well, in words that contradicted the banner
+                      below. One outcome, said once. */}
                   <p className="mut" style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
-                    The owner reads this before deciding. If they still say no,
-                    you pack up and go — nothing is charged for the visit.
+                    The owner reads this before deciding.
                   </p>
                 </div>
               )}
 
-              <div className="ll-field">
-                <label>Anything else the owner should know? (optional)</label>
-                <input
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="e.g. counted 12 including the end platform"
-                />
-              </div>
+              {step === "different" && (
+                <div className="ll-field">
+                  <label>Anything else the owner should know? (optional)</label>
+                  <input
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="e.g. counted 12 including the end platform"
+                  />
+                </div>
+              )}
 
-              {/* WHAT HAPPENS NEXT, SO NOBODY STANDS THERE GUESSING.
-                  Deliberately silent about money: the crew states the count,
-                  the owner sees the price (rule 1). */}
-              <div
-                style={{
-                  padding: "10px 12px", borderRadius: 10, marginBottom: 12,
-                  background: "var(--sun-soft)", border: "1px solid #ecd9ad", color: "#7a5a1e",
-                  fontSize: 12.5, lineHeight: 1.5,
-                }}
+              <WhatHappensNext
+                canProceed={canProceed}
+                cannotReason={cannotReason}
+                serviceName={serviceName}
+              />
+
+              <button
+                className="ll-btn gold"
+                style={{ width: "100%" }}
+                onClick={() => sendCorrection(step === "somethingelse" ? "other" : "correction")}
+                disabled={busy}
               >
-                This holds the job and asks the owner to confirm.{" "}
-                <b>Don&apos;t start until they answer</b>{" "}
-                — you&apos;ll get a text either way. If they say no, do the job as
-                it was booked.
-              </div>
-
-              <button className="ll-btn gold" style={{ width: "100%" }} onClick={sendCorrection} disabled={busy}>
                 {busy ? "Sending…" : "Send to the owner"}
               </button>
               <button

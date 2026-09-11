@@ -235,6 +235,20 @@ export interface DeclineMeaning {
   label: string;
   /** What will happen, said before they tap it. */
   detail: string;
+  /**
+   * THE SAME OUTCOME, SAID TO THE OTHER PERSON.
+   *
+   * The crew is standing in the driveway reading one screen and the owner is
+   * on their phone reading another, and they are the two halves of a single
+   * decision. The arrival sheet used to hardcode "If they say no, do the job
+   * as it was booked" — true for a mow, false for a pier removal, and printed
+   * twenty lines under a field helper saying "you pack up and go". Both
+   * sentences were on screen at once.
+   *
+   * Deriving it here means the two audiences cannot land on different
+   * outcomes: there is one branch, and both sentences come out of it.
+   */
+  crewDetail: string;
 }
 
 export function declineMeans(
@@ -253,6 +267,9 @@ export function declineMeans(
         (flag.crew_cannot_reason ? `Their words: "${flag.crew_cannot_reason}". ` : "") +
         `If you say no, they'll pack up and leave — no work today and nothing ` +
         `charged for the visit. We'll come back to you about another day.`,
+      crewDetail:
+        `If they say no, pack up and go — nothing more to do here today, and ` +
+        `nothing is charged for the visit. We'll sort another day with them.`,
     };
   }
   return {
@@ -262,7 +279,68 @@ export function declineMeans(
       `The crew will do the ${ctx.bookedLabel ?? "amount you booked"} and leave ` +
       `the rest. You'll be charged the original price, and we'll note on the ` +
       `job what was and wasn't done.`,
+    crewDetail:
+      `If they say no, do the job as it was booked and leave the rest. We'll ` +
+      `note on the job what was and wasn't done.`,
   };
+}
+
+/**
+ * WHAT AN AT-ARRIVAL FLAG MUST CARRY BEFORE IT MAY STOP A JOB.
+ *
+ * This was "there must be a proposed change", and it was the reason the
+ * arrival sheet had no door for anything that isn't a count. The pier is
+ * already out of the water. A car is parked across the whole lawn. It's the
+ * wrong house. None of those is a number, and the crew's only way through was
+ * to pick a field and invent one — which rule 6 then writes into the
+ * customer's profile the moment they approve it. A made-up fact, approved.
+ *
+ * The rule the guard was reaching for is not "a number". It is that a stop
+ * sign must say what it is stopping for: an owner cannot decide on a blank,
+ * and a crew cannot be left standing in a driveway waiting on an answer to a
+ * question nobody can read. So counts OR words, and never neither.
+ *
+ * Returns the sentence to refuse with, or null to allow.
+ */
+export function arrivalFlagRefusal(
+  proposed: Record<string, unknown> | null,
+  note: string,
+): string | null {
+  if (proposed && Object.keys(proposed).length > 0) return null;
+  // Long enough to be a reason. "no" and "x" are a crew tapping through, and
+  // the owner is being asked to hold a job on the strength of it.
+  if (note.trim().length >= 6) return null;
+  return "Say what you found — the owner is being asked to stop the job on the strength of it.";
+}
+
+/**
+ * THE MESSAGE FOR A FLAG THAT CARRIES WORDS AND NO NUMBERS.
+ *
+ * `correctionMessage` quotes counts and money — "Pier sections 8 → 12, $796
+ * instead of $604" — and has nothing to say about a pier that is already out
+ * of the water. The generic fallback beside it says the crew "found something
+ * that doesn't match your profile", which is precisely what this kind of flag
+ * is NOT about; the owner would tap through expecting a count and find a
+ * sentence.
+ *
+ * So the crew's own words are the message. They are the only fact there is,
+ * they are what the approval card shows, and the owner is being asked to stop
+ * a job on the strength of them — they should arrive intact.
+ *
+ * No price and no money figure: rule 1, and there is nothing to price anyway.
+ */
+export function arrivalNoteMessage(opts: {
+  note: string;
+  where: string;
+  serviceName: string;
+}): string {
+  // Trimmed for a text message. The whole note is on the approval card; this
+  // is the part that has to fit in a notification.
+  const said = opts.note.trim().replace(/\s+/g, " ").slice(0, 160);
+  return (
+    `Your crew is at ${opts.where} and can't start the ${opts.serviceName} until ` +
+    `you've seen this: "${said}" Nothing is charged while it waits.`
+  );
 }
 
 /**

@@ -35,8 +35,17 @@ const one = <T>(x: T | T[] | null | undefined): T | null =>
  * Copied VERBATIM from `assertVendorJob` in src/app/vendor/actions.ts — same
  * gate, same deliberately narrow select. It is duplicated rather than imported
  * because a "use server" module may only export async actions, and this gate
- * must also run inside plain server loaders. Keep the two in lockstep; in
- * particular NEVER widen this select (see rule 1 above).
+ * must also run inside plain server loaders.
+ *
+ * "Keep the two in lockstep" is the rule, and they had already drifted: the
+ * actions copy carries held_at / no_show_at / stood_down_at and this one did
+ * not, so the job page could not tell a crew their visit was held, no-showed
+ * or stood down, and offered "Mark complete" on a job the database refuses.
+ * The three are now here too.
+ *
+ * The narrowness that matters is rule 1: NEVER add customer_price,
+ * vendor_cost or margin. Those are the columns this select exists to keep out
+ * of a crew's browser.
  */
 export async function assertVendorJob(jobId: string) {
   const vendorId = await getMyVendorId();
@@ -52,7 +61,7 @@ export async function assertVendorJob(jobId: string) {
       // Deliberately NO customer_price / vendor_cost: this is the crew code path,
       // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
       // those columns out of reach by construction (settleJob re-loads them ops-side).
-      .select("id, status, vendor_id, service_id, date, property_id, group_id, pickup_address, pickup_lat, pickup_lng, pickup_contact, pickup_phone, release_confirmed_at, services(name, min_photos, required_photo_slots)")
+      .select("id, status, vendor_id, service_id, date, property_id, group_id, held_at, no_show_at, stood_down_at, pickup_address, pickup_lat, pickup_lng, pickup_contact, pickup_phone, release_confirmed_at, services(name, min_photos, required_photo_slots)")
       .eq("id", jobId)
       .maybeSingle(),
   );
@@ -150,6 +159,18 @@ export interface CrewJobDetail {
   /** Set when a make-it-right visit was booked to cure THIS job. */
   correctionVisit: CrewJobLink | null;
   flags: CrewJobFlag[];
+  /**
+   * THE THREE FACTS THAT STOP A VISIT (0084, 0088).
+   *
+   * Required, not optional, on purpose: this codebase's commonest defect is a
+   * field read by a screen and written by nothing, and a `?` here would let
+   * the loader quietly stop producing them while the banner kept compiling.
+   * `completionBlock` turns them into the same three sentences the route card
+   * shows.
+   */
+  heldAt: string | null;
+  noShowAt: string | null;
+  stoodDownAt: string | null;
 }
 
 /** Statuses src/lib/disputes.ts still treats as open (payout stays held). */
@@ -358,6 +379,9 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
     pickupContact: (job.pickup_contact as string | null) ?? null,
     pickupPhone: (job.pickup_phone as string | null) ?? null,
     releaseConfirmedAt: (job.release_confirmed_at as string | null) ?? null,
+    heldAt: (job.held_at as string | null) ?? null,
+    noShowAt: (job.no_show_at as string | null) ?? null,
+    stoodDownAt: (job.stood_down_at as string | null) ?? null,
     lakeName,
     ownerName,
     facts: stop?.facts ?? "",

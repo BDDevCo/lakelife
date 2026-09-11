@@ -105,9 +105,18 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
     if (rpcErr) return { ok: false, error: rpcErr.message };
   }
 
+  // NOTHING PROPOSED, NOTHING TO REPRICE. The crew's "something else is wrong"
+  // door files a flag carrying words and no counts, so apply_flag_change above
+  // applies nothing to the profile — and running the loop below would rewrite
+  // customer_price and vendor_cost on every open job at the property from an
+  // unchanged profile. That should compute the same numbers, and "should
+  // compute the same numbers" is not a thing to run across somebody's money.
+  const proposedOnFlag = ctx.flag.proposed_change as Record<string, unknown> | null;
+  const hasProposal = !!proposedOnFlag && Object.keys(proposedOnFlag).length > 0;
+
   // Re-price the owner's open jobs on this property from the updated profile.
   // vendor_cost/margin are preserved; margin is re-derived when a cost exists.
-  if (ctx.propertyId) {
+  if (ctx.propertyId && hasProposal) {
     // getFullProfile THROWS when one of its reads fails (a half-read profile
     // is what reprices a twelve-section pier as an eight). A server action
     // cannot throw — its caller is a button awaiting { ok, error } — so the

@@ -13,6 +13,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { getFullProfile, toPricingProfile } from "@/app/profile/data";
 import {
   summariseCorrection, correctionMessage, noAnswerOutcome, completionBlock,
+  arrivalFlagRefusal, arrivalNoteMessage,
   type TimedRule,
 } from "@/lib/arrival";
 import { planRecovery } from "@/lib/recovery";
@@ -392,12 +393,12 @@ export async function submitFlag(
   const admin = createServiceClient();
   const proposed = sanitizeProposed(proposedChange);
 
-  if (atArrival && !proposed) {
-    return {
-      ok: false,
-      error: "Say what's different — the counts are what the owner approves.",
-    };
-  }
+  // COUNTS OR WORDS, AND NEVER NEITHER. This used to demand a proposed change,
+  // which is why the arrival sheet had no door for a problem that isn't a
+  // number — and why a crew whose pier was already out of the water had to
+  // invent one, for the owner to approve into their profile.
+  const arrivalRefusal = atArrival ? arrivalFlagRefusal(proposed, note) : null;
+  if (arrivalRefusal) return { ok: false, error: arrivalRefusal };
   if (atArrival && scope && !scope.canProceed && !scope.cannotReason?.trim()) {
     // The owner is being asked to choose between two outcomes. They cannot
     // choose blind, and 0088's check constraint would refuse the row anyway.
@@ -482,6 +483,13 @@ export async function submitFlag(
     // and somebody deciding on their phone at 7:45 usually cares more that the
     // crew will be there another hour and a quarter than about the money.
     let detail = "";
+    // WORDS, NOT COUNTS. The generic fallback below says the crew "found
+    // something that doesn't match your profile" — true of a correction, and
+    // exactly wrong for the door that exists because the problem isn't a
+    // count. The crew's own sentence is the whole of what there is to say.
+    if (atArrival && !proposed && note.trim()) {
+      detail = arrivalNoteMessage({ note, where, serviceName: svcName });
+    }
     if (atArrival && proposed) {
       try {
         const [ruleRes, profile] = await Promise.all([

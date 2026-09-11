@@ -19,6 +19,7 @@ import { uploadJobPhoto, completeJob, submitFlag } from "@/app/vendor/actions";
 import { crewCureJob } from "@/app/vendor/job-detail-actions";
 import { FlagModal } from "@/components/VendorStopCard";
 import { photoGateLabel } from "@/lib/job-view";
+import { completionBlock } from "@/lib/arrival";
 
 /**
  * Turn-by-turn to this one stop — the same device-aware link the Today card
@@ -58,6 +59,9 @@ export function CrewJobActions({
   shotSlots,
   status,
   isCorrection,
+  heldAt,
+  noShowAt,
+  stoodDownAt,
 }: {
   jobId: string;
   address: string | null;
@@ -69,6 +73,18 @@ export function CrewJobActions({
   shotSlots: string[];
   status: string;
   isCorrection: boolean;
+  /**
+   * THE THREE FACTS THAT STOP A VISIT (0084, 0088).
+   *
+   * The route card has read these since 0093 and drew a banner. This panel —
+   * the one a crew reaches from a text message, on the page where the job
+   * actually lives — never had them, so it offered "Mark complete" on a job
+   * the database will refuse and said nothing about why. Same rule, second
+   * doorway.
+   */
+  heldAt: string | null;
+  noShowAt: string | null;
+  stoodDownAt: string | null;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -146,9 +162,37 @@ export function CrewJobActions({
   const enough = minPhotos <= 0 || count >= minPhotos;
   const progress = shotProgress(photoSlots, shot, count, minPhotos);
 
+  // 0084's trigger is the real gate; this is so the crew reads a sentence
+  // instead of meeting a database error with their thumb on the button. Same
+  // helper, same three sentences, as the Today card.
+  const blocked = completionBlock({
+    held_at: heldAt,
+    no_show_at: noShowAt,
+    stood_down_at: stoodDownAt,
+  });
+  const ended = !!noShowAt || !!stoodDownAt;
+
   return (
     <div className="ll-card ll-card-pad">
       <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>Proof of work</h3>
+
+      {/* WHERE THIS VISIT IS STUCK, IF IT IS. Above the photo counter on
+          purpose — a crew who is blocked should not first read about photos
+          they cannot usefully take yet. */}
+      {blocked && !done && (
+        <div
+          style={{
+            margin: "8px 0 10px", padding: "10px 12px", borderRadius: 10,
+            background: ended ? "var(--slate-soft)" : "var(--sun-soft)",
+            border: `1px solid ${ended ? "var(--line)" : "#ecd9ad"}`,
+            color: ended ? "var(--text)" : "#7a5a1e",
+            fontSize: 13, lineHeight: 1.5,
+          }}
+        >
+          {noShowAt ? "🚪 " : stoodDownAt ? "🛑 " : "⏳ "}{blocked}
+        </div>
+      )}
+
       <p style={{ fontSize: 13, fontWeight: 700, color: enough ? "var(--ok)" : "var(--warn)", margin: "0 0 2px" }}>
         📷 {photoGateLabel(count, minPhotos)}
       </p>
@@ -192,9 +236,14 @@ export function CrewJobActions({
           <button className="ll-btn ghost sm" onClick={() => setFlagOpen(true)}>
             Flag something
           </button>
-          <button className="ll-btn gold sm" onClick={markComplete} disabled={completing}>
-            {completing ? "Completing…" : "Mark complete"}
-          </button>
+          {/* HIDDEN, NOT GREYED. The banner above already says what happened
+              and what to do next; a dead button beside it is a second thing to
+              work out. The server refuses it either way. */}
+          {!blocked && (
+            <button className="ll-btn gold sm" onClick={markComplete} disabled={completing}>
+              {completing ? "Completing…" : "Mark complete"}
+            </button>
+          )}
         </div>
       )}
 

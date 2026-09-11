@@ -335,6 +335,9 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
           shotSlots={job.photos.map((p) => p.slot).filter((s): s is string => !!s)}
           status={job.status}
           isCorrection={isCorrection}
+          heldAt={job.heldAt}
+          noShowAt={job.noShowAt}
+          stoodDownAt={job.stoodDownAt}
         />
       </div>
 

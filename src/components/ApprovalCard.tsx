@@ -81,6 +81,15 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
   );
   const standsDown = declineNote.outcome === "stands_down";
 
+  // A FLAG THAT PROPOSED NOTHING. The crew's "something else is wrong" door
+  // sends words and no counts — the pier is already out, a car is parked
+  // across the lawn — so `apply_flag_change` applies nothing and no price
+  // moves. Saying "approving updates your profile and re-prices future visits"
+  // over that is this codebase's copy-that-lies class. One variable governs
+  // both the sentence and the toast, so the two cannot drift.
+  const nothingProposed =
+    !flag.proposed_change || Object.keys(flag.proposed_change).length === 0;
+
   const title = (flag.type && TYPE_LABEL[flag.type]) || "A note from the crew";
   const subline = [flag.service_name, flag.address, formatWhen(flag.created_at)]
     .filter(Boolean)
@@ -110,9 +119,11 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
     } else {
       const n = res.repriced ?? 0;
       const parts = [
-        n > 0
-          ? `Approved — profile updated and ${n} upcoming ${n === 1 ? "visit" : "visits"} re-priced.`
-          : "Approved — your profile is updated. Nothing upcoming to re-price yet.",
+        nothingProposed
+          ? "Approved — we've told the crew to go ahead."
+          : n > 0
+            ? `Approved — profile updated and ${n} upcoming ${n === 1 ? "visit" : "visits"} re-priced.`
+            : "Approved — your profile is updated. Nothing upcoming to re-price yet.",
       ];
       if (res.flaggedJobAlreadyDone) {
         parts.push("That visit is already done, so its bill stays as it was.");
@@ -211,8 +222,9 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
           )}
 
           <p className="mut" style={{ fontSize: 13, margin: "12px 0 0" }}>
-            Approving updates your profile and re-prices future visits. Declining changes nothing.
-            Nothing bills until you approve.
+            {nothingProposed
+              ? "The crew is waiting on your answer. Approving tells them to go ahead; declining tells them to stop. Nothing bills either way."
+              : "Approving updates your profile and re-prices future visits. Declining changes nothing. Nothing bills until you approve."}
           </p>
           <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
             <button
