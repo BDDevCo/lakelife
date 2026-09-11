@@ -311,7 +311,10 @@ export async function createBookingBatch(
   // show them a number that is already confirmed. Nothing is written yet.
   const meRes = await supabase
     .from("users")
-    .select("email_verified, phone_verified, phone, email")
+    // `name` so the confirmation can greet a person by their name. Without it
+    // the email addressed them by their STREET ADDRESS — "You're booked,
+    // 1414 E Lane Rd." — because that was the only human-ish string in scope.
+    .select("email_verified, phone_verified, phone, email, name")
     .eq("id", user.id)
     .maybeSingle();
   if (meRes.error) return { ok: false, error: readFailedMessage("your account", meRes.error) };
@@ -683,11 +686,27 @@ export async function createBookingBatch(
   if (me?.email && (await allowsNotification(user.id, "book", "email"))) {
     void sendEmail({
       to: me.email,
-      subject: solo ? `Booked: ${service.name} 🌊` : `Booked: ${visits} of ${service.name} 🌊`,
+      // THE SAME FACT THE TEXT ALREADY TELLS THEM. `soloAssigned` is set by
+      // autoAssignJob a few lines up and the SMS branches on it — "is booked
+      // for Friday" versus "we're lining up a crew now". This email said
+      // "You're booked" to both, so a customer who reads mail and not texts
+      // believed somebody was coming when nobody had been found. One doorway
+      // of two, on the money path.
+      //
+      // A BATCH IS NOT AFFECTED: soloAssigned is documented as meaningful only
+      // for a one-date booking, and the batch text speaks for the whole list.
+      subject: !solo
+        ? `Booked: ${visits} of ${service.name} 🌊`
+        : soloAssigned
+          ? `Booked: ${service.name} 🌊`
+          : `We've got your ${service.name} request 🌊`,
       html: html`<div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#20343d">
-          <h2>You're booked, ${profile.address ?? "friend"}.</h2>
+          <h2>${solo && !soloAssigned ? "We've got it" : "You're booked"}, ${me.name ?? "friend"}.</h2>
           ${solo
             ? html`<p><b>${service.name}</b> — ${frequency}<br>${pretty}</p>
+          ${soloAssigned
+            ? ""
+            : html`<p style="color:#8a6d3b">We're lining up a crew for that day now, and you'll hear the moment one is locked in. Nothing is confirmed until then.</p>`}
           <p style="color:#5D7681">Your price: <b>$${only.price.toLocaleString()}</b>. You're only charged after the service is completed and photos are uploaded.</p>`
             : html`<p><b>${service.name}</b> — ${visits}</p>
           <ul style="color:#20343d;padding-left:18px">${booked
