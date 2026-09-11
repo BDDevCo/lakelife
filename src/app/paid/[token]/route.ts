@@ -1,6 +1,7 @@
 import { htmlPage } from "@/app/a/[token]/respond";
 import { loadPaymentByToken, type ConfirmView, confirmByToken, disputeByToken } from "@/lib/confirm-server";
 import { ReadFailed } from "@/lib/must-read";
+import { escapeHtml } from "@/lib/html-safe";
 
 /**
  * "DOES THIS LOOK RIGHT?" — the renter's half of the receipt.
@@ -74,8 +75,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
  * get agreement that means nothing.
  */
 function confirmPage(token: string, line: string): Response {
-  const esc = (s: string) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  // ONE COPY OF THIS RULE, in lib/html-safe. This local one covered & < > " but not '.
+  const esc = escapeHtml;
   const t = encodeURIComponent(token);
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">

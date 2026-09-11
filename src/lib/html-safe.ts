@@ -58,14 +58,18 @@ function isRaw(v: unknown): v is RawHtml {
 }
 
 /**
- * Escape text for an HTML body.
+ * Escape text for HTML — an email body, a printed notice, a token page.
  *
  * Apply at the point text ENTERS HTML, never where the sentence is composed:
  * the same strings go out by SMS too, and an owner reading `&quot;` aloud is
  * the bug. `html` below calls this for you; use it directly only when building
- * a body some other way.
+ * a document some other way (a print window, a route handler's own template).
+ *
+ * THE ONE COPY. There were ten: six in the email path and four more serving
+ * web pages, covering three, four or five characters depending on which was
+ * written first. This is the only one now.
  */
-export function emailSafe(text: string): string {
+export function escapeHtml(text: string): string {
   return text
     // & FIRST, or the ampersands introduced below are escaped a second time
     // and the owner reads `&amp;lt;`.
@@ -113,7 +117,7 @@ function render(v: unknown): string {
   if (v == null || v === false) return "";
   if (isRaw(v)) return v.value;
   if (Array.isArray(v)) return v.map(render).join("");
-  return emailSafe(String(v));
+  return escapeHtml(String(v));
 }
 
 /**

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   declineMeans, completionBlock, arrivalFlagRefusal, arrivalNoteMessage,
 } from "@/lib/arrival";
-import { emailSafe } from "@/lib/html-safe";
+import { escapeHtml } from "@/lib/html-safe";
 
 /**
  * THREE THINGS THE CREW COULD NOT SAY, AND ONE SCREEN THAT SAID TWO OPPOSITE
@@ -555,7 +555,7 @@ describe("C. the note both sides were promised gets written", () => {
 describe("D. a crew's sentence does not get eaten by the owner's mail client", () => {
   it("survives an angle bracket intact", () => {
     const note = "gate is <4ft wide, truck won't fit";
-    const body = emailSafe(
+    const body = escapeHtml(
       arrivalNoteMessage({ note, where: "1414 Lane Rd", serviceName: "Mowing" }),
     );
     // What a parser leaves behind after eating tags is what the owner reads.
@@ -565,8 +565,8 @@ describe("D. a crew's sentence does not get eaten by the owner's mail client", (
   });
 
   it("escapes the characters that break an HTML body, and only those", () => {
-    expect(emailSafe(`<b>&"'`)).toBe("&lt;b&gt;&amp;&quot;&#39;");
-    expect(emailSafe("a plain sentence."), "escaping ordinary text").toBe("a plain sentence.");
+    expect(escapeHtml(`<b>&"'`)).toBe("&lt;b&gt;&amp;&quot;&#39;");
+    expect(escapeHtml("a plain sentence."), "escaping ordinary text").toBe("a plain sentence.");
   });
 
   it("leaves the TEXT message alone — &quot; is not a thing to read aloud", () => {

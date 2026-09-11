@@ -29,6 +29,8 @@ const COUNT_MAX: Record<string, number> = {
   pier_sections: 99, boat_lifts: 99, pwc_lifts: 99, jet_skis: 99, toy_lifts: 99,
   panes: 999,
 };
+/** A photo slot is a slug: lower-case, digits, underscore, hyphen, 1-40. */
+const SLOT_SHAPE = /^[a-z0-9_-]{1,40}$/;
 const BAND_FIELDS = new Set(["lawn_band", "drive_band"]);
 const BANDS = new Set(["small", "medium", "large"]);
 function sanitizeProposed(input: Record<string, unknown> | null): Record<string, unknown> | null {
@@ -114,11 +116,24 @@ export async function uploadJobPhoto(jobId: string, form: FormData): Promise<Act
   const sha256 = createHash("sha256").update(bytes).digest("hex");
 
   // The SLOT is which named shot this is — the list lives on
-  // services.required_photo_slots. Free text is refused rather than stored:
-  // a typo'd slot is worse than none, because the screen would show a gap
-  // where a photo actually exists. An unlabelled extra photo is fine.
+  // services.required_photo_slots.
+  //
+  // THIS COMMENT USED TO CLAIM free text was refused rather than stored. It
+  // was not: the code clamped to 40 characters and kept whatever arrived. A server
+  // action's arguments are client-supplied by construction, so a crew posting
+  // by hand could write anything into an evidence column. `slot=constructor`
+  // then crashed the customer's own complaint page — see
+  // the-slot-that-was-not-a-string.test.ts.
+  //
+  // A SHAPE, NOT A WHITELIST, and the distinction is deliberate: KNOWN in
+  // shot-list.ts is explicitly not a whitelist either, because
+  // required_photo_slots is authored in SQL and may name a slot no label
+  // exists for yet. Refusing those would show a crew a shorter walk-around
+  // than the service asks for. So anything slug-shaped is kept and anything
+  // else becomes null — an unlabelled extra photo was always fine.
   const rawSlot = form.get("slot");
-  const slot = typeof rawSlot === "string" && rawSlot.trim() ? rawSlot.trim().slice(0, 40) : null;
+  const trimmedSlot = typeof rawSlot === "string" ? rawSlot.trim().toLowerCase() : "";
+  const slot = SLOT_SHAPE.test(trimmedSlot) ? trimmedSlot : null;
 
   // The DEVICE TIME is the file's own modified time, kept BESIDE taken_at and
   // never instead of it. It is NOT EXIF and must never be called capture time.

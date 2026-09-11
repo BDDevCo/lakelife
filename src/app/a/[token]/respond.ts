@@ -10,9 +10,13 @@ import { photoStripHtml, type StripPhoto } from "@/lib/photo-strip";
  */
 
 /** HTML-escape anything interpolated into the token pages (nickname/address
- *  are user-controlled — a 40-char nickname can hold a working XSS payload). */
-export const escapeHtml = (s: string) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+ *  are user-controlled — a 40-char nickname can hold a working XSS payload).
+ *
+ *  RE-EXPORTED, not redefined: this was one of ten copies of the same rule,
+ *  and one of only two that were complete. It keeps its name here so the four
+ *  route handlers that import it from this module are untouched. */
+export { escapeHtml } from "@/lib/html-safe";
+import { escapeHtml } from "@/lib/html-safe";
 
 /**
  * @param photos OPTIONAL condition-report thumbnails, already signed by the

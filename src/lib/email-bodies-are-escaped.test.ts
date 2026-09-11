@@ -236,3 +236,27 @@ describe("a body handed over by shorthand is still a body", () => {
       .toEqual([]);
   });
 });
+
+
+describe("nowhere in the product hand-rolls HTML escaping any more", () => {
+  it("has exactly one copy of the rule, and it is lib/html-safe", () => {
+    // TEN copies existed: six in the email path, four more serving web pages —
+    // print windows, a crew's printable statement, the token landing pages —
+    // covering three, four or five characters depending on which was written
+    // first. The two that were COMPLETE were the token pages, whose author
+    // knew exactly why ("a 40-char nickname can hold a working XSS payload").
+    // Everything now imports the one function.
+    const guilty = walk(SRC)
+      .filter((p) => !/\.test\.tsx?$/.test(p) && !p.endsWith("lib/html-safe.ts"))
+      .filter((p) => /replace\(\/&\/g,\s*["']&amp;["']\)/.test(strip(readFileSync(p, "utf8"))))
+      .map(rel);
+    expect(guilty, "a hand-rolled HTML escaper came back").toEqual([]);
+  });
+
+  it("and the scanner would notice if one did", () => {
+    // Proving the scan can still fail: the one real copy must be findable.
+    const theOne = strip(readFileSync(join(SRC, "lib/html-safe.ts"), "utf8"));
+    expect(theOne, "html-safe no longer contains the escaper itself")
+      .toMatch(/replace\(\/&\/g,\s*"&amp;"\)/);
+  });
+});

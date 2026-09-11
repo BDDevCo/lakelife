@@ -17,6 +17,7 @@ import {
 } from "@/app/park/ledger-helpers";
 import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
 import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
+import { escapeHtml } from "@/lib/html-safe";
 
 /**
  * WHO OWES, WHO PAID, WHO IS LATE.
@@ -345,8 +346,8 @@ function Reminders({
   function printNotices(p: ReminderPlan) {
     const w = window.open("", "_blank", "width=760,height=900");
     if (!w) { toast("Your browser blocked the print window."); return; }
-    const esc = (t: string) =>
-      t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    // ONE COPY OF THIS RULE, in lib/html-safe. This local one covered only & < >.
+    const esc = escapeHtml;
     // One notice per page — these get folded and put through doors.
     const pages = p.toPrint
       .map((r) => `<section><h2>Lot ${esc(r.lotNumber)}</h2><pre>${esc(r.body)}</pre></section>`)

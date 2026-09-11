@@ -64,13 +64,25 @@ describe("every photo is written as evidence", () => {
   });
 
   it("refuses a junk slot rather than storing it", () => {
+    // THIS TEST AGREED WITH A COMMENT THAT WAS WRONG. It asserted `.trim()`
+    // and `.slice(0, 40)` — a LENGTH CLAMP — and called that refusing junk,
+    // which is exactly what the comment above the code claimed and exactly
+    // what the code did not do. Anything 40 characters or shorter was stored
+    // verbatim on an evidence column, and `slot=constructor` then crashed the
+    // customer's complaint page (see lib/the-slot-that-was-not-a-string).
+    //
+    // The name was right all along; the assertions measured the wrong thing.
     const fn = uploadFn();
-    // A typo'd slot is worse than none: the screen would show a gap where a
-    // photo actually exists.
     const slot = fn.match(/const slot =[\s\S]*?;/)?.[0] ?? "";
     expect(slot, "slot derivation not found").not.toBe("");
-    expect(slot, "blank must become null").toMatch(/\.trim\(\)/);
-    expect(slot, "an unbounded string must not reach the column").toMatch(/\.slice\(0,\s*\d+\)/);
+    // A SHAPE, not a length. Blank fails it too, so blank still becomes null.
+    expect(slot, "the slot is stored without being tested against a shape")
+      .toMatch(/SLOT_SHAPE\.test\(/);
+    expect(slot, "anything that is not a slug must become null").toMatch(/:\s*null/);
+    // And the shape itself is bounded, so an unbounded string cannot reach
+    // the column by another route.
+    expect(code("src/app/vendor/actions.ts"), "SLOT_SHAPE must bound the length")
+      .toMatch(/\[a-z0-9_-\]\{1,\s*\d+\}/);
   });
 });
 

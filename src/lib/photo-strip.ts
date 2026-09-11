@@ -1,4 +1,5 @@
 import { slotLabel } from "@/lib/shot-list";
+import { escapeHtml } from "@/lib/html-safe";
 
 /**
  * THE CONDITION REPORT, ON A PHONE, WITH NO SESSION.
@@ -32,9 +33,8 @@ export interface StripPhoto {
   slot?: string | null;
 }
 
-const esc = (s: string) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-   .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+// ONE COPY OF THIS RULE, in lib/html-safe. This local one covered all five, correctly.
+const esc = escapeHtml;
 
 /** How many thumbnails fit on a phone before the card becomes a scroll. */
 export const STRIP_MAX = 8;

@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { toast } from "@/components/Toast";
 import { emailReceipt, takeDropSlipSerials } from "@/app/park/ledger-actions";
+import { escapeHtml } from "@/lib/html-safe";
 import {
   receiptBody, receiptCounterfoil, dropSlipSerials, dropSlipHalf, dropSlipSummary,
   type ReceiptLines,
@@ -24,8 +25,8 @@ import {
 function printText(title: string, blocks: string[]) {
   const w = window.open("", "_blank", "width=680,height=880");
   if (!w) { toast("Your browser blocked the print window."); return false; }
-  const esc = (t: string) =>
-    t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // ONE COPY OF THIS RULE, in lib/html-safe. This local one covered only & < >.
+  const esc = escapeHtml;
   w.document.write(
     `<!doctype html><title>${esc(title)}</title><style>
       body{font:13px/1.55 ui-monospace,Menlo,Consolas,monospace;margin:0}

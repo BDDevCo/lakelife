@@ -31,7 +31,19 @@
  * de-slugged rather than dropped, because dropping it would show a crew a
  * shorter walk-around than the service asks for.
  */
-const KNOWN: Record<string, string> = {
+/**
+ * NULL-PROTOTYPE ON PURPOSE. As a plain object literal this inherited from
+ * Object.prototype, and the unguarded `if (KNOWN[key])` below then resolved
+ * `constructor` to the Object constructor — truthy — so slotLabel returned a
+ * FUNCTION from a function whose signature says string. photoStripHtml called
+ * `esc()` on it and died with "s.replace is not a function", inside the GET
+ * that serves the customer's 👍/👎 links, which have no error boundary.
+ *
+ * Structural rather than a hasOwnProperty check at the one call site: there is
+ * nothing left to inherit, so a second lookup added later cannot reintroduce
+ * it. (`__proto__` is inert on a null-prototype object too.)
+ */
+const KNOWN: Record<string, string> = Object.assign(Object.create(null), {
   port_side: "Port side",
   starboard_side: "Starboard side",
   bow: "Bow",
@@ -44,7 +56,7 @@ const KNOWN: Record<string, string> = {
   tag: "Registration tag",
   racked_position: "In the rack",
   cover_or_wrap: "Cover / wrap",
-};
+});
 
 /** "cover_or_wrap" → "Cover / wrap"; "fuel_line" → "Fuel line". */
 export function slotLabel(slot: string): string {

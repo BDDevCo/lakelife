@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { html, raw, emailSafe, asHtml, type RawHtml } from "./html-safe";
+import { html, raw, escapeHtml, asHtml, type RawHtml } from "./html-safe";
 
 /**
  * THE SWEEP'S FOUNDATION.
@@ -39,21 +39,21 @@ describe("a typed sentence survives the mail client", () => {
   });
 
   it("escapes the five characters that matter, and nothing else", () => {
-    expect(emailSafe(`<b>&"'`)).toBe("&lt;b&gt;&amp;&quot;&#39;");
-    expect(emailSafe("a plain sentence — with an em dash")).toBe("a plain sentence — with an em dash");
+    expect(escapeHtml(`<b>&"'`)).toBe("&lt;b&gt;&amp;&quot;&#39;");
+    expect(escapeHtml("a plain sentence — with an em dash")).toBe("a plain sentence — with an em dash");
   });
 
   it("escapes the ampersand first, or the owner reads &amp;lt;", () => {
-    expect(emailSafe("<")).toBe("&lt;");
-    expect(emailSafe("&lt;")).toBe("&amp;lt;");
+    expect(escapeHtml("<")).toBe("&lt;");
+    expect(escapeHtml("&lt;")).toBe("&amp;lt;");
   });
 
   it("catches the apostrophe not one of the six escapers handled", () => {
     // Five of the six did & < > only and the sixth added "; none did '. So
     // every O'Neil and every "don't" carried a character the chain was
     // supposed to cover.
-    expect(emailSafe('say "hi"')).toContain("&quot;");
-    expect(emailSafe("it's")).toContain("&#39;");
+    expect(escapeHtml('say "hi"')).toContain("&quot;");
+    expect(escapeHtml("it's")).toContain("&#39;");
   });
 });
 

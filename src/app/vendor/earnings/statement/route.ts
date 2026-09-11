@@ -1,6 +1,7 @@
 import { termsGateForRouteHandler } from "@/lib/terms-gate-route";
 import { todayLakeDate } from "@/lib/booking";
 import { getMyEarningsFor } from "../../earnings-data";
+import { escapeHtml } from "@/lib/html-safe";
 import {
   periodRanges,
   formatCurrency,
@@ -67,13 +68,8 @@ function resolveRange(req: Request): { from: string; to: string } {
   };
 }
 
-function esc(s: string | null | undefined): string {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+// ONE COPY OF THIS RULE, in lib/html-safe. This local one covered & < > " but not '.
+const esc = (s: string | null | undefined): string => escapeHtml(s ?? "");
 
 function renderStatement(
   company: string | null,
