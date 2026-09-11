@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { statusPill } from "@/lib/status-colors";
 import { TopBar } from "@/components/Brand";
 import { OwnerHeader } from "@/components/OwnerHeader";
 import { createClient } from "@/lib/supabase/server";
@@ -19,9 +20,6 @@ import { mustRead } from "@/lib/must-read";
 // Pill COLOUR lives here; the WORDS come from customerStatusLabel
 // (src/lib/job-view, under test) so this table and the job-detail page can
 // never drift apart on what a status is called.
-const STATUS_PILL: Record<string, string> = {
-  requested: "warn", scheduled: "teal", in_progress: "teal", complete: "ok", paid: "slate", cancelled: "slate",
-};
 
 export default async function RequestsPage() {
   if (!hasSupabaseEnv()) {
@@ -172,7 +170,7 @@ export default async function RequestsPage() {
                             {r.date ? new Date(r.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
                           </Link>
                         </Td>
-                        <Td><span className={`ll-pill ${STATUS_PILL[r.status] ?? "slate"}`}>{customerStatusLabel(r.status as string)}</span></Td>
+                        <Td><span className={`ll-pill ${statusPill(r.status)}`}>{customerStatusLabel(r.status as string)}</span></Td>
                         <Td right>{r.customer_price != null ? formatPrice(Number(r.customer_price)) : "—"}</Td>
                         <Td right>
                           <span style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>

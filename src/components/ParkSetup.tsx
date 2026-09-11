@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { chipStyle } from "@/components/wizard-controls";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { saveParkProfile } from "@/app/park/actions";
@@ -181,16 +182,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function Chip({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+  // The shared chip style — see wizard-controls. This screen drew its own with
+  // a pale selected state; the rest of the product and the prototype select
+  // with a solid teal fill.
   return (
     <button
       type="button"
       onClick={onClick}
-      style={{
-        padding: "8px 14px", borderRadius: 999, fontSize: 14, fontWeight: 600, cursor: "pointer",
-        border: `2px solid ${on ? "var(--teal)" : "var(--line)"}`,
-        background: on ? "var(--teal-wash)" : "transparent",
-        color: on ? "var(--teal-dark)" : "var(--sub)",
-      }}
+      style={chipStyle(on)}
     >
       {label}
     </button>

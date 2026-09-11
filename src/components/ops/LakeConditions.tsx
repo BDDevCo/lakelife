@@ -97,13 +97,7 @@ function LakeCard({ lake }: { lake: LakeCondition }) {
           lake page are now both obliged to admit to — so the sooner a real
           ice-out lands in these two boxes, the sooner they stop hedging. */}
       {!lake.is_fixture && lake.provisional && (
-        <div
-          style={{
-            fontSize: 12.5, lineHeight: 1.5, marginTop: 8,
-            padding: "8px 10px", borderRadius: 8,
-            background: "var(--sun-soft)", border: "1px solid #ecd9ad", color: "#7a5a1e",
-          }}
-        >
+        <div className="ll-notice" style={{ marginTop: 8 }}>
           <b>Still provisional.</b>{" "}
           {lake.season_confirmed
             ? "These dates were rolled from a past season, so customers booking water work here are being told they're an estimate."

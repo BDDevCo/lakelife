@@ -13,6 +13,7 @@
  */
 
 import { useState, useTransition } from "react";
+import { STATUS_COLORS as SHARED_STATUS_COLORS } from "@/lib/status-colors";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
 import { loadCrewCalendarYear } from "@/app/vendor/job-detail-actions";
@@ -23,14 +24,12 @@ const DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
 type StatusKey = "requested" | "scheduled" | "in_progress" | "complete" | "paid";
 
-/** Mirrors OpsCalendar's map exactly — one product, one color language. */
-const STATUS_COLORS: Record<StatusKey, { dot: string; bg: string; fg: string; label: string }> = {
-  requested: { dot: "var(--sun)", bg: "var(--sun-soft)", fg: "#8a6420", label: "Requested" },
-  scheduled: { dot: "var(--teal)", bg: "#e0f0f3", fg: "var(--teal-dark)", label: "Scheduled" },
-  in_progress: { dot: "var(--teal-dark)", bg: "#cfe6ea", fg: "var(--teal-dark)", label: "In progress" },
-  complete: { dot: "var(--ok)", bg: "#e4f2ea", fg: "var(--ok)", label: "Complete" },
-  paid: { dot: "var(--slate)", bg: "#e9eff1", fg: "var(--sub)", label: "Paid" },
-};
+// THE ONE COLOUR LANGUAGE — see lib/status-colors. This file used to carry its
+// own table, commented as mirroring the other calendar's, and the two of them
+// agreed with each other and disagreed with every list and job page ("Requested"
+// gold here, orange everywhere else). The shared map is derived from the pill
+// classes, so a calendar square and a list pill cannot differ again.
+const STATUS_COLORS: Record<StatusKey, { dot: string; bg: string; fg: string; label: string }> = SHARED_STATUS_COLORS;
 const LEGEND_ORDER: StatusKey[] = ["requested", "scheduled", "in_progress", "complete", "paid"];
 
 function statusMeta(status: string) {

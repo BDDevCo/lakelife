@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { STATUS_PILL } from "@/lib/status-colors";
 import { TopBar } from "@/components/Brand";
 import { hasSupabaseEnv } from "@/lib/env";
 import { assertOps, getActiveVendors } from "@/app/ops/data";
@@ -25,14 +26,8 @@ export const dynamic = "force-dynamic";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
-const STATUS_TONE: Record<string, string> = {
-  requested: "warn",
-  scheduled: "teal",
-  in_progress: "teal",
-  complete: "ok",
-  paid: "slate",
-  cancelled: "slate",
-};
+// One product, one colour language — lib/status-colors is the only copy.
+const STATUS_TONE: Record<string, string> = STATUS_PILL;
 const STATUS_LABEL: Record<string, string> = {
   requested: "Requested",
   scheduled: "Scheduled",

@@ -113,13 +113,7 @@ export function WhatHappensNext({
     { serviceName },
   );
   return (
-    <div
-      style={{
-        padding: "10px 12px", borderRadius: 10, marginBottom: 12,
-        background: "var(--sun-soft)", border: "1px solid #ecd9ad", color: "#7a5a1e",
-        fontSize: 12.5, lineHeight: 1.5,
-      }}
-    >
+    <div className="ll-notice" style={{ marginBottom: 12 }}>
       This holds the job and asks the owner to confirm.{" "}
       <b>Don&apos;t start until they answer</b> — you&apos;ll get a text either
       way. {means.crewDetail}

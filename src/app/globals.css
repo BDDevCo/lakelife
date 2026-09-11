@@ -17,6 +17,13 @@
   --line: #dce9ec;
   --sun: #e9b44c; /* buoy gold accent */
   --sun-soft: #fbf1dc;
+  /* THE NOTICE BOX. An amber "read this before you act" panel — a held job,
+     a gate code, an unpriced service. It was hand-typed as the same three
+     values in eleven places across eight files, with the two below as bare
+     hex beside a var(--sun-soft). Named so the next one is one class, not a
+     copied triple. */
+  --notice-line: #ecd9ad;
+  --notice-text: #7a5a1e;
   --text: #20343d;
   --sub: #5d7681;
   --ok: #2e8b57;
@@ -179,6 +186,26 @@ textarea {
   border-radius: 99px;
   padding: 4px 11px;
 }
+/* THE NOTICE BOX — "read this before you act". A held job, a gate code, an
+   unpriced service, a decline's consequence. This was the same amber triple
+   hand-typed in eleven places across eight files, at three paddings and two
+   radii. One class; the sites that drifted come back to the majority. */
+.ll-notice {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--sun-soft);
+  border: 1px solid var(--notice-line);
+  color: var(--notice-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+/* A notice that is no longer amber — the job ended, the answer came. */
+.ll-notice.quiet {
+  background: var(--slate-soft);
+  border-color: var(--line);
+  color: var(--text);
+}
+
 .ll-pill.teal {
   background: #e0f0f3;
   color: var(--teal-dark);

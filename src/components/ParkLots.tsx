@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { chipStyle } from "@/components/wizard-controls";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { saveLot, saveLotRates, generateLots, setRatesForLots, setLotLifecycle } from "@/app/park/actions";
@@ -148,7 +149,7 @@ export function ParkLots({ parkId, lots }: { parkId: string; lots: LotView[] }) 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
-        <h2 style={{ fontSize: 18, margin: 0 }}>Lots &amp; rates</h2>
+        <h1 style={{ fontSize: 26, margin: 0 }}>Lots &amp; rates</h1>
         {editing !== "new" && <button className="ll-btn" onClick={openNew}>Add a lot</button>}
       </div>
 
@@ -684,16 +685,14 @@ function BulkRates({ parkId, lotCount }: { parkId: string; lotCount: number }) {
 /** Same chip as the park setup interview, so the two forms feel like one
  *  product rather than two people's work. */
 function Chip({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+  // The shared chip style — see wizard-controls. This screen drew its own with
+  // a pale selected state; the rest of the product and the prototype select
+  // with a solid teal fill.
   return (
     <button
       type="button"
       onClick={onClick}
-      style={{
-        padding: "7px 13px", borderRadius: 999, fontSize: 13.5, fontWeight: 600, cursor: "pointer",
-        border: `2px solid ${on ? "var(--teal)" : "var(--line)"}`,
-        background: on ? "var(--teal-wash)" : "transparent",
-        color: on ? "var(--teal-dark)" : "var(--sub)",
-      }}
+      style={chipStyle(on)}
     >
       {label}
     </button>

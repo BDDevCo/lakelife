@@ -158,8 +158,8 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
             boat is being brought back to it. */}
         {job.pickupAddress ? (
           <>
-            <div style={{ padding: "10px 12px", background: "var(--sun-soft)", border: "1px solid #ecd9ad", borderRadius: 10, margin: "0 0 10px" }}>
-              <p style={{ fontSize: 12.5, fontWeight: 700, margin: "0 0 2px", color: "#7a5a1e" }}>
+            <div className="ll-notice" style={{ margin: "0 0 10px" }}>
+              <p style={{ fontSize: 12.5, fontWeight: 700, margin: "0 0 2px" }}>
                 ⛵ Collect the boat here first
               </p>
               <p style={{ fontSize: 14, margin: "0 0 8px" }}>{job.pickupAddress}</p>
@@ -200,7 +200,7 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
         <CrewNavigateButton lat={job.lat} lng={job.lng} address={job.address} />
 
         {isCorrection && (
-          <p style={{ fontSize: 13, marginTop: 12, padding: "9px 12px", background: "var(--sun-soft)", border: "1px solid #ecd9ad", borderRadius: 10, color: "#7a5a1e", lineHeight: 1.5 }}>
+          <p className="ll-notice" style={{ marginTop: 12 }}>
             <b>Make-it-right visit — no charge.</b>{" "}
             {`Photos are still required to close it. This puts right the ${job.correctionOf?.serviceName ?? "earlier job"} from ${shortDate(job.correctionOf?.date ?? null)}.`}{" "}
             <Link href={`/vendor/jobs/${job.correctionOf?.id}`} style={{ color: "inherit", fontWeight: 700 }}>
@@ -300,7 +300,7 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
       <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
         <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>Getting in</h3>
         {job.gateCode ? (
-          <div style={{ padding: "9px 12px", background: "var(--sun-soft)", border: "1px solid #ecd9ad", borderRadius: 10, fontSize: 13.5, color: "#7a5a1e" }}>
+          <div className="ll-notice">
             🔑 Gate / door code:{" "}
             <b style={{ fontFamily: "var(--font-display)", letterSpacing: ".08em" }}>{job.gateCode}</b>
             <span className="mut" style={{ display: "block", fontSize: 11.5 }}>

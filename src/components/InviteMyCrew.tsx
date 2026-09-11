@@ -45,7 +45,7 @@ export function InviteMyCrew() {
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginBottom: 18 }}>
-      <h3 style={{ fontSize: 18, margin: "0 0 6px" }}>Already have a crew you love? 🌊</h3>
+      <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>Already have a crew you love? 🌊</h3>
 
       {sentTo ? (
         warning ? (

@@ -24,7 +24,7 @@ export function NotifPrefs({ initial }: { initial: NotifPrefState }) {
 
   return (
     <div className="ll-card ll-card-pad">
-      <h3 style={{ fontSize: 18, marginBottom: 4 }}>Notifications</h3>
+      <h3 style={{ fontSize: 16, marginBottom: 4 }}>Notifications</h3>
       <p className="mut" style={{ fontSize: 13, marginBottom: 4 }}>
         Choose how LakeLife reaches you for each kind of update.
       </p>

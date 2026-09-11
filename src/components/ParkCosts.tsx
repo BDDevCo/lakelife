@@ -127,7 +127,7 @@ export function ParkCosts({
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
-      <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Costs &amp; fees</h1>
+      <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Costs &amp; fees</h1>
       <p className="mut" style={{ marginTop: 0, lineHeight: 1.5, maxWidth: 640 }}>
         What the park pays, and what it charges. Enter your bills here and the
         fee below gets checked against them — that comparison is the only

@@ -61,7 +61,7 @@ export function AutopilotCard({
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
-      <h3 style={{ fontSize: 18, margin: "0 0 6px" }}>Autopilot ⚡ — set &amp; forget</h3>
+      <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>Autopilot ⚡ — set &amp; forget</h3>
       <p className="mut" style={{ fontSize: 14, margin: "0 0 14px", maxWidth: 540 }}>
         We line up each season&rsquo;s visit and text you first — one tap books it, skip
         is free, and your price is locked in today.

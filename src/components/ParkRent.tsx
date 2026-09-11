@@ -95,7 +95,7 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
           href={`/park/rent?month=${shiftMonth(page.month, -1)}`}>
           ← {prettyMonth(shiftMonth(page.month, -1))}
         </a>
-        <h1 style={{ fontSize: 24, margin: 0 }}>Rent — {prettyMonth(page.month)}</h1>
+        <h1 style={{ fontSize: 26, margin: 0 }}>Rent — {prettyMonth(page.month)}</h1>
         {page.month < currentPeriod(page.today) && (
           <a className="ll-btn ghost" style={{ fontSize: 13 }}
             href={`/park/rent?month=${shiftMonth(page.month, 1)}`}>

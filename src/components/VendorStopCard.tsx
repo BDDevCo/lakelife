@@ -184,7 +184,7 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
 
           {/* Gate code — only present for today's jobs (rule 3) */}
           {stop.gate_code && (
-            <div style={{ marginTop: 8, padding: "8px 11px", background: "var(--sun-soft)", border: "1px solid #ecd9ad", borderRadius: 10, fontSize: 13, color: "#7a5a1e" }}>
+            <div className="ll-notice" style={{ marginTop: 8 }}>
               🔑 Gate / door code: <b style={{ fontFamily: "var(--font-display)", letterSpacing: ".08em" }}>{stop.gate_code}</b>
               <span className="mut" style={{ display: "block", fontSize: 11 }}>Shown only today, for this job.</span>
             </div>
@@ -208,15 +208,7 @@ export function VendorStopCard({ stop, index, truckLabel }: { stop: VendorStop; 
               Above the photo counter on purpose — a crew who is blocked should
               not first read about photos they cannot usefully take yet. */}
           {blocked && (
-            <div
-              style={{
-                marginTop: 12, padding: "10px 12px", borderRadius: 10,
-                background: noShow || stoodDown ? "var(--slate-soft)" : "var(--sun-soft)",
-                border: `1px solid ${noShow || stoodDown ? "var(--line)" : "#ecd9ad"}`,
-                color: noShow || stoodDown ? "var(--text)" : "#7a5a1e",
-                fontSize: 13, lineHeight: 1.5,
-              }}
-            >
+            <div className={`ll-notice${noShow || stoodDown ? " quiet" : ""}`} style={{ marginTop: 12 }}>
               {noShow ? "🚪 " : stoodDown ? "🛑 " : "⏳ "}{blocked}
             </div>
           )}

@@ -208,7 +208,7 @@ function PhotosCard({ job }: { job: JobDetailView }) {
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginBottom: 16 }}>
-      <h2 style={{ fontSize: 18, margin: "0 0 2px" }}>📸 Photos of the work</h2>
+      <h2 style={{ fontSize: 16, margin: "0 0 2px" }}>📸 Photos of the work</h2>
       <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
         {n > 0
           ? `${customerPhotoLabel(n, job.minPhotos, done)} Tap any one to see it full size.`
@@ -277,7 +277,7 @@ function MoneyCard({ job }: { job: JobDetailView }) {
   const inv = invoiceCopy(job);
   return (
     <div className="ll-card ll-card-pad" style={{ marginBottom: 16 }}>
-      <h2 style={{ fontSize: 18, margin: "0 0 10px" }}>Your invoice</h2>
+      <h2 style={{ fontSize: 16, margin: "0 0 10px" }}>Your invoice</h2>
 
       {/* The headline must be what we actually BILLED, not what the job was
           quoted at. A late cancellation charges a fee while jobs.customer_price
@@ -355,7 +355,7 @@ function MoneyCard({ job }: { job: JobDetailView }) {
 function CommentsCard({ job }: { job: JobDetailView }) {
   return (
     <div className="ll-card ll-card-pad" style={{ marginBottom: 24 }}>
-      <h2 style={{ fontSize: 18, margin: "0 0 2px" }}>Comments</h2>
+      <h2 style={{ fontSize: 16, margin: "0 0 2px" }}>Comments</h2>
       <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
         About this job specifically. Dispatch sees it on your property board and usually replies same day. 🌊
       </p>

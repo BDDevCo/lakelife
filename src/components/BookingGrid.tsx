@@ -376,13 +376,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
               guessed window is still the best window we have, and refusing to
               take the booking would be worse than taking it honestly. */}
           {service.is_water_work && season.provisional && (
-            <div
-              style={{
-                fontSize: 12.5, lineHeight: 1.5, marginBottom: 8,
-                padding: "8px 10px", borderRadius: 8,
-                background: "var(--sun-soft)", border: "1px solid #ecd9ad", color: "#7a5a1e",
-              }}
-            >
+            <div className="ll-notice" style={{ marginBottom: 8 }}>
               <b>{season.lake ? `${season.lake}'s season dates aren't confirmed yet.` : "These season dates aren't confirmed yet."}</b>{" "}
               They&apos;re our best estimate, not this year&apos;s measured ice-out. You can book now
               — if the water moves the date, we&apos;ll come back to you before anyone drives out.

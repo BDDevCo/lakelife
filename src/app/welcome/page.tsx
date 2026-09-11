@@ -72,7 +72,7 @@ export default async function WelcomePage() {
 
       <div className="wrap" style={{ paddingTop: 36, maxWidth: 640 }}>
         <div className="ll-card ll-card-pad">
-          <h3 style={{ fontSize: 18, marginBottom: 14 }}>Account checklist</h3>
+          <h3 style={{ fontSize: 16, marginBottom: 14 }}>Account checklist</h3>
           <CheckRow ok={true} label="Account created" />
           <CheckRow
             ok={emailVerified}

@@ -76,7 +76,7 @@ export function ParkDocuments({ parkId, page }: { parkId: string; page: Document
 
   return (
     <section style={{ marginTop: 28 }}>
-      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Documents</h2>
+      <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Documents</h1>
       <p className="mut" style={{ margin: "0 0 6px", lineHeight: 1.5, maxWidth: 640 }}>
         Your lease, your rules, your notices. File the document here and record
         who you gave it to.

@@ -73,7 +73,7 @@ export function ParkOnboard({
   if (seeds.length === 0) {
     return (
       <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
-        <h1 style={{ fontSize: 24, margin: "0 0 6px" }}>Who lives here</h1>
+        <h1 style={{ fontSize: 26, margin: "0 0 6px" }}>Who lives here</h1>
         <p className="mut" style={{ fontSize: 14, lineHeight: 1.5 }}>
           Every live lot already has somebody on it. Nothing left to file.
         </p>

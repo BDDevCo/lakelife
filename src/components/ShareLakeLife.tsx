@@ -58,7 +58,7 @@ export function ShareLakeLife({
   }
   return (
     <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
-      <h3 style={{ fontSize: 17, margin: "0 0 4px" }}>Give the lake a hand — earn credits 🌊</h3>
+      <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>Give the lake a hand — earn credits 🌊</h3>
       <p className="mut" style={{ fontSize: 13.5, margin: "0 0 10px" }}>
         When a neighbor joins through your link, you earn {customerPct}% of what they spend for a year — as credits on your own bills. Bring your crew aboard instead and earn up to ${crewCap}.
       </p>

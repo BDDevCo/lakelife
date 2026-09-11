@@ -13,8 +13,8 @@ export function ConfigNotice({
     <div
       style={{
         background: "var(--sun-soft)",
-        borderBottom: "1px solid #ecd9ad",
-        color: "#7a5a1e",
+        borderBottom: "1px solid var(--notice-line)",
+        color: "var(--notice-text)",
         padding: "10px 24px",
         fontSize: 13.5,
         textAlign: "center",

@@ -209,12 +209,10 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
               been asked. So the consequence is stated before the button. */}
           {flag.at_arrival && (
             <div
+              className="ll-notice"
               style={{
-                marginTop: 12, padding: "10px 12px", borderRadius: 10,
-                background: standsDown ? "var(--sun-soft)" : "var(--sand)",
-                border: `1px solid ${standsDown ? "#ecd9ad" : "var(--line)"}`,
-                color: standsDown ? "#7a5a1e" : "var(--text)",
-                fontSize: 13, lineHeight: 1.55,
+                marginTop: 12,
+                ...(standsDown ? {} : { background: "var(--sand)", borderColor: "var(--line)", color: "var(--text)" }),
               }}
             >
               <b>The crew is at your place now.</b> {declineNote.detail}

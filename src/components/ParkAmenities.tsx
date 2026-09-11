@@ -51,7 +51,7 @@ export function ParkAmenities({
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
-      <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Things you rent out</h1>
+      <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Things you rent out</h1>
       <p className="mut" style={{ marginTop: 0, lineHeight: 1.5, maxWidth: 640 }}>
         The boat, the pavilion, a cart, a kayak — anything you own that one
         person has to themselves for a while. This is your money, not

@@ -1,4 +1,5 @@
 import "server-only";
+import { STATUS_PILL } from "@/lib/status-colors";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { mustRead, mustCount } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
@@ -38,9 +39,8 @@ const one = <T,>(x: T | T[] | null | undefined): T | null =>
 
 /** Pill COLOUR only — the words come from customerStatusLabel (src/lib/job-view,
  *  under test) so one implementation serves every customer surface. */
-export const JOB_STATUS_PILL: Record<string, string> = {
-  requested: "warn", scheduled: "teal", in_progress: "teal", complete: "ok", paid: "slate", cancelled: "slate",
-};
+export // One product, one colour language — lib/status-colors is the only copy.
+const JOB_STATUS_PILL: Record<string, string> = STATUS_PILL;
 
 export interface JobDetailLeg {
   name: string;

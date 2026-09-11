@@ -129,7 +129,15 @@ export function ToggleChips({
   );
 }
 
-function chipStyle(on: boolean): React.CSSProperties {
+/**
+ * THE ONE CHIP. Radius 99, a 1.5px line, and a SOLID teal fill with white text
+ * when selected — the prototype's `.daychip.on` (lakelife.html:240). Two park
+ * screens drew their own chip with a pale teal-wash selected state instead,
+ * so the same gesture read as "chosen" in two different ways depending on
+ * which tab you were on. Exported so a screen with its own Chip wrapper can
+ * still draw the shared one.
+ */
+export function chipStyle(on: boolean): React.CSSProperties {
   return {
     padding: "9px 14px",
     borderRadius: 99,

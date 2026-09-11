@@ -180,15 +180,7 @@ export function CrewJobActions({
           purpose — a crew who is blocked should not first read about photos
           they cannot usefully take yet. */}
       {blocked && !done && (
-        <div
-          style={{
-            margin: "8px 0 10px", padding: "10px 12px", borderRadius: 10,
-            background: ended ? "var(--slate-soft)" : "var(--sun-soft)",
-            border: `1px solid ${ended ? "var(--line)" : "#ecd9ad"}`,
-            color: ended ? "var(--text)" : "#7a5a1e",
-            fontSize: 13, lineHeight: 1.5,
-          }}
-        >
+        <div className={`ll-notice${ended ? " quiet" : ""}`} style={{ margin: "8px 0 10px" }}>
           {noShowAt ? "🚪 " : stoodDownAt ? "🛑 " : "⏳ "}{blocked}
         </div>
       )}

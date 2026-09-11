@@ -85,7 +85,7 @@ export function MyTrucks({ trucks: initialTrucks }: { trucks: MyTruck[] }) {
 
   return (
     <div className="ll-card ll-card-pad">
-      <h2 style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>My trucks 🚚</h2>
+      <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>My trucks 🚚</h2>
       <p className="mut" style={{ fontSize: 13, margin: "0 0 14px" }}>
         Running more than one crew? Give each truck its own name — every truck gets its own morning
         route text sent straight to that driver, and your daily job capacity is the sum of every

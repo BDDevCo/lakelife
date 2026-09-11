@@ -87,7 +87,7 @@ export function VendorStorage({
 
   return (
     <div className="ll-card ll-card-pad">
-      <h2 style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>Winter storage</h2>
+      <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>Winter storage</h2>
       <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
         Set your capacity and keep your garagekeepers policy current — both have to be
         on file before storage & winterization jobs route to you.
@@ -207,7 +207,7 @@ function GaragekeepersUpload({
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <h3 style={{ fontSize: 15, margin: 0, flex: 1 }}>Garagekeepers / bailee insurance</h3>
+        <h3 style={{ fontSize: 16, margin: 0, flex: 1 }}>Garagekeepers / bailee insurance</h3>
         {done && <span className="ll-pill ok">On file ✓</span>}
       </div>
 

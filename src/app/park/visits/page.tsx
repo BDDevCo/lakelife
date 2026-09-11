@@ -34,7 +34,7 @@ export default async function ParkVisitsPage() {
       <TopBar />
       <ParkNav park={park} />
       <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
-        <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Who&apos;s on site</h1>
+        <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Who&apos;s on site</h1>
         <p className="mut" style={{ fontSize: 14, marginTop: 0, lineHeight: 1.5 }}>
           Crews working in the park — the company, the job and the day, so you
           can tell a truck in the drive is meant to be there.

@@ -55,7 +55,7 @@ export function RescheduleVisit({ jobId, view }: { jobId: string; view: Reschedu
         {view.outcome === "stood_down" ? "We couldn't do it" : "We couldn't get in"}
       </span>
 
-      <h3 style={{ fontSize: 18, margin: "10px 0 6px" }}>{view.ask}</h3>
+      <h3 style={{ fontSize: 16, margin: "10px 0 6px" }}>{view.ask}</h3>
 
       <p className="mut" style={{ fontSize: 13, marginTop: 0, lineHeight: 1.55 }}>
         {view.ifNothingHappens}
