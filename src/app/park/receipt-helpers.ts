@@ -52,6 +52,12 @@ export interface ReceiptLines {
   /** What is left on that bill AFTER this payment. */
   balanceAfter: number;
   /**
+   * The part of `amount` that did NOT go against the bill — recorded on
+   * account for the household, with its own receipt number, because it was
+   * more than the bill had left. Null when everything went against the bill.
+   */
+  onAccount?: { amount: number; receiptNo: number | null } | null;
+  /**
    * Where the renter confirms this from their OWN phone.
    *
    * Null on the printed copy for a household with no way to open a link — the
@@ -64,9 +70,13 @@ export interface ReceiptLines {
 const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+// `transfer` is the bank push the OFFICE keys (Zelle, a wire, an online
+// transfer to the park's account); `ach` is the same thing done through the
+// processor. To the person holding the receipt both are a bank transfer, and
+// the form that recorded the first one called it exactly that.
 export const METHOD_WORD: Record<string, string> = {
   cash: "cash", check: "check", card: "card",
-  ach: "bank transfer", transfer: "transfer", other: "other",
+  ach: "bank transfer", transfer: "bank transfer", other: "other",
 };
 
 /** A human-quotable reference: park initials, year, receipt number. */
@@ -96,6 +106,15 @@ export function receiptBody(r: ReceiptLines): string {
     `Amount          ${money(r.amount)}`,
   ];
 
+  // MORE THAN THE BILL. Both parts on the paper they keep, because "Amount
+  // $600.00 / Against January rent — $542.53" with nothing between them is a
+  // receipt that raises the question it exists to answer.
+  const acct = r.onAccount && r.onAccount.amount > 0 ? r.onAccount : null;
+  if (acct) {
+    lines.push(`  to this bill  ${money(r.amount - acct.amount)}`);
+    lines.push(`  on account    ${money(acct.amount)}`);
+  }
+
   // THE FEE, ON THE RECEIPT, BECAUSE THE NETWORKS REQUIRE IT THERE. Also
   // because a resident holding a card statement for $412 and a receipt for
   // $400 has no way to tell which one is wrong.
@@ -124,6 +143,16 @@ export function receiptBody(r: ReceiptLines): string {
     lines.push(`In credit       ${money(-r.balanceAfter)}`);
   } else {
     lines.push(`Balance         nothing further owing on this one`);
+  }
+
+  if (acct) {
+    // WHERE THE REST IS, in words that make no promise the software does not
+    // keep: nothing applies it to the next bill on its own — the office does,
+    // once that bill exists.
+    lines.push(``);
+    lines.push(`The ${money(acct.amount)} on account is held by the office and hasn't been put`);
+    lines.push(`against a bill yet. It stays yours until it is${
+      acct.receiptNo != null ? ` (receipt ${receiptRef(r.parkName, acct.receiptNo, r.receivedOn)})` : ""}.`);
   }
 
   lines.push(``);

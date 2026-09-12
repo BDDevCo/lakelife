@@ -10,8 +10,10 @@ import {
   allocateCost, recoveryByCategory, canSplit, whyNotSplit,
   type CostCategory, type CostLot, type CostAllocation,
   buildCostScheduleRow, type CostScheduleInput, COST_CATEGORY_LABEL,
-
+  costCategoryForService,
   carryFromRow, type CostCarry,} from "./cost-helpers";
+import { preCutoverCostRefusal, preCutoverEvidenceSignal, preCutoverJobNote } from "@/lib/billing-start";
+import { prettyMonth } from "./ledger-helpers";
 import type { ParkResult } from "./actions";
 
 /**
@@ -29,11 +31,41 @@ import type { ParkResult } from "./actions";
 
 const DENIED = "You don't manage that park.";
 
-export interface CostPreview {
-  allocation: CostAllocation;
-  category: CostCategory;
-  amountPaid: number;
-}
+/**
+ * WHAT THE SAVE WOULD DO — not only how a split would fall.
+ *
+ * "Show me the split" is the only screen door to a non-carried save: the
+ * form's save button renders after a successful preview and nowhere else.
+ * So the preview has to answer for every branch that save can take, or a
+ * bill ends at a refusal with no button under it. Two shapes:
+ *
+ *   `allocation` set  → the save divides it across the lots; the per-lot
+ *                       numbers are here to read before committing.
+ *   `coveredBy` set   → an active fee already charges residents for this
+ *                       category, so the save records it under that fee and
+ *                       divides nothing — no lots are read, and there is no
+ *                       allocation to show. `evidenceOnly` is true when the
+ *                       period began before go-live: the row then feeds the
+ *                       fee comparison and never a bill.
+ *
+ * A pre-go-live period with NO covering fee is a refusal, not a preview —
+ * the fee-covered branch is the only one that takes such a bill.
+ */
+export type CostPreview =
+  | {
+      category: CostCategory;
+      amountPaid: number;
+      allocation: CostAllocation;
+      coveredBy: null;
+      evidenceOnly: false;
+    }
+  | {
+      category: CostCategory;
+      amountPaid: number;
+      allocation: null;
+      coveredBy: string;
+      evidenceOnly: boolean;
+    };
 
 /**
  * Who was on a lot during the billing period.
@@ -105,6 +137,48 @@ async function lotsForPeriod(
   }));
 }
 
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * THE GO-LIVE BOUNDARY — the same one the rent run refuses on.
+ *
+ * A bill for a period that began before go-live is whoever-ran-the-park-
+ * then's money: at The Haven, the 2026 property tax (a credit at the closing
+ * table, by decision never a park_costs row) and the December sewer. Until
+ * this existed, the Today screen told him to enter both and this door took
+ * them.
+ *
+ * WHICH BRANCHES REFUSE. Three branches write a park_costs row and they do
+ * not all go to the same place. The SPLIT lands on the residents' next bill;
+ * PARK-CARRIES files it as the park's own cost, in its books and on its CPA
+ * statement. Both refuse a period from before go-live
+ * (`preCutoverCostRefusal`). The FEE-COVERED branch reaches neither: its row
+ * reaches no resident's bill and no ledger line — its readers are the "is my
+ * fee covering my costs" comparison, the costs list (`listCosts`) and the
+ * per-lot typical-cost line (`getSharedCostBaseline`). A typical-month
+ * figure from before go-live is exactly the evidence that comparison is
+ * built from — The Haven's whole check rests on four June 2026 baselines.
+ * Refusing those would empty the check to protect a bill that was never
+ * going to be raised. So that branch takes the row and says what it is
+ * (`preCutoverEvidenceSignal`).
+ *
+ * READ ONCE, HERE, so the three branches cannot each decide differently. A
+ * FAILED READ is a refusal on every branch: `{data:null, error}` reads
+ * exactly like a park with no restriction, and "no restriction" is the
+ * branch that lets the seller's tax in.
+ */
+async function goLiveBoundary(
+  admin: ReturnType<typeof createServiceClient>,
+  parkId: string,
+): Promise<{ readFailed: string; cutoverOn?: undefined } | { readFailed: null; cutoverOn: string | null }> {
+  const parkRes = await admin
+    .from("parks").select("cutover_date").eq("id", parkId).maybeSingle();
+  if (parkRes.error) {
+    return { readFailed: readFailedMessage("when your park went live", parkRes.error, { money: true }) };
+  }
+  return { readFailed: null, cutoverOn: (parkRes.data?.cutover_date as string | null) ?? null };
+}
+
 /** What the split would look like, before anything is written. */
 export async function previewCostSplit(
   parkId: string,
@@ -117,11 +191,46 @@ export async function previewCostSplit(
   if (!Number.isFinite(amountPaid) || amountPaid < 0) {
     return { ok: false, error: "That bill amount isn't a number." };
   }
+  if (!ISO_DAY.test(periodStart) || !ISO_DAY.test(periodEnd)) {
+    return { ok: false, error: "Give the dates this bill covers." };
+  }
   if (!(periodEnd > periodStart)) {
     return { ok: false, error: "The period has to end after it starts." };
   }
+  // NEVER SPLIT A HOME THE PARK OWNS — the same rule the save applies before
+  // any branch (0069). Without it here, this door previewed a per-lot split
+  // of a park-owned home's power that the save then refused.
+  if (!canSplit(category)) return { ok: false, error: whyNotSplit(category) };
 
   const admin = createServiceClient();
+  // "Show me the split" refuses first, so he reads the reason here rather
+  // than seeing a per-lot number and then a refusal on the save button.
+  const goLive = await goLiveBoundary(admin, parkId);
+  if (goLive.readFailed) return { ok: false, error: goLive.readFailed };
+  // AND THE FEES, because this is the only screen door to the fee-covered
+  // branch. The save records a covered category under its fee at any date —
+  // and a pre-go-live period a fee covers is evidence for the fee check
+  // (`preCutoverEvidenceSignal`). Refusing every pre-go-live period here,
+  // as this used to, left the two missing Haven baselines and the December
+  // sewer with a 367-character refusal and no button under it. A failed fee
+  // read refuses either way it could fall: "no fee" on a pre-go-live period
+  // refuses a bill the save would take, and "no fee" on a month that is ours
+  // previews a split the save would never make.
+  const covering = await feeCovering(parkId, category);
+  if (covering.failed) {
+    return { ok: false, error: readFailedMessage("your fees", covering.error, { money: true }) };
+  }
+  const notOurs = preCutoverCostRefusal(periodStart.slice(0, 7), goLive.cutoverOn, prettyMonth, covering.label);
+  if (notOurs && !covering.label) return { ok: false, error: notOurs };
+  if (covering.label) {
+    // Nothing to divide, so nothing to read: the save's fee-covered branch
+    // never looks at the lots, and a preview that refused on a lots read
+    // would refuse a save that works.
+    return {
+      ok: true,
+      preview: { category, amountPaid, allocation: null, coveredBy: covering.label, evidenceOnly: notOurs != null },
+    };
+  }
   const lots = await lotsForPeriod(admin, parkId, periodStart, periodEnd);
   if (lots === null) {
     // Which of the two reads failed is already on the log line above this one.
@@ -131,7 +240,7 @@ export async function previewCostSplit(
     };
   }
   const allocation = allocateCost({ amountPaid, method: "per_lot", lots });
-  return { ok: true, preview: { allocation, category, amountPaid } };
+  return { ok: true, preview: { category, amountPaid, allocation, coveredBy: null, evidenceOnly: false } };
 }
 
 /**
@@ -225,6 +334,36 @@ export async function recordCost(
     if (!jobRes.data) return { ok: false, error: "That job isn't one of this park's." };
   }
 
+  // BEFORE ANY OF THE THREE BRANCHES WRITES. The park-carries and fee-covered
+  // branches return before `previewCostSplit`, so a check inside it alone
+  // would be the rule in one doorway of three. The dates are checked here for
+  // the same reason: the fee-covered branch had no check at all, and a
+  // malformed start date must not slip past the go-live comparison — and an
+  // empty period used to reach the insert on that branch, hit the
+  // park_costs_period_real constraint, and come back as "try again" for a
+  // shape that can never work.
+  if (!ISO_DAY.test(periodStart) || !ISO_DAY.test(periodEnd)) {
+    return { ok: false, error: "Give the dates this bill covers." };
+  }
+  if (!(periodEnd > periodStart)) {
+    return { ok: false, error: "The period has to end after it starts — for a one-day job, use the next day as the end." };
+  }
+  // The boundary is read ONCE, here, and each branch below answers it its own
+  // way: the split and park-carries refuse (`notOurs`), the fee-covered
+  // branch records the row as evidence and says so. See `goLiveBoundary`.
+  const goLive = await goLiveBoundary(createServiceClient(), parkId);
+  if (goLive.readFailed) return { ok: false, error: goLive.readFailed };
+  // THE FEES ARE READ HERE TOO — once, for all three branches — because the
+  // refusal below has to know whether a covered bill has somewhere else to
+  // go. Read, not applied: the park-carries branch still records the cost as
+  // his (a grounds fee covering "grounds" says nothing about a boat, and
+  // asking him to choose and then overriding him would make the choice a
+  // lie). WHAT A FAILED READ DOES depends on what the read is for, branch by
+  // branch: the two writes below that go on its answer are refused (a second
+  // bill for the same water); the park-carries write goes on nothing it says,
+  // so that branch decides for itself, just under here.
+  const covering = await feeCovering(parkId, category);
+
   // NEVER SPLIT A HOME THE PARK OWNS. Guarded here as well as hidden from the
   // dropdown, because the dropdown is a courtesy and this is the rule — and a
   // category arrives from a browser.
@@ -232,19 +371,40 @@ export async function recordCost(
     return { ok: false, error: whyNotSplit(category) };
   }
 
-  // THE PARK'S OWN COST. Taken before the fee check on purpose: a grounds fee
-  // covering "grounds" says nothing about a boat, and asking him to choose and
-  // then overriding him would make the choice a lie.
+  // THE PARK'S OWN COST. Decided before the fee is applied, on purpose — see
+  // the fee read above.
   if (parkCarries) {
-    // The screen gates on these, but the screen is a courtesy and this is a
-    // public endpoint. `previewCostSplit` validates the period for the split
-    // path; this branch returns before reaching it.
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(periodStart) || !/^\d{4}-\d{2}-\d{2}$/.test(periodEnd)) {
-      return { ok: false, error: "Give the dates this bill covers." };
+    // THE PARK'S OWN BOOKS, which start at go-live. A park_only row is an
+    // expense on the CPA statement for its month, and a month that began
+    // before go-live is a month we do not keep — usually the previous
+    // operator's. (A cost the buyer paid himself between closing and go-live
+    // is refused here too and goes nowhere in LakeLife; whether the park's
+    // own books should start at closing instead is his call, not a bug.)
+    // When a fee covers the category the refusal names the other door.
+    //
+    // THE FEE SHAPES THIS SENTENCE AND NOTHING ELSE ON THIS BRANCH. So a
+    // failed fee read on a month that is ours refuses nothing here — it used
+    // to, with "couldn't check… try again", on a write it never informed. On
+    // a month that is NOT ours the refusal is final whatever the fee says,
+    // and "try again" would be for a write that can never work; so the
+    // sentence goes out with its facts, minus the door it cannot vouch for,
+    // and says so — a failed read is not "no fee covers this".
+    if (covering.failed) console.error("[read failed] your fees:", covering.error);
+    const notOurs = preCutoverCostRefusal(
+      periodStart.slice(0, 7), goLive.cutoverOn, prettyMonth, covering.failed ? null : covering.label,
+    );
+    if (notOurs) {
+      return {
+        ok: false,
+        error: covering.failed
+          ? `${notOurs} Whether one of your fees covers it — and so whether it can still go in ` +
+            `as evidence for the fee comparison — couldn't be checked just now.`
+          : notOurs,
+      };
     }
-    if (periodEnd <= periodStart) {
-      return { ok: false, error: "The period has to end after it starts — for a one-day job, use the next day as the end." };
-    }
+    // The screen gates on this, but the screen is a courtesy and this is a
+    // public endpoint. The period itself was checked above, once, for all
+    // three branches.
     if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
       return { ok: false, error: "That amount isn't a number." };
     }
@@ -284,14 +444,16 @@ export async function recordCost(
   //
   // The bill is still RECORDED — he needs it in his books and on the "is my
   // fee covering my costs" comparison — it is simply not split again.
-  // FAILS OPEN IF IT IS NOT CHECKED. A dropped read here used to read exactly
+  // FAILS OPEN IF IT IS NOT CHECKED. A dropped read used to read exactly
   // like "no fee covers this", and the difference is a second bill: the split
   // below runs, and a household pays their fee AND their share of the same
   // water — 189% recovery, which no constraint in the database can see.
-  const covering = await feeCovering(parkId, category);
+  // (The read is above, once for all three branches; THIS is where a failed
+  // one refuses, because this and the split are the writes that go on it.)
   if (covering.failed) {
     return { ok: false, error: readFailedMessage("your fees", covering.error, { money: true }) };
   }
+  const notOurs = preCutoverCostRefusal(periodStart.slice(0, 7), goLive.cutoverOn, prettyMonth, covering.label);
   if (covering.label) {
     const admin0 = createServiceClient();
     const { error: e0 } = await admin0.from("park_costs").insert({
@@ -313,14 +475,31 @@ export async function recordCost(
     revalidatePath("/park/costs");
     return {
       ok: true,
-      signal: `Recorded. Your "${covering.label}" fee already covers this, so it is not split again — it shows in the comparison below.`,
+      // EVIDENCE, OR A BILL. Before go-live the row is evidence for the fee
+      // check and nothing else, and the signal says so — the same door
+      // refuses the split of the same bill a minute later, and the two
+      // sentences have to agree about why.
+      signal:
+        preCutoverEvidenceSignal(periodStart.slice(0, 7), goLive.cutoverOn, prettyMonth, covering.label)
+        ?? `Recorded. Your "${covering.label}" fee already covers this, so it is not split again — it shows in the comparison below.`,
       perLot: 0,
       parkAbsorbs: amountPaid,
     };
   }
 
+  // THE SPLIT — the branch that reaches the residents' bills. Refused on the
+  // boundary already read; `previewCostSplit` reads it again because "Show
+  // me the split" is its own public door and must refuse on its own.
+  if (notOurs) return { ok: false, error: notOurs };
   const pre = await previewCostSplit(parkId, category, periodStart, periodEnd, amountPaid);
   if (!pre.ok || !pre.preview) return { ok: false, error: pre.error };
+  // No fee covered it a moment ago or the branch above would have taken it.
+  // The preview reads the fees again on its own door, so this can only be a
+  // fee saved between the two reads — and then the honest answer is the
+  // covered branch's, which a second save will take.
+  if (!pre.preview.allocation) {
+    return { ok: false, error: `Your "${pre.preview.coveredBy}" fee now covers this, so it is recorded rather than split — save it again.` };
+  }
 
   const { allocation } = pre.preview;
   // An empty park is no longer a refusal: the bill is recorded and the park
@@ -521,6 +700,17 @@ export interface BillableParkJob {
   periodStart: string;
   periodEnd: string;
   note: string;
+  /**
+   * Why this one has no button. Non-null for a job done in a month that
+   * began before go-live whose cost no fee covers: `recordCost` refuses that
+   * period on the split, so offering the tap would be offering a refusal.
+   * A pre-go-live job a fee DOES cover keeps its button — the same tap
+   * records it as evidence for the fee check, which is what recordCost does
+   * with it. The list decides exactly as the action does, or it lies.
+   * The row is still listed either way — he paid for it, and a job that
+   * silently vanished from this list would read as a dropped read.
+   */
+  notOurs: string | null;
 }
 
 /**
@@ -544,9 +734,18 @@ export async function getBillableParkJobs(parkId: string): Promise<BillableParkJ
   const admin = createServiceClient();
 
   const park = mustRead("your park", await admin
-    .from("parks").select("service_property_id").eq("id", parkId).maybeSingle());
+    .from("parks").select("service_property_id, cutover_date").eq("id", parkId).maybeSingle());
   const propertyId = (park?.service_property_id as string) ?? null;
   if (!propertyId) return [];
+  // THE SAME BOUNDARY THE BUTTON'S ACTION REFUSES ON — and the same fee
+  // read, because the action's answer depends on both: a pre-go-live job is
+  // refused on the split and taken as evidence when a fee covers it. The list
+  // has to reach the same verdict from the same facts, or it offers a tap
+  // that says no (or withholds one that would have worked).
+  const cutoverOn = (park?.cutover_date as string | null) ?? null;
+  const fees = cutoverOn == null ? [] : (mustRead("your fees", await admin
+    .from("park_fees").select("label, covers, active")
+    .eq("park_id", parkId).eq("active", true)) ?? []);
 
   const jobs = mustRead("the work done at your park", await admin
     .from("jobs")
@@ -605,6 +804,12 @@ export async function getBillableParkJobs(parkId: string): Promise<BillableParkJ
         periodStart: `${date.slice(0, 7)}-01`,
         periodEnd: addDays(date, 1),
         note: `${svc ?? "Park work"} — LakeLife, ${date}`,
+        // The month the tap would submit, against the same rule recordCost
+        // applies to it — and the same "does a fee cover this" answer, from
+        // the same helper. One comparison, both doors.
+        notOurs: coveringLabel(fees, costCategoryForService(svc ?? "Park work"))
+          ? null
+          : preCutoverJobNote(date.slice(0, 7), cutoverOn, prettyMonth),
       };
     });
 }
@@ -630,9 +835,19 @@ async function feeCovering(
     .eq("park_id", parkId)
     .eq("active", true);
   if (res.error) return { label: null, failed: true, error: res.error };
-  const hit = (res.data ?? []).find((f) =>
-    ((f.covers as string[]) ?? []).includes(category));
-  return { label: hit ? ((hit.label as string) ?? "recurring") : null, failed: false };
+  return { label: coveringLabel(res.data ?? [], category), failed: false };
+}
+
+/**
+ * The one predicate behind "a fee already covers this" — used by the write
+ * (`feeCovering`) and by the one-tap list (`getBillableParkJobs`), so the two
+ * cannot answer differently for the same job.
+ */
+function coveringLabel(
+  fees: readonly Record<string, unknown>[], category: CostCategory,
+): string | null {
+  const hit = fees.find((f) => ((f.covers as string[]) ?? []).includes(category));
+  return hit ? ((hit.label as string) ?? "recurring") : null;
 }
 
 /**

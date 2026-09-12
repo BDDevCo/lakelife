@@ -168,3 +168,68 @@ describe("the renter's own confirmation", () => {
     expect(receiptCounterfoil({ ...base, payerName: null })).toContain("Lot 3   Lot 3");
   });
 });
+
+// ---------------------------------------------------------------------------
+// MORE THAN THE BILL, ON THE PAPER THEY KEEP.
+//
+// $600 for a $542.53 bill is split by recordPayment: the bill's balance
+// against the bill, the rest on account with its own receipt number. The
+// receipt for what they handed over has to show both, or "Amount $600.00 /
+// Against January rent — $542.53" is a receipt that raises the question it
+// exists to answer.
+// ---------------------------------------------------------------------------
+describe("a receipt for more than the bill", () => {
+  const split: ReceiptLines = {
+    ...base, amount: 600, billAmount: 542.53, balanceAfter: 0,
+    periodMonth: "2027-01", receivedOn: "2027-01-05", receiptNo: 101,
+    onAccount: { amount: 57.47, receiptNo: 102 },
+  };
+
+  it("shows the whole amount, then how it was split", () => {
+    const b = receiptBody(split);
+    expect(b).toMatch(/Amount\s+\$600\.00/);
+    expect(b).toMatch(/to this bill\s+\$542\.53/);
+    expect(b).toMatch(/on account\s+\$57\.47/);
+    expect(b).toContain("Against         January 2027 rent — $542.53");
+    expect(b).toContain("nothing further owing on this one");
+    expect(b).not.toContain("In credit");
+  });
+
+  it("says where the rest is, with its own receipt number, and promises nothing", () => {
+    const b = receiptBody(split);
+    expect(b).toContain("The $57.47 on account is held by the office and hasn't been put");
+    expect(b).toContain("against a bill yet. It stays yours until it is (receipt TH-2027-0102).");
+    // Nothing applies it to the next bill on its own.
+    expect(b).not.toMatch(/next bill|will be applied|come off/i);
+  });
+
+  it("survives a missing second receipt number", () => {
+    const b = receiptBody({ ...split, onAccount: { amount: 57.47, receiptNo: null } });
+    expect(b).toContain("It stays yours until it is.");
+    expect(b).not.toContain("(receipt");
+  });
+
+  it("prints none of it on an ordinary receipt", () => {
+    for (const r of [base, { ...base, onAccount: null }, { ...base, onAccount: { amount: 0, receiptNo: null } }]) {
+      const b = receiptBody(r);
+      expect(b).not.toMatch(/on account/);
+      expect(b).not.toMatch(/to this bill/);
+    }
+  });
+
+  it("the counterfoil they sign names what they handed over", () => {
+    expect(receiptCounterfoil(split)).toContain("$600.00");
+  });
+});
+
+describe("how it came, in the words the form used", () => {
+  it("a bank push the office keyed reads 'bank transfer', as the form called it", () => {
+    // The rent screen's form says "Bank transfer" and files `transfer`; the
+    // receipt used to print "transfer" for it and "bank transfer" only for
+    // the processor's `ach` row.
+    expect(receiptBody({ ...base, method: "transfer", reference: "Zelle" }))
+      .toContain("How             bank transfer Zelle");
+    expect(receiptBody({ ...base, method: "ach", reference: "ch_1" }))
+      .toContain("How             bank transfer ch_1");
+  });
+});

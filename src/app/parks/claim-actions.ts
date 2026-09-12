@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { mintClaimCode, normalizeClaimCode } from "@/lib/claim-code";
+import { LOT_WORD, LOT_WORDS } from "@/lib/roll-parse";
 import {
   claimSays, claimWorked, issueSays, issueWorked, officeCanReprint,
 } from "@/lib/park-claim-copy";
@@ -10,17 +11,61 @@ import {
 
 /**
  * Accept either the park's slug ("the-haven") or its name as printed on the
- * slip ("The Haven"). Returns the slug the RPC expects; if nothing matches,
- * returns the input slugified so the RPC's own "park not open" answer stands.
+ * slip ("The Haven"). Returns the slug the RPC expects — and the park's id,
+ * so the lot can be resolved against the park's own lots — or, if nothing
+ * matches, the input slugified and no id, so the RPC's own "park not open"
+ * answer stands.
  */
-async function resolveParkSlug(typed: string): Promise<string> {
+async function resolveParkSlug(typed: string): Promise<{ slug: string; id: string | null }> {
   const asSlug = typed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   const admin = createServiceClient();
-  const bySlug = await admin.from("parks").select("slug").eq("slug", asSlug).maybeSingle();
-  if (bySlug.data?.slug) return bySlug.data.slug as string;
-  const byName = await admin.from("parks").select("slug").ilike("name", typed).maybeSingle();
-  if (byName.data?.slug) return byName.data.slug as string;
-  return asSlug;
+  const bySlug = await admin.from("parks").select("id, slug").eq("slug", asSlug).maybeSingle();
+  if (bySlug.data?.slug) return { slug: bySlug.data.slug as string, id: (bySlug.data.id as string) ?? null };
+  const byName = await admin.from("parks").select("id, slug").ilike("name", typed).maybeSingle();
+  if (byName.data?.slug) return { slug: byName.data.slug as string, id: (byName.data.id as string) ?? null };
+  return { slug: asSlug, id: null };
+}
+
+/**
+ * A lot label reduced to what identifies it: no "#", no lot word — however
+ * many times it is written, because the slip prints "Lot" in front of a
+ * label that may already carry it ("Lot LOT22") — no spaces, one case.
+ * "Lotus" keeps its Lot: a word only comes off ahead of a digit.
+ */
+const LOT_WORD_RUN = new RegExp(`^(?:${LOT_WORDS.join("|")})+(?=\\d)`, "i");
+const lotKey = (s: string) => s.replace(/[^A-Za-z0-9]/g, "").toUpperCase().replace(LOT_WORD_RUN, "");
+
+/**
+ * THE PARK'S OWN SPELLING OF THE LOT SHE MEANS.
+ *
+ * `claim_park_file` matches `lot_number` exactly, and the park's lots are
+ * not all spelt the same way: the importer stores "14", `addLots` stores
+ * "LOT22", and a lot made by hand is stored as typed. A door that only
+ * stripped the word turned the stored "LOT22" into a "22" the RPC could not
+ * find — the lot existed, the slip was right, and she was refused.
+ *
+ * So: the park's lots are read, and the one whose whole label she typed
+ * wins; failing that, the one that reduces to the same key. When nothing
+ * matches, or two lots reduce to one key and neither is what she typed, or
+ * the read fails — a failed read is not an empty one — the stripped form
+ * goes through and the RPC gives its own answer.
+ */
+async function resolveLotNumber(parkId: string | null, typed: string, stripped: string): Promise<string> {
+  if (!parkId) return stripped;
+  const admin = createServiceClient();
+  const res = await admin.from("park_lots").select("lot_number").eq("park_id", parkId);
+  // Logged, as every other failure in this file is: on a park whose lots
+  // carry the word, a read that fails here sends the stripped form, the RPC
+  // answers no such lot, and she is told nobody lives there — a confident
+  // sentence caused by a failed read, with nothing in the logs to say so.
+  if (res.error) console.error("[claim] lots read failed", res.error.message);
+  if (res.error || !res.data) return stripped;
+  const labels = res.data.map((l: { lot_number: unknown }) => String(l.lot_number));
+  const whole = labels.find((l) => l.toUpperCase() === typed.toUpperCase());
+  if (whole !== undefined) return whole;
+  const key = lotKey(typed);
+  const byKey = key ? labels.filter((l) => lotKey(l) === key) : [];
+  return byKey.length === 1 ? byKey[0] : stripped;
 }
 /**
  * THE TWO ENDS OF A SLIP OF PAPER.
@@ -81,15 +126,25 @@ export async function claimMyFile(input: {
   }
 
   const typedPark = (input.parkSlug ?? "").trim();
-  const lotNumber = (input.lotNumber ?? "").trim();
-  if (!typedPark || !lotNumber) {
+  // THE SLIP SAYS "Lot 14". `claim_park_file` matches lot_number exactly, so
+  // typing the lot the way the slip prints it was refused as no such
+  // household. The word — and a leading "#" — come off here, with the same
+  // expression the importer uses, so the two doors agree about the lot WORD;
+  // and then the park's own spelling of that lot is looked up, because the
+  // stored label is not always the bare number (resolveLotNumber). "Lotus"
+  // keeps its Lot: the word only comes off ahead of a digit.
+  const typedLot = (input.lotNumber ?? "").trim();
+  const strippedLot = typedLot.replace(/^#\s*/, "").replace(LOT_WORD, "").trim();
+  if (!typedPark || !strippedLot) {
     return { ok: false, outcome: "claim_no_open_lot", message: claimSays("claim_no_open_lot") };
   }
   // THE SLIP SAYS "THE HAVEN". The field was labelled "Park" and the database
   // wanted the URL slug, so a resident typing what her slip actually says was
   // refused with no explanation. A typed slug still works; a typed NAME is
   // resolved to its slug here, case-insensitively, before the RPC sees it.
-  const parkSlug = await resolveParkSlug(typedPark);
+  const park = await resolveParkSlug(typedPark);
+  const parkSlug = park.slug;
+  const lotNumber = await resolveLotNumber(park.id, typedLot, strippedLot);
 
   const { data, error } = await supabase.rpc("claim_park_file", {
     p_park_slug: parkSlug,

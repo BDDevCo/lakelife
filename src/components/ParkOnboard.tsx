@@ -8,6 +8,7 @@ import {
   planOnboarding, onboardSummary, signingExplainer,
   type OnboardRow,
 } from "@/app/park/onboard-helpers";
+import { agreementStartFor, SIGNED_START_HORIZON_DAYS, dayInWords } from "@/app/park/park-helpers";
 
 /**
  * NINETEEN HOUSEHOLDS IN ONE SITTING.
@@ -20,13 +21,18 @@ import {
  * afternoon, and a blank row is left for later rather than blocking the save.
  */
 export function ParkOnboard({
-  parkId, seeds, today, capMonths, rentsFromImport, feePerSignedLot = 0,
+  parkId, seeds, today, capMonths, termMonths = null, rentsFromImport, feePerSignedLot = 0, cutoverDate = null,
 }: {
   parkId: string;
   seeds: OnboardSeed[];
   today: string;
   /** The park's own agreement cap, or null when it has not set one. */
   capMonths: number | null;
+  /**
+   * The term a signed agreement is written for — the length, which the cap
+   * only bounds. Null on a park with neither dial (the rolling horizon).
+   */
+  termMonths?: number | null;
   /** Did a roll actually get pasted in? The rent hint is a lie otherwise. */
   rentsFromImport: boolean;
   /**
@@ -35,11 +41,20 @@ export function ParkOnboard({
    * against his own roll was not the number that billed.
    */
   feePerSignedLot?: number;
+  /**
+   * The park's cutover date. A signed lease may not start before it and one
+   * filed before go-live starts ON it — the one date that is true of a lease
+   * collected in December for 1 January. Null for a park that never changed
+   * hands.
+   */
+  cutoverDate?: string | null;
 }) {
   const router = useRouter();
   const [busy, start] = useTransition();
   /** Lots that came back with a reason, so a partial failure names them. */
   const [failed, setFailed] = useState<{ lotNumber: string; why: string }[]>([]);
+  /** Whether anything DID file alongside them — "the rest did" is only true then. */
+  const [someFiled, setSomeFiled] = useState(false);
   const [rows, setRows] = useState<OnboardRow[]>(
     seeds.map((s) => ({
       lotId: s.lotId,
@@ -51,6 +66,9 @@ export function ParkOnboard({
       // types them, and a row without both is named rather than filed.
       email: "",
       phone: "",
+      // Blank until the tick is set; then the later of today and the cutover,
+      // which he can change to the day the lease says.
+      agreementStartsOn: "",
       // NOBODY HAS SIGNED ANYTHING YET. This defaulted to true, on the theory
       // that everyone signs at takeover — so an owner who read the instruction
       // ("tick anyone who has signed"), ticked nobody because nobody had, and
@@ -68,7 +86,21 @@ export function ParkOnboard({
   const set = (i: number, k: keyof OnboardRow, v: string | boolean) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
 
-  const plan = planOnboarding(rows, today);
+  // THE DAY A SIGNED LEASE RUNS FROM, seeded when the tick is set. The default
+  // is the later of today and the cutover — a lease collected on 20 December
+  // for 1 January is filed dated 1 January, not the afternoon it was typed.
+  // Clearing the tick clears the date: a holdover has no agreement start.
+  const defaultStart = agreementStartFor("", today, cutoverDate);
+  const tick = (i: number, signed: boolean) =>
+    setRows((rs) => rs.map((r, j) => (j === i
+      ? { ...r, signedNewLease: signed, agreementStartsOn: signed ? (defaultStart.ok ? defaultStart.start : "") : "" }
+      : r)));
+  const latestStart = (() => {
+    const [y, m, d] = today.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d + SIGNED_START_HORIZON_DAYS)).toISOString().slice(0, 10);
+  })();
+
+  const plan = planOnboarding(rows, today, cutoverDate);
 
   if (seeds.length === 0) {
     return (
@@ -101,7 +133,21 @@ export function ParkOnboard({
       <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
         <strong style={{ fontSize: 15 }}>The new lease</strong>
         <p className="mut" style={{ fontSize: 13, marginTop: 6, marginBottom: 0, lineHeight: 1.5 }}>
-          {signingExplainer(capMonths)}
+          {signingExplainer(termMonths)}
+          {/* THE DATE, AND WHY IT IS NOT TODAY. A signed lease is filed from
+              the day it says: eighteen leases for 1 January typed in on the
+              4th were billed 28 of 31 days, because the window began the
+              afternoon they were typed. */}
+          {defaultStart.ok && (
+            <>
+              {" "}A signed lease is filed from the day it says — that starts as{" "}
+              {dayInWords(defaultStart.start)}
+              {cutoverDate && cutoverDate > today
+                ? ", the day the ledger starts,"
+                : ""}{" "}
+              and you can change it to the date on the paper.
+            </>
+          )}
         </p>
       </div>
 
@@ -162,9 +208,27 @@ export function ParkOnboard({
                   have signed and some have not. */}
               <label style={{ display: "flex", gap: 5, alignItems: "center", fontSize: 12 }}>
                 <input type="checkbox" checked={r.signedNewLease}
-                  onChange={(e) => set(i, "signedNewLease", e.target.checked)} />
+                  onChange={(e) => tick(i, e.target.checked)} />
                 <span className="mut">signed</span>
               </label>
+              {/* THE DATE THE LEASE SAYS, not the date it is typed. Only a
+                  signed row has one; a holdover starts the day it is filed.
+                  Bounded by the cutover below and two months ahead above —
+                  the same rule planOnboarding and the server apply. */}
+              {r.signedNewLease && (
+                <label style={{ display: "flex", gap: 5, alignItems: "center", fontSize: 12 }}>
+                  <span className="mut">from</span>
+                  <input
+                    type="date"
+                    value={r.agreementStartsOn}
+                    min={cutoverDate ?? undefined}
+                    max={latestStart}
+                    onChange={(e) => set(i, "agreementStartsOn", e.target.value)}
+                    title="The day the signed lease runs from"
+                    style={{ flex: "0 1 150px", minWidth: 0 }}
+                  />
+                </label>
+              )}
               {problem && (
                 <span className="mut" style={{ fontSize: 12, flexBasis: "100%" }}>
                   {problem.why}
@@ -196,6 +260,7 @@ export function ParkOnboard({
                 // twenty-one rows, where an unfiled one and an empty lot look
                 // identical.
                 setFailed(res.failed ?? []);
+                setSomeFiled(res.ok && (res.filed ?? 0) > 0);
                 if (res.ok) router.refresh();
               })
             }>
@@ -205,8 +270,12 @@ export function ParkOnboard({
 
         {failed.length > 0 && (
           <div style={{ marginTop: 12, borderTop: "1px solid rgba(0,0,0,.08)", paddingTop: 10 }}>
+            {/* "THE REST DID" ONLY WHEN SOME DID. When every row was refused
+                there is no rest, and the sentence would report a success
+                that did not happen. */}
             <strong style={{ fontSize: 13.5, color: "var(--warn)" }}>
-              {failed.length === 1 ? "One didn't file" : `${failed.length} didn't file`} — the rest did.
+              {failed.length === 1 ? "One didn't file" : `${failed.length} didn't file`}
+              {someFiled ? " — the rest did." : "."}
             </strong>
             {failed.map((f) => (
               <p key={f.lotNumber} style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.5 }}>

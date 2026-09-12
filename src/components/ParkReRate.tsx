@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
+import { longDate } from "@/lib/lake-time";
 import {
   previewReRate, scheduleReRate, recordNotice, cancelReRate,
   type PendingReRate,
@@ -74,14 +75,14 @@ export function ParkReRate({
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div>
               <strong>
-                {p.count} {p.count === 1 ? "rent goes" : "rents go"} to {money(p.toAmount)} on {p.effectiveOn}
+                {p.count} {p.count === 1 ? "rent goes" : "rents go"} to {money(p.toAmount)} on {longDate(p.effectiveOn)}
               </strong>
               <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
                 {money(p.monthlyDelta)} more a month
               </div>
             </div>
             <span className={`ll-pill ${p.noticeGivenOn ? "" : "warn"}`}>
-              {p.noticeGivenOn ? `Noticed ${p.noticeGivenOn}` : "Nobody told yet"}
+              {p.noticeGivenOn ? `Noticed ${longDate(p.noticeGivenOn)}` : "Nobody told yet"}
             </span>
           </div>
 
@@ -161,7 +162,7 @@ export function ParkReRate({
                   <strong>That&apos;s too soon.</strong>{" "}
                   <span className="mut">
                     Your notice period is {noticeDays} days, so the earliest this
-                    can start is <strong>{plan.earliestEffective}</strong>.
+                    can start is <strong>{longDate(plan.earliestEffective)}</strong>.
                   </span>
                 </p>
               ) : (
@@ -224,7 +225,7 @@ export function ParkReRate({
                   </p>
 
                   <button className="ll-btn" onClick={schedule} disabled={busy || plan.changing.length === 0}>
-                    Schedule it for {effectiveOn}
+                    Schedule it for {longDate(effectiveOn)}
                   </button>
                 </>
               )}

@@ -7,6 +7,7 @@ import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { sendEmail } from "@/lib/email";
 import { html } from "@/lib/html-safe";
+import { whyItDidntGo } from "./reminder-helpers";
 import {
   planFiling, deliverySummary, DOCUMENT_KIND_LABEL, VERSIONED_KINDS,
   type DeliveryChannel, type DeliveryRow, type DeliveryAttempt, type DocumentKind,
@@ -389,7 +390,11 @@ async function deliver(
         }`,
       });
       if (!res.ok) {
-        failed.push({ name, why: "The email didn't go out — nothing was logged, so you can try again." });
+        // THE REAL REASON, not "try again". Under the hold — the normal state
+        // in January — a retry can never work, and this was the fourth
+        // park-owner email door still saying it could. Same helper the
+        // receipt, reminder and invite doors build from.
+        failed.push({ name, why: `${whyItDidntGo(res.error)} Nothing was logged.` });
         continue;
       }
     }

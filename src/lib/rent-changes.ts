@@ -31,13 +31,17 @@ export async function applyDueRentChangesFor(parkId?: string): Promise<{
   const admin = createServiceClient();
   const today = todayLakeDate();
 
+  // IN DATE ORDER. After a missed nightly two served changes on one pinned row
+  // can both be due — $400→$425 from the 1st and $425→$450 from the 15th —
+  // and applied in arbitrary order the row ends at $425.
   let q = admin
     .from("lot_rent_changes")
-    .select("id, reservation_id, to_amount, effective_on, notice_given_on")
+    .select("id, reservation_id, from_amount, to_amount, effective_on, notice_given_on")
     .lte("effective_on", today)
     .is("applied_at", null)
     .is("cancelled_at", null)
-    .not("notice_given_on", "is", null);
+    .not("notice_given_on", "is", null)
+    .order("effective_on", { ascending: true });
   if (parkId) q = q.eq("park_id", parkId);
 
   const dueRes = await q;
@@ -59,19 +63,54 @@ export async function applyDueRentChangesFor(parkId?: string): Promise<{
   const due = dueRes.data;
 
   for (const c of due ?? []) {
+    // WHERE THE PINNED ROW SITS IN ITS CHAIN — read before anything is
+    // written, so a failed read skips the change whole rather than applying
+    // half of it. A change is pinned to the ONE row that covered its effective
+    // date when it was scheduled; if the owner has since written that row's
+    // successor "at the same rent", the successor is sitting at the OLD number
+    // and would bill it from its first month — the increase evaporating after
+    // one month with nothing on any screen saying so.
+    const pinnedRes = await admin
+      .from("lot_reservations")
+      .select("id, agreement_chain_id, agreement_seq")
+      .eq("id", c.reservation_id as string)
+      .maybeSingle();
+    if (pinnedRes.error || !pinnedRes.data) {
+      skipped += 1; errors.push(`reservation ${c.reservation_id}`); continue;
+    }
+    const pinned = pinnedRes.data;
+    const patch = {
+      quoted_amount: c.to_amount,
+      // HE set this number, and he set it before anyone confirmed it. A
+      // re-rate is never 'tenant_confirmed' — that has to be earned at the
+      // window, one household at a time.
+      amount_source: "owner_knowledge",
+      amount_source_at: new Date().toISOString(),
+    };
+
     const { error: resErr } = await admin
       .from("lot_reservations")
-      .update({
-        quoted_amount: c.to_amount,
-        // HE set this number, and he set it before anyone confirmed it. A
-        // re-rate is never 'tenant_confirmed' — that has to be earned at the
-        // window, one household at a time.
-        amount_source: "owner_knowledge",
-        amount_source_at: new Date().toISOString(),
-      })
+      .update(patch)
       .eq("id", c.reservation_id as string);
 
     if (resErr) { skipped += 1; errors.push(`reservation ${c.reservation_id}`); continue; }
+
+    // CARRY IT DOWN THE CHAIN: every later live link still at the number the
+    // change moved FROM takes the new one. A later link at some other number
+    // is one he re-rated himself and is not ours to move; a change that
+    // recorded no 'from' has nothing to match and carries nothing. If this
+    // write fails the change is left unapplied, so tomorrow's run — the
+    // pinned update being idempotent — tries the whole thing again.
+    if (c.from_amount != null && pinned.agreement_chain_id) {
+      const { error: chainErr } = await admin
+        .from("lot_reservations")
+        .update(patch)
+        .eq("agreement_chain_id", pinned.agreement_chain_id as string)
+        .gt("agreement_seq", (pinned.agreement_seq as number) ?? 1)
+        .eq("quoted_amount", c.from_amount)
+        .in("status", ["approved", "active"]);
+      if (chainErr) { skipped += 1; errors.push(`chain of reservation ${c.reservation_id}`); continue; }
+    }
 
     const { error: chErr } = await admin
       .from("lot_rent_changes")

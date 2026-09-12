@@ -40,6 +40,11 @@
  * complete is a form that saves nothing.
  */
 
+// The same start-date rule the server applies, so the screen refuses what the
+// server would refuse and names the lot instead of failing at File.
+import { agreementStartFor, dayInWords, SIGNED_LEASE_LABEL } from "./park-helpers";
+import { prettyMonth } from "./ledger-helpers";
+
 export interface OnboardRow {
   lotId: string;
   lotNumber: string;
@@ -58,6 +63,15 @@ export interface OnboardRow {
    * arrangement they already had and nobody has changed that yet.
    */
   signedNewLease: boolean;
+  /**
+   * THE DAY THE SIGNED LEASE RUNS FROM — read only when the tick is set.
+   *
+   * Blank means the later of today and the park's cutover date. A lease
+   * collected on 20 December for 1 January is filed dated 1 January and bills
+   * January whole; typed in with no date of its own it was filed from the day
+   * it was typed and billed January short. See `agreementStartFor`.
+   */
+  agreementStartsOn: string;
   /**
    * HOW TO REACH THEM, taken at signing.
    *
@@ -81,6 +95,8 @@ export interface OnboardPlan {
     rent: number | null;
     movedInOn: string;
     signedNewLease: boolean;
+    /** Resolved for a signed row (the typed date or the default); null for a holdover. */
+    agreementStartsOn: string | null;
     email: string;
     phone: string;
   }[];
@@ -90,7 +106,46 @@ export interface OnboardPlan {
   blankLotNumbers: string[];
 }
 
-export function planOnboarding(rows: readonly OnboardRow[], todayISO: string): OnboardPlan {
+/**
+ * BOTH ARE A CONDITION OF RENTING — one rule, one set of sentences.
+ *
+ * The filing screen refused a row without an email or a phone; the rent
+ * roll's "Someone lives here" door and the new "They signed the new lease"
+ * door did not, so the household the strict screen turned away was filed by
+ * the lax one with neither. Every door that records a signed agreement now
+ * asks this, and the sentence he reads is the same at all of them.
+ *
+ * Null means both are present and well-formed.
+ *
+ * WHICH DOORS ASK. `planOnboarding` (Who lives here) asks EVERY row, signed
+ * or not — both are a condition of renting here, and that screen files
+ * households as a batch. The roll's "Someone lives here" asks only when the
+ * signed tick is set, and "They signed the new lease" always: on those two
+ * doors the condition is the LEASE's. Two rules, one sentence set; whether
+ * a no-email holdover should file at all is the owner's call, not this
+ * comment's.
+ */
+export function contactProblem(email: string, phone: string): string | null {
+  const e = email.trim().toLowerCase();
+  const p = phone.trim();
+  if (!e && !p) return "No email or phone yet — both are needed to file.";
+  if (!e) return "No email yet.";
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return "That email doesn't look right.";
+  if (!p) return "No phone number yet.";
+  if (p.replace(/\D/g, "").length < 10) return "That phone number looks short.";
+  return null;
+}
+
+export function planOnboarding(
+  rows: readonly OnboardRow[],
+  todayISO: string,
+  /**
+   * The park's cutover date — the floor under any signed agreement's start.
+   * Null for a park that never changed hands. Optional so the pure callers
+   * that predate it read exactly as before.
+   */
+  cutoverDate: string | null = null,
+): OnboardPlan {
   const toFile: OnboardPlan["toFile"] = [];
   const problems: OnboardPlan["problems"] = [];
   const blankLotNumbers: string[] = [];
@@ -149,30 +204,29 @@ export function planOnboarding(rows: readonly OnboardRow[], todayISO: string): O
     // left off the roll is a household nobody bills.
     const email = r.email.trim().toLowerCase();
     const phone = r.phone.trim();
-    if (!email && !phone) {
-      problems.push({ lotNumber: r.lotNumber, why: "No email or phone yet — both are needed to file." });
+    const contact = contactProblem(email, phone);
+    if (contact) {
+      problems.push({ lotNumber: r.lotNumber, why: contact });
       continue;
     }
-    if (!email) {
-      problems.push({ lotNumber: r.lotNumber, why: "No email yet." });
-      continue;
-    }
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-      problems.push({ lotNumber: r.lotNumber, why: "That email doesn't look right." });
-      continue;
-    }
-    if (!phone) {
-      problems.push({ lotNumber: r.lotNumber, why: "No phone number yet." });
-      continue;
-    }
-    if (phone.replace(/\D/g, "").length < 10) {
-      problems.push({ lotNumber: r.lotNumber, why: "That phone number looks short." });
-      continue;
+
+    // WHEN THE SIGNED LEASE RUNS FROM. Resolved here so the summary can say
+    // which month bills first, and refused here — by the same rule the server
+    // applies — so a date before go-live names its lot instead of failing at
+    // the end of the afternoon.
+    let agreementStartsOn: string | null = null;
+    if (r.signedNewLease) {
+      const at = agreementStartFor(r.agreementStartsOn, todayISO, cutoverDate);
+      if (!at.ok) {
+        problems.push({ lotNumber: r.lotNumber, why: at.error });
+        continue;
+      }
+      agreementStartsOn = at.start;
     }
 
     toFile.push({
       lotId: r.lotId, lotNumber: r.lotNumber, displayName: name, rent, movedInOn,
-      signedNewLease: r.signedNewLease, email, phone,
+      signedNewLease: r.signedNewLease, agreementStartsOn, email, phone,
     });
   }
 
@@ -263,6 +317,13 @@ export function onboardSummary(
     );
   }
 
+  // WHICH MONTH BILLS FIRST, AND FOR HOW MUCH. The total above is "a month";
+  // the first month is only that when every signed lease starts on the 1st.
+  // Filed on the 4th for the 4th it is a part month, and the number he checks
+  // against his leases has to be the one that bills.
+  const firstMonth = firstBilledMonth(plan, feePerSignedLot);
+  if (firstMonth) parts.push(firstMonth);
+
   const noRent = plan.toFile.filter((r) => r.rent == null).map((r) => r.lotNumber);
   if (noRent.length > 0) {
     parts.push(
@@ -290,6 +351,31 @@ function capRule(months: number): string {
 }
 
 /**
+ * The first month a signed lease bills, in words, with its figure.
+ *
+ * Only the SIGNED rows with a rent are counted — a holdover starts today and
+ * is billed as it always was, and a row with no rent is not billed at all.
+ * When every signed lease starts on the 1st of one month the figure is the
+ * whole month; otherwise it is a part month and says so rather than quoting a
+ * number the run will not raise.
+ */
+function firstBilledMonth(plan: OnboardPlan, feePerSignedLot: number): string | null {
+  const signed = plan.toFile.filter((r) => r.signedNewLease && r.rent != null && r.agreementStartsOn);
+  if (signed.length === 0) return null;
+  const earliest = signed.map((r) => r.agreementStartsOn!).sort()[0];
+  const month = earliest.slice(0, 7);
+  // Only the leases that START in the first month are on its bill; one dated
+  // for the month after is simply not there yet.
+  const inMonth = signed.filter((r) => r.agreementStartsOn!.slice(0, 7) === month);
+  if (!inMonth.every((r) => r.agreementStartsOn!.endsWith("-01"))) {
+    return `from ${dayInWords(earliest)}, so ${prettyMonth(month)} bills a part month`;
+  }
+  const rent = inMonth.reduce((s, r) => s + (r.rent ?? 0), 0);
+  const total = Math.round((rent + feePerSignedLot * inMonth.length) * 100) / 100;
+  return `from ${dayInWords(earliest)} — ${prettyMonth(month)} bills ${money(total)}`;
+}
+
+/**
  * What the tick means, in his words.
  *
  * A real decision with a legal shape, so it is put plainly and the app takes no
@@ -300,14 +386,29 @@ function capRule(months: number): string {
  * already own themselves and have had the same households for years — there is
  * no seller anywhere in their story, and a screen that invents one reads as
  * software written for somebody else.
+ *
+ * NAMES THE DOOR. "The rule starts applying when they sign" was a promise
+ * about a control that did not exist: nothing on the rent roll could record a
+ * signature, so a household filed clear stayed clear — and fee-exempt —
+ * forever. The control exists now and this sentence says where it is.
+ *
+ * THE TERM, NOT THE CAP. This took the park's ceiling and said 'a fresh
+ * agreement under your 3-month rule' at The Haven, where commitOnboarding
+ * writes ONE month (agreementMonthsFor: the house style under the cap). It
+ * takes the length now — what is actually written — and says that.
  */
-export function signingExplainer(capMonths: number | null): string {
+export function signingExplainer(termMonths: number | null): string {
   return (
-    "Tick anyone who has signed your new lease — those get a fresh agreement" +
-    (capMonths == null ? ". " : ` under your ${capRule(capMonths)}. `) +
+    "Tick anyone who has signed your new lease — those get a fresh" +
+    (termMonths == null ? " agreement. " : ` ${termMonths === 1 ? "one" : termMonths}-month agreement. `) +
     "Leave it clear for everyone still on the arrangement they already had: " +
-    "that carries on exactly as it is" +
-    (capMonths == null ? "" : ", and the rule starts applying when they sign") +
-    ". Either way they're on the roll and they get billed."
+    "that carries on exactly as it is. When one of them signs, record it from " +
+    // The control's own words, from their one home — never retyped here.
+    `their row on the rent roll ('${SIGNED_LEASE_LABEL}') — the new ` +
+    // The CAP is not the length: a park with a one-month house style under
+    // a three-month cap writes one month, so "your 3-month rule starts from
+    // that day" would quote a number the successor does not carry.
+    "agreement starts from the day the lease runs from. Either way they're " +
+    "on the roll and they get billed."
   );
 }

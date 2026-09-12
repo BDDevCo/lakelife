@@ -385,8 +385,13 @@ describe("nothing in this feature records assent", () => {
     expect(send).toBeGreaterThan(0);
     expect(log).toBeGreaterThan(0);
     expect(send).toBeLessThan(log);
-    // And a failed send must abandon the household, not fall through to it.
-    expect(act).toMatch(/nothing was logged, so you can try again/);
+    // And a failed send must abandon the household, not fall through to it —
+    // with the REAL reason (whyItDidntGo: under the hold a retry can never
+    // work), never "try again". The window is send→log, comments stripped.
+    const between = act.slice(send, log);
+    expect(between).toMatch(/whyItDidntGo\(res\.error\)\} Nothing was logged\./);
+    expect(between).toMatch(/continue;/);
+    expect(between).not.toMatch(/try again/i);
   });
 
   it("a notice does not supersede the last notice", () => {

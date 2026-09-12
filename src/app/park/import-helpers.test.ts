@@ -1,18 +1,58 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseRentRoll, parseLot } from "@/lib/roll-parse";
 import {
   planImport,
   normaliseLotLabel,
+  sheetCadence,
+  heldCadence,
+  answeredCadence,
+  cadenceOnSheetOf,
   rangeForTerm,
   cadenceTotals,
   checkTotals,
   statedTotalFrom,
   importBlockerText,
+  typedRent,
+  phoneOnFile,
   MAX_LOT_LABEL,
   type ImportBlocker, emptyLotsFrom, reconcileRoll, decodeRoll,
 } from "./import-helpers";
+
+// ---------------------------------------------------------------------------
+// THE REAL `resolveRow`, against a fake of the two tables it touches. Mocked
+// here at the top because vi.mock is hoisted; nothing else in this file
+// imports the server client, so the pure helpers above are untouched.
+// ---------------------------------------------------------------------------
+type Row = Record<string, unknown>;
+const fakeDb: Record<string, Row[]> = {};
+class FakeQ {
+  private fs: Array<(r: Row) => boolean> = [];
+  private patch: Row | null = null;
+  constructor(private t: string) {}
+  select() { return this; }
+  eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
+  in(c: string, vs: unknown[]) { this.fs.push((r) => vs.includes(r[c])); return this; }
+  order() { return this; }
+  update(patch: Row) { this.patch = patch; return this; }
+  private resolve() {
+    const hit = (fakeDb[this.t] ?? []).filter((r) => this.fs.every((f) => f(r)));
+    if (this.patch) for (const r of hit) Object.assign(r, this.patch);
+    return Promise.resolve({ data: hit, error: null });
+  }
+  maybeSingle() { return this.resolve().then((r) => ({ data: r.data[0] ?? null, error: null })); }
+  then<A, B>(ok?: ((x: { data: Row[]; error: null }) => A | PromiseLike<A>) | null,
+             bad?: ((e: unknown) => B | PromiseLike<B>) | null) {
+    return this.resolve().then(ok, bad);
+  }
+}
+vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+vi.mock("@/app/park/data", () => ({ assertMyPark: async () => true }));
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({ from: (t: string) => new FakeQ(t) }),
+  createServiceClient: () => ({ from: (t: string) => new FakeQ(t) }),
+}));
 
 const CUTOVER = "2026-08-01";
 
@@ -218,13 +258,30 @@ describe("planImport", () => {
   it("gives every blocker a sentence with no placeholder left in it", () => {
     const all: ImportBlocker[] = [
       "no_name", "no_lot", "lot_unknown", "lot_ambiguous", "lot_taken",
-      "lot_twice_in_paste", "label_too_long", "bad_amount", "no_season",
+      "lot_twice_in_paste", "label_too_long", "bad_amount", "bad_term", "looks_yearly", "no_season",
     ];
+    // The union in the source, so a blocker added without a sentence — or a
+    // sentence added here without a blocker — fails rather than rotting.
+    const src = readFileSync(fileURLToPath(new URL("./import-helpers.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    const union = src.match(/export type ImportBlocker =([\s\S]*?);/)?.[1] ?? "";
+    const declared = [...union.matchAll(/"(\w+)"/g)].map((m) => m[1]).sort();
+    expect(declared.length, "ImportBlocker not found — this scan is measuring nothing").toBeGreaterThan(5);
+    expect([...all].sort()).toEqual(declared);
+    // Every cadence the sheet can state, from the union in the source too.
+    const cadences = [...(src.match(/export type CadenceOnSheet =([^;]*);/)?.[1] ?? "").matchAll(/"(\w+)"/g)]
+      .map((m) => m[1] as "annual");
+    expect(cadences).toEqual(["annual", "quarterly", "conflicting", "unreadable"]);
     for (const b of all) {
-      const s = importBlockerText(b, "7");
-      expect(s.length).toBeGreaterThan(10);
-      expect(s).not.toMatch(/undefined|null|\{|\}/);
-      expect(s.trim()).toBe(s);
+      for (const detail of [undefined, ...cadences.map((c) => ({ cadenceOnSheet: c })),
+                            { rateHint: { amount: 400, basis: "lot" as const } },
+                            { rateHint: { amount: 412.5, basis: "park" as const } }]) {
+        const s = importBlockerText(b, "7", detail);
+        expect(s.length).toBeGreaterThan(10);
+        expect(s).not.toMatch(/undefined|null|\{|\}|NaN/);
+        expect(s).not.toMatch(/try again/i);
+        expect(s.trim()).toBe(s);
+      }
     }
   });
 });
@@ -365,7 +422,7 @@ describe("the seller's arithmetic, without the overclaim", () => {
       lines: [i + 1], lineNo: i + 1, source: [""],
       lotLabel, matchedLotId: null, createsLot: false,
       name: "Somebody", email: null, phone: null,
-      amount, term: "monthly" as const, range: null,
+      amount, term: "monthly" as const, cadenceOnSheet: null, typedOver: false, rateHint: null, range: null,
       skipped: false, blockers: [], flags: [], notes: [],
     }));
   }
@@ -1039,5 +1096,763 @@ describe("the seller's own total, read across a CSV", () => {
   it("reads the plain unseparated case unchanged", () => {
     expect(statedTotalFrom(["Total 6700"], "none")).toBe(6700);
     expect(statedTotalFrom(["Total\t6700.00"], "tab")).toBe(6700);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// A FIGURE IN A CADENCE THE PLAN WILL NOT FILE.
+//
+// planImport read `row.term.value ?? "monthly"`, so a sheet whose figures were
+// yearly — Mike's roster — planned eighteen monthly tenancies at $3,600–$4,500
+// and the review screen said "$67,500 a month … ties to the penny". The
+// biller never reads the term, only the amount, so setting term "annual" on
+// the tenancy would have changed nothing on the January bill. The fix is at
+// plan time and it is a question: the row is held until he types the MONTHLY
+// rent. Never divided by twelve — the parser's own rule, and his sheet does
+// not say the year was twelve equal months.
+// ---------------------------------------------------------------------------
+describe("a yearly or quarterly figure is held for the monthly rent", () => {
+  function planWith(blob: string, overrides: Record<number, { rent?: number | null; name?: string }>, lots = LOTS) {
+    const parsed = parseRentRoll(blob, { knownLots: lots.map((l) => l.lotNumber) });
+    return planImport({
+      rows: parsed.rows, lots, liveStays: [], cutoverISO: CUTOVER, season: null,
+      namelessRoll: !parsed.shape.hasNameColumn, overrides,
+    });
+  }
+
+  it("a yearly HEADER holds the row, names the cadence, and files nothing", () => {
+    const p = planWith("Lot\tTenant\tAnnual Rent\n1\tWexler, Donna\t4800", {});
+    expect(p.ready).toHaveLength(0);
+    expect(p.needsYou[0].blockers).toEqual(["bad_term"]);
+    expect(p.needsYou[0].cadenceOnSheet).toBe("annual");
+    // The tenancy this row becomes is monthly; the figure on it is his.
+    expect(p.needsYou[0].term).toBe("monthly");
+    expect(p.needsYou[0].amount).toBe(4800);       // the evidence, kept on the card
+    expect(p.monthlyTotal).toBe(0);
+    expect(p.rates).toEqual([]);
+  });
+
+  it.each([
+    ["Annually", "annual"], ["Yearly", "annual"], ["Per annum", "annual"],
+    ["Quarterly", "quarterly"], ["Qtr", "quarterly"], ["Twice yearly", "unreadable"], ["Whenever", "unreadable"],
+  ])("a term CELL of %s holds the row as %s", (cell, cadence) => {
+    const p = planWith(`Lot\tTenant\tRent\tBilling\n1\tWexler, Donna\t1200\t${cell}`, {});
+    expect(p.ready).toHaveLength(0);
+    expect(p.needsYou[0].blockers).toContain("bad_term");
+    expect(p.needsYou[0].cadenceOnSheet).toBe(cadence);
+    expect(importBlockerText("bad_term", "1", p.needsYou[0])).toMatch(/monthly rent/i);
+  });
+
+  it("the sentence names what the sheet said, and never a twelfth of it", () => {
+    const annual = planWith("Lot\tTenant\tAnnual Rent\n1\tWexler, Donna\t4800", {}).needsYou[0];
+    const s = importBlockerText("bad_term", "1", annual);
+    expect(s).toMatch(/yearly figure/);
+    expect(s).not.toMatch(/400/);
+    const q = planWith("Lot\tTenant\tRent\tBilling\n1\tWexler, Donna\t1200\tQuarterly", {}).needsYou[0];
+    expect(importBlockerText("bad_term", "1", q)).toMatch(/quarterly figure/);
+    const u = planWith("Lot\tTenant\tRent\tBilling\n1\tWexler, Donna\t1200\tWhenever", {}).needsYou[0];
+    expect(importBlockerText("bad_term", "1", u)).toMatch(/couldn't tell how often/);
+  });
+
+  it("a row with no figure has nothing to hold", () => {
+    const p = planWith("Lot\tTenant\tAnnual Rent\n1\tWexler, Donna\t", {});
+    expect(p.ready).toHaveLength(1);
+    expect(p.ready[0].amount).toBeNull();
+    expect(p.ready[0].term).toBe("monthly");
+  });
+
+  it("the monthly rent he types clears it — as typed, filed monthly", () => {
+    const blob = "Lot\tTenant\tAnnual Rent\n1\tWexler, Donna\t4800";
+    const p = planWith(blob, { 2: { rent: 400 } });
+    expect(p.ready).toHaveLength(1);
+    expect(p.ready[0]).toMatchObject({ amount: 400, term: "monthly", blockers: [] });
+    // The sheet's cadence is still remembered, so the totals check stays off.
+    expect(p.ready[0].cadenceOnSheet).toBe("annual");
+    // And the figure on the row is his now, not the seller's printed one.
+    expect(p.ready[0].typedOver).toBe(true);
+    expect(p.monthlyTotal).toBe(400);
+    expect(p.rates).toEqual([{ lineNo: 2, lotLabel: "1", amount: 400, createsLot: false }]);
+  });
+
+  it("'there isn't one' is also an answer", () => {
+    const p = planWith("Lot\tTenant\tAnnual Rent\n1\tWexler, Donna\t4800", { 2: { rent: null } });
+    expect(p.ready).toHaveLength(1);
+    expect(p.ready[0].amount).toBeNull();
+    // The seller printed 4800; nothing is on the row now. Typed over.
+    expect(p.ready[0].typedOver).toBe(true);
+  });
+
+  it("a row with no figure on the sheet is never typed over — there was nothing to type over", () => {
+    const p = planWith("Lot\tTenant\tAnnual Rent\n1\tWexler, Donna\t", {});
+    expect(p.ready[0].typedOver).toBe(false);
+    // A plain monthly figure is not typed over either, even by a different
+    // one: the plan would have filed it as printed, and the sentence for a
+    // typed-over row would call it a figure that looked yearly. The only box
+    // the screen offers such a row is the optional rent beside a name.
+    const m = planWith("Lot\tTenant\tRent\n1\tWexler, Donna\t400", { 2: { rent: 400 } });
+    expect(m.ready[0].typedOver).toBe(false);
+    const nameless = planWith("Lot\tTenant\tRent\n1\t\t400", { 2: { name: "Wexler, Donna", rent: 410 } });
+    expect(nameless.ready[0]).toMatchObject({ amount: 410, typedOver: false });
+    // Nor a rent we could not read: "4l0.00" printed no figure to type over,
+    // and the 410 he types restores the seller's, so the check still runs.
+    const unread = planWith("Lot\tTenant\tRent\n1\tWexler, Donna\t4l0.00", { 2: { rent: 410 } });
+    expect(unread.ready[0]).toMatchObject({ amount: 410, typedOver: false });
+    expect(answeredCadence([...m.rows, ...nameless.rows, ...unread.rows])).toBeNull();
+  });
+
+  it("the cadence card leaves held rows out and counts them", () => {
+    const p = planWith(
+      "Lot\tTenant\tRent\tBilling\n1\tWexler, Donna\t385\tMonthly\n2\tFry, Loren\t4800\tAnnually",
+      {},
+    );
+    const c = cadenceTotals(p.rows);
+    expect(c.byTerm).toEqual([{ term: "monthly", count: 1, total: 385 }]);
+    expect(c.heldForMonthly).toBe(1);
+    expect(c.mixed).toBe(false);
+  });
+
+  it("the tie check is refused on a sheet that is not monthly — before AND after he answers", () => {
+    const blob = "Lot\tTenant\tAnnual Rent\n1\tWexler, Donna\t4800\n2\tFry, Loren\t4800\nTOTAL\t\t9600";
+    const before = planWith(blob, {});
+    expect(checkTotals(9600, before.rows)).toBeNull();
+    expect(sheetCadence(before.rows)).toBe("annual");
+    // Answered, the rows are monthly and his total is still a year: 9600
+    // against 800 is not a mismatch to shout about, it is two different units.
+    const after = planWith(blob, { 2: { rent: 400 }, 3: { rent: 400 } });
+    expect(after.ready).toHaveLength(2);
+    expect(checkTotals(9600, after.rows)).toBeNull();
+    expect(sheetCadence(after.rows)).toBe("annual");
+    // Collapsed the other way: the same rows on a monthly sheet are checked.
+    const monthly = planWith("Lot\tTenant\tRent\n1\tWexler, Donna\t400\n2\tFry, Loren\t400\nTOTAL\t\t800", {});
+    expect(checkTotals(800, monthly.rows)?.ties).toBe(true);
+    expect(sheetCadence(monthly.rows)).toBeNull();
+  });
+
+  it("a nameless roll under a yearly header sets up the lots with NO rate card", () => {
+    const p = planWith("Lot\tAnnual Rent\n1\t4800\n2\t4800", {});
+    expect(p.namelessRoll).toBe(true);
+    expect(p.rates.map((r) => r.amount)).toEqual([null, null]);
+    expect(p.monthlyTotal).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE RATE CARDS AS A SCALE. A bare "Rent" header carrying yearly figures has
+// no header to read; the only tell is twenty-one cards at $400 against a
+// column of $3,600s. A question, never a rejection — the figure he types is
+// his answer, even when it is the same one.
+// ---------------------------------------------------------------------------
+describe("a monthly figure many times the park's rate cards looks yearly", () => {
+  const CARDED = [
+    { id: "lot-1", lotNumber: "1", monthlyRate: 400 },
+    { id: "lot-2", lotNumber: "2", monthlyRate: 400 },
+    { id: "lot-7", lotNumber: "7", monthlyRate: 400 },
+    { id: "lot-11", lotNumber: "11", monthlyRate: 1500 },   // the park-owned home
+    { id: "lot-13", lotNumber: "13", monthlyRate: null },
+  ];
+  function planWith(
+    blob: string,
+    overrides: Record<number, { rent?: number | null }> = {},
+    lots: { id: string; lotNumber: string; monthlyRate?: number | null }[] = CARDED,
+  ) {
+    const parsed = parseRentRoll(blob, { knownLots: lots.map((l) => l.lotNumber) });
+    return planImport({ rows: parsed.rows, lots, liveStays: [], cutoverISO: CUTOVER, season: null, overrides });
+  }
+
+  it("holds $3,600 against a $400 card, and says which card", () => {
+    const p = planWith("Lot\tTenant\tRent\n1\tWexler, Donna\t3600");
+    expect(p.ready).toHaveLength(0);
+    expect(p.needsYou[0].blockers).toEqual(["looks_yearly"]);
+    expect(p.needsYou[0].rateHint).toEqual({ amount: 400, basis: "lot" });
+    expect(importBlockerText("looks_yearly", "1", p.needsYou[0])).toMatch(/\$400 a month/);
+  });
+
+  it("the middle card is the scale, so one $1,500 home does not move it", () => {
+    // Median of 400, 400, 400, 1500 is 400; four times that is 1,600.
+    const home = planWith("Lot\tTenant\tRent\n11\tThe Park\t1500");
+    expect(home.ready).toHaveLength(1);
+    const over = planWith("Lot\tTenant\tRent\n13\tWexler, Donna\t1700");
+    expect(over.needsYou[0].blockers).toEqual(["looks_yearly"]);
+    // Lot 13 has no card of its own, so the sentence says what lots here go for.
+    expect(over.needsYou[0].rateHint).toEqual({ amount: 400, basis: "park" });
+    expect(importBlockerText("looks_yearly", "13", over.needsYou[0])).toMatch(/about \$400 a month/);
+  });
+
+  it("a lot the park does not have yet is measured against the park", () => {
+    const p = planWith("Lot\tTenant\tRent\n34B\tJunior Caraway\t3600");
+    expect(p.needsYou[0].blockers).toContain("looks_yearly");
+    expect(p.needsYou[0].rateHint).toEqual({ amount: 400, basis: "park" });
+  });
+
+  it("does not run on a park with no cards — a guess would be worse", () => {
+    const p = planWith("Lot\tTenant\tRent\n1\tWexler, Donna\t3600", {}, LOTS);
+    expect(p.ready).toHaveLength(1);
+    expect(p.ready[0].rateHint).toBeNull();
+  });
+
+  it("is not raised beside bad_term — that row is already asking", () => {
+    const p = planWith("Lot\tTenant\tAnnual Rent\n1\tWexler, Donna\t3600");
+    expect(p.needsYou[0].blockers).toEqual(["bad_term"]);
+  });
+
+  it("the figure he types is his answer, even the same one", () => {
+    const p = planWith("Lot\tTenant\tRent\n1\tWexler, Donna\t3600", { 2: { rent: 3600 } });
+    expect(p.ready).toHaveLength(1);
+    expect(p.ready[0].amount).toBe(3600);
+    expect(p.ready[0].blockers).toEqual([]);
+  });
+
+  it("no green tick above the open questions — and none once he has typed a different figure over the sheet's", () => {
+    const blob = "Lot\tTenant\tRent\n1\tWexler, Donna\t3600\n2\tFry, Loren\t3600\nTOTAL\t\t7200";
+    const held = planWith(blob);
+    expect(checkTotals(7200, held.rows)).toBeNull();
+    expect(held.rows.every((r) => r.typedOver === false)).toBe(true);
+    // Answered with the monthly rent, the rows are 300 + 300 and his total
+    // is still 3600 + 3600. This ran the check and said "short $6,600"
+    // about a sheet that adds up: the sums no longer add the same things,
+    // and the row says so.
+    const answered = planWith(blob, { 2: { rent: 300 }, 3: { rent: 300 } });
+    expect(answered.needsYou).toEqual([]);
+    expect(answered.rows.map((r) => r.typedOver)).toEqual([true, true]);
+    expect(checkTotals(7200, answered.rows)).toBeNull();
+    expect(checkTotals(600, answered.rows)).toBeNull();
+    // The same figure typed back IS the sheet's figure, and then his
+    // arithmetic is checked: 3600 + 3600 ties to 7200.
+    const same = planWith(blob, { 2: { rent: 3600 }, 3: { rent: 3600 } });
+    expect(same.rows.map((r) => r.typedOver)).toEqual([false, false]);
+    expect(checkTotals(7200, same.rows)?.ties).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SCREEN OFFERS THE ANSWER IT ASKS FOR. A blocker with no control is a
+// dead end dressed as a question; a box pre-filled with the sheet's yearly
+// figure under "Monthly rent" is one tap from filing a year as a month.
+// ---------------------------------------------------------------------------
+describe("the review screen gives the held rows a monthly-rent box", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("../../components/ParkImportRead.tsx", import.meta.url)), "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+
+  it("finds the file it is scanning", () => {
+    expect(src).toMatch(/function AskCard\(/);
+    expect(src).toMatch(/function shortReason\(/);
+  });
+
+  it("offers the rent box for both blockers", () => {
+    expect(src).toMatch(/const wantsMonthly = has\("bad_term"\) \|\| has\("looks_yearly"\);/);
+    expect(src).toMatch(/const wantsRent = [^;]*wantsMonthly/);
+  });
+
+  it("labels it as the MONTHLY rent and does not pre-fill the sheet's figure", () => {
+    expect(src).toMatch(/wantsMonthly \? "Monthly rent" : "Rent"/);
+    expect(src).toMatch(/useState\(row\.amount == null \|\| heldOnCadence \? "" : String\(row\.amount\)\)/);
+  });
+
+  it("will not save a held row with the box still empty — that refresh would say nothing", () => {
+    expect(src).toMatch(/disabled=\{busy \|\| \(wantsName && !name\.trim\(\)\) \|\| \(wantsMonthly && !rent\.trim\(\)\)\}/);
+  });
+
+  it("has a short reason for each, and passes the row so the sentence can name the card", () => {
+    expect(src).toMatch(/case "bad_term": return "[^"]+";/);
+    expect(src).toMatch(/case "looks_yearly": return "[^"]+";/);
+    expect(src).toMatch(/importBlockerText\(b, row\.lotLabel \?\? undefined, row\)/);
+  });
+
+  it("refuses the tie check through checkTotals and explains the missing panel", () => {
+    expect(src).toMatch(/const sheetSays = sheetCadence\(live\);/);
+    expect(src).toMatch(/\{view\.statedTotal != null && !totals && \(sheetSays \|\| cadence\.heldForMonthly > 0 \|\| answered\) && \(/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A "PAID Y/N" COLUMN MUST NOT HOLD A ROLL.
+//
+// Probed against the real parser and planner: `Lot,Tenant,Monthly Rent,Paid`
+// with Y/N cells came back 0 ready, every row held on bad_term, under a
+// header that literally said Monthly — the bare word "paid" was a term
+// synonym, and an unreadable term cell beat a readable rent header. Worse,
+// `Annual Rent` + Paid said three different things about one column. The
+// header is the stronger evidence; a cell that is not a cadence is kept in
+// the notes, not obeyed; and whatever stays unreadable is said ONCE.
+// ---------------------------------------------------------------------------
+describe("a Paid column and a lease-length cell do not hold a roll", () => {
+  const CARDED = [{ id: "lot-1", lotNumber: "1", monthlyRate: 400 }, { id: "lot-2", lotNumber: "2", monthlyRate: 400 }];
+  function planWith(blob: string, lots: { id: string; lotNumber: string; monthlyRate?: number | null }[] = CARDED) {
+    const parsed = parseRentRoll(blob, { knownLots: lots.map((l) => l.lotNumber) });
+    const p = planImport({
+      rows: parsed.rows, lots, liveStays: [], cutoverISO: CUTOVER, season: null,
+      namelessRoll: !parsed.shape.hasNameColumn,
+    });
+    return { parsed, plan: p };
+  }
+
+  it("Monthly Rent + Paid=Y imports", () => {
+    const { parsed, plan: p } = planWith('Lot,Tenant,Monthly Rent,Paid\n1,"Wexler, Donna",400,Y\n2,"Fry, Loren",410,N');
+    expect(parsed.blockQuestions).toEqual([]);
+    expect(p.needsYou).toEqual([]);
+    expect(p.ready).toHaveLength(2);
+    expect(p.ready.every((r) => r.term === "monthly" && r.cadenceOnSheet === null)).toBe(true);
+    expect(p.monthlyTotal).toBe(810);
+    expect(p.ready[0].notes).toContain("Paid: Y");
+  });
+
+  it("Annual Rent + Paid=Y is held as annual — one sentence at the top, and the cadence card knows it is yearly", () => {
+    const { parsed, plan: p } = planWith('Lot,Tenant,Annual Rent,Paid\n1,"Wexler, Donna",4800,Y\n2,"Fry, Loren",4800,N');
+    expect(p.ready).toEqual([]);
+    expect(p.needsYou).toHaveLength(2);
+    expect(p.needsYou.every((r) => r.blockers.includes("bad_term") && r.cadenceOnSheet === "annual")).toBe(true);
+    expect(importBlockerText("bad_term", "1", p.needsYou[0])).toMatch(/yearly figure/);
+    expect(sheetCadence(p.rows)).toBe("annual");
+    // ONE sentence about the column, not three.
+    expect(parsed.blockQuestions.map((b) => b.code)).toEqual(["RENT_NOT_MONTHLY"]);
+  });
+
+  it("Term=12 under Monthly Rent imports — the header's cadence, with the cell kept", () => {
+    const { parsed, plan: p } = planWith('Lot,Tenant,Monthly Rent,Term\n1,"Wexler, Donna",400,12\n2,"Fry, Loren",410,6');
+    expect(parsed.blockQuestions).toEqual([]);
+    expect(p.ready).toHaveLength(2);
+    expect(p.ready[0].notes).toContain("Term: 12");
+  });
+
+  it("Term=12 under a bare Rent header is held as unreadable, and said once at the top", () => {
+    const { parsed, plan: p } = planWith('Lot,Tenant,Rent,Term\n1,"Wexler, Donna",400,12\n2,"Fry, Loren",410,6');
+    expect(p.ready).toEqual([]);
+    expect(p.needsYou.every((r) => r.blockers.includes("bad_term") && r.cadenceOnSheet === "unreadable")).toBe(true);
+    const qs = parsed.blockQuestions.filter((b) => b.code === "TERM_NOT_READ");
+    expect(qs).toHaveLength(1);
+    expect(qs[0].question).toMatch(/"12" in the Term column/);
+    expect(sheetCadence(p.rows)).toBe("unreadable");
+  });
+
+  it("a Term cell reading Monthly under an Annual Rent header does not beat the header", () => {
+    // Before: the cell was `stated`, the row planned monthly at the yearly
+    // figure, and the only thing holding it was the rate card — on a park
+    // with no cards it was READY under a top sentence saying it could not be.
+    const blob = 'Lot,Tenant,Annual Rent,Term\n1,"Wexler, Donna",4800,Monthly';
+    const { parsed, plan: p } = planWith(blob, [{ id: "lot-1", lotNumber: "1", monthlyRate: null }]);
+    expect(parsed.blockQuestions.map((b) => b.code)).toEqual(["RENT_NOT_MONTHLY"]);
+    expect(p.ready).toEqual([]);
+    expect(p.needsYou[0].blockers).toEqual(["bad_term"]);
+    expect(p.needsYou[0].cadenceOnSheet).toBe("conflicting");
+    const s = importBlockerText("bad_term", "1", p.needsYou[0]);
+    expect(s).toMatch(/header and this row's term cell disagree/i);
+    expect(s).toMatch(/two answers/i);
+    expect(s).toMatch(/monthly rent/i);
+    expect(s).not.toMatch(/couldn't tell/i);
+    expect(sheetCadence(p.rows)).toBe("conflicting");
+    // With cards it is the same hold, not a second one.
+    expect(planWith(blob).plan.needsYou[0].blockers).toEqual(["bad_term"]);
+  });
+
+  it("a Term cell reading Annual under a Monthly Rent header is the same contradiction, said once at the top", () => {
+    // The other direction. The cell used to be `stated` annual and the card
+    // read "This is a yearly figure" — asserting the figure is a year when
+    // the header says it is a month. Neither is trusted; the sheet is asked.
+    const { parsed, plan: p } = planWith('Lot,Tenant,Monthly Rent,Term\n1,"Wexler, Donna",400,Annual\n2,"Fry, Loren",410,Annual');
+    expect(p.ready).toEqual([]);
+    expect(p.needsYou.every((r) => r.blockers.includes("bad_term") && r.cadenceOnSheet === "conflicting")).toBe(true);
+    expect(importBlockerText("bad_term", "1", p.needsYou[0])).not.toMatch(/yearly figure/);
+    const qs = parsed.blockQuestions.filter((b) => b.code === "TERM_CONFLICTS");
+    expect(qs).toHaveLength(1);
+    expect(qs[0].question).toMatch(/"Monthly Rent"/);
+    expect(qs[0].question).toMatch(/Term column/);
+    expect(qs[0].question).toMatch(/"Annual"/);
+    expect(qs[0].question).toMatch(/2 rows/);
+    expect(parsed.blockQuestions.map((b) => b.code)).toEqual(["TERM_CONFLICTS"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ONE ROW MUST NOT DECIDE THE SHEET'S CADENCE.
+//
+// `sheetCadence` took the most frequent NON-NULL cadence and ignored every
+// row without one, so a single conflicting row on a monthly sheet — or a
+// blank-rent row whose term cell said Annual, which held nothing — made the
+// whole sheet "conflicting", switched the seller's-arithmetic check off for
+// good, and printed "adds up figures the sheet gives two cadences for" about
+// a monthly total that tied to the penny. A sheet's cadence is the one MOST
+// of its figures share, or nothing; the held row still refuses the tick on
+// its own until it is answered; and the sentence about held rows is derived
+// from the held rows, not from the sheet.
+// ---------------------------------------------------------------------------
+describe("the sheet's cadence is a majority of its figures, never one row", () => {
+  const CARDED = [
+    { id: "lot-1", lotNumber: "1", monthlyRate: 400 },
+    { id: "lot-2", lotNumber: "2", monthlyRate: 400 },
+    { id: "lot-7", lotNumber: "7", monthlyRate: 400 },
+  ];
+  function planWith(
+    blob: string,
+    overrides?: Record<number, { rent?: number | null; skip?: boolean }>,
+    lots: { id: string; lotNumber: string; monthlyRate?: number | null }[] = CARDED,
+  ) {
+    const parsed = parseRentRoll(blob, { knownLots: lots.map((l) => l.lotNumber) });
+    const p = planImport({
+      rows: parsed.rows, lots, liveStays: [], cutoverISO: CUTOVER, season: null,
+      namelessRoll: !parsed.shape.hasNameColumn, overrides,
+    });
+    return { parsed, plan: p };
+  }
+  // The seller's total is the sum of the figures he PRINTED: 400 + 400 + 4800.
+  const ODD_ROW = 'Lot,Tenant,Monthly Rent,Term\n1,"Wexler, Donna",400,Monthly\n2,"Fry, Loren",400,Monthly\n7,"Ordonez, Maria",4800,Annual\nTOTAL,,5600,';
+
+  it("one Annual row on a monthly sheet leaves the sheet monthly, and holds only that row", () => {
+    const { plan: p } = planWith(ODD_ROW);
+    expect(p.ready).toHaveLength(2);
+    expect(p.needsYou).toHaveLength(1);
+    expect(p.needsYou[0]).toMatchObject({ lotLabel: "7", cadenceOnSheet: "conflicting", blockers: ["bad_term"] });
+    expect(sheetCadence(p.rows)).toBeNull();
+  });
+
+  it("the tie check waits for the held row, and stays off once he has typed a different figure over the sheet's", () => {
+    // A tick above an open question about one of the same figures answers
+    // it — so no tick while held, however the majority reads.
+    const { plan: held } = planWith(ODD_ROW);
+    expect(checkTotals(5600, held.rows)).toBeNull();
+    // Answered with the MONTHLY rent, the rows are 400 + 400 + 400 and his
+    // total is still 400 + 400 + 4800: the two no longer add up the same
+    // things, and no total he could have printed is a check on them. This
+    // ran the check and said "short $4,400" about a sheet that adds up to
+    // the penny — and ticked only a 1,200 the seller could have written by
+    // dividing 4,800 by 12 himself.
+    const { plan: after } = planWith(ODD_ROW, { 4: { rent: 400 } });
+    expect(after.needsYou).toEqual([]);
+    const odd = after.rows.find((r) => r.lotLabel === "7")!;
+    expect(odd.cadenceOnSheet).toBe("conflicting");   // remembered on the row
+    expect(odd.typedOver).toBe(true);
+    expect(sheetCadence(after.rows)).toBeNull();
+    expect(checkTotals(5600, after.rows)).toBeNull();
+    expect(checkTotals(1200, after.rows)).toBeNull();
+    expect(checkTotals(800, after.rows)).toBeNull();
+    // The SAME figure typed back is still his figure, and then the check is
+    // his arithmetic over his own numbers: 400 + 400 + 4800 ties to 5600.
+    const { plan: same } = planWith(ODD_ROW, { 4: { rent: 4800 } });
+    expect(same.needsYou).toEqual([]);
+    expect(same.rows.find((r) => r.lotLabel === "7")?.typedOver).toBe(false);
+    expect(checkTotals(5600, same.rows)?.ties).toBe(true);
+    expect(checkTotals(1200, same.rows)?.difference).toBe(-4400);
+    // Stood down, the row is out of both sums: 400 + 400 against whatever
+    // he wrote is his arithmetic again.
+    const { plan: gone } = planWith(ODD_ROW, { 4: { skip: true } });
+    expect(checkTotals(800, gone.rows)?.ties).toBe(true);
+  });
+
+  it("the rows whose figure is no longer the seller's are counted, by kind, for the sentence that says why", () => {
+    // Held: nothing answered yet.
+    expect(answeredCadence(planWith(ODD_ROW).plan.rows)).toBeNull();
+    // Answered with a different figure: one conflicting row.
+    expect(answeredCadence(planWith(ODD_ROW, { 4: { rent: 400 } }).plan.rows)).toEqual({ kind: "conflicting", count: 1 });
+    // The same figure typed back is not typed over; a skipped row is not counted.
+    expect(answeredCadence(planWith(ODD_ROW, { 4: { rent: 4800 } }).plan.rows)).toBeNull();
+    expect(answeredCadence(planWith(ODD_ROW, { 4: { skip: true } }).plan.rows)).toBeNull();
+    // Mike's bare Rent header on a carded park: held for looking yearly,
+    // then typed over — the kind is the cards, not a cadence on the sheet.
+    const cards = 'Lot,Tenant,Rent\n1,"Wexler, Donna",4800\n2,"Fry, Loren",4800\n7,"Ordonez, Maria",400\nTOTAL,,10000,';
+    expect(answeredCadence(planWith(cards).plan.rows)).toBeNull();
+    const typed = planWith(cards, { 2: { rent: 400 }, 3: { rent: 400 } }).plan;
+    expect(typed.needsYou).toEqual([]);
+    expect(answeredCadence(typed.rows)).toEqual({ kind: "looks_yearly", count: 2 });
+    expect(checkTotals(10000, typed.rows)).toBeNull();
+    // One of each: neither sentence is true of both.
+    const mixed = 'Lot,Tenant,Rent,Billing\n1,"Wexler, Donna",4800,Annually\n2,"Fry, Loren",4800,\n7,"Ordonez, Maria",400,Monthly';
+    expect(answeredCadence(planWith(mixed, { 2: { rent: 400 }, 3: { rent: 400 } }).plan.rows)).toEqual({ kind: "mixed", count: 2 });
+    // Half answered: the answered one is counted, the held one is still held.
+    const half = planWith(mixed, { 2: { rent: 400 } }).plan;
+    expect(half.needsYou.map((r) => r.blockers)).toEqual([["looks_yearly"]]);
+    expect(answeredCadence(half.rows)).toEqual({ kind: "annual", count: 1 });
+    expect(heldCadence(half.rows)).toBe("looks_yearly");
+  });
+
+  it("a blank-rent row whose term cell says Annual has no figure to tally", () => {
+    const blob = 'Lot,Tenant,Monthly Rent,Term\n1,"Wexler, Donna",400,Monthly\n2,"Fry, Loren",,Annual\nTOTAL,,400,';
+    const { plan: p } = planWith(blob);
+    expect(p.needsYou).toEqual([]);
+    expect(p.rows.find((r) => r.lotLabel === "2")?.cadenceOnSheet).toBe("conflicting");
+    expect(sheetCadence(p.rows)).toBeNull();
+    expect(checkTotals(400, p.rows)?.ties).toBe(true);
+  });
+
+  it("an even split is not a majority, and a skipped row is not a vote", () => {
+    const blob = 'Lot,Tenant,Rent,Billing\n1,"Wexler, Donna",400,Monthly\n2,"Fry, Loren",4800,Annually';
+    expect(sheetCadence(planWith(blob).plan.rows)).toBeNull();
+    // Stand the monthly row down and the sheet is all yearly.
+    expect(sheetCadence(planWith(blob, { 2: { skip: true } }).plan.rows)).toBe("annual");
+    // Stand the yearly row down and it is all monthly.
+    expect(sheetCadence(planWith(blob, { 3: { skip: true } }).plan.rows)).toBeNull();
+  });
+
+  it("a sheet that is mostly yearly is yearly, with a monthly row or two on it", () => {
+    const blob = 'Lot,Tenant,Rent,Billing\n1,"Wexler, Donna",4800,Annually\n2,"Fry, Loren",4800,Annually\n7,"Ordonez, Maria",400,Monthly\nTOTAL,,10000,';
+    const { plan: p } = planWith(blob);
+    expect(sheetCadence(p.rows)).toBe("annual");
+    expect(checkTotals(10000, p.rows)).toBeNull();
+    // And still a yearly sheet once both are answered: his total is a year.
+    const { plan: after } = planWith(blob, { 2: { rent: 400 }, 3: { rent: 400 } });
+    expect(after.needsYou).toEqual([]);
+    expect(sheetCadence(after.rows)).toBe("annual");
+    expect(checkTotals(10000, after.rows)).toBeNull();
+  });
+
+  it("what the HELD rows were stated as is read off the held rows, not the sheet", () => {
+    // One conflicting row on a monthly sheet: the sheet says nothing, and
+    // the sentence must not fall back to "figures that look yearly against
+    // your rate cards" — nothing measured that row against a card.
+    expect(heldCadence(planWith(ODD_ROW).plan.rows)).toBe("conflicting");
+    // Mike's bare Rent header: nothing on the sheet, every row held on the cards.
+    const cards = planWith('Lot,Tenant,Rent\n1,"Wexler, Donna",4800\n2,"Fry, Loren",4800');
+    expect(cards.plan.needsYou.every((r) => r.blockers.includes("looks_yearly"))).toBe(true);
+    expect(heldCadence(cards.plan.rows)).toBe("looks_yearly");
+    // Two kinds held at once: neither sentence is true of all of them.
+    const mixed = planWith('Lot,Tenant,Rent,Billing\n1,"Wexler, Donna",4800,Annually\n2,"Fry, Loren",4800,');
+    expect(mixed.plan.needsYou.map((r) => r.blockers)).toEqual([["bad_term"], ["looks_yearly"]]);
+    expect(heldCadence(mixed.plan.rows)).toBe("mixed");
+    // Nothing held: nothing to say.
+    expect(heldCadence(planWith(ODD_ROW, { 4: { rent: 400 } }).plan.rows)).toBeNull();
+    // A held row he stood down is not counted.
+    expect(heldCadence(planWith(ODD_ROW, { 4: { skip: true } }).plan.rows)).toBeNull();
+  });
+
+  it("the review screen describes the total by the sheet and the held rows by the held rows", () => {
+    const src = readFileSync(
+      fileURLToPath(new URL("../../components/ParkImportRead.tsx", import.meta.url)), "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+    expect(src).toMatch(/const sheetSays = sheetCadence\(live\);/);
+    expect(src).toMatch(/const heldSays = heldCadence\(live\);/);
+    expect(src).toMatch(/const heldPhrase = phraseFor\(heldSays\)/);
+    expect(src).toMatch(/const sheetPhrase = phraseFor\(sheetSays\)/);
+    // Every kind has its own words — in the plural for a set of figures and
+    // the singular for the figure on a row — and the mixed case claims
+    // nothing specific. ONE table: a kind added to one form is added to both.
+    expect(src).toMatch(/const KIND_WORDS: Record<HeldCadence, \{ many: string; one: string \}> = \{/);
+    expect(src).toMatch(/conflicting: \{ many: "[^"]+", one: "[^"]+" \}/);
+    expect(src).toMatch(/looks_yearly: \{ many: "[^"]+", one: "[^"]+" \}/);
+    expect(src).toMatch(/mixed: \{ many: "figures we won't read as a monthly rent", one: "one we won't read as a monthly rent" \}/);
+    expect(src).toMatch(/const phraseFor = \(c: HeldCadence \| null\) => KIND_WORDS\[c \?\? "mixed"\]\.many;/);
+    expect(src).toMatch(/const figureWas = \(c: HeldCadence \| null\) => KIND_WORDS\[c \?\? "mixed"\]\.one;/);
+    // The sentence about a total the sheet gave in another cadence uses the
+    // sheet's word; the one about rows still waiting uses the held rows'.
+    expect(src).toMatch(/adds up \{sheetPhrase\}/);
+    expect(src).not.toMatch(/adds up \{heldPhrase\}/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE HEADER'S CADENCE IS A SIGNAL THE PARSER HAD, NOT TEXT TO RE-READ.
+//
+// A quarterly header the parser reads fine — "Rent Each Quarter" — is two
+// words after the filler, which the one-word cell reader cannot read. The
+// parser put the header LABEL in each row's raw and the plan re-read it as a
+// cell: the top card said "a quarterly figure", each row said "we couldn't
+// tell how often that's paid", and the cadence card said "a cadence we
+// couldn't read". Three sentences about one column, two of them false.
+// ---------------------------------------------------------------------------
+describe("a quarterly header says quarterly in all three places", () => {
+  const LOTS2 = [{ id: "lot-1", lotNumber: "1", monthlyRate: 400 }, { id: "lot-2", lotNumber: "2", monthlyRate: 400 }];
+  function planWith(blob: string) {
+    const parsed = parseRentRoll(blob, { knownLots: LOTS2.map((l) => l.lotNumber) });
+    const p = planImport({ rows: parsed.rows, lots: LOTS2, liveStays: [], cutoverISO: CUTOVER, season: null });
+    return { parsed, plan: p };
+  }
+
+  it.each(["Rent Each Quarter", "Rent Due Quarterly", "Quarterly Rent Due", "Quarterly Rent"])(
+    "%s — the top card, the row and the sheet agree", (header) => {
+      const { parsed, plan: p } = planWith(`Lot,Tenant,${header}\n1,"Wexler, Donna",1200\n2,"Fry, Loren",1200`);
+      expect(parsed.blockQuestions.map((b) => b.code)).toEqual(["RENT_NOT_MONTHLY"]);
+      expect(parsed.blockQuestions[0].question).toMatch(/quarterly figure/);
+      expect(p.needsYou).toHaveLength(2);
+      expect(p.needsYou.every((r) => r.blockers.includes("bad_term") && r.cadenceOnSheet === "quarterly")).toBe(true);
+      expect(importBlockerText("bad_term", "1", p.needsYou[0])).toMatch(/quarterly figure/);
+      expect(importBlockerText("bad_term", "1", p.needsYou[0])).not.toMatch(/couldn't tell/);
+      expect(sheetCadence(p.rows)).toBe("quarterly");
+      expect(heldCadence(p.rows)).toBe("quarterly");
+    });
+
+  it("reads the signal before the raw text, and a contradiction before either", () => {
+    const unread = { value: null, confidence: "unknown" as const, raw: "Rent Each Quarter" };
+    expect(cadenceOnSheetOf({ term: unread, headerCadence: "quarterly" })).toBe("quarterly");
+    // Without the signal the same raw is what it always was: unreadable.
+    expect(cadenceOnSheetOf({ term: unread })).toBe("unreadable");
+    // A yearly header over a cell that says quarterly: both long, no
+    // contradiction; the header's word wins, as it does on the top card.
+    const qtr = { value: null, confidence: "unknown" as const, raw: "Qtr" };
+    expect(cadenceOnSheetOf({ term: qtr, headerCadence: "annual" })).toBe("annual");
+    expect(cadenceOnSheetOf({ term: qtr })).toBe("quarterly");
+    // A contradiction outranks the signal.
+    expect(cadenceOnSheetOf({ term: { ...unread, raw: "Monthly" }, headerCadence: "quarterly", cadenceConflict: { header: "Rent Each Quarter", cell: "Monthly" } })).toBe("conflicting");
+    // A monthly or weekly header is not a cadence the plan refuses.
+    expect(cadenceOnSheetOf({ term: { value: "monthly", confidence: "inferred" as const, raw: "" }, headerCadence: "monthly" })).toBeNull();
+  });
+
+  it("a Seasonal cell under a yearly header is held as a contradiction, not filed as a season", () => {
+    const parsed = parseRentRoll('Lot,Tenant,Annual Rent,Term\n1,"Wexler, Donna",4800,Seasonal', { knownLots: ["1"] });
+    const p = planImport({
+      rows: parsed.rows, lots: [{ id: "lot-1", lotNumber: "1", monthlyRate: null }], liveStays: [],
+      cutoverISO: CUTOVER, season: { start: "2027-05-01", end: "2027-10-31" },
+    });
+    expect(p.ready).toEqual([]);
+    expect(p.needsYou[0]).toMatchObject({ blockers: ["bad_term"], cadenceOnSheet: "conflicting", term: "monthly" });
+    expect(importBlockerText("bad_term", "1", p.needsYou[0])).toMatch(/two answers/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE RENT HE TYPES IS A FIGURE, OR IT IS REFUSED BY NAME.
+//
+// The box under "This is a yearly figure… What's the monthly rent?" invites
+// arithmetic. The loader read the answer by stripping everything but digits:
+// "4500/12" → 450012, "see lease" → 0 — and either cleared the hold as his
+// answer, with no question left on screen. A binned attempt must not look
+// like a number.
+// ---------------------------------------------------------------------------
+describe("the rent he types is a figure, or it is refused by name", () => {
+  it("reads a plain figure, however he writes it", () => {
+    expect(typedRent("375")).toEqual({ ok: true, value: 375 });
+    expect(typedRent("$4,500.00")).toEqual({ ok: true, value: 4500 });
+    expect(typedRent(" 375.5 ")).toEqual({ ok: true, value: 375.5 });
+    expect(typedRent(375)).toEqual({ ok: true, value: 375 });
+    expect(typedRent("0")).toEqual({ ok: true, value: 0 });
+    // "There isn't one" is an answer the plan already accepts.
+    expect(typedRent(null)).toEqual({ ok: true, value: null });
+  });
+
+  it.each(["4500/12", "4,500 / 12 = 375", "see lease", "none", "", "12 x 375", "-20"])(
+    "refuses %j, naming what he typed, and never turns it into a number", (typed) => {
+      const t = typedRent(typed);
+      expect(t.ok).toBe(false);
+      if (t.ok) return;
+      expect(t.error).toMatch(/like 375/);
+      if (typed.trim()) expect(t.error).toContain(typed.trim());
+      expect(t.error).not.toMatch(/try again/i);
+    });
+
+  it("a number that is not a rent is refused too", () => {
+    expect(typedRent(Number.NaN).ok).toBe(false);
+    expect(typedRent(-5).ok).toBe(false);
+    expect(typedRent(true).ok).toBe(false);
+  });
+
+  describe("resolveRow, with the screen's real payload", () => {
+    beforeEach(() => {
+      for (const k of Object.keys(fakeDb)) delete fakeDb[k];
+      fakeDb.park_import_batches = [{ id: "b1", park_id: "p1", committed_at: null }];
+      fakeDb.park_import_rows = [{ batch_id: "b1", line_no: 2, resolved: { name: "Wexler, Donna" } }];
+    });
+
+    it("refuses '4500/12' and writes nothing", async () => {
+      const { resolveRow } = await import("./import-actions");
+      const res = await resolveRow("b1", 2, { rent: "4500/12" });
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain("4500/12");
+      expect(res.error).toMatch(/like 375/);
+      expect(fakeDb.park_import_rows[0].resolved).toEqual({ name: "Wexler, Donna" });
+    });
+
+    it("stores a plain figure as the number, merged over his earlier answers", async () => {
+      const { resolveRow } = await import("./import-actions");
+      const res = await resolveRow("b1", 2, { rent: "$375" });
+      expect(res.ok).toBe(true);
+      expect(fakeDb.park_import_rows[0].resolved).toEqual({ name: "Wexler, Donna", rent: 375 });
+    });
+
+    it("an answer with no rent in it is untouched", async () => {
+      const { resolveRow } = await import("./import-actions");
+      const res = await resolveRow("b1", 2, { skip: true });
+      expect(res.ok).toBe(true);
+      expect(fakeDb.park_import_rows[0].resolved).toEqual({ name: "Wexler, Donna", skip: true });
+    });
+  });
+
+  it("the loader reads a stored answer through the same door, never a digit-stripper", () => {
+    const src = readFileSync(
+      fileURLToPath(new URL("./import-actions.ts", import.meta.url)), "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).toMatch(/async function loadBatch/);
+    expect(src).toMatch(/typedRent\(raw\.rent\)/);
+    expect(src).not.toMatch(/replace\(\/\[\^0-9\.-\]\/g/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ONE MEDIAN, ONE MONEY SHAPE, ONE PHONE FORM — the right thing existed.
+// ---------------------------------------------------------------------------
+describe("the helpers this file borrows rather than rewrites", () => {
+  const helpers = readFileSync(
+    fileURLToPath(new URL("./import-helpers.ts", import.meta.url)), "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const actions = readFileSync(
+    fileURLToPath(new URL("./import-actions.ts", import.meta.url)), "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("the park's middle rate card comes from the shared median, not a third copy", () => {
+    expect(helpers).toMatch(/export function planImport/);
+    expect(helpers).not.toMatch(/function medianOf/);
+    expect(helpers).toMatch(/import \{ median \} from "@\/lib\/stats"/);
+    expect(helpers).toMatch(/const cardMedian = median\(/);
+  });
+
+  it("the rate-card sentence prints money the way the screen does — cents only when there are any", () => {
+    const row = { cadenceOnSheet: null, rateHint: { amount: 400, basis: "lot" as const } };
+    expect(importBlockerText("looks_yearly", "1", row)).toMatch(/\$400 a month/);
+    expect(importBlockerText("looks_yearly", "1", row)).not.toMatch(/\$400\.00/);
+    const odd = { cadenceOnSheet: null, rateHint: { amount: 412.5, basis: "park" as const } };
+    expect(importBlockerText("looks_yearly", "1", odd)).toMatch(/\$412\.50 a month/);
+  });
+
+  it("a pasted phone is stored the way the other two writers store it — E.164 — and shown the way it was written", () => {
+    expect(phoneOnFile("(260) 555-0142")).toBe("+12605550142");
+    expect(phoneOnFile(null)).toBeNull();
+    expect(phoneOnFile("")).toBeNull();
+    // The write goes through it. `row.phone` is parsePhone's pretty form and
+    // stays that on the review screen.
+    expect(actions).toMatch(/phone_on_file_with_park: phoneOnFile\(row\.phone\)/);
+    expect(actions).not.toMatch(/phone_on_file_with_park: row\.phone,/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// COPY THAT OUTLIVES ITS CONDITION. The yearly-column card is rendered from
+// the stored parse for the life of the batch; once every held row has its
+// monthly rent it must read as done, not as an open blocker over a finished
+// job — and the tie-check paragraph must stop saying the rows need a rent.
+// ---------------------------------------------------------------------------
+describe("the review screen's cadence copy follows his answers", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("../../components/ParkImportRead.tsx", import.meta.url)), "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+
+  it("finds the file it is scanning", () => {
+    expect(src).toMatch(/view\.blockQuestions\.map\(/);
+  });
+
+  it("names a sheet that contradicts itself, rather than calling it unreadable", () => {
+    expect(src).toMatch(/conflicting: \{ many: "[^"]+", one: "[^"]+" \}/);
+    expect(src).not.toMatch(/conflicting: \{ many: "[^"]*couldn't read/);
+  });
+
+  it("the yearly-column card is derived from the plan once the rows are answered", () => {
+    expect(src).toMatch(/const cadenceAnswered =/);
+    expect(src).toMatch(/!live\.some\(\(r\) => r\.blockers\.includes\("bad_term"\)\)/);
+    expect(src).toMatch(/const CADENCE_CARDS = new Set\(\["RENT_NOT_MONTHLY", "TERM_NOT_MONTHLY", "TERM_NOT_READ", "TERM_CONFLICTS"\]\)/);
+    expect(src).toMatch(/cadenceAnswered && CADENCE_CARDS\.has\(q\.code\)/);
+    expect(src).toMatch(/settled \?/);
+  });
+
+  it("the tie-check paragraph says the rows need a rent only while some still do", () => {
+    expect(src).toMatch(/cadence\.heldForMonthly > 0 \? \(/);
+  });
+
+  it("never promises a check that the monthly rent he types makes impossible", () => {
+    // "Once every row has one, the rows are checked against it" promised the
+    // seller's-arithmetic check on rows whose figure would no longer be the
+    // seller's — and then ran it, reading "short $4,400" off a sheet that
+    // adds up to the penny.
+    expect(src).not.toMatch(/Once every row has one/);
+    expect(src).not.toMatch(/the rows are checked against it/);
+    // The answered state has its own sentence, derived from the plan.
+    expect(src).toMatch(/const answered = answeredCadence\(live\);/);
+    expect(src).toMatch(/\{view\.statedTotal != null && !totals && \(sheetSays \|\| cadence\.heldForMonthly > 0 \|\| answered\) && \(/);
+    expect(src).toMatch(/the sheet&apos;s figure was \{figureWas\(answered\.kind\)\} and you typed the monthly rent over it,\s*so his total and the rows no longer add up the same things\./);
   });
 });

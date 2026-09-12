@@ -15,7 +15,9 @@ import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 import { proposeAutopilotDate } from "@/lib/autopilot";
 import { shouldDemote, healBase, isCoolingDown } from "@/lib/lake-standing";
 import { warningDue, isExpired, WAITLIST_WARNING_KIND, expiryActionFor, PROTECTIVE_ESCALATION_KIND } from "@/lib/waitlist";
-import { remindDecision, extendedRange, extensionPrice } from "@/lib/extend-stay";
+import { remindDecision } from "@/lib/extend-stay";
+import { extendViewFor, type ExtendView } from "@/lib/extend-server";
+import { longDate } from "@/lib/lake-time";
 import { parseDaterange, type Term } from "@/lib/parks";
 import { rushWindowOpen } from "@/lib/rush";
 import { isLastDayOfMonth, nudgeCooling, nearMilestone } from "@/lib/growth";
@@ -4366,7 +4368,23 @@ export async function sendNightlyDigest(results: {
  * same checkout stops reading our texts, and the one they stop reading is the
  * freeze warning.
  */
-export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: number; skipped: string[] }> {
+export async function remindExpiringStays(): Promise<{
+  ok: boolean;
+  reminded: number;
+  /**
+   * Stays inside the lead window the page itself would refuse, COUNTED by the
+   * refusal — a household still on the seller's arrangement, a lot already let
+   * after these dates, a term the park does not sell. Nothing is texted and no
+   * token is minted for any of them, and a line per stay would nag the digest
+   * every night for the fortnight before each one ends, so the sweep reports
+   * the counts once per run (the nightly returns them with the run) — an
+   * inherited household is already named on the Today card as still to sign.
+   * `other` is any refusal the sweep's own filters should make unreachable,
+   * kept so the total is never quietly short.
+   */
+  refused: { inherited: number; lot_taken: number; no_rate: number; other: number };
+  skipped: string[];
+}> {
   const admin = createServiceClient();
   const today = todayLakeDate();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
@@ -4374,10 +4392,12 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
   // month. The skips below are all correct — none of them may send on a read
   // that failed — but the park owner has to be able to see them.
   const skipped: string[] = [];
+  const refused = { inherited: 0, lot_taken: 0, no_rate: 0, other: 0 };
 
   const stays = mustRead("the stays coming to an end", await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_id, during, term, status, extended_count, extend_reminded_at")
+    // ONE string literal — supabase-js types a concatenated select as an error.
+    .select("id, park_lot_id, renter_id, during, term, status, origin, quoted_amount, extended_count, extend_reminded_at")
     .in("status", ["approved", "active"])
     .is("extend_reminded_at", null));
 
@@ -4395,7 +4415,7 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
       alreadySent: false, // the query already filtered on the stamp
       extendedCount: (s.extended_count as number) ?? 0,
     });
-    if (decision !== "send") continue;
+    if (decision !== "send" || !range) continue;
 
     // NEVER TEXT WITHOUT VERIFIED CONSENT.
     //
@@ -4417,7 +4437,7 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
     // a lot the rent roll will call vacant, so it cannot be silent.
     if (renterErr) {
       console.error(`[read failed] the renter's consent and mobile (${s.renter_id}):`, renterErr);
-      skipped.push(`Stay ${s.id}: couldn't read the renter's consent and mobile, so the extend question wasn't asked — the tenancy still ends ${range?.end ?? "on its date"} unless somebody asks by hand.`);
+      skipped.push(`Stay ${s.id}: couldn't read the renter's consent and mobile, so the extend question wasn't asked — the tenancy still ends ${longDate(range.end)} unless somebody asks by hand.`);
       continue;
     }
     const phone = renter?.mobile_e164 as string | undefined;
@@ -4428,26 +4448,50 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
       !renter?.sms_consent_operational_at
     ) continue;
 
-    const { data: lot, error: lotErr } = await admin
-      .from("park_lots").select("lot_number").eq("id", s.park_lot_id as string).maybeSingle();
-    const { data: rateRows, error: rateErr } = await admin
-      .from("lot_rates").select("term, amount").eq("park_lot_id", s.park_lot_id as string);
-    // The text names her site and quotes a price. A failed read would send
-    // "your site  is booked" or, worse, price the extension off no rates at all.
-    if (lotErr || rateErr) {
-      console.error(`[read failed] the lot and its rates (${s.park_lot_id}):`, lotErr ?? rateErr);
-      skipped.push(`Stay ${s.id}: couldn't read the lot or its rates, so the extend question wasn't asked — the tenancy still ends ${range?.end ?? "on its date"} unless somebody asks by hand.`);
+    // WHAT THE LINK WILL SAY — from the same resolution the page uses, so the
+    // text cannot quote a number or a date the page will not. This used to
+    // price the offer off the park's rate card and end it thirty nights out;
+    // at a park that caps agreement length the page starts a NEW agreement at
+    // the household's rent in force, so a served increase — or a card that
+    // differed from the rent — put one number in the text and another on the
+    // page it linked to. And a household with a rent on file but no card was
+    // never texted at all, though the page would have said yes.
+    let view: ExtendView | null;
+    try {
+      view = await extendViewFor({
+        id: s.id as string,
+        park_lot_id: s.park_lot_id as string,
+        renter_id: s.renter_id as string,
+        during: s.during as string,
+        term: s.term as string,
+        status: s.status as string,
+        origin: (s.origin as string | null) ?? null,
+        quoted_amount: s.quoted_amount as number | string | null,
+      });
+    } catch (e) {
+      if (!(e instanceof ReadFailed)) throw e;
+      // The text names her site and quotes a price. Sending on a failed read
+      // would say "your site  is booked" or price the offer off no rates at all.
+      // `e.what` is named for THIS reader — the office, about somebody else's
+      // household — in extendViewFor, which is the only place that knows
+      // which read it was.
+      console.error(`[read failed] what the extend link would offer (stay ${s.id}):`, e);
+      skipped.push(`Stay ${s.id}: couldn't read ${e.what}, so the extend question wasn't asked — the tenancy still ends ${longDate(range.end)} unless somebody asks by hand.`);
       continue;
     }
-    const price = extensionPrice(
-      (rateRows ?? []).map((r) => ({ term: r.term as Term, amount: Number(r.amount) })),
-      term,
-    );
-    // No rate for that term means we have nothing honest to quote, so we do not
-    // ask. The park can still extend it by hand.
-    if (price == null || !range) continue;
+    // The page would refuse this tap — a household still on the seller's
+    // arrangement, a lot already let after these dates, a term the park no
+    // longer sells — so no text goes out: a link that opens on "we can't do
+    // that from here" is a dead end. The park can still do it by hand.
+    // Counted, not narrated (see the return type), and no stamp: the
+    // household is asked again tomorrow, when the reason may be gone.
+    if (!view || view.refusal || !view.newEnd || view.price == null) {
+      const why = view?.refusal;
+      if (why === "inherited" || why === "lot_taken" || why === "no_rate") refused[why]++;
+      else refused.other++;
+      continue;
+    }
 
-    const next = extendedRange(range, term);
     const token = `x${crypto.randomUUID().replace(/-/g, "")}`;
 
     // The STAMP IS THE CLAIM: setting it while it is still null is what makes
@@ -4462,6 +4506,7 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
     if (!claimed || claimed.length === 0) continue;
 
     reminded++;
+    const msg = extendReminderText(view, `${site}/x/${token}`);
     // THE SMS GATE ABOVE IS UNTOUCHED — nobody new is messaged. The email is
     // the second door to the SAME renter, and the park module already treats
     // it as the one that is always open (invite-channels.ts). It matters here
@@ -4470,22 +4515,55 @@ export async function remindExpiringStays(): Promise<{ ok: boolean; reminded: nu
     const told = await notify(
       `the renter that her stay is ending, with the one tap that extends it (stay ${s.id})`,
       { phone, email: renter?.email as string | null },
-      {
-        sms:
-          `LakeLife: your site ${lot?.lot_number ?? ""} is booked through ${range.end}. ` +
-          `Want to keep it through ${next.end} for $${price.toLocaleString()}? ` +
-          `One tap: ${site}/x/${token}`,
-        subject: `Your site is booked through ${range.end} — keep it through ${next.end}?`,
-        body:
-          `Your site ${lot?.lot_number ?? ""} is booked through ${range.end}.\n\n` +
-          `Want to keep it through ${next.end} for $${price.toLocaleString()}?\n\n` +
-          `One tap:\n  ${site}/x/${token}`,
-      },
+      msg,
     );
     if (!told.reached && told.note) skipped.push(told.note);
   }
 
-  return { ok: true, reminded, skipped };
+  return { ok: true, reminded, refused, skipped };
+}
+
+/**
+ * The words of the reminder, from the view the page will render. A capped park
+ * is not extending anything — the tap starts the NEXT agreement at the
+ * household's monthly rent — and the text says that the way the page does;
+ * anywhere else it is one more period at the park's card price.
+ */
+export function extendReminderText(
+  view: ExtendView,
+  link: string,
+): { sms: string; subject: string; body: string } {
+  const lot = view.lotNumber ? `site ${view.lotNumber}` : "your site";
+  const ends = longDate(view.currentEnd);
+  const to = longDate(view.newEnd);
+  const price = `$${(view.price ?? 0).toLocaleString()}`;
+
+  if (view.isRenewal) {
+    const months = view.capMonths ?? 3;
+    const rent = `${price}${view.term === "monthly" ? " a month" : ""}`;
+    const offer = `start the next ${months}-month agreement, ${longDate(view.newStart)} to ${to}, at ${rent}`;
+    // The same gate as the page this links to: a deposit is mentioned only
+    // to somebody the park is holding one for. Printed to everyone, it told
+    // a park full of households who never paid one that theirs carries over.
+    const deposit = view.depositHeld ? " Your deposit carries over." : "";
+    return {
+      sms: `LakeLife: your agreement at ${lot} runs to ${ends}. Want to ${offer}? One tap: ${link}`,
+      subject: `Your agreement runs to ${ends} — start the next ${months} months?`,
+      body:
+        `Your agreement at ${lot} runs to ${ends}.\n\n` +
+        `Want to ${offer}?${deposit}\n\n` +
+        `One tap:\n  ${link}`,
+    };
+  }
+
+  return {
+    sms: `LakeLife: your ${lot} is booked through ${ends}. Want to keep it through ${to} for ${price}? One tap: ${link}`,
+    subject: `Your site is booked through ${ends} — keep it through ${to}?`,
+    body:
+      `Your ${lot} is booked through ${ends}.\n\n` +
+      `Want to keep it through ${to} for ${price}?\n\n` +
+      `One tap:\n  ${link}`,
+  };
 }
 
 // ==========================================================================

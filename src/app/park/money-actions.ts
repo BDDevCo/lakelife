@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { todayLakeDate } from "@/lib/booking";
 import { assertMyPark } from "./data";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
+import { handKeyedRefusal, paymentAmountRefusal, type HandKeyedMethod } from "./ledger-helpers";
 
 /**
  * MONEY THAT ARRIVES BEFORE A BILL DOES — and money that is not a bill at all.
@@ -35,8 +36,16 @@ export interface MoneyResult {
   receiptNo?: number | null;
 }
 
-type Method = "cash" | "check" | "card" | "ach" | "transfer" | "other";
-const METHODS: Method[] = ["cash", "check", "card", "ach", "transfer", "other"];
+/**
+ * THE FOUR HAND-KEYED WAYS, from the one list in ledger-helpers. This file had
+ * its own six — with `card` and `ach` still on it — so the rent screen's door
+ * refused a bank rail while the on-account and deposit doors here took it from
+ * a crafted call: a deposit on `ach` hit 0108's constraint and surfaced the
+ * raw constraint text; money on account keyed as `ach` with any reference
+ * became a row 0142 will never let him reverse, with no charge to refund
+ * against. Rule 1's own standard is the API, not the select.
+ */
+type Method = HandKeyedMethod;
 
 const DENIED = "You don't manage that park.";
 
@@ -57,8 +66,15 @@ function dateProblem(receivedOn: string, todayISO: string): string | null {
   return null;
 }
 
+/**
+ * The three amount refusals are the rent door's (paymentAmountRefusal): this
+ * one said "isn't a number" of 0 and of -5, and passed 0.004 straight to the
+ * insert unrounded, where numeric(10,2) made it 0.00 and the office read
+ * park_payments_amount_check by name. The typo line is this file's own.
+ */
 function amountProblem(amount: number): string | null {
-  if (!Number.isFinite(amount) || amount <= 0) return "That amount isn't a number.";
+  const bad = paymentAmountRefusal(amount);
+  if (bad) return bad;
   if (amount > 100_000) return "That amount looks like a typo.";
   return null;
 }
@@ -108,7 +124,10 @@ export async function recordOnAccount(
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
   const bad = amountProblem(amount) ?? dateProblem(receivedOn, todayLakeDate());
   if (bad) return { ok: false, error: bad };
-  if (!METHODS.includes(method)) return { ok: false, error: "That isn't a way money arrives." };
+  // The two processor rails are refused BEFORE any read or insert, with the
+  // sentence the rent screen's door uses — not 0108's constraint name.
+  const methodBad = handKeyedRefusal(method);
+  if (methodBad) return { ok: false, error: methodBad };
 
   const admin = createServiceClient();
   const found = await renterInPark(admin, parkId, renterId);
@@ -275,7 +294,10 @@ export async function recordDeposit(
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
   const bad = amountProblem(amount) ?? dateProblem(receivedOn, todayLakeDate());
   if (bad) return { ok: false, error: bad };
-  if (!METHODS.includes(method)) return { ok: false, error: "That isn't a way money arrives." };
+  // A deposit carries no reference at all, so `card`/`ach` here ALWAYS hit
+  // 0108 and surfaced the raw constraint text. Refused first, same sentence.
+  const methodBad = handKeyedRefusal(method);
+  if (methodBad) return { ok: false, error: methodBad };
 
   const admin = createServiceClient();
   const found = await renterInPark(admin, parkId, renterId);

@@ -7,6 +7,7 @@ import { getMyPark } from "@/app/park/data";
 import { getStatement } from "@/app/park/receipts-actions";
 import { monthPeriod } from "@/app/park/receipts-helpers";
 import { todayLakeDate } from "@/lib/booking";
+import { paymentsAreLive } from "@/lib/charge-gate";
 
 /**
  * Defaults to LAST COMPLETE MONTH, not this one.
@@ -43,12 +44,17 @@ export default async function ParkStatementsPage() {
   const initial = monthPeriod(lastCompleteMonth(today), today)!;
   const page = await getStatement(park.id, initial.from, initial.to);
 
+  // THE FACT COMES FROM THE SERVER. ParkStatements hides "Refund to card" and
+  // says "the processor isn't connected" whenever `paymentsLive` is false, and
+  // its default is false — so a page that never passed it would have kept
+  // saying that on the day LAKELIFE_PAYMENTS_LIVE is switched on. A client
+  // component cannot read the env var; this page can.
   return (
     <>
       <TopBar />
       <ParkNav park={park} />
       {page ? (
-        <ParkStatements parkId={park.id} page={page} today={today} />
+        <ParkStatements parkId={park.id} page={page} today={today} paymentsLive={paymentsAreLive()} />
       ) : (
         <div className="wrap" style={{ paddingTop: 24 }}>Nothing to report on yet.</div>
       )}

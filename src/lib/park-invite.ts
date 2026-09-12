@@ -148,8 +148,10 @@ const CLAIM_SAYS: Record<string, string> = {
     "This account manages the park, so it can't also be set up as a household here.",
   claim_already_here:
     "This account already has a lot at this park.",
+  // The invite door finds the file by its token, so the only tenancy this
+  // can mean is one that ended — never one that has not started (0166).
   claim_no_open_lot:
-    "We can't find a current tenancy for this link. Have a word with the office.",
+    "We can't find a tenancy for this link that hasn't ended. Have a word with the office.",
   claim_file_merged:
     "This record has been merged into another one. The office can point you at the right lot.",
 };

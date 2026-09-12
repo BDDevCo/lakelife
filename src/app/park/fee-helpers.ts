@@ -208,20 +208,34 @@ export interface CoverageCheck {
   unverified: CostCategory[];
   /** Categories the park pays for that NO fee claims to cover. */
   uncovered: CostCategory[];
+  /**
+   * How many distinct months each claimed category's monthly figure rests
+   * on — the evidence behind `actualCost`, per bill. Only categories with a
+   * row appear; the ones without are in `unverified`.
+   */
+  monthsByCategory: { category: CostCategory; months: number }[];
 }
 
 /**
  * Put the fee income and the real cost side by side.
  *
- * `monthsObserved` matters: three months of bills is $1,140 of water, not
- * $1,140 a month. Getting that wrong would tell him he is losing money at four
- * times the real rate, and a wrong alarm is worse than no alarm.
+ * EACH BILL IS AVERAGED OVER ITS OWN MONTHS. Three months of water bills is
+ * $1,140 of water, not $1,140 a month — but the denominator has to be the
+ * months THAT bill was entered for, not the months any bill was. The Haven's
+ * grounds, common electric and "other" are annual figures divided by twelve
+ * and entered once, as a June row; only the sewer arrives monthly and only
+ * the sewer has a reminder. With one denominator across every category, each
+ * December sewer bill diluted the three baselines and the sentence he sets
+ * the fee by drifted from "ahead by $37.67 a lot" to $60.63 by July, in the
+ * reassuring direction, while nothing had changed.
+ *
+ * A category's month is the month its period BEGINS (`period_start`), which
+ * is the same key the rest of the ledger reads a park_costs row by.
  */
 export function checkCoverage(
   fees: readonly ParkFee[],
   payersByFee: ReadonlyMap<string, number>,
-  costs: readonly { category: CostCategory; amountPaid: number }[],
-  monthsObserved: number,
+  costs: readonly { category: CostCategory; amountPaid: number; periodStart: string }[],
 ): CoverageCheck {
   const live = fees.filter((f) => f.active);
 
@@ -238,15 +252,20 @@ export function checkCoverage(
   );
 
   const spentBy = new Map<CostCategory, number>();
+  const monthsBy = new Map<CostCategory, Set<string>>();
   for (const c of costs) {
     spentBy.set(c.category, round2((spentBy.get(c.category) ?? 0) + c.amountPaid));
+    const seen = monthsBy.get(c.category) ?? new Set<string>();
+    seen.add(String(c.periodStart ?? "").slice(0, 7));
+    monthsBy.set(c.category, seen);
   }
+  const monthsOf = (cat: CostCategory) => Math.max(1, monthsBy.get(cat)?.size ?? 0);
 
-  const months = Math.max(1, monthsObserved);
+  // Per category: what it costs in a typical month. Then the sum of those.
   const actualCost = round2(
     [...spentBy.entries()]
       .filter(([cat]) => claimed.has(cat))
-      .reduce((s, [, amt]) => s + amt, 0) / months,
+      .reduce((s, [cat, amt]) => s + round2(amt / monthsOf(cat)), 0),
   );
 
   return {
@@ -255,7 +274,51 @@ export function checkCoverage(
     margin: round2(feeIncome - actualCost),
     unverified: [...claimed].filter((c) => !spentBy.has(c)),
     uncovered: [...spentBy.keys()].filter((c) => !claimed.has(c)),
+    monthsByCategory: [...spentBy.keys()]
+      .filter((c) => claimed.has(c))
+      .map((category) => ({ category, months: monthsOf(category) })),
   };
+}
+
+/**
+ * HOW THIN THE EVIDENCE IS, per bill — the caption under the headline.
+ *
+ * Null when there is nothing recorded (the headline already says so, and
+ * "from one month of bills" under it would be inventing a month nobody
+ * entered). Names each bill with the months it rests on, because "averaged
+ * over 7 months" was true of the sewer and false of everything else on the
+ * same screen. A single month is also a SEASON — a June of mowing is not a
+ * January of ploughing — and a fee set on it is set for a year, so the
+ * one-month caveat stays as long as any bill is resting on one.
+ */
+export function evidenceLine(check: CoverageCheck): string | null {
+  const rows = check.monthsByCategory;
+  if (rows.length === 0) return null;
+  const thin = "thin evidence for a number you set for a year";
+  if (rows.every((r) => r.months === 1)) {
+    return `From one month of bills — ${thin}.`;
+  }
+  // Group by month count, most months first, so the line reads
+  // "sewer over 7 months; common electric, grounds and other over one".
+  const byMonths = new Map<number, string[]>();
+  for (const r of rows) {
+    const label = COVER_LABEL[r.category] ?? r.category;
+    byMonths.set(r.months, [...(byMonths.get(r.months) ?? []), label]);
+  }
+  const parts = [...byMonths.entries()]
+    .sort((a, b) => b[0] - a[0])
+    .map(([months, labels]) => {
+      const names = labels.sort((a, b) => a.localeCompare(b));
+      const list = names.length <= 1
+        ? names.join("")
+        : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+      return `${list} over ${months === 1 ? "one month" : `${months} months`}`;
+    });
+  const anyThin = rows.some((r) => r.months === 1);
+  return (
+    `Each bill is averaged over the months it was entered for: ${parts.join("; ")}.` +
+    (anyThin ? ` A single month is ${thin}.` : "")
+  );
 }
 
 /**

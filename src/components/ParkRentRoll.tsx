@@ -9,8 +9,17 @@ import {
   decideApplication, endTenancy, setParkLive, addTenant, editTenancy,
   giveNotice, clearNotice,
 } from "@/app/park/actions";
+import { recordSigning } from "@/app/park/sign-actions";
+import {
+  defaultSigningDay, firstMonthBills, agreementAlreadyOver, alreadyOverClause,
+  SIGNED_LEASE_LABEL, type SigningInput,
+} from "@/app/park/sign-helpers";
 import type { TenantInput, TenantEditInput } from "@/app/park/park-helpers";
+import {
+  agreementStartFor, SIGNED_START_HORIZON_DAYS, dayInWords, EDITABLE_TERMS, TERM_EACH,
+} from "@/app/park/park-helpers";
 import { prettyMonth } from "@/app/park/ledger-helpers";
+import { prettyPhone } from "@/lib/phone";
 
 /**
  * The park owner's home screen: every lot, who is on it, and who is asking.
@@ -40,8 +49,6 @@ export interface RollRowView {
    */
   slipRenterId: string | null;
   slipRenterName: string | null;
-  /** Set when they have not moved in yet, so the slip can say so. */
-  slipArrivesOn: string | null;
   /**
    * What the office may know about this household's slip: 'none' | 'open' |
    * 'used' | 'expired' | 'locked' | 'declined'.
@@ -58,6 +65,8 @@ export interface RollRowView {
   currentDueDay: number | null;
   /** 'prior_roll' until a human confirms it — the rent roll shows its work. */
   currentSource: string | null;
+  /** How they pay — 'monthly', 'annual', … — for the Edit panel's select. */
+  currentTerm: string | null;
   /** What this household owes this month — or why we can't say. */
   owedThisMonth: string | null;
   /**
@@ -73,6 +82,49 @@ export interface RollRowView {
   rolling?: boolean;
   nextRenter: string | null;
   nextFrom: string | null;
+  /**
+   * The next agreement's row, when it can be withdrawn from here: this same
+   * household's own successor standing behind their current link, or a
+   * SUCCESSOR (origin 'office') still to start on a lot with no current
+   * link at all — the state a move-out leaves when its cascade fails after
+   * the trim. Written early by the renewal screen and, until now, impossible
+   * to withdraw from any screen once it existed. Never a household's ONLY
+   * record wearing that silhouette: not an imported holdover waiting for
+   * go-live, and not an approved applicant (or a lease 'Who lives here'
+   * filed ahead of its day) still to arrive — a first agreement is not a
+   * 'next' one, and un-approving an applicant is not this control's to do.
+   */
+  nextReservationId: string | null;
+  /**
+   * THEY SIGNED THE NEW LEASE — set when the stay this row is about is a
+   * holdover on the arrangement they already had. Carries what the form
+   * starts from: the lot's rate card (the number the lease was written from)
+   * or what they paid before, and whatever the file already holds for
+   * reaching them.
+   */
+  signing: {
+    reservationId: string;
+    renterName: string;
+    /**
+     * A MONTHLY figure or nothing: the lot's rate card, else what they paid
+     * before only when that was filed monthly. A yearly holdover's number in
+     * a box the sentence reads as a month quoted "$3,442.53" for January.
+     */
+    rent: number | null;
+    rentFromRateCard: boolean;
+    /** How the holdover was filed as paid — so a blank rent box can say why. */
+    holdoverTerm: string | null;
+    email: string | null;
+    phone: string | null;
+    /** The holdover's own first day — the form's default when the ledger covers it. */
+    holdoverFrom: string | null;
+    /** The park's term — what the successor runs for; null on a park with neither dial. */
+    termMonths: number | null;
+    /** What a signed agreement on this lot is charged each month, by the biller's rule. */
+    feePerMonth: number;
+    /** Set before the ledger starts: the day from which a signing can be recorded. */
+    recordableFrom: string | null;
+  } | null;
   pending: {
     id: string;
     renter: string;
@@ -98,6 +150,11 @@ export interface RollSummaryView {
 const SITE_LABEL: Record<string, string> = {
   rv_site: "RV site", mh_single: "Single-wide pad", mh_double: "Double-wide pad",
   tent: "Tent site", slip: "Boat slip",
+};
+
+/** The "Paid" select's words — the filing form's, so the two doors agree. */
+const TERM_OPTION: Record<string, string> = {
+  monthly: "monthly", weekly: "weekly", seasonal: "seasonally", annual: "yearly", nightly: "nightly",
 };
 
 const STATE_STYLE: Record<RollRowView["state"], { pill: string; label: string }> = {
@@ -131,6 +188,7 @@ export function ParkRentRoll({
   disputedAmount,
   wouldBill,
   preGoLive,
+  cutoverDate = null,
 }: {
   parkId: string;
   isOwner: boolean;
@@ -141,6 +199,11 @@ export function ParkRentRoll({
   summary: RollSummaryView;
   /** Lake date from the server. A client component must never guess it. */
   today: string;
+  /**
+   * The park's cutover date, or null. A signed lease filed from this screen
+   * may not start before it, and one filed before go-live starts on it.
+   */
+  cutoverDate?: string | null;
   owedTotal?: number;
   owedBlocked?: number;
   owedMonth?: string;
@@ -168,6 +231,10 @@ export function ParkRentRoll({
   // The notice panel: which tenancy, and the day they SAY they are going.
   const [noticeId, setNoticeId] = useState<string | null>(null);
   const [leavingOn, setLeavingOn] = useState("");
+  // The signing panel: which holdover just signed the new lease.
+  const [signingId, setSigningId] = useState<string | null>(null);
+  // The withdrawal: which successor he is about to take back.
+  const [withdrawingId, setWithdrawingId] = useState<string | null>(null);
 
   function decide(id: string, decision: "approve" | "decline") {
     setBusyId(id);
@@ -192,7 +259,24 @@ export function ParkRentRoll({
     startTransition(async () => {
       const res = await endTenancy(id, "ended", lastDayISO);
       setBusyId(null);
-      if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
+      if (!res.ok) {
+        toast.err(res.error ?? "Couldn't do that.");
+        // THE CLOSE-OUT MAY HAVE SAVED. When the cascade fails after the trim
+        // the sentence begins "Closed out" and the row must stop offering Move
+        // out for the link that has ended — and show whichever control the
+        // sentence points at: 'Withdraw the next agreement' when the standing
+        // successor is still to start, or Move out on the successor itself
+        // when it already covers today (a late close-out). A successor that
+        // has already lapsed leaves the lot vacant and the sentence says so;
+        // no control follows. Without a refresh a second tap only gets "That
+        // one is already closed."
+        if (/^Closed out/.test(res.error ?? "")) {
+          setClosingId(null);
+          setLastDay("");
+          router.refresh();
+        }
+        return;
+      }
       toast(res.signal ?? "Done.");
       setClosingId(null);
       setLastDay("");
@@ -216,6 +300,25 @@ export function ParkRentRoll({
       toast(res.signal ?? "Noted.");
       setNoticeId(null);
       setLeavingOn("");
+      router.refresh();
+    });
+  }
+
+  // WITHDRAW THE NEXT AGREEMENT — the `cancelled` branch nothing called.
+  //
+  // The renewal screen writes a successor up to 45 days early. When the
+  // household then leaves, or simply will not renew, that row still held the
+  // lot until its end, still billed, and could be reached from no screen:
+  // Move out and Gave notice were offered only for the row covering today.
+  // Cancelled, not ended — nobody lived in it, so there is nothing to bill.
+  function withdraw(nextId: string) {
+    setBusyId(nextId);
+    startTransition(async () => {
+      const res = await endTenancy(nextId, "cancelled");
+      setBusyId(null);
+      setWithdrawingId(null);
+      if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
+      toast.ok("Their next agreement is withdrawn — nothing bills for it.");
       router.refresh();
     });
   }
@@ -538,6 +641,58 @@ export function ParkRentRoll({
                         They&apos;re staying
                       </button>
                     )}
+                    {/* THE SIGNATURE, RECORDED WHERE TODAY SENDS HIM. The
+                        "N households haven't signed" card points at this
+                        row, and until now the row had nothing to record it
+                        with. Shown for a holdover whether or not they have
+                        arrived yet, because before go-live that is everybody
+                        on an imported roll. */}
+                    {r.signing && (
+                      <button
+                        className="ll-btn ghost"
+                        onClick={() => {
+                          setSigningId(signingId === r.signing!.reservationId ? null : r.signing!.reservationId);
+                        }}
+                        disabled={pending && busyId === r.signing.reservationId}
+                      >
+                        {signingId === r.signing.reservationId ? "Cancel" : SIGNED_LEASE_LABEL}
+                      </button>
+                    )}
+                    {r.nextReservationId && (
+                      withdrawingId === r.nextReservationId ? (
+                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                          <span className="mut" style={{ fontSize: 13 }}>
+                            Withdraw their {r.nextFrom ? prettyMonth(r.nextFrom.slice(0, 7)) : "next"} agreement? Nothing bills for it.
+                          </span>
+                          <button className="ll-btn sm" style={{ minHeight: 36 }}
+                            disabled={pending && busyId === r.nextReservationId}
+                            onClick={() => withdraw(r.nextReservationId!)}>
+                            {pending && busyId === r.nextReservationId ? "Withdrawing…" : "Yes"}
+                          </button>
+                          <button className="ll-btn ghost sm" style={{ minHeight: 36 }}
+                            onClick={() => setWithdrawingId(null)}>
+                            No
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          className="ll-btn ghost"
+                          onClick={() => setWithdrawingId(r.nextReservationId)}
+                          disabled={pending && busyId === r.nextReservationId}
+                        >
+                          Withdraw the next agreement
+                        </button>
+                      )
+                    )}
+                    {r.signing && signingId === r.signing.reservationId && (
+                      <SignedNewLease
+                        parkId={parkId}
+                        seed={r.signing}
+                        today={today}
+                        cutoverDate={cutoverDate}
+                        onDone={() => setSigningId(null)}
+                      />
+                    )}
                     {noticeId && noticeId === r.currentReservationId && (
                       <div className="ll-field" style={{ width: "100%", marginTop: 8 }}>
                         <label>Day they plan to leave</label>
@@ -603,6 +758,7 @@ export function ParkRentRoll({
                     rent={r.currentRent}
                     dueDay={r.currentDueDay}
                     source={r.currentSource}
+                    term={r.currentTerm}
                     onDone={() => setEditingId(null)}
                   />
                 )}
@@ -612,6 +768,8 @@ export function ParkRentRoll({
                     parkId={parkId}
                     lotId={r.lotId}
                     lotNumber={r.lotNumber}
+                    today={today}
+                    cutoverDate={cutoverDate}
                     onDone={() => setAddingTo(null)}
                   />
                 )}
@@ -635,24 +793,47 @@ export function ParkRentRoll({
  * park turns into a three-hour data-entry session that gets abandoned at lot 9.
  */
 function AddTenant({
-  parkId, lotId, lotNumber, onDone,
+  parkId, lotId, lotNumber, today, cutoverDate, onDone,
 }: {
-  parkId: string; lotId: string; lotNumber: string; onDone: () => void;
+  parkId: string; lotId: string; lotNumber: string;
+  today: string; cutoverDate: string | null; onDone: () => void;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [form, setForm] = useState<TenantInput>({
     displayName: "", mobile: "", email: "",
     movedInOn: "", term: "monthly", rent: "", source: "prior_roll",
+    // NOBODY HAS SIGNED ANYTHING until he says so. This door had no tick at
+    // all and wrote no origin, so the column default filed every household
+    // typed here as having agreed to the fee. The tick is a claim about a
+    // piece of paper; it starts clear and only the person holding the paper
+    // may set it.
+    signedNewLease: false,
+    agreementStartsOn: "",
   });
   const set = <K extends keyof TenantInput>(k: K, v: TenantInput[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  // THE DAY A SIGNED LEASE RUNS FROM, seeded when the tick is set: the later
+  // of today and the cutover, changeable to the date on the paper. Cleared
+  // with the tick — a holdover has no agreement start.
+  const defaultStart = agreementStartFor("", today, cutoverDate);
+  const tick = (signed: boolean) =>
+    setForm((f) => ({
+      ...f,
+      signedNewLease: signed,
+      agreementStartsOn: signed && defaultStart.ok ? defaultStart.start : "",
+    }));
+  const latestStart = (() => {
+    const [y, m, d] = today.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d + SIGNED_START_HORIZON_DAYS)).toISOString().slice(0, 10);
+  })();
 
   function save() {
     startTransition(async () => {
       const res = await addTenant(parkId, lotId, form);
       if (!res.ok) { toast.err(res.error ?? "Couldn't save."); return; }
-      toast(res.signal ?? "Added.");
+      toast.ok(res.signal ?? "Added.");
       onDone();
       router.refresh();
     });
@@ -672,9 +853,19 @@ function AddTenant({
             onChange={(e) => set("displayName", e.target.value)} style={{ marginTop: 4 }} />
         </label>
         <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
-          <span className="mut">Best number (optional)</span>
+          <span className="mut">{form.signedNewLease ? "Best number" : "Best number (optional)"}</span>
           <input type="tel" inputMode="tel" value={form.mobile} placeholder="(260) 555-0142"
             onChange={(e) => set("mobile", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+        {/* THE EMAIL THAT COULD NOT BE TYPED. This form hard-coded email to
+            "" — so no household filed from the roll could ever be emailed a
+            slip, and a signed lease (which needs both) could not be filed
+            here at all. */}
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">{form.signedNewLease ? "Email" : "Email (optional)"}</span>
+          <input type="email" inputMode="email" autoCapitalize="off" autoCorrect="off"
+            value={form.email} placeholder="donna@example.com"
+            onChange={(e) => set("email", e.target.value)} style={{ marginTop: 4 }} />
         </label>
         <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
           <span className="mut">Rent (optional)</span>
@@ -683,14 +874,45 @@ function AddTenant({
         </label>
         <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
           <span className="mut">Paid</span>
+          {/* The same four ways, in the same words, as the Edit panel's select. */}
           <select value={form.term} onChange={(e) => set("term", e.target.value)} style={{ marginTop: 4 }}>
-            <option value="monthly">monthly</option>
-            <option value="weekly">weekly</option>
-            <option value="seasonal">seasonally</option>
-            <option value="annual">yearly</option>
+            {EDITABLE_TERMS.map((t) => (
+              <option key={t} value={t}>{TERM_OPTION[t]}</option>
+            ))}
           </select>
         </label>
       </div>
+
+      {/* THE TICK THE FILING SCREEN HAS AND THIS DOOR DID NOT. Clear writes a
+          holdover on the arrangement they already had — no fee, no cap — from
+          today. Ticked writes a real agreement, from the day the lease says,
+          and needs both ways to reach them. */}
+      <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 12, fontSize: 14 }}>
+        <input type="checkbox" checked={!!form.signedNewLease} style={{ marginTop: 3 }}
+          onChange={(e) => tick(e.target.checked)} />
+        <span>
+          They&apos;ve signed the new lease.
+          <span className="mut"> Leave it clear if they&apos;re still on the arrangement they
+          already had — that carries on as it is, and no fee bills until they sign.</span>
+        </span>
+      </label>
+      {form.signedNewLease && (
+        <div className="ll-field" style={{ fontSize: 13, marginTop: 10 }}>
+          <label>The lease runs from</label>
+          <input
+            type="date"
+            value={form.agreementStartsOn ?? ""}
+            min={cutoverDate ?? undefined}
+            max={latestStart}
+            onChange={(e) => set("agreementStartsOn", e.target.value)}
+          />
+          <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
+            The day on the paper, not today — the first month bills from this
+            day{form.agreementStartsOn ? ` (${dayInWords(form.agreementStartsOn)})` : ""}.
+            Email and phone are a condition of the new lease, so both are needed.
+          </p>
+        </div>
+      )}
 
       {/* WHAT A NUMBER HERE ACTUALLY BUYS.
           This promised "rent receipts and freeze warnings by text". Nothing
@@ -709,6 +931,159 @@ function AddTenant({
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button className="ll-btn" onClick={save} disabled={pending || !form.displayName.trim()}>
           Add to lot {lotNumber}
+        </button>
+        <button className="ll-btn ghost" onClick={onDone} disabled={pending}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * THEY SIGNED THE NEW LEASE — the form.
+ *
+ * Four things and no more: THE DAY THE NEW LEASE RUNS FROM (the day on the
+ * paper — never today, which is the day the office got round to it), the
+ * rent on the paper (started from the lot's rate card, the number the lease
+ * was written from), and the two ways to reach them that are a condition of
+ * the lease. The arrangement they had ends the day the new lease starts and
+ * the new agreement runs from it — see sign-helpers.ts for what that means
+ * for the bill, which this form says BEFORE the write.
+ *
+ * The date starts from the holdover's own first day when the ledger already
+ * covers it (an imported row's 1 January) and is otherwise blank. Seeded with
+ * today, eighteen leases for 1 January recorded on the 4th billed January
+ * three days of the seller's rent plus 28/31 of the lease, and ran every
+ * later link 4th-to-4th. And it is left blank — with the reason — when an
+ * agreement from that day would already be over (1 January under a
+ * one-month term, opened on 15 February): the planner refuses that day, so
+ * seeding it and saying "keep the day on the paper" offered the one date
+ * that cannot be recorded. Which link to write for a lease recorded a
+ * month late is the owner's call; the form does not guess.
+ *
+ * The rent box holds a MONTHLY figure or nothing (signingRentSeed); the
+ * phone is shown back the way a person writes it.
+ */
+function SignedNewLease({
+  parkId, seed, today, cutoverDate, onDone,
+}: {
+  parkId: string;
+  seed: NonNullable<RollRowView["signing"]>;
+  today: string;
+  cutoverDate: string | null;
+  onDone: () => void;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  // THE DAY THE BOX WOULD START FROM, AND WHETHER IT MAY. An imported row's
+  // 1 January under a one-month term, recorded on 15 February, is an
+  // agreement already over — the planner refuses it, so the box is left
+  // blank and the reason is said, rather than seeding the one day that
+  // cannot be recorded and telling him to keep it.
+  const seededDay = defaultSigningDay(seed.holdoverFrom, cutoverDate);
+  const seededDayOver = !!seededDay && agreementAlreadyOver(seededDay, seed.termMonths, today);
+  const [form, setForm] = useState<SigningInput>({
+    signedOn: seededDayOver ? "" : seededDay,
+    rent: seed.rent == null ? "" : String(seed.rent),
+    email: seed.email ?? "",
+    // Shown back the way a person writes it, never in the stored form.
+    mobile: prettyPhone(seed.phone),
+  });
+  // WHAT THE FIRST MONTH BILLS, from the date and rent as typed — the same
+  // sentence the toast will quote, so nothing is learned only after the
+  // write. Nothing is quoted until both boxes hold something real.
+  const rentTyped = Number(form.rent.trim().replace(/[$,\s]/g, ""));
+  const firstMonth =
+    /^\d{4}-\d{2}-\d{2}$/.test(form.signedOn) && form.rent.trim() && Number.isFinite(rentTyped) && rentTyped >= 0
+      ? firstMonthBills(form.signedOn, Math.round(rentTyped * 100) / 100, seed.feePerMonth, seed.holdoverFrom)
+      : null;
+  const set = <K extends keyof SigningInput>(k: K, v: SigningInput[K]) =>
+    setForm((f) => ({ ...f, [k]: v }));
+
+  function save() {
+    startTransition(async () => {
+      const res = await recordSigning(parkId, seed.reservationId, form);
+      if (!res.ok) { toast.err(res.error ?? "Couldn't record that."); return; }
+      toast.ok(res.signal ?? "Recorded.");
+      onDone();
+      router.refresh();
+    });
+  }
+
+  // BEFORE THE LEDGER STARTS, THERE IS NOTHING TO RECORD YET. A lease signed
+  // in December for 1 January begins on 1 January; recording it then is what
+  // dates the new agreement — and the fee — from the right day.
+  if (seed.recordableFrom) {
+    return (
+      <div className="ll-notice" style={{ width: "100%", marginTop: 8, fontSize: 13, lineHeight: 1.5 }}>
+        Their new agreement can be recorded from {dayInWords(seed.recordableFrom)}, the
+        day the ledger starts. Until then they stay on the arrangement they already had.
+      </div>
+    );
+  }
+
+  return (
+    <div className="ll-field" style={{ width: "100%", marginTop: 8 }}>
+      <p style={{ fontSize: 13, margin: "0 0 8px", lineHeight: 1.5 }}>
+        <strong>{seed.renterName}</strong> signed the new lease. The arrangement they
+        had ends the day the new lease starts and the new agreement runs from it.
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">The new lease runs from</span>
+          <input type="date" value={form.signedOn} min={cutoverDate ?? undefined} max={today}
+            onChange={(e) => set("signedOn", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Rent on the lease</span>
+          <input inputMode="decimal" value={form.rent} placeholder="400"
+            onChange={(e) => set("rent", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Email</span>
+          <input type="email" inputMode="email" autoCapitalize="off" autoCorrect="off"
+            value={form.email} placeholder="none on file yet"
+            onChange={(e) => set("email", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Phone</span>
+          <input type="tel" inputMode="tel" value={form.mobile} placeholder="(260) 555-0142"
+            onChange={(e) => set("mobile", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
+      </div>
+      <p className="mut" style={{ fontSize: 12, margin: "8px 0 0", lineHeight: 1.5 }}>
+        {seededDayOver ? (
+          // THE DAY ON THE PAPER IS THE ONE DAY THIS FORM REFUSES, so it is
+          // not told to type it. What is true today: why the box is blank,
+          // and what any day he does type will do. Which link to write for a
+          // lease recorded a month late is the owner's call, not this copy's.
+          <>
+            The day is left blank: {alreadyOverClause(seededDay, seed.termMonths)}, so it
+            can&apos;t be recorded from that day here. The day you type is the day the new
+            agreement runs from, and the first month bills from it.{" "}
+          </>
+        ) : (
+          <>The day on the paper, not today — the first month bills from this day.{" "}</>
+        )}
+        {seed.rentFromRateCard
+          ? "The rent starts from the lot's rate card — change it if the lease says otherwise. "
+          : seed.rent != null
+            ? "The rent starts from what they paid before — change it to what the lease says. "
+            : seed.holdoverTerm && seed.holdoverTerm !== "monthly"
+              // A yearly figure is not divided for him — the Edit panel holds
+              // the same line. The lease is monthly; its number is the one.
+              ? `They were filed as paid ${TERM_OPTION[seed.holdoverTerm] ?? seed.holdoverTerm} — type what the lease says each month. `
+              : "No rent was on file for them — type what the lease says each month. "}
+        Email and phone are a condition of the new lease, so both are needed.
+      </p>
+      {firstMonth && (
+        <p style={{ fontSize: 13, margin: "8px 0 0", lineHeight: 1.5 }}>
+          On the new lease from <strong>{dayInWords(form.signedOn)}</strong> — {firstMonth}.
+        </p>
+      )}
+      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+        <button className="ll-btn gold" style={{ minHeight: 44 }} onClick={save}
+          disabled={pending || !form.signedOn || !form.rent.trim()}>
+          {pending ? "Recording…" : "Record the new lease"}
         </button>
         <button className="ll-btn ghost" onClick={onDone} disabled={pending}>Cancel</button>
       </div>
@@ -735,13 +1110,15 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
  * number — and it only moves when he says he actually checked.
  */
 function EditTenant({
-  reservationId, name, rent, dueDay, source, onDone,
+  reservationId, name, rent, dueDay, source, term, onDone,
 }: {
   reservationId: string;
   name: string;
   rent: number | null;
   dueDay: number | null;
   source: string | null;
+  /** How they pay today — what the "Paid" select starts on. */
+  term: string | null;
   onDone: () => void;
 }) {
   const router = useRouter();
@@ -757,9 +1134,22 @@ function EditTenant({
     email: "",
     mobile: "",
     contactPref: "",
+    // The select shows what they pay today; the same value is no change.
+    term: term ?? "",
   });
   const set = <K extends keyof TenantEditInput>(k: K, v: TenantEditInput[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+  // CHANGING HOW THEY PAY EMPTIES THE RENT BOX. The figure on the row is for
+  // the old way of paying — $3,600 a year is not a monthly rent, and it is
+  // not divided into one here either. He types what they pay each month.
+  // Picking the original way back restores the original figure.
+  const termChanged = !!form.term && form.term !== (term ?? "");
+  const pickTerm = (next: string) =>
+    setForm((f) => ({
+      ...f,
+      term: next,
+      rent: next === (term ?? "") ? (rent == null ? "" : String(rent)) : "",
+    }));
 
   function save() {
     startTransition(async () => {
@@ -780,8 +1170,8 @@ function EditTenant({
             style={{ marginTop: 4 }} />
         </label>
         <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
-          <span className="mut">Rent</span>
-          <input value={form.rent} inputMode="decimal" placeholder="Not set"
+          <span className="mut">{termChanged ? `Rent (${TERM_EACH[form.term ?? ""] ?? "for the new way of paying"})` : "Rent"}</span>
+          <input value={form.rent} inputMode="decimal" placeholder={termChanged ? "type it" : "Not set"}
             onChange={(e) => set("rent", e.target.value)} style={{ marginTop: 4 }} />
         </label>
         <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
@@ -789,7 +1179,33 @@ function EditTenant({
           <input value={form.dueDay} inputMode="numeric" placeholder="1"
             onChange={(e) => set("dueDay", e.target.value)} style={{ marginTop: 4 }} />
         </label>
+        {/* HOW THEY PAY — the control the charge run sends him here for. The
+            run bills months only and names a tenancy filed as paid yearly;
+            this is the one door that moves it. Mirrors the filing form's
+            select, plus the current value when it is one the form no longer
+            offers. */}
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Paid</span>
+          <select value={form.term ?? ""} onChange={(e) => pickTerm(e.target.value)} style={{ marginTop: 4 }}>
+            {term && !EDITABLE_TERMS.includes(term as (typeof EDITABLE_TERMS)[number]) && (
+              <option value={term}>{TERM_OPTION[term] ?? term}</option>
+            )}
+            {EDITABLE_TERMS.map((t) => (
+              <option key={t} value={t}>{TERM_OPTION[t]}</option>
+            ))}
+          </select>
+        </label>
       </div>
+      {termChanged && (
+        <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
+          Paid {TERM_OPTION[form.term ?? ""] ?? form.term} from now on — type what they pay{" "}
+          {TERM_EACH[form.term ?? ""] ?? "under the new way of paying"}. The old figure
+          isn&apos;t divided for you.{" "}
+          {form.term === "monthly"
+            ? "The next run bills this number."
+            : "The monthly run bills months only, so it won't bill a tenancy paid this way."}
+        </p>
+      )}
 
       {/* HOW TO REACH THEM — the fields that did not exist.
           The importer files every household with no email and contact_pref

@@ -16,6 +16,7 @@
  */
 
 import { milesBetween } from "./dispatch"; // relative — vitest has no path alias
+import { median } from "./stats";
 
 /** Net-strike demotion rule. `limit` is the lake_strike_limit dial. */
 export function shouldDemote(strikes: number, completions: number, limit: number): boolean {
@@ -31,13 +32,8 @@ export function isCoolingDown(demotedAtISO: string | null, days: number, nowMs: 
   return nowMs - demoted < days * 86_400_000;
 }
 
-/** Median of a list (average of middle two for even counts). */
-export function median(values: number[]): number | null {
-  const v = values.filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
-  if (v.length === 0) return null;
-  const mid = Math.floor(v.length / 2);
-  return v.length % 2 === 1 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
-}
+/** The shared median (src/lib/stats), re-exported so existing callers keep working. */
+export { median };
 
 export interface BaseHealDecision {
   action: "set" | "correct" | "keep";

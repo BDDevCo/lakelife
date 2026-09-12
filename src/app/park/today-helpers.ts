@@ -29,6 +29,8 @@
 import type { LedgerRow, LedgerSummary } from "./ledger-helpers";
 import { ledgerHeadline } from "./ledger-helpers";
 import { prettyMonth } from "./ledger-helpers";
+import { SIGNED_LEASE_LABEL } from "./sign-helpers";
+import { periodIsBillable } from "@/lib/billing-start";
 
 // Notification thresholds, not pricing — so they live here rather than in the
 // database. The first time he says one of these numbers is wrong, it becomes a
@@ -308,9 +310,28 @@ export interface TaskFacts {
     /** The period this is due FOR — a month, a quarter, or a year. */
     periodKey: string;
     periodLabel: string;
+    /**
+     * The first day of that period (`billPeriod`'s `from`), ISO. This is the
+     * month the go-live gate compares — the same month the cost door compares
+     * (`period_start`) — so the reminder and the door cannot disagree about
+     * whether a bill is ours.
+     */
+    periodFrom: string;
     dueOn: string;
     typical: number | null;
   }[];
+  /**
+   * The park's go-live date, or null when there is no restriction.
+   *
+   * REQUIRED, NOT OPTIONAL, on purpose: a caller that forgets it would get a
+   * reminder list with no go-live gate and nothing would say so. Bills for a
+   * period that began before go-live are not ours (`periodIsBillable`) — the
+   * seller's tax is a credit at the closing table, never a park_costs row —
+   * so the reminder for them is never raised. Handed in as the date rather
+   * than pre-filtered, so the rule sits next to the card it governs and the
+   * tests can pin it.
+   */
+  cutoverOn: string | null;
 }
 
 function rank(u: TaskUrgency): number {
@@ -407,8 +428,11 @@ export function generateTasks(f: TaskFacts): Task[] {
     }
   }
 
-  // BILLING THE MONTH. Only worth raising when there is somebody to bill.
-  if (!f.monthBilled && f.liveOccupiedLots > 0) {
+  // BILLING THE MONTH. Only worth raising when there is somebody to bill —
+  // and only for a month that is ours: the run refuses a month that began
+  // before go-live (preCutoverRefusal), so a card sending him to it would be
+  // an instruction to press a button that says no.
+  if (!f.monthBilled && f.liveOccupiedLots > 0 && periodIsBillable(f.currentMonth, f.cutoverOn)) {
     const dueOn = `${f.currentMonth}-${String(f.rentDueDay).padStart(2, "0")}`;
     const until = daysBetween(f.today, dueOn);
     if (until <= BILL_WARN_DAYS) {
@@ -434,9 +458,15 @@ export function generateTasks(f: TaskFacts): Task[] {
     out.push({
       key: `unsigned_lease:${f.parkId}`,
       title: `${n} ${n === 1 ? "household hasn't" : "households haven't"} signed the new lease`,
+      // AND WHERE TO RECORD IT. This card sent him to the rent roll and the
+      // roll had no control for a signature, so a household that signed on
+      // 1 January stayed "unsigned" — and fee-exempt — with nothing saying
+      // how to change that. The control is named here by its own label.
       detail:
         `${n === 1 ? "Lot" : "Lots"} ${f.holdoverLots.join(", ")} — still on the ` +
-        `arrangement they already had, so your agreement cap doesn't apply to them yet.`,
+        `arrangement they already had, so your agreement cap doesn't apply to them yet. ` +
+        `When one signs your new lease, record it from their row on the rent roll ` +
+        `('${SIGNED_LEASE_LABEL}').`,
       urgency: "whenever",
       dueOn: null,
       href: "/park",
@@ -495,11 +525,34 @@ export function generateTasks(f: TaskFacts): Task[] {
   // bill is one task a year rather than twelve.
   //
   // Never dismissible: the software must not offer to stop mentioning a bill
-  // that nineteen households are waiting to be charged their share of. It is
-  // 'soon' before the due day and 'overdue' after, because a sewer bill
-  // entered three weeks late still bills correctly — it is only the FORGOTTEN
-  // one that costs money.
+  // that nineteen households are waiting to be charged their share of — or,
+  // when a fee covers it, the one bill the fee comparison is waiting on. It
+  // is 'soon' before the due day and 'overdue' after, because a sewer bill
+  // entered three weeks late still records correctly — it is only the
+  // FORGOTTEN one that costs money.
   for (const b of f.billsDue) {
+    // NOT OURS. A bill for a period that began before the park went live
+    // belongs to whoever was running the park then — at The Haven, the 2026
+    // property tax and the December sewer, both settled at the closing table.
+    // The card used to instruct him to enter both, and the cost door would
+    // have taken them, so the seller's money would have landed on the
+    // residents' first bill.
+    //
+    // ONE KEY FOR ONE RULE. Keyed on the month the bill is FOR — the first
+    // day of its period — because that is the month the cost door compares
+    // (`period_start`, preCutoverCostRefusal). Keyed on the due month
+    // instead, the two doors disagreed: this card raised a bill the door then
+    // refused. For a monthly or quarterly bill the two months coincide, so
+    // nothing moves. For an ANNUAL bill they differ, and the annual case is
+    // decided here on purpose: a park that goes live mid-year (April, say)
+    // gets NO reminder for that year's tax, because the year began before
+    // go-live and the door would refuse the period he would type. Indiana
+    // bills property tax in arrears, so that year's bill is the previous
+    // owner's anyway, and the buyer's share is a closing credit — never a
+    // park_costs row. The first tax reminder such a park sees is the next
+    // year's.
+    if (!periodIsBillable(b.periodFrom.slice(0, 7), f.cutoverOn)) continue;
+
     const daysToDue = daysBetween(f.today, b.dueOn);
     const late = daysToDue < 0;
 
@@ -530,9 +583,21 @@ export function generateTasks(f: TaskFacts): Task[] {
       title: late
         ? `${b.label} for ${b.periodLabel} still isn't entered`
         : `${b.label} for ${b.periodLabel} is due about now`,
-      detail: b.typical != null
-        ? `Usually about ${money(b.typical)}. Enter the real figure and it splits across the lots — until it is in, nobody is billed for it.`
-        : "Enter it and it splits across the lots — until it is in, nobody is billed for it.",
+      // WHAT THE DOOR WILL DO WITH IT IS NOT KNOWN HERE. The loader reads
+      // no fees, and the costs screen does two different things with a bill:
+      // one a live fee covers is recorded under that fee and divided to
+      // nobody (at The Haven, this very sewer bill); one no fee covers is
+      // split across the lots. This used to promise the split — "it splits
+      // across the lots — until it is in, nobody is billed for it" — on the
+      // 5th of every month, for a bill the screen it links to then refuses
+      // to split. So it names both and promises neither. What IS true of
+      // every bill: until it is entered it is in nobody's books and nobody's
+      // fee comparison, which is the one thing the costs screen is for.
+      detail:
+        (b.typical != null ? `Usually about ${money(b.typical)}. ` : "") +
+        "Enter the real figure on the costs screen — it goes under a fee that " +
+        "covers it, or splits across the lots. Until it is in, it is in nobody's " +
+        "books and nobody's fee comparison.",
       urgency: late ? "overdue" : "soon",
       dueOn: b.dueOn,
       href: "/park/costs",

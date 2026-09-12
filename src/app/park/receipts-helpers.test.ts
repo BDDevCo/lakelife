@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, type Receipt, type OtherReceipt } from "./receipts-helpers";
+import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, METHOD_LABEL, type Receipt, type OtherReceipt } from "./receipts-helpers";
+import { METHOD_WORD } from "./receipt-helpers";
 
 const TODAY = "2026-08-11";
 
@@ -753,5 +754,36 @@ describe("every CSV row is as wide as the header", () => {
     lines.forEach((line, i) => {
       expect(csvCells(line).length, `row ${i} has the wrong number of cells`).toBe(width);
     });
+  });
+});
+
+describe("the statement calls a row what the resident's receipt calls it", () => {
+  /**
+   * SAME ROW, TWO NAMES. The receipt in a resident's hand said "bank transfer"
+   * for `transfer`; the accountant's statement and CSV said "Transfer" and
+   * kept "Bank transfer" for processor `ach`. Two people comparing paper
+   * would find the same $542.53 under two different words. Both buckets stay
+   * distinct on the statement — who recorded it differs — but both now say
+   * what the receipt says.
+   */
+  it("both bank rails are a 'Bank transfer', told apart by who recorded them", () => {
+    expect(METHOD_LABEL.ach).toBe("Bank transfer (processor)");
+    expect(METHOD_LABEL.transfer).toBe("Bank transfer (to the park)");
+    expect(METHOD_LABEL.ach).not.toBe(METHOD_LABEL.transfer);
+    // And the receipt's word is inside each — the paper and the statement agree.
+    for (const m of ["ach", "transfer"] as const) {
+      expect(METHOD_LABEL[m].toLowerCase()).toContain(METHOD_WORD[m]);
+    }
+  });
+
+  it("the CSV carries the label, not the raw value", () => {
+    const csv = receiptsCsv(
+      [receipt({ paymentId: "t1", method: "transfer" }), receipt({ paymentId: "a1", method: "ach", reference: "px_1" })],
+      [],
+      { parkName: "The Haven", generatedAt: "2026-08-11T00:00:00Z" },
+    );
+    expect(csv).toContain("Bank transfer (to the park)");
+    expect(csv).toContain("Bank transfer (processor)");
+    expect(csv).not.toMatch(/,Transfer,/);
   });
 });

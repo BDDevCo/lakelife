@@ -54,9 +54,19 @@ export type Verdict = "import" | "ask";
 
 export type Target = "lot" | "name" | "rent" | "term" | "dueDay" | "moveIn" | "email" | "phone";
 
+/**
+ * WHAT A RENT HEADER SAYS ABOUT HOW OFTEN IT IS PAID.
+ *
+ * Wider than `Term` on purpose: "Quarterly Rent" is a real header on a real
+ * roll and there is no quarterly term — rent bills monthly, there will never
+ * be a quarterly one — so the header has to be readable as a cadence the
+ * importer REFUSES rather than one it cannot see.
+ */
+export type HeaderCadence = "monthly" | "weekly" | "annual" | "quarterly";
+
 export interface ColumnMap {
   /** One entry per column, in order. */
-  roles: ({ kind: "field"; target: Target; term?: Term }
+  roles: ({ kind: "field"; target: Target; cadence?: HeaderCadence }
         | { kind: "carry"; label: string }
         | { kind: "refused"; label: string }
         | { kind: "unrecognised"; label: string })[];
@@ -78,6 +88,23 @@ export interface ParsedRow {
   name: Field<string>;
   rent: Field<number>;
   term: Field<Term>;
+  /**
+   * THE SHEET GIVES TWO CADENCES. The rent header names one ("Annual Rent",
+   * "Monthly Rent") and this row's term cell names another, and neither is
+   * trusted: `term` is unknown with the cell as its raw, and the plan reads
+   * this shape as a sheet that contradicts itself rather than "we couldn't
+   * tell". Set only when both name a cadence and they disagree.
+   */
+  cadenceConflict?: { header: string; cell: string };
+  /**
+   * THE CADENCE THE RENT HEADER NAMED, carried as the signal it is. The plan
+   * used to re-read it from the header label that a quarterly column leaves
+   * in `term.raw` — and "Rent Each Quarter" is two words once the filler is
+   * gone, which the one-word cell reader cannot read, so eighteen rows said
+   * "we couldn't tell" under a top card that said quarterly. Set on every
+   * row under a rent header that names one; absent under a bare "Rent".
+   */
+  headerCadence?: HeaderCadence;
   /**
    * AN ADDRESS OF RECORD, NOT PERMISSION.
    *
@@ -156,7 +183,11 @@ const SYN: Record<Target, string[]> = {
   lot:    ["lot", "lot #", "lot no", "lot number", "site", "site #", "space", "space #", "unit #", "#", "pad", "stall"],
   name:   ["name", "tenant", "tenant name", "resident", "occupant", "renter", "lessee", "customer", "who"],
   rent:   ["rent", "lot rent", "monthly rent", "rent/mo", "rent amount", "lot rent amount", "amount", "monthly", "weekly rent", "rate", "base rent", "site rent"],
-  term:   ["term", "frequency", "cadence", "billing", "paid", "period"],
+  // NOT "paid". A "Paid" column on a rent roll is Y/N or a date, never how
+  // often the rent is due — and as a term synonym it turned an ordinary
+  // roll with a Paid column into eighteen held rows under a header that
+  // said Monthly. It carries to notes now, like any column we do not map.
+  term:   ["term", "frequency", "cadence", "billing", "period"],
   dueDay: ["due", "due day", "due date", "rent due"],
   moveIn: ["move in", "move-in", "moved in", "start", "start date", "lease start", "since"],
   email:  ["email", "e-mail", "email address"],
@@ -186,9 +217,73 @@ const REFUSE = [
 const CARRY = [
   "balance", "past due", "deposit",
   "security", "pet", "pets", "notes", "note", "comment", "status", "address",
-  "meter", "water", "electric", "utility", "vehicle", "make", "model", "year",
+  "meter", "water", "electric", "utility", "vehicle", "make", "model",
+  // A YEAR IS ONLY A VEHICLE YEAR NEXT TO A VEHICLE. A bare "year" sat here
+  // and swallowed "Yearly Rent" whole — the rent column carried off to notes,
+  // NO_RENT_COLUMN raised, eighteen households filed with no rent at all.
+  // "Annual Rent" took the other road and imported a year as a month. The
+  // cadence words now belong to the rent matcher (rentCadence); a year is
+  // carried only when the header says what it is the year OF.
+  "vin", "home year", "unit year", "rv year", "year built", "yr built",
   "lease", "paid thru", "paid through", "last paid",
 ];
+
+/**
+ * THE CADENCE A RENT HEADER STATES. "Monthly Rent" and "Weekly Rent" become
+ * the row's inferred term. "Annual Rent", "Rent/Yr", "Quarterly Rent" become
+ * a cadence the plan REFUSES: rent is filed by the month and the parser never
+ * invents a value, and dividing by twelve is inventing one — a roster does
+ * not say the year was twelve equal months. Word-bounded on the normalised
+ * header, so "yr" cannot hide inside another word.
+ */
+const YEARLY_RE = /\b(annual|annually|annum|yearly|year|yr)\b/;
+const QUARTERLY_RE = /\b(quarterly|quarter|qtr)\b/;
+export function rentCadence(normalisedHeader: string): HeaderCadence | undefined {
+  const h = normalisedHeader;
+  if (h.includes("month")) return "monthly";
+  if (h.includes("week")) return "weekly";
+  if (YEARLY_RE.test(h)) return "annual";
+  if (QUARTERLY_RE.test(h)) return "quarterly";
+  return undefined;
+}
+
+/** Words a cell puts around its cadence — not part of it. */
+const CADENCE_FILLER = new Set([
+  "rent", "lot", "site", "space", "per", "amount", "figure", "rate", "base",
+  "paid", "billing", "billed", "term", "period",
+]);
+
+/**
+ * WHAT A TERM CELL SAYS, read the one way the parser and the plan both use.
+ *
+ * ONE word, once the filler is gone: a real term by its first five letters
+ * or whole ("Month", "Monthly", "Annua", "Seasonal"); a cadence word the
+ * term list does not spell ("Yearly", "Per annum", "Qtr"); "mo" as the
+ * abbreviation everybody writes. Undefined is a cell that names no cadence
+ * we can read — a lease length, a date range, a tick — and also one that
+ * names MORE than a cadence: "Bi-monthly", "Semi-annual", "Every 3 months"
+ * used to read as a stated month or a stated year by substring, and neither
+ * is true.
+ */
+const TERMS: readonly Term[] = ["nightly", "weekly", "monthly", "seasonal", "annual"];
+export function cellCadence(text: string): Term | "quarterly" | undefined {
+  const words = norm(text).split(" ").filter((w) => w && !CADENCE_FILLER.has(w));
+  if (words.length !== 1) return undefined;
+  const w = words[0];
+  const found = TERMS.find((x) => w === x || w.startsWith(x.slice(0, 5)));
+  if (found) return found;
+  const said = rentCadence(w);
+  if (said) return said;
+  if (w.includes("mo")) return "monthly";
+  return undefined;
+}
+
+/**
+ * A CELL THAT SAYS YES OR NO IS NOT A CADENCE. A tick in a "Billing" column
+ * states nothing about how often the rent is due; treating it as a cadence
+ * we could not read held the whole roll.
+ */
+const YES_NO_RE = /^(?:y|n|yes|no|x|✓|✔|paid|unpaid|true|false|t|f|-|—|n\/?a)$/i;
 
 /**
  * TARGETS NOTHING READS.
@@ -210,9 +305,9 @@ const CARRY = [
  */
 const NO_READER: Target[] = ["moveIn", "dueDay"];
 
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+export const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-function targetFor(header: string): { target: Target; term?: Term } | "carry" | "refuse" | null {
+function targetFor(header: string): { target: Target; cadence?: HeaderCadence } | "carry" | "refuse" | null {
   const h = norm(header);
   if (!h) return null;
 
@@ -234,8 +329,8 @@ function targetFor(header: string): { target: Target; term?: Term } | "carry" | 
         // A rent header often states the cadence. That is INFERRED, not stated
         // by a cell, and the row records it as such.
         if (t === "rent") {
-          if (h.includes("month")) return { target: "rent", term: "monthly" };
-          if (h.includes("week")) return { target: "rent", term: "weekly" };
+          const cadence = rentCadence(h);
+          return cadence ? { target: "rent", cadence } : { target: "rent" };
         }
         return NO_READER.includes(t) ? "carry" : { target: t };
       }
@@ -253,8 +348,8 @@ function targetFor(header: string): { target: Target; term?: Term } | "carry" | 
   for (const t of ["rent", "name", "lot", "moveIn", "email", "term", "dueDay"] as Target[]) {
     if (SYN[t].some((syn) => { const n = usable(syn); return n != null && h.includes(n); })) {
       if (t === "rent") {
-        if (h.includes("month")) return { target: "rent", term: "monthly" };
-        if (h.includes("week")) return { target: "rent", term: "weekly" };
+        const cadence = rentCadence(h);
+        return cadence ? { target: "rent", cadence } : { target: "rent" };
       }
       return NO_READER.includes(t) ? "carry" : { target: t };
     }
@@ -575,7 +670,8 @@ export function parseMoney(raw: string): Field<number> {
 // `\b` strips "Lot 26" and leaves "Lot26" — which is exactly how the old
 // matcher failed. A lookahead for the digit does both, and refuses to strip
 // anything that is not a lot label ("Lotus" keeps its Lot).
-const LOT_WORD = /^(?:lot|site|space|unit|stall|pad)[\s.:#-]*(?=\d)/i;
+export const LOT_WORDS = ["lot", "site", "space", "unit", "stall", "pad"] as const;
+export const LOT_WORD = new RegExp(`^(?:${LOT_WORDS.join("|")})[\\s.:#-]*(?=\\d)`, "i");
 
 export function parseLot(raw: string, knownLots?: readonly string[]): Field<string> {
   const s = (raw ?? "").trim().replace(/^#\s*/, "");
@@ -808,11 +904,11 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     // than carried, so it does not arrive twice.
     if (index[t.target] !== undefined) {
       if (t.target !== "name") { roles.push({ kind: "carry", label }); return; }
-      roles.push({ kind: "field", target: t.target, ...(t.term ? { term: t.term } : {}) });
+      roles.push({ kind: "field", target: t.target, ...(t.cadence ? { cadence: t.cadence } : {}) });
       return;
     }
 
-    roles.push({ kind: "field", target: t.target, ...(t.term ? { term: t.term } : {}) });
+    roles.push({ kind: "field", target: t.target, ...(t.cadence ? { cadence: t.cadence } : {}) });
     index[t.target] = i;
   });
   // NO HEADER? Infer the shape from the body rather than giving up. Reported,
@@ -905,8 +1001,36 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     });
   }
 
-  const headerTerm = roles.find((r) => r.kind === "field" && r.target === "rent" && r.term);
-  const impliedTerm = headerTerm && headerTerm.kind === "field" ? headerTerm.term : undefined;
+  const rentRole = roles.find((r) => r.kind === "field" && r.target === "rent");
+  const headerCadence = rentRole && rentRole.kind === "field" ? rentRole.cadence : undefined;
+  const rentHeaderLabel = index.rent !== undefined ? (headerCells[index.rent] ?? "").trim() : "";
+  const termHeaderLabel = index.term !== undefined
+    ? ((headerCells[index.term] ?? "").trim() || `column ${index.term + 1}`)
+    : "";
+  /** The term cells we could not read as a cadence, with a figure beside them. */
+  const termUnread: { first: string; rows: number } = { first: "", rows: 0 };
+  /** Term cells that contradict a monthly or weekly rent header, with a figure
+   *  beside them — and the header's own word, so the card says which. */
+  const termConflicts: { first: string; word: string; rows: number } = { first: "", word: "", rows: 0 };
+  /** Term cells saying yearly or quarterly under a rent header that says nothing. */
+  const termNotMonthly: { first: string; word: string; rows: number } = { first: "", word: "", rows: 0 };
+
+  // A RENT COLUMN THAT IS NOT MONTHLY IS SAID ONCE, AT THE TOP. Rent is filed
+  // by the month; a yearly or quarterly column is a figure we will not divide,
+  // because his sheet does not say the year was twelve equal months. Every row
+  // under it is held for the monthly rent, and this is where he learns why
+  // before he reaches eighteen identical questions. Not a "try again": the
+  // column is read fine, and the answer is a number only he has.
+  if (headerCadence === "annual" || headerCadence === "quarterly") {
+    const word = headerCadence === "annual" ? "yearly" : "quarterly";
+    blockQuestions.push({
+      code: "RENT_NOT_MONTHLY",
+      question:
+        `The rent column is a ${word} figure ("${rentHeaderLabel}"). Rent is filed by the month ` +
+        `and we won't divide a ${word} number into one — nothing from that column goes in ` +
+        `until you give each household's monthly rent.`,
+    });
+  }
 
   // --- lines ---
   for (let i = 0; i < rawLines.length; i++) {
@@ -972,17 +1096,102 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     const name = noNameColumn ? unknownField<string>("") : parseName(nameCell());
     const rent = index.rent === undefined ? unknownField<number>("") : parseMoney(cellAt("rent"));
 
+    /**
+     * THE TERM: the cell, the header, or neither — and the header is the
+     * stronger evidence.
+     *
+     * A cell we cannot read as a cadence ("12", "Jan-Mar", a tick) used to
+     * beat a header that said "Monthly Rent" and hold the row; a cell that
+     * said "Monthly" used to beat a header that said "Annual Rent" and file
+     * the year as a month. Now: a yes/no states nothing; a cell that names a
+     * cadence is read, unless it contradicts a yearly or quarterly header, in
+     * which case neither is trusted and the row asks; a cell that names none
+     * takes the header's cadence and is kept in the notes; and only a cell
+     * that names none under a header that says none is held as unreadable —
+     * said once at the top, as well as on the row.
+     */
     let term: Field<Term> = unknownField<Term>("");
-    const rawTerm = cellAt("term");
-    if (rawTerm) {
-      const t = norm(rawTerm);
-      const found = (["nightly", "weekly", "monthly", "seasonal", "annual"] as Term[])
-        .find((x) => t.startsWith(x.slice(0, 5)) || t.includes(x));
-      if (found) term = stated(found, rawTerm);
-      else if (t.includes("mo")) term = inferred("monthly" as Term, rawTerm, "Read as monthly.");
-      else term = unknownField<Term>(rawTerm, "We couldn't tell how often that's paid.");
-    } else if (impliedTerm) {
-      term = inferred(impliedTerm, "", `The rent column said "${impliedTerm}".`);
+    let cadenceConflict: ParsedRow["cadenceConflict"];
+    const rawTerm = cellAt("term").trim();
+    const termCell = YES_NO_RE.test(rawTerm) ? "" : rawTerm;
+    /** A term-cell reading that is kept as a note rather than obeyed. */
+    let termCellNote = false;
+    const cadenceWordOf = (c: HeaderCadence | Term) =>
+      c === "annual" ? "yearly" : c === "quarterly" ? "quarterly" : c;
+    const said = termCell ? cellCadence(termCell) : undefined;
+    if (termCell && said) {
+      const shortSide = (c: HeaderCadence | Term) => c === "monthly" || c === "weekly" || c === "nightly";
+      const longSide = (c: HeaderCadence | Term) => c === "annual" || c === "quarterly";
+      // Under a yearly or quarterly header ANY cell that is not itself yearly
+      // or quarterly disagrees — "Seasonal" included. It is neither short nor
+      // long, and sorting only those two let it through as a STATED season:
+      // on a park with a season set the row went in as a seasonal tenancy at
+      // the yearly figure, under a card promising nothing from that column
+      // would. Under a monthly or weekly header only a long cell disagrees;
+      // a seasonal or weekly cell there is the cell's own term, as before.
+      const disagree = headerCadence !== undefined
+        && ((longSide(headerCadence) && !longSide(said)) || (shortSide(headerCadence) && longSide(said)));
+      if (disagree) {
+        // The header says a year and the cell says a month, or the other
+        // way round. One of them is wrong and the sheet does not say which;
+        // the row asks for the monthly rent, and the plan reads this shape
+        // as a sheet that contradicts itself — never as "we couldn't tell".
+        const h = cadenceWordOf(headerCadence!);
+        term = unknownField<Term>(termCell, `The column header says ${h} but this cell says ${cadenceWordOf(said)}.`);
+        cadenceConflict = { header: rentHeaderLabel, cell: termCell };
+        // THE WORD SURVIVES. Once he types the monthly rent this row files
+        // as a monthly tenancy, and `term.raw` is written nowhere — so
+        // "Seasonal" under a yearly header reached no column at all, and
+        // the office could not see on the file why the seller called the
+        // household seasonal while it was billed through the winter. The
+        // cell is kept in the notes, in the column's own words, as the
+        // unreadable-cell path below already keeps its cell.
+        termCellNote = true;
+        if (shortSide(headerCadence!) && rent.value != null) {
+          if (!termConflicts.first) { termConflicts.first = termCell; termConflicts.word = h; }
+          termConflicts.rows += 1;
+        }
+      } else {
+        if (said === "quarterly") {
+          // No quarterly term exists and never will (rent goes monthly). The
+          // cell is the raw; the plan reads an unknown term WITH a raw as
+          // "we saw a cadence and could not file it".
+          term = unknownField<Term>(termCell, "This cell says these are quarterly figures.");
+        } else if (norm(termCell).startsWith(said.slice(0, 5))) {
+          // "Monthly", "Month", "Annually": the term's own word.
+          term = stated(said, termCell);
+        } else {
+          // "Yearly", "Per mo", "Qtr rent": a synonym we read into a term.
+          term = inferred(said, termCell, `Read as ${said}.`);
+        }
+        // A yearly or quarterly CELL under a header that says nothing is the
+        // yearly-column case arriving one row at a time; counted so it is
+        // said once at the top, as the header case is.
+        if (longSide(said) && headerCadence === undefined && rent.value != null) {
+          if (!termNotMonthly.first) { termNotMonthly.first = termCell; termNotMonthly.word = cadenceWordOf(said); }
+          termNotMonthly.rows += 1;
+        }
+      }
+    } else if (termCell && (headerCadence === "monthly" || headerCadence === "weekly" || headerCadence === "annual")) {
+      term = inferred(
+        headerCadence, termCell,
+        `The rent column said "${headerCadence}"; we couldn't read "${termCell}" as how often it's paid.`,
+      );
+      termCellNote = true;
+    } else if (termCell && headerCadence === "quarterly") {
+      term = unknownField<Term>(rentHeaderLabel, "The rent column says these are quarterly figures.");
+      termCellNote = true;
+    } else if (termCell) {
+      term = unknownField<Term>(termCell, "We couldn't tell how often that's paid.");
+      if (rent.value != null) {
+        if (!termUnread.first) termUnread.first = termCell;
+        termUnread.rows += 1;
+      }
+    } else if (headerCadence === "monthly" || headerCadence === "weekly" || headerCadence === "annual") {
+      term = inferred(headerCadence, "", `The rent column said "${headerCadence}".`);
+    } else if (headerCadence === "quarterly") {
+      // The header is the evidence, so it is the raw.
+      term = unknownField<Term>(rentHeaderLabel, "The rent column says these are quarterly figures.");
     }
 
     let email = index.email === undefined
@@ -994,6 +1203,9 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     // Nothing is thrown away silently — EXCEPT a refused column, which is
     // dropped on purpose and never touches a note.
     const notes: string[] = [];
+    // A term cell the header overrode is still something the office wrote
+    // down — a lease length, a period. Kept, in the column's own words.
+    if (termCellNote) notes.push(`${termHeaderLabel}: ${termCell}`);
     roles.forEach((r, ci) => {
       const v = (cells[ci] ?? "").trim();
       if (!v) return;
@@ -1034,7 +1246,55 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     rows.push({
       lines: [lineNo], source: [redactSensitive(line)],
       lot, name, rent, term, email, phone, notes,
+      ...(cadenceConflict ? { cadenceConflict } : {}),
+      // The one writer of headerCadence: the header's own reading, on every
+      // row under it, whether or not the row has a figure.
+      ...(headerCadence ? { headerCadence } : {}),
       verdict: "import", askReasons: [],
+    });
+  }
+
+  // A TERM COLUMN WE COULD NOT READ, WITH NO HEADER TO FALL BACK ON, is said
+  // ONCE at the top — naming the column and the cell — so eighteen identical
+  // row questions are not the only explanation on the screen. Only rows with
+  // a figure are held, so only they are counted. Not raised beside
+  // RENT_NOT_MONTHLY: a yearly header already answered the cadence.
+  if (termUnread.rows > 0) {
+    const n = termUnread.rows;
+    blockQuestions.push({
+      code: "TERM_NOT_READ",
+      question:
+        `We tried to read "${termUnread.first}" in the ${termHeaderLabel} column as how often rent is ` +
+        `paid, and couldn't. Rent is filed by the month, so ${n === 1 ? "that row is" : `${n} rows are`} ` +
+        `held until you give the monthly rent.`,
+    });
+  }
+  // A TERM COLUMN SAYING YEARLY OR QUARTERLY under a bare "Rent" header is the
+  // RENT_NOT_MONTHLY case by another route, and is said once the same way.
+  if (termNotMonthly.rows > 0) {
+    const n = termNotMonthly.rows;
+    const word = termNotMonthly.word;
+    blockQuestions.push({
+      code: "TERM_NOT_MONTHLY",
+      question:
+        `The ${termHeaderLabel} column says the rent is ${word} ("${termNotMonthly.first}"). Rent is filed ` +
+        `by the month and we won't divide a ${word} number into one — ` +
+        `${n === 1 ? "that row is" : `${n} rows are`} held until you give the monthly rent.`,
+    });
+  }
+  // AND A TERM COLUMN THAT CONTRADICTS A MONTHLY OR WEEKLY RENT HEADER,
+  // likewise once — in the header's own word, since a weekly sheet's card
+  // used to say "beside a monthly header" while the row's why said weekly.
+  // (Under a yearly or quarterly header RENT_NOT_MONTHLY has already said
+  // the column is held; a second card would be the same sentence twice.)
+  if (termConflicts.rows > 0) {
+    const n = termConflicts.rows;
+    blockQuestions.push({
+      code: "TERM_CONFLICTS",
+      question:
+        `The rent column ("${rentHeaderLabel}") and the ${termHeaderLabel} column disagree about how ` +
+        `often rent is paid — "${termConflicts.first}" beside a ${termConflicts.word} header. We won't pick one: ` +
+        `${n === 1 ? "that row is" : `${n} rows are`} held until you give the monthly rent.`,
     });
   }
 
@@ -1064,6 +1324,17 @@ export function parseRentRoll(blob: string, opts: ParseOptions = {}): ParseResul
     }
     if (r.lot.value && (byLot.get(r.lot.value)?.length ?? 0) > 1) {
       why.push(`Two rows land on lot ${r.lot.value}. Which one is current?`);
+    }
+    // A CADENCE WE CANNOT FILE, with a figure beside it. Rent goes monthly;
+    // "annual" is a real term the biller does not read, and an unreadable
+    // term cell ("Quarterly", "Twice yearly") was a why-text nothing looked at.
+    // Neither becomes a monthly rent by default — the row asks for one.
+    if (r.rent.value != null) {
+      if (r.term.value === "annual") {
+        why.push("That's a yearly figure. What's the monthly rent?");
+      } else if (r.term.value === null && r.term.raw.trim() !== "") {
+        why.push(`${r.term.why ?? "We couldn't tell how often that's paid."} What's the monthly rent?`);
+      }
     }
     if (why.length > 0) { r.verdict = "ask"; r.askReasons = why; }
   }

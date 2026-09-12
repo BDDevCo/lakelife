@@ -15,6 +15,71 @@
 
 export type ChargeStatus = "open" | "paid" | "void";
 
+/**
+ * THE WAYS MONEY ARRIVES BY HAND — one list, read by every door that keys it.
+ *
+ * `card` and `ach` are deliberately NOT here. Those two are processor rails:
+ * 0108 refuses a row on either with no processor reference, 0142 refuses ever
+ * to reverse one, and the statement screen offers only "Refund to card" on
+ * them — all three on the assumption that a machine recorded it. A bank push
+ * the office keys is `transfer`, which stays reversible. Only `payRent`
+ * writes the other two, with the processor's own reference.
+ *
+ * It lives here, not in ledger-actions.ts, because a "use server" file can
+ * export only async functions — and money-actions.ts had grown its OWN list
+ * with the two rails still on it. Two lists, one rule, is how the rent screen
+ * refused `ach` while the on-account door took it.
+ */
+export type HandKeyedMethod = "cash" | "check" | "transfer" | "other";
+export const HAND_KEYED: readonly HandKeyedMethod[] = ["cash", "check", "transfer", "other"];
+export const PROCESSOR_ONLY =
+  "A card or bank-rail payment needs its reference from the processor, and only the " +
+  "processor writes one — it can't be keyed by hand. If they pushed the money to " +
+  "your bank, record it as a bank transfer.";
+/** The one sentence for a method that is not a way money arrives at all. */
+export const NOT_A_METHOD = "That isn't a way money arrives.";
+/**
+ * Why a hand-keyed door refuses a method, BEFORE any insert — or null when the
+ * method is one of the four. Every door that takes a method from a browser
+ * calls this first — rent (ledger-actions), on-account and deposit
+ * (money-actions), and the amenities window (amenity-actions) — so the two
+ * rails get the same sentence everywhere. ledger-helpers.test.ts does not
+ * take that on trust: it walks src for every park_payments insert with a
+ * bare `method,` and requires this call between each insert and the one
+ * before it, so the next door in the same file cannot forget. (The
+ * amenities door DID, since it was written on 14 Aug 2026, with `card` on
+ * its own list and no reference to insert — the DB refused every one.)
+ */
+export function handKeyedRefusal(method: string): string | null {
+  if (method === "card" || method === "ach") return PROCESSOR_ONLY;
+  if (!(HAND_KEYED as readonly string[]).includes(method)) return NOT_A_METHOD;
+  return null;
+}
+
+/**
+ * WHY A PAYMENT AMOUNT IS REFUSED, before any door reads or writes — or null.
+ *
+ * Three refusals, each true of what was typed. "That amount isn't a number"
+ * was said of -5 and of 0.004, and neither is not a number. A figure that
+ * rounds to no cents (0.004) passes `amount <= 0`, then numeric(10,2) rounds
+ * it to 0.00 and park_payments_amount_check (0070) refuses it — so the office
+ * read the raw constraint text, or on the rent door "Recorded" about nothing.
+ *
+ * One rule here because four doors take an amount from a browser: rent
+ * (ledger-actions recordPayment), on-account, deposit and deposit return
+ * (money-actions), the amenities window (amenity-actions) — and the claim
+ * door, where a resident says what they paid. The rent door fixed this alone
+ * in one round and the other three kept "isn't a number" for 0 and -5; the
+ * walk in ledger-helpers.test.ts now requires every park_payments door to
+ * read this and keep no sentence of its own.
+ */
+export function paymentAmountRefusal(amount: number): string | null {
+  if (!Number.isFinite(amount)) return "That payment amount isn't a number.";
+  if (amount <= 0) return "That payment amount needs to be more than zero.";
+  if (Math.round(amount * 100) === 0) return "That payment amount is less than a cent.";
+  return null;
+}
+
 export interface Charge {
   id: string;
   lotNumber: string;
@@ -152,6 +217,77 @@ export function ledgerState(
 }
 
 /**
+ * A TENANCY FILED AS PAID SOME OTHER WAY THAN MONTHLY.
+ *
+ * The run bills months. A row whose `term` is annual, seasonal, weekly or
+ * nightly carries a `quoted_amount` that is a rate for THAT term — $3,600 a
+ * year, $80 a night — and both charge paths used to bill it as a month's rent
+ * without ever reading the column. Naming the lot and the term is the whole
+ * fix on the biller's side; the importer that files such a row is another
+ * door.
+ */
+const TERM_WORD: Record<string, string> = {
+  annual: "yearly", seasonal: "by the season", weekly: "weekly", nightly: "nightly",
+};
+
+/**
+ * A TERM PRICED PER STAY, not by any calendar month. The run's sentence
+ * (below) and the rent screen's "Open the rent roll" link both branch on
+ * it; this is the ONE spelling, so a term added to one list and not the
+ * other cannot print "it's priced per stay" followed by a link to change
+ * its monthly rent.
+ */
+export function perStayTerm(term: string): boolean {
+  return term === "nightly" || term === "weekly";
+}
+
+export function notMonthlySentence(
+  rows: readonly { lotNumber: string; term: string }[],
+): string {
+  if (rows.length === 0) return "";
+  const byTerm = new Map<string, string[]>();
+  for (const r of rows) {
+    const list = byTerm.get(r.term) ?? [];
+    if (!list.includes(r.lotNumber)) list.push(r.lotNumber);
+    byTerm.set(r.term, list);
+  }
+  const sentences: string[] = [];
+  for (const [term, lots] of byTerm) {
+    const word = TERM_WORD[term] ?? `by the ${term}`;
+    const who = lots.length === 1
+      ? `Lot ${lots[0]} is`
+      : `Lots ${lots.slice(0, -1).join(", ")} and ${lots[lots.length - 1]} are`;
+    // A yearly or seasonal figure has a monthly answer he can type. A nightly
+    // home does not — it is priced per stay, and telling him to set a monthly
+    // rent on it would be the wrong instruction.
+    //
+    // THE DOOR IS NAMED, AND IT IS THE ONE THAT EXISTS. "Set a monthly rent"
+    // sent him to type $400 into Edit, which changed the amount and left the
+    // term at `annual` — so the run printed this same sentence next month.
+    // Changing how a tenancy is paid is Edit on the roll (the term control the
+    // edit panel carries), and the monthly figure is his to type — never the
+    // yearly one divided by twelve.
+    const advice = perStayTerm(term)
+      ? "; it's priced per stay, not by the month."
+      : " — change how it's paid to monthly from Edit on the roll and type the monthly rent.";
+    sentences.push(`${who} filed as paid ${word} — the run bills months only${advice}`);
+  }
+  return sentences.join(" ");
+}
+
+/**
+ * "lot 1, lot 2 and lot 7" — or "lot 1, lot 2, lot 6 and 15 more". The run's
+ * own shape, named lots not counts, and never twenty numbers in one sentence.
+ * The rent screen used to carry a verbatim copy of this; one home now.
+ */
+export function lotList(ns: readonly string[]): string {
+  const named = ns.map((n) => `lot ${n}`);
+  if (named.length <= 1) return named.join("");
+  if (named.length <= 3) return `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
+  return `${named.slice(0, 3).join(", ")} and ${ns.length - 3} more`;
+}
+
+/**
  * WHY A CHARGE RUN RAISED NOTHING.
  *
  * The run said "it may already be done" whenever it produced no rows, and it
@@ -174,12 +310,10 @@ export function nothingToBillReason(
     expired: readonly string[];
     notYet: readonly string[];
     noRent: readonly string[];
+    notMonthly?: readonly { lotNumber: string; term: string }[];
   },
 ): string {
-  const lots = (ns: readonly string[]) =>
-    ns.length <= 3
-      ? ns.map((n) => `lot ${n}`).join(", ")
-      : `${ns.slice(0, 3).map((n) => `lot ${n}`).join(", ")} and ${ns.length - 3} more`;
+  const lots = lotList;
 
   // LOUDEST FIRST. An expired window is money stopping; the rest are ordinary.
   if (cause.expired.length > 0) {
@@ -189,6 +323,9 @@ export function nothingToBillReason(
       `run out (${lots(cause.expired)}). Nobody moved out; the paperwork ended. ` +
       `Renew ${n === 1 ? "it" : "them"} and run this again.`
     );
+  }
+  if (cause.notMonthly && cause.notMonthly.length > 0) {
+    return `Nothing to bill for ${monthLabel} — ${notMonthlySentence(cause.notMonthly)}`;
   }
   if (cause.noRent.length > 0) {
     return (
@@ -322,53 +459,164 @@ export function ledgerHeadline(s: LedgerSummary, lagDays: number): string {
  * that already have a charge for the month — re-running must add nothing,
  * which the unique constraint enforces anyway, but he should see zero rather
  * than trust it.
+ *
+ * ONE CLASSIFICATION, TWO DOORS. The run used to sort its skips into four
+ * buckets (already billed / window ended / not started / no rent) and the
+ * preview into two (already billed / "no total") — so on the morning every
+ * one-month agreement lapsed, the preview read "18 skipped — no rent set" on a
+ * park where every rent is $400, and disabled the only button that would have
+ * reached the run's honest sentence. Both doors now call `classifyForRun`, and
+ * the plan carries every bucket by lot name.
  */
+export type SkipWhy =
+  | "already"      // a live charge for this month exists
+  | "expired"      // the agreement window ended before the month began
+  | "notYet"       // the agreement window starts after the month ends
+  | "movedOut"     // an ended tenancy whose window does not reach the month — somebody left
+  | "notMonthly"   // filed as paid yearly / nightly / …; the run bills months only
+  | "noRent";      // the statement has no honest total, or a zero one
+
+export interface RunCandidate {
+  reservationId: string;
+  lotNumber: string;
+  /**
+   * The statement total. Null when it could not be totalled (no rent set) —
+   * never billed as zero. Zero when the stay covers none of the month, or the
+   * rent is nought; neither is worth a charge.
+   */
+  amount: number | null;
+  /** The agreement window, half-open. Null when it could not be read. */
+  range?: { start: string; end: string } | null;
+  /**
+   * How the tenancy is paid. NOT NULL in the database (0052), so an absent
+   * value here only ever means a caller that did not carry it, and reads as
+   * monthly — the only term this run can bill.
+   */
+  term?: string | null;
+  /** `ended` means somebody moved out; its lapsed window is not paperwork running out. */
+  status?: string | null;
+}
+
+/**
+ * Why one tenancy is billed, or why it is not. Pure, and the ONLY place the
+ * question is answered — both the preview and the run read this.
+ */
+export function classifyForRun(
+  c: RunCandidate,
+  month: string,
+  alreadyBilled: ReadonlySet<string>,
+): "bill" | SkipWhy {
+  if (alreadyBilled.has(c.reservationId)) return "already";
+  const monthStart = `${month}-01`;
+  const nextMonthStart = `${shiftMonth(month, 1)}-01`;
+  if (c.range) {
+    // Half-open, like the database: a window ending on the 1st was not here
+    // this month at all.
+    const outside = c.range.end <= monthStart || c.range.start >= nextMonthStart;
+    if (outside && c.status === "ended") return "movedOut";
+    if (c.range.end <= monthStart) return "expired";
+    if (c.range.start >= nextMonthStart) return "notYet";
+  }
+  if (c.term != null && c.term !== "monthly") return "notMonthly";
+  // A statement with no total is a rent nobody set. Billing it as zero would
+  // hide the problem behind a paid charge.
+  if (c.amount == null || c.amount === 0) return "noRent";
+  return "bill";
+}
+
 export interface RunPlan {
   toBill: { reservationId: string; lotNumber: string; amount: number }[];
   skippedAlreadyBilled: number;
-  skippedNoTotal: number;
+  /**
+   * Lot names, deduplicated, in read order. A prior term whose SUCCESSOR is
+   * billed this month — or already was — appears in none of these: that lot's
+   * paperwork did not run out, it was renewed.
+   */
+  expired: string[];
+  notYet: string[];
+  noRent: string[];
+  notMonthly: { lotNumber: string; term: string }[];
   total: number;
 }
 
 export function planRun(
-  candidates: readonly {
-    reservationId: string;
-    lotNumber: string;
-    /** Null when the statement could not be totalled — never billed as zero. */
-    amount: number | null;
-  }[],
+  candidates: readonly RunCandidate[],
   alreadyBilled: ReadonlySet<string>,
+  /** The period, YYYY-MM. Needed to tell an ended window from one not started. */
+  month: string,
 ): RunPlan {
   const toBill: RunPlan["toBill"] = [];
   let skippedAlreadyBilled = 0;
-  let skippedNoTotal = 0;
+  const why = candidates.map((c) => classifyForRun(c, month, alreadyBilled));
 
-  for (const c of candidates) {
-    if (alreadyBilled.has(c.reservationId)) { skippedAlreadyBilled += 1; continue; }
-    // A statement with no total is a rent nobody set. Billing it as zero would
-    // hide the problem behind a paid charge.
-    if (c.amount == null) { skippedNoTotal += 1; continue; }
-    toBill.push({ reservationId: c.reservationId, lotNumber: c.lotNumber, amount: c.amount });
-  }
+  // FIRST PASS: what is billed, and which lots are therefore covered.
+  const covered = new Set<string>();
+  candidates.forEach((c, i) => {
+    if (why[i] === "already") { skippedAlreadyBilled += 1; covered.add(c.lotNumber); }
+    else if (why[i] === "bill") {
+      toBill.push({ reservationId: c.reservationId, lotNumber: c.lotNumber, amount: c.amount as number });
+      covered.add(c.lotNumber);
+    }
+  });
+
+  // SECOND PASS: the skips worth naming. A renewal leaves the prior row
+  // active (renew-actions inserts a successor), so without the `covered`
+  // check every January agreement would be "run out" on every run from
+  // February onward, forever, on a park where nothing had run out.
+  const expired: string[] = [];
+  const notYet: string[] = [];
+  const noRent: string[] = [];
+  const notMonthly: RunPlan["notMonthly"] = [];
+  const once = (list: string[], name: string) => { if (!list.includes(name)) list.push(name); };
+  candidates.forEach((c, i) => {
+    switch (why[i]) {
+      case "expired": if (!covered.has(c.lotNumber)) once(expired, c.lotNumber); break;
+      case "notYet": if (!covered.has(c.lotNumber)) once(notYet, c.lotNumber); break;
+      case "noRent": once(noRent, c.lotNumber); break;
+      case "notMonthly":
+        if (!notMonthly.some((n) => n.lotNumber === c.lotNumber)) {
+          notMonthly.push({ lotNumber: c.lotNumber, term: c.term as string });
+        }
+        break;
+      default: break; // bill, already, movedOut
+    }
+  });
 
   return {
     toBill,
     skippedAlreadyBilled,
-    skippedNoTotal,
+    expired, notYet, noRent, notMonthly,
     total: round2(toBill.reduce((s, r) => s + r.amount, 0)),
   };
 }
 
 export function runSummary(plan: RunPlan, month: string): string {
+  // THE RUN'S OWN SENTENCE, from the same buckets. The preview used to say
+  // "Nothing to bill." here and leave the reason to a button it had just
+  // disabled.
   if (plan.toBill.length === 0) {
-    if (plan.skippedAlreadyBilled > 0) return `${prettyMonth(month)} is already billed — nothing to do.`;
-    return "Nothing to bill.";
+    return nothingToBillReason(prettyMonth(month), {
+      already: plan.skippedAlreadyBilled,
+      expired: plan.expired, notYet: plan.notYet, noRent: plan.noRent,
+      notMonthly: plan.notMonthly,
+    });
   }
   const parts = [
     `Bill ${plan.toBill.length} ${plan.toBill.length === 1 ? "household" : "households"} for ${prettyMonth(month)} — $${plan.total.toFixed(2)}`,
   ];
   if (plan.skippedAlreadyBilled > 0) parts.push(`${plan.skippedAlreadyBilled} already billed`);
-  if (plan.skippedNoTotal > 0) parts.push(`${plan.skippedNoTotal} skipped — no rent set`);
+  // Named in the partial line too. Ten renewed and eight not is the likelier
+  // morning, and "8 skipped — no rent set" sent him to set eight rents.
+  if (plan.expired.length > 0) {
+    const n = plan.expired.length;
+    parts.push(`${n} ${n === 1 ? "agreement has" : "agreements have"} run out`);
+  }
+  if (plan.notMonthly.length > 0) parts.push(`${plan.notMonthly.length} not paid monthly`);
+  if (plan.noRent.length > 0) parts.push(`${plan.noRent.length} skipped — no rent set`);
+  if (plan.notYet.length > 0) {
+    const n = plan.notYet.length;
+    parts.push(`${n} ${n === 1 ? "starts" : "start"} after this month`);
+  }
   return parts.join(" · ");
 }
 

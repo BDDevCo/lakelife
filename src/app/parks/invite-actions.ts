@@ -7,6 +7,7 @@ import { assertMyPark } from "@/app/park/data";
 import { readFailedMessage } from "@/lib/must-read";
 import { sendEmail } from "@/lib/email";
 import { sendSms } from "@/lib/sms";
+import { whyItDidntGo, commonestReason, isHoldRefusal } from "@/app/park/reminder-helpers";
 import { planChannels, inviteSmsBody, smsHoldSays, type SmsHold } from "@/lib/invite-channels";
 import {
   mintInviteToken, inviteTokenHash, inviteUrl, inviteCopy,
@@ -37,6 +38,13 @@ export interface InviteResult {
   texted?: boolean;
   /** Why it didn't, when it didn't. */
   smsHold?: SmsHold | null;
+  /**
+   * Why the EMAIL didn't go, in the sender's own words — the hold he set, a
+   * lookup that failed closed, a transport error. Set only on a refused send,
+   * so the bulk screen can say the real reason beside the household instead
+   * of "that address didn't work" about an address that was fine.
+   */
+  emailFailed?: string;
 }
 
 /** Where the link points. Behind a proxy the Host header is what the browser saw. */
@@ -227,23 +235,37 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
       })
       .eq("id", renterId);
 
+    // THE REAL REASON. With notices held — the default, and his own standing
+    // rule — every one of these is a refusal he ordered, and "we couldn't
+    // email them, print a slip" sent him to check eighteen addresses he had
+    // just typed. Same helper the reminders and receipt doors use.
+    const why = whyItDidntGo(sent.error);
+    // A slip is the way round a BAD ADDRESS or a dead transport. It is not
+    // the way round the hold he set, so the advice only comes with the causes
+    // it answers.
     return {
       ok: false,
       outcome: "invite_send_failed",
-      message: `We couldn't email ${email}. Print a slip for them instead.`,
+      emailFailed: why,
+      message: isHoldRefusal(why)
+        ? `${why} Nothing went to ${email}.`
+        : `${why} Nothing went to ${email}; print a slip for them instead.`,
     };
   }
 
   // Email failed but the text got through: the invite stands, and the office
-  // should know the address is bad rather than assume both landed.
+  // should know WHY the email didn't rather than assume both landed — or
+  // assume the address is bad.
   if (!sent.ok && textQueued) {
     revalidatePath("/park");
+    const why = whyItDidntGo(sent.error);
     return {
       ok: true,
       outcome,
       texted: true,
       smsHold: null,
-      message: `${email} didn't work. A text went to the carrier, but texts aren't `
+      emailFailed: why,
+      message: `${why} A text went to the carrier for ${email}, but texts aren't `
         + `arriving yet — print them a slip.`,
     };
   }
@@ -278,7 +300,17 @@ export interface BulkInviteResult {
     displayName: string;
     lotNumber: string;
     why: "no_email" | "send_failed";
+    /** For `send_failed`: the sender's own reason, so the screen never guesses "bad address". */
+    reason?: string;
   }[];
+  /**
+   * NOT A SLIP CASE. These were refused because notices are on hold — the
+   * hold he set, and the normal state in January. A slip is the way round a
+   * bad address or a dead transport; it is not the way round his own hold,
+   * and the single-household door already refuses to say so. Filing these
+   * under needSlips told him to print eighteen slips to work around himself.
+   */
+  held: { renterId: string; displayName: string; lotNumber: string }[];
   skipped: number;
   message: string;
 }
@@ -298,7 +330,7 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
   const admin = createServiceClient();
 
   if (!(await assertMyPark(parkId))) {
-    return { ok: false, sent: 0, texted: 0, needSlips: [], skipped: 0, message: "You don't manage that park." };
+    return { ok: false, sent: 0, texted: 0, needSlips: [], held: [], skipped: 0, message: "You don't manage that park." };
   }
 
   const rowsRes = await admin
@@ -311,7 +343,7 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
   // of this screen is that nobody is quietly never contacted.
   if (rowsRes.error) {
     return {
-      ok: false, sent: 0, texted: 0, needSlips: [], skipped: 0,
+      ok: false, sent: 0, texted: 0, needSlips: [], held: [], skipped: 0,
       message: readFailedMessage("your roll", rowsRes.error),
     };
   }
@@ -334,7 +366,7 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
     // has been sent at this point, so refusing costs a button press.
     if (staysRes.error) {
       return {
-        ok: false, sent: 0, texted: 0, needSlips: [], skipped: 0,
+        ok: false, sent: 0, texted: 0, needSlips: [], held: [], skipped: 0,
         message: readFailedMessage("their lot numbers", staysRes.error),
       };
     }
@@ -349,6 +381,8 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
   let texted = 0;
   let skipped = 0;
   const needSlips: BulkInviteResult["needSlips"] = [];
+  const held: BulkInviteResult["held"] = [];
+  const heldReasons: string[] = [];
 
   for (const r of candidates) {
     const label = {
@@ -364,16 +398,34 @@ export async function inviteEveryone(parkId: string): Promise<BulkInviteResult> 
 
     const res = await inviteHousehold(r.id as string);
     if (res.ok) { sent++; if (res.texted) texted++; }
-    // A send that failed still needs reaching — it belongs on the paper list
-    // rather than in a silence.
-    else needSlips.push({ ...label, why: "send_failed" });
+    else {
+      const reason = res.emailFailed ?? res.message;
+      // THE HOLD IS ITS OWN BUCKET. Same rule the single door applies: a
+      // refusal he ordered is not a household to reach on paper, it is a
+      // household to invite again once he lifts it.
+      if (isHoldRefusal(reason)) { held.push(label); heldReasons.push(reason); }
+      // A send that failed for any other reason still needs reaching — it
+      // belongs on the paper list rather than in a silence, and it carries
+      // the reason it failed.
+      else needSlips.push({ ...label, why: "send_failed", reason });
+    }
   }
 
   revalidatePath("/park");
   const parts = [texted > 0 ? `${sent} emailed (${texted} also sent a text)` : `${sent} emailed`];
-  if (needSlips.length) parts.push(`${needSlips.length} need a slip`);
+  // "18 need a slip" with no cause sends him to look at eighteen addresses.
+  // When the sends all failed the same way, say which, once.
+  const refused = needSlips.filter((n) => n.why === "send_failed" && n.reason).map((n) => n.reason as string);
+  if (needSlips.length) {
+    parts.push(
+      `${needSlips.length} need a slip` +
+      (refused.length ? ` — ${refused.length} couldn't be emailed: ${commonestReason(refused)}` : ""),
+    );
+  }
+  // Never "need a slip" for these. The sentence is the hold's own.
+  if (held.length) parts.push(`${held.length} held — ${commonestReason(heldReasons)}`);
   if (skipped) parts.push(`${skipped} already invited`);
-  return { ok: true, sent, texted, needSlips, skipped, message: parts.join(" · ") };
+  return { ok: true, sent, texted, needSlips, held, skipped, message: parts.join(" · ") };
 }
 
 /** The resident follows the link. */

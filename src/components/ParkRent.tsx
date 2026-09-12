@@ -13,6 +13,7 @@ import { ReceiptPanel, DropSlips } from "@/components/ParkReceipt";
 import type { ReceiptLines } from "@/app/park/receipt-helpers";
 import {
   LEDGER_LABEL, ledgerHeadline, runSummary, prettyMonth, shiftMonth, currentPeriod,
+  notMonthlySentence, lotList, perStayTerm,
   type RunPlan,
 } from "@/app/park/ledger-helpers";
 import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
@@ -34,11 +35,22 @@ import { escapeHtml } from "@/lib/html-safe";
 const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/**
+ * THE WAYS MONEY ARRIVES BY HAND — the same four ClaimForm and IPaidForm
+ * offer, with "Bank transfer" meaning the same database value on every door.
+ *
+ * "Card" and "Bank transfer" = `ach` were here, and both are processor rails:
+ * the database refuses either with no reference (so a Zelle push keyed with
+ * the box blank read "try again" forever), and once keyed with one the row
+ * could never be reversed, only "refunded to card" by a processor that does
+ * not exist. A bank push the office sees on its statement is `transfer`,
+ * which stays correctable like a cheque. Only the resident's own online
+ * payment writes the other two.
+ */
 const METHODS = [
   { value: "check", label: "Check" },
   { value: "cash", label: "Cash" },
-  { value: "card", label: "Card" },
-  { value: "ach", label: "Bank transfer" },
+  { value: "transfer", label: "Bank transfer" },
   { value: "other", label: "Other" },
 ] as const;
 
@@ -149,9 +161,43 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
         ) : (
           <div className="ll-card ll-card-pad">
             <strong>{runSummary(plan, page.month)}</strong>
-            {plan.skippedNoTotal > 0 && (
+            {/* EACH SKIP BY ITS OWN NAME. This paragraph used to say "no rent
+                set" for every skip — including the morning all eighteen
+                one-month agreements lapsed, on a park where every rent is
+                $400. The buckets come from the same classification the run
+                uses, so the paragraph cannot describe a cause the run would
+                name differently. */}
+            {plan.expired.length > 0 && (
               <p className="mut" style={{ fontSize: 13, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
-                The skipped ones have no rent set. They&apos;re left off rather
+                {plan.expired.length === 1
+                  ? `Lot ${plan.expired[0]}'s agreement has run out.`
+                  : `${plan.expired.length} agreements have run out (${lotList(plan.expired)}).`}{" "}
+                Nobody moved out; the paperwork ended. Renew{" "}
+                {plan.expired.length === 1 ? "it" : "them"} under{" "}
+                <a href="/park/today">Agreements to write on Today</a>, then come
+                back and run this again.
+              </p>
+            )}
+            {plan.notMonthly.length > 0 && (
+              <p className="mut" style={{ fontSize: 13, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
+                {notMonthlySentence(plan.notMonthly)}
+                {/* The sentence is ONE string shared with the run's refusal,
+                    so the door it names is linked AFTER it, not inside it —
+                    and only when it named one: a per-stay home has nothing
+                    to change on the roll. The expired paragraph above links
+                    its door the same way. */}
+                {plan.notMonthly.some((l) => !perStayTerm(l.term)) && (
+                  <>
+                    {" "}
+                    <a href="/park">Open the rent roll</a>.
+                  </>
+                )}
+              </p>
+            )}
+            {plan.noRent.length > 0 && (
+              <p className="mut" style={{ fontSize: 13, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
+                {plan.noRent.length === 1 ? `Lot ${plan.noRent[0]} has` : `${lotList(plan.noRent).replace(/^lot/, "Lot")} have`}{" "}
+                no rent set. {plan.noRent.length === 1 ? "It's" : "They're"} left off rather
                 than billed at zero — a $0 bill marked paid is how a missing
                 rent survives a year.
               </p>

@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { opsReasonText } from "./claim-reasons";
+import { claimSays } from "./park-claim-copy";
+import { inviteClaimSays } from "./park-invite";
 
 /**
  * THE DOOR THE SLIP COULD NOT OPEN.
@@ -156,5 +158,159 @@ describe("the two vocabularies agree", () => {
 
   it("opsReasonText still falls back rather than throwing on an unknown code", () => {
     expect(opsReasonText("claim_something_new_in_2027")).toBe("refused (claim_something_new_in_2027)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NOT YET ARRIVED IS NOT THE SAME AS GONE (0166).
+//
+// Every household on the roll is dated from the takeover, 1 January, and the
+// roll deliberately prints slips for them in December. Both claim doors then
+// required `t.during @> current_date` — in residence TODAY — so every one of
+// those slips was refused until 1 January, logged against nobody, and expired
+// two weeks later. The comment beside the rule said what it was for: a
+// tenancy that ENDED is not a door. The test is now `upper(t.during) >
+// current_date`, in both doors. This pins the door test itself — the WHERE of
+// the tenancy lookup — so the next migration cannot put the old rule back in
+// either doorway, and it collapses the rule both ways on fixture SQL so the
+// pin is known to bite.
+// ---------------------------------------------------------------------------
+describe("a household who has not arrived yet is still a door", () => {
+  /**
+   * The WHERE of the tenancy lookup — the door test itself, and nothing
+   * after it. The slip door may still RANK its candidates by residence in an
+   * ORDER BY (a lot in turnover holds a leaving household and an arriving
+   * one); that line opens nothing and is deliberately outside this slice.
+   */
+  function tenancyDoor(body: string): string {
+    const start = body.search(/lot_reservations\s+t\b/i);
+    if (start === -1) throw new Error("no tenancy lookup found — this scan is measuring nothing");
+    const rest = body.slice(start);
+    const end = rest.search(/\border\s+by\b|\blimit\b|\bthen\b|;/i);
+    return end === -1 ? rest : rest.slice(0, end);
+  }
+
+  /** "Not ended" is the test, and "in residence today" is not. */
+  function opensToArrivals(door: string): boolean {
+    return (
+      /upper\(\s*t\.during\s*\)\s*>\s*current_date/i.test(door) &&
+      !/@>\s*current_date/i.test(door)
+    );
+  }
+
+  /** And a range with no upper bound — never ended — is not shut out by a NULL. */
+  function neverEndedIsOpen(door: string): boolean {
+    return /upper_inf\(\s*t\.during\s*\)\s*or\s*upper\(\s*t\.during\s*\)\s*>\s*current_date/i.test(door);
+  }
+
+  const OLD_SLIP = `
+    select r.* into v_file from public.park_renters r
+    join public.lot_reservations t on t.renter_id = r.id
+   where t.park_lot_id = v_lot and t.status in ('approved','active')
+     and t.during @> current_date
+   limit 1;
+  if v_file.id is null then return 'claim_no_open_lot'; end if;`;
+  const OLD_INVITE = `
+  elsif not exists (select 1 from public.lot_reservations t
+                     where t.renter_id = v_file.id and t.status in ('approved','active')
+                       and t.during @> current_date)
+                                            then v_reason := 'claim_no_open_lot';`;
+  const NEW_SLIP = OLD_SLIP.replace("and t.during @> current_date", "and upper(t.during) > current_date");
+  const NEW_INVITE = OLD_INVITE.replace("and t.during @> current_date", "and upper(t.during) > current_date");
+  const RANKED_SLIP = NEW_SLIP.replace(
+    "\n   limit 1;",
+    "\n   order by (t.during @> current_date) desc, lower(t.during)\n   limit 1;",
+  );
+  const REBUILT = NEW_SLIP.replace(
+    "and upper(t.during) > current_date",
+    "and upper(t.during) > current_date\n     and t.during @> current_date",
+  );
+  // A tenancy with no end at all is not ended either. `upper()` of an
+  // unbounded range is NULL, and NULL > today excludes the row — the old
+  // `@>` handled that case and the new test must too.
+  const OPEN_ENDED_SLIP = NEW_SLIP.replace(
+    "and upper(t.during) > current_date",
+    "and (upper_inf(t.during) or upper(t.during) > current_date)",
+  );
+  const OPEN_ENDED_INVITE = NEW_INVITE.replace(
+    "and upper(t.during) > current_date",
+    "and (upper_inf(t.during) or upper(t.during) > current_date)",
+  );
+
+  it("the pin bites: the old predicate fails it, in both shapes", () => {
+    expect(opensToArrivals(tenancyDoor(OLD_SLIP))).toBe(false);
+    expect(opensToArrivals(tenancyDoor(OLD_INVITE))).toBe(false);
+  });
+
+  it("and the new predicate passes it, in both shapes", () => {
+    expect(opensToArrivals(tenancyDoor(NEW_SLIP))).toBe(true);
+    expect(opensToArrivals(tenancyDoor(NEW_INVITE))).toBe(true);
+  });
+
+  it("ranking by residence AFTER the door is allowed; a second door test is not", () => {
+    expect(opensToArrivals(tenancyDoor(RANKED_SLIP))).toBe(true);
+    expect(opensToArrivals(tenancyDoor(REBUILT))).toBe(false);
+  });
+
+  it("a tenancy with no end date is a door too, in both shapes", () => {
+    expect(opensToArrivals(tenancyDoor(OPEN_ENDED_SLIP))).toBe(true);
+    expect(opensToArrivals(tenancyDoor(OPEN_ENDED_INVITE))).toBe(true);
+    expect(neverEndedIsOpen(tenancyDoor(OPEN_ENDED_SLIP))).toBe(true);
+    expect(neverEndedIsOpen(tenancyDoor(NEW_SLIP))).toBe(false);
+  });
+
+  it("reads 0166 or later, not a definition that is not live", () => {
+    expect(effectiveBody("claim_park_file").from >= "0166").toBe(true);
+    expect(effectiveBody("claim_park_file_by_invite").from >= "0166").toBe(true);
+  });
+
+  for (const fn of ["claim_park_file", "claim_park_file_by_invite"]) {
+    it(`${fn}: a tenancy that has not started is a door, one that ended is not`, () => {
+      const { body, from } = effectiveBody(fn);
+      const door = tenancyDoor(body);
+      expect(door, `${fn} (${from}) has no tenancy door`).toMatch(/status\s+in\s*\(\s*'approved'\s*,\s*'active'\s*\)/i);
+      expect(opensToArrivals(door), `${fn} (${from}) refuses a household who has not arrived`).toBe(true);
+      expect(neverEndedIsOpen(door), `${fn} (${from}) shuts out a tenancy with no end date`).toBe(true);
+    });
+  }
+
+  it("the slip door orders its candidates once a lot in turnover can hold two", () => {
+    // A bare `limit 1` would check her code against whichever household the
+    // planner returned, and count the miss on the wrong file. The file whose
+    // open code matches comes first, then the household in residence, then
+    // the next to arrive.
+    const { body } = effectiveBody("claim_park_file");
+    const start = body.search(/lot_reservations\s+t\b/i);
+    const lookup = body.slice(start, body.indexOf(";", start));
+    expect(lookup).toMatch(/order\s+by/i);
+    const ranking = lookup.slice(lookup.search(/order\s+by/i));
+    expect(ranking).toMatch(/claim_code_hash/);
+    expect(ranking).toMatch(/crypt\(/);
+    expect(ranking).toMatch(/t\.during\s*@>\s*current_date/);
+    expect(ranking).toMatch(/lower\(\s*t\.during\s*\)/);
+    expect(ranking.indexOf("crypt(")).toBeLessThan(ranking.indexOf("@> current_date"));
+    expect(lookup).toMatch(/limit\s+1/i);
+  });
+
+  it("the refusal logging survived the copy, line for line", () => {
+    const { body } = effectiveBody("claim_park_file");
+    expect(body.match(/return\s+'claim_no_open_lot'/g)).toHaveLength(2);
+    expect(body.match(/insert\s+into\s+public\.park_renter_claim_events/gi)?.length).toBe(4);
+    const invite = effectiveBody("claim_park_file_by_invite").body;
+    expect(invite.match(/insert\s+into\s+public\.park_renter_claim_events/gi)?.length).toBe(2);
+  });
+
+  it("the refusal no longer tells her she is not 'current' — in any of the three vocabularies", () => {
+    // Once an arriving household can claim, the only households this fires
+    // for have ended or never existed. A December resident who mistyped her
+    // lot number must not read "current household" and conclude her slip
+    // does not work until January — and the invite door and /ops describe
+    // the same refusal, so they must not say it either.
+    expect(claimSays("claim_no_open_lot")).not.toMatch(/current/i);
+    expect(claimSays("claim_no_open_lot")).toMatch(/office/i);
+    expect(inviteClaimSays("claim_no_open_lot")).not.toMatch(/current/i);
+    expect(inviteClaimSays("claim_no_open_lot")).toMatch(/office/i);
+    expect(opsReasonText("claim_no_open_lot")).not.toMatch(/current/i);
+    expect(opsReasonText("claim_no_open_lot")).not.toMatch(/^refused \(/);
   });
 });

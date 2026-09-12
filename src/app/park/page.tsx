@@ -10,6 +10,8 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { pendingReRates } from "@/app/park/rerate-actions";
 import { buildStatement, rollUp, statementLine, type StatementFee } from "@/app/park/statement-helpers";
 import { getMyPark, getParkLots, getParkRoll, type ParkUnitView } from "@/app/park/data";
+import { agreementMonthsFor } from "@/app/park/park-helpers";
+import { signingRentSeed } from "@/app/park/sign-helpers";
 import { lotFits, fitProblemText, type Lot } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
 import { periodIsBillable, firstBillablePeriod } from "@/lib/billing-start";
@@ -81,11 +83,19 @@ export default async function ParkPage() {
     "your park's settings",
     await sb
       .from("parks")
-      .select("rent_notice_days, rent_due_day, cutover_date")
+      .select("rent_notice_days, rent_due_day, cutover_date, default_agreement_months, max_agreement_months")
       .eq("id", park.id)
       .maybeSingle(),
   );
   const noticeDays = (parkRow?.rent_notice_days as number) ?? 30;
+  // THE TERM A SIGNED LEASE RUNS FOR — the same arithmetic recordSigning
+  // writes the successor with, so the form can refuse to seed a day whose
+  // agreement would already be over (an imported 1 January, recorded in
+  // February) instead of offering the one day the planner will refuse.
+  const termMonths = agreementMonthsFor(
+    (parkRow?.default_agreement_months as number | null) ?? null,
+    (parkRow?.max_agreement_months as number | null) ?? null,
+  );
 
   const feeRows = mustRead(
     "your park's fees",
@@ -207,8 +217,14 @@ export default async function ParkPage() {
   // slip, never about them — the refusal log behind it is ops-only, because a
   // failed attempt must not become a durable note about a resident on their
   // landlord's screen.
+  //
+  // THE SAME HOUSEHOLD THE SLIP IS FOR — `current ?? next`, the rule the row
+  // uses forty lines down. This read `current` alone, so a household arriving
+  // on 1 January held a slip the office had printed in December and the row
+  // still said "Print a slip": the status was never looked up for anyone who
+  // had not arrived, which is exactly who the December slips are for.
   const renterIds = roll.rows
-    .map((r) => r.current?.renterId)
+    .map((r) => (r.current ?? r.next)?.renterId)
     .filter((x): x is string => !!x);
   const claimStatuses = await claimStatusFor(renterIds);
 
@@ -226,22 +242,26 @@ export default async function ParkPage() {
   //
   // `.eq("park_id", park.id)` is the security boundary here, spelled out
   // rather than assumed, exactly as data.ts does it.
-  const contact = new Map<string, { email: string | null; invitedAt: string | null }>();
+  const contact = new Map<string, { email: string | null; phone: string | null; invitedAt: string | null }>();
   {
     // Not swallowed, and no longer merely logged. An error here reads as
     // "nobody is reachable", which is a quiet, wrong answer to the question
     // this whole screen exists to ask — so it stops the screen instead.
+    //
+    // The office's phone column is read too, so the signing form can start
+    // from what the file already holds rather than ask him to retype it.
     const contactRows = mustRead(
       "how to reach each household",
       await createServiceClient()
         .from("park_renters")
-        .select("id, email, invite_sent_at, user_id, claim_declined_at")
+        .select("id, email, phone_on_file_with_park, invite_sent_at, user_id, claim_declined_at")
         .eq("park_id", park.id),
     );
 
     for (const c of contactRows ?? []) {
       contact.set(c.id as string, {
         email: (c.email as string | null) ?? null,
+        phone: (c.phone_on_file_with_park as string | null) ?? null,
         invitedAt: (c.invite_sent_at as string | null) ?? null,
       });
 
@@ -274,6 +294,53 @@ export default async function ParkPage() {
    * start saying somebody lives on a lot before they do.
    */
   const slipFor = r.current ?? r.next;
+  /**
+   * THEY SIGNED THE NEW LEASE — offered for the stay the row is about (the
+   * one covering today, else the one still to start) whenever that stay is
+   * a holdover. Before 1 January that is every imported household; the
+   * control is shown and says from when it works. The rent starts from the
+   * lot's rate card, the number the lease was written from, else from what
+   * they paid before.
+   */
+  const holdover = slipFor?.origin === "grandfathered" ? slipFor : null;
+  const rateCard = lotById.get(r.lot.id)?.rates.find((c) => c.term === "monthly")?.amount ?? null;
+  /**
+   * WHAT A SIGNED AGREEMENT ON THIS LOT IS CHARGED EACH MONTH, by the
+   * biller's own rule, so the signing form can say what the first month
+   * bills BEFORE the write — the same figure the toast quotes after it.
+   */
+  const signedFeePerMonth = Math.round(
+    feesForTenancy(monthlyFees, { rental_mode: r.lot.rentalMode }, { origin: "office" })
+      // Only the cadence the run bills — the same filter recordSigning applies.
+      .filter((f) => f.cadence === "monthly")
+      .reduce((sum, f) => sum + f.amount, 0) * 100,
+  ) / 100;
+  /**
+   * THE NEXT AGREEMENT, WHEN IT CAN BE WITHDRAWN FROM HERE. A successor
+   * written up to 45 days early could not be withdrawn from any screen —
+   * Move out and Gave notice were offered only for the row covering today.
+   *
+   * Two shapes: the same household's own renewal standing behind their
+   * current link; and a SUCCESSOR still to start on a lot with NO current
+   * link — which is the state a move-out leaves behind when its cascade
+   * fails after the trim (the current link ended, the successor still
+   * standing and billing), and any household closed out before that cascade
+   * existed. Every successor is written `origin: 'office'` — the renewal,
+   * the extension and the signing doors all go through successor-row.ts
+   * with that origin — so on a lot with nothing current, 'office' IS the
+   * test, and it excludes two more shapes that wear the same silhouette (no
+   * current, a link still to start) but are a household's ONLY record:
+   *   - an imported holdover waiting for go-live ('grandfathered'): one
+   *     'Yes' on 'Withdraw the next agreement' would have cancelled it with
+   *     no undo on all 21 rows at The Haven until 1 January;
+   *   - an APPROVED APPLICATION still to arrive, or a signed lease 'Who
+   *     lives here' filed ahead of its day (both 'application'): a first
+   *     agreement, not a 'next' one, and un-approving an applicant from the
+   *     roll is a decision this screen was never given.
+   * A DIFFERENT household's link behind a current one is a new tenancy, not
+   * this row's to withdraw.
+   */
+  const nextIsRenewal = !!r.next && (r.current == null ? r.next.origin === "office" : r.next.renterId === r.current.renterId);
   return {
     lotId: r.lot.id,
     lotNumber: r.lot.lotNumber,
@@ -288,13 +355,15 @@ export default async function ParkPage() {
     // The household a slip should go to, whether they are here yet or not.
     slipRenterId: slipFor?.renterId ?? null,
     slipRenterName: slipFor ? roll.renterNames.get(slipFor.renterId) ?? "Renter" : null,
-    slipArrivesOn: r.current ? null : r.next?.range?.start ?? null,
     claimStatus: slipFor?.renterId ? claimStatuses[slipFor.renterId] ?? "none" : null,
     renterEmail: slipFor?.renterId ? contact.get(slipFor.renterId)?.email ?? null : null,
     invitedAt: slipFor?.renterId ? contact.get(slipFor.renterId)?.invitedAt ?? null : null,
     currentRent: r.current?.quotedAmount ?? null,
     currentDueDay: r.current?.dueDay ?? null,
     currentSource: r.current?.amountSource ?? null,
+    // How they pay, for the Edit panel's "Paid" select — the one control
+    // that can move a tenancy the monthly run cannot bill onto monthly.
+    currentTerm: r.current?.term ?? null,
     owedThisMonth: owed.get(r.lot.id) ?? null,
     expectedMoveOut: r.current?.expectedMoveOut ?? null,
     // A countdown is only true for a SHORT stay. A month-to-month tenant's end
@@ -307,6 +376,28 @@ export default async function ParkPage() {
     rolling: !!r.current && r.current.term !== "nightly" && r.current.term !== "weekly",
     nextRenter: r.next ? roll.renterNames.get(r.next.renterId) ?? "Renter" : null,
     nextFrom: r.next?.range?.start ?? null,
+    nextReservationId: nextIsRenewal ? r.next!.id : null,
+    signing: holdover
+      ? {
+          reservationId: holdover.id,
+          renterName: roll.renterNames.get(holdover.renterId) ?? "This household",
+          // A MONTHLY figure or nothing — see signingRentSeed. A yearly
+          // holdover's $3,300 seeded here read 'January 2027 bills $3,442.53'.
+          rent: signingRentSeed(rateCard, holdover.term, holdover.quotedAmount),
+          rentFromRateCard: rateCard != null,
+          holdoverTerm: holdover.term ?? null,
+          email: contact.get(holdover.renterId)?.email ?? null,
+          phone: contact.get(holdover.renterId)?.phone ?? null,
+          // The holdover's own first day — the form's default when the
+          // ledger already covers it (an imported row's 1 January), never
+          // today. See defaultSigningDay.
+          holdoverFrom: holdover.range?.start ?? null,
+          termMonths,
+          feePerMonth: signedFeePerMonth,
+          // A signing may not be recorded before the ledger starts.
+          recordableFrom: cutoverDate && cutoverDate > roll.today ? cutoverDate : null,
+        }
+      : null,
     pending: r.pending.map((p) => ({
       id: p.id,
       renter: roll.renterNames.get(p.renterId) ?? "Renter",
@@ -373,6 +464,7 @@ export default async function ParkPage() {
             : { firstMonth: firstOurs, label: prettyMonth(firstOurs) }
         }
         today={todayLakeDate()}
+        cutoverDate={cutoverDate}
       />
     </>
   );

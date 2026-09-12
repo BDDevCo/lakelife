@@ -1,12 +1,52 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { planOnboarding, onboardSummary, signingExplainer, type OnboardRow } from "./onboard-helpers";
+import { planOnboarding, onboardSummary, signingExplainer, contactProblem, type OnboardRow } from "./onboard-helpers";
+import { SIGNED_LEASE_LABEL } from "./park-helpers";
+
+// ---------------------------------------------------------------------------
+// The last describe in this file drives the REAL `commitOnboarding` against an
+// in-memory table, so its mocks are declared up front (vitest hoists them).
+// The pure-helper tests are untouched by them.
+// ---------------------------------------------------------------------------
+type Row = Record<string, unknown>;
+const db: Record<string, Row[]> = { parks: [], park_members: [], park_renters: [], lot_reservations: [] };
+const inserted: Array<{ table: string; row: Row }> = [];
+class Q implements PromiseLike<{ data: Row[] | null; error: null }> {
+  private fs: Array<(r: Row) => boolean> = [];
+  private ins: Row | null = null;
+  constructor(private t: string) {}
+  select() { return this; }
+  eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
+  in(c: string, vs: unknown[]) { this.fs.push((r) => vs.includes(r[c])); return this; }
+  insert(row: Row) { this.ins = row; return this; }
+  private run() {
+    if (this.ins) {
+      const row = { id: `${this.t}-${db[this.t].length + 1}`, ...this.ins };
+      db[this.t].push(row);
+      inserted.push({ table: this.t, row });
+      return { data: [row], error: null };
+    }
+    return { data: db[this.t].filter((r) => this.fs.every((f) => f(r))), error: null };
+  }
+  maybeSingle() { const r = this.run(); return Promise.resolve({ data: r.data?.[0] ?? null, error: null }); }
+  single() { return this.maybeSingle(); }
+  then<A, B>(ok?: ((x: { data: Row[] | null; error: null }) => A | PromiseLike<A>) | null, bad?: ((e: unknown) => B | PromiseLike<B>) | null) {
+    return Promise.resolve(this.run()).then(ok, bad);
+  }
+}
+vi.mock("server-only", () => ({}));
+vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+vi.mock("@/lib/booking", () => ({ todayLakeDate: () => "2026-12-20" }));
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "owner" } } }) } }),
+  createServiceClient: () => ({ from: (t: string) => new Q(t) }),
+}));
 
 const TODAY = "2026-12-16";
 
 const row = (o: Partial<OnboardRow> = {}): OnboardRow => ({
   lotId: "l1", lotNumber: "3", displayName: "Amberg, Roy",
-  rent: "395", movedInOn: "", signedNewLease: false,
+  rent: "395", movedInOn: "", signedNewLease: false, agreementStartsOn: "",
   email: "roy@example.com", phone: "(260) 555-0142", ...o,
 });
 
@@ -137,8 +177,46 @@ describe("what he is told before he writes it", () => {
   it("names the park's OWN cap when it has one", () => {
     const all = planOnboarding([row({ signedNewLease: true })], TODAY);
     expect(onboardSummary(all, 6)).toContain("capped by your 6-month rule");
-    expect(signingExplainer(6)).toContain("6-month rule");
-    expect(signingExplainer(1)).toContain("one-month rule");
+  });
+
+  it("the explainer quotes the TERM a signed agreement is written for — never the cap as the length", () => {
+    // The Haven: one-month house style under a three-month cap. This read
+    // 'a fresh agreement under your 3-month rule' while commitOnboarding
+    // wrote one month. It takes agreementMonthsFor(default, max) now.
+    expect(signingExplainer(1)).toContain("those get a fresh one-month agreement.");
+    expect(signingExplainer(6)).toContain("those get a fresh 6-month agreement.");
+    expect(signingExplainer(null)).toContain("those get a fresh agreement.");
+    for (const line of [signingExplainer(1), signingExplainer(3), signingExplainer(null)]) {
+      expect(line).not.toMatch(/-month rule/);
+      expect(line).not.toMatch(/under your/);
+    }
+  });
+
+  it("names the control that records a signing, rather than promising one", () => {
+    // "The rule starts applying when they sign" was a sentence about a door
+    // that did not exist: nothing on the rent roll could record a signature,
+    // so a household filed clear stayed clear — and fee-exempt — forever.
+    for (const line of [signingExplainer(null), signingExplainer(1)]) {
+      expect(line).toContain("record it from their row on the rent roll");
+      expect(line).toContain("'They signed the new lease'");
+      // The control's words from their one home (park-helpers), never
+      // retyped here — sign-helpers.test.ts scans this file's source for it.
+      expect(line).toContain(`('${SIGNED_LEASE_LABEL}')`);
+      expect(line).not.toMatch(/starts applying when they sign/);
+    }
+  });
+
+  it("does not say the CAP starts when they sign — the successor runs the park's term, not its ceiling", () => {
+    // The Haven: one-month house style under a three-month cap. The sentence
+    // read "the new agreement, and your 3-month rule, starts from that day"
+    // while recordSigning wrote ONE month. The cap is quoted where it is a
+    // cap ("under your 3-month rule"); the signing sentence quotes no length.
+    const line = signingExplainer(3);
+    const signing = line.slice(line.indexOf("When one of them signs"));
+    expect(signing, "the signing sentence is gone — this scan measures nothing").not.toBe("");
+    expect(signing).not.toMatch(/\d+-month rule/);
+    expect(signing).not.toMatch(/one-month rule/);
+    expect(signing).toMatch(/starts from the day the lease runs from/);
   });
 
   // ---- park-agnostic -------------------------------------------------------
@@ -353,5 +431,189 @@ describe("how to reach them, taken at signing", () => {
     const p = planOnboarding([row({ lotNumber: "9", displayName: "", email: "", phone: "" })], TODAY);
     expect(p.problems).toHaveLength(0);
     expect(p.blankLotNumbers).toEqual(["9"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the day a signed lease runs from", () => {
+  /**
+   * A LEASE DATED 1 JANUARY, TYPED IN ON ANY OTHER DAY. The plan resolves the
+   * start by the same rule the server applies (`agreementStartFor`), names
+   * the lot when the date is refused, and says which month bills first.
+   */
+  const CUTOVER = "2027-01-01";
+  const signed = (o: Partial<OnboardRow> = {}) => row({ signedNewLease: true, rent: "400", ...o });
+
+  it("defaults a signed row filed before go-live to the cutover, not today", () => {
+    const p = planOnboarding([signed()], "2026-12-20", CUTOVER);
+    expect(p.toFile[0].agreementStartsOn).toBe("2027-01-01");
+  });
+
+  it("defaults to today after go-live, and keeps a typed date either side", () => {
+    expect(planOnboarding([signed()], "2027-01-04", CUTOVER).toFile[0].agreementStartsOn).toBe("2027-01-04");
+    expect(planOnboarding([signed({ agreementStartsOn: "2027-01-01" })], "2027-01-04", CUTOVER).toFile[0].agreementStartsOn)
+      .toBe("2027-01-01");
+    expect(planOnboarding([signed({ agreementStartsOn: "2027-02-01" })], "2027-01-04", CUTOVER).toFile[0].agreementStartsOn)
+      .toBe("2027-02-01");
+  });
+
+  it("a holdover carries no agreement start at all", () => {
+    const p = planOnboarding([row({ agreementStartsOn: "2027-01-01" })], "2026-12-20", CUTOVER);
+    expect(p.toFile[0].agreementStartsOn).toBeNull();
+  });
+
+  it("names the lot whose date is before the ledger starts", () => {
+    const p = planOnboarding([signed({ lotNumber: "14", agreementStartsOn: "2026-12-20" })], "2026-12-20", CUTOVER);
+    expect(p.toFile).toHaveLength(0);
+    expect(p.problems).toEqual([{
+      lotNumber: "14",
+      why: "The ledger starts on January 1, 2027 — an agreement can't begin before that.",
+    }]);
+  });
+
+  it("says which month bills first, and for how much, when the leases start on the 1st", () => {
+    const p = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1" }), signed({ lotId: "b", lotNumber: "2" })],
+      "2026-12-20", CUTOVER,
+    );
+    const s = onboardSummary(p, 3, 142.53);
+    expect(s).toContain("from January 1, 2027 — January 2027 bills $1,085.06");
+    expect(s).not.toMatch(/2027-01/);
+  });
+
+  it("counts only the leases that start in the first month on its bill", () => {
+    const p = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1", agreementStartsOn: "2027-01-01" }),
+       signed({ lotId: "b", lotNumber: "2", agreementStartsOn: "2027-02-01" })],
+      "2026-12-20", CUTOVER,
+    );
+    expect(onboardSummary(p, 3, 142.53)).toContain("from January 1, 2027 — January 2027 bills $542.53");
+  });
+
+  it("says a part month when a lease starts mid-month, rather than quoting a number the run will not raise", () => {
+    const p = planOnboarding([signed({ agreementStartsOn: "2027-01-04" })], "2027-01-04", CUTOVER);
+    expect(onboardSummary(p, 3, 142.53)).toContain("from January 4, 2027, so January 2027 bills a part month");
+  });
+
+  it("says nothing about a first month when nobody has signed", () => {
+    const p = planOnboarding([row()], "2026-12-20", CUTOVER);
+    expect(onboardSummary(p, 3, 142.53)).not.toMatch(/bills/);
+  });
+});
+
+describe("contactProblem — one rule, one set of sentences, every door", () => {
+  it("is the rule planOnboarding applies", () => {
+    expect(contactProblem("roy@example.com", "(260) 555-0142")).toBeNull();
+    expect(contactProblem("", "")).toBe("No email or phone yet — both are needed to file.");
+    expect(contactProblem("", "(260) 555-0142")).toBe("No email yet.");
+    expect(contactProblem("roy@", "(260) 555-0142")).toBe("That email doesn't look right.");
+    expect(contactProblem("roy@example.com", "")).toBe("No phone number yet.");
+    expect(contactProblem("roy@example.com", "555")).toBe("That phone number looks short.");
+  });
+
+  it("and planOnboarding says exactly what it says", () => {
+    for (const [email, phone] of [["", ""], ["", "(260) 555-0142"], ["roy@", "x"], ["roy@example.com", ""], ["roy@example.com", "555"]]) {
+      const p = planOnboarding([row({ email, phone })], TODAY);
+      expect(p.problems[0]?.why).toBe(contactProblem(email, phone));
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PROP NOTHING PASSED. getOnboardSeeds returned the cutover and the screen
+// accepted it, defaulting to null — and the page between them never handed it
+// over. So before go-live the seeded date was today, the input had no floor,
+// the summary promised December would bill, and the server refused every
+// signed row by name. The whole of the f02 fix, built and never reached.
+// ---------------------------------------------------------------------------
+describe("the screen actually gets the cutover", () => {
+  const page = readFileSync(new URL("./onboard/page.tsx", import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\{\s*\/\/.*$/gm, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  it("finds the element it is scanning", () => {
+    expect(page).toMatch(/<ParkOnboard[\s\S]*?\/>/);
+  });
+
+  it("the page hands the cutover to the screen — a prop nothing passes is no default", () => {
+    const el = page.match(/<ParkOnboard[\s\S]*?\/>/)?.[0] ?? "";
+    expect(el, "onboard/page.tsx does not pass cutoverDate").toMatch(/cutoverDate=\{res\.cutoverDate \?\? null\}/);
+  });
+
+  it("and the seeds carry it, or the prop is always null", () => {
+    const actions = readFileSync(new URL("./onboard-actions.ts", import.meta.url), "utf8");
+    const seeds = actions.slice(actions.indexOf("export async function getOnboardSeeds("), actions.indexOf("export async function commitOnboarding("));
+    expect(seeds).toMatch(/\.select\("max_agreement_months, default_agreement_months, cutover_date"\)/);
+    expect(seeds).toMatch(/cutoverDate: \(parkRow\?\.cutover_date as string \| null\) \?\? null/);
+  });
+
+  it("the term reaches the explainer: seeds → page → screen, with the arithmetic commitOnboarding writes", () => {
+    // A prop nothing passes defaults to null and the explainer says 'a
+    // fresh agreement' at a park writing one month — quietly, forever.
+    const actions = readFileSync(new URL("./onboard-actions.ts", import.meta.url), "utf8");
+    const seeds = actions.slice(actions.indexOf("export async function getOnboardSeeds("), actions.indexOf("export async function commitOnboarding("));
+    expect(seeds).toMatch(/termMonths: agreementMonthsFor\(\s*\(parkRow\?\.default_agreement_months as number \| null\) \?\? null,\s*\(parkRow\?\.max_agreement_months as number \| null\) \?\? null,?\s*\)/);
+    const el = page.match(/<ParkOnboard[\s\S]*?\/>/)?.[0] ?? "";
+    expect(el).toMatch(/termMonths=\{res\.termMonths \?\? null\}/);
+    const screen = readFileSync(new URL("../../components/ParkOnboard.tsx", import.meta.url), "utf8");
+    expect(screen).toMatch(/\{signingExplainer\(termMonths\)\}/);
+    expect(screen).not.toMatch(/signingExplainer\(capMonths\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A ROW THE SERVER REFUSES IS NAMED, NEVER DROPPED. The screen plans from the
+// same inputs, but the server holds a rule the screen can lack (the cutover,
+// when the page did not hand it over) and a typed date can sit below the
+// input's floor — so a signed row can be refused here alone. It used to leave
+// the batch in silence: "N households filed" with the refused ones gone, or
+// "Nothing filled in to file." when every row was filled in and refused.
+// ---------------------------------------------------------------------------
+const { commitOnboarding } = await import("./onboard-actions");
+
+describe("commitOnboarding names what it refused", () => {
+  beforeEach(() => {
+    db.parks = [{ id: "park-1", cutover_date: "2027-01-01", default_agreement_months: 1, max_agreement_months: 3 }];
+    db.park_members = [{ park_id: "park-1", user_id: "owner", role: "owner" }];
+    db.park_renters = [];
+    db.lot_reservations = [];
+    inserted.length = 0;
+  });
+
+  // A signed lease typed with a date the client did not know was below the
+  // floor — 20 December, on a ledger that starts 1 January.
+  const signedTooEarly = row({ lotId: "l1", lotNumber: "1", signedNewLease: true, agreementStartsOn: "2026-12-20" });
+  const holdover = row({ lotId: "l2", lotNumber: "2", displayName: "Reyes, Donna", signedNewLease: false });
+
+  it("every row refused: says so, names each lot and why, and writes nothing", async () => {
+    const res = await commitOnboarding("park-1", [signedTooEarly]);
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("None of those could be filed.");
+    expect(res.error).not.toMatch(/Nothing filled in/);
+    expect(res.failed).toEqual([
+      { lotNumber: "1", why: "The ledger starts on January 1, 2027 — an agreement can't begin before that." },
+    ]);
+    expect(inserted).toEqual([]);
+  });
+
+  it("some refused: files the rest, and the refused one is on the list with its reason", async () => {
+    const res = await commitOnboarding("park-1", [signedTooEarly, holdover]);
+    expect(res.ok, res.error).toBe(true);
+    expect(res.filed).toBe(1);
+    expect(res.failed).toEqual([
+      { lotNumber: "1", why: "The ledger starts on January 1, 2027 — an agreement can't begin before that." },
+    ]);
+    expect(res.signal).toBe("1 household filed, 1 couldn't be.");
+    expect(inserted.map((i) => i.table)).toEqual(["park_renters", "lot_reservations"]);
+    expect(inserted[1].row).toMatchObject({ park_lot_id: "l2", origin: "grandfathered" });
+  });
+
+  it("nothing typed at all is still 'nothing filled in' — that sentence is for an empty screen only", async () => {
+    const res = await commitOnboarding("park-1", [row({ displayName: "" })]);
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Nothing filled in to file.");
+    expect(res.failed).toBeUndefined();
   });
 });

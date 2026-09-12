@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import {
   planReminders, channelFor, reminderBody, reminderSummary, ownerDigest,
-  whyItDidntGo, commonestReason, reminderSignal,
+  whyItDidntGo, commonestReason, reminderSignal, isHoldRefusal,
   type RenterContact, type ReminderOptions,
 } from "./reminder-helpers";
+import { holdRefusal } from "@/lib/notice-hold";
 import { toRows, type Charge } from "./ledger-helpers";
 
 const TODAY = "2026-08-20";
@@ -398,5 +400,121 @@ describe("the reminder action is wired to these", () => {
     expect(src, "the hardcoded address blame is back")
       .not.toMatch(/check the address/i);
     expect(src).toMatch(/whyItDidntGo\(res\.error\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AND SO IS EVERY OTHER DOOR THAT SENDS AN EMAIL.
+//
+// The reminders door was rewritten to stop blaming the address for the hold
+// he set, and the scan above pinned that — for reminder-actions.ts alone. The
+// receipt door ("Email it to them") kept saying "That didn't send — check the
+// address", and the invite door said "that address didn't work" about
+// eighteen addresses he had just typed. Same lie, two more doorways.
+//
+// So this walks EVERY file under src that calls sendEmail( and forbids the
+// two sentences in code. Comments stripped: the files' own prose quotes the
+// removed sentences, as this one does.
+// ---------------------------------------------------------------------------
+
+function walk(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) walk(p, out);
+    else if (/\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name)) out.push(p);
+  }
+  return out;
+}
+const strip = (raw: string) =>
+  raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+describe("every door that sends an email tells the truth about why it didn't", () => {
+  const SRC = fileURLToPath(new URL("../../", import.meta.url));
+  const callers = walk(SRC)
+    .map((p) => ({ p, code: strip(readFileSync(p, "utf8")) }))
+    .filter((f) => /\bsendEmail\(/.test(f.code));
+  // The screens that RENDER a send result are not callers, and one of them
+  // carried the invite door's version of the lie.
+  const renderers = ["components/InviteEveryone.tsx", "components/ParkReceipt.tsx"]
+    .map((rel) => ({ p: join(SRC, rel), code: strip(readFileSync(join(SRC, rel), "utf8")) }));
+
+  it("found the callers — otherwise this scan is measuring nothing", () => {
+    expect(callers.length).toBeGreaterThanOrEqual(3);
+    const names = callers.map((f) => f.p);
+    expect(names.some((p) => p.endsWith("park/ledger-actions.ts"))).toBe(true);
+    expect(names.some((p) => p.endsWith("park/reminder-actions.ts"))).toBe(true);
+    expect(names.some((p) => p.endsWith("parks/invite-actions.ts"))).toBe(true);
+  });
+
+  it("no caller, and no result screen, blames the address in code", () => {
+    for (const f of [...callers, ...renderers]) {
+      expect(f.code, `${f.p} blames the address for a refused send`).not.toMatch(/check the address/i);
+      expect(f.code, `${f.p} says the address "didn't work"`).not.toMatch(/(address|email)[^\n]{0,40}didn't work/i);
+      expect(f.code, `${f.p} says "didn't work" about a recipient`).not.toMatch(/\$\{email\} didn't work/);
+    }
+  });
+
+  // The four park-owner doors: receipt, reminders, invites — and the lease
+  // document, which was still saying "nothing was logged, so you can try
+  // again" under the hold, the retry that can never work.
+  const OWNER_DOORS = [
+    "park/ledger-actions.ts", "park/reminder-actions.ts", "parks/invite-actions.ts", "park/document-actions.ts",
+  ];
+
+  it("the four park-owner doors build their refusal from whyItDidntGo", () => {
+    for (const rel of OWNER_DOORS) {
+      const f = callers.find((c) => c.p.endsWith(rel));
+      expect(f, `${rel} no longer calls sendEmail — repoint this scan`).toBeTruthy();
+      expect(f!.code, `${rel} maps a refused send to a sentence of its own`).toMatch(/whyItDidntGo\((sent|res)\.error\)/);
+    }
+  });
+
+  it("no park-owner door answers a refused send with 'try again'", () => {
+    // The window after each sendEmail( call, up to the next export — where
+    // the failure branch lives. Under the hold a retry can never work, and
+    // "try again" elsewhere in these files (a failed write) is not this.
+    let windows = 0;
+    for (const rel of OWNER_DOORS) {
+      const f = callers.find((c) => c.p.endsWith(rel))!;
+      let at = f.code.indexOf("sendEmail(");
+      while (at >= 0) {
+        const next = f.code.indexOf("\nexport ", at);
+        const win = f.code.slice(at, next < 0 ? undefined : next);
+        expect(win, `${rel}: a refused send is answered with a retry`).not.toMatch(/try again/i);
+        windows += 1;
+        at = f.code.indexOf("sendEmail(", at + 1);
+      }
+    }
+    expect(windows, "found no sendEmail windows — this scan is measuring nothing").toBeGreaterThanOrEqual(4);
+  });
+
+  it("the invite screen prints the sender's reason beside the household", () => {
+    const screen = renderers.find((r) => r.p.endsWith("InviteEveryone.tsx"))!;
+    expect(screen.code).toMatch(/s\.reason/);
+  });
+});
+
+describe("whyItDidntGo and holdRefusal are pinned to each other", () => {
+  // whyItDidntGo passes the hold sentences through by PREFIX. A wording
+  // change in notice-hold.ts would silently turn "Notices are on hold…" into
+  // "The email didn't go — Notices are on hold…" on every park screen. Both
+  // halves in one test, built from the real function, not a quoted string.
+  const shapes = [
+    { held: true, reason: "Waiting on the leases.", failed: false },
+    { held: true, reason: null, failed: false },
+    { held: true, reason: null, failed: true },
+  ];
+
+  it("every sentence holdRefusal can write is recognised as a hold", () => {
+    for (const h of shapes) {
+      const s = holdRefusal(h);
+      expect(isHoldRefusal(s), s).toBe(true);
+      expect(whyItDidntGo(s), s).toBe(s);
+    }
+  });
+
+  it("and a transport error is not", () => {
+    expect(isHoldRefusal("Resend 503: upstream unavailable")).toBe(false);
+    expect(isHoldRefusal("email not configured")).toBe(false);
   });
 });

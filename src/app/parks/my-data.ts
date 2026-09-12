@@ -144,6 +144,25 @@ export interface RenterHome {
   deposit: { amount: number; since: string } | null;
 
   /**
+   * RENT MONEY OF THEIRS THAT IS NOT AGAINST ANY BILL. $57.47 handed over
+   * with a $600 cheque for a $542.53 month, a January cheque that arrived
+   * before January was raised — the rows `recordOnAccount` and the split in
+   * `recordPayment` write (kind 'rent', no charge). The office could see it
+   * under "Money not against a bill"; the person it belongs to could not see
+   * it anywhere, and was chased for the next month in full. Zero when none.
+   *
+   * SAID AS WHAT IT IS, NOT AS A PROMISE. Nothing applies it to the next bill
+   * on its own — the office does, from its own screen — so the sentence on the
+   * resident's page says "with the office", never "will come off your next
+   * bill".
+   *
+   * Optional only so a view built before this field existed still type-checks;
+   * the loader always writes it, and the screen shows nothing when it is
+   * absent or zero — which is the truth for every household today.
+   */
+  onAccount?: number;
+
+  /**
    * `amount` is the RENT. `fee` is the card convenience fee charged on top and
    * is null on every other rail. Two figures because the card statement shows
    * their sum and the rent ledger shows only the first — a resident comparing
@@ -249,7 +268,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // person acts on: the lot number she'd quote to the office, the park's name,
   // whether a Pay button appears at all, the percentage added if she uses it,
   // what she owes, what she has paid, and her deposit.
-  const [lotRes, parkRes, cardsRes, chargesRes, paysRes, propsRes, reqsRes] = await Promise.all([
+  const [lotRes, parkRes, cardsRes, chargesRes, paysRes, propsRes, reqsRes, acctRes] = await Promise.all([
     // `qr_token` because the "What you reported" card asserts a sticker on
     // her pedestal. No lot at The Haven has one — a token exists only after
     // the office runs mintStickers and physically fixes them — so the card
@@ -306,6 +325,18 @@ export async function getRenterHome(): Promise<RenterHome | null> {
           .order("created_at", { ascending: false })
           .limit(10)
       : Promise.resolve({ data: null, error: null }),
+    // Money on account — exactly the rows getHeldMoney lists for the office,
+    // and 0102's partial index. Its own read rather than a filter over the
+    // 24-row receipt slice above, because a row older than that slice is
+    // still their money.
+    admin
+      .from("park_payments")
+      .select("amount")
+      .eq("renter_id", file.id as string)
+      .eq("kind", "rent")
+      .is("charge_id", null)
+      .is("reversed_at", null)
+      .is("returned_at", null),
   ]);
   const lot = mustRead("your lot", lotRes);
   const park = mustRead("your park", parkRes);
@@ -414,6 +445,13 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     .map((p) => p.received_on as string)
     .sort()[0] ?? null;
 
+  // A failed read here would print "nothing on account" at somebody who handed
+  // over $57.47 more than the bill last week. mustRead, like the deposit.
+  const acctRows = mustRead("money you have on account", acctRes);
+  const onAccount = Math.round(
+    (acctRows ?? []).reduce((sum, p) => sum + Number(p.amount ?? 0), 0) * 100,
+  ) / 100;
+
   // ---- what they reported -------------------------------------------------
   // Scoped to their tenancy's start: park_requests key on the LOT, not the
   // renter, so without this a new resident would be shown the last one's
@@ -488,6 +526,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     deposit: depositTotal > 0 && depositSince
       ? { amount: depositTotal, since: depositSince }
       : null,
+    onAccount,
     payments: live
       .filter((p) => p.kind !== "deposit")
       // TWENTY-FOUR, NOT SIX, AND THE SCREEN SAYS WHEN IT IS SHOWING A SLICE.

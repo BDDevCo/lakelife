@@ -49,15 +49,29 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   // A capped park is not extending anything — it is starting the NEXT
   // agreement, and calling that "keep your spot" would be telling somebody
   // they are doing something smaller than they are. It is a fresh term with
-  // its own dates, and the only thing that carries over is the deposit.
+  // its own dates, and the only thing that can carry over is a deposit, when
+  // the park is holding one.
   if (view.isRenewal) {
     const months = view.capMonths ?? 3;
+    // `price` is the rent in force on the successor's first morning — the
+    // number the tap writes — and on a monthly tenancy it is a MONTHLY rent,
+    // not the price of a three-month agreement. "for $425" alone reads as the
+    // latter.
+    const rent = view.price != null
+      ? ` at $${view.price.toLocaleString()}${view.term === "monthly" ? " a month" : ""}`
+      : "";
+    // Only to somebody the park is actually holding a deposit for. This
+    // sentence used to be printed to everyone, and at a park where nobody
+    // has paid one it described a deposit that did not exist.
+    const deposit = view.depositHeld
+      ? `Your deposit carries over — there's nothing more to pay on it. `
+      : "";
     return htmlPage(
       `Stay on at site ${view.lotNumber}? 🌊`,
       `Your agreement runs to ${pretty(view.currentEnd)}. ` +
         `Tapping below starts a NEW ${months}-month agreement, ` +
-        `${pretty(view.newStart!)} to ${pretty(view.newEnd)}${money}. ` +
-        `Your deposit carries over — there's nothing more to pay on it. ` +
+        `${pretty(view.newStart!)} to ${pretty(view.newEnd)}${rent}. ` +
+        deposit +
         `${view.parkName} will send the agreement to sign.`,
       true,
       new URL(req.url).pathname,
@@ -85,7 +99,9 @@ export async function POST(_req: Request, ctx: { params: Promise<{ token: string
   return htmlPage(
     "You're set 🌊",
     `Your site is yours through ${pretty(res.newEnd!)}. ` +
-      `The park will send the paperwork if there's any to sign — ` +
-      `nothing more to pay on your deposit.`,
+      `The park will send the paperwork if there's any to sign` +
+      // Same gate as the page before the tap: a deposit is mentioned only to
+      // somebody who paid one.
+      (res.depositHeld ? ` — nothing more to pay on your deposit.` : `.`),
   );
 }

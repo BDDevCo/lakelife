@@ -4,11 +4,15 @@ import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
-import { parseDaterange, toDaterange, effectiveSeason } from "@/lib/parks";
+import { longDate } from "@/lib/lake-time";
+import { parseDaterange, effectiveSeason } from "@/lib/parks";
 import {
-  planRenewal, renewalRefusalText, chainNotice,
+  planRenewal, renewalRefusalText, chainNotice, monthsBetween,
   type PlannedRenewal, type AgreementTerms,
 } from "./agreement-helpers";
+import { rentForPeriod } from "./rerate-helpers";
+import { servedRentHistory } from "@/lib/rent-changes";
+import { successorRow, type PriorLink } from "@/lib/successor-row";
 import type { ParkResult } from "./actions";
 import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
@@ -33,6 +37,16 @@ import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
  * The renewal itself is INSERTED, never edited in place. Last term's dates and
  * its rent are what the ledger already billed against, and rewriting them would
  * silently restate history.
+ *
+ * THE ROW IS BUILT BY `successorRow`, shared with the resident's own extend
+ * link, so the two doors cannot disagree about what travels: the household's
+ * due day, their move-in date, whether the rent was confirmed with them. And
+ * THE RENT IS THE ONE IN FORCE ON THE SUCCESSOR'S FIRST MORNING, resolved from
+ * the same served history the bills use — because a rent increase is pinned to
+ * one link of a chain, and copying `quoted_amount` off that link before the
+ * increase had been applied wrote the successor at the old number. The
+ * increase then evaporated after one month, with nothing on any screen saying
+ * so.
  */
 
 const DENIED = "You don't manage that park.";
@@ -43,7 +57,17 @@ export interface RenewalPreview {
   renterName: string | null;
   priorStart: string;
   priorEnd: string;
+  /**
+   * The rent the successor WILL BE WRITTEN AT — the number in force on its
+   * first morning, once every served increase has been applied. This is what
+   * the button writes, so it is what the card shows.
+   */
   quotedAmount: number | null;
+  /** What the prior row carries today. Differs from `quotedAmount` only when
+   *  a served increase lands between now and the successor's start. */
+  priorQuotedAmount: number | null;
+  /** The effective date of that increase, when there is one. */
+  rentChangeOn: string | null;
   plan: PlannedRenewal;
   refusalText: string | null;
   /** Said out loud past a year of consecutive short agreements. */
@@ -109,6 +133,10 @@ async function loadTerms(
 
 type PreviewResult = { ok: boolean; error?: string; preview?: RenewalPreview };
 
+/** The preview plus the prior row it was planned from — the row the successor
+ *  is built FROM. Internal: the exported action hands back only the preview. */
+type Planned = PreviewResult & { prior?: PriorLink };
+
 /**
  * What the next agreement WOULD be. Nothing is written.
  *
@@ -122,7 +150,7 @@ async function planNextAgreement(
   parkId: string,
   reservationId: string,
   startFrom?: string,
-): Promise<PreviewResult> {
+): Promise<Planned> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
   const admin = createServiceClient();
@@ -130,9 +158,15 @@ async function planNextAgreement(
   // statements of fact, and a dropped read has no facts to state. The first
   // sends the owner hunting for a row sitting in front of him; the second tells
   // him something false about his own access.
+  //
+  // ONE READ of the prior row, and it carries everything the successor copies
+  // — the household's due day, move-in date and rent confirmation travel with
+  // them, so they are read here rather than dropped on the floor by a second,
+  // narrower select at write time.
   const res = mustRead("that tenancy", await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_id, during, quoted_amount, term, agreement_chain_id, agreement_seq, status")
+    // ONE string literal — supabase-js types a concatenated select as an error.
+    .select("id, park_lot_id, renter_id, renter_unit_id, during, quoted_amount, term, agreement_chain_id, agreement_seq, status, origin, due_day, tenancy_began_on, amount_source, amount_source_at")
     .eq("id", reservationId)
     .maybeSingle());
   if (!res) return { ok: false, error: "That tenancy isn't here." };
@@ -147,21 +181,72 @@ async function planNextAgreement(
 
   const today = todayLakeDate();
   const terms = await loadTerms(admin, parkId, lot.id as string, startFrom ?? range.end);
+  const chainId = (res.agreement_chain_id as string) ?? (res.id as string);
+  const seq = (res.agreement_seq as number) ?? 1;
+  const priorQuoted = res.quoted_amount == null ? null : Number(res.quoted_amount);
 
-  const plan = planRenewal(
+  // THE CHAIN'S REAL LENGTH, for the long-run sentence. Every earlier live link
+  // by its own dates, plus this one — not the sequence number times the cap,
+  // which at a park whose first lease is one month and whose renewals are three
+  // said "six months" after four. A failed read here would make the chain look
+  // short and keep the sentence quiet, so it stops instead.
+  const links = mustRead("that household's earlier agreements", await admin
+    .from("lot_reservations")
+    .select("id, during, agreement_seq")
+    .eq("agreement_chain_id", chainId)
+    .in("status", ["approved", "active"]));
+  const chainMonthsSoFar = (links ?? [])
+    .filter((l) => l.id !== res.id && ((l.agreement_seq as number) ?? 1) < seq)
+    .reduce((sum, l) => {
+      const r = parseDaterange(l.during as string);
+      return r ? sum + monthsBetween(r.start, r.end) : sum;
+    }, monthsBetween(range.start, range.end));
+
+  let plan = planRenewal(
     {
       id: res.id as string,
-      chainId: (res.agreement_chain_id as string) ?? res.id as string,
-      seq: (res.agreement_seq as number) ?? 1,
+      chainId,
+      seq,
       start: range.start,
       end: range.end,
-      quotedAmount: res.quoted_amount == null ? null : Number(res.quoted_amount),
+      quotedAmount: priorQuoted,
       term: (res.term as string) ?? "monthly",
+      chainMonthsSoFar,
     },
     terms,
     today,
     startFrom,
   );
+
+  // A HOUSEHOLD STILL ON THE SELLER'S ARRANGEMENT is not renewed from here.
+  // Their new lease is a different act — it ends the holdover and starts the
+  // fee — and it is recorded from their row on the rent roll. Writing a
+  // successor here would either copy 'grandfathered' onto a lease they had
+  // just signed (the fee never bills) or assert 'office' on one they had not
+  // (a fee they never agreed to). So the card says where the control is.
+  // Whatever else the planner said — "already ended, start a new one" would
+  // send him to a door that files a second renter for the same household.
+  if (res.origin === "grandfathered") {
+    plan = { ok: false, refusal: "inherited" };
+  }
+
+  // THE RENT IN FORCE ON THE SUCCESSOR'S FIRST MORNING — from the same served
+  // history the bills read, so a $425 increase served for 1 April is what a
+  // May–August agreement written on 17 March carries, not the $400 still
+  // sitting on the February row. A failed read of that history would quietly
+  // write the old number, so it stops.
+  const hist = await servedRentHistory([res.id as string]);
+  if (hist.error) {
+    console.error("[read failed] the rent history for that tenancy:", hist.error);
+    throw new ReadFailed("the rent history for that tenancy", String((hist.error as { message?: string })?.message ?? ""));
+  }
+  const changes = hist.byRes.get(res.id as string) ?? [];
+  const successorStart = plan.ok && plan.start ? plan.start : (startFrom ?? range.end);
+  const quotedAmount = rentForPeriod(changes, successorStart, priorQuoted);
+  const inForce = [...changes]
+    .filter((c) => c.effective_on <= successorStart)
+    .sort((a, b) => a.effective_on.localeCompare(b.effective_on))
+    .at(-1);
 
   const renter = res.renter_id
     ? mustRead("the name on that tenancy", await admin
@@ -169,18 +254,35 @@ async function planNextAgreement(
         .eq("id", res.renter_id as string).maybeSingle())
     : null;
 
+  const lotNumber = (lot.lot_number as string) ?? "?";
   return {
     ok: true,
     preview: {
       reservationId: res.id as string,
-      lotNumber: (lot.lot_number as string) ?? "?",
+      lotNumber,
       renterName: (renter?.display_name as string) ?? null,
       priorStart: range.start,
       priorEnd: range.end,
-      quotedAmount: res.quoted_amount == null ? null : Number(res.quoted_amount),
+      quotedAmount,
+      priorQuotedAmount: priorQuoted,
+      rentChangeOn: inForce && quotedAmount !== priorQuoted ? inForce.effective_on : null,
       plan,
-      refusalText: plan.refusal ? renewalRefusalText(plan.refusal) : null,
+      refusalText: plan.refusal ? renewalRefusalText(plan.refusal, lotNumber) : null,
       chainNote: plan.totalMonthsAfter ? chainNotice(plan.totalMonthsAfter) : null,
+    },
+    prior: {
+      id: res.id as string,
+      park_lot_id: res.park_lot_id as string,
+      renter_id: res.renter_id as string,
+      renter_unit_id: (res.renter_unit_id as string | null) ?? null,
+      term: (res.term as string) ?? "monthly",
+      quoted_amount: priorQuoted,
+      agreement_chain_id: (res.agreement_chain_id as string | null) ?? null,
+      agreement_seq: seq,
+      due_day: (res.due_day as number | null) ?? null,
+      tenancy_began_on: (res.tenancy_began_on as string | null) ?? null,
+      amount_source: (res.amount_source as string | null) ?? null,
+      amount_source_at: (res.amount_source_at as string | null) ?? null,
     },
   };
 }
@@ -196,6 +298,15 @@ export async function previewRenewal(
   reservationId: string,
   startFrom?: string,
 ): Promise<PreviewResult> {
+  const { ok, error, preview } = await plannedOrSentence(parkId, reservationId, startFrom);
+  return { ok, error, preview };
+}
+
+async function plannedOrSentence(
+  parkId: string,
+  reservationId: string,
+  startFrom?: string,
+): Promise<Planned> {
   try {
     return await planNextAgreement(parkId, reservationId, startFrom);
   } catch (e) {
@@ -217,8 +328,11 @@ export async function renewAgreement(
 ): Promise<ParkResult & { newEnd?: string }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
-  const pre = await previewRenewal(parkId, reservationId, opts.startFrom);
-  if (!pre.ok || !pre.preview) return { ok: false, error: pre.error ?? "Couldn't work that out." };
+  // The prior row is read ONCE, by the planner, and the successor is built
+  // from that same read — so a failed read never reaches the insert as a row
+  // attached to nobody: the planner's sentence comes back instead.
+  const pre = await plannedOrSentence(parkId, reservationId, opts.startFrom);
+  if (!pre.ok || !pre.preview || !pre.prior) return { ok: false, error: pre.error ?? "Couldn't work that out." };
   const { plan, lotNumber } = pre.preview;
   if (!plan.ok || !plan.start || !plan.end) {
     return { ok: false, error: pre.preview.refusalText ?? "Can't renew that one." };
@@ -234,39 +348,27 @@ export async function renewAgreement(
   }
 
   const admin = createServiceClient();
-  const priorRes = await admin
-    .from("lot_reservations")
-    .select("park_lot_id, renter_id, renter_unit_id, term, agreement_chain_id, origin")
-    .eq("id", reservationId).maybeSingle();
-  // This is the row the successor is copied FROM — its lot, its renter, its
-  // chain. A failed read here reaching the insert below would write an
-  // agreement attached to nobody, so it stops, and it says so rather than
-  // claiming the tenancy is gone.
-  if (priorRes.error) {
-    return { ok: false, error: readFailedMessage("that tenancy", priorRes.error, { money: true }) };
-  }
-  const prior = priorRes.data;
-  if (!prior) return { ok: false, error: "That tenancy isn't here." };
 
   // A SUCCESSOR ROW, never an edit. Last term's dates and rent are what the
   // ledger already billed against; rewriting them would restate history.
-  const { error } = await admin.from("lot_reservations").insert({
-    park_lot_id: prior.park_lot_id,
-    renter_id: prior.renter_id,
-    renter_unit_id: prior.renter_unit_id,
-    during: toDaterange({ start: plan.start, end: plan.end }),
+  //
+  // Built by the one builder both doors share. `origin` is this door's fact —
+  // an agreement the owner wrote is 'office' — never a copy of the prior's.
+  // A gap OMITS the chain column so the database mints a new chain; sending
+  // null to it is a constraint error, not a fresh start.
+  const { error } = await admin.from("lot_reservations").insert(successorRow(pre.prior, {
+    start: plan.start,
+    end: plan.end,
     status: "approved",
-    term: prior.term,
-    quoted_amount: quoted,
-    origin: prior.origin ?? "application",
-    agreement_chain_id: plan.continuesChain
-      ? (prior.agreement_chain_id as string) ?? reservationId
-      : null,
-    agreement_seq: plan.nextSeq ?? 1,
+    quotedAmount: quoted,
+    origin: "office",
+    continuesChain: plan.continuesChain ?? false,
+    nextSeq: plan.nextSeq ?? 1,
     // The owner's own rule, and the database refuses a deposit on a
     // consecutive renewal regardless — so the two cannot drift apart.
-    deposit_amount: plan.depositDue ? plan.depositAmount : null,
-  });
+    depositAmount: plan.depositDue ? plan.depositAmount : null,
+    nowISO: new Date().toISOString(),
+  }));
   if (error) {
     return {
       ok: false,
@@ -282,9 +384,10 @@ export async function renewAgreement(
   return {
     ok: true,
     newEnd: plan.end,
+    // A date a person reads is words — "May 1, 2027", never "2027-05-01".
     signal: plan.depositDue
-      ? `Lot ${lotNumber} runs to ${plan.end}. This one starts a new chain, so a deposit is due.`
-      : `Lot ${lotNumber} runs to ${plan.end}. Consecutive — no new deposit.`,
+      ? `Lot ${lotNumber} runs to ${longDate(plan.end)}. This one starts a new chain, so a deposit is due.`
+      : `Lot ${lotNumber} runs to ${longDate(plan.end)}. Consecutive — no new deposit.`,
   };
 }
 

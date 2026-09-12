@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
+import { longDate } from "@/lib/lake-time";
 import { renewAgreement, type RenewalPreview } from "@/app/park/renew-actions";
 
 /**
@@ -14,10 +15,28 @@ import { renewAgreement, type RenewalPreview } from "@/app/park/renew-actions";
  *
  * So the whole cycle is one list with a button per row, and the common case —
  * renew at the same rent — is a single tap with nothing to type.
+ *
+ * THE NUMBER ON THE ROW IS THE NUMBER THE BUTTON WRITES. `quotedAmount` is the
+ * rent in force on the successor's first morning, which differs from what the
+ * prior row carries today only when a served increase lands in between — and
+ * then the row says so, because a $425 beside a roll that still reads $400 is
+ * a number he did not type and should not have to guess at.
  */
 
 const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** True when a served increase lands between today and the successor's start. */
+const rentMoves = (r: RenewalPreview) =>
+  r.quotedAmount != null && r.priorQuotedAmount != null && r.priorQuotedAmount !== r.quotedAmount;
+
+/** planReRate refuses only "already at that amount", so a served DECREASE
+ *  reaches this row too — the sentence must not call it an increase. */
+const rentMovesNote = (r: RenewalPreview) =>
+  `${money(r.priorQuotedAmount!)} today; the ${r.quotedAmount! > r.priorQuotedAmount! ? "increase" : "decrease"} ` +
+  `you served takes effect ` +
+  `${r.rentChangeOn ? longDate(r.rentChangeOn) : "before the next one starts"}, ` +
+  `so the next one is written at ${money(r.quotedAmount!)}.`;
 
 export function ParkRenewals({
   parkId, rows,
@@ -52,16 +71,21 @@ export function ParkRenewals({
             <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
               <strong style={{ minWidth: 62 }}>Lot {r.lotNumber}</strong>
               <span style={{ flex: 1 }}>{r.renterName ?? "—"}</span>
-              <span className="mut" style={{ fontSize: 13 }}>ends {r.priorEnd}</span>
+              <span className="mut" style={{ fontSize: 13 }}>ends {longDate(r.priorEnd)}</span>
               {r.quotedAmount != null && (
                 <span className="mut" style={{ fontSize: 13 }}>{money(r.quotedAmount)}</span>
               )}
             </div>
+            {rentMoves(r) && (
+              <div className="mut" style={{ fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>
+                {rentMovesNote(r)}
+              </div>
+            )}
 
             {r.plan.ok ? (
               <>
                 <div className="mut" style={{ fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
-                  Next one runs {r.plan.start} to {r.plan.end}
+                  Next one runs {longDate(r.plan.start)} to {longDate(r.plan.end)}
                   {r.plan.depositDue
                     ? " — new chain, so a deposit is due."
                     : " — consecutive, so no new deposit."}
@@ -96,7 +120,7 @@ export function ParkRenewals({
                     <button className="ll-btn" disabled={busy}
                       style={{ padding: "6px 14px", fontSize: 14 }}
                       onClick={() => renew(r)}>
-                      Renew at the same rent
+                      {rentMoves(r) ? `Renew at ${money(r.quotedAmount!)}` : "Renew at the same rent"}
                     </button>
                     <button className="ll-btn ghost" disabled={busy}
                       style={{ padding: "6px 12px", fontSize: 14 }}

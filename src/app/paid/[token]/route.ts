@@ -58,7 +58,23 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
     // careful resident comparing the two would honestly answer "no".
     (view.fee && view.fee > 0
       ? ` A card fee of $${view.fee.toFixed(2)} was charged on top, so $${(view.amount + view.fee).toFixed(2)} left your card. The fee isn't rent and isn't credited against your bill.`
-      : "");
+      : "") +
+    // THE HALF THE PAPER RECEIPT SAYS. `amount` is the whole she handed over
+    // (bill share + on account), so the page must say where the rest sits or
+    // she agrees to $600 with no word that $57.47 of it is not against her
+    // bill. Same words as the receipt, same promise — none: the office puts it
+    // against a bill; nothing does so on its own.
+    //
+    // AND WHERE IT SITS TODAY. This URL is printed on paper and outlives the
+    // day it was written: once the office puts the $57.47 against a bill,
+    // "held for you, not yet put against a bill" is false, and a resident
+    // reading it in March would rightly ask why her money is still sitting
+    // in a drawer. The loader reads the sibling's charge_id; this says which.
+    (view.onAccount == null
+      ? ""
+      : view.onAccountApplied
+        ? ` $${view.onAccount.toFixed(2)} of that went on account with the office and has since been put against a bill.`
+        : ` $${view.onAccount.toFixed(2)} of that is on account with the office — held for you, not yet put against a bill.`);
 
   if (view.alreadyConfirmedAt) {
     return htmlPage("Already confirmed 🌊", `${line}\n\nYou've confirmed this one — nothing more to do.`);

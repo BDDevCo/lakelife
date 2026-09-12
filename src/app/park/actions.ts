@@ -9,18 +9,20 @@ import { liftedNoticesSignal } from "@/lib/send-capability";
 import { toDaterange, parseDaterange, type Lot, effectiveSeason } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
 import { paymentsAreLive } from "@/lib/charge-gate";
-// Pure date maths, already used by the re-rate path — no need for a second copy.
-import { addDays as addDaysISO } from "./rerate-helpers";
 import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
   buildLotRange, planBulkRates, buildTenant, buildTenantEdit, buildParkDialsRow,
-  agreementMonthsFor,
+  agreementMonthsFor, dayInWords, planMoveOut, type ChainLink,
   type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
   type TenantInput, type TenantEditInput, type ParkDialsInput, lotLabelRange, SITE_DEFAULTS,
   buildOnlineRentRow, onlineRentCautions, CARD_FEE_CEILING, type OnlineRentInput,
 } from "./park-helpers";
 import { canEnableParkServices } from "./service-helpers";
+// The one set of sentences for "both are a condition of renting".
+import { contactProblem } from "./onboard-helpers";
+// Months a person reads are words; the withdrawn-agreement signal names them.
+import { prettyMonth } from "./ledger-helpers";
 
 /**
  * The park owner's write path. Every action asserts membership of the park it
@@ -528,7 +530,7 @@ export async function addTenant(
   const capAdmin = createServiceClient();
   const capRes = await capAdmin
     .from("parks")
-    .select("max_agreement_months, default_agreement_months")
+    .select("max_agreement_months, default_agreement_months, cutover_date")
     .eq("id", parkId)
     .maybeSingle();
   // Null means "he has no cap". A failed read means we don't know his, and
@@ -543,8 +545,23 @@ export async function addTenant(
     (capRes.data?.default_agreement_months as number | null) ?? null,
     (capRes.data?.max_agreement_months as number | null) ?? null,
   );
+  const cutoverDate = (capRes.data?.cutover_date as string | null) ?? null;
 
-  const built = buildTenant(input, todayLakeDate(), cap);
+  // A SIGNED LEASE NEEDS BOTH WAYS TO REACH THEM — the owner's condition of
+  // renting, asked in the same words the filing screen uses. A holdover is
+  // not asked: the condition is the lease's, and they have not signed one.
+  // A name is still enough to put them on the roll.
+  if (input.signedNewLease) {
+    const contact = contactProblem(input.email, input.mobile);
+    if (contact) return { ok: false, error: contact };
+  }
+
+  // THE TICK DECIDES ORIGIN, LENGTH, START AND STATUS TOGETHER, inside the
+  // builder. This door used to pass the term unconditionally and write no
+  // origin at all — so a holdover filed here landed on the column default,
+  // 'application', and was billed a fee they never agreed to on a one-month
+  // window that then expired.
+  const built = buildTenant(input, todayLakeDate(), cap, { cutoverDate });
   if (!built.ok || !built.renter || !built.tenancy) {
     return { ok: false, error: built.error };
   }
@@ -568,9 +585,17 @@ export async function addTenant(
     // This path never recorded it at all, so a household who has lived here
     // since 2019 read as having moved in the day the office typed them in.
     tenancy_began_on: built.tenancy.beganOn,
-    // They are living there right now. `active` holds the dates, which is what
-    // makes the lot read as occupied rather than vacant.
-    status: "active",
+    // `active` for somebody living there now, `approved` for a signed lease
+    // that has not started yet. Both hold the dates, which is what makes the
+    // lot read as taken rather than vacant.
+    status: built.tenancy.status,
+    // NAMED, NEVER DEFAULTED. Paired with the length inside `buildTenant`:
+    // 'grandfathered' for a holdover (no fee, no cap), 'application' for a
+    // signed lease.
+    origin: built.tenancy.origin,
+    // The office's sheet is the owner's knowledge, never the tenant's — the
+    // same value the filing screen writes.
+    amount_source: "owner_knowledge",
   });
 
   if (resErr) {
@@ -597,7 +622,23 @@ export async function addTenant(
     // Nothing was ever going to be sent — and no text this app sent has been
     // delivered since 19 July. The sentence promised a channel to a household
     // that would then wait for it.
-    signal: `${built.renter.display_name} is on the roll.` +
+    signal: `${built.renter.display_name} is on the roll` +
+      (built.tenancy.origin === "grandfathered"
+        // WHAT WAS FILED, IN HIS WORDS. On the arrangement they already had,
+        // and — because this door takes a name alone — with nothing to reach
+        // them by unless he typed it. Saying so is what stops "on the roll"
+        // reading as "done".
+        ? ", on the arrangement they already had" +
+          (built.renter.email && built.renter.phone_on_file_with_park
+            ? "."
+            : !built.renter.email && !built.renter.phone_on_file_with_park
+              ? " — the file has no email or phone yet."
+              : !built.renter.email
+                ? " — the file has no email yet."
+                : " — the file has no phone yet.")
+        : built.tenancy.status === "approved"
+          ? `, on the new lease from ${dayInWords(built.tenancy.start)}.`
+          : ", on the new lease.") +
       (built.renter.phone_on_file_with_park
         ? " The number is on file for you to ring — they'll get anything automated only once they ask for it themselves."
         : ""),
@@ -824,7 +865,7 @@ export async function endTenancy(
   const admin = createServiceClient();
   const stayRes = await admin
     .from("lot_reservations")
-    .select("id, during, status")
+    .select("id, during, status, agreement_chain_id, agreement_seq")
     .eq("id", reservationId)
     .maybeSingle();
   if (stayRes.error) {
@@ -872,37 +913,126 @@ export async function endTenancy(
     };
   }
 
+  // AND IT ENDS THE WHOLE CHAIN. The last day may fall inside any link of the
+  // household's agreement chain — on 1 February the row a screen can reach is
+  // the successor, and the day they left is in January — and every link
+  // written for after that day is withdrawn, or the February run bills a
+  // family that has gone and the lot reads as theirs until May. See
+  // `planMoveOut` for the rules.
+  const chainId = (stay.agreement_chain_id as string | null) ?? null;
+  const linksRes = chainId
+    ? await admin
+        .from("lot_reservations")
+        .select("id, during, status, agreement_seq, moved_out_on")
+        .eq("agreement_chain_id", chainId)
+    : { data: [stay], error: null };
+  if (linksRes.error) {
+    return { ok: false, error: readFailedMessage("their other agreements", linksRes.error, { money: true }) };
+  }
+  const links: ChainLink[] = (linksRes.data ?? []).map((l) => ({
+    id: l.id as string,
+    range: parseDaterange(l.during as string),
+    status: l.status as string,
+    agreementSeq: ((l as { agreement_seq?: number | null }).agreement_seq as number | null) ?? 1,
+    movedOutOn: ((l as { moved_out_on?: string | null }).moved_out_on as string | null) ?? null,
+  }));
+
   const lastDay = (moveOutISO ?? "").trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(lastDay)) {
-    return { ok: false, error: "Pick the last day they lived there." };
-  }
-  if (lastDay < range.start) {
-    return { ok: false, error: `They moved in on ${range.start} — the last day can't be before that.` };
+  const plan = planMoveOut(links, lastDay);
+  if (!plan.ok) return { ok: false, error: plan.error };
+
+  if (plan.trim) {
+    const { data: done, error } = await admin
+      .from("lot_reservations")
+      .update({
+        status: "ended",
+        during: toDaterange({ start: plan.trim.start, end: plan.trim.newEnd }),
+        moved_out_on: lastDay,
+      })
+      .eq("id", plan.trim.id)
+      .in("status", ["approved", "active"])   // one closer wins a double-tap
+      .select("id");
+    if (error) return { ok: false, error: `Couldn't close that out — ${error.message}` };
+    if (!done?.length) return { ok: false, error: "Somebody just closed that one." };
   }
 
-  // `during` is half-open: a last day of the 20th means the range ends on the
-  // 21st. Storing the human date separately (moved_out_on) keeps every screen
-  // out of that arithmetic.
-  const newEnd = addDaysISO(lastDay, 1);
-
-  const { data: done, error } = await admin
-    .from("lot_reservations")
-    .update({
-      status: "ended",
-      during: toDaterange({ start: range.start, end: newEnd }),
-      moved_out_on: lastDay,
-    })
-    .eq("id", reservationId)
-    .in("status", ["approved", "active"])   // one closer wins a double-tap
-    .select("id");
-  if (error) return { ok: false, error: `Couldn't close that out — ${error.message}` };
-  if (!done?.length) return { ok: false, error: "Somebody just closed that one." };
+  // THE LATER LINKS, WITHDRAWN. Cancelled, not ended: nobody lived in them, so
+  // there is no last day, nothing to prorate and nothing to bill. Guarded on
+  // the chain and the sequence so a link somebody else just closed is left
+  // alone.
+  let withdrawn: string[] = [];
+  if (plan.cancel.length > 0 && chainId) {
+    const { data: gone, error: cancelErr } = await admin
+      .from("lot_reservations")
+      .update({ status: "cancelled" })
+      .eq("agreement_chain_id", chainId)
+      .gt("agreement_seq", plan.coveringSeq)
+      .in("status", ["approved", "active"])
+      .select("id, during");
+    if (cancelErr) {
+      // The close-out DID save. Say so, and say what is still standing.
+      // "Try again" from a row that no longer shows Move out is not a path
+      // he can take, and which control IS depends on where the standing
+      // successor sits against today — THREE states, not two:
+      //   - RUNNING (covers today): a late close-out, recorded on 3 February
+      //     for a household who left on 27 January. The successor is the
+      //     row's CURRENT link and the row offers Move out, which walks the
+      //     chain and withdraws it when given the same last day.
+      //   - STILL TO START: the roll's 'Withdraw the next agreement',
+      //     offered for a lot whose current link has ended and whose
+      //     successor still stands.
+      //   - ALREADY LAPSED (ended before today): a close-out recorded in
+      //     March for a household who left in January, whose February link
+      //     has run its course. It billed February and bills nothing now;
+      //     buildRentRoll reads the lot vacant and NO control reaches it. The
+      //     old two-way sentence called that one 'Move out' and said it
+      //     'still bills' — a button the row lacks and a claim that was false.
+      // Naming the wrong one sends him to a button the row lacks.
+      const today = todayLakeDate();
+      const dated = plan.cancel.filter((c) => c.start != null);
+      const running = dated.some((c) => c.start! <= today && (c.end == null || c.end > today));
+      const toCome = dated.some((c) => c.start! > today);
+      const closed = `Closed out — last day ${dayInWords(lastDay)} — but their next agreement couldn't be withdrawn`;
+      if (!running && !toCome) {
+        const billed = dated
+          .map((c) => prettyMonth(c.start!.slice(0, 7)))
+          .filter((m, i, all) => all.indexOf(m) === i);
+        const months = billed.length <= 1
+          ? billed[0] ?? "the months after"
+          : `${billed.slice(0, -1).join(", ")} and ${billed[billed.length - 1]}`;
+        return {
+          ok: false,
+          error:
+            `${closed}: it already billed ${months} for a household who had left. ` +
+            `That's ours to fix — get in touch and we'll sort it.`,
+        };
+      }
+      return {
+        ok: false,
+        error:
+          `${closed} and still bills. Withdraw it from their row on the roll ` +
+          (running ? `(Move out, with the same last day).` : `('Withdraw the next agreement').`),
+      };
+    }
+    withdrawn = (gone ?? [])
+      .map((g) => parseDaterange(g.during as string)?.start ?? null)
+      .filter((x): x is string => !!x)
+      .sort()
+      .map((start) => prettyMonth(start.slice(0, 7)));
+  }
 
   revalidatePath("/park");
-  return {
-    ok: true,
-    signal: `Closed out — last day ${lastDay}. Their final month bills for the days they were here.`,
-  };
+  revalidatePath("/park/today");
+  revalidatePath("/park/rent");
+  const closed = plan.trim
+    ? `Closed out — last day ${dayInWords(lastDay)}. Their final month bills for the days they were here.`
+    : `They were already closed out on ${dayInWords(lastDay)}.`;
+  const withdrawal = withdrawn.length === 0
+    ? ""
+    : withdrawn.length === 1
+      ? ` Their ${withdrawn[0]} agreement was withdrawn too — nothing bills for it.`
+      : ` Their ${withdrawn.slice(0, -1).join(", ")} and ${withdrawn[withdrawn.length - 1]} agreements were withdrawn too — nothing bills for them.`;
+  return { ok: true, signal: closed + withdrawal };
 }
 
 /**
@@ -978,7 +1108,7 @@ export async function editTenancy(
   // change the meaning of what he typed.
   const resRow = await admin
     .from("lot_reservations")
-    .select("id, renter_id, quoted_amount, due_day, status")
+    .select("id, renter_id, quoted_amount, due_day, status, term")
     .eq("id", reservationId)
     .maybeSingle();
   if (resRow.error) {
@@ -992,6 +1122,9 @@ export async function editTenancy(
     {
       rent: res.quoted_amount == null ? null : Number(res.quoted_amount),
       dueDay: (res.due_day as number | null) ?? null,
+      // How they pay today, so a "monthly" that is already monthly is no
+      // change and a real change is checked against it.
+      term: (res.term as string | null) ?? null,
     },
     todayLakeDate(),
   );
@@ -1009,6 +1142,10 @@ export async function editTenancy(
     tenancyPatch.amount_source = built.tenancy.amount_source;
     tenancyPatch.amount_source_at = new Date().toISOString();
   }
+  // HOW THEY PAY. The charge run bills months only and tells him to change a
+  // yearly tenancy to monthly from here; this is the write that instruction
+  // names. Only present when the builder saw a real change.
+  if (built.tenancy.term) tenancyPatch.term = built.tenancy.term;
 
   const { error: tErr } = await admin
     .from("lot_reservations")
@@ -1040,13 +1177,28 @@ export async function editTenancy(
   }
 
   revalidatePath("/park");
+  // A term change is what the rent screen sent him here for; that screen
+  // reads `term` on every run and is cached.
+  if (built.tenancy.term) revalidatePath("/park/rent");
+  const termNote = built.tenancy.term
+    ? ` Filed as paid ${TERM_SAID[built.tenancy.term] ?? built.tenancy.term} now` +
+      (built.tenancy.quoted_amount != null
+        ? ` — $${built.tenancy.quoted_amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` +
+          (built.tenancy.term === "monthly" ? " a month." : ".")
+        : ".")
+    : "";
   return {
     ok: true,
-    signal: input.confirmedWithTenant
+    signal: (input.confirmedWithTenant
       ? `Confirmed with ${built.renter.display_name}. That's confirmed with them now, not just on the old roll.`
-      : "Saved.",
+      : "Saved.") + termNote,
   };
 }
+
+/** How a term reads in a sentence — "paid yearly", never "paid annual". */
+const TERM_SAID: Record<string, string> = {
+  monthly: "monthly", weekly: "weekly", seasonal: "by the season", annual: "yearly", nightly: "nightly",
+};
 
 // ------------------------------------------------------- lot lifecycle ----
 

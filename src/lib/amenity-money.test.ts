@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { HAND_KEYED, handKeyedRefusal } from "@/app/park/ledger-helpers";
 
 /**
  * MONEY THAT COULD LEAVE WITHOUT ANYBODY DECIDING IT SHOULD.
@@ -27,6 +28,9 @@ import { fileURLToPath } from "node:url";
 
 const src = (rel: string) =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+/** Comments stripped, so a sentence explaining why `card` is gone cannot read as `card` being offered. */
+const strip = (s: string) =>
+  s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 
 describe("a day she has used is not hers to give back", () => {
   it("cancelDayByToken refuses a day that has started", () => {
@@ -177,14 +181,38 @@ describe("how they paid is recorded, not assumed", () => {
     expect(s).toMatch(/payMethod\[h\.id\] \?\? "cash"/);
   });
 
-  it("offers every method the action accepts", () => {
-    const ui = src("../components/ParkAmenities.tsx");
-    const action = src("../app/park/amenity-actions.ts");
-    const accepted = action.match(/\["cash", "check", "card", "transfer", "other"\]/);
-    expect(accepted).not.toBeNull();
-    for (const m of ["cash", "check", "card", "transfer", "other"]) {
-      expect(ui, `the picker is missing ${m}, which the action accepts`).toContain(`value="${m}"`);
-    }
+  it("offers exactly the four ways money arrives by hand — the ones the action accepts", () => {
+    /**
+     * This used to pin a five-way list with `card` on it as correct. The
+     * action inserted no processor reference, so every "Card" pressed here
+     * was refused by park_payments_online_has_a_reference (0108, unconditional
+     * on `kind`) and the office read the raw constraint text. The action now
+     * reads the ONE refusal (handKeyedRefusal); the picker offers what it
+     * accepts and nothing it refuses.
+     */
+    const ui = strip(src("../components/ParkAmenities.tsx"));
+    const action = strip(src("../app/park/amenity-actions.ts"));
+    expect(action).toMatch(/handKeyedRefusal\(method\)/);
+    // And the amount: this door said "isn't a number" of 0 and let 0.004
+    // reach the insert as 0.00. Same three sentences as every other door,
+    // before the booking is even read.
+    const at = action.indexOf("export async function collectAmenityMoney(");
+    expect(at).toBeGreaterThan(0);
+    const collect = action.slice(at, action.indexOf("\nexport async function", at + 10));
+    expect(collect).toMatch(/paymentAmountRefusal\(n\)/);
+    expect(collect).not.toMatch(/isn't a number/);
+    expect(collect.indexOf("paymentAmountRefusal(n)")).toBeLessThan(collect.indexOf('.from("amenity_bookings")'));
+    expect(action, "the action grew its own list again").not.toMatch(/\[\s*"cash",\s*"check"/);
+    const offered = [...ui.matchAll(/<option value="([a-z]+)">/g)].map((m) => m[1]);
+    expect(offered, "the picker is gone — this scan is measuring nothing").not.toEqual([]);
+    expect(offered).toEqual([...HAND_KEYED]);
+    for (const m of offered) expect(handKeyedRefusal(m), `the picker offers ${m}, which the action refuses`).toBeNull();
+  });
+
+  it("calls a bank push what every other office door calls it", () => {
+    const ui = strip(src("../components/ParkAmenities.tsx"));
+    expect(ui).toMatch(/<option value="transfer">Bank transfer<\/option>/);
+    expect(ui).not.toMatch(/value="card"/);
   });
 });
 

@@ -1,5 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
-import { mustRead, readFailedMessage } from "@/lib/must-read";
+import { mustRead, readFailedMessage, ReadFailed } from "@/lib/must-read";
 import { isBearerToken } from "@/lib/token-format";
 import { receiptRef, METHOD_WORD } from "@/app/park/receipt-helpers";
 import { longDate } from "@/lib/lake-time";
@@ -32,8 +32,25 @@ import { longDate } from "@/lib/lake-time";
 export interface ConfirmView {
   parkName: string;
   lotNumber: string;
-  /** The RENT. What the card was actually charged is amount + fee. */
+  /**
+   * WHAT THEY HANDED OVER — the whole of it. A payment for more than the bill
+   * is recorded as two rows (recordPayment: the bill's share against the
+   * charge, the rest on account), and the receipt's link carries the bill
+   * row's token. Asking "does this match what you handed over?" against
+   * $542.53 when she handed $600 manufactures a dispute, so the on-account
+   * sibling is folded back in here. What the card was actually charged is
+   * amount + fee.
+   */
   amount: number;
+  /** The part of `amount` that went on account with the office, or null when none did. */
+  onAccount: number | null;
+  /**
+   * Whether the office has since put that part against a bill. This page is
+   * a permanent URL printed on paper, and "held for you, not yet put against
+   * a bill" was true the day the receipt was written and false from the day
+   * applyOnAccount set the sibling's charge_id. Read, never assumed.
+   */
+  onAccountApplied: boolean;
   /** Card convenience fee charged on top, or null. */
   fee: number | null;
   method: string;
@@ -41,6 +58,63 @@ export interface ConfirmView {
   receivedOn: string;
   ref: string;
   alreadyConfirmedAt: string | null;
+}
+
+/** The key recordPayment gives the on-account half of a split — spelled once. */
+function siblingKey(key: string): string {
+  return `${key}:onaccount`;
+}
+
+/**
+ * THE OTHER HALF OF A SPLIT PAYMENT — one helper, because three doors read it.
+ *
+ * recordPayment writes the on-account row under the bill row's key +
+ * ":onaccount", in the same insert, and the receipt's link carries the bill
+ * row's token. The page that asks "does this match what you handed over?",
+ * the claim filed when the answer is "no", and the stamp written when the
+ * answer is "yes" must therefore all cover the SAME money: she reads $600 on
+ * the page, taps "That's not what I paid", and the office must see a claim
+ * about $600 — not one that says the receipt records $542.53, a number nobody
+ * printed for her. Taps "Yes, that's right", and both rows carry her
+ * confirmation, not just the one whose token she had. One rule in one place,
+ * so the next door that quotes a receipt cannot fold half of it in.
+ *
+ * WHERE THE REST SITS is read, not assumed: applyOnAccount moves it by
+ * setting the sibling's charge_id, and the receipt's link is a permanent URL.
+ * `onAccountApplied` is how the page stops saying "held for you" about money
+ * that was put against February a month ago.
+ *
+ * Only a row against a bill can have a sibling. mustRead, never maybe: a
+ * failed read here would show the bill's share as the whole and ask her to
+ * agree to it (or file a claim about it). Callers that return `{ ok, error }`
+ * rather than throw must catch ReadFailed.
+ */
+async function wholeHandedOver(
+  admin: ReturnType<typeof createServiceClient>,
+  pay: { charge_id: unknown; amount: unknown; idempotency_key: unknown },
+): Promise<{
+  amount: number;
+  onAccount: number | null;
+  onAccountApplied: boolean;
+  /** The sibling row's id, so a stamp can land on both halves in one update. */
+  siblingId: string | null;
+}> {
+  const key = (pay.idempotency_key as string | null) ?? null;
+  const sibling = pay.charge_id && key
+    ? mustRead("the rest of that payment", await admin
+        .from("park_payments")
+        .select("id, amount, charge_id")
+        .eq("idempotency_key", siblingKey(key))
+        .is("reversed_at", null)
+        .maybeSingle())
+    : null;
+  const onAccount = sibling ? Number(sibling.amount) : null;
+  return {
+    amount: Math.round((Number(pay.amount) + (onAccount ?? 0)) * 100) / 100,
+    onAccount,
+    onAccountApplied: sibling?.charge_id != null,
+    siblingId: sibling ? (sibling.id as string) : null,
+  };
 }
 
 export async function loadPaymentByToken(token: string): Promise<ConfirmView | null> {
@@ -55,10 +129,12 @@ export async function loadPaymentByToken(token: string): Promise<ConfirmView | n
   // that their receipt exists. Only say it when we actually looked.
   const pay = mustRead("your receipt", await admin
     .from("park_payments")
-    .select("id, charge_id, park_id, kind, amount, fee_amount, method, reference, received_on, receipt_no, renter_confirmed_at")
+    .select("id, charge_id, park_id, kind, amount, fee_amount, method, reference, received_on, receipt_no, renter_confirmed_at, idempotency_key")
     .eq("confirm_token", token)
     .maybeSingle());
   if (!pay) return null;
+
+  const { amount, onAccount, onAccountApplied } = await wholeHandedOver(admin, pay);
 
   // A PAYMENT NEED NOT HAVE A CHARGE ANY MORE (0102). This resolved the park by
   // reading it OFF the charge and bailed when there wasn't one — so the
@@ -92,7 +168,9 @@ export async function loadPaymentByToken(token: string): Promise<ConfirmView | n
     // A deposit or a cheque with no bill has no lot on the record. Say so
     // rather than printing "?" as though something were missing.
     lotNumber: (lot?.lot_number as string) ?? (pay.charge_id ? "?" : "—"),
-    amount: Number(pay.amount),
+    amount,
+    onAccount,
+    onAccountApplied,
     // Asking "does this match what you handed over?" while showing a figure
     // smaller than the one on their bank statement invites a dispute we caused.
     fee: pay.fee_amount == null ? null : Number(pay.fee_amount),
@@ -104,23 +182,49 @@ export async function loadPaymentByToken(token: string): Promise<ConfirmView | n
   };
 }
 
-/** "Yes, that's right." Recorded as the renter's act, not the park's. */
+/**
+ * "Yes, that's right." Recorded as the renter's act, not the park's.
+ *
+ * BOTH HALVES OR NEITHER. The page asked whether $600 matches what she
+ * handed over; her "yes" is about $600. This stamped the bill row alone, so
+ * the $57.47 sibling — the row the office later moves to February, and the
+ * one most likely to be argued about — sat in park_payments_unconfirmed_idx
+ * (0077) with no account of how it was given. One update over both ids, so
+ * the record cannot say she confirmed half of what she was shown. A sibling
+ * already confirmed on its own (a reversed one is never returned) keeps its
+ * stamp: the update touches only rows still unconfirmed.
+ */
 export async function confirmByToken(
   token: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const admin = createServiceClient();
   const payRes = await admin
-    .from("park_payments").select("id, renter_confirmed_at").eq("confirm_token", token).maybeSingle();
+    .from("park_payments")
+    .select("id, charge_id, amount, idempotency_key, renter_confirmed_at")
+    .eq("confirm_token", token)
+    .maybeSingle();
   if (payRes.error) return { ok: false, error: readFailedMessage("your receipt", payRes.error) };
   const pay = payRes.data;
   if (!pay) return { ok: false, error: "This link doesn't match a payment." };
   // Confirming twice is not an error — people tap links twice.
   if (pay.renter_confirmed_at) return { ok: true };
 
+  // A failed sibling read refuses rather than stamping the bill's share as
+  // the whole — that is the half-confirmation this exists to prevent.
+  let whole: { siblingId: string | null };
+  try {
+    whole = await wholeHandedOver(admin, pay);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("the rest of that payment", e) };
+  }
+
+  const ids = [pay.id as string, ...(whole.siblingId ? [whole.siblingId] : [])];
   const { error } = await admin
     .from("park_payments")
     .update({ renter_confirmed_at: new Date().toISOString(), renter_confirmed_via: "link" })
-    .eq("id", pay.id as string);
+    .in("id", ids)
+    .is("renter_confirmed_at", null);
   if (error) return { ok: false, error: "That didn't save — try again." };
   return { ok: true };
 }
@@ -138,7 +242,7 @@ export async function disputeByToken(
 ): Promise<{ ok: boolean; error?: string }> {
   const admin = createServiceClient();
   const payRes = await admin
-    .from("park_payments").select("id, charge_id, amount, received_on, receipt_no").eq("confirm_token", token).maybeSingle();
+    .from("park_payments").select("id, charge_id, amount, received_on, receipt_no, idempotency_key").eq("confirm_token", token).maybeSingle();
   if (payRes.error) return { ok: false, error: readFailedMessage("your receipt", payRes.error) };
   const pay = payRes.data;
   if (!pay) return { ok: false, error: "This link doesn't match a payment." };
@@ -153,6 +257,19 @@ export async function disputeByToken(
       ok: false,
       error: `Please ring the office and quote receipt ${pay.receipt_no ?? "on this page"} — this one isn't against a bill, so it can't be flagged here yet.`,
     };
+  }
+
+  // THE FIGURE SHE WAS SHOWN. The page said $600 (bill share + on account);
+  // the claim must say $600, or the office reads a dispute about a number
+  // nobody printed. A failed sibling read refuses rather than filing the
+  // bill's share as the whole — that would write the very lie this fixes into
+  // the claim log, where nothing later corrects it.
+  let whole: { amount: number; onAccount: number | null; onAccountApplied: boolean };
+  try {
+    whole = await wholeHandedOver(admin, pay);
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("the rest of that payment", e) };
   }
 
   const openRes = await admin
@@ -172,8 +289,17 @@ export async function disputeByToken(
     charge_id: pay.charge_id,
     asserted_by: "renter",
     note:
-      `They say the receipt is wrong — it records $${Number(pay.amount).toFixed(2)} ` +
-      `taken on ${longDate(pay.received_on as string)}. Raised from their own confirmation link.`,
+      `They say the receipt is wrong — it records $${whole.amount.toFixed(2)} ` +
+      `taken on ${longDate(pay.received_on as string)}` +
+      // Where the rest sits, as of the day she taps — a claim note is never
+      // corrected later, so it must not say "on account" about money the
+      // office has already put against a bill.
+      (whole.onAccount == null
+        ? ""
+        : whole.onAccountApplied
+          ? ` ($${whole.onAccount.toFixed(2)} of it since put against a bill)`
+          : ` ($${whole.onAccount.toFixed(2)} of it on account with the office)`) +
+      `. Raised from their own confirmation link.`,
   });
   if (error) return { ok: false, error: "That didn't save — try again." };
   return { ok: true };

@@ -4,8 +4,9 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { saveFee, setFeeActive, type FeesPage } from "@/app/park/fee-actions";
+import { SIGNED_LEASE_LABEL } from "@/app/park/sign-helpers";
 import {
-  COVER_LABEL, CADENCE_LABEL, APPLIES_LABEL, coverageSummary,
+  COVER_LABEL, CADENCE_LABEL, APPLIES_LABEL, coverageSummary, evidenceLine,
   FEE_COVERS, FEE_EXTRA_COVERS,
   type FeeCadence, type FeeAppliesTo,
 } from "@/app/park/fee-helpers";
@@ -118,13 +119,17 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
           A fee is never charged to a tenancy the park INHERITED — they signed
           nothing with him and there is no way to serve notice yet. Without
           this sentence the only symptom is a payer count quietly lower than
-          his household count, which reads as a fault rather than a rule. */}
+          his household count, which reads as a fault rather than a rule.
+          AND WHERE THE SIGNING IS RECORDED: this promised "when they sign"
+          while no screen had a control for it, so a household that signed on
+          1 January stayed fee-exempt with this sentence still on screen. */}
       {page.inheritedTenancies > 0 && (
         <p className="mut" style={{ margin: "0 0 14px", lineHeight: 1.5, maxWidth: 640, fontSize: 13 }}>
           This won&apos;t be charged to the {page.inheritedTenancies}{" "}
           {page.inheritedTenancies === 1 ? "household you inherited" : "households you inherited"} —
           they agreed to their rent with the previous owner, not to a fee with
-          you. It starts for each of them when they sign a new agreement.
+          you. It starts for each of them when they sign your new lease — record
+          that from their row on the rent roll (&apos;{SIGNED_LEASE_LABEL}&apos;).
         </p>
       )}
 
@@ -133,18 +138,16 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
         <div className="ll-card ll-card-pad"
           style={{ marginBottom: 14, background: short ? "rgba(200,60,40,.07)" : undefined }}>
           <strong style={{ fontSize: 15 }}>{coverageSummary(c, page.coveragePayers, page.fees.length)}</strong>
-          {/* HOW THIN THE EVIDENCE IS, and the one-month case said NOTHING.
-              Over two months or more this read "averaged over N months"; at
-              exactly one it was silent — so the thinnest possible evidence was
-              the only case presented without a caveat, in the sentence whose
-              own job is to decide whether he changes the fee. One month is
-              also a SEASON: a June of mowing is not a January of ploughing,
-              and a fee set on it is set for a year. */}
-          {c.actualCost > 0 && (
-            <div className="mut" style={{ fontSize: 13, marginTop: 6 }}>
-              {page.monthsObserved > 1
-                ? `Averaged over ${page.monthsObserved} months of bills.`
-                : "From one month of bills — thin evidence for a number you set for a year."}
+          {/* HOW THIN THE EVIDENCE IS, PER BILL. This used to say "averaged
+              over N months" with N counted across every bill — true of the
+              sewer, which arrives monthly, and false of the three baselines
+              entered once, which the same N was quietly dividing. Now each
+              bill names the months it rests on, and the one-month caveat stays
+              as long as any bill is resting on one: a June of mowing is not a
+              January of ploughing, and a fee set on it is set for a year. */}
+          {c.actualCost > 0 && evidenceLine(c) && (
+            <div className="mut" style={{ fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
+              {evidenceLine(c)}
             </div>
           )}
           {c.uncovered.length > 0 && (

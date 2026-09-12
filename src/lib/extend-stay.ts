@@ -19,8 +19,12 @@
  * reach her is a text with a signed link. That is why this is one tap and not
  * a login.
  *
- * WHAT THIS MODULE NEVER DOES: invent a price. The extension is quoted from
- * the park owner's own rate card, exactly like the original stay.
+ * WHAT THIS MODULE NEVER DOES: invent a price. An extension is quoted from
+ * the park owner's own rate card, exactly like the original stay; a renewal
+ * at a capped park is quoted at the rent the household already pays, as it
+ * stands on the successor's first morning — the caller resolves that from the
+ * served history, and the card is only the fallback for a household with no
+ * rent on file.
  */
 
 import { nightsIn, type DateRange, type Term } from "@/lib/parks";
@@ -138,7 +142,8 @@ export type ExtendRefusal =
   | "not_extendable"
   | "lot_taken"
   | "no_rate"
-  | "already_ended";
+  | "already_ended"
+  | "inherited";
 
 /**
  * May this stay be extended right now? The DATABASE is the real guard — the
@@ -157,25 +162,42 @@ export function canExtend(input: {
   rates: { term: Term; amount: number }[];
   /** The park's agreement cap, when it has one. */
   capMonths?: number | null;
-  /** What this tenant already pays. The fallback price on a renewal. */
+  /**
+   * What this tenant pays on the successor's first morning — the caller
+   * resolves it from the served rent history, so an increase already noticed
+   * for a date before the renewal starts is in it. On a renewal THIS is the
+   * price shown and written; the card is only for a household with no rent on
+   * file.
+   */
   currentAmount?: number | null;
+  /** How the current agreement came to be. A household still on the seller's
+   *  arrangement ('grandfathered') signs its new lease with the park, never
+   *  from this link. */
+  origin?: string | null;
 }): { ok: boolean; refusal?: ExtendRefusal; range?: DateRange; price?: number; isRenewal?: boolean } {
-  const { range, term, status, todayISO, otherHeld, rates, capMonths, currentAmount } = input;
+  const { range, term, status, todayISO, otherHeld, rates, capMonths, currentAmount, origin } = input;
 
   if (!range) return { ok: false, refusal: "not_found" };
   if (status !== "approved" && status !== "active") return { ok: false, refusal: "not_extendable" };
+  // Before 'already_ended', as on the owner's side: that sentence sends them
+  // to "the park can set up a new one", and a new one is exactly what the
+  // roll's signing control records — this link must not be a second door to it.
+  if (origin === "grandfathered") return { ok: false, refusal: "inherited" };
   if (range.end < todayISO) return { ok: false, refusal: "already_ended" };
 
   // The park's asking rate, when it publishes one for this term.
   let price = extensionPrice(rates, term);
 
-  // A RENEWAL FALLS BACK TO WHAT THEY ALREADY PAY. At a park that caps
-  // agreement length, renewing is the normal way to stay, and refusing it
-  // because the rate CARD is empty would strand a sitting tenant who has been
-  // paying the same rent for a year. The card wins when it exists — that is
-  // how the owner raises a price — but its absence is not a reason to refuse
-  // somebody the next term.
-  if (price == null && capMonths != null && currentAmount != null && currentAmount > 0) {
+  // A RENEWAL IS AT THE RENT THEY ALREADY PAY. At a park that caps agreement
+  // length, renewing is the normal way to stay. The card is the ASKING rate —
+  // what a new tenant would be quoted — and writing it onto a sitting tenant's
+  // next agreement would be a rent change nobody served notice on; the owner
+  // raises a sitting tenant's rent from the re-rate screen, with notice, and
+  // that increase arrives here inside `currentAmount`. The card is the
+  // fallback for a household with no rent on file, so an empty card never
+  // strands somebody who has paid the same rent for a year — and a missing
+  // rent never refuses somebody the park has a price for.
+  if (capMonths != null && currentAmount != null && currentAmount > 0) {
     price = currentAmount;
   }
   if (price == null) return { ok: false, refusal: "no_rate" };
@@ -201,5 +223,9 @@ export function refusalText(r: ExtendRefusal): string {
     // Deliberately does not say who took it or until when. That is somebody
     // else's business, and the renter only needs to know what to do next.
     case "lot_taken":       return "That site is spoken for after your dates. The park can look for another one.";
+    // A household inherited from the previous owner signs its new lease with
+    // the park; that act ends the old arrangement and is recorded from the
+    // rent roll, not from a tap on a text.
+    case "inherited":       return "Your new agreement is signed with the park — give them a call and they'll have it ready.";
   }
 }

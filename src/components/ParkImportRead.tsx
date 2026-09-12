@@ -9,6 +9,10 @@ import {
   importBlockerText,
   cadenceTotals,
   checkTotals,
+  sheetCadence,
+  heldCadence,
+  answeredCadence,
+  type HeldCadence,
   type PlannedRow,
   type ImportBlocker,
   type RollReconciliation,
@@ -79,6 +83,9 @@ function commitFailures(counts: Record<string, unknown>): CommitFailure[] {
 const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
 
+/** The parser's top-of-screen cards about a cadence — the ones his answers settle. */
+const CADENCE_CARDS = new Set(["RENT_NOT_MONTHLY", "TERM_NOT_MONTHLY", "TERM_NOT_READ", "TERM_CONFLICTS"]);
+
 export function ParkImportRead({ view }: { view: ReadView }) {
   const [showPaste, setShowPaste] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
@@ -121,11 +128,56 @@ export function ParkImportRead({ view }: { view: ReadView }) {
   const live = view.rows.filter((r) => !r.skipped);
   const cadence = cadenceTotals(live);
   /** Of the rows in that figure, how many still need an answer from him. */
-  const pendingInCadence = view.needsYou.filter((r) => r.amount != null).length;
+  const pendingInCadence = view.needsYou.filter(
+    (r) => r.amount != null && !r.blockers.includes("bad_term") && !r.blockers.includes("looks_yearly"),
+  ).length;
+  // THE SHEET'S OWN CADENCE, when it is not a month. Mike's roster carries a
+  // yearly figure per lot; read as months it printed "$67,500 a month" here
+  // and "ties to the penny" in green below. Those rows are held for the
+  // monthly rent and left out of every figure on this card.
+  const sheetSays = sheetCadence(live);
+  // AND WHAT THE HELD ROWS THEMSELVES WERE STATED AS. Two different things:
+  // the sheet's cadence describes his TOTAL; the held rows describe the
+  // ROWS still waiting. Deriving the second from the first called a lone
+  // conflicting row on a monthly sheet "figures that look yearly against
+  // your rate cards" when nothing had measured it against a card.
+  const heldSays = heldCadence(live);
+  /**
+   * What a set of figures IS, said no more confidently than we know — in
+   * the plural for a set, and in the singular for the figure on one row.
+   * ONE table, so a kind added to one form is added to both. "mixed" — rows
+   * of more than one kind — and the null that nothing below reaches: claim
+   * nothing specific of all of them.
+   */
+  const KIND_WORDS: Record<HeldCadence, { many: string; one: string }> = {
+    annual: { many: "yearly figures", one: "a yearly one" },
+    quarterly: { many: "quarterly figures", one: "a quarterly one" },
+    conflicting: { many: "figures the sheet gives two cadences for", one: "one the sheet gives two cadences for" },
+    unreadable: { many: "figures in a cadence we couldn't read", one: "one in a cadence we couldn't read" },
+    looks_yearly: { many: "figures that look yearly against your rate cards", one: "one that looked yearly against your rate cards" },
+    mixed: { many: "figures we won't read as a monthly rent", one: "one we won't read as a monthly rent" },
+  };
+  const phraseFor = (c: HeldCadence | null) => KIND_WORDS[c ?? "mixed"].many;
+  const figureWas = (c: HeldCadence | null) => KIND_WORDS[c ?? "mixed"].one;
+  const heldPhrase = phraseFor(heldSays);
+  const sheetPhrase = phraseFor(sheetSays);
+  // AND THE ROWS HE HAS ANSWERED WITH A FIGURE THAT IS NOT THE SELLER'S. His
+  // total sums the figures he printed; once a yearly one has the monthly
+  // rent typed over it, no total he could have printed checks the rows —
+  // and the sentence below says so, rather than promising a check that his
+  // answer made impossible.
+  const answered = answeredCadence(live);
+  // THE CADENCE QUESTIONS, ONCE HE HAS ANSWERED THEM. The top-of-screen
+  // cards come from the stored parse and would sit in red for the life of
+  // the batch — over a plan showing eighteen ready. Derived from the PLAN,
+  // not the parse: once no row he is still importing is held on its
+  // cadence, those two cards read as done.
+  const cadenceAnswered = !live.some((r) => r.blockers.includes("bad_term"));
   // Against the rows he has NOT stood down. Once he answers "Fry lives there
   // now", Newman's $410 stops being part of what this sheet claims — so the
   // comparison has to move with his answers, or the section keeps arguing a
-  // point he already settled.
+  // point he already settled. Null on a sheet that is not monthly — see
+  // checkTotals — and the sentence below says why.
   const totals = checkTotals(view.statedTotal, live);
 
   function answer(lineNo: number, resolved: Record<string, unknown>) {
@@ -157,15 +209,24 @@ export function ParkImportRead({ view }: { view: ReadView }) {
       </h1>
       <p className="mut" style={{ marginTop: 0 }}>Nothing is saved yet.</p>
 
-      {view.blockQuestions.map((q) => (
-        <div
-          key={q.code}
-          className="ll-card ll-card-pad"
-          style={{ marginTop: 14, background: "rgba(200,60,40,.08)" }}
-        >
-          <strong>{q.question}</strong>
-        </div>
-      ))}
+      {view.blockQuestions.map((q) => {
+        const settled = cadenceAnswered && CADENCE_CARDS.has(q.code);
+        return (
+          <div
+            key={q.code}
+            className="ll-card ll-card-pad"
+            style={{ marginTop: 14, background: settled ? "rgba(0,0,0,.04)" : "rgba(200,60,40,.08)" }}
+          >
+            {settled ? (
+              <span className="mut">
+                {q.question} — done: nothing from that column is still waiting on you.
+              </span>
+            ) : (
+              <strong>{q.question}</strong>
+            )}
+          </div>
+        );
+      })}
 
       {/* ---- Section 1: WALK THESE FIRST. Deliberately above everything. --- */}
       {(walk.length > 0 || absent.length > 0) && (
@@ -204,7 +265,16 @@ export function ParkImportRead({ view }: { view: ReadView }) {
       {/* ---- Section 2: the seller's own arithmetic. ---------------------- */}
       <section className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
         <h2 style={{ fontSize: 18, margin: "0 0 10px" }}>What this list says you collect</h2>
-        {cadence.byTerm.length === 0 ? (
+        {cadence.byTerm.length === 0 && cadence.heldForMonthly > 0 ? (
+          <p style={{ margin: 0, lineHeight: 1.5 }}>
+            The {cadence.heldForMonthly} {cadence.heldForMonthly === 1 ? "amount" : "amounts"} on
+            this list {cadence.heldForMonthly === 1 ? "is" : "are"} {heldPhrase}, so
+            there&apos;s no monthly total to show.{" "}
+            <span className="mut">
+              Each row below asks for the monthly rent, and nothing goes in until you give it.
+            </span>
+          </p>
+        ) : cadence.byTerm.length === 0 ? (
           <p className="mut" style={{ margin: 0 }}>
             No amounts on this list yet. That&apos;s fine — you can fill them in
             as you meet people.
@@ -239,7 +309,60 @@ export function ParkImportRead({ view }: { view: ReadView }) {
                   sheet claims rather than what will be written.
                 </>
               )}
+              {cadence.heldForMonthly > 0 && (
+                <>
+                  {" "}
+                  {cadence.heldForMonthly} other {cadence.heldForMonthly === 1 ? "row gives" : "rows give"} a
+                  figure we won&apos;t read as a monthly rent — {cadence.heldForMonthly === 1 ? "it's" : "they're"} not
+                  in this number, and {cadence.heldForMonthly === 1 ? "it asks" : "each asks"} for the
+                  monthly rent below.
+                </>
+              )}
             </span>
+          </p>
+        )}
+
+        {/* HIS TOTAL, WHEN IT IS NOT A CHECK ON THE ROWS. The tie check is
+            refused outright (checkTotals returns null) on a sheet that is not
+            monthly: yearly figures that add up to a yearly total are a green
+            tick over rents twelve times too big, and once he has typed the
+            monthly rents a yearly total cannot be checked against them
+            either. Said here, so a missing panel is not a silent one. What
+            the TOTAL adds up is the sheet's cadence; on a monthly sheet with
+            a row or two still held, the total is only waiting, and the
+            sentence claims nothing about what it adds up — and promises no
+            check, because the monthly rent he types over a yearly figure
+            leaves his total adding up figures the rows no longer carry. Once
+            he has, the last branch says exactly that. */}
+        {view.statedTotal != null && !totals && (sheetSays || cadence.heldForMonthly > 0 || answered) && (
+          <p className="mut" style={{ margin: "14px 0 0", paddingTop: 12, borderTop: "1px solid rgba(0,0,0,.08)", lineHeight: 1.5 }}>
+            {sheetSays ? (
+              cadence.heldForMonthly > 0 ? (
+                <>
+                  The total at the bottom of the list, {money(view.statedTotal)}, adds up {sheetPhrase},
+                  so we didn&apos;t tick it — the rows need a monthly rent, and a total like that
+                  can&apos;t be checked against monthly rents.
+                </>
+              ) : (
+                <>
+                  The total at the bottom of the list, {money(view.statedTotal)}, adds up {sheetPhrase},
+                  so we didn&apos;t tick it — a total like that can&apos;t be checked against
+                  the monthly rents you typed.
+                </>
+              )
+            ) : cadence.heldForMonthly > 0 ? (
+              <>
+                We haven&apos;t checked the total at the bottom of the list, {money(view.statedTotal)}, yet:{" "}
+                {cadence.heldForMonthly} {cadence.heldForMonthly === 1 ? "row" : "rows"} below still{" "}
+                {cadence.heldForMonthly === 1 ? "needs" : "need"} a monthly rent.
+              </>
+            ) : answered && (
+              <>
+                We haven&apos;t checked the total at the bottom of the list, {money(view.statedTotal)}:
+                on {answered.count} {answered.count === 1 ? "row" : "rows"} the sheet&apos;s figure was {figureWas(answered.kind)} and you typed the monthly rent over it,
+                so his total and the rows no longer add up the same things.
+              </>
+            )}
           </p>
         )}
 
@@ -645,7 +768,12 @@ function AskCard({
   busy: boolean;
 }) {
   const [name, setName] = useState(row.name ?? "");
-  const [rent, setRent] = useState(row.amount == null ? "" : String(row.amount));
+  // The sheet's figure is NOT the starting value for a row held on its
+  // cadence: a box pre-filled with 4500 under "Monthly rent" is one tap from
+  // filing a year as a month. The figure is on the card as evidence; the
+  // answer has to be his.
+  const heldOnCadence = row.blockers.includes("bad_term") || row.blockers.includes("looks_yearly");
+  const [rent, setRent] = useState(row.amount == null || heldOnCadence ? "" : String(row.amount));
 
   const primary = row.blockers[0] as ImportBlocker | undefined;
   const title = row.lotLabel ? `Lot ${row.lotLabel}` : `Line ${row.lineNo}`;
@@ -656,7 +784,11 @@ function AskCard({
   // visible way forward. That is the dead end the whole screen exists to avoid.
   const has = (b: ImportBlocker) => row.blockers.includes(b);
   const wantsName = has("no_name");
-  const wantsRent = has("bad_amount") || has("no_name");
+  // A figure the plan will not file as a month is answered the same way a
+  // rent we could not read is: he types the MONTHLY rent. Never pre-filled
+  // with the sheet's figure ÷ 12 — that would be the software dividing.
+  const wantsMonthly = has("bad_term") || has("looks_yearly");
+  const wantsRent = has("bad_amount") || has("no_name") || wantsMonthly;
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginBottom: 12 }}>
@@ -679,7 +811,7 @@ function AskCard({
 
       <ul style={{ margin: "10px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
         {row.blockers.map((b) => (
-          <li key={b}>{importBlockerText(b, row.lotLabel ?? undefined)}</li>
+          <li key={b}>{importBlockerText(b, row.lotLabel ?? undefined, row)}</li>
         ))}
       </ul>
 
@@ -693,7 +825,10 @@ function AskCard({
           )}
           {wantsRent && (
             <label className="ll-field" style={{ fontSize: 13 }}>
-              <span className="mut">Rent {has("bad_amount") ? "" : "(optional)"}</span>
+              <span className="mut">
+                {wantsMonthly ? "Monthly rent" : "Rent"}{" "}
+                {has("bad_amount") || wantsMonthly ? "" : "(optional)"}
+              </span>
               <input
                 value={rent}
                 onChange={(e) => setRent(e.target.value)}
@@ -720,7 +855,9 @@ function AskCard({
         {(wantsName || wantsRent) && (
           <button
             className="ll-btn"
-            disabled={busy || (wantsName && !name.trim())}
+            // A held row saved with the box still empty would refresh into
+            // the same held row with nothing said. The answer is the number.
+            disabled={busy || (wantsName && !name.trim()) || (wantsMonthly && !rent.trim())}
             onClick={() =>
               onAnswer(row.lineNo, {
                 name: name.trim() || undefined,
@@ -758,6 +895,8 @@ function shortReason(b: ImportBlocker | undefined): string {
     case "lot_twice_in_paste": return "two people on it";
     case "label_too_long": return "odd lot name";
     case "bad_amount": return "rent unreadable";
+    case "bad_term": return "not a monthly rent";
+    case "looks_yearly": return "looks yearly";
     case "no_season": return "no season set";
     default: return "needs you";
   }

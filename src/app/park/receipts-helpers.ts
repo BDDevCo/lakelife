@@ -44,12 +44,20 @@ import { csvCell as csvText } from "@/lib/csv";
 
 export type Method = "cash" | "check" | "card" | "ach" | "transfer" | "other";
 
+/**
+ * SAME ROW, ONE NAME. The resident's receipt calls `transfer` a "bank
+ * transfer" (receipt-helpers METHOD_WORD); this called it "Transfer" and
+ * reserved "Bank transfer" for processor `ach`, so the accountant's statement
+ * and the resident's receipt named the same row two ways. Both are a bank
+ * transfer; what differs is who recorded it — the processor, or the office
+ * seeing it land in the park's own account — and the label says which.
+ */
 export const METHOD_LABEL: Record<Method, string> = {
   cash: "Cash",
   check: "Check",
   card: "Card",
-  ach: "Bank transfer",
-  transfer: "Transfer",
+  ach: "Bank transfer (processor)",
+  transfer: "Bank transfer (to the park)",
   other: "Other",
 };
 

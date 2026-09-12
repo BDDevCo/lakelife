@@ -127,8 +127,12 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 due {pretty(b.dueOn)}
               </span>
             </div>
+            {/* THE BIG NUMBER IS WHAT SHE OWES, OR WHAT SHE PAID — never the
+                bill's face value over a payment that exceeded it. Below zero
+                the truthful figure is what she handed over, with the excess
+                named on the next line. */}
             <div style={{ fontSize: 26, fontWeight: 800, margin: "6px 0 2px" }}>
-              {usd(b.outstanding > 0 ? b.outstanding : b.amount)}
+              {usd(b.outstanding > 0 ? b.outstanding : b.outstanding < 0 ? b.paidTotal : b.amount)}
             </div>
 
             {/* A DISAGREEMENT OUTRANKS A BALANCE. If they have told the park
@@ -146,7 +150,18 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 {b.claimedPaidOn ? ` on ${pretty(b.claimedPaidOn)}` : ""}.
                 Nothing is being chased until they&apos;ve confirmed it.
               </div>
-            ) : b.outstanding <= 0 ? (
+            ) : b.outstanding < 0 ? (
+              /* NOT "PAID IN FULL". That sentence over a $600 payment on a
+                 $542.53 bill hid the $57.47 from the one person it belongs to.
+                 New payments are split on account before they reach here, so
+                 this is the older shape — and it still has to say what it is,
+                 without promising the software will apply it: nothing does on
+                 its own. */
+              <div style={{ fontSize: 13, color: "var(--ink-good)" }}>
+                Paid — {usd(-b.outstanding)} more than this bill. The office is
+                holding that; ask them to put it toward your next one.
+              </div>
+            ) : b.outstanding === 0 ? (
               <div style={{ fontSize: 13, color: "var(--ink-good)" }}>
                 Paid in full — thank you.
               </div>
@@ -321,6 +336,22 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
             <div className="mut" style={{ fontSize: 13, marginTop: 4 }}>None held.</div>
           )}
         </div>
+        {/* MONEY OF THEIRS NOT AGAINST ANY BILL. The office has seen this row
+            under "Money not against a bill" since 0102; the resident never
+            saw it at all. Only rendered when there is some — a "$0.00 on
+            account" card is a number nobody asked for. Says where it is, not
+            what will happen to it: the office applies it, by hand. */}
+        {view.onAccount != null && view.onAccount > 0 && (
+          <div className="ll-card ll-card-pad" style={{ flex: "1 1 200px" }}>
+            <div className="mut" style={{ fontSize: 13 }}>On account</div>
+            <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>
+              {usd(view.onAccount)}
+            </div>
+            <div className="mut" style={{ fontSize: 12, lineHeight: 1.4 }}>
+              with the office — paid, not yet against a bill
+            </div>
+          </div>
+        )}
         <div className="ll-card ll-card-pad" style={{ flex: "1 1 200px" }}>
           <div className="mut" style={{ fontSize: 13 }}>Your agreement</div>
           <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4, textTransform: "capitalize" }}>

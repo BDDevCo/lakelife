@@ -318,8 +318,22 @@ export function ownerDigest(plan: ReminderPlan, parkName: string, month: string)
 export function whyItDidntGo(error?: string): string {
   if (!error) return "The email didn't go, and no reason came back.";
   // notice-hold.ts writes both of these to be read by the park owner.
-  if (/^Notices are on hold|^We couldn't check whether/.test(error)) return error;
+  if (isHoldRefusal(error)) return error;
   return `The email didn't go — ${error}`;
+}
+
+/**
+ * Is this one of the two sentences `holdRefusal` (lib/notice-hold) writes?
+ *
+ * ONE COPY OF THE PREFIXES. The invite door needs the same question — a slip
+ * is the way round a bad address, not the way round the hold he set — and a
+ * second regex there would drift from this one the day the wording changes.
+ * reminder-helpers.test.ts ("whyItDidntGo and holdRefusal are pinned to each
+ * other") builds every sentence holdRefusal can write and asserts this
+ * recognises it, so a change to either side fails there.
+ */
+export function isHoldRefusal(s: string): boolean {
+  return /^Notices are on hold|^We couldn't check whether/.test(s);
 }
 
 /**

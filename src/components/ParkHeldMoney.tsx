@@ -110,7 +110,7 @@ export function ParkHeldMoney({
               <select value={method} onChange={(e) => setMethod(e.target.value)} style={{ marginTop: 4 }}>
                 <option value="check">Check</option>
                 <option value="cash">Cash</option>
-                <option value="transfer">Transfer</option>
+                <option value="transfer">Bank transfer</option>
                 <option value="other">Other</option>
               </select>
             </label>

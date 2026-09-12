@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   planReRate, addDays, reRateSummary, reRateProblemText,
   type ReRateTarget, type ReRateProblem,
@@ -173,5 +173,81 @@ describe("the day-one re-rate", () => {
   it("handles a month-end effective date across a year boundary", () => {
     expect(addDays("2026-12-15", 30)).toBe("2027-01-14");
     expect(addDays("2028-02-01", 29)).toBe("2028-03-01"); // leap year
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHICH ROW A CHANGE LANDS ON when a lot carries two live agreements — which
+// from 1 February 2027 is every lot at The Haven whose renewal has been
+// written. `loadTargets` used to keep whichever row the query happened to
+// return last, so the same click either scheduled the increase or refused it
+// with "Lot 7's stay ends before the new rent would start" — about a lot
+// whose May agreement was sitting right there.
+// ---------------------------------------------------------------------------
+
+type Row = Record<string, unknown>;
+const db: Record<string, Row[]> = {};
+
+class Q {
+  private fs: Array<(r: Row) => boolean> = [];
+  constructor(private t: string) {}
+  select() { return this; }
+  eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
+  in(c: string, vs: unknown[]) { this.fs.push((r) => vs.includes(r[c])); return this; }
+  private rows(): Row[] { return (db[this.t] ?? []).filter((r) => this.fs.every((f) => f(r))); }
+  maybeSingle() { const rows = this.rows(); return Promise.resolve({ data: rows[0] ?? null, error: null }); }
+  then<A, B>(
+    ok?: ((x: { data: Row[]; error: null }) => A | PromiseLike<A>) | null,
+    bad?: ((e: unknown) => B | PromiseLike<B>) | null,
+  ): PromiseLike<A | B> {
+    return Promise.resolve({ data: this.rows(), error: null }).then(ok, bad);
+  }
+}
+
+vi.mock("server-only", () => ({}));
+vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "owner" } } }) } }),
+  createServiceClient: () => ({ from: (t: string) => new Q(t) }),
+}));
+vi.mock("./data", () => ({ assertMyPark: async () => ({ role: "owner" }) }));
+vi.mock("@/lib/booking", async (orig) => ({
+  ...(await orig<typeof import("@/lib/booking")>()),
+  todayLakeDate: () => "2027-02-05",
+}));
+
+const { previewReRate } = await import("./rerate-actions");
+
+const JAN = { id: "res-jan", park_lot_id: "lot-7", during: "[2027-01-01,2027-02-01)", term: "monthly", quoted_amount: 400, status: "active" };
+const FEB = { id: "res-feb", park_lot_id: "lot-7", during: "[2027-02-01,2027-05-01)", term: "monthly", quoted_amount: 400, status: "approved" };
+
+beforeEach(() => {
+  db.parks = [{ id: "park-1", rent_notice_days: 30 }];
+  db.park_lots = [{ id: "lot-7", park_id: "park-1", lot_number: "7" }];
+});
+
+describe("a re-rate lands on the live row that covers its effective date", () => {
+  for (const [label, rows] of [["January first", [JAN, FEB]], ["February first", [FEB, JAN]]] as const) {
+    it(`targets the Feb–May row for an April increase — rows returned ${label}`, async () => {
+      db.lot_reservations = [...rows];
+      const pre = await previewReRate("park-1", [], 425, "2027-04-01");
+      expect(pre.ok).toBe(true);
+      expect(pre.preview!.plan.skipped).toHaveLength(0);
+      expect(pre.preview!.plan.changing.map((l) => l.reservationId)).toEqual(["res-feb"]);
+    });
+  }
+
+  it("when no live row reaches the date, it says so about the LAST one", async () => {
+    db.lot_reservations = [FEB, JAN];
+    const pre = await previewReRate("park-1", [], 425, "2027-06-01");
+    expect(pre.preview!.plan.changing).toHaveLength(0);
+    expect(pre.preview!.plan.skipped[0].reservationId).toBe("res-feb");
+    expect(pre.preview!.plan.skipped[0].problem).toBe("ends_before_effective");
+  });
+
+  it("an empty lot is still reported as empty", async () => {
+    db.lot_reservations = [];
+    const pre = await previewReRate("park-1", [], 425, "2027-04-01");
+    expect(pre.preview!.plan.skipped[0].problem).toBe("no_tenancy");
   });
 });

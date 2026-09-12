@@ -31,8 +31,20 @@ function lastCompleteMonth(todayISO: string): string {
 }
 
 export function ParkStatements({
-  parkId, page: initial, today,
-}: { parkId: string; page: StatementPage; today: string }) {
+  parkId, page: initial, today, paymentsLive = false,
+}: {
+  parkId: string;
+  page: StatementPage;
+  today: string;
+  /**
+   * Whether a processor is actually connected — `paymentsAreLive()` on the
+   * server, which reads an env var a client component cannot. The page passes
+   * it down. FALSE BY DEFAULT, because that is what is true today: "Refund to
+   * card" with no processor behind it was a control that could only ever
+   * produce "No payment processor is connected yet".
+   */
+  paymentsLive?: boolean;
+}) {
   const [page, setPage] = useState(initial);
   const [busy, start] = useTransition();
   const [customFrom, setCustomFrom] = useState(page.period.from);
@@ -351,11 +363,19 @@ export function ParkStatements({
                     never settled, so it cannot also be refunded" — so this
                     button was a control that could only ever produce an error,
                     on the screen where somebody is trying to fix money. */}
-                {!notCollectedAt(r) && (r.method === "card" || r.method === "ach") && (
+                {/* AND NOT OFFERED WITHOUT A PROCESSOR TO DO IT. A switch is a
+                    wish; the rail is what refunds. Hidden, and the owner told
+                    why, rather than a button that declines every time. */}
+                {!notCollectedAt(r) && (r.method === "card" || r.method === "ach") && paymentsLive && (
                   <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
                     onClick={() => openRefund(r.paymentId)}>
                     Refund to card
                   </button>
+                )}
+                {!notCollectedAt(r) && (r.method === "card" || r.method === "ach") && !paymentsLive && (
+                  <span className="mut" style={{ fontSize: 12 }}>
+                    refund needs the processor, which isn&apos;t connected
+                  </span>
                 )}
                 {/* A TRANSPOSED DIGIT USED TO BE PERMANENT. The row survives
                     with its receipt number; only the money stops counting. */}

@@ -24,7 +24,9 @@ const OPS_REASON: Record<string, string> = {
   claim_already_set_up: "the lot is already claimed by another account",
   claim_already_here: "their account already holds another lot here",
   claim_member_may_not_claim: "they're signed in as park staff",
-  claim_no_open_lot: "no current tenancy matched",
+  // 0166: an arriving household is a door too, so "current" is not the
+  // rule any more — a lot that does not exist, or a tenancy that has ended.
+  claim_no_open_lot: "no lot or household matched — nobody living there or arriving",
   claim_file_merged: "their record was merged into another",
   // Reachable, and until 0153 unloggable — the four refusals that happen
   // before a file is resolved wrote no row at all, so /ops read them as

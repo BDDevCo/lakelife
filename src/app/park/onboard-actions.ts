@@ -51,9 +51,21 @@ export async function getOnboardSeeds(
   seeds?: OnboardSeed[];
   today?: string;
   capMonths?: number | null;
+  /**
+   * THE TERM, NOT THE CEILING — what commitOnboarding writes a signed
+   * agreement for (agreementMonthsFor). The explainer used to quote the cap
+   * as the length: 'under your 3-month rule' at a park writing one month.
+   */
+  termMonths?: number | null;
   rentsFromImport?: boolean;
   /** Monthly fees a SIGNED household will also be charged, per lot. */
   feePerSignedLot?: number;
+  /**
+   * The park's cutover date — the floor under any signed agreement's start,
+   * and the default start for one filed before go-live. Null when the park
+   * never changed hands.
+   */
+  cutoverDate?: string | null;
 }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
@@ -115,7 +127,7 @@ export async function getOnboardSeeds(
   // is what `?? null` and `(count ?? 0) > 0` quietly did: a dropped read put
   // the screen straight back on the two sentences this paragraph removed.
   const [parkRes, importRes, feeRes] = await Promise.all([
-    admin.from("parks").select("max_agreement_months").eq("id", parkId).maybeSingle(),
+    admin.from("parks").select("max_agreement_months, default_agreement_months, cutover_date").eq("id", parkId).maybeSingle(),
     // Committed and not since undone. There is no `status` column here — the
     // batch's life is recorded as two timestamps.
     admin
@@ -148,20 +160,27 @@ export async function getOnboardSeeds(
     seeds,
     today,
     capMonths: (parkRow?.max_agreement_months as number | null) ?? null,
+    termMonths: agreementMonthsFor(
+      (parkRow?.default_agreement_months as number | null) ?? null,
+      (parkRow?.max_agreement_months as number | null) ?? null,
+    ),
     rentsFromImport: importCount > 0,
     feePerSignedLot: Math.round(feePerSignedLot * 100) / 100,
+    cutoverDate: (parkRow?.cutover_date as string | null) ?? null,
   };
 }
 
 /**
  * File them.
  *
- * `signedNewLease` decides two things at once and they belong together:
+ * `signedNewLease` decides four things at once and they belong together:
  * `origin` (which the 0065 trigger reads to exempt a holdover from the
- * agreement cap) and the tenancy LENGTH (the cap when an agreement exists, the
- * rolling horizon when it does not). Passing the cap to `buildTenant` keeps them
- * consistent — the same function the one-at-a-time path uses, so validation
- * cannot drift between the two screens.
+ * agreement cap, and the fee rule reads to exempt it from the fee), the
+ * tenancy LENGTH (the park's term when an agreement exists, the rolling
+ * horizon when it does not), where the agreement STARTS (the day the lease
+ * says, or today for a holdover) and whether it is `active` yet. All four are
+ * derived inside `buildTenant` from the tick — the same function the
+ * one-at-a-time path uses — so no doorway can write half of them.
  */
 export async function commitOnboarding(
   parkId: string,
@@ -170,10 +189,6 @@ export async function commitOnboarding(
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
   const today = todayLakeDate();
-  const plan = planOnboarding(rows, today);
-  if (plan.toFile.length === 0) {
-    return { ok: false, error: "Nothing filled in to file." };
-  }
 
   const admin = createServiceClient();
   // Null means he HAS no cap, and the rolling horizon is written instead. A
@@ -181,13 +196,33 @@ export async function commitOnboarding(
   // a park that has one is refused by 0065, once per household, as nineteen
   // unexplained failures at the end of the afternoon. Same guard the
   // one-at-a-time path (`addTenant`) already makes.
+  //
+  // THE CUTOVER IS READ HERE TOO. A signed lease may not start before it, and
+  // one filed before go-live starts ON it — a failed read would let the
+  // clamp-to-today default back in, which is the bug this reads to prevent.
   const parkRes = await admin
     .from("parks")
-    .select("max_agreement_months, default_agreement_months")
+    .select("max_agreement_months, default_agreement_months, cutover_date")
     .eq("id", parkId)
     .maybeSingle();
   if (parkRes.error) {
     return { ok: false, error: readFailedMessage("your park's agreement cap", parkRes.error) };
+  }
+  const cutoverDate = (parkRes.data?.cutover_date as string | null) ?? null;
+
+  const plan = planOnboarding(rows, today, cutoverDate);
+  // A ROW THE SERVER REFUSES IS NAMED, NEVER DROPPED. The screen plans from
+  // the same inputs, but this side holds a rule the screen can lack (the
+  // cutover, when the page did not hand it over) and a typed date can sit
+  // below the input's floor — so a signed row can be refused here alone.
+  // Silently leaving the batch read as "N households filed" with the
+  // refused ones gone, or as "Nothing filled in to file." when every row
+  // was filled in and every one was refused.
+  const failed: { lotNumber: string; why: string }[] = [...plan.problems];
+  if (plan.toFile.length === 0) {
+    return failed.length > 0
+      ? { ok: false, error: "None of those could be filed.", failed }
+      : { ok: false, error: "Nothing filled in to file." };
   }
   // THE TERM, NOT THE CEILING. The cap used to be passed straight through as
   // the length, so every signed agreement was written at the MAXIMUM — the
@@ -216,7 +251,6 @@ export async function commitOnboarding(
   const takenIds = new Set((takenRes.data ?? []).map((r) => r.park_lot_id as string));
 
   let filed = 0;
-  const failed: { lotNumber: string; why: string }[] = [];
 
   for (const r of plan.toFile) {
     if (takenIds.has(r.lotId)) {
@@ -236,13 +270,17 @@ export async function commitOnboarding(
         mobile: r.phone,
         email: r.email,
         source: "owner_knowledge",
+        // THE TICK, AND THE DATE THE LEASE SAYS. `buildTenant` turns the tick
+        // into origin, length, start and status together — signed means a
+        // real agreement exists on paper and is written under the park's term
+        // from the day it runs; unsigned is a holdover on the rolling horizon
+        // from today, which the 0065 trigger exempts by origin.
+        signedNewLease: r.signedNewLease,
+        agreementStartsOn: r.agreementStartsOn ?? "",
       },
       today,
-      // Signed means a real agreement exists on paper, so it is written under
-      // the cap. Unsigned is a holdover on the rolling horizon, which the 0065
-      // trigger exempts by origin — the two must move together or the write is
-      // refused.
-      r.signedNewLease ? parkTerm : null,
+      parkTerm,
+      { cutoverDate },
     );
     if (!built.ok || !built.renter || !built.tenancy) {
       failed.push({ lotNumber: r.lotNumber, why: built.error ?? "Couldn't file that one." });
@@ -263,7 +301,10 @@ export async function commitOnboarding(
       park_lot_id: r.lotId,
       renter_id: renter.id,
       during: toDaterange({ start: built.tenancy.start, end: built.tenancy.end }),
-      status: "active",
+      // `approved` for a lease that has not started yet, `active` once it
+      // has. Both hold the lot; the charge run bills whichever covers the
+      // month, so a lease filed for the 1st on the 20th bills January whole.
+      status: built.tenancy.status,
       term: "monthly",
       quoted_amount: built.tenancy.quoted_amount,
       // WHERE THE NUMBER CAME FROM. The office's sheet is the owner's
@@ -273,7 +314,8 @@ export async function commitOnboarding(
       // `buildTenant` now clamps forward. They are the same value only for a
       // household who moved in today.
       tenancy_began_on: built.tenancy.beganOn,
-      origin: r.signedNewLease ? "application" : "grandfathered",
+      // Paired with the length inside `buildTenant`, never chosen here.
+      origin: built.tenancy.origin,
     });
     if (stayErr) {
       // The renter file survives on purpose — he can put them on a lot by hand

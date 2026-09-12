@@ -9,7 +9,11 @@ import { parseDaterange } from "@/lib/parks";
 import { buildStatement, type StatementFee } from "./statement-helpers";
 import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
 import { feesForTenancy } from "./fee-helpers";
-import { planRun, toRows, summarise, currentPeriod, prettyMonth, nothingToBillReason, type Charge, type LedgerRow, type LedgerSummary, type RunPlan, dueDayFor } from "./ledger-helpers";
+import {
+  planRun, toRows, summarise, currentPeriod, prettyMonth, shiftMonth, nothingToBillReason,
+  handKeyedRefusal, PROCESSOR_ONLY, paymentAmountRefusal,
+  type Charge, type LedgerRow, type LedgerSummary, type RunPlan, type HandKeyedMethod, dueDayFor,
+} from "./ledger-helpers";
 import { preCutoverRefusal } from "@/lib/billing-start";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { giveRefund } from "@/lib/charge-gate";
@@ -17,6 +21,7 @@ import { remainingRefundable, refundRefusal, refundAmountRefusal, refundCents, r
 import { sendEmail } from "@/lib/email";
 import { html } from "@/lib/html-safe";
 import { receiptBody, type ReceiptLines } from "./receipt-helpers";
+import { whyItDidntGo } from "./reminder-helpers";
 // The ENGINE, not the action: runCharges has already asserted membership
 // twenty lines up, so going back through the authorized wrapper would just
 // re-ask the same question.
@@ -205,7 +210,7 @@ export async function previewChargeRun(
   }
   const lots = lotsRes.data;
   const lotById = new Map((lots ?? []).map((l) => [l.id as string, l]));
-  if (lotById.size === 0) return { ok: true, plan: planRun([], new Set()) };
+  if (lotById.size === 0) return { ok: true, plan: planRun([], new Set(), month) };
 
   // Same rule as the run (0101): an ended tenancy with a recorded move-out is
   // billed for the days it covered. Leaving it out here would break this
@@ -213,7 +218,7 @@ export async function previewChargeRun(
   // omit a final part-month the run then charges.
   const staysRes = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, during, quoted_amount, status, moved_out_on, due_day, origin")
+    .select("id, park_lot_id, during, quoted_amount, status, moved_out_on, due_day, origin, term")
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active", "ended"]);
   if (staysRes.error) {
@@ -287,15 +292,23 @@ export async function previewChargeRun(
           costShares: shareMap.get(s.id as string) ?? [],
         })
       : null;
+    // THE FACTS, NOT A VERDICT. This used to collapse "the window ended" and
+    // "no rent is set" into one null before planRun could tell them apart, so
+    // on the morning every one-month agreement lapsed the screen said "no rent
+    // set" on a park where every rent is $400. The window, the term and the
+    // total travel separately; `classifyForRun` — the same function the run
+    // calls — decides.
     return {
       reservationId: s.id as string,
       lotNumber: lot.lot_number as string,
-      // Zero means "they weren't here" — a real answer, but not worth a charge.
-      amount: st == null || st.total === 0 ? null : st.total,
+      amount: st == null ? null : st.total,
+      range,
+      term: (s.term as string | null) ?? null,
+      status: (s.status as string | null) ?? null,
     };
   });
 
-  return { ok: true, plan: planRun(candidates, already) };
+  return { ok: true, plan: planRun(candidates, already, month) };
 }
 
 /**
@@ -391,7 +404,7 @@ export async function runCharges(
   // 'cancelled' stays OUT: nobody ever lived there.
   const staysRes = await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, renter_id, during, quoted_amount, status, moved_out_on, due_day, origin")
+    .select("id, park_lot_id, renter_id, during, quoted_amount, status, moved_out_on, due_day, origin, term")
     .in("park_lot_id", [...lotById.keys()])
     .in("status", ["approved", "active", "ended"]);
   // Swallowed, this ends as "Nothing to bill — it may already be done", which
@@ -444,13 +457,13 @@ export async function runCharges(
 
   const shareIdsByRes = new Map<string, string[]>();
 
-  const rows: Record<string, unknown>[] = [];
   /**
-   * WHY NOTHING WAS RAISED, when nothing is.
+   * WHY NOTHING WAS RAISED, when nothing is — and why some were not, when
+   * most were.
    *
    * "It may already be done" was asserted whenever this loop produced no rows,
-   * and the loop skips for four different reasons. The one that matters is a
-   * tenancy whose agreement window has ENDED: the household is still on the
+   * and the loop skips for several different reasons. The one that matters is
+   * a tenancy whose agreement window has ENDED: the household is still on the
    * lot, nobody moved out, and the rent simply stops.
    *
    * That is not hypothetical here. Every agreement filed on one afternoon
@@ -458,45 +471,59 @@ export async function runCharges(
    * 2027 and every one of them runs out on 1 April. April's run would then have
    * told him the month was probably already billed, on the morning the whole
    * park stopped paying.
+   *
+   * THE SORTING IS NOT DONE HERE. It lives in `classifyForRun` (ledger-helpers)
+   * and the preview calls the same function, so the two doors cannot drift —
+   * the preview used to say "no rent set" for the exact case the sentence
+   * below names as "run out".
    */
-  const monthStart = `${month}-01`;
-  const monthEnd = lastDayOfMonth(month);
-  let skippedAlready = 0;
-  const expiredLots: string[] = [];
-  const notYetLots: string[] = [];
-  const noRentLots: string[] = [];
-
-  for (const s of stays ?? []) {
-    if (already.has(s.id as string)) { skippedAlready += 1; continue; }
+  const statements = new Map<string, ReturnType<typeof buildStatement>>();
+  const candidates = (stays ?? []).map((s) => {
     const lot = lotById.get(s.park_lot_id as string)!;
     const range = parseDaterange(s.during as string);
-    if (!range) continue;
+    const st = range
+      ? buildStatement({
+          month, stay: range,
+          // THE RATE THAT WAS IN FORCE DURING THIS MONTH, not the one in force
+          // today — see rentForPeriod. quoted_amount is a live value; a bill for
+          // January must not inherit February's increase.
+          rent: rentForPeriod(
+            changesByRes.get(s.id as string) ?? [],
+            lastDayOfMonth(month),
+            s.quoted_amount == null ? null : Number(s.quoted_amount),
+          ),
+          fees: feesForTenancy(fees, lot, s),
+          dueDay: dueDayFor(s.due_day, dueDay),
+          costShares: shareMap.get(s.id as string) ?? [],
+        })
+      : null;
+    if (st) statements.set(s.id as string, st);
+    return {
+      reservationId: s.id as string,
+      lotNumber: ((lot.lot_number as string) ?? "?"),
+      amount: st == null ? null : st.total,
+      range,
+      term: (s.term as string | null) ?? null,
+      status: (s.status as string | null) ?? null,
+    };
+  });
+  const plan = planRun(candidates, already, month);
 
-    const shares = shareMap.get(s.id as string) ?? [];
-    const st = buildStatement({
-      month, stay: range,
-      // THE RATE THAT WAS IN FORCE DURING THIS MONTH, not the one in force
-      // today — see rentForPeriod. quoted_amount is a live value; a bill for
-      // January must not inherit February's increase.
-      rent: rentForPeriod(
-        changesByRes.get(s.id as string) ?? [],
-        lastDayOfMonth(month),
-        s.quoted_amount == null ? null : Number(s.quoted_amount),
-      ),
-      fees: feesForTenancy(fees, lot, s),
-      dueDay: dueDayFor(s.due_day, dueDay),
-      costShares: shares,
-    });
-    // No total = a rent nobody set. Billing zero would hide it behind a paid
-    // charge; skipping leaves it visible on the roll where it belongs.
-    if (st.total == null || st.total === 0) {
-      const name = (lot.lot_number as string) ?? "?";
-      if (st.total == null) noRentLots.push(name);
-      else if (range.end <= monthStart) expiredLots.push(name);
-      else if (range.start > monthEnd) notYetLots.push(name);
-      continue;
-    }
-    if (shares.length) shareIdsByRes.set(s.id as string, shares.map((c) => c.id));
+  if (plan.toBill.length === 0) {
+    return { ok: false, error: nothingToBillReason(prettyMonth(month), {
+      already: plan.skippedAlreadyBilled,
+      expired: plan.expired, notYet: plan.notYet, noRent: plan.noRent,
+      notMonthly: plan.notMonthly,
+    }) };
+  }
+
+  const stayById = new Map((stays ?? []).map((s) => [s.id as string, s]));
+  const rows: Record<string, unknown>[] = [];
+  for (const b of plan.toBill) {
+    const s = stayById.get(b.reservationId)!;
+    const st = statements.get(b.reservationId)!;
+    const shares = shareMap.get(b.reservationId) ?? [];
+    if (shares.length) shareIdsByRes.set(b.reservationId, shares.map((c) => c.id));
 
     rows.push({
       park_id: parkId,
@@ -506,14 +533,10 @@ export async function runCharges(
       period_month: month,
       due_on: st.dueOn,
       lines: st.lines,
-      amount: st.total,
+      // The plan's figure and the statement's are the same number — planRun
+      // copies `amount` from the candidate, which is `st.total`.
+      amount: b.amount,
     });
-  }
-
-  if (rows.length === 0) {
-    return { ok: false, error: nothingToBillReason(prettyMonth(month), {
-      already: skippedAlready, expired: expiredLots, notYet: notYetLots, noRent: noRentLots,
-    }) };
   }
 
   const { data: raised, error } = await admin
@@ -614,12 +637,47 @@ export async function runCharges(
   };
 }
 
-/** Record money that arrived. Cash and check are the normal case. */
+/**
+ * THE WAYS MONEY ARRIVES BY HAND live in ledger-helpers (HAND_KEYED,
+ * handKeyedRefusal) — one list, read here and by money-actions' two doors.
+ * The office form offered "Bank transfer" as `ach`, so a Zelle push keyed at
+ * the window with the reference blank read "Couldn't record that — try again"
+ * forever, and keyed with one became a row nothing could correct. A bank push
+ * the office keys is `transfer` — the value ClaimForm, IPaidForm and the
+ * held-money form already use for the same words — and it stays reversible.
+ * Only `payRent` writes `card` and `ach`, with the processor's own reference.
+ */
+
+/**
+ * A 23514 IS A CHECK CONSTRAINT SAYING NO, and it will say no again. "Try
+ * again" for one of those is the retry that can never work. Name the field
+ * instead, the way paymentDateProblem does for the date before the insert.
+ */
+function paymentRefusedSentence(message: string): string {
+  if (/online_has_a_reference/.test(message)) return PROCESSOR_ONLY;
+  if (/received_on/.test(message)) return "That date is outside the window the ledger accepts — check the day it came in.";
+  if (/amount/.test(message)) return "That amount was refused — it has to be more than nothing.";
+  return "The ledger refused that one — check the amount and the date.";
+}
+
+/**
+ * Record money that arrived. Cash and check are the normal case.
+ *
+ * MORE THAN THE BILL IS SPLIT, NOT REFUSED AND NOT CREDITED. $600 for a
+ * $542.53 bill used to land as one row against the charge: the ledger read "In
+ * credit +$57.47", the resident's screen read "Paid in full", and February was
+ * raised at the full $542.53 with nothing anywhere to move the $57.47 across —
+ * applyOnAccount refuses exactly that shape, recordPayment did not. Now the
+ * bill's balance goes against the bill and the rest lands as the row
+ * `recordOnAccount` writes (charge_id null, renter_id from the charge, kind
+ * 'rent'), in ONE insert so both exist or neither does. Money in hand is
+ * recorded the day it arrives (0102); where it sits is the only question.
+ */
 export async function recordPayment(
   parkId: string,
   chargeId: string,
   amount: number,
-  method: "cash" | "check" | "card" | "ach" | "transfer" | "other",
+  method: HandKeyedMethod,
   reference: string,
   receivedOn: string,
   /** The serial off the slip they dropped in the box, when that is how it came. */
@@ -631,11 +689,36 @@ export async function recordPayment(
    * numbers. A genuinely second payment comes from a new form and a new key.
    */
   idempotencyKey?: string,
-): Promise<ParkResult & { receipt?: ReceiptLines; renterEmail?: string | null }> {
+  /**
+   * The claim this payment answers, when it answers one. 0074's trigger closes
+   * an open claim on the insert AGAINST THE CHARGE — but a claim confirmed on a
+   * bill that is already settled lands entirely on account, which the trigger
+   * cannot see. This is how that claim still gets its answer.
+   */
+  settlesClaimId?: string,
+): Promise<ParkResult & {
+  receipt?: ReceiptLines;
+  renterEmail?: string | null;
+  /** What landed against the bill, and what went on account. */
+  against?: number;
+  onAccount?: number;
+}> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return { ok: false, error: "That payment amount isn't a number." };
-  }
+  // In cents from here on, so $542.53 against $542.53 is exactly nothing over.
+  // A figure that rounds to no cents at all (0.004) passed `amount <= 0`,
+  // built no rows, and `insert([])` would have said "Recorded" about nothing.
+  // The three refusals live in ledger-helpers (paymentAmountRefusal) — this
+  // door fixed them alone for one round while the on-account, deposit and
+  // amenity doors kept "isn't a number" for 0 and -5.
+  const cents = (n: number) => Math.round(n * 100);
+  const amountBad = paymentAmountRefusal(amount);
+  if (amountBad) return { ok: false, error: amountBad };
+  // A browser can send anything. The two processor rails are refused BEFORE
+  // the insert so the office reads why, rather than 0108's constraint name or
+  // — worse — the anonymous retry that never becomes true. Same helper the
+  // on-account, deposit and amenity doors call, so every door agrees.
+  const methodBad = handKeyedRefusal(method);
+  if (methodBad) return { ok: false, error: methodBad };
   // 0102 put a sanity window on `received_on` — a mistyped year moves income
   // into another tax year and nobody finds out until an accountant does. This
   // form had no date check at all, so the database's refusal would have
@@ -647,7 +730,7 @@ export async function recordPayment(
   const admin = createServiceClient();
   // Confirm the charge belongs to this park before writing against it.
   const chargeRes = await admin
-    .from("park_charges").select("id, park_id, renter_id, amount, paid_total, status")
+    .from("park_charges").select("id, park_id, renter_id, amount, paid_total, status, period_month")
     .eq("id", chargeId).eq("park_id", parkId).maybeSingle();
   // "That bill isn't here" is an assertion about his own ledger, told at the
   // window with the cash already in hand. Never say it because a read failed.
@@ -660,32 +743,91 @@ export async function recordPayment(
     return { ok: false, error: "That bill was cancelled — record it against a live one." };
   }
 
+  // HOW MUCH OF THIS BELONGS TO THE BILL.
+  const owingCents = Math.max(0, cents(Number(charge.amount)) - cents(Number(charge.paid_total)));
+  const againstCents = Math.min(cents(amount), owingCents);
+  const onAccountCents = cents(amount) - againstCents;
+  const against = againstCents / 100;
+  const onAccount = onAccountCents / 100;
+  const renterId = (charge.renter_id as string) ?? null;
+  if (onAccountCents > 0 && !renterId) {
+    // 0102 anchors every payment to a charge or a renter. With no household on
+    // the bill the excess has nowhere to sit, and quietly crediting the bill
+    // is the thing this split exists to stop. Say where each part goes.
+    return {
+      ok: false,
+      error:
+        `That bill only has $${against.toFixed(2)} left on it and isn't tied to a household, ` +
+        `so the other $${onAccount.toFixed(2)} can't be held on account here. Record ` +
+        `$${against.toFixed(2)} against it, and put the rest under "Money not against a bill" ` +
+        `for the household it came from.`,
+    };
+  }
+
   // The insert returns the receipt number the trigger assigned, so the renter
   // can walk away with proof of what they just handed over.
   // Minted here, not when a receipt is sent: there is no bank in the middle of
   // these lakes and nothing external will ever validate this record, so the
   // renter's own confirmation is the only second party there will ever be. The
   // token exists from the moment the payment does.
-  const confirmToken = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().slice(0, 8);
+  const mintToken = () => crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().slice(0, 8);
+  const confirmToken = mintToken();
+  const key = idempotencyKey?.trim() || null;
 
-  const { data: written, error } = await admin.from("park_payments").insert({
-    charge_id: chargeId,
-    // 0102 made `park_id` NOT NULL so money with no charge still knows which
-    // park it belongs to. This insert derived the park by joining through the
-    // charge and never carried it — without these two lines every payment
-    // recorded at the window would fail on a not-null violation.
-    park_id: parkId,
-    // Whose money it is. The first question anybody asks in a dispute, and it
-    // was only answerable by walking charge -> renter.
-    renter_id: (charge.renter_id as string) ?? null,
-    amount,
-    method,
-    reference: reference.trim() || null,
-    received_on: receivedOn,
-    drop_slip_no: dropSlipNo?.trim() || null,
-    confirm_token: confirmToken,
-    idempotency_key: idempotencyKey?.trim() || null,
-  }).select("receipt_no, fee_amount").single();
+  const rows: Record<string, unknown>[] = [];
+  if (againstCents > 0) {
+    rows.push({
+      charge_id: chargeId,
+      // 0102 made `park_id` NOT NULL so money with no charge still knows which
+      // park it belongs to. This insert derived the park by joining through the
+      // charge and never carried it — without these two lines every payment
+      // recorded at the window would fail on a not-null violation.
+      park_id: parkId,
+      // Whose money it is. The first question anybody asks in a dispute, and it
+      // was only answerable by walking charge -> renter.
+      renter_id: renterId,
+      amount: against,
+      method,
+      reference: reference.trim() || null,
+      received_on: receivedOn,
+      drop_slip_no: dropSlipNo?.trim() || null,
+      confirm_token: confirmToken,
+      idempotency_key: key,
+    });
+  }
+  if (onAccountCents > 0) {
+    // THE EXACT ROW recordOnAccount WRITES (money-actions.ts): no charge, the
+    // household, kind 'rent'. getHeldMoney lists it and applyOnAccount moves
+    // it, so it shows under "Money not against a bill" and can be put against
+    // February when February exists. Its own key, derived from the form's, so
+    // a double tap collides on both rows and neither lands twice.
+    rows.push({
+      charge_id: null,
+      park_id: parkId,
+      renter_id: renterId,
+      kind: "rent",
+      amount: onAccount,
+      method,
+      reference: reference.trim() || null,
+      received_on: receivedOn,
+      // "The bill took $0.00 of $57.47" is true and reads wrong. Say which
+      // shape this is.
+      note: againstCents > 0
+        ? `Paid over the ${prettyMonth(String(charge.period_month ?? ""))} bill — the bill took $${against.toFixed(2)} of $${amount.toFixed(2)}.`
+        : `The ${prettyMonth(String(charge.period_month ?? ""))} bill was already settled, so all $${amount.toFixed(2)} is on account.`,
+      // The slip serial rides on the bill's row when there is one. When there
+      // is not, this is the only row, and the serial was being dropped.
+      ...(againstCents === 0 ? { drop_slip_no: dropSlipNo?.trim() || null } : {}),
+      confirm_token: againstCents > 0 ? mintToken() : confirmToken,
+      idempotency_key: key ? `${key}:onaccount` : null,
+    });
+  }
+
+  // ONE INSERT FOR BOTH ROWS. PostgREST runs a bulk insert as one statement,
+  // so a refused on-account row takes the bill's row down with it — the office
+  // never reads "recorded" about $600 of which $57.47 silently vanished.
+  const { data: written, error } = await admin.from("park_payments").insert(rows)
+    .select("receipt_no, fee_amount, charge_id");
   if (error) {
     // 23505 on the idempotency index = this exact submit already landed. That
     // is a success from the office's point of view, not a failure — telling
@@ -693,7 +835,36 @@ export async function recordPayment(
     if (error.code === "23505") {
       return { ok: false, error: "That payment is already recorded — check the ledger before entering it again." };
     }
+    // A CHECK constraint will refuse the same row tomorrow. Say which one.
+    if (error.code === "23514") return { ok: false, error: paymentRefusedSentence(error.message ?? "") };
     return { ok: false, error: "Couldn't record that — try again." };
+  }
+  const billRow = (written ?? []).find((w) => w.charge_id != null) ?? null;
+  const acctRow = (written ?? []).find((w) => w.charge_id == null) ?? null;
+
+  // A CLAIM ANSWERED ENTIRELY ON ACCOUNT. The trigger keys on the charge the
+  // payment was recorded against, and this one was recorded against none —
+  // the bill was already settled. Close it the way the trigger would: by
+  // conceding, with a note saying where the money went.
+  // IF THAT UPDATE FAILS, THE MONEY IS RECORDED AND THE CLAIM IS STILL OPEN —
+  // the bill keeps reading "disputed" and nothing chases it. Logging that and
+  // returning ok rendered a failed write as success; it goes in the sentence.
+  let claimStillOpen = false;
+  if (settlesClaimId && againstCents === 0) {
+    const { error: claimErr } = await admin
+      .from("park_payment_claims")
+      .update({
+        resolved_at: new Date().toISOString(),
+        resolution: "matched",
+        resolution_note: `The office confirmed collecting $${onAccount.toFixed(2)}. That bill was already settled, so it was recorded on account.`,
+        resolved_by: await currentUserId(),
+      })
+      .eq("id", settlesClaimId)
+      .is("resolved_at", null);
+    if (claimErr) {
+      console.error("[recordPayment] the money landed but the claim stays open:", claimErr);
+      claimStillOpen = true;
+    }
   }
 
   // THE BALANCE ON THE PIECE OF PAPER THEY WALK AWAY WITH.
@@ -712,7 +883,7 @@ export async function recordPayment(
   const after = afterRes.data;
   const balance = after
     ? Number(after.amount) - Number(after.paid_total)
-    : Number(charge.amount) - Number(charge.paid_total) - amount;
+    : Number(charge.amount) - Number(charge.paid_total) - against;
 
   // Everything the receipt needs, gathered once here rather than by a second
   // round trip from the screen.
@@ -745,19 +916,21 @@ export async function recordPayment(
   const lot = lotRes.data;
   const renter = renterRes.data;
 
+  const primary = billRow ?? acctRow;
   const receipt: ReceiptLines = {
     parkName: (park?.name as string) ?? "This park",
     officeLine: park?.address
       ? `Questions? The office — ${park.address}.`
       : "Questions? Ask at the office.",
-    receiptNo: (written?.receipt_no as number) ?? null,
-    // Always null on this path — the office keying a card at the window does
-    // not surcharge, only the resident's own online payment does. Read back
-    // from the row anyway rather than hard-coded, so the receipt tells the
-    // truth if that ever stops being so.
-    feeAmount: written?.fee_amount == null ? null : Number(written.fee_amount),
+    receiptNo: (primary?.receipt_no as number) ?? null,
+    // Always null on this path — no hand-keyed method surcharges, only the
+    // resident's own online payment does. Read back from the row anyway rather
+    // than hard-coded, so the receipt tells the truth if that ever stops
+    // being so.
+    feeAmount: primary?.fee_amount == null ? null : Number(primary.fee_amount),
     lotNumber: (lot?.lot_number as string) ?? "?",
     payerName: (renter?.display_name as string) ?? null,
+    // What they handed over — the whole of it. The split is on its own lines.
     amount,
     method,
     reference: reference.trim() || null,
@@ -765,22 +938,42 @@ export async function recordPayment(
     periodMonth: (full?.period_month as string) ?? "",
     billAmount: Number(full?.amount ?? charge.amount),
     balanceAfter: Math.round(balance * 100) / 100,
+    onAccount: onAccountCents > 0
+      ? { amount: onAccount, receiptNo: (acctRow?.receipt_no as number) ?? null }
+      : null,
     confirmUrl: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/paid/${confirmToken}`,
   };
 
+  const monthLabel = prettyMonth((full?.period_month as string) ?? String(charge.period_month ?? ""));
+  const nextLabel = prettyMonth(shiftMonth((full?.period_month as string) ?? String(charge.period_month ?? ""), 1));
   revalidatePath("/park/rent");
+  // The on-account pile shows on the roll's money line too, as recordOnAccount
+  // already revalidates.
+  if (onAccountCents > 0) revalidatePath("/park");
   return {
     ok: true,
     receipt,
+    against,
+    onAccount,
     // A paper household cannot be emailed one. Say which it is so the screen
     // offers the right thing rather than pretending both work.
     renterEmail: (renter?.contact_pref as string) === "paper"
       ? null
       : ((renter?.email as string) ?? null),
-    signal: balance > 0
-      ? `Recorded. $${balance.toFixed(2)} still outstanding.`
-      : balance < 0
-        ? `Recorded. They're $${Math.abs(balance).toFixed(2)} in credit.`
+    signal: onAccountCents > 0
+      // BOTH LINES, and where the second one is. No promise that it comes off
+      // the next bill on its own — the run does not apply it; he does, from
+      // "Money not against a bill", once that bill exists.
+      ? (againstCents > 0
+          ? `$${amount.toFixed(2)} received — $${against.toFixed(2)} against ${monthLabel}, ` +
+            `$${onAccount.toFixed(2)} on account.`
+          : `$${amount.toFixed(2)} received — ${monthLabel} was already settled, so all of it is on account.`) +
+        ` Put it against ${nextLabel} when you raise it — it's under "Money not against a bill".` +
+        (claimStillOpen
+          ? " The claim it answers is still open — we couldn't close it; answer it from the ledger."
+          : "")
+      : balance > 0
+        ? `Recorded. $${balance.toFixed(2)} still outstanding.`
         : "Recorded — that one's settled.",
   };
 }
@@ -802,7 +995,12 @@ export async function emailReceipt(
     text: body,
     html: html`<pre style="font:14px/1.6 ui-monospace,Menlo,monospace;white-space:pre-wrap">${body}</pre>`,
   });
-  if (res?.ok === false) return { ok: false, error: "That didn't send — check the address." };
+  // THE REAL REASON, NOT A GUESS ABOUT THE ADDRESS. Every refusal — the hold he
+  // set himself, a lookup that failed closed, a Resend error, no API key — was
+  // flattened into "check the address", and in January the hold is the normal
+  // state. He would have been correcting addresses that were right. Same
+  // helper the reminders door uses; it passes the hold sentences through.
+  if (res?.ok === false) return { ok: false, error: whyItDidntGo(res.error) };
   return { ok: true, signal: "Receipt sent." };
 }
 
@@ -1108,9 +1306,10 @@ export async function logPaymentClaim(
   // produce paperwork.
   const raw = (input.amount ?? "").replace(/[$,\s]/g, "");
   const amount = raw ? Number(raw) : null;
-  if (amount != null && (!Number.isFinite(amount) || amount <= 0)) {
-    return { ok: false, error: "That amount isn't a number." };
-  }
+  // The same three sentences as every payment door: "isn't a number" was
+  // said here of 0 typed into "how much", and 0 is a number.
+  const amountBad = amount == null ? null : paymentAmountRefusal(amount);
+  if (amountBad) return { ok: false, error: amountBad };
 
   const { error } = await admin.from("park_payment_claims").insert({
     charge_id: chargeId,
@@ -1243,16 +1442,19 @@ export async function confirmClaimCollected(
   if (!claim || owner !== parkId) return { ok: false, error: "That isn't here." };
   if (claim.resolved_at) return { ok: false, error: "That one's already been answered." };
 
-  // A claim can name any method, but the two that settle through a processor
-  // cannot be confirmed by hand — 0108 refuses a card or ACH row with no
-  // reference, and a confirmation is not where a processor reference comes
-  // from. Say so plainly rather than letting the database's refusal surface as
-  // "couldn't record that".
+  // A claim can name any method the column allows, but the two that settle
+  // through a processor cannot be confirmed by hand — only the processor
+  // writes a card or ACH row, with its own reference. No claim door offers
+  // them today (ClaimForm and IPaidForm both file a bank push as `transfer`),
+  // so this is the guard for a row that arrived some other way. It no longer
+  // points at a form option that does not exist.
   const claimed = (claim.method as string) ?? "cash";
-  if ((claimed === "card" || claimed === "ach") && !(claim.reference as string)?.trim()) {
+  if (claimed === "card" || claimed === "ach") {
     return {
       ok: false,
-      error: "That one came in on a card or bank rail — record it from the payment form with its reference.",
+      error:
+        "That claim says it came in on a card or bank rail, which only the processor can record. " +
+        "If they pushed the money to your bank, confirm it as a bank transfer from the payment form.",
     };
   }
   const method = claimed as Parameters<typeof recordPayment>[3];
@@ -1266,6 +1468,9 @@ export async function confirmClaimCollected(
     receivedOn,
     undefined,
     idempotencyKey,
+    // So a claim confirmed on a bill that is already settled — money that
+    // lands entirely on account — is still closed as matched.
+    claim.id as string,
   );
 }
 
@@ -1350,9 +1555,14 @@ export async function reversePayment(
   // statement still showed the charge. 0142 makes the database refuse it; this
   // says so in a sentence rather than as a constraint name.
   if (pay.method === "card" || pay.method === "ach") {
+    // NAMED BY ITS OWN RAIL, as guard_park_payment names it. Saying "card"
+    // about a bank-rail payment is a sentence that is wrong in the one word
+    // that tells him where to look.
     return {
       ok: false,
-      error: "That was paid by card, so the money really did arrive — reversing it would only change our record. Refund it instead and it goes back to their card.",
+      error: pay.method === "ach"
+        ? "That came in by bank transfer through the processor, so the money really did arrive — reversing it would only change our record. Refund it instead and it goes back to their bank account."
+        : "That was paid by card, so the money really did arrive — reversing it would only change our record. Refund it instead and it goes back to their card.",
     };
   }
 
@@ -1537,9 +1747,12 @@ export async function refundParkPayment(
   // was refunded and then refused a record of it.
   const done = await giveRefund({ chargeRef, amountCents: refundCents(amount, feeAmount), idempotencyKey: input.idempotencyKey });
   if (!done.ok || !done.ref) {
+    // The gate's own sentence ends in a full stop; appending ours produced
+    // "refunded.. Nothing".
+    const why = (done.error ?? "").trim().replace(/\.$/, "");
     return {
       ok: false,
-      error: `The processor wouldn't return that${done.error ? ` — ${done.error}` : ""}. Nothing has moved and nothing has been recorded.`,
+      error: `The processor wouldn't return that${why ? ` — ${why}` : ""}. Nothing has moved and nothing has been recorded.`,
     };
   }
 

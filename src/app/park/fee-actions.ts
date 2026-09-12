@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { mustRead } from "@/lib/must-read";
+import { todayLakeDate } from "@/lib/booking";
+import { parseDaterange } from "@/lib/parks";
 import { assertMyPark } from "./data";
 import {
   checkCoverage, payersFor, monthlyIncome,
@@ -36,23 +38,25 @@ export interface FeesPage {
    * quietly reporting fewer payers than he has households.
    */
   inheritedTenancies: number;
-  monthsObserved: number;
 }
 
 /**
  * Fees, what each brings in, and whether they cover the costs they claim to.
  *
- * `monthsObserved` is counted from the actual billing periods on record: three
- * months of water bills is not three months of cost per month, and treating it
- * that way would raise a false alarm at three times the real rate.
+ * Every bill is averaged over the months IT was entered for (checkCoverage):
+ * three months of water bills is not three months of cost per month, and one
+ * denominator across every category let each new sewer bill dilute the
+ * once-entered baselines beside it. The period start goes through per row so
+ * the helper can count each category's own months.
  */
 export async function listFees(parkId: string): Promise<FeesPage> {
   const empty: FeesPage = {
     fees: [],
-    coverage: { feeIncome: 0, actualCost: 0, margin: 0, unverified: [], uncovered: [] },
+    coverage: {
+      feeIncome: 0, actualCost: 0, margin: 0, unverified: [], uncovered: [], monthsByCategory: [],
+    },
     coveragePayers: 0,
     inheritedTenancies: 0,
-    monthsObserved: 1,
   };
   if (!(await assertMyPark(parkId))) return empty;
 
@@ -79,19 +83,33 @@ export async function listFees(parkId: string): Promise<FeesPage> {
   // none — so counting every live lot overstated fee income by exactly the
   // vacancy the park now carries on the cost side, and the two halves of this
   // screen disagreed by the amount it exists to make visible.
-  const liveStays = mustRead("who is on your lots", live.length
+  const stayRows = mustRead("who is on your lots", live.length
     ? await admin
         .from("lot_reservations")
-        .select("park_lot_id, origin")
+        .select("park_lot_id, origin, during")
         .in("park_lot_id", live.map((l) => l.id as string))
         .in("status", ["approved", "active"])
     : { data: [] as Record<string, unknown>[], error: null });
+  // ON THE LOT TODAY, not merely still `active`. When a household signs the
+  // new lease the inherited tenancy is trimmed to end that day and its
+  // successor starts — both rows stay `active`, because status is about the
+  // booking and the range is about time. Counting by status alone counted the
+  // trimmed holdover as an inherited household forever, so the screen kept
+  // saying a fee "won't be charged to the 1 household you inherited" about a
+  // household that had signed — and the payer count read one short. Same
+  // test the Today screen applies to a holdover: half-open, today === end is
+  // not here.
+  const today = todayLakeDate();
+  const liveStays = (stayRows ?? []).filter((s) => {
+    const r = parseDaterange(s.during as string);
+    return r != null && r.start <= today && today < r.end;
+  });
   // A FEE IS NOT CHARGED TO AN INHERITED TENANCY (feesForTenancy), so counting
   // those households as payers would credit the park income from bills the run
   // will never raise — on the one screen built to answer "is my fee covering
   // my costs".
-  const billable = (liveStays ?? []).filter((s) => (s.origin as string) !== "grandfathered");
-  const inheritedTenancies = (liveStays ?? []).length - billable.length;
+  const billable = liveStays.filter((s) => (s.origin as string) !== "grandfathered");
+  const inheritedTenancies = liveStays.length - billable.length;
   const occupied = new Set(billable.map((s) => s.park_lot_id as string));
 
   const counts = {
@@ -129,18 +147,14 @@ export async function listFees(parkId: string): Promise<FeesPage> {
     return { ...fee, payers, monthly: monthlyIncome(fee, payers) };
   });
 
-  // How many distinct months the recorded bills actually span.
-  const months = new Set<string>();
-  for (const c of costs ?? []) months.add((c.period_start as string).slice(0, 7));
-  const monthsObserved = Math.max(1, months.size);
-
   const payersByFee = new Map(fees.map((f) => [f.id, f.payers]));
   const coverage = checkCoverage(
     fees, payersByFee,
     (costs ?? []).map((c) => ({
-      category: c.category as CostCategory, amountPaid: Number(c.amount_paid),
+      category: c.category as CostCategory,
+      amountPaid: Number(c.amount_paid),
+      periodStart: String(c.period_start ?? ""),
     })),
-    monthsObserved,
   );
 
   return {
@@ -148,7 +162,6 @@ export async function listFees(parkId: string): Promise<FeesPage> {
     coverage,
     coveragePayers: Math.max(...fees.map((f) => f.payers), 0),
     inheritedTenancies,
-    monthsObserved,
   };
 }
 

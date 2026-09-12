@@ -9,6 +9,7 @@ import {
   type AmenityRow,
 } from "@/app/park/amenity-actions";
 import { reversePayment } from "@/app/park/ledger-actions";
+import { METHOD_WORD } from "@/app/park/receipt-helpers";
 import { priceLine, daysIn } from "@/lib/amenities";
 
 const money = (n: number) =>
@@ -285,10 +286,14 @@ function AmenityCard({
                       // whole page on focus. design-system-holds.test.ts catches it.
                       style={{ padding: "4px 6px" }}
                     >
+                      {/* The four ways money arrives BY HAND (HAND_KEYED).
+                          "Card" is not offered: a card row needs the
+                          processor's reference and this door has none, so
+                          the DB refused every Card pressed here. A push to
+                          the park's bank is a bank transfer. */}
                       <option value="cash">Cash</option>
                       <option value="check">Check</option>
-                      <option value="card">Card</option>
-                      <option value="transfer">Transfer</option>
+                      <option value="transfer">Bank transfer</option>
                       <option value="other">Other</option>
                     </select>
                     <button
@@ -333,8 +338,11 @@ function AmenityCard({
                         display: "flex", gap: 8, alignItems: "baseline",
                         fontSize: 12.5, paddingTop: 4,
                       }}>
+                        {/* The receipt's word for the method, not the column's
+                            value: the picker above says "Bank transfer" and
+                            this row printed "transfer" for the same money. */}
                         <span className="mut">
-                          {money(p.amount)} {p.method}{p.on ? ` · ${pretty(p.on)}` : ""}
+                          {money(p.amount)} {METHOD_WORD[p.method] ?? p.method}{p.on ? ` · ${pretty(p.on)}` : ""}
                         </span>
                         <button
                           className="ll-btn ghost sm" disabled={busy}

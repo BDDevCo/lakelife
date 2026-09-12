@@ -49,8 +49,14 @@ const SAY: Record<ClaimOutcome, string> = {
 
   // Deliberately the SAME message for "no such lot" and "no live tenancy on
   // it". Distinguishing them would let a stranger map which lots are occupied.
+  //
+  // NOT "a current household". Since 0166 a household who has not arrived
+  // yet can claim — the roll prints slips in December for 1 January — so this
+  // fires only for a tenancy that ended or a lot that has nobody. A December
+  // resident who mistyped her lot number must not read "current" and conclude
+  // her slip does not work until January.
   claim_no_open_lot:
-    "We can't match that lot number to a current household. The office can check it in a moment.",
+    "We can't match that lot number to a household living there or moving in. The office can check it in a moment.",
 
   claim_file_merged:
     "Your records were joined with another file. Ask the office to send a fresh slip.",

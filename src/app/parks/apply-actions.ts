@@ -271,6 +271,10 @@ export async function applyForLot(input: ApplyInput): Promise<ApplyResult> {
     // The RATE, not the stay total — see the note above `quoteStay` here.
     quoted_amount: card.amount,
     status: "applied",
+    // NAMED, not defaulted. The column's default is 'application' and this is
+    // an application — but a door that relies on the default is the door that
+    // filed a holdover as "agreed to the fee with us". Every insert says which.
+    origin: "application",
   });
   if (resErr) {
     // Don't leave an orphan rig behind on a failed application.

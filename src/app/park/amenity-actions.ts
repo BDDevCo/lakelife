@@ -5,6 +5,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
+import { handKeyedRefusal, paymentAmountRefusal } from "./ledger-helpers";
 import { parseDaterange, toDaterange, type ParkSeason } from "@/lib/parks";
 import {
   quoteAmenity, runWindow, daysIn,
@@ -526,10 +527,17 @@ export async function collectAmenityMoney(
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
   const n = Number(amount.trim().replace(/[$,\s]/g, ""));
-  if (!Number.isFinite(n) || n <= 0) return { ok: false, error: "That amount isn't a number." };
-  if (!["cash", "check", "card", "transfer", "other"].includes(method)) {
-    return { ok: false, error: "How did they pay?" };
-  }
+  // The same three sentences as the rent and on-account doors; this one said
+  // "isn't a number" of 0 and let 0.004 reach the insert as 0.00.
+  const amountBad = paymentAmountRefusal(n);
+  if (amountBad) return { ok: false, error: amountBad };
+  // THE THIRD DOOR. This kept its own five-way list with `card` on it, and
+  // the insert below carries no processor reference — so every "Card" pressed
+  // on the amenities screen hit park_payments_online_has_a_reference (0108,
+  // unconditional on `kind`) and the office read the raw constraint text.
+  // Same four ways, same refusal, as the rent and on-account doors.
+  const methodBad = handKeyedRefusal(method);
+  if (methodBad) return { ok: false, error: methodBad };
 
   const admin = createServiceClient();
   // Money in. A failed read here answers DENIED — "you don't manage that park"

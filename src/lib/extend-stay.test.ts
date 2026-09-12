@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   extendedRange, extensionPrice, remindDecision, canExtend, refusalText,
   LEAD_DAYS, MAX_SILENT_ROLLS,
+  type ExtendRefusal,
 } from "@/lib/extend-stay";
 import { parseDaterange, toDaterange, type DateRange, type Term } from "@/lib/parks";
 
@@ -138,7 +139,12 @@ describe("canExtend — the tap we can actually honour", () => {
   });
 
   it("every refusal has a sentence a stressed person can act on", () => {
-    for (const k of ["not_found", "not_extendable", "lot_taken", "no_rate", "already_ended"] as const) {
+    // Typed against the union: a seventh ExtendRefusal fails typecheck here
+    // until it has a sentence — a literal list would let it slip past.
+    const all: Record<ExtendRefusal, true> = {
+      not_found: true, not_extendable: true, lot_taken: true, no_rate: true, already_ended: true, inherited: true,
+    };
+    for (const k of Object.keys(all) as ExtendRefusal[]) {
       const t = refusalText(k);
       expect(t.length).toBeGreaterThan(30);
       // Never blames the renter.
@@ -191,18 +197,50 @@ describe("renewal at a capped park", () => {
 
   it("falls back to what they already pay when the rate card is empty", () => {
     // Refusing a sitting tenant the next term because the ASKING rate is unset
-    // would strand them. The card wins when it exists; its absence is not a
-    // reason to say no.
+    // would strand them. On a renewal their own rent is the price whether or
+    // not a card exists; the card's absence is not a reason to say no.
     const r = canExtend({ ...base, rates: [], capMonths: 3, currentAmount: 400 });
     expect(r.ok).toBe(true);
     expect(r.price).toBe(400);
   });
 
-  it("prefers the park's card over the old rent when both exist", () => {
+  it("a sitting tenant's own rent wins over the park's asking rate", () => {
+    // The card is what a NEW tenant is quoted. Writing it onto a renewal would
+    // raise a sitting tenant's rent with no notice served — the re-rate screen
+    // is the only way that number moves, and it arrives here as currentAmount.
     const r = canExtend({
       ...base, rates: [{ term: "monthly", amount: 500 }], capMonths: 3, currentAmount: 400,
     });
+    expect(r.price).toBe(400);
+  });
+
+  it("the card is the fallback for a household with no rent on file", () => {
+    const r = canExtend({
+      ...base, rates: [{ term: "monthly", amount: 500 }], capMonths: 3, currentAmount: null,
+    });
+    expect(r.ok).toBe(true);
     expect(r.price).toBe(500);
+  });
+
+  it("the card still prices an EXTENSION at a park with no cap", () => {
+    const r = canExtend({ ...base, capMonths: null, currentAmount: 400 });
+    expect(r.price).toBe(400);
+    const wider = canExtend({ ...base, rates: [{ term: "monthly", amount: 500 }], capMonths: null, currentAmount: 400 });
+    expect(wider.price).toBe(500);
+  });
+
+  it("a household still on the seller's arrangement is sent to the park, whatever else is true", () => {
+    const r = canExtend({ ...base, capMonths: 3, currentAmount: 400, origin: "grandfathered" });
+    expect(r.ok).toBe(false);
+    expect(r.refusal).toBe("inherited");
+    // Even after it has run out — 'already_ended' points at a door that
+    // files a second household.
+    expect(canExtend({ ...base, capMonths: 3, todayISO: "2027-04-01", origin: "grandfathered" }).refusal).toBe("inherited");
+    expect(refusalText("inherited")).toBe(
+      "Your new agreement is signed with the park — give them a call and they'll have it ready.",
+    );
+    // A signed household is not.
+    expect(canExtend({ ...base, capMonths: 3, currentAmount: 400, origin: "office" }).ok).toBe(true);
   });
 
   it("still refuses when there is no card AND no established rent", () => {

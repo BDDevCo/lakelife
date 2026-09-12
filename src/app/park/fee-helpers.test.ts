@@ -83,11 +83,10 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     const c = checkCoverage(
       [GROUNDS], payers,
       [
-        { category: "water", amountPaid: 380 },
-        { category: "sewer", amountPaid: 300 },
-        { category: "trash", amountPaid: 220 },
+        { category: "water", amountPaid: 380, periodStart: "2026-06-01" },
+        { category: "sewer", amountPaid: 300, periodStart: "2026-06-01" },
+        { category: "trash", amountPaid: 220, periodStart: "2026-06-01" },
       ],
-      1,
     );
     expect(c.feeIncome).toBe(1100);
     expect(c.actualCost).toBe(900);
@@ -99,8 +98,7 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     // $71 a lot of real cost against a $55 fee.
     const c = checkCoverage(
       [GROUNDS], payers,
-      [{ category: "water", amountPaid: 800 }, { category: "grounds", amountPaid: 620 }],
-      1,
+      [{ category: "water", amountPaid: 800, periodStart: "2026-06-01" }, { category: "grounds", amountPaid: 620, periodStart: "2026-06-01" }],
     );
     expect(c.margin).toBeLessThan(0);
     const s = coverageSummary(c, 20);
@@ -112,22 +110,102 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     // Getting this wrong tells him he is losing money at three times the real
     // rate, and a wrong alarm is worse than no alarm.
     const threeMonths = [
-      { category: "water" as CostCategory, amountPaid: 380 },
-      { category: "water" as CostCategory, amountPaid: 400 },
-      { category: "water" as CostCategory, amountPaid: 420 },
+      { category: "water" as CostCategory, amountPaid: 380, periodStart: "2026-06-01" },
+      { category: "water" as CostCategory, amountPaid: 400, periodStart: "2026-07-01" },
+      { category: "water" as CostCategory, amountPaid: 420, periodStart: "2026-08-01" },
     ];
-    const one = checkCoverage([GROUNDS], payers, threeMonths, 1);
-    const three = checkCoverage([GROUNDS], payers, threeMonths, 3);
+    // The same three amounts entered against ONE month are one month's bills.
+    const oneMonth = threeMonths.map((c) => ({ ...c, periodStart: "2026-06-01" }));
+    const one = checkCoverage([GROUNDS], payers, oneMonth);
+    const three = checkCoverage([GROUNDS], payers, threeMonths);
     expect(one.actualCost).toBe(1200);
     expect(three.actualCost).toBe(400);
     expect(three.margin).toBeGreaterThan(one.margin);
+    expect(three.monthsByCategory).toEqual([{ category: "water", months: 3 }]);
+  });
+
+  // -------------------------------------------------------------------------
+  // EACH BILL OVER ITS OWN MONTHS, NOT EVERY BILL OVER THE SEWER'S.
+  //
+  // The Haven's four rows are all June 2026: the sewer is a real monthly bill,
+  // and grounds, common electric and "other" are annual figures divided by
+  // twelve and entered once as a June row (their notes say "BASELINE, NOT A
+  // BILL"). Only the sewer has a monthly reminder, so only the sewer gains
+  // rows. One denominator across every category meant each December sewer
+  // bill DILUTED the three baselines: "ahead by $37.67 a lot" became $51.06
+  // after one sewer row and $60.63 after six, while nothing had changed.
+  // -------------------------------------------------------------------------
+  describe("a mixed cadence — The Haven's real rows plus the sewer's run", () => {
+    const HAVEN_FEE: ParkFee = {
+      ...GROUNDS, amount: 142.53,
+      covers: ["water", "sewer", "trash", "common_electric", "grounds", "other"] as CostCategory[],
+    };
+    const eighteen = new Map([["f1", 18]]);
+    const june = [
+      { category: "sewer" as CostCategory, amountPaid: 1405.36, periodStart: "2026-06-01" },
+      { category: "grounds" as CostCategory, amountPaid: 198.08, periodStart: "2026-06-01" },
+      { category: "common_electric" as CostCategory, amountPaid: 144.02, periodStart: "2026-06-01" },
+      { category: "other" as CostCategory, amountPaid: 140.00, periodStart: "2026-06-01" },
+    ];
+    const sewerFor = (months: string[]) =>
+      months.map((m) => ({ category: "sewer" as CostCategory, amountPaid: 1405.36, periodStart: `${m}-01` }));
+
+    it("four June rows and 18 payers: ahead by $37.67 a lot", () => {
+      const c = checkCoverage([HAVEN_FEE], eighteen, june);
+      expect(c.actualCost).toBe(1887.46);
+      expect(coverageSummary(c, 18, 1)).toContain("ahead by $37.67 a lot");
+    });
+
+    it("stays $37.67 after one December sewer row", () => {
+      const c = checkCoverage([HAVEN_FEE], eighteen, [...june, ...sewerFor(["2026-12"])]);
+      expect(c.actualCost).toBe(1887.46);
+      expect(coverageSummary(c, 18, 1)).toContain("ahead by $37.67 a lot");
+    });
+
+    it("and after six — the sum of per-category monthly figures, never total ÷ months", () => {
+      const six = sewerFor(["2026-12", "2027-01", "2027-02", "2027-03", "2027-04", "2027-05"]);
+      const c = checkCoverage([HAVEN_FEE], eighteen, [...june, ...six]);
+      expect(c.actualCost).toBe(1887.46);
+      expect(coverageSummary(c, 18, 1)).toContain("ahead by $37.67 a lot");
+      // Collapsed the other way: total ÷ 7 is what the screen used to say.
+      expect(c.actualCost).not.toBeCloseTo(1474.23, 2);
+      expect(c.monthsByCategory).toEqual(expect.arrayContaining([
+        { category: "sewer", months: 7 },
+        { category: "grounds", months: 1 },
+        { category: "common_electric", months: 1 },
+        { category: "other", months: 1 },
+      ]));
+    });
+
+    it("a sewer that actually rises shows in the average", () => {
+      // Six December-to-May bills at $1,505.36 against June's $1,405.36:
+      // sewer = (1405.36 + 6 × 1505.36) / 7 = 1491.07.
+      const dearer = sewerFor(["2026-12", "2027-01", "2027-02", "2027-03", "2027-04", "2027-05"])
+        .map((c) => ({ ...c, amountPaid: 1505.36 }));
+      const c = checkCoverage([HAVEN_FEE], eighteen, [...june, ...dearer]);
+      expect(c.actualCost).toBe(1973.17);   // 1491.07 + 198.08 + 144.02 + 140.00
+    });
+
+    it("two bills in the same month for one category are one month's cost", () => {
+      // A corrected sewer invoice entered twice against December is two rows,
+      // one month — averaging them over two months would halve the sewer.
+      const twice = [...june, ...sewerFor(["2026-12"]), ...sewerFor(["2026-12"])];
+      const c = checkCoverage([HAVEN_FEE], eighteen, twice);
+      // sewer = (1405.36 + 1405.36 + 1405.36) / 2 months
+      expect(c.actualCost).toBe(2590.14);
+      expect(c.monthsByCategory).toEqual(expect.arrayContaining([{ category: "sewer", months: 2 }]));
+    });
+
+    it("still names water and trash as unchecked, and nothing else", () => {
+      const c = checkCoverage([HAVEN_FEE], eighteen, [...june, ...sewerFor(["2026-12"])]);
+      expect([...c.unverified].sort()).toEqual(["trash", "water"]);
+    });
   });
 
   it("names a cost NOTHING claims to cover", () => {
     const c = checkCoverage(
       [{ ...GROUNDS, covers: ["water"] as CostCategory[] }], payers,
-      [{ category: "water", amountPaid: 380 }, { category: "grounds", amountPaid: 500 }],
-      1,
+      [{ category: "water", amountPaid: 380, periodStart: "2026-06-01" }, { category: "grounds", amountPaid: 500, periodStart: "2026-06-01" }],
     );
     expect(c.uncovered).toContain("grounds");
     // And the uncovered cost is NOT counted against the fee — the fee never
@@ -136,7 +214,7 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
   });
 
   it("names what the fee claims but nothing has been spent on", () => {
-    const c = checkCoverage([GROUNDS], payers, [{ category: "water", amountPaid: 380 }], 1);
+    const c = checkCoverage([GROUNDS], payers, [{ category: "water", amountPaid: 380, periodStart: "2026-06-01" }]);
     expect(c.unverified).toEqual(expect.arrayContaining(["sewer", "trash", "common_electric"]));
   });
 
@@ -146,13 +224,13 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     };
     const c = checkCoverage(
       [amenities], new Map([["f9", 20]]),
-      [{ category: "water", amountPaid: 380 }], 1,
+      [{ category: "water", amountPaid: 380, periodStart: "2026-06-01" }],
     );
     expect(c.feeIncome).toBe(0);
   });
 
   it("is honest when there is nothing to compare", () => {
-    const c = checkCoverage([GROUNDS], payers, [], 1);
+    const c = checkCoverage([GROUNDS], payers, []);
     expect(coverageSummary(c, 20)).toMatch(/no bills entered/i);
   });
 });
@@ -254,7 +332,7 @@ describe("the sentence at the top of the fee screen, on the first day", () => {
    */
   const noCosts = {
     feeIncome: 0, actualCost: 0, margin: 0,
-    unverified: [] as never[], uncovered: [] as never[],
+    unverified: [] as never[], uncovered: [] as never[], monthsByCategory: [] as never[],
   };
 
   it("says nobody is on a lot when a fee exists and nobody is", () => {
@@ -277,7 +355,7 @@ describe("the sentence at the top of the fee screen, on the first day", () => {
     // screen exists for.
     const real = {
       feeIncome: 1100, actualCost: 900, margin: 200,
-      unverified: [] as never[], uncovered: [] as never[],
+      unverified: [] as never[], uncovered: [] as never[], monthsByCategory: [] as never[],
     };
     expect(coverageSummary(real, 20, 1)).toMatch(/ahead by \$10\.00 a lot/);
   });

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { inviteEveryone, type BulkInviteResult } from "@/app/parks/invite-actions";
 
@@ -58,12 +59,33 @@ export function InviteEveryone({
                 <li key={s.renterId}>
                   Lot {s.lotNumber} — {s.displayName}
                   {/* THE REASON, because the two need different things from
-                      him: one is an address to collect, the other is an
-                      address to correct. */}
+                      him: one is an address to collect, the other is whatever
+                      the sender actually said — which in January is the hold
+                      he set, not a bad address. This used to read "that
+                      address didn't work" for every refused send. */}
                   <span className="mut">
-                    {s.why === "no_email" ? " · no email on file" : " · that address didn't work"}
+                    {s.why === "no_email"
+                      ? " · no email on file"
+                      : ` · ${s.reason ?? "we couldn't email them"}`}
                   </span>
                 </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {/* THE HOLD IS NOT A SLIP CASE. These households were refused because
+            notices are on hold — the hold he set. Telling him to print a slip
+            for them is telling him to work around himself, and the by-hand
+            channel is held too. The way to reach them is to lift the hold. */}
+        {res.held.length > 0 && (
+          <>
+            <p className="mut" style={{ fontSize: 13.5, margin: "8px 0 6px", lineHeight: 1.55 }}>
+              Nothing went to these — notices are on hold. Lift the hold in{" "}
+              <Link href="/park/setup">Park setup</Link>, then invite again.
+            </p>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14, lineHeight: 1.7 }}>
+              {res.held.map((s) => (
+                <li key={s.renterId}>Lot {s.lotNumber} — {s.displayName}</li>
               ))}
             </ul>
           </>

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   parseRentRoll, parseMoney, parseLot, parseName, detectDelimiter, contentHash,
-  isPlaceholderName, redactSensitive,
+  isPlaceholderName, redactSensitive, rentCadence, cellCadence, LOT_WORD, norm,
 } from "@/lib/roll-parse";
 
 /** Every parse must satisfy the never-drop guarantee. A dropped line is a
@@ -310,8 +310,10 @@ describe("nothing is ever defaulted", () => {
     const commit = readFileSync(
       new URL("../app/park/import-actions.ts", import.meta.url), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-    expect(commit).toMatch(/phone_on_file_with_park:\s*row\.phone/);
-    expect(commit).not.toMatch(/mobile_e164:\s*row\.phone/);
+    // Stored in E.164 like the other two writers of that column; still the
+    // office's column, never the send-target one.
+    expect(commit).toMatch(/phone_on_file_with_park:\s*phoneOnFile\(row\.phone\)/);
+    expect(commit).not.toMatch(/mobile_e164:\s*(?:phoneOnFile\()?row\.phone/);
     expect(commit).toMatch(/contact_pref:\s*"paper"/);
   });
 
@@ -911,5 +913,367 @@ describe("a unit the park itself owns is not a household", () => {
     const lot11 = r.rows.find((x) => x.lot.value === "11");
     expect(lot11?.name.value).toBeNull();
     expect(lot11?.verdict).toBe("ask");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// A RENT COLUMN THAT IS NOT MONTHLY.
+//
+// Only "month" and "week" in a rent header ever set a cadence, so "Annual
+// Rent" mapped to rent with no term, and the plan's default made it a month.
+// "Yearly Rent" took the other road: "year" sat in CARRY for vehicle years and
+// swallowed the whole rent column into notes. Two silent failures, one header
+// apart. The parser never invents a value, and dividing by twelve is
+// inventing one — so a yearly or quarterly cadence is READ, and refused.
+// ---------------------------------------------------------------------------
+describe("a rent column stated by the year or the quarter", () => {
+  const parse = (csv: string) => parseRentRoll(csv, { knownLots: ["6", "7"] });
+
+  it.each([
+    ["Annual Rent", "annual"], ["Yearly Rent", "annual"], ["Rent/Yr", "annual"],
+    ["Rent (Annual)", "annual"], ["Annual Lot Rent", "annual"], ["Yr Rent", "annual"],
+    ["Rent per year", "annual"], ["Rent per annum", "annual"],
+    ["Quarterly Rent", "quarterly"], ["Rent/Qtr", "quarterly"], ["Rent per quarter", "quarterly"],
+  ])("%s is the rent column, in cadence %s", (header, cadence) => {
+    const r = parse(`Lot,Tenant,${header}\n6,"Ordonez, Maria","$4,800.00"`);
+    expect(r.columns.index.rent).toBe(2);
+    const role = r.columns.roles[2];
+    expect(role.kind === "field" && role.cadence).toBe(cadence);
+    expect(r.rows[0].rent.value).toBe(4800);
+    expect(r.blockQuestions.map((b) => b.code)).not.toContain("NO_RENT_COLUMN");
+  });
+
+  it("still reads the monthly and weekly headers the way it always did", () => {
+    const m = parse('Lot,Tenant,Monthly Rent\n6,"Ordonez, Maria",400');
+    expect(m.rows[0].term.value).toBe("monthly");
+    expect(m.rows[0].term.confidence).toBe("inferred");
+    const w = parse('Lot,Tenant,Weekly Rent\n6,"Ordonez, Maria",100');
+    expect(w.rows[0].term.value).toBe("weekly");
+  });
+
+  it("a yearly header lands on the row as an inferred annual term", () => {
+    const r = parse('Lot,Tenant,Annual Rent\n6,"Ordonez, Maria","$4,800.00"');
+    expect(r.rows[0].term).toMatchObject({ value: "annual", confidence: "inferred" });
+  });
+
+  it("a quarterly header lands as an unreadable term whose evidence is the header", () => {
+    // There is no quarterly term and never will be — rent goes monthly. The
+    // header is kept as the raw so the plan can see a cadence it must refuse.
+    const r = parse('Lot,Tenant,Quarterly Rent\n6,"Ordonez, Maria","$1,200.00"');
+    expect(r.rows[0].term.value).toBeNull();
+    expect(r.rows[0].term.raw).toBe("Quarterly Rent");
+    expect(r.rows[0].term.why).toMatch(/quarterly/i);
+  });
+
+  it("says so ONCE at the top, naming the header, and never says 'try again'", () => {
+    const r = parse('Lot,Tenant,Annual Rent\n6,"Ordonez, Maria","$4,800.00"\n7,"Fry, Loren","$4,800.00"');
+    const qs = r.blockQuestions.filter((b) => b.code === "RENT_NOT_MONTHLY");
+    expect(qs).toHaveLength(1);
+    expect(qs[0].question).toMatch(/"Annual Rent"/);
+    expect(qs[0].question).toMatch(/yearly/);
+    expect(qs[0].question).not.toMatch(/try again/i);
+    const q = parse('Lot,Tenant,Quarterly Rent\n6,"Ordonez, Maria","$1,200.00"');
+    expect(q.blockQuestions.find((b) => b.code === "RENT_NOT_MONTHLY")?.question).toMatch(/quarterly/);
+    // And not on a monthly sheet.
+    const m = parse('Lot,Tenant,Monthly Rent\n6,"Ordonez, Maria",400');
+    expect(m.blockQuestions.map((b) => b.code)).not.toContain("RENT_NOT_MONTHLY");
+  });
+
+  it("makes every row with a figure an ASK, the way an unreadable rent is", () => {
+    const r = parse('Lot,Tenant,Annual Rent\n6,"Ordonez, Maria","$4,800.00"\n7,"Fry, Loren",');
+    expect(r.rows[0].verdict).toBe("ask");
+    expect(r.rows[0].askReasons.join(" ")).toMatch(/monthly rent/i);
+    // A row with no figure has nothing to misfile.
+    expect(r.rows[1].verdict).toBe("import");
+  });
+
+  it("a term CELL that is not monthly is read the same way", () => {
+    const annual = parse('Lot,Tenant,Rent,Billing\n6,"Ordonez, Maria",4800,Annually');
+    expect(annual.rows[0].term.value).toBe("annual");
+    expect(annual.rows[0].verdict).toBe("ask");
+
+    // "Yearly" and "Per annum" are the annual term by another word, and are
+    // read as it. "Quarterly" is a cadence no term can file, and "Twice
+    // yearly" names none we can read: the cell is the raw, and a raw with no
+    // value is what the plan holds on. Before this it was a why-text nothing
+    // read, and the plan's default made the figure a month.
+    for (const cell of ["Yearly", "Per annum"]) {
+      const r = parse(`Lot,Tenant,Rent,Billing\n6,"Ordonez, Maria",1200,${cell}`);
+      expect(r.rows[0].term, cell).toMatchObject({ value: "annual", raw: cell });
+      expect(r.rows[0].verdict, cell).toBe("ask");
+    }
+    for (const cell of ["Quarterly", "Twice yearly"]) {
+      const r = parse(`Lot,Tenant,Rent,Billing\n6,"Ordonez, Maria",1200,${cell}`);
+      expect(r.rows[0].term.value, cell).toBeNull();
+      expect(r.rows[0].term.raw, cell).toBe(cell);
+      expect(r.rows[0].verdict, cell).toBe("ask");
+    }
+    // Each is announced ONCE at the top, by the right name: a quarterly cell
+    // was read fine and refused on purpose; "Twice yearly" could not be read.
+    const q = parse('Lot,Tenant,Rent,Billing\n6,"Ordonez, Maria",1200,Quarterly\n7,"Fry, Loren",1200,Qtr');
+    expect(q.blockQuestions.map((b) => b.code)).toEqual(["TERM_NOT_MONTHLY"]);
+    expect(q.blockQuestions[0].question).toMatch(/Billing column says the rent is quarterly \("Quarterly"\)/);
+    expect(q.blockQuestions[0].question).toMatch(/2 rows/);
+    const y = parse('Lot,Tenant,Rent,Billing\n6,"Ordonez, Maria",4800,Yearly');
+    expect(y.blockQuestions.map((b) => b.code)).toEqual(["TERM_NOT_MONTHLY"]);
+    expect(y.blockQuestions[0].question).toMatch(/says the rent is yearly/);
+    expect(parse('Lot,Tenant,Rent,Billing\n6,"Ordonez, Maria",1200,Twice yearly').blockQuestions.map((b) => b.code))
+      .toEqual(["TERM_NOT_READ"]);
+    // Not beside a yearly header (RENT_NOT_MONTHLY already said it), and not
+    // for a row with no figure.
+    expect(parse('Lot,Tenant,Annual Rent,Billing\n6,"Ordonez, Maria",4800,Yearly').blockQuestions.map((b) => b.code))
+      .toEqual(["RENT_NOT_MONTHLY"]);
+    expect(parse('Lot,Tenant,Rent,Billing\n6,"Ordonez, Maria",,Yearly').blockQuestions).toEqual([]);
+  });
+
+  it("a year is still a vehicle year next to a vehicle — and never a rent", () => {
+    for (const header of ["Vehicle Year", "Model Year", "Home Year", "Unit Year", "Year Built", "VIN"]) {
+      const r = parse(`Lot,Tenant,Rent,${header}\n6,"Ordonez, Maria",400,2019`);
+      expect(r.columns.index.rent, header).toBe(2);
+      expect(r.rows[0].rent.value, header).toBe(400);
+      expect(r.rows[0].notes.join(" "), `${header} was lost`).toMatch(/2019/);
+    }
+    // A bare "Year" is unrecognised, which also carries to notes — and is
+    // still not a rent and still not a cadence on the rent column.
+    const bare = parse('Lot,Tenant,Rent,Year\n6,"Ordonez, Maria",400,2019');
+    expect(bare.rows[0].rent.value).toBe(400);
+    expect(bare.rows[0].term.value).toBeNull();
+    expect(bare.rows[0].term.raw).toBe("");
+    expect(bare.rows[0].notes.join(" ")).toMatch(/2019/);
+  });
+
+  it("'yr' is a word, not a substring", () => {
+    // "Payroll" contains "yr". The cadence words are bounded on the normalised
+    // header so nothing like this reads as a yearly rent.
+    expect(rentCadence("rent payroll")).toBeUndefined();
+    expect(rentCadence("rent yr")).toBe("annual");
+    expect(rentCadence("qtr rent")).toBe("quarterly");
+    expect(rentCadence("monthly rent")).toBe("monthly");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A TERM CELL THAT IS NOT A CADENCE MUST NOT HOLD A ROLL.
+//
+// The cadence rule above landed with the bare word "paid" still in the term
+// synonyms, and the per-row term took the CELL branch whenever a term column
+// existed. So an ordinary roll — "Monthly Rent" beside a "Paid" column of Y
+// and N — was refused wholesale: every row held on a cadence nobody could
+// read, eighteen identical questions, and a header that literally said
+// Monthly. The header is the stronger evidence; a cell we cannot read as a
+// cadence is kept, not obeyed; and a yes/no is not a cadence at all.
+// ---------------------------------------------------------------------------
+describe("a term cell that is not a cadence does not hold a roll", () => {
+  const parse = (csv: string) => parseRentRoll(csv, { knownLots: ["1", "2"] });
+
+  it("a Paid column is not a term column — it carries to notes", () => {
+    const r = parse('Lot,Tenant,Monthly Rent,Paid\n1,"Wexler, Donna",400,Y\n2,"Fry, Loren",410,N');
+    expect(r.columns.index.term).toBeUndefined();
+    expect(r.rows[0].term).toMatchObject({ value: "monthly", confidence: "inferred" });
+    expect(r.rows[0].notes.join(" ")).toMatch(/Paid: Y/);
+    expect(r.rows[1].notes.join(" ")).toMatch(/Paid: N/);
+    expect(r.rows.map((x) => x.verdict)).toEqual(["import", "import"]);
+    expect(r.blockQuestions).toEqual([]);
+  });
+
+  it.each(["Y", "N", "yes", "no", "x", "✓", "paid", "unpaid", "TRUE", "false", "-"])(
+    "a yes/no/tick cell (%s) states no cadence — the header's stands", (cell) => {
+      const m = parse(`Lot,Tenant,Monthly Rent,Billing\n1,"Wexler, Donna",400,${cell}`);
+      expect(m.columns.index.term).toBe(3);
+      expect(m.rows[0].term).toMatchObject({ value: "monthly", confidence: "inferred", raw: "" });
+      expect(m.rows[0].verdict).toBe("import");
+      // And with nothing on the header either: no cadence, and no hold.
+      const bare = parse(`Lot,Tenant,Rent,Billing\n1,"Wexler, Donna",400,${cell}`);
+      expect(bare.rows[0].term.value).toBeNull();
+      expect(bare.rows[0].term.raw).toBe("");
+      expect(bare.rows[0].verdict).toBe("import");
+      expect(bare.blockQuestions).toEqual([]);
+    });
+
+  it("an unreadable cell under a readable rent header takes the header's cadence, and keeps the cell", () => {
+    for (const cell of ["12", "M", "Mthly", "Jan-Mar"]) {
+      const r = parse(`Lot,Tenant,Monthly Rent,Term\n1,"Wexler, Donna",400,${cell}`);
+      expect(r.rows[0].term.value, cell).toBe("monthly");
+      expect(r.rows[0].term.confidence, cell).toBe("inferred");
+      expect(r.rows[0].term.why, cell).toMatch(new RegExp(`"${cell}"`));
+      // The cell is evidence the office may want; it lands in the notes.
+      expect(r.rows[0].notes.join(" "), cell).toMatch(new RegExp(`Term: ${cell}`));
+      expect(r.rows[0].verdict, cell).toBe("import");
+      expect(r.blockQuestions, cell).toEqual([]);
+    }
+    // A yearly header with an unreadable cell is still a yearly figure —
+    // held for the monthly rent, as the header alone would be.
+    const y = parse('Lot,Tenant,Annual Rent,Term\n1,"Wexler, Donna",4800,12');
+    expect(y.rows[0].term).toMatchObject({ value: "annual", confidence: "inferred" });
+    expect(y.rows[0].verdict).toBe("ask");
+    expect(y.rows[0].askReasons.join(" ")).toMatch(/yearly figure/);
+    expect(y.blockQuestions.map((b) => b.code)).toEqual(["RENT_NOT_MONTHLY"]);
+  });
+
+  it("an unreadable cell with NO header cadence is said once at the top, naming the column and the cell", () => {
+    const r = parse('Lot,Tenant,Rent,Term\n1,"Wexler, Donna",400,12\n2,"Fry, Loren",410,6');
+    expect(r.rows.map((x) => x.verdict)).toEqual(["ask", "ask"]);
+    const qs = r.blockQuestions.filter((b) => b.code === "TERM_NOT_READ");
+    expect(qs).toHaveLength(1);
+    expect(qs[0].question).toMatch(/"12"/);
+    expect(qs[0].question).toMatch(/Term column/);
+    expect(qs[0].question).toMatch(/monthly rent/i);
+    expect(qs[0].question).not.toMatch(/try again/i);
+    // Two cells, one sentence — it names the first and counts the rest.
+    expect(qs[0].question).toMatch(/2 rows/);
+  });
+
+  it("the top-level sentence is not raised when the header already answered, nor twice beside RENT_NOT_MONTHLY", () => {
+    const m = parse('Lot,Tenant,Monthly Rent,Term\n1,"Wexler, Donna",400,12');
+    expect(m.blockQuestions.map((b) => b.code)).not.toContain("TERM_NOT_READ");
+    const a = parse('Lot,Tenant,Annual Rent,Term\n1,"Wexler, Donna",4800,12');
+    expect(a.blockQuestions.map((b) => b.code)).toEqual(["RENT_NOT_MONTHLY"]);
+    // A row with no figure has nothing held, so nothing to announce.
+    const empty = parse('Lot,Tenant,Rent,Term\n1,"Wexler, Donna",,12');
+    expect(empty.blockQuestions.map((b) => b.code)).not.toContain("TERM_NOT_READ");
+    expect(empty.rows[0].verdict).toBe("import");
+  });
+
+  it("a term cell reading Monthly under an Annual Rent header does not beat the header", () => {
+    for (const cell of ["Monthly", "Weekly", "Per mo"]) {
+      const r = parse(`Lot,Tenant,Annual Rent,Term\n1,"Wexler, Donna",4800,${cell}`);
+      expect(r.rows[0].term.value, cell).toBeNull();
+      expect(r.rows[0].term.raw, cell).toBe(cell);
+      expect(r.rows[0].term.why, cell).toMatch(/column header says yearly but this cell says (monthly|weekly)/i);
+      expect(r.rows[0].cadenceConflict, cell).toEqual({ header: "Annual Rent", cell });
+      expect(r.rows[0].verdict, cell).toBe("ask");
+      expect(r.rows[0].askReasons.join(" "), cell).toMatch(/monthly rent/i);
+      // Said once at the top by RENT_NOT_MONTHLY; not a second card.
+      expect(r.blockQuestions.map((b) => b.code), cell).toEqual(["RENT_NOT_MONTHLY"]);
+    }
+    const q = parse('Lot,Tenant,Quarterly Rent,Term\n1,"Wexler, Donna",1200,Monthly');
+    expect(q.rows[0].term.value).toBeNull();
+    expect(q.rows[0].term.why).toMatch(/column header says quarterly but this cell says monthly/i);
+    // The other way round is the same contradiction, and here the top card
+    // is TERM_CONFLICTS, because no yearly header has said anything.
+    const m2 = parse('Lot,Tenant,Monthly Rent,Term\n1,"Wexler, Donna",400,Annual\n2,"Fry, Loren",410,Qtr');
+    expect(m2.rows[0].term.value).toBeNull();
+    expect(m2.rows[0].term.why).toMatch(/column header says monthly but this cell says yearly/i);
+    expect(m2.rows[1].term.why).toMatch(/column header says monthly but this cell says quarterly/i);
+    expect(m2.rows.every((r) => r.cadenceConflict && r.verdict === "ask")).toBe(true);
+    expect(m2.blockQuestions.map((b) => b.code)).toEqual(["TERM_CONFLICTS"]);
+    expect(m2.blockQuestions[0].question).toMatch(/"Annual" beside a monthly header/);
+    // The sentence names the HEADER'S cadence. It is raised for any short-side
+    // header, and it hard-coded "monthly" — so a weekly sheet's card said the
+    // row's own why was wrong.
+    const w = parse('Lot,Tenant,Weekly Rent,Term\n1,"Wexler, Donna",100,Annually');
+    expect(w.rows[0].term.why).toMatch(/column header says weekly but this cell says yearly/i);
+    expect(w.blockQuestions.map((b) => b.code)).toEqual(["TERM_CONFLICTS"]);
+    expect(w.blockQuestions[0].question).toMatch(/"Weekly Rent"/);
+    expect(w.blockQuestions[0].question).toMatch(/"Annually" beside a weekly header/);
+    expect(w.blockQuestions[0].question).not.toMatch(/monthly header/);
+    // A row with no figure under the contradiction is not held, not counted.
+    const none = parse('Lot,Tenant,Monthly Rent,Term\n1,"Wexler, Donna",,Annual');
+    expect(none.rows[0].verdict).toBe("import");
+    expect(none.blockQuestions).toEqual([]);
+    // The same cell under a monthly header is what it always was.
+    const m = parse('Lot,Tenant,Monthly Rent,Term\n1,"Wexler, Donna",400,Monthly');
+    expect(m.rows[0].term).toMatchObject({ value: "monthly", confidence: "stated" });
+    // And a cell that AGREES with the yearly header is stated yearly.
+    const a = parse('Lot,Tenant,Annual Rent,Term\n1,"Wexler, Donna",4800,Annual');
+    expect(a.rows[0].term).toMatchObject({ value: "annual", confidence: "stated" });
+  });
+
+  it("a term cell reading Seasonal under a yearly or quarterly header is the same disagreement", () => {
+    // "seasonal" is neither a short cadence nor a long one, so the guard that
+    // sorts short from long let it through: the cell was STATED seasonal,
+    // and on a park with a season set the row planned READY as a seasonal
+    // tenancy at the YEARLY figure — directly under the card promising that
+    // nothing from that column goes in. Any cell that is not on the header's
+    // long side is a disagreement.
+    for (const [header, word] of [["Annual Rent", "yearly"], ["Quarterly Rent", "quarterly"]] as const) {
+      const r = parse(`Lot,Tenant,${header},Term\n1,"Wexler, Donna",4800,Seasonal`);
+      expect(r.rows[0].term.value, header).toBeNull();
+      expect(r.rows[0].term.raw, header).toBe("Seasonal");
+      expect(r.rows[0].term.why, header).toMatch(new RegExp(`column header says ${word} but this cell says seasonal`, "i"));
+      expect(r.rows[0].cadenceConflict, header).toEqual({ header, cell: "Seasonal" });
+      expect(r.rows[0].verdict, header).toBe("ask");
+      expect(r.rows[0].askReasons.join(" "), header).toMatch(/monthly rent/i);
+      // Said once at the top by RENT_NOT_MONTHLY, as the Monthly cell is.
+      expect(r.blockQuestions.map((b) => b.code), header).toEqual(["RENT_NOT_MONTHLY"]);
+      // THE WORD SURVIVES. The row files as a monthly tenancy once he types
+      // the rent, and `term.raw` is written nowhere — so the one place the
+      // office can see why the seller called this household seasonal is
+      // the notes, in the column's own words.
+      expect(r.rows[0].notes, header).toContain("Term: Seasonal");
+    }
+    // The same for a Monthly cell under the yearly header — the cell the
+    // plan did not obey is still something the office wrote down.
+    const mo = parse('Lot,Tenant,Annual Rent,Term\n1,"Wexler, Donna",4800,Monthly');
+    expect(mo.rows[0].notes).toContain("Term: Monthly");
+    // Collapsed the other way: under a monthly header a seasonal cell is the
+    // cell's own term, as it always was, and nothing conflicts.
+    const m = parse('Lot,Tenant,Monthly Rent,Term\n1,"Wexler, Donna",400,Seasonal');
+    expect(m.rows[0].term).toMatchObject({ value: "seasonal", confidence: "stated" });
+    expect(m.rows[0].cadenceConflict).toBeUndefined();
+    expect(m.blockQuestions).toEqual([]);
+  });
+
+  it("carries the rent header's cadence on the row as a signal, not as text to re-read", () => {
+    // "Rent Each Quarter" is two words once the filler is gone, which the
+    // one-word cell reader cannot read — and the parser already knew the
+    // header was quarterly. The plan used to re-derive it from the label and
+    // call the column unreadable on every row.
+    for (const [header, cadence] of [
+      ["Rent Each Quarter", "quarterly"], ["Rent Due Quarterly", "quarterly"], ["Quarterly Rent Due", "quarterly"],
+      ["Annual Rent", "annual"], ["Rent per year", "annual"],
+      ["Monthly Rent", "monthly"], ["Weekly Rent", "weekly"],
+    ] as const) {
+      const r = parse(`Lot,Tenant,${header}\n1,"Wexler, Donna",1200\n2,"Fry, Loren",`);
+      expect(r.columns.index.rent, header).toBe(2);
+      // On every row under the header, with or without a figure.
+      expect(r.rows.map((x) => x.headerCadence), header).toEqual([cadence, cadence]);
+    }
+    // A header that names no cadence carries none — absent, not null.
+    const bare = parse('Lot,Tenant,Rent\n1,"Wexler, Donna",400');
+    expect("headerCadence" in bare.rows[0]).toBe(false);
+    // And no rent column at all carries none either.
+    const none = parse('Lot,Tenant\n1,"Wexler, Donna"');
+    expect("headerCadence" in none.rows[0]).toBe(false);
+  });
+
+  it("a cell that names a cadence under a bare Rent header is still read from the cell", () => {
+    const r = parse('Lot,Tenant,Rent,Frequency\n1,"Wexler, Donna",400,Monthly\n2,"Fry, Loren",100,Weekly');
+    expect(r.rows[0].term).toMatchObject({ value: "monthly", confidence: "stated" });
+    expect(r.rows[1].term).toMatchObject({ value: "weekly", confidence: "stated" });
+    expect(r.blockQuestions).toEqual([]);
+  });
+
+  it("a cell that says MORE than a cadence is not read as one by substring", () => {
+    // "Bi-monthly" read as a stated month and "Semi-annual" as a stated year,
+    // because the old matcher used includes(). Neither is true. They are not
+    // cadences we can file: the header's cadence stands if it has one, else
+    // the row is held and the column is named at the top.
+    for (const cell of ["Bi-monthly", "Semi-annual", "Every 3 months", "Twice yearly"]) {
+      expect(cellCadence(cell), cell).toBeUndefined();
+      const under = parse(`Lot,Tenant,Monthly Rent,Billing\n1,"Wexler, Donna",400,${cell}`);
+      expect(under.rows[0].term, cell).toMatchObject({ value: "monthly", confidence: "inferred" });
+      expect(under.rows[0].notes.join(" "), cell).toContain(`Billing: ${cell}`);
+      const bare = parse(`Lot,Tenant,Rent,Billing\n1,"Wexler, Donna",400,${cell}`);
+      expect(bare.rows[0].term.value, cell).toBeNull();
+      expect(bare.rows[0].verdict, cell).toBe("ask");
+      expect(bare.blockQuestions.map((b) => b.code), cell).toEqual(["TERM_NOT_READ"]);
+    }
+    // And the single words still read.
+    expect(cellCadence("Monthly rent")).toBe("monthly");
+    expect(cellCadence("Per annum")).toBe("annual");
+    expect(cellCadence("Qtr")).toBe("quarterly");
+    expect(cellCadence("per mo")).toBe("monthly");
+    expect(cellCadence("Season")).toBe("seasonal");
+    expect(cellCadence("12")).toBeUndefined();
+  });
+
+  it("exports the lot word so the claim door can strip 'Lot 14' the way the importer does", () => {
+    expect(LOT_WORD).toBeInstanceOf(RegExp);
+    expect("Lot 14".replace(LOT_WORD, "")).toBe("14");
+    expect("lot#14".replace(LOT_WORD, "")).toBe("14");
+    expect("Lotus".replace(LOT_WORD, "")).toBe("Lotus");
+    expect(norm("  Monthly-Rent ")).toBe("monthly rent");
   });
 });

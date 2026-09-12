@@ -456,7 +456,10 @@ describe("SEASON CLOCK · the year roll", () => {
 // ===========================================================================
 
 describe("LADDER · waitlist warning + expiry over two seasons", () => {
-  it("warns at most once, on exactly jobDate − warnDays, and expires exactly the day after the date", () => {
+  // 2500 jobs × 730 nights runs ~1 s alone and has crossed vitest's 5 s
+  // default under a loaded full-suite run — a flake, not a finding. The
+  // budget is explicit so a busy machine cannot fail the sim.
+  it("warns at most once, on exactly jobDate − warnDays, and expires exactly the day after the date", { timeout: 20000 }, () => {
     const r = mkRng(3);
     const JOBS = 2500;
     let warnedTotal = 0, expiredTotal = 0, neverWarned = 0, cases = 0;

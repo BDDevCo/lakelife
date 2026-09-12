@@ -3,9 +3,11 @@ import {
   type DateRange,
   type Term,
 } from "@/lib/parks";
-import { parseLot, splitLine } from "@/lib/roll-parse";
+import { parseLot, splitLine, parseMoney, cellCadence } from "@/lib/roll-parse";
 import type { Delimiter } from "@/lib/roll-parse";
 import type { ParsedRow } from "@/lib/roll-parse";
+import { median } from "@/lib/stats";
+import { toE164 } from "@/lib/phone";
 
 /**
  * THE PLAN — everything the commit will do, decided before a single write.
@@ -38,9 +40,49 @@ export type ImportBlocker =
   | "lot_twice_in_paste"
   | "label_too_long"
   | "bad_amount"
+  /**
+   * A figure in a cadence we will not file as a month — a yearly or quarterly
+   * column, a term cell reading "Annual", or one we could not read at all.
+   * Rent goes monthly, the biller reads the amount and never the term, and
+   * the parser never invents a value: dividing by twelve IS inventing one,
+   * because his sheet does not say the year was twelve equal months. Held
+   * until he types the monthly rent.
+   */
+  | "bad_term"
+  /**
+   * A monthly figure that is many times what the lots are carded at. The one
+   * guard that catches a bare "Rent" header carrying yearly figures — no
+   * header rule can. A question, not a rejection: the figure he types is his
+   * answer, even if it is the same one.
+   */
+  | "looks_yearly"
   | "no_season";
 
-export function importBlockerText(b: ImportBlocker, lotLabel?: string): string {
+/**
+ * How the sheet stated a figure the plan will not file as a monthly rent.
+ * `conflicting` is a sheet that says two things — a yearly or quarterly rent
+ * header over a term cell reading "Monthly" — and neither is trusted.
+ */
+export type CadenceOnSheet = "annual" | "quarterly" | "conflicting" | "unreadable";
+
+/**
+ * The rate card a figure was measured against — the lot's own when it has
+ * one, otherwise the middle of the park's cards. Carried so the sentence can
+ * say the number rather than "the rate card".
+ */
+export interface RateHint { amount: number; basis: "lot" | "park" }
+
+/** What a blocker's sentence needs beyond the code and the lot. */
+export interface BlockerDetail {
+  cadenceOnSheet?: CadenceOnSheet | null;
+  rateHint?: RateHint | null;
+}
+
+/** Money the way the review screen prints it — cents only when there are any. */
+const money2 = (n: number) =>
+  `$${n.toLocaleString("en-US", { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
+
+export function importBlockerText(b: ImportBlocker, lotLabel?: string, detail?: BlockerDetail): string {
   const lot = lotLabel ? `Lot ${lotLabel}` : "This row";
   switch (b) {
     case "no_name":
@@ -59,6 +101,34 @@ export function importBlockerText(b: ImportBlocker, lotLabel?: string): string {
       return "That lot name is too long to be a lot name.";
     case "bad_amount":
       return "We read a rent on this line but couldn't turn it into a number.";
+    case "bad_term": {
+      // NO ÷12 HERE, EVEN AS A SUGGESTION. A number printed beside a box is a
+      // number that gets typed into it, and then the software has divided by
+      // twelve with his fingerprint on it. And no "on the lease": on The Haven
+      // eleven of the eighteen leases understate what is actually collected,
+      // so naming a document would point him at the wrong number. He knows
+      // what the month is; the question is his to answer.
+      const c = detail?.cadenceOnSheet ?? "unreadable";
+      if (c === "annual") {
+        return "This is a yearly figure, and rent is filed by the month. What's the monthly rent?";
+      }
+      if (c === "quarterly") {
+        return "This is a quarterly figure, and rent is filed by the month. What's the monthly rent?";
+      }
+      if (c === "conflicting") {
+        return "The rent column's header and this row's term cell disagree about how often it's paid — the sheet gives two answers. What's the monthly rent?";
+      }
+      return "We couldn't tell how often that's paid, so we won't file it as a month. What's the monthly rent?";
+    }
+    case "looks_yearly": {
+      const hint = detail?.rateHint;
+      const against = hint
+        ? hint.basis === "lot"
+          ? ` — the lot's rate card is ${money2(hint.amount)} a month`
+          : ` — lots here are carded at about ${money2(hint.amount)} a month`
+        : ", not a monthly rent";
+      return `That looks like a yearly figure${against}. If it really is the monthly rent, type it in and it goes through as typed.`;
+    }
     case "no_season":
       return "This is a seasonal tenancy and the park has no season set, so we don't know the dates.";
   }
@@ -194,6 +264,25 @@ export interface PlannedRow {
   phone: string | null;
   amount: number | null;
   term: Term;
+  /**
+   * The sheet gave this figure in a cadence the plan will not file as a
+   * month. Set from the parse, so it survives his answer — once he types the
+   * monthly rent the blocker clears, but the screen still knows the sheet's
+   * own total is a yearly one and must not be checked against monthly rows.
+   */
+  cadenceOnSheet: CadenceOnSheet | null;
+  /**
+   * THE FIGURE ON THIS ROW IS HIS, NOT THE SELLER'S. The sheet printed one
+   * the plan would not file as a month — in another cadence, or one that
+   * looked yearly against the cards — and he typed a different figure over
+   * it (or said there isn't one). The seller's total at the bottom of his
+   * list is the sum of the figures he PRINTED, so from here on his total and
+   * the rows no longer add up the same things, and `checkTotals` refuses.
+   * The same figure typed back is still his figure, and is not this.
+   */
+  typedOver: boolean;
+  /** What `looks_yearly` measured the figure against. Null when nothing did. */
+  rateHint: RateHint | null;
   range: DateRange | null;
   /** He decided to leave this one out. Not a failure — an answer. */
   skipped: boolean;
@@ -237,6 +326,13 @@ export interface ImportPlan {
 export interface ExistingLot {
   id: string;
   lotNumber: string;
+  /**
+   * The lot's monthly rate card, when it has one. The plan uses the park's
+   * cards as the scale a sheet's figures are measured on: a "rent" of $3,600
+   * against twenty-one cards at $400 is a year, not a month. Absent on a park
+   * with no cards yet, and then nothing is measured.
+   */
+  monthlyRate?: number | null;
 }
 
 export interface LiveStay {
@@ -347,14 +443,27 @@ export function planImport(input: PlanInput): ImportPlan {
     if (key) timesUsed.set(key, (timesUsed.get(key) ?? 0) + 1);
   }
 
+  // THE SCALE THE PARK'S OWN CARDS SET. The middle card, so one park-owned
+  // home at $1,500 among twenty lots at $400 does not move it. Null on a park
+  // with no cards, and then the check does not run — a guess would be worse.
+  const cardMedian = median(
+    lots.map((l) => l.monthlyRate).filter((n): n is number => typeof n === "number" && n > 0),
+  );
+
   // ---- pass 2: plan each row.
   const planned: PlannedRow[] = resolved.map((entry) => {
     const { row, rawLabel, real, o } = entry;
     const blockers: ImportBlocker[] = [];
     const label = real ?? rawLabel;
-    const term = (row.term.value ?? "monthly") as Term;
-    const range = rangeForTerm(term, cutoverISO, season);
     const skipped = isSkipped(entry);
+
+    // A FIGURE IN A CADENCE WE WILL NOT FILE. Rent goes monthly and the
+    // biller reads the amount, never the term, so "annual, $4,500" bills
+    // $4,500 in January. The tenancy this row becomes is monthly; the figure
+    // on it is the one he types.
+    const cadenceOnSheet = cadenceOnSheetOf(row);
+    const term = (cadenceOnSheet ? "monthly" : (row.term.value ?? "monthly")) as Term;
+    const range = rangeForTerm(term, cutoverISO, season);
 
     // What he typed wins over what we read, always.
     const name = o.name?.trim() || row.name.value;
@@ -385,6 +494,37 @@ export function planImport(input: PlanInput): ImportPlan {
       blockers.push("bad_amount");
     }
 
+    // A figure the sheet gave by the year or the quarter, or under a cadence
+    // we could not read, with no monthly rent typed over it. NEVER ÷12.
+    if (cadenceOnSheet && o.rent === undefined && row.rent.value != null) {
+      blockers.push("bad_term");
+    }
+
+    // The sheet's own figure against the park's cards. Only the sheet's — a
+    // figure he typed is his answer, and refusing it would be a question with
+    // no exit. Not raised beside bad_term: that row is already asking.
+    const lotRate = real ? byLabel.get(real)?.monthlyRate ?? null : null;
+    const rateHint: RateHint | null =
+      typeof lotRate === "number" && lotRate > 0
+        ? { amount: lotRate, basis: "lot" }
+        : cardMedian != null ? { amount: cardMedian, basis: "park" } : null;
+    const looksYearly =
+      !cadenceOnSheet &&
+      row.rent.value != null &&
+      cardMedian != null &&
+      row.rent.value > cardMedian * LOOKS_YEARLY_FACTOR;
+    if (looksYearly && o.rent === undefined) blockers.push("looks_yearly");
+
+    // Whether the figure now on the row is still the one the seller printed.
+    // Only for a figure the plan would not have filed: a plain monthly rent
+    // gets no box on the screen, and a rent we could not read ("4l0.00")
+    // printed no figure to be typed over.
+    const typedOver =
+      (cadenceOnSheet != null || looksYearly) &&
+      row.rent.value != null &&
+      o.rent !== undefined &&
+      o.rent !== row.rent.value;
+
     if (term === "seasonal" && !range) blockers.push("no_season");
 
     // The parser found more than one lot this line could mean. Picking one is
@@ -413,6 +553,9 @@ export function planImport(input: PlanInput): ImportPlan {
       phone: row.phone.value ?? null,
       amount,
       term,
+      cadenceOnSheet,
+      typedOver,
+      rateHint: blockers.includes("looks_yearly") ? rateHint : null,
       range,
       skipped,
       blockers,
@@ -433,12 +576,17 @@ export function planImport(input: PlanInput): ImportPlan {
   // he cannot answer from the document in front of him, which is the same as
   // importing nothing.
   if (input.namelessRoll) {
+    // A yearly figure is no more a monthly rate card than a monthly rent. The
+    // lot is still set up; its card stays empty, and RENT_NOT_MONTHLY at the
+    // top of the screen says why.
+    const notMonthly = (p: PlannedRow) =>
+      p.blockers.includes("bad_term") || p.blockers.includes("looks_yearly");
     const rates: PlannedRate[] = planned
       .filter((p) => !p.skipped && p.lotLabel && !p.blockers.includes("label_too_long"))
       .map((p) => ({
         lineNo: p.lineNo,
         lotLabel: p.lotLabel!,
-        amount: p.amount,
+        amount: notMonthly(p) ? null : p.amount,
         createsLot: p.createsLot,
       }));
 
@@ -503,12 +651,175 @@ export function planImport(input: PlanInput): ImportPlan {
   return { rows: planned, ready, needsYou, lotsToCreate, monthlyTotal, namelessRoll: false, emptyLots: [...(input.emptyLots ?? [])], rates };
 }
 
+/**
+ * A monthly figure this many times the park's middle rate card is read as a
+ * yearly one. Four is deliberately loose: a park-owned double-wide at $1,500
+ * among $400 lots is under it; a $3,600 "rent" against $400 cards is nine
+ * times over.
+ */
+export const LOOKS_YEARLY_FACTOR = 4;
+
+/**
+ * How the sheet stated this row's figure, when it is not a month. The parser
+ * carries it four ways, read in this order: `cadenceConflict` set — the
+ * header and the cell each name a cadence and disagree, a sheet that
+ * contradicts itself, and the card says so rather than "we couldn't tell";
+ * a term value of "annual" (from a header or a cell); `headerCadence` — the
+ * header's own reading, carried as a signal because "Rent Each Quarter" is
+ * two words after the filler and the one-word cell reader cannot read it
+ * back off the label the parser leaves in `term.raw`; and last, no value
+ * with the cell it could not file as the raw — "Quarterly", "Twice yearly".
+ */
+export function cadenceOnSheetOf(
+  row: Pick<ParsedRow, "term" | "cadenceConflict" | "headerCadence">,
+): CadenceOnSheet | null {
+  if (row.cadenceConflict) return "conflicting";
+  if (row.term.value === "annual") return "annual";
+  if (row.headerCadence === "quarterly") return "quarterly";
+  if (row.headerCadence === "annual") return "annual";
+  if (row.term.value === null && row.term.raw.trim() !== "") {
+    const said = cellCadence(row.term.raw);
+    if (said === "annual") return "annual";
+    if (said === "quarterly") return "quarterly";
+    return "unreadable";
+  }
+  return null;
+}
+
+/**
+ * THE RENT HE TYPES, read as a figure or refused by name.
+ *
+ * The box under "This is a yearly figure… What's the monthly rent?" invites
+ * arithmetic, and the loader used to read whatever landed there by stripping
+ * everything but digits: "4500/12" became 450,012, "see lease" became 0, and
+ * either cleared the hold as his answer with no question left on screen.
+ * `parseMoney` is the parser's own reading of a money cell — the same one
+ * that refused "4l0.00" on the sheet — so the answer box and the sheet are
+ * held to one standard. `null` is the plan's "there isn't one".
+ */
+export type TypedRent = { ok: true; value: number | null } | { ok: false; error: string };
+export function typedRent(raw: unknown): TypedRent {
+  if (raw === null) return { ok: true, value: null };
+  if (typeof raw === "number") {
+    return Number.isFinite(raw) && raw >= 0 && raw <= 100_000
+      ? { ok: true, value: raw }
+      : { ok: false, error: "That isn't a figure we can file as a rent. Type the monthly amount as a number, like 375." };
+  }
+  if (typeof raw !== "string") {
+    return { ok: false, error: "That isn't a figure we can file as a rent. Type the monthly amount as a number, like 375." };
+  }
+  const typed = raw.trim();
+  const m = parseMoney(typed);
+  if (m.value != null) return { ok: true, value: m.value };
+  const named = typed ? `"${typed}" isn't a figure we can file as a rent.` : "That box is empty.";
+  return { ok: false, error: `${named} Type the monthly amount as a number, like 375.` };
+}
+
+/**
+ * A pasted phone, in the form the other two writers of
+ * `phone_on_file_with_park` store it (buildTenant and the signing door both
+ * go through `toE164`), so one column holds one format. The parser's pretty
+ * form stays on the review screen, where a person reads it.
+ */
+export function phoneOnFile(pretty: string | null | undefined): string | null {
+  if (!pretty) return null;
+  return toE164(pretty);
+}
+
+/**
+ * The cadence the SHEET gave its figures in, across the rows he has not stood
+ * down — or null when they are monthly. The screen reads this to refuse the
+ * tie check and to say why: a yearly total at the bottom of a sheet cannot be
+ * checked against rows that are waiting for a monthly rent, and once they
+ * have one it still cannot, because the total is a year and the rows are a
+ * month. Reads the parse, not the blocker, so it holds after he answers.
+ *
+ * A MAJORITY OF THE FIGURES, OR NOTHING. This took the most frequent cadence
+ * among the rows that had one and ignored the rest, so ONE row decided the
+ * sheet: a single "Annual" cell on a monthly roll — or a blank-rent row whose
+ * term cell said Annual, which held nothing at all — made the whole sheet
+ * "conflicting", switched the seller's-arithmetic check off for good, and
+ * printed a sentence about a monthly total that tied to the penny. Only rows
+ * with a figure vote (a row with none is nothing to add up), and a cadence is
+ * the sheet's only when more than half of them share it. A held minority
+ * still refuses the tick on its own until answered — see `checkTotals`.
+ */
+export function sheetCadence(rows: readonly PlannedRow[]): CadenceOnSheet | null {
+  const tally = new Map<CadenceOnSheet, number>();
+  let figures = 0;
+  for (const r of rows) {
+    if (r.skipped || r.amount == null) continue;
+    figures += 1;
+    if (!r.cadenceOnSheet) continue;
+    tally.set(r.cadenceOnSheet, (tally.get(r.cadenceOnSheet) ?? 0) + 1);
+  }
+  let best: CadenceOnSheet | null = null;
+  let n = 0;
+  for (const [c, count] of tally) if (count > n) { best = c; n = count; }
+  return best !== null && n * 2 > figures ? best : null;
+}
+
+/**
+ * What the rows still WAITING on a monthly rent were stated as — for the
+ * sentence about them, which used to be derived from the sheet and so called
+ * a lone conflicting row on a monthly sheet "figures that look yearly
+ * against your rate cards" when nothing had measured it against a card.
+ *
+ * One kind when every held row is that kind; "mixed" when they differ, so
+ * the screen claims nothing specific of all of them; null when none is held.
+ * A `looks_yearly` row has no cadence on the sheet — it is held for looking
+ * like a year against the cards — and is its own kind here.
+ */
+export type HeldCadence = CadenceOnSheet | "looks_yearly" | "mixed";
+export function heldCadence(rows: readonly PlannedRow[]): HeldCadence | null {
+  let found: HeldCadence | null = null;
+  for (const r of rows) {
+    if (r.skipped) continue;
+    const kind: HeldCadence | null = r.blockers.includes("bad_term")
+      ? (r.cadenceOnSheet ?? "unreadable")
+      : r.blockers.includes("looks_yearly") ? "looks_yearly" : null;
+    if (kind === null) continue;
+    if (found === null) found = kind;
+    else if (found !== kind) return "mixed";
+  }
+  return found;
+}
+
+/**
+ * The rows he has ANSWERED with a figure that is not the seller's — the
+ * sheet printed a yearly one, a quarterly one, one it gave two cadences for,
+ * or one that looked yearly against the cards, and he typed the monthly rent
+ * over it. Read the same way `heldCadence` reads the held rows: one kind when
+ * they all share it, "mixed" when they differ, null when there are none. And
+ * how many, for the sentence that says why his total is not checked: once
+ * any such row exists, his total sums figures that are no longer on the rows.
+ */
+export function answeredCadence(rows: readonly PlannedRow[]): { kind: HeldCadence; count: number } | null {
+  let found: HeldCadence | null = null;
+  let count = 0;
+  for (const r of rows) {
+    if (r.skipped || !r.typedOver) continue;
+    const kind: HeldCadence = r.cadenceOnSheet ?? "looks_yearly";
+    count += 1;
+    if (found === null) found = kind;
+    else if (found !== kind) found = "mixed";
+  }
+  return found === null ? null : { kind: found, count };
+}
+
 // ------------------------------------------------------------- the money ----
 
 export interface CadenceTotals {
   byTerm: { term: Term; count: number; total: number }[];
   /** True when more than one cadence is present — no single number is honest. */
   mixed: boolean;
+  /**
+   * Rows with a figure the plan will not read as any cadence — held on
+   * `bad_term` or `looks_yearly` until he types the monthly rent. Left out of
+   * every total above, and counted here so the screen can say so rather than
+   * printing "$67,500 a month" over eighteen yearly figures.
+   */
+  heldForMonthly: number;
 }
 
 /**
@@ -520,15 +831,23 @@ export interface CadenceTotals {
  */
 export function cadenceTotals(rows: readonly PlannedRow[]): CadenceTotals {
   const map = new Map<Term, { count: number; total: number }>();
+  let heldForMonthly = 0;
   for (const r of rows) {
     if (r.amount == null) continue;
+    // A figure with no cadence we can name is not "a month" — it is the row's
+    // question. Summing it as one is exactly how the review screen read
+    // "$67,500 a month" off a yearly column.
+    if (r.blockers.includes("bad_term") || r.blockers.includes("looks_yearly")) {
+      heldForMonthly += 1;
+      continue;
+    }
     const cur = map.get(r.term) ?? { count: 0, total: 0 };
     cur.count += 1;
     cur.total += r.amount;
     map.set(r.term, cur);
   }
   const byTerm = [...map.entries()].map(([term, v]) => ({ term, ...v }));
-  return { byTerm, mixed: byTerm.length > 1 };
+  return { byTerm, mixed: byTerm.length > 1, heldForMonthly };
 }
 
 /**
@@ -621,15 +940,46 @@ export function checkTotals(
   rows: readonly PlannedRow[],
 ): TotalsCheck | null {
   if (stated == null) return null;
-  const computed = rows.reduce((s, r) => s + (r.amount ?? 0), 0);
+  // THE SELLER'S TOTAL IS THE SUM OF THE FIGURES HE PRINTED, so this is a
+  // check on his arithmetic only while every figure it adds is his. Null —
+  // and the screen says why — when:
+  //
+  // The sheet is not monthly. His yearly figures add up to his yearly total,
+  // a tie that reads as a green tick over eighteen rents twelve times too
+  // big; and once he has typed the monthly rents, a yearly total against
+  // monthly rows is not a check either.
+  //
+  // Any row is still held for LOOKING yearly, or on its cadence. A minority
+  // "Annual" row on a monthly sheet does not switch the sheet's cadence, so
+  // it refuses the tick on its own: a tick above an open question about one
+  // of the same figures answers it.
+  //
+  // Any row has been TYPED OVER. Two monthly rows at 400 and one yearly at
+  // 4800, under the seller's honest total of 5600: once he types 400 over
+  // the yearly figure the rows are 1200 and his total is still 5600. This
+  // ran the check on that and printed "short $4,400" about a sheet that adds
+  // up to the penny — and ticked only a 1200 the seller could have written
+  // by dividing 4800 by 12 himself. No total he could have printed is a
+  // check on rows that no longer carry his figures.
+  //
+  // Over the rows he has NOT stood down, throughout: the guards read that
+  // way, and the sum did not, so a skipped row was refused a vote and then
+  // added to the total anyway. The screen passes only the live rows and never
+  // saw it; the function is held to its own rule regardless.
+  const live = rows.filter((r) => !r.skipped);
+  if (sheetCadence(live) != null) return null;
+  if (live.some((r) => r.blockers.includes("looks_yearly"))) return null;
+  if (live.some((r) => r.blockers.includes("bad_term"))) return null;
+  if (live.some((r) => r.typedOver)) return null;
+  const computed = live.reduce((s, r) => s + (r.amount ?? 0), 0);
   const difference = Math.round((stated - computed) * 100) / 100;
   const ties = Math.abs(difference) < 0.005;
 
-  const lotsWithNoAmount = rows
+  const lotsWithNoAmount = live
     .filter((r) => r.amount == null && r.lotLabel)
     .map((r) => r.lotLabel!);
 
-  const amounts = rows.map((r) => r.amount).filter((n): n is number => n != null);
+  const amounts = live.map((r) => r.amount).filter((n): n is number => n != null);
 
   // BOTH conditions, or we say nothing: the sheet is SHORT, and short by an
   // amount that actually sits inside the range of rents on this very sheet.
@@ -643,7 +993,7 @@ export function checkTotals(
   // A lot listed twice inflates OUR sum above his, which is the usual reason a
   // total comes out "over" rather than short.
   const perLot = new Map<string, number>();
-  for (const r of rows) {
+  for (const r of live) {
     if (r.lotLabel && r.amount != null) perLot.set(r.lotLabel, (perLot.get(r.lotLabel) ?? 0) + 1);
   }
   const doubleCountedLots =

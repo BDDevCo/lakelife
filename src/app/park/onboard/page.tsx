@@ -36,8 +36,14 @@ export default async function ParkOnboardPage() {
         seeds={res.seeds ?? []}
         today={res.today ?? ""}
         capMonths={res.capMonths ?? null}
+        termMonths={res.termMonths ?? null}
         rentsFromImport={res.rentsFromImport ?? false}
         feePerSignedLot={res.feePerSignedLot ?? 0}
+        // THE PROP NOTHING PASSED. getOnboardSeeds returned it and the screen
+        // accepted it (defaulting to null), so before go-live the seeded date
+        // was today, the input had no floor, and the server then refused
+        // every signed row by name.
+        cutoverDate={res.cutoverDate ?? null}
       />
     </>
   );

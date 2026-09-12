@@ -6,7 +6,9 @@ import {
   addDays, daysBetween, ordinal,
   type TaskFacts, type OccupancySnapshot,
 } from "./today-helpers";
-import { toRows, summarise, type Charge } from "./ledger-helpers";
+import { toRows, summarise, prettyMonth, type Charge } from "./ledger-helpers";
+import { preCutoverCostRefusal } from "@/lib/billing-start";
+import { SIGNED_LEASE_LABEL } from "./sign-helpers";
 
 const TODAY = "2026-08-11";
 
@@ -34,6 +36,8 @@ const facts = (over: Partial<TaskFacts> = {}): TaskFacts => ({
   pendingRentChanges: [],
   noticed: [],
   billsDue: [],
+  // NULL = no go-live restriction, which is what a park with no handover has.
+  cutoverOn: null,
   ...over,
 });
 
@@ -233,6 +237,23 @@ describe("the to-do list", () => {
     }))).toEqual([]);
   });
 
+  it("never asks to bill a month that began before go-live — the run would refuse it anyway", () => {
+    // Somebody filed with a December start at a park going live 1 January:
+    // "December 2026 isn't billed yet" sent him to a button that says
+    // December isn't ours. Same rule, same function, as the bill reminders.
+    expect(generateTasks(facts({
+      monthBilled: false, today: "2026-12-15", currentMonth: "2026-12",
+      rentDueDay: 1, liveOccupiedLots: 3, cutoverOn: "2027-01-01",
+    }))).toEqual([]);
+    // And the first month that IS ours is raised as before.
+    const [t] = generateTasks(facts({
+      monthBilled: false, today: "2027-01-11", currentMonth: "2027-01",
+      rentDueDay: 1, liveOccupiedLots: 3, cutoverOn: "2027-01-01",
+    }));
+    expect(t?.title).toBe("January 2027 isn't billed yet");
+    expect(t?.urgency).toBe("overdue");
+  });
+
   it("says a cost that isn't split bills NOBODY", () => {
     const [t] = generateTasks(facts({
       unallocatedCosts: [{ id: "k1", label: "Water — July", amount: 412.5 }],
@@ -350,6 +371,15 @@ describe("who still hasn't signed", () => {
     expect(t.title).toBe("2 households haven't signed the new lease");
     expect(t.detail).toContain("Lots 4, 9");
     expect(t.detail).toMatch(/cap doesn't apply to them yet/);
+  });
+
+  it("says where to record a signature, by the control's own label", () => {
+    // The card sent him to the roll and the roll had nothing to tap: a
+    // household that signed on 1 January stayed "unsigned" — and fee-exempt.
+    const [t] = generateTasks(facts({ holdoverLots: ["4"] }));
+    expect(t.detail).toContain("record it from their row on the rent roll");
+    expect(t.detail).toContain("'They signed the new lease'");
+    expect(t.href).toBe("/park");
   });
 
   it("says nothing at all once everybody has signed", () => {
@@ -536,11 +566,17 @@ describe("a disputed bill is not arrears", () => {
 // trace anywhere.
 // ---------------------------------------------------------------------------
 describe("bills that come round again", () => {
-  const sewer = (over: Record<string, unknown> = {}) => [{
-    scheduleId: "s1", category: "sewer", label: "Sewer",
-    periodKey: "2026-08", periodLabel: "August 2026",
-    dueOn: "2026-08-05", typical: 1433.17, ...over,
-  }];
+  // `periodFrom` is what billPeriod hands the loader: the first day of the
+  // period the bill is FOR. Derived from the key so an override of one cannot
+  // leave the other pointing at a different month.
+  const sewer = (over: Record<string, unknown> = {}) => {
+    const periodKey = (over.periodKey as string | undefined) ?? "2026-08";
+    return [{
+      scheduleId: "s1", category: "sewer", label: "Sewer",
+      periodKey, periodLabel: "August 2026", periodFrom: `${periodKey}-01`,
+      dueOn: "2026-08-05", typical: 1433.17, ...over,
+    }];
+  };
 
   it("says what to expect, so a wrong invoice is noticeable", () => {
     const [t] = generateTasks(facts({ billsDue: sewer({ dueOn: "2026-08-20" }) }));
@@ -570,7 +606,33 @@ describe("bills that come round again", () => {
   it("manages without a typical amount rather than inventing one", () => {
     const [t] = generateTasks(facts({ billsDue: sewer({ typical: null }) }));
     expect(t.detail).not.toMatch(/\$/);
-    expect(t.detail).toMatch(/splits across the lots/);
+    expect(t.detail).toMatch(/costs screen/);
+  });
+
+  // THE CARD DOES NOT KNOW WHAT THE DOOR WILL DO WITH THE BILL. The loader
+  // reads no fees, and at The Haven the monthly sewer is fee-covered: the
+  // costs screen records it under the Grounds fee and divides it to nobody.
+  // "Enter the real figure and it splits across the lots — until it is in,
+  // nobody is billed for it" promised, on the 5th of every month, a split and
+  // a bill that the screen it links to then — correctly — refuses to make.
+  // So the sentence names both things the door can do and promises neither.
+  it("promises no split it cannot know about — the sentence is the same for a covered category", () => {
+    for (const typical of [1433.17, null]) {
+      const [t] = generateTasks(facts({ billsDue: sewer({ typical }) }));
+      expect(t.detail).toMatch(/costs screen/);
+      expect(t.detail).toMatch(/a fee that covers it/);
+      expect(t.detail).toMatch(/or splits across the lots/);
+      expect(t.detail).toMatch(/nobody's books and nobody's fee comparison/);
+      // The unconditional promise, in the shape it had.
+      expect(t.detail).not.toMatch(/it splits across the lots —/);
+      expect(t.detail).not.toMatch(/nobody is billed for it/);
+    }
+    // And the typical figure still leads when there is one, in one sentence
+    // of its own, so the instruction reads the same either way.
+    const [withTypical] = generateTasks(facts({ billsDue: sewer({ typical: 1433.17 }) }));
+    expect(withTypical.detail).toMatch(/^Usually about \$1,433\.17\. Enter the real figure/);
+    const [without] = generateTasks(facts({ billsDue: sewer({ typical: null }) }));
+    expect(without.detail).toMatch(/^Enter the real figure/);
   });
 
   // A NEW PARK HAS NO SCHEDULES AND SEES NOTHING. Nothing about The Haven is
@@ -589,11 +651,14 @@ describe("bills that come round again", () => {
   // billed for the first time — his Needs-you list opened with "Property tax
   // for 2027 is due about now", 313 days early, and `canDismiss: false`.
   // -------------------------------------------------------------------------
-  const tax = (over: Record<string, unknown> = {}) => [{
-    scheduleId: "s9", category: "tax", label: "Property tax",
-    periodKey: "2026", periodLabel: "2026",
-    dueOn: "2026-11-10", typical: 3517.96, ...over,
-  }];
+  const tax = (over: Record<string, unknown> = {}) => {
+    const periodKey = (over.periodKey as string | undefined) ?? "2026";
+    return [{
+      scheduleId: "s9", category: "tax", label: "Property tax",
+      periodKey, periodLabel: "2026", periodFrom: `${periodKey}-01-01`,
+      dueOn: "2026-11-10", typical: 3517.96, ...over,
+    }];
+  };
 
   it("does not claim an annual bill is due 313 days out", () => {
     // TODAY is 2026-08-11; a bill due 2027-11-10 is well over a year away.
@@ -635,6 +700,149 @@ describe("bills that come round again", () => {
       expect(t?.title, `sewer due 2026-09-${day} vanished`)
         .toMatch(/Sewer for September 2026/);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // A BILL FOR A MONTH THAT WAS NEVER OURS.
+  //
+  // The Haven closes 15 December 2026 and goes live 1 January 2027. Its two
+  // schedules are real — sewer monthly due the 5th, property tax annual due
+  // 10 November — and on closing morning both raised a red, non-dismissible
+  // card: "Property tax for 2026 still isn't entered" and "LaGrange County
+  // sewer for December 2026 still isn't entered". The 2026 tax is the
+  // seller's and is settled as a credit at the closing table; December's
+  // sewer arrived at the seller's address. Neither may ever be a park_costs
+  // row, and the card instructed him to enter both.
+  //
+  // ONE KEY FOR ONE RULE. The gate is keyed on the month the bill is FOR —
+  // the first day of its period — because that is the month the cost door
+  // compares against `period_start`. Keyed on the DUE month, the two doors
+  // disagreed for any annual bill at a park that went live mid-year: the card
+  // was raised and the door refused the period he would type.
+  // -------------------------------------------------------------------------
+  describe("before the park went live", () => {
+    const HAVEN = { cutoverOn: "2027-01-01" };
+
+    it("does not raise the seller's tax on closing day", () => {
+      expect(generateTasks(facts({
+        ...HAVEN, today: "2026-12-15",
+        billsDue: tax({ dueOn: "2026-11-10" }),
+      }))).toEqual([]);
+    });
+
+    it("does not raise the December sewer for a January go-live", () => {
+      expect(generateTasks(facts({
+        ...HAVEN, today: "2026-12-15",
+        billsDue: sewer({ periodKey: "2026-12", periodLabel: "December 2026", dueOn: "2026-12-05" }),
+      }))).toEqual([]);
+    });
+
+    it("raises the January sewer — the first bill that is ours", () => {
+      const [t] = generateTasks(facts({
+        ...HAVEN, today: "2027-01-06",
+        billsDue: sewer({ periodKey: "2027-01", periodLabel: "January 2027", dueOn: "2027-01-05" }),
+      }));
+      expect(t?.title).toBe("Sewer for January 2027 still isn't entered");
+      expect(t?.urgency).toBe("overdue");
+      expect(t?.canDismiss).toBe(false);
+    });
+
+    it("still never clips a LATE bill that IS ours", () => {
+      // Go-live 1 Jan 2027; the 2027 tax was due 10 Nov 2027 and it is now
+      // February 2028. Ours, late, and the whole point of the reminder.
+      const [t] = generateTasks(facts({
+        ...HAVEN, today: "2028-02-11",
+        billsDue: tax({ dueOn: "2027-11-10", periodKey: "2027", periodLabel: "2027" }),
+      }));
+      expect(t?.title).toBe("Property tax for 2027 still isn't entered");
+      expect(t?.urgency).toBe("overdue");
+    });
+
+    it("keys on the bill's own period, so a mid-year go-live sees no tax card for the year that began before it", () => {
+      // Go-live 1 April 2027. billPeriod gives the 2027 tax a period starting
+      // 1 January 2027 — before go-live. The cost door refuses that period
+      // (period_start January 2027 is before April 2027), so a card for it
+      // would send him to a door that says no. Indiana bills property tax in
+      // arrears: the November 2027 bill is for 2026, the previous owner's
+      // year, and the buyer's share is a closing credit — never a park_costs
+      // row. Decided, not accidental; the comment on the gate says the same.
+      expect(generateTasks(facts({
+        cutoverOn: "2027-04-01", today: "2027-11-11",
+        billsDue: tax({ dueOn: "2027-11-10", periodKey: "2027", periodLabel: "2027" }),
+      }))).toEqual([]);
+      // The next year's is the first that is his — and it is raised.
+      const [t] = generateTasks(facts({
+        cutoverOn: "2027-04-01", today: "2028-11-11",
+        billsDue: tax({ dueOn: "2028-11-10", periodKey: "2028", periodLabel: "2028" }),
+      }));
+      expect(t?.title).toBe("Property tax for 2028 still isn't entered");
+    });
+
+    it("a quarterly bill is keyed the same way — the quarter it is for", () => {
+      // Anchored Feb/May/Aug/Nov, due on the 10th of the anchor month. The
+      // November 2026 quarter began before a 1 January go-live; February
+      // 2027's is the first that is ours. For quarterly, as for monthly, the
+      // due month IS the period's first month, so nothing moves here.
+      const quarter = (key: string, from: string, dueOn: string, label: string) => [{
+        scheduleId: "s4", category: "trash", label: "Trash",
+        periodKey: key, periodLabel: label, periodFrom: from, dueOn, typical: null,
+      }];
+      expect(generateTasks(facts({
+        ...HAVEN, today: "2026-12-15",
+        billsDue: quarter("2026-Q11", "2026-11-01", "2026-11-10", "the November 2026 quarter"),
+      }))).toEqual([]);
+      const [t] = generateTasks(facts({
+        ...HAVEN, today: "2027-02-11",
+        billsDue: quarter("2027-Q2", "2027-02-01", "2027-02-10", "the February 2027 quarter"),
+      }));
+      expect(t?.title).toBe("Trash for the February 2027 quarter still isn't entered");
+    });
+
+    it("raises a card exactly when the cost door would take the bill — both cadences, both ways", () => {
+      // The reminder and the door are two doorways on one rule. Collapsed both
+      // ways: every bill the card raises, preCutoverCostRefusal accepts for
+      // the period the card names; every bill it refuses, the card omits.
+      const cases = [
+        { cutoverOn: "2027-01-01", today: "2026-12-15", bill: tax({ dueOn: "2026-11-10" })[0] },
+        { cutoverOn: "2027-01-01", today: "2027-11-11", bill: tax({ dueOn: "2027-11-10", periodKey: "2027" })[0] },
+        { cutoverOn: "2027-04-01", today: "2027-11-11", bill: tax({ dueOn: "2027-11-10", periodKey: "2027" })[0] },
+        { cutoverOn: "2027-04-01", today: "2028-11-11", bill: tax({ dueOn: "2028-11-10", periodKey: "2028" })[0] },
+        { cutoverOn: "2027-01-01", today: "2026-12-06", bill: sewer({ periodKey: "2026-12", dueOn: "2026-12-05" })[0] },
+        { cutoverOn: "2027-01-01", today: "2027-01-06", bill: sewer({ periodKey: "2027-01", dueOn: "2027-01-05" })[0] },
+        { cutoverOn: "2026-12-15", today: "2026-12-20", bill: sewer({ periodKey: "2026-12", dueOn: "2026-12-05" })[0] },
+        { cutoverOn: "2026-12-15", today: "2027-01-06", bill: sewer({ periodKey: "2027-01", dueOn: "2027-01-05" })[0] },
+      ];
+      let raised = 0;
+      for (const c of cases) {
+        const card = generateTasks(facts({ cutoverOn: c.cutoverOn, today: c.today, billsDue: [c.bill] }));
+        const doorTakes = preCutoverCostRefusal(c.bill.periodFrom.slice(0, 7), c.cutoverOn, prettyMonth, null) === null;
+        expect(card.length > 0, `${c.bill.periodKey} at go-live ${c.cutoverOn}`).toBe(doorTakes);
+        if (doorTakes) raised += 1;
+      }
+      // Both halves exercised, or the loop proved nothing.
+      expect(raised).toBe(4);
+    });
+
+    it("treats a mid-month go-live's own month as not ours", () => {
+      // Go-live 15 Dec 2026: December began before us, so a bill due in
+      // December is whoever-was-collecting's; January's is ours.
+      expect(generateTasks(facts({
+        cutoverOn: "2026-12-15", today: "2026-12-20",
+        billsDue: sewer({ periodKey: "2026-12", periodLabel: "December 2026", dueOn: "2026-12-05" }),
+      }))).toEqual([]);
+      expect(generateTasks(facts({
+        cutoverOn: "2026-12-15", today: "2027-01-06",
+        billsDue: sewer({ periodKey: "2027-01", periodLabel: "January 2027", dueOn: "2027-01-05" }),
+      })).length).toBe(1);
+    });
+
+    it("changes nothing for a park with no go-live date", () => {
+      const [t] = generateTasks(facts({
+        cutoverOn: null, today: "2026-12-15",
+        billsDue: tax({ dueOn: "2026-11-10" }),
+      }));
+      expect(t?.title).toBe("Property tax for 2026 still isn't entered");
+    });
   });
 });
 
@@ -861,5 +1069,55 @@ describe("the read behind it", () => {
     // off the charge. Folding billless rows in would give them "?" and "", and
     // would double-count them into the month total.
     expect(src).toMatch(/filter\(\(p\) => p\.charge_id != null\)/);
+  });
+
+  it("hands the gate the bill's own period start, straight from billPeriod", () => {
+    // The go-live gate compares `periodFrom`; if the loader stopped passing
+    // `p.from` here the type would catch it, but a literal (say the due date)
+    // would not — and the reminder and the cost door would disagree again.
+    expect(src).toMatch(/periodFrom:\s*p\.from/);
+  });
+});
+
+describe("the control the copy names", () => {
+  /**
+   * Two sentences — the 'households haven't signed' card and the fee page —
+   * tell him to record a signature "from their row on the rent roll ('They
+   * signed the new lease')". That is a button's label, and the button lives in
+   * a file neither sentence imports. If it is renamed or removed, both
+   * sentences become an instruction for an action the screen lacks. Pinned
+   * here so the copy cannot outlive the control.
+   */
+  const roll = readFileSync(
+    fileURLToPath(new URL("../../components/ParkRentRoll.tsx", import.meta.url)),
+    "utf8",
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  it("the scanner is reading real JSX, not prose", () => {
+    expect(roll).toContain("ParkRentRoll");
+    expect(roll).toMatch(/<button/);
+  });
+
+  it("the rent roll still has the 'They signed the new lease' control the card sends him to", () => {
+    // ONE HOME FOR THE WORDS. The roll renders SIGNED_LEASE_LABEL on its
+    // button (anchored on the JSX expression, so a comment that merely
+    // mentions it cannot satisfy this), the constant IS these words, and the
+    // card's own sentence renders the same constant — so the three cannot
+    // drift apart, and the words a person reads are pinned here in full.
+    expect(SIGNED_LEASE_LABEL).toBe("They signed the new lease");
+    expect(roll).toMatch(/import \{[^}]*\bSIGNED_LEASE_LABEL\b[^}]*\} from "@\/app\/park\/sign-helpers"/);
+    // The constant is a <button>'s own child — the words on the control.
+    expect(roll).toMatch(/\bSIGNED_LEASE_LABEL\}\s*<\/button>/);
+    const [t] = generateTasks(facts({ holdoverLots: ["4"] }));
+    expect(t.detail).toContain("'They signed the new lease'");
+    // And the fees screen, which makes the same promise, uses the same home.
+    const fees = readFileSync(
+      fileURLToPath(new URL("../../components/ParkFees.tsx", import.meta.url)), "utf8",
+    ).replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+    expect(fees).toMatch(/\{SIGNED_LEASE_LABEL\}/);
+    expect(fees).not.toMatch(/They signed the new lease/);
   });
 });

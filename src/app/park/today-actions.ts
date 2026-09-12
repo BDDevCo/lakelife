@@ -428,6 +428,10 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     parkId,
     currentMonth: month,
     rentDueDay,
+    // The go-live gate for the bill reminders. Read at the top of this loader
+    // and, until now, consumed only by the readiness checklist — so the
+    // seller's tax and December sewer were raised as overdue on closing day.
+    cutoverOn,
     agreements,
     monthBilled: monthRows.length > 0,
     liveOccupiedLots: occupiedLotIds.size,
@@ -523,6 +527,9 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
           || (sc.category as string),
         periodKey: p.key,
         periodLabel: p.label,
+        // The month the go-live gate compares — the bill's own period, the
+        // same thing the cost door compares against `period_start`.
+        periodFrom: p.from,
         dueOn: p.dueOn,
         typical: sc.typical_amount == null ? null : Number(sc.typical_amount),
       })),

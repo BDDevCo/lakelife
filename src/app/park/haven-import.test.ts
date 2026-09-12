@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { parseRentRoll } from "@/lib/roll-parse";
-import { planImport, checkTotals, statedTotalFrom, emptyLotsFrom } from "./import-helpers";
+import {
+  planImport, checkTotals, statedTotalFrom, emptyLotsFrom, cadenceTotals, sheetCadence,
+  importBlockerText,
+} from "./import-helpers";
 import { allocateCost, type CostLot } from "./cost-helpers";
 
 /**
@@ -200,5 +203,266 @@ describe("The Haven — the roll becomes a denominator", () => {
     expect(a.shares[0].basis).toBe("1 of 21 rentable lots");
     expect(a.allocated).toBe(1031.32);
     expect(a.parkAbsorbs).toBe(108.68);   // his empty pad + his own double-wide
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MIKE'S ROSTER — THE ANNUAL COLUMN.
+//
+// The seller's typed roster carries a YEARLY figure per lot: $4,500, $3,900,
+// $3,600, $67,500 across the eighteen leased lots. Saved as a CSV under its
+// own header, "Annual Rent", the parser mapped the column to rent with no
+// cadence, planImport defaulted the cadence to monthly, and the review screen
+// read "$67,500 a month, across 18 rows" with "His total ties to the penny"
+// in green — 18 ready, nothing asked. One tap filed eighteen tenancies at
+// $3,600–$4,500 a month, and "Bill January 2027" would have raised $67,500.
+//
+// The rule the parser is built on: NEVER INVENT A VALUE. Dividing by twelve
+// is inventing one — his roster does not say the year was twelve equal
+// months. So a yearly or quarterly figure is a question, exactly like a rent
+// we read and could not convert, and the row stays held until he types the
+// MONTHLY rent himself.
+//
+// The lots here are the eighteen The Haven actually leases (memory: the roll
+// from Mike); the names are fixtures. 11 × 3,600 + 6 × 3,900 + 4,500 = 67,500.
+// ---------------------------------------------------------------------------
+const HAVEN_LEASED = [
+  "1", "7", "9", "10", "14", "15", "16", "17", "18", "19", "20", "21",
+  "22", "23", "24", "26", "27", "28",
+];
+const HAVEN_ALL = ["1", "2", "6", "7", "9", "10", "11", "14", "15", "16", "17",
+  "18", "19", "20", "21", "22", "23", "24", "26", "27", "28"];
+const ANNUAL = [4500, ...Array(6).fill(3900), ...Array(11).fill(3600)] as number[];
+
+function mikesRoster(rentHeader: string, extraCol?: { header: string; cell: string }) {
+  const head = ["Name", "Lot #", "Mailing Address", "Payment Method", rentHeader];
+  if (extraCol) head.push(extraCol.header);
+  const lines = [head.join(",")];
+  HAVEN_LEASED.forEach((lot, i) => {
+    const cells = [
+      `"Fixture, Household ${i + 1}"`, lot, `"${lot} Haven Dr, Wolcottville IN"`,
+      i % 3 === 0 ? "Check" : "Cash", `"$${ANNUAL[i].toLocaleString("en-US")}.00"`,
+    ];
+    if (extraCol) cells.push(extraCol.cell);
+    lines.push(cells.join(","));
+  });
+  lines.push(`Total,,,,"$67,500.00"${extraCol ? "," : ""}`);
+  return lines.join("\n");
+}
+
+const HAVEN_LOTS = HAVEN_ALL.map((n) => ({ id: `lot-${n}`, lotNumber: n, monthlyRate: 400 }));
+
+/** The same lots with no rate card yet — nothing to measure a figure on. */
+const HAVEN_LOTS_UNCARDED = HAVEN_ALL.map((n) => ({ id: `lot-${n}`, lotNumber: n, monthlyRate: null }));
+
+function planMikes(
+  blob: string,
+  overrides?: Record<number, { rent?: number | null }>,
+  lots: { id: string; lotNumber: string; monthlyRate?: number | null }[] = HAVEN_LOTS,
+  season: { start: string; end: string } | null = null,
+) {
+  const parsed = parseRentRoll(blob, { knownLots: HAVEN_ALL });
+  const plan = planImport({
+    rows: parsed.rows,
+    lots,
+    liveStays: [],
+    cutoverISO: "2027-01-01",
+    season,
+    namelessRoll: !parsed.shape.hasNameColumn,
+    overrides,
+  });
+  return { parsed, plan };
+}
+
+describe("Mike's roster — the annual column is a question, never a monthly rent", () => {
+  it("the fixture adds up the way his sheet does", () => {
+    expect(ANNUAL).toHaveLength(18);
+    expect(ANNUAL.reduce((a, b) => a + b, 0)).toBe(67500);
+  });
+
+  it("reads all eighteen households and the rent column", () => {
+    const { parsed } = planMikes(mikesRoster("Annual Rent"));
+    expect(parsed.accounting.unaccounted).toEqual([]);
+    expect(parsed.rows).toHaveLength(18);
+    expect(parsed.columns.index.rent).toBe(4);
+    expect(parsed.rows.every((r) => r.rent.value != null)).toBe(true);
+  });
+
+  it("holds every row on the cadence — 18 blocked, 0 ready, nothing written", () => {
+    const { plan } = planMikes(mikesRoster("Annual Rent"));
+    expect(plan.ready).toHaveLength(0);
+    expect(plan.needsYou).toHaveLength(18);
+    expect(plan.needsYou.every((r) => r.blockers.includes("bad_term"))).toBe(true);
+    // Nothing monthly to expect, so the receipt's "expected each month" is $0,
+    // not $67,500.
+    expect(plan.monthlyTotal).toBe(0);
+    expect(plan.rates).toEqual([]);
+  });
+
+  it("never divides by twelve", () => {
+    const { plan } = planMikes(mikesRoster("Annual Rent"));
+    for (const r of plan.rows) {
+      expect(r.amount).not.toBe(375);
+      expect(r.amount).not.toBe(325);
+      expect(r.amount).not.toBe(300);
+    }
+  });
+
+  it("does not print '$67,500 a month' — the cadence card carries no monthly figure", () => {
+    const { plan } = planMikes(mikesRoster("Annual Rent"));
+    const live = plan.rows.filter((r) => !r.skipped);
+    const c = cadenceTotals(live);
+    expect(c.byTerm.find((t) => t.term === "monthly")).toBeUndefined();
+    expect(c.byTerm.reduce((s, t) => s + t.total, 0)).toBe(0);
+    expect(c.heldForMonthly).toBe(18);
+  });
+
+  it("does not show 'ties to the penny' in green for a yearly total", () => {
+    const { parsed, plan } = planMikes(mikesRoster("Annual Rent"));
+    const stated = statedTotalFrom(parsed.totals.map((t) => t.text), parsed.shape.delimiter);
+    expect(stated).toBe(67500);
+    const live = plan.rows.filter((r) => !r.skipped);
+    // The check is refused outright: a yearly total against rows that are
+    // waiting for a monthly figure is not arithmetic anyone should see ticked.
+    expect(checkTotals(stated, live)).toBeNull();
+    expect(sheetCadence(live)).toBe("annual");
+  });
+
+  it("says so once at the top, as a block question", () => {
+    const { parsed } = planMikes(mikesRoster("Annual Rent"));
+    const q = parsed.blockQuestions.find((b) => b.code === "RENT_NOT_MONTHLY");
+    expect(q).toBeDefined();
+    expect(q!.question).toMatch(/yearly/i);
+    expect(q!.question).toMatch(/Annual Rent/);
+    expect(q!.question).not.toMatch(/try again/i);
+  });
+
+  it("the monthly rent he types unblocks the row as a MONTHLY tenancy", () => {
+    const blob = mikesRoster("Annual Rent");
+    const { plan } = planMikes(blob, { 2: { rent: 375 } });
+    const first = plan.rows.find((r) => r.lineNo === 2)!;
+    expect(first.blockers).toEqual([]);
+    expect(first.term).toBe("monthly");
+    expect(first.amount).toBe(375);
+    expect(plan.ready).toHaveLength(1);
+    expect(plan.needsYou).toHaveLength(17);
+    expect(plan.monthlyTotal).toBe(375);
+  });
+
+  it("'Yearly Rent' is read as the rent column and held — not carried off to notes", () => {
+    // "year" sat in the CARRY list for vehicle years, so this header was
+    // swallowed whole: no rent column, every row imported with no rent at all.
+    const { parsed, plan } = planMikes(mikesRoster("Yearly Rent"));
+    expect(parsed.columns.index.rent).toBe(4);
+    expect(parsed.blockQuestions.map((b) => b.code)).not.toContain("NO_RENT_COLUMN");
+    expect(plan.needsYou).toHaveLength(18);
+    expect(plan.ready).toHaveLength(0);
+  });
+
+  it.each(["Rent/Yr", "Rent (Annual)", "Annual Lot Rent", "Yr Rent", "Rent per year"])(
+    "%s is held the same way", (header) => {
+      const { plan } = planMikes(mikesRoster(header));
+      expect(plan.ready).toHaveLength(0);
+      expect(plan.needsYou.every((r) => r.blockers.includes("bad_term"))).toBe(true);
+    });
+
+  it("a 'Billing = Quarterly' cell holds the row too — and says so once at the top", () => {
+    const { parsed, plan } = planMikes(mikesRoster("Rent", { header: "Billing", cell: "Quarterly" }));
+    expect(parsed.columns.index.term).toBe(5);
+    expect(plan.ready).toHaveLength(0);
+    expect(plan.needsYou.every((r) => r.blockers.includes("bad_term"))).toBe(true);
+    expect(checkTotals(67500, plan.rows)).toBeNull();
+    expect(parsed.blockQuestions.map((b) => b.code)).toEqual(["TERM_NOT_MONTHLY"]);
+    expect(parsed.blockQuestions[0].question).toMatch(/18 rows/);
+  });
+
+  it("a bare 'Rent' header carrying yearly figures is caught by the rate cards", () => {
+    // No header rule can help here — the only tell is that every figure is
+    // nine to eleven times what the lots are carded at.
+    const { plan } = planMikes(mikesRoster("Rent"));
+    expect(plan.ready).toHaveLength(0);
+    expect(plan.needsYou.every((r) => r.blockers.includes("looks_yearly"))).toBe(true);
+    expect(plan.needsYou[0].rateHint).toEqual({ amount: 400, basis: "lot" });
+    // The row itself is the detail the sentence needs — callers pass the row.
+    const sentence = importBlockerText("looks_yearly", "1", plan.needsYou[0]);
+    expect(sentence).toMatch(/yearly figure/);
+    expect(sentence).toMatch(/\$400 a month/);
+    expect(sentence).not.toMatch(/try again/i);
+  });
+
+  it("the rate-card check is only a question — the figure he types is his answer", () => {
+    const { plan } = planMikes(mikesRoster("Rent"), { 2: { rent: 4500 } });
+    const first = plan.rows.find((r) => r.lineNo === 2)!;
+    expect(first.blockers).toEqual([]);
+    expect(first.amount).toBe(4500);
+  });
+
+  // A "PAID" COLUMN MUST NOT HOLD HIS ROSTER. Mike's real header text is not
+  // pinned anywhere; a Paid Y/N column beside the rent is the ordinary shape,
+  // and it turned eighteen rows into eighteen wrong questions with an empty
+  // box each and no sentence at the top saying why.
+  it("Monthly Rent + Paid=Y imports — eighteen rows, nothing asked", () => {
+    const { parsed, plan } = planMikes(mikesRoster("Monthly Rent", { header: "Paid", cell: "Y" }), undefined, HAVEN_LOTS_UNCARDED);
+    expect(parsed.columns.index.term).toBeUndefined();
+    expect(parsed.blockQuestions).toEqual([]);
+    expect(plan.needsYou).toEqual([]);
+    expect(plan.ready).toHaveLength(18);
+    expect(plan.monthlyTotal).toBe(67500);
+    expect(plan.ready[0].notes).toContain("Paid: Y");
+  });
+
+  it("Annual Rent + Paid=Y is held as annual, with ONE sentence about the column", () => {
+    const { parsed, plan } = planMikes(mikesRoster("Annual Rent", { header: "Paid", cell: "Y" }));
+    expect(plan.ready).toEqual([]);
+    expect(plan.needsYou).toHaveLength(18);
+    expect(plan.needsYou.every((r) => r.blockers.includes("bad_term") && r.cadenceOnSheet === "annual")).toBe(true);
+    expect(parsed.blockQuestions.map((b) => b.code)).toEqual(["RENT_NOT_MONTHLY"]);
+    expect(sheetCadence(plan.rows)).toBe("annual");
+    expect(importBlockerText("bad_term", "1", plan.needsYou[0])).toMatch(/yearly figure/);
+  });
+
+  it("a Term column reading 'Monthly' under 'Annual Rent' is held too — even on a park with no rate cards", () => {
+    // The top of the screen promises that nothing from a yearly column goes
+    // in; a cell saying "Monthly" used to beat that header and plan the row
+    // monthly at the yearly figure, READY on a park with no cards.
+    const { parsed, plan } = planMikes(mikesRoster("Annual Rent", { header: "Term", cell: "Monthly" }), undefined, HAVEN_LOTS_UNCARDED);
+    expect(parsed.blockQuestions.map((b) => b.code)).toEqual(["RENT_NOT_MONTHLY"]);
+    expect(plan.ready).toEqual([]);
+    expect(plan.needsYou).toHaveLength(18);
+    expect(plan.needsYou.every((r) => r.blockers.includes("bad_term") && r.cadenceOnSheet === "conflicting")).toBe(true);
+    expect(plan.monthlyTotal).toBe(0);
+  });
+
+  it("a Term column reading 'Seasonal' under 'Annual Rent' is held the same way — even with a season set", () => {
+    // "seasonal" is the one term word the short-or-long guard did not sort,
+    // so the cell was STATED seasonal and, on a park with a season, every
+    // row planned READY as a seasonal tenancy at the YEARLY figure — under
+    // the card promising nothing from that column goes in.
+    const season = { start: "2027-05-01", end: "2027-10-31" };
+    const { parsed, plan } = planMikes(
+      mikesRoster("Annual Rent", { header: "Term", cell: "Seasonal" }), undefined, HAVEN_LOTS_UNCARDED, season,
+    );
+    expect(parsed.blockQuestions.map((b) => b.code)).toEqual(["RENT_NOT_MONTHLY"]);
+    expect(plan.ready).toEqual([]);
+    expect(plan.needsYou).toHaveLength(18);
+    expect(plan.needsYou.every((r) => r.blockers.includes("bad_term") && r.cadenceOnSheet === "conflicting")).toBe(true);
+    expect(plan.needsYou.every((r) => r.term === "monthly")).toBe(true);
+    expect(plan.monthlyTotal).toBe(0);
+    expect(sheetCadence(plan.rows)).toBe("conflicting");
+    expect(importBlockerText("bad_term", "1", plan.needsYou[0])).toMatch(/two answers/);
+  });
+
+  it("'Rent Each Quarter' is a quarterly column on every row, and says so once", () => {
+    // The parser knew the header was quarterly; the plan used to re-read the
+    // label as a cell and call all eighteen rows unreadable.
+    const { parsed, plan } = planMikes(mikesRoster("Rent Each Quarter"));
+    expect(parsed.columns.index.rent).toBe(4);
+    expect(parsed.rows.every((r) => r.headerCadence === "quarterly")).toBe(true);
+    expect(parsed.blockQuestions.map((b) => b.code)).toEqual(["RENT_NOT_MONTHLY"]);
+    expect(parsed.blockQuestions[0].question).toMatch(/quarterly figure \("Rent Each Quarter"\)/);
+    expect(plan.needsYou).toHaveLength(18);
+    expect(plan.needsYou.every((r) => r.blockers.includes("bad_term") && r.cadenceOnSheet === "quarterly")).toBe(true);
+    expect(importBlockerText("bad_term", "1", plan.needsYou[0])).toMatch(/quarterly figure/);
+    expect(sheetCadence(plan.rows)).toBe("quarterly");
   });
 });

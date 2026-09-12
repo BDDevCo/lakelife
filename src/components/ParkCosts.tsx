@@ -3,10 +3,13 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { previewCostSplit, recordCost, removeCost, type CostRow, type BillableParkJob } from "@/app/park/cost-actions";
+import {
+  previewCostSplit, recordCost, removeCost,
+  type CostRow, type BillableParkJob, type CostPreview,
+} from "@/app/park/cost-actions";
 import {
   COST_CATEGORY_LABEL, costCategoryForService, allocationSummary,
-  type CostCategory, type CostAllocation, carriedLine,
+  type CostCategory, carriedLine,
 } from "@/app/park/cost-helpers";
 import type { recoveryByCategory } from "@/app/park/cost-helpers";
 
@@ -75,7 +78,9 @@ export function ParkCosts({
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
-  const [preview, setPreview] = useState<CostAllocation | null>(null);
+  // WHAT THE SAVE WOULD DO, not only how a split would fall: a covered
+  // category previews as "recorded under your fee", with no per-lot rows.
+  const [preview, setPreview] = useState<CostPreview | null>(null);
   // Which prefill is being saved, so only its own button says "Splitting…".
   const [fillingId, setFillingId] = useState<string | null>(null);
 
@@ -85,7 +90,7 @@ export function ParkCosts({
     start(async () => {
       const res = await previewCostSplit(parkId, category, from, to, amountNum());
       if (!res.ok || !res.preview) { toast.err(res.error ?? "Couldn't work that out."); return; }
-      setPreview(res.preview.allocation);
+      setPreview(res.preview);
     });
   }
 
@@ -208,69 +213,49 @@ export function ParkCosts({
       )}
 
       {/* WORK ALREADY PAID FOR, WAITING TO BE PASSED ON.
-
           Above the manual form deliberately: the figures are already exact,
-
           and the form below exists for the water bill that arrives on paper. */}
-
       {billable.length > 0 && (
-
         <div style={{ marginTop: 12 }}>
-
           <div style={{ fontSize: 13.5, fontWeight: 800, marginBottom: 4 }}>
-
             Work LakeLife has done here, not yet passed on
-
           </div>
-
           <p className="mut" style={{ fontSize: 12.5, margin: "0 0 8px", lineHeight: 1.5 }}>
-
             Work on the common ground. One tap files it under the right kind of
-
             cost — split across the lots, or carried by a fee that already covers
-
             it — with nothing to retype.
-
           </p>
-
           {billable.map((j) => (
-
             <div key={j.jobId} style={{
-
               display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap",
-
               padding: "8px 0", borderTop: "1px solid var(--line)",
-
             }}>
-
               <span style={{ fontSize: 13.5, fontWeight: 700 }}>{j.service}</span>
-
               <span className="mut" style={{ fontSize: 12.5 }}>{j.date}</span>
-
               <span style={{ fontSize: 14, fontWeight: 800, marginLeft: "auto" }}>
-
                 {j.amount.toLocaleString(undefined, { style: "currency", currency: "USD" })}
-
               </span>
-
-              <button className="ll-btn ghost sm" disabled={busy}
-
-                onClick={() => fillFrom(j)}>
-
-                {fillingId === j.jobId
-
-                  ? "Filing…"
-
-                  : `File as ${COST_CATEGORY_LABEL[costCategoryForService(j.service)]}`}
-
-              </button>
-
+              {/* NO BUTTON FOR A JOB THE ACTION WOULD REFUSE — one from before
+                  go-live that no fee covers. recordCost refuses that month on
+                  the split, so a tap here would be a tap that always says no.
+                  The row stays — he paid for it — and the line says why it goes
+                  nowhere. (One a fee covers keeps its tap: that records it as
+                  evidence for the fee check, and the toast says so.) */}
+              {j.notOurs ? (
+                <span className="mut" style={{ fontSize: 12.5, flexBasis: "100%", lineHeight: 1.5 }}>
+                  {j.notOurs}
+                </span>
+              ) : (
+                <button className="ll-btn ghost sm" disabled={busy}
+                  onClick={() => fillFrom(j)}>
+                  {fillingId === j.jobId
+                    ? "Filing…"
+                    : `File as ${COST_CATEGORY_LABEL[costCategoryForService(j.service)]}`}
+                </button>
+              )}
             </div>
-
           ))}
-
         </div>
-
       )}
 
 
@@ -378,32 +363,53 @@ export function ParkCosts({
 
           {!parkCarries && preview && (
             <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
-              <p style={{ margin: "0 0 10px", fontSize: 16 }}>
-                {allocationSummary(preview, category)}
-              </p>
-              {/* THE PER-LOT BREAKDOWN only exists when somebody is being
-                  billed. The DECISION always does. */}
-              {preview.shares.length > 0 && (
-                <div style={{ display: "grid", gap: 2, fontVariantNumeric: "tabular-nums", marginBottom: 12 }}>
-                  <Row label="you paid" value={money(amountNum())} />
-                  <Row label="passed on" value={money(preview.allocated)} />
-                  <Row label="you carry" value={money(preview.parkAbsorbs)} strong />
-                </div>
-              )}
+              {/* TWO ANSWERS, ONE DOOR. The preview says what the save would
+                  DO. A category a live fee already covers is recorded under
+                  that fee and divided to nobody — so it gets its own sentence
+                  and its own button, and never the per-lot rows or "Save it
+                  and split it" it used to show for a save that split nothing.
+                  This is also the only screen door to a pre-go-live bill a
+                  fee covers (the June baselines, the December sewer): the
+                  server takes those as evidence for the fee check, and until
+                  the preview asked about the fee, the form refused them with
+                  no button under the refusal. */}
+              {preview.allocation ? (
+                <>
+                  <p style={{ margin: "0 0 10px", fontSize: 16 }}>
+                    {allocationSummary(preview.allocation, category)}
+                  </p>
+                  {/* THE PER-LOT BREAKDOWN only exists when somebody is being
+                      billed. The DECISION always does. */}
+                  {preview.allocation.shares.length > 0 && (
+                    <div style={{ display: "grid", gap: 2, fontVariantNumeric: "tabular-nums", marginBottom: 12 }}>
+                      <Row label="you paid" value={money(amountNum())} />
+                      <Row label="passed on" value={money(preview.allocation.allocated)} />
+                      <Row label="you carry" value={money(preview.allocation.parkAbsorbs)} strong />
+                    </div>
+                  )}
 
-              {/* SAVING WAS GATED ON THERE BEING SOMEBODY TO BILL.
-                  A park with no tenancies on the roll — The Haven until
-                  closing, and every park on its first day — got the sentence
-                  "nobody is on a lot, so you carry all $380.00" and no button.
-                  The server has supported this since 0112 ("an empty park is no
-                  longer a refusal: the bill is recorded and the park carries
-                  all of it"); only the screen refused. A bill he cannot record
-                  is a bill missing from his books and from his own fee
-                  comparison, which is the one thing this page is for. */}
-              {preview.problem == null && (
-                <button className="ll-btn" onClick={save} disabled={busy}>
-                  {preview.shares.length > 0 ? "Save it and split it" : "Record it — I carry this one"}
-                </button>
+                  {/* SAVING WAS GATED ON THERE BEING SOMEBODY TO BILL.
+                      A park with no tenancies on the roll — The Haven until
+                      closing, and every park on its first day — got the sentence
+                      "nobody is on a lot, so you carry all $380.00" and no button.
+                      The server has supported this since 0112 ("an empty park is no
+                      longer a refusal: the bill is recorded and the park carries
+                      all of it"); only the screen refused. A bill he cannot record
+                      is a bill missing from his books and from his own fee
+                      comparison, which is the one thing this page is for. */}
+                  {preview.allocation.problem == null && (
+                    <button className="ll-btn" onClick={save} disabled={busy}>
+                      {preview.allocation.shares.length > 0 ? "Save it and split it" : "Record it — I carry this one"}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <CoveredPreview
+                  coveredBy={preview.coveredBy}
+                  evidenceOnly={preview.evidenceOnly}
+                  busy={busy}
+                  onSave={save}
+                />
               )}
             </div>
           )}
@@ -476,6 +482,40 @@ export function ParkCosts({
 
       {fees}
     </div>
+  );
+}
+
+/**
+ * A BILL A FEE ALREADY COVERS: recorded, not split.
+ *
+ * No per-lot rows, because there is no allocation — the save files it under
+ * the fee and divides nothing (`recordCost`'s fee-covered branch). The
+ * button hangs off nothing but `busy`: there are no shares to be empty and
+ * no problem to gate on. When the period began before go-live the row is
+ * evidence for the fee comparison only, and the second sentence says so in
+ * the same words the save's own toast will use.
+ */
+function CoveredPreview({ coveredBy, evidenceOnly, busy, onSave }: {
+  coveredBy: string;
+  evidenceOnly: boolean;
+  busy: boolean;
+  onSave: () => void;
+}) {
+  return (
+    <>
+      <p style={{ margin: "0 0 10px", fontSize: 16, lineHeight: 1.5 }}>
+        Your &ldquo;{coveredBy}&rdquo; fee already covers this — it is recorded, not split.
+        {evidenceOnly && (
+          <>
+            {" "}Its period starts before you went live, so it counts as
+            evidence for the fee comparison only.
+          </>
+        )}
+      </p>
+      <button className="ll-btn" onClick={onSave} disabled={busy}>
+        {busy ? "Saving…" : "Record it"}
+      </button>
+    </>
   );
 }
 

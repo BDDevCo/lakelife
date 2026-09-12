@@ -13,6 +13,8 @@ import {
   statedTotalFrom,
   emptyLotsFrom,
   reconcileRoll,
+  typedRent,
+  phoneOnFile,
   type RollReconciliation,
   type ImportPlan,
   type RowOverride,
@@ -298,8 +300,31 @@ export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
   const lotRows = mustRead("your lots", lotsRes);
   const rowRecords = mustRead("your answers on this import", rowsRes);
 
-  const lots = (lotRows ?? []).map((l) => ({ id: l.id as string, lotNumber: l.lot_number as string }));
-  const lotIds = lots.map((l) => l.id);
+  const lotIds = (lotRows ?? []).map((l) => l.id as string);
+
+  // THE PARK'S OWN RATE CARDS, so the plan has a scale to measure the sheet's
+  // figures on. Twenty-one cards at $400 are what tell a bare "Rent" column
+  // of $3,600s that it is a year. A failed read is NOT "no cards": it would
+  // switch the check off in silence on the one sheet it exists for, so it
+  // throws like the other reads and the page's boundary says so.
+  const rateRows = mustRead("what your lots rent for", lotIds.length
+    ? await admin
+        .from("lot_rates")
+        .select("park_lot_id, amount")
+        .in("park_lot_id", lotIds)
+        .eq("term", "monthly")
+    : { data: [] as { park_lot_id: string; amount: number | string | null }[], error: null });
+  const rateByLot = new Map<string, number>();
+  for (const r of rateRows ?? []) {
+    const n = Number(r.amount);
+    if (Number.isFinite(n) && n > 0) rateByLot.set(r.park_lot_id as string, n);
+  }
+
+  const lots = (lotRows ?? []).map((l) => ({
+    id: l.id as string,
+    lotNumber: l.lot_number as string,
+    monthlyRate: rateByLot.get(l.id as string) ?? null,
+  }));
 
   // Tenancies that already hold dates, so a collision is caught before a write.
   // A failed read is an empty list, which is "no collisions" — the check the
@@ -328,10 +353,13 @@ export async function loadBatch(batchId: string): Promise<LoadedBatch | null> {
     const o: RowOverride = {};
     if (typeof raw.name === "string" && raw.name.trim()) o.name = raw.name.trim();
     if (raw.rent !== undefined) {
-      const n = Number(String(raw.rent).replace(/[^0-9.-]/g, ""));
-      // An unparseable answer is not a rent. Leave it absent rather than
-      // storing NaN, which renders as a blank that silently means zero.
-      o.rent = Number.isFinite(n) ? n : null;
+      // THE SAME DOOR THE ANSWER CAME IN BY. resolveRow refuses anything
+      // that is not a plain figure, so a stored answer normally reads clean;
+      // one that does not (an answer stored before that door existed) is
+      // left ABSENT, so the row stays held and asks again, rather than
+      // stripped to digits — "4500/12" was becoming $450,012 a month here.
+      const t = typedRent(raw.rent);
+      if (t.ok) o.rent = t.value;
     }
     if (raw.skip === true) o.skip = true;
     if (raw.current === true) o.current = true;
@@ -456,6 +484,18 @@ export async function resolveRow(
   if (!(await assertMyPark(batch.park_id as string))) return { ok: false, error: DENIED };
   if (batch.committed_at) return { ok: false, error: "That import is already in." };
 
+  // A RENT THAT IS NOT A FIGURE IS REFUSED HERE, BY NAME. The held-row box
+  // sits under "What's the monthly rent?" and invites "4500/12" or "see
+  // lease"; stored as typed, the loader used to read those as $450,012 and $0
+  // and clear the hold as his answer. The toast says what he typed and what
+  // to type instead; the row stays held.
+  let answer = resolved;
+  if (resolved.rent !== undefined) {
+    const t = typedRent(resolved.rent);
+    if (!t.ok) return { ok: false, error: t.error };
+    answer = { ...resolved, rent: t.value };
+  }
+
   // This read is what makes the write a MERGE. Failing it reads as "he has
   // answered nothing about this line", and the update below then overwrites
   // the answers he already gave with only the one he just typed.
@@ -469,7 +509,7 @@ export async function resolveRow(
     return { ok: false, error: readFailedMessage("your earlier answers", existingRes.error) };
   }
 
-  const merged = { ...((existingRes.data?.resolved as Record<string, unknown>) ?? {}), ...resolved };
+  const merged = { ...((existingRes.data?.resolved as Record<string, unknown>) ?? {}), ...answer };
   const { error } = await admin
     .from("park_import_rows")
     .update({ resolved: merged })
@@ -681,7 +721,9 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
         // unable to read the second, so the office can see the number while
         // the software cannot dial it.
         email: row.email,
-        phone_on_file_with_park: row.phone,
+        // E.164, the form the other two writers of this column store — one
+        // column, one format. The parser's "(260) 555-0142" is for the screen.
+        phone_on_file_with_park: phoneOnFile(row.phone),
         // PAPER, ALWAYS, until they say otherwise. Having an address is not
         // being asked. This is the same rule buildTenant learned the hard way
         // when `mobile ? "sms" : "paper"` enrolled a park in text messages.
@@ -832,7 +874,7 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
     failures.push({
       lot: row.lotLabel,
       name: row.name,
-      message: importBlockerText(row.blockers[0], row.lotLabel ?? undefined),
+      message: importBlockerText(row.blockers[0], row.lotLabel ?? undefined, row),
     });
   }
 
@@ -974,7 +1016,8 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
         error:
           `You've billed rent on these lots (${count} ${count === 1 ? "bill" : "bills"}), ` +
           `so undoing the import would take those bills and any money recorded ` +
-          `against them with it. Fix the individual tenancies instead.`,
+          `against them with it. Fix each household from its row on the rent roll instead — ` +
+          `a household who has since signed your new lease is recorded from their row there too.`,
       };
     }
   }

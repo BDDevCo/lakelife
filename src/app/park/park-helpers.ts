@@ -17,6 +17,10 @@ import {
 } from "@/lib/parks";
 // The agreement cap lives here already, and it clamps short months correctly.
 import { addMonths } from "./agreement-helpers";
+// The one shape a phone number is stored in. Both tenant builders go through
+// it — and so does the importer, via import-helpers' phoneOnFile — so a
+// number is the same string whichever door it came through.
+import { toE164 } from "@/lib/phone";
 
 // ------------------------------------------------------------ rent roll ----
 
@@ -753,6 +757,27 @@ export interface TenantInput {
   rent: string;
   /** Where the fact came from, so the roll can later show its work. */
   source: string;
+  /**
+   * HAVE THEY SIGNED THE NEW LEASE? A claim about a piece of paper, and only
+   * the person holding the paper may make it — so it is absent or false by
+   * default, which is the true state of every household on the first morning.
+   *
+   * It decides FOUR things at once, and they are decided in one place
+   * (`buildTenant`) so no doorway can write half of them: the origin (the
+   * fee rule and the 0065 cap exemption read it), the agreement's length (the
+   * park's term when signed, the rolling horizon when not), where the
+   * agreement starts (a holdover starts the day it is filed; a signed lease
+   * starts the day it says), and whether the row is `active` yet.
+   */
+  signedNewLease?: boolean;
+  /**
+   * THE DAY A SIGNED AGREEMENT RUNS FROM, when it is not today.
+   *
+   * Only read when `signedNewLease` is true. Blank means the later of today
+   * and the park's cutover date — the one date that is true of a lease
+   * collected before go-live. See `agreementStartFor` for the bounds.
+   */
+  agreementStartsOn?: string;
 }
 
 export interface TenantResult {
@@ -766,9 +791,25 @@ export interface TenantResult {
     source: string;
   };
   tenancy?: {
-    /** The AGREEMENT window. Never starts in the past — see buildTenant. */
+    /** The AGREEMENT window. See buildTenant for where it starts. */
     start: string;
     end: string;
+    /**
+     * `approved` when the agreement has not started yet, `active` once it
+     * has. Both hold the lot; the charge run and the rent roll already read
+     * future-dated held rows, so a lease filed for the 1st on the 20th sits
+     * as `approved` until its day and then bills the whole month.
+     */
+    status: "active" | "approved";
+    /**
+     * THE DOOR'S FACT, paired with the length above. A signed lease is an
+     * agreement with THIS owner ('application'); an unsigned household is on
+     * whatever arrangement they already had ('grandfathered'), which no fee
+     * lands on and the cap does not bind. The two used to be written by the
+     * caller, separately, and one doorway wrote neither — so the column's
+     * default filed a holdover as having agreed to the fee.
+     */
+    origin: "application" | "grandfathered";
     /**
      * When the household actually moved in, which is a different fact and
      * often years earlier. Written to `tenancy_began_on`.
@@ -844,6 +885,125 @@ function addDays(iso: string, days: number): string {
 }
 
 /**
+ * A date a person reads — "January 1, 2027", never "2027-01-01".
+ *
+ * The same house rule the months follow (prettyMonth). Every sentence on the
+ * roll and the filing screen that names a day goes through here. It is the
+ * same rendering as billing-start.ts's private prettyDay; this is the
+ * exported one, and the copy the park module reads.
+ */
+export function dayInWords(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
+    day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
+  });
+}
+
+/** "an agreement …" → "An agreement …" — for a clause that opens a sentence. */
+export function capitalise(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * THE LABEL ON THE CONTROL — one home for the words Today, the filing screen,
+ * the Fees screen, the renewal refusal and the roll all use to name it. It is
+ * DEFINED in agreement-helpers (the leaf under this file, so the renewal
+ * refusal can render it without a cycle) and re-exported here for everything
+ * that already imports from this module. Render it; never retype it.
+ */
+export { SIGNED_LEASE_LABEL } from "./agreement-helpers";
+
+/**
+ * WHEN AN AGREEMENT FROM THAT DAY ENDS: the park's term from the signing day,
+ * or the rolling horizon for a park with neither dial. The same arithmetic
+ * both doors write the row with, so a refusal and the write agree.
+ */
+export function agreementEndFrom(startISO: string, months: number | null): string {
+  return months == null ? addDays(startISO, TENANCY_HORIZON_DAYS) : addMonths(startISO, months);
+}
+
+/**
+ * "an agreement from January 1, 2027 under your one-month term would already
+ * be over by now" — ONE clause for ONE rule, read by every door that enforces
+ * it: the roll's signing planner, the filing screen's tenant builder, and the
+ * signing form's reason for leaving the box blank on a day it would have
+ * seeded. No capital and no full stop; each door finishes its own sentence
+ * with what to check on ITS form. Two doors once said it two ways.
+ */
+export function alreadyOverClause(startISO: string, months: number | null): string {
+  const term = months == null ? "" : ` under your ${months === 1 ? "one" : months}-month term`;
+  return `an agreement from ${dayInWords(startISO)}${term} would already be over by now`;
+}
+
+/** True when an agreement from that day would have ended on or before today. */
+export function agreementAlreadyOver(startISO: string, months: number | null, todayISO: string): boolean {
+  return agreementEndFrom(startISO, months) <= todayISO;
+}
+
+/**
+ * HOW FAR AHEAD A SIGNED AGREEMENT MAY BE FILED.
+ *
+ * A lease effective the 1st is usually in his hand a week or two before. Two
+ * months is enough for that and short enough that a typo in the year is
+ * refused rather than filed as a tenancy nobody sees until 2028.
+ */
+export const SIGNED_START_HORIZON_DAYS = 60;
+
+/**
+ * WHEN A SIGNED AGREEMENT RUNS FROM.
+ *
+ * The window used to start on the day the row was TYPED — `rangeStart =
+ * start < today ? today : start`, with no field for the lease's own date. So
+ * eighteen leases that say "1 January, $542.53", filed on Monday the 4th,
+ * were written [4 Jan, 4 Feb): January billed 28 of 31 days, every bill was
+ * due on the 4th, and every month after was two part-month bills. Filed on
+ * 20 December — which the readiness list asks for — January billed 19 days.
+ * The only correct afternoon was 1 January itself, and nothing said so.
+ *
+ * The rules, in one place so the filing screen and the one-at-a-time door
+ * cannot disagree:
+ *
+ *   - Blank means the LATER of today and the park's cutover date. Before
+ *     go-live that is go-live, which is the one date true of a lease collected
+ *     early; after it, today.
+ *   - Never before the cutover when the park has one. The ledger starts at
+ *     go-live; an agreement dated into the seller's months would bill a month
+ *     that was never ours.
+ *   - Never more than SIGNED_START_HORIZON_DAYS ahead.
+ *
+ * Either side of today is allowed. The caller writes `approved` for a start
+ * still to come and `active` for one already running — both hold the lot,
+ * and the charge run bills whichever covers the month.
+ */
+export function agreementStartFor(
+  typed: string | null | undefined,
+  todayISO: string,
+  cutoverDate: string | null | undefined,
+): { ok: true; start: string } | { ok: false; error: string } {
+  const cutover = cutoverDate ?? null;
+  const fallback = cutover && cutover > todayISO ? cutover : todayISO;
+  const raw = (typed ?? "").trim();
+  if (!raw) return { ok: true, start: fallback };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return { ok: false, error: "That agreement start date doesn't look right." };
+  }
+  if (cutover && raw < cutover) {
+    return {
+      ok: false,
+      error: `The ledger starts on ${dayInWords(cutover)} — an agreement can't begin before that.`,
+    };
+  }
+  if (raw > addDays(todayISO, SIGNED_START_HORIZON_DAYS)) {
+    return {
+      ok: false,
+      error: `That start is more than two months away — an agreement can be filed up to two months ahead.`,
+    };
+  }
+  return { ok: true, start: raw };
+}
+
+/**
  * Shape a tenant the park owner types in — the person who was already living
  * there when he bought the place.
  *
@@ -875,8 +1035,19 @@ export function buildTenant(
    * A term is a statement about how long ONE agreement runs, not about how
    * long somebody may stay. So it shortens the range; it never refuses the
    * person.
+   *
+   * ONLY A SIGNED AGREEMENT HAS A TERM. For an unsigned household this is
+   * ignored and the rolling horizon is written — the 0065 trigger exempts a
+   * grandfathered row from the cap by origin, and the two facts are paired
+   * here rather than by each caller remembering to pass `signed ? term :
+   * null`. One door forgot, and wrote a one-month holdover that expired.
    */
   agreementMonths: number | null = null,
+  /**
+   * The park's cutover date, which bounds where a SIGNED agreement may start.
+   * Null for a park that never changed hands. See `agreementStartFor`.
+   */
+  bounds: { cutoverDate: string | null } = { cutoverDate: null },
 ): TenantResult {
   const displayName = input.displayName.trim();
   if (!displayName) return { ok: false, error: "Who lives here? A name is enough to start." };
@@ -886,6 +1057,8 @@ export function buildTenant(
   if (!TENANT_SOURCES.includes(source)) {
     return { ok: false, error: "Where did this come from?" };
   }
+
+  const signed = input.signedNewLease === true;
 
   // A blank move-in date means "already here", which is the common case and a
   // true answer. Today is the honest stand-in: it says when the RECORD starts,
@@ -898,9 +1071,23 @@ export function buildTenant(
     return { ok: false, error: "That move-in date is in the future — use the booking flow for someone arriving later." };
   }
 
-  // The agreement cannot have been running before today for a household we are
-  // filing today. The real arrival date is kept separately.
-  const rangeStart = start < todayISO ? todayISO : start;
+  // WHERE THE AGREEMENT WINDOW STARTS — two different rules for two different
+  // facts.
+  //
+  // A HOLDOVER starts today. Nobody signed anything; the record simply begins
+  // the day it is made, and the real arrival date is kept separately.
+  //
+  // A SIGNED LEASE starts the day the lease says, which is usually not the
+  // day it is typed in. Clamping it to the filing day billed January short on
+  // every afternoon except 1 January itself — see `agreementStartFor`.
+  let rangeStart: string;
+  if (signed) {
+    const at = agreementStartFor(input.agreementStartsOn, todayISO, bounds.cutoverDate);
+    if (!at.ok) return { ok: false, error: at.error };
+    rangeStart = at.start;
+  } else {
+    rangeStart = start < todayISO ? todayISO : start;
+  }
 
   const term = (input.term.trim() || "monthly") as Term;
   if (!["nightly", "weekly", "monthly", "seasonal", "annual"].includes(term)) {
@@ -916,15 +1103,44 @@ export function buildTenant(
     quoted = Math.round(n * 100) / 100;
   }
 
-  const mobile = input.mobile.replace(/[^0-9+]/g, "");
-  if (mobile && mobile.replace(/\D/g, "").length < 10) {
-    return { ok: false, error: "That phone number looks short." };
+  // ONE FORMAT FOR THE NUMBER THE OFFICE RINGS. This used to strip to bare
+  // digits ("2605550142") while the Edit panel stored E.164 ("+12605550142"),
+  // so the same number typed at two doors was two different strings — and the
+  // notice hold compares this column with `eq`, so one of the two spellings
+  // was invisible to it. All THREE writers now go through `toE164`, the shape
+  // every number this app writes for itself already has: this builder, the
+  // Edit panel's (buildTenantEdit), and the importer's (import-helpers.ts
+  // phoneOnFile, which turns parsePhone's printed "(260) 555-0142" into the
+  // stored form at the write). One number, one string, whichever door.
+  const rawMobile = input.mobile.trim();
+  let mobile: string | null = null;
+  if (rawMobile) {
+    if (rawMobile.replace(/\D/g, "").length < 10) {
+      return { ok: false, error: "That phone number looks short." };
+    }
+    mobile = toE164(rawMobile);
+    if (!mobile) return { ok: false, error: "That phone number doesn't look right." };
   }
-
 
   const email = input.email.trim();
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return { ok: false, error: "That email doesn't look right." };
+  }
+
+  // The length, the horizon, and the two dates it produces. Only a signed
+  // agreement has a term; a holdover runs the horizon (see the parameter).
+  const months = signed ? agreementMonths : null;
+  const end = agreementEndFrom(rangeStart, months);
+  // A signed agreement dated so far back that it is already over would be
+  // filed `active` and then read as vacant the same afternoon — the exact
+  // shape the move-in clamp above exists to prevent. Refused, with the reason
+  // — the same clause the roll's signing door refuses with, so the two doors
+  // say one thing; only the tail names this form's own box.
+  if (end <= todayISO) {
+    return {
+      ok: false,
+      error: `${capitalise(alreadyOverClause(rangeStart, months))} — check the start date.`,
+    };
   }
 
   return {
@@ -973,16 +1189,133 @@ export function buildTenant(
       // The two facts are separated instead: `during` is how long the current
       // agreement runs, `beganOn` is when the person arrived.
       start: rangeStart,
-      // The cap when there is one, the horizon when there is not. `addMonths`
-      // clamps a short month properly — Jan 31 plus one month is Feb 28, not
-      // an invalid date.
-      end: agreementMonths == null
-        ? addDays(rangeStart, TENANCY_HORIZON_DAYS)
-        : addMonths(rangeStart, agreementMonths),
+      // The term when a signed agreement has one, the horizon otherwise.
+      // `addMonths` clamps a short month properly — Jan 31 plus one month is
+      // Feb 28, not an invalid date.
+      end,
+      // A lease that has not started yet holds the lot as `approved`; one
+      // already running is `active`. A holdover starts today, so it is always
+      // active.
+      status: rangeStart > todayISO ? "approved" : "active",
+      origin: signed ? "application" : "grandfathered",
       beganOn: input.movedInOn.trim() || null,
       term,
       quoted_amount: quoted,
     },
+  };
+}
+
+// ------------------------------------------------------ closing one out -----
+
+/**
+ * One link of an agreement chain, as the move-out planner sees it. Every row
+ * that shares the household's `agreement_chain_id`, whatever its status.
+ */
+export interface ChainLink {
+  id: string;
+  range: DateRange | null;
+  status: string;
+  agreementSeq: number;
+  /** Set once a link has been closed out. */
+  movedOutOn: string | null;
+}
+
+export type MoveOutPlan =
+  | { ok: false; error: string }
+  | {
+      ok: true;
+      /** The link to trim and mark ended, or null when it already was. */
+      trim: { id: string; start: string; newEnd: string } | null;
+      /** The sequence of the link the last day fell in; later ones are withdrawn. */
+      coveringSeq: number;
+      /**
+       * The later links to withdraw — written up early, never lived in.
+       * Start and end travel with each so a caller that could not withdraw
+       * one can say which control still can: one covering today is the
+       * row's current link (Move out), one still to start is 'Withdraw the
+       * next agreement', and one already lapsed has billed and no control
+       * reaches it.
+       */
+      cancel: { id: string; start: string | null; end: string | null }[];
+    };
+
+/**
+ * A MOVE-OUT ENDS THE CHAIN, NOT ONE LINK OF IT.
+ *
+ * The renewal nag lists everything ending within 45 days, so at a park whose
+ * house style is one month the February agreement is written on the 5th of
+ * January for all eighteen households. When Lot 9 leaves on the 27th, closing
+ * out the January row alone left its February successor `approved`: the
+ * February run raised $542.53 for a family that was gone, the roll read the
+ * lot as theirs until May, "Someone lives here" was not offered because the
+ * lot was not vacant, and the exclusion constraint refused any new tenancy on
+ * it. From 1 February the only row a screen could close was the successor,
+ * which refused any January date with "They moved in on 2027-02-01" — false
+ * of a household that had lived there for years.
+ *
+ * So the last day is looked up against EVERY link of the chain: the one that
+ * covers it is trimmed and ended, and every later link is cancelled — not
+ * ended, because nobody lived in it: the charge run skips cancelled rows, the
+ * exclusion constraint releases them, and the renewal list drops them.
+ *
+ * A NOTICE DOES NOT DO THIS. Notice ends nothing; they may change their minds.
+ */
+export function planMoveOut(links: readonly ChainLink[], lastDayISO: string): MoveOutPlan {
+  const lastDay = lastDayISO.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(lastDay)) {
+    return { ok: false, error: "Pick the last day they lived there." };
+  }
+
+  const dated = links.filter((l) => l.range != null);
+  const covering = dated.find(
+    (l) => ["approved", "active", "ended"].includes(l.status) && coversDay(l.range, lastDay),
+  );
+
+  if (!covering) {
+    const earliest = dated
+      .filter((l) => ["approved", "active", "ended"].includes(l.status))
+      .map((l) => l.range!.start)
+      .sort()[0];
+    if (earliest && lastDay < earliest) {
+      // Not "they moved in on" — the chain's first link is when our RECORD
+      // starts, and a household of eleven years moved in long before it.
+      return {
+        ok: false,
+        error: `Their record here starts on ${dayInWords(earliest)} — the last day can't be before that.`,
+      };
+    }
+    return {
+      ok: false,
+      error: `None of their agreements covers ${dayInWords(lastDay)} — check the date.`,
+    };
+  }
+
+  const cancel = links
+    .filter((l) => l.agreementSeq > covering.agreementSeq)
+    .filter((l) => l.status === "approved" || l.status === "active")
+    .sort((a, b) => a.agreementSeq - b.agreementSeq)
+    .map((l) => ({ id: l.id, start: l.range?.start ?? null, end: l.range?.end ?? null }));
+
+  if (covering.status === "ended") {
+    // Closed out on that very day already — the only thing left to do is the
+    // withdrawal the earlier close did not know to make.
+    if (covering.movedOutOn === lastDay) {
+      return { ok: true, trim: null, coveringSeq: covering.agreementSeq, cancel };
+    }
+    return {
+      ok: false,
+      error: `They were already closed out — last day ${dayInWords(covering.movedOutOn ?? addDays(covering.range!.end, -1))}.`,
+    };
+  }
+
+  // `during` is half-open: a last day of the 20th means the range ends on the
+  // 21st. Storing the human date separately (moved_out_on) keeps every screen
+  // out of that arithmetic.
+  return {
+    ok: true,
+    trim: { id: covering.id, start: covering.range!.start, newEnd: addDays(lastDay, 1) },
+    coveringSeq: covering.agreementSeq,
+    cancel,
   };
 }
 
@@ -1335,6 +1668,20 @@ export interface TenantEditInput {
   mobile?: string;
   /** 'paper' | 'email'. Never inferred — see the note in the builder. */
   contactPref?: string;
+  /**
+   * HOW THEY PAY — the thing nothing could change once a household was filed.
+   *
+   * The charge run bills months only and names a tenancy filed as paid
+   * yearly ("change how it's paid to monthly from Edit on the roll"); until
+   * this field existed no door on the roll changed `term`, so he followed the
+   * instruction, retyped the rent, and read the same sentence next month.
+   *
+   * Blank or absent means "leave it as it is". A change needs the rent for
+   * the NEW way of paying typed alongside it — a yearly figure is never
+   * divided into a monthly one here, because what a household pays each
+   * month is a fact he holds, not arithmetic.
+   */
+  term?: string;
 }
 
 export interface TenantEditResult {
@@ -1350,7 +1697,18 @@ export interface TenantEditResult {
     display_name: string;
     confirmed_at: string | null;
     email?: string | null;
-    mobile_e164?: string | null;
+    /**
+     * THE NUMBER THE OFFICE RINGS — and never `mobile_e164`.
+     *
+     * The Edit panel wrote its phone into `mobile_e164` for a year: the column
+     * documented as "a number the resident gave us themselves and verified",
+     * the one consent-actions.ts sets only alongside mobile_verified_at and the
+     * consent stamp. The panel's own copy said "a phone number here is one the
+     * office can ring", and the sibling builder above was corrected on 25
+     * August — this one was not, and its test pinned the wrong column. The
+     * key is absent from this type now, so the regression cannot compile.
+     */
+    phone_on_file_with_park?: string | null;
     contact_pref?: string;
   };
   tenancy?: {
@@ -1358,9 +1716,20 @@ export interface TenantEditResult {
     due_day: number | null;
     /** Only set when the amount actually MOVED. */
     amount_source?: string;
+    /** Only set when how they pay actually CHANGED. */
+    term?: Term;
   };
 }
 
+/** The ways of paying the Edit panel offers — the same four the filing form does. */
+export const EDITABLE_TERMS: readonly Term[] = ["monthly", "weekly", "seasonal", "annual"];
+/**
+ * "each month" — what the rent box is for once the term changes. The one
+ * copy; the roll's Edit panel imports it rather than carrying a twin.
+ */
+export const TERM_EACH: Record<string, string> = {
+  monthly: "each month", weekly: "each week", seasonal: "for the season", annual: "each year", nightly: "each night",
+};
 /**
  * The rent's provenance follows who last touched it, and it is never upgraded
  * for free:
@@ -1376,12 +1745,26 @@ export interface TenantEditResult {
  */
 export function buildTenantEdit(
   input: TenantEditInput,
-  current: { rent: number | null; dueDay: number | null },
+  current: { rent: number | null; dueDay: number | null; term?: string | null },
   todayISO: string,
 ): TenantEditResult {
   const displayName = input.displayName.trim();
   if (!displayName) return { ok: false, error: "A tenant needs a name." };
   if (displayName.length > 120) return { ok: false, error: "That name is too long." };
+
+  // HOW THEY PAY. Blank leaves it; the same value is no change. A different
+  // one is checked against what the database accepts, and then the rent
+  // below has to be typed for it — see the note on the term rule after the
+  // rent is read.
+  const termRaw = (input.term ?? "").trim();
+  const currentTerm = current.term ?? null;
+  let newTerm: Term | null = null;
+  if (termRaw && termRaw !== currentTerm) {
+    if (!EDITABLE_TERMS.includes(termRaw as Term)) {
+      return { ok: false, error: "Pick how they pay — usually monthly." };
+    }
+    newTerm = termRaw as Term;
+  }
 
   const rentRaw = input.rent.trim();
   let quoted: number | null = current.rent;
@@ -1409,15 +1792,33 @@ export function buildTenantEdit(
     dueDay = d;
   }
 
+  // A CHANGED TERM NEEDS ITS OWN RENT. The figure on the row is for the old
+  // way of paying: $3,600 a year is not $3,600 a month, and it is not $300 a
+  // month either — nobody here knows what the household actually pays each
+  // month except him, so he types it. The panel empties the rent box the
+  // moment the term changes (so the old figure cannot ride along unread) and
+  // this refuses to file the change with the box still empty. It does NOT
+  // refuse a rent equal to the old one: a row mis-filed as yearly with the
+  // monthly figure already on it is corrected by typing that same number.
+  if (newTerm && quoted == null) {
+    return {
+      ok: false,
+      error: `Type what they pay ${TERM_EACH[newTerm]} — the rent for the new way of paying. It isn't divided for you.`,
+    };
+  }
+
   const amountMoved = quoted !== current.rent;
 
   const tenancy: TenantEditResult["tenancy"] = { quoted_amount: quoted, due_day: dueDay };
+  if (newTerm) tenancy.term = newTerm;
   if (input.confirmedWithTenant) {
     // The only value that reduces what he is exposed on. Requires him to say
     // he checked, and applies whether or not the number changed — confirming
     // that the seller was RIGHT is exactly as valuable as correcting him.
     tenancy.amount_source = "tenant_confirmed";
-  } else if (amountMoved) {
+  } else if (amountMoved || newTerm) {
+    // A rent typed for a new way of paying is his number even when the digits
+    // match the old one — it now means something else.
     tenancy.amount_source = "owner_knowledge";
   }
 
@@ -1439,19 +1840,23 @@ export function buildTenantEdit(
     renter.email = email.toLowerCase();
   }
 
+  // THE OFFICE'S NUMBER GOES TO THE OFFICE'S COLUMN. `mobile_e164` is left to
+  // the resident's own Verify flow, which is the only writer that can make it
+  // true; a "-" here clears the office number and nothing else.
   const mobile = (input.mobile ?? "").trim();
   if (mobile === "-") {
-    renter.mobile_e164 = null;
+    renter.phone_on_file_with_park = null;
   } else if (mobile !== "") {
     const digits = mobile.replace(/\D/g, "");
     // 10 digits, or 11 starting with a US country code. Anything else is a
-    // typo, and a wrong number on a rent notice is worse than none.
+    // typo, and a wrong number on a rent notice is worse than none. Same
+    // normaliser as buildTenant, so the two writers store ONE format.
     const e164 =
-      digits.length === 10 ? `+1${digits}`
-      : digits.length === 11 && digits.startsWith("1") ? `+${digits}`
-      : null;
+      digits.length === 10 || (digits.length === 11 && digits.startsWith("1"))
+        ? toE164(mobile)
+        : null;
     if (!e164) return { ok: false, error: "That phone number doesn't look like ten digits." };
-    renter.mobile_e164 = e164;
+    renter.phone_on_file_with_park = e164;
   }
 
   // THE PREFERENCE IS NEVER INFERRED FROM HAVING A CONTACT DETAIL.

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -203,6 +203,18 @@ describe("the biller applies the inherited-tenancy rule", () => {
     expect(ACTIONS).toContain("inheritedTenancies");
   });
 
+  it("and counts a household by whether it is on the lot TODAY, not by status alone", () => {
+    // A signing trims the inherited tenancy to end that day and starts the
+    // successor; both rows stay `active`. Counted by status, the trimmed
+    // holdover was an inherited household forever.
+    const stays = ACTIONS.split("\n").filter(
+      (l) => l.includes(".select(") && l.includes("park_lot_id") && l.includes("origin"),
+    );
+    expect(stays.length).toBe(1);
+    expect(stays[0]).toContain("during");
+    expect(ACTIONS).toMatch(/r\.start <= today && today < r\.end/);
+  });
+
   it("the screen says who it will not reach", () => {
     // A rule enforced silently looks like a fault: the only other symptom is a
     // payer count lower than his household count.
@@ -215,23 +227,38 @@ describe("the biller applies the inherited-tenancy rule", () => {
 
 describe("the first afternoon, and what it shows before he taps", () => {
   const LEDGER = code("./ledger-actions.ts");
+  // THE SORTING MOVED. It used to be four inline buckets in the run; it is
+  // now `classifyForRun` in ledger-helpers, called by the preview AND the run
+  // so the two cannot disagree. The pins follow the rule to where it lives.
+  const HELPERS = code("./ledger-helpers.ts");
   const ONBOARD = code("./onboard-actions.ts");
   const SCREEN = code("../../components/ParkOnboard.tsx");
+
+  it("the scanner finds the helper it now reads", () => {
+    expect(HELPERS).toContain("export function classifyForRun(");
+    expect(HELPERS).not.toContain("Pure, and the ONLY place the");
+  });
 
   it("the run counts WHY it skipped, rather than assuming", () => {
     // "It may already be done" was asserted for four different causes, one of
     // which is the whole park's rent stopping.
     expect(LEDGER).toContain("nothingToBillReason");
     expect(LEDGER).not.toMatch(/it may already be done/i);
-    for (const bucket of ["expiredLots", "notYetLots", "noRentLots", "skippedAlready"]) {
-      expect(LEDGER).toContain(bucket);
+    // The run hands every bucket to the sentence — not a subset of them.
+    for (const key of ["already:", "expired:", "notYet:", "noRent:"]) {
+      expect(LEDGER).toContain(key);
+    }
+    for (const bucket of ['"expired"', '"notYet"', '"noRent"', '"already"']) {
+      expect(HELPERS).toContain(bucket);
     }
   });
 
   it("an expired window is told apart from one that has not started", () => {
     // Both produce a zero statement. Only one of them is money stopping.
-    expect(LEDGER).toMatch(/range\.end <= monthStart/);
-    expect(LEDGER).toMatch(/range\.start > monthEnd/);
+    // Half-open, like the database: a window ending on the 1st was not here
+    // this month at all, so the comparisons are <= and >=, not < and >.
+    expect(HELPERS).toMatch(/c\.range\.end <= monthStart/);
+    expect(HELPERS).toMatch(/c\.range\.start >= nextMonthStart/);
   });
 
   it("the onboarding screen reads the fees the biller will actually charge", () => {
@@ -299,5 +326,109 @@ describe("the term, and the number that must never be a send target", () => {
     expect(SCREEN2).toMatch(/set\(i, "phone", e\.target\.value\)/);
     expect(ONBOARD2).toMatch(/mobile: r\.phone/);
     expect(ONBOARD2).toMatch(/email: r\.email/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE MORNING AFTER A SIGNING, ON THE FEE PAGE.
+//
+// The Haven's twenty-one households arrive as inherited (grandfathered)
+// tenancies. When one signs the new lease the roll trims that tenancy to end
+// today and files the successor from today — both `active`, because status is
+// about the booking and the range is about time. The fee page counted by
+// status alone, so the signed household was still "1 household you inherited"
+// and one payer short, on the screen that decides whether $142.53 is right.
+//
+// Run against the real loader with the database mocked and the lakes' clock
+// pinned to the morning after.
+// ---------------------------------------------------------------------------
+type Row = Record<string, unknown>;
+const db: Record<string, Row[]> = {};
+
+class Q {
+  private fs: Array<(r: Row) => boolean> = [];
+  constructor(private t: string) {}
+  select() { return this; }
+  eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
+  in(c: string, vs: unknown[]) { this.fs.push((r) => vs.includes(r[c])); return this; }
+  order() { return this; }
+  private result() { return { data: (db[this.t] ?? []).filter((r) => this.fs.every((f) => f(r))), error: null }; }
+  maybeSingle() { const r = this.result(); return Promise.resolve({ data: r.data[0] ?? null, error: null }); }
+  then<A, B>(ok?: ((x: { data: Row[]; error: null }) => A | PromiseLike<A>) | null, bad?: ((e: unknown) => B | PromiseLike<B>) | null) {
+    return Promise.resolve(this.result()).then(ok, bad);
+  }
+}
+
+const OWNER = "user-owner";
+const PARK = "park-haven";
+const TODAY = "2027-01-15";
+vi.mock("server-only", () => ({}));
+vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: OWNER } } }) } }),
+  createServiceClient: () => ({ from: (t: string) => new Q(t) }),
+}));
+vi.mock("@/lib/booking", async (orig) => ({
+  ...(await orig<typeof import("@/lib/booking")>()),
+  todayLakeDate: () => TODAY,
+}));
+
+const { listFees } = await import("./fee-actions");
+
+describe("who the fee page counts, the morning after a signing", () => {
+  beforeEach(() => {
+    db.park_members = [{ park_id: PARK, user_id: OWNER, role: "owner" }];
+    db.park_fees = [{
+      id: "fee-grounds", park_id: PARK, label: "Grounds fee", amount: 142.53,
+      cadence: "monthly", applies_to: "long_term", covers: ["sewer", "grounds"], active: true,
+    }];
+    db.park_lots = [
+      { id: "l1", park_id: PARK, rental_mode: "long_term", lifecycle: "live", site_type: "mh_single" },
+      { id: "l2", park_id: PARK, rental_mode: "long_term", lifecycle: "live", site_type: "mh_single" },
+    ];
+    db.park_costs = [];
+    db.lot_fee_assignments = [];
+  });
+
+  it("a trimmed holdover plus the office successor is ONE billable household and NO inherited one", async () => {
+    db.lot_reservations = [
+      // Lot 1 signed yesterday: the inherited tenancy was trimmed to end
+      // then, and the successor runs from then. Both still `active`.
+      { id: "r-old", park_lot_id: "l1", origin: "grandfathered", status: "active", during: `[2026-01-01,${TODAY})` },
+      { id: "r-new", park_lot_id: "l1", origin: "office", status: "active", during: `[${TODAY},2028-01-01)` },
+      // Lot 2 has not signed.
+      { id: "r-2", park_lot_id: "l2", origin: "grandfathered", status: "active", during: "[2026-01-01,2028-01-01)" },
+    ];
+    const page = await listFees(PARK);
+    expect(page.inheritedTenancies).toBe(1);
+    expect(page.fees[0].payers).toBe(1);
+    expect(page.fees[0].monthly).toBeCloseTo(142.53, 2);
+  });
+
+  it("the trimmed holdover ALONE counts as nobody — its range has ended, whatever its status says", async () => {
+    db.lot_reservations = [
+      { id: "r-old", park_lot_id: "l1", origin: "grandfathered", status: "active", during: "[2026-01-01,2027-01-10)" },
+    ];
+    const page = await listFees(PARK);
+    expect(page.inheritedTenancies).toBe(0);
+    expect(page.fees[0].payers).toBe(0);
+  });
+
+  it("a household still on the seller's terms is still counted as inherited", async () => {
+    db.lot_reservations = [
+      { id: "r-2", park_lot_id: "l2", origin: "grandfathered", status: "active", during: "[2026-01-01,2028-01-01)" },
+    ];
+    const page = await listFees(PARK);
+    expect(page.inheritedTenancies).toBe(1);
+    expect(page.fees[0].payers).toBe(0);
+  });
+
+  it("a tenancy that starts tomorrow is not here yet — half-open, like the Today screen", async () => {
+    db.lot_reservations = [
+      { id: "r-soon", park_lot_id: "l1", origin: "office", status: "approved", during: "[2027-01-16,2028-01-01)" },
+    ];
+    const page = await listFees(PARK);
+    expect(page.inheritedTenancies).toBe(0);
+    expect(page.fees[0].payers).toBe(0);
   });
 });

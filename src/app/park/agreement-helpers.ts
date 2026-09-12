@@ -41,6 +41,26 @@ export function daysBetween(a: string, b: string): number {
   );
 }
 
+/**
+ * How many months a half-open agreement REALLY ran, by the same calendar
+ * arithmetic that wrote its end: whole months by stepping `addMonths` from the
+ * start, and a remainder of fifteen days or more counts as one more. Never
+ * negative.
+ *
+ * This replaces `seq × cap`, which assumed every link in a chain was written
+ * at the cap. At The Haven the first signed lease is ONE month and the renewal
+ * is three, so multiplying the sequence number by the cap said a household had
+ * held the lot for six months after four — and, later in the chain, would have
+ * spoken the long-run sentence a season before it was true.
+ */
+export function monthsBetween(startISO: string, endISO: string): number {
+  if (endISO <= startISO) return 0;
+  let n = 0;
+  while (addMonths(startISO, n + 1) <= endISO) n += 1;
+  const rest = daysBetween(addMonths(startISO, n), endISO);
+  return rest >= 15 ? n + 1 : n;
+}
+
 export interface AgreementTerms {
   /** NULL means the park writes agreements of any length. */
   maxAgreementMonths: number | null;
@@ -83,15 +103,49 @@ export interface PriorAgreement {
   end: string;
   quotedAmount: number | null;
   term: string;
+  /**
+   * Whole months this chain has run by the end of `prior`, summed from every
+   * link's REAL dates (see `monthsBetween`). The caller that has the chain's
+   * rows passes it. Left out, the prior's own span stands in — exact for a
+   * chain of one, an undercount for a longer one, and never `seq × cap`.
+   */
+  chainMonthsSoFar?: number;
 }
 
 export type RenewalRefusal =
   | "no_cap"
   | "already_ended"
   | "not_yet_renewable"
-  | "season_closed";
+  | "season_closed"
+  | "inherited";
 
-export function renewalRefusalText(r: RenewalRefusal): string {
+/**
+ * THE LABEL ON THE ROLL'S SIGNING CONTROL — the one home for the words Today,
+ * the fee page, the filing screen and every refusal that sends him to it all
+ * render. Homed here, the leaf of the park helpers, so a sentence in this
+ * file can name the control without importing sign-helpers back up the graph
+ * (sign-helpers imports `addMonths` from here). The screens that import the
+ * label from sign-helpers get the same words — agreement-helpers.test.ts
+ * pins the two equal. Render this; never retype it — retyped, the words
+ * outlive the button.
+ */
+export const SIGNED_LEASE_LABEL = "They signed the new lease";
+
+/**
+ * A household still on the seller's arrangement has no successor to write
+ * from here. Their new lease is recorded from their row on the rent roll —
+ * that control is the one act that ends the holdover and starts the fee — and
+ * this sentence names it rather than a button this screen does not have.
+ */
+export function inheritedRefusalText(lotNumber: string | null | undefined): string {
+  const who = lotNumber ? `Lot ${lotNumber} is` : "This household is";
+  return (
+    `${who} still on the arrangement they had with the previous owner. When they ` +
+    `sign your new lease, record it from their row on the rent roll — '${SIGNED_LEASE_LABEL}'.`
+  );
+}
+
+export function renewalRefusalText(r: RenewalRefusal, lotNumber?: string | null): string {
   switch (r) {
     case "no_cap":
       return "This park doesn't write fixed-length agreements, so there's nothing to renew — the stay just continues.";
@@ -101,6 +155,8 @@ export function renewalRefusalText(r: RenewalRefusal): string {
       return "It's too early to renew this one.";
     case "season_closed":
       return "That spot is closed for the season. You can book it again when the season opens.";
+    case "inherited":
+      return inheritedRefusalText(lotNumber);
   }
 }
 
@@ -123,8 +179,8 @@ export interface PlannedRenewal {
   depositAmount?: number | null;
   /**
    * How long this person will have held the lot once this agreement runs out,
-   * counting the whole chain. The number that makes a two-year residency
-   * visible instead of implied.
+   * counting the whole chain by its real dates. The number that makes a
+   * two-year residency visible instead of implied.
    */
   totalMonthsAfter?: number;
 }
@@ -167,8 +223,13 @@ export function planRenewal(
     return { ok: false, refusal: "already_ended" };
   }
 
-  const months = terms.maxAgreementMonths;
-  const priorMonths = continuesChain ? prior.seq * months : 0;
+  // REAL LENGTHS, both sides. The successor's own span (season-clamped when
+  // the slips come out early) plus what the chain has actually run — never the
+  // cap multiplied by a sequence number.
+  const months = monthsBetween(start, end);
+  const priorMonths = continuesChain
+    ? (prior.chainMonthsSoFar ?? monthsBetween(prior.start, prior.end))
+    : 0;
 
   return {
     ok: true,

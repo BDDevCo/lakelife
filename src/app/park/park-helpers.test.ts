@@ -5,10 +5,11 @@ import {
   toStay, buildRentRoll, summarise, coversDay, canApprove, decideProblemText,
   buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
   planBulkRates, buildTenant, buildParkDialsRow, dialsWarning, noticeShape,
-  agreementMonthsFor,
-  type BulkRateTarget, type TenantInput,
+  agreementMonthsFor, agreementStartFor, dayInWords, planMoveOut, SIGNED_START_HORIZON_DAYS,
+  alreadyOverClause, agreementEndFrom, agreementAlreadyOver, capitalise,
+  type BulkRateTarget, type TenantInput, type ChainLink,
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
-  buildTenantEdit,
+  buildTenantEdit, EDITABLE_TERMS,
   type TenantEditInput,
   parseLotSeason, lotLabelRange, denominatorImpact,
   buildOnlineRentRow, onlineRentCautions,
@@ -635,7 +636,7 @@ describe("buildTenant — the tenant who was already there", () => {
   });
 
   it("the same date under a cap is still a live window, not an expired one", () => {
-    const res = buildTenant(input({ movedInOn: "2019-05-01" }), TODAY, 3);
+    const res = buildTenant(input({ movedInOn: "2019-05-01", signedNewLease: true }), TODAY, 3);
     expect(res.tenancy!.start).toBe(TODAY);
     expect(res.tenancy!.end > TODAY).toBe(true);
     expect(res.tenancy!.beganOn).toBe("2019-05-01");
@@ -673,9 +674,21 @@ describe("buildTenant — the tenant who was already there", () => {
     // office-typed number has none of them, and 0059 made
     // phone_on_file_with_park a separate column for exactly that.
     const res = buildTenant(input({ mobile: "(260) 555-0142" }), TODAY);
-    expect(res.renter!.phone_on_file_with_park).toBe("2605550142");
+    // ONE FORMAT. This used to store bare digits while the Edit panel stored
+    // E.164, so the same number typed at two doors was two strings — and the
+    // notice hold compares this column with `eq`.
+    expect(res.renter!.phone_on_file_with_park).toBe("+12605550142");
     expect(res.renter).not.toHaveProperty("mobile_e164");
     expect(res.renter!.contact_pref).toBe("paper");
+  });
+
+  it("stores the same string the Edit panel stores for the same number", () => {
+    const filed = buildTenant(input({ mobile: "260-555-0142" }), TODAY).renter!.phone_on_file_with_park;
+    const edited = buildTenantEdit(
+      { displayName: "Donna Reyes", rent: "", dueDay: "", confirmedWithTenant: false, mobile: "(260) 555-0142" },
+      { rent: null, dueDay: null }, TODAY,
+    ).renter!.phone_on_file_with_park;
+    expect(filed).toBe(edited);
   });
 
   it("carries PROVENANCE, so the roll can later show its work", () => {
@@ -916,9 +929,12 @@ describe("park dials — the numbers nothing could write", () => {
 });
 
 describe("adding a tenant under an agreement cap", () => {
+  // A term is a fact about a SIGNED agreement. These rows are ticked, because
+  // an unsigned household is on the horizon whatever the park's term is.
   const input = {
     displayName: "Roy Amberg", movedInOn: "", term: "monthly",
     rent: "395", mobile: "", email: "", source: "owner_knowledge",
+    signedNewLease: true,
   };
 
   it("writes a 365-day range when the park has NO cap", () => {
@@ -944,6 +960,242 @@ describe("adding a tenant under an agreement cap", () => {
 
   it("a cap shortens the agreement, it never refuses the person", () => {
     expect(buildTenant(input, "2026-08-11", 1).ok).toBe(true);
+  });
+
+  // ---- THE TICK DECIDES ORIGIN AND LENGTH TOGETHER ---------------------------
+
+  it("an UNSIGNED household is on the horizon even when the park has a term", () => {
+    // The rent roll's door passed the term unconditionally and wrote no
+    // origin, so a holdover typed there landed on the column default —
+    // 'application', a fee they never agreed to — on a one-month window that
+    // then expired on the 2nd of the next month.
+    const r = buildTenant({ ...input, signedNewLease: false }, "2027-01-02", 1);
+    expect(r.tenancy!.origin).toBe("grandfathered");
+    expect(r.tenancy!.start).toBe("2027-01-02");
+    expect(r.tenancy!.end).toBe("2028-01-02");
+    expect(r.tenancy!.status).toBe("active");
+  });
+
+  it("the tick absent means unsigned — the true state, never a default that asserts a lease", () => {
+    const { signedNewLease: _drop, ...noTick } = input;
+    void _drop;
+    const r = buildTenant(noTick, "2027-01-02", 1);
+    expect(r.tenancy!.origin).toBe("grandfathered");
+    expect(r.tenancy!.end).toBe("2028-01-02");
+  });
+
+  it("a SIGNED lease is an agreement with this owner, under the term", () => {
+    const r = buildTenant(input, "2027-01-02", 1);
+    expect(r.tenancy!.origin).toBe("application");
+    expect(r.tenancy!.end).toBe("2027-02-02");
+  });
+
+  it("collapses both ways: no pairing of 'grandfathered' with a term, or 'application' with the horizon", () => {
+    for (const signed of [true, false]) {
+      const r = buildTenant({ ...input, signedNewLease: signed }, "2027-01-02", 1);
+      const onTerm = r.tenancy!.end === "2027-02-02";
+      expect({ signed, origin: r.tenancy!.origin, onTerm })
+        .toEqual({ signed, origin: signed ? "application" : "grandfathered", onTerm: signed });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A LEASE DATED 1 JANUARY, TYPED IN ON ANY OTHER DAY.
+//
+// buildTenant clamped the agreement start to the day the row was filed and
+// there was no field for the lease's own date. Eighteen leases that say
+// "1 January, $542.53" filed on Monday the 4th were written [4 Jan, 4 Feb):
+// January billed 28 of 31 days, due on the 4th. Filed on 20 December — which
+// the readiness list asks for — January billed 19 days. The only correct
+// afternoon was 1 January itself.
+// ---------------------------------------------------------------------------
+describe("when a signed lease runs from", () => {
+  const CUTOVER = "2027-01-01";
+  const signed = (over: Partial<TenantInput> = {}): TenantInput => ({
+    displayName: "Amberg, Roy", mobile: "(260) 555-0142", email: "roy@example.com", movedInOn: "",
+    term: "monthly", rent: "400", source: "owner_knowledge", signedNewLease: true, ...over,
+  });
+
+  it("filed on 20 December for 1 January writes [2027-01-01, 2027-02-01), approved", () => {
+    const r = buildTenant(signed({ agreementStartsOn: "2027-01-01" }), "2026-12-20", agreementMonthsFor(1, 3), { cutoverDate: CUTOVER });
+    expect(r.ok).toBe(true);
+    expect(r.tenancy!.start).toBe("2027-01-01");
+    expect(r.tenancy!.end).toBe("2027-02-01");
+    // Not started yet, so it holds the lot without claiming anyone is on it.
+    expect(r.tenancy!.status).toBe("approved");
+    expect(r.tenancy!.origin).toBe("application");
+  });
+
+  it("filed on 4 January for 1 January writes [2027-01-01, 2027-02-01), active — the whole month bills", () => {
+    const r = buildTenant(signed({ agreementStartsOn: "2027-01-01" }), "2027-01-04", 1, { cutoverDate: CUTOVER });
+    expect(r.tenancy!.start).toBe("2027-01-01");
+    expect(r.tenancy!.end).toBe("2027-02-01");
+    expect(r.tenancy!.status).toBe("active");
+  });
+
+  it("DEFAULTS to the cutover when filed before it, and to today after it", () => {
+    // Blank on 20 December is 1 January, not 20 December — the one date that
+    // is true of a lease collected early.
+    expect(buildTenant(signed(), "2026-12-20", 1, { cutoverDate: CUTOVER }).tenancy!.start).toBe("2027-01-01");
+    expect(buildTenant(signed(), "2027-01-04", 1, { cutoverDate: CUTOVER }).tenancy!.start).toBe("2027-01-04");
+    // A park that never changed hands: today.
+    expect(buildTenant(signed(), "2026-12-20", 1).tenancy!.start).toBe("2026-12-20");
+  });
+
+  it("would have written [2026-12-20, 2027-01-20) under the old clamp — kept as the defect", () => {
+    // The unsigned path still starts today, which is right for a holdover
+    // and was wrong for a lease. Same input, tick clear: the clamp.
+    const r = buildTenant(signed({ signedNewLease: false, agreementStartsOn: "2027-01-01" }), "2026-12-20", 1, { cutoverDate: CUTOVER });
+    expect(r.tenancy!.start).toBe("2026-12-20");
+  });
+
+  it("refuses a start before the cutover — the ledger starts at go-live", () => {
+    const r = buildTenant(signed({ agreementStartsOn: "2026-12-15" }), "2026-12-20", 1, { cutoverDate: CUTOVER });
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("The ledger starts on January 1, 2027 — an agreement can't begin before that.");
+  });
+
+  it("refuses a start more than two months out", () => {
+    const r = buildTenant(signed({ agreementStartsOn: "2027-04-01" }), "2027-01-04", 1, { cutoverDate: CUTOVER });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/more than two months away/);
+    // Exactly the horizon is fine.
+    const [y, m, d] = "2027-01-04".split("-").map(Number);
+    const edge = new Date(Date.UTC(y, m - 1, d + SIGNED_START_HORIZON_DAYS)).toISOString().slice(0, 10);
+    expect(buildTenant(signed({ agreementStartsOn: edge }), "2027-01-04", 1, { cutoverDate: CUTOVER }).ok).toBe(true);
+  });
+
+  it("refuses a lease already over — the household would vanish the same afternoon", () => {
+    const r = buildTenant(signed({ agreementStartsOn: "2026-10-01" }), "2027-01-04", 1);
+    expect(r.ok).toBe(false);
+    // The ONE clause the roll's signing door refuses with (alreadyOverClause),
+    // term named when the park has one; the tail names this form's own box.
+    expect(r.error).toBe("An agreement from October 1, 2026 under your one-month term would already be over by now — check the start date.");
+    expect(r.error).toBe(`${capitalise(alreadyOverClause("2026-10-01", 1))} — check the start date.`);
+    const three = buildTenant(signed({ agreementStartsOn: "2026-10-01" }), "2027-01-04", 3);
+    expect(three.error).toMatch(/under your 3-month term would already be over by now/);
+    // A park with neither dial runs the horizon: over only a year on, and no term clause.
+    expect(buildTenant(signed({ agreementStartsOn: "2026-10-01" }), "2027-01-04", null).ok).toBe(true);
+    const horizon = buildTenant(signed({ agreementStartsOn: "2026-01-04" }), "2027-01-04", null);
+    expect(horizon.error).toBe("An agreement from January 4, 2026 would already be over by now — check the start date.");
+    // The helpers the doors and the form share.
+    expect(agreementEndFrom("2027-01-01", 1)).toBe("2027-02-01");
+    expect(agreementEndFrom("2027-01-01", null)).toBe("2028-01-01");
+    expect(agreementAlreadyOver("2027-01-01", 1, "2027-01-31")).toBe(false);
+    expect(agreementAlreadyOver("2027-01-01", 1, "2027-02-01")).toBe(true);
+  });
+
+  it("keeps when they actually arrived apart from when the lease runs", () => {
+    const r = buildTenant(signed({ movedInOn: "2015-04-02", agreementStartsOn: "2027-01-01" }), "2026-12-20", 1, { cutoverDate: CUTOVER });
+    expect(r.tenancy!.beganOn).toBe("2015-04-02");
+    expect(r.tenancy!.start).toBe("2027-01-01");
+  });
+
+  it("a holdover ignores the lease date entirely — it has no lease", () => {
+    const r = buildTenant(signed({ signedNewLease: false, agreementStartsOn: "2026-06-01" }), "2027-01-04", 1, { cutoverDate: CUTOVER });
+    expect(r.ok).toBe(true);
+    expect(r.tenancy!.start).toBe("2027-01-04");
+  });
+
+  it("agreementStartFor is the one rule both screens read", () => {
+    expect(agreementStartFor("", "2026-12-20", CUTOVER)).toEqual({ ok: true, start: "2027-01-01" });
+    expect(agreementStartFor("", "2027-01-04", CUTOVER)).toEqual({ ok: true, start: "2027-01-04" });
+    expect(agreementStartFor("", "2026-12-20", null)).toEqual({ ok: true, start: "2026-12-20" });
+    expect(agreementStartFor("2027-01-01", "2026-12-20", CUTOVER)).toEqual({ ok: true, start: "2027-01-01" });
+    expect(agreementStartFor("2026-12-31", "2026-12-20", CUTOVER).ok).toBe(false);
+    expect(agreementStartFor("Jan 1", "2026-12-20", CUTOVER).ok).toBe(false);
+  });
+
+  it("names days in words", () => {
+    expect(dayInWords("2027-01-01")).toBe("January 1, 2027");
+    expect(dayInWords("nonsense")).toBe("nonsense");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A MOVE-OUT ENDS THE CHAIN, NOT ONE LINK OF IT.
+//
+// The February agreement is written on 5 January for all eighteen. Lot 9
+// leaves on the 27th: closing the January row alone left its successor
+// approved — billed for February, holding the lot until May, and unreachable
+// from every screen.
+// ---------------------------------------------------------------------------
+describe("planMoveOut — closing one out withdraws what was written for after", () => {
+  const link = (over: Partial<ChainLink> & { id: string }): ChainLink => ({
+    range: null, status: "active", agreementSeq: 1, movedOutOn: null, ...over,
+  });
+  const jan = link({ id: "jan", range: { start: "2027-01-01", end: "2027-02-01" }, status: "active", agreementSeq: 1 });
+  const feb = link({ id: "feb", range: { start: "2027-02-01", end: "2027-03-01" }, status: "approved", agreementSeq: 2 });
+  const mar = link({ id: "mar", range: { start: "2027-03-01", end: "2027-04-01" }, status: "approved", agreementSeq: 3 });
+
+  it("Jan row ended on the 27th + a February successor → the successor is withdrawn", () => {
+    const p = planMoveOut([jan, feb], "2027-01-27");
+    expect(p.ok).toBe(true);
+    if (!p.ok) return;
+    expect(p.trim).toEqual({ id: "jan", start: "2027-01-01", newEnd: "2027-01-28" });
+    expect(p.coveringSeq).toBe(1);
+    // Start AND end travel with each link to withdraw, so a caller that
+    // could not withdraw one can tell running / still to start / lapsed.
+    expect(p.cancel).toEqual([{ id: "feb", start: "2027-02-01", end: "2027-03-01" }]);
+    const undated = planMoveOut([jan, link({ id: "x", status: "approved", agreementSeq: 2 })], "2027-01-27");
+    expect(undated.ok && undated.cancel).toEqual([{ id: "x", start: null, end: null }]);
+  });
+
+  it("every later link goes, in order", () => {
+    const p = planMoveOut([mar, jan, feb], "2027-01-27");
+    expect(p.ok && p.cancel.map((c) => c.id)).toEqual(["feb", "mar"]);
+  });
+
+  it("a last day INSIDE an earlier link — the 1 February screen — trims that link and withdraws the rest", () => {
+    // On 1 February the row a screen can reach is the successor; the day
+    // they left is in January. The old code refused with "They moved in on
+    // 2027-02-01", false of a household of eleven years.
+    const p = planMoveOut([jan, feb], "2027-01-27");
+    expect(p.ok && p.trim?.id).toBe("jan");
+    expect(p.ok && p.cancel.map((c) => c.id)).toEqual(["feb"]);
+  });
+
+  it("a last day inside the successor trims the successor and leaves January alone", () => {
+    const p = planMoveOut([jan, feb, mar], "2027-02-10");
+    expect(p.ok && p.trim).toEqual({ id: "feb", start: "2027-02-01", newEnd: "2027-02-11" });
+    expect(p.ok && p.cancel.map((c) => c.id)).toEqual(["mar"]);
+  });
+
+  it("an already-cancelled or declined link is never touched", () => {
+    const gone = link({ id: "gone", range: { start: "2027-02-01", end: "2027-03-01" }, status: "cancelled", agreementSeq: 2 });
+    const p = planMoveOut([jan, gone, mar], "2027-01-27");
+    expect(p.ok && p.cancel.map((c) => c.id)).toEqual(["mar"]);
+  });
+
+  it("refuses a day before the record starts, without claiming they moved in then", () => {
+    const p = planMoveOut([jan, feb], "2026-12-30");
+    expect(p.ok).toBe(false);
+    expect(!p.ok && p.error).toBe("Their record here starts on January 1, 2027 — the last day can't be before that.");
+    expect(!p.ok && p.error).not.toMatch(/moved in/);
+  });
+
+  it("a link already closed on that day only withdraws the rest", () => {
+    // Closed on the 27th before this fix existed, so February is still
+    // standing. Running it again cancels February and trims nothing.
+    const closed = link({ id: "jan", range: { start: "2027-01-01", end: "2027-01-28" }, status: "ended", agreementSeq: 1, movedOutOn: "2027-01-27" });
+    const p = planMoveOut([closed, feb], "2027-01-27");
+    expect(p.ok && p.trim).toBeNull();
+    expect(p.ok && p.cancel.map((c) => c.id)).toEqual(["feb"]);
+  });
+
+  it("a link closed on a DIFFERENT day is refused with that day", () => {
+    const closed = link({ id: "jan", range: { start: "2027-01-01", end: "2027-01-26" }, status: "ended", agreementSeq: 1, movedOutOn: "2027-01-25" });
+    const p = planMoveOut([closed, feb], "2027-01-25");
+    expect(p.ok).toBe(true);
+    const p2 = planMoveOut([closed, feb], "2027-01-20");
+    expect(p2.ok).toBe(false);
+    expect(!p2.ok && p2.error).toMatch(/already closed out — last day January 25, 2027/);
+  });
+
+  it("needs a date", () => {
+    expect(planMoveOut([jan], "").ok).toBe(false);
+    expect(planMoveOut([jan], "yesterday").ok).toBe(false);
   });
 });
 
@@ -1029,11 +1281,26 @@ describe("how to reach a household — the thing that could not be entered", () 
     expect(r.renter!.email).toBe("ada@example.com");
   });
 
-  it("normalises a ten-digit phone to E.164", () => {
-    expect(buildTenantEdit({ ...base, mobile: "(260) 555-0134" }, current, "2026-08-12").renter!.mobile_e164)
+  it("normalises a ten-digit phone to E.164 — into the OFFICE's column", () => {
+    // THIS TEST PINNED THE WRONG COLUMN. `mobile_e164` means a number the
+    // resident gave us and verified; consent-actions.ts is its only honest
+    // writer. The panel's own copy says "a phone number here is one the
+    // office can ring", and that number lives in phone_on_file_with_park —
+    // the column buildTenant was corrected to on 25 August while this
+    // builder kept writing the send target.
+    const r = buildTenantEdit({ ...base, mobile: "(260) 555-0134" }, current, "2026-08-12");
+    expect(r.renter!.phone_on_file_with_park).toBe("+12605550134");
+    expect(r.renter).not.toHaveProperty("mobile_e164");
+    expect(buildTenantEdit({ ...base, mobile: "1 260 555 0134" }, current, "2026-08-12").renter!.phone_on_file_with_park)
       .toBe("+12605550134");
-    expect(buildTenantEdit({ ...base, mobile: "1 260 555 0134" }, current, "2026-08-12").renter!.mobile_e164)
-      .toBe("+12605550134");
+  });
+
+  it("never writes mobile_e164 from this panel at all — with or without a number", () => {
+    for (const mobile of ["(260) 555-0134", "-", ""]) {
+      const r = buildTenantEdit({ ...base, mobile }, current, "2026-08-12");
+      expect(r.ok).toBe(true);
+      expect(r.renter).not.toHaveProperty("mobile_e164");
+    }
   });
 
   it("refuses a number that isn't ten digits — a wrong number on a rent notice is worse than none", () => {
@@ -1045,13 +1312,14 @@ describe("how to reach a household — the thing that could not be entered", () 
     const r = buildTenantEdit({ ...base, email: "", mobile: "" }, current, "2026-08-12");
     expect(r.ok).toBe(true);
     expect("email" in r.renter!).toBe(false);
-    expect("mobile_e164" in r.renter!).toBe(false);
+    expect("phone_on_file_with_park" in r.renter!).toBe(false);
   });
 
-  it("a lone dash clears", () => {
+  it("a lone dash clears — the office number, never the verified one", () => {
     const r = buildTenantEdit({ ...base, email: "-", mobile: "-" }, current, "2026-08-12");
     expect(r.renter!.email).toBe(null);
-    expect(r.renter!.mobile_e164).toBe(null);
+    expect(r.renter!.phone_on_file_with_park).toBe(null);
+    expect(r.renter).not.toHaveProperty("mobile_e164");
   });
 
   it("THE PREFERENCE IS NEVER INFERRED from having a contact detail", () => {
@@ -1079,6 +1347,118 @@ describe("how to reach a household — the thing that could not be entered", () 
     const r = buildTenantEdit({ ...base, mobile: "2605550134", contactPref: "sms" }, current, "2026-08-12");
     expect(r.ok).toBe(true);
     expect("contact_pref" in r.renter!).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HOW THEY PAY — the thing nothing could change once a household was filed.
+//
+// The charge run bills months only and names a tenancy filed as paid yearly
+// ("change how it's paid to monthly from Edit on the roll"). Until this
+// existed no door on the roll changed `term`: he followed the instruction,
+// retyped the rent, and read the same sentence next month.
+// ---------------------------------------------------------------------------
+describe("changing how a tenancy is paid, from the Edit panel", () => {
+  const TODAY = "2027-02-03";
+  const yearly = { rent: 3600, dueDay: 1, term: "annual" };
+  const base = { displayName: "Ada Lovelace", dueDay: "1", confirmedWithTenant: false };
+
+  it("moves a yearly tenancy to monthly at the rent HE TYPED — never the yearly figure divided", () => {
+    const r = buildTenantEdit({ ...base, rent: "400", term: "monthly" }, yearly, TODAY);
+    expect(r.ok, r.error).toBe(true);
+    expect(r.tenancy!.term).toBe("monthly");
+    expect(r.tenancy!.quoted_amount).toBe(400);
+    expect(r.tenancy!.quoted_amount).not.toBe(300);
+    // A rent typed for a new way of paying is his number.
+    expect(r.tenancy!.amount_source).toBe("owner_knowledge");
+  });
+
+  it("refuses the change with the rent box empty — what they pay each month is a fact he holds", () => {
+    const r = buildTenantEdit({ ...base, rent: "", term: "monthly" }, yearly, TODAY);
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe(
+      "Type what they pay each month — the rent for the new way of paying. It isn't divided for you.",
+    );
+  });
+
+  it("a row mis-filed as yearly with the monthly figure already on it is corrected by typing that same number", () => {
+    // The guard is the emptied box on screen, not an equality check here — a
+    // refusal of an equal number would leave this row with no way to monthly.
+    const r = buildTenantEdit({ ...base, rent: "400", term: "monthly" }, { rent: 400, dueDay: 1, term: "annual" }, TODAY);
+    expect(r.ok, r.error).toBe(true);
+    expect(r.tenancy!.term).toBe("monthly");
+    expect(r.tenancy!.amount_source).toBe("owner_knowledge");
+  });
+
+  it("blank leaves it alone, and the same value is no change at all", () => {
+    for (const term of ["", "annual", undefined]) {
+      const r = buildTenantEdit({ ...base, rent: "3600", term }, yearly, TODAY);
+      expect(r.ok, r.error).toBe(true);
+      expect("term" in r.tenancy!).toBe(false);
+      // And a no-change never promotes the provenance.
+      expect(r.tenancy!.amount_source).toBeUndefined();
+    }
+  });
+
+  it("offers the filing form's four ways of paying and refuses anything else", () => {
+    expect([...EDITABLE_TERMS]).toEqual(["monthly", "weekly", "seasonal", "annual"]);
+    const r = buildTenantEdit({ ...base, rent: "90", term: "fortnightly" }, yearly, TODAY);
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("Pick how they pay — usually monthly.");
+    // The database's own check: term in ('nightly','weekly','monthly','seasonal','annual').
+    for (const t of EDITABLE_TERMS) {
+      expect(buildTenantEdit({ ...base, rent: "90", term: t }, { rent: 3600, dueDay: 1, term: "nightly" }, TODAY).ok).toBe(true);
+    }
+  });
+
+  it("a row whose term the caller did not carry still changes — the table's term is the truth, never a guess here", () => {
+    const r = buildTenantEdit({ ...base, rent: "400", term: "monthly" }, { rent: 3600, dueDay: 1 }, TODAY);
+    expect(r.ok, r.error).toBe(true);
+    expect(r.tenancy!.term).toBe("monthly");
+  });
+
+  it("confirming with them still wins the provenance when the term moves too", () => {
+    const r = buildTenantEdit({ ...base, rent: "400", term: "monthly", confirmedWithTenant: true }, yearly, TODAY);
+    expect(r.tenancy!.amount_source).toBe("tenant_confirmed");
+    expect(r.tenancy!.term).toBe("monthly");
+  });
+
+  describe("and the panel on the roll is the door the run's sentence names", () => {
+    const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const roll = strip(readFileSync(
+      fileURLToPath(new URL("../../components/ParkRentRoll.tsx", import.meta.url)), "utf8"));
+    const panel = roll.slice(roll.indexOf("function EditTenant("));
+    const actions = strip(readFileSync(fileURLToPath(new URL("./actions.ts", import.meta.url)), "utf8"));
+    const editTenancy = actions.slice(actions.indexOf("export async function editTenancy("));
+
+    it("finds the panel and the action — a scan of nothing proves nothing", () => {
+      expect(panel.length).toBeGreaterThan(500);
+      expect(panel).toContain("editTenancy(reservationId, form)");
+      expect(editTenancy).toContain("buildTenantEdit(");
+    });
+
+    it("shows a 'Paid' select, mirroring the filing form's, and starts it on what they pay today", () => {
+      expect(panel).toMatch(/<span className="mut">Paid<\/span>/);
+      expect(panel).toMatch(/EDITABLE_TERMS\.map\(/);
+      expect(panel).toMatch(/term: term \?\? ""/);
+    });
+
+    it("EMPTIES the rent box the moment the term changes, so the yearly figure cannot ride along", () => {
+      const pick = panel.match(/const pickTerm = [\s\S]*?\}\)\);/)?.[0] ?? "";
+      expect(pick, "pickTerm is gone — this scan measures nothing").not.toBe("");
+      // Back to the original way of paying restores the original figure;
+      // any other way empties the box.
+      expect(pick).toMatch(/rent: next === \(term \?\? ""\) \? .+ : "",?\s*$/m);
+      expect(panel).not.toMatch(/\/ ?12/);
+    });
+
+    it("the action carries the term from the table into the builder, and the builder's answer into the patch", () => {
+      const select = editTenancy.match(/\.select\("id, renter_id, quoted_amount, due_day, status[^"]*"\)/)?.[0] ?? "";
+      expect(select, "editTenancy's select is gone — this scan measures nothing").not.toBe("");
+      expect(select, "term is not in the query, so the builder always sees null").toMatch(/\bterm\b/);
+      expect(editTenancy).toMatch(/term: \(res\.term as string \| null\) \?\? null/);
+      expect(editTenancy).toMatch(/if \(built\.tenancy\.term\) tenancyPatch\.term = built\.tenancy\.term;/);
+    });
   });
 });
 
@@ -1260,7 +1640,7 @@ describe("how long one new agreement runs", () => {
   it("dates a month-to-month agreement one month out, not three", () => {
     const r = buildTenant(
       { displayName: "Amberg, Roy", mobile: "", email: "", movedInOn: "",
-        term: "monthly", rent: "400", source: "owner_knowledge" },
+        term: "monthly", rent: "400", source: "owner_knowledge", signedNewLease: true },
       "2027-01-01",
       agreementMonthsFor(1, 3),
     );
@@ -1273,7 +1653,7 @@ describe("how long one new agreement runs", () => {
     // straight through is what put every household's expiry on one morning.
     const r = buildTenant(
       { displayName: "Amberg, Roy", mobile: "", email: "", movedInOn: "",
-        term: "monthly", rent: "400", source: "owner_knowledge" },
+        term: "monthly", rent: "400", source: "owner_knowledge", signedNewLease: true },
       "2027-01-01",
       3,
     );
