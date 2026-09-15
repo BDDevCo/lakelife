@@ -74,7 +74,7 @@ describe("the quarter-ahead cheque's own link", () => {
 
   it("before anything is applied: this is money on account, and it comes off the next bill", async () => {
     const t = await text(own({ onAccountApplied: false, onAccountRemaining: 1627.59, allocations: [], whereItWent: "$1,627.59 on account" }));
-    expect(t).toMatch(/recorded \$1627\.59 from you, paid by check 1042/);
+    expect(t).toMatch(/recorded \$1,627\.59 from you, paid by check 1042/);
     expect(t).not.toMatch(/from lot —/);
     expect(t).toMatch(/That money is on account with the office — held for you\. It comes off the next bill the park raises for you\./);
   });

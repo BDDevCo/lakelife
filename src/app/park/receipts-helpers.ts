@@ -40,6 +40,7 @@ import { lakeDateOf } from "@/lib/booking";
  */
 
 import { prettyMonth } from "./ledger-helpers";
+import { longDate } from "@/lib/lake-time";
 import { csvCell as csvText } from "@/lib/csv";
 
 export type Method = "cash" | "check" | "card" | "ach" | "transfer" | "other";
@@ -363,7 +364,7 @@ export function decimal(cents: number): string {
  */
 export function receiptsHeadline(s: ReceiptSummary, period: Period): string {
   if (s.count === 0) {
-    return `No money is recorded as coming in between ${period.from} and ${period.to}.`;
+    return `No money is recorded as coming in between ${longDate(period.from)} and ${longDate(period.to)}.`;
   }
   const n = `${s.count} ${s.count === 1 ? "payment" : "payments"}`;
   return `${money(s.totalCents)} came in — ${n}.`;

@@ -3,6 +3,7 @@ import { loadPaymentByToken, type ConfirmView, confirmByToken, disputeByToken } 
 import { ReadFailed } from "@/lib/must-read";
 import { escapeHtml } from "@/lib/html-safe";
 import { longDay } from "@/lib/lake-time";
+import { money } from "@/app/park/ledger-helpers";
 
 /**
  * "DOES THIS LOOK RIGHT?" — the renter's half of the receipt.
@@ -83,7 +84,7 @@ function onAccountWords(view: ConfirmView): string {
     if (view.onAccount != null && !siblingTakenBackOn(view)) {
       // The bill's share went; the $57.47 on account is its own row and
       // stands. Not "this payment was taken back" — $57.47 of it was not.
-      const rest = `The $${view.onAccount.toFixed(2)} on account is a separate record — it still stands`;
+      const rest = `The ${money(view.onAccount)} on account is a separate record — it still stands`;
       return (
         ` The part of this against your bill was ${when}. ` +
         (view.onAccountApplied
@@ -93,7 +94,7 @@ function onAccountWords(view: ConfirmView): string {
     }
     // The whole of it went: the row's own allocations (a quarter-ahead
     // cheque), or both halves of a split.
-    const hadGone = view.onAccount != null ? ` $${view.onAccount.toFixed(2)} of that had gone on account with the office.` : "";
+    const hadGone = view.onAccount != null ? ` ${money(view.onAccount)} of that had gone on account with the office.` : "";
     return (
       hadGone +
       (view.onAccountApplied && view.whereItWent
@@ -109,8 +110,8 @@ function onAccountWords(view: ConfirmView): string {
       : ` That money is on account with the office — held for you. ${COMES_OFF}`;
   }
   return view.onAccountApplied
-    ? ` $${view.onAccount.toFixed(2)} of that went on account with the office and has since been put against a bill. That's ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
-    : ` $${view.onAccount.toFixed(2)} of that is on account with the office — held for you, not yet put against a bill. ${COMES_OFF}`;
+    ? ` ${money(view.onAccount)} of that went on account with the office and has since been put against a bill. That's ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
+    : ` ${money(view.onAccount)} of that is on account with the office — held for you, not yet put against a bill. ${COMES_OFF}`;
 }
 
 export async function GET(_req: Request, ctx: { params: Promise<{ token: string }> }) {
@@ -138,14 +139,14 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
   // loader hands "—" to mean there is no lot on the record, so say "from you".
   const from = view.lotNumber === "—" ? "from you" : `from lot ${view.lotNumber}`;
   const line =
-    `${view.parkName} recorded $${view.amount.toFixed(2)} ${from}, ` +
+    `${view.parkName} recorded ${money(view.amount)} ${from}, ` +
     `paid by ${view.method}${view.reference ? ` ${view.reference}` : ""} ` +
     `on ${pretty(view.receivedOn)}. Receipt ${view.ref}.` +
     // ASKING "DOES THIS MATCH?" AGAINST THE WRONG NUMBER MANUFACTURES A
     // DISPUTE. Their bank shows rent + fee; this page showed rent alone, so a
     // careful resident comparing the two would honestly answer "no".
     (view.fee && view.fee > 0
-      ? ` A card fee of $${view.fee.toFixed(2)} was charged on top, so $${(view.amount + view.fee).toFixed(2)} left your card. The fee isn't rent and isn't credited against your bill.`
+      ? ` A card fee of ${money(view.fee)} was charged on top, so ${money(view.amount + view.fee)} left your card. The fee isn't rent and isn't credited against your bill.`
       : "") +
     // THE HALF THE PAPER RECEIPT SAYS. `amount` is the whole she handed over
     // (bill share + on account), so the page must say where the rest sits or

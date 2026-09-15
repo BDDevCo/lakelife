@@ -547,12 +547,12 @@ describe("the page that asks 'does this match?' reads every field the loader wri
 
   it("the scanner reads the route it thinks it reads", () => {
     expect(route).toContain("loadPaymentByToken(token)");
-    expect(route).toContain("view.amount.toFixed(2)");
+    expect(route).toMatch(/money\(view\.amount\)/);
   });
 
   it("/paid reads view.onAccount and says it is on account with the office", () => {
     expect(route).toMatch(/view\.onAccount == null/);
-    expect(route).toMatch(/\$\$\{view\.onAccount\.toFixed\(2\)\} of that is on account with the office/);
+    expect(route).toMatch(/\$\{money\(view\.onAccount\)\} of that is on account with the office/);
     // Still true while nothing has been applied. (Since 0167 the run does
     // apply it to the next bill it raises, so the page MAY say so — the
     // loader now hands it `whereItWent` and `onAccountRemaining` for that.)
@@ -562,7 +562,7 @@ describe("the page that asks 'does this match?' reads every field the loader wri
   it("and reads view.onAccountApplied, so a permanent link stops saying 'held for you' about applied money", () => {
     // Both branches, and the sentence changes with the fact.
     expect(route).toMatch(/view\.onAccountApplied\s*\?/);
-    expect(route).toMatch(/\$\$\{view\.onAccount\.toFixed\(2\)\} of that went on account with the office and has since been put against a bill\./);
+    expect(route).toMatch(/\$\{money\(view\.onAccount\)\} of that went on account with the office and has since been put against a bill\./);
     const applied = route.indexOf("has since been put against a bill");
     const held = route.indexOf("held for you, not yet put against a bill");
     expect(applied).toBeGreaterThan(0);
