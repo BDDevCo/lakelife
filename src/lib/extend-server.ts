@@ -2,8 +2,9 @@ import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
-import { parseDaterange, toDaterange, type DateRange, type Term } from "@/lib/parks";
+import { parseDaterange, toDaterange, effectiveSeason, type DateRange, type Term } from "@/lib/parks";
 import { canExtend, refusalText, type ExtendRefusal } from "@/lib/extend-stay";
+import { offeredAgreementLengths, agreementMonthsFor, agreementSeasonEnd } from "@/app/park/agreement-helpers";
 import { isExtendToken } from "@/lib/token-format";
 import { servedRentHistory } from "@/lib/rent-changes";
 import { rentForPeriod } from "@/app/park/rerate-helpers";
@@ -37,7 +38,37 @@ export interface ExtendView {
   message: string | null;
   /** True when this park writes a NEW agreement instead of widening this one. */
   isRenewal: boolean;
+  /** The park's ceiling — the renewal/extension switch, never the length. */
   capMonths: number | null;
+  /**
+   * THE LENGTHS THE HOUSEHOLD MAY PICK, ascending: the ones the park offers
+   * (`offeredAgreementLengths`) that the tap would honour — each one asked
+   * of `canExtend`, the tap's own verdict, so the page never shows a button
+   * the tap refuses. Empty on an extension, and on a refusal.
+   */
+  offeredMonths: number[];
+  /**
+   * EACH OFFERED LENGTH WITH THE END IT WOULD REALLY HAVE — the same
+   * verdicts `offeredMonths` was filtered by, kept so a button can say
+   * "3 months, cut short by the season close" on a slip lot instead of
+   * promising three months the season will not give. Same order as
+   * `offeredMonths`; empty when it is.
+   */
+  lengths: { months: number; end: string; cutShortBySeason: boolean }[];
+  /**
+   * TRUE when the lot's season, not the chosen length, set `newEnd` — the
+   * same judgement the owner's plan carries, so the page after the tap can
+   * say "cut short by the season close" rather than call six weeks
+   * "3 months". False on an extension.
+   */
+  cutShortBySeason: boolean;
+  /**
+   * THE LENGTH THIS VIEW IS RESOLVED AT — `newStart`/`newEnd` are its dates.
+   * The requested one when the tap named one; otherwise the park's house
+   * style, or the first offered length when the house style's dates are
+   * taken. Null on an extension.
+   */
+  renewMonths: number | null;
   /**
    * WHETHER THE PARK IS HOLDING A DEPOSIT OF THEIRS — the fact that gates
    * "your deposit carries over" on the page and in the text. Read from the
@@ -69,7 +100,11 @@ export interface ExtendSource {
  * possible. Read-only — safe to run on a GET, which matters because SMS
  * link-preview prefetchers issue GETs.
  */
-export async function loadExtendByToken(token: string): Promise<ExtendView | null> {
+export async function loadExtendByToken(
+  token: string,
+  /** The length the tap named, on a POST; a GET names none and reads the house style. */
+  renewMonths: number | null = null,
+): Promise<ExtendView | null> {
   // Was `token.length < 16`, which let any 16-character string reach `.eq()`.
   // NOT `isBearerToken`: this token is minted as 'x' + 32 hex, so a hex-only
   // rule would refuse every extend link already sitting in somebody's texts.
@@ -95,7 +130,7 @@ export async function loadExtendByToken(token: string): Promise<ExtendView | nul
     status: stay.status as string,
     origin: (stay.origin as string | null) ?? null,
     quoted_amount: stay.quoted_amount as number | string | null,
-  });
+  }, renewMonths);
 }
 
 /**
@@ -123,11 +158,25 @@ export async function loadExtendByToken(token: string): Promise<ExtendView | nul
  * its own. So the reads are named in the third person. "Couldn't read your
  * rent history" on the owner's morning list was addressed to the tenant.
  */
-export async function extendViewFor(res: ExtendSource): Promise<ExtendView | null> {
+export async function extendViewFor(
+  res: ExtendSource,
+  /**
+   * THE LENGTH THE HOUSEHOLD PICKED, when they have — the POST re-resolves
+   * the view at the length the tap named, and refuses one the park does not
+   * offer, because a texted link can be replayed and the page's view is not
+   * what the insert reads. Null resolves at the park's house style, which is
+   * what the reminder text and the page before the tap read.
+   */
+  renewMonths: number | null = null,
+): Promise<ExtendView | null> {
   const admin = createServiceClient();
 
   const [lotRes, renterRes] = await Promise.all([
-    admin.from("park_lots").select("lot_number, park_id").eq("id", res.park_lot_id).maybeSingle(),
+    // THE LOT'S SEASON TOO — a slip closes before its park does, and the
+    // successor is cut to it exactly as the owner's door cuts it (loadTerms).
+    admin.from("park_lots")
+      .select("lot_number, park_id, season_open_month, season_open_day, season_close_month, season_close_day")
+      .eq("id", res.park_lot_id).maybeSingle(),
     admin.from("park_renters").select("display_name").eq("id", res.renter_id).maybeSingle(),
   ]);
   const lot = mustRead("the household's lot", lotRes);
@@ -138,7 +187,10 @@ export async function extendViewFor(res: ExtendSource): Promise<ExtendView | nul
   if (!lot) return null;
 
   const [parkRes, rateRes, othersRes, depositRes] = await Promise.all([
-    admin.from("parks").select("name, max_agreement_months")
+    // THE HOUSE STYLE TOO. Only the cap was read, and the cap was the length.
+    // And the park's season, which the lot inherits when it has none of its own.
+    admin.from("parks")
+      .select("name, max_agreement_months, default_agreement_months, season_open_month, season_open_day, season_close_month, season_close_day")
       .eq("id", lot.park_id as string).maybeSingle(),
     admin.from("lot_rates").select("term, amount").eq("park_lot_id", res.park_lot_id),
     admin
@@ -185,6 +237,26 @@ export async function extendViewFor(res: ExtendSource): Promise<ExtendView | nul
     .filter((r): r is DateRange => r != null);
 
   const capMonths = (park?.max_agreement_months as number | null) ?? null;
+  const defaultMonths = (park?.default_agreement_months as number | null) ?? null;
+
+  // THE SEASON THE SUCCESSOR IS CUT TO — the lot's own when it has one, else
+  // the park's (effectiveSeason), and the morning it sets from the ONE home
+  // the owner's door reads (agreementSeasonEnd). Null for a year-round lot.
+  const season = effectiveSeason(
+    {
+      openMonth: (lot.season_open_month as number | null) ?? null,
+      openDay: (lot.season_open_day as number | null) ?? null,
+      closeMonth: (lot.season_close_month as number | null) ?? null,
+      closeDay: (lot.season_close_day as number | null) ?? null,
+    },
+    {
+      openMonth: (park?.season_open_month as number | null) ?? null,
+      openDay: (park?.season_open_day as number | null) ?? null,
+      closeMonth: (park?.season_close_month as number | null) ?? null,
+      closeDay: (park?.season_close_day as number | null) ?? null,
+    },
+  );
+  const seasonEnd = range ? agreementSeasonEnd(range.end, season) : null;
 
   // THE RENT IN FORCE ON THE SUCCESSOR'S FIRST MORNING — which is the day this
   // agreement ends — from the same served history the bills read. This is the
@@ -203,7 +275,13 @@ export async function extendViewFor(res: ExtendSource): Promise<ExtendView | nul
     ? rentForPeriod(hist.byRes.get(res.id) ?? [], range.end, quoted)
     : quoted;
 
-  const verdict = canExtend({
+  // THE ASK, BUILT ONCE. Every verdict below — each length the page may
+  // offer, and the one the view is resolved at — is canExtend on this same
+  // input with only the length changed, so the page can never show a button
+  // the tap refuses. The list used to be filtered by a re-typed copy of
+  // canExtend's clash test; the moment either copy changed, or canExtend
+  // gained a refusal that depends on the length, the two disagreed again.
+  const ask = {
     range,
     term,
     status: res.status,
@@ -211,9 +289,32 @@ export async function extendViewFor(res: ExtendSource): Promise<ExtendView | nul
     otherHeld,
     rates: (rateRows ?? []).map((r) => ({ term: r.term as Term, amount: Number(r.amount) })),
     capMonths,
+    defaultMonths,
+    seasonEnd,
     currentAmount,
     origin: res.origin,
-  });
+  };
+
+  // THE LENGTHS ON OFFER, at a capped park: the ones the park writes that the
+  // tap would honour. The view is resolved at the requested length; a request
+  // the park does not offer is refused by canExtend in its own words, and a
+  // GET (no request) reads the house style, or the first honoured length when
+  // the house style's dates are taken.
+  const houseStyle = agreementMonthsFor(defaultMonths, capMonths);
+  const lengths = capMonths == null
+    ? []
+    : offeredAgreementLengths(defaultMonths, capMonths).flatMap((m) => {
+        const v = canExtend({ ...ask, renewMonths: m });
+        return v.ok ? [{ months: m, end: v.range!.end, cutShortBySeason: Boolean(v.cutShortBySeason) }] : [];
+      });
+  const offeredMonths = lengths.map((l) => l.months);
+  const resolvedMonths = capMonths == null
+    ? null
+    : renewMonths != null
+      ? renewMonths
+      : (houseStyle != null && offeredMonths.includes(houseStyle) ? houseStyle : offeredMonths[0] ?? houseStyle);
+
+  const verdict = canExtend({ ...ask, renewMonths: resolvedMonths });
 
   return {
     reservationId: res.id,
@@ -232,6 +333,10 @@ export async function extendViewFor(res: ExtendSource): Promise<ExtendView | nul
     // one is a different act from staying on.
     isRenewal: Boolean(verdict.isRenewal),
     capMonths,
+    offeredMonths: verdict.ok && verdict.isRenewal ? offeredMonths : [],
+    lengths: verdict.ok && verdict.isRenewal ? lengths : [],
+    renewMonths: verdict.ok && verdict.isRenewal ? resolvedMonths : null,
+    cutShortBySeason: Boolean(verdict.ok && verdict.cutShortBySeason),
     depositHeld: (deposits ?? []).length > 0,
   };
 }
@@ -248,19 +353,50 @@ export async function extendViewFor(res: ExtendSource): Promise<ExtendView | nul
  */
 export async function extendByToken(
   token: string,
-): Promise<{ ok: boolean; newEnd?: string; depositHeld?: boolean; error?: string }> {
+  /**
+   * THE LENGTH THE TAP NAMED, in months — the household's choice at a capped
+   * park, posted by the button they pressed. Re-validated here against the
+   * lengths the park offers, on the row as it stands now: a texted link is
+   * replayable and the page's view is not what the insert reads. Ignored on
+   * an extension (a park with no cap widens by one period of the term).
+   */
+  renewMonths: number | null = null,
+): Promise<{
+  ok: boolean;
+  newStart?: string;
+  newEnd?: string;
+  /** Set on a renewal: the length written, and the monthly rent it was written at. */
+  renewMonths?: number | null;
+  price?: number | null;
+  term?: Term;
+  /** On a renewal: the season, not the length, set `newEnd` — say so. */
+  cutShortBySeason?: boolean;
+  depositHeld?: boolean;
+  error?: string;
+}> {
   // The loader THROWS on a failed read (a page can render an honest error; a
   // button awaiting { ok, error } cannot), so this is where that is turned
   // back into a sentence. `not_found` here would be the loader's lie repeated.
   let view: ExtendView | null;
   try {
-    view = await loadExtendByToken(token);
+    view = await loadExtendByToken(token, renewMonths);
   } catch (e) {
     return { ok: false, error: readFailedMessage("your stay", e, { money: true }) };
   }
   if (!view) return { ok: false, error: refusalText("not_found") };
   if (view.refusal || !view.newEnd) {
     return { ok: false, error: view.message ?? refusalText("not_extendable") };
+  }
+  // A RENEWAL IS WRITTEN AT THE LENGTH THEY PICKED, AND ONLY THAT. The loader
+  // resolved the view at the posted length and refused one the park does not
+  // offer; a tap with no length at all at a capped park is not a choice, and
+  // writing the house style for them would be this screen choosing — and it
+  // is told a length is MISSING, not that "that length" is not written.
+  if (view.isRenewal && renewMonths == null) {
+    return { ok: false, error: refusalText("length_missing") };
+  }
+  if (view.isRenewal && view.renewMonths !== renewMonths) {
+    return { ok: false, error: refusalText("length_not_offered") };
   }
 
   const admin = createServiceClient();
@@ -349,8 +485,18 @@ export async function extendByToken(
       .eq("id", view.reservationId);
 
     // `depositHeld` travels with the answer so the page after the tap can say
-    // "nothing more to pay on your deposit" only to somebody who paid one.
-    return { ok: true, newEnd: view.newEnd, depositHeld: view.depositHeld };
+    // "nothing more to pay on your deposit" only to somebody who paid one —
+    // and the length and dates written travel so it can say what was chosen.
+    return {
+      ok: true,
+      newStart: view.newStart,
+      newEnd: view.newEnd,
+      renewMonths: view.renewMonths,
+      price: view.price,
+      term: view.term,
+      cutShortBySeason: view.cutShortBySeason,
+      depositHeld: view.depositHeld,
+    };
   }
 
   const { data: updated, error } = await admin
@@ -377,5 +523,5 @@ export async function extendByToken(
     return { ok: false, error: "That stay just changed. Refresh, or give the park a call." };
   }
 
-  return { ok: true, newEnd: view.newEnd, depositHeld: view.depositHeld };
+  return { ok: true, newEnd: view.newEnd, renewMonths: null, depositHeld: view.depositHeld };
 }

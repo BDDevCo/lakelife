@@ -7,7 +7,7 @@ import { chainReservationIds } from "./tenancy-chain";
  * A RENEWAL HID EVERY BILL SHE STILL OWED.
  *
  * Confirmed 3/3 and worse than claimed: the owner may write the next agreement
- * up to 45 days early (renewalsDue), and until that agreement's first bill is
+ * in its last half, at most 45 days early (renewalsDue), and until that agreement's first bill is
  * raised the successor row has ZERO charges — so bill=null, and RenterHome
  * rendered "Nothing to pay right now — your next bill hasn't been sent yet"
  * while her current month sat open under the previous row. No Pay button, no

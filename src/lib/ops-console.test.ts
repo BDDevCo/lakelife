@@ -274,7 +274,10 @@ describe("no hint quotes a dial nobody set", () => {
     // "Your rule is three months" whatever was in the box, including empty.
     const d = src("../components/ParkDials.tsx");
     expect(d).not.toMatch(/Your rule is three months/);
-    expect(d).toMatch(/How long one agreement may run/);
+    // The cap is a CEILING now (12 Sep 2026): households pick 1, 3, 6 or 12
+    // months up to it. The hint says that, and still names no value.
+    expect(d).toMatch(/The longest one agreement may run/);
+    expect(d).not.toMatch(/Your rule is \w+ months/);
   });
 
   it("the park cost label claims only what the query knows", () => {

@@ -143,6 +143,7 @@ describe("canExtend — the tap we can actually honour", () => {
     // until it has a sentence — a literal list would let it slip past.
     const all: Record<ExtendRefusal, true> = {
       not_found: true, not_extendable: true, lot_taken: true, no_rate: true, already_ended: true, inherited: true,
+      length_not_offered: true, length_missing: true, season_closed: true,
     };
     for (const k of Object.keys(all) as ExtendRefusal[]) {
       const t = refusalText(k);
@@ -167,8 +168,10 @@ describe("canExtend — the tap we can actually honour", () => {
 
 // ---------------------------------------------------------------------------
 // A PARK THAT CAPS AGREEMENT LENGTH renews instead of extending. The Haven
-// writes three-month agreements; staying on is a NEW one, starting the day the
-// last ends, which is what carries the deposit forward.
+// caps agreements at three months; staying on is a NEW one, starting the day
+// the last ends — which is what carries the deposit forward — for THE LENGTH
+// THE HOUSEHOLD CHOSE (the owner's decision: one, three or six months), never
+// the cap.
 // ---------------------------------------------------------------------------
 describe("renewal at a capped park", () => {
   const base = {
@@ -178,6 +181,8 @@ describe("renewal at a capped park", () => {
     todayISO: "2027-03-01",
     otherHeld: [],
     rates: [{ term: "monthly" as const, amount: 400 }],
+    // The house style, as the caller resolves it; the tests below pick.
+    renewMonths: 3,
   };
 
   it("produces the SUCCESSOR's range, not a wider one", () => {
@@ -186,6 +191,84 @@ describe("renewal at a capped park", () => {
     expect(r.isRenewal).toBe(true);
     // Starts where the last one ended — that is what "consecutive" means.
     expect(r.range).toEqual({ start: "2027-03-15", end: "2027-06-15" });
+  });
+
+  it("runs for the length CHOSEN — one month at a cap of three is one month", () => {
+    // The cap used to be the length, so every tap at The Haven wrote three.
+    const one = canExtend({ ...base, capMonths: 3, renewMonths: 1 });
+    expect(one.ok).toBe(true);
+    expect(one.range).toEqual({ start: "2027-03-15", end: "2027-04-15" });
+    const six = canExtend({ ...base, capMonths: 6, renewMonths: 6 });
+    expect(six.range).toEqual({ start: "2027-03-15", end: "2027-09-15" });
+    // extendedRange reads the length, and nothing else, on a renewal.
+    expect(extendedRange(base.range, "monthly", 1)).toEqual({ start: "2027-03-15", end: "2027-04-15" });
+    expect(extendedRange({ start: "2027-01-31", end: "2027-01-31" }, "monthly", 1).end).toBe("2027-02-28");
+  });
+
+  it("refuses a renewal with NO length rather than writing the cap — and says a length is MISSING, not 'that length'", () => {
+    const r = canExtend({ ...base, capMonths: 3, renewMonths: null });
+    expect(r.ok).toBe(false);
+    // 'length_not_offered' here read "doesn't write agreements of that
+    // length" about a tap that named no length at all.
+    expect(r.refusal).toBe("length_missing");
+    expect(refusalText("length_missing")).toBe(
+      "Pick how long to renew for — open the link again and tap one of the lengths it offers.",
+    );
+    expect(refusalText("length_not_offered")).toBe(
+      "The park doesn't write agreements of that length. Open the link again and pick one of the lengths it offers.",
+    );
+    // And a length at a park with no cap is simply not read — it extends.
+    expect(canExtend({ ...base, capMonths: null, renewMonths: 3 }).range!.end).toBe("2027-04-14");
+  });
+
+  it("refuses a length the park does not write — the ONE judgement (chooseAgreementLength), read here too", () => {
+    // Six at a cap of three; twelve at a cap of six. The caller used to make
+    // this call itself and hand canExtend a null, which read as 'no length'.
+    expect(canExtend({ ...base, capMonths: 3, renewMonths: 6 }).refusal).toBe("length_not_offered");
+    expect(canExtend({ ...base, capMonths: 6, defaultMonths: 1, renewMonths: 12 }).refusal).toBe("length_not_offered");
+    expect(canExtend({ ...base, capMonths: 6, defaultMonths: 1, renewMonths: 6 }).ok).toBe(true);
+    // A house style off the standard list is still offered.
+    expect(canExtend({ ...base, capMonths: 6, defaultMonths: 2, renewMonths: 2 }).ok).toBe(true);
+  });
+
+  // THE SEASON CLAMP, on the resident's door as on the owner's. On a slip
+  // lot closing 15 October the owner's Renew wrote [Sep 1, Oct 16) and the
+  // household's own tap for 3 months wrote [Sep 1, Dec 1) — two doors, two
+  // rows for one act, and nothing in the database refuses the second.
+  describe("the season", () => {
+    const september = { ...base, range: { start: "2027-06-01", end: "2027-09-01" }, todayISO: "2027-08-20", capMonths: 3 };
+
+    it("cuts the successor to the season close, and says so on the verdict", () => {
+      const r = canExtend({ ...september, renewMonths: 3, seasonEnd: "2027-10-16" });
+      expect(r.ok).toBe(true);
+      expect(r.range).toEqual({ start: "2027-09-01", end: "2027-10-16" });
+      expect(r.cutShortBySeason).toBe(true);
+      // One month from 1 September is inside the season — not cut.
+      const one = canExtend({ ...september, renewMonths: 1, seasonEnd: "2027-10-16" });
+      expect(one.range).toEqual({ start: "2027-09-01", end: "2027-10-01" });
+      expect(one.cutShortBySeason).toBe(false);
+      // The same arithmetic the owner's door uses — agreementEnd, not a copy.
+      expect(extendedRange(september.range, "monthly", 3, "2027-10-16")).toEqual({ start: "2027-09-01", end: "2027-10-16" });
+      expect(extendedRange(september.range, "monthly", 3, null)).toEqual({ start: "2027-09-01", end: "2027-12-01" });
+    });
+
+    it("refuses a renewal that would start after the close — nothing to renew into", () => {
+      const r = canExtend({
+        ...september, range: { start: "2027-08-01", end: "2027-11-01" }, todayISO: "2027-10-20",
+        renewMonths: 1, seasonEnd: "2027-10-16",
+      });
+      expect(r.ok).toBe(false);
+      expect(r.refusal).toBe("season_closed");
+      expect(refusalText("season_closed")).toBe(
+        "Your spot is closed for the season after your dates, so there's nothing to renew into yet — the park can book you in again when it opens.",
+      );
+    });
+
+    it("a year-round lot is not clamped, and an extension at an uncapped park ignores the season", () => {
+      expect(canExtend({ ...september, renewMonths: 3, seasonEnd: null }).range!.end).toBe("2027-12-01");
+      expect(canExtend({ ...september, renewMonths: 3 }).cutShortBySeason).toBe(false);
+      expect(canExtend({ ...september, capMonths: null, seasonEnd: "2027-10-16" }).range!.end).toBe("2027-10-01");
+    });
   });
 
   it("still WIDENS when the park has no cap", () => {

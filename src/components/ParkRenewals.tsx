@@ -4,17 +4,29 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { longDate } from "@/lib/lake-time";
+import { chipStyle } from "@/components/wizard-controls";
+import { lengthInWords, agreementSpanWords } from "@/app/park/agreement-helpers";
 import { renewAgreement, type RenewalPreview } from "@/app/park/renew-actions";
 
 /**
  * WRITING THE NEXT AGREEMENTS, a cycle at a time.
  *
- * At a three-month cap this is the park's main recurring job — nineteen
- * households, four times a year. Doing it one screen-hop at a time is how it
- * stops getting done, and a lapsed tenancy stops being billed silently.
+ * At a park that caps agreement length this is the park's main recurring job
+ * — nineteen households, each coming round as often as the length they chose
+ * runs out. Doing it one screen-hop at a time is how it stops getting done,
+ * and a lapsed tenancy stops being billed silently.
  *
  * So the whole cycle is one list with a button per row, and the common case —
  * renew at the same rent — is a single tap with nothing to type.
+ *
+ * THE LENGTH IS THE HOUSEHOLD'S CHOICE. The owner's decision: one, three or
+ * six months at every renewal. The row offers the lengths the park writes
+ * (the server planned each one, season clamp included), starts on the park's
+ * house style, and the sentence under the chips shows the real dates of the
+ * one picked — because that is what the button writes, in the words the
+ * toast will say back (agreementSpanWords, one home for both). This card
+ * used to write the cap, so "Renew at the same rent" turned a one-month
+ * lease into a three-month one without a word on screen.
  *
  * THE NUMBER ON THE ROW IS THE NUMBER THE BUTTON WRITES. `quotedAmount` is the
  * rent in force on the successor's first morning, which differs from what the
@@ -45,12 +57,25 @@ export function ParkRenewals({
   const [busy, start] = useTransition();
   const [editing, setEditing] = useState<string | null>(null);
   const [rent, setRent] = useState("");
+  // The length picked per row. Absent means the park's house style — the
+  // length the choice starts on — so nothing is chosen for him by this screen
+  // that the park's own dial did not.
+  const [picked, setPicked] = useState<Record<string, number>>({});
 
   if (rows.length === 0) return null;
 
+  /** The length this row will be written for, and its plan. */
+  function choice(r: RenewalPreview) {
+    const months = picked[r.reservationId] ?? r.defaultMonths ?? r.lengths[0]?.months ?? null;
+    const at = r.lengths.find((l) => l.months === months) ?? r.lengths[0] ?? null;
+    return at;
+  }
+
   function renew(r: RenewalPreview, newRent?: string) {
+    const at = choice(r);
+    if (!at) { toast.err("Pick how long the next one runs."); return; }
     start(async () => {
-      const res = await renewAgreement(parkId, r.reservationId, { newRent });
+      const res = await renewAgreement(parkId, r.reservationId, { months: at.months, newRent });
       toast(res.ok ? (res.signal ?? "Written.") : (res.error ?? "Couldn't write that."));
       if (res.ok) { setEditing(null); setRent(""); router.refresh(); }
     });
@@ -65,7 +90,9 @@ export function ParkRenewals({
       </p>
 
       <div className="ll-card">
-        {rows.map((r) => (
+        {rows.map((r) => {
+          const at = choice(r);
+          return (
           <div key={r.reservationId}
             style={{ padding: "11px 14px", borderTop: "1px solid rgba(0,0,0,.06)" }}>
             <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
@@ -82,21 +109,48 @@ export function ParkRenewals({
               </div>
             )}
 
-            {r.plan.ok ? (
+            {r.plan.ok && at?.plan.ok && at.plan.start && at.plan.end ? (
               <>
+                {/* THE HOUSEHOLD'S CHOICE. One chip per length the park
+                    writes, starting on its house style. The dates under
+                    them are the picked length's own plan — season clamp
+                    included — because that is exactly what the button
+                    writes. */}
+                {r.lengths.length > 1 && (
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+                    <span className="mut" style={{ fontSize: 13 }}>Renew for</span>
+                    {r.lengths.map((l) => {
+                      const on = l.months === at.months;
+                      return (
+                        <button key={l.months} type="button" aria-pressed={on} disabled={busy}
+                          style={{ ...chipStyle(on), padding: "6px 12px", fontSize: 13 }}
+                          onClick={() => setPicked((p) => ({ ...p, [r.reservationId]: l.months }))}>
+                          {lengthInWords(l.months)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* THE PLAN'S OWN WORDS, the same helper the toast reads —
+                    "3 months, February 1, 2027 to May 1, 2027", or "3 months,
+                    cut short by the season close — September 1, 2027 to
+                    October 16, 2027" on a slip lot (the close day is the last
+                    night; the agreement ends the morning after). This line used to quote
+                    the picked length beside the clamped dates. */}
                 <div className="mut" style={{ fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
-                  Next one runs {longDate(r.plan.start)} to {longDate(r.plan.end)}
-                  {r.plan.depositDue
-                    ? " — new chain, so a deposit is due."
-                    : " — consecutive, so no new deposit."}
+                  Next one: {agreementSpanWords(at.plan)}.
+                  {at.plan.depositDue
+                    ? " New chain, so a deposit is due."
+                    : " Consecutive, so no new deposit."}
                 </div>
 
                 {/* Said out loud past a year of consecutive short agreements.
                     Not advice — the length of a chain is a fact he should be
                     looking at, and a court would look at it too. */}
-                {r.chainNote && (
+                {at.chainNote && (
                   <div style={{ fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
-                    {r.chainNote}
+                    {at.chainNote}
                   </div>
                 )}
 
@@ -136,7 +190,8 @@ export function ParkRenewals({
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );

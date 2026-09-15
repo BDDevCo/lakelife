@@ -134,6 +134,17 @@ const MONTH_NAMES = [
  * Anything that isn't a well-formed period comes back unchanged rather than
  * becoming "Invalid Date" on somebody's statement.
  */
+/**
+ * "$1,085.06" — ONE shape for a money figure in a sentence about money on
+ * account: the held-money panel, the receipts, describeAllocations, the
+ * run's toast and its preview headline. A toast that says "$1085.06" beside
+ * a panel that says "$1,085.06" is the same number in two shapes on one
+ * screen. Lives here (not in lib/allocations, which imports this file) so
+ * nothing has to import in a circle to print a figure.
+ */
+export const money = (n: number) =>
+  `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
 export function prettyMonth(period: string): string {
   const m = /^(\d{4})-(\d{2})$/.exec(period);
   if (!m) return period;
@@ -160,6 +171,104 @@ export function shiftMonth(period: string, by: number): string {
 
 export function balanceOf(c: Charge): number {
   return round2(c.amount - c.paidTotal);
+}
+
+// ------------------------------------------------- one cheque, two rows ---
+
+/**
+ * THE ON-ACCOUNT HALF OF A SPLIT CARRIES THE BILL ROW'S KEY PLUS THIS.
+ * recordPayment writes $600 on a $542.53 bill as two rows in one insert —
+ * the bill's share under the form's key, the rest under the same key with
+ * this suffix — and three doors later have to find the other half: the
+ * renter's confirmation link, the claim she files from it, and the office
+ * taking the cheque back. Spelled ONCE, here, so no door can mis-spell the
+ * half it is looking for and read "no sibling" about $57.47.
+ */
+export const ON_ACCOUNT_KEY_SUFFIX = ":onaccount";
+
+/** The key the on-account half of a split is written under. */
+export function onAccountKey(key: string): string {
+  return `${key}${ON_ACCOUNT_KEY_SUFFIX}`;
+}
+
+/**
+ * THE OTHER HALF'S KEY, from a row's own. A bill row (charge_id set) looks
+ * for its key + the suffix; an on-account row whose key ENDS in the suffix
+ * looks for the key without it. Any other on-account row — a cheque keyed
+ * through recordOnAccount, a deposit — has no sibling and gets null, so its
+ * own form key is never read as somebody else's ":onaccount". A row with no
+ * key at all (written before 0081) has no way to find a sibling either.
+ */
+export function splitSiblingKey(key: string | null | undefined, chargeId: unknown): string | null {
+  if (!key) return null;
+  if (chargeId) return onAccountKey(key);
+  return key.endsWith(ON_ACCOUNT_KEY_SUFFIX) ? key.slice(0, -ON_ACCOUNT_KEY_SUFFIX.length) : null;
+}
+
+/** Where a payment on account had been put, for a reversal's sentence. */
+export interface ReopenedLine {
+  /** YYYY-MM of the bill it had been put against. */
+  periodMonth: string;
+  amount: number;
+}
+
+/**
+ * "January 2027, February 2027 and March 2027" — months in order, joined the
+ * way a person says a list. Empty for none.
+ */
+export function monthList(periods: readonly string[]): string {
+  const months = [...new Set(periods)].sort().map(prettyMonth);
+  if (months.length <= 1) return months.join("");
+  return `${months.slice(0, -1).join(", ")} and ${months[months.length - 1]}`;
+}
+
+/**
+ * THE SENTENCE A REVERSAL PRINTS — one copy, pure, so the office reads the
+ * same shape whichever screen it took the money back from.
+ *
+ *   `amount` is the WHOLE taken back: for a split cheque, both halves.
+ *   `billMonth` is the month of the bill the direct row was against (null
+ *     for money with no bill).
+ *   `split` names the other half when a split was taken back with this row:
+ *     which half the office tapped, and how much the on-account half was —
+ *     it is one cheque, and the sentence says both halves went.
+ *   `hadGone` is every LIVE allocation reopened — the row's own for money on
+ *     account, the sibling's for a split — and each month is named, or the
+ *     office reads "off the household's account" while three months just
+ *     went back to owing.
+ */
+export function reversalSentence(input: {
+  amount: number;
+  receiptNo: number | null;
+  kind: "rent" | "deposit" | "amenity" | string;
+  billMonth: string | null;
+  split: { tapped: "bill" | "on_account"; onAccount: number; against: number } | null;
+  hadGone: readonly ReopenedLine[];
+}): string {
+  const head = `${money(input.amount)} taken back${input.receiptNo != null ? ` (receipt ${input.receiptNo})` : ""}`;
+  const gone = input.hadGone.filter((l) => Math.round(l.amount * 100) > 0);
+  const goneTotal = gone.reduce((s, l) => s + Math.round(l.amount * 100), 0) / 100;
+  const goneMonths = monthList(gone.map((l) => l.periodMonth));
+  const plural = new Set(gone.map((l) => l.periodMonth)).size > 1;
+  const reopened = plural ? "those bills are outstanding again" : "that bill is outstanding again";
+  const bill = input.billMonth ? `The ${prettyMonth(input.billMonth)} bill` : "The bill";
+
+  if (input.split) {
+    // ONE CHEQUE, BOTH HALVES. Whichever half was tapped, the other went
+    // with it, and each thing that reopened is named.
+    const halves = `both halves of it, the ${money(input.split.against)} against ${input.billMonth ? prettyMonth(input.billMonth) : "the bill"} and the ${money(input.split.onAccount)} on account`;
+    return (
+      `${head} — ${halves}. ${bill} is outstanding again` +
+      (gone.length > 0
+        ? `, and ${money(goneTotal)} of the on-account half had been put against ${goneMonths} — ${plural ? "those bills are" : "that bill is"} outstanding again too`
+        : "") +
+      `. The record shows why.`
+    );
+  }
+  if (input.billMonth) return `${head}. ${bill} is outstanding again, and the record shows why.`;
+  if (input.kind === "deposit") return `${head}. That deposit is no longer held, and the record shows why.`;
+  if (gone.length > 0) return `${head}. It had been put against ${goneMonths} — ${reopened}, and the record shows why.`;
+  return `${head}. It's off the household's account, and the record shows why.`;
 }
 
 /** Days from `a` to `b`, negative when b is earlier. */
@@ -525,7 +634,20 @@ export function classifyForRun(
 }
 
 export interface RunPlan {
-  toBill: { reservationId: string; lotNumber: string; amount: number }[];
+  toBill: {
+    reservationId: string;
+    lotNumber: string;
+    amount: number;
+    /**
+     * Dollars of this household's money on account the run will put against
+     * the bill the moment it raises it (0167). Filled in by the preview from
+     * `planAllocations`, the same function the run calls; 0 when the plan was
+     * built without reading the held money.
+     */
+    fromOnAccount?: number;
+  }[];
+  /** Sum of `toBill[].fromOnAccount` — what comes off the total before anybody is chased. */
+  fromOnAccount: number;
   skippedAlreadyBilled: number;
   /**
    * Lot names, deduplicated, in read order. A prior term whose SUCCESSOR is
@@ -584,9 +706,31 @@ export function planRun(
 
   return {
     toBill,
+    fromOnAccount: 0,
     skippedAlreadyBilled,
     expired, notYet, noRent, notMonthly,
     total: round2(toBill.reduce((s, r) => s + r.amount, 0)),
+  };
+}
+
+/**
+ * THE SAME PLAN, WITH THE MONEY ON ACCOUNT WRITTEN ON IT.
+ *
+ * `amounts` is dollars per reservation id, from `planAllocations` — the one
+ * function the run also calls, so what the preview says comes off is what the
+ * run applies. Nothing else about the plan moves: the bills are still raised
+ * in full, and `total` is still what is billed. What changes is that the
+ * sentence can say how much of it is already in the office's hands.
+ */
+export function withOnAccount(plan: RunPlan, amounts: ReadonlyMap<string, number>): RunPlan {
+  const toBill = plan.toBill.map((b) => ({
+    ...b,
+    fromOnAccount: round2(amounts.get(b.reservationId) ?? 0),
+  }));
+  return {
+    ...plan,
+    toBill,
+    fromOnAccount: round2(toBill.reduce((s, b) => s + (b.fromOnAccount ?? 0), 0)),
   };
 }
 
@@ -602,7 +746,11 @@ export function runSummary(plan: RunPlan, month: string): string {
     });
   }
   const parts = [
-    `Bill ${plan.toBill.length} ${plan.toBill.length === 1 ? "household" : "households"} for ${prettyMonth(month)} — $${plan.total.toFixed(2)}`,
+    `Bill ${plan.toBill.length} ${plan.toBill.length === 1 ? "household" : "households"} for ${prettyMonth(month)} — ${money(plan.total)}` +
+      // WHAT COMES OFF BEFORE ANYBODY IS CHASED. The bills are raised in full;
+      // the run then puts each household's money on account against its own
+      // bill (0167), so the owner reads the figure he is actually owed.
+      (plan.fromOnAccount > 0 ? `, ${money(plan.fromOnAccount)} of it already on account` : ""),
   ];
   if (plan.skippedAlreadyBilled > 0) parts.push(`${plan.skippedAlreadyBilled} already billed`);
   // Named in the partial line too. Ten renewed and eight not is the likelier

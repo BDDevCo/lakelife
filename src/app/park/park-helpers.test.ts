@@ -1203,16 +1203,25 @@ describe("what a notice period costs, in dates", () => {
   it("turns an abstract number into a date he can hold to a calendar", () => {
     const s = noticeShape(45, 3, "2026-08-11");
     expect(s.earliest).toBe("2026-09-25");
-    expect(s.line).toContain("earliest a new rent could start is 2026-09-25");
+    // The date he reads is words; the ISO value is for arithmetic only.
+    expect(s.line).toContain("earliest a new rent could start is September 25, 2026");
+    expect(s.line).not.toMatch(/2026-09/);
   });
 
-  it("says a 45-day notice costs NOTHING against 3-month agreements", () => {
+  it("says a 45-day notice costs NOTHING against a full-length term, and names who it does bite", () => {
     // Inside a fixed term the rent is the rent — increases land at renewal, so
     // notice served at the halfway point of a 90-day cycle constrains nothing.
+    // But the cap is the LONGEST agreement, not every agreement: households
+    // pick their own length, and a one-month household is month to month for
+    // this purpose. "With 3-month agreements" described a park where
+    // everybody had chosen the maximum.
     const s = noticeShape(45, 3, "2026-08-11");
     expect(s.fitsInTerm).toBe(true);
     expect(s.line).toMatch(/costs you nothing/);
     expect(s.line).toMatch(/only bites on month-to-month/);
+    expect(s.line).toMatch(/agreements of up to 3 months/);
+    expect(s.line).toMatch(/anyone who picks a one-month agreement/);
+    expect(s.line).not.toMatch(/With 3-month agreements/);
   });
 
   it("warns when the notice is LONGER than a whole term", () => {

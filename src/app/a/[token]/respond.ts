@@ -18,10 +18,26 @@ import { photoStripHtml, type StripPhoto } from "@/lib/photo-strip";
 export { escapeHtml } from "@/lib/html-safe";
 import { escapeHtml } from "@/lib/html-safe";
 
+/** One button on a page that offers a choice: it posts `name=value`. */
+export interface PageChoice {
+  name: string;
+  value: string;
+  label: string;
+}
+
+const BUTTON_STYLE =
+  "width:100%;min-height:48px;border:0;border-radius:12px;background:#d9a441;color:#0a2430;font-size:16px;font-weight:800;cursor:pointer";
+
 /**
  * @param photos OPTIONAL condition-report thumbnails, already signed by the
  *   caller (see photoStripHtml). Passed as VALUES, never as HTML: this
  *   function does every escape, so no caller can hand it markup to render.
+ * @param choices OPTIONAL: when given, the page renders ONE POST FORM PER
+ *   CHOICE to `formAction` — each a button carrying a hidden `name=value` —
+ *   in place of the single button. The resident's renew page offers one
+ *   button per length the park writes; it used to carry its own copy of
+ *   this card to do that, and the two copies had already drifted. Values
+ *   only, escaped here; an empty list renders no form at all.
  */
 export function htmlPage(
   rawTitle: string,
@@ -30,15 +46,24 @@ export function htmlPage(
   formAction?: string,
   formLabel?: string,
   photos?: StripPhoto[],
+  choices?: PageChoice[],
 ): Response {
   const title = escapeHtml(rawTitle);
   const body = escapeHtml(rawBody);
   const strip = photoStripHtml(photos);
   // Mutations happen ONLY on POST (link-preview prefetchers issue GETs — a
   // prefetch must never book or skip anything). The GET page renders this form.
-  const form = formAction
-    ? `<form method="post" action="${escapeHtml(formAction)}" style="margin-top:18px"><button type="submit" style="width:100%;min-height:48px;border:0;border-radius:12px;background:#d9a441;color:#0a2430;font-size:16px;font-weight:800;cursor:pointer">${escapeHtml(formLabel ?? "Confirm")}</button></form>`
-    : "";
+  const action = formAction ? escapeHtml(formAction) : null;
+  const form = !action
+    ? ""
+    : choices
+      ? choices.map((c, i) =>
+          `<form method="post" action="${action}" style="margin-top:${i === 0 ? 18 : 10}px">` +
+          `<input type="hidden" name="${escapeHtml(c.name)}" value="${escapeHtml(c.value)}">` +
+          `<button type="submit" style="${BUTTON_STYLE}">${escapeHtml(c.label)}</button>` +
+          `</form>`,
+        ).join("")
+      : `<form method="post" action="${action}" style="margin-top:18px"><button type="submit" style="${BUTTON_STYLE}">${escapeHtml(formLabel ?? "Confirm")}</button></form>`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} — LakeLife</title><style>
   body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#f2f7f8;color:#0a2430;display:grid;place-items:center;min-height:100vh}
   .card{background:#fff;border-radius:16px;box-shadow:0 8px 30px rgba(10,36,48,.08);padding:32px 28px;max-width:420px;margin:16px;text-align:center}

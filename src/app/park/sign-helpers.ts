@@ -29,7 +29,11 @@
  *     range is refused by the database, so it is `cancelled` instead.
  *   - The successor is `successorRow(prior, ...)`: same renter, same chain,
  *     next seq, no deposit, origin 'office' — the park's own paper — from
- *     signedOn for the park's term. Paid MONTHLY, whatever the holdover was
+ *     signedOn for THE LENGTH THE HOUSEHOLD CHOSE (the owner's decision:
+ *     one, three or six months, from the lengths the park offers; the form
+ *     starts on the park's house style). A length the park does not offer
+ *     is refused in words that name the ones it does; the toast says the
+ *     length back. Paid MONTHLY, whatever the holdover was
  *     filed as: the rent on this form is a monthly figure and the sentence
  *     he reads quotes a month, so a successor copying a yearly term would
  *     be a row the charge run refuses while the toast says it bills.
@@ -63,9 +67,10 @@ import { successorRow, type PriorLink, type SuccessorRow } from "@/lib/successor
 import type { DateRange } from "@/lib/parks";
 import { toE164 } from "@/lib/phone";
 import {
-  agreementMonthsFor, dayInWords, capitalise,
+  dayInWords, capitalise,
   agreementEndFrom, alreadyOverClause, agreementAlreadyOver, SIGNED_LEASE_LABEL,
 } from "./park-helpers";
+import { chooseAgreementLength, lengthAdjective, lengthInWords } from "./agreement-helpers";
 import { contactProblem } from "./onboard-helpers";
 import { prettyMonth } from "./ledger-helpers";
 
@@ -89,6 +94,13 @@ export interface SigningInput {
   rent: string;
   email: string;
   mobile: string;
+  /**
+   * HOW LONG THE LEASE RUNS, in months — the household's choice from the
+   * lengths the park offers, seeded on the form with the park's house style.
+   * Null only at a park with neither dial, where the successor runs the
+   * rolling horizon. Judged by `chooseAgreementLength`, never defaulted here.
+   */
+  agreementMonths: number | null;
 }
 
 /** The holdover as it stands, plus what the successor copies from it. */
@@ -179,7 +191,12 @@ export function planSigning(
   // Said here, with the other date refusals, and not after the email check:
   // a form whose date is over and whose email is blank used to get 'No email
   // yet.' first and learn the date could not be recorded only on the next tap.
-  const months = agreementMonthsFor(ctx.defaultAgreementMonths, ctx.maxAgreementMonths);
+  // THE LENGTH THEY CHOSE, from the lengths this park offers — never the cap,
+  // never the house style unless that is what was picked. A choice the park
+  // does not offer is refused before the date is judged against it.
+  const pick = chooseAgreementLength(input.agreementMonths, ctx.defaultAgreementMonths, ctx.maxAgreementMonths);
+  if (!pick.ok) return { ok: false, error: pick.error };
+  const months = pick.months;
   const end = agreementEndFrom(signedOn, months);
   if (end <= ctx.todayISO) {
     return {
@@ -229,13 +246,23 @@ export function planSigning(
     ? { id: prior.id, cancel: true as const }
     : { id: prior.id, trimTo: { start: prior.range.start, end: signedOn } };
 
-  const signal = `On the new lease from ${dayInWords(signedOn)} — ${firstMonthBills(signedOn, rent, ctx.feePerMonth, prior.range.start)}.`;
+  const signal = `On the ${newLeaseWords(months)} from ${dayInWords(signedOn)} — ${firstMonthBills(signedOn, rent, ctx.feePerMonth, prior.range.start)}.`;
 
   return { ok: true, holdover, successor, renter: { email, phone_on_file_with_park: phone }, signal };
 }
 
 const money = (x: number) =>
   `$${x.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/**
+ * "new one-month lease", "new 3-month lease", or "new lease" at a park with
+ * neither dial — the words both the form (before the write) and the toast
+ * (after it) open with, so the length he is told he is filing is the length
+ * he is told he filed.
+ */
+export function newLeaseWords(months: number | null): string {
+  return months == null ? "new lease" : `new ${lengthAdjective(months)} lease`;
+}
 
 /**
  * WHAT THE RENT BOX STARTS FROM — a MONTHLY figure or nothing. The lot's rate
@@ -291,6 +318,66 @@ export function firstMonthBills(
     );
   }
   return `${prettyMonth(month)} bills from that day, then ${money(monthly)} a month${parts}`;
+}
+
+/**
+ * THE DAY BOX, FOR THE LENGTH PICKED — the one rule the form's seed and its
+ * length select both apply, so "already over" is judged at the household's
+ * CHOICE and not at the house style once at mount.
+ *
+ * The Haven on 15 February 2027: an imported 1 January holdover. At one month
+ * an agreement from 1 January is over; at three it is not, and planSigning
+ * accepts 1 January at three months. Judged at `seed.termMonths` the box
+ * stayed blank after he picked '3 months', under a sentence saying the one
+ * day the server would take could not be recorded.
+ *
+ *   - the seeded day is over at `months` → a box still holding the seeded
+ *     day empties; a day HE typed is left alone;
+ *   - the seeded day is open at `months` → a blank box fills with it; a day
+ *     he typed is left alone.
+ *
+ * Called with `signedOn = seededDay` for the initial state, and with the
+ * box's current value on every length change. Never returns today: `todayISO`
+ * is only the judge of 'over' (agreementAlreadyOver — the same function
+ * planSigning refuses on).
+ */
+export function signingDayForLength(
+  seededDay: string,
+  signedOn: string,
+  months: number | null,
+  todayISO: string,
+): string {
+  if (!seededDay) return signedOn;
+  if (agreementAlreadyOver(seededDay, months, todayISO)) {
+    return signedOn === seededDay ? "" : signedOn;
+  }
+  return signedOn === "" ? seededDay : signedOn;
+}
+
+/**
+ * WHY THE DAY BOX IS BLANK, at the length picked — and what to do about it,
+ * only when the screen can honour it. "pick a longer length" is said when
+ * some longer offered length keeps the seeded day open (1 January at three
+ * months on 15 February); when none does, the sentence says why and stops —
+ * sending him to "type the day the lease runs from" would name the one day
+ * this form refuses. Which link to write for a lease recorded a month late
+ * is the owner's call, not this copy's. No leading capital, no full stop:
+ * the form opens with "The day is left blank:" and ends the sentence.
+ */
+export function blankDayWords(
+  seededDay: string,
+  months: number | null,
+  offered: readonly number[],
+  todayISO: string,
+): string {
+  const longerKeepsItOpen = offered.some(
+    (m) => months != null && m > months && !agreementAlreadyOver(seededDay, m, todayISO),
+  );
+  const at = months == null ? "" : `at ${months === 1 ? "one month" : lengthInWords(months)} `;
+  const began = `their arrangement began ${dayInWords(seededDay)}, and ${at}that agreement would already be over`;
+  return longerKeepsItOpen
+    ? `${began} — pick a longer length or type the day the lease runs from`
+    : `${began}, so it can't be recorded from that day here`;
 }
 
 /**

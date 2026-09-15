@@ -30,12 +30,23 @@ import type { LedgerRow, LedgerSummary } from "./ledger-helpers";
 import { ledgerHeadline } from "./ledger-helpers";
 import { prettyMonth } from "./ledger-helpers";
 import { SIGNED_LEASE_LABEL } from "./sign-helpers";
+import { dayInWords } from "./park-helpers";
+// THE RENEWAL LEAD HAS ONE HOME. The card below and the "Agreements to write"
+// list it links to (renew-actions renewalsDue) both read renewalLeadDays, so
+// the card can never name a household the list keeps quiet about.
+import { renewalLeadDays } from "./agreement-helpers";
 import { periodIsBillable } from "@/lib/billing-start";
 
 // Notification thresholds, not pricing — so they live here rather than in the
 // database. The first time he says one of these numbers is wrong, it becomes a
 // park column.
-export const RENEWAL_LEAD_DAYS = 45;
+/**
+ * How far ahead a household that has GIVEN NOTICE is a lot to start showing.
+ * Its own number: this used to share the renewal card's flat 45 days, and the
+ * renewal lead is no longer a constant at all (R2 — an agreement is asked for
+ * renewal in its own last half; see agreement-helpers renewalLeadDays).
+ */
+export const MOVE_OUT_LEAD_DAYS = 45;
 export const NOTICE_WARN_DAYS = 7;
 export const BILL_WARN_DAYS = 3;
 /**
@@ -93,7 +104,12 @@ const OFF_BOOK_WHAT: Record<string, string> = {
   // how many rows, so none of these may commit to a singular.
   deposit: "deposit money you're holding",
   amenity: "income from something the park rents out",
-  rent: "money on account, not yet put against a bill",
+  // A CASH-RECEIVED FIGURE, NOT A HELD ONE. This block counts every dollar
+  // that arrived this month, and money on account is applied to the
+  // household's bills the moment either exists (0167) — so "not yet put
+  // against a bill" was true of every such row until the first run spent
+  // one, and false the morning after. The label says what the figure IS.
+  rent: "money on account — counted the day it arrived, whichever bills it goes against",
 };
 
 /** Name the kinds present, in a fixed order so the sentence never reshuffles. */
@@ -238,6 +254,12 @@ export interface TaskFacts {
     reservationId: string;
     lotNumber: string;
     renterName: string | null;
+    /**
+     * The agreement's own start — the lead is a function of its span
+     * (renewalLeadDays), so the card needs both ends of it. A one-month
+     * agreement is asked in its last ~15 days, a three-month one 45 out.
+     */
+    startsOn: string;
     endsOn: string;
     chainId: string | null;
     seq: number;
@@ -388,22 +410,30 @@ export function generateTasks(f: TaskFacts): Task[] {
     });
   }
 
-  // THE RECURRING WORKLOAD AT THIS PARK. A three-month cap means renewals come
-  // round four times a year per household, and a lapsed tenancy stops being
-  // billed SILENTLY — buildStatement returns zero days and the charge run drops
-  // the row without an error.
+  // THE RECURRING WORKLOAD AT THIS PARK. A household on one-month agreements
+  // renews twelve times a year, and a lapsed tenancy stops being billed
+  // SILENTLY — buildStatement returns zero days and the charge run drops the
+  // row without an error.
+  //
+  // ASKED WITH THE SAME LEAD AS THE LIST THIS CARD LINKS TO (R2): in the
+  // agreement's own last half, never more than 45 days ahead. With a flat 45
+  // days here and the list's lead already the agreement's own, the morning
+  // he renewed Lot 14 for a month this card read "ends in 40 days — write
+  // the next one" and the tap landed on a page whose "Agreements to write"
+  // rendered nothing for it; on 1 January eighteen one-month leases signed
+  // that morning were "running out" from the day they were signed.
   const ending = f.agreements
     .filter((a) => !a.hasSuccessor)
     .filter((a) => {
       const d = daysBetween(f.today, a.endsOn);
-      return d <= RENEWAL_LEAD_DAYS;
+      return d <= renewalLeadDays(a.startsOn, a.endsOn);
     });
   if (ending.length > 3) {
     const soonest = ending.reduce((m, a) => (a.endsOn < m ? a.endsOn : m), ending[0].endsOn);
     out.push({
       key: `agreements_ending:${f.parkId}:${soonest}`,
       title: `${ending.length} agreements are running out`,
-      detail: `The first ends ${soonest}. When one lapses the rent stops being billed — quietly.`,
+      detail: `The first ends ${dayInWords(soonest)}. When one lapses the rent stops being billed — quietly.`,
       urgency: daysBetween(f.today, soonest) < 0 ? "overdue" : "soon",
       dueOn: soonest,
       href: "/park/today",
@@ -615,13 +645,13 @@ export function generateTasks(f: TaskFacts): Task[] {
   // billed, not whether the roll is true.
   const leaving = f.noticed
     .map((n) => ({ ...n, days: daysBetween(f.today, n.leavingOn) }))
-    .filter((n) => n.days < 0 || n.days <= RENEWAL_LEAD_DAYS);
+    .filter((n) => n.days < 0 || n.days <= MOVE_OUT_LEAD_DAYS);
 
   const gone = leaving.filter((n) => n.days < 0);
   for (const n of gone) {
     out.push({
       key: `move_out_due:${n.reservationId}`,
-      title: `Lot ${n.lotNumber} was due to leave on ${n.leavingOn}`,
+      title: `Lot ${n.lotNumber} was due to leave on ${dayInWords(n.leavingOn)}`,
       detail: n.renterName
         ? `${n.renterName} gave notice for that day. If they've gone, close it out — ` +
           `an open tenancy keeps billing rent.`
@@ -641,7 +671,7 @@ export function generateTasks(f: TaskFacts): Task[] {
     out.push({
       key: `leaving_soon:${f.parkId}:${soonest}`,
       title: `${upcoming.length} households are leaving`,
-      detail: `The first goes ${soonest}. ${upcoming.map((n) => n.lotNumber).join(", ")} — ` +
+      detail: `The first goes ${dayInWords(soonest)}. ${upcoming.map((n) => n.lotNumber).join(", ")} — ` +
         `time to start showing them.`,
       urgency: "soon",
       dueOn: soonest,
@@ -656,8 +686,8 @@ export function generateTasks(f: TaskFacts): Task[] {
           ? `Lot ${n.lotNumber} leaves today`
           : `Lot ${n.lotNumber} leaves in ${n.days} ${n.days === 1 ? "day" : "days"}`,
         detail: n.renterName
-          ? `${n.renterName} is out on ${n.leavingOn}. Start showing it now, not the morning after.`
-          : `Out on ${n.leavingOn}. Start showing it now, not the morning after.`,
+          ? `${n.renterName} is out on ${dayInWords(n.leavingOn)}. Start showing it now, not the morning after.`
+          : `Out on ${dayInWords(n.leavingOn)}. Start showing it now, not the morning after.`,
         urgency: "soon",
         dueOn: n.leavingOn,
         href: "/park",

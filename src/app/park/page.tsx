@@ -465,6 +465,12 @@ export default async function ParkPage() {
         }
         today={todayLakeDate()}
         cutoverDate={cutoverDate}
+        // THE TWO DIALS, both. The cap is the ceiling the lengths on offer are
+        // filtered to; the term is the one every choice starts on. Without the
+        // cap the roll offered every standard length and the server refused
+        // the ones the park does not write.
+        capMonths={(parkRow?.max_agreement_months as number | null) ?? null}
+        termMonths={termMonths}
       />
     </>
   );

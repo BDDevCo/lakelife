@@ -7,9 +7,11 @@ import { getStatement, type StatementPage } from "@/app/park/receipts-actions";
 import { reversePayment, refundParkPayment, refundableOn } from "@/app/park/ledger-actions";
 import {
   money, receiptsHeadline, monthPeriod, quarterPeriod, yearPeriod, customPeriod,
-  notCollectedAt,
-  type Period,
+  notCollectedAt, onAccountKindLabel, METHOD_LABEL,
+  type Period, type OtherReceipt, type Method,
 } from "@/app/park/receipts-helpers";
+import { prettyMonth } from "@/app/park/ledger-helpers";
+import { longDate } from "@/lib/lake-time";
 
 /**
  * WHAT CAME IN, FOR THE ACCOUNTANT.
@@ -166,7 +168,7 @@ export function ParkStatements({
       {/* ---- the number --------------------------------------------------- */}
       <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
         <div className="mut" style={{ fontSize: 13 }}>
-          {page.period.from} to {page.period.to}
+          {longDate(page.period.from)} to {longDate(page.period.to)}
         </div>
         <strong style={{ fontSize: 20, display: "block", marginTop: 4 }}>
           {receiptsHeadline(s, page.period)}
@@ -242,7 +244,7 @@ export function ParkStatements({
               {s.againstVoided.map((r) => (
                 <div key={r.paymentId} style={{ fontSize: 13, lineHeight: 1.5 }}>
                   <strong>Lot {r.lotNumber}</strong> — {money(r.amountCents)} came in
-                  on {r.receivedOn} against a bill that was later cancelled. It&apos;s
+                  on {longDate(r.receivedOn)} against a bill that was later cancelled. It&apos;s
                   counted here because the money arrived; if you gave it back, that
                   refund isn&apos;t recorded anywhere yet.
                 </div>
@@ -254,7 +256,7 @@ export function ParkStatements({
               {s.reversed.map((r) => (
                 <div key={`rev-${r.paymentId}`} style={{ fontSize: 13, lineHeight: 1.5 }}>
                   <strong>Lot {r.lotNumber}</strong> — {money(r.amountCents)} recorded
-                  on {r.receivedOn} and then taken back
+                  on {longDate(r.receivedOn)} and then taken back
                   {r.reversedReason ? `: ${r.reversedReason}` : ""}. It is NOT counted
                   in the totals above.
                 </div>
@@ -322,6 +324,9 @@ export function ParkStatements({
         </p>
       </section>
 
+      {/* ---- money on account, and where it went ------------------------- */}
+      <OnAccountRows rows={page.otherReceipts} />
+
       {/* ---- the rows ----------------------------------------------------- */}
       {page.receipts.length > 0 && (
         <section style={{ marginTop: 22 }}>
@@ -330,8 +335,8 @@ export function ParkStatements({
               <div key={r.paymentId}
                 style={{ padding: "9px 14px", borderTop: "1px solid rgba(0,0,0,.06)",
                          display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-                <span className="mut" style={{ minWidth: 88, fontVariantNumeric: "tabular-nums" }}>
-                  {r.receivedOn}
+                <span className="mut" style={{ minWidth: 130, fontVariantNumeric: "tabular-nums" }}>
+                  {longDate(r.receivedOn)}
                 </span>
                 <strong style={{ minWidth: 56 }}>Lot {r.lotNumber}</strong>
                 <span style={{ flex: 1 }}>{r.payerName ?? "—"}</span>
@@ -492,6 +497,75 @@ export function ParkStatements({
         </section>
       )}
     </div>
+  );
+}
+
+/**
+ * MONEY ON ACCOUNT RECEIVED IN THIS WINDOW, AND WHERE IT HAS SINCE GONE (0167).
+ *
+ * These rows were on the screen only as a sentence — "$1,627.59 received on
+ * account" — and in the file with a blank Bill month. Once the run puts a
+ * quarter-ahead cheque against January, February and March, the accountant's
+ * question is which months it paid, and the row answers against each month.
+ * The CASH DOES NOT MOVE: the row is dated the day it arrived and counted
+ * once, outside rent received, exactly as the notes above say.
+ *
+ * `appliedTo` is the loader's read. Undefined means it did not look, and the
+ * row then makes no claim either way — "not yet applied" is a fact only when
+ * the read came back empty. The Kind label is the file's own
+ * (`onAccountKindLabel`), so the screen and the CSV cannot disagree.
+ */
+function OnAccountRows({ rows }: { rows: OtherReceipt[] }) {
+  // Deposits go back and amenity money is income; neither is on account.
+  const acct = rows.filter((o) => o.kind !== "deposit" && o.kind !== "amenity");
+  if (acct.length === 0) return null;
+  return (
+    <section style={{ marginTop: 22 }}>
+      <div className="ll-card">
+        <div className="ll-card-pad" style={{ paddingBottom: 8 }}>
+          <strong style={{ fontSize: 15 }}>Money on account in this window</strong>
+          <p className="mut" style={{ fontSize: 12.5, margin: "4px 0 0", lineHeight: 1.5 }}>
+            Not rent received — counted on the day it arrived, outside the total
+            above. Where it has gone since is against each month it paid.
+          </p>
+        </div>
+        {acct.map((o) => {
+          const applied = [...(o.appliedTo ?? [])]
+            .filter((a) => a.amountCents > 0)
+            .sort((a, b) => a.periodMonth.localeCompare(b.periodMonth));
+          return (
+            <div key={o.paymentId}
+              style={{ padding: "9px 14px", borderTop: "1px solid rgba(0,0,0,.06)",
+                       display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+              <span className="mut" style={{ minWidth: 130, fontVariantNumeric: "tabular-nums" }}>
+                {longDate(o.receivedOn)}
+              </span>
+              <span className="mut" style={{ fontSize: 13, flex: 1 }}>
+                {(METHOD_LABEL[o.method as Method] ?? o.method).toLowerCase()}{o.reference ? ` ${o.reference}` : ""}
+              </span>
+              {o.appliedTo != null && <span className="ll-pill slate">{onAccountKindLabel(o)}</span>}
+              <span style={{ minWidth: 88, textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+                {money(o.amountCents)}
+              </span>
+              {o.appliedTo != null && (
+                <div className="mut" style={{ flexBasis: "100%", fontSize: 12.5, lineHeight: 1.5 }}>
+                  {applied.length === 0
+                    // "Comes off the next bill" is true only while the view says
+                    // something is still held; a row given back, or one taken
+                    // back between the loader's two reads, must not promise it.
+                    ? (o.remainingCents === 0
+                        ? "Given back."
+                        : o.remainingCents == null
+                          ? ""
+                          : "Not yet put against a bill — it comes off the next bill raised for that household.")
+                    : applied.map((a) => `${money(a.amountCents)} to ${prettyMonth(a.periodMonth)}`).join(", ")}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

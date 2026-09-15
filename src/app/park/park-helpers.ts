@@ -16,7 +16,7 @@ import {
   type ParkSeason,
 } from "@/lib/parks";
 // The agreement cap lives here already, and it clamps short months correctly.
-import { addMonths } from "./agreement-helpers";
+import { addMonths, lengthAdjective } from "./agreement-helpers";
 // The one shape a phone number is stored in. Both tenant builders go through
 // it — and so does the importer, via import-helpers' phoneOnFile — so a
 // number is the same string whichever door it came through.
@@ -778,6 +778,14 @@ export interface TenantInput {
    * collected before go-live. See `agreementStartFor` for the bounds.
    */
   agreementStartsOn?: string;
+  /**
+   * HOW LONG THE SIGNED AGREEMENT RUNS, in months — the household's choice
+   * from the lengths the park offers (`offeredAgreementLengths`), seeded on
+   * screen with the park's house style. Only read when `signedNewLease` is
+   * true; the door judges it with `chooseAgreementLength` and hands the
+   * result to `buildTenant`, which never chooses.
+   */
+  agreementMonths?: number | null;
 }
 
 export interface TenantResult {
@@ -847,36 +855,15 @@ const TENANT_SOURCES = ["prior_roll", "owner_knowledge", "tenant_confirmed", "do
 export const TENANCY_HORIZON_DAYS = 365;
 
 /**
- * HOW LONG ONE NEW AGREEMENT RUNS.
- *
- * THE CAP AND THE DEFAULT ARE DIFFERENT NUMBERS, and 0067 added
- * `parks.default_agreement_months` specifically to stop them being conflated:
- * "Three months max, but typically month to month ... conflating them writes
- * every new tenant a three-month agreement when the house style is one month
- * rolling."
- *
- * The column shipped with neither a reader nor a writer. So the cap was passed
- * straight through as the length, and every signed agreement was written at
- * the MAXIMUM — the exact bug that comment describes.
- *
- * It matters most on a day everybody signs at once. Twenty agreements written
- * on one afternoon all end on one morning, and when they do the rent stops
- * with no error anywhere.
- *
- * Clamped, because a default longer than the cap is a contradiction the
- * database also refuses (parks_default_within_max), and because the 0062
- * trigger rejects any agreement longer than the cap outright.
+ * HOW LONG ONE NEW AGREEMENT RUNS WHEN NOBODY CHOOSES — the park's house
+ * style under its ceiling, and the length every choice STARTS on. DEFINED in
+ * agreement-helpers beside the list of lengths a park offers
+ * (`offeredAgreementLengths`) and the one judgement of a chosen length
+ * (`chooseAgreementLength`), which every writing door now takes its length
+ * from. Re-exported here for everything that already imports it from this
+ * module; the history of the cap-as-length bug is on the definition.
  */
-export function agreementMonthsFor(
-  defaultMonths: number | null,
-  capMonths: number | null,
-): number | null {
-  // No default set means "however long the horizon is", which is the old
-  // behaviour for a park that has neither dial.
-  if (defaultMonths == null) return capMonths;
-  if (capMonths == null) return defaultMonths;
-  return Math.min(defaultMonths, capMonths);
-}
+export { agreementMonthsFor } from "./agreement-helpers";
 
 /** Add days to an ISO date without touching local time. */
 function addDays(iso: string, days: number): string {
@@ -932,7 +919,7 @@ export function agreementEndFrom(startISO: string, months: number | null): strin
  * with what to check on ITS form. Two doors once said it two ways.
  */
 export function alreadyOverClause(startISO: string, months: number | null): string {
-  const term = months == null ? "" : ` under your ${months === 1 ? "one" : months}-month term`;
+  const term = months == null ? "" : ` under your ${lengthAdjective(months)} term`;
   return `an agreement from ${dayInWords(startISO)}${term} would already be over by now`;
 }
 
@@ -1020,7 +1007,9 @@ export function buildTenant(
   input: TenantInput,
   todayISO: string,
   /**
-   * How long THIS agreement runs, in months — see `agreementMonthsFor`.
+   * How long THIS agreement runs, in months — the household's CHOICE, already
+   * judged by the caller against the lengths the park offers
+   * (`chooseAgreementLength`); this builder never chooses and never defaults.
    *
    * Named for what it is rather than for the cap, because it is no longer the
    * cap: a park with a one-month house style and a three-month ceiling writes
@@ -1242,9 +1231,10 @@ export type MoveOutPlan =
 /**
  * A MOVE-OUT ENDS THE CHAIN, NOT ONE LINK OF IT.
  *
- * The renewal nag lists everything ending within 45 days, so at a park whose
- * house style is one month the February agreement is written on the 5th of
- * January for all eighteen households. When Lot 9 leaves on the 27th, closing
+ * The renewal nag lists an agreement in its last half (at most 45 days out —
+ * renewalLeadDays), so at a park whose house style is one month the February
+ * agreement is written in the second half of January for all eighteen
+ * households. When Lot 9 leaves on the 27th, closing
  * out the January row alone left its February successor `approved`: the
  * February run raised $542.53 for a family that was gone, the roll read the
  * lot as theirs until May, "Someone lives here" was not offered because the
@@ -1536,30 +1526,38 @@ export function noticeShape(
   const termDays = capMonths == null ? null : capMonths * 30;
   const fitsInTerm = termDays == null ? true : noticeDays <= termDays;
 
+  // A date a person reads is words — "September 25, 2026", never
+  // "2026-09-25". `earliest` stays ISO for the caller's arithmetic.
   const base =
     `If you told everyone today, the earliest a new rent could start is ` +
-    `${earliest}.`;
+    `${dayInWords(earliest)}.`;
 
   if (termDays == null) {
     return { earliest, fitsInTerm, line: base };
   }
+  // THE CAP IS THE LONGEST AGREEMENT, NOT EVERY AGREEMENT. Households pick
+  // their own length from the ones the park offers (offeredAgreementLengths),
+  // so "with 3-month agreements" described a park where everybody had chosen
+  // the maximum. The notice fits a full-length term; a household on a
+  // one-month agreement is, for this purpose, month to month.
   if (fitsInTerm) {
     return {
       earliest,
       fitsInTerm,
       line:
-        `${base} With ${capMonths}-month agreements that sits inside the term, ` +
-        `so increases land at renewal and this costs you nothing. It only bites ` +
-        `on month-to-month households.`,
+        `${base} With agreements of up to ${capMonths} months that sits inside a ` +
+        `full-length term, so increases land at renewal and this costs you nothing. ` +
+        `It only bites on month-to-month households — and anyone who picks a ` +
+        `one-month agreement.`,
     };
   }
   return {
     earliest,
     fitsInTerm,
     line:
-      `${base} That is LONGER than a ${capMonths}-month agreement, so you could ` +
-      `never raise a rent within one term — every increase would slip a whole ` +
-      `cycle.`,
+      `${base} That is LONGER than a ${capMonths}-month agreement — the longest ` +
+      `this park writes — so you could never raise a rent within one term: every ` +
+      `increase would slip a whole cycle.`,
   };
 }
 

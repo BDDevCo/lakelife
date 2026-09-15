@@ -404,6 +404,24 @@ export interface OtherReceipt {
   feeCents: number;
   method: string;
   reference: string | null;
+  /**
+   * WHERE MONEY ON ACCOUNT HAS SINCE GONE (0167): which bill months it was put
+   * against, and how much to each. Cash basis is untouched — the row is still
+   * dated `receivedOn` and counted once — but the accountant can now tie
+   * "$1,627.59 received 28 December" to January, February and March instead
+   * of carrying it as unapplied forever. Absent or empty for a deposit, for
+   * amenity money, and for on-account money nothing has touched yet.
+   */
+  appliedTo?: Array<{ periodMonth: string; amountCents: number }>;
+  /**
+   * WHAT IS STILL HELD of an on-account row — the view's `remaining`
+   * (park_payment_remaining: amount − live allocations − refunds), never
+   * amount − applied here. Absent for a deposit and for amenity money, and
+   * when the loader did not look; present (possibly 0) whenever
+   * `appliedTo` is. A row with nothing applied and nothing held has gone
+   * back to a card.
+   */
+  remainingCents?: number;
 }
 
 /** What a person calls each kind, for the Kind column. */
@@ -412,6 +430,34 @@ const KIND_LABEL: Record<string, string> = {
   amenity: "Rented out (income)",
   rent: "Rent",
 };
+
+/**
+ * The Kind an on-account row prints, by how much of it has been applied. A
+ * filterable label, so "not yet applied" still finds exactly the money the
+ * office has yet to put anywhere.
+ */
+export function onAccountKindLabel(o: OtherReceipt): string {
+  const applied = (o.appliedTo ?? []).reduce((s, a) => s + a.amountCents, 0);
+  // "Applied" means nothing is left — the view's word when the loader
+  // carried it, so a row with $57.47 refunded and the rest on bills is
+  // "applied", not "partly", and one with nothing applied and nothing held
+  // is not "not yet applied" (it went back). Without the figure, applied vs
+  // amount is the only test available and is right for every row a hand-
+  // keyed door writes.
+  const held = o.remainingCents;
+  if (applied <= 0) return held === 0 ? "On account (given back)" : "On account (not yet applied)";
+  if (held != null ? held === 0 : applied >= o.amountCents) return "On account (applied)";
+  return "On account (partly applied)";
+}
+
+/** "2027-01: 542.53; 2027-02: 542.53" — the months an on-account row settled, for the Bill month cell. */
+export function appliedToCell(o: OtherReceipt): string {
+  return [...(o.appliedTo ?? [])]
+    .filter((a) => a.amountCents > 0)
+    .sort((a, b) => a.periodMonth.localeCompare(b.periodMonth))
+    .map((a) => `${a.periodMonth}: ${decimal(a.amountCents)}`)
+    .join("; ");
+}
 
 const HEADERS = [
   "Park", "Generated at", "Basis",
@@ -516,13 +562,17 @@ export function receiptsCsv(
   }
 
   // The bill columns are EMPTY for these, not zero: a deposit has no bill, and
-  // a zero would be a figure somebody could sum.
+  // a zero would be a figure somebody could sum. The one exception is the
+  // Bill month cell of money on account that has since been put against
+  // bills (0167): it names the months and the split, so the accountant can
+  // tie December's cheque to the quarter it paid for.
   for (const o of other) {
+    const isOnAccount = !(o.kind in KIND_LABEL) || o.kind === "rent";
     out.push([
       csvText(meta.parkName),
       csvText(meta.generatedAt),
       csvText("cash"),
-      csvText(KIND_LABEL[o.kind] ?? "On account (not yet applied)"),
+      csvText(isOnAccount ? onAccountKindLabel(o) : KIND_LABEL[o.kind]),
       csvText(o.receivedOn),
       csvText(decimal(o.amountCents)),
       csvText(decimal(o.feeCents)),
@@ -536,7 +586,8 @@ export function receiptsCsv(
       // test file is what makes that impossible rather than merely unlikely.
       csvText(""), csvText(""), csvText(""), csvText(""),
       csvText(""), csvText(""),                // lot / payer
-      csvText(""), csvText(""), csvText(""), csvText(""),  // bill month/total/status/breakdown
+      csvText(isOnAccount ? appliedToCell(o) : ""),        // bill month: where on-account money went
+      csvText(""), csvText(""), csvText(""),   // bill total/status/breakdown
       csvText(o.paymentId),
       csvText(""),                             // no charge to point at
     ].join(","));
@@ -570,6 +621,22 @@ export interface ExclusionContext {
   depositsReceivedCents?: number;
   onAccountReceivedCents?: number;
   /**
+   * OF THE MONEY RECEIVED ON ACCOUNT IN THIS WINDOW, how much has since been
+   * put against bills (0167). Still not "rent received" — cash basis counts
+   * it once, on the day it arrived, under on-account — but the sentence must
+   * not say "hasn't been put against a bill" about money that has.
+   */
+  onAccountAppliedCents?: number;
+  /**
+   * OF THAT SAME MONEY, what is STILL HELD — the sum of the view's
+   * `remaining` over the window's on-account rows. The note prints THIS for
+   * "is still held", never received − applied: that subtraction ignores a
+   * refund and is the second copy of park_payment_remaining this codebase
+   * keeps finding as a bug. Absent when the loader did not read it, and then
+   * no held figure is printed at all.
+   */
+  onAccountHeldCents?: number;
+  /**
    * CARD FEES COLLECTED, in cents. Money that hit the processor on top of the
    * rent and is not the park's income — it covers the cost of the rail. Named
    * for the same reason deposits are: without it, this statement cannot be
@@ -601,19 +668,37 @@ export function exclusionLines(ctx: ExclusionContext): string[] {
     // the system to record them yet." That stopped being true the day deposits
     // could be recorded, and a statement carrying a stale disclaimer is worse
     // than one carrying none.
-    "Deposits and money held on account aren't counted as rent received — a deposit goes back, and money on account hasn't been put against a bill yet. Any amounts are listed below so this still reconciles to your bank.",
+    "Deposits and money held on account aren't counted as rent received — a deposit goes back, and money on account is counted here on the day it arrived, not on the bills it later pays. Any amounts are listed below so this still reconciles to your bank.",
     "This is the day your office took the money, not the day it cleared the bank. A check taken at the end of a month may clear in the next one.",
     "Payments aren't split between rent and fees. Each one sits against a whole bill, and the file carries that bill's own breakdown so your accountant can split it.",
   ];
   const dep = ctx.depositsReceivedCents ?? 0;
   const acct = ctx.onAccountReceivedCents ?? 0;
+  const applied = Math.min(acct, ctx.onAccountAppliedCents ?? 0);
+  // THE VIEW'S FIGURE, or nothing. `held` is what the database says is still
+  // on account; "All of it has gone against bills" is said only when the
+  // database says nothing is held AND the applied lines cover what came in —
+  // a row refunded in full has nothing held and nothing applied.
+  const held = ctx.onAccountHeldCents;
   if (dep > 0 || acct > 0) {
     const bits: string[] = [];
     if (dep > 0) bits.push(`$${(dep / 100).toFixed(2)} in deposits taken`);
     if (acct > 0) bits.push(`$${(acct / 100).toFixed(2)} received on account`);
     lines.push(
       `Also received in this period, and NOT in the total above: ${bits.join(" and ")}. ` +
-      `It reached the bank; it just isn't rent yet.`,
+      `It reached the bank; it just isn't rent yet.` +
+      // WHERE IT HAS GONE SINCE. Money paid ahead settles bills the run raises
+      // later; the file's Bill month column names them per row.
+      (applied > 0
+        ? held === 0 && applied >= acct
+          ? ` All of the money on account has since been put against bills — the file says which months.`
+          : ` $${(applied / 100).toFixed(2)} of the money on account has since been put against bills — the file says which months` +
+            (held == null
+              ? `.`
+              : held > 0
+                ? ` — and $${(held / 100).toFixed(2)} is still held.`
+                : ` — and none of it is still held.`)
+        : ""),
     );
   }
   const amenity = ctx.amenityReceivedCents ?? 0;

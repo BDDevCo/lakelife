@@ -329,6 +329,8 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
       reservationId: s.id as string,
       lotNumber: lotName.get(s.park_lot_id as string) ?? "?",
       renterName: renterName.get(s.renter_id as string) ?? null,
+      // Both ends: the card's lead is the agreement's own span (R2).
+      startsOn: r.start,
       endsOn: r.end,
       chainId: cid,
       seq,

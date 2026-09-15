@@ -26,6 +26,7 @@
 
 import { prettyMonth } from "./ledger-helpers";
 import { longDate } from "@/lib/lake-time";
+import { describeAllocations, type AllocationLine } from "@/lib/allocations";
 
 export interface ReceiptLines {
   parkName: string;
@@ -55,8 +56,39 @@ export interface ReceiptLines {
    * The part of `amount` that did NOT go against the bill — recorded on
    * account for the household, with its own receipt number, because it was
    * more than the bill had left. Null when everything went against the bill.
+   *
+   * `appliedTo` and `remaining` say where that money went AT THE MOMENT OF
+   * RECORDING (0167, R1): money on account settles the household's oldest
+   * open bill as soon as it is keyed, so the paper can read "$542.53 to
+   * February 2027, $57.47 on account" before they leave the window. Written
+   * at record time by recordOnAccount (its own receipt, kind "on_account")
+   * and by recordPayment when the excess settled an older open bill; absent
+   * when nothing of it went anywhere, and then all of it is held. Nothing
+   * reprints a receipt later. `remaining` is the view's figure and is left
+   * out when that read failed — receiptBody then says it wasn't read rather
+   * than printing the whole as held.
    */
-  onAccount?: { amount: number; receiptNo: number | null } | null;
+  onAccount?: {
+    amount: number;
+    receiptNo: number | null;
+    appliedTo?: AllocationLine[];
+    remaining?: number;
+  } | null;
+  /**
+   * MONEY OF THEIRS THE OFFICE WAS ALREADY HOLDING, put against this bill
+   * beside what they handed over today (0167). Without it "still owing" is a
+   * figure the household cannot reconcile to what they paid.
+   */
+  fromOnAccount?: number | null;
+  /**
+   * A RECEIPT FOR MONEY ON ACCOUNT ITSELF — a cheque taken before its bill
+   * existed, a quarter paid ahead. Built by recordOnAccount (money-actions)
+   * and printed by the held-money panel. There is no "Against … rent" line
+   * and no bill balance; instead the paper says where the money went the
+   * moment it was recorded (`onAccount.appliedTo`) and what is still held.
+   * `periodMonth` and `billAmount` are ignored.
+   */
+  kind?: "bill" | "on_account";
   /**
    * Where the renter confirms this from their OWN phone.
    *
@@ -78,6 +110,30 @@ export const METHOD_WORD: Record<string, string> = {
   cash: "cash", check: "check", card: "card",
   ach: "bank transfer", transfer: "bank transfer", other: "other",
 };
+
+/**
+ * WHAT IS STILL HELD, for the paper. Nothing applied at record time means
+ * the whole of it is held — that is not a guess, it is what "nothing
+ * applied" means the moment the row is written, and no receipt is printed
+ * later. Once something HAS gone somewhere, only the database knows what is
+ * left (`remaining`, the view's figure); when that read failed the writer
+ * leaves it out, and this returns null so the paper says so rather than
+ * printing the whole cheque as held beside a line saying $40 of it is on
+ * December. Never `?? amount`.
+ */
+function stillHeld(
+  amount: number,
+  acct: { appliedTo?: readonly AllocationLine[]; remaining?: number } | null | undefined,
+): number | null {
+  const applied = acct?.appliedTo ?? [];
+  // The view's figure when the writer read it; the whole when nothing of it
+  // has gone anywhere — the one case where that is a fact, not a fallback.
+  if (applied.length === 0) return acct?.remaining ?? amount;
+  return acct?.remaining ?? null;
+}
+
+/** The line printed in place of a held figure nobody read. */
+const NOT_READ_LINE = `What's still on account wasn't read when this was printed — ask at the office.`;
 
 /** A human-quotable reference: park initials, year, receipt number. */
 export function receiptRef(parkName: string, receiptNo: number | null, receivedOn: string): string {
@@ -106,6 +162,44 @@ export function receiptBody(r: ReceiptLines): string {
     `Amount          ${money(r.amount)}`,
   ];
 
+  // MONEY ON ACCOUNT, RECEIPTED ON ITS OWN. Where it has gone so far, and
+  // what is still held — the whole record on one piece of paper.
+  if (r.kind === "on_account") {
+    const applied = r.onAccount?.appliedTo ?? [];
+    const remaining = stillHeld(r.amount, r.onAccount);
+    // Only once something HAS gone somewhere. Fresh from the window the held
+    // sentence below is the whole story, and "Where it went: on account" is
+    // a line that answers a question nobody asked.
+    const where = applied.length > 0 ? describeAllocations(applied, remaining ?? 0) : "";
+    lines.push(`How             ${METHOD_WORD[r.method] ?? r.method}${r.reference ? ` ${r.reference}` : ""}`);
+    lines.push(`Date taken      ${longDate(r.receivedOn)}`);
+    lines.push(`Against         money on account`);
+    if (where) lines.push(`Where it went   ${where}`);
+    lines.push(``);
+    if (remaining == null) {
+      lines.push(NOT_READ_LINE);
+      lines.push(``);
+    } else if (remaining > 0) {
+      lines.push(`The ${money(remaining)} on account is held by the office and comes off your next`);
+      lines.push(`bill. It stays yours until then.`);
+      lines.push(``);
+    }
+    if (r.method === "check") {
+      lines.push(`This is a receipt for the check itself. If it doesn't clear, any bill`);
+      lines.push(`it was put against goes back to outstanding and we'll be in touch.`);
+      lines.push(``);
+    }
+    lines.push(r.officeLine);
+    lines.push(``);
+    if (r.confirmUrl) {
+      lines.push(`Does this match what you handed over? Say so here:`);
+      lines.push(r.confirmUrl);
+      lines.push(``);
+    }
+    lines.push(`Keep this. It's your record of what you handed over.`);
+    return lines.join("\n");
+  }
+
   // MORE THAN THE BILL. Both parts on the paper they keep, because "Amount
   // $600.00 / Against January rent — $542.53" with nothing between them is a
   // receipt that raises the question it exists to answer.
@@ -113,6 +207,11 @@ export function receiptBody(r: ReceiptLines): string {
   if (acct) {
     lines.push(`  to this bill  ${money(r.amount - acct.amount)}`);
     lines.push(`  on account    ${money(acct.amount)}`);
+  }
+  // AND WHAT THE OFFICE ALREADY HELD, put in beside it.
+  const held = r.fromOnAccount && r.fromOnAccount > 0 ? r.fromOnAccount : 0;
+  if (held > 0) {
+    lines.push(`From on account ${money(held)}`);
   }
 
   // THE FEE, ON THE RECEIPT, BECAUSE THE NETWORKS REQUIRE IT THERE. Also
@@ -145,14 +244,34 @@ export function receiptBody(r: ReceiptLines): string {
     lines.push(`Balance         nothing further owing on this one`);
   }
 
-  if (acct) {
-    // WHERE THE REST IS, in words that make no promise the software does not
-    // keep: nothing applies it to the next bill on its own — the office does,
-    // once that bill exists.
+  if (held > 0) {
+    // Said in words too, so "$200 handed over, nothing further owing on a
+    // $542.53 bill" does not read as a mistake on the only copy they keep.
     lines.push(``);
-    lines.push(`The ${money(acct.amount)} on account is held by the office and hasn't been put`);
-    lines.push(`against a bill yet. It stays yours until it is${
-      acct.receiptNo != null ? ` (receipt ${receiptRef(r.parkName, acct.receiptNo, r.receivedOn)})` : ""}.`);
+    lines.push(`${money(held)} you already had on account with the office went against this`);
+    lines.push(`bill as well.`);
+  }
+
+  if (acct) {
+    // WHERE THE REST IS, as of the moment this was written: the run puts
+    // money on account against the next bill it raises for them (0167), and
+    // the excess may already have settled an older open bill (R1).
+    const applied = acct.appliedTo ?? [];
+    const remaining = stillHeld(acct.amount, acct);
+    lines.push(``);
+    if (applied.length > 0) {
+      lines.push(`Of the ${money(acct.amount)} on account: ${describeAllocations(applied, remaining ?? 0)}${
+        acct.receiptNo != null ? ` (receipt ${receiptRef(r.parkName, acct.receiptNo, r.receivedOn)})` : ""}.`);
+      if (remaining == null) {
+        lines.push(NOT_READ_LINE);
+      } else if (remaining > 0) {
+        lines.push(`The ${money(remaining)} still on account comes off your next bill.`);
+      }
+    } else {
+      lines.push(`The ${money(acct.amount)} on account is held by the office and comes off your next`);
+      lines.push(`bill. It stays yours until then${
+        acct.receiptNo != null ? ` (receipt ${receiptRef(r.parkName, acct.receiptNo, r.receivedOn)})` : ""}.`);
+    }
   }
 
   lines.push(``);

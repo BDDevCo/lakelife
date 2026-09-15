@@ -185,11 +185,20 @@ describe("the text that mints the token quotes the page's resolution", () => {
     expect(a).toBeGreaterThan(-1);
     expect(b).toBeGreaterThan(a);
     const words = src.slice(a, b);
-    for (const f of ["view.price", "view.newStart", "view.newEnd", "view.currentEnd", "view.capMonths", "view.isRenewal", "view.depositHeld"]) {
+    for (const f of ["view.price", "view.newEnd", "view.currentEnd", "view.offeredMonths", "view.renewMonths", "view.isRenewal", "view.depositHeld"]) {
       expect(words).toContain(f);
     }
+    // THE LENGTH IS THE HOUSEHOLD'S CHOICE. The text names the lengths on
+    // offer (`view.offeredMonths`, in words) and never the cap as a length:
+    // `view.capMonths ?? 3` put "the next 3-month agreement" in every text
+    // and the tap wrote it. And it quotes no successor date, because none is
+    // chosen until the page.
+    expect(words).not.toMatch(/view\.capMonths/);
+    expect(words).not.toMatch(/\?\? 3\b/);
+    expect(words).not.toMatch(/-month agreement/);
+    expect(words).toMatch(/lengthsInWords\(/);
     // Dates in words, never ISO.
-    expect(words.match(/longDate\(/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    expect(words.match(/longDate\(/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
     expect(words).not.toMatch(/\$\{(view|range|next)\.(newEnd|newStart|currentEnd|end|start)\}/);
     // A deposit is mentioned only behind the fact — never as a bare literal.
     expect(words).toMatch(/view\.depositHeld \? " Your deposit carries over\." : ""/);

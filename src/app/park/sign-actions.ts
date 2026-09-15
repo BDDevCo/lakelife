@@ -76,9 +76,11 @@ export async function recordSigning(
       .eq("park_id", parkId)
       .eq("active", true),
   ]);
-  // The cutover bounds the date and the term sets the length. A failed read
-  // would write the successor on the horizon against a park with a cap — the
-  // database error 0065 exists to raise — or date it into the seller's months.
+  // The cutover bounds the date, and the two dials are what the household's
+  // chosen length is judged against (chooseAgreementLength: the lengths the
+  // park offers under its cap). A failed read would write the successor on
+  // the horizon against a park with a cap — the database error 0065 exists to
+  // raise — or date it into the seller's months.
   if (parkRes.error) {
     return { ok: false, error: readFailedMessage("your park's settings", parkRes.error, { money: true }) };
   }

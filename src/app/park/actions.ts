@@ -13,7 +13,7 @@ import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
   buildLotRange, planBulkRates, buildTenant, buildTenantEdit, buildParkDialsRow,
-  agreementMonthsFor, dayInWords, planMoveOut, type ChainLink,
+  dayInWords, planMoveOut, type ChainLink,
   type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
   type TenantInput, type TenantEditInput, type ParkDialsInput, lotLabelRange, SITE_DEFAULTS,
   buildOnlineRentRow, onlineRentCautions, CARD_FEE_CEILING, type OnlineRentInput,
@@ -21,6 +21,8 @@ import {
 import { canEnableParkServices } from "./service-helpers";
 // The one set of sentences for "both are a condition of renting".
 import { contactProblem } from "./onboard-helpers";
+// The one judgement of a chosen agreement length, and its words.
+import { chooseAgreementLength, lengthAdjective } from "./agreement-helpers";
 // Months a person reads are words; the withdrawn-agreement signal names them.
 import { prettyMonth } from "./ledger-helpers";
 
@@ -539,12 +541,6 @@ export async function addTenant(
   if (capRes.error) {
     return { ok: false, error: readFailedMessage("your park's agreement cap", capRes.error) };
   }
-  // The park's TERM — its house style, clamped to its ceiling. Passing the
-  // ceiling wrote every new agreement at the maximum; see agreementMonthsFor.
-  const cap = agreementMonthsFor(
-    (capRes.data?.default_agreement_months as number | null) ?? null,
-    (capRes.data?.max_agreement_months as number | null) ?? null,
-  );
   const cutoverDate = (capRes.data?.cutover_date as string | null) ?? null;
 
   // A SIGNED LEASE NEEDS BOTH WAYS TO REACH THEM — the owner's condition of
@@ -556,12 +552,28 @@ export async function addTenant(
     if (contact) return { ok: false, error: contact };
   }
 
+  // HOW LONG THE SIGNED LEASE RUNS — the household's choice, judged against
+  // the lengths this park offers under its cap. Passing the ceiling wrote
+  // every new agreement at the maximum, and passing the house style wrote
+  // every one at the default; the length is theirs, chosen once, here. A
+  // holdover has no length: the builder writes the rolling horizon.
+  let agreementMonths: number | null = null;
+  if (input.signedNewLease) {
+    const pick = chooseAgreementLength(
+      input.agreementMonths ?? null,
+      (capRes.data?.default_agreement_months as number | null) ?? null,
+      (capRes.data?.max_agreement_months as number | null) ?? null,
+    );
+    if (!pick.ok) return { ok: false, error: pick.error };
+    agreementMonths = pick.months;
+  }
+
   // THE TICK DECIDES ORIGIN, LENGTH, START AND STATUS TOGETHER, inside the
   // builder. This door used to pass the term unconditionally and write no
   // origin at all — so a holdover filed here landed on the column default,
   // 'application', and was billed a fee they never agreed to on a one-month
   // window that then expired.
-  const built = buildTenant(input, todayLakeDate(), cap, { cutoverDate });
+  const built = buildTenant(input, todayLakeDate(), agreementMonths, { cutoverDate });
   if (!built.ok || !built.renter || !built.tenancy) {
     return { ok: false, error: built.error };
   }
@@ -636,9 +648,9 @@ export async function addTenant(
               : !built.renter.email
                 ? " — the file has no email yet."
                 : " — the file has no phone yet.")
-        : built.tenancy.status === "approved"
-          ? `, on the new lease from ${dayInWords(built.tenancy.start)}.`
-          : ", on the new lease.") +
+        // THE LENGTH AND THE DAY SAID BACK, so a six-month lease filed for
+        // one month is caught by the toast and not by the roll in February.
+        : `, on the new ${agreementMonths == null ? "" : `${lengthAdjective(agreementMonths)} `}lease from ${dayInWords(built.tenancy.start)}.`) +
       (built.renter.phone_on_file_with_park
         ? " The number is on file for you to ring — they'll get anything automated only once they ask for it themselves."
         : ""),

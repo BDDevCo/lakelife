@@ -54,6 +54,24 @@ const METHODS = [
   { value: "other", label: "Other" },
 ] as const;
 
+/**
+ * WHAT COMES OFF FROM MONEY ON ACCOUNT, PER LOT — the preview's second
+ * sentence (0167). `runSummary` says the total ("$742.53 of it already on
+ * account"); this names whose, from the same `fromOnAccount` the run then
+ * applies, so the owner can tie the figure to the cheque in his drawer.
+ * Empty when nothing is on account for anybody being billed.
+ */
+export function fromOnAccountSentence(plan: Pick<RunPlan, "toBill">): string {
+  const lots = plan.toBill.filter((b) => (b.fromOnAccount ?? 0) > 0);
+  if (lots.length === 0) return "";
+  if (lots.length === 1) {
+    const b = lots[0];
+    return `${money(b.fromOnAccount ?? 0)} of Lot ${b.lotNumber}'s money on account comes off its bill the moment it's raised — only what's left is ever chased.`;
+  }
+  const list = lots.map((b) => `Lot ${b.lotNumber} ${money(b.fromOnAccount ?? 0)}`).join(", ");
+  return `Money on account comes off each bill the moment it's raised, oldest money first — ${list} — and only what's left is ever chased.`;
+}
+
 const STATE_PILL: Record<string, string> = {
   late: "warn", part_paid: "warn", due: "slate", paid: "", void: "slate", credit: "",
   disputed: "warn",
@@ -200,6 +218,15 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                 no rent set. {plan.noRent.length === 1 ? "It's" : "They're"} left off rather
                 than billed at zero — a $0 bill marked paid is how a missing
                 rent survives a year.
+              </p>
+            )}
+            {/* WHOSE MONEY ON ACCOUNT COMES OFF. The headline above carries
+                the total; this carries the lots, from the same per-bill figure
+                the run applies. Guarded on the total so a plan built with
+                nothing on account says nothing about it. */}
+            {plan.fromOnAccount > 0 && (
+              <p className="mut" style={{ fontSize: 13, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
+                {fromOnAccountSentence(plan)}
               </p>
             )}
             <p className="mut" style={{ fontSize: 13, marginTop: 8, lineHeight: 1.5 }}>

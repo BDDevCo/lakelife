@@ -4,12 +4,17 @@ import { fileURLToPath } from "node:url";
 import {
   addMonths, daysBetween, monthsBetween, agreementEnd, planRenewal, chainNotice,
   renewalRefusalText, inheritedRefusalText, LONG_CHAIN_MONTHS, SIGNED_LEASE_LABEL,
-  type AgreementTerms, type PriorAgreement, type RenewalRefusal,
+  AGREEMENT_LENGTHS, offeredAgreementLengths, agreementMonthsFor, chooseAgreementLength,
+  lengthInWords, lengthsInWords, lengthAdjective, lengthNotOfferedText,
+  renewalLeadDays, RENEWAL_LEAD_CAP_DAYS, agreementSpanWords, agreementSeasonEnd,
+  type AgreementTerms, type PriorAgreement, type RenewalRefusal, type PlannedRenewal,
 } from "./agreement-helpers";
+import { parkOpenFor, type ParkSeason } from "@/lib/parks";
 import { SIGNED_LEASE_LABEL as LABEL_ON_THE_ROLL } from "./sign-helpers";
 
-/** The Haven: three-month agreements, one deposit per unbroken chain. */
-const HAVEN: AgreementTerms = { maxAgreementMonths: 3, depositAmount: 400 };
+/** The Haven: one-month house style under a three-month cap, one deposit per
+ *  unbroken chain. The household picks one or three months at every renewal. */
+const HAVEN: AgreementTerms = { maxAgreementMonths: 3, defaultAgreementMonths: 1, depositAmount: 400 };
 const NO_CAP: AgreementTerms = { maxAgreementMonths: null, depositAmount: null };
 
 const first: PriorAgreement = {
@@ -38,21 +43,109 @@ describe("addMonths", () => {
 });
 
 describe("agreementEnd", () => {
-  it("ends a Haven agreement three months on", () => {
-    expect(agreementEnd("2026-12-15", HAVEN)).toBe("2027-03-15");
+  it("ends an agreement the CHOSEN number of months on — one, three or six, never the cap", () => {
+    expect(agreementEnd("2026-12-15", 3, HAVEN)).toBe("2027-03-15");
+    expect(agreementEnd("2026-12-15", 1, HAVEN)).toBe("2027-01-15");
+    expect(agreementEnd("2026-12-15", 6, {})).toBe("2027-06-15");
   });
 
   it("returns null where the park writes no fixed term", () => {
-    expect(agreementEnd("2026-12-15", NO_CAP)).toBeNull();
+    expect(agreementEnd("2026-12-15", null, NO_CAP)).toBeNull();
+  });
+
+  it("does not read the cap at all — the length is the argument", () => {
+    // A cap of three with a chosen length of one ends one month on.
+    expect(agreementEnd("2027-01-01", 1, { maxAgreementMonths: 3 } as AgreementTerms)).toBe("2027-02-01");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE LENGTHS ON OFFER. The owner's decision: "options for them to have a 1
+// month, 3 month or 6 month renew." The standard lengths under the park's
+// cap, always including its house style; nothing here knows any park's cap.
+// ---------------------------------------------------------------------------
+describe("the lengths a park offers", () => {
+  it("are one, three, six and twelve months, filtered by the park's cap", () => {
+    expect(AGREEMENT_LENGTHS).toEqual([1, 3, 6, 12]);
+    // The Haven today: a cap of three offers one or three.
+    expect(offeredAgreementLengths(1, 3)).toEqual([1, 3]);
+    // The Haven once the cap is raised to six: one, three or six.
+    expect(offeredAgreementLengths(1, 6)).toEqual([1, 3, 6]);
+    // No cap: all of them.
+    expect(offeredAgreementLengths(1, null)).toEqual([1, 3, 6, 12]);
+    expect(offeredAgreementLengths(null, 12)).toEqual([1, 3, 6, 12]);
+  });
+
+  it("always includes the park's own house style, even off the standard list", () => {
+    expect(offeredAgreementLengths(2, 6)).toEqual([1, 2, 3, 6]);
+    // A house style over the cap is clamped to it, as the database would.
+    expect(offeredAgreementLengths(12, 3)).toEqual([1, 3]);
+  });
+
+  it("offers nothing at a park with neither dial — it writes no fixed-length agreement", () => {
+    expect(offeredAgreementLengths(null, null)).toEqual([]);
+  });
+
+  it("starts the choice on the house style under the cap", () => {
+    expect(agreementMonthsFor(1, 3)).toBe(1);
+    expect(agreementMonthsFor(null, 3)).toBe(3);
+    expect(agreementMonthsFor(12, 3)).toBe(3);
+    expect(agreementMonthsFor(1, null)).toBe(1);
+    expect(agreementMonthsFor(null, null)).toBeNull();
+  });
+});
+
+describe("judging a chosen length — the one rule every writing door uses", () => {
+  it("accepts a length the park offers, and returns exactly that", () => {
+    expect(chooseAgreementLength(1, 1, 3)).toEqual({ ok: true, months: 1 });
+    expect(chooseAgreementLength(3, 1, 3)).toEqual({ ok: true, months: 3 });
+    expect(chooseAgreementLength(6, 1, 6)).toEqual({ ok: true, months: 6 });
+  });
+
+  it("refuses a length the park does not offer, naming the ones it does", () => {
+    const r = chooseAgreementLength(6, 1, 3);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toBe("This park writes agreements of 1 or 3 months — pick one of those.");
+    const r6 = chooseAgreementLength(12, 1, 6);
+    expect(!r6.ok && r6.error).toBe("This park writes agreements of 1, 3 or 6 months — pick one of those.");
+    // Never the cap by default: a choice of none is refused, not defaulted.
+    expect(chooseAgreementLength(2, 1, 3).ok).toBe(false);
+  });
+
+  it("refuses a missing choice rather than defaulting it — the screens seed the house style", () => {
+    const r = chooseAgreementLength(null, 1, 3);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toBe("Pick how long the agreement runs — 1 or 3 months.");
+    expect(chooseAgreementLength(undefined, 1, 6).ok).toBe(false);
+  });
+
+  it("at a park with neither dial the only right answer is no length — the horizon", () => {
+    expect(chooseAgreementLength(null, null, null)).toEqual({ ok: true, months: null });
+    const r = chooseAgreementLength(3, null, null);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(/doesn't write fixed-length agreements/);
+    expect(lengthNotOfferedText([])).toMatch(/doesn't write fixed-length agreements/);
+  });
+
+  it("says a length in words a person reads", () => {
+    expect(lengthInWords(1)).toBe("1 month");
+    expect(lengthInWords(3)).toBe("3 months");
+    expect(lengthsInWords([1, 3, 6])).toBe("1, 3 or 6 months");
+    expect(lengthsInWords([1, 3])).toBe("1 or 3 months");
+    expect(lengthsInWords([1])).toBe("1 month");
+    expect(lengthsInWords([])).toBe("");
+    expect(lengthAdjective(1)).toBe("one-month");
+    expect(lengthAdjective(6)).toBe("6-month");
   });
 });
 
 describe("renewing", () => {
   it("CONSECUTIVE: same chain, next in sequence, and NO second deposit", () => {
-    const r = planRenewal(first, HAVEN, "2027-03-01");
+    const r = planRenewal(first, HAVEN, "2027-03-01", 3);
     expect(r.ok).toBe(true);
     expect(r.start).toBe("2027-03-15");          // the day the last one ends
     expect(r.end).toBe("2027-06-15");
+    expect(r.termMonths).toBe(3);
     expect(r.continuesChain).toBe(true);
     expect(r.nextSeq).toBe(2);
     // THE OWNER'S RULE.
@@ -61,9 +154,32 @@ describe("renewing", () => {
     expect(r.totalMonthsAfter).toBe(6);
   });
 
+  it("writes the length the household CHOSE — one month on a park capped at three", () => {
+    // This planner used to use the cap as the length, so every renewal at
+    // The Haven was three months whatever the household wanted.
+    const one = planRenewal(first, HAVEN, "2027-03-01", 1);
+    expect(one.ok).toBe(true);
+    expect(one.start).toBe("2027-03-15");
+    expect(one.end).toBe("2027-04-15");
+    expect(one.termMonths).toBe(1);
+    expect(one.totalMonthsAfter).toBe(4);
+  });
+
+  it("offers six months only once the cap allows it, and never twelve at a cap of six", () => {
+    const capSix: AgreementTerms = { ...HAVEN, maxAgreementMonths: 6 };
+    expect(planRenewal(first, HAVEN, "2027-03-01", 6).refusal).toBe("not_offered");
+    const six = planRenewal(first, capSix, "2027-03-01", 6);
+    expect(six.ok).toBe(true);
+    expect(six.end).toBe("2027-09-15");
+    expect(planRenewal(first, capSix, "2027-03-01", 12).refusal).toBe("not_offered");
+    // The refusal names what IS offered.
+    expect(renewalRefusalText("not_offered", null, [1, 3, 6]))
+      .toBe("This park writes agreements of 1, 3 or 6 months — pick one of those.");
+  });
+
   it("A GAP: new chain, back to seq 1, and a deposit IS due", () => {
     // They left in March and came back in June. That is a new tenancy.
-    const r = planRenewal(first, HAVEN, "2027-06-01", "2027-06-01");
+    const r = planRenewal(first, HAVEN, "2027-06-01", 3, "2027-06-01");
     expect(r.ok).toBe(true);
     expect(r.continuesChain).toBe(false);
     expect(r.nextSeq).toBe(1);
@@ -73,7 +189,7 @@ describe("renewing", () => {
   });
 
   it("charges no deposit on a gap when the park takes none", () => {
-    const r = planRenewal(first, { maxAgreementMonths: 3, depositAmount: null }, "2027-06-01", "2027-06-01");
+    const r = planRenewal(first, { maxAgreementMonths: 3, depositAmount: null }, "2027-06-01", 3, "2027-06-01");
     expect(r.depositDue).toBe(false);
   });
 
@@ -81,7 +197,7 @@ describe("renewing", () => {
     let prior = first;
     const ends: string[] = [];
     for (let i = 0; i < 7; i++) {
-      const r = planRenewal(prior, HAVEN, prior.end);
+      const r = planRenewal(prior, HAVEN, prior.end, 3);
       expect(r.continuesChain).toBe(true);
       expect(r.depositDue).toBe(false);          // never again
       ends.push(r.end!);
@@ -95,59 +211,96 @@ describe("renewing", () => {
     // Eight consecutive three-month agreements = two years on the lot.
     expect(prior.seq).toBe(8);
     expect(ends.at(-1)).toBe("2028-12-15");
-    expect(planRenewal(prior, HAVEN, prior.end).totalMonthsAfter).toBe(27);
+    expect(planRenewal(prior, HAVEN, prior.end, 3).totalMonthsAfter).toBe(27);
   });
 
   it("counts the months the chain REALLY ran, not seq × cap", () => {
     // The Haven's first signed lease is ONE month (default 1, cap 3). Its
-    // renewal is written at the cap. The chain has run 1 month, and after the
+    // renewal is chosen at three. The chain has run 1 month, and after the
     // renewal will have run 4 — not 3 + 3 = 6, which is what multiplying the
     // sequence number by the cap says.
     const jan: PriorAgreement = {
       id: "j", chainId: "c", seq: 1, start: "2027-01-01", end: "2027-02-01",
       quotedAmount: 400, term: "monthly",
     };
-    expect(planRenewal(jan, { maxAgreementMonths: 3, depositAmount: null }, "2027-01-20")
+    expect(planRenewal(jan, { maxAgreementMonths: 3, depositAmount: null }, "2027-01-20", 3)
       .totalMonthsAfter).toBe(4);
 
     // Seq 4 after three real one-month links and this one: the caller says 4.
     const fourth: PriorAgreement = { ...jan, seq: 4, start: "2027-04-01", end: "2027-05-01", chainMonthsSoFar: 4 };
-    expect(planRenewal(fourth, { maxAgreementMonths: 3, depositAmount: null }, "2027-04-20")
+    expect(planRenewal(fourth, { maxAgreementMonths: 3, depositAmount: null }, "2027-04-20", 3)
       .totalMonthsAfter).toBe(7);
     // Without the caller's number the prior's own span stands in — never seq × cap.
-    expect(planRenewal({ ...fourth, chainMonthsSoFar: undefined }, { maxAgreementMonths: 3, depositAmount: null }, "2027-04-20")
+    expect(planRenewal({ ...fourth, chainMonthsSoFar: undefined }, { maxAgreementMonths: 3, depositAmount: null }, "2027-04-20", 3)
       .totalMonthsAfter).toBe(4);
   });
 
-  it("a season-clamped successor counts its real length, not the cap", () => {
-    // Sep 1 at a 3-month cap, slips out Oct 15: the agreement is 1½ months.
+  it("a season-clamped successor counts its real length, not the one chosen", () => {
+    // Sep 1 choosing 3 months, slips out Oct 15: the agreement is 1½ months.
     const r = planRenewal(
       { ...first, start: "2027-06-01", end: "2027-09-01" },
       { maxAgreementMonths: 3, depositAmount: null, seasonEnd: "2027-10-15" },
       "2027-08-20",
+      3,
     );
     expect(r.end).toBe("2027-10-15");
     expect(r.totalMonthsAfter).toBe(3 + 1);
+    // THE PLAN SAYS SO. The toast and the Today card quoted the CHOSEN length
+    // beside the clamped dates — "renewed for 3 months, September 1, 2027 to
+    // October 15, 2027" — which is a 1½-month agreement described as three.
+    expect(r.cutShortBySeason).toBe(true);
+    expect(agreementSpanWords(r)).toBe(
+      "3 months, cut short by the season close — September 1, 2027 to October 15, 2027",
+    );
   });
 
-  it("refuses to renew a park with no fixed term", () => {
-    expect(planRenewal(first, NO_CAP, "2027-03-01").refusal).toBe("no_cap");
+  it("an unclamped plan is not 'cut short', and its words quote the length plainly", () => {
+    const r = planRenewal(first, HAVEN, "2027-03-01", 3);
+    expect(r.cutShortBySeason).toBe(false);
+    expect(agreementSpanWords(r)).toBe("3 months, March 15, 2027 to June 15, 2027");
+    // A season that ends AFTER the chosen length is no clamp at all.
+    const roomy = planRenewal(first, { ...HAVEN, seasonEnd: "2027-11-01" }, "2027-03-01", 1);
+    expect(roomy.cutShortBySeason).toBe(false);
+    expect(agreementSpanWords(roomy)).toBe("1 month, March 15, 2027 to April 15, 2027");
+  });
+
+  it("the span words come from the plan, never from the request", () => {
+    // A refused plan has no span to speak of — the caller reads the refusal.
+    const refused: PlannedRenewal = { ok: false, refusal: "no_cap" };
+    expect(agreementSpanWords(refused)).toBe("");
+  });
+
+  it("refuses to renew a park with no fixed term, whatever length is asked for", () => {
+    expect(planRenewal(first, NO_CAP, "2027-03-01", 1).refusal).toBe("no_cap");
+    expect(planRenewal(first, NO_CAP, "2027-03-01", 3).refusal).toBe("no_cap");
   });
 
   it("refuses a start date before the current agreement ends", () => {
     // That would overlap the tenant with themselves and the exclusion
     // constraint would reject it anyway — say so in words first.
-    expect(planRenewal(first, HAVEN, "2027-02-01", "2027-02-01").refusal)
+    expect(planRenewal(first, HAVEN, "2027-02-01", 3, "2027-02-01").refusal)
       .toBe("not_yet_renewable");
   });
 
   it("gives every refusal a sentence", () => {
     const all: Record<RenewalRefusal, true> = {
-      no_cap: true, already_ended: true, not_yet_renewable: true, season_closed: true, inherited: true,
+      no_cap: true, not_offered: true, already_ended: true, not_yet_renewable: true, season_closed: true, inherited: true,
     };
     for (const r of Object.keys(all) as RenewalRefusal[]) {
-      expect(renewalRefusalText(r).length).toBeGreaterThan(20);
+      expect(renewalRefusalText(r, null, [1, 3]).length).toBeGreaterThan(20);
     }
+  });
+
+  it("'not offered' never says the park writes no fixed-length agreements — that refusal exists only when the cap is SET", () => {
+    // With a defaulted `offered = []` the not_offered sentence read "This park
+    // doesn't write fixed-length agreements…" — false for the one situation
+    // that yields not_offered. The list is required now; the caller has it.
+    expect(renewalRefusalText("not_offered", null, [1, 3]))
+      .toBe("This park writes agreements of 1 or 3 months — pick one of those.");
+    const src = readFileSync(fileURLToPath(new URL("./agreement-helpers.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).toMatch(/offered: number\[\],\s*\): string \{/);
+    expect(src).not.toMatch(/offered: number\[\] = \[\]/);
   });
 });
 
@@ -223,12 +376,120 @@ describe("the inherited-household refusal", () => {
   });
 });
 
+describe("how far ahead an agreement is asked for renewal (R2)", () => {
+  // THE LEAD IS A FUNCTION OF THE AGREEMENT'S OWN SPAN: its last half, capped
+  // at 45 days. A flat 45 days listed every one-month agreement from the
+  // morning it was written — he tapped Renew, the toast said "renewed", and
+  // the household reappeared in the same list reading the new end date, as
+  // if the tap had not taken. On 1 January all 21 one-month leases would sit
+  // in "Agreements to write" from the day they were signed.
+  it("a one-month agreement is asked in its last ~15 days", () => {
+    expect(renewalLeadDays("2027-02-01", "2027-03-01")).toBe(14); // 28 days
+    expect(renewalLeadDays("2027-01-01", "2027-02-01")).toBe(16); // 31 days — the odd day goes to the lead
+    expect(renewalLeadDays("2027-04-01", "2027-05-01")).toBe(15); // 30 days
+  });
+
+  it("a three-month agreement is asked 45 days ahead — the cap", () => {
+    expect(RENEWAL_LEAD_CAP_DAYS).toBe(45);
+    expect(renewalLeadDays("2027-02-01", "2027-05-01")).toBe(45); // 89 days
+    expect(renewalLeadDays("2027-06-01", "2027-09-01")).toBe(45); // 92 days
+    expect(renewalLeadDays("2027-01-01", "2027-07-01")).toBe(45); // six months
+  });
+
+  it("a shorter cap is honoured, and a span with no days has no lead", () => {
+    expect(renewalLeadDays("2027-02-01", "2027-05-01", 30)).toBe(30);
+    expect(renewalLeadDays("2027-02-01", "2027-02-01")).toBe(0);
+    expect(renewalLeadDays("2027-02-01", "2027-02-02")).toBe(1);
+    expect(renewalLeadDays("2027-02-01", "2027-02-03")).toBe(1);
+    // Never negative for a range the database would refuse anyway.
+    expect(renewalLeadDays("2027-02-03", "2027-02-01")).toBe(0);
+  });
+
+  it("a just-written one-month successor is NOT yet due: its lead is inside its own second half", () => {
+    // Written on 1 February for 1 February – 1 March: due from 15 February.
+    const lead = renewalLeadDays("2027-02-01", "2027-03-01");
+    expect(daysBetween("2027-02-01", "2027-03-01") - lead).toBeGreaterThan(0);
+    expect(addMonths("2027-02-01", 0)).toBe("2027-02-01");
+    // Day 14 of 28 is the first morning it lists (28 - 14 = 14 days left).
+    expect(daysBetween("2027-02-15", "2027-03-01")).toBe(lead);
+  });
+});
+
+describe("agreementSeasonEnd — the one checkout morning a season sets, for BOTH doors", () => {
+  // The owner's Renew button computed this inline (the close DAY, in the
+  // start's year) and the resident's texted link never computed it at all —
+  // so on a slip lot the two doors wrote different rows for one choice.
+  // Both now read this. The close day is the LAST NIGHT, as the booking gate
+  // (parkOpenFor) and seasonEndAfter already have it: a lot that closes
+  // 15 October sells the night of the 15th, and its agreements end the
+  // morning of the 16th.
+  const SLIPS: ParkSeason = { openMonth: 4, openDay: 15, closeMonth: 10, closeDay: 15 };
+  const WINTER: ParkSeason = { openMonth: 11, openDay: 1, closeMonth: 3, closeDay: 31 };
+  const YEAR_ROUND: ParkSeason = { openMonth: null, openDay: null, closeMonth: null, closeDay: null };
+
+  it("is the morning after the close day — the night of the close is sold", () => {
+    expect(agreementSeasonEnd("2027-09-01", SLIPS)).toBe("2027-10-16");
+    // The booking gate agrees: a stay through that morning is inside the season.
+    expect(parkOpenFor(SLIPS, { start: "2027-09-01", end: "2027-10-16" })).toBe(true);
+    expect(parkOpenFor(SLIPS, { start: "2027-09-01", end: "2027-10-17" })).toBe(false);
+  });
+
+  it("is THIS season's end even once it has passed, so a start after the close is refused, not planned", () => {
+    // Not seasonEndAfter's answer (next year's close): planRenewal reads
+    // start >= seasonEnd as season_closed, and a renewal from 1 November
+    // must hit 16 October, not 16 October of next year.
+    expect(agreementSeasonEnd("2027-11-01", SLIPS)).toBe("2027-10-16");
+    const r = planRenewal(
+      { ...first, start: "2027-08-01", end: "2027-11-01" },
+      { maxAgreementMonths: 3, depositAmount: null, seasonEnd: agreementSeasonEnd("2027-11-01", SLIPS) },
+      "2027-10-01", 1,
+    );
+    expect(r.refusal).toBe("season_closed");
+  });
+
+  it("a window that wraps the New Year closes in the year after the open the start sits in", () => {
+    expect(agreementSeasonEnd("2027-12-01", WINTER)).toBe("2028-04-01");
+    expect(agreementSeasonEnd("2028-02-01", WINTER)).toBe("2028-04-01");
+    // June is outside a November–March window: its end is the April already gone.
+    expect(agreementSeasonEnd("2027-06-01", WINTER)).toBe("2027-04-01");
+  });
+
+  it("is null for a year-round lot — nothing to clamp to", () => {
+    expect(agreementSeasonEnd("2027-09-01", YEAR_ROUND)).toBeNull();
+    expect(agreementEnd("2027-09-01", 3, { seasonEnd: agreementSeasonEnd("2027-09-01", YEAR_ROUND) })).toBe("2027-12-01");
+  });
+
+  it("clamps a three-month September slip agreement to six weeks, and the plan says so", () => {
+    const r = planRenewal(
+      { ...first, start: "2027-06-01", end: "2027-09-01" },
+      { maxAgreementMonths: 3, depositAmount: null, seasonEnd: agreementSeasonEnd("2027-09-01", SLIPS) },
+      "2027-08-20", 3,
+    );
+    expect(r).toMatchObject({ ok: true, start: "2027-09-01", end: "2027-10-16", cutShortBySeason: true });
+    expect(agreementSpanWords(r)).toBe("3 months, cut short by the season close — September 1, 2027 to October 16, 2027");
+  });
+});
+
 describe("daysBetween", () => {
   it("measures a Haven agreement", () => {
     expect(daysBetween("2026-12-15", "2027-03-15")).toBe(90);
     // Every three-month span is under the 31*3+1 guard the database uses.
     for (const s of ["2027-01-31", "2027-02-28", "2027-11-30", "2028-01-31"]) {
       expect(daysBetween(s, addMonths(s, 3))).toBeLessThanOrEqual(94);
+    }
+  });
+
+  it("every offered length fits under the cap trigger's cap*31+1 guard, at every cap", () => {
+    // 0065 refuses span_days > cap*31+1. A six-month agreement is at most
+    // 184 days (≤ 187 at a cap of six); the guard reads the CAP, so a
+    // shorter chosen length is always inside it.
+    for (const cap of [1, 3, 6, 12]) {
+      for (const months of offeredAgreementLengths(1, cap)) {
+        for (const s of ["2027-01-31", "2027-02-28", "2027-07-01", "2027-11-30", "2028-01-31"]) {
+          expect(daysBetween(s, addMonths(s, months)), `${months}mo from ${s} at cap ${cap}`)
+            .toBeLessThanOrEqual(cap * 31 + 1);
+        }
+      }
     }
   });
 });

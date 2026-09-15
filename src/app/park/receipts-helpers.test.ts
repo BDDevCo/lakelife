@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, METHOD_LABEL, type Receipt, type OtherReceipt } from "./receipts-helpers";
+import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, onAccountKindLabel, appliedToCell, METHOD_LABEL, type Receipt, type OtherReceipt } from "./receipts-helpers";
 import { METHOD_WORD } from "./receipt-helpers";
 
 const TODAY = "2026-08-11";
@@ -352,6 +352,100 @@ describe("cash that came in but is not rent received", () => {
 
   it("and when the caller doesn't pass them at all", () => {
     expect(exclusionLines(base).some((l) => /NOT in the total above/.test(l))).toBe(false);
+  });
+
+  // MONEY ON ACCOUNT THAT HAS SINCE BEEN PUT AGAINST BILLS (0167). Cash basis
+  // is untouched — it is counted on the day it arrived — but the statement
+  // must not say "hasn't been put against a bill" about a quarter that paid
+  // for January, February and March.
+  it("says how much of the on-account money has since gone against bills, and how much is still held — the VIEW's figure", () => {
+    const part = exclusionLines({ ...base, onAccountReceivedCents: 162_759, onAccountAppliedCents: 108_506, onAccountHeldCents: 54_253 })
+      .find((l) => /NOT in the total above/.test(l))!;
+    expect(part).toContain("$1627.59 received on account");
+    expect(part).toContain("$1085.06 of the money on account has since been put against bills — the file says which months — and $542.53 is still held.");
+    const all = exclusionLines({ ...base, onAccountReceivedCents: 162_759, onAccountAppliedCents: 162_759, onAccountHeldCents: 0 })
+      .find((l) => /NOT in the total above/.test(l))!;
+    expect(all).toContain("All of the money on account has since been put against bills — the file says which months.");
+    const none = exclusionLines({ ...base, onAccountReceivedCents: 162_759, onAccountAppliedCents: 0, onAccountHeldCents: 162_759 })
+      .find((l) => /NOT in the total above/.test(l))!;
+    expect(none).not.toMatch(/since been put against/);
+  });
+
+  it("'is still held' is never received minus applied: a refund the arithmetic would miss, and a figure nobody read is not printed", () => {
+    // $600 on account by card: $542.53 to January, $57.47 refunded. The
+    // old subtraction printed "$57.47 is still held" in the accountant's
+    // file about money that went back to a card. The view says 0.
+    const refunded = exclusionLines({ ...base, onAccountReceivedCents: 60_000, onAccountAppliedCents: 54_253, onAccountHeldCents: 0 })
+      .find((l) => /NOT in the total above/.test(l))!;
+    expect(refunded).toContain("$542.53 of the money on account has since been put against bills — the file says which months — and none of it is still held.");
+    expect(refunded).not.toMatch(/\$57\.47/);
+    expect(refunded).not.toMatch(/All of the money/);
+    // The loader did not read the view: no held figure at all, not a guess.
+    const unread = exclusionLines({ ...base, onAccountReceivedCents: 162_759, onAccountAppliedCents: 108_506 })
+      .find((l) => /NOT in the total above/.test(l))!;
+    expect(unread).toContain("$1085.06 of the money on account has since been put against bills — the file says which months.");
+    expect(unread).not.toMatch(/still held/);
+    expect(unread).not.toMatch(/All of the money/);
+  });
+
+  it("no longer asserts that money on account has not been put against a bill", () => {
+    const standing = exclusionLines(base);
+    expect(standing.some((l) => /hasn't been put against a bill/.test(l))).toBe(false);
+    expect(standing.some((l) => /counted here on the day it arrived, not on the bills it later pays/.test(l))).toBe(true);
+  });
+});
+
+describe("where money on account went, in the file", () => {
+  const acct = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
+    paymentId: "q", kind: "rent", receivedOn: "2026-12-28", amountCents: 162_759, feeCents: 0, method: "check", reference: "1042", ...over,
+  });
+  const cellsOf = (csv: string, line: number) => {
+    const header = csv.split("\r\n")[0].split(",");
+    const row = csv.split("\r\n")[line].split(",");
+    return (name: string) => row[header.indexOf(name)];
+  };
+
+  it("labels the kind by how much has been applied — still filterable", () => {
+    expect(onAccountKindLabel(acct())).toBe("On account (not yet applied)");
+    expect(onAccountKindLabel(acct({ appliedTo: [{ periodMonth: "2027-01", amountCents: 54_253 }] }))).toBe("On account (partly applied)");
+    expect(onAccountKindLabel(acct({ appliedTo: [
+      { periodMonth: "2027-01", amountCents: 54_253 }, { periodMonth: "2027-02", amountCents: 54_253 }, { periodMonth: "2027-03", amountCents: 54_253 },
+    ] }))).toBe("On account (applied)");
+  });
+
+  it("'applied' means nothing is left — the view's word when the loader carried it, not applied >= amount", () => {
+    // $600 by card: $542.53 on January, $57.47 refunded. Applied < amount,
+    // yet nothing is on account — the row is "applied", not "partly".
+    expect(onAccountKindLabel(acct({ amountCents: 60_000, appliedTo: [{ periodMonth: "2027-01", amountCents: 54_253 }], remainingCents: 0 }))).toBe("On account (applied)");
+    expect(onAccountKindLabel(acct({ amountCents: 60_000, appliedTo: [{ periodMonth: "2027-01", amountCents: 54_253 }], remainingCents: 5_747 }))).toBe("On account (partly applied)");
+    // Nothing applied and nothing held: it went back, and "not yet applied"
+    // would send the office looking for money to apply.
+    expect(onAccountKindLabel(acct({ appliedTo: [], remainingCents: 0 }))).toBe("On account (given back)");
+    expect(onAccountKindLabel(acct({ appliedTo: [], remainingCents: 162_759 }))).toBe("On account (not yet applied)");
+  });
+
+  it("names the months and the split in the Bill month cell, in month order", () => {
+    const row = acct({ appliedTo: [{ periodMonth: "2027-02", amountCents: 54_253 }, { periodMonth: "2027-01", amountCents: 54_253 }] });
+    expect(appliedToCell(row)).toBe("2027-01: 542.53; 2027-02: 542.53");
+    const csv = receiptsCsv([], [row], { parkName: "P", generatedAt: "t" });
+    const at = cellsOf(csv, 1);
+    expect(at("Kind")).toBe("On account (partly applied)");
+    expect(at("Bill month")).toBe("2027-01: 542.53; 2027-02: 542.53");
+    // Still one row, dated the day it arrived, at the amount that arrived.
+    expect(at("Date received")).toBe("2026-12-28");
+    expect(at("Amount")).toBe("1627.59");
+    expect(at("Bill total")).toBe("");
+    expect(at("Charge ID")).toBe("");
+  });
+
+  it("a deposit and amenity money carry no months, whatever is passed", () => {
+    const csv = receiptsCsv([], [
+      acct({ kind: "deposit", paymentId: "d", appliedTo: [{ periodMonth: "2027-01", amountCents: 1 }] }),
+      acct({ kind: "amenity", paymentId: "a" }),
+    ], { parkName: "P", generatedAt: "t" });
+    expect(cellsOf(csv, 1)("Bill month")).toBe("");
+    expect(cellsOf(csv, 1)("Kind")).toBe("Deposit (not income)");
+    expect(cellsOf(csv, 2)("Bill month")).toBe("");
   });
 });
 

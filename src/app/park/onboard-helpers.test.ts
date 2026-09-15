@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { planOnboarding, onboardSummary, signingExplainer, contactProblem, type OnboardRow } from "./onboard-helpers";
 import { SIGNED_LEASE_LABEL } from "./park-helpers";
 
@@ -46,9 +47,12 @@ const TODAY = "2026-12-16";
 
 const row = (o: Partial<OnboardRow> = {}): OnboardRow => ({
   lotId: "l1", lotNumber: "3", displayName: "Amberg, Roy",
-  rent: "395", movedInOn: "", signedNewLease: false, agreementStartsOn: "",
+  rent: "395", movedInOn: "", signedNewLease: false, agreementStartsOn: "", agreementMonths: null,
   email: "roy@example.com", phone: "(260) 555-0142", ...o,
 });
+
+/** The Haven's two dials: a one-month house style under a three-month cap. */
+const HAVEN_DIALS = { defaultMonths: 1, capMonths: 3 };
 
 describe("filing the households who were already there", () => {
   it("files a row with a name, and leaves an unknown move-in date UNKNOWN", () => {
@@ -182,13 +186,28 @@ describe("what he is told before he writes it", () => {
   it("the explainer quotes the TERM a signed agreement is written for — never the cap as the length", () => {
     // The Haven: one-month house style under a three-month cap. This read
     // 'a fresh agreement under your 3-month rule' while commitOnboarding
-    // wrote one month. It takes agreementMonthsFor(default, max) now.
-    expect(signingExplainer(1)).toContain("those get a fresh one-month agreement.");
-    expect(signingExplainer(6)).toContain("those get a fresh 6-month agreement.");
+    // wrote one month. With one length on offer it names that length; with
+    // more it names the choice per row and the one it starts on.
+    // One length on offer (a cap of one, or a cap equal to the only length).
+    expect(signingExplainer(1, 1)).toContain("those get a fresh one-month agreement.");
+    expect(signingExplainer(6, 6)).toContain("those get a fresh agreement — 6 months unless you pick 1 or 3 months on the row.");
     expect(signingExplainer(null)).toContain("those get a fresh agreement.");
-    for (const line of [signingExplainer(1), signingExplainer(3), signingExplainer(null)]) {
+    // No cap at all: every standard length is on offer beside the house style.
+    expect(signingExplainer(1)).toContain("those get a fresh agreement — 1 month unless you pick 3, 6 or 12 months on the row.");
+    for (const line of [signingExplainer(1), signingExplainer(3), signingExplainer(null), signingExplainer(1, 1)]) {
       expect(line).not.toMatch(/-month rule/);
       expect(line).not.toMatch(/under your/);
+    }
+  });
+
+  it("with more than one length on offer the explainer says the choice is per row — the owner's one-three-or-six", () => {
+    expect(signingExplainer(1, 3)).toContain("those get a fresh agreement — 1 month unless you pick 3 months on the row.");
+    expect(signingExplainer(1, 6)).toContain("those get a fresh agreement — 1 month unless you pick 3 or 6 months on the row.");
+    // A cap of one offers one length: no choice to describe.
+    expect(signingExplainer(1, 1)).toContain("those get a fresh one-month agreement.");
+    for (const line of [signingExplainer(1, 3), signingExplainer(1, 6)]) {
+      expect(line).not.toMatch(/-month rule/);
+      expect(line).not.toMatch(/2027-/);
     }
   });
 
@@ -502,6 +521,96 @@ describe("the day a signed lease runs from", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// THE LENGTH IS THE HOUSEHOLD'S CHOICE, PER ROW. The owner's decision: one,
+// three or six months. A signed row carries the length that household's lease
+// says, judged against the park's dials by the same rule every door uses —
+// commitOnboarding used to pass the cap, then the house style, to every row.
+// ---------------------------------------------------------------------------
+describe("the length each signed household chose", () => {
+  const CUTOVER = "2027-01-01";
+  const signed = (o: Partial<OnboardRow> = {}) => row({ signedNewLease: true, rent: "400", agreementMonths: 1, ...o });
+
+  it("carries each row's own length through to what gets written", () => {
+    const p = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1", agreementMonths: 1 }), signed({ lotId: "b", lotNumber: "2", agreementMonths: 3 })],
+      "2027-01-04", CUTOVER, HAVEN_DIALS,
+    );
+    expect(p.problems).toEqual([]);
+    expect(p.toFile.map((r) => r.agreementMonths)).toEqual([1, 3]);
+  });
+
+  it("a holdover carries no length at all, whatever the row says", () => {
+    const p = planOnboarding([row({ agreementMonths: 3 })], "2027-01-04", CUTOVER, HAVEN_DIALS);
+    expect(p.toFile[0].agreementMonths).toBeNull();
+  });
+
+  it("names the lot whose length the park does not offer — six at a cap of three — and files it once the cap is six", () => {
+    const p = planOnboarding([signed({ lotNumber: "14", agreementMonths: 6 })], "2027-01-04", CUTOVER, HAVEN_DIALS);
+    expect(p.toFile).toHaveLength(0);
+    expect(p.problems).toEqual([{ lotNumber: "14", why: "This park writes agreements of 1 or 3 months — pick one of those." }]);
+    const raised = planOnboarding([signed({ lotNumber: "14", agreementMonths: 6 })], "2027-01-04", CUTOVER, { defaultMonths: 1, capMonths: 6 });
+    expect(raised.problems).toEqual([]);
+    expect(raised.toFile[0].agreementMonths).toBe(6);
+  });
+
+  it("names a signed row with NO length rather than filing the house style for it", () => {
+    const p = planOnboarding([signed({ lotNumber: "9", agreementMonths: null })], "2027-01-04", CUTOVER, HAVEN_DIALS);
+    expect(p.problems).toEqual([{ lotNumber: "9", why: "Pick how long the agreement runs — 1 or 3 months." }]);
+  });
+
+  it("a park with neither dial writes no length — the horizon — and the pure callers that pass no dials read the same", () => {
+    expect(planOnboarding([signed({ agreementMonths: null })], "2027-01-04", CUTOVER, { defaultMonths: null, capMonths: null }).toFile[0].agreementMonths).toBeNull();
+    expect(planOnboarding([signed({ agreementMonths: null })], "2027-01-04", CUTOVER).toFile[0].agreementMonths).toBeNull();
+  });
+
+  it("the summary ALWAYS names the lengths — the one number the tick chose for him is the one he must see", () => {
+    const mixed = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1", agreementMonths: 1 }), signed({ lotId: "b", lotNumber: "2", agreementMonths: 1 }),
+       signed({ lotId: "c", lotNumber: "14", agreementMonths: 3 })],
+      "2027-01-04", CUTOVER, HAVEN_DIALS,
+    );
+    expect(onboardSummary(mixed, 3)).toContain("2 for 1 month, 1 for 3 months");
+    // Eighteen rows ticked and the per-row select never touched files
+    // eighteen ONE-MONTH leases; the sentence he checks before File said
+    // "all on the new lease, capped by your 3-month rule" and no length.
+    const same = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1" }), signed({ lotId: "b", lotNumber: "2" })],
+      "2027-01-04", CUTOVER, HAVEN_DIALS,
+    );
+    expect(onboardSummary(same, 3)).toContain("all for 1 month");
+    expect(onboardSummary(same, 3)).toContain("all on the new lease, capped by your 3-month rule · all for 1 month");
+    // Two rows both picked three: says three, once.
+    const three = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1", agreementMonths: 3 }), signed({ lotId: "b", lotNumber: "2", agreementMonths: 3 })],
+      "2027-01-04", CUTOVER, HAVEN_DIALS,
+    );
+    expect(onboardSummary(three, 3)).toContain("all for 3 months");
+    expect(onboardSummary(three, 3)).not.toMatch(/2 for 3 months/);
+    // A mix of signed and holdover names the length beside the split.
+    const split = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1" }), row({ lotId: "b", lotNumber: "2", signedNewLease: false })],
+      "2027-01-04", CUTOVER, HAVEN_DIALS,
+    );
+    expect(onboardSummary(split, 3)).toContain("1 on the new lease, 1 on the arrangement they already had (lot 2)");
+    expect(onboardSummary(split, 3)).toContain("all for 1 month");
+    // Nobody signed: no length to name, and none invented.
+    const none = planOnboarding([row({ signedNewLease: false })], "2027-01-04", CUTOVER, HAVEN_DIALS);
+    expect(onboardSummary(none, 3)).not.toMatch(/for \d+ month/);
+  });
+
+  it("the explainer's adjective comes from the one home for it", () => {
+    // One month always fits under a cap, so the single-length branch only
+    // ever reads "one-month" — the scan is what pins the home.
+    expect(signingExplainer(1, 1)).toContain("those get a fresh one-month agreement.");
+    expect(signingExplainer(3, 3)).toContain("those get a fresh agreement — 3 months unless you pick 1 month on the row.");
+    const src = readFileSync(fileURLToPath(new URL("./onboard-helpers.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).toMatch(/lengthAdjective\(termMonths\)/);
+    expect(src).not.toMatch(/termMonths === 1 \? "one" : termMonths\}-month/);
+  });
+});
+
 describe("contactProblem — one rule, one set of sentences, every door", () => {
   it("is the rule planOnboarding applies", () => {
     expect(contactProblem("roy@example.com", "(260) 555-0142")).toBeNull();
@@ -558,8 +667,20 @@ describe("the screen actually gets the cutover", () => {
     const el = page.match(/<ParkOnboard[\s\S]*?\/>/)?.[0] ?? "";
     expect(el).toMatch(/termMonths=\{res\.termMonths \?\? null\}/);
     const screen = readFileSync(new URL("../../components/ParkOnboard.tsx", import.meta.url), "utf8");
-    expect(screen).toMatch(/\{signingExplainer\(termMonths\)\}/);
+    expect(screen).toMatch(/\{signingExplainer\(termMonths, capMonths\)\}/);
     expect(screen).not.toMatch(/signingExplainer\(capMonths\)/);
+  });
+
+  it("the screen offers each signed row the lengths the park writes, seeds the house style with the tick, and plans with the dials", () => {
+    const screen = readFileSync(new URL("../../components/ParkOnboard.tsx", import.meta.url), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\s*\/\/.*$/gm, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(screen).toMatch(/const lengths = offeredAgreementLengths\(termMonths, capMonths\);/);
+    expect(screen).toMatch(/agreementMonths: signed \? termMonths : null,/);
+    expect(screen).toMatch(/planOnboarding\(rows, today, cutoverDate, \{ defaultMonths: termMonths, capMonths \}\)/);
+    expect(screen).toMatch(/\{r\.signedNewLease && lengths\.length > 0 && \(/);
+    expect(screen).toMatch(/onChange=\{\(e\) => set\(i, "agreementMonths", e\.target\.value \? Number\(e\.target\.value\) : null\)\}/);
+    // The initial state carries no length: nobody has signed anything.
+    expect(screen).toMatch(/agreementMonths: null,/);
   });
 });
 
@@ -615,5 +736,30 @@ describe("commitOnboarding names what it refused", () => {
     expect(res.ok).toBe(false);
     expect(res.error).toBe("Nothing filled in to file.");
     expect(res.failed).toBeUndefined();
+  });
+
+  it("writes each signed row for the length ITS household chose — three months beside one, at a park whose house style is one", async () => {
+    const res = await commitOnboarding("park-1", [
+      row({ lotId: "l1", lotNumber: "1", signedNewLease: true, agreementStartsOn: "2027-01-01", agreementMonths: 1 }),
+      row({ lotId: "l2", lotNumber: "2", displayName: "Reyes, Donna", signedNewLease: true, agreementStartsOn: "2027-01-01", agreementMonths: 3 }),
+    ]);
+    expect(res.ok, res.error).toBe(true);
+    expect(res.filed).toBe(2);
+    const stays = inserted.filter((i) => i.table === "lot_reservations").map((i) => i.row);
+    expect(stays[0]).toMatchObject({ park_lot_id: "l1", during: "[2027-01-01,2027-02-01)", origin: "application" });
+    expect(stays[1]).toMatchObject({ park_lot_id: "l2", during: "[2027-01-01,2027-04-01)", origin: "application" });
+  });
+
+  it("refuses a length the PARK does not offer by lot, reading the cap from the park, and writes nothing for it", async () => {
+    const six = row({ lotId: "l1", lotNumber: "1", signedNewLease: true, agreementStartsOn: "2027-01-01", agreementMonths: 6 });
+    const res = await commitOnboarding("park-1", [six]);
+    expect(res.ok).toBe(false);
+    expect(res.failed).toEqual([{ lotNumber: "1", why: "This park writes agreements of 1 or 3 months — pick one of those." }]);
+    expect(inserted).toEqual([]);
+
+    db.parks[0].max_agreement_months = 6;
+    const raised = await commitOnboarding("park-1", [six]);
+    expect(raised.ok, raised.error).toBe(true);
+    expect(inserted.find((i) => i.table === "lot_reservations")!.row).toMatchObject({ during: "[2027-01-01,2027-07-01)" });
   });
 });

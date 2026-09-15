@@ -82,7 +82,7 @@ describe("an agreement ends at whichever comes first", () => {
 
   it("clamps a September slip to the season close, not three months out", () => {
     // Three months would run to Dec 1, and the slips are out of the water.
-    expect(agreementEnd("2027-09-01", HAVEN_SLIP)).toBe("2027-11-01");
+    expect(agreementEnd("2027-09-01", 3, HAVEN_SLIP)).toBe("2027-11-01");
   });
 
   it("uses the term cap when the season ends later", () => {
@@ -90,11 +90,11 @@ describe("an agreement ends at whichever comes first", () => {
       maxAgreementMonths: 3, depositAmount: 400,
       seasonEnd: seasonEndAfter("2027-05-01", SLIP_SEASON),   // Nov 1
     };
-    expect(agreementEnd("2027-05-01", terms)).toBe("2027-08-01");
+    expect(agreementEnd("2027-05-01", 3, terms)).toBe("2027-08-01");
   });
 
   it("leaves a year-round pad on the plain three-month term", () => {
-    expect(agreementEnd("2026-12-15", { maxAgreementMonths: 3, depositAmount: 400 }))
+    expect(agreementEnd("2026-12-15", 3, {}))
       .toBe("2027-03-15");
   });
 
@@ -106,7 +106,7 @@ describe("an agreement ends at whichever comes first", () => {
     const r = planRenewal(prior, {
       maxAgreementMonths: 3, depositAmount: 400,
       seasonEnd: "2027-11-01",
-    }, "2027-10-25");
+    }, "2027-10-25", 3);
     expect(r.ok).toBe(false);
     expect(r.refusal).toBe("season_closed");
   });

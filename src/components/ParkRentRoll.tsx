@@ -11,13 +11,14 @@ import {
 } from "@/app/park/actions";
 import { recordSigning } from "@/app/park/sign-actions";
 import {
-  defaultSigningDay, firstMonthBills, agreementAlreadyOver, alreadyOverClause,
-  SIGNED_LEASE_LABEL, type SigningInput,
+  defaultSigningDay, firstMonthBills, agreementAlreadyOver, signingDayForLength, blankDayWords,
+  SIGNED_LEASE_LABEL, newLeaseWords, type SigningInput,
 } from "@/app/park/sign-helpers";
 import type { TenantInput, TenantEditInput } from "@/app/park/park-helpers";
 import {
   agreementStartFor, SIGNED_START_HORIZON_DAYS, dayInWords, EDITABLE_TERMS, TERM_EACH,
 } from "@/app/park/park-helpers";
+import { offeredAgreementLengths, lengthInWords } from "@/app/park/agreement-helpers";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 import { prettyPhone } from "@/lib/phone";
 
@@ -118,7 +119,11 @@ export interface RollRowView {
     phone: string | null;
     /** The holdover's own first day — the form's default when the ledger covers it. */
     holdoverFrom: string | null;
-    /** The park's term — what the successor runs for; null on a park with neither dial. */
+    /**
+     * The park's house style under its cap — the length the form's choice
+     * STARTS on, never what the successor must run for; the household picks
+     * from the lengths the park offers. Null on a park with neither dial.
+     */
     termMonths: number | null;
     /** What a signed agreement on this lot is charged each month, by the biller's rule. */
     feePerMonth: number;
@@ -189,6 +194,8 @@ export function ParkRentRoll({
   wouldBill,
   preGoLive,
   cutoverDate = null,
+  capMonths,
+  termMonths,
 }: {
   parkId: string;
   isOwner: boolean;
@@ -204,6 +211,16 @@ export function ParkRentRoll({
    * may not start before it, and one filed before go-live starts on it.
    */
   cutoverDate?: string | null;
+  /**
+   * THE PARK'S TWO DIALS, for the length choice on every door here that
+   * writes a signed agreement — "Someone lives here" and "They signed the new
+   * lease". The cap (`max_agreement_months`) filters the lengths on offer;
+   * the term (`agreementMonthsFor(default, max)`) is the one the choice
+   * starts on. REQUIRED, not defaulted: a prop nothing passes would offer no
+   * choice and the server would refuse every signed row for having none.
+   */
+  capMonths: number | null;
+  termMonths: number | null;
   owedTotal?: number;
   owedBlocked?: number;
   owedMonth?: string;
@@ -690,6 +707,7 @@ export function ParkRentRoll({
                         seed={r.signing}
                         today={today}
                         cutoverDate={cutoverDate}
+                        capMonths={capMonths}
                         onDone={() => setSigningId(null)}
                       />
                     )}
@@ -770,6 +788,8 @@ export function ParkRentRoll({
                     lotNumber={r.lotNumber}
                     today={today}
                     cutoverDate={cutoverDate}
+                    capMonths={capMonths}
+                    termMonths={termMonths}
                     onDone={() => setAddingTo(null)}
                   />
                 )}
@@ -793,10 +813,13 @@ export function ParkRentRoll({
  * park turns into a three-hour data-entry session that gets abandoned at lot 9.
  */
 function AddTenant({
-  parkId, lotId, lotNumber, today, cutoverDate, onDone,
+  parkId, lotId, lotNumber, today, cutoverDate, capMonths, termMonths, onDone,
 }: {
   parkId: string; lotId: string; lotNumber: string;
-  today: string; cutoverDate: string | null; onDone: () => void;
+  today: string; cutoverDate: string | null;
+  /** The park's cap and house style — the lengths on offer, and the one the choice starts on. */
+  capMonths: number | null; termMonths: number | null;
+  onDone: () => void;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -810,19 +833,26 @@ function AddTenant({
     // may set it.
     signedNewLease: false,
     agreementStartsOn: "",
+    agreementMonths: null,
   });
   const set = <K extends keyof TenantInput>(k: K, v: TenantInput[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
+  // THE LENGTHS THE PARK OFFERS, for the choice a signed lease carries. The
+  // same list the server judges the choice against (chooseAgreementLength).
+  const lengths = offeredAgreementLengths(termMonths, capMonths);
+
   // THE DAY A SIGNED LEASE RUNS FROM, seeded when the tick is set: the later
   // of today and the cutover, changeable to the date on the paper. Cleared
-  // with the tick — a holdover has no agreement start.
+  // with the tick — a holdover has no agreement start. THE LENGTH likewise:
+  // seeded with the park's house style, his to change, cleared with the tick.
   const defaultStart = agreementStartFor("", today, cutoverDate);
   const tick = (signed: boolean) =>
     setForm((f) => ({
       ...f,
       signedNewLease: signed,
       agreementStartsOn: signed && defaultStart.ok ? defaultStart.start : "",
+      agreementMonths: signed ? termMonths : null,
     }));
   const latestStart = (() => {
     const [y, m, d] = today.split("-").map(Number);
@@ -898,18 +928,38 @@ function AddTenant({
       </label>
       {form.signedNewLease && (
         <div className="ll-field" style={{ fontSize: 13, marginTop: 10 }}>
-          <label>The lease runs from</label>
-          <input
-            type="date"
-            value={form.agreementStartsOn ?? ""}
-            min={cutoverDate ?? undefined}
-            max={latestStart}
-            onChange={(e) => set("agreementStartsOn", e.target.value)}
-          />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+            <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+              <span className="mut">The lease runs from</span>
+              <input
+                type="date"
+                value={form.agreementStartsOn ?? ""}
+                min={cutoverDate ?? undefined}
+                max={latestStart}
+                onChange={(e) => set("agreementStartsOn", e.target.value)}
+                style={{ marginTop: 4 }}
+              />
+            </label>
+            {/* HOW LONG IT RUNS — the household's choice from the lengths
+                the park offers, starting on the house style. The server
+                refuses any other length, so only these are offered. */}
+            {lengths.length > 0 && (
+              <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+                <span className="mut">For</span>
+                <select value={form.agreementMonths ?? ""} style={{ marginTop: 4 }}
+                  onChange={(e) => set("agreementMonths", e.target.value ? Number(e.target.value) : null)}>
+                  {lengths.map((m) => (
+                    <option key={m} value={m}>{lengthInWords(m)}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
           <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
             The day on the paper, not today — the first month bills from this
             day{form.agreementStartsOn ? ` (${dayInWords(form.agreementStartsOn)})` : ""}.
-            Email and phone are a condition of the new lease, so both are needed.
+            {lengths.length > 1 ? " The length is theirs to pick at every renewal too." : ""}
+            {" "}Email and phone are a condition of the new lease, so both are needed.
           </p>
         </div>
       )}
@@ -941,8 +991,10 @@ function AddTenant({
 /**
  * THEY SIGNED THE NEW LEASE — the form.
  *
- * Four things and no more: THE DAY THE NEW LEASE RUNS FROM (the day on the
- * paper — never today, which is the day the office got round to it), the
+ * Five things and no more: THE DAY THE NEW LEASE RUNS FROM (the day on the
+ * paper — never today, which is the day the office got round to it), HOW
+ * LONG IT RUNS (the household's pick from the lengths the park offers,
+ * starting on the house style — the owner's one-three-or-six decision), the
  * rent on the paper (started from the lot's rate card, the number the lease
  * was written from), and the two ways to reach them that are a condition of
  * the lease. The arrangement they had ends the day the new lease starts and
@@ -954,40 +1006,57 @@ function AddTenant({
  * today, eighteen leases for 1 January recorded on the 4th billed January
  * three days of the seller's rent plus 28/31 of the lease, and ran every
  * later link 4th-to-4th. And it is left blank — with the reason — when an
- * agreement from that day would already be over (1 January under a
- * one-month term, opened on 15 February): the planner refuses that day, so
- * seeding it and saying "keep the day on the paper" offered the one date
- * that cannot be recorded. Which link to write for a lease recorded a
+ * agreement from that day would already be over AT THE LENGTH PICKED
+ * (1 January at one month, opened on 15 February): the planner refuses that
+ * day, so seeding it and saying "keep the day on the paper" offered the one
+ * date that cannot be recorded. Judged at the pick, every render, and
+ * re-seeded when the pick changes — at three months 1 January is still
+ * running, and the box fills. Which link to write for a lease recorded a
  * month late is the owner's call; the form does not guess.
  *
  * The rent box holds a MONTHLY figure or nothing (signingRentSeed); the
  * phone is shown back the way a person writes it.
  */
 function SignedNewLease({
-  parkId, seed, today, cutoverDate, onDone,
+  parkId, seed, today, cutoverDate, capMonths, onDone,
 }: {
   parkId: string;
   seed: NonNullable<RollRowView["signing"]>;
   today: string;
   cutoverDate: string | null;
+  /** The park's cap — with the seed's term, the lengths on offer. */
+  capMonths: number | null;
   onDone: () => void;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // THE LENGTHS THE PARK OFFERS — the household's choice, starting on the
+  // park's house style (seed.termMonths). The server judges the pick against
+  // the same list, so nothing is offered here that it would refuse.
+  const lengths = offeredAgreementLengths(seed.termMonths, capMonths);
   // THE DAY THE BOX WOULD START FROM, AND WHETHER IT MAY. An imported row's
   // 1 January under a one-month term, recorded on 15 February, is an
   // agreement already over — the planner refuses it, so the box is left
   // blank and the reason is said, rather than seeding the one day that
   // cannot be recorded and telling him to keep it.
   const seededDay = defaultSigningDay(seed.holdoverFrom, cutoverDate);
-  const seededDayOver = !!seededDay && agreementAlreadyOver(seededDay, seed.termMonths, today);
   const [form, setForm] = useState<SigningInput>({
-    signedOn: seededDayOver ? "" : seededDay,
+    // Seeded for the house style — blank when an agreement from that day
+    // would already be over at it (signingDayForLength, the rule the length
+    // select re-applies on every change).
+    signedOn: signingDayForLength(seededDay, seededDay, seed.termMonths, today),
     rent: seed.rent == null ? "" : String(seed.rent),
     email: seed.email ?? "",
     // Shown back the way a person writes it, never in the stored form.
     mobile: prettyPhone(seed.phone),
+    // The house style, until he picks what the lease says.
+    agreementMonths: seed.termMonths,
   });
+  // JUDGED AT THE LENGTH PICKED, EVERY RENDER. 1 January on 15 February is
+  // over at one month and running at three; judged at the house style once,
+  // the blank-box sentence outlived his pick of '3 months' and told him the
+  // one day the server would take could not be recorded.
+  const seededDayOver = !!seededDay && agreementAlreadyOver(seededDay, form.agreementMonths, today);
   // WHAT THE FIRST MONTH BILLS, from the date and rent as typed — the same
   // sentence the toast will quote, so nothing is learned only after the
   // write. Nothing is quoted until both boxes hold something real.
@@ -1033,6 +1102,28 @@ function SignedNewLease({
           <input type="date" value={form.signedOn} min={cutoverDate ?? undefined} max={today}
             onChange={(e) => set("signedOn", e.target.value)} style={{ marginTop: 4 }} />
         </label>
+        {/* HOW LONG THE LEASE RUNS — one of the lengths the park offers. */}
+        {lengths.length > 0 && (
+          <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+            <span className="mut">For</span>
+            <select value={form.agreementMonths ?? ""} style={{ marginTop: 4 }}
+              onChange={(e) => {
+                const months = e.target.value ? Number(e.target.value) : null;
+                // The day box follows the pick: a blank box fills with the
+                // seeded day once a length keeps it open, and empties again
+                // when it does not. A day he typed is never touched.
+                setForm((f) => ({
+                  ...f,
+                  agreementMonths: months,
+                  signedOn: signingDayForLength(seededDay, f.signedOn, months, today),
+                }));
+              }}>
+              {lengths.map((m) => (
+                <option key={m} value={m}>{lengthInWords(m)}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
           <span className="mut">Rent on the lease</span>
           <input inputMode="decimal" value={form.rent} placeholder="400"
@@ -1052,14 +1143,14 @@ function SignedNewLease({
       </div>
       <p className="mut" style={{ fontSize: 12, margin: "8px 0 0", lineHeight: 1.5 }}>
         {seededDayOver ? (
-          // THE DAY ON THE PAPER IS THE ONE DAY THIS FORM REFUSES, so it is
-          // not told to type it. What is true today: why the box is blank,
-          // and what any day he does type will do. Which link to write for a
-          // lease recorded a month late is the owner's call, not this copy's.
+          // WHY THE BOX IS BLANK AT THE LENGTH PICKED, and what to do only
+          // when the screen can honour it (blankDayWords: 'pick a longer
+          // length' only when one keeps the day open). Which link to write
+          // for a lease recorded a month late is the owner's call.
           <>
-            The day is left blank: {alreadyOverClause(seededDay, seed.termMonths)}, so it
-            can&apos;t be recorded from that day here. The day you type is the day the new
-            agreement runs from, and the first month bills from it.{" "}
+            The day is left blank: {blankDayWords(seededDay, form.agreementMonths, lengths, today)}.
+            The day you type is the day the new agreement runs from, and the first month
+            bills from it.{" "}
           </>
         ) : (
           <>The day on the paper, not today — the first month bills from this day.{" "}</>
@@ -1077,7 +1168,7 @@ function SignedNewLease({
       </p>
       {firstMonth && (
         <p style={{ fontSize: 13, margin: "8px 0 0", lineHeight: 1.5 }}>
-          On the new lease from <strong>{dayInWords(form.signedOn)}</strong> — {firstMonth}.
+          On the {newLeaseWords(form.agreementMonths)} from <strong>{dayInWords(form.signedOn)}</strong> — {firstMonth}.
         </p>
       )}
       <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>

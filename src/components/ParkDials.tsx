@@ -66,7 +66,7 @@ export function ParkDials({
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginTop: 14 }}>
         <Field
           label="Longest one agreement can run"
-          hint="How long one agreement may run before a fresh one has to be written. Leave blank for no limit."
+          hint="The longest one agreement may run. Households pick 1, 3, 6 or 12 months up to this at signing and at every renewal. Leave blank for no limit."
           suffix="months"
           value={form.maxAgreementMonths}
           onChange={(v) => set("maxAgreementMonths", v)}

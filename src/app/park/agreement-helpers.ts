@@ -1,21 +1,36 @@
 /**
  * AGREEMENTS THAT END, AND RENEWALS THAT CHAIN.
  *
- * The Haven's rule: no stay runs longer than three months. Somebody may stay
- * as long as they like, but each further period is a NEW three-month agreement
+ * The Haven's rule: no agreement runs longer than the park's cap. Somebody may
+ * stay as long as they like, but each further period is a NEW agreement
  * executed on its own — and if the periods are CONSECUTIVE, no second deposit
  * is collected.
  *
- * Three things follow from that, and they are the whole of this file:
+ * THE LENGTH IS THE HOUSEHOLD'S CHOICE, NOT THE CAP. The owner's decision:
+ * "options for them to have a 1 month, 3 month or 6 month renew." At every
+ * signing and every renewal the household picks from the lengths the park
+ * offers — the standard lengths (`AGREEMENT_LENGTHS`) that fit under its cap
+ * — and the park's house style (`default_agreement_months`) is only what the
+ * choice STARTS on. Until now the cap was passed through as the length, so
+ * "Renew at the same rent" turned every one-month lease into a three-month
+ * one, silently, and would have turned it into a six-month one the day the
+ * cap was raised. The length is chosen exactly once, at the moment a row is
+ * written, and nothing edits `during` afterwards — so every writing door
+ * takes the choice as an input, and refuses one the park does not offer.
  *
- *   1. An agreement's end is computed from its start and the park's cap, with
- *      real month arithmetic. Not 90 days. Dec 15 → Mar 15.
+ * Three things follow, and they are the whole of this file:
+ *
+ *   1. An agreement's end is computed from its start and the CHOSEN length,
+ *      with real month arithmetic. Not 90 days. Dec 15 → Mar 15.
  *   2. A renewal is a SUCCESSOR, not a wider date range. Widening would erase
  *      the discrete signed period the structure exists to create.
  *   3. CONSECUTIVE is a precise thing — the next agreement starts the day the
  *      last one ends — and it is the only thing that carries a deposit
  *      forward. A gap means they left, and coming back is a new chain.
  */
+
+import { longDate } from "@/lib/lake-time";
+import { isSeasonal, type ParkSeason } from "@/lib/parks";
 
 /**
  * Add whole months, clamping to the end of the target month.
@@ -61,37 +76,228 @@ export function monthsBetween(startISO: string, endISO: string): number {
   return rest >= 15 ? n + 1 : n;
 }
 
+/**
+ * HOW FAR AHEAD AN AGREEMENT IS ASKED FOR RENEWAL — the R2 ruling.
+ *
+ * Today's "Agreements to write" list asked for every agreement ending within
+ * a flat 45 days. With the length now the household's choice and the house
+ * style one month, that flat lead is longer than the agreement: a one-month
+ * renewal written on 1 February for 1 February – 1 March was back in the
+ * list the same morning, reading "ends March 1, 2027" under the toast that
+ * said it was renewed — which looks like the tap did not take. On 1 January
+ * all 21 one-month leases would sit in the list from the day they were
+ * signed.
+ *
+ * So the lead is a function of the agreement's OWN span: it is asked for
+ * renewal in its last half, and never more than `cap` days ahead. A
+ * one-month agreement lists in its last ~15 days; a three-month one 45 days
+ * out, as before. Whole days; an odd day goes to the lead, so every
+ * three-month span (89–92 days) reaches the cap and a 31-day month asks in
+ * its last 16.
+ */
+export const RENEWAL_LEAD_CAP_DAYS = 45;
+
+export function renewalLeadDays(
+  startISO: string,
+  endISO: string,
+  cap: number = RENEWAL_LEAD_CAP_DAYS,
+): number {
+  const span = Math.max(0, daysBetween(startISO, endISO));
+  return Math.min(cap, Math.ceil(span / 2));
+}
+
+// ------------------------------------------------ the lengths on offer -----
+
+/**
+ * THE LENGTHS A HOUSEHOLD MAY CHOOSE BETWEEN, in months. The owner named
+ * one, three and six; twelve is on the list so a park with no cap, or a cap
+ * of a year, can offer it. A park's cap filters the list — at a cap of three
+ * the choice is one or three; at six it is one, three or six. Nothing here
+ * assumes any park's cap: it is read from `parks.max_agreement_months` by
+ * every door, and the 0065 trigger refuses a row longer than it regardless.
+ */
+export const AGREEMENT_LENGTHS: readonly number[] = [1, 3, 6, 12];
+
+/**
+ * HOW LONG ONE NEW AGREEMENT RUNS WHEN NOBODY CHOOSES — the park's house
+ * style under its ceiling. This is the length every choice STARTS on.
+ *
+ * THE CAP AND THE DEFAULT ARE DIFFERENT NUMBERS, and 0067 added
+ * `parks.default_agreement_months` specifically to stop them being conflated:
+ * "Three months max, but typically month to month ... conflating them writes
+ * every new tenant a three-month agreement when the house style is one month
+ * rolling." The column shipped with neither a reader nor a writer, so the cap
+ * was passed straight through as the length and every signed agreement was
+ * written at the MAXIMUM — the exact bug that comment describes. It matters
+ * most on a day everybody signs at once: twenty agreements written on one
+ * afternoon all end on one morning, and when they do the rent stops with no
+ * error anywhere.
+ *
+ * Clamped, because a default longer than the cap is a contradiction the
+ * database also refuses (parks_default_within_max), and because the 0065
+ * trigger rejects any agreement longer than the cap outright. Null only when
+ * the park has set neither dial, which means the rolling horizon.
+ */
+export function agreementMonthsFor(
+  defaultMonths: number | null,
+  capMonths: number | null,
+): number | null {
+  if (defaultMonths == null) return capMonths;
+  if (capMonths == null) return defaultMonths;
+  return Math.min(defaultMonths, capMonths);
+}
+
+/**
+ * THE LENGTHS THIS PARK OFFERS, ascending: the standard lengths that fit
+ * under its cap (no cap: all of them), always including its own house style
+ * so a park whose default is not on the standard list still offers it. EMPTY
+ * for a park with neither dial — such a park writes no fixed-length
+ * agreement at all (the rolling horizon, see `agreementMonthsFor`), and an
+ * empty list is how every door knows there is nothing to choose.
+ */
+export function offeredAgreementLengths(
+  defaultMonths: number | null,
+  capMonths: number | null,
+): number[] {
+  if (defaultMonths == null && capMonths == null) return [];
+  const cap = capMonths ?? Number.POSITIVE_INFINITY;
+  const offered = new Set(AGREEMENT_LENGTHS.filter((m) => m <= cap));
+  const house = agreementMonthsFor(defaultMonths, capMonths);
+  if (house != null) offered.add(house);
+  return [...offered].sort((a, b) => a - b);
+}
+
+/**
+ * THE ONE JUDGEMENT OF A CHOSEN LENGTH, for every door that writes a row:
+ * the owner's Renew button, the resident's texted link, the roll's signing
+ * control, "Someone lives here" and "Who lives here". A length the park does
+ * not offer is refused in words that name the ones it does; at a park with
+ * neither dial the only right answer is no length (the horizon), so a length
+ * sent there is refused too rather than quietly written. A missing choice is
+ * refused, never defaulted here — the screens seed the park's house style,
+ * so a blank reaching this point is a caller that lost the choice.
+ */
+export function chooseAgreementLength(
+  chosen: number | null | undefined,
+  defaultMonths: number | null,
+  capMonths: number | null,
+): { ok: true; months: number | null } | { ok: false; error: string } {
+  const offered = offeredAgreementLengths(defaultMonths, capMonths);
+  if (offered.length === 0) {
+    return chosen == null
+      ? { ok: true, months: null }
+      : { ok: false, error: "This park doesn't write fixed-length agreements, so there's no length to pick." };
+  }
+  if (chosen == null) {
+    return { ok: false, error: `Pick how long the agreement runs — ${lengthsInWords(offered)}.` };
+  }
+  if (!offered.includes(chosen)) return { ok: false, error: lengthNotOfferedText(offered) };
+  return { ok: true, months: chosen };
+}
+
+/** "This park writes agreements of 1, 3 or 6 months — pick one of those." */
+export function lengthNotOfferedText(offered: number[]): string {
+  return offered.length
+    ? `This park writes agreements of ${lengthsInWords(offered)} — pick one of those.`
+    : "This park doesn't write fixed-length agreements, so there's no length to pick.";
+}
+
+/** "1 month", "3 months" — a length a person reads. */
+export function lengthInWords(months: number): string {
+  return `${months} ${months === 1 ? "month" : "months"}`;
+}
+
+/** "1, 3 or 6 months"; "1 or 3 months"; "1 month" — a list of lengths. */
+export function lengthsInWords(months: readonly number[]): string {
+  if (months.length === 0) return "";
+  if (months.length === 1) return lengthInWords(months[0]);
+  const head = months.slice(0, -1).join(", ");
+  const last = months[months.length - 1];
+  return `${head} or ${last} months`;
+}
+
+/** "one-month", "3-month" — the adjective in "under your one-month term". */
+export function lengthAdjective(months: number): string {
+  return `${months === 1 ? "one" : months}-month`;
+}
+
 export interface AgreementTerms {
-  /** NULL means the park writes agreements of any length. */
+  /**
+   * The park's CEILING — the longest agreement it writes. NULL means the park
+   * writes agreements of any length, and a renewal is refused as `no_cap`:
+   * there is nothing to renew, the stay just continues.
+   */
   maxAgreementMonths: number | null;
+  /** The park's house style — what a choice starts on. NULL means "the cap". */
+  defaultAgreementMonths?: number | null;
   /** What the park collects once per chain. NULL means none. */
   depositAmount: number | null;
   /**
-   * The first morning AFTER this lot's season, when it has one. An agreement
-   * ends at whichever comes first — the term cap or the season close.
+   * The first morning AFTER this lot's season, when it has one — from
+   * `agreementSeasonEnd`, never typed inline. An agreement ends at whichever
+   * comes first — the chosen length or the season close.
    */
   seasonEnd?: string | null;
 }
 
 /**
- * The end date of an agreement starting on `startISO`.
+ * THE CHECKOUT MORNING A LOT'S SEASON SETS for an agreement starting on
+ * `startISO` — the `seasonEnd` every door hands `agreementEnd` and
+ * `planRenewal`. ONE home: the owner's Renew button computed this inline and
+ * the resident's texted link never computed it at all, so on a slip lot the
+ * two doors wrote different rows for the same choice.
+ *
+ * THE CLOSE DAY IS THE LAST NIGHT, half-open like everything else: a lot that
+ * closes 15 October sells the night of the 15th (parkOpenFor says so, and
+ * seasonEndAfter's "a season closing Oct 31 returns Nov 1"), so its
+ * agreements end on the morning of the 16th. The inline copy ended them on
+ * the 15th — one night short of what the park's own booking gate would sell.
+ *
+ * THIS season's end, not the next one's: a start after the close gets back
+ * the close it has already passed, so planRenewal's `start >= seasonEnd`
+ * refuses it as season_closed. seasonEndAfter rolls forward to next year's
+ * close instead — right for "when must a stay from here be out by", wrong
+ * here, where it would plan three winter months on a slip that is out of the
+ * water. A window that wraps the New Year (open November, close March)
+ * closes in the year AFTER the open the start sits in.
+ *
+ * Null for a year-round lot — nothing to clamp to.
+ */
+export function agreementSeasonEnd(startISO: string, season: ParkSeason): string | null {
+  if (!isSeasonal(season)) return null;
+  const [y, m, d] = startISO.split("-").map(Number);
+  const md = m * 100 + d;
+  const open = season.openMonth! * 100 + season.openDay!;
+  const close = season.closeMonth! * 100 + season.closeDay!;
+  const year = open <= close || md < open ? y : y + 1;
+  // Day + 1: the morning after the last night.
+  return new Date(Date.UTC(year, season.closeMonth! - 1, season.closeDay! + 1))
+    .toISOString().slice(0, 10);
+}
+
+/**
+ * The end date of an agreement starting on `startISO` and running for
+ * `termMonths` — THE CHOSEN LENGTH, never the cap. Null length means the park
+ * writes no fixed term, and the only end is the season's, if any.
  *
  * Half-open, matching the database: the tenant is there through the night
  * before this date, and it is checkout morning.
  */
-export function agreementEnd(startISO: string, terms: AgreementTerms): string | null {
-  const capped = terms.maxAgreementMonths == null
-    ? null
-    : addMonths(startISO, terms.maxAgreementMonths);
+export function agreementEnd(
+  startISO: string,
+  termMonths: number | null,
+  terms: Pick<AgreementTerms, "seasonEnd">,
+): string | null {
+  const ends = termMonths == null ? null : addMonths(startISO, termMonths);
 
   // WHICHEVER COMES FIRST. A three-month slip agreement taken out in September
   // would otherwise run to December, and the slips come out of the water in
   // October. Selling somebody a slip for a month it does not exist is the kind
   // of error that is discovered by the customer.
   const season = terms.seasonEnd ?? null;
-  if (capped == null) return season;
-  if (season == null) return capped;
-  return season < capped ? season : capped;
+  if (ends == null) return season;
+  if (season == null) return ends;
+  return season < ends ? season : ends;
 }
 
 export interface PriorAgreement {
@@ -114,6 +320,7 @@ export interface PriorAgreement {
 
 export type RenewalRefusal =
   | "no_cap"
+  | "not_offered"
   | "already_ended"
   | "not_yet_renewable"
   | "season_closed"
@@ -145,10 +352,22 @@ export function inheritedRefusalText(lotNumber: string | null | undefined): stri
   );
 }
 
-export function renewalRefusalText(r: RenewalRefusal, lotNumber?: string | null): string {
+export function renewalRefusalText(
+  r: RenewalRefusal,
+  lotNumber: string | null | undefined,
+  /**
+   * The lengths the park does offer — named when the chosen one is not.
+   * REQUIRED: defaulted to [] this read "This park doesn't write fixed-length
+   * agreements" for `not_offered`, which the planner returns only when the
+   * cap IS set. Every caller has the list; none may leave it out.
+   */
+  offered: number[],
+): string {
   switch (r) {
     case "no_cap":
       return "This park doesn't write fixed-length agreements, so there's nothing to renew — the stay just continues.";
+    case "not_offered":
+      return lengthNotOfferedText(offered);
     case "already_ended":
       return "That agreement has already ended. Start a new one instead — it won't carry the old deposit.";
     case "not_yet_renewable":
@@ -166,6 +385,16 @@ export interface PlannedRenewal {
   /** The successor's half-open range. */
   start?: string;
   end?: string;
+  /** The length it was planned at — the household's choice, in months. */
+  termMonths?: number;
+  /**
+   * TRUE when the season close, not the chosen length, set `end` — a
+   * September slip agreement chosen at three months that the slips coming
+   * out on 15 October cuts to six weeks. The one place that judgement is
+   * made; every sentence that quotes the length beside the dates reads it,
+   * so none can call a six-week agreement "3 months".
+   */
+  cutShortBySeason?: boolean;
   /** Same chain when consecutive; a brand-new chain when there was a gap. */
   continuesChain?: boolean;
   nextSeq?: number;
@@ -188,6 +417,11 @@ export interface PlannedRenewal {
 /**
  * Plan the next agreement in a chain.
  *
+ * `termMonths` is THE HOUSEHOLD'S CHOICE — one of the lengths the park offers
+ * (`offeredAgreementLengths`), and refused as `not_offered` otherwise. It is
+ * the successor's length; the cap in `terms` is only the ceiling and the
+ * `no_cap` sentinel, never the length.
+ *
  * `startFrom` defaults to the prior agreement's end, which is what makes it
  * consecutive. Passing a later date is how somebody comes back after a gap —
  * and that starts a new chain and a new deposit, deliberately.
@@ -196,12 +430,15 @@ export function planRenewal(
   prior: PriorAgreement,
   terms: AgreementTerms,
   todayISO: string,
+  termMonths: number,
   startFrom?: string,
 ): PlannedRenewal {
   if (terms.maxAgreementMonths == null) return { ok: false, refusal: "no_cap" };
+  const offered = offeredAgreementLengths(terms.defaultAgreementMonths ?? null, terms.maxAgreementMonths);
+  if (!offered.includes(termMonths)) return { ok: false, refusal: "not_offered" };
 
   const start = startFrom ?? prior.end;
-  const end = agreementEnd(start, terms)!;
+  const end = agreementEnd(start, termMonths, terms)!;
 
   // A renewal that would begin after the season has already closed is not a
   // renewal — there is nothing to renew into until the season opens again.
@@ -235,6 +472,8 @@ export function planRenewal(
     ok: true,
     start,
     end,
+    termMonths,
+    cutShortBySeason: end !== addMonths(start, termMonths),
     continuesChain,
     nextSeq: continuesChain ? prior.seq + 1 : 1,
     // The whole point: consecutive costs nothing extra.
@@ -242,6 +481,24 @@ export function planRenewal(
     depositAmount: continuesChain ? null : terms.depositAmount,
     totalMonthsAfter: priorMonths + months,
   };
+}
+
+/**
+ * THE SPAN A PLAN WAS WRITTEN FOR, IN WORDS — what the toast says back and
+ * what the Today card says under the chips, from ONE home so they cannot
+ * disagree: "3 months, September 1, 2027 to December 1, 2027", or, when the
+ * season set the end instead of the length, "3 months, cut short by the
+ * season close — September 1, 2027 to October 16, 2027". Reads the PLAN,
+ * never the request: the length he picked and the dates the row will carry
+ * are both on it. Empty for a refused plan — the caller reads the refusal.
+ */
+export function agreementSpanWords(plan: PlannedRenewal): string {
+  if (!plan.ok || plan.termMonths == null || !plan.start || !plan.end) return "";
+  const length = lengthInWords(plan.termMonths);
+  const dates = `${longDate(plan.start)} to ${longDate(plan.end)}`;
+  return plan.cutShortBySeason
+    ? `${length}, cut short by the season close — ${dates}`
+    : `${length}, ${dates}`;
 }
 
 /**

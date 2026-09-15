@@ -2,6 +2,7 @@ import { htmlPage } from "@/app/a/[token]/respond";
 import { loadPaymentByToken, type ConfirmView, confirmByToken, disputeByToken } from "@/lib/confirm-server";
 import { ReadFailed } from "@/lib/must-read";
 import { escapeHtml } from "@/lib/html-safe";
+import { longDay } from "@/lib/lake-time";
 
 /**
  * "DOES THIS LOOK RIGHT?" — the renter's half of the receipt.
@@ -20,12 +21,96 @@ import { escapeHtml } from "@/lib/html-safe";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * "Sunday, January 3, 2027" — WITH THE YEAR. This URL is printed on paper and
+ * opened months later; "Sunday, January 3" on a page read the following
+ * winter is a date that could be either year. On the lakes' clock, like every
+ * other date a person reads (lib/lake-time).
+ */
 function pretty(iso: string): string {
-  if (!iso) return "";
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
-    weekday: "long", month: "long", day: "numeric", timeZone: "UTC",
-  });
+  return longDay(iso);
+}
+
+/** "It comes off the next bill the park raises for you." — true since 0167: the run applies money on account, oldest first. Said only of a payment that still stands. */
+const COMES_OFF = "It comes off the next bill the park raises for you.";
+const STILL_COMES_OFF = "what's still on account comes off the next bill the park raises for you.";
+
+/**
+ * THE SIBLING'S OWN STANDING, if the loader hands it. A split is two rows
+ * (recordPayment: the bill's share, and the rest on account under the same
+ * key + ":onaccount"), and each stands or falls on its own: `takenBackOn`
+ * is the bill row's. Today the loader lists a sibling only while it stands
+ * (its read filters reversed_at), so a split's `onAccount` here belongs to
+ * a row that stands. Should the loader ever list a sibling that has gone,
+ * it says so in `siblingTakenBackOn`, and the page says the whole went.
+ * Read only when handed — never assumed either way.
+ */
+function siblingTakenBackOn(view: ConfirmView): string | null {
+  if (!("siblingTakenBackOn" in view)) return null;
+  const v = view.siblingTakenBackOn;
+  return typeof v === "string" && v ? v : null;
+}
+
+/**
+ * WHERE THE MONEY ON ACCOUNT SITS TODAY, for the sentence the page asks her
+ * to agree to. Five shapes, from the loader's own reads (never assumed):
+ *
+ *   a payment that no longer stands — the office reversed it (a bounced
+ *   cheque, a typo) or the bank returned it — says so, with the day and the
+ *   reason, and where the money HAD gone; nothing of it is on account and no
+ *   "comes off the next bill" is ever said about it. This link is printed on
+ *   paper and read the following winter;
+ *   a split receipt whose BILL half alone was taken back — the on-account
+ *   half is a separate row and still stands, so the page says which half
+ *   went and where the rest sits today. "That no longer stands" is said
+ *   only of the taken-back row's OWN allocations, never of a standing
+ *   sibling's: its $40 is still on December, its $17.47 is still held;
+ *   a split receipt ($600 for a $542.53 bill) — `onAccount` is the part that
+ *   went on account; `whereItWent` says which months it has since paid and
+ *   what is still held;
+ *   a payment that IS money on account (a cheque before its bill existed, a
+ *   quarter paid ahead) — `onAccount` is null and `onAccountRemaining` is its
+ *   own; the same sentence, about the whole;
+ *   a bill payment with nothing on account, or a deposit — nothing to say.
+ *
+ * "It comes off the next bill" is said only while something is still held.
+ */
+function onAccountWords(view: ConfirmView): string {
+  const held = (view.onAccountRemaining ?? 0) > 0;
+  if (view.takenBackOn) {
+    const why = view.takenBackWhy?.trim() ? ` — ${view.takenBackWhy.trim()}` : "";
+    const when = `taken back on ${longDay(view.takenBackOn)}${why}`;
+    if (view.onAccount != null && !siblingTakenBackOn(view)) {
+      // The bill's share went; the $57.47 on account is its own row and
+      // stands. Not "this payment was taken back" — $57.47 of it was not.
+      const rest = `The $${view.onAccount.toFixed(2)} on account is a separate record — it still stands`;
+      return (
+        ` The part of this against your bill was ${when}. ` +
+        (view.onAccountApplied
+          ? `${rest}, and has since been put against a bill. That's ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
+          : `${rest}, held for you, not yet put against a bill. ${COMES_OFF}`)
+      );
+    }
+    // The whole of it went: the row's own allocations (a quarter-ahead
+    // cheque), or both halves of a split.
+    const hadGone = view.onAccount != null ? ` $${view.onAccount.toFixed(2)} of that had gone on account with the office.` : "";
+    return (
+      hadGone +
+      (view.onAccountApplied && view.whereItWent
+        ? ` It had been put against ${view.whereItWent}; that no longer stands.`
+        : "") +
+      ` This payment was ${when}.`
+    );
+  }
+  if (view.onAccount == null) {
+    if (view.onAccountRemaining == null) return "";
+    return view.onAccountApplied
+      ? ` That money went on account with the office. Where it went: ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
+      : ` That money is on account with the office — held for you. ${COMES_OFF}`;
+  }
+  return view.onAccountApplied
+    ? ` $${view.onAccount.toFixed(2)} of that went on account with the office and has since been put against a bill. That's ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
+    : ` $${view.onAccount.toFixed(2)} of that is on account with the office — held for you, not yet put against a bill. ${COMES_OFF}`;
 }
 
 export async function GET(_req: Request, ctx: { params: Promise<{ token: string }> }) {
@@ -49,8 +134,11 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
     return htmlPage("That link isn't right", "This link doesn't match a payment. 🌊", false);
   }
 
+  // "from lot —" is what a cheque with no bill behind it used to print: the
+  // loader hands "—" to mean there is no lot on the record, so say "from you".
+  const from = view.lotNumber === "—" ? "from you" : `from lot ${view.lotNumber}`;
   const line =
-    `${view.parkName} recorded $${view.amount.toFixed(2)} from lot ${view.lotNumber}, ` +
+    `${view.parkName} recorded $${view.amount.toFixed(2)} ${from}, ` +
     `paid by ${view.method}${view.reference ? ` ${view.reference}` : ""} ` +
     `on ${pretty(view.receivedOn)}. Receipt ${view.ref}.` +
     // ASKING "DOES THIS MATCH?" AGAINST THE WRONG NUMBER MANUFACTURES A
@@ -62,19 +150,16 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
     // THE HALF THE PAPER RECEIPT SAYS. `amount` is the whole she handed over
     // (bill share + on account), so the page must say where the rest sits or
     // she agrees to $600 with no word that $57.47 of it is not against her
-    // bill. Same words as the receipt, same promise — none: the office puts it
-    // against a bill; nothing does so on its own.
+    // bill.
     //
     // AND WHERE IT SITS TODAY. This URL is printed on paper and outlives the
-    // day it was written: once the office puts the $57.47 against a bill,
-    // "held for you, not yet put against a bill" is false, and a resident
-    // reading it in March would rightly ask why her money is still sitting
-    // in a drawer. The loader reads the sibling's charge_id; this says which.
-    (view.onAccount == null
-      ? ""
-      : view.onAccountApplied
-        ? ` $${view.onAccount.toFixed(2)} of that went on account with the office and has since been put against a bill.`
-        : ` $${view.onAccount.toFixed(2)} of that is on account with the office — held for you, not yet put against a bill.`);
+    // day it was written: once the run or the office puts the $57.47 against
+    // a bill, "held for you, not yet put against a bill" is false, and a
+    // resident reading it in March would rightly ask why her money is still
+    // sitting in a drawer. The loader reads the allocations (0167); this says
+    // which months, and — while any is still held — that it comes off the
+    // next bill, which since 0167 the run does.
+    onAccountWords(view);
 
   if (view.alreadyConfirmedAt) {
     return htmlPage("Already confirmed 🌊", `${line}\n\nYou've confirmed this one — nothing more to do.`);

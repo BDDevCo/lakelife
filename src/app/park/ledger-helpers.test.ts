@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
 import {
   ledgerState, balanceOf, toRows, summarise, ledgerHeadline,
-  planRun, runSummary, daysBetween, classifyForRun, notMonthlySentence,
+  planRun, runSummary, withOnAccount, daysBetween, classifyForRun, notMonthlySentence,
   prettyMonth, shiftMonth, dueDayFor, nothingToBillReason, lotList,
   handKeyedRefusal, HAND_KEYED, PROCESSOR_ONLY, paymentAmountRefusal, perStayTerm,
+  onAccountKey, splitSiblingKey, ON_ACCOUNT_KEY_SUFFIX, monthList, reversalSentence,
   type Charge, type RunCandidate,
 } from "./ledger-helpers";
 import { buildStatement } from "./statement-helpers";
@@ -144,6 +145,22 @@ describe("the charge run", () => {
   it("bills a clean park in one go", () => {
     const p = planRun(candidates.slice(0, 2), new Set(), "2027-03");
     expect(runSummary(p, "2027-03")).toBe("Bill 2 households for March 2027 — $910.00");
+    expect(p.fromOnAccount, "a plan built without the held money promises nothing off it").toBe(0);
+  });
+
+  // MONEY ON ACCOUNT COMES OFF THE NEXT BILLS (0167). The preview writes what
+  // the run will apply onto the plan, per household and in total, and the
+  // sentence says it — the bills themselves are still raised in full.
+  it("says how much of the total is already on account, once the preview has written it on", () => {
+    const p = withOnAccount(planRun(candidates.slice(0, 2), new Set(), "2027-03"), new Map([["r1", 455], ["r2", 100.5]]));
+    expect(p.total, "the bills are raised in full").toBe(910);
+    expect(p.toBill.map((b) => b.fromOnAccount)).toEqual([455, 100.5]);
+    expect(p.fromOnAccount).toBe(555.5);
+    expect(runSummary(p, "2027-03")).toBe("Bill 2 households for March 2027 — $910.00, $555.50 of it already on account");
+    // and a plan with nothing on account reads exactly as before
+    const none = withOnAccount(planRun(candidates.slice(0, 2), new Set(), "2027-03"), new Map());
+    expect(runSummary(none, "2027-03")).toBe("Bill 2 households for March 2027 — $910.00");
+    expect(none.toBill.every((b) => b.fromOnAccount === 0)).toBe(true);
   });
 });
 
@@ -207,7 +224,7 @@ describe("the morning every one-month agreement lapses", () => {
     // was renewed. Only the eight nobody renewed are named.
     expect(p.expired).toEqual(HAVEN.slice(10));
     expect(runSummary(p, FEB)).toBe(
-      "Bill 10 households for February 2027 — $5425.30 · 8 agreements have run out",
+      "Bill 10 households for February 2027 — $5,425.30 · 8 agreements have run out",
     );
   });
 
@@ -216,7 +233,7 @@ describe("the morning every one-month agreement lapses", () => {
     const p = planRun([...priors, ...renewed], new Set(), FEB);
     expect(p.toBill).toHaveLength(18);
     expect(p.expired).toEqual([]);
-    expect(runSummary(p, FEB)).toBe("Bill 18 households for February 2027 — $9765.54");
+    expect(runSummary(p, FEB)).toBe("Bill 18 households for February 2027 — $9,765.54");
   });
 
   it("a prior term whose successor is ALREADY billed is not run out either", () => {
@@ -1013,5 +1030,88 @@ describe("why a payment amount is refused", () => {
     expect(paymentAmountRefusal(0.005)).toBeNull();
     expect(paymentAmountRefusal(0.01)).toBeNull();
     expect(paymentAmountRefusal(542.53)).toBeNull();
+  });
+});
+
+/**
+ * ONE CHEQUE, TWO ROWS — the key that ties them, spelled once. recordPayment
+ * writes the on-account half under the bill row's key + ":onaccount"; the
+ * renter's link, the claim from it and the office's reversal all have to find
+ * the other half through the same spelling, or one of them reads "no sibling"
+ * about $57.47.
+ */
+describe("the other half of a split cheque", () => {
+  it("a bill row looks for its key plus the suffix", () => {
+    expect(onAccountKey("form-key")).toBe("form-key:onaccount");
+    expect(ON_ACCOUNT_KEY_SUFFIX).toBe(":onaccount");
+    expect(splitSiblingKey("form-key", "charge-9")).toBe("form-key:onaccount");
+  });
+
+  it("an on-account row looks for its key without the suffix — and only when it carries one", () => {
+    expect(splitSiblingKey("form-key:onaccount", null)).toBe("form-key");
+    // A cheque keyed through recordOnAccount has the form's own key: no
+    // sibling, and its key is never read as somebody else's ":onaccount".
+    expect(splitSiblingKey("form-own", null)).toBeNull();
+    expect(splitSiblingKey("form-own", undefined)).toBeNull();
+  });
+
+  it("no key, no sibling", () => {
+    expect(splitSiblingKey(null, "charge-9")).toBeNull();
+    expect(splitSiblingKey(undefined, null)).toBeNull();
+    expect(splitSiblingKey("", "charge-9")).toBeNull();
+  });
+});
+
+describe("the sentence a reversal prints", () => {
+  it("a plain bill payment names the month", () => {
+    expect(reversalSentence({ amount: 542.53, receiptNo: 101, kind: "rent", billMonth: "2027-01", split: null, hadGone: [] }))
+      .toBe("$542.53 taken back (receipt 101). The January 2027 bill is outstanding again, and the record shows why.");
+  });
+
+  it("a split names both halves and every month the on-account half had reached", () => {
+    expect(reversalSentence({
+      amount: 600, receiptNo: 101, kind: "rent", billMonth: "2027-01",
+      split: { tapped: "bill", against: 542.53, onAccount: 57.47 },
+      hadGone: [{ periodMonth: "2027-02", amount: 57.47 }],
+    })).toBe(
+      "$600.00 taken back (receipt 101) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. " +
+      "The January 2027 bill is outstanding again, and $57.47 of the on-account half had been put against February 2027 — that bill is outstanding again too. The record shows why.",
+    );
+    // Tapped from the on-account row: the same sentence, the receipt is that row's.
+    expect(reversalSentence({
+      amount: 600, receiptNo: 102, kind: "rent", billMonth: "2027-01",
+      split: { tapped: "on_account", against: 542.53, onAccount: 57.47 },
+      hadGone: [{ periodMonth: "2027-02", amount: 40 }, { periodMonth: "2027-03", amount: 17.47 }],
+    })).toBe(
+      "$600.00 taken back (receipt 102) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. " +
+      "The January 2027 bill is outstanding again, and $57.47 of the on-account half had been put against February 2027 and March 2027 — those bills are outstanding again too. The record shows why.",
+    );
+    // Nothing of the on-account half applied yet: no month for it.
+    expect(reversalSentence({
+      amount: 600, receiptNo: null, kind: "rent", billMonth: "2027-01",
+      split: { tapped: "bill", against: 542.53, onAccount: 57.47 }, hadGone: [],
+    })).toBe("$600.00 taken back — both halves of it, the $542.53 against January 2027 and the $57.47 on account. The January 2027 bill is outstanding again. The record shows why.");
+  });
+
+  it("money on account names the months it had reached, singular and plural; a deposit and idle money keep their sentences", () => {
+    expect(reversalSentence({ amount: 1627.59, receiptNo: 47, kind: "rent", billMonth: null, split: null,
+      hadGone: [{ periodMonth: "2027-03", amount: 542.53 }, { periodMonth: "2027-01", amount: 542.53 }, { periodMonth: "2027-02", amount: 542.53 }] }))
+      .toBe("$1,627.59 taken back (receipt 47). It had been put against January 2027, February 2027 and March 2027 — those bills are outstanding again, and the record shows why.");
+    expect(reversalSentence({ amount: 542.53, receiptNo: 47, kind: "rent", billMonth: null, split: null, hadGone: [{ periodMonth: "2027-02", amount: 542.53 }] }))
+      .toBe("$542.53 taken back (receipt 47). It had been put against February 2027 — that bill is outstanding again, and the record shows why.");
+    expect(reversalSentence({ amount: 50, receiptNo: 48, kind: "rent", billMonth: null, split: null, hadGone: [] }))
+      .toBe("$50.00 taken back (receipt 48). It's off the household's account, and the record shows why.");
+    expect(reversalSentence({ amount: 500, receiptNo: 49, kind: "deposit", billMonth: null, split: null, hadGone: [] }))
+      .toBe("$500.00 taken back (receipt 49). That deposit is no longer held, and the record shows why.");
+    // A zero-amount line is not a month that reopened.
+    expect(reversalSentence({ amount: 50, receiptNo: 48, kind: "rent", billMonth: null, split: null, hadGone: [{ periodMonth: "2027-02", amount: 0 }] }))
+      .toMatch(/off the household's account/);
+  });
+
+  it("monthList reads like a person saying it", () => {
+    expect(monthList([])).toBe("");
+    expect(monthList(["2027-02"])).toBe("February 2027");
+    expect(monthList(["2027-02", "2027-01"])).toBe("January 2027 and February 2027");
+    expect(monthList(["2027-03", "2027-01", "2027-01", "2027-02"])).toBe("January 2027, February 2027 and March 2027");
   });
 });

@@ -167,7 +167,7 @@ describe("the to-do list", () => {
     const [t] = generateTasks(facts({
       agreements: [{
         reservationId: "r1", lotNumber: "3", renterName: "Roy Amberg",
-        endsOn: "2026-09-10", chainId: "ch1", seq: 1, hasSuccessor: false,
+        startsOn: "2026-06-10", endsOn: "2026-09-10", chainId: "ch1", seq: 1, hasSuccessor: false,
       }],
     }));
     expect(t.title).toBe("Lot 3's agreement ends in 30 days");
@@ -178,7 +178,7 @@ describe("the to-do list", () => {
     expect(generateTasks(facts({
       agreements: [{
         reservationId: "r1", lotNumber: "3", renterName: null,
-        endsOn: "2026-09-10", chainId: "ch1", seq: 1, hasSuccessor: true,
+        startsOn: "2026-06-10", endsOn: "2026-09-10", chainId: "ch1", seq: 1, hasSuccessor: true,
       }],
     }))).toEqual([]);
   });
@@ -186,13 +186,13 @@ describe("the to-do list", () => {
   it("keys renewals per SEQUENCE, so dismissing one doesn't hide the next", () => {
     const a = generateTasks(facts({
       agreements: [{ reservationId: "r1", lotNumber: "3", renterName: null,
-        endsOn: "2026-09-10", chainId: "ch1", seq: 3, hasSuccessor: false }],
+        startsOn: "2026-06-10", endsOn: "2026-09-10", chainId: "ch1", seq: 3, hasSuccessor: false }],
     }))[0];
-    // Both inside the 45-day window, or the second produces no card at all
-    // and the test proves nothing.
+    // Both inside their own lead (three-month spans, 45 days), or the second
+    // produces no card at all and the test proves nothing.
     const b = generateTasks(facts({
       agreements: [{ reservationId: "r2", lotNumber: "3", renterName: null,
-        endsOn: "2026-09-20", chainId: "ch1", seq: 4, hasSuccessor: false }],
+        startsOn: "2026-06-20", endsOn: "2026-09-20", chainId: "ch1", seq: 4, hasSuccessor: false }],
     }))[0];
     expect(a.key).not.toBe(b.key);
   });
@@ -200,12 +200,65 @@ describe("the to-do list", () => {
   it("collapses a pile of renewals into one card", () => {
     const many = Array.from({ length: 6 }, (_, i) => ({
       reservationId: `r${i}`, lotNumber: String(i), renterName: null,
+      startsOn: `2026-06-${String(10 + i).padStart(2, "0")}`,
       endsOn: `2026-09-${String(10 + i).padStart(2, "0")}`,
       chainId: `ch${i}`, seq: 1, hasSuccessor: false,
     }));
     const ts = generateTasks(facts({ agreements: many }));
     expect(ts).toHaveLength(1);
     expect(ts[0].title).toBe("6 agreements are running out");
+    // A day a person reads — never "2026-09-10".
+    expect(ts[0].detail).toMatch(/^The first ends September 10, 2026\./);
+    expect(ts[0].detail).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  });
+
+  // R2 — THE CARD ASKS WITH THE SAME LEAD AS THE LIST IT LINKS TO. The lead
+  // is the agreement's own last half, capped at 45 days (renewalLeadDays,
+  // agreement-helpers), and it is read from `startsOn` and `endsOn` together.
+  // With a flat 45 days, a one-month agreement was on this card from the
+  // morning it was signed — above an "Agreements to write" list that R2 had
+  // just made keep quiet about it.
+  it("a one-month agreement gets NO card on its first day, and one in its last half", () => {
+    // 11 August – 10 September is 30 days: asked from the 26th, 15 days out.
+    const one = {
+      reservationId: "r1", lotNumber: "14", renterName: "Doris",
+      startsOn: "2026-08-11", endsOn: "2026-09-10", chainId: "ch1", seq: 1, hasSuccessor: false,
+    };
+    expect(generateTasks(facts({ today: "2026-08-11", agreements: [one] }))).toEqual([]);
+    expect(generateTasks(facts({ today: "2026-08-25", agreements: [one] }))).toEqual([]);
+    const [t] = generateTasks(facts({ today: "2026-08-26", agreements: [one] }));
+    expect(t.title).toBe("Lot 14's agreement ends in 15 days");
+    expect(t.detail).toMatch(/^Doris — write the next one/);
+  });
+
+  it("a just-written one-month successor gets no card — the tap visibly took", () => {
+    // 27 August: he renewed Lot 14 for the month from 10 September. The new
+    // row is two weeks off its start and has no successor of its own; the
+    // flat lead put it straight back on the card as "ends in 44 days".
+    const successor = {
+      reservationId: "r2", lotNumber: "14", renterName: "Doris",
+      startsOn: "2026-09-10", endsOn: "2026-10-10", chainId: "ch1", seq: 2, hasSuccessor: false,
+    };
+    expect(generateTasks(facts({ today: "2026-08-27", agreements: [successor] }))).toEqual([]);
+    expect(generateTasks(facts({ today: "2026-09-10", agreements: [successor] }))).toEqual([]);
+    // Its own last half: 30 days, asked from 25 September.
+    expect(generateTasks(facts({ today: "2026-09-25", agreements: [successor] }))).toHaveLength(1);
+    // And a three-month one keeps the 45-day lead it always had.
+    const three = { ...successor, reservationId: "r3", startsOn: "2026-07-10", endsOn: "2026-10-10" };
+    expect(generateTasks(facts({ today: "2026-08-26", agreements: [three] }))).toHaveLength(1);
+    expect(generateTasks(facts({ today: "2026-08-25", agreements: [three] }))).toEqual([]);
+  });
+
+  it("the card's lead is renewalLeadDays from agreement-helpers — ONE home, no second constant (source)", () => {
+    const src = readFileSync(fileURLToPath(new URL("./today-helpers.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).toMatch(/import \{[^}]*renewalLeadDays[^}]*\} from "\.\/agreement-helpers"/);
+    expect(src).toMatch(/d <= renewalLeadDays\(a\.startsOn, a\.endsOn\)/);
+    expect(src).not.toMatch(/RENEWAL_LEAD_DAYS/);
+    // The move-out card's lead is its own named number, not the renewal's.
+    expect(src).toMatch(/n\.days <= MOVE_OUT_LEAD_DAYS/);
+    expect(src).toMatch(/The first ends \$\{dayInWords\(soonest\)\}/);
   });
 
   it("raises unbilled rent near the due day, not weeks early", () => {
@@ -301,7 +354,7 @@ describe("the to-do list", () => {
       lateCount: 1, lateAmount: 455,
       unallocatedCosts: [{ id: "k1", label: "Water", amount: 100 }],
       agreements: [{ reservationId: "r1", lotNumber: "3", renterName: null,
-        endsOn: "2026-09-10", chainId: "ch1", seq: 1, hasSuccessor: false }],
+        startsOn: "2026-06-10", endsOn: "2026-09-10", chainId: "ch1", seq: 1, hasSuccessor: false }],
     }));
     expect(ts.map((t) => t.urgency)).toEqual(["overdue", "soon", "whenever"]);
   });
@@ -337,7 +390,7 @@ describe("who is leaving", () => {
   // catches it: they all ask whether the roll is billed, not whether it's true.
   it("escalates past the date, because an open tenancy keeps billing", () => {
     const [t] = generateTasks(facts({ noticed: one({ leavingOn: "2026-08-02" }) }));
-    expect(t.title).toBe("Lot 7 was due to leave on 2026-08-02");
+    expect(t.title).toBe("Lot 7 was due to leave on August 2, 2026");
     expect(t.urgency).toBe("overdue");
     expect(t.detail).toMatch(/keeps billing rent/);
     expect(t.canDismiss).toBe(false);
@@ -357,11 +410,23 @@ describe("who is leaving", () => {
     expect(ts).toHaveLength(1);
     expect(ts[0].title).toBe("4 households are leaving");
     expect(ts[0].detail).toContain("3, 7, 9, 12");
+    expect(ts[0].detail).toMatch(/^The first goes August 20, 2026\./);
+  });
+
+  it("names the day in words on every move-out card — never an ISO date", () => {
+    const [t] = generateTasks(facts({ noticed: one() }));
+    expect(t.detail).toContain("Dave Nolan is out on August 30, 2026.");
+    for (const ts of [
+      generateTasks(facts({ noticed: one() })),
+      generateTasks(facts({ noticed: one({ leavingOn: "2026-08-02" }) })),
+    ]) {
+      expect(ts[0].title + ts[0].detail).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    }
   });
 
   it("survives a household with no name on file", () => {
     const [t] = generateTasks(facts({ noticed: one({ renterName: null }) }));
-    expect(t.detail).toMatch(/^Out on 2026-08-30/);
+    expect(t.detail).toMatch(/^Out on August 30, 2026\./);
   });
 });
 
@@ -981,16 +1046,31 @@ describe("money that arrived without a bill behind it", () => {
     // The caller passes which KINDS are present, not how many rows, so a
     // sentence saying "a deposit" would be wrong the moment there are two.
     expect(describeOffBook(["deposit"])).toBe("deposit money you're holding");
-    expect(describeOffBook(["rent"])).toBe("money on account, not yet put against a bill");
+    expect(describeOffBook(["rent"])).toBe("money on account — counted the day it arrived, whichever bills it goes against");
     expect(describeOffBook(["amenity"])).toBe("income from something the park rents out");
     expect(describeOffBook(["rent", "deposit"])).toBe(
-      "deposit money you're holding and money on account, not yet put against a bill",
+      "deposit money you're holding and money on account — counted the day it arrived, whichever bills it goes against",
     );
     // Order comes from the list, not from whatever order the rows arrived in.
     expect(describeOffBook(["rent", "deposit"])).toBe(describeOffBook(["deposit", "rent"]));
     expect(describeOffBook(["amenity", "deposit", "rent"])).toBe(
-      "deposit money you're holding, income from something the park rents out and money on account, not yet put against a bill",
+      "deposit money you're holding, income from something the park rents out and money on account — counted the day it arrived, whichever bills it goes against",
     );
+  });
+
+  it("never asserts 'not yet put against a bill' about a figure that counts money the run has spent", () => {
+    // The Today block is a cash-received figure — every dollar that came in
+    // this month. Since 0167 the run and the recording door put money on
+    // account against bills the moment either exists, so a label asserting
+    // it is "not yet put against a bill" is false the morning after the
+    // first run. Pinned on the SOURCE, comments stripped, so a rewording
+    // that quietly reintroduces the claim fails here.
+    const src = readFileSync(fileURLToPath(new URL("./today-helpers.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).toMatch(/rent: "money on account/);
+    expect(src).not.toMatch(/not yet put against/);
+    expect(src).not.toMatch(/not yet against/);
+    expect(describeOffBook(["rent"])).not.toMatch(/not yet/);
   });
 
   it("falls back to plain English for a kind nobody has added yet", () => {

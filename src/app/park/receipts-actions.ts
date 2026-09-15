@@ -150,6 +150,79 @@ export async function getStatement(
       .reduce((s2, p) => s2 + Number(p.amount ?? 0), 0) * 100,
   );
 
+  // The branch below turns an empty result into a complete, plausible,
+  // ZERO statement. It must only ever be reachable by a park that has genuinely
+  // never billed anybody.
+  const charges = mustRead(
+    "the bills you've raised",
+    await admin
+      .from("park_charges")
+      .select("id, park_lot_id, renter_id, period_month, due_on, amount, status, lines")
+      .eq("park_id", parkId),
+  );
+  const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
+  const chargeIds = [...chargeById.keys()];
+
+  // WHERE THE MONEY ON ACCOUNT HAS SINCE GONE (0167) — per row, so the file's
+  // Bill month cell and the screen's row can name the months. Only rent on
+  // account has allocations; `offBook` already leaves out reversed and
+  // bank-returned rows, so every payment here still stands, and a removed
+  // allocation (taken back off its bill) is not "gone" anywhere. Cash basis
+  // is untouched: the row is still dated the day it arrived and counted once.
+  //
+  // THIS IS THE WRITER for OtherReceipt.appliedTo and onAccountAppliedCents.
+  // For one round both fields were read by the CSV, the note and the screen
+  // and written by nothing, so the file printed "On account (not yet
+  // applied)" about a cheque the run had spent on three months. A park with
+  // no bills has no allocations to read (they reference bills), so the empty
+  // branch below writes `[]` and 0 rather than skipping the fields.
+  const acctIds = (offBook ?? [])
+    .filter((p2) => p2.kind !== "deposit" && p2.kind !== "amenity")
+    .map((p2) => p2.id as string);
+  const allocRows = acctIds.length && chargeIds.length
+    ? (mustRead(
+        "where the money on account went",
+        await admin
+          .from("park_payment_allocations")
+          .select("payment_id, charge_id, amount")
+          .eq("park_id", parkId)
+          .in("payment_id", acctIds)
+          .is("removed_at", null),
+      ) ?? [])
+    : [];
+  const appliedByPayment = new Map<string, Array<{ periodMonth: string; amountCents: number }>>();
+  for (const a of allocRows) {
+    const list = appliedByPayment.get(a.payment_id as string) ?? [];
+    list.push({
+      periodMonth: String(chargeById.get(a.charge_id as string)?.period_month ?? ""),
+      amountCents: cents(a.amount),
+    });
+    appliedByPayment.set(a.payment_id as string, list);
+  }
+  const onAccountAppliedCents = allocRows.reduce((s2, a) => s2 + cents(a.amount), 0);
+
+  // WHAT IS STILL HELD of that money — the VIEW'S `remaining`, summed over
+  // the same rows, never `received − applied` here. The one definition of
+  // what is left on a payment lives in park_payment_remaining (amount − live
+  // allocations − refunds); a subtraction in this file would print "$57.47
+  // is still held" in the accountant's file about $57.47 that went back to
+  // a card. Every on-account row here still stands (`offBook` filters
+  // reversed and returned), so each has a row in the view; one absent is
+  // read as nothing held rather than guessed. mustRead: a failed read must
+  // not print "still held" about a figure nobody looked at.
+  const heldRows = acctIds.length
+    ? (mustRead(
+        "what is still held on account",
+        await admin
+          .from("park_on_account_payments")
+          .select("payment_id, remaining")
+          .eq("park_id", parkId)
+          .in("payment_id", acctIds),
+      ) ?? [])
+    : [];
+  const remainingByPayment = new Map(heldRows.map((h) => [h.payment_id as string, cents(h.remaining)]));
+  const onAccountHeldCents = acctIds.reduce((s2, id) => s2 + (remainingByPayment.get(id) ?? 0), 0);
+
   // THE SAME MONEY, AS ROWS THE ACCOUNTANT CAN TIE TO A BANK LINE.
   //
   // These three figures were reaching the caller only as prose in `notes`, and
@@ -174,20 +247,25 @@ export async function getStatement(
     feeCents: cents(p2.fee_amount),
     method: (p2.method as string) ?? "other",
     reference: (p2.reference as string) ?? null,
+    // ALWAYS an array for money on account — `[]` means "read, nothing
+    // applied"; `undefined` would mean "nobody looked", and the screen
+    // deliberately says nothing in that case. Deposits and amenity money
+    // are never applied to anything, so they carry no answer.
+    ...(p2.kind !== "deposit" && p2.kind !== "amenity"
+      ? {
+          appliedTo: appliedByPayment.get(p2.id as string) ?? [],
+          // The view's figure per row, so a screen can say "still held"
+          // only about money that is — a refunded row has none. Carried
+          // only when the view had the row: a row it lacks was taken back
+          // between the two reads, and the screen says nothing about it
+          // rather than reading "given back" off a figure nobody wrote.
+          ...(remainingByPayment.has(p2.id as string)
+            ? { remainingCents: remainingByPayment.get(p2.id as string) }
+            : {}),
+        }
+      : {}),
   }));
 
-  // The branch below turns an empty result into a complete, plausible,
-  // ZERO statement. It must only ever be reachable by a park that has genuinely
-  // never billed anybody.
-  const charges = mustRead(
-    "the bills you've raised",
-    await admin
-      .from("park_charges")
-      .select("id, park_lot_id, renter_id, period_month, due_on, amount, status, lines")
-      .eq("park_id", parkId),
-  );
-
-  const chargeIds = (charges ?? []).map((c) => c.id as string);
   if (chargeIds.length === 0) {
     const empty = summariseReceipts([], period);
     return {
@@ -195,6 +273,7 @@ export async function getStatement(
       notes: exclusionLines({
         recordsBeginOn: null, lagDays, unbilledFeeLabels: [], anyMissingPayerName: false,
         depositsReceivedCents, onAccountReceivedCents, amenityReceivedCents,
+        onAccountAppliedCents, onAccountHeldCents,
       }),
       recordsBeginOn: null, billedInWindowCents: 0,
       today, generatedAt: new Date().toISOString(),
@@ -218,7 +297,6 @@ export async function getStatement(
   const renters = mustRead("the households", rentersRes);
   const fees = mustRead("your park's fees", feesRes);
 
-  const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
   const lotName = new Map((lots ?? []).map((l) => [l.id as string, l.lot_number as string]));
   const renterName = new Map((renters ?? []).map((r) => [r.id as string, r.display_name as string]));
 
@@ -297,6 +375,7 @@ export async function getStatement(
     notes: exclusionLines({
       recordsBeginOn, lagDays, unbilledFeeLabels, anyMissingPayerName,
       depositsReceivedCents, onAccountReceivedCents, amenityReceivedCents,
+      onAccountAppliedCents, onAccountHeldCents,
       // Summarised over the SAME window the total is, so the sentence and the
       // number can never disagree.
       cardFeesReceivedCents: summary.cardFeesCents,

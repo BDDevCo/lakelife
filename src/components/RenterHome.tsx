@@ -4,6 +4,7 @@ import { PayRentButton } from "@/components/PayRentButton";
 import { IPaidForm } from "@/components/IPaidForm";
 import { TextOptIn } from "@/components/TextOptIn";
 import { EnableLotBooking } from "@/components/EnableLotBooking";
+import { money } from "@/app/park/ledger-helpers";
 
 /**
  * WHAT THE RESIDENT SEES.
@@ -19,9 +20,6 @@ import { EnableLotBooking } from "@/components/EnableLotBooking";
  * collector without anybody deciding to.
  */
 
-const usd = (n: number) =>
-  n.toLocaleString(undefined, { style: "currency", currency: "USD" });
-
 /** "3 July 2026" — a date a person reads, never 2026-07-03. */
 function pretty(iso: string | null): string {
   if (!iso) return "—";
@@ -29,6 +27,33 @@ function pretty(iso: string | null): string {
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, {
     day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
   });
+}
+
+/**
+ * "$542.53 of it came from money you had on account." — the sentence a settled
+ * or part-settled bill adds when money on account paid some of it (0167).
+ * Said in her words: she "had money on account"; the run "put it against"
+ * the bill. Only ever rendered when the figure is above zero.
+ */
+function fromOnAccountWords(b: { fromOnAccount: number }): string {
+  return `${money(b.fromOnAccount)} of it came from money you had on account.`;
+}
+
+/**
+ * "$300.00 received so far — $100.00 of it from money you had on account."
+ *
+ * `paidTotal` already counts what came off money on account
+ * (recompute_charge_paid adds allocations), so the two figures are nested,
+ * not added. When ALL of it came off money on account there is no cheque
+ * for this month on her list, and the sentence says so in one breath.
+ */
+function receivedSoFar(b: { paidTotal: number; fromOnAccount: number }): string {
+  const head = `${money(b.paidTotal)} received so far`;
+  if (b.fromOnAccount <= 0) return `${head}.`;
+  if (Math.round(b.fromOnAccount * 100) >= Math.round(b.paidTotal * 100)) {
+    return `${head} — from money you had on account.`;
+  }
+  return `${head} — ${money(b.fromOnAccount)} of it from money you had on account.`;
 }
 
 /**
@@ -132,7 +157,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 the truthful figure is what she handed over, with the excess
                 named on the next line. */}
             <div style={{ fontSize: 26, fontWeight: 800, margin: "6px 0 2px" }}>
-              {usd(b.outstanding > 0 ? b.outstanding : b.outstanding < 0 ? b.paidTotal : b.amount)}
+              {money(b.outstanding > 0 ? b.outstanding : b.outstanding < 0 ? b.paidTotal : b.amount)}
             </div>
 
             {/* A DISAGREEMENT OUTRANKS A BALANCE. If they have told the park
@@ -158,16 +183,21 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                  without promising the software will apply it: nothing does on
                  its own. */
               <div style={{ fontSize: 13, color: "var(--ink-good)" }}>
-                Paid — {usd(-b.outstanding)} more than this bill. The office is
+                Paid — {money(-b.outstanding)} more than this bill. The office is
                 holding that; ask them to put it toward your next one.
               </div>
             ) : b.outstanding === 0 ? (
+              /* HOW IT WAS PAID, when money on account paid it (0167). Her
+                 payment list shows one $1,627.59 cheque and no $542.53, so
+                 "Paid in full" over a month she never wrote a cheque for is
+                 the sentence that sends her to the office to ask. */
               <div style={{ fontSize: 13, color: "var(--ink-good)" }}>
                 Paid in full — thank you.
+                {b.fromOnAccount > 0 && ` ${fromOnAccountWords(b)}`}
               </div>
             ) : (
               <div className="mut" style={{ fontSize: 13 }}>
-                {b.paidTotal > 0 ? `${usd(b.paidTotal)} received so far.` : "Not paid yet."}
+                {b.paidTotal > 0 ? receivedSoFar(b) : "Not paid yet."}
               </div>
             )}
 
@@ -231,7 +261,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                         <span style={{ opacity: 0.75 }}> · {l.basis}</span>
                       )}
                     </span>
-                    <span style={{ marginLeft: "auto" }}>{usd(l.amount)}</span>
+                    <span style={{ marginLeft: "auto" }}>{money(l.amount)}</span>
                   </div>
                 ))}
               </div>
@@ -286,9 +316,19 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                   due {pretty(a.dueOn)}
                 </span>
                 <span style={{ marginLeft: "auto", fontSize: 17, fontWeight: 800 }}>
-                  {usd(a.outstanding)}
+                  {money(a.outstanding)}
                 </span>
               </div>
+
+              {/* WHAT MONEY ON ACCOUNT ALREADY TOOK OFF THIS MONTH. The big
+                  number is what is left; without this line a household whose
+                  quarter-ahead cheque half-covered January reads $242.53 owed
+                  with no sign the other $300 was ever counted. */}
+              {a.fromOnAccount > 0 && (
+                <div className="mut" style={{ fontSize: 12.5, marginTop: 2 }}>
+                  {money(a.fromOnAccount)} came off money you had on account.
+                </div>
+              )}
 
               {a.disputed ? (
                 <div style={{ fontSize: 13, color: "var(--ink-warn)", marginTop: 4 }}>
@@ -326,7 +366,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
           {view.deposit ? (
             <>
               <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>
-                {usd(view.deposit.amount)}
+                {money(view.deposit.amount)}
               </div>
               <div className="mut" style={{ fontSize: 12 }}>
                 since {pretty(view.deposit.since)}
@@ -336,19 +376,28 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
             <div className="mut" style={{ fontSize: 13, marginTop: 4 }}>None held.</div>
           )}
         </div>
-        {/* MONEY OF THEIRS NOT AGAINST ANY BILL. The office has seen this row
+        {/* MONEY OF THEIRS STILL ON ACCOUNT. The office has seen this row
             under "Money not against a bill" since 0102; the resident never
             saw it at all. Only rendered when there is some — a "$0.00 on
-            account" card is a number nobody asked for. Says where it is, not
-            what will happen to it: the office applies it, by hand. */}
+            account" card is a number nobody asked for.
+
+            "IT COMES OFF YOUR BILLS, OLDEST FIRST" IS TRUE (0167, R1). This
+            card used to say "paid, not yet against a bill" and nothing more,
+            because nothing applied the money on its own. Every door now
+            settles her oldest open bill from it — the run the moment it
+            raises one, the office the moment money is keyed, or by hand —
+            and the figure is what is STILL held, not what she handed over.
+            Not "next bills": after the office takes a line back off a bill
+            (R3) the money is on account while that bill is open again, and
+            it is that bill, not a next one, the next run puts it against. */}
         {view.onAccount != null && view.onAccount > 0 && (
           <div className="ll-card ll-card-pad" style={{ flex: "1 1 200px" }}>
             <div className="mut" style={{ fontSize: 13 }}>On account</div>
             <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>
-              {usd(view.onAccount)}
+              {money(view.onAccount)}
             </div>
             <div className="mut" style={{ fontSize: 12, lineHeight: 1.4 }}>
-              with the office — paid, not yet against a bill
+              with the office — it comes off your bills, oldest first
             </div>
           </div>
         )}
@@ -394,7 +443,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                     opacity: p.bankReturnedOn ? 0.55 : undefined,
                   }}
                 >
-                  {usd(p.amount)}
+                  {money(p.amount)}
                 </span>
                 {/* The receipt number is the thing they can quote at the
                     window. It is why assign_receipt_no exists. */}
@@ -409,7 +458,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                     a phone call to the office. */}
                 {p.fee != null && p.fee > 0 && (
                   <span className="mut" style={{ flexBasis: "100%", fontSize: 12, lineHeight: 1.4 }}>
-                    plus {usd(p.fee)} card fee &mdash; {usd(p.amount + p.fee)} left your card
+                    plus {money(p.fee)} card fee &mdash; {money(p.amount + p.fee)} left your card
                   </span>
                 )}
                 {/* WITHOUT THIS LINE THE SCREEN CONTRADICTS ITSELF. A returned

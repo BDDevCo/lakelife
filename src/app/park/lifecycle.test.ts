@@ -10,14 +10,14 @@ import type { Lot } from "@/lib/parks";
 // The pure-helper tests above are untouched by them.
 // ---------------------------------------------------------------------------
 type Row = Record<string, unknown>;
-const db: Record<string, Row[]> = { lot_reservations: [], park_members: [], park_lots: [] };
+const db: Record<string, Row[]> = { lot_reservations: [], park_members: [], park_lots: [], parks: [], park_renters: [] };
 const writes: Array<{ op: string; patch: Row; matched: string[] }> = [];
 const failNext: { update?: boolean } = {};
 
 class Q implements PromiseLike<{ data: Row[] | null; error: { message: string } | null }> {
   private fs: Array<(r: Row) => boolean> = [];
   private patch: Row | null = null;
-  private op: "select" | "update" = "select";
+  private op: "select" | "update" | "insert" | "delete" = "select";
   private embed = false;
   constructor(private t: string) {}
   select(cols?: string) { if (cols?.includes("park_lots(")) this.embed = true; return this; }
@@ -25,8 +25,23 @@ class Q implements PromiseLike<{ data: Row[] | null; error: { message: string } 
   in(c: string, vs: unknown[]) { this.fs.push((r) => vs.includes(r[c])); return this; }
   gt(c: string, v: number) { this.fs.push((r) => (r[c] as number) > v); return this; }
   update(patch: Row) { this.op = "update"; this.patch = patch; return this; }
+  // The "Someone lives here" door inserts a renter file then a tenancy, and
+  // deletes the file when the tenancy cannot land.
+  insert(row: Row) { this.op = "insert"; this.patch = row; return this; }
+  delete() { this.op = "delete"; return this; }
   private run() {
+    if (this.op === "insert") {
+      const row = { id: `${this.t}-${(db[this.t] ??= []).length + 1}`, ...this.patch! };
+      db[this.t].push(row);
+      writes.push({ op: `insert:${this.t}`, patch: this.patch!, matched: [row.id as string] });
+      return { data: [row], error: null };
+    }
     const hit = (db[this.t] ?? []).filter((r) => this.fs.every((f) => f(r)));
+    if (this.op === "delete") {
+      db[this.t] = (db[this.t] ?? []).filter((r) => !hit.includes(r));
+      writes.push({ op: `delete:${this.t}`, patch: {}, matched: hit.map((r) => r.id as string) });
+      return { data: [], error: null };
+    }
     if (this.op === "update") {
       if (failNext.update) { delete failNext.update; return { data: null, error: { message: "boom" } }; }
       for (const r of hit) Object.assign(r, this.patch);
@@ -39,6 +54,7 @@ class Q implements PromiseLike<{ data: Row[] | null; error: { message: string } 
     };
   }
   maybeSingle() { const r = this.run(); return Promise.resolve({ data: r.data?.[0] ?? null, error: r.error }); }
+  single() { return this.maybeSingle(); }
   then<A, B>(
     ok?: ((x: { data: Row[] | null; error: { message: string } | null }) => A | PromiseLike<A>) | null,
     bad?: ((e: unknown) => B | PromiseLike<B>) | null,
@@ -54,7 +70,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "user-owner" } } }) } }),
   createServiceClient: () => ({ from: (t: string) => new Q(t) }),
 }));
-const { endTenancy } = await import("./actions");
+const { endTenancy, addTenant } = await import("./actions");
 
 const TODAY = "2027-06-15";
 
@@ -434,5 +450,75 @@ describe("the roll offers the withdrawal for a lot whose current link has ended"
     const failure = close.match(/if \(!res\.ok\) \{[\s\S]*?return;\s*\}/)?.[0] ?? "";
     expect(failure).toMatch(/\/\^Closed out\/\.test\(res\.error/);
     expect(failure).toMatch(/router\.refresh\(\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "SOMEONE LIVES HERE" WRITES THE LENGTH THE HOUSEHOLD CHOSE. The owner's
+// decision: one, three or six months at signing. This door used to hand
+// buildTenant the park's house style for every signed lease; the length is
+// the form's now, judged against the park's dials, and said back in the toast.
+// ---------------------------------------------------------------------------
+describe("addTenant — the roll's one-at-a-time door — takes the chosen length", () => {
+  const signed = (agreementMonths: number | null | undefined) => ({
+    displayName: "Reyes, Donna", mobile: "(260) 555-0142", email: "donna@example.com",
+    movedInOn: "", term: "monthly", rent: "400", source: "owner_knowledge",
+    signedNewLease: true, agreementStartsOn: "2027-01-01", agreementMonths,
+  });
+
+  beforeEach(() => {
+    clock.today = "2027-01-04";
+    db.park_members = [{ park_id: "park-1", user_id: "user-owner", role: "owner" }];
+    db.park_lots = [{ id: "lot-9", park_id: "park-1", lot_number: "9" }];
+    // The Haven: a one-month house style under a three-month cap.
+    db.parks = [{ id: "park-1", max_agreement_months: 3, default_agreement_months: 1, cutover_date: "2027-01-01" }];
+    db.park_renters = [];
+    db.lot_reservations = [];
+    writes.length = 0;
+  });
+
+  const tenancy = () => db.lot_reservations[0];
+
+  it("writes three months when three is chosen, and says so", async () => {
+    const res = await addTenant("park-1", "lot-9", signed(3));
+    expect(res.ok, res.error).toBe(true);
+    expect(tenancy()).toMatchObject({ during: "[2027-01-01,2027-04-01)", origin: "application", status: "active" });
+    expect(res.signal).toContain("on the new 3-month lease from January 1, 2027.");
+  });
+
+  it("writes one month when one is chosen — the house style is a choice like any other", async () => {
+    const res = await addTenant("park-1", "lot-9", signed(1));
+    expect(res.ok, res.error).toBe(true);
+    expect(tenancy().during).toBe("[2027-01-01,2027-02-01)");
+    expect(res.signal).toContain("on the new one-month lease from January 1, 2027.");
+  });
+
+  it("refuses six at a cap of three, reading the cap from the PARK, writing nothing — and files it once the cap is six", async () => {
+    const six = await addTenant("park-1", "lot-9", signed(6));
+    expect(six.ok).toBe(false);
+    expect(six.error).toBe("This park writes agreements of 1 or 3 months — pick one of those.");
+    expect(writes).toEqual([]);
+    expect(db.park_renters).toEqual([]);
+
+    db.parks[0].max_agreement_months = 6;
+    const raised = await addTenant("park-1", "lot-9", signed(6));
+    expect(raised.ok, raised.error).toBe(true);
+    expect(tenancy().during).toBe("[2027-01-01,2027-07-01)");
+  });
+
+  it("refuses a signed lease with no length rather than filing the house style — before any write", async () => {
+    const res = await addTenant("park-1", "lot-9", signed(null));
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Pick how long the agreement runs — 1 or 3 months.");
+    expect(writes).toEqual([]);
+    // A form that never sent the field at all is the same missing choice.
+    expect((await addTenant("park-1", "lot-9", signed(undefined))).ok).toBe(false);
+  });
+
+  it("a holdover has no length: the tick clear, whatever the field says, writes the rolling horizon", async () => {
+    const res = await addTenant("park-1", "lot-9", { ...signed(3), signedNewLease: false, agreementStartsOn: "" });
+    expect(res.ok, res.error).toBe(true);
+    expect(tenancy()).toMatchObject({ during: "[2027-01-04,2028-01-04)", origin: "grandfathered" });
+    expect(res.signal).toContain("on the arrangement they already had");
   });
 });

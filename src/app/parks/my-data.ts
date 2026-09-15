@@ -53,6 +53,16 @@ export interface Bill {
   /** The day they said they paid, when they gave one. */
   claimedPaidOn: string | null;
   lines: BillLine[];
+  /**
+   * DOLLARS OF THIS BILL SETTLED FROM MONEY SHE HAD ON ACCOUNT (0167) — the
+   * quarter paid ahead, the excess over an earlier bill. Counted inside
+   * `paidTotal` already (recompute_charge_paid adds allocations); carried
+   * separately so "Paid in full" can say HOW, because the payment list shows
+   * one $1,627.59 cheque and no $542.53 — and a resident tying the two
+   * together is exactly who rings the office. Zero when nothing on account
+   * touched it.
+   */
+  fromOnAccount: number;
 }
 
 export interface RenterHome {
@@ -144,17 +154,26 @@ export interface RenterHome {
   deposit: { amount: number; since: string } | null;
 
   /**
-   * RENT MONEY OF THEIRS THAT IS NOT AGAINST ANY BILL. $57.47 handed over
-   * with a $600 cheque for a $542.53 month, a January cheque that arrived
-   * before January was raised — the rows `recordOnAccount` and the split in
-   * `recordPayment` write (kind 'rent', no charge). The office could see it
+   * RENT MONEY OF THEIRS STILL ON ACCOUNT — what has not yet been put against
+   * a bill. $57.47 handed over with a $600 cheque for a $542.53 month, a
+   * quarter paid ahead in December — the rows `recordOnAccount` and the split
+   * in `recordPayment` write (kind 'rent', no charge). The office could see it
    * under "Money not against a bill"; the person it belongs to could not see
    * it anywhere, and was chased for the next month in full. Zero when none.
    *
-   * SAID AS WHAT IT IS, NOT AS A PROMISE. Nothing applies it to the next bill
-   * on its own — the office does, from its own screen — so the sentence on the
-   * resident's page says "with the office", never "will come off your next
-   * bill".
+   * WHAT IS LEFT, NOT WHAT ARRIVED (0167). The payment row never moves: a
+   * quarter paid ahead keeps `charge_id null` forever while the run puts
+   * $542.53 of it against each month as it raises it. Summing `amount` here
+   * read $1,627.59 "on account" the morning January was settled from it, and
+   * still in March when every cent was spent. This is the view's `remaining`.
+   *
+   * AND NOW A PROMISE THE SOFTWARE KEEPS. Every door settles her OLDEST open
+   * bill from it (R1): the run the moment it raises one, the office the
+   * moment money is keyed, or by hand — so the screen may say "it comes off
+   * your bills, oldest first", which is what she wants to know. Not "next":
+   * after the office takes a line back off a bill (R3) the money is on
+   * account while that bill is open again, and it is that bill the next run
+   * puts it against.
    *
    * Optional only so a view built before this field existed still type-checks;
    * the loader always writes it, and the screen shows nothing when it is
@@ -268,7 +287,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // person acts on: the lot number she'd quote to the office, the park's name,
   // whether a Pay button appears at all, the percentage added if she uses it,
   // what she owes, what she has paid, and her deposit.
-  const [lotRes, parkRes, cardsRes, chargesRes, paysRes, propsRes, reqsRes, acctRes] = await Promise.all([
+  const [lotRes, parkRes, cardsRes, chargesRes, paysRes, propsRes, reqsRes, acctRes, allocRes] = await Promise.all([
     // `qr_token` because the "What you reported" card asserts a sticker on
     // her pedestal. No lot at The Haven has one — a token exists only after
     // the office runs mintStickers and physically fixes them — so the card
@@ -325,18 +344,34 @@ export async function getRenterHome(): Promise<RenterHome | null> {
           .order("created_at", { ascending: false })
           .limit(10)
       : Promise.resolve({ data: null, error: null }),
-    // Money on account — exactly the rows getHeldMoney lists for the office,
-    // and 0102's partial index. Its own read rather than a filter over the
-    // 24-row receipt slice above, because a row older than that slice is
-    // still their money.
+    // Money on account — the SAME view getHeldMoney lists for the office
+    // (0167): kind rent, no charge, still standing, with the database's own
+    // `remaining` after allocations and refunds. Its own read rather than a
+    // filter over the 24-row receipt slice above, because a row older than
+    // that slice is still their money. Only what is still held: a cheque
+    // every cent of which has gone to bills is not money on account.
     admin
-      .from("park_payments")
-      .select("amount")
+      .from("park_on_account_payments")
+      .select("payment_id, remaining")
       .eq("renter_id", file.id as string)
-      .eq("kind", "rent")
-      .is("charge_id", null)
-      .is("reversed_at", null)
-      .is("returned_at", null),
+      .gt("remaining", 0),
+    // WHERE HER MONEY ON ACCOUNT HAS GONE — the allocations from HER payments,
+    // scoped through the payment's household (the FK to park_payments), so the
+    // read only needs the file and can sit in this trip. Keyed by bill below,
+    // so a settled month can say "$542.53 of it from money you had on
+    // account" beside a payment list that shows one $1,627.59 cheque.
+    // The payment's own standing comes along: an allocation SURVIVES a
+    // reversal as record (0167), so a bounced cheque's rows are skipped below
+    // rather than read as money that paid the month. And LIVE LINES ONLY: a
+    // line the office took back off its bill (R3, removed_at set) is the
+    // record of a correction — the view and the recompute leave it out, and
+    // so does this, or February would read "$542.53 of it came from money
+    // you had on account" the day after that money went back on account.
+    admin
+      .from("park_payment_allocations")
+      .select("charge_id, payment_id, amount, park_payments!inner(renter_id, reversed_at, returned_at)")
+      .eq("park_payments.renter_id", file.id as string)
+      .is("removed_at", null),
   ]);
   const lot = mustRead("your lot", lotRes);
   const park = mustRead("your park", parkRes);
@@ -393,6 +428,24 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       if (!claimedOn.has(key)) claimedOn.set(key, (c.claimed_paid_on as string | null) ?? null);
     }
   }
+  // WHAT EACH BILL GOT FROM MONEY ON ACCOUNT, in cents per bill. A failed
+  // read here would render "Paid in full — thank you" with no word of how,
+  // under a payment list that shows no payment for that month — the shape of
+  // sentence that sends somebody to the office to ask where their money went.
+  // mustRead, like every other money read on this screen.
+  const allocRows = mustRead("where your money on account went", allocRes);
+  const fromOnAccountCents = new Map<string, number>();
+  for (const a of allocRows ?? []) {
+    // A reversed or bank-returned cheque's allocations are the record of
+    // where it HAD gone; recompute_charge_paid no longer counts them and
+    // neither does this. PostgREST embeds a many-to-one as an object.
+    const raw = a.park_payments as unknown;
+    const pay = (Array.isArray(raw) ? raw[0] : raw) as { reversed_at?: unknown; returned_at?: unknown } | null;
+    if (pay?.reversed_at != null || pay?.returned_at != null) continue;
+    const key = a.charge_id as string;
+    fromOnAccountCents.set(key, (fromOnAccountCents.get(key) ?? 0) + Math.round(Number(a.amount ?? 0) * 100));
+  }
+
   /** One charge row shaped for the screen. Used for the current bill and each
    *  arrears month, so they cannot drift apart. */
   const toBill = (c: Record<string, unknown>): Bill => {
@@ -408,6 +461,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       status: (c.status as string) ?? "open",
       disputed: claimedOn.has(c.id as string),
       claimedPaidOn: claimedOn.get(c.id as string) ?? null,
+      fromOnAccount: (fromOnAccountCents.get(c.id as string) ?? 0) / 100,
       lines: ((c.lines as { label?: string; amount?: number; basis?: string }[]) ?? []).map((l) => ({
         label: String(l.label ?? "Rent"),
         amount: Number(l.amount ?? 0),
@@ -447,9 +501,10 @@ export async function getRenterHome(): Promise<RenterHome | null> {
 
   // A failed read here would print "nothing on account" at somebody who handed
   // over $57.47 more than the bill last week. mustRead, like the deposit.
+  // WHAT IS STILL HELD — the view's `remaining` — never the cheque's amount.
   const acctRows = mustRead("money you have on account", acctRes);
   const onAccount = Math.round(
-    (acctRows ?? []).reduce((sum, p) => sum + Number(p.amount ?? 0), 0) * 100,
+    (acctRows ?? []).reduce((sum, p) => sum + Number(p.remaining ?? 0), 0) * 100,
   ) / 100;
 
   // ---- what they reported -------------------------------------------------

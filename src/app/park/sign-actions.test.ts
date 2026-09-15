@@ -107,7 +107,8 @@ function seed(during = "[2027-01-01,2028-01-01)") {
   clock.today = "2027-01-01";
 }
 
-const INPUT = { signedOn: "2027-01-01", rent: "400", email: "doris@example.com", mobile: "(260) 555-0114" };
+/** The form as it opens at The Haven: the one-month house style already picked. */
+const INPUT = { signedOn: "2027-01-01", rent: "400", email: "doris@example.com", mobile: "(260) 555-0114", agreementMonths: 1 };
 
 beforeEach(() => seed());
 
@@ -126,7 +127,38 @@ describe("recordSigning writes the plan, in order", () => {
       agreement_chain_id: "chain-14", agreement_seq: 2, status: "active", quoted_amount: 400,
     });
     expect(db.park_renters).toHaveLength(1);       // no second file
-    expect(res.signal).toBe("On the new lease from January 1, 2027 — January 2027 bills $542.53 ($400.00 rent + $142.53 fees).");
+    expect(res.signal).toBe("On the new one-month lease from January 1, 2027 — January 2027 bills $542.53 ($400.00 rent + $142.53 fees).");
+  });
+
+  // THE LENGTH IS THE HOUSEHOLD'S CHOICE — the owner's decision, one, three
+  // or six months. This door used to write the house style for everybody.
+  it("writes the successor for the length the household chose, and says it back", async () => {
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, agreementMonths: 3 });
+    expect(res.ok, res.error).toBe(true);
+    expect(writes[2].patch).toMatchObject({ during: "[2027-01-01,2027-04-01)", status: "active", origin: "office" });
+    expect(res.signal).toBe("On the new 3-month lease from January 1, 2027 — January 2027 bills $542.53 ($400.00 rent + $142.53 fees).");
+  });
+
+  it("refuses a length the park does not offer, reading the cap from the PARK, and writes nothing", async () => {
+    // The Haven today: cap 3, so six is refused. Nothing is assumed about
+    // any park's cap — raise this one's to six and the same call files.
+    const six = await recordSigning("park-1", "res-14", { ...INPUT, agreementMonths: 6 });
+    expect(six.ok).toBe(false);
+    expect(six.error).toBe("This park writes agreements of 1 or 3 months — pick one of those.");
+    expect(writes).toEqual([]);
+
+    db.parks[0].max_agreement_months = 6;
+    const raised = await recordSigning("park-1", "res-14", { ...INPUT, agreementMonths: 6 });
+    expect(raised.ok, raised.error).toBe(true);
+    expect(writes[2].patch).toMatchObject({ during: "[2027-01-01,2027-07-01)" });
+    expect(raised.signal).toMatch(/^On the new 6-month lease from January 1, 2027/);
+  });
+
+  it("refuses a form that sends no length — the house style is never filed for them", async () => {
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, agreementMonths: null });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Pick how long the agreement runs — 1 or 3 months.");
+    expect(writes).toEqual([]);
   });
 
   it("a holdover already running is trimmed, not ended — no moved_out_on", async () => {

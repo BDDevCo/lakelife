@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   planSigning, defaultSigningDay, firstMonthBills, agreementAlreadyOver, agreementEndFrom,
-  alreadyOverClause, signingRentSeed, SIGNED_LEASE_LABEL,
+  alreadyOverClause, signingRentSeed, SIGNED_LEASE_LABEL, newLeaseWords,
+  signingDayForLength, blankDayWords,
   type Holdover, type SigningContext, type SigningInput,
 } from "./sign-helpers";
 import { contactProblem, signingExplainer } from "./onboard-helpers";
@@ -54,9 +55,11 @@ const imported = (over: Partial<Holdover> = {}): Holdover => ({
   ...over,
 });
 
+/** The form as it opens: the house style (one month) already picked. */
 const signed = (over: Partial<SigningInput> = {}): SigningInput => ({
-  signedOn: "2027-01-01", rent: "400", email: "Doris@Example.com", mobile: "(260) 555-0114", ...over,
-});
+  signedOn: "2027-01-01", rent: "400", email: "Doris@Example.com", mobile: "(260) 555-0114",
+  agreementMonths: 1, ...over,
+} as SigningInput);
 
 const GROUNDS = [{ label: "Grounds fee", amount: 142.53, cadence: "monthly" }];
 
@@ -140,7 +143,7 @@ describe("the transition is end-the-holdover + insert-a-successor", () => {
     });
     expect(st.total).toBe(542.53);
     expect(p.signal).toBe(
-      "On the new lease from January 1, 2027 — January 2027 bills $542.53 ($400.00 rent + $142.53 fees).",
+      "On the new one-month lease from January 1, 2027 — January 2027 bills $542.53 ($400.00 rent + $142.53 fees).",
     );
 
     // And the defect, kept: dated from the day it was recorded.
@@ -176,7 +179,7 @@ describe("the transition is end-the-holdover + insert-a-successor", () => {
     const p = planSigning(signed(), imported(), HAVEN);
     if (!p.ok) throw new Error(p.error);
     expect(p.signal).toBe(
-      "On the new lease from January 1, 2027 — January 2027 bills $542.53 ($400.00 rent + $142.53 fees).",
+      "On the new one-month lease from January 1, 2027 — January 2027 bills $542.53 ($400.00 rent + $142.53 fees).",
     );
     expect(p.signal).not.toMatch(/2027-01/);
   });
@@ -197,7 +200,7 @@ describe("the transition is end-the-holdover + insert-a-successor", () => {
     // lease from that day', sitting right after 'January 14', read as the
     // lease running from the 14th. The lease's own day is named.
     expect(p.signal).toBe(
-      "On the new lease from January 15, 2027 — January 2027 bills the arrangement they had to January 14, 2027, " +
+      "On the new one-month lease from January 15, 2027 — January 2027 bills the arrangement they had to January 14, 2027, " +
       "then the new lease from January 15, 2027 — $542.53 a month after that ($400.00 rent + $142.53 fees).",
     );
   });
@@ -213,20 +216,69 @@ describe("the transition is end-the-holdover + insert-a-successor", () => {
     if (!p.ok) throw new Error(p.error);
     expect(p.holdover).toEqual({ id: "res-14", cancel: true });
     expect(p.signal).toBe(
-      "On the new lease from January 15, 2027 — January 2027 bills from that day, then $542.53 a month ($400.00 rent + $142.53 fees).",
+      "On the new one-month lease from January 15, 2027 — January 2027 bills from that day, then $542.53 a month ($400.00 rent + $142.53 fees).",
     );
   });
 
   it("a park with no fee says so by not inventing one", () => {
     const p = planSigning(signed(), imported(), { ...HAVEN, feePerMonth: 0 });
     if (!p.ok) throw new Error(p.error);
-    expect(p.signal).toBe("On the new lease from January 1, 2027 — January 2027 bills $400.00.");
+    expect(p.signal).toBe("On the new one-month lease from January 1, 2027 — January 2027 bills $400.00.");
   });
 
-  it("a park with neither dial writes the successor on the horizon", () => {
-    const p = planSigning(signed(), imported(), { ...HAVEN, defaultAgreementMonths: null, maxAgreementMonths: null });
+  it("a park with neither dial writes the successor on the horizon — and the form sends no length", () => {
+    const p = planSigning(signed({ agreementMonths: null }), imported(), { ...HAVEN, defaultAgreementMonths: null, maxAgreementMonths: null });
     if (!p.ok) throw new Error(p.error);
     expect(p.successor.during).toBe("[2027-01-01,2028-01-01)");
+    expect(p.signal).toBe("On the new lease from January 1, 2027 — January 2027 bills $542.53 ($400.00 rent + $142.53 fees).");
+  });
+
+  // -------------------------------------------------------------------------
+  // THE LENGTH IS THE HOUSEHOLD'S CHOICE. The owner's decision: one, three or
+  // six months at signing and at every renewal. This planner used to write
+  // agreementMonthsFor(default, cap) — the house style — for everybody.
+  // -------------------------------------------------------------------------
+  it("writes the length the household chose — three months at The Haven, not the one-month house style", () => {
+    const p = planSigning(signed({ agreementMonths: 3 }), imported(), HAVEN);
+    if (!p.ok) throw new Error(p.error);
+    expect(p.successor.during).toBe("[2027-01-01,2027-04-01)");
+    expect(p.signal).toBe(
+      "On the new 3-month lease from January 1, 2027 — January 2027 bills $542.53 ($400.00 rent + $142.53 fees).",
+    );
+  });
+
+  it("offers six months only once the park's cap allows it", () => {
+    const six = planSigning(signed({ agreementMonths: 6 }), imported(), HAVEN);
+    expect(six.ok).toBe(false);
+    expect(!six.ok && six.error).toBe("This park writes agreements of 1 or 3 months — pick one of those.");
+    const raised = planSigning(signed({ agreementMonths: 6 }), imported(), { ...HAVEN, maxAgreementMonths: 6 });
+    if (!raised.ok) throw new Error(raised.error);
+    expect(raised.successor.during).toBe("[2027-01-01,2027-07-01)");
+    expect(raised.signal).toMatch(/^On the new 6-month lease from January 1, 2027/);
+    // And twelve is still not one of them at a cap of six.
+    const twelve = planSigning(signed({ agreementMonths: 12 }), imported(), { ...HAVEN, maxAgreementMonths: 6 });
+    expect(!twelve.ok && twelve.error).toBe("This park writes agreements of 1, 3 or 6 months — pick one of those.");
+  });
+
+  it("refuses a form that sends no length rather than filing the house style for them", () => {
+    const p = planSigning(signed({ agreementMonths: null }), imported(), HAVEN);
+    expect(p.ok).toBe(false);
+    expect(!p.ok && p.error).toBe("Pick how long the agreement runs — 1 or 3 months.");
+    expect(p).not.toHaveProperty("successor");
+  });
+
+  it("the over-by-now check reads the CHOSEN length — a 1 January three-month lease is still running on 15 February", () => {
+    const onFeb15 = { ...HAVEN, todayISO: "2027-02-15" };
+    expect(planSigning(signed({ agreementMonths: 1 }), imported(), onFeb15).ok).toBe(false);
+    const three = planSigning(signed({ agreementMonths: 3 }), imported(), onFeb15);
+    if (!three.ok) throw new Error(three.error);
+    expect(three.successor.during).toBe("[2027-01-01,2027-04-01)");
+  });
+
+  it("the words the form and the toast open with come from one place", () => {
+    expect(newLeaseWords(1)).toBe("new one-month lease");
+    expect(newLeaseWords(3)).toBe("new 3-month lease");
+    expect(newLeaseWords(null)).toBe("new lease");
   });
 
   it("patches the file with the email and the office's number, in one format", () => {
@@ -336,12 +388,12 @@ describe("what it refuses, and in what words", () => {
 
   it("a park with neither dial is over only after the horizon, and the sentence names no term", () => {
     const noDials = { ...HAVEN, defaultAgreementMonths: null, maxAgreementMonths: null, cutoverDate: null };
-    expect(planSigning(signed(), imported(), { ...noDials, todayISO: "2027-12-31" }).ok).toBe(true);
+    expect(planSigning(signed({ agreementMonths: null }), imported(), { ...noDials, todayISO: "2027-12-31" }).ok).toBe(true);
     // The horizon from 1 January 2027 ends 1 January 2028, so on that day it
     // is over. (The holdover's own range also ends that day, but the
     // range-end check is `signedOn >= end` — 1 Jan 2027 is not — so it is
     // this clause that refuses.)
-    const p = planSigning(signed(), imported(), { ...noDials, todayISO: "2028-01-01" });
+    const p = planSigning(signed({ agreementMonths: null }), imported(), { ...noDials, todayISO: "2028-01-01" });
     expect(p.ok).toBe(false);
     expect(!p.ok && p.error).toBe(
       "An agreement from January 1, 2027 would already be over by now — check the day the lease runs from.",
@@ -381,7 +433,7 @@ describe("what it refuses, and in what words", () => {
   });
 
   it("a 3-month term says 3-month; the clause is the one the form reads", () => {
-    const p = planSigning(signed(), imported(), { ...HAVEN, defaultAgreementMonths: 3, todayISO: "2027-04-01" });
+    const p = planSigning(signed({ agreementMonths: 3 }), imported(), { ...HAVEN, defaultAgreementMonths: 3, todayISO: "2027-04-01" });
     expect(!p.ok && p.error).toMatch(/under your 3-month term/);
     expect(alreadyOverClause("2027-01-01", 1)).toBe("an agreement from January 1, 2027 under your one-month term would already be over by now");
     expect(alreadyOverClause("2027-01-01", null)).toBe("an agreement from January 1, 2027 would already be over by now");
@@ -412,11 +464,81 @@ describe("the day the form starts from — never today", () => {
   });
 });
 
+describe("the day box follows the LENGTH PICKED — judged at the choice, not the house style", () => {
+  // The Haven on 15 February 2027: an imported 1 January holdover. At one
+  // month an agreement from 1 January is over; at three it is not — and
+  // planSigning accepts 1 January at three months. The form judged the seeded
+  // day at the HOUSE STYLE once, at mount, so picking '3 months' left the box
+  // blank and the sentence telling him the one day the server would take
+  // cannot be recorded.
+  const FEB15 = "2027-02-15";
+
+  it("seeds the day when the picked length keeps it open, blank when it does not", () => {
+    expect(signingDayForLength("2027-01-01", "2027-01-01", 1, FEB15)).toBe("");
+    expect(signingDayForLength("2027-01-01", "2027-01-01", 3, FEB15)).toBe("2027-01-01");
+    // On the takeover morning itself, one month is still running.
+    expect(signingDayForLength("2027-01-01", "2027-01-01", 1, "2027-01-04")).toBe("2027-01-01");
+  });
+
+  it("on a length change: a blank box fills with the seeded day once a length keeps it open, and empties again when it does not", () => {
+    // 1 → 3: the blank box takes 1 January.
+    expect(signingDayForLength("2027-01-01", "", 3, FEB15)).toBe("2027-01-01");
+    // 3 → 1: the seeded day is over again, so the box empties.
+    expect(signingDayForLength("2027-01-01", "2027-01-01", 1, FEB15)).toBe("");
+    // A day HE typed is never touched, either way.
+    expect(signingDayForLength("2027-01-01", "2027-02-01", 1, FEB15)).toBe("2027-02-01");
+    expect(signingDayForLength("2027-01-01", "2027-02-01", 3, FEB15)).toBe("2027-02-01");
+    // No seeded day (a hand-filed holdover): nothing to fill with.
+    expect(signingDayForLength("", "", 3, FEB15)).toBe("");
+    expect(signingDayForLength("", "", 1, FEB15)).not.toBe(FEB15);
+  });
+
+  it("says why the box is blank at the picked length, and what to do — in the form's words", () => {
+    expect(blankDayWords("2027-01-01", 1, [1, 3], FEB15)).toBe(
+      "their arrangement began January 1, 2027, and at one month that agreement would already be over — " +
+      "pick a longer length or type the day the lease runs from",
+    );
+    // At six the sentence names six.
+    expect(blankDayWords("2027-01-01", 6, [1, 3, 6, 12], "2027-08-01")).toBe(
+      "their arrangement began January 1, 2027, and at 6 months that agreement would already be over — " +
+      "pick a longer length or type the day the lease runs from",
+    );
+  });
+
+  it("does NOT say 'pick a longer length' when no offered length keeps the day open — that is an instruction the screen cannot honour", () => {
+    // 1 January at three months is over by 1 April; the park offers 1 and 3.
+    const words = blankDayWords("2027-01-01", 3, [1, 3], "2027-04-02");
+    expect(words).toBe(
+      "their arrangement began January 1, 2027, and at 3 months that agreement would already be over, " +
+      "so it can't be recorded from that day here",
+    );
+    expect(words).not.toMatch(/pick a longer length/);
+    // Nor is he sent to type the day on the paper — that is the day refused.
+    expect(words).not.toMatch(/type the day/i);
+    // Picking one month with three ALSO over: same — three is offered but no help.
+    expect(blankDayWords("2027-01-01", 1, [1, 3], "2027-04-02")).not.toMatch(/pick a longer length/);
+  });
+
+  it("every word of it is the arithmetic planSigning refuses on", () => {
+    // The sentence and the seed both read agreementAlreadyOver — the same
+    // function planSigning's over-by-now check uses — so the form never says
+    // 'over' for a day the server takes, or seeds a day it refuses.
+    for (const [months, today] of [[1, FEB15], [3, FEB15], [3, "2027-04-02"]] as const) {
+      const plan = planSigning(
+        { signedOn: "2027-01-01", rent: "400", email: "d@example.com", mobile: "(260) 555-0142", agreementMonths: months },
+        imported(), { ...HAVEN, todayISO: today },
+      );
+      const seeded = signingDayForLength("2027-01-01", "2027-01-01", months, today);
+      expect(seeded === "2027-01-01", `${months}mo on ${today}`).toBe(plan.ok);
+    }
+  });
+});
+
 describe("what the first month bills is said BEFORE the write, in the toast's own words", () => {
   it("is the one sentence the plan's signal is built from", () => {
     const p = planSigning(signed(), imported(), HAVEN);
     if (!p.ok) throw new Error(p.error);
-    expect(p.signal).toBe(`On the new lease from January 1, 2027 — ${firstMonthBills("2027-01-01", 400, 142.53)}.`);
+    expect(p.signal).toBe(`On the new one-month lease from January 1, 2027 — ${firstMonthBills("2027-01-01", 400, 142.53)}.`);
     expect(firstMonthBills("2027-01-15", 400, 142.53)).toBe(
       "January 2027 bills from that day, then $542.53 a month ($400.00 rent + $142.53 fees)",
     );
@@ -478,34 +600,44 @@ describe("the form on the roll asks for the same fact the arithmetic uses", () =
     expect(seeded, "the form no longer computes seededDay — this scan measures nothing").not.toBe("");
     expect(seeded).toMatch(/defaultSigningDay\(/);
     expect(seeded).not.toMatch(/\btoday\b/);
-    const seed = form.match(/signedOn:\s*([^,\n]+)/)?.[1] ?? "";
+    // The seed is the helper's answer for the house style; `today` reaches it
+    // only as the judge of 'already over' — signingDayForLength never
+    // returns it (pinned above).
+    const seed = form.match(/signedOn:\s*(signingDayForLength\([^)]*\))/)?.[1] ?? "";
     expect(seed, "the form no longer seeds signedOn").not.toBe("");
-    expect(seed).not.toMatch(/\btoday\b/);
+    expect(seed).toBe("signingDayForLength(seededDay, seededDay, seed.termMonths, today)");
   });
 
-  it("leaves the date BLANK when an agreement from the seeded day would already be over, and says why", () => {
-    // 1 January under a one-month term, opened on 15 February: the planner
-    // refuses that day, so seeding it and saying 'keep the day on the paper'
-    // offered him the one date that cannot be recorded.
-    const seed = form.match(/signedOn:\s*([^,\n]+)/)?.[1] ?? "";
-    expect(seed).toMatch(/^seededDayOver \? "" : seededDay$/);
+  it("judges 'already over' at the LENGTH PICKED, every render — not the house style once at mount", () => {
+    // 1 January recorded on 15 February: over at one month, running at
+    // three. Judged at seed.termMonths the sentence stayed after he picked
+    // '3 months', and planSigning then accepted the day it called over.
     const over = form.match(/const seededDayOver = ([^;]+);/)?.[1] ?? "";
     expect(over, "the form no longer decides seededDayOver").not.toBe("");
-    expect(over).toMatch(/agreementAlreadyOver\(seededDay, seed\.termMonths, today\)/);
-    expect(form).toMatch(/The day is left blank: \{alreadyOverClause\(seededDay, seed\.termMonths\)\}, so it\s+can&apos;t be recorded from that day here\./);
+    expect(over).toMatch(/agreementAlreadyOver\(seededDay, form\.agreementMonths, today\)/);
+    expect(form).not.toMatch(/agreementAlreadyOver\(seededDay, seed\.termMonths, today\)/);
+    expect(form).not.toMatch(/alreadyOverClause\(seededDay, seed\.termMonths\)/);
+    expect(form).toMatch(/The day is left blank: \{blankDayWords\(seededDay, form\.agreementMonths, lengths, today\)\}\./);
   });
 
-  it("when the box is blank for that reason, it does NOT send him to type the day on the paper — that is the day refused", () => {
-    // 'The day on the paper, not today … Type the day the lease runs from'
-    // named 1 January twice on the one form that refuses 1 January. The
-    // over-branch says what any typed day does; the lead line is the other
-    // branch's alone.
+  it("changing the length re-seeds the day through the same helper — a blank box fills when the pick keeps the day open", () => {
+    const onChange = form.match(/onChange=\{\(e\) => \{\s*const months = [\s\S]*?\}\}/)?.[0] ?? "";
+    expect(onChange, "the length select's onChange is gone — this scan measures nothing").not.toBe("");
+    expect(onChange).toMatch(/signedOn: signingDayForLength\(seededDay, f\.signedOn, months, today\)/);
+    expect(onChange).toMatch(/agreementMonths: months/);
+  });
+
+  it("when the box is blank for that reason, the lead line is the other branch's alone", () => {
+    // 'The day on the paper, not today …' named 1 January on the one form
+    // that refuses 1 January. The over-branch reads blankDayWords (which
+    // says 'type the day the lease runs from' ONLY when a longer length
+    // keeps the seeded day open — pinned above) and what any typed day does.
     const helper = form.slice(form.indexOf("{seededDayOver ? ("), form.indexOf("{seed.rentFromRateCard"));
     expect(helper, "the helper line's branch is gone — this scan measures nothing").not.toBe("");
     const [overBranch, elseBranch] = helper.split(") : (");
-    expect(overBranch).toMatch(/The day you type is the day the new\s+agreement runs from, and the first month bills from it\./);
+    expect(overBranch).toMatch(/The day you type is the day the new\s+agreement runs from, and the first month\s+bills from it\./);
     expect(overBranch).not.toMatch(/The day on the paper/);
-    expect(overBranch).not.toMatch(/Type the\s+day the lease runs from/);
+    expect(overBranch).not.toMatch(/can&apos;t be recorded/);
     expect(elseBranch).toMatch(/The day on the paper, not today — the first month bills from this day\./);
   });
 
@@ -569,7 +701,37 @@ describe("the form on the roll asks for the same fact the arithmetic uses", () =
 
   it("says what the first month bills before the write, from the shared sentence", () => {
     expect(form).toMatch(/firstMonthBills\(form\.signedOn/);
-    expect(form).toMatch(/On the new lease from <strong>\{dayInWords\(form\.signedOn\)\}<\/strong> — \{firstMonth\}\./);
+    expect(form).toMatch(/On the \{newLeaseWords\(form\.agreementMonths\)\} from <strong>\{dayInWords\(form\.signedOn\)\}<\/strong> — \{firstMonth\}\./);
+  });
+
+  // THE LENGTH IS THE HOUSEHOLD'S CHOICE, on this form and on "Someone lives
+  // here". Offered from the same list the server judges against, seeded with
+  // the house style, and sent with the form — so the server never refuses a
+  // choice this screen made, and never files one it did not.
+  it("offers the lengths the park writes, seeded with the house style, and sends the pick", () => {
+    expect(form).toMatch(/const lengths = offeredAgreementLengths\(seed\.termMonths, capMonths\);/);
+    expect(form).toMatch(/agreementMonths: seed\.termMonths,/);
+    expect(form).toMatch(/<select value=\{form\.agreementMonths \?\? ""\}/);
+    expect(form).toMatch(/const months = e\.target\.value \? Number\(e\.target\.value\) : null;/);
+    expect(form).toMatch(/\{lengths\.map\(\(m\) => \(\s*<option key=\{m\} value=\{m\}>\{lengthInWords\(m\)\}<\/option>/);
+  });
+
+  it("'Someone lives here' seeds the length with the tick and clears it with the tick, from the same list", () => {
+    const add = roll.slice(roll.indexOf("function AddTenant("), roll.indexOf("function SignedNewLease("));
+    expect(add, "the AddTenant form is gone — this scan measures nothing").toContain("addTenant(");
+    expect(add).toMatch(/const lengths = offeredAgreementLengths\(termMonths, capMonths\);/);
+    expect(add).toMatch(/agreementMonths: signed \? termMonths : null,/);
+    expect(add).toMatch(/<select value=\{form\.agreementMonths \?\? ""\}/);
+    // The initial state carries no length: nobody has signed anything.
+    expect(add).toMatch(/signedNewLease: false,\s*agreementStartsOn: "",\s*agreementMonths: null,/);
+  });
+
+  it("the two dials reach the roll as REQUIRED props — a prop nothing passes offers no choice", () => {
+    const props = roll.slice(roll.indexOf("export function ParkRentRoll("), roll.indexOf("const router = useRouter();"));
+    expect(props).toMatch(/capMonths: number \| null;/);
+    expect(props).toMatch(/termMonths: number \| null;/);
+    expect(props).not.toMatch(/capMonths\?:/);
+    expect(props).not.toMatch(/termMonths\?:/);
   });
 });
 
@@ -593,5 +755,15 @@ describe("the page seeds the form from the same helpers the planner refuses on",
     expect(signing).toMatch(/termMonths,/);
     expect(page).toMatch(/const termMonths = agreementMonthsFor\(/);
     expect(page).toMatch(/default_agreement_months, max_agreement_months"\)/);
+  });
+
+  it("the page hands the roll BOTH dials — the cap for the lengths on offer, the term for the one the choice starts on", () => {
+    // A prop nothing passes is no default: without the cap the roll's forms
+    // offer no length, and the server then refuses every signed row for
+    // having none. The page already reads both columns.
+    const el = page.match(/<ParkRentRoll[\s\S]*?\/>/)?.[0] ?? "";
+    expect(el, "the roll element is gone — this scan measures nothing").toContain("cutoverDate={cutoverDate}");
+    expect(el, "page.tsx does not pass capMonths to ParkRentRoll").toMatch(/capMonths=\{\(parkRow\?\.max_agreement_months as number \| null\) \?\? null\}/);
+    expect(el, "page.tsx does not pass termMonths to ParkRentRoll").toMatch(/termMonths=\{termMonths\}/);
   });
 });

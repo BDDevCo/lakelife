@@ -175,7 +175,7 @@ const owing = (over: Partial<RenterHomeView> = {}) =>
     bill: {
       id: "c1", monthLabel: "January 2027", dueOn: "2027-01-01",
       amount: 542.53, paidTotal: 0, outstanding: 542.53,
-      status: "open", disputed: false, claimedPaidOn: null, lines: [],
+      status: "open", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0,
     },
     ...over,
   });
@@ -206,7 +206,7 @@ describe("a household that pays cash", () => {
     const paid = owing({
       bill: { id: "c1", monthLabel: "January 2027", dueOn: "2027-01-01",
         amount: 542.53, paidTotal: 542.53, outstanding: 0,
-        status: "paid", disputed: false, claimedPaidOn: null, lines: [] },
+        status: "paid", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0 },
     });
     expect(words(paid)).not.toMatch(/pay the office/i);
   });
@@ -218,10 +218,10 @@ describe("a household that pays cash", () => {
     const backOnly = owing({
       bill: { id: "c2", monthLabel: "January 2027", dueOn: "2027-01-01",
         amount: 542.53, paidTotal: 542.53, outstanding: 0,
-        status: "paid", disputed: false, claimedPaidOn: null, lines: [] },
+        status: "paid", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0 },
       arrears: [{ id: "c1", monthLabel: "December 2026", dueOn: "2026-12-01",
         amount: 542.53, paidTotal: 0, outstanding: 542.53,
-        status: "open", disputed: false, claimedPaidOn: null, lines: [] }],
+        status: "open", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0 }],
     });
     expect(words(backOnly), "a household in arrears is told nothing").toMatch(/pay the office/i);
   });

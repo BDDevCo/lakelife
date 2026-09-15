@@ -4,13 +4,14 @@ import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
-import { longDate } from "@/lib/lake-time";
 import { parseDaterange, effectiveSeason } from "@/lib/parks";
 import {
   planRenewal, renewalRefusalText, chainNotice, monthsBetween,
+  offeredAgreementLengths, agreementMonthsFor, lengthNotOfferedText, agreementSpanWords,
+  renewalLeadDays, RENEWAL_LEAD_CAP_DAYS, agreementSeasonEnd,
   type PlannedRenewal, type AgreementTerms,
 } from "./agreement-helpers";
-import { rentForPeriod } from "./rerate-helpers";
+import { rentForPeriod, addDays } from "./rerate-helpers";
 import { servedRentHistory } from "@/lib/rent-changes";
 import { successorRow, type PriorLink } from "@/lib/successor-row";
 import type { ParkResult } from "./actions";
@@ -19,9 +20,10 @@ import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 /**
  * WRITING THE NEXT AGREEMENT — from the owner's side.
  *
- * This is the recurring workload at a park with a three-month cap: nineteen
- * households renewing four times a year is roughly seventy-six agreements
- * annually, and until now there was NO WAY TO DO ONE from the owner's screens.
+ * This is the recurring workload at a park that caps agreement length:
+ * nineteen households, each renewing as often as the length they chose runs
+ * out — a household on one-month agreements twelve times a year, one on six
+ * months twice — and until now there was NO WAY TO DO ONE from the owner's screens.
  * `planRenewal` had no caller at all, and the only path that existed was the
  * renter's own `/x/{token}` link — which needs a token minted by an SMS
  * reminder, and SMS is switched off pending carrier registration.
@@ -37,6 +39,15 @@ import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
  * The renewal itself is INSERTED, never edited in place. Last term's dates and
  * its rent are what the ledger already billed against, and rewriting them would
  * silently restate history.
+ *
+ * THE LENGTH IS THE HOUSEHOLD'S CHOICE, NEVER THE CAP. The owner's decision:
+ * one, three or six months, chosen at every renewal. The planner works every
+ * length the park offers (`offeredAgreementLengths`) so the card can show the
+ * dates of whichever is picked, the button writes the one picked, and a length
+ * the park does not offer is refused in words that name the ones it does. This
+ * door used to write the cap: every "Renew at the same rent" turned a one-month
+ * lease into a three-month one, and would have made it six the day the cap
+ * was raised — silently, on the owner's most-used button.
  *
  * THE ROW IS BUILT BY `successorRow`, shared with the resident's own extend
  * link, so the two doors cannot disagree about what travels: the household's
@@ -68,10 +79,25 @@ export interface RenewalPreview {
   priorQuotedAmount: number | null;
   /** The effective date of that increase, when there is one. */
   rentChangeOn: string | null;
+  /**
+   * The plan at the park's HOUSE STYLE — the length the choice starts on.
+   * Its refusals (inherited, already ended, season closed) are true of every
+   * length, so the card reads this one to decide between buttons and a
+   * sentence.
+   */
   plan: PlannedRenewal;
   refusalText: string | null;
-  /** Said out loud past a year of consecutive short agreements. */
+  /** Said out loud past a year of consecutive short agreements — at the house style. */
   chainNote: string | null;
+  /**
+   * EVERY LENGTH THE PARK OFFERS, each planned in full, ascending — so the
+   * card shows the real dates of whichever the household picks (season clamp
+   * included) and the button writes exactly what the card said. Empty when
+   * the plan refuses.
+   */
+  lengths: { months: number; plan: PlannedRenewal; chainNote: string | null }[];
+  /** The length the choice starts on: the park's house style under its cap. */
+  defaultMonths: number | null;
 }
 
 async function loadTerms(
@@ -82,7 +108,10 @@ async function loadTerms(
 ): Promise<AgreementTerms> {
   const [parkRes, lotRes] = await Promise.all([
     admin.from("parks")
-      .select("max_agreement_months, deposit_amount, season_open_month, season_open_day, season_close_month, season_close_day")
+      // THE HOUSE STYLE TOO. This selected only the cap, and the cap was then
+      // used as the length — so the default the owner set (one month) was
+      // read by no door at renewal time.
+      .select("max_agreement_months, default_agreement_months, deposit_amount, season_open_month, season_open_day, season_close_month, season_close_day")
       .eq("id", parkId).maybeSingle(),
     admin.from("park_lots")
       .select("season_open_month, season_open_day, season_close_month, season_close_day")
@@ -119,15 +148,16 @@ async function loadTerms(
     },
   );
 
-  const year = Number(startISO.slice(0, 4));
-  const seasonEnd = season.closeMonth && season.closeDay
-    ? `${year}-${String(season.closeMonth).padStart(2, "0")}-${String(season.closeDay).padStart(2, "0")}`
-    : null;
-
+  // ONE HOME for the morning the season sets — the resident's texted link
+  // reads the same function, so the two doors clamp one choice to one row.
+  // This was typed inline here as the close DAY in the start's year: one
+  // night short of what the booking gate sells, and wrong by a year for a
+  // window that wraps the New Year.
   return {
     maxAgreementMonths: (park?.max_agreement_months as number) ?? null,
+    defaultAgreementMonths: (park?.default_agreement_months as number) ?? null,
     depositAmount: park?.deposit_amount == null ? null : Number(park.deposit_amount),
-    seasonEnd,
+    seasonEnd: agreementSeasonEnd(startISO, season),
   };
 }
 
@@ -202,21 +232,30 @@ async function planNextAgreement(
       return r ? sum + monthsBetween(r.start, r.end) : sum;
     }, monthsBetween(range.start, range.end));
 
-  let plan = planRenewal(
-    {
-      id: res.id as string,
-      chainId,
-      seq,
-      start: range.start,
-      end: range.end,
-      quotedAmount: priorQuoted,
-      term: (res.term as string) ?? "monthly",
-      chainMonthsSoFar,
-    },
-    terms,
-    today,
-    startFrom,
-  );
+  // EVERY LENGTH THE PARK OFFERS, PLANNED. The household picks one at the
+  // card; the button writes the plan for that one. The house style is the
+  // plan the card starts on and the one whose refusal speaks for all.
+  const prior = {
+    id: res.id as string,
+    chainId,
+    seq,
+    start: range.start,
+    end: range.end,
+    quotedAmount: priorQuoted,
+    term: (res.term as string) ?? "monthly",
+    chainMonthsSoFar,
+  };
+  const offered = offeredAgreementLengths(terms.defaultAgreementMonths ?? null, terms.maxAgreementMonths);
+  const defaultMonths = agreementMonthsFor(terms.defaultAgreementMonths ?? null, terms.maxAgreementMonths);
+  let lengths = offered.map((months) => {
+    const p = planRenewal(prior, terms, today, months, startFrom);
+    return { months, plan: p, chainNote: p.totalMonthsAfter ? chainNotice(p.totalMonthsAfter) : null };
+  });
+  // No cap: nothing is offered and the planner says so with `no_cap`; a
+  // length has to be passed to hear it, and any number is refused the same.
+  let plan = lengths.find((l) => l.months === defaultMonths)?.plan
+    ?? lengths[0]?.plan
+    ?? planRenewal(prior, terms, today, defaultMonths ?? 1, startFrom);
 
   // A HOUSEHOLD STILL ON THE SELLER'S ARRANGEMENT is not renewed from here.
   // Their new lease is a different act — it ends the holdover and starts the
@@ -229,6 +268,8 @@ async function planNextAgreement(
   if (res.origin === "grandfathered") {
     plan = { ok: false, refusal: "inherited" };
   }
+  // A refusal is true of every length; the card offers nothing to pick.
+  if (!plan.ok) lengths = [];
 
   // THE RENT IN FORCE ON THE SUCCESSOR'S FIRST MORNING — from the same served
   // history the bills read, so a $425 increase served for 1 April is what a
@@ -267,8 +308,10 @@ async function planNextAgreement(
       priorQuotedAmount: priorQuoted,
       rentChangeOn: inForce && quotedAmount !== priorQuoted ? inForce.effective_on : null,
       plan,
-      refusalText: plan.refusal ? renewalRefusalText(plan.refusal, lotNumber) : null,
+      refusalText: plan.refusal ? renewalRefusalText(plan.refusal, lotNumber, offered) : null,
       chainNote: plan.totalMonthsAfter ? chainNotice(plan.totalMonthsAfter) : null,
+      lengths,
+      defaultMonths,
     },
     prior: {
       id: res.id as string,
@@ -318,13 +361,19 @@ async function plannedOrSentence(
 /**
  * Write it.
  *
+ * `months` is THE HOUSEHOLD'S CHOICE of length, and it is required: the card
+ * seeds the park's house style, so a call without one is a caller that lost
+ * the choice, and defaulting here would be the cap-as-length bug in a new
+ * coat. A length the park does not offer is refused in words that name the
+ * ones it does.
+ *
  * `newRent` is optional — a renewal at the same rent is the common case, and
- * demanding a number every time is how a three-month cycle becomes a chore.
+ * demanding a number every time is how a renewal cycle becomes a chore.
  */
 export async function renewAgreement(
   parkId: string,
   reservationId: string,
-  opts: { startFrom?: string; newRent?: string } = {},
+  opts: { months: number; startFrom?: string; newRent?: string },
 ): Promise<ParkResult & { newEnd?: string }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
@@ -333,9 +382,20 @@ export async function renewAgreement(
   // attached to nobody: the planner's sentence comes back instead.
   const pre = await plannedOrSentence(parkId, reservationId, opts.startFrom);
   if (!pre.ok || !pre.preview || !pre.prior) return { ok: false, error: pre.error ?? "Couldn't work that out." };
-  const { plan, lotNumber } = pre.preview;
-  if (!plan.ok || !plan.start || !plan.end) {
+  const { lotNumber } = pre.preview;
+  if (!pre.preview.plan.ok) {
     return { ok: false, error: pre.preview.refusalText ?? "Can't renew that one." };
+  }
+  // THE PLAN FOR THE LENGTH THEY PICKED — the one the card showed. Not
+  // offered means not planned, and the sentence names what is.
+  const chosen = pre.preview.lengths.find((l) => l.months === opts.months);
+  if (!chosen) {
+    return { ok: false, error: lengthNotOfferedText(pre.preview.lengths.map((l) => l.months)) };
+  }
+  const plan = chosen.plan;
+  if (!plan.ok || !plan.start || !plan.end) {
+    const offered = pre.preview.lengths.map((l) => l.months);
+    return { ok: false, error: plan.refusal ? renewalRefusalText(plan.refusal, lotNumber, offered) : "Can't renew that one." };
   }
 
   let quoted = pre.preview.quotedAmount;
@@ -381,18 +441,34 @@ export async function renewAgreement(
   revalidatePath("/park");
   revalidatePath("/park/today");
   revalidatePath("/park/rent");
+  // A date a person reads is words — "May 1, 2027", never "2027-05-01" — and
+  // the length they picked is said back, so a one-month renewal written by
+  // mistake for six is caught by the toast and not by the ledger. THE WORDS
+  // COME FROM THE PLAN, not the request: on a slip lot the season close sets
+  // the end, and "renewed for 3 months, September 1 to October 15" described
+  // six weeks as three months. agreementSpanWords says "cut short by the
+  // season close" when it was, and the Today card reads the same helper.
+  const span = agreementSpanWords(plan);
   return {
     ok: true,
     newEnd: plan.end,
-    // A date a person reads is words — "May 1, 2027", never "2027-05-01".
     signal: plan.depositDue
-      ? `Lot ${lotNumber} runs to ${longDate(plan.end)}. This one starts a new chain, so a deposit is due.`
-      : `Lot ${lotNumber} runs to ${longDate(plan.end)}. Consecutive — no new deposit.`,
+      ? `Lot ${lotNumber} renewed for ${span}. This one starts a new chain, so a deposit is due.`
+      : `Lot ${lotNumber} renewed for ${span}. Consecutive — no new deposit.`,
   };
 }
 
 /**
  * Everything ending soon, so a whole cycle can be worked in one sitting.
+ *
+ * HOW FAR AHEAD IS EACH AGREEMENT'S OWN LAST HALF, capped at `leadCapDays`
+ * (R2, `renewalLeadDays`): a one-month agreement is asked for renewal in its
+ * last ~15 days, a three-month one 45 days out. A flat 45 days was longer
+ * than a one-month agreement, so a renewal written on 1 February for
+ * 1 February – 1 March was back in this list the same morning under the
+ * toast that said it was renewed — as if the tap had not taken — and on
+ * 1 January every one-month lease would have sat here from the day it was
+ * signed.
  *
  * THROWS `ReadFailed`. Its one caller is `/park/today`, a server component
  * under the root error boundary, and that is deliberate: the caller renders
@@ -403,7 +479,7 @@ export async function renewAgreement(
  */
 export async function renewalsDue(
   parkId: string,
-  withinDays = 45,
+  leadCapDays: number = RENEWAL_LEAD_CAP_DAYS,
 ): Promise<{ ok: boolean; rows?: RenewalPreview[] }> {
   if (!(await assertMyPark(parkId))) return { ok: false };
 
@@ -432,12 +508,13 @@ export async function renewalsDue(
     maxSeq.set(cid, Math.max(maxSeq.get(cid) ?? 0, (s.agreement_seq as number) ?? 1));
   }
 
-  const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) + withinDays * 86_400_000)
-    .toISOString().slice(0, 10);
-
+  // Each agreement's own lead: the morning it enters its last half, or
+  // `leadCapDays` before its end, whichever is later. Listed from that day.
   const due = (stays ?? []).filter((s) => {
     const r = parseDaterange(s.during as string);
-    if (!r || r.end > cutoff) return false;
+    if (!r) return false;
+    const askFrom = addDays(r.end, -renewalLeadDays(r.start, r.end, leadCapDays));
+    if (today < askFrom) return false;
     const cid = (s.agreement_chain_id as string) ?? null;
     const seq = (s.agreement_seq as number) ?? 1;
     return !(cid && (maxSeq.get(cid) ?? 0) > seq);

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   receiptRef, receiptBody, receiptCounterfoil,
   dropSlipSerials, dropSlipHalf, dropSlipSummary,
@@ -195,18 +197,52 @@ describe("a receipt for more than the bill", () => {
     expect(b).not.toContain("In credit");
   });
 
-  it("says where the rest is, with its own receipt number, and promises nothing", () => {
+  it("says where the rest is, with its own receipt number, and promises what the run keeps", () => {
+    // The run puts money on account against the next bill it raises (0167),
+    // so the paper may say so — and must not say "hasn't been put against a
+    // bill yet" as though nothing ever would.
     const b = receiptBody(split);
-    expect(b).toContain("The $57.47 on account is held by the office and hasn't been put");
-    expect(b).toContain("against a bill yet. It stays yours until it is (receipt TH-2027-0102).");
-    // Nothing applies it to the next bill on its own.
-    expect(b).not.toMatch(/next bill|will be applied|come off/i);
+    expect(b).toContain("The $57.47 on account is held by the office and comes off your next");
+    expect(b).toContain("bill. It stays yours until then (receipt TH-2027-0102).");
+    expect(b).not.toMatch(/hasn't been put/);
   });
 
   it("survives a missing second receipt number", () => {
     const b = receiptBody({ ...split, onAccount: { amount: 57.47, receiptNo: null } });
-    expect(b).toContain("It stays yours until it is.");
+    expect(b).toContain("It stays yours until then.");
     expect(b).not.toContain("(receipt");
+  });
+
+  it("when the excess settled an older bill at record time and what is left could not be read, the paper says so — never the whole as held", () => {
+    // recordPayment leaves `remaining` out when the view read failed. The
+    // old fallback `?? acct.amount` then printed "$40.00 to December 2026,
+    // $57.47 on account" — more than the cheque — and promised $57.47 that
+    // is $40 on December.
+    const b = receiptBody({
+      ...split,
+      onAccount: { amount: 57.47, receiptNo: 102, appliedTo: [{ periodMonth: "2026-12", amount: 40 }] },
+    });
+    expect(b).toContain("Of the $57.47 on account: $40.00 to December 2026 (receipt TH-2027-0102).");
+    expect(b).toContain("What's still on account wasn't read when this was printed — ask at the office.");
+    expect(b).not.toMatch(/December 2026, \$57\.47 on account/);
+    expect(b).not.toMatch(/\$17\.47/);
+    expect(b).not.toMatch(/still on account comes off/);
+    expect(b).not.toMatch(/held by the office/);
+  });
+
+  it("printed at record time, says where the on-account part went", () => {
+    const b = receiptBody({
+      ...split,
+      onAccount: { amount: 57.47, receiptNo: 102, appliedTo: [{ periodMonth: "2027-02", amount: 57.47 }], remaining: 0 },
+    });
+    expect(b).toContain("Of the $57.47 on account: $57.47 to February 2027 (receipt TH-2027-0102).");
+    expect(b).not.toMatch(/comes off your next/);
+    const part = receiptBody({
+      ...split,
+      onAccount: { amount: 57.47, receiptNo: 102, appliedTo: [{ periodMonth: "2027-02", amount: 40 }], remaining: 17.47 },
+    });
+    expect(part).toContain("Of the $57.47 on account: $40.00 to February 2027, $17.47 on account (receipt TH-2027-0102).");
+    expect(part).toContain("The $17.47 still on account comes off your next bill.");
   });
 
   it("prints none of it on an ordinary receipt", () => {
@@ -231,5 +267,95 @@ describe("how it came, in the words the form used", () => {
       .toContain("How             bank transfer Zelle");
     expect(receiptBody({ ...base, method: "ach", reference: "ch_1" }))
       .toContain("How             bank transfer ch_1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MONEY OF THEIRS THE OFFICE ALREADY HELD, PUT AGAINST THIS BILL (0167). A
+// household with $342.53 on account hands over $200; the bill is settled. A
+// receipt reading "Amount $200.00 … nothing further owing" on a $542.53 bill
+// is one the household cannot reconcile, so the paper names the other part.
+// ---------------------------------------------------------------------------
+describe("a receipt where money on account went in beside the cash", () => {
+  const topped: ReceiptLines = {
+    ...base, amount: 200, billAmount: 542.53, balanceAfter: 0, periodMonth: "2027-01", receivedOn: "2027-01-05",
+    fromOnAccount: 342.53,
+  };
+
+  it("prints the part from on account as its own line, and says it in words", () => {
+    const b = receiptBody(topped);
+    expect(b).toMatch(/Amount\s+\$200\.00/);
+    expect(b).toContain("From on account $342.53");
+    expect(b).toContain("$342.53 you already had on account with the office went against this");
+    expect(b).toContain("nothing further owing on this one");
+  });
+
+  it("prints none of it when nothing came from on account", () => {
+    for (const r of [base, { ...base, fromOnAccount: null }, { ...base, fromOnAccount: 0 }]) {
+      const b = receiptBody(r);
+      expect(b).not.toMatch(/From on account/);
+      expect(b).not.toMatch(/already had on account/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A RECEIPT FOR MONEY ON ACCOUNT ITSELF — a quarter paid ahead. There is no
+// bill to print "Against … rent" for; the paper says where the money has gone
+// so far and what is still held.
+// ---------------------------------------------------------------------------
+describe("a receipt for money on account", () => {
+  const ahead: ReceiptLines = {
+    ...base, kind: "on_account", amount: 1627.59, receivedOn: "2026-12-28", periodMonth: "", billAmount: 0, balanceAfter: 0,
+    onAccount: {
+      amount: 1627.59, receiptNo: 47,
+      appliedTo: [{ periodMonth: "2027-02", amount: 542.53 }, { periodMonth: "2027-01", amount: 542.53 }],
+      remaining: 542.53,
+    },
+  };
+
+  it("lists its allocations in month order, then what is still on account", () => {
+    const b = receiptBody(ahead);
+    expect(b).toContain("Against         money on account");
+    expect(b).toContain("Where it went   $542.53 to January 2027, $542.53 to February 2027, $542.53 on account");
+    expect(b).toContain("The $542.53 on account is held by the office and comes off your next");
+    expect(b).not.toMatch(/rent —/);
+    expect(b).not.toMatch(/Still owing|In credit|nothing further owing/);
+  });
+
+  it("fresh from the window, before anything has been applied, it says only that it is held", () => {
+    const b = receiptBody({ ...ahead, onAccount: { amount: 1627.59, receiptNo: 47 } });
+    expect(b).not.toContain("Where it went");
+    expect(b).toContain("The $1,627.59 on account is held by the office and comes off your next");
+  });
+
+  it("applied lines with no held figure: the months, then 'wasn't read' — never the whole cheque as held", () => {
+    const b = receiptBody({
+      ...ahead,
+      onAccount: { amount: 1627.59, receiptNo: 47, appliedTo: [{ periodMonth: "2027-01", amount: 542.53 }] },
+    });
+    expect(b).toContain("Where it went   $542.53 to January 2027");
+    expect(b).not.toMatch(/January 2027, \$1,627\.59 on account/);
+    expect(b).toContain("What's still on account wasn't read when this was printed — ask at the office.");
+    expect(b).not.toMatch(/held by the office/);
+    // And the source never falls back to the amount for a figure it lacks.
+    const src = readFileSync(join(process.cwd(), "src", "app", "park", "receipt-helpers.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).not.toMatch(/remaining \?\? r\.amount/);
+    expect(src).not.toMatch(/remaining \?\? acct\.amount/);
+    expect(src.match(/stillHeld\(/g)?.length, "both branches ask the one helper").toBe(3);
+  });
+
+  it("all applied: nothing is promised about a next bill", () => {
+    const b = receiptBody({
+      ...ahead,
+      onAccount: { amount: 1085.06, receiptNo: 47, appliedTo: [{ periodMonth: "2027-01", amount: 542.53 }, { periodMonth: "2027-02", amount: 542.53 }], remaining: 0 },
+    });
+    expect(b).toContain("Where it went   $542.53 to January 2027, $542.53 to February 2027");
+    expect(b).not.toMatch(/comes off your next/);
+  });
+
+  it("a check receipt still says what a check receipt is for", () => {
+    expect(receiptBody(ahead)).toContain("This is a receipt for the check itself. If it doesn't clear, any bill");
   });
 });

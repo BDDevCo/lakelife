@@ -28,6 +28,7 @@
  */
 
 import { nightsIn, type DateRange, type Term } from "@/lib/parks";
+import { agreementEnd, chooseAgreementLength } from "@/app/park/agreement-helpers";
 
 /** Nights one period of each term covers. Matches quoteStay's table — if these
  *  two ever disagree, a renter is quoted one thing and given another. */
@@ -66,27 +67,30 @@ export function extendedRange(
   term: Term,
   /**
    * A park that caps agreement length does not EXTEND — it writes the next
-   * agreement. The successor starts the day this one ends, which is what makes
-   * the two consecutive and carries the deposit forward. See
-   * app/park/agreement-helpers.ts.
+   * agreement, and THIS is its length: the household's choice from the
+   * lengths the park offers, never the cap. The successor starts the day this
+   * one ends, which is what makes the two consecutive and carries the deposit
+   * forward. See app/park/agreement-helpers.ts. Null means an extension.
    */
-  capMonths?: number | null,
+  renewMonths?: number | null,
+  /**
+   * The checkout morning the lot's season sets, when it has one — from
+   * agreementSeasonEnd, the same value the owner's door hands planRenewal.
+   * A renewal ends at whichever comes first, the chosen length or this.
+   */
+  seasonEnd?: string | null,
 ): DateRange {
-  if (capMonths != null) {
-    return { start: current.end, end: addMonthsClamped(current.end, capMonths) };
+  if (renewMonths != null) {
+    // THE ONE END ARITHMETIC (agreement-helpers agreementEnd): month
+    // arithmetic that clamps Jan 31, and the season clamp, so the resident's
+    // door and the owner's cannot disagree about either. This door used to
+    // add the months and nothing else: on a slip lot closing 15 October the
+    // owner's Renew wrote [Sep 1, Oct 16) and the household's own tap for
+    // three months wrote [Sep 1, Dec 1) — two rows for one act.
+    return { start: current.end, end: agreementEnd(current.end, renewMonths, { seasonEnd: seasonEnd ?? null })! };
   }
   const nights = TERM_NIGHTS[term] ?? 30;
   return { start: current.start, end: addDays(current.end, nights) };
-}
-
-/** Whole months, clamping to the end of a short month. Mirrors addMonths in
- *  app/park/agreement-helpers.ts — the two must not disagree about Jan 31. */
-function addMonthsClamped(iso: string, months: number): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  const t = new Date(Date.UTC(y, m - 1 + months, 1));
-  const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
-  t.setUTCDate(Math.min(d, last));
-  return t.toISOString().slice(0, 10);
 }
 
 /** What one more period costs, from the PARK'S card. Null when the park does
@@ -143,7 +147,10 @@ export type ExtendRefusal =
   | "lot_taken"
   | "no_rate"
   | "already_ended"
-  | "inherited";
+  | "inherited"
+  | "length_missing"
+  | "length_not_offered"
+  | "season_closed";
 
 /**
  * May this stay be extended right now? The DATABASE is the real guard — the
@@ -160,8 +167,26 @@ export function canExtend(input: {
   /** Other DECIDED stays on the same lot. */
   otherHeld: DateRange[];
   rates: { term: Term; amount: number }[];
-  /** The park's agreement cap, when it has one. */
+  /** The park's agreement cap, when it has one — the switch between an
+   *  extension (no cap) and a renewal (a cap). Never the length. */
   capMonths?: number | null;
+  /** The park's house style — with the cap, what decides which lengths it
+   *  offers (offeredAgreementLengths). Read only at a capped park. */
+  defaultMonths?: number | null;
+  /**
+   * THE RENEWAL'S LENGTH, in months — the household's choice, judged HERE
+   * against the lengths the park offers by the one judgement every writing
+   * door reads (chooseAgreementLength). Read only at a capped park. A capped
+   * park with no length is refused as `length_missing`, never written at the
+   * cap; a length the park does not write is `length_not_offered`.
+   */
+  renewMonths?: number | null;
+  /**
+   * The checkout morning the lot's season sets (agreementSeasonEnd), or null
+   * for a year-round lot. A renewal is cut to it, and one that would START
+   * on or after it is refused — there is nothing to renew into.
+   */
+  seasonEnd?: string | null;
   /**
    * What this tenant pays on the successor's first morning — the caller
    * resolves it from the served rent history, so an increase already noticed
@@ -174,8 +199,23 @@ export function canExtend(input: {
    *  arrangement ('grandfathered') signs its new lease with the park, never
    *  from this link. */
   origin?: string | null;
-}): { ok: boolean; refusal?: ExtendRefusal; range?: DateRange; price?: number; isRenewal?: boolean } {
-  const { range, term, status, todayISO, otherHeld, rates, capMonths, currentAmount, origin } = input;
+}): {
+  ok: boolean;
+  refusal?: ExtendRefusal;
+  range?: DateRange;
+  price?: number;
+  isRenewal?: boolean;
+  /**
+   * TRUE when the season close, not the chosen length, set the range's end
+   * — the same judgement the owner's plan carries (cutShortBySeason), so
+   * the page after the tap never calls six weeks "3 months".
+   */
+  cutShortBySeason?: boolean;
+} {
+  const {
+    range, term, status, todayISO, otherHeld, rates, capMonths, defaultMonths, renewMonths, seasonEnd,
+    currentAmount, origin,
+  } = input;
 
   if (!range) return { ok: false, refusal: "not_found" };
   if (status !== "approved" && status !== "active") return { ok: false, refusal: "not_extendable" };
@@ -202,7 +242,22 @@ export function canExtend(input: {
   }
   if (price == null) return { ok: false, refusal: "no_rate" };
 
-  const next = extendedRange(range, term, capMonths);
+  // A RENEWAL HAS THE LENGTH THE HOUSEHOLD PICKED. The cap used to be passed
+  // here as the length, so every tap wrote the maximum. Without a length there
+  // is nothing to write, and saying so beats writing the cap; a length the
+  // park does not write is refused by the one judgement of a chosen length,
+  // so this verdict IS the list of buttons the page may show.
+  if (capMonths != null) {
+    if (renewMonths == null) return { ok: false, refusal: "length_missing" };
+    if (!chooseAgreementLength(renewMonths, defaultMonths ?? null, capMonths).ok) {
+      return { ok: false, refusal: "length_not_offered" };
+    }
+    // A renewal that would begin after the season has closed is not a
+    // renewal — as on the owner's side (planRenewal), there is nothing to
+    // renew into until the season opens again.
+    if (seasonEnd != null && range.end >= seasonEnd) return { ok: false, refusal: "season_closed" };
+  }
+  const next = extendedRange(range, term, capMonths != null ? renewMonths : null, capMonths != null ? seasonEnd : null);
 
   // Half-open, matching the exclusion constraint exactly. The stay we are
   // widening is NOT in otherHeld — the caller excludes it — so any overlap
@@ -210,7 +265,15 @@ export function canExtend(input: {
   const clash = otherHeld.some((h) => h.start < next.end && next.start < h.end);
   if (clash) return { ok: false, refusal: "lot_taken" };
 
-  return { ok: true, range: next, price, isRenewal: capMonths != null };
+  return {
+    ok: true,
+    range: next,
+    price,
+    isRenewal: capMonths != null,
+    // Cut short when the length alone would have ended it later.
+    cutShortBySeason: capMonths != null && renewMonths != null
+      && next.end !== extendedRange(range, term, renewMonths, null).end,
+  };
 }
 
 /** What the renter reads. Never blames them, never mentions another renter. */
@@ -227,5 +290,19 @@ export function refusalText(r: ExtendRefusal): string {
     // the park; that act ends the old arrangement and is recorded from the
     // rent roll, not from a tap on a text.
     case "inherited":       return "Your new agreement is signed with the park — give them a call and they'll have it ready.";
+    // The tap named NO length at a park where the length is the household's
+    // choice — a form that lost its field, a link opened by hand. The page
+    // this sends them back to shows one button per length.
+    case "length_missing":
+      return "Pick how long to renew for — open the link again and tap one of the lengths it offers.";
+    // The tap named a length the park does not write — a replayed link, or a
+    // cap that changed since the text went out. The page lists the ones it does.
+    case "length_not_offered":
+      return "The park doesn't write agreements of that length. Open the link again and pick one of the lengths it offers.";
+    // The lot's season closes before the next agreement would start — the
+    // slips are out of the water. As on the owner's side, nothing to renew
+    // into; the park books them in again when it opens.
+    case "season_closed":
+      return "Your spot is closed for the season after your dates, so there's nothing to renew into yet — the park can book you in again when it opens.";
   }
 }

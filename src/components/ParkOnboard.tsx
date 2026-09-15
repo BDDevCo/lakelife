@@ -9,6 +9,7 @@ import {
   type OnboardRow,
 } from "@/app/park/onboard-helpers";
 import { agreementStartFor, SIGNED_START_HORIZON_DAYS, dayInWords } from "@/app/park/park-helpers";
+import { offeredAgreementLengths, lengthInWords } from "@/app/park/agreement-helpers";
 
 /**
  * NINETEEN HOUSEHOLDS IN ONE SITTING.
@@ -69,6 +70,9 @@ export function ParkOnboard({
       // Blank until the tick is set; then the later of today and the cutover,
       // which he can change to the day the lease says.
       agreementStartsOn: "",
+      // No length until the tick is set; then the park's house style, which
+      // he changes on the row to what that household's lease says.
+      agreementMonths: null,
       // NOBODY HAS SIGNED ANYTHING YET. This defaulted to true, on the theory
       // that everyone signs at takeover — so an owner who read the instruction
       // ("tick anyone who has signed"), ticked nobody because nobody had, and
@@ -83,24 +87,34 @@ export function ParkOnboard({
     })),
   );
 
-  const set = (i: number, k: keyof OnboardRow, v: string | boolean) =>
+  const set = (i: number, k: keyof OnboardRow, v: string | boolean | number | null) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
+
+  // THE LENGTHS THE PARK OFFERS — the same list the server judges each
+  // signed row's pick against, so nothing is offered here it would refuse.
+  const lengths = offeredAgreementLengths(termMonths, capMonths);
 
   // THE DAY A SIGNED LEASE RUNS FROM, seeded when the tick is set. The default
   // is the later of today and the cutover — a lease collected on 20 December
   // for 1 January is filed dated 1 January, not the afternoon it was typed.
   // Clearing the tick clears the date: a holdover has no agreement start.
+  // THE LENGTH likewise — seeded with the house style, cleared with the tick.
   const defaultStart = agreementStartFor("", today, cutoverDate);
   const tick = (i: number, signed: boolean) =>
     setRows((rs) => rs.map((r, j) => (j === i
-      ? { ...r, signedNewLease: signed, agreementStartsOn: signed ? (defaultStart.ok ? defaultStart.start : "") : "" }
+      ? {
+          ...r,
+          signedNewLease: signed,
+          agreementStartsOn: signed ? (defaultStart.ok ? defaultStart.start : "") : "",
+          agreementMonths: signed ? termMonths : null,
+        }
       : r)));
   const latestStart = (() => {
     const [y, m, d] = today.split("-").map(Number);
     return new Date(Date.UTC(y, m - 1, d + SIGNED_START_HORIZON_DAYS)).toISOString().slice(0, 10);
   })();
 
-  const plan = planOnboarding(rows, today, cutoverDate);
+  const plan = planOnboarding(rows, today, cutoverDate, { defaultMonths: termMonths, capMonths });
 
   if (seeds.length === 0) {
     return (
@@ -133,7 +147,7 @@ export function ParkOnboard({
       <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
         <strong style={{ fontSize: 15 }}>The new lease</strong>
         <p className="mut" style={{ fontSize: 13, marginTop: 6, marginBottom: 0, lineHeight: 1.5 }}>
-          {signingExplainer(termMonths)}
+          {signingExplainer(termMonths, capMonths)}
           {/* THE DATE, AND WHY IT IS NOT TODAY. A signed lease is filed from
               the day it says: eighteen leases for 1 January typed in on the
               4th were billed 28 of 31 days, because the window began the
@@ -227,6 +241,24 @@ export function ParkOnboard({
                     title="The day the signed lease runs from"
                     style={{ flex: "0 1 150px", minWidth: 0 }}
                   />
+                </label>
+              )}
+              {/* HOW LONG THAT HOUSEHOLD'S LEASE RUNS — their pick from the
+                  lengths the park offers, starting on the house style. Only a
+                  signed row has one; the server refuses any other length. */}
+              {r.signedNewLease && lengths.length > 0 && (
+                <label style={{ display: "flex", gap: 5, alignItems: "center", fontSize: 12 }}>
+                  <span className="mut">for</span>
+                  <select
+                    value={r.agreementMonths ?? ""}
+                    onChange={(e) => set(i, "agreementMonths", e.target.value ? Number(e.target.value) : null)}
+                    title="How long the signed lease runs"
+                    style={{ flex: "0 1 120px", minWidth: 0 }}
+                  >
+                    {lengths.map((m) => (
+                      <option key={m} value={m}>{lengthInWords(m)}</option>
+                    ))}
+                  </select>
                 </label>
               )}
               {problem && (

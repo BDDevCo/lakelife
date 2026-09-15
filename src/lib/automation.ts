@@ -17,6 +17,7 @@ import { shouldDemote, healBase, isCoolingDown } from "@/lib/lake-standing";
 import { warningDue, isExpired, WAITLIST_WARNING_KIND, expiryActionFor, PROTECTIVE_ESCALATION_KIND } from "@/lib/waitlist";
 import { remindDecision } from "@/lib/extend-stay";
 import { extendViewFor, type ExtendView } from "@/lib/extend-server";
+import { lengthsInWords } from "@/app/park/agreement-helpers";
 import { longDate } from "@/lib/lake-time";
 import { parseDaterange, type Term } from "@/lib/parks";
 import { rushWindowOpen } from "@/lib/rush";
@@ -4526,8 +4527,11 @@ export async function remindExpiringStays(): Promise<{
 /**
  * The words of the reminder, from the view the page will render. A capped park
  * is not extending anything — the tap starts the NEXT agreement at the
- * household's monthly rent — and the text says that the way the page does;
- * anywhere else it is one more period at the park's card price.
+ * household's monthly rent, for a length THEY pick from the ones the park
+ * offers — and the text says that the way the page does: it names the
+ * lengths on offer and no single one, because none is chosen until the page.
+ * This used to name one length, the cap, and the tap wrote it. Anywhere else
+ * it is one more period at the park's card price.
  */
 export function extendReminderText(
   view: ExtendView,
@@ -4539,16 +4543,20 @@ export function extendReminderText(
   const price = `$${(view.price ?? 0).toLocaleString()}`;
 
   if (view.isRenewal) {
-    const months = view.capMonths ?? 3;
+    // The lengths the page will offer — the ones the park writes whose dates
+    // the tap can honour. The view is never sent without at least one.
+    const lengths = lengthsInWords(
+      view.offeredMonths.length ? view.offeredMonths : view.renewMonths != null ? [view.renewMonths] : [],
+    );
     const rent = `${price}${view.term === "monthly" ? " a month" : ""}`;
-    const offer = `start the next ${months}-month agreement, ${longDate(view.newStart)} to ${to}, at ${rent}`;
+    const offer = `renew for ${lengths} at ${rent}`;
     // The same gate as the page this links to: a deposit is mentioned only
     // to somebody the park is holding one for. Printed to everyone, it told
     // a park full of households who never paid one that theirs carries over.
     const deposit = view.depositHeld ? " Your deposit carries over." : "";
     return {
       sms: `LakeLife: your agreement at ${lot} runs to ${ends}. Want to ${offer}? One tap: ${link}`,
-      subject: `Your agreement runs to ${ends} — start the next ${months} months?`,
+      subject: `Your agreement runs to ${ends} — renew for ${lengths}?`,
       body:
         `Your agreement at ${lot} runs to ${ends}.\n\n` +
         `Want to ${offer}?${deposit}\n\n` +

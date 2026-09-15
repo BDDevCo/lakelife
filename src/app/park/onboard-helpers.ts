@@ -28,8 +28,10 @@
  *   correct any of them; a correction is still HIS knowledge, not the tenant's,
  *   so the provenance does not improve just because he retyped it.
  *
- *   THE SIGNING STATE IS ONE TICK PER ROW. Ticked writes a real agreement under
- *   the cap, because one exists on paper. Clear writes a holdover on the rolling
+ *   THE SIGNING STATE IS ONE TICK PER ROW. Ticked writes a real agreement for
+ *   the length that household chose — the owner's one-three-or-six decision,
+ *   picked per row from the lengths the park offers, starting on its house
+ *   style — because one exists on paper. Clear writes a holdover on the rolling
  *   horizon, which 0065 exempts from the cap — they are living here on the
  *   arrangement they already had, and until they sign, that is simply the
  *   truth. Clear is the default, because on the first morning it is true of
@@ -44,6 +46,9 @@
 // server would refuse and names the lot instead of failing at File.
 import { agreementStartFor, dayInWords, SIGNED_LEASE_LABEL } from "./park-helpers";
 import { prettyMonth } from "./ledger-helpers";
+import {
+  chooseAgreementLength, offeredAgreementLengths, lengthInWords, lengthsInWords, lengthAdjective,
+} from "./agreement-helpers";
 
 export interface OnboardRow {
   lotId: string;
@@ -73,6 +78,13 @@ export interface OnboardRow {
    */
   agreementStartsOn: string;
   /**
+   * HOW LONG THE SIGNED LEASE RUNS, in months — read only when the tick is
+   * set. The household's choice from the lengths the park offers, seeded
+   * with the park's house style when the tick is set and cleared with it.
+   * Null at a park with neither dial (the rolling horizon).
+   */
+  agreementMonths: number | null;
+  /**
    * HOW TO REACH THEM, taken at signing.
    *
    * The owner's rule: both are a condition of renting a lot in the park. So
@@ -97,6 +109,8 @@ export interface OnboardPlan {
     signedNewLease: boolean;
     /** Resolved for a signed row (the typed date or the default); null for a holdover. */
     agreementStartsOn: string | null;
+    /** Judged for a signed row against the park's dials; null for a holdover. */
+    agreementMonths: number | null;
     email: string;
     phone: string;
   }[];
@@ -145,6 +159,13 @@ export function planOnboarding(
    * that predate it read exactly as before.
    */
   cutoverDate: string | null = null,
+  /**
+   * THE PARK'S TWO DIALS, which every signed row's length is judged against
+   * (chooseAgreementLength). Null — the default for pure callers that predate
+   * it — reads as a park with neither dial: no length is offered, and a
+   * signed row carries none (the horizon).
+   */
+  dials: { defaultMonths: number | null; capMonths: number | null } | null = null,
 ): OnboardPlan {
   const toFile: OnboardPlan["toFile"] = [];
   const problems: OnboardPlan["problems"] = [];
@@ -215,6 +236,7 @@ export function planOnboarding(
     // applies — so a date before go-live names its lot instead of failing at
     // the end of the afternoon.
     let agreementStartsOn: string | null = null;
+    let agreementMonths: number | null = null;
     if (r.signedNewLease) {
       const at = agreementStartFor(r.agreementStartsOn, todayISO, cutoverDate);
       if (!at.ok) {
@@ -222,11 +244,20 @@ export function planOnboarding(
         continue;
       }
       agreementStartsOn = at.start;
+      // HOW LONG IT RUNS — the household's pick, judged by the one rule
+      // every door uses, and refused by lot number when the park does not
+      // offer it rather than written at the cap.
+      const pick = chooseAgreementLength(r.agreementMonths, dials?.defaultMonths ?? null, dials?.capMonths ?? null);
+      if (!pick.ok) {
+        problems.push({ lotNumber: r.lotNumber, why: pick.error });
+        continue;
+      }
+      agreementMonths = pick.months;
     }
 
     toFile.push({
       lotId: r.lotId, lotNumber: r.lotNumber, displayName: name, rent, movedInOn,
-      signedNewLease: r.signedNewLease, agreementStartsOn, email, phone,
+      signedNewLease: r.signedNewLease, agreementStartsOn, agreementMonths, email, phone,
     });
   }
 
@@ -317,6 +348,28 @@ export function onboardSummary(
     );
   }
 
+  // THE LENGTHS, ALWAYS. The tick seeds every row with the house style, so
+  // an owner who ticks eighteen rows and never touches the per-row select
+  // files eighteen one-month leases — and the one number the seed chose for
+  // him was the one this sentence omitted ("all on the new lease, capped by
+  // your 3-month rule", no length). Same length everywhere: "all for
+  // 1 month"; a mix: "2 for 1 month, 1 for 3 months", a fact he checks
+  // against the leases in his hand.
+  const byLength = new Map<number, number>();
+  for (const r of signedRows) {
+    if (r.agreementMonths != null) byLength.set(r.agreementMonths, (byLength.get(r.agreementMonths) ?? 0) + 1);
+  }
+  if (byLength.size === 1) {
+    parts.push(`all for ${lengthInWords([...byLength.keys()][0])}`);
+  } else if (byLength.size > 1) {
+    parts.push(
+      [...byLength.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([months, n]) => `${n} for ${lengthInWords(months)}`)
+        .join(", "),
+    );
+  }
+
   // WHICH MONTH BILLS FIRST, AND FOR HOW MUCH. The total above is "a month";
   // the first month is only that when every signed lease starts on the 1st.
   // Filed on the 4th for the 4th it is a part month, and the number he checks
@@ -397,10 +450,26 @@ function firstBilledMonth(plan: OnboardPlan, feePerSignedLot: number): string | 
  * writes ONE month (agreementMonthsFor: the house style under the cap). It
  * takes the length now — what is actually written — and says that.
  */
-export function signingExplainer(termMonths: number | null): string {
+export function signingExplainer(
+  termMonths: number | null,
+  /**
+   * The park's cap, for the lengths on offer. With more than one the
+   * sentence says the choice is per row and names the one it starts on;
+   * with one it names that; with none (neither dial) it names no length.
+   */
+  capMonths: number | null = null,
+): string {
+  const offered = offeredAgreementLengths(termMonths, capMonths);
+  const others = offered.filter((m) => m !== termMonths);
+  const length =
+    termMonths == null
+      ? " agreement. "
+      : others.length > 0
+        ? ` agreement — ${lengthInWords(termMonths)} unless you pick ${lengthsInWords(others)} on the row. `
+        : ` ${lengthAdjective(termMonths)} agreement. `;
   return (
     "Tick anyone who has signed your new lease — those get a fresh" +
-    (termMonths == null ? " agreement. " : ` ${termMonths === 1 ? "one" : termMonths}-month agreement. `) +
+    length +
     "Leave it clear for everyone still on the arrangement they already had: " +
     "that carries on exactly as it is. When one of them signs, record it from " +
     // The control's own words, from their one home — never retyped here.

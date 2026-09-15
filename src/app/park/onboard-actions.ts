@@ -176,8 +176,8 @@ export async function getOnboardSeeds(
  * `signedNewLease` decides four things at once and they belong together:
  * `origin` (which the 0065 trigger reads to exempt a holdover from the
  * agreement cap, and the fee rule reads to exempt it from the fee), the
- * tenancy LENGTH (the park's term when an agreement exists, the rolling
- * horizon when it does not), where the agreement STARTS (the day the lease
+ * tenancy LENGTH (the length that household chose when an agreement exists,
+ * the rolling horizon when it does not), where the agreement STARTS (the day the lease
  * says, or today for a holdover) and whether it is `active` yet. All four are
  * derived inside `buildTenant` from the tick — the same function the
  * one-at-a-time path uses — so no doorway can write half of them.
@@ -210,7 +210,14 @@ export async function commitOnboarding(
   }
   const cutoverDate = (parkRes.data?.cutover_date as string | null) ?? null;
 
-  const plan = planOnboarding(rows, today, cutoverDate);
+  // EACH SIGNED ROW CARRIES THE LENGTH ITS HOUSEHOLD CHOSE, judged here
+  // against the park's dials by the same rule the screen planned with —
+  // so a length the park does not offer names its lot instead of failing
+  // at the end of the afternoon, and is never written at the cap.
+  const plan = planOnboarding(rows, today, cutoverDate, {
+    defaultMonths: (parkRes.data?.default_agreement_months as number | null) ?? null,
+    capMonths: (parkRes.data?.max_agreement_months as number | null) ?? null,
+  });
   // A ROW THE SERVER REFUSES IS NAMED, NEVER DROPPED. The screen plans from
   // the same inputs, but this side holds a rule the screen can lack (the
   // cutover, when the page did not hand it over) and a typed date can sit
@@ -224,15 +231,6 @@ export async function commitOnboarding(
       ? { ok: false, error: "None of those could be filed.", failed }
       : { ok: false, error: "Nothing filled in to file." };
   }
-  // THE TERM, NOT THE CEILING. The cap used to be passed straight through as
-  // the length, so every signed agreement was written at the MAXIMUM — the
-  // conflation 0067 added `default_agreement_months` to prevent, in a column
-  // that then shipped with no reader at all.
-  const parkTerm = agreementMonthsFor(
-    (parkRes.data?.default_agreement_months as number) ?? null,
-    (parkRes.data?.max_agreement_months as number) ?? null,
-  );
-
   // Re-check what is already held, so a second submit cannot double-file.
   //
   // FAILS OPEN. `taken ?? []` on a dropped read holds nobody, so the check
@@ -279,7 +277,11 @@ export async function commitOnboarding(
         agreementStartsOn: r.agreementStartsOn ?? "",
       },
       today,
-      parkTerm,
+      // THE LENGTH THIS HOUSEHOLD CHOSE, already judged by planOnboarding.
+      // The cap used to be passed straight through here, so every signed
+      // agreement was written at the MAXIMUM; then the house style, so every
+      // one was written at the default. Neither is a choice.
+      r.agreementMonths,
       { cutoverDate },
     );
     if (!built.ok || !built.renter || !built.tenancy) {

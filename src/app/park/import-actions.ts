@@ -1033,30 +1033,70 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
   // was" over a roll where every household file survived.
   //
   // Same shape, same failure: a dropped count is not "no money on account".
+  //
+  // TWO SENTENCES, BECAUSE TWO THINGS ARE TRUE (0167). A payment on account
+  // keeps `charge_id null` forever — applying it never moves the row — so
+  // "on account" is no longer a fact about the column; it is the view's
+  // `remaining`. Money STILL HELD (remaining > 0, or a deposit not yet
+  // returned) can be put against a bill or given back, and that clears it.
+  // Money already put against bills, already given back, or since taken
+  // back by the bank cannot be "applied or returned" — the row is a record
+  // now, and the household file it hangs off cannot be deleted (0102's
+  // anchor). Telling the office to apply money that is already applied is
+  // an instruction the screen cannot follow.
   if (renterIds.length) {
-    const heldRes = await admin
+    const rowsRes2 = await admin
       .from("park_payments")
-      .select("id", { count: "exact", head: true })
+      .select("id, kind, reversed_at, returned_at, returned_on")
       .in("renter_id", renterIds)
-      .is("charge_id", null)
-      .is("reversed_at", null)
-      // AND MONEY THE BANK TOOK BACK IS NOT MONEY HELD. This count exists to
-      // block an undo while the park is still holding somebody's cash; a
-      // payment that bounced is not cash, and counting it would refuse the
-      // undo forever with no way to clear it — the park cannot "apply or give
-      // back" money that is not there.
-      .is("returned_at", null);
-    if (heldRes.error) {
-      return { ok: false, error: readFailedMessage("money held on account", heldRes.error, { money: true }) };
+      .is("charge_id", null);
+    if (rowsRes2.error) {
+      return { ok: false, error: readFailedMessage("money held on account", rowsRes2.error, { money: true }) };
     }
-    const held = heldRes.count;
-    if (held && held > 0) {
+    const chargeless = rowsRes2.data ?? [];
+    if (chargeless.length > 0) {
+      const standing = chargeless.filter((p) => p.reversed_at == null && p.returned_at == null);
+      const depositsHeld = standing.filter((p) => p.kind === "deposit" && p.returned_on == null).length;
+      const rentIds = standing.filter((p) => p.kind !== "deposit" && p.kind !== "amenity").map((p) => p.id as string);
+      let stillOnAccount = 0;
+      if (rentIds.length) {
+        const heldRes = await admin
+          .from("park_on_account_payments")
+          .select("payment_id, remaining")
+          .in("payment_id", rentIds);
+        if (heldRes.error) {
+          return { ok: false, error: readFailedMessage("money held on account", heldRes.error, { money: true }) };
+        }
+        stillOnAccount = (heldRes.data ?? []).filter((r) => Number(r.remaining ?? 0) > 0).length;
+      }
+      const held = stillOnAccount + depositsHeld;
+      if (held > 0) {
+        return {
+          ok: false,
+          error:
+            `You're holding money from ${held === 1 ? "a household" : "households"} on this import — ` +
+            `${held} ${held === 1 ? "payment is" : "payments are"} still on account or held as a deposit. ` +
+            `Put it against a bill or give it back first, then undo.`,
+        };
+      }
+      // An amenity booking's money is none of "put against bills, given
+      // back, or taken back" — it is its own record. Count it apart so the
+      // sentence describes every row it counts.
+      const amenity = chargeless.filter((p) => p.kind === "amenity").length;
+      const settled = chargeless.length - amenity;
+      const settledClause = settled > 0
+        ? `${settled} ${settled === 1 ? "payment that has" : "payments that have"} since been put against bills, given back, or taken back`
+        : "";
+      const amenityClause = amenity > 0
+        ? `${amenity} ${amenity === 1 ? "amenity booking" : "amenity bookings"} paid for`
+        : "";
       return {
         ok: false,
         error:
-          `You've taken money from ${held === 1 ? "a household" : "households"} on this import — ` +
-          `${held} ${held === 1 ? "payment is" : "payments are"} on account or held as a deposit. ` +
-          `Apply or give that money back first, then undo.`,
+          `Money has been recorded for ${chargeless.length === 1 ? "a household" : "households"} on this import — ` +
+          [settledClause, amenityClause].filter(Boolean).join(", and ") + " — " +
+          `so ${chargeless.length === 1 ? "that household's file" : "those household files"} can't be removed. ` +
+          `Fix each household from its row on the rent roll instead.`,
       };
     }
   }

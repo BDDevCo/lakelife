@@ -296,9 +296,13 @@ describe("the term, and the number that must never be a send target", () => {
   it("BOTH filing paths write the term, not the ceiling", () => {
     // Passing the cap straight through wrote every signed agreement at the
     // maximum, so a whole afternoon's tenancies expire on one morning.
-    for (const src of [ONBOARD2, ACT]) {
-      expect(src).toContain("agreementMonthsFor");
-    }
+    // The length is the household's CHOICE now (decision 12 Sep 2026): the
+    // roll's door judges it with chooseAgreementLength against the lengths
+    // the park offers; the filing screen seeds its explainer from the term.
+    // Neither ever writes the ceiling as the length.
+    expect(ACT).toContain("chooseAgreementLength");
+    expect(ACT).not.toMatch(/buildTenant\(input, todayLakeDate\(\), cap,/);
+    expect(ONBOARD2).toContain("agreementMonthsFor");
     expect(ONBOARD2).toContain("default_agreement_months");
     expect(ACT).toContain("default_agreement_months");
   });
