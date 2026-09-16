@@ -12,9 +12,13 @@ import {
 } from "./ledger-helpers";
 import { summariseReceipts, customPeriod, type Receipt, type Method } from "./receipts-helpers";
 import {
-  moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, preCutover,
+  moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, preCutover, householdsIn, holdoverLotsOf,
   type MoneyBlock, type Task, type TaskState, type OccupancySnapshot,
 } from "./today-helpers";
+import { getHeldMoney } from "./money-actions";
+// A day a person reads is words — the snooze toast said "Back on 2027-02-01".
+import { dayInWords } from "./park-helpers";
+import { latestSeqByChain } from "./agreement-helpers";
 import { livenessLine, lastNightsFindings, type RunRow, type LivenessLine } from "./machine-helpers";
 import { mustRead } from "@/lib/must-read";
 import type { ParkResult } from "./actions";
@@ -300,13 +304,15 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   });
 
   // ---- the to-do list -----------------------------------------------------
-  const chains = new Map<string, number>();
-  for (const s of stays ?? []) {
-    const cid = (s.agreement_chain_id as string) ?? null;
-    if (!cid) continue;
-    const seq = (s.agreement_seq as number) ?? 1;
-    chains.set(cid, Math.max(chains.get(cid) ?? 0, seq));
-  }
+  // ONE predicate for "already has a successor" — the same map the
+  // renewals card and the nightly reminder read (latestSeqByChain); this
+  // loader used to build its own copy.
+  const chains = latestSeqByChain(
+    (stays ?? []).map((s) => ({
+      agreement_chain_id: (s.agreement_chain_id as string | null) ?? null,
+      agreement_seq: (s.agreement_seq as number | null) ?? null,
+    })),
+  );
 
   // reservation -> lot, so a rent change can name its lot without a column
   // that does not exist.
@@ -411,6 +417,33 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const monthCosts = mustRead("the costs already entered", monthCostsRes);
   const allCosts = monthCosts ?? [];
 
+  // WHAT THE PARK STILL HOLDS FOR HOUSEHOLDS WHO HAVE LEFT. getHeldMoney
+  // throws to the boundary on a failed read, the same way every read above
+  // does — a quiet morning over a cheque nobody looked for is the shape
+  // this screen exists to prevent. Grouped per household: on account only
+  // where the final month is billed (no bill will ever take it now), a
+  // deposit whenever the tenancy has ended and it is still held — and the
+  // household carries `finalMonthBilled` with it, so the card can say
+  // "nothing more bills for them" only when that is true, and name the bill
+  // still to come when it is not. (Every row of one household carries the
+  // same fact: tenancyFactsFor reads it per renter.)
+  const held = await getHeldMoney(parkId);
+  const departed = new Map<string, { renterId: string; renterName: string; movedOutOn: string; finalMonthBilled: boolean; onAccount: number; depositsHeld: number }>();
+  const note = (r: { renterId: string | null; renterName: string; movedOutOn: string | null; finalMonthBilled: boolean }, onAccount: number, deposit: number) => {
+    if (!r.renterId || !r.movedOutOn) return;
+    const cur = departed.get(r.renterId) ?? { renterId: r.renterId, renterName: r.renterName, movedOutOn: r.movedOutOn, finalMonthBilled: r.finalMonthBilled, onAccount: 0, depositsHeld: 0 };
+    cur.onAccount = Math.round((cur.onAccount + onAccount) * 100) / 100;
+    cur.depositsHeld = Math.round((cur.depositsHeld + deposit) * 100) / 100;
+    departed.set(r.renterId, cur);
+  };
+  for (const r of held.onAccount) {
+    if (r.tenancyEnded && r.finalMonthBilled && r.remaining > 0) note(r, r.remaining, 0);
+  }
+  for (const d of held.deposits) {
+    if (d.tenancyEnded && !d.returnedOn) note(d, 0, d.amount);
+  }
+  const heldForDeparted = [...departed.values()].filter((h) => h.onAccount > 0 || h.depositsHeld > 0);
+
   // The last week of evening checks. Absence is the alarm.
   // ABSENCE IS THE ALARM HERE, which is exactly why a failed read must not
   // look like absence — it would report the nightly check as dead on a night
@@ -439,14 +472,23 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     liveOccupiedLots: occupiedLotIds.size,
     // A holdover is a CURRENT tenancy written as grandfathered — somebody
     // living here on the seller's terms who has not signed the new lease.
-    holdoverLots: (stays ?? [])
-      .filter((s) => (s.origin as string) === "grandfathered")
-      .filter((s) => {
-        const r = parseDaterange(s.during as string);
-        return r != null && r.start <= today && today < r.end;
-      })
-      .map((s) => lotName.get(s.park_lot_id as string) ?? "?")
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    // AND HAS NOT: a signing trims the grandfathered row and holds the new
+    // lease one link later in the same chain, so a household who signed on
+    // 10 December for 1 January is still current on the old row on the
+    // 20th. `chains` (built above for the renewal card) knows the later
+    // link; holdoverLotsOf leaves those off.
+    holdoverLots: holdoverLotsOf(
+      (stays ?? []).map((s) => ({
+        park_lot_id: s.park_lot_id as string,
+        during: s.during as string,
+        origin: (s.origin as string | null) ?? null,
+        agreement_chain_id: (s.agreement_chain_id as string | null) ?? null,
+        agreement_seq: (s.agreement_seq as number | null) ?? null,
+      })),
+      today,
+      chains,
+      (lotId) => lotName.get(lotId) ?? "?",
+    ),
     lateCount: monthSummary.lateCount,
     lateAmount: monthSummary.lateAmount,
     disputedCount: monthSummary.disputedCount,
@@ -454,8 +496,16 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     // lines up and handed only to `moneyBlock`, so it was rendered in bold on
     // the money card and was invisible to `generateTasks` — the unpaid July
     // bill dropped off the list at midnight on 1 August and never came back.
-    arrearsCount: arrears.length,
+    // HOUSEHOLDS, not rows: one row per bill, and a household with January
+    // and February open read "2 households owe" beside the money card's
+    // "1 household". The same helper moneyBlock counts with.
+    arrearsCount: householdsIn(arrears),
     arrearsAmount: arrears.reduce((sum, r) => sum + r.balance, 0),
+    // MONEY HELD FOR A HOUSEHOLD THAT HAS LEFT — the held panel's own read
+    // (getHeldMoney), so Today and the Rent screen name the same money. Only
+    // when the final month is billed: before that, the run raises their
+    // part-month and settles it from this money (R1).
+    heldForDeparted,
     // A BILL THAT WAS NEVER SPLIT — but only the ones he can actually do
     // something about. Two shapes land on `allocated_total === 0` and are
     // exactly right, and both would have sat here as a permanent chore he
@@ -648,7 +698,7 @@ export async function snoozeTask(
   if (error) return { ok: false, error: "Couldn't save that — try again." };
 
   revalidatePath("/park/today");
-  return { ok: true, signal: `Back on ${until}.` };
+  return { ok: true, signal: `Back on ${dayInWords(until)}.` };
 }
 
 /** Decide against it. Only ever offered for things it is safe to stop showing. */

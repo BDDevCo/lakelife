@@ -2,6 +2,8 @@ import { htmlPage } from "@/app/a/[token]/respond";
 import { loadExtendByToken, type ExtendView, extendByToken } from "@/lib/extend-server";
 import { ReadFailed } from "@/lib/must-read";
 import { lengthInWords } from "@/app/park/agreement-helpers";
+import { lotWord, renewalRentWords } from "@/lib/extend-stay";
+import { money as moneyWords } from "@/app/park/ledger-helpers";
 
 /**
  * ONE-TAP EXTEND, for a renter who has no account and may never have one.
@@ -30,12 +32,6 @@ function pretty(iso: string): string {
   });
 }
 
-/** "$425 a month" on a monthly tenancy; "$425" otherwise. */
-function rentWords(view: { price: number | null; term: string }): string {
-  return view.price != null
-    ? `$${view.price.toLocaleString()}${view.term === "monthly" ? " a month" : ""}`
-    : "";
-}
 
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
@@ -57,11 +53,22 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   if (!view) {
     return htmlPage("That link isn't right", "This link doesn't match a stay. 🌊", false);
   }
+  // Their own next agreement is already written — by their earlier tap, or
+  // by the office for them. Not an error and not "we can't do that": the
+  // sentence names the dates, under the same title the tap itself shows.
+  if (view.refusal === "already_renewed") {
+    return htmlPage("You're already set 🌊", view.message ?? "Your next agreement is written. 🌊", true);
+  }
   if (view.refusal || !view.newEnd) {
     return htmlPage("We can't do that from here", view.message ?? "Give the park a call. 🌊", false);
   }
+  // "lot" for a household that lives there, "site" for a pad booked by the
+  // night — the noun their lease, their invite and their own home page use.
+  const lot = lotWord(view.rentalMode);
 
-  const money = view.price != null ? ` for $${view.price.toLocaleString()}` : "";
+  // ONE shape for a money figure — "$500.00", as the text that linked here
+  // and the renewal page's renewalRentWords print it; this read "$500".
+  const money = view.price != null ? ` for ${moneyWords(view.price)}` : "";
 
   // A capped park is not extending anything — it is starting the NEXT
   // agreement, and calling that "keep your spot" would be telling somebody
@@ -72,8 +79,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
     // `price` is the rent in force on the successor's first morning — the
     // number every button writes — and on a monthly tenancy it is a MONTHLY
     // rent, not the price of the whole agreement. "for $425" alone reads as
-    // the latter.
-    const rent = view.price != null ? ` at ${rentWords(view)}` : "";
+    // the latter. AND THE FEE BESIDE IT: the successor bills rent plus the
+    // park's monthly fee from its first morning, so "$400 a month" alone
+    // understated a $542.53 bill by a third (renewalRentWords, the one home
+    // the text and the page after the tap read too).
+    const rent = view.price != null
+      ? ` at ${renewalRentWords({ price: view.price, term: view.term, fees: view.monthlyFees })}`
+      : "";
     // Only to somebody the park is actually holding a deposit for. This
     // sentence used to be printed to everyone, and at a park where nobody
     // has paid one it described a deposit that did not exist.
@@ -96,10 +108,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
     }));
     // One length on offer is not a choice; say what the tap does.
     const ask = choices.length === 1
-      ? `Tapping below starts the next agreement — ${lengthInWords(view.lengths[0].months)} from ${pretty(view.newStart!)}${rent}. `
-      : `Pick how long to renew for — the next agreement starts ${pretty(view.newStart!)}${rent}. `;
+      ? `Tapping below starts the next agreement: ${lengthInWords(view.lengths[0].months)} from ${pretty(view.newStart!)}${rent}. `
+      : `Pick how long to renew for. The next agreement starts ${pretty(view.newStart!)}${rent}. `;
     return htmlPage(
-      `Stay on at site ${view.lotNumber}? 🌊`,
+      `Stay on at ${lot} ${view.lotNumber}? 🌊`,
       `Your agreement runs to ${pretty(view.currentEnd)}. ` +
         ask +
         deposit +
@@ -113,7 +125,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   }
 
   return htmlPage(
-    `Stay longer on site ${view.lotNumber}? 🌊`,
+    `Stay longer on ${lot} ${view.lotNumber}? 🌊`,
     `Right now you're booked through ${pretty(view.currentEnd)}. ` +
       `Tap below to keep it through ${pretty(view.newEnd)}${money}. ` +
       `${view.parkName} will see it straight away.`,
@@ -139,16 +151,23 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   const { token } = await ctx.params;
   const months = await postedMonths(req);
   const res = await extendByToken(token, months);
+  // A replayed tap after the first one took: their next agreement is
+  // written, and that is not "we couldn't extend it".
+  if (!res.ok && res.refusal === "already_renewed") {
+    return htmlPage("You're already set 🌊", res.error ?? "Your next agreement is written. 🌊", true);
+  }
   if (!res.ok) {
     return htmlPage("We couldn't extend it", res.error ?? "Give the park a call. 🌊", false);
   }
   // A renewal says back what was chosen — the length and its dates — so a
   // tap on the wrong button is caught here and not by the ledger.
   if (res.renewMonths != null && res.newStart && res.newEnd) {
-    const rent = res.price != null ? ` at ${rentWords({ price: res.price, term: res.term ?? "monthly" })}` : "";
+    const rent = res.price != null
+      ? ` at ${renewalRentWords({ price: res.price, term: res.term ?? "monthly", fees: res.monthlyFees })}`
+      : "";
     return htmlPage(
       "You're set 🌊",
-      `Your next agreement runs ${pretty(res.newStart)} to ${pretty(res.newEnd)} — ` +
+      `Your next agreement runs ${pretty(res.newStart)} to ${pretty(res.newEnd)}: ` +
         `${lengthInWords(res.renewMonths)}${res.cutShortBySeason ? ", cut short by the season close" : ""}${rent}. ` +
         `The park will send the agreement to sign` +
         // Same gate as the page before the tap: a deposit is mentioned only
@@ -158,7 +177,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   }
   return htmlPage(
     "You're set 🌊",
-    `Your site is yours through ${pretty(res.newEnd!)}. ` +
+    `Your ${lotWord(res.rentalMode)} is yours through ${pretty(res.newEnd!)}. ` +
       `The park will send the paperwork if there's any to sign` +
       (res.depositHeld ? ` — nothing more to pay on your deposit.` : `.`),
   );

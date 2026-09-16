@@ -31,6 +31,7 @@
 
 import { longDate } from "@/lib/lake-time";
 import { isSeasonal, type ParkSeason } from "@/lib/parks";
+import { prettyMonth } from "./ledger-helpers";
 
 /**
  * Add whole months, clamping to the end of the target month.
@@ -221,6 +222,23 @@ export function lengthAdjective(months: number): string {
   return `${months === 1 ? "one" : months}-month`;
 }
 
+/**
+ * "a month", "a week", "a night" — the words after a rent figure, from the
+ * tenancy's term. Every sentence that quotes a rent reads this so a weekly
+ * pad is never told its rent is "a month"; an unknown term gets no words at
+ * all rather than a wrong cadence.
+ */
+export function perTermWords(term: string | null | undefined): string {
+  switch (term) {
+    case "nightly": return "a night";
+    case "weekly": return "a week";
+    case "monthly": return "a month";
+    case "seasonal": return "for the season";
+    case "annual": return "a year";
+    default: return "";
+  }
+}
+
 export interface AgreementTerms {
   /**
    * The park's CEILING — the longest agreement it writes. NULL means the park
@@ -368,8 +386,15 @@ export function renewalRefusalText(
       return "This park doesn't write fixed-length agreements, so there's nothing to renew — the stay just continues.";
     case "not_offered":
       return lengthNotOfferedText(offered);
+    // THE RULE IS ON THE PLAN, not the prior: a short lapse is backfilled
+    // consecutively (the household never left), and this fires only when
+    // even the longest length the park writes, run from the old end, would
+    // be over before today. It names no door — the card has none for this —
+    // and "Start a new one instead" used to point at a control the owner's
+    // screen does not have. And no duration claim: at a park that writes
+    // one-month agreements, one day past that length is not "so long ago".
     case "already_ended":
-      return "That agreement has already ended. Start a new one instead — it won't carry the old deposit.";
+      return "That agreement has run out, and even the longest agreement this park writes, run from its end, would be over already — there's nothing to write from here.";
     case "not_yet_renewable":
       return "It's too early to renew this one.";
     case "season_closed":
@@ -451,12 +476,24 @@ export function planRenewal(
   // lot was theirs to lose, and the deposit went back.
   const continuesChain = start === prior.end;
 
-  // A chain that already lapsed cannot be continued — that is a fresh start,
-  // and the honest answer is to say so rather than quietly re-open it.
+  // A start before the prior's end would overlap the household with itself.
   if (!continuesChain && start < prior.end) {
     return { ok: false, refusal: "not_yet_renewable" };
   }
-  if (!continuesChain && todayISO > prior.end && startFrom === undefined) {
+
+  // THE RULE IS ON THE PLAN, NOT ON THE PRIOR. A lapsed agreement is planned
+  // consecutively from its own end on purpose — the household never left, and
+  // the successor covers the days since (a one-month lease ended 1 February,
+  // renewed on the 16th, is written 1 February – 1 March). What cannot be
+  // written is a successor that is OVER before it exists: on 17 June, one
+  // month from 1 February ends 1 March, and that row would bill nothing, hold
+  // nothing, and re-list the lot tomorrow one month further along. So the
+  // plan is refused when its own end does not reach past today, whatever
+  // start it was given. The guard this replaces read
+  // `!continuesChain && todayISO > prior.end && startFrom === undefined` —
+  // and with startFrom undefined the start IS the prior's end, so
+  // continuesChain was always true and the branch could never fire.
+  if (end <= todayISO) {
     return { ok: false, refusal: "already_ended" };
   }
 
@@ -502,6 +539,26 @@ export function agreementSpanWords(plan: PlannedRenewal): string {
 }
 
 /**
+ * THE MONTHS A BACKFILLED AGREEMENT REACHES BACK OVER, in words — "It
+ * reaches back over February 2027 through June 2027, which nothing has
+ * billed yet." A successor planned from a lapsed agreement's own end starts
+ * in the past, and the one tap that writes it makes every month since
+ * billable at the rent; the bills run keys on the row, and this row is new,
+ * so none of them has been raised — including a month whose run already
+ * happened on the 1st and found no tenancy on the lot. Named so the click
+ * that made five months billable says so on screen. A statement, not an
+ * instruction: whether to run those months is the owner's call. Null when
+ * the plan starts today or later. Months in words (prettyMonth), never ISO.
+ */
+export function backfillWords(startISO: string, todayISO: string): string | null {
+  if (!(startISO < todayISO)) return null;
+  const first = startISO.slice(0, 7);
+  const last = todayISO.slice(0, 7);
+  const span = first === last ? prettyMonth(first) : `${prettyMonth(first)} through ${prettyMonth(last)}`;
+  return `It reaches back over ${span}, which nothing has billed yet.`;
+}
+
+/**
  * What to say about a chain that has been going a while.
  *
  * Returns null for a short chain, because a first renewal needs no commentary.
@@ -524,4 +581,57 @@ export function chainNotice(totalMonths: number): string | null {
     `from a short stay, whatever each agreement says. Ask your attorney how they ` +
     `want these handled.`
   );
+}
+
+// ------------------------------------------------ the successor's status ---
+
+/**
+ * THE STATUS A SUCCESSOR IS WRITTEN WITH — one rule for every door that
+ * writes one. `approved` is an agreement that has not started; `active` is
+ * one already running (park-helpers' tenancy convention). The owner's Renew
+ * button hardcoded `approved` and the resident's texted tap hardcoded
+ * `active`, so the same fact — a signed-for period that has not begun — was
+ * filed under two statuses depending on which door wrote it. Every reader
+ * takes the pair, so no screen was wrong; but a row that had already started
+ * (a lapsed agreement backfilled from its own end) sat `approved`, and a tap
+ * on the end day wrote a row starting today as if it had not.
+ */
+export function successorStatus(startISO: string, todayISO: string): "approved" | "active" {
+  return startISO > todayISO ? "approved" : "active";
+}
+
+// ------------------------------------------------ a chain's later links ----
+
+/** The columns a chain-link check reads off a `lot_reservations` row. */
+export interface ChainLink {
+  agreement_chain_id?: unknown;
+  agreement_seq?: unknown;
+}
+
+/**
+ * THE LATEST SEQUENCE NUMBER PER CHAIN, from every live row on the park's
+ * lots — the map that decides which agreements ALREADY have a successor
+ * written. The owner's "Agreements to write" list built this inline; the
+ * nightly reminder built nothing, and so the night after a household
+ * renewed it read the old row again and counted the household's own next
+ * agreement as "lot taken". One predicate for every door that asks it:
+ * renewalsDue (the card), remindExpiringStays (the nightly), and the Today
+ * loader's `hasSuccessor` (today-actions.ts) — the third still builds the
+ * map inline, and is to be repointed here.
+ */
+export function latestSeqByChain(rows: readonly ChainLink[]): Map<string, number> {
+  const maxSeq = new Map<string, number>();
+  for (const s of rows) {
+    const cid = (s.agreement_chain_id as string | null) ?? null;
+    if (!cid) continue;
+    maxSeq.set(cid, Math.max(maxSeq.get(cid) ?? 0, (s.agreement_seq as number) ?? 1));
+  }
+  return maxSeq;
+}
+
+/** True when a later link of this row's chain is already written. */
+export function hasLaterLink(row: ChainLink, maxSeq: Map<string, number>): boolean {
+  const cid = (row.agreement_chain_id as string | null) ?? null;
+  if (!cid) return false;
+  return (maxSeq.get(cid) ?? 0) > ((row.agreement_seq as number) ?? 1);
 }

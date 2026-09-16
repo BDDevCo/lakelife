@@ -24,7 +24,9 @@ vi.mock("@/components/ClaimForm", () => ({ ClaimForm: () => null }));
 vi.mock("@/components/ResolveClaimForm", () => ({ ResolveClaimForm: () => null }));
 vi.mock("@/components/ParkReceipt", () => ({ ReceiptPanel: () => null, DropSlips: () => null }));
 
-const { fromOnAccountSentence } = await import("./ParkRent");
+const { fromOnAccountSentence, ParkRent } = await import("./ParkRent");
+const { renderToStaticMarkup } = await import("react-dom/server");
+const { summarise } = await import("@/app/park/ledger-helpers");
 
 const bill = (lotNumber: string, fromOnAccount?: number) => ({ reservationId: `r-${lotNumber}`, lotNumber, amount: 542.53, fromOnAccount });
 
@@ -64,5 +66,39 @@ describe("the preview renders it, guarded on the plan's total", () => {
     // The headline it sits under is the shared helper's, so the total and
     // the names come from one plan.
     expect(src).toMatch(/<strong>\{runSummary\(plan, page\.month\)\}<\/strong>/);
+  });
+});
+
+/**
+ * A MONTH THAT HAS NOT STARTED HAS NO BILL BUTTON. The forward link stopped
+ * at the current month on purpose, and a typed `?month=` still reached the
+ * page with the button live — both actions refuse it now
+ * (notYetBillableRefusal), so a button that would always say no goes, with
+ * the one line saying why. Rendered both ways.
+ */
+describe("the Bill button on a month that has not started", () => {
+  const page = (month: string) => ({ month, rows: [], claims: {}, summary: summarise([]), lagDays: 3, today: "2027-01-28" });
+
+  it("February on 28 January: the sentence, no button", () => {
+    const html = renderToStaticMarkup(<ParkRent parkId="park-haven" page={page("2027-02")} />);
+    expect(html).toContain("February 2027 hasn&#x27;t started — bill it on the 1st.");
+    expect(html).not.toMatch(/>Bill February 2027</);
+  });
+
+  it("January on 28 January: the button, no sentence — collapsed the other way", () => {
+    const html = renderToStaticMarkup(<ParkRent parkId="park-haven" page={page("2027-01")} />);
+    expect(html).toMatch(/>Bill January 2027</);
+    expect(html).not.toMatch(/hasn&#x27;t started/);
+    // And an earlier month still bills — a June bill still open in August.
+    const past = renderToStaticMarkup(<ParkRent parkId="park-haven" page={page("2026-12")} />);
+    expect(past).toMatch(/>Bill December 2026</);
+  });
+
+  it("is the same helper the two actions refuse with", () => {
+    const src = readFileSync(fileURLToPath(new URL("./ParkRent.tsx", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).toMatch(/import \{ notYetBillableRefusal \} from "@\/lib\/billing-start"/);
+    expect(src).toMatch(/const notYet = notYetBillableRefusal\(page\.month, page\.today, prettyMonth\)/);
+    expect(src).toMatch(/\{notYet \? \(/);
   });
 });

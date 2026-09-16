@@ -106,6 +106,29 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     expect(s).toMatch(/\$16\.00 a lot/);
   });
 
+  it("every figure in the coverage sentence goes through money() — a thousand reads $1,420.00, never $1420.00", () => {
+    // The card beside it prints '$1,420.00/mo' from the same formatter; a
+    // toFixed here put the same number in two shapes on one screen.
+    const c = checkCoverage(
+      [GROUNDS], payers,
+      [{ category: "water", amountPaid: 2000, periodStart: "2026-06-01" }, { category: "grounds", amountPaid: 620, periodStart: "2026-06-01" }],
+    );
+    expect(c.feeIncome).toBe(1100);
+    expect(c.actualCost).toBe(2620);
+    expect(coverageSummary(c, 20)).toBe(
+      "Your fees bring in $1,100.00 a month against $2,620.00 of real cost — SHORT by $76.00 a lot, $1,520.00 a month.",
+    );
+    const ahead = checkCoverage([{ ...GROUNDS, amount: 150 }], payers, [{ category: "water", amountPaid: 1000, periodStart: "2026-06-01" }]);
+    expect(coverageSummary(ahead, 20)).toBe(
+      "Your fees bring in $3,000.00 a month against $1,000.00 of real cost — ahead by $100.00 a lot.",
+    );
+    expect(nightlyRecoveryLine("12", 1234.5)).toContain("$1,234.50 a night");
+    // No toFixed left in the module.
+    const src = readFileSync(fileURLToPath(new URL("./fee-helpers.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).not.toMatch(/toFixed\(/);
+  });
+
   it("DIVIDES BY THE MONTHS OBSERVED — three months of bills is not one month", () => {
     // Getting this wrong tells him he is losing money at three times the real
     // rate, and a wrong alarm is worse than no alarm.
@@ -338,6 +361,34 @@ describe("the sentence at the top of the fee screen, on the first day", () => {
   it("says nobody is on a lot when a fee exists and nobody is", () => {
     expect(coverageSummary(noCosts, 0, 1)).toBe(
       "Nobody is on a lot yet, so this fee is collecting nothing.",
+    );
+    // A park with no household filed to pay from a later day reads the same.
+    expect(coverageSummary(noCosts, 0, 1, null)).toBe("Nobody is on a lot yet, so this fee is collecting nothing.");
+    expect(coverageSummary(noCosts, 0, 1, { count: 0, fromMonth: "2027-01", income: 0 })).toBe(
+      "Nobody is on a lot yet, so this fee is collecting nothing.",
+    );
+  });
+
+  it("names the households filed to pay from a day still to come — the truer sentence on the afternoon eighteen leases are filed", () => {
+    // 20 December at The Haven: 18 signed leases for 1 January on the roll,
+    // one holdover, zero tenancies covering today. "Collecting nothing" was
+    // a wrong count on the screen where he decides whether $142.53 is right.
+    // Leads with the fact the count measures — billed, not 'on a lot': the
+    // one holdover IS on a lot that afternoon (the roll reads 'Occupied 1')
+    // and is billed nothing.
+    expect(coverageSummary(noCosts, 0, 1, { count: 18, fromMonth: "2027-01", income: 2565.54 })).toBe(
+      "Nobody is billed it yet — 18 households will be from January 2027, $2,565.54 a month. Nothing is billed before then.",
+    );
+    expect(coverageSummary(noCosts, 0, 1, { count: 1, fromMonth: "2027-02", income: 142.53 })).toBe(
+      "Nobody is billed it yet — 1 household will be from February 2027, $142.53 a month. Nothing is billed before then.",
+    );
+    expect(coverageSummary(noCosts, 0, 1, { count: 18, fromMonth: "2027-01", income: 2565.54 })).not.toMatch(/on a lot/);
+    // Never "collected": LakeLife collects nothing, the office records what it did.
+    expect(coverageSummary(noCosts, 0, 1, { count: 18, fromMonth: "2027-01", income: 2565.54 })).not.toMatch(/collect/);
+    expect(coverageSummary(noCosts, 0, 1, { count: 18, fromMonth: "2027-01", income: 2565.54 })).not.toMatch(/2027-01/);
+    // Once somebody IS paying, the upcoming rows do not change the sentence.
+    expect(coverageSummary(noCosts, 3, 1, { count: 18, fromMonth: "2027-01", income: 2565.54 })).toBe(
+      "No bills entered yet, so there's nothing to check this against.",
     );
   });
 

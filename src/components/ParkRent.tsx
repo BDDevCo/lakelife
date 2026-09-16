@@ -19,6 +19,7 @@ import {
 import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
 import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
 import { escapeHtml } from "@/lib/html-safe";
+import { notYetBillableRefusal } from "@/lib/billing-start";
 
 /**
  * WHO OWES, WHO PAID, WHO IS LATE.
@@ -107,6 +108,12 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
   }
 
   const s = page.summary;
+  // A MONTH THAT HAS NOT STARTED. The forward link stops at the current
+  // month on purpose; a typed `?month=` still reaches this page, and the
+  // Bill button here used to raise everybody's rent early — both actions
+  // refuse it now (notYetBillableRefusal), so the button that would always
+  // say no goes, with the one line saying why.
+  const notYet = notYetBillableRefusal(page.month, page.today, prettyMonth);
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
@@ -169,7 +176,12 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
 
       {/* ---- the run ----------------------------------------------------- */}
       <section style={{ marginTop: 18 }}>
-        {!plan ? (
+        {notYet ? (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <span className="mut" style={{ fontSize: 13 }}>{notYet}</span>
+            <DropSlips parkId={parkId} />
+          </div>
+        ) : !plan ? (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="ll-btn" onClick={preview} disabled={busy}>
               {busy ? "Working…" : `Bill ${prettyMonth(page.month)}`}

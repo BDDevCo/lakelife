@@ -27,8 +27,10 @@
  */
 
 import type { LedgerRow, LedgerSummary } from "./ledger-helpers";
-import { ledgerHeadline } from "./ledger-helpers";
-import { prettyMonth } from "./ledger-helpers";
+// THE ONE money() — this file kept a private copy with the same body while
+// importing three other things from the same module. One formatter, so the
+// morning card and the rent screen cannot print one figure two ways.
+import { ledgerHeadline, prettyMonth, money } from "./ledger-helpers";
 import { SIGNED_LEASE_LABEL } from "./sign-helpers";
 import { dayInWords } from "./park-helpers";
 // THE RENEWAL LEAD HAS ONE HOME. The card below and the "Agreements to write"
@@ -36,6 +38,7 @@ import { dayInWords } from "./park-helpers";
 // the card can never name a household the list keeps quiet about.
 import { renewalLeadDays } from "./agreement-helpers";
 import { periodIsBillable } from "@/lib/billing-start";
+import { parseDaterange } from "@/lib/parks";
 
 // Notification thresholds, not pricing — so they live here rather than in the
 // database. The first time he says one of these numbers is wrong, it becomes a
@@ -58,9 +61,6 @@ export const BILL_WARN_DAYS = 3;
  * the first day of their period, which for the property tax was 313 days out.
  */
 export const BILL_DUE_LEAD_DAYS = 28;
-
-const money = (n: number) =>
-  `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export function daysBetween(a: string, b: string): number {
   const [ay, am, ad] = a.split("-").map(Number);
@@ -121,6 +121,63 @@ export function describeOffBook(kinds: readonly string[]): string {
   return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
+/**
+ * HOW MANY HOUSEHOLDS A SET OF BILLS BELONGS TO — one lot is one household,
+ * the convention the money card has always used. The arrears TASK counted
+ * rows (one per bill) while the money card two lines above it counted lots,
+ * so a household with January and February open read "2 households owe"
+ * beside "1 household" on the screen he reads with coffee. One helper, both
+ * readers.
+ */
+export function householdsIn(rows: readonly { lotNumber: string }[]): number {
+  return new Set(rows.map((r) => r.lotNumber)).size;
+}
+
+/**
+ * THE LOTS STILL ON THE SELLER'S ARRANGEMENT — and not the ones that have
+ * already signed.
+ *
+ * A signing (sign-actions) never rewrites the holdover: it TRIMS the
+ * grandfathered row to end on the signing day and writes the new lease as
+ * the next link in the same chain, approved, from that day. So on 20
+ * December a household who signed on the 10th for 1 January is still LIVING
+ * on the grandfathered row — current, origin `grandfathered` — with their
+ * signed lease held one link later. Filtering on origin and today alone
+ * listed them under "haven't signed the new lease" for the rest of the
+ * month, with the card pointing at a button that would refuse them.
+ *
+ * `latestSeqInChain` is the loader's own map (the one the renewal card's
+ * `hasSuccessor` reads): the highest agreement_seq standing — approved or
+ * active — in each chain. A holdover whose chain carries a later link has
+ * signed; it is left off. Sorted numerically by lot, as the card prints it.
+ */
+export function holdoverLotsOf(
+  stays: readonly {
+    park_lot_id: string;
+    during: string;
+    origin: string | null;
+    agreement_chain_id: string | null;
+    agreement_seq: number | null;
+  }[],
+  today: string,
+  latestSeqInChain: ReadonlyMap<string, number>,
+  lotNumber: (lotId: string) => string,
+): string[] {
+  return stays
+    .filter((s) => s.origin === "grandfathered")
+    .filter((s) => {
+      const r = parseDaterange(s.during);
+      return r != null && r.start <= today && today < r.end;
+    })
+    .filter((s) => {
+      const cid = s.agreement_chain_id;
+      const seq = s.agreement_seq ?? 1;
+      return !(cid != null && (latestSeqInChain.get(cid) ?? 0) > seq);
+    })
+    .map((s) => lotNumber(s.park_lot_id))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
 export function moneyBlock(input: {
   /** EVERY dollar received this month, bill or no bill. */
   monthToDateCents: number;
@@ -153,18 +210,18 @@ export function moneyBlock(input: {
   let arrearsLine: string | null = null;
   if (arrears.length > 0) {
     const total = arrears.reduce((s, r) => s + r.balance, 0);
-    const lots = new Set(arrears.map((r) => r.lotNumber)).size;
+    const lots = householdsIn(arrears);
     const oldest = arrears.reduce((m, r) => (r.dueOn < m ? r.dueOn : m), arrears[0].dueOn);
     arrearsLine =
       `${money(total)} still owing from earlier months — ` +
-      `${lots} ${lots === 1 ? "household" : "households"}, oldest due ${oldest} ` +
+      `${lots} ${lots === 1 ? "household" : "households"}, oldest due ${dayInWords(oldest)} ` +
       `(${daysBetween(oldest, today)} days).`;
   }
 
   let disputedLine: string | null = null;
   if (disputedOlder.length > 0) {
     const total = disputedOlder.reduce((s2, r) => s2 + r.balance, 0);
-    const n = new Set(disputedOlder.map((r) => r.lotNumber)).size;
+    const n = householdsIn(disputedOlder);
     disputedLine =
       `${money(total)} from earlier months is disputed — ` +
       `${n} ${n === 1 ? "household says they" : "households say they"} already paid. ` +
@@ -343,6 +400,30 @@ export interface TaskFacts {
     typical: number | null;
   }[];
   /**
+   * MONEY THE PARK HOLDS FOR A HOUSEHOLD THAT HAS LEFT — on account with
+   * their final month already billed (so no bill will ever take it), or a
+   * deposit still held. Fed from the same read as the held-money panel
+   * (getHeldMoney), so the two cannot disagree about whose money it is.
+   * The task it raises is not dismissible: the quiet state must not print
+   * over a liability.
+   */
+  heldForDeparted: {
+    renterId: string;
+    renterName: string;
+    /** YYYY-MM-DD — the last day they lived here. */
+    movedOutOn: string;
+    /**
+     * Whether the month they left in is billed for them (getHeldMoney's own
+     * fact, carried per household). On-account money is listed only when it
+     * is; a deposit is listed as soon as they have gone, and the card's
+     * sentence branches on this — "nothing more bills for them" is a promise
+     * the run is about to break when it is false.
+     */
+    finalMonthBilled: boolean;
+    onAccount: number;
+    depositsHeld: number;
+  }[];
+  /**
    * The park's go-live date, or null when there is no restriction.
    *
    * REQUIRED, NOT OPTIONAL, on purpose: a caller that forgets it would get a
@@ -376,7 +457,7 @@ export function generateTasks(f: TaskFacts): Task[] {
     out.push({
       key: `arrears:${f.parkId}`,
       title: `${f.arrearsCount} ${f.arrearsCount === 1 ? "household owes" : "households owe"} from earlier months`,
-      detail: `${money(f.arrearsAmount)} still outstanding from before ${f.currentMonth}.`,
+      detail: `${money(f.arrearsAmount)} still outstanding from before ${prettyMonth(f.currentMonth)}.`,
       urgency: "overdue",
       dueOn: null,
       href: "/park/rent",
@@ -410,6 +491,48 @@ export function generateTasks(f: TaskFacts): Task[] {
     });
   }
 
+  // MONEY TO HAND BACK. A household has left and the park is still holding
+  // money of theirs — on account, where no bill will ever take it now, or a
+  // deposit. Never dismissible: the software must not offer to stop
+  // mentioning money it owes somebody. One card per household, named — at
+  // twenty-one lots that is the answer, not a list.
+  //
+  // "NOTHING MORE BILLS FOR THEM" IS SAID ONLY WHEN IT IS TRUE. The loader
+  // lists on-account money only once the month they left in is billed, but a
+  // deposit as soon as they have gone — and a move-out closed out on the 2nd,
+  // before the office presses Bill February, still gets its two-day
+  // part-month from that run. The card used to promise "nothing more bills"
+  // over that deposit; the office handed it back, and the arrears task then
+  // chased a household that had gone. Now the card names the bill still to
+  // come, and which button raises it.
+  for (const h of f.heldForDeparted) {
+    const acct = Math.round(h.onAccount * 100) / 100;
+    const dep = Math.round(h.depositsHeld * 100) / 100;
+    if (acct <= 0 && dep <= 0) continue;
+    const what = [
+      acct > 0 ? `${money(acct)} on account` : "",
+      dep > 0 ? `${money(dep)} deposit` : "",
+    ].filter(Boolean).join(" and ");
+    const left = `they moved out ${dayInWords(h.movedOutOn)}`;
+    const bills = h.finalMonthBilled
+      ? `${left} and nothing more bills for them.`
+      : `${left}; their final month isn't billed yet — it's raised when you bill ` +
+        `${prettyMonth(h.movedOutOn.slice(0, 7))}${acct > 0 ? ", which takes anything on account first" : ""}.`;
+    out.push({
+      key: `hand_back:${h.renterId}`,
+      title: `Money to hand back — ${h.renterName}`,
+      detail:
+        `${what}: ${bills} ` +
+        (acct > 0
+          ? `Hand it back from "Money not against a bill" on the Rent screen, or put it against a bill of theirs if one is still open.`
+          : `Give it back from "Money not against a bill" on the Rent screen — or keep some, with a reason.`),
+      urgency: "soon",
+      dueOn: null,
+      href: "/park/rent",
+      canDismiss: false,
+    });
+  }
+
   // THE RECURRING WORKLOAD AT THIS PARK. A household on one-month agreements
   // renews twelve times a year, and a lapsed tenancy stops being billed
   // SILENTLY — buildStatement returns zero days and the charge run drops the
@@ -430,11 +553,23 @@ export function generateTasks(f: TaskFacts): Task[] {
     });
   if (ending.length > 3) {
     const soonest = ending.reduce((m, a) => (a.endsOn < m ? a.endsOn : m), ending[0].endsOn);
+    // LAPSED IS NOT RUNNING OUT. The per-lot branch below already says "ran
+    // out" for d < 0; this aggregate said "running out" and "the first ends"
+    // about fifteen agreements four months past their end, with nothing
+    // billed to them since. The same test, split into the two counts.
+    const lapsed = ending.filter((a) => daysBetween(f.today, a.endsOn) < 0);
+    const running = ending.length - lapsed.length;
     out.push({
       key: `agreements_ending:${f.parkId}:${soonest}`,
-      title: `${ending.length} agreements are running out`,
-      detail: `The first ends ${dayInWords(soonest)}. When one lapses the rent stops being billed — quietly.`,
-      urgency: daysBetween(f.today, soonest) < 0 ? "overdue" : "soon",
+      title: lapsed.length > 0
+        ? `${lapsed.length} ${lapsed.length === 1 ? "agreement has" : "agreements have"} lapsed` +
+          (running > 0 ? ` and ${running} ${running === 1 ? "is" : "are"} running out` : "")
+        : `${ending.length} agreements are running out`,
+      detail: lapsed.length > 0
+        ? `${lapsed.length} ${lapsed.length === 1 ? "has" : "have"} lapsed — the first on ${dayInWords(soonest)}; nothing billed since.` +
+          (running > 0 ? ` ${running} ${running === 1 ? "is" : "are"} running out.` : "")
+        : `The first ends ${dayInWords(soonest)}. When one lapses the rent stops being billed — quietly.`,
+      urgency: lapsed.length > 0 ? "overdue" : "soon",
       dueOn: soonest,
       href: "/park/today",
       canDismiss: true,
@@ -526,9 +661,9 @@ export function generateTasks(f: TaskFacts): Task[] {
     if (until < 0) {
       out.push({
         key: `notice_missed:${rc.id}`,
-        title: `Lot ${rc.lotNumber}'s new rent can't start ${rc.effectiveOn}`,
+        title: `Lot ${rc.lotNumber}'s new rent can't start ${dayInWords(rc.effectiveOn)}`,
         detail:
-          `You needed to give ${rc.noticeDaysRequired} days' notice by ${serveBy}. ` +
+          `You needed to give ${rc.noticeDaysRequired} days' notice by ${dayInWords(serveBy)}. ` +
           `Move the date or serve it now and start later.`,
         urgency: "overdue",
         dueOn: serveBy,
@@ -538,8 +673,8 @@ export function generateTasks(f: TaskFacts): Task[] {
     } else if (until <= NOTICE_WARN_DAYS) {
       out.push({
         key: `notice_cliff:${rc.id}`,
-        title: `Lot ${rc.lotNumber} needs its rent notice by ${serveBy}`,
-        detail: `${rc.noticeDaysRequired} days' notice before it starts ${rc.effectiveOn}.`,
+        title: `Lot ${rc.lotNumber} needs its rent notice by ${dayInWords(serveBy)}`,
+        detail: `${rc.noticeDaysRequired} days' notice before it starts ${dayInWords(rc.effectiveOn)}.`,
         urgency: "soon",
         dueOn: serveBy,
         href: "/park/lots",
@@ -562,25 +697,28 @@ export function generateTasks(f: TaskFacts): Task[] {
   // FORGOTTEN one that costs money.
   for (const b of f.billsDue) {
     // NOT OURS. A bill for a period that began before the park went live
-    // belongs to whoever was running the park then — at The Haven, the 2026
-    // property tax and the December sewer, both settled at the closing table.
-    // The card used to instruct him to enter both, and the cost door would
-    // have taken them, so the seller's money would have landed on the
-    // residents' first bill.
+    // belongs to whoever was running the park then. The card used to
+    // instruct him to enter it, and the cost door would have taken it, so
+    // the seller's money would have landed on the residents' first bill.
     //
-    // ONE KEY FOR ONE RULE. Keyed on the month the bill is FOR — the first
-    // day of its period — because that is the month the cost door compares
-    // (`period_start`, preCutoverCostRefusal). Keyed on the due month
-    // instead, the two doors disagreed: this card raised a bill the door then
-    // refused. For a monthly or quarterly bill the two months coincide, so
-    // nothing moves. For an ANNUAL bill they differ, and the annual case is
-    // decided here on purpose: a park that goes live mid-year (April, say)
-    // gets NO reminder for that year's tax, because the year began before
-    // go-live and the door would refuse the period he would type. Indiana
-    // bills property tax in arrears, so that year's bill is the previous
-    // owner's anyway, and the buyer's share is a closing credit — never a
-    // park_costs row. The first tax reminder such a park sees is the next
-    // year's.
+    // ONE KEY FOR ONE RULE. Keyed on the month `billPeriod` gives the bill —
+    // the first day of the period it is due IN — because that is the month
+    // the cost door compares (`period_start`, preCutoverCostRefusal). Keyed
+    // on the due month instead, the two doors disagreed for a mid-year
+    // go-live: this card raised a bill the door then refused.
+    //
+    // WHAT THIS GATE CANNOT KNOW: whether the bill is FOR the period it is
+    // due in. The schedule form asks when a bill lands, not what it covers,
+    // and no column says. A bill paid in arrears — Indiana property tax
+    // (the bill due 10 November 2027 is for 2026, the seller's year, a
+    // closing-table credit and never a park_costs row) or a sewer bill
+    // dated the 5th for the previous month's service — is keyed here on
+    // the due period, so a 1 January go-live IS shown a card for the bill
+    // due that November. Until the schedule carries which period a bill
+    // covers, the card names only what it does know — the DUE DATE — and
+    // never a year or a month it is guessing at. The gate is the LOADER's
+    // rule; whether a schedule shifts its period back one cadence is the
+    // owner's, not this file's.
     if (!periodIsBillable(b.periodFrom.slice(0, 7), f.cutoverOn)) continue;
 
     const daysToDue = daysBetween(f.today, b.dueOn);
@@ -607,12 +745,22 @@ export function generateTasks(f: TaskFacts): Task[] {
 
     out.push({
       // KEYED ON THE BILL'S OWN PERIOD, not the calendar month. A tax bill is
-      // one task called "Property tax for 2026" — keying it on the month made
-      // it twelve tasks a year for something that arrives once.
+      // one task a year — keying it on the month made it twelve tasks a
+      // year for something that arrives once.
       key: `bill_due:${b.scheduleId}:${b.periodKey}`,
+      // NAMED BY ITS DUE DATE, never by a period it does not know. "Property
+      // tax for 2027" about the bill due 10 November 2027 was the seller's
+      // 2026 tax under the buyer's year; "sewer for January 2027" about the
+      // bill dated 5 January was December's service. `periodLabel` is
+      // billPeriod's: "due November 10, 2027" for a yearly bill, "(bill due
+      // January 5)" for a monthly or quarterly one.
+      // "Sewer (bill due January 5) is coming up" — the label already carries
+      // "due", so the not-yet-late form does not say it twice ("due January
+      // 5 is due about now" was the stutter on the screen he opens with
+      // coffee). The late form reads fine and is unchanged.
       title: late
-        ? `${b.label} for ${b.periodLabel} still isn't entered`
-        : `${b.label} for ${b.periodLabel} is due about now`,
+        ? `${b.label} ${b.periodLabel} still isn't entered`
+        : `${b.label} ${b.periodLabel} is coming up`,
       // WHAT THE DOOR WILL DO WITH IT IS NOT KNOWN HERE. The loader reads
       // no fees, and the costs screen does two different things with a bill:
       // one a live fee covers is recorded under that fee and divided to
@@ -789,7 +937,7 @@ export function preCutover(input: {
       : `${input.parkName} — ${days} ${days === 1 ? "day" : "days"} to go-live.`,
     sub: days === 0
       ? "Money and occupancy start now."
-      : `You go live on ${input.cutoverOn}. Nothing is collectable until then.`,
+      : `You go live on ${dayInWords(input.cutoverOn)}. Nothing is collectable until then.`,
     items: [
       { label: "Lots on file", value: String(input.lots), done: input.lots > 0 },
       {

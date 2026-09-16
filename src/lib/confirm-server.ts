@@ -3,8 +3,9 @@ import { mustRead, readFailedMessage, ReadFailed } from "@/lib/must-read";
 import { isBearerToken } from "@/lib/token-format";
 import { receiptRef, METHOD_WORD } from "@/app/park/receipt-helpers";
 import { splitSiblingKey } from "@/app/park/ledger-helpers";
+import { notCollectedAt, takenBackWhy, takenBackOfRow } from "@/app/park/receipts-helpers";
 import { longDate } from "@/lib/lake-time";
-import { describeAllocations, type AllocationLine } from "@/lib/allocations";
+import { describeAllocations, money, type AllocationLine } from "@/lib/allocations";
 
 /**
  * THE RENTER'S OWN CONFIRMATION — the only part of the ledger they can act on.
@@ -92,6 +93,38 @@ export interface ConfirmView {
    */
   siblingTakenBackOn: string | null;
   siblingTakenBackWhy: string | null;
+  /**
+   * MONEY SENT BACK THROUGH THE PROCESSOR (0142), one entry per refund — off
+   * this row and off its split sibling both. The page asked her to confirm
+   * $600 and listed $560 of it against bills with nothing about the $40 that
+   * went back to her card; the view's `remaining` had already netted it, so
+   * the arithmetic on the page could not be tied to the paper. Read, never
+   * derived. Empty for every payment nothing has been refunded from.
+   * `method` is the refunded payment's rail — "card" or "ach" — so the page
+   * says "your card" or "your bank account" and not the wrong one.
+   */
+  sentBack: Array<{ amount: number; fee: number; on: string; method: string }>;
+  /**
+   * MONEY HANDED BACK ACROSS THE WINDOW — a deposit returned (0102), rent on
+   * account handed back to a household that has left (0168) — off this row
+   * or its split sibling, oldest first. A hand-back is a stamp on the payment
+   * (returned_on, returned_amount, return_note), recorded once, so there is
+   * at most one per row. The fourth way money leaves, and the one page a
+   * household keeps said nothing about it: "$542.53 to January 2027" for a
+   * $600 cheque with $57.47 unexplained. Read, never derived. `note` is the
+   * office's reason, carried for the record; the page prints the amount and
+   * the day.
+   */
+  handedBack: Array<{ amount: number; on: string; note: string | null }>;
+  /**
+   * WHETHER "THAT'S NOT WHAT I PAID" CAN BE SAVED. A claim hangs off a bill
+   * (park_payment_claims.charge_id is NOT NULL), so a receipt for money on
+   * account or a deposit has nowhere to file one — and the page used to
+   * offer the button anyway, promise "nothing will be chased while they
+   * look", and then answer "We couldn't save that". False here means the
+   * page renders no second button and names the real path instead.
+   */
+  canDispute: boolean;
   /** Card convenience fee charged on top, or null. */
   fee: number | null;
   method: string;
@@ -182,9 +215,18 @@ async function whereItWent(
  * the whole and ask her to agree to it (or file a claim about it). Callers
  * that return `{ ok, error }` rather than throw must catch ReadFailed.
  */
+/** A hand-back off one payment row, or null when the row carries no stamp. */
+function handBackOf(p: { returned_on?: unknown; returned_amount?: unknown; return_note?: unknown }): { amount: number; on: string; note: string | null } | null {
+  if (p.returned_on == null || Number(p.returned_amount ?? 0) <= 0) return null;
+  return { amount: Number(p.returned_amount), on: String(p.returned_on), note: (p.return_note as string | null) ?? null };
+}
+
 async function wholeHandedOver(
   admin: ReturnType<typeof createServiceClient>,
-  pay: { id?: unknown; charge_id: unknown; amount: unknown; idempotency_key: unknown; kind?: unknown },
+  pay: {
+    id?: unknown; charge_id: unknown; amount: unknown; idempotency_key: unknown; kind?: unknown; method?: unknown;
+    returned_on?: unknown; returned_amount?: unknown; return_note?: unknown;
+  },
 ): Promise<{
   amount: number;
   onAccount: number | null;
@@ -196,6 +238,10 @@ async function wholeHandedOver(
   /** The sibling's own reversed_at / returned_at, and the reason — null while it stands or when there is none. */
   siblingTakenBackOn: string | null;
   siblingTakenBackWhy: string | null;
+  /** Every refund off this row or its sibling, oldest first. */
+  sentBack: Array<{ amount: number; fee: number; on: string; method: string }>;
+  /** Every hand-back off this row or its sibling, oldest first — at most one each. */
+  handedBack: Array<{ amount: number; on: string; note: string | null }>;
 }> {
   // ONLY A BILL ROW LOOKS FOR A SIBLING HERE. The link on an on-account
   // row's own receipt reports that row (its allocations, its standing);
@@ -206,15 +252,19 @@ async function wholeHandedOver(
   // page that drops the $57.47 the office has since taken back is a page
   // that hides the correction rather than stating it. The standing comes
   // along so the page can say which half no longer stands.
+  // `returned_on` / `returned_amount` / `return_note`: the sibling handed
+  // back across the window (0168) — a different act from `returned_at`, the
+  // bank pulling money back, and read here for the same reason the standing
+  // is: the page must say where the $57.47 went.
   const sibling = key
     ? mustRead("the rest of that payment", await admin
         .from("park_payments")
-        .select("id, amount, charge_id, reversed_at, reversed_reason, returned_at, return_code")
+        .select("id, amount, charge_id, method, reversed_at, reversed_reason, returned_at, return_code, returned_on, returned_amount, return_note")
         .eq("idempotency_key", key)
         .maybeSingle())
     : null;
   const onAccount = sibling ? Number(sibling.amount) : null;
-  const siblingStands = !!sibling && sibling.reversed_at == null && sibling.returned_at == null;
+  const siblingStands = !!sibling && notCollectedAt(takenBackOfRow(sibling)) == null;
 
   // Whose allocations to read: the sibling's on a split receipt; the row's
   // own when the row itself is money on account. A deposit has none (0102).
@@ -227,6 +277,35 @@ async function wholeHandedOver(
     ? await whereItWent(admin, acctRowId)
     : { allocations: [], remaining: 0 };
 
+  // WHAT WENT BACK TO THE CARD — off this row and off the sibling, in one
+  // read. A refund is its own row (park_refunds, 0142); the payment row
+  // never changes, so nothing above could have said it. mustRead: a failed
+  // read here would ask her to confirm $600 with no word that $40 of it is
+  // back on her statement.
+  const refundIds = [...(pay.id ? [String(pay.id)] : []), ...(sibling ? [sibling.id as string] : [])];
+  const refundRows = refundIds.length
+    ? (mustRead("what went back to your card", await admin
+        .from("park_refunds")
+        .select("payment_id, amount, fee_amount, created_at")
+        .in("payment_id", refundIds)) ?? [])
+    : [];
+  // The rail each refund went back on is the refunded PAYMENT's — this row's
+  // or the sibling's — so the page can say "your card" or "your bank
+  // account" by the row, not by a fixed word.
+  const railOf = (paymentId: unknown) =>
+    String((sibling && String(sibling.id) === String(paymentId) ? sibling.method : pay.method) ?? "card");
+  const sentBack = refundRows
+    .map((r) => ({ amount: Number(r.amount ?? 0), fee: Number(r.fee_amount ?? 0), on: String(r.created_at ?? ""), method: railOf(r.payment_id) }))
+    .sort((a, b) => a.on.localeCompare(b.on));
+
+  // WHAT WENT BACK ACROSS THE WINDOW — the stamp on this row (a deposit
+  // returned, or the row's own on-account money handed back) and on the
+  // sibling (the $57.47 of a split handed back after the household left).
+  // Already on the rows read above; nothing more to fetch.
+  const handedBack = [handBackOf(pay), ...(sibling ? [handBackOf(sibling)] : [])]
+    .filter((h): h is { amount: number; on: string; note: string | null } => h != null)
+    .sort((a, b) => a.on.localeCompare(b.on));
+
   return {
     amount: Math.round((Number(pay.amount) + (onAccount ?? 0)) * 100) / 100,
     onAccount,
@@ -234,14 +313,12 @@ async function wholeHandedOver(
     onAccountRemaining: sibling ? went.remaining : acctRowId ? went.remaining : null,
     allocations: went.allocations,
     siblingId: siblingStands ? (sibling!.id as string) : null,
-    siblingTakenBackOn: sibling && !siblingStands
-      ? ((sibling.reversed_at as string) ?? (sibling.returned_at as string) ?? null)
-      : null,
-    siblingTakenBackWhy: sibling && !siblingStands
-      ? sibling.reversed_at
-        ? ((sibling.reversed_reason as string) ?? null)
-        : ((sibling.return_code as string) ?? "returned by the bank")
-      : null,
+    // The sibling's own standing, in the one derivation every reader of
+    // these four fields shares (receipts-helpers).
+    siblingTakenBackOn: sibling && !siblingStands ? notCollectedAt(takenBackOfRow(sibling)) : null,
+    siblingTakenBackWhy: sibling && !siblingStands ? takenBackWhy(takenBackOfRow(sibling)) : null,
+    sentBack,
+    handedBack,
   };
 }
 
@@ -258,14 +335,17 @@ export async function loadPaymentByToken(token: string): Promise<ConfirmView | n
   // reversed_at / returned_at / their reasons: the row's OWN standing. Every
   // other reader of park_payments filters these; this one must SHOW them,
   // because the page is the household's permanent record of the money.
+  // returned_on / returned_amount / return_note: money from this row handed
+  // back across the window — a deposit at move-out, rent on account after
+  // they left — the same record, for the same reason.
   const pay = mustRead("your receipt", await admin
     .from("park_payments")
-    .select("id, charge_id, park_id, kind, amount, fee_amount, method, reference, received_on, receipt_no, renter_confirmed_at, idempotency_key, reversed_at, reversed_reason, returned_at, return_code")
+    .select("id, charge_id, park_id, kind, amount, fee_amount, method, reference, received_on, receipt_no, renter_confirmed_at, idempotency_key, reversed_at, reversed_reason, returned_at, return_code, returned_on, returned_amount, return_note")
     .eq("confirm_token", token)
     .maybeSingle());
   if (!pay) return null;
 
-  const { amount, onAccount, onAccountApplied, onAccountRemaining, allocations, siblingTakenBackOn, siblingTakenBackWhy } = await wholeHandedOver(admin, pay);
+  const { amount, onAccount, onAccountApplied, onAccountRemaining, allocations, siblingTakenBackOn, siblingTakenBackWhy, sentBack, handedBack } = await wholeHandedOver(admin, pay);
 
   // A PAYMENT NEED NOT HAVE A CHARGE ANY MORE (0102). This resolved the park by
   // reading it OFF the charge and bailed when there wasn't one — so the
@@ -305,14 +385,21 @@ export async function loadPaymentByToken(token: string): Promise<ConfirmView | n
     onAccountRemaining,
     allocations,
     whereItWent: describeAllocations(allocations, onAccountRemaining ?? 0),
-    takenBackOn: (pay.reversed_at as string) ?? (pay.returned_at as string) ?? null,
-    takenBackWhy: pay.reversed_at
-      ? ((pay.reversed_reason as string) ?? null)
-      : pay.returned_at
-        ? ((pay.return_code as string) ?? "returned by the bank")
-        : null,
+    // The row's own standing — the one derivation (receipts-helpers), the
+    // same words the statement's file and the resident's home screen use.
+    takenBackOn: notCollectedAt(takenBackOfRow(pay)),
+    takenBackWhy: takenBackWhy(takenBackOfRow(pay)),
     siblingTakenBackOn,
     siblingTakenBackWhy,
+    sentBack,
+    handedBack,
+    // Keyed on the bill, exactly as disputeByToken refuses: a claim needs a
+    // charge to hang on, and money on account or a deposit has none — even
+    // when the money has since been put against bills, because 0167's
+    // settle_claims_on_allocation would close a claim on that bill the moment
+    // the office re-applied during its own look. Widening claims to hang off
+    // a payment is the owner's call, not this page's.
+    canDispute: !!pay.charge_id,
     // Asking "does this match what you handed over?" while showing a figure
     // smaller than the one on their bank statement invites a dispute we caused.
     fee: pay.fee_amount == null ? null : Number(pay.fee_amount),
@@ -381,23 +468,34 @@ export async function confirmByToken(
  */
 export async function disputeByToken(
   token: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; unsupported?: boolean }> {
   const admin = createServiceClient();
   const payRes = await admin
-    .from("park_payments").select("id, charge_id, amount, received_on, receipt_no, idempotency_key").eq("confirm_token", token).maybeSingle();
+    .from("park_payments").select("id, charge_id, park_id, amount, method, received_on, receipt_no, idempotency_key, returned_on, returned_amount, return_note").eq("confirm_token", token).maybeSingle();
   if (payRes.error) return { ok: false, error: readFailedMessage("your receipt", payRes.error) };
   const pay = payRes.data;
   if (!pay) return { ok: false, error: "This link doesn't match a payment." };
 
   // `park_payment_claims.charge_id` is NOT NULL, so a disagreement about money
   // with no bill behind it — a deposit, or a cheque taken before the bill
-  // existed — has nowhere to be recorded. Say that plainly instead of
-  // inserting a null and telling them "that didn't save, try again" forever.
-  // Widening the claims table to hang off a payment is its own piece of work.
+  // existed — has nowhere to be recorded, EVEN once the run has put that
+  // money against bills: a claim on those bills would be closed as "matched"
+  // by settle_claims_on_allocation (0167) the moment the office re-applied
+  // during its own look. The page no longer offers the button for these
+  // (`canDispute`), so this answers only a crafted POST — and it is a
+  // by-design refusal, not a failed write, which `unsupported` says so the
+  // page does not title it "We couldn't save that". Widening the claims
+  // table to hang off a payment is the owner's call.
   if (!pay.charge_id) {
+    // The reference the paper and the page print, not the bare number.
+    const parkRes = await admin.from("parks").select("name").eq("id", pay.park_id as string).maybeSingle();
+    const ref = !parkRes.error && parkRes.data?.name && pay.receipt_no != null
+      ? receiptRef(String(parkRes.data.name), pay.receipt_no as number, String(pay.received_on ?? ""))
+      : pay.receipt_no != null ? String(pay.receipt_no) : "on this page";
     return {
       ok: false,
-      error: `Please ring the office and quote receipt ${pay.receipt_no ?? "on this page"} — this one isn't against a bill, so it can't be flagged here yet.`,
+      unsupported: true,
+      error: `This one was recorded as money on account or a deposit, and that can't be flagged from this link yet. Ring the office and quote receipt ${ref} — they can log it for you.`,
     };
   }
 
@@ -406,7 +504,7 @@ export async function disputeByToken(
   // nobody printed. A failed sibling read refuses rather than filing the
   // bill's share as the whole — that would write the very lie this fixes into
   // the claim log, where nothing later corrects it.
-  let whole: { amount: number; onAccount: number | null; onAccountApplied: boolean; onAccountRemaining: number | null; allocations: AllocationLine[]; siblingTakenBackOn: string | null; siblingTakenBackWhy: string | null };
+  let whole: Awaited<ReturnType<typeof wholeHandedOver>>;
   try {
     whole = await wholeHandedOver(admin, pay);
   } catch (e) {
@@ -431,7 +529,7 @@ export async function disputeByToken(
     charge_id: pay.charge_id,
     asserted_by: "renter",
     note:
-      `They say the receipt is wrong — it records $${whole.amount.toFixed(2)} ` +
+      `They say the receipt is wrong — it records ${money(whole.amount)} ` +
       `taken on ${longDate(pay.received_on as string)}` +
       // Where the rest sits, as of the day she taps — a claim note is never
       // corrected later, so it must not say "on account" about money the
@@ -441,10 +539,15 @@ export async function disputeByToken(
         : whole.siblingTakenBackOn
           // The office has already taken that half back: it is not on
           // account and not on a bill, and the note must not say either.
-          ? ` ($${whole.onAccount.toFixed(2)} of it had gone on account and was taken back on ${longDate(whole.siblingTakenBackOn)}${whole.siblingTakenBackWhy ? ` — ${whole.siblingTakenBackWhy}` : ""})`
+          ? ` (${money(whole.onAccount)} of it had gone on account and was taken back on ${longDate(whole.siblingTakenBackOn)}${whole.siblingTakenBackWhy ? ` — ${whole.siblingTakenBackWhy}` : ""})`
           : whole.onAccountApplied
-            ? ` ($${whole.onAccount.toFixed(2)} of it on account: ${describeAllocations(whole.allocations, whole.onAccountRemaining ?? 0)})`
-            : ` ($${whole.onAccount.toFixed(2)} of it on account with the office)`) +
+            ? ` (${money(whole.onAccount)} of it on account: ${describeAllocations(whole.allocations, whole.onAccountRemaining ?? 0)})`
+            : ` (${money(whole.onAccount)} of it on account with the office)`) +
+      // What has gone back since — through the processor, or across the
+      // window — a claim note is never corrected later, and a dispute about
+      // $600 of which $40 is back on her statement must say so.
+      whole.sentBack.map((r) => ` (${money(r.amount)} of it was sent back to their ${r.method === "ach" ? "bank account" : "card"} on ${longDate(r.on)})`).join("") +
+      whole.handedBack.map((h) => ` (${money(h.amount)} of it was handed back to them on ${longDate(h.on)})`).join("") +
       `. Raised from their own confirmation link.`,
   });
   if (error) return { ok: false, error: "That didn't save — try again." };

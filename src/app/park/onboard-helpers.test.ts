@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { planOnboarding, onboardSummary, signingExplainer, contactProblem, type OnboardRow } from "./onboard-helpers";
+import { TYPE_THE_LEASE_DAY, buildTenant, dayInWords } from "./park-helpers";
 import { SIGNED_LEASE_LABEL } from "./park-helpers";
 
 // ---------------------------------------------------------------------------
@@ -45,14 +46,24 @@ vi.mock("@/lib/supabase/server", () => ({
 
 const TODAY = "2026-12-16";
 
-const row = (o: Partial<OnboardRow> = {}): OnboardRow => ({
-  lotId: "l1", lotNumber: "3", displayName: "Amberg, Roy",
-  rent: "395", movedInOn: "", signedNewLease: false, agreementStartsOn: "", agreementMonths: null,
-  email: "roy@example.com", phone: "(260) 555-0142", ...o,
-});
+const row = (o: Partial<OnboardRow> = {}): OnboardRow => {
+  const r: OnboardRow = {
+    lotId: "l1", lotNumber: "3", displayName: "Amberg, Roy",
+    rent: "395", movedInOn: "", signedNewLease: false, agreementStartsOn: "", agreementMonths: null,
+    email: "roy@example.com", phone: "(260) 555-0142", ...o,
+  };
+  // A signed row carries the day the lease says (a blank after go-live is
+  // refused — see "the day a signed lease runs from"). These fixtures are
+  // about everything else, so the day is the day it is filed unless a test
+  // sets the box itself.
+  if (r.signedNewLease && !("agreementStartsOn" in o)) r.agreementStartsOn = TODAY;
+  return r;
+};
 
 /** The Haven's two dials: a one-month house style under a three-month cap. */
 const HAVEN_DIALS = { defaultMonths: 1, capMonths: 3 };
+/** The Haven as it stands in prod: house style one, cap six. */
+const HAVEN_DIALS_SIX = { defaultMonths: 1, capMonths: 6 };
 
 describe("filing the households who were already there", () => {
   it("files a row with a name, and leaves an unknown move-in date UNKNOWN", () => {
@@ -462,19 +473,27 @@ describe("the day a signed lease runs from", () => {
    * the lot when the date is refused, and says which month bills first.
    */
   const CUTOVER = "2027-01-01";
-  const signed = (o: Partial<OnboardRow> = {}) => row({ signedNewLease: true, rent: "400", ...o });
+  const signed = (o: Partial<OnboardRow> = {}) => row({ signedNewLease: true, rent: "400", agreementStartsOn: "", ...o });
 
   it("defaults a signed row filed before go-live to the cutover, not today", () => {
     const p = planOnboarding([signed()], "2026-12-20", CUTOVER);
     expect(p.toFile[0].agreementStartsOn).toBe("2027-01-01");
   });
 
-  it("defaults to today after go-live, and keeps a typed date either side", () => {
-    expect(planOnboarding([signed()], "2027-01-04", CUTOVER).toFile[0].agreementStartsOn).toBe("2027-01-04");
+  it("REFUSES a blank after go-live by lot number — never today — and keeps a typed date either side", () => {
+    // Blank on the 4th used to file [4 Jan, 4 Feb) under a hint reading
+    // "the day on the paper, not today": January $17.50 short and every
+    // later link 4th-to-4th. The same rule the roll's signing form keeps.
+    const blank = planOnboarding([signed({ lotNumber: "28" })], "2027-01-04", CUTOVER);
+    expect(blank.toFile).toHaveLength(0);
+    expect(blank.problems).toEqual([{ lotNumber: "28", why: TYPE_THE_LEASE_DAY }]);
     expect(planOnboarding([signed({ agreementStartsOn: "2027-01-01" })], "2027-01-04", CUTOVER).toFile[0].agreementStartsOn)
       .toBe("2027-01-01");
     expect(planOnboarding([signed({ agreementStartsOn: "2027-02-01" })], "2027-01-04", CUTOVER).toFile[0].agreementStartsOn)
       .toBe("2027-02-01");
+    // Typing today is a day the paper can say.
+    expect(planOnboarding([signed({ agreementStartsOn: "2027-01-04" })], "2027-01-04", CUTOVER).toFile[0].agreementStartsOn)
+      .toBe("2027-01-04");
   });
 
   it("a holdover carries no agreement start at all", () => {
@@ -515,9 +534,84 @@ describe("the day a signed lease runs from", () => {
     expect(onboardSummary(p, 3, 142.53)).toContain("from January 4, 2027, so January 2027 bills a part month");
   });
 
-  it("says nothing about a first month when nobody has signed", () => {
+  it("says nothing about a first month when nobody has signed and the window is not known", () => {
     const p = planOnboarding([row()], "2026-12-20", CUTOVER);
     expect(onboardSummary(p, 3, 142.53)).not.toMatch(/bills/);
+  });
+
+  // THE NUMBER HE CHECKS AGAINST HIS LEASES HAS TO BE THE ONE THAT BILLS. On
+  // 20 December, eighteen ticked and lot 27 filed on the arrangement they
+  // had: the sentence said "January 2027 bills $9,765.54" and the run raised
+  // $10,165.54 — lot 27's $400 covers all of January, and January is ours.
+  it("counts a holdover whose window covers the first month — named by lot, apart from the leases, no fee on it", () => {
+    const rows = [
+      ...Array.from({ length: 18 }, (_, i) =>
+        signed({ lotId: `l${i + 1}`, lotNumber: String(i + 1), agreementStartsOn: "2027-01-01", agreementMonths: [1, 3, 6][i % 3] })),
+      row({ lotId: "l27", lotNumber: "27", rent: "400" }),
+    ];
+    const p = planOnboarding(rows, "2026-12-20", CUTOVER, HAVEN_DIALS_SIX);
+    const s = onboardSummary(p, 6, 142.53, { todayISO: "2026-12-20", cutoverDate: CUTOVER });
+    expect(s).toContain("$7,600.00 rent + $2,565.54 fees = $10,165.54 a month");
+    expect(s).toContain(
+      "from January 1, 2027 — January 2027 bills $10,165.54 ($9,765.54 on the new leases + $400.00 for lot 27 on the arrangement they had)",
+    );
+    // The window matters: without it the figure is the leases alone, as before.
+    expect(onboardSummary(p, 6, 142.53)).toContain("January 2027 bills $9,765.54");
+  });
+
+  it("a holdover alone, filed after go-live, bills the first month whole from the cutover — not a part month from today", () => {
+    // Filed on 2 January: buildTenant floors the window at the cutover, so
+    // January bills $400.00, not 30 of 31 days.
+    const p = planOnboarding([row({ lotNumber: "11", rent: "400" })], "2027-01-02", CUTOVER);
+    expect(onboardSummary(p, 3, 142.53, { todayISO: "2027-01-02", cutoverDate: CUTOVER })).toContain(
+      "from January 1, 2027 — January 2027 bills $400.00 for lot 11 on the arrangement they had",
+    );
+    // A move-in typed after the floor is a new arrival: a part month, said.
+    const fresh = planOnboarding([row({ lotNumber: "11", rent: "400", movedInOn: "2027-01-15" })], "2027-01-20", CUTOVER);
+    expect(onboardSummary(fresh, 3, 142.53, { todayISO: "2027-01-20", cutoverDate: CUTOVER })).toContain(
+      "from January 15, 2027, so January 2027 bills a part month",
+    );
+  });
+
+  it("a holdover filed BEFORE go-live is not counted for the month the seller collected — the first month is ours", () => {
+    // 20 December: the holdover's window starts today, but December is not
+    // ours (firstBillablePeriod); January is the first month, from the 1st.
+    const p = planOnboarding([row({ lotNumber: "27", rent: "400" })], "2026-12-20", CUTOVER);
+    const s = onboardSummary(p, 3, 142.53, { todayISO: "2026-12-20", cutoverDate: CUTOVER });
+    expect(s).toContain("from January 1, 2027 — January 2027 bills $400.00 for lot 27 on the arrangement they had");
+    expect(s).not.toMatch(/December/);
+  });
+
+  it("names every holdover on the first month's bill", () => {
+    const p = planOnboarding(
+      [signed({ lotId: "a", lotNumber: "1", agreementStartsOn: "2027-01-01" }),
+       row({ lotId: "b", lotNumber: "27", rent: "400" }),
+       row({ lotId: "c", lotNumber: "11", rent: "350" })],
+      "2026-12-20", CUTOVER,
+    );
+    expect(onboardSummary(p, 3, 142.53, { todayISO: "2026-12-20", cutoverDate: CUTOVER })).toContain(
+      "January 2027 bills $1,292.53 ($542.53 on the new lease + $750.00 for lots 27 and 11 on the arrangement they had)",
+    );
+  });
+
+  it("the summary's holdover start is buildTenant's own — the same helper, for blank, typed-before-floor and typed-after-floor", () => {
+    // A copy of the floor arithmetic here is what put the summary's figure
+    // beside a run that raised a different one (member 5). Each shape's
+    // 'from' day in the sentence is what buildTenant writes for the same row.
+    for (const [movedInOn, today, expectFrom] of [
+      ["", "2027-01-02", "January 1, 2027"],
+      ["2015-04-02", "2027-01-02", "January 1, 2027"],
+      ["2027-01-15", "2027-01-20", "January 15, 2027"],
+    ] as const) {
+      const p = planOnboarding([row({ lotId: "b", lotNumber: "27", rent: "400", movedInOn })], today, CUTOVER);
+      const written = buildTenant(
+        { displayName: "Roy", mobile: "", email: "", movedInOn, term: "monthly", rent: "400", source: "owner_knowledge", signedNewLease: false },
+        today, 1, { cutoverDate: CUTOVER },
+      );
+      expect(written.ok, written.error).toBe(true);
+      expect(dayInWords(written.tenancy!.start)).toBe(expectFrom);
+      expect(onboardSummary(p, 1, 142.53, { todayISO: today, cutoverDate: CUTOVER })).toContain(`from ${expectFrom}`);
+    }
   });
 });
 
@@ -529,7 +623,8 @@ describe("the day a signed lease runs from", () => {
 // ---------------------------------------------------------------------------
 describe("the length each signed household chose", () => {
   const CUTOVER = "2027-01-01";
-  const signed = (o: Partial<OnboardRow> = {}) => row({ signedNewLease: true, rent: "400", agreementMonths: 1, ...o });
+  // Filed on 4 January for leases that say the 1st — the day is typed.
+  const signed = (o: Partial<OnboardRow> = {}) => row({ signedNewLease: true, rent: "400", agreementMonths: 1, agreementStartsOn: "2027-01-01", ...o });
 
   it("carries each row's own length through to what gets written", () => {
     const p = planOnboarding(

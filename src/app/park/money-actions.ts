@@ -2,11 +2,12 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { todayLakeDate } from "@/lib/booking";
+import { todayLakeDate, lakeDateOf } from "@/lib/booking";
 import { assertMyPark } from "./data";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { handKeyedRefusal, paymentAmountRefusal, prettyMonth, splitSiblingKey, type HandKeyedMethod } from "./ledger-helpers";
-import { settleOnAccount, describeSettlement, money, type AllocationLine } from "@/lib/allocations";
+import { settleOnAccount, describeSettlement, heldOnAccountFor, money, type AllocationLine } from "@/lib/allocations";
+import { dayInWords } from "./park-helpers";
 import type { ReceiptLines } from "./receipt-helpers";
 
 /**
@@ -73,9 +74,16 @@ type Method = HandKeyedMethod;
 
 const DENIED = "You don't manage that park.";
 
-/** Mirrors 0102's DB check, so somebody gets a sentence rather than a 23514. */
-function dateProblem(receivedOn: string, todayISO: string): string | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedOn)) return "Pick the day the money arrived.";
+/**
+ * Mirrors 0102's DB check, so somebody gets a sentence rather than a 23514.
+ *
+ * `what` is the act the day is for — "the money arrived" for a receipt, "it
+ * went back" for a return or a hand-back — so the format refusal on the
+ * hand-back door never says "Pick the day the money arrived" about the day
+ * it left.
+ */
+function dateProblem(receivedOn: string, todayISO: string, what: "the money arrived" | "it went back" = "the money arrived"): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedOn)) return `Pick the day ${what}.`;
   const day = 86_400_000;
   const got = Date.parse(`${receivedOn}T12:00:00Z`);
   const now = Date.parse(`${todayISO}T12:00:00Z`);
@@ -195,6 +203,17 @@ export async function recordOnAccount(
   // that money is not what this receipt is for.
   let went: AllocationLine[] = [];
   let problem: string | null = null;
+  /**
+   * WHERE MONEY THEY ALREADY HAD ON ACCOUNT WENT, other than this payment's
+   * own lines — the same clause recordPayment's signal carries. settleOnAccount
+   * settles the household, not the payment: an older cheque sitting on
+   * account (taken off a bill with a reason, or keyed when nothing was open)
+   * moves onto their oldest open bill the moment this cash is keyed, and the
+   * sentence used to say nothing about it — "$100.00 recorded … it's on
+   * account" while $542.53 of last month's cheque had just gone back onto
+   * February. The office told the household it would sit until March.
+   */
+  let older = "";
   const settled = await settleOnAccount(admin, parkId, [renterId], "office", await currentUserId());
   if ("error" in settled) {
     console.error(`[recordOnAccount] couldn't read ${settled.what}:`, settled.error);
@@ -204,6 +223,7 @@ export async function recordOnAccount(
     went = settled.lines
       .filter((l) => l.paymentId === paymentId)
       .map((l) => ({ periodMonth: monthOf.get(l.key) ?? "", amount: l.amount }));
+    older = describeSettlement(settled, (l) => l.paymentId !== paymentId);
     if (settled.failed.length > 0) {
       const missed = Math.round(settled.failed.reduce((t, f) => t + f.amount, 0) * 100) / 100;
       problem = `${money(missed)} of it couldn't be put against a bill — it stays on account.`;
@@ -284,6 +304,8 @@ export async function recordOnAccount(
       (where
         ? `${where.charAt(0).toUpperCase()}${where.slice(1)} — ${stays}.`
         : "It's on account — it comes off the next bill you raise for them, or put it against an open one now.") +
+      // AND WHAT OLDER MONEY OF THEIRS MOVED, the way recordPayment says it.
+      (older ? ` And ${older} from money they already had on account.` : "") +
       (problem ? ` ⚠️ ${problem}` : ""),
   };
 }
@@ -543,12 +565,19 @@ export async function unapplyAllocation(
         ? " The record shows why."
         : gone
           ? " That payment isn't standing any more, so nothing of it is on account. The record shows why."
-          // WHAT IS TRUE: the run settles only the households it raises a
-          // bill for, so "the next run puts it against their oldest open
-          // bill" promised something the run does not do for a household
-          // it skips or has finished with. The money waits for the next
-          // bill the run raises for THEM — and then goes oldest-first.
-          : ` ${money(held)} is back on account for them — put it against the right bill now, or cancel the wrong one; the next bill the run raises for them takes it, oldest open bill first. The record shows why.`),
+          // WHAT IS TRUE (R1, both doors): money on account settles the
+          // household's oldest OPEN bill the next time a settling door runs
+          // for them — the next payment keyed for them, or the next bill the
+          // run raises for them (a deposit or a refund recorded for them
+          // settles nothing, so "anything recorded" was wider than true).
+          // AND THE SHARP CASE, NAMED: the bill this just came off is open
+          // again, so it IS their oldest open bill until something older
+          // is — the next cash keyed for this household puts the money
+          // straight back on it. This used to name the run alone, and the
+          // office told a household "it'll sit until March" in the one flow
+          // where the next payment keyed undoes the correction the same
+          // afternoon.
+          : ` ${money(held)} is back on account for them — put it against the right bill now, or cancel the wrong one. Otherwise the next payment keyed for them, or the next bill the run raises for them, puts it against their oldest open bill — including the one it just came off, if that is still the oldest. The record shows why.`),
   };
 }
 
@@ -616,7 +645,7 @@ export async function recordDeposit(
     ok: true,
     paymentId: data.id as string,
     receiptNo: (data.receipt_no as number) ?? null,
-    signal: `$${amount.toFixed(2)} deposit held for ${renter.name}.`,
+    signal: `${money(amount)} deposit held for ${renter.name}.`,
   };
 }
 
@@ -640,7 +669,7 @@ export async function returnDeposit(
   note?: string,
 ): Promise<MoneyResult> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
-  const bad = amountProblem(amount) ?? dateProblem(returnedOn, todayLakeDate());
+  const bad = amountProblem(amount) ?? dateProblem(returnedOn, todayLakeDate(), "it went back");
   if (bad) return { ok: false, error: bad };
 
   const admin = createServiceClient();
@@ -668,7 +697,7 @@ export async function returnDeposit(
   }
   if (dep.returned_on) return { ok: false, error: "That deposit has already been returned." };
   if (amount > Number(dep.amount)) {
-    return { ok: false, error: `They only ever paid $${Number(dep.amount).toFixed(2)} — you can't return more.` };
+    return { ok: false, error: `They only ever paid ${money(Number(dep.amount))} — you can't return more.` };
   }
   // KEEPING PART OF A DEPOSIT IS A MONEY DECISION and it was the only one in
   // the module with nothing behind it. 0103 refuses it at the database too;
@@ -677,7 +706,7 @@ export async function returnDeposit(
   if (kept > 0 && !(note ?? "").trim()) {
     return {
       ok: false,
-      error: `You're keeping $${kept.toFixed(2)} of their deposit — say why. In six months that note is the only record of the reason.`,
+      error: `You're keeping ${money(kept)} of their deposit — say why. In six months that note is the only record of the reason.`,
     };
   }
 
@@ -696,8 +725,144 @@ export async function returnDeposit(
     signal: kept > 0
       // The reason is now required above, so this states what was recorded
       // rather than asking for something the office has already given.
-      ? `$${amount.toFixed(2)} returned, $${kept.toFixed(2)} kept — and the reason is on the record.`
-      : `$${amount.toFixed(2)} returned in full.`,
+      ? `${money(amount)} returned, ${money(kept)} kept — and the reason is on the record.`
+      : `${money(amount)} returned in full.`,
+  };
+}
+
+/**
+ * HAND RENT ON ACCOUNT BACK ACROSS THE WINDOW (0168).
+ *
+ * A household leaves with money of theirs still on account and nothing will
+ * ever bill for them again. Until 0168 the only control on that row was
+ * "Take it back" — a reversal, which records that the cheque never arrived
+ * and drags the bill's half of it back to owing on every screen. The
+ * database's own comment named the missing act: "cash and cheques are handed
+ * back across a window by a person. That is a different act with a different
+ * record." This is that record — the stamp the deposit already uses
+ * (returned_on, returned_amount, return_note), on a rent row.
+ *
+ * NOT returnDeposit widened. That door's partial-return rule is "you are
+ * keeping the rest — say why", and on a $600 split handing back the $57.47
+ * on account is not keeping $542.53 of anything. Here the ceiling is what is
+ * STILL ON ACCOUNT (the view's `remaining` — after allocations and refunds,
+ * the database's own figure, never `amount − applied` here), and a reason is
+ * required whatever the amount: a household is owed nothing by default, so
+ * the note says why the money went back.
+ *
+ * WHAT MOVES: `remaining` falls by the amount (park_payment_remaining
+ * subtracts it), so the held panel, the resident's card, the cash
+ * statement's "still held" and the run's settlement plan all stop counting
+ * it in one place. Nothing is sent. The row stays as the record, with the
+ * day and the reason, and can never be reversed afterwards — the database
+ * refuses that by name.
+ */
+export async function handBackOnAccount(
+  parkId: string,
+  paymentId: string,
+  amount: number,
+  handedBackOn: string,
+  reason: string,
+): Promise<MoneyResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  const bad = amountProblem(amount) ?? dateProblem(handedBackOn, todayLakeDate(), "it went back");
+  if (bad) return { ok: false, error: bad };
+  const why = (reason ?? "").trim();
+  if (!why) {
+    return { ok: false, error: "Say why it's going back — they moved out, they overpaid. The record has to carry the reason." };
+  }
+  if (why.length > 500) return { ok: false, error: "That's a bit long — a sentence is plenty." };
+
+  const admin = createServiceClient();
+  const payRes = await admin
+    .from("park_payments")
+    // `returned_on` is money the park handed back; `returned_at` is the bank
+    // pulling a card or ACH payment back. Both read before anything moves.
+    .select("id, park_id, renter_id, kind, charge_id, amount, method, returned_on, reversed_at, returned_at")
+    .eq("id", paymentId).eq("park_id", parkId).maybeSingle();
+  // "That payment isn't here" is never a thing to say on a failed read about
+  // money the office is holding in its hand.
+  if (payRes.error) {
+    return { ok: false, error: readFailedMessage("that payment", payRes.error, { money: true }) };
+  }
+  const pay = payRes.data;
+  if (!pay) return { ok: false, error: "That payment isn't here." };
+  if (pay.kind === "deposit") return { ok: false, error: "That's a deposit — give it back from its own line under Deposits." };
+  if (pay.kind !== "rent" || pay.charge_id) {
+    return { ok: false, error: "That money is against a bill, so it isn't on account — take it back with a reason if it was recorded wrongly." };
+  }
+  if (pay.method === "card" || pay.method === "ach") {
+    return {
+      ok: false,
+      error: pay.method === "ach"
+        ? "That came in by bank transfer through the processor — refund it and it goes back to their bank account."
+        : "That was paid by card — refund it and it goes back to their card.",
+    };
+  }
+  if (pay.reversed_at) return { ok: false, error: "That payment was reversed — there is nothing of theirs to hand back." };
+  if (pay.returned_at) {
+    return { ok: false, error: "The bank took that payment back — it never settled, so there is nothing of theirs to hand back." };
+  }
+  if (pay.returned_on) {
+    return { ok: false, error: `Money from that payment was already handed back on ${dayInWords(String(pay.returned_on))} — a hand-back is recorded once.` };
+  }
+
+  // THE CEILING IS WHAT IS STILL ON ACCOUNT — the view's figure. A failed
+  // read refuses: "you can't hand back more than $57.47" about a figure
+  // nobody read is the sentence that hands back money that is on a bill.
+  const leftRes = await admin
+    .from("park_on_account_payments").select("remaining").eq("payment_id", paymentId).maybeSingle();
+  if (leftRes.error) {
+    return { ok: false, error: readFailedMessage("what's still on account from that payment", leftRes.error, { money: true }) };
+  }
+  const remaining = Number(leftRes.data?.remaining ?? 0);
+  if (remaining <= 0) {
+    return { ok: false, error: "Nothing of that payment is still on account — all of it has gone against bills or already gone back." };
+  }
+  if (Math.round(amount * 100) > Math.round(remaining * 100)) {
+    return {
+      ok: false,
+      error: `Only ${money(remaining)} of that payment is still on account — the rest is against bills and stays there. You can hand back up to ${money(remaining)}.`,
+    };
+  }
+
+  const { data: done, error } = await admin
+    .from("park_payments")
+    .update({ returned_on: handedBackOn, returned_amount: amount, return_note: why })
+    .eq("id", paymentId)
+    .eq("park_id", parkId)
+    .is("returned_on", null)        // once — a double tap does not hand it back twice
+    .select("id");
+  if (error) {
+    return { ok: false, error: `Couldn't record that — ${(error.message ?? "").replace(/^park_payments:\s*/, "")}` };
+  }
+  if (!done?.length) return { ok: false, error: "That one was just handed back by somebody else." };
+
+  // WHAT THE PARK STILL HOLDS OF THEIRS, re-read after the stamp — never
+  // `remaining − amount` here. The HOUSEHOLD's figure, not this payment's:
+  // a household that has left may have a second cheque on account and a
+  // deposit, and the office handing back $57.47 across the window needs to
+  // know about the $500 deposit while they are standing there. The money is
+  // recorded, so a failed read is logged and the sentence stops short.
+  const theirs = pay.renter_id
+    ? await heldOnAccountFor(admin, parkId, pay.renter_id as string)
+    : null;
+  if (theirs?.error) console.error("[read failed] what is still held for them after the hand-back:", theirs.error);
+  const still = theirs && !theirs.error ? theirs : null;
+
+  revalidatePath("/park/rent");
+  revalidatePath("/park/today");
+  revalidatePath("/park");
+  return {
+    ok: true,
+    signal:
+      `${money(amount)} handed back on ${dayInWords(handedBackOn)} — the record shows why.` +
+      (still == null
+        ? ""
+        : (still.remaining > 0
+            ? ` ${money(still.remaining)} of theirs is still on account.`
+            : " Nothing of theirs is on account any more.") +
+          (still.depositsHeld > 0 ? ` You still hold their ${money(still.depositsHeld)} deposit.` : "")),
   };
 }
 
@@ -708,13 +873,25 @@ export interface OnAccountRow {
   /** What arrived. Not what is still held — see `remaining`. */
   amount: number;
   /**
-   * WHAT IS STILL ON ACCOUNT (0167) — `amount` less what has been put against
-   * bills and what went back. The figure a screen prints beside "on account"
-   * and the figure a picker offers; `amount` is the receipt's number.
+   * WHAT IS STILL ON ACCOUNT (0167, 0168) — `amount` less what has been put
+   * against bills, what went back to the card and what was handed back
+   * across the window. The figure a screen prints beside "on account" and
+   * the figure a picker offers; `amount` is the receipt's number.
    */
   remaining: number;
   /** Dollars of `amount` already against bills. */
   allocated: number;
+  /** Dollars sent back through the processor (park_refunds), and each event. */
+  refunded: number;
+  refunds: { amount: number; on: string }[];
+  /**
+   * Dollars handed back across the window (0168), the day, and the reason
+   * the office gave — read back onto the row, or the reason the form
+   * demands lives in a column no screen opens.
+   */
+  handedBack: number;
+  handedBackOn: string | null;
+  handedBackNote: string | null;
   method: string;
   receivedOn: string;
   reference: string | null;
@@ -724,12 +901,30 @@ export interface OnAccountRow {
    * writes $600 on a $542.53 bill as two rows; reversePayment takes BOTH
    * back whichever half is tapped (it is one cheque). "Take it back" on
    * this row therefore reverses the $542.53 against the bill as well, and
-   * the confirm must say so — "Reverse $57.47 on account" about an act that
-   * reverses $600 is the sentence this flag exists to prevent. Read off the
-   * row's own key through the one spelling (splitSiblingKey). Always false
-   * for a deposit.
+   * the confirm must say so. READ, NOT DERIVED: the key's suffix alone
+   * said "split" about a lone on-account row written over a settled bill
+   * (recordPayment writes the suffix whether or not a bill row exists), so
+   * the confirm asked the office to reverse "the whole cheque — and the
+   * part against the bill" about $542.53 in cash with no other half. This
+   * is set only when the sibling bill row STANDS — the same read
+   * reversePayment makes — and carries what that half is.
    */
-  partOfSplit: boolean;
+  split: { against: number; billMonth: string | null } | null;
+  /**
+   * THE HOUSEHOLD HAS LEFT. No approved or active tenancy, and at least one
+   * ended; `movedOutOn` is the last day they lived here.
+   */
+  tenancyEnded: boolean;
+  movedOutOn: string | null;
+  /**
+   * AND THEIR FINAL MONTH IS BILLED — a live charge exists for the month
+   * they moved out in, on the link they moved out from. Only then is "no
+   * next bill will take this" true: a move-out recorded before that
+   * month's run still gets a prorated final bill, which the run settles
+   * from money on account (R1). The screen's "this is theirs to have back"
+   * needs BOTH facts.
+   */
+  finalMonthBilled: boolean;
 }
 
 export interface DepositRow extends OnAccountRow {
@@ -738,6 +933,71 @@ export interface DepositRow extends OnAccountRow {
   note: string | null;
   /** Why any of it was kept. The screen asks for it; this is the read back. */
   returnNote: string | null;
+}
+
+/** The tenancy facts one household's rows share — read once per household. */
+interface TenancyFacts {
+  tenancyEnded: boolean;
+  movedOutOn: string | null;
+  finalMonthBilled: boolean;
+}
+
+/**
+ * WHETHER EACH HOUSEHOLD HAS LEFT, AND WHETHER THEIR LAST MONTH IS BILLED.
+ *
+ * One read of their tenancies, one of the charges on the links they moved
+ * out from. mustRead on both: a failed read defaulting to "still here"
+ * would print "No open bill for them yet" — a promise of a next bill —
+ * over money the park owes back, which is the exact sentence this exists
+ * to end.
+ */
+async function tenancyFactsFor(
+  admin: ReturnType<typeof createServiceClient>,
+  renterIds: readonly string[],
+): Promise<Map<string, TenancyFacts>> {
+  const out = new Map<string, TenancyFacts>();
+  if (renterIds.length === 0) return out;
+  const stays = mustRead(
+    "whether those households are still here",
+    await admin.from("lot_reservations")
+      .select("id, renter_id, status, moved_out_on, during")
+      .in("renter_id", [...renterIds])
+      .in("status", ["approved", "active", "ended"]),
+  ) ?? [];
+  // The link each departed household moved out FROM — the one carrying the
+  // last day. Its final month is the month of that day.
+  const lastLink = new Map<string, { id: string; movedOutOn: string }>();
+  const stillHere = new Set<string>();
+  for (const s of stays) {
+    const rid = s.renter_id as string;
+    if (s.status === "approved" || s.status === "active") { stillHere.add(rid); continue; }
+    const day = (s.moved_out_on as string | null) ?? null;
+    if (!day) continue;
+    const prev = lastLink.get(rid);
+    if (!prev || day > prev.movedOutOn) lastLink.set(rid, { id: s.id as string, movedOutOn: day });
+  }
+  const linkIds = [...lastLink.values()].map((l) => l.id);
+  const billed = new Set<string>();
+  if (linkIds.length) {
+    const charges = mustRead(
+      "whether their final month is billed",
+      await admin.from("park_charges")
+        .select("reservation_id, period_month, status")
+        .in("reservation_id", linkIds)
+        .neq("status", "void"),
+    ) ?? [];
+    for (const c of charges) billed.add(`${c.reservation_id}:${c.period_month}`);
+  }
+  for (const rid of renterIds) {
+    const link = lastLink.get(rid);
+    const ended = !stillHere.has(rid) && link != null;
+    out.set(rid, {
+      tenancyEnded: ended,
+      movedOutOn: ended ? link!.movedOutOn : null,
+      finalMonthBilled: ended && billed.has(`${link!.id}:${link!.movedOutOn.slice(0, 7)}`),
+    });
+  }
+  return out;
 }
 
 /** Money sitting against households, and deposits being held. */
@@ -756,19 +1016,22 @@ export async function getHeldMoney(parkId: string): Promise<{
   // nothing at runtime.
   //
   // MONEY ON ACCOUNT COMES FROM THE VIEW (0167), which carries the database's
-  // own `remaining` — what has not been put against a bill or sent back. It
-  // already leaves out reversed and bank-returned rows, the same two filters
-  // the deposit read below applies by hand.
+  // own `remaining` — what has not been put against a bill, sent back to the
+  // card, or handed back across the window (0168). It already leaves out
+  // reversed and bank-returned rows, the same two filters the deposit read
+  // below applies by hand.
   //
   // A ROW FULLY APPLIED STAYS LISTED (remaining 0, allocated > 0). This panel
   // is the ONLY screen with "Take it back" on a cheque with no bill — and a
   // bounced quarter-ahead cheque bounces AFTER the run has spent it on three
   // months. Dropped from the list the morning March was applied, it could
-  // never be reversed in exactly the case the reversal was built for. What
-  // is dropped is a row with nothing applied and nothing left (refunded in
-  // full): there is nothing to take back and nothing to show. The total sums
-  // `remaining`, so a spent cheque adds $0 to "on account".
-  const acctCols = "payment_id, renter_id, amount, allocated, refunded, remaining, method, received_on, reference, receipt_no, note, idempotency_key";
+  // never be reversed in exactly the case the reversal was built for. A row
+  // handed back stays listed too (handed_back > 0): it is the record of
+  // where the money went. What is dropped is a row with nothing applied,
+  // nothing handed back and nothing left (refunded in full): there is
+  // nothing to take back and nothing to show. The total sums `remaining`, so
+  // a spent cheque adds $0 to "on account".
+  const acctCols = "payment_id, renter_id, amount, allocated, refunded, remaining, handed_back, handed_back_on, handed_back_note, method, received_on, reference, receipt_no, note, idempotency_key";
   const depCols = "id, renter_id, amount, fee_amount, method, received_on, reference, receipt_no, kind, charge_id, returned_on, returned_amount, return_note, note, reversed_at, returned_at";
   // MONEY THE BANK TOOK BACK IS NOT MONEY THE PARK IS HOLDING, and a deposit
   // has no charge for `recompute_charge_paid` to correct — that is the whole
@@ -788,7 +1051,7 @@ export async function getHeldMoney(parkId: string): Promise<{
   // deposit is $500 that is the worst sentence on the screen, so a failed read
   // never reaches it — it throws to the error boundary instead.
   const acctRows = (mustRead("money sitting on account", acctRes) ?? [])
-    .filter((r) => Number(r.remaining ?? 0) > 0 || Number(r.allocated ?? 0) > 0);
+    .filter((r) => Number(r.remaining ?? 0) > 0 || Number(r.allocated ?? 0) > 0 || Number(r.handed_back ?? 0) > 0);
   const depRows = mustRead("the deposits you're holding", depRes);
   const rows = [...(acctRows ?? []), ...(depRows ?? [])];
   if (!rows.length) return empty;
@@ -802,31 +1065,100 @@ export async function getHeldMoney(parkId: string): Promise<{
     );
     for (const r of rs ?? []) names.set(r.id as string, (r.display_name as string) ?? "—");
   }
+  const tenancy = await tenancyFactsFor(admin, renterIds);
 
-  const base = (r: Record<string, unknown>, id: string): OnAccountRow => ({
-    paymentId: id,
-    renterId: (r.renter_id as string) ?? null,
-    renterName: names.get(r.renter_id as string) ?? "Unknown household",
-    amount: Number(r.amount ?? 0),
-    remaining: Number(r.remaining ?? r.amount ?? 0),
-    allocated: Number(r.allocated ?? 0),
-    method: (r.method as string) ?? "other",
-    receivedOn: (r.received_on as string) ?? "",
-    reference: (r.reference as string) ?? null,
-    receiptNo: (r.receipt_no as number) ?? null,
-    partOfSplit: false,
+  // THE OTHER HALF OF A SPLIT, READ. One `.in()` over the sibling keys, the
+  // same standing filter reversePayment uses (park-scoped, not reversed,
+  // against a bill), then the bills' months in one more read. mustRead: a
+  // failed read defaulting to "no split" would print "Reverse it" on a real
+  // $600 split — the exact lie the flag exists to prevent.
+  const sibKeys = (acctRows ?? [])
+    .map((r) => splitSiblingKey((r.idempotency_key as string | null) ?? null, null))
+    .filter((k): k is string => k != null);
+  const sibByKey = new Map<string, { against: number; chargeId: string }>();
+  if (sibKeys.length) {
+    const sibs = mustRead(
+      "the other half of those payments",
+      await admin.from("park_payments").select("idempotency_key, amount, charge_id")
+        .eq("park_id", parkId).in("idempotency_key", sibKeys).is("reversed_at", null).is("returned_at", null),
+    ) ?? [];
+    for (const s of sibs) {
+      if (!s.charge_id) continue;
+      sibByKey.set(s.idempotency_key as string, { against: Number(s.amount ?? 0), chargeId: s.charge_id as string });
+    }
+  }
+  // EACH REFUND, WITH ITS DAY, so the row can say "$40.00 went back to the
+  // card on January 9, 2027" rather than a total with no date. Card money
+  // only (guard_park_refund) — none at a cash-and-cheque park, one read
+  // that returns nothing there. THE DAY IS THE LAKE'S: created_at is a
+  // timestamptz, and its first ten characters are the UTC date — a refund
+  // keyed after seven in the evening on the 9th is 2027-01-10T00:xxZ, and
+  // the row read "January 10". lakeDateOf is what the statement's refund
+  // note uses for this same column.
+  const refundsByPayment = new Map<string, { amount: number; on: string }[]>();
+  const refundedIds = (acctRows ?? []).filter((r) => Number(r.refunded ?? 0) > 0).map((r) => r.payment_id as string);
+  if (refundedIds.length) {
+    const refs = mustRead(
+      "what went back to the card",
+      await admin.from("park_refunds").select("payment_id, amount, created_at")
+        .eq("park_id", parkId).in("payment_id", refundedIds).order("created_at", { ascending: true }),
+    ) ?? [];
+    for (const r of refs) {
+      const list = refundsByPayment.get(r.payment_id as string) ?? [];
+      list.push({ amount: Number(r.amount ?? 0), on: lakeDateOf(String(r.created_at ?? "")) ?? "" });
+      refundsByPayment.set(r.payment_id as string, list);
+    }
+  }
+  const monthOfCharge = new Map<string, string>();
+  const sibChargeIds = [...new Set([...sibByKey.values()].map((s) => s.chargeId))];
+  if (sibChargeIds.length) {
+    const chs = mustRead(
+      "the bills the other halves are against",
+      await admin.from("park_charges").select("id, period_month").in("id", sibChargeIds),
+    ) ?? [];
+    for (const c of chs) monthOfCharge.set(c.id as string, String(c.period_month ?? ""));
+  }
+
+  const base = (r: Record<string, unknown>, id: string): OnAccountRow => {
+    const facts = tenancy.get(r.renter_id as string);
+    return {
+      paymentId: id,
+      renterId: (r.renter_id as string) ?? null,
+      renterName: names.get(r.renter_id as string) ?? "Unknown household",
+      amount: Number(r.amount ?? 0),
+      remaining: Number(r.remaining ?? r.amount ?? 0),
+      allocated: Number(r.allocated ?? 0),
+      refunded: Number(r.refunded ?? 0),
+      refunds: refundsByPayment.get(id) ?? [],
+      handedBack: Number(r.handed_back ?? 0),
+      handedBackOn: (r.handed_back_on as string | null) ?? null,
+      handedBackNote: (r.handed_back_note as string | null) ?? null,
+      method: (r.method as string) ?? "other",
+      receivedOn: (r.received_on as string) ?? "",
+      reference: (r.reference as string) ?? null,
+      receiptNo: (r.receipt_no as number) ?? null,
+      split: null,
+      tenancyEnded: facts?.tenancyEnded ?? false,
+      movedOutOn: facts?.movedOutOn ?? null,
+      finalMonthBilled: facts?.finalMonthBilled ?? false,
+    };
+  };
+
+  const onAccount = (acctRows ?? []).map((r) => {
+    const sibKey = splitSiblingKey((r.idempotency_key as string | null) ?? null, null);
+    const sib = sibKey ? sibByKey.get(sibKey) : undefined;
+    return {
+      ...base(r, r.payment_id as string),
+      split: sib ? { against: sib.against, billMonth: monthOfCharge.get(sib.chargeId) ?? null } : null,
+    };
   });
-
-  const onAccount = (acctRows ?? []).map((r) => ({
-    ...base(r, r.payment_id as string),
-    // An on-account row whose key is a bill row's key + the suffix is the
-    // other half of that bill's cheque.
-    partOfSplit: splitSiblingKey((r.idempotency_key as string | null) ?? null, null) != null,
-  }));
   // A deposit is never applied to anything (0102), so all of it is held
   // until it goes back: remaining is the amount, allocated is nothing.
   const deposits = (depRows ?? []).map((r) => ({
     ...base(r, r.id as string),
+    handedBack: r.returned_amount == null ? 0 : Number(r.returned_amount),
+    handedBackOn: (r.returned_on as string) ?? null,
+    handedBackNote: (r.return_note as string) ?? null,
     returnedOn: (r.returned_on as string) ?? null,
     returnedAmount: r.returned_amount == null ? null : Number(r.returned_amount),
     note: (r.note as string) ?? null,
@@ -913,7 +1245,7 @@ export async function getOpenChargesForApply(
     return {
       id: c.id as string,
       renterId: (c.renter_id as string) ?? null,
-      label: `${lotNo.get(c.park_lot_id as string) ?? "?"} · ${prettyMonthLabel(c.period_month as string)} · $${owed.toFixed(2)} owing`,
+      label: `${lotNo.get(c.park_lot_id as string) ?? "?"} · ${prettyMonthLabel(c.period_month as string)} · ${money(owed)} owing`,
     };
   });
 }

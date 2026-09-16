@@ -64,12 +64,14 @@ const period = monthPeriod("2026-12", TODAY)!;
 
 const acct = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
   paymentId: "pay-acct", kind: "rent", receivedOn: "2026-12-28", amountCents: 162759, feeCents: 0,
-  method: "check", reference: "1042", ...over,
+  method: "check", reference: "1042", payerName: "Household 9", lotNumber: "9",
+  reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null, ...over,
 });
 
-const page = (other: OtherReceipt[], notes: string[] = []): StatementPage => ({
+const page = (other: OtherReceipt[], notes: string[] = [], over: Partial<StatementPage> = {}): StatementPage => ({
   parkName: "The Haven", period, summary: summariseReceipts([], period), receipts: [], otherReceipts: other,
-  notes, recordsBeginOn: "2026-12-28", billedInWindowCents: 0, today: TODAY, generatedAt: "2027-02-02T12:00:00Z",
+  notes, cardFeesReceivedCents: 0, recordsBeginOn: "2026-12-28", billedInWindowCents: 0, today: TODAY, generatedAt: "2027-02-02T12:00:00Z",
+  ...over,
 });
 
 const words = (p: StatementPage) =>
@@ -189,6 +191,8 @@ describe("through the real loader: the December cheque and the months the run ha
     // The view's answer for what is still held — the loader reads THIS for
     // "is still held", never amount − applied in JavaScript.
     db.park_on_account_payments = [{ payment_id: "q", park_id: PARK, remaining: 542.53 }];
+    db.lot_reservations = [{ id: "res-9", renter_id: "renter-9", park_lot_id: "lot-9", status: "active" }];
+    db.park_refunds = [];
   });
 
   it("the row reads partly applied, names January and February in order, and never March", async () => {
@@ -205,7 +209,7 @@ describe("through the real loader: the December cheque and the months the run ha
     expect(w).not.toMatch(/to March 2027/);
     // And the note under the total says what is still held — the loader's
     // onAccountAppliedCents, written into the same page.
-    expect(w).toMatch(/\$1085\.06 of the money on account has since been put against bills — the file says which months — and \$542\.53 is still held/);
+    expect(w).toMatch(/\$1,085\.06 of the money on account has since been put against bills — the file says which months — and \$542\.53 is still held/);
   });
 
   it("untouched: the loader says [] and the screen says not yet applied — a read, not a guess", async () => {
@@ -215,6 +219,102 @@ describe("through the real loader: the December cheque and the months the run ha
     const w = words(real);
     expect(w).toMatch(/On account \(not yet applied\)/);
     expect(w).toMatch(/comes off the next bill raised for that household/);
+  });
+
+  it("the row names the household — Lot 9 · Household 9 — from the loader's own read", async () => {
+    const real = (await getStatement(PARK, "2026-12-01", "2026-12-31"))!;
+    const w = words(real);
+    const own = w.slice(w.indexOf("Money on account in this window"));
+    expect(own).toMatch(/Lot 9 · Household 9/);
+  });
+
+  it("the bounced quarter cheque, through the real loader: on the screen, struck through, named, and in no total", async () => {
+    // The cheque bounced on 10 February; the run had spent January and
+    // February of it. Before: the off-book read filtered it out and this
+    // screen, the notes and the file lost the row entirely.
+    db.park_payments[0].reversed_at = "2027-02-10T20:30:00Z";
+    db.park_payments[0].reversed_reason = "cheque 1042 bounced";
+    db.park_on_account_payments = [];
+    const real = (await getStatement(PARK, "2026-12-01", "2026-12-31"))!;
+    const html = renderToStaticMarkup(<ParkStatements parkId="park-haven" page={real} today={TODAY} />);
+    const w = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+    const own = w.slice(w.indexOf("Money on account in this window"));
+    expect(own).toMatch(/Lot 9 · Household 9/);
+    expect(own).toMatch(/taken back/);
+    expect(own).toMatch(/Taken back on February 10, 2027 — cheque 1042 bounced\. It counts toward nothing\./);
+    expect(own).not.toMatch(/comes off the next bill/);
+    expect(own).not.toMatch(/not yet applied|partly applied|Given back/);
+    expect(html).toMatch(/line-through/);
+    // Under "Worth a look", beside the rent rows' own taken-back list.
+    expect(w).toMatch(/Worth a look/);
+    expect(w).toMatch(/Lot 9 · Household 9 — \$1,627\.59 received on account on December 28, 2026 and then taken back: cheque 1042 bounced\. It is NOT counted in the totals above\./);
+    // And the notes say it — not "received on account".
+    expect(w).toMatch(/\$1,627\.59 that arrived in this period as a deposit, on account or for something you rent out was later taken back/);
+    expect(w).not.toMatch(/NOT in the total above: \$1,627\.59 received on account/);
+    expect(real.notes.join(" ")).not.toMatch(/received on account/);
+  });
+
+  it("a refund through the real loader: under Worth a look, in the notes, and the fee row is the loader's one figure", async () => {
+    db.park_payments[0].method = "card"; db.park_payments[0].reference = "ch_9"; db.park_payments[0].fee_amount = 48.83;
+    db.park_refunds = [{ id: "rf-1", payment_id: "q", park_id: PARK, amount: 542.53, fee_amount: 16.28, processor_ref: "re_9", reason: "one month too many", created_at: "2026-12-30T15:00:00Z" }];
+    const real = (await getStatement(PARK, "2026-12-01", "2026-12-31"))!;
+    expect(real.cardFeesReceivedCents).toBe(4883 - 1628);
+    const w = words(real);
+    expect(w).toMatch(/Lot 9 · Household 9 — \$542\.53 was sent back to the card on December 30, 2026, with \$16\.28 of card fee \(re_9\)\. It is NOT taken off the total above/);
+    expect(w).toMatch(/\$542\.53 was sent back to a card in this period — Lot 9 \$542\.53 on December 30, 2026\./);
+    expect(w).toMatch(/\$32\.55 card fees on top — not yours, not in the total/);
+    expect(w).not.toMatch(/rent plus those fees/);
+    // The refund row is NOT listed as money on account — it is money going out.
+    // The on-account section is the LAST section, so "to the end" is the
+    // section; the guard makes that explicit rather than sliced blind.
+    const at = w.indexOf("Money on account in this window");
+    expect(at).toBeGreaterThan(-1);
+    const own = w.slice(at);
+    expect(own).not.toMatch(/Worth a look/);
+    expect((own.match(/December 30, 2026/g) ?? []).length).toBe(0);
+  });
+});
+
+describe("the file blurb", () => {
+  it("no longer says these rows have 'no lot' — every on-account row names one now", () => {
+    const w = words(page([acct({ appliedTo: [] })]));
+    expect(w).toMatch(/1 line is money that isn.{1,6}t rent against a bill/);
+    expect(w).toMatch(/and no bill against them/);
+    expect(w).not.toMatch(/no lot or bill/);
+  });
+
+  it("the button counts LINES, not payments — a refund or a hand-back is a line of money going out", () => {
+    const w = words(page([acct({ appliedTo: [] }), acct({ paymentId: "rf", kind: "refund", amountCents: -4_000, method: "card", receivedOn: "2027-01-25" })]));
+    expect(w).toMatch(/Download 2 lines for your accountant/);
+    expect(w).not.toMatch(/Download 2 payments/);
+    expect(words(page([acct({ appliedTo: [] })]))).toMatch(/Download 1 line for your accountant/);
+  });
+
+  it("the filter warning counts EVERY line marked Taken back — a bounced on-account cheque with no rent reversals still gets it", () => {
+    // One reversed on-account row, no rent rows at all: the blurb keyed on
+    // summary.reversed alone and said nothing over a file holding a marked row.
+    const bounced = acct({ appliedTo: [], reversedAt: "2027-02-10T20:30:00Z", reversedReason: "cheque 1042 bounced" });
+    const w = words(page([bounced]));
+    expect(w).toMatch(/1 taken-back line is in the file too, marked (&quot;|")Taken back(&quot;|")/);
+    expect(w).toMatch(/don.{1,6}t sum the Amount column without filtering that out/);
+    // One of each: the count is the file's, two.
+    const rent = { ...summariseReceipts([], period), count: 0, reversed: [{ paymentId: "r", lotNumber: "3", amountCents: 1, receivedOn: "2026-12-02", reversedReason: "typo" } as never], reversedCents: 1 };
+    const both = words(page([bounced], [], { summary: rent }));
+    expect(both).toMatch(/2 taken-back lines are in the file too/);
+    // None: no warning.
+    expect(words(page([acct({ appliedTo: [] })]))).not.toMatch(/taken-back line/);
+  });
+
+  it("names what the non-rent lines can be, hand-backs included", () => {
+    const w = words(page([acct({ appliedTo: [] })]));
+    expect(w).toMatch(/anything given back, whether sent back through the processor or handed back across the window/);
+  });
+
+  it("the summary card's fee row reads the loader's one figure, not the rent rows' alone", () => {
+    const withFee = page([], [], { summary: { ...summariseReceipts([], period), count: 1, totalCents: 54253, cardFeesCents: 1628 }, cardFeesReceivedCents: 3428 });
+    const w = words(withFee);
+    expect(w).toMatch(/\$34\.28 card fees on top/);
+    expect(w).not.toMatch(/\$16\.28/);
   });
 });
 
@@ -230,5 +330,86 @@ describe("the loader that feeds this screen", () => {
     expect(src).toMatch(/o\.appliedTo/);
     expect(src).toMatch(/onAccountKindLabel\(o\)/);
     expect(src).not.toMatch(/"On account \((not yet |partly )?applied\)"/);
+  });
+
+  it("reads the reason a row did not stay from the one helper — no fourth copy of the derivation here", () => {
+    expect(src).toMatch(/takenBackWhy,?\s[\s\S]*?from "@\/app\/park\/receipts-helpers"/);
+    expect(src).not.toMatch(/function takenBackWhy/);
+    expect(src).not.toMatch(/returned by the bank/);
+  });
+
+  it("the blurb's taken-back count is the file's — rent rows plus the off-book rows beside them", () => {
+    expect(src).toMatch(/const takenBack = s\.reversed\.length \+ otherGone\.length;/);
+    expect(src).not.toMatch(/s\.reversed\.length\} taken-back/);
+  });
+});
+
+/**
+ * THE FOURTH EXIT, ON THE SCREEN. A hand-back across the window — the
+ * deposit returned, the $57.47 handed to a household that has gone — is a
+ * negative line in the file; the owner about to forward that file is told
+ * so under "Worth a look" and in the notes, exactly as a refund is. And a
+ * refund off an ACH payment says "bank account", not "card".
+ */
+describe("money handed back across the window, and the rail a refund went back on", () => {
+  const handed = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
+    paymentId: "pay-acct", kind: "handed_back", receivedOn: "2027-01-28", amountCents: -5_747, feeCents: 0,
+    method: "check", reference: "moved out 27 January; nothing more bills", payerName: "Household 9", lotNumber: "9",
+    reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null, ...over,
+  });
+
+  it("a hand-back is named under Worth a look, with the day and the reason, and never listed as money on account", () => {
+    const w = words(page([acct({ appliedTo: [{ periodMonth: "2027-01", amountCents: 54_253 }], remainingCents: 0, amountCents: 60_000 }), handed()]));
+    expect(w).toMatch(/Worth a look/);
+    expect(w).toMatch(/Lot 9 · Household 9 — \$57\.47 was handed back to them on January 28, 2027 — moved out 27 January; nothing more bills\. It is NOT taken off the total above/);
+    const at = w.indexOf("Money on account in this window");
+    expect(at).toBeGreaterThan(-1);
+    const own = w.slice(at);
+    expect(own).not.toMatch(/January 28, 2027/);
+    expect(own).not.toMatch(/handed back/);
+    // The file's row count includes it.
+    expect(w).toMatch(/Download 2 lines for your accountant/);
+  });
+
+  it("a deposit's return, with no reason on the record, prints no dangling dash", () => {
+    const w = words(page([handed({ kind: "handed_back", amountCents: -50_000, method: "cash", reference: null, lotNumber: "14", payerName: "Household 14", receivedOn: "2027-02-03" })]));
+    expect(w).toMatch(/Lot 14 · Household 14 — \$500\.00 was handed back to them on February 3, 2027\. It is NOT taken off/);
+    expect(w).not.toMatch(/2027 — \./);
+  });
+
+  it("a refund off an ACH payment went back to their bank account, not the card", () => {
+    const w = words(page([acct({ paymentId: "rf", kind: "refund", amountCents: -4_000, method: "ach", receivedOn: "2027-01-25", reference: "re_1" })]));
+    expect(w).toMatch(/\$40\.00 was sent back to their bank account on January 25, 2027/);
+    expect(w).not.toMatch(/sent back to the card/);
+    const card = words(page([acct({ paymentId: "rf", kind: "refund", amountCents: -4_000, method: "card", receivedOn: "2027-01-25", reference: "re_1" })]));
+    expect(card).toMatch(/\$40\.00 was sent back to the card on January 25, 2027/);
+  });
+
+  it("through the real loader: the $57.47 handed back after Lot 9 left is on the screen, in the notes, and the summary is untouched", async () => {
+    for (const k of Object.keys(db)) delete db[k];
+    const PARK = "park-haven";
+    db.parks = [{ id: PARK, name: "The Haven", office_recording_lag_days: 0 }];
+    db.park_lots = [{ id: "lot-9", park_id: PARK, lot_number: "9" }];
+    db.park_renters = [{ id: "renter-9", park_id: PARK, display_name: "Household 9" }];
+    db.park_fees = [];
+    db.park_charges = [{ id: "jan", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, status: "paid", lines: [] }];
+    db.park_payments = [
+      { id: "bill-half", park_id: PARK, renter_id: "renter-9", charge_id: "jan", kind: "rent", amount: 542.53, fee_amount: null, method: "check", reference: "1042", received_on: "2027-01-05", reversed_at: null, returned_at: null, returned_on: null, returned_amount: null, return_note: null },
+      { id: "acct-half", park_id: PARK, renter_id: "renter-9", charge_id: null, kind: "rent", amount: 57.47, fee_amount: null, method: "check", reference: "1042", received_on: "2027-01-05", reversed_at: null, returned_at: null, returned_on: "2027-01-28", returned_amount: 57.47, return_note: "moved out 27 January; nothing more bills" },
+    ];
+    db.park_payment_allocations = [];
+    db.park_on_account_payments = [{ payment_id: "acct-half", park_id: PARK, remaining: 0 }];
+    db.lot_reservations = [{ id: "res-9", renter_id: "renter-9", park_lot_id: "lot-9", status: "ended", during: "[2026-01-01,2027-01-28)", moved_out_on: "2027-01-27" }];
+    db.park_refunds = [];
+    const real = (await getStatement(PARK, "2027-01-01", "2027-01-31"))!;
+    const w = words(real);
+    expect(w).toMatch(/\$542\.53 came in — 1 payment\./);
+    expect(w).toMatch(/Lot 9 · Household 9 — \$57\.47 was handed back to them on January 28, 2027 — moved out 27 January; nothing more bills\./);
+    expect(w).toMatch(/\$57\.47 was handed back across the window in this period — Lot 9 \$57\.47 of their money on account on January 28, 2027 \(moved out 27 January; nothing more bills\)\./);
+    // The on-account row: given back, and it does not promise a next bill.
+    const own = w.slice(w.indexOf("Money on account in this window"));
+    expect(own).toMatch(/Given back\./);
+    expect(own).not.toMatch(/comes off the next bill/);
+    expect(w).toMatch(/Download 3 lines for your accountant/);
   });
 });

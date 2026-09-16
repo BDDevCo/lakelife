@@ -8,7 +8,7 @@ import {
   planOnboarding, onboardSummary, signingExplainer,
   type OnboardRow,
 } from "@/app/park/onboard-helpers";
-import { agreementStartFor, SIGNED_START_HORIZON_DAYS, dayInWords } from "@/app/park/park-helpers";
+import { agreementStartFor, latestAgreementStart, dayInWords } from "@/app/park/park-helpers";
 import { offeredAgreementLengths, lengthInWords } from "@/app/park/agreement-helpers";
 
 /**
@@ -109,10 +109,7 @@ export function ParkOnboard({
           agreementMonths: signed ? termMonths : null,
         }
       : r)));
-  const latestStart = (() => {
-    const [y, m, d] = today.split("-").map(Number);
-    return new Date(Date.UTC(y, m - 1, d + SIGNED_START_HORIZON_DAYS)).toISOString().slice(0, 10);
-  })();
+  const latestStart = latestAgreementStart(today);
 
   const plan = planOnboarding(rows, today, cutoverDate, { defaultMonths: termMonths, capMonths });
 
@@ -152,14 +149,20 @@ export function ParkOnboard({
               the day it says: eighteen leases for 1 January typed in on the
               4th were billed 28 of 31 days, because the window began the
               afternoon they were typed. */}
-          {defaultStart.ok && (
+          {defaultStart.ok ? (
             <>
               {" "}A signed lease is filed from the day it says — that starts as{" "}
-              {dayInWords(defaultStart.start)}
-              {cutoverDate && cutoverDate > today
-                ? ", the day the ledger starts,"
-                : ""}{" "}
-              and you can change it to the date on the paper.
+              {dayInWords(defaultStart.start)}, the day the ledger starts, and you can
+              change it to the date on the paper.
+            </>
+          ) : (
+            // AFTER GO-LIVE THE BOX IS BLANK. Seeded with today it filed a
+            // lease that says the 1st from the day it was typed — January
+            // short, every later link 4th-to-4th — under a hint reading
+            // "the day on the paper, not today". He types the day.
+            <>
+              {" "}A signed lease is filed from the day it says — type the date on
+              the paper; the box starts blank.
             </>
           )}
         </p>
@@ -273,7 +276,10 @@ export function ParkOnboard({
 
       {/* ---- what is about to happen -------------------------------------- */}
       <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
-        <strong style={{ fontSize: 15 }}>{onboardSummary(plan, capMonths, feePerSignedLot)}</strong>
+        {/* THE WINDOW, so a holdover's month is on the first-month figure —
+            the number he checks against his leases has to be the one that
+            bills, and lot 27's $400 on the arrangement they had bills too. */}
+        <strong style={{ fontSize: 15 }}>{onboardSummary(plan, capMonths, feePerSignedLot, { todayISO: today, cutoverDate })}</strong>
         <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
           Nobody is told anything by this. It puts them on the roll so you can
           bill them — the rents are recorded as YOUR figures, not as anything

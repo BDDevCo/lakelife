@@ -16,7 +16,7 @@ import {
   type ParkSeason,
 } from "@/lib/parks";
 // The agreement cap lives here already, and it clamps short months correctly.
-import { addMonths, lengthAdjective } from "./agreement-helpers";
+import { addMonths, lengthAdjective, monthsBetween, successorStatus } from "./agreement-helpers";
 // The one shape a phone number is stored in. Both tenant builders go through
 // it — and so does the importer, via import-helpers' phoneOnFile — so a
 // number is the same string whichever door it came through.
@@ -112,6 +112,17 @@ export interface RollRow {
   pending: Stay[];
   /** Nights until `current` ends. Null when nothing is on the lot. */
   nightsLeft: number | null;
+  /**
+   * THE HELD LINK CARRYING A NOTICE, whichever one it is. Notice is given on
+   * the link covering the day it is given; the household's next agreement
+   * may already be written (a renewal lands in the last half of the term),
+   * and on the 1st THAT link becomes `current` and carries nothing — so a
+   * notice given in January for a February day dropped off the roll on
+   * 1 February, "Gave notice" reappeared, and "They're staying" could not
+   * reach the link holding it. Today reads every held stay for the same
+   * fact; so does the roll now.
+   */
+  noticed: Stay | null;
 }
 
 const HOLDS = new Set(["approved", "active"]);
@@ -172,6 +183,7 @@ export function buildRentRoll(
       next,
       pending,
       nightsLeft: current?.range ? nightsIn({ start: todayISO, end: current.range.end }) : null,
+      noticed: held.find((s) => s.expectedMoveOut != null) ?? null,
     };
   });
 }
@@ -893,6 +905,37 @@ export function capitalise(s: string): string {
 }
 
 /**
+ * HOW THE ROLL NAMES WHAT A HOUSEHOLD IS ON — "month-to-month", or the
+ * agreement with its end: "3-month lease to April 1, 2027".
+ *
+ * `rolling` used to be "paid monthly", which is not the same fact as "no end
+ * date": every 1-, 3- and 6-month lease signed at a capped park read
+ * "month-to-month" on the one screen he looks at most, while the Today card
+ * said "Lot 14's agreement ends in 12 days … or their rent stops being
+ * billed" about the same row. Only two shapes roll: a grandfathered holdover
+ * (the silent horizon the importer and "Who lives here" write) and a monthly
+ * row at a park with NO cap (extend-stay: nothing is renewed there, the stay
+ * just continues). Everything else has an end the household chose, named
+ * here in the Agreements-to-write list's own words — the length from the
+ * row's real dates (monthsBetween), the end as a day (`to` the half-open
+ * checkout morning, as every other door words it; never a day-before copy).
+ *
+ * A nightly or weekly stay is neither: the row counts nights instead.
+ */
+export function agreementSpan(
+  current: { term: string; origin: string | null; range: DateRange | null } | null,
+  capMonths: number | null,
+): { rolling: boolean; words: string | null } {
+  if (!current) return { rolling: false, words: null };
+  if (current.term === "nightly" || current.term === "weekly") return { rolling: false, words: null };
+  if (current.origin === "grandfathered" || capMonths == null) return { rolling: true, words: null };
+  if (!current.range) return { rolling: false, words: null };
+  const months = monthsBetween(current.range.start, current.range.end);
+  if (months < 1) return { rolling: false, words: null };
+  return { rolling: false, words: `${lengthAdjective(months)} lease to ${dayInWords(current.range.end)}` };
+}
+
+/**
  * THE LABEL ON THE CONTROL — one home for the words Today, the filing screen,
  * the Fees screen, the renewal refusal and the roll all use to name it. It is
  * DEFINED in agreement-helpers (the leaf under this file, so the renewal
@@ -938,6 +981,38 @@ export function agreementAlreadyOver(startISO: string, months: number | null, to
 export const SIGNED_START_HORIZON_DAYS = 60;
 
 /**
+ * THE LAST DAY A SIGNED AGREEMENT MAY START, from today — the date pickers'
+ * `max` on "Who lives here", "Someone lives here" and "They signed the new
+ * lease", and the bound agreementStartFor refuses past. One subtraction,
+ * three pickers: it was computed inline in each, and a horizon changed in
+ * one place would have left the other two boxes accepting a day the server
+ * refuses.
+ */
+export function latestAgreementStart(todayISO: string): string {
+  return addDays(todayISO, SIGNED_START_HORIZON_DAYS);
+}
+
+/**
+ * WHERE A HOLDOVER'S WINDOW STARTS — the ledger's claim on them: the park's
+ * cutover once that has passed, else today; a move-in typed AFTER that
+ * floor (a new arrival filed through the hand door) starts from its own
+ * day. The one rule buildTenant writes and the filing screen's summary
+ * quotes — the summary used to carry its own copy of these two lines, and
+ * a summary whose arithmetic is a separate copy of what the run bills is
+ * how "January 2027 bills $9,765.54" stood beside a run that raised
+ * $10,165.54.
+ */
+export function holdoverWindowStart(
+  movedInOn: string | null | undefined,
+  todayISO: string,
+  cutoverDate: string | null | undefined,
+): string {
+  const floor = cutoverDate && cutoverDate <= todayISO ? cutoverDate : todayISO;
+  const arrived = (movedInOn ?? "").trim();
+  return arrived && arrived > floor ? arrived : floor;
+}
+
+/**
  * WHEN A SIGNED AGREEMENT RUNS FROM.
  *
  * The window used to start on the day the row was TYPED — `rangeStart =
@@ -948,12 +1023,18 @@ export const SIGNED_START_HORIZON_DAYS = 60;
  * 20 December — which the readiness list asks for — January billed 19 days.
  * The only correct afternoon was 1 January itself, and nothing said so.
  *
- * The rules, in one place so the filing screen and the one-at-a-time door
- * cannot disagree:
+ * The rules, in one place so the filing screen, the one-at-a-time door and
+ * the roll's signing door cannot disagree:
  *
- *   - Blank means the LATER of today and the park's cutover date. Before
- *     go-live that is go-live, which is the one date true of a lease collected
- *     early; after it, today.
+ *   - Blank BEFORE go-live means go-live — the one date true of a lease
+ *     collected early. Blank AFTER go-live (or at a park that never changed
+ *     hands) is REFUSED: the only day it could default to is today, which
+ *     is the day the office got round to it, and a lease filed on the 2nd
+ *     with that seed ran [2 Jan, 2 Apr), billed January $17.50 short and
+ *     ran every later link 2nd-to-2nd — under a hint reading "the day on
+ *     the paper, not today". The same rule the signing form already keeps
+ *     (defaultSigningDay: NEVER TODAY). Typing today is still allowed when
+ *     the paper says so; the screens seed the box blank and he types it.
  *   - Never before the cutover when the park has one. The ledger starts at
  *     go-live; an agreement dated into the seller's months would bill a month
  *     that was never ours.
@@ -963,15 +1044,20 @@ export const SIGNED_START_HORIZON_DAYS = 60;
  * still to come and `active` for one already running — both hold the lot,
  * and the charge run bills whichever covers the month.
  */
+export const TYPE_THE_LEASE_DAY = "Type the day the lease runs from — the day on the paper, not today.";
+
 export function agreementStartFor(
   typed: string | null | undefined,
   todayISO: string,
   cutoverDate: string | null | undefined,
 ): { ok: true; start: string } | { ok: false; error: string } {
   const cutover = cutoverDate ?? null;
-  const fallback = cutover && cutover > todayISO ? cutover : todayISO;
   const raw = (typed ?? "").trim();
-  if (!raw) return { ok: true, start: fallback };
+  if (!raw) {
+    return cutover && cutover > todayISO
+      ? { ok: true, start: cutover }
+      : { ok: false, error: TYPE_THE_LEASE_DAY };
+  }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     return { ok: false, error: "That agreement start date doesn't look right." };
   }
@@ -981,7 +1067,7 @@ export function agreementStartFor(
       error: `The ledger starts on ${dayInWords(cutover)} — an agreement can't begin before that.`,
     };
   }
-  if (raw > addDays(todayISO, SIGNED_START_HORIZON_DAYS)) {
+  if (raw > latestAgreementStart(todayISO)) {
     return {
       ok: false,
       error: `That start is more than two months away — an agreement can be filed up to two months ahead.`,
@@ -1063,8 +1149,17 @@ export function buildTenant(
   // WHERE THE AGREEMENT WINDOW STARTS — two different rules for two different
   // facts.
   //
-  // A HOLDOVER starts today. Nobody signed anything; the record simply begins
-  // the day it is made, and the real arrival date is kept separately.
+  // A HOLDOVER starts when THE LEDGER'S CLAIM ON THEM starts: the park's
+  // cutover once that has passed, else today. Nobody signed anything; the
+  // record simply begins where our months begin, and the real arrival date
+  // is kept separately. This used to start today whatever the cutover, so a
+  // household filed by hand on 2 January "on the arrangement they already
+  // had" — there on the 1st, and for years before — was billed 30 of 31
+  // days for a month they lived whole, while the importer dated the same
+  // household from the cutover (import-helpers rangeForTerm; 0059: "during
+  // starts at the cutover date"). One rule now, in both doors: the floor is
+  // the cutover when it has passed, and a move-in typed AFTER the floor
+  // (a new arrival filed through this door) starts from its own day.
   //
   // A SIGNED LEASE starts the day the lease says, which is usually not the
   // day it is typed in. Clamping it to the filing day billed January short on
@@ -1075,7 +1170,7 @@ export function buildTenant(
     if (!at.ok) return { ok: false, error: at.error };
     rangeStart = at.start;
   } else {
-    rangeStart = start < todayISO ? todayISO : start;
+    rangeStart = holdoverWindowStart(input.movedInOn, todayISO, bounds.cutoverDate);
   }
 
   const term = (input.term.trim() || "monthly") as Term;
@@ -1117,9 +1212,14 @@ export function buildTenant(
   }
 
   // The length, the horizon, and the two dates it produces. Only a signed
-  // agreement has a term; a holdover runs the horizon (see the parameter).
+  // agreement has a term; a holdover runs the horizon (see the parameter) —
+  // and THE HORIZON ROLLS FROM THE DAY IT IS WRITTEN, not from the window's
+  // start: a holdover floored at a cutover more than a year back would
+  // otherwise end before today and be refused below with a sentence about a
+  // start-date box this form does not have. 0065's cap trigger exempts a
+  // grandfathered row by origin, so the longer range is accepted.
   const months = signed ? agreementMonths : null;
-  const end = agreementEndFrom(rangeStart, months);
+  const end = signed ? agreementEndFrom(rangeStart, months) : addDays(todayISO, TENANCY_HORIZON_DAYS);
   // A signed agreement dated so far back that it is already over would be
   // filed `active` and then read as vacant the same afternoon — the exact
   // shape the move-in clamp above exists to prevent. Refused, with the reason
@@ -1183,9 +1283,13 @@ export function buildTenant(
       // Feb 28, not an invalid date.
       end,
       // A lease that has not started yet holds the lot as `approved`; one
-      // already running is `active`. A holdover starts today, so it is always
-      // active.
-      status: rangeStart > todayISO ? "approved" : "active",
+      // already running is `active` — the one rule every door writes
+      // (successorStatus). A holdover's window starts at the floor (the
+      // cutover once passed, else today) — `active` — unless a move-in
+      // AFTER the floor was typed, which starts from its own day and may
+      // be `approved`; the screens cap that box at today, this builder
+      // does not.
+      status: successorStatus(rangeStart, todayISO),
       origin: signed ? "application" : "grandfathered",
       beganOn: input.movedInOn.trim() || null,
       term,

@@ -146,9 +146,12 @@ function onAccountView(): Row[] {
     .filter((p) => (p.kind ?? "rent") === "rent" && p.charge_id == null && p.reversed_at == null && p.returned_at == null)
     .map((p) => {
       const allocated = (db.park_payment_allocations ?? []).filter((a) => a.payment_id === p.id && live(a)).reduce((t, a) => t + cents(a.amount), 0);
+      const handedBack = cents(p.returned_amount);
+      const refunded = (db.park_refunds ?? []).filter((r) => r.payment_id === p.id).reduce((t, r) => t + cents(r.amount), 0);
       return { payment_id: p.id, park_id: p.park_id, renter_id: p.renter_id, amount: p.amount, received_on: p.received_on,
         created_at: p.created_at ?? null,
-        allocated: allocated / 100, refunded: 0, remaining: Math.max(0, cents(p.amount) - allocated) / 100, method: p.method,
+        allocated: allocated / 100, refunded: refunded / 100, remaining: Math.max(0, cents(p.amount) - allocated - handedBack - refunded) / 100, method: p.method,
+        handed_back: handedBack / 100, handed_back_on: p.returned_on ?? null,
         reference: p.reference ?? null, receipt_no: p.receipt_no ?? null, note: p.note ?? null, idempotency_key: p.idempotency_key ?? null };
     });
 }
@@ -172,6 +175,7 @@ class Q {
   constructor(private t: string) { touched.push(this.t); }
   select() { return this; }
   eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
+  neq(c: string, v: unknown) { this.fs.push((r) => r[c] !== v); return this; }
   is(c: string, v: unknown) { this.fs.push((r) => (v === null ? r[c] == null : r[c] === v)); return this; }
   gt(c: string, v: number) { this.fs.push((r) => Number(r[c]) > v); return this; }
   in(c: string, vs: unknown[]) { this.fs.push((r) => vs.includes(r[c])); return this; }
@@ -187,8 +191,11 @@ class Q {
       this.failed = nextAllocationError; nextAllocationError = null; return this;
     }
     const w: Row = { id: `${this.t}-${(db[this.t] ??= []).length + 1}`, receipt_no: (db[this.t] ?? []).length + 1, ...row };
+    // 0167's park_payment_allocations_live_line_idx is PARTIAL on removed_at
+    // is null: a line taken off a bill and applied again is the ordinary
+    // correction, and the fake must not refuse what the database allows.
     if (this.t === "park_payment_allocations"
-        && (db[this.t] ?? []).some((a) => a.payment_id === w.payment_id && a.charge_id === w.charge_id)) {
+        && (db[this.t] ?? []).some((a) => a.payment_id === w.payment_id && a.charge_id === w.charge_id && live(a))) {
       this.failed = { code: "23505", message: "duplicate key value violates unique constraint park_payment_allocations_payment_id_charge_id_key" };
       return this;
     }
@@ -217,6 +224,18 @@ class Q {
           if (!String(this.patch.removed_reason ?? "").trim()) return Promise.resolve({ data: null, error: { code: "P0001", message: "park_payment_allocations: say why it is coming off the bill — the record has to carry the reason" } });
         }
       }
+      // 0168's guard on park_payments: a hand-back is recorded once, never
+      // more than is still on account, and a handed-back row cannot be reversed.
+      if (this.t === "park_payments") {
+        for (const r of hit) {
+          if (this.patch.returned_on != null && r.returned_on != null) return Promise.resolve({ data: null, error: { code: "P0001", message: `park_payments: that money was already handed back on ${r.returned_on} — a hand-back is recorded once` } });
+          if (this.patch.returned_on != null && (r.kind ?? "rent") === "rent") {
+            const left = onAccountView().find((v) => v.payment_id === r.id)?.remaining ?? 0;
+            if (cents(this.patch.returned_amount) > cents(left)) return Promise.resolve({ data: null, error: { code: "P0001", message: `park_payments: only ${Number(left).toFixed(2)} of that payment is still on account, and this would hand back ${Number(this.patch.returned_amount).toFixed(2)}` } });
+          }
+          if (this.patch.reversed_at != null && r.returned_on != null) return Promise.resolve({ data: null, error: { code: "P0001", message: `park_payments: ${r.returned_amount} of that payment was already handed back on ${r.returned_on} — a reversal would contradict the record` } });
+        }
+      }
       for (const r of hit) Object.assign(r, this.patch);
       updated.push({ table: this.t, patch: this.patch, ids: hit.map((r) => String(r.id)) });
       // sync_charge_paid_from_allocation fires on UPDATE too: the bill gives it back.
@@ -238,7 +257,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "owner-1" } } }) } }),
   createServiceClient: () => ({ from: (t: string) => new Q(t) }),
 }));
-const { recordOnAccount, recordDeposit, applyOnAccount, getHeldMoney, unapplyAllocation } = await import("./money-actions");
+const { recordOnAccount, recordDeposit, applyOnAccount, getHeldMoney, unapplyAllocation, handBackOnAccount, returnDeposit } = await import("./money-actions");
 const { receiptBody } = await import("./receipt-helpers");
 const TODAY = todayLakeDate();
 
@@ -252,6 +271,7 @@ function seed() {
   db.park_payments = [];
   db.park_charges = [];
   db.park_payment_allocations = [];
+  db.park_refunds = [];
 }
 beforeEach(seed);
 
@@ -471,31 +491,62 @@ describe("getHeldMoney lists what is still held, not what arrived", () => {
     expect(held.onAccountTotal).toBe(0);
   });
 
-  it("the on-account half of a split cheque says so — 'Take it back' on it reverses the bill's half too", async () => {
+  it("the on-account half of a split cheque says so — 'Take it back' on it reverses the bill's half too — and ONLY when that half stands", async () => {
     // recordPayment writes $600 on a $542.53 bill as two rows under one key
     // and key + ":onaccount"; reversePayment takes both back whichever half
     // is tapped. The panel's confirm must not say "Reverse $57.47" about an
-    // act that reverses $600, so the row carries the fact.
+    // act that reverses $600, so the row carries the fact — READ from the
+    // sibling row, never derived from the key's suffix: recordPayment writes
+    // the suffix whether or not a bill row exists (a payment keyed over a
+    // settled bill lands entirely on account), so the suffix alone said
+    // "the whole cheque — and the part against the bill" about $542.53 in
+    // cash with no other half. Collapsed both ways: a key-derived flag
+    // fails on `lone`; a flag that never reads fails on `half`.
+    db.park_charges.push({ id: "jan", park_id: "park-haven", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, paid_total: 542.53, status: "paid" });
     db.park_payments.push(
+      { id: "bill-half", park_id: "park-haven", renter_id: "renter-9", charge_id: "jan", kind: "rent", amount: 542.53, method: "check", received_on: "2027-01-04", reversed_at: null, returned_at: null, idempotency_key: "form-key" },
       { id: "half", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 57.47, method: "check", received_on: "2027-01-04", reversed_at: null, returned_at: null, idempotency_key: "form-key:onaccount" },
+      { id: "lone", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 542.53, method: "cash", received_on: "2027-01-05", reversed_at: null, returned_at: null, idempotency_key: "form-9-b:onaccount" },
+      { id: "bounced-bill", park_id: "park-haven", renter_id: "renter-9", charge_id: "jan", kind: "rent", amount: 542.53, method: "check", received_on: "2027-01-06", reversed_at: "2027-01-08T00:00:00Z", returned_at: null, idempotency_key: "form-x" },
+      { id: "orphan", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 20, method: "check", received_on: "2027-01-06", reversed_at: null, returned_at: null, idempotency_key: "form-x:onaccount" },
       { id: "own", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 542.53, method: "check", received_on: "2026-12-28", reversed_at: null, returned_at: null, idempotency_key: "form-own" },
       { id: "old", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 100, method: "cash", received_on: "2026-12-20", reversed_at: null, returned_at: null },
       { id: "dep", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "deposit", amount: 500, method: "cash", received_on: "2026-12-20", reversed_at: null, returned_at: null, idempotency_key: "dep-key:onaccount" },
     );
     const held = await getHeldMoney("park-haven");
-    const by = new Map(held.onAccount.map((r) => [r.paymentId, r.partOfSplit]));
-    expect(by.get("half")).toBe(true);
-    expect(by.get("own"), "a cheque keyed through its own door has no other half").toBe(false);
-    expect(by.get("old"), "a row with no key at all has no other half").toBe(false);
-    expect(held.deposits[0].partOfSplit, "a deposit is never half of a split").toBe(false);
-    // The view is asked for the key — without it every row reads false.
-    expect(fnBody(SRC(), "getHeldMoney", 800)).toMatch(/receipt_no, note, idempotency_key"/);
+    const by = new Map(held.onAccount.map((r) => [r.paymentId, r.split]));
+    expect(by.get("half"), "the bill's half stands, so the confirm names it").toEqual({ against: 542.53, billMonth: "2027-01" });
+    expect(by.get("lone"), "cash keyed over a settled bill has no other half — the suffix alone is not proof").toBeNull();
+    expect(by.get("orphan"), "a sibling already reversed is not standing — nothing else goes back with this one").toBeNull();
+    expect(by.get("own"), "a cheque keyed through its own door has no other half").toBeNull();
+    expect(by.get("old"), "a row with no key at all has no other half").toBeNull();
+    expect(held.deposits[0].split, "a deposit is never half of a split").toBeNull();
+    // The view is asked for the key — without it every row reads null — and
+    // the sibling is READ, with reversePayment's standing filter.
+    const fn = fnBody(SRC(), "getHeldMoney", 800);
+    expect(fn).toMatch(/receipt_no, note, idempotency_key"/);
+    expect(fn).toMatch(/\.in\("idempotency_key", sibKeys\)\.is\("reversed_at", null\)\.is\("returned_at", null\)/);
+    expect(fn).not.toMatch(/split: splitSiblingKey\(/);
+    expect(fn).not.toMatch(/partOfSplit/);
+  });
+
+  it("a refund's day is the lake's, not the UTC date of its timestamp", async () => {
+    // A card refund keyed at 7:30 in the evening on the 9th is created_at
+    // 2027-01-10T00:30:00Z; the row printed "went back to the card on
+    // January 10, 2027". lakeDateOf — what the statement's refund note
+    // already renders this column through — reads it on the lake clock.
+    db.park_payments.push({ id: "c", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 100, method: "card", reference: "pi_1", received_on: "2027-01-05", reversed_at: null, returned_at: null });
+    db.park_refunds.push({ id: "rf-1", park_id: "park-haven", payment_id: "c", amount: 40, created_at: "2027-01-10T00:30:00Z" });
+    db.park_refunds.push({ id: "rf-2", park_id: "park-haven", payment_id: "c", amount: 10, created_at: "2027-01-12T15:00:00Z" });
+    const held = await getHeldMoney("park-haven");
+    expect(held.onAccount[0]).toMatchObject({ paymentId: "c", refunded: 50, remaining: 50 });
+    expect(held.onAccount[0].refunds).toEqual([{ amount: 40, on: "2027-01-09" }, { amount: 10, on: "2027-01-12" }]);
   });
 
   it("a row with nothing applied and nothing left (refunded in full) is not listed — nothing to take back", async () => {
-    db.park_payments.push({ id: "gone", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 0.01, method: "card", reference: "ch_1", received_on: "2026-12-28", reversed_at: null, returned_at: null });
-    // The fake's view has no refunds; a fully refunded row reads remaining 0, allocated 0.
-    db.park_payments[0].amount = 0;
+    db.park_payments.push({ id: "gone", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 100, method: "card", reference: "ch_1", received_on: "2026-12-28", reversed_at: null, returned_at: null });
+    // Refunded in full through the processor: the view reads remaining 0, allocated 0.
+    db.park_refunds.push({ id: "rf-all", park_id: "park-haven", payment_id: "gone", amount: 100, created_at: "2027-01-09T20:00:00Z" });
     const held = await getHeldMoney("park-haven");
     expect(held.onAccount).toHaveLength(0);
   });
@@ -613,15 +664,21 @@ describe("unapplyAllocation takes money back off a bill, with a reason, and says
     expect(db.park_charges.map((c) => c.status)).toEqual(["paid", "paid"]);
     const res = await unapplyAllocation("park-haven", "al-feb", "they asked for February to stay open");
     expect(res.ok).toBe(true);
-    // WHAT IS TRUE, not "the next run puts it against their oldest open
-    // bill": the run settles only the households it raises a bill for that
-    // morning, so a household it skips — or has raised its final bill for —
-    // is never touched by it. The money waits for the next bill raised for
-    // THEM, and then goes oldest-first.
+    // WHAT IS TRUE — BOTH DOORS (R1), AND THE SHARP CASE NAMED: money on
+    // account settles the household's oldest open bill the next time a
+    // settling door runs for them — the next payment keyed for them as much
+    // as the next bill the run raises — and the bill it just came off is
+    // open again, so it IS that oldest bill. The sentence used to name the
+    // run alone, so the office told a pay-ahead household "it'll sit until
+    // March" and the next cash keyed put it straight back on February; then
+    // it named both doors but not that February is where it lands. A
+    // deposit or a refund recorded for them settles nothing, so "anything
+    // recorded" was wider than true and is gone.
     expect(res.signal).toBe(
-      "Took $542.53 off February 2027 — that bill is outstanding again, $542.53 owing. $542.53 is back on account for them — put it against the right bill now, or cancel the wrong one; the next bill the run raises for them takes it, oldest open bill first. The record shows why.",
+      "Took $542.53 off February 2027 — that bill is outstanding again, $542.53 owing. $542.53 is back on account for them — put it against the right bill now, or cancel the wrong one. Otherwise the next payment keyed for them, or the next bill the run raises for them, puts it against their oldest open bill — including the one it just came off, if that is still the oldest. The record shows why.",
     );
-    expect(res.signal).not.toMatch(/the next run puts it/);
+    expect(res.signal).not.toMatch(/the next run puts it|anything is recorded/);
+    expect(res.signal).toMatch(/including the one it just came off/);
     const row = db.park_payment_allocations.find((a) => a.id === "al-feb")!;
     expect(row.removed_at).toBeTruthy();
     expect(row.removed_reason).toBe("they asked for February to stay open");
@@ -635,6 +692,52 @@ describe("unapplyAllocation takes money back off a bill, with a reason, and says
     expect(Object.keys(updated[0].patch).sort()).toEqual(["removed_at", "removed_by", "removed_reason"]);
     const held = await getHeldMoney("park-haven");
     expect(held.onAccount[0]).toMatchObject({ paymentId: "q", remaining: 542.53, allocated: 542.53 });
+  });
+
+  it("…and the sentence is TRUE: the next payment keyed for them puts the money straight back on the bill it came off", async () => {
+    // The door the sentence names. After February is taken off, February is
+    // the household's oldest open bill again; $100 cash keyed at the window
+    // settles it from the older cheque, applied_by the office, before the
+    // run ever runs. Pinned so the sentence cannot drift back to "the run".
+    bill("jan", "2027-01"); bill("feb", "2027-02");
+    // The cheque is OLDER than the cash keyed today (oldest money first), so
+    // its received_on sits before the real clock this test keys the cash on.
+    db.park_payments.push({ id: "q", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 1085.06, method: "check", received_on: "2026-06-28", reversed_at: null, returned_at: null });
+    applied("al-jan", "q", "jan", 542.53); applied("al-feb", "q", "feb", 542.53);
+    expect((await unapplyAllocation("park-haven", "al-feb", "they asked for it to sit until March")).ok).toBe(true);
+    expect(db.park_charges.find((c) => c.id === "feb")).toMatchObject({ paid_total: 0, status: "open" });
+    const cash = await recordOnAccount("park-haven", "renter-9", 100, "cash", "", TODAY, "", "k-100");
+    expect(cash.ok).toBe(true);
+    const liveLines = db.park_payment_allocations.filter((a) => a.removed_at == null).map((a) => [a.payment_id, a.charge_id, a.amount, a.applied_via]);
+    expect(liveLines).toEqual([["q", "jan", 542.53, "run"], ["q", "feb", 542.53, "office"]]);
+    expect(db.park_charges.find((c) => c.id === "feb")).toMatchObject({ paid_total: 542.53, status: "paid" });
+    const held = new Map((await getHeldMoney("park-haven")).onAccount.map((r) => [r.paymentId, r.remaining]));
+    expect(held.get("q"), "the cheque is spent again — on the bill it just came off").toBe(0);
+    expect(held.get(cash.paymentId!), "the $100 keyed today is what waits").toBe(100);
+    // AND THE SIGNAL SAYS SO — the older cheque's move is this act's doing,
+    // said the way recordPayment says it. It used to read "$100.00 recorded
+    // … It's on account" and nothing about the $542.53 that had just gone
+    // back onto February.
+    expect(cash.signal).toBe(
+      "$100.00 recorded for Household 9. It's on account — it comes off the next bill you raise for them, or put it against an open one now. " +
+      "And $542.53 went against February 2027 from money they already had on account.",
+    );
+  });
+
+  it("the older clause is the older money's alone — a payment that settles a bill itself does not count its own lines twice", async () => {
+    // Nothing older on account: no clause at all (collapsed the other way).
+    bill("jan", "2027-01");
+    const alone = await recordOnAccount("park-haven", "renter-9", 542.53, "cash", "", TODAY, "", "k-a");
+    expect(alone.signal).toBe("$542.53 recorded for Household 9. $542.53 went against January 2027 — nothing stays on account.");
+    expect(alone.signal).not.toMatch(/already had on account/);
+    // An older cheque waiting AND this cash settling: each named once, on its own side.
+    bill("feb", "2027-02"); bill("mar", "2027-03");
+    db.park_payments.push({ id: "old", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 542.53, method: "check", received_on: "2026-06-28", reversed_at: null, returned_at: null });
+    const cash = await recordOnAccount("park-haven", "renter-9", 542.53, "cash", "", TODAY, "", "k-b");
+    expect(cash.signal).toBe(
+      "$542.53 recorded for Household 9. $542.53 went against March 2027 — nothing stays on account. " +
+      "And $542.53 went against February 2027 from money they already had on account.",
+    );
   });
 
   it("a reason is required, before anything is read", async () => {
@@ -688,5 +791,229 @@ describe("unapplyAllocation takes money back off a bill, with a reason, and says
     expect(fn).toMatch(/\.update\(\{ removed_at:/);
     expect(fn).toMatch(/\.is\("removed_at", null\)/);
     expect(fn.match(/\.eq\("park_id", parkId\)/g)?.length, "park-scoped on the read AND the write").toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CASH HANDED BACK ACROSS THE WINDOW (0168). A household leaves with $57.47
+// of theirs still on account; nothing will bill for them again; the office
+// hands it over. Until 0168 the only control on that row was Take it back —
+// a reversal, which records that the cheque never arrived and reopens
+// January on every screen. The hand-back is the deposit's stamp on a rent
+// row: a day, an amount no more than is still on account, and a reason.
+// ---------------------------------------------------------------------------
+describe("handBackOnAccount — the deposit's stamp on rent on account", () => {
+  const bill = (id: string, month: string, over: Partial<Row> = {}) => {
+    db.park_charges.push({ id, park_id: "park-haven", renter_id: "renter-9", period_month: month, due_on: `${month}-01`, amount: 542.53, paid_total: 0, status: "open", ...over });
+  };
+  const split = () => {
+    bill("jan", "2027-01", { paid_total: 542.53, status: "paid" });
+    db.park_payments.push(
+      { id: "bill-half", park_id: "park-haven", renter_id: "renter-9", charge_id: "jan", kind: "rent", amount: 542.53, method: "check", received_on: "2026-06-05", reversed_at: null, returned_at: null, returned_on: null, idempotency_key: "form-key" },
+      { id: "acct", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 57.47, method: "check", received_on: "2026-06-05", reversed_at: null, returned_at: null, returned_on: null, idempotency_key: "form-key:onaccount", receipt_no: 102 },
+    );
+  };
+
+  it("hands the $57.47 back: the row is stamped once, remaining is 0, January stays paid, and the sentence says what it did", async () => {
+    split();
+    const res = await handBackOnAccount("park-haven", "acct", 57.47, TODAY, "moved out 27 January; nothing more bills");
+    expect(res.ok).toBe(true);
+    expect(res.signal).toBe(`$57.47 handed back on ${new Date(`${TODAY}T12:00:00Z`).toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })} — the record shows why. Nothing of theirs is on account any more.`);
+    expect(res.signal).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    const row = db.park_payments.find((p) => p.id === "acct")!;
+    expect(row).toMatchObject({ returned_on: TODAY, returned_amount: 57.47, return_note: "moved out 27 January; nothing more bills", reversed_at: null });
+    // THE STAMP, not a reversal and not a negative row.
+    expect(updated).toHaveLength(1);
+    expect(Object.keys(updated[0].patch).sort()).toEqual(["return_note", "returned_amount", "returned_on"]);
+    expect(inserted.filter((r) => r.__table === "park_payments")).toHaveLength(0);
+    expect(db.park_charges.find((c) => c.id === "jan")).toMatchObject({ paid_total: 542.53, status: "paid" });
+    // And every reader of the view agrees: remaining 0, handed back 57.47.
+    const held = await getHeldMoney("park-haven");
+    expect(held.onAccount.find((r) => r.paymentId === "acct")).toMatchObject({ remaining: 0, handedBack: 57.47, handedBackOn: TODAY });
+    expect(held.onAccountTotal).toBe(0);
+  });
+
+  it("part of it: $40 of $57.47 goes back and $17.47 stays for the next bill", async () => {
+    split();
+    const res = await handBackOnAccount("park-haven", "acct", 40, TODAY, "overpaid; $40 back");
+    expect(res.ok).toBe(true);
+    expect(res.signal).toMatch(/\$40\.00 handed back on .* \$17\.47 of theirs is still on account\.$/);
+    expect((await getHeldMoney("park-haven")).onAccount.find((r) => r.paymentId === "acct")).toMatchObject({ remaining: 17.47, handedBack: 40 });
+  });
+
+  it("the sentence names the HOUSEHOLD's money, not this payment's: a second cheque and a deposit still held are said", async () => {
+    // Handing back $57.47 across the window to a household that has left:
+    // the office needs to hear about the $500 deposit while they are there.
+    split();
+    db.park_payments.push(
+      { id: "second", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 100, method: "cash", received_on: "2026-06-06", reversed_at: null, returned_at: null, returned_on: null },
+      { id: "dep", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "deposit", amount: 500, method: "cash", received_on: "2026-06-05", reversed_at: null, returned_at: null, returned_on: null },
+      // Another household's money is not theirs.
+      { id: "other", park_id: "park-haven", renter_id: "renter-14", charge_id: null, kind: "rent", amount: 999, method: "cash", received_on: "2026-06-06", reversed_at: null, returned_at: null, returned_on: null },
+    );
+    const res = await handBackOnAccount("park-haven", "acct", 57.47, TODAY, "moved out");
+    expect(res.ok).toBe(true);
+    expect(res.signal).toMatch(/ — the record shows why\. \$100\.00 of theirs is still on account\. You still hold their \$500\.00 deposit\.$/);
+    expect(res.signal).not.toMatch(/999/);
+    // Read through the one household reader, never `remaining − amount`.
+    const fn = read("app/park/money-actions.ts").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const body = fn.slice(fn.indexOf("export async function handBackOnAccount"), fn.indexOf("export interface OnAccountRow"));
+    expect(body).toMatch(/await heldOnAccountFor\(admin, parkId, pay\.renter_id as string\)/);
+    expect(body).not.toMatch(/remaining - amount|remaining − amount/);
+  });
+
+  it("the ceiling is what is STILL on account — never the cheque", async () => {
+    split();
+    const res = await handBackOnAccount("park-haven", "acct", 57.48, TODAY, "moved out");
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Only $57.47 of that payment is still on account — the rest is against bills and stays there. You can hand back up to $57.47.");
+    expect(updated).toHaveLength(0);
+    // A cheque part-applied: $1,085.06 of $1,627.59 on bills leaves $542.53 to hand back, not $1,627.59.
+    db.park_payments.push({ id: "q", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 1627.59, method: "check", received_on: "2026-06-28", reversed_at: null, returned_at: null, returned_on: null });
+    db.park_payment_allocations.push({ id: "a1", payment_id: "q", charge_id: "jan", amount: 542.53 }, { id: "a2", payment_id: "q", charge_id: "feb", amount: 542.53 });
+    expect((await handBackOnAccount("park-haven", "q", 600, TODAY, "x")).error).toMatch(/Only \$542\.53 of that payment is still on account/);
+    expect((await handBackOnAccount("park-haven", "q", 542.53, TODAY, "moved out")).ok).toBe(true);
+  });
+
+  it("a reason is required whatever the amount, before anything is read", async () => {
+    split();
+    const res = await handBackOnAccount("park-haven", "acct", 57.47, TODAY, "   ");
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/^Say why it's going back/);
+    expect(touched).toEqual([]);
+  });
+
+  it("a day it cannot read is refused as the day it WENT BACK — the receipt doors say 'arrived'", async () => {
+    // dateProblem is shared by the four doors; its format refusal said
+    // "Pick the day the money arrived." on the hand-back and the deposit's
+    // return, about the day it left.
+    split();
+    expect((await handBackOnAccount("park-haven", "acct", 57.47, "next tuesday", "moved out")).error).toBe("Pick the day it went back.");
+    expect((await returnDeposit("park-haven", "acct", 57.47, "next tuesday", "")).error).toBe("Pick the day it went back.");
+    expect((await recordOnAccount("park-haven", "renter-9", 100, "cash", "", "next tuesday", "", "k")).error).toBe("Pick the day the money arrived.");
+    expect((await recordDeposit("park-haven", "renter-9", 100, "cash", "next tuesday")).error).toBe("Pick the day the money arrived.");
+    expect(touched).toEqual([]);
+  });
+
+  it("once: a second hand-back is refused by name, and a double tap reaches nothing", async () => {
+    split();
+    expect((await handBackOnAccount("park-haven", "acct", 20, TODAY, "first")).ok).toBe(true);
+    const again = await handBackOnAccount("park-haven", "acct", 20, TODAY, "second");
+    expect(again.ok).toBe(false);
+    expect(again.error).toMatch(/already handed back on .* — a hand-back is recorded once\./);
+    expect(again.error).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    expect(updated).toHaveLength(1);
+  });
+
+  it("refuses what is not rent on account: the bill's half, a deposit, card money, a reversed row, a spent cheque", async () => {
+    split();
+    expect((await handBackOnAccount("park-haven", "bill-half", 1, TODAY, "x")).error).toMatch(/against a bill, so it isn't on account/);
+    db.park_payments.push({ id: "dep", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "deposit", amount: 500, method: "cash", received_on: "2026-06-05", reversed_at: null, returned_at: null, returned_on: null });
+    expect((await handBackOnAccount("park-haven", "dep", 500, TODAY, "x")).error).toMatch(/That's a deposit — give it back from its own line/);
+    db.park_payments.push({ id: "card", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 100, method: "card", reference: "ch_1", received_on: "2026-06-05", reversed_at: null, returned_at: null, returned_on: null });
+    expect((await handBackOnAccount("park-haven", "card", 100, TODAY, "x")).error).toBe("That was paid by card — refund it and it goes back to their card.");
+    db.park_payments.push({ id: "gone", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 100, method: "cash", received_on: "2026-06-05", reversed_at: "2026-06-09T00:00:00Z", returned_at: null, returned_on: null });
+    expect((await handBackOnAccount("park-haven", "gone", 100, TODAY, "x")).error).toMatch(/was reversed — there is nothing of theirs to hand back/);
+    db.park_payments.push({ id: "spent", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 542.53, method: "cash", received_on: "2026-06-05", reversed_at: null, returned_at: null, returned_on: null });
+    db.park_payment_allocations.push({ id: "a-spent", payment_id: "spent", charge_id: "jan", amount: 542.53 });
+    expect((await handBackOnAccount("park-haven", "spent", 1, TODAY, "x")).error).toMatch(/Nothing of that payment is still on account/);
+    expect((await handBackOnAccount("park-haven", "nope", 1, TODAY, "x")).error).toBe("That payment isn't here.");
+    expect(updated).toHaveLength(0);
+  });
+
+  it("the database's own refusal reaches the office without the table's name on it", async () => {
+    split();
+    nextUpdateError = { table: "park_payments", error: { code: "P0001", message: "park_payments: only 57.47 of that payment is still on account, and this would hand back 57.48" } };
+    const res = await handBackOnAccount("park-haven", "acct", 57.47, TODAY, "moved out");
+    expect(res.error).toBe("Couldn't record that — only 57.47 of that payment is still on account, and this would hand back 57.48");
+  });
+
+  it("is the deposit's stamp: the same three columns, and returnDeposit is untouched", async () => {
+    const fn = fnBody(SRC(), "handBackOnAccount", 800);
+    expect(fn).toMatch(/\.update\(\{ returned_on: handedBackOn, returned_amount: amount, return_note: why \}\)/);
+    expect(fn).toMatch(/\.is\("returned_on", null\)/);
+    expect(fn).not.toMatch(/reversed_at: /);
+    expect(fn).not.toMatch(/\.insert\(/);
+    // The ceiling is the VIEW's figure — no subtraction here.
+    expect(fn).toMatch(/\.from\("park_on_account_payments"\)\.select\("remaining"\)/);
+    expect(fn).not.toMatch(/amount - /);
+    // A deposit still goes back through its own door, with its own kept-with-reason rule.
+    db.park_payments.push({ id: "dep", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "deposit", amount: 500, method: "cash", received_on: "2026-06-05", reversed_at: null, returned_at: null, returned_on: null });
+    const res = await returnDeposit("park-haven", "dep", 300, TODAY, "");
+    expect(res.error).toMatch(/You're keeping \$200\.00 of their deposit — say why/);
+    expect((await returnDeposit("park-haven", "dep", 500, TODAY, "")).signal).toBe("$500.00 returned in full.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHO HAS LEFT, AND WHETHER THEIR LAST MONTH IS BILLED. The held panel and
+// Today say "this is theirs to have back" only on BOTH facts: a move-out
+// recorded before the month's run still gets a prorated final bill, which the
+// run settles from this very money (R1).
+// ---------------------------------------------------------------------------
+describe("getHeldMoney carries whether the household has left and whether their final month is billed", () => {
+  const acct = (id: string, renter: string, amount: number) => {
+    db.park_payments.push({ id, park_id: "park-haven", renter_id: renter, charge_id: null, kind: "rent", amount, method: "check", received_on: "2026-06-05", reversed_at: null, returned_at: null, returned_on: null });
+  };
+
+  it("a household still here: not ended, and 'No open bill for them yet' stays the truth", async () => {
+    acct("p9", "renter-9", 57.47);
+    const [r] = (await getHeldMoney("park-haven")).onAccount;
+    expect(r).toMatchObject({ tenancyEnded: false, movedOutOn: null, finalMonthBilled: false });
+  });
+
+  it("moved out with the final month billed: ended, the day, and billed", async () => {
+    db.lot_reservations = [{ id: "stay-9", renter_id: "renter-9", park_lot_id: "lot-9", status: "ended", moved_out_on: "2027-01-27", during: "[2027-01-01,2027-01-28)" }];
+    db.park_charges.push({ id: "jan-9", park_id: "park-haven", reservation_id: "stay-9", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, paid_total: 542.53, status: "paid" });
+    acct("p9", "renter-9", 57.47);
+    const [r] = (await getHeldMoney("park-haven")).onAccount;
+    expect(r).toMatchObject({ tenancyEnded: true, movedOutOn: "2027-01-27", finalMonthBilled: true });
+  });
+
+  it("moved out BEFORE the month's run: ended, but the final month is not billed yet — the run will raise it and take this money", async () => {
+    db.lot_reservations = [{ id: "stay-9", renter_id: "renter-9", park_lot_id: "lot-9", status: "ended", moved_out_on: "2027-02-03", during: "[2027-01-01,2027-02-04)" }];
+    db.park_charges.push({ id: "jan-9", park_id: "park-haven", reservation_id: "stay-9", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, paid_total: 542.53, status: "paid" });
+    acct("p9", "renter-9", 57.47);
+    const [r] = (await getHeldMoney("park-haven")).onAccount;
+    expect(r).toMatchObject({ tenancyEnded: true, movedOutOn: "2027-02-03", finalMonthBilled: false });
+    // A cancelled (void) February bill does not count as billed.
+    db.park_charges.push({ id: "feb-9", park_id: "park-haven", reservation_id: "stay-9", renter_id: "renter-9", period_month: "2027-02", due_on: "2027-02-01", amount: 52.53, paid_total: 0, status: "void" });
+    expect((await getHeldMoney("park-haven")).onAccount[0].finalMonthBilled).toBe(false);
+    db.park_charges.push({ id: "feb-9b", park_id: "park-haven", reservation_id: "stay-9", renter_id: "renter-9", period_month: "2027-02", due_on: "2027-02-01", amount: 52.53, paid_total: 0, status: "open" });
+    expect((await getHeldMoney("park-haven")).onAccount[0].finalMonthBilled).toBe(true);
+  });
+
+  it("a chain: ended January link plus a withdrawn February link is still 'ended'; a live successor is not", async () => {
+    db.lot_reservations = [
+      { id: "jan-link", renter_id: "renter-9", park_lot_id: "lot-9", status: "ended", moved_out_on: "2027-01-27", during: "[2027-01-01,2027-01-28)" },
+      { id: "feb-link", renter_id: "renter-9", park_lot_id: "lot-9", status: "cancelled", moved_out_on: null, during: "[2027-02-01,2027-03-01)" },
+    ];
+    db.park_charges.push({ id: "jan-9", park_id: "park-haven", reservation_id: "jan-link", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, paid_total: 542.53, status: "paid" });
+    acct("p9", "renter-9", 57.47);
+    expect((await getHeldMoney("park-haven")).onAccount[0]).toMatchObject({ tenancyEnded: true, finalMonthBilled: true });
+    db.lot_reservations.push({ id: "mar-link", renter_id: "renter-9", park_lot_id: "lot-9", status: "approved", moved_out_on: null, during: "[2027-03-01,2027-04-01)" });
+    expect((await getHeldMoney("park-haven")).onAccount[0]).toMatchObject({ tenancyEnded: false, movedOutOn: null, finalMonthBilled: false });
+  });
+
+  it("a deposit carries the same facts, and a handed-back rent row stays listed as the record", async () => {
+    db.lot_reservations = [{ id: "stay-9", renter_id: "renter-9", park_lot_id: "lot-9", status: "ended", moved_out_on: "2027-01-27", during: "[2027-01-01,2027-01-28)" }];
+    db.park_payments.push({ id: "dep", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "deposit", amount: 500, method: "cash", received_on: "2026-06-05", reversed_at: null, returned_at: null, returned_on: null });
+    db.park_payments.push({ id: "back", park_id: "park-haven", renter_id: "renter-9", charge_id: null, kind: "rent", amount: 57.47, method: "check", received_on: "2026-06-05", reversed_at: null, returned_at: null, returned_on: "2027-01-28", returned_amount: 57.47, return_note: "moved out" });
+    const held = await getHeldMoney("park-haven");
+    expect(held.deposits[0]).toMatchObject({ tenancyEnded: true, movedOutOn: "2027-01-27" });
+    expect(held.onAccount).toHaveLength(1);
+    expect(held.onAccount[0]).toMatchObject({ paymentId: "back", remaining: 0, handedBack: 57.47, handedBackOn: "2027-01-28" });
+    expect(held.onAccountTotal).toBe(0);
+  });
+
+  it("the facts are read through mustRead — a failed read is not 'still here'", () => {
+    const src = SRC();
+    const at = src.indexOf("async function tenancyFactsFor");
+    const fn = src.slice(at, src.indexOf("\nexport ", at));
+    expect(fn.length).toBeGreaterThan(400);
+    expect(fn).toMatch(/mustRead\(\s*"whether those households are still here"/);
+    expect(fn).toMatch(/mustRead\(\s*"whether their final month is billed"/);
+    expect(fn).toMatch(/\.neq\("status", "void"\)/);
+    expect(fn).not.toMatch(/\?\? \[\]\)\.filter\(\(s\) => s\.status === "ended"\)\.length === 0/);
   });
 });

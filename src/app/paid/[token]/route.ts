@@ -74,7 +74,13 @@ function siblingTakenBackOn(view: ConfirmView): string | null {
  *   own; the same sentence, about the whole;
  *   a bill payment with nothing on account, or a deposit — nothing to say.
  *
- * "It comes off the next bill" is said only while something is still held.
+ * "It comes off the next bill" is said only while something is still held —
+ * in EVERY branch. The not-applied branches used to say "held for you … it
+ * comes off the next bill" unconditionally, so money on account sent back
+ * to the card, or handed back across the window, before anything was
+ * applied read "held for you" and "was sent back to you" in one breath.
+ * When nothing is applied and nothing is held, the money went somewhere,
+ * and the sent-back / handed-back sentence after this one says where.
  */
 function onAccountWords(view: ConfirmView): string {
   const held = (view.onAccountRemaining ?? 0) > 0;
@@ -89,7 +95,9 @@ function onAccountWords(view: ConfirmView): string {
         ` The part of this against your bill was ${when}. ` +
         (view.onAccountApplied
           ? `${rest}, and has since been put against a bill. That's ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
-          : `${rest}, held for you, not yet put against a bill. ${COMES_OFF}`)
+          : held
+            ? `${rest}, held for you, not yet put against a bill. ${COMES_OFF}`
+            : `${rest}; none of it is still held.`)
       );
     }
     // The whole of it went: the row's own allocations (a quarter-ahead
@@ -107,11 +115,48 @@ function onAccountWords(view: ConfirmView): string {
     if (view.onAccountRemaining == null) return "";
     return view.onAccountApplied
       ? ` That money went on account with the office. Where it went: ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
-      : ` That money is on account with the office — held for you. ${COMES_OFF}`;
+      : held
+        ? ` That money is on account with the office — held for you. ${COMES_OFF}`
+        : ` That money went on account with the office; none of it is still held.`;
   }
   return view.onAccountApplied
     ? ` ${money(view.onAccount)} of that went on account with the office and has since been put against a bill. That's ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
-    : ` ${money(view.onAccount)} of that is on account with the office — held for you, not yet put against a bill. ${COMES_OFF}`;
+    : held
+      ? ` ${money(view.onAccount)} of that is on account with the office — held for you, not yet put against a bill. ${COMES_OFF}`
+      : ` ${money(view.onAccount)} of that went on account with the office; none of it is still held.`;
+}
+
+/**
+ * WHAT WENT BACK THROUGH THE PROCESSOR (0142), one sentence per refund. The
+ * page asked her to confirm $600 and listed $560 of it against bills with
+ * nothing about the $40 that went back — on the one page built to show every
+ * event on her money. Said after the on-account sentence, whatever shape
+ * that took, and never folded into "where it went": a refund is not a bill
+ * month. "Your card" or "your bank account" by the payment's rail — 0142
+ * refunds ACH money too.
+ */
+function sentBackWords(view: ConfirmView): string {
+  return (view.sentBack ?? [])
+    .map((r) =>
+      ` ${money(r.amount)} was sent back to your ${r.method === "ach" ? "bank account" : "card"} on ${longDay(r.on)}` +
+      (r.fee > 0 ? `, with the ${money(r.fee)} card fee` : "") +
+      `.`)
+    .join("");
+}
+
+/**
+ * WHAT WENT BACK ACROSS THE WINDOW — a deposit returned at move-out, rent on
+ * account handed back after the household left (0168) — one sentence per
+ * hand-back, off this row or its split sibling. The fourth way money leaves,
+ * and the one this page said nothing about: "$542.53 to January 2027" for a
+ * $600 cheque, with the $57.47 the office handed across the counter
+ * unexplained. Never "comes off the next bill" about it — the on-account
+ * sentence above stops promising that once nothing is held.
+ */
+function handedBackWords(view: ConfirmView): string {
+  return (view.handedBack ?? [])
+    .map((h) => ` ${money(h.amount)} of that was handed back to you on ${longDay(h.on)}.`)
+    .join("");
 }
 
 export async function GET(_req: Request, ctx: { params: Promise<{ token: string }> }) {
@@ -160,15 +205,21 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
     // sitting in a drawer. The loader reads the allocations (0167); this says
     // which months, and — while any is still held — that it comes off the
     // next bill, which since 0167 the run does.
-    onAccountWords(view);
+    onAccountWords(view) +
+    sentBackWords(view) +
+    handedBackWords(view);
 
   if (view.alreadyConfirmedAt) {
     return htmlPage("Already confirmed 🌊", `${line}\n\nYou've confirmed this one — nothing more to do.`);
   }
 
-  // Two buttons, equally weighted. A page with only "yes" is a rubber stamp,
-  // which is why htmlPage's single-button form isn't used here.
-  return confirmPage(token, line);
+  // Two buttons, equally weighted — when both can do something. A page with
+  // only "yes" is a rubber stamp, which is why htmlPage's single-button form
+  // isn't used here; but a "no" the server refuses by design is worse than
+  // no "no" at all, so the second button is rendered only when a claim can
+  // actually be saved (`canDispute`), and otherwise the page names the real
+  // path.
+  return confirmPage(token, line, view);
 }
 
 /**
@@ -176,10 +227,23 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
  * answers are the same size and weight — making "yes" the easy one is how you
  * get agreement that means nothing.
  */
-function confirmPage(token: string, line: string): Response {
+function confirmPage(token: string, line: string, view: ConfirmView): Response {
   // ONE COPY OF THIS RULE, in lib/html-safe. This local one covered & < > " but not '.
   const esc = escapeHtml;
   const t = encodeURIComponent(token);
+  // THE SECOND BUTTON EXISTS ONLY WHERE IT CAN SAVE SOMETHING. A claim hangs
+  // off a bill; a receipt for money on account or a deposit has none, so the
+  // button used to promise "the park will look into it — nothing will be
+  // chased while they do" and then answer "We couldn't save that". No
+  // promise a page cannot keep: the office and the receipt reference are
+  // the path that works today.
+  const canDispute = view.canDispute === true;
+  const ask = canDispute
+    ? `If that matches what you handed over, tap the first button. If it doesn&#39;t, tap the second and the park will look into it — nothing will be chased while they do.`
+    : `If that matches what you handed over, tap the button. If it doesn&#39;t, ring the office and quote receipt ${esc(view.ref)} — they can log it for you.`;
+  const noForm = canDispute
+    ? `<form method="post" action="/paid/${t}"><button class="no" name="answer" value="no" type="submit">That&#39;s not what I paid</button></form>`
+    : "";
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Does this look right? — LakeLife</title><style>
@@ -193,9 +257,9 @@ button{width:100%;min-height:48px;border:0;border-radius:12px;font-size:16px;fon
 </style></head><body><div class="card">
 <h1>Does this look right?</h1>
 <p>${esc(line)}</p>
-<p>If that matches what you handed over, tap the first button. If it doesn&#39;t, tap the second and the park will look into it — nothing will be chased while they do.</p>
+<p>${ask}</p>
 <form method="post" action="/paid/${t}"><button class="yes" name="answer" value="yes" type="submit">Yes, that&#39;s right</button></form>
-<form method="post" action="/paid/${t}"><button class="no" name="answer" value="no" type="submit">That&#39;s not what I paid</button></form>
+${noForm}
 </div></body></html>`;
   return new Response(html, {
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
@@ -209,6 +273,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 
   if (answer === "no") {
     const res = await disputeByToken(token);
+    // A BY-DESIGN REFUSAL IS NOT A FAILED WRITE. The page hides the button for
+    // money on account, so this answers a stray POST — and "We couldn't save
+    // that" over it would say something tried and broke. Nothing did.
+    if (!res.ok && res.unsupported) return htmlPage("This one can't be flagged here", res.error ?? "Give the park a call. 🌊", false);
     if (!res.ok) return htmlPage("We couldn't save that", res.error ?? "Give the park a call. 🌊", false);
     return htmlPage(
       "Thanks — we've flagged it 🌊",

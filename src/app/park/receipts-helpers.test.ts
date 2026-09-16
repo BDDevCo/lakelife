@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, onAccountKindLabel, appliedToCell, METHOD_LABEL, type Receipt, type OtherReceipt } from "./receipts-helpers";
+import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, onAccountKindLabel, otherKindLabel, isOnAccountRow, appliedToCell, takenBackCells, notCollectedAt, takenBackWhy, takenBackOfRow, METHOD_LABEL, type Receipt, type OtherReceipt } from "./receipts-helpers";
 import { METHOD_WORD } from "./receipt-helpers";
 
 const TODAY = "2026-08-11";
@@ -361,8 +361,8 @@ describe("cash that came in but is not rent received", () => {
   it("says how much of the on-account money has since gone against bills, and how much is still held — the VIEW's figure", () => {
     const part = exclusionLines({ ...base, onAccountReceivedCents: 162_759, onAccountAppliedCents: 108_506, onAccountHeldCents: 54_253 })
       .find((l) => /NOT in the total above/.test(l))!;
-    expect(part).toContain("$1627.59 received on account");
-    expect(part).toContain("$1085.06 of the money on account has since been put against bills — the file says which months — and $542.53 is still held.");
+    expect(part).toContain("$1,627.59 received on account");
+    expect(part).toContain("$1,085.06 of the money on account has since been put against bills — the file says which months — and $542.53 is still held.");
     const all = exclusionLines({ ...base, onAccountReceivedCents: 162_759, onAccountAppliedCents: 162_759, onAccountHeldCents: 0 })
       .find((l) => /NOT in the total above/.test(l))!;
     expect(all).toContain("All of the money on account has since been put against bills — the file says which months.");
@@ -378,12 +378,23 @@ describe("cash that came in but is not rent received", () => {
     const refunded = exclusionLines({ ...base, onAccountReceivedCents: 60_000, onAccountAppliedCents: 54_253, onAccountHeldCents: 0 })
       .find((l) => /NOT in the total above/.test(l))!;
     expect(refunded).toContain("$542.53 of the money on account has since been put against bills — the file says which months — and none of it is still held.");
+    // The held sentence never invents the refunded slice from arithmetic…
     expect(refunded).not.toMatch(/\$57\.47/);
     expect(refunded).not.toMatch(/All of the money/);
+    // …and the refund IS named, as its own sentence, when the loader read it
+    // (park_refunds, 0142). This test used to PIN the omission: code, comment
+    // and test all agreed the $57.47 that went back to a card was in no note.
+    const named = exclusionLines({ ...base, onAccountReceivedCents: 60_000, onAccountAppliedCents: 54_253, onAccountHeldCents: 0,
+      refunds: [{ amountCents: 5_747, feeCents: 0, refundedOn: "2027-01-25", lotNumber: "15", payerName: "Household 15", method: "card" }] });
+    const sentence = named.find((l) => /sent back to a card/.test(l))!;
+    expect(sentence).toBeTruthy();
+    expect(sentence).toContain("$57.47 was sent back to a card in this period — Lot 15 $57.47 on January 25, 2027.");
+    expect(sentence).toMatch(/NOT taken off the total above/);
+    expect(sentence).toMatch(/negative amount/);
     // The loader did not read the view: no held figure at all, not a guess.
     const unread = exclusionLines({ ...base, onAccountReceivedCents: 162_759, onAccountAppliedCents: 108_506 })
       .find((l) => /NOT in the total above/.test(l))!;
-    expect(unread).toContain("$1085.06 of the money on account has since been put against bills — the file says which months.");
+    expect(unread).toContain("$1,085.06 of the money on account has since been put against bills — the file says which months.");
     expect(unread).not.toMatch(/still held/);
     expect(unread).not.toMatch(/All of the money/);
   });
@@ -397,7 +408,8 @@ describe("cash that came in but is not rent received", () => {
 
 describe("where money on account went, in the file", () => {
   const acct = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
-    paymentId: "q", kind: "rent", receivedOn: "2026-12-28", amountCents: 162_759, feeCents: 0, method: "check", reference: "1042", ...over,
+    paymentId: "q", kind: "rent", receivedOn: "2026-12-28", amountCents: 162_759, feeCents: 0, method: "check", reference: "1042",
+    payerName: "Household 9", lotNumber: "9", reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null, ...over,
   });
   const cellsOf = (csv: string, line: number) => {
     const header = csv.split("\r\n")[0].split(",");
@@ -516,6 +528,11 @@ describe("the card fee on a statement", () => {
     expect(line).toBeTruthy();
     expect(line).toContain("13.65");
     expect(line).toContain("not your income");
+    // The figure is EVERY fee that reached the processor — on rent, on money
+    // on account, on amenity money — so the sentence no longer says "on top
+    // of their rent" about a number that includes the on-account card's fee.
+    expect(line).not.toMatch(/on top of their rent/);
+    expect(line).toMatch(/on rent, on money on account, or for things you rent out/);
   });
 
   it("says nothing at all when no card fee was taken", () => {
@@ -589,6 +606,8 @@ describe("the file adds up to the bank", () => {
     feeCents: 0,
     method: "cash",
     reference: null,
+    payerName: null, lotNumber: null,
+    reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null,
     ...over,
   });
 
@@ -676,7 +695,8 @@ describe("the button's count and the file's rows", () => {
 
   const other = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
     paymentId: "p-other", kind: "deposit", receivedOn: "2026-07-09",
-    amountCents: 50000, feeCents: 0, method: "check", reference: null, ...over,
+    amountCents: 50000, feeCents: 0, method: "check", reference: null,
+    payerName: "Roy Amberg", lotNumber: "3", reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null, ...over,
   });
 
   it("a file of rent, a bounced cheque and a deposit is three rows", () => {
@@ -836,8 +856,15 @@ describe("every CSV row is as wide as the header", () => {
         receipt({ paymentId: "r3", bankReturnedAt: "2026-07-22T00:00:00Z", returnCode: "R02" }),
       ],
       [
-        { paymentId: "o1", kind: "deposit", amountCents: 50000, feeCents: 0, method: "check", reference: "88", receivedOn: "2026-07-04" } as OtherReceipt,
-        { paymentId: "o2", kind: "amenity", amountCents: 7500, feeCents: 225, method: "card", reference: null, receivedOn: "2026-07-06" } as OtherReceipt,
+        { paymentId: "o1", kind: "deposit", amountCents: 50000, feeCents: 0, method: "check", reference: "88", receivedOn: "2026-07-04",
+          payerName: "Roy Amberg", lotNumber: "3", reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null },
+        { paymentId: "o2", kind: "amenity", amountCents: 7500, feeCents: 225, method: "card", reference: null, receivedOn: "2026-07-06",
+          payerName: null, lotNumber: null, reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null },
+        // A bounced on-account cheque and a refund — the two new shapes.
+        { paymentId: "o3", kind: "rent", amountCents: 162759, feeCents: 0, method: "check", reference: "3300", receivedOn: "2026-07-04",
+          payerName: "Household 10", lotNumber: "10", reversedAt: "2026-07-21T00:00:00Z", reversedReason: "cheque bounced", bankReturnedAt: null, returnCode: null, appliedTo: [] },
+        { paymentId: "p1", kind: "refund", amountCents: -10000, feeCents: -300, method: "card", reference: "re_1", receivedOn: "2026-07-26",
+          payerName: "Roy Amberg", lotNumber: "3", reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null },
       ],
       { parkName: "The Haven", generatedAt: "2026-08-11T00:00:00Z" },
     );
@@ -879,5 +906,326 @@ describe("the statement calls a row what the resident's receipt calls it", () =>
     expect(csv).toContain("Bank transfer (to the park)");
     expect(csv).toContain("Bank transfer (processor)");
     expect(csv).not.toMatch(/,Transfer,/);
+  });
+});
+
+/**
+ * MONEY THAT WAS NOT AGAINST A BILL AND DID NOT STAY.
+ *
+ * A bounced cheque against a bill was kept in the file and marked "Taken
+ * back". The same cheque recorded ON ACCOUNT — a quarter paid ahead, the
+ * excess over a bill — was filtered out of the off-book read, so it left the
+ * file with no row, no note, and a hole in the receipt-number sequence. The
+ * rule is one rule, and these pin it for the rows beside the rent.
+ */
+describe("a deposit or on-account row that was taken back is kept, marked, and counts toward nothing", () => {
+  const acct = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
+    paymentId: "acct-10", kind: "rent", receivedOn: "2027-01-04", amountCents: 162_759, feeCents: 0, method: "check", reference: "3300",
+    payerName: "Household 10", lotNumber: "10", reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null, appliedTo: [], ...over,
+  });
+  const cellsOf = (csv: string, line: number) => {
+    const header = csv.split("\r\n")[0].split(",");
+    const row = csv.split("\r\n")[line].split(",");
+    return (name: string) => row[header.indexOf(name)];
+  };
+
+  it("one writer for the four Taken-back cells, shared by both kinds of row", () => {
+    expect(takenBackCells(acct())).toEqual(["", "", "", ""]);
+    expect(takenBackCells(acct({ reversedAt: "2027-02-10T20:30:00Z", reversedReason: "cheque bounced" })))
+      // 8:30pm UTC on 10 Feb is 3:30pm on the lakes — same day. The lake date, never a UTC slice.
+      .toEqual(["YES", "office correction", "2027-02-10", "cheque bounced"]);
+    expect(takenBackCells(acct({ bankReturnedAt: "2027-02-11T02:30:00Z", returnCode: "R01" })))
+      // 2:30am UTC on the 11th is the evening of the 10th on the lakes.
+      .toEqual(["YES", "bank return", "2027-02-10", "R01"]);
+    // And the rent rows go through the very same function.
+    expect(takenBackCells(receipt({ reversedAt: "2026-07-21T12:00:00Z", reversedReason: "entered twice" })))
+      .toEqual(["YES", "office correction", "2026-07-21", "entered twice"]);
+    // notCollectedAt decides for both shapes.
+    expect(notCollectedAt(acct({ reversedAt: "2027-02-10T20:30:00Z" }))).toBe("2027-02-10T20:30:00Z");
+    expect(notCollectedAt(acct())).toBeNull();
+  });
+
+  it("the file marks a bounced on-account cheque exactly as it marks a bounced bill cheque", () => {
+    const csv = receiptsCsv([], [acct({ reversedAt: "2027-02-10T20:30:00Z", reversedReason: "cheque bounced" })], { parkName: "The Haven", generatedAt: "t" });
+    const at = cellsOf(csv, 1);
+    expect(at("Taken back")).toBe("YES");
+    expect(at("Taken back how")).toBe("office correction");
+    expect(at("Taken back on")).toBe("2027-02-10");
+    expect(at("Reason")).toBe("cheque bounced");
+    expect(at("Kind")).toBe("On account (taken back)");
+    // Still one row, at what arrived, on the day it arrived — the receipt number is not lost.
+    expect(at("Amount")).toBe("1627.59");
+    expect(at("Date received")).toBe("2027-01-04");
+    expect(csv).toContain("acct-10");
+  });
+
+  it("the Kind says taken back before it says anything about applying — never 'not yet applied' about a bounced cheque", () => {
+    expect(onAccountKindLabel(acct({ reversedAt: "2027-02-10T20:30:00Z" }))).toBe("On account (taken back)");
+    expect(onAccountKindLabel(acct({ bankReturnedAt: "2027-02-10T20:30:00Z", method: "ach" }))).toBe("On account (taken back)");
+    // Even with allocations on the record (they survive a reversal as record, 0167).
+    expect(onAccountKindLabel(acct({ reversedAt: "2027-02-10T20:30:00Z", appliedTo: [{ periodMonth: "2027-01", amountCents: 54_253 }] }))).toBe("On account (taken back)");
+    // A standing row is unchanged.
+    expect(onAccountKindLabel(acct({ remainingCents: 162_759 }))).toBe("On account (not yet applied)");
+    // And a deposit or amenity row that went back says so in its own words.
+    expect(otherKindLabel(acct({ kind: "deposit", reversedAt: "2027-02-10T20:30:00Z" }))).toBe("Deposit (taken back)");
+    expect(otherKindLabel(acct({ kind: "amenity", bankReturnedAt: "2027-02-10T20:30:00Z" }))).toBe("Rented out (taken back)");
+    expect(otherKindLabel(acct({ kind: "deposit" }))).toBe("Deposit (not income)");
+    expect(otherKindLabel(acct({ kind: "rent", remainingCents: 162_759 }))).toBe("On account (not yet applied)");
+  });
+
+  it("the Lot and Payer cells name the household — no more anonymous $1,627.59", () => {
+    const csv = receiptsCsv([], [acct()], { parkName: "The Haven", generatedAt: "t" });
+    const at = cellsOf(csv, 1);
+    expect(at("Lot")).toBe("10");
+    expect(at("Payer")).toBe("Household 10");
+    // A row whose record names nobody prints blank, not "null".
+    const anon = receiptsCsv([], [acct({ payerName: null, lotNumber: null })], { parkName: "The Haven", generatedAt: "t" });
+    expect(cellsOf(anon, 1)("Lot")).toBe("");
+    expect(cellsOf(anon, 1)("Payer")).toBe("");
+    expect(anon).not.toMatch(/null/);
+  });
+
+  it("the note names the money that went back out, separately from rent taken back", () => {
+    const lines = exclusionLines({ recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, otherTakenBackCents: 162_759 });
+    const line = lines.find((l) => /later taken back/.test(l))!;
+    expect(line).toBeTruthy();
+    expect(line).toContain("$1,627.59 that arrived in this period as a deposit, on account or for something you rent out was later taken back");
+    expect(line).toMatch(/counts toward nothing above/);
+    expect(line).toMatch(/marked "Taken back"/);
+    // Silent when nothing was.
+    expect(exclusionLines({ recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, otherTakenBackCents: 0 })
+      .some((l) => /later taken back/.test(l))).toBe(false);
+  });
+});
+
+/**
+ * A REFUND IS ITS OWN NEGATIVE ROW (0142). Money received stays the row it
+ * was; the refund is the correction, as a new row dated the day it went
+ * back — so the Amount column sums to the bank and the original receipt is
+ * untouched. Member 12's alternative (subtract it from the total, or a
+ * column on the original row) would break the file's own rule that byMethod
+ * and byHousehold sum to totalCents, and re-read a row that already
+ * happened.
+ */
+describe("a refund to a card, in the file", () => {
+  const refund = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
+    paymentId: "pay-card-26", kind: "refund", receivedOn: "2027-01-26", amountCents: -10_000, feeCents: -300, method: "card", reference: "re_abc",
+    payerName: "Household 26", lotNumber: "26", reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null, ...over,
+  });
+  const cellsOf = (csv: string, line: number) => {
+    const header = csv.split("\r\n")[0].split(",");
+    const row = csv.split("\r\n")[line].split(",");
+    return (name: string) => row[header.indexOf(name)];
+  };
+
+  it("is not money on account", () => {
+    expect(isOnAccountRow(refund())).toBe(false);
+    expect(isOnAccountRow({ kind: "rent" })).toBe(true);
+    expect(isOnAccountRow({ kind: "on_account" })).toBe(true);
+    expect(isOnAccountRow({ kind: "deposit" })).toBe(false);
+  });
+
+  it("prints negative, dated the day it went back, tied to the payment it came off", () => {
+    const csv = receiptsCsv([], [refund()], { parkName: "The Haven", generatedAt: "t" });
+    const at = cellsOf(csv, 1);
+    expect(at("Kind")).toBe("Refund (given back)");
+    expect(at("Date received")).toBe("2027-01-26");
+    // A well-formed negative decimal passes through csvCell as a NUMBER, not
+    // as text — the formula guard exempts it (lib/csv).
+    expect(at("Amount")).toBe("-100.00");
+    expect(at("Card fee")).toBe("-3.00");
+    expect(at("Charged total")).toBe("-103.00");
+    expect(at("Method")).toBe("Card");
+    expect(at("Reference")).toBe("re_abc");
+    expect(at("Lot")).toBe("26");
+    expect(at("Payer")).toBe("Household 26");
+    expect(at("Taken back")).toBe("");
+    expect(at("Payment ID")).toBe("pay-card-26");
+    expect(at("Bill month")).toBe("");
+  });
+
+  it("the Amount column still sums to the bank: received, less what went back", () => {
+    const csv = receiptsCsv(
+      [receipt({ amountCents: 54_253, method: "card", feeCents: 1_628 })],
+      [refund({ amountCents: -10_000, feeCents: 0 })],
+      { parkName: "P", generatedAt: "t" },
+    );
+    const header = csv.split("\r\n")[0].split(",");
+    const amountAt = header.indexOf("Amount");
+    const amounts = csv.split("\r\n").slice(1).map((r) => Number(r.split(",")[amountAt].replace(/"/g, "")));
+    expect(amounts).toEqual([542.53, -100]);
+    expect(Math.round(amounts.reduce((a, b) => a + b, 0) * 100)).toBe(44_253);
+  });
+
+  it("the note names each refund and says it is NOT taken off the total", () => {
+    const lines = exclusionLines({
+      recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false,
+      refunds: [
+        { amountCents: 10_000, feeCents: 0, refundedOn: "2027-01-26", lotNumber: "26", payerName: "Household 26", method: "card" },
+        { amountCents: 4_000, feeCents: 120, refundedOn: "2027-01-25", lotNumber: null, payerName: "Household 15", method: "card" },
+      ],
+    });
+    const line = lines.find((l) => /sent back to cards/.test(l))!;
+    expect(line).toBeTruthy();
+    expect(line).toContain("$140.00 was sent back to cards in this period — Lot 26 $100.00 on January 26, 2027; Household 15 $40.00 on January 25, 2027.");
+    expect(line).toContain("$1.20 of card fee went back with it.");
+    expect(line).toMatch(/It is NOT taken off the total above/);
+    // Silent when there were none.
+    expect(exclusionLines({ recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, refunds: [] })
+      .some((l) => /sent back/.test(l))).toBe(false);
+  });
+
+  it("every money figure in the notes goes through money() — a thousands comma, never toFixed", () => {
+    const lines = exclusionLines({
+      recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false,
+      depositsReceivedCents: 150_000, onAccountReceivedCents: 162_759, onAccountAppliedCents: 108_506, onAccountHeldCents: 54_253,
+      amenityReceivedCents: 120_000, cardFeesReceivedCents: 100_000, otherTakenBackCents: 162_759,
+      refunds: [{ amountCents: 162_759, feeCents: 0, refundedOn: "2027-01-26", lotNumber: "9", payerName: null, method: "card" }],
+      handedBack: [{ amountCents: 108_506, on: "2027-02-03", lotNumber: "9", payerName: null, kind: "rent", note: "moved out" }],
+    });
+    const joined = lines.join(" ");
+    for (const figure of ["$1,500.00", "$1,627.59", "$1,085.06", "$1,200.00", "$1,000.00", "$1,085.06 of their money on account"]) {
+      expect(joined).toContain(figure);
+    }
+    // The bare four-digit form is the toFixed shape, and it is gone.
+    expect(joined).not.toMatch(/\$\d{4,}\.\d{2}/);
+    const src = readFileSync(fileURLToPath(new URL("./receipts-helpers.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).not.toMatch(/toFixed/);
+  });
+});
+
+/**
+ * ONE DERIVATION OF "WHY IT DID NOT STAY". The rule — the bank's code for a
+ * return (or "returned by the bank"), the office's words for a reversal —
+ * existed four times: the file's Reason cell, the statement screen, the
+ * resident's home screen and her /paid link, each a copy. The helper is the
+ * one writer; the row adapter lets a loader that reads snake_case columns
+ * ask it without spelling the rule out again.
+ */
+describe("takenBackWhy — the one derivation, and the row adapter", () => {
+  it("a bank return reads the code, or 'returned by the bank' when there is none", () => {
+    expect(takenBackWhy({ reversedAt: null, reversedReason: null, bankReturnedAt: "2027-01-08T14:00:00Z", returnCode: "R01" })).toBe("R01");
+    expect(takenBackWhy({ reversedAt: null, reversedReason: null, bankReturnedAt: "2027-01-08T14:00:00Z", returnCode: null })).toBe("returned by the bank");
+  });
+
+  it("a reversal reads the office's reason, or null when it carries none — never 'returned by the bank'", () => {
+    expect(takenBackWhy({ reversedAt: "2027-02-10T20:30:00Z", reversedReason: "cheque 1042 bounced", bankReturnedAt: null, returnCode: null })).toBe("cheque 1042 bounced");
+    expect(takenBackWhy({ reversedAt: "2027-02-10T20:30:00Z", reversedReason: null, bankReturnedAt: null, returnCode: null })).toBeNull();
+  });
+
+  it("a payment that stands has no reason", () => {
+    expect(takenBackWhy({ reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null })).toBeNull();
+  });
+
+  it("the Reason cell IS this helper — the file and every screen say the same words", () => {
+    const r = { reversedAt: "2027-02-10T20:30:00Z", reversedReason: "cheque 1042 bounced", bankReturnedAt: null, returnCode: null };
+    expect(takenBackCells(r)[3]).toBe(takenBackWhy(r));
+    const bank = { reversedAt: null, reversedReason: null, bankReturnedAt: "2027-01-08T14:00:00Z", returnCode: null };
+    expect(takenBackCells(bank)[3]).toBe("returned by the bank");
+  });
+
+  it("takenBackOfRow maps a park_payments row and reads returned_at, never returned_on", () => {
+    const row = takenBackOfRow({ reversed_at: null, reversed_reason: null, returned_at: "2027-01-08T14:00:00Z", return_code: "R01", returned_on: "2027-02-03" } as Record<string, unknown>);
+    expect(row).toEqual({ reversedAt: null, reversedReason: null, bankReturnedAt: "2027-01-08T14:00:00Z", returnCode: "R01" });
+    expect(notCollectedAt(row)).toBe("2027-01-08T14:00:00Z");
+    // A deposit handed back across the window still STANDS.
+    const handed = takenBackOfRow({ returned_on: "2027-02-03", returned_amount: 500 } as Record<string, unknown>);
+    expect(notCollectedAt(handed)).toBeNull();
+    expect(takenBackWhy(handed)).toBeNull();
+  });
+
+  it("no second copy of the rule survives in the screens or the loaders that read these fields", () => {
+    const strip = (rel: string) =>
+      readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    for (const rel of ["../../components/ParkStatements.tsx", "../parks/my-data.ts", "../../lib/confirm-server.ts"]) {
+      const src = strip(rel);
+      expect(src, `${rel} still derives the reason itself`).not.toMatch(/"returned by the bank"/);
+      expect(src, `${rel} does not import the one helper`).toMatch(/takenBackWhy/);
+    }
+    // And this file holds the ONE literal.
+    const here = strip("./receipts-helpers.ts");
+    expect((here.match(/"returned by the bank"/g) ?? []).length).toBe(1);
+  });
+});
+
+/**
+ * THE FOURTH WAY MONEY LEAVES — handed back across the window. A deposit
+ * returned (0102), rent on account handed back to a household that has gone
+ * (0168): no processor, a park cheque or cash over a counter. It is a row
+ * of the same shape as a refund — negative, on the day it went back — and
+ * the note names it, or February's file is short by exactly the cheque the
+ * park wrote.
+ */
+describe("money handed back across the window", () => {
+  const handed = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
+    paymentId: "pay-acct", kind: "handed_back", receivedOn: "2027-01-28", amountCents: -5_747, feeCents: 0,
+    method: "check", reference: "moved out 27 January; nothing more bills", payerName: "Household 9", lotNumber: "9",
+    reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null, ...over,
+  });
+
+  it("is its own Kind, never on account, and the label survives being taken back (it cannot be)", () => {
+    expect(otherKindLabel(handed())).toBe("Handed back (given back)");
+    expect(isOnAccountRow(handed())).toBe(false);
+  });
+
+  it("prints as a negative line in the file, dated the day it went back, the reason where the reference goes, tied to the payment", () => {
+    const csv = receiptsCsv([], [handed()], { parkName: "The Haven", generatedAt: "t" });
+    const header = csv.split("\r\n")[0].split(",");
+    const cells = csv.split("\r\n")[1].split(",");
+    const at = (h: string) => cells[header.indexOf(h)].replace(/^"|"$/g, "");
+    expect(at("Kind")).toBe("Handed back (given back)");
+    expect(at("Date received")).toBe("2027-01-28");
+    expect(at("Amount")).toBe("-57.47");
+    expect(at("Card fee")).toBe("0.00");
+    expect(at("Charged total")).toBe("-57.47");
+    expect(at("Method")).toBe("Check");
+    expect(at("Payment ID")).toBe("pay-acct");
+    expect(at("Lot")).toBe("9");
+    expect(at("Payer")).toBe("Household 9");
+    expect(at("Taken back")).toBe("");
+    expect(csv).toContain("moved out 27 January; nothing more bills");
+    expect(cells.length).toBe(header.length);
+  });
+
+  it("the Amount column still sums to the bank: the cheque in, the hand-back out", () => {
+    const csv = receiptsCsv([], [
+      { ...handed({ kind: "rent", receivedOn: "2027-01-05", amountCents: 60_000, reference: "1042", appliedTo: [{ periodMonth: "2027-01", amountCents: 54_253 }], remainingCents: 0 }) },
+      handed(),
+    ], { parkName: "P", generatedAt: "t" });
+    const header = csv.split("\r\n")[0].split(",");
+    const amountAt = header.indexOf("Amount");
+    const amounts = csv.split("\r\n").slice(1).map((r) => Number(r.split(",")[amountAt].replace(/"/g, "")));
+    expect(amounts).toEqual([600, -57.47]);
+    expect(Math.round(amounts.reduce((a, b) => a + b, 0) * 100)).toBe(54_253);
+  });
+
+  it("the note names each hand-back — what it was, the day, the reason — and says it is NOT taken off the total", () => {
+    const lines = exclusionLines({
+      recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false,
+      handedBack: [
+        { amountCents: 5_747, on: "2027-01-28", lotNumber: "9", payerName: "Household 9", kind: "rent", note: "moved out 27 January; nothing more bills" },
+        { amountCents: 50_000, on: "2027-02-03", lotNumber: null, payerName: "Household 14", kind: "deposit", note: null },
+      ],
+    });
+    const line = lines.find((l) => /handed back across the window/.test(l))!;
+    expect(line).toBeTruthy();
+    expect(line).toContain("$557.47 was handed back across the window in this period — Lot 9 $57.47 of their money on account on January 28, 2027 (moved out 27 January; nothing more bills); Household 14 $500.00 of their deposit on February 3, 2027.");
+    expect(line).toMatch(/It is NOT taken off the total above/);
+    expect(line).toMatch(/negative amount/);
+    expect(line).not.toMatch(/null/);
+    // Silent when there were none.
+    expect(exclusionLines({ recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, handedBack: [] })
+      .some((l) => /handed back/.test(l))).toBe(false);
+  });
+
+  it("a refund's note names the rail it went back on — a card, or a bank account (0142 refunds ACH too)", () => {
+    const ctx = { recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false };
+    const one = (method: string) => ({ amountCents: 4_000, feeCents: 0, refundedOn: "2027-01-25", lotNumber: "15", payerName: null, method });
+    expect(exclusionLines({ ...ctx, refunds: [one("ach")] }).find((l) => /sent back/.test(l))).toContain("$40.00 was sent back to a bank account in this period");
+    expect(exclusionLines({ ...ctx, refunds: [one("ach"), one("ach")] }).find((l) => /sent back/.test(l))).toContain("was sent back to bank accounts in this period");
+    expect(exclusionLines({ ...ctx, refunds: [one("card"), one("ach")] }).find((l) => /sent back/.test(l))).toContain("was sent back to cards and bank accounts in this period");
+    expect(exclusionLines({ ...ctx, refunds: [one("card")] }).find((l) => /sent back/.test(l))).toContain("was sent back to a card in this period");
   });
 });

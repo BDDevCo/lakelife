@@ -17,6 +17,8 @@ const CARD: RefundablePayment = {
   fee_amount: 12,
   method: "card",
   reference: "ch_mock_abc",
+  charge_id: "charge-9",
+  kind: "rent",
   reversed_at: null,
   returned_at: null,
 };
@@ -84,6 +86,47 @@ describe("why a payment cannot be refunded", () => {
     expect(refundRefusal(p, { amount: 400, fee: 0 })).toMatch(/paid by check/);
   });
 
+  /**
+   * NAME THE DOOR THAT EXISTS. This sentence used to say "hand it back at
+   * the office and reverse the record instead" — and a reversal says the
+   * money never arrived: on a split cheque it takes the bill's half back
+   * too, and a paid January reads outstanding on every screen for a
+   * household that paid it and has gone. The hand-back is its own record
+   * now (0168), written from the row's line under "Money not against a
+   * bill"; a deposit goes back from its own line; money against a bill has
+   * no hand-back at all.
+   */
+  describe("and names the door for the money it is, never 'reverse the record'", () => {
+    it("rent on account: hand it back, and record it from its line — never by taking the record back", () => {
+      const p = { ...CARD, method: "check", reference: null, charge_id: null, kind: "rent" };
+      const why = refundRefusal(p, { amount: 57.47, fee: 0 })!;
+      expect(why).toMatch(/paid by check, so there is no card to send it back to\./);
+      expect(why).toMatch(/Hand it back across the window and record it with "Hand it back" on its line under Money not against a bill, on the Rent screen/);
+      expect(why).toMatch(/never by taking the record back/);
+      expect(why).not.toMatch(/reverse/);
+    });
+
+    it("a deposit: from its own line under Deposits", () => {
+      const p = { ...CARD, method: "cash", reference: null, charge_id: null, kind: "deposit" };
+      const why = refundRefusal(p, { amount: 500, fee: 0 })!;
+      expect(why).toMatch(/Give it back from its own line under Deposits on the Rent screen/);
+      expect(why).not.toMatch(/reverse|Hand it back/);
+    });
+
+    it("money against a bill: not handed back — only a WRONG record is taken back, with the reason", () => {
+      const p = { ...CARD, method: "check", reference: null };
+      const why = refundRefusal(p, { amount: 400, fee: 0 })!;
+      expect(why).toMatch(/against a bill, so it isn't handed back — if the record is wrong, take it back with the reason/);
+      expect(why).not.toMatch(/reverse the record|Hand it back/);
+    });
+
+    it("the sentence 'reverse the record' is gone from this file", () => {
+      const src = readFileSync(fileURLToPath(new URL("./refund-helpers.ts", import.meta.url)), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      expect(src).not.toMatch(/reverse the record/);
+    });
+  });
+
   it("allows ACH, not just card", () => {
     const p = { ...CARD, method: "ach", fee_amount: null };
     expect(refundRefusal(p, { amount: 400, fee: 0 })).toBeNull();
@@ -131,6 +174,24 @@ describe("whether these particular numbers are allowed", () => {
 
   it("refuses a penny more than is left, and says the ceiling", () => {
     expect(refundAmountRefusal(257.48, 0, left)).toMatch(/at most \$257\.47/);
+  });
+
+  it("every figure goes through money() — a thousands comma, never toFixed", () => {
+    expect(refundAmountRefusal(1627.60, 0, { amount: 1627.59, fee: 0 })).toMatch(/at most \$1,627\.59/);
+    expect(refundAmountRefusal(0, 1000.01, { amount: 5000, fee: 1000 })).toMatch(/Only \$1,000\.00 of card fee/);
+    expect(refundSignal(1627.59, 48.83, false)).toMatch(/\$1,627\.59 plus \$48\.83 of card fee/);
+    expect(refundSignal(0, 1000, true)).toMatch(/\$1,000\.00 card fee/);
+  });
+
+  it("names the rail the money took — a bank pull is not 'their card'", () => {
+    expect(refundSignal(542.53, 0, true, "ach")).toMatch(/sent back to their bank account/);
+    expect(refundSignal(542.53, 0, true, "card")).toMatch(/sent back to their card/);
+    expect(refundSignal(542.53, 0, true)).toMatch(/sent back to their card/);
+    expect(refundSignal(0, 12, false, "ach")).toMatch(/card fee sent back to their bank account/);
+    const src = readFileSync(fileURLToPath(new URL("./refund-helpers.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).not.toMatch(/toFixed/);
+    expect(src).toMatch(/import \{ money \} from "\.\/ledger-helpers"/);
   });
 
   it("refuses zero and negative amounts when nothing else is going back", () => {

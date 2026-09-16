@@ -117,6 +117,33 @@ export function planAllocations(
   return out;
 }
 
+/**
+ * WHICH OF THE APPLIED DOLLARS ARE THE NEW BILLS' AND WHICH ARE OLDER BILLS'
+ * — one partition for the preview and the run, so the two cannot disagree
+ * about what "older" means. `applied` is dollars by bill key (the run keys
+ * on charge ids; the preview keys a bill it is about to raise on its
+ * reservation id and an older one on its charge id); `newKeys` are the bills
+ * being raised; `monthOf` names an older bill's month for the sentence.
+ *
+ * NOT `total − fromOnAccount`: a second copy of a subtraction is the shape
+ * this codebase keeps finding as a bug. Each dollar is sorted once.
+ */
+export function splitApplied(
+  applied: ReadonlyMap<string, number>,
+  newKeys: ReadonlySet<string>,
+  monthOf: (key: string) => string | undefined,
+): { fromOnAccount: number; toOlderBills: { key: string; periodMonth: string; amount: number }[] } {
+  let fromOnAccount = 0;
+  const toOlderBills: { key: string; periodMonth: string; amount: number }[] = [];
+  for (const [key, amount] of applied) {
+    if (cents(amount) <= 0) continue;
+    if (newKeys.has(key)) fromOnAccount += cents(amount);
+    else toOlderBills.push({ key, periodMonth: monthOf(key) ?? "", amount });
+  }
+  toOlderBills.sort((a, b) => a.periodMonth.localeCompare(b.periodMonth) || a.key.localeCompare(b.key));
+  return { fromOnAccount: dollars(fromOnAccount), toOlderBills };
+}
+
 /** Dollars planned per bill key, and the total — for a preview's sentence. */
 export function plannedByKey(plan: readonly PlannedAllocation[]): { byKey: Map<string, number>; total: number } {
   const byKey = new Map<string, number>();
@@ -198,6 +225,39 @@ export async function onAccountSources(
       receivedOn: (r.received_on as string) ?? "",
       createdAt: (r.created_at as string) ?? null,
     })),
+    error: null,
+  };
+}
+
+/**
+ * WHAT THE PARK IS STILL HOLDING OF ONE HOUSEHOLD'S — money on account
+ * (the view's `remaining`, summed) and deposits not yet given back. The
+ * hand-back door reads it after the stamp so its sentence names what else
+ * of theirs is still held (a second cheque, the deposit); the close-out
+ * door wants the same figure after a move-out, and the held panel and Today
+ * read the same view for the same money.
+ *
+ * A FAILED READ IS NOT "NOTHING HELD". `{ error }` travels back so the
+ * caller says it could not check, never "closed out" over a cheque it did
+ * not look for.
+ */
+export async function heldOnAccountFor(
+  admin: Admin,
+  parkId: string,
+  renterId: string,
+): Promise<{ remaining: number; depositsHeld: number; error: null } | { remaining: 0; depositsHeld: 0; error: unknown }> {
+  const [acctRes, depRes] = await Promise.all([
+    admin.from("park_on_account_payments").select("remaining")
+      .eq("park_id", parkId).eq("renter_id", renterId).gt("remaining", 0),
+    admin.from("park_payments").select("amount")
+      .eq("park_id", parkId).eq("renter_id", renterId).eq("kind", "deposit")
+      .is("reversed_at", null).is("returned_at", null).is("returned_on", null),
+  ]);
+  if (acctRes.error) return { remaining: 0, depositsHeld: 0, error: acctRes.error };
+  if (depRes.error) return { remaining: 0, depositsHeld: 0, error: depRes.error };
+  return {
+    remaining: dollars((acctRes.data ?? []).reduce((s, r) => s + cents(Number(r.remaining ?? 0)), 0)),
+    depositsHeld: dollars((depRes.data ?? []).reduce((s, r) => s + cents(Number(r.amount ?? 0)), 0)),
     error: null,
   };
 }

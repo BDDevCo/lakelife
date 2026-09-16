@@ -15,23 +15,26 @@ import type { ConfirmView } from "@/lib/confirm-server";
  */
 
 const view: { current: ConfirmView | null } = { current: null };
+/** What disputeByToken answers the next POST — the page's title must follow the shape. */
+const dispute: { next: { ok: boolean; error?: string; unsupported?: boolean } } = { next: { ok: true } };
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/confirm-server", () => ({
   loadPaymentByToken: async () => view.current,
   confirmByToken: async () => ({ ok: true }),
-  disputeByToken: async () => ({ ok: true }),
+  disputeByToken: async () => dispute.next,
 }));
 vi.mock("@/lib/supabase/server", () => ({ createServiceClient: () => ({}) }));
 
-const { GET } = await import("./route");
+const { GET, POST } = await import("./route");
 
 const TOKEN = "a".repeat(40);
 const base = (over: Partial<ConfirmView> = {}): ConfirmView => ({
   parkName: "The Haven", lotNumber: "9", amount: 600, onAccount: 57.47, onAccountApplied: false,
   onAccountRemaining: 57.47, allocations: [], whereItWent: "$57.47 on account",
   takenBackOn: null, takenBackWhy: null, siblingTakenBackOn: null, siblingTakenBackWhy: null,
+  sentBack: [], handedBack: [], canDispute: true,
   fee: null, method: "check", reference: "1042", receivedOn: "2027-01-03",
-  ref: "The Haven receipt 12", alreadyConfirmedAt: null, ...over,
+  ref: "TH-2027-0012", alreadyConfirmedAt: null, ...over,
 });
 
 async function text(v: ConfirmView): Promise<string> {
@@ -41,7 +44,7 @@ async function text(v: ConfirmView): Promise<string> {
   return html.replace(/<[^>]*>/g, " ").replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 }
 
-beforeEach(() => { view.current = null; });
+beforeEach(() => { view.current = null; dispute.next = { ok: true }; });
 
 describe("a split receipt — $600 for a $542.53 bill", () => {
   it("nothing applied yet: held for you, and it comes off the next bill", async () => {
@@ -254,5 +257,198 @@ describe("the date is a permanent page's date — with its year, on the lakes' c
   it("Sunday, January 3, 2027", async () => {
     const t = await text(base());
     expect(t).toMatch(/on Sunday, January 3, 2027\./);
+  });
+});
+
+/**
+ * THE SECOND BUTTON EXISTS ONLY WHERE IT CAN SAVE SOMETHING. A claim hangs
+ * off a bill; a receipt for money on account or a deposit has none — and
+ * every quarter-ahead cheque's receipt prints ONLY this kind of link. The
+ * page offered "That's not what I paid", promised "nothing will be chased
+ * while they do", and then answered "We couldn't save that".
+ */
+describe("the dispute button, and the promise that goes with it", () => {
+  async function html(v: ConfirmView): Promise<string> {
+    view.current = v;
+    const res = await GET(new Request("https://lakelife.test/paid/x"), { params: Promise.resolve({ token: TOKEN }) });
+    return res.text();
+  }
+
+  it("a bill row's link keeps both buttons and the promise", async () => {
+    const h = await html(base({ canDispute: true }));
+    expect(h).toMatch(/value="yes"/);
+    expect(h).toMatch(/value="no"/);
+    expect(h).toMatch(/That&#39;s not what I paid/);
+    expect(h).toMatch(/tap the second and the park will look into it — nothing will be chased while they do/);
+  });
+
+  it("a receipt for money on account renders ONE button and names the office and the receipt reference — no promise", async () => {
+    const h = await html(base({ lotNumber: "—", amount: 1627.59, onAccount: null, onAccountRemaining: 1627.59, whereItWent: "$1,627.59 on account", canDispute: false, ref: "TH-2027-0101" }));
+    expect(h).toMatch(/value="yes"/);
+    expect(h, "the dead button is still offered").not.toMatch(/value="no"/);
+    expect(h).not.toMatch(/not what I paid/);
+    expect(h).not.toMatch(/nothing will be chased/);
+    expect(h).not.toMatch(/the park will look into it/);
+    expect(h).toMatch(/If it doesn&#39;t, ring the office and quote receipt TH-2027-0101 — they can log it for you\./);
+    // Still asks the question the page exists to ask.
+    expect(h).toMatch(/If that matches what you handed over, tap the button\./);
+  });
+
+  it("the same for a deposit's link", async () => {
+    const h = await html(base({ lotNumber: "—", amount: 500, onAccount: null, onAccountApplied: false, onAccountRemaining: null, allocations: [], whereItWent: "", canDispute: false }));
+    expect(h).not.toMatch(/value="no"/);
+    expect(h).toMatch(/quote receipt TH-2027-0012/);
+  });
+
+  it("a stray POST 'no' on such a link is titled as what it is — not 'We couldn't save that'", async () => {
+    dispute.next = { ok: false, unsupported: true, error: "This one was recorded as money on account or a deposit, and that can't be flagged from this link yet. Ring the office and quote receipt TH-2027-0101 — they can log it for you." };
+    const form = new FormData(); form.set("answer", "no");
+    const res = await POST(new Request("https://lakelife.test/paid/x", { method: "POST", body: form }), { params: Promise.resolve({ token: TOKEN }) });
+    const t = (await res.text()).replace(/<[^>]*>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
+    expect(t).toMatch(/This one can't be flagged here/);
+    expect(t).not.toMatch(/We couldn't save that/);
+    expect(t).toMatch(/quote receipt TH-2027-0101/);
+    // A real failed write keeps its own title.
+    dispute.next = { ok: false, error: "That didn't save — try again." };
+    const form2 = new FormData(); form2.set("answer", "no");
+    const res2 = await POST(new Request("https://lakelife.test/paid/x", { method: "POST", body: form2 }), { params: Promise.resolve({ token: TOKEN }) });
+    expect((await res2.text()).replace(/&#39;/g, "'")).toMatch(/We couldn't save that/);
+  });
+});
+
+/**
+ * WHAT WENT BACK TO HER CARD (0142). The page asked her to confirm $600 and
+ * listed $560 of it against bills with nothing about the $40 that went back
+ * — on the one page built to show every event on her money.
+ */
+describe("money sent back to the card is said on the page", () => {
+  it("a split receipt, $40 of the on-account half sent back", async () => {
+    const t = await text(base({
+      amount: 600, onAccount: 57.47, onAccountApplied: true, onAccountRemaining: 0,
+      allocations: [{ periodMonth: "2027-01", amount: 17.47 }], whereItWent: "$17.47 to January 2027",
+      sentBack: [{ amount: 40, fee: 1.2, on: "2027-01-25T15:00:00Z", method: "card" }],
+    }));
+    expect(t).toMatch(/\$57\.47 of that went on account with the office and has since been put against a bill\. That's \$17\.47 to January 2027\./);
+    expect(t).toMatch(/\$40\.00 was sent back to your card on Monday, January 25, 2027, with the \$1\.20 card fee\./);
+    expect(t).not.toMatch(/comes off/);
+  });
+
+  it("a plain bill payment refunded in full — the shape that used to say nothing at all", async () => {
+    const t = await text(base({
+      amount: 542.53, onAccount: null, onAccountApplied: false, onAccountRemaining: null, allocations: [], whereItWent: "",
+      method: "card", reference: "ch_9", fee: 16.28,
+      sentBack: [{ amount: 542.53, fee: 16.28, on: "2027-01-06T15:00:00Z", method: "card" }],
+    }));
+    expect(t).toMatch(/\$542\.53 was sent back to your card on Wednesday, January 6, 2027, with the \$16\.28 card fee\./);
+  });
+
+  it("no fee, no fee clause; nothing sent back, no sentence; the date is on the lake's clock", async () => {
+    const t = await text(base({ sentBack: [{ amount: 40, fee: 0, on: "2027-01-26T02:30:00Z", method: "card" }] }));
+    // 2:30am UTC on the 26th is the evening of the 25th in Indiana.
+    expect(t).toMatch(/\$40\.00 was sent back to your card on Monday, January 25, 2027\./);
+    expect(t).not.toMatch(/card fee/);
+    expect(await text(base({ sentBack: [] }))).not.toMatch(/sent back/);
+  });
+});
+
+/**
+ * TWO SENTENCES THAT CANNOT BOTH BE TRUE. The not-applied branches said
+ * "held for you … It comes off the next bill the park raises for you"
+ * unconditionally, so money on account sent back to the card, or handed
+ * back across the window, before anything was applied read "held for you"
+ * and "was sent back to you" on one page. "Comes off the next bill" is said
+ * only while something is still held — in every branch now.
+ */
+describe("nothing applied and nothing held: the money went somewhere, and the page says where", () => {
+  it("a card on account refunded in full before any allocation: no 'held for you', no 'comes off'", async () => {
+    const t = await text(base({
+      lotNumber: "—", amount: 600, onAccount: null, onAccountApplied: false, onAccountRemaining: 0, allocations: [], whereItWent: "",
+      method: "card", reference: "ch_9",
+      sentBack: [{ amount: 600, fee: 0, on: "2027-01-25T15:00:00Z", method: "card" }],
+    }));
+    expect(t).toMatch(/That money went on account with the office; none of it is still held\. \$600\.00 was sent back to your card on Monday, January 25, 2027\./);
+    expect(t).not.toMatch(/comes off the next bill|held for you/);
+  });
+
+  it("a split whose $57.47 was handed back across the window before the run touched it", async () => {
+    const t = await text(base({
+      onAccountApplied: false, onAccountRemaining: 0, allocations: [], whereItWent: "",
+      handedBack: [{ amount: 57.47, on: "2027-01-28", note: "moved out 27 January; nothing more bills" }],
+    }));
+    expect(t).toMatch(/\$57\.47 of that went on account with the office; none of it is still held\. \$57\.47 of that was handed back to you on Thursday, January 28, 2027\./);
+    expect(t).not.toMatch(/comes off the next bill|held for you/);
+    // The office's reason is not printed to her.
+    expect(t).not.toMatch(/moved out/);
+  });
+
+  it("the bill half taken back, the on-account half handed back: neither 'still stands, held for you' nor 'comes off'", async () => {
+    const t = await text(base({
+      takenBackOn: "2027-02-03T15:00:00Z", takenBackWhy: "a typo — keyed twice",
+      onAccountApplied: false, onAccountRemaining: 0, allocations: [], whereItWent: "",
+      handedBack: [{ amount: 57.47, on: "2027-02-10", note: null }],
+    }));
+    expect(t).toMatch(/The \$57\.47 on account is a separate record — it still stands; none of it is still held\./);
+    expect(t).toMatch(/\$57\.47 of that was handed back to you on Wednesday, February 10, 2027\./);
+    expect(t).not.toMatch(/comes off the next bill|held for you/);
+  });
+
+  it("still 'held for you … comes off the next bill' while something IS held — the standing shapes are unchanged", async () => {
+    expect(await text(base())).toMatch(/held for you, not yet put against a bill\. It comes off the next bill the park raises for you\./);
+    expect(await text(base({ lotNumber: "—", amount: 1627.59, onAccount: null, onAccountRemaining: 1627.59, whereItWent: "$1,627.59 on account" })))
+      .toMatch(/That money is on account with the office — held for you\. It comes off the next bill the park raises for you\./);
+  });
+
+  it("the source: every not-applied sentence is gated on `held`", () => {
+    const src = readFileSync(join(process.cwd(), "src", "app", "paid", "[token]", "route.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const fn = src.slice(src.indexOf("function onAccountWords"), src.indexOf("function sentBackWords"));
+    // The bare COMES_OFF (not STILL_COMES_OFF, which was always gated) is
+    // used exactly three times, each inside a `held ?` arm.
+    const uses = [...fn.matchAll(/(?<!STILL_)COMES_OFF\}/g)].length;
+    expect(uses).toBe(3);
+    expect([...fn.matchAll(/held\s*\n?\s*\?/g)].length).toBeGreaterThanOrEqual(3);
+    expect(fn).toMatch(/none of it is still held/);
+  });
+});
+
+/**
+ * WHAT WENT BACK ACROSS THE WINDOW (0168) — the fourth way money leaves, and
+ * the one this page said nothing about. And a refund off an ACH payment
+ * went back to her bank account, not her card.
+ */
+describe("money handed back across the window is said on the page", () => {
+  it("a split receipt, $542.53 to January and the $57.47 handed back after they left", async () => {
+    const t = await text(base({
+      onAccountApplied: true, onAccountRemaining: 0,
+      allocations: [{ periodMonth: "2027-01", amount: 542.53 }], whereItWent: "$542.53 to January 2027",
+      handedBack: [{ amount: 57.47, on: "2027-01-28", note: "moved out" }],
+    }));
+    expect(t).toMatch(/has since been put against a bill\. That's \$542\.53 to January 2027\. \$57\.47 of that was handed back to you on Thursday, January 28, 2027\./);
+    expect(t).not.toMatch(/comes off/);
+  });
+
+  it("a deposit's link: the whole of it handed back", async () => {
+    const t = await text(base({
+      lotNumber: "—", amount: 500, onAccount: null, onAccountApplied: false, onAccountRemaining: null, allocations: [], whereItWent: "",
+      method: "cash", reference: null,
+      handedBack: [{ amount: 500, on: "2027-02-03", note: null }],
+    }));
+    expect(t).toMatch(/recorded \$500\.00 from you, paid by cash on Sunday, January 3, 2027\. Receipt TH-2027-0012\. \$500\.00 of that was handed back to you on Wednesday, February 3, 2027\./);
+    expect(t).not.toMatch(/on account/);
+  });
+
+  it("nothing handed back, no sentence; the day is a date in words", async () => {
+    expect(await text(base({ handedBack: [] }))).not.toMatch(/handed back/);
+    expect(await text(base({ handedBack: [{ amount: 1, on: "2027-01-28", note: null }] }))).not.toMatch(/2027-01-28/);
+  });
+
+  it("a refund off an ACH payment went back to her bank account", async () => {
+    const t = await text(base({
+      amount: 542.53, onAccount: null, onAccountApplied: false, onAccountRemaining: null, allocations: [], whereItWent: "",
+      method: "bank transfer", reference: "ach_9",
+      sentBack: [{ amount: 100, fee: 0, on: "2027-01-06T15:00:00Z", method: "ach" }],
+    }));
+    expect(t).toMatch(/\$100\.00 was sent back to your bank account on Wednesday, January 6, 2027\./);
+    expect(t).not.toMatch(/your card/);
   });
 });

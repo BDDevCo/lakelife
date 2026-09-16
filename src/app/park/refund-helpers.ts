@@ -6,6 +6,8 @@
  * nobody can check.
  */
 
+import { money } from "./ledger-helpers";
+
 /** Only the parts of a payment a refund decision depends on. */
 export interface RefundablePayment {
   amount: number | null;
@@ -13,6 +15,18 @@ export interface RefundablePayment {
   fee_amount: number | null;
   method: string | null;
   reference: string | null;
+  /**
+   * WHAT THE MONEY IS, for the sentence that names the other door. Cash and
+   * cheques cannot be refunded through a processor, and the right act for
+   * them depends on the row: a deposit goes back from its own line, rent on
+   * account (kind 'rent', no charge) is handed back across the window and
+   * recorded from its line (0168), and money against a bill has no hand-back
+   * at all. REQUIRED, like `returned_at` below and for the same reason: an
+   * optional field is a branch that silently never fires. Pinned against
+   * refundableOn's select in refund-helpers.test.ts.
+   */
+  charge_id: string | null;
+  kind: string | null;
   reversed_at: string | null;
   /**
    * The bank pulled this money back. NOT `returned_on`, which is a security
@@ -93,7 +107,24 @@ export function refundRefusal(pay: RefundablePayment, left: Remaining): string |
     return "That payment is recorded as never having arrived, so there is nothing to send back.";
   }
   if (pay.method !== "card" && pay.method !== "ach") {
-    return `That was paid by ${pay.method ?? "hand"}, so there is no card to send it back to — hand it back at the office and reverse the record instead.`;
+    // NAME THE DOOR THAT EXISTS, NEVER "REVERSE THE RECORD". This used to
+    // say "hand it back at the office and reverse the record instead" — and
+    // a reversal says the money never arrived: on a split cheque it takes
+    // the bill's half back too, and a paid January reads outstanding on
+    // every screen for a household that paid it and has gone. The record of
+    // money handed across the window is the stamp on the row (0102 for a
+    // deposit, 0168 for rent on account), written from that row's own line
+    // under "Money not against a bill" on the Rent screen. Money against a
+    // bill has no hand-back: it is the bill's money, and the only correction
+    // is taking a WRONG record back, with the reason.
+    const by = `That was paid by ${pay.method ?? "hand"}, so there is no card to send it back to.`;
+    if (pay.kind === "deposit") {
+      return `${by} Give it back from its own line under Deposits on the Rent screen — that records the day and the amount.`;
+    }
+    if (!pay.charge_id) {
+      return `${by} Hand it back across the window and record it with "Hand it back" on its line under Money not against a bill, on the Rent screen — never by taking the record back.`;
+    }
+    return `${by} It is against a bill, so it isn't handed back — if the record is wrong, take it back with the reason.`;
   }
   if (!String(pay.reference ?? "").trim()) {
     // 0108 refuses to record a card payment without one, so this is a payment
@@ -139,14 +170,14 @@ export function refundAmountRefusal(
     return "Enter how much to send back.";
   }
   if (round2(amount) > left.amount) {
-    return `That's more than is left on this payment — at most $${left.amount.toFixed(2)} can still go back.`;
+    return `That's more than is left on this payment — at most ${money(left.amount)} can still go back.`;
   }
   if (!feeIsNumber || feeAmount < 0) {
     return "The card fee to return has to be a number, or nothing.";
   }
   if (round2(feeAmount) > left.fee) {
     return left.fee > 0
-      ? `Only $${left.fee.toFixed(2)} of card fee is left to return.`
+      ? `Only ${money(left.fee)} of card fee is left to return.`
       : "No card fee was charged on that payment, so there is none to return.";
   }
   return null;
@@ -165,24 +196,27 @@ export function refundCents(amount: number, feeAmount: number): number {
 }
 
 /** What the office is told once the money is on its way. */
-export function refundSignal(amount: number, feeAmount: number, hasCharge: boolean): string {
+export function refundSignal(amount: number, feeAmount: number, hasCharge: boolean, method: string | null = null): string {
+  // "SENT BACK TO THEIR CARD" WAS SAID OF ACH TOO. The rail is a fact the
+  // row carries; the sentence names it rather than assuming the common case.
+  const rail = method === "ach" ? "their bank account" : "their card";
   // A FEE-ONLY REFUND IS NOT "$0.00 PLUS $12.00". That sentence reads as a bug
   // to the person who just pressed the button, and it is the one they will
   // quote to the household. Say what actually went back.
   const what =
     amount <= 0
-      ? `$${feeAmount.toFixed(2)} card fee`
-      : `$${amount.toFixed(2)}${feeAmount > 0 ? ` plus $${feeAmount.toFixed(2)} of card fee` : ""}`;
+      ? `${money(feeAmount)} card fee`
+      : `${money(amount)}${feeAmount > 0 ? ` plus ${money(feeAmount)} of card fee` : ""}`;
   // AND THE BILL DID NOT MOVE. `recompute_charge_paid` subtracts
   // `park_refunds.amount` — the rent — and never the surcharge, because the
   // surcharge was never in `paid_total` to begin with (0109). So a fee-only
   // refund leaves the balance exactly where it was, and saying otherwise sends
   // the office looking for a number that did not change.
   if (amount <= 0) {
-    return `${what} sent back to their card. The rent on it is untouched, and the record shows why.`;
+    return `${what} sent back to ${rail}. The rent on it is untouched, and the record shows why.`;
   }
   return (
-    `${what} sent back to their card. ` +
+    `${what} sent back to ${rail}. ` +
     (hasCharge
       ? "The bill is outstanding again by that much, and the record shows why."
       : "It's off the household's account, and the record shows why.")

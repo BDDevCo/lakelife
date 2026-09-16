@@ -9,7 +9,8 @@ import {
 } from "./sign-helpers";
 import { contactProblem, signingExplainer } from "./onboard-helpers";
 import {
-  buildTenant, capitalise, SIGNED_LEASE_LABEL as LABEL_AT_HOME, alreadyOverClause as CLAUSE_AT_HOME,
+  buildTenant, capitalise, agreementStartFor,
+  SIGNED_LEASE_LABEL as LABEL_AT_HOME, alreadyOverClause as CLAUSE_AT_HOME,
   type TenantInput,
 } from "./park-helpers";
 import { feesForTenancy } from "./fee-helpers";
@@ -301,12 +302,46 @@ describe("what it refuses, and in what words", () => {
     expect(planSigning(signed(), imported({ status: "cancelled" }), HAVEN).ok).toBe(false);
   });
 
-  it("a lease that runs from a day still to come is not recorded yet — and the sentence names the day", () => {
-    const p = planSigning(signed({ signedOn: "2027-01-02" }), imported(), HAVEN);
-    expect(p.ok).toBe(false);
-    expect(!p.ok && p.error).toBe(
-      "The new lease runs from January 2, 2027 — that hasn't come yet. Record it from that day.",
+  it("a lease in his hand on 20 December for 1 January IS recorded — approved, the holdover trimmed to it", () => {
+    // ONE RULE FOR BOTH DOORS. "Who lives here" filed the same paper on
+    // 20 December (agreementStartFor allows 60 days ahead, buildTenant
+    // writes `approved`); this door refused it with "that hasn't come yet",
+    // so Today kept nagging about a household that had signed, and the
+    // forced wait put the signing AFTER January's bills.
+    const p = planSigning(
+      signed({ signedOn: "2027-01-01" }),
+      imported({ range: { start: "2026-12-20", end: "2027-12-20" } }),
+      { ...HAVEN, todayISO: "2026-12-20" },
     );
+    expect(p.ok, !p.ok ? p.error : "").toBe(true);
+    if (!p.ok) return;
+    expect(p.successor).toMatchObject({ during: "[2027-01-01,2027-02-01)", status: "approved", origin: "office" });
+    expect(p.holdover).toEqual({ id: "res-14", trimTo: { start: "2026-12-20", end: "2027-01-01" } });
+    expect(p.signal).toBe("On the new one-month lease from January 1, 2027 — January 2027 bills $542.53 ($400.00 rent + $142.53 fees).");
+    // Recorded on its day or after, it is already running: active.
+    const onTheDay = planSigning(signed({ signedOn: "2027-01-01" }), imported(), HAVEN);
+    expect(onTheDay.ok && onTheDay.successor.status).toBe("active");
+    const after = planSigning(signed({ signedOn: "2027-01-01" }), imported(), { ...HAVEN, todayISO: "2027-01-04" });
+    expect(after.ok && after.successor.status).toBe("active");
+  });
+
+  it("a day more than two months out is refused in the filing screen's own words — the window is one rule", () => {
+    const p = planSigning(
+      signed({ signedOn: "2027-03-01" }),
+      imported({ range: { start: "2026-12-20", end: "2027-12-20" } }),
+      { ...HAVEN, todayISO: "2026-12-20" },
+    );
+    expect(p.ok).toBe(false);
+    expect(!p.ok && p.error).toBe("That start is more than two months away — an agreement can be filed up to two months ahead.");
+    // The same day, from the filing screen's rule, is the same answer.
+    expect(agreementStartFor("2027-03-01", "2026-12-20", "2027-01-01")).toEqual(p);
+    // The edge of the window is inside it.
+    const edge = planSigning(
+      signed({ signedOn: "2027-02-18" }),
+      imported({ range: { start: "2026-12-20", end: "2027-12-20" } }),
+      { ...HAVEN, todayISO: "2026-12-20" },
+    );
+    expect(edge.ok, !edge.ok ? edge.error : "").toBe(true);
   });
 
   it("asks for the day the lease runs from, not the day they signed", () => {
@@ -321,7 +356,8 @@ describe("what it refuses, and in what words", () => {
       { ...HAVEN, todayISO: "2027-01-04" },
     );
     expect(p.ok).toBe(false);
-    expect(!p.ok && p.error).toBe("The ledger starts on January 1, 2027 — the new agreement can't begin before that.");
+    // The filing screen's sentence, verbatim — one rule, one set of words.
+    expect(!p.ok && p.error).toBe("The ledger starts on January 1, 2027 — an agreement can't begin before that.");
   });
 
   it("a park with no cutover takes any day up to today", () => {
@@ -692,11 +728,19 @@ describe("the form on the roll asks for the same fact the arithmetic uses", () =
     expect(agreementHelpers).toMatch(/export const SIGNED_LEASE_LABEL = "They signed the new lease";/);
   });
 
-  it("the picker's floor is the cutover, as the filing form's already is", () => {
+  it("the picker's window is the filing form's: floored at the cutover, up to two months ahead — never capped at today", () => {
+    // Capped at today, a lease in his hand on 20 December for 1 January
+    // could not be picked, and the form deferred it to 1 January while
+    // "Who lives here" filed the same paper that afternoon.
     const input = form.match(/<input type="date" value=\{form\.signedOn\}[^>]*>/)?.[0] ?? "";
     expect(input, "the date input is gone — this scan measures nothing").not.toBe("");
     expect(input).toMatch(/min=\{cutoverDate \?\? undefined\}/);
-    expect(input).toMatch(/max=\{today\}/);
+    expect(input).toMatch(/max=\{latestStart\}/);
+    expect(input).not.toMatch(/max=\{today\}/);
+    // The one helper (park-helpers latestAgreementStart), never a fourth
+    // inline copy of today + SIGNED_START_HORIZON_DAYS.
+    expect(form).toMatch(/const latestStart = latestAgreementStart\(today\);/);
+    expect(form).not.toMatch(/d \+ SIGNED_START_HORIZON_DAYS/);
   });
 
   it("says what the first month bills before the write, from the shared sentence", () => {

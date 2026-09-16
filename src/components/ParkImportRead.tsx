@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
+import { perTermWords } from "@/app/park/agreement-helpers";
 import { commitImport, resolveRow, undoImport } from "@/app/park/import-actions";
 import {
   importBlockerText,
@@ -723,15 +724,13 @@ export function ParkImportRead({ view }: { view: ReadView }) {
   );
 }
 
+/**
+ * The cadence in words — the one home is agreement-helpers' perTermWords; the
+ * import reader keeps the raw term as its fallback because a roll can carry a
+ * cadence word nobody has taught it yet, and printing nothing would hide it.
+ */
 function perTerm(term: string): string {
-  switch (term) {
-    case "nightly": return "a night";
-    case "weekly": return "a week";
-    case "monthly": return "a month";
-    case "seasonal": return "for the season";
-    case "annual": return "a year";
-    default: return term;
-  }
+  return perTermWords(term) || term;
 }
 
 /**

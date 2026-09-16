@@ -531,6 +531,10 @@ export function summarise(rows: readonly LedgerRow[]): LedgerSummary {
  * Leads with LATE, because that is the only part that needs him today, and
  * says nothing at all when nothing is late — an empty state that reads
  * "0 late" trains an owner to skim past the number on the day it isn't zero.
+ *
+ * Every figure goes through money(): this printed "$1085.06 of $11620.20
+ * in." in bold above tiles reading "$11,620.20 · billed" — the same number
+ * in two shapes on one screen.
  */
 export function ledgerHeadline(s: LedgerSummary, lagDays: number): string {
   if (s.billed === 0) return "Nothing billed yet this month.";
@@ -540,7 +544,7 @@ export function ledgerHeadline(s: LedgerSummary, lagDays: number): string {
   if (s.disputedCount > 0) {
     const n = s.disputedCount;
     const rest = s.lateCount > 0
-      ? ` ${s.lateCount} other ${s.lateCount === 1 ? "household is" : "households are"} late — $${s.lateAmount.toFixed(2)}.`
+      ? ` ${s.lateCount} other ${s.lateCount === 1 ? "household is" : "households are"} late — ${money(s.lateAmount)}.`
       : "";
     // Nothing outstanding means they are disputing a payment we already
     // recorded, not claiming an unrecorded one. Reporting "$0.00" there reads
@@ -548,16 +552,16 @@ export function ledgerHeadline(s: LedgerSummary, lagDays: number): string {
     if (s.disputedAmount === 0) {
       return `${n} ${n === 1 ? "household says a payment we've recorded isn't right" : "households say a payment we've recorded isn't right"}.${rest}`;
     }
-    return `${n} ${n === 1 ? "household says they've" : "households say they've"} paid and we haven't found it — $${s.disputedAmount.toFixed(2)}.${rest}`;
+    return `${n} ${n === 1 ? "household says they've" : "households say they've"} paid and we haven't found it — ${money(s.disputedAmount)}.${rest}`;
   }
   if (s.lateCount > 0) {
-    return `${s.lateCount} ${s.lateCount === 1 ? "household is" : "households are"} late — $${s.lateAmount.toFixed(2)}.`;
+    return `${s.lateCount} ${s.lateCount === 1 ? "household is" : "households are"} late — ${money(s.lateAmount)}.`;
   }
   if (s.outstanding > 0) {
     const grace = lagDays > 0 ? ` Nothing is late yet; you allow ${lagDays} days for the office to catch up.` : "";
-    return `$${s.collected.toFixed(2)} of $${s.billed.toFixed(2)} in.${grace}`;
+    return `${money(s.collected)} of ${money(s.billed)} in.${grace}`;
   }
-  return `Everything's in — $${s.collected.toFixed(2)}.`;
+  return `Everything's in — ${money(s.collected)}.`;
 }
 
 /**
@@ -648,6 +652,15 @@ export interface RunPlan {
   }[];
   /** Sum of `toBill[].fromOnAccount` — what comes off the total before anybody is chased. */
   fromOnAccount: number;
+  /**
+   * OLDER OPEN BILLS THE SAME MONEY SETTLES FIRST (R1). The run applies a
+   * household's money on account oldest bill first, so a cheque back on
+   * account after an un-apply goes against January before it touches the
+   * February bill being raised. The preview planned these dollars and
+   * discarded them, so the sentence he approved from named $57.47 while
+   * the run moved $600. One per older bill, month named.
+   */
+  toOlderBills: { periodMonth: string; amount: number }[];
   skippedAlreadyBilled: number;
   /**
    * Lot names, deduplicated, in read order. A prior term whose SUCCESSOR is
@@ -707,6 +720,7 @@ export function planRun(
   return {
     toBill,
     fromOnAccount: 0,
+    toOlderBills: [],
     skippedAlreadyBilled,
     expired, notYet, noRent, notMonthly,
     total: round2(toBill.reduce((s, r) => s + r.amount, 0)),
@@ -718,11 +732,18 @@ export function planRun(
  *
  * `amounts` is dollars per reservation id, from `planAllocations` — the one
  * function the run also calls, so what the preview says comes off is what the
- * run applies. Nothing else about the plan moves: the bills are still raised
- * in full, and `total` is still what is billed. What changes is that the
- * sentence can say how much of it is already in the office's hands.
+ * run applies. `older` is the same plan's dollars against the households'
+ * OLDER open bills (splitApplied, the partition the run also uses). Nothing
+ * else about the plan moves: the bills are still raised in full, and `total`
+ * is still what is billed. What changes is that the sentence can say how
+ * much of it is already in the office's hands — and where else that money
+ * goes first.
  */
-export function withOnAccount(plan: RunPlan, amounts: ReadonlyMap<string, number>): RunPlan {
+export function withOnAccount(
+  plan: RunPlan,
+  amounts: ReadonlyMap<string, number>,
+  older: readonly { periodMonth: string; amount: number }[] = [],
+): RunPlan {
   const toBill = plan.toBill.map((b) => ({
     ...b,
     fromOnAccount: round2(amounts.get(b.reservationId) ?? 0),
@@ -731,7 +752,33 @@ export function withOnAccount(plan: RunPlan, amounts: ReadonlyMap<string, number
     ...plan,
     toBill,
     fromOnAccount: round2(toBill.reduce((s, b) => s + (b.fromOnAccount ?? 0), 0)),
+    toOlderBills: older.map((o) => ({ periodMonth: o.periodMonth, amount: round2(o.amount) })),
   };
+}
+
+/**
+ * WHERE MONEY ON ACCOUNT GOES WHEN THE BILLS ARE RAISED — one clause for the
+ * preview and the run, so the sentence he approves from and the one he reads
+ * after cannot differ in shape. Older open bills first (R1), then the bill
+ * being raised: "; $1,085.06 of money on account goes against January 2027
+ * and February 2027". With nothing older it keeps the shorter form the
+ * preview always had. Empty when nothing on account moves.
+ *
+ * `verb` is the tense: the preview says what WILL happen, the run what DID.
+ */
+export function onAccountClause(
+  fromOnAccount: number,
+  toOlderBills: readonly { periodMonth: string; amount: number }[],
+  month: string,
+  verb: { preview: string; older: string },
+): string {
+  const older = toOlderBills.filter((o) => Math.round(o.amount * 100) > 0);
+  const olderTotal = older.reduce((s, o) => s + Math.round(o.amount * 100), 0) / 100;
+  if (older.length === 0) {
+    return fromOnAccount > 0 ? `, ${money(fromOnAccount)} of it ${verb.preview}` : "";
+  }
+  const months = monthList([...older.map((o) => o.periodMonth), ...(fromOnAccount > 0 ? [month] : [])]);
+  return `; ${money(round2(olderTotal + fromOnAccount))} of money on account ${verb.older} against ${months}`;
 }
 
 export function runSummary(plan: RunPlan, month: string): string {
@@ -748,9 +795,11 @@ export function runSummary(plan: RunPlan, month: string): string {
   const parts = [
     `Bill ${plan.toBill.length} ${plan.toBill.length === 1 ? "household" : "households"} for ${prettyMonth(month)} — ${money(plan.total)}` +
       // WHAT COMES OFF BEFORE ANYBODY IS CHASED. The bills are raised in full;
-      // the run then puts each household's money on account against its own
-      // bill (0167), so the owner reads the figure he is actually owed.
-      (plan.fromOnAccount > 0 ? `, ${money(plan.fromOnAccount)} of it already on account` : ""),
+      // the run then puts each household's money on account against its
+      // OLDER open bills first and then its own bill (0167, R1), so the
+      // owner reads the figure he is actually owed — and where the money
+      // goes first. A PREVIEW MUST SHOW WHAT THE RUN WILL ACTUALLY DO.
+      onAccountClause(plan.fromOnAccount, plan.toOlderBills ?? [], month, { preview: "already on account", older: "goes" }),
   ];
   if (plan.skippedAlreadyBilled > 0) parts.push(`${plan.skippedAlreadyBilled} already billed`);
   // Named in the partial line too. Ten renewed and eight not is the likelier

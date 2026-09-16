@@ -7,7 +7,7 @@ import { getStatement, type StatementPage } from "@/app/park/receipts-actions";
 import { reversePayment, refundParkPayment, refundableOn } from "@/app/park/ledger-actions";
 import {
   money, receiptsHeadline, monthPeriod, quarterPeriod, yearPeriod, customPeriod,
-  notCollectedAt, onAccountKindLabel, METHOD_LABEL,
+  notCollectedAt, takenBackWhy, onAccountKindLabel, isOnAccountRow, METHOD_LABEL,
   type Period, type OtherReceipt, type Method,
 } from "@/app/park/receipts-helpers";
 import { prettyMonth } from "@/app/park/ledger-helpers";
@@ -118,6 +118,17 @@ export function ParkStatements({
   // reassembled from the screen's totals, which exclude different things for
   // good reasons of their own.
   const fileRows = page.receipts.length + page.otherReceipts.length;
+  // Off-book rows that did not stay, and money that went back out — through
+  // the processor or across the window — all in the file and in no total,
+  // and all named under "Worth a look".
+  const otherGone = page.otherReceipts.filter((o) => notCollectedAt(o));
+  const refunds = page.otherReceipts.filter((o) => o.kind === "refund");
+  const handedBack = page.otherReceipts.filter((o) => o.kind === "handed_back");
+  // EVERY LINE MARKED "Taken back = YES" IN THE FILE — rent rows AND the
+  // off-book rows beside them. The blurb below counted rent rows alone, so
+  // one bounced quarter cheque on account and no rent reversals printed no
+  // filter warning at all over a file holding a marked row.
+  const takenBack = s.reversed.length + otherGone.length;
   const year = Number(today.slice(0, 4));
   const href =
     `/park/statements/export?from=${page.period.from}&to=${page.period.to}`;
@@ -182,39 +193,44 @@ export function ParkStatements({
           </p>
         )}
 
-        {s.count > 0 && (
+        {/* The fee row stands on its own: a window with no rent rows and one
+            on-account card still has a fee that reached the processor. */}
+        {(s.count > 0 || page.cardFeesReceivedCents > 0) && (
           <div style={{ display: "grid", gap: 2, marginTop: 14, fontVariantNumeric: "tabular-nums" }}>
-            {s.byMethod.map((b) => (
-              <Row key={b.key} label={`${b.label.toLowerCase()} (${b.count})`} value={money(b.cents)} />
-            ))}
-            <div style={{ borderTop: "1px solid var(--line)", marginTop: 6, paddingTop: 6 }}>
-              <Row label="received" value={money(s.totalCents)} strong />
-            </div>
+            {s.count > 0 && (
+              <>
+                {s.byMethod.map((b) => (
+                  <Row key={b.key} label={`${b.label.toLowerCase()} (${b.count})`} value={money(b.cents)} />
+                ))}
+                <div style={{ borderTop: "1px solid var(--line)", marginTop: 6, paddingTop: 6 }}>
+                  <Row label="received" value={money(s.totalCents)} strong />
+                </div>
+              </>
+            )}
             {/* CARD FEES SIT BELOW THE TOTAL, NEVER INSIDE IT. The by-method
                 rows above must keep summing to `received` or the statement
                 stops reconciling against itself — but the bank deposit is
                 larger by exactly this, and an accountant who cannot see why
-                stops trusting the file. */}
-            {s.cardFeesCents > 0 && (
+                stops trusting the file.
+
+                THE LOADER'S ONE FIGURE, not `s.cardFeesCents`: that is the
+                fees on rent rows alone, and this row printed $16.28 while the
+                file's Card fee column summed to $34.28 — the on-account card's
+                $18.00 was in the file and on no screen. `cardFeesReceivedCents`
+                is every fee that reached the processor in the window, less any
+                sent back with a refund, and the note below reads the same
+                field. The old "rent plus those fees" line went with it: with
+                fees on money that is not rent in the figure, that sum was
+                neither rent-plus-its-fees nor a bank total. */}
+            {page.cardFeesReceivedCents > 0 && (
               <div style={{ marginTop: 6 }}>
                 <Row
                   label="card fees on top — not yours, not in the total"
-                  value={money(s.cardFeesCents)}
-                />
-                {/* NOT A BANK TOTAL. Deposits and money on account also
-                    reached the bank in this window — the notes below this card
-                    say so in as many words — and they are deliberately outside
-                    `received`. Claiming a bank figure here that omits them put
-                    two numbers on one page that cannot both be true, and the
-                    person who finds that is an accountant. Say only what this
-                    line actually knows. */}
-                <Row
-                  label="rent plus those fees"
-                  value={money(s.totalCents + s.cardFeesCents)}
+                  value={money(page.cardFeesReceivedCents)}
                 />
               </div>
             )}
-            {page.billedInWindowCents > 0 && (
+            {s.count > 0 && page.billedInWindowCents > 0 && (
               <div style={{ marginTop: 6 }}>
                 <Row label="billed as due in this window" value={money(page.billedInWindowCents)} />
               </div>
@@ -236,7 +252,8 @@ export function ParkStatements({
       </section>
 
       {/* ---- things that need his eye ------------------------------------- */}
-      {(s.againstVoided.length > 0 || s.reversed.length > 0 || s.overpaidCents > 0 || s.otherMonthCount > 0) && (
+      {(s.againstVoided.length > 0 || s.reversed.length > 0 || otherGone.length > 0 || refunds.length > 0
+        || handedBack.length > 0 || s.overpaidCents > 0 || s.otherMonthCount > 0) && (
         <section style={{ marginTop: 16 }}>
           <div className="ll-card ll-card-pad">
             <strong style={{ fontSize: 15 }}>Worth a look</strong>
@@ -245,8 +262,8 @@ export function ParkStatements({
                 <div key={r.paymentId} style={{ fontSize: 13, lineHeight: 1.5 }}>
                   <strong>Lot {r.lotNumber}</strong> — {money(r.amountCents)} came in
                   on {longDate(r.receivedOn)} against a bill that was later cancelled. It&apos;s
-                  counted here because the money arrived; if you gave it back, that
-                  refund isn&apos;t recorded anywhere yet.
+                  counted here because the money arrived. If you sent it back to a
+                  card, that refund is its own line below and in the file.
                 </div>
               ))}
               {/* MONEY TAKEN BACK. Kept out of every total above — a bounced
@@ -267,6 +284,49 @@ export function ParkStatements({
                   in this window.
                 </div>
               )}
+              {/* THE SAME, FOR MONEY THAT WAS NOT AGAINST A BILL. A bounced
+                  quarter-ahead cheque on account used to vanish from this
+                  section, the notes and the file — the off-book read filtered
+                  it out — while the same cheque against a bill was listed
+                  here. One rule: kept, named, counted toward nothing. */}
+              {otherGone.map((o) => (
+                <div key={`gone-${o.paymentId}`} style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  <strong>{whoLine(o)}</strong> — {money(o.amountCents)}{" "}
+                  {o.kind === "deposit" ? "taken as a deposit" : o.kind === "amenity" ? "paid for something you rent out" : "received on account"}{" "}
+                  on {longDate(o.receivedOn)} and then taken back
+                  {o.bankReturnedAt ? " by the bank" : ""}
+                  {takenBackWhy(o) ? `: ${takenBackWhy(o)}` : ""}. It is NOT counted
+                  in the totals above.
+                </div>
+              ))}
+              {/* MONEY THAT WENT BACK TO A CARD (0142). Not taken off the
+                  total — cash basis counts what arrived on the day it arrived
+                  — and named here because each one is a negative line in the
+                  file he is about to forward. */}
+              {refunds.map((o, i) => (
+                <div key={`refund-${o.paymentId}-${i}`} style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  <strong>{whoLine(o)}</strong> — {money(-o.amountCents)} was sent back
+                  to {o.method === "ach" ? "their bank account" : "the card"} on {longDate(o.receivedOn)}
+                  {o.feeCents < 0 ? `, with ${money(-o.feeCents)} of card fee` : ""}
+                  {o.reference ? ` (${o.reference})` : ""}. It is NOT taken off the
+                  total above — it&apos;s its own line in the file, as a negative amount
+                  on the day it went back.
+                </div>
+              ))}
+              {/* MONEY HANDED BACK ACROSS THE WINDOW — a deposit returned, rent
+                  on account handed back to a household that has gone. No
+                  processor; the record is the stamp on the payment. The same
+                  treatment as a refund: named here, a negative line in the
+                  file on the day it went back, never taken off the total. */}
+              {handedBack.map((o, i) => (
+                <div key={`handed-${o.paymentId}-${i}`} style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  <strong>{whoLine(o)}</strong> — {money(-o.amountCents)} was handed back
+                  to them on {longDate(o.receivedOn)}
+                  {o.reference ? ` — ${o.reference}` : ""}. It is NOT taken off the
+                  total above — it&apos;s its own line in the file, as a negative amount
+                  on the day it went back.
+                </div>
+              ))}
               {s.overpaidCents > 0 && (
                 <div style={{ fontSize: 13, lineHeight: 1.5 }}>
                   {money(s.overpaidCents)} more came in than was billed — somebody
@@ -301,23 +361,32 @@ export function ParkStatements({
               kept in step with the file. It is taken from the two arrays the
               route literally passes to `receiptsCsv`, which is one row each.
               Derive, don't denormalise: the only way to be wrong now is to
-              pass a third array to the file and not to this. */}
+              pass a third array to the file and not to this.
+
+              "LINES", NOT "PAYMENTS": a refund or a hand-back is a line of
+              money going OUT, and a January with one card payment and one
+              refund read "Download 2 payments". */}
           {fileRows > 0
-            ? `Download ${fileRows} ${fileRows === 1 ? "payment" : "payments"} for your accountant`
+            ? `Download ${fileRows} ${fileRows === 1 ? "line" : "lines"} for your accountant`
             : "Download the empty file anyway"}
         </a>
         <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
           A spreadsheet — one line per payment, with the date, amount, how it was
           paid, which lot and what the bill was made up of.{" "}
-          {s.reversed.length > 0
-            ? `${s.reversed.length} taken-back ${s.reversed.length === 1 ? "payment is" : "payments are"} in the file too, marked "Taken back" — they're excluded from the totals above, so don't sum the Amount column without filtering that out.`
+          {/* EVERY marked line — rent rows and the off-book rows beside them.
+              A bounced on-account cheque is in the file with Taken back = YES
+              exactly as a rent row is, and the accountant filtering the
+              column must be told about all of them, not the rent ones. */}
+          {takenBack > 0
+            ? `${takenBack} taken-back ${takenBack === 1 ? "line is" : "lines are"} in the file too, marked "Taken back" — they're excluded from the totals above, so don't sum the Amount column without filtering that out.`
             : ""}{" "}
-          {/* These rows have no lot and no bill — a deposit isn't rent. Said
-              here because the sentence above promises "which lot and what the
-              bill was made up of" for every line, and for these it is blank
-              on purpose rather than missing. */}
+          {/* These rows have no bill — a deposit isn't rent. Said here
+              because the sentence above promises "what the bill was made up
+              of" for every line, and for these it is blank on purpose rather
+              than missing. The lot IS filled now: every on-account row and
+              every deposit is somebody's money, and the file names them. */}
           {page.otherReceipts.length > 0
-            ? `${page.otherReceipts.length} ${page.otherReceipts.length === 1 ? "line is" : "lines are"} money that isn't rent — deposits, money on account and anything you rent out. They're in the file with the Kind saying which, and no lot or bill against them.`
+            ? `${page.otherReceipts.length} ${page.otherReceipts.length === 1 ? "line is" : "lines are"} money that isn't rent against a bill — deposits, money on account, anything you rent out, and anything given back, whether sent back through the processor or handed back across the window. They're in the file with the Kind saying which, and no bill against them.`
             : ""}{" "}
           Nothing is rounded
           or summarised in it.
@@ -516,8 +585,9 @@ export function ParkStatements({
  * (`onAccountKindLabel`), so the screen and the CSV cannot disagree.
  */
 function OnAccountRows({ rows }: { rows: OtherReceipt[] }) {
-  // Deposits go back and amenity money is income; neither is on account.
-  const acct = rows.filter((o) => o.kind !== "deposit" && o.kind !== "amenity");
+  // Deposits go back, amenity money is income, and a refund is money going
+  // OUT; none is on account. The file's own test decides.
+  const acct = rows.filter(isOnAccountRow);
   if (acct.length === 0) return null;
   return (
     <section style={{ marginTop: 22 }}>
@@ -540,14 +610,30 @@ function OnAccountRows({ rows }: { rows: OtherReceipt[] }) {
               <span className="mut" style={{ minWidth: 130, fontVariantNumeric: "tabular-nums" }}>
                 {longDate(o.receivedOn)}
               </span>
+              {/* WHOSE MONEY. The row printed a date, a cheque number and an
+                  amount and named nobody — the accountant tying cheque 2101
+                  to a household ledger had nothing. The name is the roll's;
+                  the lot is the household's live tenancy's. */}
+              <span style={{ minWidth: 56 }}>{whoLine(o)}</span>
               <span className="mut" style={{ fontSize: 13, flex: 1 }}>
                 {(METHOD_LABEL[o.method as Method] ?? o.method).toLowerCase()}{o.reference ? ` ${o.reference}` : ""}
               </span>
-              {o.appliedTo != null && <span className="ll-pill slate">{onAccountKindLabel(o)}</span>}
-              <span style={{ minWidth: 88, textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+              {/* TAKEN BACK: the same two words the rent rows use, for the
+                  same two events. Struck through, never dropped. */}
+              {o.bankReturnedAt && <span className="ll-pill red">bank returned it</span>}
+              {o.reversedAt && !o.bankReturnedAt && <span className="ll-pill slate">taken back</span>}
+              {!notCollectedAt(o) && o.appliedTo != null && <span className="ll-pill slate">{onAccountKindLabel(o)}</span>}
+              <span style={{ minWidth: 88, textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums",
+                             textDecoration: notCollectedAt(o) ? "line-through" : undefined,
+                             opacity: notCollectedAt(o) ? 0.55 : 1 }}>
                 {money(o.amountCents)}
               </span>
-              {o.appliedTo != null && (
+              {notCollectedAt(o) ? (
+                <div className="mut" style={{ flexBasis: "100%", fontSize: 12.5, lineHeight: 1.5 }}>
+                  Taken back on {longDate(notCollectedAt(o))}
+                  {takenBackWhy(o) ? ` — ${takenBackWhy(o)}` : ""}. It counts toward nothing.
+                </div>
+              ) : o.appliedTo != null && (
                 <div className="mut" style={{ flexBasis: "100%", fontSize: 12.5, lineHeight: 1.5 }}>
                   {applied.length === 0
                     // "Comes off the next bill" is true only while the view says
@@ -568,6 +654,16 @@ function OnAccountRows({ rows }: { rows: OtherReceipt[] }) {
     </section>
   );
 }
+
+/** "Lot 9 · Household 9", "Household 9", "Lot 9", or "—" — whatever the record carries. */
+function whoLine(o: Pick<OtherReceipt, "lotNumber" | "payerName">): string {
+  const bits = [o.lotNumber ? `Lot ${o.lotNumber}` : "", o.payerName ?? ""].filter(Boolean);
+  return bits.length ? bits.join(" · ") : "—";
+}
+
+// The reason a row did not stay is the file's Reason cell — `takenBackWhy`
+// from receipts-helpers, imported above. This file used to keep its own copy
+// of that derivation, the fourth in the codebase.
 
 function Chip({ label, onClick, busy }: { label: string; onClick: () => void; busy: boolean }) {
   return (

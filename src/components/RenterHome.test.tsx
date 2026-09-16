@@ -43,7 +43,7 @@ const view = (over: Partial<RenterHomeView> = {}): RenterHomeView => ({
   textsOn: false, textNumber: null, term: "Month to month", leavingOn: null,
   acceptsOnlineRent: false, hasCard: false, bookingReady: false, cardFeePct: 0,
   today: "2027-01-02",
-  bill: null, arrears: [], tenancyEnded: null, deposit: null,
+  bill: null, arrears: [], tenancyEnded: null, finalMonthBilled: false, deposit: null, depositReturned: null,
   payments: [], reported: [], reportedFailed: false,
   ...over,
 });
@@ -116,10 +116,15 @@ const PAID: PaymentRow = {
   method: "ach",
   receiptNo: 104,
   bankReturnedOn: null,
+  takenBackOn: null,
+  takenBackWhy: null,
+  handedBack: 0,
+  handedBackOn: null,
 };
 
 describe("a payment the bank sent back", () => {
-  const returned: PaymentRow = { ...PAID, bankReturnedOn: "2027-02-04T00:00:00Z" };
+  // The loader writes both: takenBackOn = reversed_at ?? returned_at.
+  const returned: PaymentRow = { ...PAID, bankReturnedOn: "2027-02-04T15:00:00Z", takenBackOn: "2027-02-04T15:00:00Z", takenBackWhy: "R01" };
 
   it("is drawing the real list at all", () => {
     // Otherwise every assertion below is green against a screen with no
@@ -151,7 +156,105 @@ describe("a payment the bank sent back", () => {
     // test above and terrifies everybody who paid on time.
     const html = renderToStaticMarkup(<RenterHome view={view({ payments: [PAID] })} />);
     expect(html).not.toMatch(/bank sent this payment back/);
+    expect(html).not.toMatch(/taken back/);
     expect(html).not.toMatch(/line-through/);
+  });
+
+  it("prints the day in words on the lakes' clock — a timestamp, never 'Invalid Date'", () => {
+    // `returned_at` is a timestamptz. The screen's own pretty() splits on "-"
+    // and printed "Your bank sent this payment back on Invalid Date".
+    const w = words(view({ payments: [returned] }));
+    expect(w).not.toMatch(/Invalid Date/);
+    expect(w).toMatch(/Your bank sent this payment back on Thursday, February 4, 2027, so this month is showing as unpaid again\./);
+  });
+});
+
+/**
+ * THE CHEQUE THAT BOUNCED. At a park where 17 of 18 pay by cheque, a bounce
+ * is a REVERSAL — the database refuses `returned_at` on a cheque (0155) and
+ * the office's only door is reversePayment. The list dropped every reversed
+ * row, so a household holding receipt #101 read "Nothing recorded yet" under
+ * two months that had flipped to unpaid with no sentence why — while her own
+ * /paid link said "This payment was taken back on … — the cheque bounced".
+ * Two resident surfaces, one truth.
+ */
+describe("a cheque the office took back", () => {
+  const bounced: PaymentRow = { ...PAID, method: "check", receiptNo: 101, amount: 1627.59,
+    takenBackOn: "2027-02-10T20:30:00Z", takenBackWhy: "the cheque bounced" };
+
+  it("stays on the list, struck through, with its receipt number", () => {
+    const html = renderToStaticMarkup(<RenterHome view={view({ payments: [bounced] })} />);
+    expect(html).toMatch(/#101/);
+    expect(html).toMatch(/line-through/);
+    expect(html).not.toMatch(/Nothing recorded yet/);
+  });
+
+  it("says what happened, in the words her /paid link already uses — the day in words, and the office's reason — as the EVENT, never the state of her bills now", () => {
+    const w = words(view({ payments: [bounced] }));
+    expect(w).toMatch(/This payment was taken back on Wednesday, February 10, 2027 — the cheque bounced\. Anything it had paid was reopened that day\./);
+    // Once she has paid January again another way, "is showing as owed
+    // again" is false on the same screen that shows it paid.
+    expect(w).not.toMatch(/is showing as owed again/);
+    // Never "your bank": the ledger cannot tell a bounce from a typo.
+    expect(w).not.toMatch(/bank sent this payment back/);
+    expect(w).not.toMatch(/Invalid Date/);
+  });
+
+  it("a reason the record does not carry is left out, not printed as 'null' or '— .'", () => {
+    const w = words(view({ payments: [{ ...bounced, takenBackWhy: null }] }));
+    expect(w).toMatch(/This payment was taken back on Wednesday, February 10, 2027\. Anything it had paid was reopened that day\./);
+    expect(w).not.toMatch(/null/);
+    expect(w).not.toMatch(/— \./);
+  });
+
+  it("the strike-through and the sentence both key on takenBackOn — collapse either and the row reads as money", () => {
+    const src = readFileSync(fileURLToPath(new URL("./RenterHome.tsx", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).toMatch(/textDecoration: p\.takenBackOn \? "line-through"/);
+    expect(src).toMatch(/longDay\(p\.takenBackOn\)/);
+    expect(src).toMatch(/longDay\(p\.bankReturnedOn\)/);
+    expect(src, "the bank-return line is back on pretty(), which prints Invalid Date for a timestamp").not.toMatch(/pretty\(p\.bankReturnedOn\)/);
+    expect(src).toMatch(/import \{ longDay \} from "@\/lib\/lake-time"/);
+  });
+});
+
+/**
+ * MONEY ON ACCOUNT AFTER THE LAST BILL. "It comes off your bills, oldest
+ * first" is true right up to the final month; once the tenancy has ended AND
+ * that month is billed there will never be another bill, and the card
+ * promised one to the person the money belongs to. Whether it is owed back
+ * to her is the office's to say — the card says only what is true.
+ */
+describe("the on-account card once the tenancy has ended", () => {
+  const gone = (over: Partial<RenterHomeView> = {}) =>
+    view({ tenancyEnded: "2027-01-27", onAccount: 57.47, ...over });
+
+  it("with the move-out month billed: nothing more bills — never 'comes off your bills'", () => {
+    const w = words(gone({ finalMonthBilled: true }));
+    const card = w.slice(w.indexOf("On account"), w.indexOf("Your agreement"));
+    expect(card).toMatch(/\$57\.47/);
+    expect(card).toMatch(/with the office — nothing more bills for you/);
+    expect(card).not.toMatch(/comes off your bills/);
+    // Not a product decision the owner has not made.
+    expect(w).not.toMatch(/owed back|refund/i);
+  });
+
+  it("with the move-out month NOT yet billed: the final part-month is still coming, and the money will come off it", () => {
+    const w = words(gone({ finalMonthBilled: false }));
+    const card = w.slice(w.indexOf("On account"), w.indexOf("Your agreement"));
+    expect(card).toMatch(/comes off your bills, oldest first/);
+    expect(card).not.toMatch(/nothing more bills/);
+  });
+
+  it("a standing tenancy is unchanged, whatever the flag says", () => {
+    const w = words(view({ onAccount: 57.47, tenancyEnded: null, finalMonthBilled: true }));
+    const card = w.slice(w.indexOf("On account"), w.indexOf("Your agreement"));
+    expect(card).toMatch(/comes off your bills, oldest first/);
+  });
+
+  it("the wrap-up lists money on account among what keeps the page open", () => {
+    const w = words(gone({ finalMonthBilled: true }));
+    expect(w).toMatch(/anything you still owe, any deposit still held, and any money of yours still on account\./);
   });
 });
 
@@ -258,5 +361,48 @@ describe("the receipts promise", () => {
     expect(w).toMatch(/last two years are below/);
     // And it says where the rest are, rather than implying they are gone.
     expect(w).toMatch(/by receipt number/);
+  });
+});
+
+/**
+ * THE FOURTH EXIT, ON HER SCREEN. The $57.47 of a $600 cheque handed back
+ * across the window after she left (0168): her on-account card had already
+ * stopped counting it, so the card simply shrank and the cheque sat on her
+ * list unmarked. And a deposit returned read "None held." — true, and
+ * silent about the return she was waiting on.
+ */
+describe("money handed back to her across the window", () => {
+  const cheque: PaymentRow = { ...PAID, method: "check", receiptNo: 14, amount: 600, handedBack: 57.47, handedBackOn: "2027-01-28" };
+
+  it("says, under the cheque, how much of it came back and the day — in words", () => {
+    const w = words(view({ payments: [cheque] }));
+    expect(w).toMatch(/\$600\.00/);
+    expect(w).toMatch(/\$57\.47 of this was handed back to you on Thursday, January 28, 2027\./);
+    expect(w).not.toMatch(/2027-01-28/);
+    // Not taken back, not struck through: the cheque arrived and stands.
+    const html = renderToStaticMarkup(<RenterHome view={view({ payments: [cheque] })} />);
+    expect(html).not.toMatch(/line-through/);
+    expect(w).not.toMatch(/taken back/);
+  });
+
+  it("says nothing of the kind about a payment nothing came back from", () => {
+    expect(words(view({ payments: [PAID] }))).not.toMatch(/handed back/);
+  });
+
+  it("the deposit card names a return instead of 'None held.' alone", () => {
+    const w = words(view({ deposit: null, depositReturned: { amount: 500, on: "2027-02-03" } }));
+    expect(w).toMatch(/None held\. \$500\.00 was handed back to you on Wednesday, February 3, 2027\./);
+    expect(words(view({ deposit: null, depositReturned: null }))).toMatch(/None held\./);
+    expect(words(view({ deposit: null, depositReturned: null }))).not.toMatch(/handed back/);
+  });
+
+  it("the line keys on handedBack AND handedBackOn — a stamp with no amount, or an amount with no day, prints nothing", () => {
+    expect(words(view({ payments: [{ ...cheque, handedBack: 0 }] }))).not.toMatch(/handed back/);
+    expect(words(view({ payments: [{ ...cheque, handedBackOn: null }] }))).not.toMatch(/handed back/);
+    const src = readFileSync(fileURLToPath(new URL("./RenterHome.tsx", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).toMatch(/p\.handedBack > 0 && p\.handedBackOn &&/);
+    expect(src).toMatch(/longDay\(p\.handedBackOn\)/);
+    expect(src).toMatch(/longDay\(view\.depositReturned\.on\)/);
   });
 });

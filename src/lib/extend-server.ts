@@ -3,8 +3,9 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange, toDaterange, effectiveSeason, type DateRange, type Term } from "@/lib/parks";
-import { canExtend, refusalText, type ExtendRefusal } from "@/lib/extend-stay";
-import { offeredAgreementLengths, agreementMonthsFor, agreementSeasonEnd } from "@/app/park/agreement-helpers";
+import { canExtend, refusalText, type ExtendRefusal, type MonthlyFee } from "@/lib/extend-stay";
+import { offeredAgreementLengths, agreementMonthsFor, agreementSeasonEnd, successorStatus } from "@/app/park/agreement-helpers";
+import { feesForTenancy } from "@/app/park/fee-helpers";
 import { isExtendToken } from "@/lib/token-format";
 import { servedRentHistory } from "@/lib/rent-changes";
 import { rentForPeriod } from "@/app/park/rerate-helpers";
@@ -18,6 +19,9 @@ import { successorRow } from "@/lib/successor-row";
 export interface ExtendView {
   reservationId: string;
   lotNumber: string;
+  /** long_term | short_term — what the lot is called to the household
+   *  ("lot" or "site", lotWord) and whether a monthly fee reaches it. */
+  rentalMode: string | null;
   parkName: string;
   renterName: string;
   term: Term;
@@ -34,7 +38,18 @@ export interface ExtendView {
    * so the two cannot come apart.
    */
   price: number | null;
+  /**
+   * THE FEES THE SUCCESSOR'S HOUSEHOLD WILL BE BILLED EACH MONTH beside the
+   * rent — the park's active monthly fees that reach this lot's mode and a
+   * successor written as 'office' (feesForTenancy, the biller's own rule).
+   * The text, the page and the page after the tap quote rent AND fee, so
+   * "$400 a month" never describes an agreement that bills $542.53. Empty
+   * at a park with no fee; on a short-term lot; on an extension.
+   */
+  monthlyFees: MonthlyFee[];
   refusal: ExtendRefusal | null;
+  /** The refusal in the household's words — for `already_renewed` it names
+   *  their next agreement's dates; for `lot_taken` the lot's own noun. */
   message: string | null;
   /** True when this park writes a NEW agreement instead of widening this one. */
   isRenewal: boolean;
@@ -175,7 +190,7 @@ export async function extendViewFor(
     // THE LOT'S SEASON TOO — a slip closes before its park does, and the
     // successor is cut to it exactly as the owner's door cuts it (loadTerms).
     admin.from("park_lots")
-      .select("lot_number, park_id, season_open_month, season_open_day, season_close_month, season_close_day")
+      .select("lot_number, park_id, rental_mode, season_open_month, season_open_day, season_close_month, season_close_day")
       .eq("id", res.park_lot_id).maybeSingle(),
     admin.from("park_renters").select("display_name").eq("id", res.renter_id).maybeSingle(),
   ]);
@@ -186,16 +201,18 @@ export async function extendViewFor(
   // it is only reached when the read RAN and found nothing.
   if (!lot) return null;
 
-  const [parkRes, rateRes, othersRes, depositRes] = await Promise.all([
+  const [parkRes, rateRes, othersRes, depositRes, feeRes] = await Promise.all([
     // THE HOUSE STYLE TOO. Only the cap was read, and the cap was the length.
     // And the park's season, which the lot inherits when it has none of its own.
     admin.from("parks")
       .select("name, max_agreement_months, default_agreement_months, season_open_month, season_open_day, season_close_month, season_close_day")
       .eq("id", lot.park_id as string).maybeSingle(),
     admin.from("lot_rates").select("term, amount").eq("park_lot_id", res.park_lot_id),
+    // WHOSE, as well as when: the household's own next agreement sits on
+    // this lot too, and it is not a clash.
     admin
       .from("lot_reservations")
-      .select("id, during, status")
+      .select("id, renter_id, during, status")
       .eq("park_lot_id", res.park_lot_id)
       .in("status", ["approved", "active"]),
     // Money of theirs the park is holding — the resident's own front page's
@@ -213,6 +230,14 @@ export async function extendViewFor(
       .is("returned_on", null)
       .is("returned_at", null)
       .limit(1),
+    // WHAT THE SUCCESSOR BILLS BESIDE THE RENT — the same read and rule the
+    // owner's signing toast uses (sign-actions): active park fees, filtered
+    // below to the monthly ones the biller charges.
+    admin
+      .from("park_fees")
+      .select("label, amount, cadence, applies_to")
+      .eq("park_id", lot.park_id as string)
+      .eq("active", true),
   ]);
   // FAILS OPEN IF LEFT ALONE, twice over. A failed `parks` read leaves
   // capMonths null, which switches the agreement cap OFF and turns a renewal
@@ -225,16 +250,45 @@ export async function extendViewFor(
   // And a failed deposit read must not quietly print nothing about a $500
   // the household is owed — or "carries over" at one they never paid.
   const deposits = mustRead("the household's deposit", depositRes);
+  // A failed fee read must not print "$400 a month" as the all-in — the
+  // household would act on a number a third short of the bill.
+  const feeRows = mustRead("the park's fees", feeRes);
 
   const range = parseDaterange(res.during);
   const term = res.term as Term;
 
-  // Everything else DECIDED on this lot — excluding the stay being extended,
-  // so an overlap here is a genuine clash with somebody else.
-  const otherHeld: DateRange[] = (others ?? [])
+  // Everything else DECIDED on this lot — excluding the stay being extended
+  // — PARTITIONED. A later row for the SAME household, starting on or after
+  // this one's end, is `ownSuccessor`, the earliest of them: at a capped
+  // park their next agreement (written by their earlier tap, or by the
+  // office for them), and at a park with no cap simply their own later
+  // booking, which canExtend holds for the clash test like anybody else's.
+  // Everything else is somebody else's, and only that is a clash. Keyed on
+  // the renter, not the chain: a gap renewal from the office starts a new
+  // chain for the same household.
+  const decided = (others ?? [])
     .filter((o) => o.id !== res.id)
-    .map((o) => parseDaterange(o.during as string))
-    .filter((r): r is DateRange => r != null);
+    .map((o) => ({ renterId: (o.renter_id as string | null) ?? null, range: parseDaterange(o.during as string) }))
+    .filter((o): o is { renterId: string | null; range: DateRange } => o.range != null);
+  const isOwn = (o: { renterId: string | null; range: DateRange }) =>
+    o.renterId === res.renter_id && range != null && o.range.start >= range.end;
+  const ownSuccessor: DateRange | null = decided
+    .filter(isOwn)
+    .map((o) => o.range)
+    .sort((a, b) => a.start.localeCompare(b.start))[0] ?? null;
+  const otherHeld: DateRange[] = decided.filter((o) => !isOwn(o)).map((o) => o.range);
+
+  // THE FEES THIS HOUSEHOLD WILL BE BILLED with the successor's rent — the
+  // biller's filter (monthly, an audience the run honours) and its rule
+  // (feesForTenancy: never a short-term lot, never an inherited tenancy —
+  // and the successor is written 'office', which is what the tap writes).
+  const monthlyFees: MonthlyFee[] = feesForTenancy(
+    (feeRows ?? [])
+      .filter((f) => (f.cadence as string) === "monthly")
+      .filter((f) => ["all_lots", "long_term"].includes(f.applies_to as string)),
+    { rental_mode: lot.rental_mode },
+    { origin: "office" },
+  ).map((f) => ({ label: (f.label as string) ?? "fee", amount: Number(f.amount) }));
 
   const capMonths = (park?.max_agreement_months as number | null) ?? null;
   const defaultMonths = (park?.default_agreement_months as number | null) ?? null;
@@ -287,6 +341,7 @@ export async function extendViewFor(
     status: res.status,
     todayISO: todayLakeDate(),
     otherHeld,
+    ownSuccessor,
     rates: (rateRows ?? []).map((r) => ({ term: r.term as Term, amount: Number(r.amount) })),
     capMonths,
     defaultMonths,
@@ -319,6 +374,7 @@ export async function extendViewFor(
   return {
     reservationId: res.id,
     lotNumber: (lot.lot_number as string) ?? "",
+    rentalMode: (lot.rental_mode as string | null) ?? null,
     parkName: (park?.name as string) ?? "the park",
     renterName: (renter?.display_name as string) ?? "there",
     term,
@@ -326,8 +382,9 @@ export async function extendViewFor(
     newEnd: verdict.ok ? verdict.range!.end : null,
     newStart: verdict.ok ? verdict.range!.start : null,
     price: verdict.ok ? verdict.price! : null,
+    monthlyFees: verdict.ok && verdict.isRenewal ? monthlyFees : [],
     refusal: verdict.refusal ?? null,
-    message: verdict.refusal ? refusalText(verdict.refusal) : null,
+    message: verdict.refusal ? refusalText(verdict.refusal, ownSuccessor, lot.rental_mode as string | null) : null,
     // At a park that caps agreement length this is not an extension at all —
     // it is the NEXT AGREEMENT, and the screen has to say so, because signing
     // one is a different act from staying on.
@@ -368,11 +425,18 @@ export async function extendByToken(
   /** Set on a renewal: the length written, and the monthly rent it was written at. */
   renewMonths?: number | null;
   price?: number | null;
+  /** The fees billed beside that rent — the page after the tap quotes both. */
+  monthlyFees?: MonthlyFee[];
+  /** What the lot is called to them — "lot" or "site" (lotWord). */
+  rentalMode?: string | null;
   term?: Term;
   /** On a renewal: the season, not the length, set `newEnd` — say so. */
   cutShortBySeason?: boolean;
   depositHeld?: boolean;
   error?: string;
+  /** The loader's refusal, when that is why nothing was written — so the
+   *  page after a replayed tap can tell "already set" from an error. */
+  refusal?: ExtendRefusal;
 }> {
   // The loader THROWS on a failed read (a page can render an honest error; a
   // button awaiting { ok, error } cannot), so this is where that is turned
@@ -385,7 +449,7 @@ export async function extendByToken(
   }
   if (!view) return { ok: false, error: refusalText("not_found") };
   if (view.refusal || !view.newEnd) {
-    return { ok: false, error: view.message ?? refusalText("not_extendable") };
+    return { ok: false, error: view.message ?? refusalText("not_extendable"), refusal: view.refusal ?? undefined };
   }
   // A RENEWAL IS WRITTEN AT THE LENGTH THEY PICKED, AND ONLY THAT. The loader
   // resolved the view at the posted length and refused one the park does not
@@ -462,7 +526,10 @@ export async function extendByToken(
       {
         start: view.newStart,
         end: view.newEnd,
-        status: "active",
+        // ONE RULE with the owner's door: approved until it starts, active
+        // from its first morning. This door wrote `active` for a row that
+        // had not begun while the owner's wrote `approved` for the same fact.
+        status: successorStatus(view.newStart, todayLakeDate()),
         quotedAmount,
         origin: "office",
         // extendedRange starts the successor the morning this one ends.
@@ -473,15 +540,18 @@ export async function extendByToken(
     ));
 
     if (insErr) {
-      if (insErr.code === "23P01") return { ok: false, error: refusalText("lot_taken") };
+      if (insErr.code === "23P01") return { ok: false, error: refusalText("lot_taken", null, view.rentalMode) };
       return { ok: false, error: "Something went wrong — give the park a call and they'll sort it." };
     }
 
-    // Clear the reminder on the OLD agreement so the new one gets asked in its
-    // own right when its time comes.
+    // The OLD agreement keeps its stamp: it WAS asked, and that is how this
+    // row came to be. The successor is born with a stamp of its own (null),
+    // so it is asked in its own right when its time comes. Clearing the old
+    // stamp put the old row back into the nightly sweep the very next
+    // night, where its own successor read as "lot taken".
     await admin
       .from("lot_reservations")
-      .update({ extend_reminded_at: null, extended_at: new Date().toISOString() })
+      .update({ extended_at: new Date().toISOString() })
       .eq("id", view.reservationId);
 
     // `depositHeld` travels with the answer so the page after the tap can say
@@ -493,6 +563,8 @@ export async function extendByToken(
       newEnd: view.newEnd,
       renewMonths: view.renewMonths,
       price: view.price,
+      monthlyFees: view.monthlyFees,
+      rentalMode: view.rentalMode,
       term: view.term,
       cutShortBySeason: view.cutShortBySeason,
       depositHeld: view.depositHeld,
@@ -516,12 +588,12 @@ export async function extendByToken(
     .select("id");
 
   if (error) {
-    if (error.code === "23P01") return { ok: false, error: refusalText("lot_taken") };
+    if (error.code === "23P01") return { ok: false, error: refusalText("lot_taken", null, view.rentalMode) };
     return { ok: false, error: "Something went wrong — give the park a call and they'll sort it." };
   }
   if (!updated || updated.length === 0) {
     return { ok: false, error: "That stay just changed. Refresh, or give the park a call." };
   }
 
-  return { ok: true, newEnd: view.newEnd, renewMonths: null, depositHeld: view.depositHeld };
+  return { ok: true, newEnd: view.newEnd, renewMonths: null, rentalMode: view.rentalMode, depositHeld: view.depositHeld };
 }

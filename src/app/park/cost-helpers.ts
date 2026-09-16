@@ -531,16 +531,26 @@ export interface CostScheduleInput {
 }
 
 /**
- * WHICH PERIOD A BILL IS CURRENTLY DUE FOR, and what to call it.
+ * WHICH PERIOD A BILL IS CURRENTLY DUE IN, and what to call it.
  *
  * The whole reason this exists: a task keyed on the calendar month nags twelve
  * times a year about a bill that arrives once. A property tax reminder must be
- * one task with one name — "Property tax for 2026" — and it must go quiet the
- * moment the bill is entered and stay quiet until next November.
+ * one task with one name, and it must go quiet the moment the bill is entered
+ * and stay quiet until next November.
  *
  * `from`/`to` are the window a matching cost must fall in, half-open like every
  * other window here. `key` goes in the task id, so the same bill in the same
  * period is the same task no matter how many mornings he opens the screen.
+ *
+ * THE LABEL NAMES THE DUE DATE, NOT A PERIOD. This used to label the yearly
+ * bill by the year it is due in ("2027") and the monthly one by its due
+ * month ("January 2027"), and the card read "Property tax for 2027" about
+ * the bill due 10 November 2027 — which at an Indiana park is the 2026 tax,
+ * the seller's year — and "sewer for January 2027" about the bill dated
+ * 5 January for December's service. The schedule knows WHEN a bill lands;
+ * it does not know what period it covers, so the label says only what it
+ * knows: "due November 10, 2027" for a yearly bill, "(bill due January 5)"
+ * for a monthly or quarterly one.
  */
 export function billPeriod(
   cadence: Cadence,
@@ -557,7 +567,7 @@ export function billPeriod(
   if (cadence === "monthly") {
     const key = `${y}-${String(m).padStart(2, "0")}`;
     return {
-      key, label: prettyMonthName(y, m), dueOn: `${key}-${day}`,
+      key, label: `(bill due ${monthDay(y, m, Number(day))})`, dueOn: `${key}-${day}`,
       from: iso(y, m), to: m === 12 ? iso(y + 1, 1) : iso(y, m + 1),
     };
   }
@@ -575,7 +585,7 @@ export function billPeriod(
     const emm = em > 12 ? em - 12 : em;
     return {
       key: `${sy}-Q${sm}`,
-      label: `the ${prettyMonthName(sy, sm)} quarter`,
+      label: `(bill due ${monthDay(sy, sm, Number(day))})`,
       dueOn: `${sy}-${String(sm).padStart(2, "0")}-${day}`,
       from: iso(sy, sm), to: iso(ey, emm),
     };
@@ -584,17 +594,19 @@ export function billPeriod(
   // ANNUAL. The year it is due in is THIS year if the due month has not passed
   // by more than its window, and the window is the whole year — a tax bill
   // entered in December still answers November's reminder.
+  const dm = dueMonth ?? 1;
   return {
     key: String(y),
-    label: String(y),
-    dueOn: `${y}-${String(dueMonth ?? 1).padStart(2, "0")}-${day}`,
+    label: `due ${monthDay(y, dm, Number(day))}, ${y}`,
+    dueOn: `${y}-${String(dm).padStart(2, "0")}-${day}`,
     from: iso(y, 1), to: iso(y + 1, 1),
   };
 }
 
-function prettyMonthName(y: number, m: number): string {
-  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-US", {
-    month: "long", year: "numeric", timeZone: "UTC",
+/** "November 10" — a due day without its year (the yearly label adds it). */
+function monthDay(y: number, m: number, d: number): string {
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
+    month: "long", day: "numeric", timeZone: "UTC",
   });
 }
 

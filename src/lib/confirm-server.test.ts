@@ -180,12 +180,16 @@ describe("a split receipt shows what was handed over", () => {
       { id: "al-1", payment_id: "pay-acct", charge_id: "charge-feb", amount: 542.53 },
       { id: "al-0", payment_id: "pay-acct", charge_id: "charge-9", amount: 40, removed_at: "2027-01-09T00:00:00Z", removed_reason: "wrong month" },
     );
-    db.park_refunds = [{ id: "rf-1", payment_id: "pay-acct", amount: 57.47 }];
+    db.park_refunds = [{ id: "rf-1", payment_id: "pay-acct", amount: 57.47, fee_amount: 0, created_at: "2027-01-25T15:00:00Z" }];
     const v = await loadPaymentByToken(ACCT_TOKEN);
     expect(v!.allocations, "the removed line is not where the money went").toEqual([{ periodMonth: "2027-02", amount: 542.53 }]);
     expect(v!.onAccountRemaining).toBe(0);
     expect(v!.whereItWent).toBe("$542.53 to February 2027");
     expect(v!.takenBackOn).toBeNull();
+    // And the $57.47 that went back is on the page — the view had netted it,
+    // so $600 with "$542.53 to February 2027" left $57.47 unexplained on the
+    // one page built to show every event on her money.
+    expect(v!.sentBack).toEqual([{ amount: 57.47, fee: 0, on: "2027-01-25T15:00:00Z", method: "check" }]);
   });
 
   it("a quarter-ahead cheque that BOUNCED after the run spent it: nothing is on account, and the page knows it was taken back", async () => {
@@ -236,7 +240,7 @@ describe("a split receipt shows what was handed over", () => {
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     const load = src.match(/export async function loadPaymentByToken[\s\S]*?\n}/)?.[0] ?? "";
     expect(load.length).toBeGreaterThan(300);
-    expect(load).toMatch(/reversed_at, reversed_reason, returned_at, return_code"\)/);
+    expect(load).toMatch(/reversed_at, reversed_reason, returned_at, return_code, returned_on, returned_amount, return_note"\)/);
     expect(load).toMatch(/takenBackOn:/);
     const went = src.match(/async function whereItWent[\s\S]*?\n}/)?.[0] ?? "";
     expect(went.length).toBeGreaterThan(200);
@@ -441,11 +445,11 @@ describe("the claim she files quotes the figure she was shown", () => {
     // is reported, never used to drop half of what she handed over.
     const helper = src.slice(src.indexOf("async function wholeHandedOver"), src.indexOf("export async function loadPaymentByToken"));
     expect(helper.length).toBeGreaterThan(300);
-    expect(helper).toMatch(/select\("id, amount, charge_id, reversed_at, reversed_reason, returned_at, return_code"\)/);
+    expect(helper).toMatch(/select\("id, amount, charge_id, method, reversed_at, reversed_reason, returned_at, return_code, returned_on, returned_amount, return_note"\)/);
     expect(helper, "the sibling read must not filter on standing").not.toMatch(/\.is\("reversed_at", null\)/);
     // And each door selects the columns the helper needs — a column it
     // doesn't fetch is a sibling it can never find.
-    expect(doors.dispute).toMatch(/select\("id, charge_id, amount, received_on, receipt_no, idempotency_key"\)/);
+    expect(doors.dispute).toMatch(/select\("id, charge_id, park_id, amount, method, received_on, receipt_no, idempotency_key, returned_on, returned_amount, return_note"\)/);
     expect(doors.confirm).toMatch(/select\("id, charge_id, amount, idempotency_key, renter_confirmed_at"\)/);
   });
 });
@@ -570,5 +574,224 @@ describe("the page that asks 'does this match?' reads every field the loader wri
     // Never "a later bill": applyOnAccount offers every open bill of that
     // household, arrears included, so "later" is a fact nothing checked.
     expect(route).not.toMatch(/later bill/);
+  });
+});
+
+/**
+ * WHAT WENT BACK TO HER CARD (0142) IS ON HER PAGE. The rent page said "Of
+ * $600.00 received, $560.00 is against bills" and /paid listed $560 of a
+ * $600 payment with nothing about the rest — the view's `remaining` had
+ * already netted the $40, so nothing on the page could be tied to the paper.
+ * The refund is its own row; the loader reads it for the row AND its split
+ * sibling, and the claim note says it too.
+ */
+describe("money sent back to the card is read for the row and its sibling", () => {
+  it("a refund off the on-account sibling reaches the bill row's link", async () => {
+    db.park_payments[1].amount = 600;
+    db.park_payment_allocations.push({ id: "al-1", payment_id: "pay-acct", charge_id: "charge-feb", amount: 17.47 });
+    db.park_refunds = [{ id: "rf-1", payment_id: "pay-acct", amount: 40, fee_amount: 1.2, created_at: "2027-01-25T15:00:00Z" }];
+    const v = await loadPaymentByToken(TOKEN);
+    expect(v!.sentBack).toEqual([{ amount: 40, fee: 1.2, on: "2027-01-25T15:00:00Z", method: "check" }]);
+    // The allocation sentence is untouched — a refund is not a bill month.
+    expect(v!.whereItWent).toBe("$17.47 to February 2027, $542.53 on account");
+  });
+
+  it("a refund off the bill row itself — a card payment sent back in full", async () => {
+    db.park_payments.pop();
+    db.park_payments[0].method = "card"; db.park_payments[0].fee_amount = 16.28;
+    db.park_refunds = [{ id: "rf-1", payment_id: "pay-bill", amount: 542.53, fee_amount: 16.28, created_at: "2027-01-06T15:00:00Z" }];
+    const v = await loadPaymentByToken(TOKEN);
+    expect(v!.amount).toBe(542.53);
+    expect(v!.sentBack).toEqual([{ amount: 542.53, fee: 16.28, on: "2027-01-06T15:00:00Z", method: "card" }]);
+  });
+
+  it("two refunds, oldest first; and none for a payment nothing went back from", async () => {
+    db.park_refunds = [
+      { id: "rf-2", payment_id: "pay-acct", amount: 10, fee_amount: 0, created_at: "2027-02-01T15:00:00Z" },
+      { id: "rf-1", payment_id: "pay-acct", amount: 20, fee_amount: 0, created_at: "2027-01-25T15:00:00Z" },
+      { id: "rf-x", payment_id: "pay-other", amount: 99, fee_amount: 0, created_at: "2027-01-25T15:00:00Z" },
+    ];
+    const v = await loadPaymentByToken(ACCT_TOKEN);
+    expect(v!.sentBack.map((r) => r.amount)).toEqual([20, 10]);
+    db.park_refunds = [];
+    expect((await loadPaymentByToken(TOKEN))!.sentBack).toEqual([]);
+  });
+
+  it("a failed read of the refunds refuses rather than asking her to confirm $600 with $40 back on her statement", async () => {
+    nextReadError = { table: "park_refunds", column: "payment_id", error: { code: "57P01", message: "terminating connection" } };
+    await expect(loadPaymentByToken(TOKEN)).rejects.toBeInstanceOf(ReadFailed);
+    expect(nextReadError).toBeNull();
+  });
+
+  it("the claim she files names the refund — a claim note is never corrected later", async () => {
+    db.park_refunds = [{ id: "rf-1", payment_id: "pay-acct", amount: 40, fee_amount: 0, created_at: "2027-01-25T15:00:00Z" }];
+    const res = await disputeByToken(TOKEN);
+    expect(res).toEqual({ ok: true });
+    const note = String((inserted.park_payment_claims ?? [])[0]?.note);
+    expect(note).toContain("it records $600.00 taken on January 4, 2027");
+    expect(note).toContain("($40.00 of it was sent back to their card on January 25, 2027)");
+    expect(note).toMatch(/\. Raised from their own confirmation link\.$/);
+  });
+
+  it("the claim note prints money through money() — the one formatter", () => {
+    const src = readFileSync(join(process.cwd(), "src", "lib", "confirm-server.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).not.toMatch(/toFixed/);
+    expect(src).toMatch(/import \{ describeAllocations, money, type AllocationLine \} from "@\/lib\/allocations"/);
+  });
+});
+
+/**
+ * THE SECOND BUTTON EXISTS ONLY WHERE IT CAN SAVE SOMETHING. A claim hangs
+ * off a bill (park_payment_claims.charge_id NOT NULL); a receipt for money
+ * on account or a deposit has none. The page offered "That's not what I
+ * paid" anyway, promised "the park will look into it — nothing will be
+ * chased while they do", and then answered "We couldn't save that" — a
+ * failed-write heading over a by-design refusal, on a link printed on every
+ * quarter-ahead cheque's receipt at a park where 17 of 18 pay by cheque.
+ */
+describe("whether 'That's not what I paid' can be saved", () => {
+  it("a bill row can be disputed; money on account and a deposit cannot — keyed on the bill, not the kind", async () => {
+    expect((await loadPaymentByToken(TOKEN))!.canDispute).toBe(true);
+    expect((await loadPaymentByToken(ACCT_TOKEN))!.canDispute).toBe(false);
+    // Even once the run has put the money against bills: 0167's
+    // settle_claims_on_allocation would close a claim on that bill the moment
+    // the office re-applied during its own look.
+    db.park_payment_allocations.push({ id: "al-1", payment_id: "pay-acct", charge_id: "charge-9", amount: 57.47 });
+    const applied = await loadPaymentByToken(ACCT_TOKEN);
+    expect(applied!.onAccountApplied).toBe(true);
+    expect(applied!.canDispute).toBe(false);
+    db.park_payments.push({ id: "pay-dep", charge_id: null, park_id: "park-haven", kind: "deposit", amount: 500, fee_amount: null,
+      method: "cash", reference: null, received_on: "2027-01-04", receipt_no: 103, renter_confirmed_at: null,
+      confirm_token: "f".repeat(40), idempotency_key: null, reversed_at: null });
+    expect((await loadPaymentByToken("f".repeat(40)))!.canDispute).toBe(false);
+  });
+
+  it("a stray POST on an on-account link is refused by design — nothing inserted, `unsupported`, quoting the receipt reference the paper prints", async () => {
+    const res = await disputeByToken(ACCT_TOKEN);
+    expect(res.ok).toBe(false);
+    expect(res.unsupported).toBe(true);
+    expect(res.error).toContain("can't be flagged from this link yet");
+    // TH-2027-0102, as the receipt and the page say — not the bare "102".
+    expect(res.error).toContain("quote receipt TH-2027-0102");
+    expect(res.error).not.toMatch(/isn't against a bill/);
+    expect(res.error).not.toMatch(/try again/i);
+    expect(inserted.park_payment_claims ?? []).toHaveLength(0);
+  });
+
+  it("a real failed write is still a failed write — no `unsupported` on it", async () => {
+    nextReadError = { table: "park_payment_allocations", column: "payment_id", error: { code: "57P01", message: "terminating connection" } };
+    const res = await disputeByToken(TOKEN);
+    expect(res.ok).toBe(false);
+    expect(res.unsupported).toBeUndefined();
+  });
+
+  it("the page renders the second button only behind canDispute, and promises nothing it cannot keep otherwise", () => {
+    const route = readFileSync(join(process.cwd(), "src", "app", "paid", "[token]", "route.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const page = route.slice(route.indexOf("function confirmPage"), route.indexOf("export async function POST"));
+    expect(page.length).toBeGreaterThan(300);
+    expect(page).toMatch(/const canDispute = view\.canDispute === true;/);
+    // The "no" form is built only when canDispute; the markup interpolates it.
+    const noForm = page.match(/const noForm = canDispute\s*\?[\s\S]*?value="no"[\s\S]*?:\s*"";/)?.[0] ?? "";
+    expect(noForm, "the 'no' form is no longer guarded by canDispute").not.toBe("");
+    expect(page).toMatch(/\$\{noForm\}/);
+    expect((page.match(/value="no"/g) ?? []).length, "a second, unguarded 'no' form").toBe(1);
+    // The promise is inside the canDispute branch only.
+    // Up to the next declaration — the sentences hold HTML entities, each with its own ";".
+    const ask = page.match(/const ask = canDispute\s*\?([\s\S]*?);\s*const noForm/)?.[1] ?? "";
+    expect(ask.length).toBeGreaterThan(100);
+    expect(ask).toMatch(/nothing will be chased while they do/);
+    const otherwise = ask.slice(ask.indexOf(":"));
+    expect(otherwise).not.toMatch(/nothing will be chased/);
+    expect(otherwise).toMatch(/ring the office and quote receipt \$\{esc\(view\.ref\)\}/);
+    // And the POST titles a by-design refusal honestly.
+    const post = route.slice(route.indexOf("export async function POST"));
+    expect(post).toMatch(/res\.unsupported\) return htmlPage\("This one can't be flagged here"/);
+    expect(post).toMatch(/htmlPage\("We couldn't save that"/);
+  });
+});
+
+/**
+ * THE FOURTH EXIT ON THE HOUSEHOLD'S OWN PAGE. A hand-back across the window
+ * — a deposit returned, the $57.47 of a split handed back after they left
+ * (0168) — is a stamp on the payment row (returned_on / returned_amount /
+ * return_note), and the page printed "$542.53 to January 2027" for a $600
+ * cheque with the $57.47 unexplained. Read off the row and its sibling; the
+ * view's `remaining` has already netted it, so the page can never say "held
+ * for you" about it.
+ */
+describe("money handed back across the window is read for the row and its sibling", () => {
+  it("the $57.47 sibling handed back after they left reaches the bill row's link", async () => {
+    db.park_payments[1].returned_on = "2027-01-28";
+    db.park_payments[1].returned_amount = 57.47;
+    db.park_payments[1].return_note = "moved out 27 January; nothing more bills";
+    // The view's remaining, as 0168 defines it: the stamp comes off.
+    db.park_payments[1].amount = 57.47;
+    const v = await loadPaymentByToken(TOKEN);
+    expect(v!.amount).toBe(600);
+    expect(v!.handedBack).toEqual([{ amount: 57.47, on: "2027-01-28", note: "moved out 27 January; nothing more bills" }]);
+    // Still what she handed over; the sibling still STANDS (a hand-back is not a reversal).
+    expect(v!.siblingTakenBackOn).toBeNull();
+    expect(v!.onAccount).toBe(57.47);
+  });
+
+  it("a deposit's own link reads its return", async () => {
+    db.park_payments = [{
+      id: "pay-dep", charge_id: null, park_id: "park-haven", kind: "deposit", amount: 500, fee_amount: null,
+      method: "cash", reference: null, received_on: "2026-12-10", receipt_no: 103, renter_confirmed_at: null,
+      confirm_token: TOKEN, idempotency_key: "dep-key", reversed_at: null, returned_on: "2027-02-03", returned_amount: 500, return_note: null,
+    }];
+    const v = await loadPaymentByToken(TOKEN);
+    expect(v!.handedBack).toEqual([{ amount: 500, on: "2027-02-03", note: null }]);
+    expect(v!.onAccountRemaining).toBeNull();
+    expect(v!.takenBackOn).toBeNull();
+  });
+
+  it("the on-account row's own link reads its own hand-back; a row with no stamp carries none", async () => {
+    db.park_payments[1].returned_on = "2027-01-28"; db.park_payments[1].returned_amount = 57.47; db.park_payments[1].return_note = "moved out";
+    expect((await loadPaymentByToken(ACCT_TOKEN))!.handedBack).toEqual([{ amount: 57.47, on: "2027-01-28", note: "moved out" }]);
+    db.park_payments[1].returned_on = null; db.park_payments[1].returned_amount = null; db.park_payments[1].return_note = null;
+    expect((await loadPaymentByToken(TOKEN))!.handedBack).toEqual([]);
+    expect((await loadPaymentByToken(ACCT_TOKEN))!.handedBack).toEqual([]);
+  });
+
+  it("the claim she files names the hand-back — a claim note is never corrected later", async () => {
+    db.park_payments[1].returned_on = "2027-01-28"; db.park_payments[1].returned_amount = 57.47; db.park_payments[1].return_note = "moved out";
+    const res = await disputeByToken(TOKEN);
+    expect(res).toEqual({ ok: true });
+    const note = String((inserted.park_payment_claims ?? [])[0]?.note);
+    expect(note).toContain("($57.47 of it was handed back to them on January 28, 2027)");
+  });
+
+  it("a refund's rail is the refunded PAYMENT's — this row's or the sibling's — and the claim note says bank account for ACH", async () => {
+    db.park_payments[0].method = "ach"; db.park_payments[0].reference = "ach_1";
+    db.park_refunds = [
+      { id: "rf-1", payment_id: "pay-bill", amount: 100, fee_amount: 0, created_at: "2027-01-25T15:00:00Z" },
+      { id: "rf-2", payment_id: "pay-acct", amount: 10, fee_amount: 0, created_at: "2027-01-26T15:00:00Z" },
+    ];
+    const v = await loadPaymentByToken(TOKEN);
+    expect(v!.sentBack.map((r) => r.method)).toEqual(["ach", "check"]);
+    await disputeByToken(TOKEN);
+    const note = String((inserted.park_payment_claims ?? [])[0]?.note);
+    expect(note).toContain("($100.00 of it was sent back to their bank account on January 25, 2027)");
+    expect(note).toContain("($10.00 of it was sent back to their card on January 26, 2027)");
+  });
+
+  it("the loader selects the stamp on both rows, and derives the standing through the one helper", () => {
+    const src = readFileSync(join(process.cwd(), "src", "lib", "confirm-server.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    // Both park_payments selects that feed the page carry the three columns.
+    const selects = [...src.matchAll(/\.select\("([^"]+)"\)/g)].map((m) => m[1]).filter((c) => c.includes("returned_on"));
+    expect(selects.length).toBeGreaterThanOrEqual(3);
+    for (const c of selects) {
+      expect(c).toContain("returned_amount");
+      expect(c).toContain("return_note");
+    }
+    expect(src).toMatch(/takenBackWhy\(takenBackOfRow\(pay\)\)/);
+    expect(src).toMatch(/takenBackWhy\(takenBackOfRow\(sibling\)\)/);
+    expect(src).not.toMatch(/"returned by the bank"/);
+    // And never off the on-account view's columns, which 0168 has not yet landed.
+    expect(src).not.toMatch(/handed_back/);
   });
 });

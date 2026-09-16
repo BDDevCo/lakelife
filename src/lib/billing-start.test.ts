@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   firstBillablePeriod, periodIsBillable, preCutoverRefusal, preCutoverCostRefusal,
-  preCutoverEvidenceSignal, preCutoverJobNote,
+  preCutoverEvidenceSignal, preCutoverJobNote, notYetBillableRefusal,
 } from "./billing-start";
 
 // The real formatter, so a copy change that breaks the sentence breaks a test.
@@ -393,5 +393,40 @@ describe("what the screens say about leaving the date blank", () => {
     // Ties the copy to the behaviour, so changing one without the other fails.
     expect(firstBillablePeriod(null)).toBeNull();
     expect(periodIsBillable("2020-01", null)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE OTHER END. A month that has not started is not billed early: the rent
+// screen's forward link stopped at the current month, and the rule lived in
+// the link alone — `?month=2027-02` typed on 28 January raised February.
+// ---------------------------------------------------------------------------
+describe("a month that has not started", () => {
+  it("refuses the month after the current one, with a sentence that names a day that CAN work", () => {
+    expect(notYetBillableRefusal("2027-02", "2027-01-28", prettyMonth)).toBe("February 2027 hasn't started — bill it on the 1st.");
+    expect(notYetBillableRefusal("2027-06", "2027-01-28", prettyMonth)).toBe("June 2027 hasn't started — bill it on the 1st.");
+    expect(notYetBillableRefusal("2027-02", "2027-01-28", prettyMonth)).not.toMatch(/try again|2027-02/);
+  });
+
+  it("lets the current month and every earlier one through — collapsed both ways", () => {
+    expect(notYetBillableRefusal("2027-02", "2027-02-01", prettyMonth)).toBeNull();
+    expect(notYetBillableRefusal("2027-02", "2027-02-28", prettyMonth)).toBeNull();
+    expect(notYetBillableRefusal("2027-01", "2027-02-01", prettyMonth)).toBeNull();
+    expect(notYetBillableRefusal("2026-06", "2027-02-01", prettyMonth)).toBeNull();
+    // The boundary is the month, not the day: on 31 January, February has not started.
+    expect(notYetBillableRefusal("2027-02", "2027-01-31", prettyMonth)).not.toBeNull();
+    // And across a year end.
+    expect(notYetBillableRefusal("2028-01", "2027-12-31", prettyMonth)).toBe("January 2028 hasn't started — bill it on the 1st.");
+    expect(notYetBillableRefusal("2027-12", "2028-01-01", prettyMonth)).toBeNull();
+  });
+
+  it("refuses a month it cannot read with a sentence — no door before this checks the shape", () => {
+    // `2027-2` passed preCutoverRefusal's string compare and, with this
+    // returning null on a regex miss, reached the insert, where 0070's
+    // CHECK on period_month refused it as a raw constraint error.
+    for (const bad of ["next", "2027-2", "2027-02-01", "", "February 2027"]) {
+      expect(notYetBillableRefusal(bad, "2027-01-28", prettyMonth), bad).toBe("That isn't a month — use the month links to pick one.");
+    }
+    expect(notYetBillableRefusal("2027-01", "2027-01-28", prettyMonth)).toBeNull();
   });
 });

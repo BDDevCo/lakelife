@@ -7,7 +7,7 @@ import {
   planRun, runSummary, withOnAccount, daysBetween, classifyForRun, notMonthlySentence,
   prettyMonth, shiftMonth, dueDayFor, nothingToBillReason, lotList,
   handKeyedRefusal, HAND_KEYED, PROCESSOR_ONLY, paymentAmountRefusal, perStayTerm,
-  onAccountKey, splitSiblingKey, ON_ACCOUNT_KEY_SUFFIX, monthList, reversalSentence,
+  onAccountKey, splitSiblingKey, ON_ACCOUNT_KEY_SUFFIX, monthList, reversalSentence, onAccountClause,
   type Charge, type RunCandidate,
 } from "./ledger-helpers";
 import { buildStatement } from "./statement-helpers";
@@ -1113,5 +1113,65 @@ describe("the sentence a reversal prints", () => {
     expect(monthList(["2027-02"])).toBe("February 2027");
     expect(monthList(["2027-02", "2027-01"])).toBe("January 2027 and February 2027");
     expect(monthList(["2027-03", "2027-01", "2027-01", "2027-02"])).toBe("January 2027, February 2027 and March 2027");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ONE SHAPE FOR A FIGURE. The headline printed "$1085.06 of $11620.20 in."
+// in bold above tiles reading "$11,620.20 · billed" — the same number two
+// ways on one screen. money() is the one formatter.
+// ---------------------------------------------------------------------------
+describe("the headline prints money through money()", () => {
+  const charge = (over: Partial<Charge> = {}): Charge => ({
+    id: "c", lotNumber: "1", renterName: null, periodMonth: "2027-01", dueOn: "2027-01-01",
+    amount: 542.53, paidTotal: 0, status: "open", ...over,
+  });
+  const rows = (n: number, paid: number) => toRows(
+    Array.from({ length: n }, (_, i) => charge({ id: `c${i}`, lotNumber: String(i + 1), paidTotal: paid })),
+    "2027-01-02", 3, new Set(),
+  );
+
+  it("thousands separators in every branch", () => {
+    expect(ledgerHeadline(summarise(rows(19, 0)), 3)).toBe("$0.00 of $10,308.07 in. Nothing is late yet; you allow 3 days for the office to catch up.");
+    expect(ledgerHeadline(summarise(rows(19, 542.53)), 3)).toBe("Everything's in — $10,308.07.");
+    const late = toRows(Array.from({ length: 19 }, (_, i) => charge({ id: `c${i}`, lotNumber: String(i + 1) })), "2027-02-28", 3, new Set());
+    expect(ledgerHeadline(summarise(late), 3)).toBe("19 households are late — $10,308.07.");
+    const disputed = toRows([charge({ id: "d1" }), charge({ id: "d2", lotNumber: "2", amount: 2000 })], "2027-02-28", 3, new Set(["d2"]));
+    expect(ledgerHeadline(summarise(disputed), 3)).toBe("1 household says they've paid and we haven't found it — $2,000.00. 1 other household is late — $542.53.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHERE MONEY ON ACCOUNT GOES WHEN THE BILLS ARE RAISED — the one clause the
+// preview and the run share, so what he approves from is what he reads.
+// ---------------------------------------------------------------------------
+describe("onAccountClause and the preview's toOlderBills", () => {
+  const preview = { preview: "already on account", older: "goes" };
+  const run = { preview: "settled from money on account", older: "went" };
+
+  it("nothing older keeps the short form the preview always had; nothing at all is empty", () => {
+    expect(onAccountClause(742.53, [], "2027-02", preview)).toBe(", $742.53 of it already on account");
+    expect(onAccountClause(742.53, [], "2027-02", run)).toBe(", $742.53 of it settled from money on account");
+    expect(onAccountClause(0, [], "2027-02", preview)).toBe("");
+  });
+
+  it("older bills name the whole movement and every month, oldest first, and the new month only when some lands on it", () => {
+    expect(onAccountClause(57.47, [{ periodMonth: "2027-01", amount: 542.53 }], "2027-02", preview))
+      .toBe("; $600.00 of money on account goes against January 2027 and February 2027");
+    expect(onAccountClause(0, [{ periodMonth: "2027-01", amount: 520 }, { periodMonth: "2026-12", amount: 40 }], "2027-02", run))
+      .toBe("; $560.00 of money on account went against December 2026 and January 2027");
+    // A zero older line is not a line.
+    expect(onAccountClause(57.47, [{ periodMonth: "2027-01", amount: 0 }], "2027-02", preview)).toBe(", $57.47 of it already on account");
+  });
+
+  it("withOnAccount carries the older settlements onto the plan, rounded, and planRun starts with none", () => {
+    const plan = planRun([{ reservationId: "r9", lotNumber: "9", amount: 542.53, range: { start: "2027-02-01", end: "2027-03-01" }, term: "monthly" }], new Set(), "2027-02");
+    expect(plan.toOlderBills).toEqual([]);
+    const withOlder = withOnAccount(plan, new Map([["r9", 57.47]]), [{ periodMonth: "2027-01", amount: 542.529 }]);
+    expect(withOlder.toOlderBills).toEqual([{ periodMonth: "2027-01", amount: 542.53 }]);
+    expect(withOlder.fromOnAccount).toBe(57.47);
+    expect(runSummary(withOlder, "2027-02")).toBe("Bill 1 household for February 2027 — $542.53; $600.00 of money on account goes against January 2027 and February 2027");
+    // The bills are still raised in full: total is what is billed, not what is owed.
+    expect(withOlder.total).toBe(542.53);
   });
 });

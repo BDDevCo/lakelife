@@ -24,6 +24,8 @@
  */
 
 import type { CostCategory } from "./cost-helpers";
+// Months in words and the one money formatter — never ISO, never toFixed here.
+import { prettyMonth, money } from "./ledger-helpers";
 
 export type FeeCadence = "monthly" | "per_stay" | "annual" | "one_time";
 export type FeeAppliesTo = "all_lots" | "long_term" | "short_term" | "opt_in";
@@ -173,6 +175,25 @@ export function feePayableCount(
   stays: readonly { park_lot_id?: unknown; origin?: unknown }[],
 ): number {
   return stays.filter((s) => (s.origin as string) !== "grandfathered").length;
+}
+
+/**
+ * THE HOUSEHOLDS FILED TO PAY A FEE FROM A DAY STILL TO COME — signed leases
+ * on the roll whose agreements start later (a takeover's eighteen leases
+ * filed on 20 December for 1 January). `payers` counts only tenancies
+ * covering TODAY, which before go-live is zero by construction, and the
+ * screen turned that into "Nobody is on a lot yet, so this fee is collecting
+ * nothing" on the afternoon nineteen households were filed and the roll
+ * read "18 reserved". A wrong count, on the screen where he decides whether
+ * $142.53 is set right.
+ */
+export interface UpcomingPayers {
+  /** Lots counted once, grandfathered rows never. */
+  count: number;
+  /** YYYY-MM — the month the first of them is billed, from the rows' own earliest start. */
+  fromMonth: string;
+  /** What the active monthly fees bring in a month once they are all billed. */
+  income: number;
 }
 
 /** What a fee brings in per month. Only the cadence the biller actually bills. */
@@ -341,11 +362,29 @@ export function coverageSummary(
    * roll is named. Defaulted so existing callers keep their old behaviour.
    */
   feeCount = 0,
+  /**
+   * Households filed to pay from a day still to come. Named BEFORE "nobody",
+   * because on the afternoon eighteen leases are filed for 1 January the
+   * truer sentence is that eighteen will be billed it from January — not
+   * that the fee collects nothing. Null for a park with no such rows.
+   */
+  upcoming: UpcomingPayers | null = null,
 ): string {
   // NOBODY ON A LOT IS THE MORE SPECIFIC TRUTH, so it goes first. A fee that
   // exists and collects nothing is a different situation from having no fee,
   // and only this branch can tell him which one he is looking at.
   if (feeCount > 0 && payers === 0) {
+    // LEAD WITH THE FACT THE COUNT MEASURES. `payers` counts households
+    // billed the fee, which excludes a grandfathered holdover — who IS on a
+    // lot (the roll reads 'Occupied 1' at The Haven on 20 December) and is
+    // billed nothing. 'Nobody is on a lot yet' beside 'Occupied 1' was the
+    // contradiction; 'nobody is billed it yet' is what is known here.
+    if (upcoming && upcoming.count > 0) {
+      return (
+        `Nobody is billed it yet — ${upcoming.count} ${upcoming.count === 1 ? "household" : "households"} will be ` +
+        `from ${prettyMonth(upcoming.fromMonth)}, ${money(upcoming.income)} a month. Nothing is billed before then.`
+      );
+    }
     return "Nobody is on a lot yet, so this fee is collecting nothing.";
   }
   if (check.actualCost === 0) {
@@ -359,9 +398,9 @@ export function coverageSummary(
 
   const perLot = round2(Math.abs(check.margin) / payers);
   if (check.margin >= 0) {
-    return `Your fees bring in $${check.feeIncome.toFixed(2)} a month against $${check.actualCost.toFixed(2)} of real cost — ahead by $${perLot.toFixed(2)} a lot.`;
+    return `Your fees bring in ${money(check.feeIncome)} a month against ${money(check.actualCost)} of real cost — ahead by ${money(perLot)} a lot.`;
   }
-  return `Your fees bring in $${check.feeIncome.toFixed(2)} a month against $${check.actualCost.toFixed(2)} of real cost — SHORT by $${perLot.toFixed(2)} a lot, $${Math.abs(check.margin).toFixed(2)} a month.`;
+  return `Your fees bring in ${money(check.feeIncome)} a month against ${money(check.actualCost)} of real cost — SHORT by ${money(perLot)} a lot, ${money(Math.abs(check.margin))} a month.`;
 }
 
 
@@ -407,5 +446,5 @@ export function nightlyRecoveryTarget(input: {
 export function nightlyRecoveryLine(lotNumber: string, target: number | null): string {
   return target == null
     ? `We can't work out a nightly figure for lot ${lotNumber} yet — it needs a park cost split first.`
-    : `Lot ${lotNumber}: $${target.toFixed(2)} a night covers its share of running the park. Build it into the nightly rate — we can't add it to a booking taken somewhere else.`;
+    : `Lot ${lotNumber}: ${money(target)} a night covers its share of running the park. Build it into the nightly rate — we can't add it to a booking taken somewhere else.`;
 }

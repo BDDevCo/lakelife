@@ -3,6 +3,8 @@ import { chainReservationIds } from "@/lib/tenancy-chain";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 import { parseDaterange } from "@/lib/parks";
+import { coversDay } from "@/app/park/park-helpers";
+import { notCollectedAt, takenBackWhy, takenBackOfRow } from "@/app/park/receipts-helpers";
 import { todayLakeDate, lakeDaysSince } from "@/lib/booking";
 import { paymentsAreLive } from "@/lib/charge-gate";
 import { mustRead, mustCount, softRead } from "@/lib/must-read";
@@ -95,7 +97,14 @@ export interface RenterHome {
   textsOn: boolean;
   textNumber: string | null;
   term: string;
-  /** Set once they have given notice. */
+  /**
+   * Set once they have given notice — on ANY live link in her chain, the rule
+   * the owner's Today screen uses. A renewal is a successor row written in
+   * the agreement's last half, and the notice stands on the link the roll
+   * called current; read off the newest row alone, the February successor
+   * carried no notice and this screen said "rolls on" to somebody who had
+   * given it.
+   */
   leavingOn: string | null;
 
   /** True when the park has agreed to take rent through LakeLife (0108). */
@@ -149,9 +158,28 @@ export interface RenterHome {
    * lot.
    */
   tenancyEnded: string | null;
+  /**
+   * WHETHER THE MOVE-OUT MONTH HAS ALREADY BEEN BILLED — a non-void charge
+   * for that month anywhere in her chain. False while the tenancy stands.
+   * The on-account card's "it comes off your bills, oldest first" is true
+   * right up to the last bill; once the final month is billed there is no
+   * next bill for it to come off, and the card must stop promising one. A
+   * move-out recorded before that month's run still raises a prorated final
+   * bill, which money on account settles — so `tenancyEnded` alone is not
+   * the test.
+   */
+  finalMonthBilled: boolean;
 
-  /** Deposit still held. Null when there has never been one. */
+  /** Deposit still held. Null when there has never been one, or none is held any more. */
   deposit: { amount: number; since: string } | null;
+  /**
+   * A DEPOSIT HANDED BACK TO HER — the most recent one, when any was. The
+   * card read "None held." the day after the office returned $500 across the
+   * window, which is true and says nothing about the single most argued-
+   * about number in this business. The record is the stamp on the deposit
+   * row (returned_on, returned_amount — 0102); this is that stamp, read.
+   */
+  depositReturned: { amount: number; on: string } | null;
 
   /**
    * RENT MONEY OF THEIRS STILL ON ACCOUNT — what has not yet been put against
@@ -200,6 +228,30 @@ export interface RenterHome {
      * has reopened, so the row must not read as money received.
      */
     bankReturnedOn: string | null;
+    /**
+     * THIS PAYMENT NO LONGER STANDS, by either route: the office took it back
+     * (`reversed_at` — a bounced cheque, a typo) or the bank returned it
+     * (`returned_at`). The same pair /paid/[token] shows the same resident.
+     * Reversed rows used to be dropped from this list on the theory that a
+     * reversal "never happened" — so a household holding receipt #101 for a
+     * cheque that bounced read "Nothing recorded yet" and two months flipped
+     * to unpaid with no sentence saying why. Money received stays the row it
+     * was; the correction is these two fields. `takenBackWhy` is the office's
+     * reason or the bank's return code, exactly as confirm-server derives it.
+     */
+    takenBackOn: string | null;
+    takenBackWhy: string | null;
+    /**
+     * MONEY FROM THIS PAYMENT HANDED BACK TO HER ACROSS THE WINDOW (0168) —
+     * how much, and the day. The $57.47 of a $600 cheque on account, given
+     * back after she left. Zero and null while none has. The row stays at
+     * its full amount (money received stays the row it was); this is the
+     * record of the money going back, and her on-account card has already
+     * stopped counting it. Not to be confused with `bankReturnedOn`, which
+     * is the bank pulling the payment back.
+     */
+    handedBack: number;
+    handedBackOn: string | null;
   }[];
 
   /** Reported from their lot, during their tenancy. */
@@ -263,15 +315,47 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       .in("status", ["approved", "active", "ended"])
       .order("created_at", { ascending: false }),
   );
-  const liveStay = (stays ?? []).find((r) => (r.status as string) !== "ended");
+  // THE LINK THAT COVERS TODAY, the way buildRentRoll picks `current` — not
+  // the newest row. A renewal is a successor row written up to 45 days early
+  // (renew-actions), and the notice she gave stands on the link the roll
+  // called current; picking the newest row read the February successor
+  // (no notice) and told her "rolls on". Falls back to the next link to
+  // start (signed, not yet moved in), then to ANY live link — a household
+  // whose monthly agreement lapsed with no successor written is still living
+  // there and must not get the wrap-up screen — and only then to the ended
+  // row, which carries the wrap-up.
+  const today = todayLakeDate();
+  const liveStays = (stays ?? []).filter((r) => (r.status as string) !== "ended");
+  const startOf = (r: Record<string, unknown>) => parseDaterange(r.during as string)?.start ?? "";
+  const liveStay =
+    liveStays.find((r) => coversDay(parseDaterange(r.during as string), today))
+    ?? [...liveStays].filter((r) => startOf(r) > today).sort((a, b) => startOf(a).localeCompare(startOf(b)))[0]
+    ?? liveStays[0];
   const stay = liveStay ?? stays?.[0];
   if (!stay) return null;
   const tenancyEnded = liveStay
     ? null
     : ((stay.moved_out_on as string | null) ?? (stay.expected_move_out as string | null) ?? null);
+  // THE NOTICE, WHEREVER IT STANDS. giveNotice writes ONE link — the roll's
+  // current one — and the successor carries nothing; Today already reads
+  // every stay for it. At most one live link carries a date.
+  const leavingOn = liveStay
+    ? (liveStays.map((r) => (r.expected_move_out as string | null) ?? null).find((d) => !!d) ?? null)
+    : ((stay.expected_move_out as string | null) ?? null);
 
   const file = files.find((f) => f.id === stay.renter_id) ?? files[0];
   const range = parseDaterange(stay.during as string);
+  // "WHAT YOU REPORTED" IS SCOPED TO HER TIME ON THIS LOT, not to the picked
+  // link's start: from the day the owner writes February, a January-start
+  // window would drop every report she filed in January and tell her
+  // "Nothing yet. Tell the office" about a riser she already reported. The
+  // earliest start across her chain on THIS lot — never another lot's, or a
+  // previous household's reports would surface.
+  const reportedSince = (stays ?? [])
+    .filter((r) => r.renter_id === stay.renter_id && r.park_lot_id === stay.park_lot_id)
+    .map(startOf)
+    .filter(Boolean)
+    .sort()[0] ?? range?.start ?? null;
 
   // EVERYTHING THAT ONLY NEEDED THE TENANCY, IN ONE TRIP.
   //
@@ -320,10 +404,11 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     admin
       .from("park_payments")
       // `returned_at` is the BANK pulling a settled payment back (0155), and
-      // it is not `returned_on`, which is this park handing a deposit back to
-      // a departing tenant. Both are on this row, one letter apart, and the
-      // list below reads both.
-      .select("amount, fee_amount, method, received_on, receipt_no, kind, returned_on, reversed_at, returned_at")
+      // it is not `returned_on`, which is this park handing money back across
+      // the window — a deposit (0102), rent on account (0168) — with
+      // `returned_amount` saying how much. Both are on this row, one letter
+      // apart, and the list below reads both.
+      .select("amount, fee_amount, method, received_on, receipt_no, kind, returned_on, returned_amount, reversed_at, reversed_reason, returned_at, return_code")
       .eq("renter_id", file.id as string)
       .order("received_on", { ascending: false })
       .limit(24),
@@ -335,12 +420,12 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     // Also only needs the tenancy. Conditional, because a tenancy with no
     // parsable start has no window to scope the list to — and an unscoped one
     // would show a new resident the LAST household's broken step.
-    range?.start
+    reportedSince
       ? admin
           .from("park_requests")
           .select("note, status, resolution_note, created_at")
           .eq("park_lot_id", stay.park_lot_id as string)
-          .gte("created_at", `${range.start}T00:00:00Z`)
+          .gte("created_at", `${reportedSince}T00:00:00Z`)
           .order("created_at", { ascending: false })
           .limit(10)
       : Promise.resolve({ data: null, error: null }),
@@ -480,6 +565,10 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // deposit is, in this business, the single most argued-about number there is.
   const pays = mustRead("your payments", paysRes);
 
+  // `live` feeds the DEPOSIT maths only. The receipt list below is built from
+  // every row: a reversed payment is not money, but it is a receipt she
+  // holds, and the screen says what became of it rather than pretending it
+  // was never written.
   const live = (pays ?? []).filter((p) => p.reversed_at == null);
 
   // A deposit is money of theirs the park is holding — the single most
@@ -498,6 +587,14 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   const depositSince = heldDeposits
     .map((p) => p.received_on as string)
     .sort()[0] ?? null;
+  // THE DEPOSIT THAT WENT BACK — the most recent stamp, so the card can say
+  // "$500.00 was handed back to you on January 28, 2027" instead of "None
+  // held." over a return she is waiting on. A deposit the office reversed
+  // never happened and carries no stamp.
+  const depositReturned = live
+    .filter((p) => p.kind === "deposit" && p.returned_on != null && Number(p.returned_amount ?? 0) > 0)
+    .sort((a, b) => String(b.returned_on).localeCompare(String(a.returned_on)))
+    .map((p) => ({ amount: Number(p.returned_amount), on: String(p.returned_on) }))[0] ?? null;
 
   // A failed read here would print "nothing on account" at somebody who handed
   // over $57.47 more than the bill last week. mustRead, like the deposit.
@@ -523,7 +620,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // failure would mean writing code that visibly ignores it.
   let reported: RenterHome["reported"] = [];
   let reportedFailed = false;
-  if (range?.start) {
+  if (reportedSince) {
     const [reqs, failed] = softRead("what you've reported", reqsRes, null);
     reportedFailed = failed;
     reported = (reqs ?? []).map((r) => ({
@@ -558,7 +655,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     hasCard: defaultCard != null,
     bookingReady: (lotProps ?? 0) > 0,
     cardFeePct: surchargePct(park?.card_fee_pct, defaultCard?.funding),
-    today: todayLakeDate(),
+    today,
     lotNumber: (lot?.lot_number as string) ?? "—",
     // Whether the sticker the report card talks about actually exists.
     hasSticker: lot?.qr_token != null,
@@ -574,15 +671,21 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     textsOn: file.sms_consent_operational_at != null,
     textNumber: (file.mobile_e164 as string | null) ?? null,
     term: (stay.term as string) ?? "monthly",
-    leavingOn: (stay.expected_move_out as string) ?? null,
+    leavingOn,
     bill: charge ? toBill(charge) : null,
     arrears: older.map(toBill),
     tenancyEnded,
+    // The move-out month has a bill — a non-void charge for that month in her
+    // chain. `charges` is newest-first and skips void, and the final month is
+    // the newest, so it is inside the slice read above.
+    finalMonthBilled: !!tenancyEnded
+      && (charges ?? []).some((c) => String(c.period_month ?? "") === tenancyEnded.slice(0, 7)),
     deposit: depositTotal > 0 && depositSince
       ? { amount: depositTotal, since: depositSince }
       : null,
+    depositReturned,
     onAccount,
-    payments: live
+    payments: (pays ?? [])
       .filter((p) => p.kind !== "deposit")
       // TWENTY-FOUR, NOT SIX, AND THE SCREEN SAYS WHEN IT IS SHOWING A SLICE.
       //
@@ -600,13 +703,27 @@ export async function getRenterHome(): Promise<RenterHome | null> {
         fee: p.fee_amount == null ? null : Number(p.fee_amount),
         method: (p.method as string) ?? "payment",
         receiptNo: (p.receipt_no as number) ?? null,
-        // KEPT ON THE LIST, NOT HIDDEN, and this is the difference between the
-        // two words. A REVERSAL says the payment never happened, so `live`
-        // drops it. A BANK RETURN says it did happen and then came back — the
-        // resident's own statement shows both legs, and a screen that quietly
-        // dropped our copy would make us look wrong about their money. It
-        // shows, labelled, and counts toward nothing.
+        // KEPT ON THE LIST, NOT HIDDEN — BY EITHER ROUTE. A BANK RETURN says
+        // the payment happened and then came back; the resident's own
+        // statement shows both legs, and a screen that quietly dropped our
+        // copy would make us look wrong about their money. A REVERSAL is the
+        // office's word for a cheque that bounced or a number keyed wrong —
+        // and at a park where 17 of 18 pay by cheque, a bounce IS a reversal
+        // (the database refuses `returned_at` on a cheque). She holds the
+        // receipt; the row shows, labelled with the day and the reason, and
+        // counts toward nothing. The reason is already hers to read on
+        // /paid/[token]; this is the same sentence on the screen she opens
+        // first — from the ONE derivation (receipts-helpers) every reader of
+        // these four fields shares.
         bankReturnedOn: (p.returned_at as string) ?? null,
+        takenBackOn: notCollectedAt(takenBackOfRow(p)),
+        takenBackWhy: takenBackWhy(takenBackOfRow(p)),
+        // Money from this payment handed back across the window (0168): the
+        // stamp on the row, read — so the $57.47 she was handed after she
+        // left is under the cheque it came off, and her on-account card
+        // (the view's remaining) and this row agree.
+        handedBack: p.returned_on != null ? Number(p.returned_amount ?? 0) : 0,
+        handedBackOn: p.returned_on != null && Number(p.returned_amount ?? 0) > 0 ? String(p.returned_on) : null,
       })),
     reported,
     reportedFailed,

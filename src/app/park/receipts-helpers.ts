@@ -34,8 +34,9 @@ import { lakeDateOf } from "@/lib/booking";
  * Two hundred receipts of $455.00 summed as floats is not $91,000.00.
  *
  * WHAT THIS IS NOT: it is not a profit-and-loss. There is no expense side yet
- * (see `park_costs.paid_on`), deposits and refunds cannot be recorded at all,
- * and the screen has to say so out loud. A number that looks complete and
+ * (see `park_costs.paid_on`), and the screen has to say so out loud. Deposits,
+ * money on account and refunds to a card ARE recorded (0102, 0142) and are
+ * carried as their own rows beside the rent. A number that looks complete and
  * isn't is worse than no number.
  */
 
@@ -134,8 +135,73 @@ export interface Receipt {
  * came to exclude bounced cheques from the totals and would have gone on
  * counting bounced ACH debits as income.
  */
-export function notCollectedAt(r: Receipt): string | null {
+export function notCollectedAt(r: Pick<Receipt, "reversedAt" | "bankReturnedAt">): string | null {
   return r.reversedAt ?? r.bankReturnedAt;
+}
+
+/** The four fields that say whether, when and why a payment did not stay. */
+export type TakenBack = Pick<Receipt, "reversedAt" | "reversedReason" | "bankReturnedAt" | "returnCode">;
+
+/**
+ * WHY IT DID NOT STAY, in the words the record carries: the bank's own code
+ * for a return (or "returned by the bank" when it gave none — the code is
+ * the thing somebody has to act on), the office's typed reason for a
+ * reversal. Null while the payment stands, or when a reversal carries no
+ * reason.
+ *
+ * ONE WRITER. This derivation existed four times — the file's Reason cell,
+ * the statement screen's "and then taken back: …", the resident's home
+ * screen and her /paid link — each a copy of the last, and the screen copy
+ * reimplemented the cell it could have read. Every reader of these four
+ * fields now says the same words, or says nothing.
+ */
+export function takenBackWhy(r: TakenBack): string | null {
+  if (r.bankReturnedAt) return r.returnCode ?? "returned by the bank";
+  if (r.reversedAt) return r.reversedReason ?? null;
+  return null;
+}
+
+/**
+ * The same four fields off a `park_payments` row as supabase-js hands it —
+ * so a loader that reads snake_case columns can ask `takenBackWhy` and
+ * `notCollectedAt` without spelling the rule out again. `returned_at` is the
+ * BANK pulling a settled payment back; `returned_on` (a deposit or rent on
+ * account handed back across the window) is a different act and is not
+ * read here.
+ */
+export function takenBackOfRow(p: {
+  reversed_at?: unknown; reversed_reason?: unknown; returned_at?: unknown; return_code?: unknown;
+}): TakenBack {
+  return {
+    reversedAt: (p.reversed_at as string | null) ?? null,
+    reversedReason: (p.reversed_reason as string | null) ?? null,
+    bankReturnedAt: (p.returned_at as string | null) ?? null,
+    returnCode: (p.return_code as string | null) ?? null,
+  };
+}
+
+/**
+ * THE FOUR "TAKEN BACK" CELLS, for any row that can be taken back — rent
+ * against a bill, or the deposit / on-account / amenity rows beside it. One
+ * writer, because the second row-writer used to pad these with four blanks by
+ * hand, so a bounced on-account cheque printed as money that stayed.
+ *
+ * "YES" rather than a date alone, so it survives a spreadsheet filter and is
+ * legible to somebody scanning the column rather than reading rows. "How" is
+ * separate because the two routes reconcile differently: a bank return is a
+ * second line on the bank statement, an office correction never touches it.
+ * The date is lake-local, like `receivedOn` beside it — sliced from UTC, a
+ * reversal recorded at 7:30pm on 31 Dec printed 2027-01-01, outside the very
+ * window the statement was generated for.
+ */
+export function takenBackCells(r: TakenBack): [string, string, string, string] {
+  return [
+    notCollectedAt(r) ? "YES" : "",
+    r.bankReturnedAt ? "bank return" : r.reversedAt ? "office correction" : "",
+    notCollectedAt(r) ? lakeDateOf(String(notCollectedAt(r))) ?? "" : "",
+    // The one derivation of the reason — the screen reads the same helper.
+    takenBackWhy(r) ?? "",
+  ];
 }
 
 export interface Period {
@@ -230,8 +296,10 @@ export interface ReceiptSummary {
    * 0072 makes this impossible to create going forward — a paid bill can no
    * longer be voided, and a payment can't be recorded against a void one. This
    * stays because it is the correct CASH answer for any row that predates that
-   * migration or arrives by a path nobody has written yet, and because the day
-   * a refund path exists this is where the mismatch will surface.
+   * migration or arrives by a path nobody has written yet. A refund to a card
+   * (0142) is its own row in `otherReceipts`, kind "refund", dated the day the
+   * money went back — so a payment against a cancelled bill that was then
+   * refunded shows here AND as a negative row, and the two tie to the bank.
    */
   againstVoided: Receipt[];
   /**
@@ -391,11 +459,25 @@ export function linesCell(lines: readonly ChargeLine[]): string {
 
 /**
  * Money the park received that is not rent against a bill: a deposit, money on
- * account, or income from something the park rents out.
+ * account, or income from something the park rents out — and money that went
+ * back OUT: to a card through the processor (kind "refund", 0142) or across
+ * the window by a person (kind "handed_back" — a deposit's return since
+ * 0102, rent on account since 0168). Both NEGATIVE.
  *
  * It is deliberately outside the rent total — a deposit is not income and
  * on-account money has not been applied to anything yet — but it DID hit the
  * bank, so it has to be in the file or the file cannot be reconciled.
+ *
+ * MONEY GOING OUT IS ITS OWN ROW, NOT A COLUMN ON THE PAYMENT. Money
+ * received stays the row it was; a correction is a new row. A refund or a
+ * hand-back is dated the day it went back, carries a negative Amount (and a
+ * negative Card fee when a surcharge went back with a refund), the
+ * processor's reference — or, for a hand-back, the office's reason — and
+ * the household, so the Amount column still adds up to the bank and the
+ * original receipt is untouched. `paymentId` on either is the PAYMENT it
+ * came off, which is how the accountant ties the two. Until this row
+ * existed a $500 deposit received in December and given back by park
+ * cheque in February was, in February's file, nothing.
  */
 export interface OtherReceipt {
   paymentId: string;
@@ -405,6 +487,35 @@ export interface OtherReceipt {
   feeCents: number;
   method: string;
   reference: string | null;
+  /**
+   * THE HOUSEHOLD, when the row carries one. Every on-account row and every
+   * deposit is somebody's money; the file printed both cells blank, so the
+   * accountant tying cheque 2101 to a household ledger had nothing. Null when
+   * the record genuinely names nobody (an amenity guest with no file).
+   */
+  payerName: string | null;
+  /**
+   * THE LOT THE HOUSEHOLD IS ON — their link covering today, else the next to
+   * start, else any live one, else the one they most recently LEFT: the
+   * accountant tying cheque 2101 to a lot ledger in April for a household
+   * gone in February still gets the lot it was for. Only when they hold no
+   * link at all does it fall back to the lot of the bills the money was put
+   * against, and null (a cheque at signing, nothing applied yet) prints as
+   * nothing rather than "?".
+   */
+  lotNumber: string | null;
+  /**
+   * TAKEN BACK, by either route — the same four fields as `Receipt`, REQUIRED
+   * so no constructor can quietly drop them: the off-book read used to filter
+   * reversed and returned rows out, so a bounced quarter-ahead cheque left the
+   * file with no row, no note and a hole in the receipt-number sequence, while
+   * the same cheque against a bill was kept and marked. Kept out of every
+   * total; kept IN the file, marked, like a rent row.
+   */
+  reversedAt: string | null;
+  reversedReason: string | null;
+  bankReturnedAt: string | null;
+  returnCode: string | null;
   /**
    * WHERE MONEY ON ACCOUNT HAS SINCE GONE (0167): which bill months it was put
    * against, and how much to each. Cash basis is untouched — the row is still
@@ -430,14 +541,39 @@ const KIND_LABEL: Record<string, string> = {
   deposit: "Deposit (not income)",
   amenity: "Rented out (income)",
   rent: "Rent",
+  // Money that went back OUT through the processor (0142). Negative Amount,
+  // dated the day it went back — the Kind that lets an accountant filter the
+  // outflows and still sum the column to the bank.
+  refund: "Refund (given back)",
+  // Money that went back OUT across the window — a deposit returned, rent on
+  // account handed back (0168). The same shape as a refund: negative, dated
+  // the day it went back, tied to the payment it came off.
+  handed_back: "Handed back (given back)",
 };
+
+/** The same kinds once the money did not stay — a filterable word, never "not yet applied" about a bounced cheque. */
+const KIND_TAKEN_BACK: Record<string, string> = {
+  deposit: "Deposit (taken back)",
+  amenity: "Rented out (taken back)",
+};
+
+/** Deposits, amenity income, refunds and hand-backs are never "on account"; everything else is. */
+export function isOnAccountRow(o: Pick<OtherReceipt, "kind">): boolean {
+  return !(o.kind in KIND_LABEL) || o.kind === "rent";
+}
 
 /**
  * The Kind an on-account row prints, by how much of it has been applied. A
  * filterable label, so "not yet applied" still finds exactly the money the
  * office has yet to put anywhere.
+ *
+ * TAKEN BACK FIRST. A reversed or bank-returned row has nothing applied and
+ * nothing held, and "not yet applied" would send the office looking for
+ * money to apply; "given back" would say it went back to a card. It was
+ * taken back, and the label says so.
  */
 export function onAccountKindLabel(o: OtherReceipt): string {
+  if (notCollectedAt(o)) return "On account (taken back)";
   const applied = (o.appliedTo ?? []).reduce((s, a) => s + a.amountCents, 0);
   // "Applied" means nothing is left — the view's word when the loader
   // carried it, so a row with $57.47 refunded and the rest on bills is
@@ -449,6 +585,13 @@ export function onAccountKindLabel(o: OtherReceipt): string {
   if (applied <= 0) return held === 0 ? "On account (given back)" : "On account (not yet applied)";
   if (held != null ? held === 0 : applied >= o.amountCents) return "On account (applied)";
   return "On account (partly applied)";
+}
+
+/** The Kind cell for ANY off-book row — one place, so the screen and the file cannot disagree. */
+export function otherKindLabel(o: OtherReceipt): string {
+  if (isOnAccountRow(o)) return onAccountKindLabel(o);
+  if (notCollectedAt(o)) return KIND_TAKEN_BACK[o.kind] ?? `${KIND_LABEL[o.kind]} (taken back)`;
+  return KIND_LABEL[o.kind];
 }
 
 /** "2027-01: 542.53; 2027-02: 542.53" — the months an on-account row settled, for the Bill month cell. */
@@ -532,25 +675,9 @@ export function receiptsCsv(
       csvText(decimal(r.amountCents + r.feeCents)),
       csvText(METHOD_LABEL[r.method] ?? r.method),
       csvText(r.reference),
-      // "YES" rather than a date alone, so it survives a spreadsheet filter and
-      // is legible to somebody scanning the column rather than reading rows.
-      csvText(notCollectedAt(r) ? "YES" : ""),
-      // Which route, because they reconcile against different documents.
-      csvText(r.bankReturnedAt ? "bank return" : r.reversedAt ? "office correction" : ""),
-      // Lake-local, like `receivedOn` and the period bounds beside it. Sliced
-      // from UTC, a reversal recorded at 7:30pm on 31 Dec printed 2027-01-01 —
-      // a date outside the very window the statement was generated for.
-      csvText(notCollectedAt(r) ? lakeDateOf(String(notCollectedAt(r))) ?? "" : ""),
-      // The bank's own code is the reason for a return, and it is the thing
-      // the crew or resident has to act on. An office reversal carries the
-      // words somebody typed.
-      csvText(
-        r.bankReturnedAt
-          ? (r.returnCode ?? "returned by the bank")
-          : r.reversedAt
-            ? (r.reversedReason ?? "")
-            : "",
-      ),
+      // Taken back / how / on / reason — the one writer, shared with the
+      // billless rows below.
+      ...takenBackCells(r).map(csvText),
       csvText(r.lotNumber),
       csvText(r.payerName),
       csvText(r.periodMonth),
@@ -567,26 +694,30 @@ export function receiptsCsv(
   // Bill month cell of money on account that has since been put against
   // bills (0167): it names the months and the split, so the accountant can
   // tie December's cheque to the quarter it paid for.
+  //
+  // A REFUND OR HAND-BACK ROW is negative in Amount, Card fee and Charged
+  // total — csvCell passes a well-formed "-542.53" through as a number
+  // (lib/csv) — and its Payment ID is the payment it came off, so the two
+  // rows tie. A hand-back's Reference cell is the office's reason.
   for (const o of other) {
-    const isOnAccount = !(o.kind in KIND_LABEL) || o.kind === "rent";
+    const isOnAccount = isOnAccountRow(o);
     out.push([
       csvText(meta.parkName),
       csvText(meta.generatedAt),
       csvText("cash"),
-      csvText(isOnAccount ? onAccountKindLabel(o) : KIND_LABEL[o.kind]),
+      csvText(otherKindLabel(o)),
       csvText(o.receivedOn),
       csvText(decimal(o.amountCents)),
       csvText(decimal(o.feeCents)),
       csvText(decimal(o.amountCents + o.feeCents)),
       csvText(METHOD_LABEL[o.method as Method] ?? o.method),
       csvText(o.reference ?? ""),
-      // taken back / how / on / reason. FOUR, matching HEADERS. This list is
-      // hand-counted against a list in another function, so adding a column
-      // there silently shifts every cell after this point in these rows — a
-      // payment ID landing under "Bill status". The width assertion in the
-      // test file is what makes that impossible rather than merely unlikely.
-      csvText(""), csvText(""), csvText(""), csvText(""),
-      csvText(""), csvText(""),                // lot / payer
+      // Taken back / how / on / reason — the SAME writer as the rent rows.
+      // These used to be four hand-counted blanks, which is how a bounced
+      // on-account cheque printed as money that stayed. The width assertion
+      // in the test file keeps both branches as wide as HEADERS.
+      ...takenBackCells(o).map(csvText),
+      csvText(o.lotNumber ?? ""), csvText(o.payerName ?? ""),
       csvText(isOnAccount ? appliedToCell(o) : ""),        // bill month: where on-account money went
       csvText(""), csvText(""), csvText(""),   // bill total/status/breakdown
       csvText(o.paymentId),
@@ -651,6 +782,62 @@ export interface ExclusionContext {
    * rent total or mislabelled "on account".
    */
   amenityReceivedCents?: number;
+  /**
+   * DEPOSITS, MONEY ON ACCOUNT AND AMENITY MONEY received in this window and
+   * SINCE TAKEN BACK — a bounced cheque, an office correction, a bank return
+   * — in cents. Not in any figure above (those sum the rows that still
+   * stand) and not in `summary.reversed` (that is rent against bills). Said
+   * out loud because the rows are kept in the file, marked, and a reader of
+   * the note must not sum them.
+   */
+  otherTakenBackCents?: number;
+  /**
+   * MONEY SENT BACK TO A CARD in this window (0142), one entry per refund. A
+   * refund reduces what the bill counts as paid and what is still held on
+   * account, but it is NOT taken off the total above: cash basis counts the
+   * money on the day it arrived, and the refund is its own negative row on
+   * the day it went back, so the file's Amount column still ties to the bank.
+   * The note names each one so the owner is not surprised by a negative
+   * line in a file he is about to forward.
+   */
+  refunds?: Array<{
+    amountCents: number;
+    feeCents: number;
+    /** YYYY-MM-DD, lake-local — the day it went back. */
+    refundedOn: string;
+    lotNumber: string | null;
+    payerName: string | null;
+    /** The refunded payment's rail — "card" or "ach" — so the sentence names the right one. */
+    method: string;
+  }>;
+  /**
+   * MONEY HANDED BACK ACROSS THE WINDOW in this window, one entry per
+   * hand-back — a deposit returned (0102), rent on account handed back
+   * (0168). The fourth way money leaves, and the one that needs no processor:
+   * a park cheque or cash across a counter. Like a refund it is NOT taken off
+   * the total above and IS its own negative row in the file, dated the day it
+   * went back; the note names each so the negative line is no surprise.
+   */
+  handedBack?: Array<{
+    amountCents: number;
+    /** YYYY-MM-DD — the day the office handed it back. */
+    on: string;
+    lotNumber: string | null;
+    payerName: string | null;
+    /** What the money was — "deposit" or "rent" (on account). */
+    kind: string;
+    /** The office's reason, when the record carries one. */
+    note: string | null;
+  }>;
+}
+
+/** "a card", "cards", "a bank account", "bank accounts", or "cards and bank accounts" — whichever rails the refunds went back on. */
+function refundRails(methods: readonly string[]): string {
+  const ach = methods.filter((m) => m === "ach").length;
+  const card = methods.length - ach;
+  if (ach > 0 && card > 0) return "cards and bank accounts";
+  if (ach > 0) return ach === 1 ? "a bank account" : "bank accounts";
+  return card === 1 ? "a card" : "cards";
 }
 
 /**
@@ -683,8 +870,8 @@ export function exclusionLines(ctx: ExclusionContext): string[] {
   const held = ctx.onAccountHeldCents;
   if (dep > 0 || acct > 0) {
     const bits: string[] = [];
-    if (dep > 0) bits.push(`$${(dep / 100).toFixed(2)} in deposits taken`);
-    if (acct > 0) bits.push(`$${(acct / 100).toFixed(2)} received on account`);
+    if (dep > 0) bits.push(`${money(dep)} in deposits taken`);
+    if (acct > 0) bits.push(`${money(acct)} received on account`);
     lines.push(
       `Also received in this period, and NOT in the total above: ${bits.join(" and ")}. ` +
       `It reached the bank; it just isn't rent yet.` +
@@ -693,28 +880,81 @@ export function exclusionLines(ctx: ExclusionContext): string[] {
       (applied > 0
         ? held === 0 && applied >= acct
           ? ` All of the money on account has since been put against bills — the file says which months.`
-          : ` $${(applied / 100).toFixed(2)} of the money on account has since been put against bills — the file says which months` +
+          : ` ${money(applied)} of the money on account has since been put against bills — the file says which months` +
             (held == null
               ? `.`
               : held > 0
-                ? ` — and $${(held / 100).toFixed(2)} is still held.`
+                ? ` — and ${money(held)} is still held.`
                 : ` — and none of it is still held.`)
         : ""),
+    );
+  }
+  // MONEY THAT ARRIVED IN THIS WINDOW AS A DEPOSIT, ON ACCOUNT OR FOR AN
+  // AMENITY AND THEN DID NOT STAY. The rows are in the file, marked "Taken
+  // back", and in none of the figures above — the same judgement the rent
+  // rows get. Named so the receipt numbers do not look like a hole.
+  const gone = ctx.otherTakenBackCents ?? 0;
+  if (gone > 0) {
+    lines.push(
+      // Every off-book kind — a bank-returned amenity card is in this figure too.
+      `${money(gone)} that arrived in this period as a deposit, on account or for something you rent out was later taken back — a bounced check, a correction, or the bank pulling it back. ` +
+      `It reached the bank and went back out, so it counts toward nothing above. ` +
+      `Each of those rows is still in the file, marked "Taken back", so the receipt numbers run without a gap.`,
     );
   }
   const amenity = ctx.amenityReceivedCents ?? 0;
   if (amenity > 0) {
     lines.push(
-      `Also received: $${(amenity / 100).toFixed(2)} for things you rent out — the boat, the pavilion and so on. ` +
+      `Also received: ${money(amenity)} for things you rent out — the boat, the pavilion and so on. ` +
       `That IS your income, but it is not rent, so it sits outside the total above and should be its own line in your books.`,
+    );
+  }
+  // MONEY THAT WENT BACK OUT TO A CARD (0142). Not taken off the total —
+  // cash basis counts what arrived on the day it arrived — but named one by
+  // one, because each is a NEGATIVE line in the file he is about to forward,
+  // dated the day it went back, and a negative he was not told about is the
+  // line his accountant rings him over.
+  const refunds = ctx.refunds ?? [];
+  if (refunds.length > 0) {
+    const back = refunds.reduce((n, r) => n + r.amountCents, 0);
+    const fees = refunds.reduce((n, r) => n + r.feeCents, 0);
+    const each = refunds.map((r) => {
+      const who = r.lotNumber ? `Lot ${r.lotNumber}` : (r.payerName ?? "a household");
+      return `${who} ${money(r.amountCents)} on ${longDate(r.refundedOn)}`;
+    });
+    lines.push(
+      // By rail: 0142 refunds ACH money too, and that goes back to a bank
+      // account, not a card.
+      `${money(back)} was sent back to ${refundRails(refunds.map((r) => r.method))} in this period — ${each.join("; ")}. ` +
+      (fees > 0 ? `${money(fees)} of card fee went back with it. ` : "") +
+      `It is NOT taken off the total above: each refund is its own line in the file, dated the day it went back, with a negative amount, so the Amount column still adds up to your bank.`,
+    );
+  }
+  // MONEY HANDED BACK ACROSS THE WINDOW — a deposit returned, rent on account
+  // handed back to a household that has left. No processor, no bank line of
+  // its own until the park's cheque clears; the record is the stamp on the
+  // payment (returned_on). The same treatment as a refund: not taken off the
+  // total, its own negative line in the file on the day it went back, named
+  // here one by one so the negative is no surprise.
+  const handed = ctx.handedBack ?? [];
+  if (handed.length > 0) {
+    const back = handed.reduce((n, h) => n + h.amountCents, 0);
+    const each = handed.map((h) => {
+      const who = h.lotNumber ? `Lot ${h.lotNumber}` : (h.payerName ?? "a household");
+      const what = h.kind === "deposit" ? "of their deposit" : "of their money on account";
+      return `${who} ${money(h.amountCents)} ${what} on ${longDate(h.on)}${h.note ? ` (${h.note})` : ""}`;
+    });
+    lines.push(
+      `${money(back)} was handed back across the window in this period — ${each.join("; ")}. ` +
+      `It is NOT taken off the total above: each hand-back is its own line in the file, dated the day it went back, with a negative amount, so the Amount column still adds up to your bank.`,
     );
   }
   const fees = ctx.cardFeesReceivedCents ?? 0;
   if (fees > 0) {
     lines.push(
-      `Residents also paid $${(fees / 100).toFixed(2)} in card fees on top of their rent. ` +
+      `Residents also paid ${money(fees)} in card fees on top of what they paid — on rent, on money on account, or for things you rent out. ` +
       `That is NOT in the total above and it is not your income — it covers what the card costs. ` +
-      `Your bank deposits will be higher than this total by that amount.`,
+      `It reached the bank, and the file carries it row by row in the Card fee column.`,
     );
   }
   if (ctx.lagDays > 0) {

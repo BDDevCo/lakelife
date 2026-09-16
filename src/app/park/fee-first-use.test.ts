@@ -273,8 +273,8 @@ describe("the first afternoon, and what it shows before he taps", () => {
     expect(ONBOARD).toMatch(/mustRead\("the fees these households will also pay"/);
   });
 
-  it("the summary is given the fee, not just the rent", () => {
-    expect(SCREEN).toMatch(/onboardSummary\(plan, capMonths, feePerSignedLot\)/);
+  it("the summary is given the fee, not just the rent — and the window, so a holdover's month is on the figure", () => {
+    expect(SCREEN).toMatch(/onboardSummary\(plan, capMonths, feePerSignedLot, \{ todayISO: today, cutoverDate \}\)/);
   });
 
   it("a partial failure names the lots instead of counting them", () => {
@@ -427,12 +427,67 @@ describe("who the fee page counts, the morning after a signing", () => {
     expect(page.fees[0].payers).toBe(0);
   });
 
-  it("a tenancy that starts tomorrow is not here yet — half-open, like the Today screen", async () => {
+  it("a tenancy that starts tomorrow is not here yet — half-open, like the Today screen — but IS filed to pay from its day", async () => {
     db.lot_reservations = [
       { id: "r-soon", park_lot_id: "l1", origin: "office", status: "approved", during: "[2027-01-16,2028-01-01)" },
     ];
     const page = await listFees(PARK);
     expect(page.inheritedTenancies).toBe(0);
     expect(page.fees[0].payers).toBe(0);
+    // Named, never "nobody": the month is the row's own start, the income
+    // the fee's own arithmetic at that count. coveragePayers stays on TODAY,
+    // so the costs headline does not claim recovery before a bill exists.
+    expect(page.upcoming).toEqual({ count: 1, fromMonth: "2027-01", income: 142.53 });
+    expect(page.coveragePayers).toBe(0);
+  });
+
+  // THE AFTERNOON EIGHTEEN LEASES ARE FILED FOR 1 JANUARY. Zero cover today;
+  // the screen said "Nobody is on a lot yet, so this fee is collecting
+  // nothing" while the roll read "18 reserved".
+  it("eighteen leases filed for a day still to come are eighteen upcoming payers — one lot once, no holdover, no lot already paying", async () => {
+    db.park_lots = [
+      ...Array.from({ length: 20 }, (_, i) => ({ id: `l${i + 1}`, park_id: PARK, rental_mode: "long_term", lifecycle: "live", site_type: "mh_single" })),
+      { id: "slip-1", park_id: PARK, rental_mode: "long_term", lifecycle: "live", site_type: "slip" },
+    ];
+    db.lot_reservations = [
+      ...Array.from({ length: 18 }, (_, i) => ({ id: `r${i + 1}`, park_lot_id: `l${i + 1}`, origin: "application", status: "approved", during: "[2027-02-01,2027-03-01)" })),
+      // Lot 19: two links filed ahead (a lease and its renewal) — one lot, once.
+      { id: "r19a", park_lot_id: "l19", origin: "application", status: "approved", during: "[2027-02-01,2027-03-01)" },
+      { id: "r19b", park_lot_id: "l19", origin: "office", status: "approved", during: "[2027-03-01,2027-04-01)" },
+      // Lot 20: a holdover filed ahead — grandfathered, never counted.
+      { id: "r20", park_lot_id: "l20", origin: "grandfathered", status: "approved", during: "[2027-02-01,2028-02-01)" },
+      // A slip filed ahead: not a lot a fee lands on.
+      { id: "r-slip", park_lot_id: "slip-1", origin: "application", status: "approved", during: "[2027-02-01,2027-03-01)" },
+      // Lot 1 also has a signed successor already paying today? No — lot 1
+      // is upcoming only. Lot 2 is paying TODAY with a renewal filed ahead:
+      // it must not be counted twice.
+      { id: "r2-now", park_lot_id: "l2", origin: "office", status: "active", during: "[2027-01-01,2027-02-01)" },
+    ];
+    const page = await listFees(PARK);
+    // Lot 2 pays today; lots 1, 3–19 are filed ahead: 18.
+    expect(page.fees[0].payers).toBe(1);
+    expect(page.upcoming).toEqual({ count: 18, fromMonth: "2027-02", income: 2565.54 });
+  });
+
+  it("with nothing filed ahead there are no upcoming payers — the old sentence stands", async () => {
+    db.lot_reservations = [];
+    const page = await listFees(PARK);
+    expect(page.upcoming).toBeNull();
+    expect(page.fees[0].payers).toBe(0);
+  });
+});
+
+describe("the fee row before go-live", () => {
+  it("relabels the row for households filed ahead — never 'paying' before a bill exists — and the panel reads the same rows", () => {
+    expect(FORM).toMatch(/\$\{page\.upcoming\.count\} from \$\{prettyMonth\(page\.upcoming\.fromMonth\)\}/);
+    expect(FORM).toMatch(/coverageSummary\(c, page\.coveragePayers, page\.fees\.length, page\.upcoming\)/);
+    expect(FORM).toMatch(/\/mo from \$\{prettyMonth\(page\.upcoming\.fromMonth\)\}/);
+    expect(FORM).toContain("nobody on a lot yet");
+  });
+
+  it("the costs headline still keys on TODAY's payers, so nothing is 'recovered' before it is billed", () => {
+    const costs = code("./costs/page.tsx");
+    expect(costs).toMatch(/coveragePayers > 0/);
+    expect(costs).not.toMatch(/upcoming/);
   });
 });

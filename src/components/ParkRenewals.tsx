@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { longDate } from "@/lib/lake-time";
 import { chipStyle } from "@/components/wizard-controls";
-import { lengthInWords, agreementSpanWords } from "@/app/park/agreement-helpers";
+import { lengthInWords, lengthsInWords, agreementSpanWords } from "@/app/park/agreement-helpers";
 import { renewAgreement, type RenewalPreview } from "@/app/park/renew-actions";
+import { money } from "@/app/park/ledger-helpers";
 
 /**
  * WRITING THE NEXT AGREEMENTS, a cycle at a time.
@@ -35,9 +36,6 @@ import { renewAgreement, type RenewalPreview } from "@/app/park/renew-actions";
  * a number he did not type and should not have to guess at.
  */
 
-const money = (n: number) =>
-  `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
 /** True when a served increase lands between today and the successor's start. */
 const rentMoves = (r: RenewalPreview) =>
   r.quotedAmount != null && r.priorQuotedAmount != null && r.priorQuotedAmount !== r.quotedAmount;
@@ -64,12 +62,22 @@ export function ParkRenewals({
 
   if (rows.length === 0) return null;
 
-  /** The length this row will be written for, and its plan. */
-  function choice(r: RenewalPreview) {
-    const months = picked[r.reservationId] ?? r.defaultMonths ?? r.lengths[0]?.months ?? null;
-    const at = r.lengths.find((l) => l.months === months) ?? r.lengths[0] ?? null;
-    return at;
+  /** The lengths this row can actually be written for — a lapsed agreement
+   *  is planned from its own end, and a short length may be over before
+   *  today while a longer one reaches past it. Only those get a chip. */
+  function open(r: RenewalPreview) {
+    return r.lengths.filter((l) => l.plan.ok && l.plan.start && l.plan.end);
   }
+
+  /** The length this row will be written for, and its plan: the pick, else
+   *  the house style when it can be written, else the shortest that can. */
+  function choice(r: RenewalPreview) {
+    const can = open(r);
+    const want = picked[r.reservationId] ?? r.defaultMonths;
+    return can.find((l) => l.months === want) ?? can[0] ?? null;
+  }
+
+  const lapsed = rows.filter((r) => r.lapsed).length;
 
   function renew(r: RenewalPreview, newRent?: string) {
     const at = choice(r);
@@ -77,28 +85,45 @@ export function ParkRenewals({
     start(async () => {
       const res = await renewAgreement(parkId, r.reservationId, { months: at.months, newRent });
       toast(res.ok ? (res.signal ?? "Written.") : (res.error ?? "Couldn't write that."));
-      if (res.ok) { setEditing(null); setRent(""); router.refresh(); }
+      if (res.ok) { setEditing(null); setRent(""); }
+      // Refreshed on a refusal too: a tab left open over midnight keeps
+      // yesterday's chips, and the server just re-planned the row — the
+      // stale chip goes with the refresh rather than inviting a second tap.
+      router.refresh();
     });
   }
 
   return (
     <section style={{ marginTop: 22 }}>
       <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Agreements to write</h2>
+      {/* PAST TENSE FOR A PAST EVENT. Fifteen agreements that lapsed on
+          1 February read "run out soon" in June. The heading splits on the
+          fact the server carries (`lapsed`), and the rows lead with them —
+          the list is already oldest-end first. */}
       <p className="mut" style={{ fontSize: 13, marginTop: 0, marginBottom: 10, lineHeight: 1.5 }}>
-        These run out soon and have nothing behind them. When one lapses the rent
-        stops being billed — quietly, with no error.
+        {lapsed === 0
+          ? "These run out soon and have nothing behind them. When one lapses the rent stops being billed — quietly, with no error."
+          : lapsed === rows.length
+            ? `${lapsed === 1 ? "This one has" : "These have"} lapsed with nothing behind ${lapsed === 1 ? "it" : "them"} — nothing has been billed to ${lapsed === 1 ? "the household" : "them"} since.`
+            : `${lapsed} of these ${lapsed === 1 ? "has" : "have"} lapsed — nothing has been billed to ${lapsed === 1 ? "that household" : "them"} since. The rest run out soon and have nothing behind them.`}
       </p>
 
       <div className="ll-card">
         {rows.map((r) => {
           const at = choice(r);
+          const can = open(r);
+          // Lengths the park writes that would be over before today from
+          // this agreement's end — named, so a missing chip is not a mystery.
+          const over = r.lengths.filter((l) => l.plan.refusal === "already_ended").map((l) => l.months);
           return (
           <div key={r.reservationId}
             style={{ padding: "11px 14px", borderTop: "1px solid rgba(0,0,0,.06)" }}>
             <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
               <strong style={{ minWidth: 62 }}>Lot {r.lotNumber}</strong>
               <span style={{ flex: 1 }}>{r.renterName ?? "—"}</span>
-              <span className="mut" style={{ fontSize: 13 }}>ends {longDate(r.priorEnd)}</span>
+              <span className="mut" style={{ fontSize: 13 }}>
+                {r.lapsed ? `lapsed ${longDate(r.priorEnd)} — nothing billed since` : `ends ${longDate(r.priorEnd)}`}
+              </span>
               {r.quotedAmount != null && (
                 <span className="mut" style={{ fontSize: 13 }}>{money(r.quotedAmount)}</span>
               )}
@@ -112,14 +137,14 @@ export function ParkRenewals({
             {r.plan.ok && at?.plan.ok && at.plan.start && at.plan.end ? (
               <>
                 {/* THE HOUSEHOLD'S CHOICE. One chip per length the park
-                    writes, starting on its house style. The dates under
-                    them are the picked length's own plan — season clamp
-                    included — because that is exactly what the button
-                    writes. */}
-                {r.lengths.length > 1 && (
+                    writes AND can write from this end, starting on its
+                    house style. The dates under them are the picked
+                    length's own plan — season clamp included — because
+                    that is exactly what the button writes. */}
+                {can.length > 1 && (
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
                     <span className="mut" style={{ fontSize: 13 }}>Renew for</span>
-                    {r.lengths.map((l) => {
+                    {can.map((l) => {
                       const on = l.months === at.months;
                       return (
                         <button key={l.months} type="button" aria-pressed={on} disabled={busy}
@@ -140,10 +165,27 @@ export function ParkRenewals({
                     the picked length beside the clamped dates. */}
                 <div className="mut" style={{ fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
                   Next one: {agreementSpanWords(at.plan)}.
-                  {at.plan.depositDue
-                    ? " New chain, so a deposit is due."
-                    : " Consecutive, so no new deposit."}
+                  {/* CONSECUTIVE is the plan's fact, not the deposit dial's:
+                      at a park with no deposit a fresh start after a gap
+                      read "Consecutive". A deposit is mentioned only when
+                      one is due. */}
+                  {at.plan.continuesChain
+                    ? " Consecutive with the last one."
+                    : ` Starts a new chain — there was a gap after ${longDate(r.priorEnd)}.` +
+                      (at.plan.depositDue && at.plan.depositAmount != null ? ` A deposit of ${money(at.plan.depositAmount)} is due.` : "")}
+                  {/* THE MONEY FACT OF A BACKFILL, from the server (it knows
+                      today): the tap below makes the months since the lapse
+                      billable, and none has been raised. */}
+                  {r.backfillNote ? ` ${r.backfillNote}` : ""}
                 </div>
+                {over.length > 0 && (
+                  <div className="mut" style={{ fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>
+                    From {longDate(r.priorEnd)}, {lengthsInWords(over)} would be over already, so
+                    {can.length === 1
+                      ? ` only ${lengthInWords(can[0].months)} reaches past today.`
+                      : over.length === 1 ? " it isn't offered here." : " those aren't offered here."}
+                  </div>
+                )}
 
                 {/* Said out loud past a year of consecutive short agreements.
                     Not advice — the length of a chain is a fact he should be
@@ -163,7 +205,10 @@ export function ParkRenewals({
                         placeholder={r.quotedAmount?.toFixed(2) ?? ""}
                         style={{ marginTop: 4, width: 120 }} />
                     </label>
-                    <button className="ll-btn" disabled={busy}
+                    {/* A button that cannot do what its label says stays
+                        off: a blank box wrote the OLD rent under a toast
+                        identical to a change. "Back" is the same-rent door. */}
+                    <button className="ll-btn" disabled={busy || !rent.trim()}
                       onClick={() => renew(r, rent)}>Write it</button>
                     <button className="ll-btn ghost" disabled={busy}
                       onClick={() => { setEditing(null); setRent(""); }}>Back</button>

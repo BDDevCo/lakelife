@@ -34,6 +34,7 @@ vi.mock("@/app/park/money-actions", () => ({
   returnDeposit: async () => ({ ok: true }),
   applyOnAccount: async () => ({ ok: true }),
   unapplyAllocation: async () => ({ ok: true }),
+  handBackOnAccount: async () => ({ ok: true }),
 }));
 vi.mock("@/app/park/ledger-actions", () => ({
   reversePayment: async () => ({ ok: true }),
@@ -47,8 +48,9 @@ type Props = Parameters<typeof ParkHeldMoney>[0];
 
 const quarter: OnAccountRow = {
   paymentId: "pay-acct", renterId: "renter-9", renterName: "Household 9",
-  amount: 1627.59, remaining: 542.53, allocated: 1085.06,
-  method: "check", receivedOn: "2026-12-28", reference: "1042", receiptNo: 12, partOfSplit: false,
+  amount: 1627.59, remaining: 542.53, allocated: 1085.06, refunded: 0, refunds: [], handedBack: 0, handedBackOn: null, handedBackNote: null,
+  method: "check", receivedOn: "2026-12-28", reference: "1042", receiptNo: 12, split: null,
+  tenancyEnded: false, movedOutOn: null, finalMonthBilled: false,
 };
 
 const props = (over: Partial<Props> = {}): Props => ({
@@ -353,5 +355,160 @@ describe("the page that mounts it is the one writer of the allocations it shows"
     expect(applied.length).toBeGreaterThan(50);
     expect(held).toMatch(/const spent = /);
     expect(held).toMatch(/const stillHeld = /);
+  });
+});
+
+/**
+ * CASH HANDED BACK ACROSS THE WINDOW (0168). A household leaves with money
+ * on account and nothing more bills for them; the only control used to be
+ * Take it back — a reversal, which reopens January on every screen. Now the
+ * row has a hand-back beside it, with the deposit's own form, and says
+ * "theirs to have back" only when BOTH facts are read.
+ */
+describe("Hand it back, beside Take it back", () => {
+  const gone: OnAccountRow = { ...quarter, amount: 57.47, remaining: 57.47, allocated: 0, receiptNo: 102, tenancyEnded: true, movedOutOn: "2027-01-27", finalMonthBilled: true };
+  const noBills = (over: Partial<Props> = {}) => props({ onAccount: [gone], allocations: {}, onAccountTotal: 57.47, openCharges: [], ...over });
+
+  it("offers Hand it back on money still on account, and never on a cheque spent in full", () => {
+    const html = renderToStaticMarkup(<ParkHeldMoney {...props()} />);
+    expect(html).toMatch(/>Hand it back</);
+    expect(html).toMatch(/Take it back/);
+    const spent: OnAccountRow = { ...quarter, remaining: 0, allocated: 1627.59 };
+    const html2 = renderToStaticMarkup(<ParkHeldMoney {...props({ onAccount: [spent], onAccountTotal: 0 })} />);
+    expect(html2).not.toMatch(/Hand it back/);
+    expect(html2).toMatch(/Take it back/);
+    // Card and ACH money goes back through the processor, never by hand
+    // (0142): the server refuses it, so the button is not offered.
+    for (const method of ["card", "ach"]) {
+      const byCard: OnAccountRow = { ...quarter, method };
+      expect(renderToStaticMarkup(<ParkHeldMoney {...props({ onAccount: [byCard] })} />)).not.toMatch(/Hand it back/);
+    }
+  });
+
+  it("says they moved out and nothing more bills — ONLY when the tenancy has ended AND the final month is billed", () => {
+    const w = words(noBills());
+    expect(w).toMatch(/They moved out January 27, 2027 — nothing more bills for them; this is theirs to have back\./);
+    expect(w).not.toMatch(/No open bill for them yet/);
+    // Collapsed both ways: either fact alone keeps the old sentence, which is
+    // the truth — a move-out recorded before the run gets a prorated final
+    // bill, and the run takes this money for it.
+    for (const half of [{ tenancyEnded: false }, { finalMonthBilled: false }, { movedOutOn: null }]) {
+      const w2 = words(noBills({ onAccount: [{ ...gone, ...half }] }));
+      expect(w2, JSON.stringify(half)).toMatch(/No open bill for them yet/);
+      expect(w2).not.toMatch(/theirs to have back/);
+    }
+    // And with an open bill of theirs, the picker wins — money against a bill first.
+    const w3 = words(props({ onAccount: [gone], allocations: {}, onAccountTotal: 57.47 }));
+    expect(w3).not.toMatch(/theirs to have back/);
+    expect(renderToStaticMarkup(<ParkHeldMoney {...props({ onAccount: [gone], allocations: {}, onAccountTotal: 57.47 })} />)).toMatch(/>Apply</);
+  });
+
+  it("the confirm on Take it back names both halves only when the bill's half STANDS, and never says 'cheque' about cash", () => {
+    // The confirm lives behind WithReason's open state, so the expression
+    // is read: it branches on `row.split` (read from the sibling row by
+    // getHeldMoney), mirrors reversalSentence's "both halves of it", and
+    // carries no method word — "the whole cheque" about $542.53 in cash
+    // was the lie.
+    const src = readFileSync(fileURLToPath(new URL("./ParkHeldMoney.tsx", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const line = src.slice(src.indexOf("function OnAccountLine"), src.indexOf("function DepositLine"));
+    const what = line.slice(line.indexOf("what={row.split"), line.indexOf("busy={busy}", line.indexOf("what={row.split")));
+    expect(what.length).toBeGreaterThan(80);
+    expect(what).toMatch(/row\.split\s*\?\s*`both halves of it — the \$\{money\(row\.split\.against\)\} against \$\{row\.split\.billMonth \? prettyMonth\(row\.split\.billMonth\) : "the bill"\} and the \$\{money\(row\.amount\)\} on account go back together`\s*:\s*"it"/);
+    expect(what).not.toMatch(/cheque/);
+    expect(line).not.toMatch(/partOfSplit/);
+  });
+
+  it("shows what went back on the row — each refund with its day, and the hand-back with its day", () => {
+    const back: OnAccountRow = { ...quarter, remaining: 0, allocated: 1085.06, refunded: 40, refunds: [{ amount: 40, on: "2027-01-09" }], handedBack: 502.53, handedBackOn: "2027-01-28", handedBackNote: "moved out; nothing more bills" };
+    const w = words(props({ onAccount: [back], onAccountTotal: 0 }));
+    expect(w).toMatch(/\$40\.00 went back to the card on January 9, 2027/);
+    expect(w).toMatch(/\$502\.53 handed back to them on January 28, 2027 — “moved out; nothing more bills”/);
+    expect(w).not.toMatch(/2027-01-28|2027-01-09/);
+    // Nothing went back: no such lines.
+    expect(words(props())).not.toMatch(/went back to the card|handed back to them/);
+  });
+
+  it("a row with nothing left because part of it went back is NOT 'Applied in full' — it has its own true heading", () => {
+    const back: OnAccountRow = { ...quarter, remaining: 0, allocated: 1085.06, handedBack: 542.53, handedBackOn: "2027-02-16", handedBackNote: "moved out 15 Feb" };
+    const w = words(props({ onAccount: [back], onAccountTotal: 0 }));
+    expect(w).not.toMatch(/Applied in full|Every cent of these is against bills/);
+    expect(w).toMatch(/Nothing left on account Part or all of these went back/);
+    // "the rest is against bills" was untrue of the walked row — $57.47 on
+    // account handed back in full has nothing against bills; the $542.53
+    // is a different row.
+    expect(w).not.toMatch(/the rest is against bills/);
+    expect(w).toMatch(/\$542\.53 handed back to them on February 16, 2027/);
+    // A part-refunded card payment with nothing left is the same shape.
+    const refunded: OnAccountRow = { ...quarter, method: "card", reference: null, remaining: 0, allocated: 1587.59, refunded: 40, refunds: [{ amount: 40, on: "2027-01-09" }] };
+    const w2 = words(props({ onAccount: [refunded], onAccountTotal: 0 }));
+    expect(w2).not.toMatch(/Applied in full/);
+    expect(w2).toMatch(/Nothing left on account/);
+    // Collapsed the other way: every cent against bills is still "Applied in full".
+    const spentRow: OnAccountRow = { ...quarter, remaining: 0, allocated: 1627.59 };
+    const w3 = words(props({ onAccount: [spentRow], onAccountTotal: 0 }));
+    expect(w3).toMatch(/Applied in full/);
+    expect(w3).not.toMatch(/Nothing left on account/);
+  });
+
+  it("a row already handed back offers neither Take it back nor Hand it back — both can only be refused", () => {
+    // Part went back, part is still on account: the database refuses a
+    // second stamp and a reversal by name, so the controls go and the line
+    // says what happened. The reason rides with it.
+    const part: OnAccountRow = { ...quarter, remaining: 17.47, allocated: 1085.06, handedBack: 525.06, handedBackOn: "2027-01-28", handedBackNote: "overpaid" };
+    const html = renderToStaticMarkup(<ParkHeldMoney {...props({ onAccount: [part], onAccountTotal: 17.47 })} />);
+    expect(html).not.toMatch(/Take it back|Hand it back/);
+    expect(html).toMatch(/\$525\.06 handed back to them on January 28, 2027/);
+    // Collapsed the other way: the same row with nothing handed back has both.
+    const both = renderToStaticMarkup(<ParkHeldMoney {...props()} />);
+    expect(both).toMatch(/Take it back/);
+    expect(both).toMatch(/Hand it back/);
+  });
+
+  it("…and when that household has gone with the final month billed, the row says the money is stuck — never 'theirs to have back'", () => {
+    // $40 of $57.47 handed back while they were here; they leave, January
+    // is billed, $17.47 is still on account. No door moves it: a hand-back
+    // is recorded once, the reversal is refused, and there is no bill to
+    // apply it to. The row used to read "this is theirs to have back" over
+    // money nothing on the screen could move.
+    const stuck: OnAccountRow = { ...quarter, amount: 57.47, remaining: 17.47, allocated: 0, handedBack: 40, handedBackOn: "2027-01-10", handedBackNote: "overpaid; $40 back", tenancyEnded: true, movedOutOn: "2027-01-27", finalMonthBilled: true };
+    const w = words(props({ onAccount: [stuck], allocations: {}, onAccountTotal: 17.47, openCharges: [] }));
+    expect(w).toMatch(/They moved out January 27, 2027 — nothing more bills for them\. \$17\.47 of it is still on account; a hand-back is recorded once, so it can’t go back from here\./);
+    expect(w).not.toMatch(/theirs to have back|No open bill for them yet/);
+    expect(w).not.toMatch(/Take it back|Hand it back/);
+    // Collapsed both ways: nothing handed back keeps "theirs to have back"
+    // (and the Hand it back door); still here keeps "No open bill".
+    const fresh = words(props({ onAccount: [{ ...stuck, handedBack: 0, handedBackOn: null, handedBackNote: null, remaining: 57.47 }], allocations: {}, onAccountTotal: 57.47, openCharges: [] }));
+    expect(fresh).toMatch(/theirs to have back/);
+    expect(fresh).toMatch(/Hand it back/);
+    const here = words(props({ onAccount: [{ ...stuck, tenancyEnded: false, movedOutOn: null, finalMonthBilled: false }], allocations: {}, onAccountTotal: 17.47, openCharges: [] }));
+    expect(here).toMatch(/No open bill for them yet/);
+    expect(here).not.toMatch(/recorded once/);
+  });
+
+  it("the hand-back and the deposit's return share ONE form, and the hand-back's button is dead until a reason is typed", () => {
+    const src = readFileSync(fileURLToPath(new URL("./ParkHeldMoney.tsx", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect((src.match(/<GiveBackForm/g) ?? []).length).toBe(2);
+    expect(src).toMatch(/act=\{\(amt, when, why\) => handBackOnAccount\(parkId, row\.paymentId, amt, when, why\)\}/);
+    expect(src).toMatch(/act=\{\(amt, when, why\) => returnDeposit\(parkId, row\.paymentId, amt, when, why\)\}/);
+    const form = src.slice(src.indexOf("function GiveBackForm"));
+    expect(form).toMatch(/disabled=\{busy \|\| !\(amt > 0\) \|\| amt > max \|\| \(needsWhy === true && !why\.trim\(\)\)\}/);
+    // The rent door demands the reason at the form; the deposit door leaves it to the server's kept-with-reason rule.
+    const acct = src.slice(src.indexOf("function OnAccountLine"), src.indexOf("function DepositLine"));
+    expect(acct).toMatch(/needsWhy\s/);
+    const dep = src.slice(src.indexOf("function DepositLine"), src.indexOf("function GiveBackForm"));
+    expect(dep).not.toMatch(/needsWhy/);
+    expect(src).not.toMatch(/partOfSplit/);
+  });
+
+  it("a departed household's deposit says so on its line", () => {
+    const dep = {
+      ...quarter, paymentId: "dep-1", amount: 500, remaining: 500, allocated: 0, method: "cash", reference: null, receiptNo: 3,
+      returnedOn: null, returnedAmount: null, note: null, returnNote: null, tenancyEnded: true, movedOutOn: "2027-01-27", finalMonthBilled: true,
+    };
+    const w = words(props({ onAccount: [], allocations: {}, onAccountTotal: 0, deposits: [dep], depositsHeldTotal: 500 }));
+    expect(w).toMatch(/\$500\.00 · Household 9 · taken December 28, 2026 · receipt 3 · they moved out January 27, 2027/);
+    expect(w).toMatch(/Give it back/);
   });
 });

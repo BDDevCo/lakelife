@@ -7,8 +7,8 @@ import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import { assertMyPark } from "./data";
 import {
-  checkCoverage, payersFor, monthlyIncome,
-  type ParkFee, type FeeCadence, type FeeAppliesTo, type CoverageCheck,
+  checkCoverage, payersFor, monthlyIncome, feePayableCount,
+  type ParkFee, type FeeCadence, type FeeAppliesTo, type CoverageCheck, type UpcomingPayers,
 } from "./fee-helpers";
 import type { CostCategory } from "./cost-helpers";
 import type { ParkResult } from "./actions";
@@ -38,6 +38,14 @@ export interface FeesPage {
    * quietly reporting fewer payers than he has households.
    */
   inheritedTenancies: number;
+  /**
+   * Households filed to pay from a day still to come — signed leases whose
+   * agreements start after today (a takeover's leases filed in December for
+   * 1 January). Null when there are none. Kept apart from `payers` and
+   * `coveragePayers` on purpose: nothing is billed before their day, so the
+   * costs headline must not claim recovery yet.
+   */
+  upcoming: UpcomingPayers | null;
 }
 
 /**
@@ -57,6 +65,7 @@ export async function listFees(parkId: string): Promise<FeesPage> {
     },
     coveragePayers: 0,
     inheritedTenancies: 0,
+    upcoming: null,
   };
   if (!(await assertMyPark(parkId))) return empty;
 
@@ -112,15 +121,40 @@ export async function listFees(parkId: string): Promise<FeesPage> {
   const inheritedTenancies = liveStays.length - billable.length;
   const occupied = new Set(billable.map((s) => s.park_lot_id as string));
 
+  // A LOT A FEE LANDS ON: long-term, not a slip or storage — the same test
+  // for a lot paying today and one filed to pay from a day still to come.
+  const feeLot = (l: Record<string, unknown>) =>
+    (l.rental_mode as string) !== "short_term" && !["slip", "storage"].includes(l.site_type as string);
   const counts = {
-    longTerm: live.filter(
-      (l) => (l.rental_mode as string) !== "short_term"
-        && !["slip", "storage"].includes(l.site_type as string)
-        && occupied.has(l.id as string),
-    ).length,
+    longTerm: live.filter((l) => feeLot(l) && occupied.has(l.id as string)).length,
     shortTerm: live.filter((l) => (l.rental_mode as string) === "short_term").length,
     optedIn: 0,
   };
+
+  // FILED TO PAY FROM A DAY STILL TO COME. The Today screen's own test for
+  // "reserved" (start > today), one lot counted once and never a lot already
+  // paying today; feePayableCount drops the grandfathered rows, as it does
+  // everywhere. The month is the rows' own earliest start — never the
+  // cutover dial, which a park that never changed hands does not have.
+  const upcomingStays = (stayRows ?? []).filter((s) => {
+    const r = parseDaterange(s.during as string);
+    return r != null && r.start > today && !occupied.has(s.park_lot_id as string);
+  });
+  const feeLotIds = new Set(live.filter(feeLot).map((l) => l.id as string));
+  const oneLotOnce = new Map<string, Record<string, unknown>>();
+  for (const s of upcomingStays) {
+    const lot = s.park_lot_id as string;
+    if (!feeLotIds.has(lot)) continue;
+    const start = parseDaterange(s.during as string)!.start;
+    const held = oneLotOnce.get(lot);
+    if (!held || start < parseDaterange(held.during as string)!.start) oneLotOnce.set(lot, s);
+  }
+  const upcomingRows = [...oneLotOnce.values()];
+  const upcomingCount = feePayableCount(upcomingRows);
+  const upcomingFrom = upcomingRows
+    .filter((s) => (s.origin as string) !== "grandfathered")
+    .map((s) => parseDaterange(s.during as string)!.start)
+    .sort()[0] ?? null;
 
   const ids = (feeRows ?? []).map((f) => f.id as string);
   const optedInBy = new Map<string, number>();
@@ -157,11 +191,20 @@ export async function listFees(parkId: string): Promise<FeesPage> {
     })),
   );
 
+  // What the active monthly fees bring in once the upcoming households are
+  // all billed — the same arithmetic as `monthly`, at the upcoming count.
+  const upcomingIncome = fees
+    .filter((f) => ["all_lots", "long_term"].includes(f.appliesTo))
+    .reduce((s, f) => s + monthlyIncome(f, upcomingCount), 0);
+
   return {
     fees,
     coverage,
     coveragePayers: Math.max(...fees.map((f) => f.payers), 0),
     inheritedTenancies,
+    upcoming: upcomingCount > 0 && upcomingFrom
+      ? { count: upcomingCount, fromMonth: upcomingFrom.slice(0, 7), income: Math.round(upcomingIncome * 100) / 100 }
+      : null,
   };
 }
 

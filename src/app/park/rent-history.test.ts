@@ -185,9 +185,22 @@ describe("the text that mints the token quotes the page's resolution", () => {
     expect(a).toBeGreaterThan(-1);
     expect(b).toBeGreaterThan(a);
     const words = src.slice(a, b);
-    for (const f of ["view.price", "view.newEnd", "view.currentEnd", "view.offeredMonths", "view.renewMonths", "view.isRenewal", "view.depositHeld"]) {
+    for (const f of ["view.price", "view.newEnd", "view.currentEnd", "view.offeredMonths", "view.renewMonths", "view.isRenewal", "view.depositHeld", "view.monthlyFees", "view.rentalMode"]) {
       expect(words).toContain(f);
     }
+    // THE RENT AND THE FEE BESIDE IT come from the one helper the page reads
+    // (renewalRentWords) — the text used to type "$400 a month" itself while
+    // the successor bills rent plus the park's monthly fee. And the noun is
+    // the lot's, never a typed "site".
+    expect(words).toMatch(/renewalRentWords\(\{ price: view\.price, term: view\.term, fees: view\.monthlyFees \}\)/);
+    expect(words).not.toMatch(/" a month"/);
+    expect(words).toMatch(/lotWord\(view\.rentalMode\)/);
+    // No typed noun survives anywhere in the function — the email SUBJECT
+    // still said "Your site is booked" over a body that said "lot 14".
+    expect(words).not.toMatch(/\bsite\b/);
+    // And ONE shape for the figure: money(), never a bare toLocaleString.
+    expect(words).toMatch(/money\(view\.price\)/);
+    expect(words).not.toMatch(/toLocaleString\(\)/);
     // THE LENGTH IS THE HOUSEHOLD'S CHOICE. The text names the lengths on
     // offer (`view.offeredMonths`, in words) and never the cap as a length:
     // `view.capMonths ?? 3` put "the next 3-month agreement" in every text

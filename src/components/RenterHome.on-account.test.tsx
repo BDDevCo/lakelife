@@ -46,7 +46,7 @@ const view = (over: Partial<RenterHomeView> = {}): RenterHomeView => ({
   textsOn: false, textNumber: null, term: "monthly", leavingOn: null,
   acceptsOnlineRent: false, hasCard: false, bookingReady: false, cardFeePct: 0,
   today: "2027-01-06",
-  bill: null, arrears: [], tenancyEnded: null, deposit: null, onAccount: 0,
+  bill: null, arrears: [], tenancyEnded: null, finalMonthBilled: false, deposit: null, depositReturned: null, onAccount: 0,
   payments: [], reported: [], reportedFailed: false,
   ...over,
 });

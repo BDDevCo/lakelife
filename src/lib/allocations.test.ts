@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   planAllocations, plannedByKey, describeAllocations, allocatedTotal,
-  oldestFirst, planSettlement, describeSettlement, money,
+  oldestFirst, planSettlement, describeSettlement, money, splitApplied, heldOnAccountFor,
 } from "./allocations";
 
 /**
@@ -164,5 +164,84 @@ describe("planSettlement — the household's oldest open bill first", () => {
     expect(money(1085.06)).toBe("$1,085.06");
     expect(money(600)).toBe("$600.00");
     expect(money(0)).toBe("$0.00");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHICH DOLLARS ARE THE NEW BILLS' AND WHICH ARE OLDER BILLS' — one partition
+// for the preview and the run. The preview planned the older-bill dollars
+// and discarded them; the run partitioned by hand; the two sentences did not
+// match. One helper, sorted by month, no subtraction.
+// ---------------------------------------------------------------------------
+describe("splitApplied", () => {
+  const monthOf = (k: string) => ({ jan: "2027-01", dec: "2026-12" } as Record<string, string>)[k];
+
+  it("sorts each applied dollar once: new bills to fromOnAccount, older ones named by month, oldest first", () => {
+    const applied = new Map([["feb-res", 57.47], ["jan", 542.53], ["dec", 40]]);
+    const out = splitApplied(applied, new Set(["feb-res"]), monthOf);
+    expect(out.fromOnAccount).toBe(57.47);
+    expect(out.toOlderBills).toEqual([
+      { key: "dec", periodMonth: "2026-12", amount: 40 },
+      { key: "jan", periodMonth: "2027-01", amount: 542.53 },
+    ]);
+  });
+
+  it("nothing older reads as none, and a zero line is not a line", () => {
+    expect(splitApplied(new Map([["feb-res", 542.53]]), new Set(["feb-res"]), monthOf)).toEqual({ fromOnAccount: 542.53, toOlderBills: [] });
+    expect(splitApplied(new Map([["jan", 0]]), new Set(), monthOf)).toEqual({ fromOnAccount: 0, toOlderBills: [] });
+    expect(splitApplied(new Map(), new Set(["feb-res"]), monthOf)).toEqual({ fromOnAccount: 0, toOlderBills: [] });
+  });
+
+  it("is exact to the cent across many new bills", () => {
+    const applied = new Map(Array.from({ length: 18 }, (_, i) => [`r${i}`, 542.53] as [string, number]));
+    expect(splitApplied(applied, new Set(applied.keys()), monthOf).fromOnAccount).toBe(9765.54);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHAT THE PARK STILL HOLDS OF ONE HOUSEHOLD'S — the close-out door's read
+// after a move-out, from the same view the held panel uses. A failed read
+// travels back as an error, never as "nothing held".
+// ---------------------------------------------------------------------------
+describe("heldOnAccountFor", () => {
+  type Row = Record<string, unknown>;
+  const fake = (rows: Record<string, Row[]>, fail: string | null = null) => ({
+    from: (t: string) => {
+      const fs: Array<(r: Row) => boolean> = [];
+      const q = {
+        select: () => q,
+        eq: (c: string, v: unknown) => { fs.push((r) => r[c] === v); return q; },
+        gt: (c: string, v: number) => { fs.push((r) => Number(r[c]) > v); return q; },
+        is: (c: string, v: unknown) => { fs.push((r) => (v === null ? r[c] == null : r[c] === v)); return q; },
+        then: (ok: (x: { data: Row[] | null; error: unknown }) => unknown) =>
+          Promise.resolve(fail === t ? { data: null, error: { message: "boom" } } : { data: (rows[t] ?? []).filter((r) => fs.every((f) => f(r))), error: null }).then(ok),
+      };
+      return q;
+    },
+  });
+  const rows = {
+    park_on_account_payments: [
+      { park_id: "p", renter_id: "r9", remaining: 57.47 },
+      { park_id: "p", renter_id: "r9", remaining: 0 },
+      { park_id: "p", renter_id: "r14", remaining: 1085.06 },
+    ],
+    park_payments: [
+      { park_id: "p", renter_id: "r9", kind: "deposit", amount: 500, reversed_at: null, returned_at: null, returned_on: null },
+      { park_id: "p", renter_id: "r9", kind: "deposit", amount: 200, reversed_at: null, returned_at: null, returned_on: "2027-01-05" },
+      { park_id: "p", renter_id: "r9", kind: "rent", amount: 999, reversed_at: null, returned_at: null, returned_on: null },
+    ],
+  };
+
+  it("sums the household's remaining and its deposits still held — theirs only", async () => {
+    expect(await heldOnAccountFor(fake(rows) as never, "p", "r9")).toEqual({ remaining: 57.47, depositsHeld: 500, error: null });
+    expect(await heldOnAccountFor(fake(rows) as never, "p", "r14")).toEqual({ remaining: 1085.06, depositsHeld: 0, error: null });
+    expect(await heldOnAccountFor(fake(rows) as never, "p", "r1")).toEqual({ remaining: 0, depositsHeld: 0, error: null });
+  });
+
+  it("a failed read is an error, not nothing held", async () => {
+    const a = await heldOnAccountFor(fake(rows, "park_on_account_payments") as never, "p", "r9");
+    expect(a.error).toBeTruthy();
+    const b = await heldOnAccountFor(fake(rows, "park_payments") as never, "p", "r9");
+    expect(b.error).toBeTruthy();
   });
 });

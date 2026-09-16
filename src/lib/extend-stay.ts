@@ -28,7 +28,9 @@
  */
 
 import { nightsIn, type DateRange, type Term } from "@/lib/parks";
-import { agreementEnd, chooseAgreementLength } from "@/app/park/agreement-helpers";
+import { agreementEnd, chooseAgreementLength, perTermWords } from "@/app/park/agreement-helpers";
+import { money } from "@/app/park/ledger-helpers";
+import { longDate } from "@/lib/lake-time";
 
 /** Nights one period of each term covers. Matches quoteStay's table — if these
  *  two ever disagree, a renter is quoted one thing and given another. */
@@ -147,6 +149,7 @@ export type ExtendRefusal =
   | "lot_taken"
   | "no_rate"
   | "already_ended"
+  | "already_renewed"
   | "inherited"
   | "length_missing"
   | "length_not_offered"
@@ -164,8 +167,22 @@ export function canExtend(input: {
   term: Term;
   status: string;
   todayISO: string;
-  /** Other DECIDED stays on the same lot. */
+  /** Other DECIDED stays on the same lot — SOMEBODY ELSE'S. The caller
+   *  partitions the household's own next agreement into `ownSuccessor`. */
   otherHeld: DateRange[];
+  /**
+   * THE HOUSEHOLD'S OWN LATER ROW on this lot, when one is already written
+   * — by their earlier tap, or by the office for them. At a CAPPED park it
+   * is their next agreement, judged before the clash test AND before
+   * `already_ended`, so a household who renewed reads "you're already set"
+   * — never "that lot is spoken for" (what it read as in `otherHeld`), and
+   * never "that stay has already finished" when they re-open the link after
+   * the old row's end with the next one in force. At a park with NO cap
+   * nothing is renewed — the stay is widened — so a guest's own later
+   * booking is simply one more held range for the clash test, exactly as
+   * anybody else's would be.
+   */
+  ownSuccessor?: DateRange | null;
   rates: { term: Term; amount: number }[];
   /** The park's agreement cap, when it has one — the switch between an
    *  extension (no cap) and a renewal (a cap). Never the length. */
@@ -214,7 +231,7 @@ export function canExtend(input: {
 } {
   const {
     range, term, status, todayISO, otherHeld, rates, capMonths, defaultMonths, renewMonths, seasonEnd,
-    currentAmount, origin,
+    currentAmount, origin, ownSuccessor,
   } = input;
 
   if (!range) return { ok: false, refusal: "not_found" };
@@ -223,6 +240,13 @@ export function canExtend(input: {
   // to "the park can set up a new one", and a new one is exactly what the
   // roll's signing control records — this link must not be a second door to it.
   if (origin === "grandfathered") return { ok: false, refusal: "inherited" };
+  // THEIR NEXT AGREEMENT IS ALREADY WRITTEN — a renewal-path fact, so only at
+  // a capped park. Nothing to choose, the clash test below must never see it
+  // as somebody else's booking, and it outranks 'already_ended': the old
+  // row's end is behind them precisely because the next one has begun, and
+  // "that stay has already finished — the park can set up a new one" is a
+  // lie to a household whose new one is in force.
+  if (capMonths != null && ownSuccessor) return { ok: false, refusal: "already_renewed" };
   if (range.end < todayISO) return { ok: false, refusal: "already_ended" };
 
   // The park's asking rate, when it publishes one for this term.
@@ -261,8 +285,11 @@ export function canExtend(input: {
 
   // Half-open, matching the exclusion constraint exactly. The stay we are
   // widening is NOT in otherHeld — the caller excludes it — so any overlap
-  // here is a genuine conflict with somebody else.
-  const clash = otherHeld.some((h) => h.start < next.end && next.start < h.end);
+  // here is a genuine conflict. At a park with no cap the guest's own later
+  // booking is held too: an extension that ran into it would be refused by
+  // the database just the same, and they read a sentence instead.
+  const held = capMonths == null && ownSuccessor ? [...otherHeld, ownSuccessor] : otherHeld;
+  const clash = held.some((h) => h.start < next.end && next.start < h.end);
   if (clash) return { ok: false, refusal: "lot_taken" };
 
   return {
@@ -276,16 +303,36 @@ export function canExtend(input: {
   };
 }
 
-/** What the renter reads. Never blames them, never mentions another renter. */
-export function refusalText(r: ExtendRefusal): string {
+/**
+ * What the renter reads. Never blames them, never mentions another renter.
+ *
+ * `nextAgreement` is the household's own successor, for `already_renewed`
+ * — the sentence names its dates in words, the way the page after the tap
+ * did, so a re-opened link says the same thing the tap said.
+ *
+ * `rentalMode` picks the noun (lotWord) where a sentence names the lot: a
+ * long-term household whose page title says "lot 14" was told "that SITE is
+ * spoken for" one refusal later.
+ */
+export function refusalText(
+  r: ExtendRefusal,
+  nextAgreement?: DateRange | null,
+  rentalMode?: string | null,
+): string {
   switch (r) {
     case "not_found":       return "We couldn't find that stay. Give the park a call and they'll sort it out.";
     case "not_extendable":  return "This stay can't be extended from here — the park can still do it for you.";
     case "already_ended":   return "That stay has already finished. The park can set up a new one.";
+    // Their own next agreement is written — by their tap, or by the office
+    // for them. Not an error, and never "spoken for": the site is theirs.
+    case "already_renewed":
+      return nextAgreement
+        ? `You're already set — your next agreement runs ${longDate(nextAgreement.start)} to ${longDate(nextAgreement.end)}. The park will send the agreement to sign.`
+        : "You're already set — your next agreement is written. The park will send the agreement to sign.";
     case "no_rate":         return "The park isn't taking extensions at that rate right now — give them a call.";
     // Deliberately does not say who took it or until when. That is somebody
     // else's business, and the renter only needs to know what to do next.
-    case "lot_taken":       return "That site is spoken for after your dates. The park can look for another one.";
+    case "lot_taken":       return `That ${lotWord(rentalMode)} is spoken for after your dates. The park can look for another one.`;
     // A household inherited from the previous owner signs its new lease with
     // the park; that act ends the old arrangement and is recorded from the
     // rent roll, not from a tap on a text.
@@ -305,4 +352,54 @@ export function refusalText(r: ExtendRefusal): string {
     case "season_closed":
       return "Your spot is closed for the season after your dates, so there's nothing to renew into yet — the park can book you in again when it opens.";
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE WORDS A HOUSEHOLD READS ABOUT THEIR LOT AND THEIR RENT — one home for
+// the text that mints the token, the page it opens and the page after the
+// tap, so none of the three can say a number or a noun the others do not.
+// ---------------------------------------------------------------------------
+
+/**
+ * "lot" for a household that lives there; "site" for a pad booked by the
+ * night. The text and the page said "site 2" to a long-term household whose
+ * lease, invite and own home page all say "Lot 2".
+ */
+export function lotWord(rentalMode: string | null | undefined): "lot" | "site" {
+  return rentalMode === "short_term" ? "site" : "lot";
+}
+
+/** A fee the successor's household will be billed each month, by label. */
+export interface MonthlyFee {
+  label: string;
+  amount: number;
+}
+
+/**
+ * WHAT THE NEXT AGREEMENT COSTS A MONTH, in the household's words —
+ * "$400.00 rent plus the $142.53 Grounds fee — $542.53 a month". The rent
+ * alone is what they are quoted; the fee is what the ledger will bill from
+ * the successor's first morning (the owner's signing toast already says
+ * "$542.53 ($400.00 rent + $142.53 fees)"), and a text that names only the
+ * rent understates the bill by a third. With no fee it is plain "$400.00 a
+ * month" — a park with no fee never reads "with the fees". The fee's label
+ * is the park's own, never a typed-in name. Only a monthly rent combines
+ * with a monthly fee; any other term quotes the rent alone.
+ */
+export function renewalRentWords(input: {
+  price: number | null;
+  term: string;
+  fees?: readonly MonthlyFee[] | null;
+}): string {
+  if (input.price == null) return "";
+  const per = perTermWords(input.term);
+  const rent = `${money(input.price)}${per ? ` ${per}` : ""}`;
+  const fees = (input.fees ?? []).filter((f) => f.amount > 0);
+  if (input.term !== "monthly" || fees.length === 0) return rent;
+  const feeTotal = Math.round(fees.reduce((sum, f) => sum + f.amount, 0) * 100) / 100;
+  const all = Math.round((input.price + feeTotal) * 100) / 100;
+  const named = fees.length === 1
+    ? `the ${money(fees[0].amount)} ${fees[0].label}`
+    : `${money(feeTotal)} in fees (${fees.map((f) => f.label).join(", ")})`;
+  return `${money(input.price)} rent plus ${named} — ${money(all)} a month`;
 }

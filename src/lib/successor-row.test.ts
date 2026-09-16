@@ -121,6 +121,10 @@ class Q {
    *  supabase-js hands back, so the test can prove the caller does not treat
    *  it as an empty one. Armed by `failNext`. */
   private failed(): { data: null; error: { message: string } } | null {
+    if (failNextWriteTable === this.t && this.patch) {
+      failNextWriteTable = null;
+      return { data: null, error: { message: `connection terminated (${this.t} update)` } };
+    }
     if (failNextTable !== this.t) return null;
     failNextTable = null;
     return { data: null, error: { message: `connection terminated (${this.t})` } };
@@ -154,8 +158,12 @@ class Q {
 }
 let afterWrite: ((table: string) => void) | null = null;
 let failNextTable: string | null = null;
+let failNextWriteTable: string | null = null;
 /** The next read of `table` fails. One-shot, cleared by `seed`. */
 const failNext = (table: string) => { failNextTable = table; };
+/** The next UPDATE of `table` fails; reads on it in between still answer.
+ *  One-shot, cleared by `seed`. */
+const failNextWrite = (table: string) => { failNextWriteTable = table; };
 
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
@@ -191,11 +199,20 @@ vi.mock("@/app/requests/offer-data", () => ({ computeScarcityOffer: vi.fn(async 
 vi.mock("@/app/ops/data", () => ({ computeMenuSuggestions: vi.fn(async () => []) }));
 vi.mock("@/lib/menu-core", () => ({ executeMenuUpdate: vi.fn(async () => ({ ok: true })) }));
 vi.mock("@/lib/settings", () => ({ getPlatformSettings: vi.fn(async () => ({})) }));
+// The card is rendered once below, as static markup — the words a person
+// reads on /park/today, from the rows the real renewalsDue hands it.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
+vi.mock("@/components/Toast", () => ({ toast: Object.assign(() => {}, { ok: () => {}, err: () => {} }) }));
 
 const { renewAgreement, previewRenewal, renewalsDue } = await import("@/app/park/renew-actions");
+const { ParkRenewals } = await import("@/components/ParkRenewals");
+const { createElement } = await import("react");
+const { renderToStaticMarkup } = await import("react-dom/server");
 const { extendByToken, loadExtendByToken } = await import("@/lib/extend-server");
 const { cancelReRate } = await import("@/app/park/rerate-actions");
 const { remindExpiringStays } = await import("@/lib/automation");
+// The mocked transport, so a test can make a night on which no door is open.
+const { notify } = await import("@/lib/notify");
 // The page the text links to and the page after the tap — the REAL route
 // handlers, so what is asserted is the HTML a resident reads.
 const { GET: extendPage, POST: extendTap } = await import("@/app/x/[token]/route");
@@ -218,7 +235,9 @@ function seed(over: Partial<Row> = {}) {
   sent.length = 0;
   afterWrite = null;
   failNextTable = null;
+  failNextWriteTable = null;
   db.park_payments = [];
+  db.park_fees = [];
   // The Haven: a one-month house style under a three-month cap, so the
   // household picks one or three months (six once the cap is raised).
   db.parks = [{
@@ -323,7 +342,7 @@ describe("renewAgreement — the owner's door", () => {
 
   it("the toast reads the length and the dates in words", async () => {
     const res = await renewAgreement("park-1", "res-jan", { months: 3 });
-    expect(res.signal).toBe("Lot 14 renewed for 3 months, February 1, 2027 to May 1, 2027. Consecutive — no new deposit.");
+    expect(res.signal).toBe("Lot 14 renewed for 3 months, February 1, 2027 to May 1, 2027 at $400.00 a month. Consecutive with the last one.");
   });
 
   // -------------------------------------------------------------------------
@@ -336,7 +355,7 @@ describe("renewAgreement — the owner's door", () => {
     const res = await renewAgreement("park-1", "res-jan", { months: 1 });
     expect(res.ok, res.error).toBe(true);
     expect(inserted[0].during).toBe("[2027-02-01,2027-03-01)");
-    expect(res.signal).toBe("Lot 14 renewed for 1 month, February 1, 2027 to March 1, 2027. Consecutive — no new deposit.");
+    expect(res.signal).toBe("Lot 14 renewed for 1 month, February 1, 2027 to March 1, 2027 at $400.00 a month. Consecutive with the last one.");
   });
 
   it("the Today card plans EVERY length the park offers, starting on the house style", async () => {
@@ -405,7 +424,7 @@ describe("renewAgreement — the owner's door", () => {
     expect(res.ok, res.error).toBe(true);
     expect(inserted[0].during).toBe("[2027-09-01,2027-10-16)");
     expect(res.signal).toBe(
-      "Lot 14 renewed for 3 months, cut short by the season close — September 1, 2027 to October 16, 2027. Consecutive — no new deposit.",
+      "Lot 14 renewed for 3 months, cut short by the season close — September 1, 2027 to October 16, 2027 at $400.00 a month. Consecutive with the last one.",
     );
   });
 
@@ -517,6 +536,254 @@ describe("renewalsDue — how far ahead the Today card asks (R2)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// A LAPSED AGREEMENT'S DOOR. Fifteen of the eighteen one-month leases from
+// the Jan 1 plan lapse on 1 February if nobody renews them; on 17 June the
+// card still said "ends February 1, 2027 … Next one: 1 month, February 1 to
+// March 1. Consecutive, so no new deposit", the button wrote a row that was
+// over three months before it existed, and the next morning the same card
+// read "ends March 1" — one tap per lapsed month, June unbilled throughout.
+// ---------------------------------------------------------------------------
+describe("a lapsed agreement on the owner's card", () => {
+  beforeEach(() => {
+    seed();
+    // The Haven's real dials: a six-month cap, one-month house style.
+    db.parks[0].max_agreement_months = 6;
+    TODAY = "2027-06-17";
+  });
+
+  const listed = async () => (await renewalsDue("park-1")).rows ?? [];
+
+  it("says lapsed, not ends, and offers only the lengths that reach past today", async () => {
+    const [row] = await listed();
+    expect(row).toBeDefined();
+    expect(row.lapsed).toBe(true);
+    expect(row.priorEnd).toBe("2027-02-01");
+    // One and three months from 1 February are over already; six reaches
+    // 1 August. The card's headline is the shortest length that can be
+    // written, and the refused ones say why.
+    expect(row.lengths.map((l) => `${l.months}:${l.plan.ok ? l.plan.end : l.plan.refusal}`))
+      .toEqual(["1:already_ended", "3:already_ended", "6:2027-08-01"]);
+    expect(row.plan).toMatchObject({ ok: true, start: "2027-02-01", end: "2027-08-01", termMonths: 6, continuesChain: true });
+    expect(row.refusalText).toBeNull();
+  });
+
+  it("refuses a length that is over already IN THE CARD'S OWN WORDS — naming the one that reaches — and instructs no door the card lacks", async () => {
+    // A per-length refusal is not a total one: on 17 June one and three
+    // months from 1 February are over, six reaches August. The toast for a
+    // 1-month tap read "there's nothing to write from here" — the sentence
+    // written for 'no length reaches' — while the card offered 6 months.
+    const one = await renewAgreement("park-1", "res-jan", { months: 1 });
+    expect(one.ok).toBe(false);
+    expect(one.error).toBe("From February 1, 2027, 1 month would be over already — pick 6 months.");
+    expect(one.error).not.toMatch(/Start a new one|nothing to write/);
+    expect(inserted).toHaveLength(0);
+    const three = await renewAgreement("park-1", "res-jan", { months: 3 });
+    expect(three.ok).toBe(false);
+    expect(three.error).toBe("From February 1, 2027, 3 months would be over already — pick 6 months.");
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("across midnight the stale chip's tap is refused for its own length, and the next length writes", async () => {
+    // The card loaded on 28 February shows the 1-month chip (1 Feb – 1 Mar
+    // is fine). The tap lands at 00:05 on 1 March: `end <= today` refuses
+    // one month; three and six reach.
+    TODAY = "2027-03-01";
+    const one = await renewAgreement("park-1", "res-jan", { months: 1 });
+    expect(one.ok).toBe(false);
+    expect(one.error).toBe("From February 1, 2027, 1 month would be over already — pick 3 or 6 months.");
+    expect(inserted).toHaveLength(0);
+    const three = await renewAgreement("park-1", "res-jan", { months: 3 });
+    expect(three.ok, three.error).toBe(true);
+    expect(inserted[0].during).toBe("[2027-02-01,2027-05-01)");
+  });
+
+  it("writes the length that reaches past today — consecutively, already ACTIVE because it has started, and says which months it made billable", async () => {
+    const res = await renewAgreement("park-1", "res-jan", { months: 6 });
+    expect(res.ok, res.error).toBe(true);
+    expect(inserted[0].during).toBe("[2027-02-01,2027-08-01)");
+    expect(inserted[0].agreement_chain_id).toBe("chain-a");
+    expect(inserted[0].agreement_seq).toBe(2);
+    // ONE RULE with the resident's door: approved until it starts, active
+    // from its first morning. This door hardcoded `approved`.
+    expect(inserted[0].status).toBe("active");
+    // THE MONEY FACT: one tap made February–June billable at the rent, and
+    // no run has raised any of it (the bills key on the row, and this row is
+    // new). A statement — whether to run those months is his call.
+    expect(res.signal).toBe(
+      "Lot 14 renewed for 6 months, February 1, 2027 to August 1, 2027 at $400.00 a month. Consecutive with the last one. " +
+      "It reaches back over February 2027 through June 2027, which nothing has billed yet.",
+    );
+    // No treadmill: the lot is not back on the card tomorrow reading "ends
+    // March 1" — the six-month successor is its own agreement, listed on its
+    // own lead (Aug 1 is 45 days out on 17 June, so it IS due, as itself).
+    TODAY = "2027-06-18";
+    const rows = await listed();
+    expect(rows.map((r) => `${r.lotNumber}:${r.priorEnd}:${r.lapsed}`)).toEqual(["14:2027-08-01:false"]);
+  });
+
+  it("when no length reaches past today the card shows the sentence, not buttons — and claims no 'so long ago'", async () => {
+    db.parks[0].max_agreement_months = 3;
+    const [row] = await listed();
+    expect(row.plan.ok).toBe(false);
+    expect(row.plan.refusal).toBe("already_ended");
+    expect(row.lengths).toEqual([]);
+    expect(row.refusalText).toBe(
+      "That agreement has run out, and even the longest agreement this park writes, run from its end, would be over already — there's nothing to write from here.",
+    );
+    // The same sentence one day past the only length a park writes — not "so long ago".
+    db.parks[0].max_agreement_months = 1; TODAY = "2027-03-02";
+    const [oneDay] = await listed();
+    expect(oneDay.refusalText).not.toMatch(/so long ago/);
+    expect(oneDay.refusalText).toMatch(/nothing to write from here/);
+    expect((await renewAgreement("park-1", "res-jan", { months: 1 })).error).toBe(oneDay.refusalText);
+  });
+
+  it("a fresh start after the gap is NOT toasted 'Consecutive', and mentions a deposit only when one is due", async () => {
+    // No screen passes startFrom yet — the plumbing is exercised so the day
+    // one does, the toast tells the truth. The Haven's deposit dial is null.
+    const res = await renewAgreement("park-1", "res-jan", { months: 1, startFrom: "2027-07-01" });
+    expect(res.ok, res.error).toBe(true);
+    expect("agreement_chain_id" in inserted[0]).toBe(false);
+    expect(res.signal).toBe(
+      "Lot 14 renewed for 1 month, July 1, 2027 to August 1, 2027 at $400.00 a month. Starts a new chain — there was a gap after February 1, 2027.",
+    );
+    expect(res.signal).not.toMatch(/Consecutive|deposit/);
+
+    // A park that takes a deposit says so, with the number.
+    seed(); db.parks[0].max_agreement_months = 6; db.parks[0].deposit_amount = 300;
+    const dep = await renewAgreement("park-1", "res-jan", { months: 1, startFrom: "2027-07-01" });
+    expect(dep.signal).toMatch(/Starts a new chain — there was a gap after February 1, 2027\. A deposit of \$300\.00 is due\.$/);
+    expect(inserted[0].deposit_amount).toBe(300);
+  });
+
+  it("the boundary is the plan's end, not the prior's: one day lapsed still backfills", async () => {
+    TODAY = "2027-02-02";
+    const [row] = await listed();
+    expect(row.lapsed).toBe(true);
+    expect(row.plan).toMatchObject({ ok: true, start: "2027-02-01", end: "2027-03-01", termMonths: 1 });
+    // One month reached back over: a February run on the 1st found no
+    // tenancy on this lot, so this row's February is unbilled.
+    expect(row.backfillNote).toBe("It reaches back over February 2027, which nothing has billed yet.");
+    const res = await renewAgreement("park-1", "res-jan", { months: 1 });
+    expect(res.ok, res.error).toBe(true);
+    expect(inserted[0].during).toBe("[2027-02-01,2027-03-01)");
+    expect(inserted[0].status).toBe("active");
+    expect(res.signal).toMatch(/Consecutive with the last one\. It reaches back over February 2027, which nothing has billed yet\.$/);
+    // And an agreement that has NOT lapsed is not called lapsed, and carries
+    // no such note — nor does one written before it starts.
+    seed(); db.parks[0].max_agreement_months = 6; TODAY = "2027-01-20";
+    const [ahead] = await listed();
+    expect(ahead.lapsed).toBe(false);
+    expect(ahead.backfillNote).toBeNull();
+    const early = await renewAgreement("park-1", "res-jan", { months: 1 });
+    expect(early.signal).not.toMatch(/reaches back|billed/);
+  });
+});
+
+describe("the card's own words for a lapsed agreement", () => {
+  beforeEach(() => { seed(); db.parks[0].max_agreement_months = 6; });
+  const card = async () => renderToStaticMarkup(createElement(ParkRenewals, { parkId: "park-1", rows: (await renewalsDue("park-1")).rows ?? [] }));
+
+  it("says lapsed, names the lengths that are over, and offers only the one that reaches past today", async () => {
+    TODAY = "2027-06-17";
+    const html = await card();
+    expect(html).toContain("This one has lapsed with nothing behind it — nothing has been billed to the household since.");
+    expect(html).toContain("lapsed February 1, 2027 — nothing billed since");
+    expect(html).not.toContain("ends February 1, 2027");
+    expect(html).not.toContain("run out soon");
+    expect(html).toContain("Next one: 6 months, February 1, 2027 to August 1, 2027. Consecutive with the last one. It reaches back over February 2027 through June 2027, which nothing has billed yet.");
+    expect(html).toContain("From February 1, 2027, 1 or 3 months would be over already, so only 6 months reaches past today.");
+    expect(html).not.toMatch(/no new deposit|New chain/);
+    // No chip for a length that cannot be written; one length is not a choice.
+    expect(html).not.toContain("Renew for</span>");
+    expect(html).toContain("Renew at the same rent");
+  });
+
+  it("with one length over and two that reach, the sentence is singular and the chips are the two", async () => {
+    // 2 March: one month from 1 February ended yesterday; three and six reach.
+    TODAY = "2027-03-02";
+    const html = await card();
+    expect(html).toContain("From February 1, 2027, 1 month would be over already, so it isn&#x27;t offered here.");
+    expect(html).not.toContain("those aren&#x27;t");
+    expect(html).toContain("Renew for</span>");
+    expect(html).toContain(">3 months<");
+    expect(html).toContain(">6 months<");
+    expect(html).not.toContain(">1 month<");
+    // The headline is the shortest that reaches, and February is named as unbilled.
+    expect(html).toContain("Next one: 3 months, February 1, 2027 to May 1, 2027. Consecutive with the last one. It reaches back over February 2027 through March 2027, which nothing has billed yet.");
+  });
+
+  it("splits the heading when some have lapsed and some are running out", async () => {
+    db.park_lots.push({ id: "lot-15", lot_number: "15", park_id: "park-1", lifecycle: "live",
+      season_open_month: null, season_open_day: null, season_close_month: null, season_close_day: null });
+    db.lot_reservations.push({
+      id: "res-15", park_lot_id: "lot-15", renter_id: "renter-doris", during: "[2027-06-01,2027-07-01)",
+      status: "active", term: "monthly", quoted_amount: 400, origin: "application", agreement_chain_id: "chain-b", agreement_seq: 1,
+    });
+    TODAY = "2027-06-17";
+    const html = await card();
+    expect(html).toContain("1 of these has lapsed — nothing has been billed to that household since. The rest run out soon and have nothing behind them.");
+    // Lapsed first, then the one ending.
+    expect(html.indexOf("lapsed February 1, 2027")).toBeLessThan(html.indexOf("ends July 1, 2027"));
+    // The un-lapsed row offers every length as chips, starting on the house style.
+    expect(html).toContain("Next one: 1 month, July 1, 2027 to August 1, 2027. Consecutive with the last one.");
+    expect(html).toContain("Renew for</span>");
+  });
+
+  it("with nothing lapsed the heading is the old one, and the card never quotes a deposit that is not due", async () => {
+    TODAY = "2027-01-20";
+    const html = await card();
+    expect(html).toContain("These run out soon and have nothing behind them.");
+    expect(html).toContain("ends February 1, 2027");
+    expect(html).not.toMatch(/lapsed|deposit/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "WRITE IT" WITH THE BOX EMPTY. The new-rent input shows the current rent as
+// a grey placeholder, and a press with nothing typed filed the OLD rent under
+// a toast identical to a change — the placeholder wrote itself, and no
+// screen after names the successor's rent before it bills.
+// ---------------------------------------------------------------------------
+describe("the new-rent door", () => {
+  beforeEach(() => { TODAY = "2027-01-20"; seed(); });
+
+  it("refuses a blank on the new-rent door and writes nothing", async () => {
+    for (const blank of ["", "   "]) {
+      const res = await renewAgreement("park-1", "res-jan", { months: 1, newRent: blank });
+      expect(res.ok).toBe(false);
+      expect(res.error).toBe("Type the new rent, or use Renew at the same rent.");
+      expect(res.error).not.toMatch(/try again/i);
+    }
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("the same-rent door — no field sent at all — still writes in one tap", async () => {
+    const res = await renewAgreement("park-1", "res-jan", { months: 1 });
+    expect(res.ok, res.error).toBe(true);
+    expect(inserted[0].quoted_amount).toBe(400);
+  });
+
+  it("both toasts name the rent written, and a change says what it was", async () => {
+    const changed = await renewAgreement("park-1", "res-jan", { months: 3, newRent: "425" });
+    expect(changed.ok, changed.error).toBe(true);
+    expect(changed.signal).toBe(
+      "Lot 14 renewed for 3 months, February 1, 2027 to May 1, 2027 at $425.00 a month (was $400.00). Consecutive with the last one.",
+    );
+    expect(inserted[0].quoted_amount).toBe(425);
+    seed();
+    const same = await renewAgreement("park-1", "res-jan", { months: 3 });
+    expect(same.signal).toContain("at $400.00 a month. Consecutive");
+    expect(same.signal).not.toContain("(was");
+  });
+
+  it("the card's 'Write it' is off while the box is empty (source)", () => {
+    const card = code("src/components/ParkRenewals.tsx");
+    expect(card).toMatch(/disabled=\{busy \|\| !rent\.trim\(\)\}\s*onClick=\{\(\) => renew\(r, rent\)\}>Write it/);
+  });
+});
+
 describe("the successor's rent is the rent IN FORCE at its start", () => {
   /** The finding's dates: Feb 5 he schedules $425 from Apr 1 on the Feb–May
    *  row and records notice; Mar 17 Today lists it (May 1 is within 45 days). */
@@ -576,7 +843,9 @@ describe("the successor's rent is the rent IN FORCE at its start", () => {
     expect(row.origin).toBe("office");
     expect(row.agreement_chain_id).toBe("chain-a");
     expect(row.agreement_seq).toBe(3);
-    expect(row.status).toBe("active");
+    // ONE RULE with the owner's door: a successor that has not started is
+    // `approved`. This door wrote `active` for the same fact.
+    expect(row.status).toBe("approved");
     expect(row.during).toBe("[2027-05-01,2027-08-01)");
     // A successor at a NEW number is the owner's knowledge, not confirmed.
     expect(row.amount_source).toBe("owner_knowledge");
@@ -888,7 +1157,7 @@ describe("remindExpiringStays quotes what the /x page will show", () => {
   it("texts the rent in force and the lengths on offer — the page's number, not the card's, and no single length", async () => {
     db.lot_rates = [{ park_lot_id: "lot-14", term: "monthly", amount: 500 }];
     const out = await remindExpiringStays();
-    expect(out).toEqual({ ok: true, reminded: 1, refused: NONE_REFUSED, skipped: [] });
+    expect(out).toEqual({ ok: true, reminded: 1, unreached: 0, refused: NONE_REFUSED, skipped: [] });
     expect(sent).toHaveLength(1);
 
     const token = row().extend_token as string;
@@ -897,11 +1166,11 @@ describe("remindExpiringStays quotes what the /x page will show", () => {
     // months (six once the cap is raised) — the text names the choice, not
     // the cap, and quotes no date it does not know yet.
     expect(sent[0].sms).toBe(
-      "LakeLife: your agreement at site 14 runs to May 1, 2027. Want to renew for 1 or 3 months " +
-      `at $425 a month? One tap: https://lakelife.test/x/${token}`,
+      "LakeLife: your agreement at lot 14 runs to May 1, 2027. Want to renew for 1 or 3 months " +
+      `at $425.00 a month? One tap: https://lakelife.test/x/${token}`,
     );
     expect(sent[0].subject).toBe("Your agreement runs to May 1, 2027 — renew for 1 or 3 months?");
-    expect(sent[0].body).toContain("Want to renew for 1 or 3 months at $425 a month?");
+    expect(sent[0].body).toContain("Want to renew for 1 or 3 months at $425.00 a month?");
     for (const t of [sent[0].sms, sent[0].subject, sent[0].body!]) {
       expect(t).not.toMatch(/3-month agreement|next 3 months|2027-0/);
     }
@@ -941,7 +1210,7 @@ describe("remindExpiringStays quotes what the /x page will show", () => {
     const token = row().extend_token as string;
     const after = await tap(token, 1);
     expect(after).toContain("Your next agreement runs");
-    expect(after).toContain("1 month at $425 a month");
+    expect(after).toContain("1 month at $425.00 a month");
     expect(after).not.toContain("Your site is yours through");
     expect(inserted[0].during).toBe("[2027-05-01,2027-06-01)");
   });
@@ -1072,13 +1341,13 @@ describe("remindExpiringStays quotes what the /x page will show", () => {
     });
     await remindExpiringStays();
     const token = row().extend_token as string;
-    expect(sent[0].sms).toContain("Want to renew for 1 month at $425 a month?");
+    expect(sent[0].sms).toContain("Want to renew for 1 month at $425.00 a month?");
     const view = await loadExtendByToken(token);
     expect(view!.offeredMonths).toEqual([1]);
     expect(await page(token)).not.toContain("Renew for 3 months");
     const three = await extendByToken(token, 3);
     expect(three.ok).toBe(false);
-    expect(three.error).toBe("That site is spoken for after your dates. The park can look for another one.");
+    expect(three.error).toBe("That lot is spoken for after your dates. The park can look for another one.");
     expect((await extendByToken(token, 1)).ok).toBe(true);
   });
 
@@ -1090,7 +1359,7 @@ describe("remindExpiringStays quotes what the /x page will show", () => {
     db.lot_rent_changes = [];
     const out = await remindExpiringStays();
     expect(out.reminded).toBe(1);
-    expect(sent[0].sms).toContain("at $400 a month");
+    expect(sent[0].sms).toContain("at $400.00 a month");
     expect((await loadExtendByToken(row().extend_token as string))!.price).toBe(400);
   });
 
@@ -1130,7 +1399,7 @@ describe("remindExpiringStays quotes what the /x page will show", () => {
     expect(db.park_payments).toEqual([]);
     await remindExpiringStays();
     const token = row().extend_token as string;
-    expect(sent[0].body).toContain("at $425 a month");
+    expect(sent[0].body).toContain("at $425.00 a month");
     expect(sent[0].body).not.toMatch(/deposit/i);
     expect(sent[0].sms).not.toMatch(/deposit/i);
     expect((await loadExtendByToken(token))!.depositHeld).toBe(false);
@@ -1139,7 +1408,7 @@ describe("remindExpiringStays quotes what the /x page will show", () => {
     expect(html).not.toMatch(/deposit/i);
     const after = await tap(token, 3);
     expect(after).toContain("Your next agreement runs");
-    expect(after).toContain("3 months at $425 a month");
+    expect(after).toContain("3 months at $425.00 a month");
     expect(after).not.toMatch(/deposit/i);
   });
 
@@ -1152,7 +1421,7 @@ describe("remindExpiringStays quotes what the /x page will show", () => {
     }];
     await remindExpiringStays();
     const token = row().extend_token as string;
-    expect(sent[0].body).toContain("Want to renew for 1 or 3 months at $425 a month? Your deposit carries over.");
+    expect(sent[0].body).toContain("Want to renew for 1 or 3 months at $425.00 a month? Your deposit carries over.");
     expect((await loadExtendByToken(token))!.depositHeld).toBe(true);
     expect(await page(token)).toContain("Your deposit carries over — there&#39;s nothing more to pay on it.");
     expect(await tap(token, 3)).toContain("nothing more to pay on your deposit");
@@ -1203,9 +1472,13 @@ describe("remindExpiringStays quotes what the /x page will show", () => {
     await remindExpiringStays();
     const token = row().extend_token as string;
     expect(sent[0].sms).toBe(
-      "LakeLife: your site 14 is booked through May 1, 2027. Want to keep it through May 31, 2027 for $500? " +
+      "LakeLife: your lot 14 is booked through May 1, 2027. Want to keep it through May 31, 2027 for $500.00? " +
       `One tap: https://lakelife.test/x/${token}`,
     );
+    // The email's subject names the lot the way the body does — "Your site
+    // is booked" sat over "Your lot 14 is booked" for a long-term household.
+    expect(sent[0].subject).toBe("Your lot 14 is booked through May 1, 2027 — keep it through May 31, 2027?");
+    expect(sent[0].body).toContain("for $500.00?");
     const view = await loadExtendByToken(token);
     expect(view!.isRenewal).toBe(false);
     expect(view!.price).toBe(500);
@@ -1218,6 +1491,471 @@ describe("remindExpiringStays quotes what the /x page will show", () => {
     expect(out.reminded).toBe(0);
     expect(sent).toHaveLength(0);
     expect(row().extend_token).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE HOUSEHOLD WHO ALREADY RENEWED. After the tap (or the office renewing
+// for them) the successor sat in the loader's "others" and the re-opened link
+// read "That site is spoken for after your dates. The park can look for
+// another one." — to a household whose home lot was theirs. And the sweep
+// read the old row again the next night and counted its own successor as
+// "lot taken", nightly to 1 February.
+// ---------------------------------------------------------------------------
+describe("a household who already renewed", () => {
+  const consenting = {
+    id: "renter-doris", display_name: "Doris", email: "doris@example.com",
+    mobile_e164: "+12605550101", mobile_verified_at: "2027-01-02T00:00:00Z",
+    sms_consent_operational_at: "2027-01-02T00:00:00Z", contact_pref: "sms",
+  };
+  const NONE_REFUSED = { inherited: 0, lot_taken: 0, no_rate: 0, other: 0 };
+
+  /** Lot 14 in January: a one-month signed lease, asked on 18 January. */
+  function seedJanuary() {
+    seed({ extend_token: null, extend_reminded_at: null });
+    db.park_renters = [{ ...consenting }];
+    process.env.NEXT_PUBLIC_SITE_URL = "https://lakelife.test";
+    TODAY = "2027-01-18";
+  }
+  beforeEach(() => seedJanuary());
+
+  const row = () => db.lot_reservations[0];
+  const page = async (token: string) =>
+    (await extendPage(new Request(`https://lakelife.test/x/${token}`), { params: Promise.resolve({ token }) })).text();
+  const tap = async (token: string, months?: number) => {
+    const body = new URLSearchParams();
+    if (months != null) body.set("months", String(months));
+    const req = new Request(`https://lakelife.test/x/${token}`, {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: body.toString(),
+    });
+    return (await extendTap(req, { params: Promise.resolve({ token }) })).text();
+  };
+
+  it("the re-opened link says 'already set' with the successor's dates — never 'spoken for' — under a non-error title", async () => {
+    await remindExpiringStays();
+    const token = row().extend_token as string;
+    TODAY = "2027-01-20";
+    const after = await tap(token, 3);
+    expect(after).toContain("Your next agreement runs Monday, February 1 to Saturday, May 1");
+    expect(inserted[0].during).toBe("[2027-02-01,2027-05-01)");
+
+    const view = await loadExtendByToken(token);
+    expect(view!.refusal).toBe("already_renewed");
+    expect(view!.message).toBe(
+      "You're already set — your next agreement runs February 1, 2027 to May 1, 2027. The park will send the agreement to sign.",
+    );
+    const html = await page(token);
+    expect(html).toContain("You&#39;re already set");
+    expect(html).toContain("runs February 1, 2027 to May 1, 2027");
+    expect(html).not.toMatch(/spoken for|another one|can&#39;t do that/);
+    expect(html).toContain('<span class="badge">LakeLife</span>');
+    expect(html).not.toContain("Heads up");
+    expect(html).not.toContain("<form");
+
+    // A replayed tap writes nothing and reads the same sentence, not "We couldn't extend it".
+    const replay = await tap(token, 1);
+    expect(inserted).toHaveLength(1);
+    expect(replay).toContain("You&#39;re already set");
+    expect(replay).toContain("runs February 1, 2027 to May 1, 2027");
+    expect(replay).not.toMatch(/couldn&#39;t extend|spoken for/);
+  });
+
+  it("re-opened after the old row's end, with the next one in force, it is STILL 'already set' — never 'already finished'", async () => {
+    await remindExpiringStays();
+    const token = row().extend_token as string;
+    TODAY = "2027-01-20";
+    await tap(token, 3);
+    // 2 February: the January row is over; February–May is running. The old
+    // row keeps its token (the sweep no longer re-mints), so the same text
+    // link opens — and read "That stay has already finished. The park can
+    // set up a new one." to a household whose new one had begun.
+    TODAY = "2027-02-02";
+    const view = await loadExtendByToken(token);
+    expect(view!.refusal).toBe("already_renewed");
+    const html = await page(token);
+    expect(html).toContain("You&#39;re already set");
+    expect(html).toContain("runs February 1, 2027 to May 1, 2027");
+    expect(html).not.toMatch(/already finished|set up a new one|can&#39;t do that/);
+    const replay = await tap(token, 3);
+    expect(inserted).toHaveLength(1);
+    expect(replay).toContain("You&#39;re already set");
+    expect(replay).not.toMatch(/already finished/);
+  });
+
+  it("at a park with NO cap a guest's own later booking keeps the extension on offer — the page, the tap and the nightly", async () => {
+    // A park that writes no fixed lengths: the stay is widened by one period
+    // at the card price, and "already set" is a renewal-path sentence that
+    // must never reach it. Doris also holds 1–30 April on the same lot.
+    db.parks[0].max_agreement_months = null;
+    db.lot_rates = [{ park_lot_id: "lot-14", term: "monthly", amount: 500 }];
+    db.lot_reservations.push({
+      id: "res-april", park_lot_id: "lot-14", renter_id: "renter-doris", during: "[2027-04-01,2027-05-01)",
+      status: "approved", term: "monthly", quoted_amount: 500, origin: "application",
+    });
+    const out = await remindExpiringStays();
+    expect(out).toEqual({ ok: true, reminded: 1, unreached: 0, refused: NONE_REFUSED, skipped: [] });
+    const token = row().extend_token as string;
+    expect(sent[0].sms).toContain("Want to keep it through March 3, 2027 for $500.00?");
+
+    const view = await loadExtendByToken(token);
+    expect(view!.refusal).toBeNull();
+    expect(view!.isRenewal).toBe(false);
+    expect(view!.newEnd).toBe("2027-03-03");
+    const html = await page(token);
+    expect(html).toContain("Stay longer on lot 14?");
+    expect(html).toContain("keep it through Wednesday, March 3 for $500.00");
+    expect(html).not.toMatch(/already set|agreement to sign/);
+    expect(html).toContain("<form");
+
+    // The tap widens the stay; nothing new is inserted, and the April
+    // booking is untouched.
+    const after = await tap(token);
+    expect(after).toContain("Your lot is yours through Wednesday, March 3");
+    expect(inserted).toHaveLength(0);
+    expect(row().during).toBe("[2027-01-01,2027-03-03)");
+    expect(db.lot_reservations.find((r) => r.id === "res-april")!.during).toBe("[2027-04-01,2027-05-01)");
+
+    // Their own later booking still counts for the clash: when it sits on
+    // the days the extension would take, the page says so — in the lot's
+    // own noun — rather than "already set".
+    seedJanuary();
+    db.parks[0].max_agreement_months = null;
+    db.lot_rates = [{ park_lot_id: "lot-14", term: "monthly", amount: 500 }];
+    db.lot_reservations[0].extend_token = TOKEN;
+    db.lot_reservations.push({
+      id: "res-feb", park_lot_id: "lot-14", renter_id: "renter-doris", during: "[2027-02-15,2027-03-15)",
+      status: "approved", term: "monthly", quoted_amount: 500, origin: "application",
+    });
+    const clash = await loadExtendByToken(TOKEN);
+    expect(clash!.refusal).toBe("lot_taken");
+    expect(clash!.message).toBe("That lot is spoken for after your dates. The park can look for another one.");
+  });
+
+  it("the office renewing for them reads the same — keyed on the household, not the chain", async () => {
+    await remindExpiringStays();
+    const token = row().extend_token as string;
+    TODAY = "2027-01-19";
+    // A gap renewal from the office starts a NEW chain for the same household.
+    const office = await renewAgreement("park-1", "res-jan", { months: 1, startFrom: "2027-02-15" });
+    expect(office.ok, office.error).toBe(true);
+    expect("agreement_chain_id" in inserted[0]).toBe(false);
+    TODAY = "2027-01-20";
+    const view = await loadExtendByToken(token);
+    expect(view!.refusal).toBe("already_renewed");
+    expect(view!.message).toContain("runs February 15, 2027 to March 15, 2027");
+    // And the sweep counts nothing for them — not a refusal, they renewed.
+    const out = await remindExpiringStays();
+    expect(out.refused).toEqual(NONE_REFUSED);
+  });
+
+  it("somebody else after their dates is still 'spoken for'", async () => {
+    db.lot_reservations.push({
+      id: "res-next", park_lot_id: "lot-14", renter_id: "renter-x", during: "[2027-02-01,2027-05-01)",
+      status: "approved", term: "monthly", quoted_amount: 400, origin: "application",
+    });
+    const out = await remindExpiringStays();
+    expect(out.refused).toEqual({ ...NONE_REFUSED, lot_taken: 1 });
+    seedJanuary();
+    db.lot_reservations[0].extend_token = TOKEN;
+    db.lot_reservations.push({
+      id: "res-next", park_lot_id: "lot-14", renter_id: "renter-x", during: "[2027-02-01,2027-05-01)",
+      status: "approved", term: "monthly", quoted_amount: 400, origin: "application",
+    });
+    expect((await loadExtendByToken(TOKEN))!.refusal).toBe("lot_taken");
+  });
+
+  it("the night after a tap the old row is not swept again — its chain has a later link", async () => {
+    await remindExpiringStays();
+    const token = row().extend_token as string;
+    TODAY = "2027-01-20";
+    await extendByToken(token, 3);
+    // The old row keeps its stamp — it WAS asked; the successor has its own.
+    expect(row().extend_reminded_at).not.toBeNull();
+    expect(row().extended_at).toBeTruthy();
+    for (const night of ["2027-01-21", "2027-01-25", "2027-02-01"]) {
+      TODAY = night;
+      sent.length = 0;
+      const out = await remindExpiringStays();
+      expect(out, night).toEqual({ ok: true, reminded: 0, unreached: 0, refused: NONE_REFUSED, skipped: [] });
+      expect(sent).toEqual([]);
+    }
+    // The successor is asked in its own right, in its own window.
+    TODAY = "2027-04-20";
+    const out = await remindExpiringStays();
+    expect(out.reminded).toBe(1);
+    expect(sent[0].sms).toContain("runs to May 1, 2027");
+  });
+
+  it("the night after the OFFICE renewed a row the sweep never asked, it is not counted 'lot taken' either", async () => {
+    TODAY = "2027-01-17";
+    const office = await renewAgreement("park-1", "res-jan", { months: 1 });
+    expect(office.ok, office.error).toBe(true);
+    TODAY = "2027-01-21";
+    const out = await remindExpiringStays();
+    expect(out).toEqual({ ok: true, reminded: 0, unreached: 0, refused: NONE_REFUSED, skipped: [] });
+    expect(row().extend_token).toBeNull();
+  });
+
+  it("the sweep reads the same predicate the owner's list does (source)", () => {
+    const auto = code("src/lib/automation.ts");
+    const sweep = auto.slice(auto.indexOf("export async function remindExpiringStays"), auto.indexOf("export function extendReminderText"));
+    expect(sweep).toMatch(/const maxSeq = latestSeqByChain\(stays \?\? \[\]\);/);
+    expect(sweep).toMatch(/if \(hasLaterLink\(s, maxSeq\)\) continue;/);
+    const renew = code("src/app/park/renew-actions.ts");
+    const due = renew.slice(renew.indexOf("export async function renewalsDue("));
+    expect(due).toMatch(/latestSeqByChain\(stays \?\? \[\]\)/);
+    expect(due).toMatch(/!hasLaterLink\(s, maxSeq\)/);
+    expect(due).not.toMatch(/new Map<string, number>/);
+    // The stamp is not cleared on the predecessor by the resident's door.
+    const extend = code("src/lib/extend-server.ts");
+    const renewal = extend.slice(extend.indexOf("if (view.isRenewal && view.newStart && view.newEnd)"), extend.indexOf("const { data: updated, error }"));
+    expect(renewal).not.toMatch(/extend_reminded_at: null/);
+    expect(renewal).toMatch(/\.update\(\{ extended_at: new Date\(\)\.toISOString\(\) \}\)/);
+  });
+
+  it("both doors write the successor's status by ONE rule (source)", () => {
+    for (const p of ["src/app/park/renew-actions.ts", "src/lib/extend-server.ts"]) {
+      const src = code(p);
+      expect(src, p).toMatch(/status: successorStatus\(/);
+      expect(src, p).not.toMatch(/status: "(approved|active)"/);
+    }
+  });
+
+  it("a tap on the end day starts the successor today — ACTIVE; a tap before it — APPROVED", async () => {
+    await remindExpiringStays();
+    const token = row().extend_token as string;
+    TODAY = "2027-02-01";
+    const res = await extendByToken(token, 1);
+    expect(res.ok, res.error).toBe(true);
+    expect(inserted[0].status).toBe("active");
+    seedJanuary();
+    await remindExpiringStays();
+    TODAY = "2027-01-25";
+    await extendByToken(row().extend_token as string, 1);
+    expect(inserted[0].status).toBe("approved");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// UNDER THE HOLD THE NIGHTLY STAMPED THE HOUSEHOLD AS REMINDED. The stamp is
+// the claim, written before the send; when notify() reached nobody nothing
+// released it, so the household's one reminder was consumed on a night no
+// door was open, `reminded: 1` said they were asked, and after the hold
+// lifted nobody was ever asked. The hold itself is NOT re-checked here — it
+// lives in the two transports and nowhere else.
+// ---------------------------------------------------------------------------
+describe("a reminder that reached nobody", () => {
+  const consenting = {
+    id: "renter-doris", display_name: "Doris", email: "doris@example.com",
+    mobile_e164: "+12605550101", mobile_verified_at: "2027-01-02T00:00:00Z",
+    sms_consent_operational_at: "2027-01-02T00:00:00Z", contact_pref: "sms",
+  };
+  const NONE_REFUSED = { inherited: 0, lot_taken: 0, no_rate: 0, other: 0 };
+  const REFUSED_NOTE = "Couldn't tell them about the renter that her stay is ending, with the one tap that extends it (stay res-jan) — the text didn't queue and the email didn't send.";
+  const row = () => db.lot_reservations[0];
+
+  beforeEach(() => {
+    seed({ extend_token: null, extend_reminded_at: null });
+    db.park_renters = [{ ...consenting }];
+    process.env.NEXT_PUBLIC_SITE_URL = "https://lakelife.test";
+    TODAY = "2027-01-18";
+  });
+  afterEach(() => {
+    vi.mocked(notify).mockImplementation(async (_what, _to, msg) => {
+      sent.push(msg);
+      return { reached: true, bySms: false, byEmail: true };
+    });
+  });
+
+  it("releases the claim, counts it unreached — not reminded — and asks again the next night", async () => {
+    vi.mocked(notify).mockImplementation(async () => ({ reached: false, bySms: false, byEmail: false, note: REFUSED_NOTE }));
+    const held = await remindExpiringStays();
+    expect(held.reminded).toBe(0);
+    expect(held.unreached).toBe(1);
+    expect(held.refused).toEqual(NONE_REFUSED);
+    expect(row().extend_reminded_at).toBeNull();
+    expect(row().extend_token).toBeNull();
+    // One line for the run, carrying the transport's reason, and what happens next.
+    expect(held.skipped).toEqual([
+      "1 household couldn't be told its agreement is ending, with the one tap that renews or extends it — the text didn't queue and the email didn't send. " +
+      "Nothing was stamped; it will be asked again the next night the agreement is still running.",
+    ]);
+
+    // The hold lifts: the next night asks, and the stamp is written then.
+    vi.mocked(notify).mockImplementation(async (_what, _to, msg) => {
+      sent.push(msg);
+      return { reached: true, bySms: false, byEmail: true };
+    });
+    TODAY = "2027-01-20";
+    const lifted = await remindExpiringStays();
+    expect(lifted).toEqual({ ok: true, reminded: 1, unreached: 0, refused: NONE_REFUSED, skipped: [] });
+    expect(sent).toHaveLength(1);
+    expect(row().extend_reminded_at).toBeTruthy();
+    expect(row().extend_token).toMatch(/^x[0-9a-f]{32}$/);
+  });
+
+  it("collapses many unreached households into ONE line, never one a night per stay", async () => {
+    db.park_lots.push({ id: "lot-15", lot_number: "15", park_id: "park-1", lifecycle: "live",
+      season_open_month: null, season_open_day: null, season_close_month: null, season_close_day: null });
+    db.lot_reservations.push({
+      id: "res-15", park_lot_id: "lot-15", renter_id: "renter-doris", during: "[2027-01-01,2027-02-01)",
+      status: "active", term: "monthly", quoted_amount: 400, origin: "application",
+      agreement_chain_id: "chain-b", agreement_seq: 1, extend_token: null, extend_reminded_at: null,
+    });
+    vi.mocked(notify).mockImplementation(async () => ({ reached: false, bySms: false, byEmail: false, note: REFUSED_NOTE }));
+    const out = await remindExpiringStays();
+    expect(out.unreached).toBe(2);
+    expect(out.reminded).toBe(0);
+    expect(out.skipped).toHaveLength(1);
+    expect(out.skipped[0]).toMatch(/^2 households couldn't be told their agreement is ending/);
+    expect(out.skipped[0]).toContain("they will be asked again the next night the agreement is still running.");
+    // Never a promise the boundary breaks: on the end night there is no tomorrow.
+    expect(out.skipped[0]).not.toMatch(/tomorrow/);
+    expect(db.lot_reservations.every((r) => r.extend_reminded_at == null && r.extend_token == null)).toBe(true);
+  });
+
+  it("when the release itself fails, says the household will NOT be asked again automatically", async () => {
+    // The claim is written, the send is refused, and then the release write
+    // fails: the stamp stands, and rendering that as "asked again tomorrow"
+    // would be a failed write rendered as a retry.
+    vi.mocked(notify).mockImplementation(async () => {
+      failNext("lot_reservations");
+      return { reached: false, bySms: false, byEmail: false, note: REFUSED_NOTE };
+    });
+    const out = await remindExpiringStays();
+    expect(out.reminded).toBe(0);
+    expect(out.unreached).toBe(1);
+    expect(row().extend_reminded_at).toBeTruthy();
+    expect(out.skipped).toHaveLength(1);
+    expect(out.skipped[0]).toMatch(/^Stay res-jan: the message didn't reach the household/);
+    expect(out.skipped[0]).toContain("will NOT be asked again automatically");
+    expect(out.skipped[0]).toContain("still ends February 1, 2027 unless somebody asks by hand");
+  });
+
+  it("when the CLAIM write fails, the household is named as unasked — not skipped as 'another run took it'", async () => {
+    // `{ data: null, error }` on the stamp write read as an empty claim: no
+    // text, no token, and not a word in the digest.
+    failNextWrite("lot_reservations");
+    const out = await remindExpiringStays();
+    expect(out.reminded).toBe(0);
+    expect(out.unreached).toBe(0);
+    expect(sent).toEqual([]);
+    expect(row().extend_token).toBeNull();
+    expect(row().extend_reminded_at).toBeNull();
+    expect(out.skipped).toEqual([
+      "Stay res-jan: couldn't mark the reminder as sent, so the extend question wasn't asked — the tenancy still ends February 1, 2027 unless somebody asks by hand.",
+    ]);
+    // The fake failed the update and nothing else: the next night asks.
+    TODAY = "2027-01-19";
+    expect((await remindExpiringStays()).reminded).toBe(1);
+  });
+
+  it("the hold is never re-checked at this call site (source)", () => {
+    const auto = code("src/lib/automation.ts");
+    const sweep = auto.slice(auto.indexOf("export async function remindExpiringStays"), auto.indexOf("export function extendReminderText"));
+    expect(sweep).not.toMatch(/notices_held_at|noticesHeld|notice-hold/);
+    // The release is guarded on the token, and reminded moves below the reached check.
+    expect(sweep).toMatch(/\.update\(\{ extend_reminded_at: null, extend_token: null \}\)\s*\.eq\("id", s\.id as string\)\s*\.eq\("extend_token", token\)/);
+    expect(sweep).toMatch(/if \(told\.reached\) \{\s*reminded\+\+;/);
+    expect(sweep).not.toMatch(/reminded\+\+;\s*const msg/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE HOUSEHOLD IS QUOTED THE MONTHLY BILL, NOT THE BARE RENT. The successor
+// bills rent plus the park's monthly fee from its first morning — the owner's
+// signing toast says "$542.53 ($400.00 rent + $142.53 fees)" — and the text,
+// the page and the page after the tap all said "$400 a month". And "site 2"
+// to a household whose lease, invite and home page say Lot 2.
+// ---------------------------------------------------------------------------
+describe("the resident's text and page quote rent plus the fee", () => {
+  const consenting = {
+    id: "renter-doris", display_name: "Doris", email: "doris@example.com",
+    mobile_e164: "+12605550101", mobile_verified_at: "2027-01-02T00:00:00Z",
+    sms_consent_operational_at: "2027-01-02T00:00:00Z", contact_pref: "sms",
+  };
+  const row = () => db.lot_reservations[0];
+  const page = async (token: string) =>
+    (await extendPage(new Request(`https://lakelife.test/x/${token}`), { params: Promise.resolve({ token }) })).text();
+  const tap = async (token: string, months: number) => {
+    const body = new URLSearchParams(); body.set("months", String(months));
+    const req = new Request(`https://lakelife.test/x/${token}`, {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: body.toString(),
+    });
+    return (await extendTap(req, { params: Promise.resolve({ token }) })).text();
+  };
+
+  beforeEach(() => {
+    seed({ extend_token: null, extend_reminded_at: null });
+    db.park_lots[0].rental_mode = "long_term";
+    db.park_renters = [{ ...consenting }];
+    // The Haven's one fee, exactly as the biller reads it.
+    db.park_fees = [{ id: "fee-1", park_id: "park-1", label: "Grounds fee", amount: "142.53", cadence: "monthly", applies_to: "long_term", active: true }];
+    process.env.NEXT_PUBLIC_SITE_URL = "https://lakelife.test";
+    TODAY = "2027-01-18";
+  });
+
+  const ALL_IN = "$400.00 rent plus the $142.53 Grounds fee — $542.53 a month";
+
+  it("on all three surfaces, and says 'lot' for a long-term lot", async () => {
+    const out = await remindExpiringStays();
+    expect(out.reminded).toBe(1);
+    const token = row().extend_token as string;
+    expect(sent[0].sms).toBe(
+      `LakeLife: your agreement at lot 14 runs to February 1, 2027. Want to renew for 1 or 3 months at ${ALL_IN}? One tap: https://lakelife.test/x/${token}`,
+    );
+    expect(sent[0].body).toContain(`Want to renew for 1 or 3 months at ${ALL_IN}?`);
+    expect(sent[0].sms).not.toMatch(/site/);
+
+    const view = await loadExtendByToken(token);
+    expect(view!.rentalMode).toBe("long_term");
+    expect(view!.monthlyFees).toEqual([{ label: "Grounds fee", amount: 142.53 }]);
+    const html = await page(token);
+    expect(html).toContain("Stay on at lot 14?");
+    expect(html).toContain(`The next agreement starts Monday, February 1 at ${ALL_IN}.`);
+    expect(html).not.toMatch(/site 14|\$400 a month/);
+
+    TODAY = "2027-01-20";
+    const after = await tap(token, 3);
+    expect(after).toContain(`Your next agreement runs Monday, February 1 to Saturday, May 1: 3 months at ${ALL_IN}.`);
+    expect(inserted[0].quoted_amount).toBe(400);
+  });
+
+  it("a fee that does not reach this lot is not quoted — a short-term site, an inactive fee, another audience", async () => {
+    db.park_lots[0].rental_mode = "short_term";
+    await remindExpiringStays();
+    expect(sent[0].sms).toContain("your agreement at site 14 runs to");
+    expect(sent[0].sms).toContain("at $400.00 a month?");
+    expect(sent[0].sms).not.toContain("Grounds");
+    expect(await page(row().extend_token as string)).toContain("Stay on at site 14?");
+
+    for (const off of [{ active: false }, { applies_to: "short_term" }, { cadence: "annual" }]) {
+      seed({ extend_token: null, extend_reminded_at: null });
+      db.park_lots[0].rental_mode = "long_term";
+      db.park_renters = [{ ...consenting }];
+      db.park_fees = [{ id: "fee-1", park_id: "park-1", label: "Grounds fee", amount: "142.53", cadence: "monthly", applies_to: "long_term", active: true, ...off }];
+      await remindExpiringStays();
+      expect(sent[0].sms, JSON.stringify(off)).toContain("at $400.00 a month?");
+      expect(sent[0].sms, JSON.stringify(off)).not.toContain("Grounds");
+    }
+  });
+
+  it("a failed fee read stops the text rather than quoting the bare rent as the all-in", async () => {
+    failNext("park_fees");
+    const out = await remindExpiringStays();
+    expect(sent).toEqual([]);
+    expect(row().extend_token).toBeNull();
+    expect(out.skipped[0]).toMatch(/couldn't read the park's fees/);
+    expect(out.skipped[0]).not.toMatch(/\byour\b/);
+  });
+
+  it("the three surfaces read ONE helper (source)", () => {
+    expect(code("src/lib/automation.ts")).toMatch(/renewalRentWords\(\{ price: view\.price, term: view\.term, fees: view\.monthlyFees \}\)/);
+    const route = code("src/app/x/[token]/route.ts");
+    expect(route.match(/renewalRentWords\(/g) ?? []).toHaveLength(2);
+    expect(route).not.toMatch(/function rentWords/);
+    expect(route).not.toMatch(/"site"|`site/);
+    expect(route.match(/lotWord\(/g) ?? []).toHaveLength(2);
   });
 });
 

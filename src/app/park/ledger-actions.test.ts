@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { todayLakeDate } from "@/lib/booking";
 import { receiptBody } from "./receipt-helpers";
 import { runSummary, prettyMonth } from "./ledger-helpers";
 
@@ -223,6 +222,17 @@ let refundResult: { ok: boolean; ref?: string; error?: string } = { ok: false, e
 /** How many times the processor was asked — the money-moving fact a refund test has to pin. */
 let refundAsks = 0;
 
+// THE CLOCK IS PINNED. Both billing doors refuse a month that has not
+// started (notYetBillableRefusal), and this suite bills January–April 2027
+// throughout; on the real clock every one of those would be refused and
+// every assertion below it would be about nothing. 15 April 2027 is on or
+// after the latest month billed here. recordPayment's received_on window is
+// measured from the same clock, so TODAY is what the doors are handed.
+const CLOCK = "2027-04-15";
+vi.mock("@/lib/booking", async (orig) => ({
+  ...(await orig<typeof import("@/lib/booking")>()),
+  todayLakeDate: () => CLOCK,
+}));
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 vi.mock("@/app/park/data", () => ({ assertMyPark: async () => true }));
 vi.mock("@/lib/supabase/server", () => ({
@@ -247,7 +257,7 @@ const {
 } = await import("./ledger-actions");
 
 const PARK = "park-haven";
-const TODAY = todayLakeDate();
+const TODAY = CLOCK;
 /** The Haven's real lots — no lot 3, no lot 8. */
 const HAVEN = ["1", "2", "6", "7", "9", "10", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "26"];
 
@@ -695,6 +705,73 @@ describe("both billing doors sort their skips the same way", () => {
 });
 
 // ---------------------------------------------------------------------------
+// A MONTH THAT HAS NOT STARTED IS NOT BILLED EARLY. The rent screen stops
+// its forward link at the current month on purpose; a typed `?month=`
+// reached both actions with no rule behind it and raised February on 28
+// January. Pinned both ways: the clock is 15 April 2027, so May refuses and
+// April (and every month back to go-live) still raises.
+// ---------------------------------------------------------------------------
+describe("both billing doors refuse a month that has not started", () => {
+  const MAY = "[2027-05-01,2027-06-01)";
+  const APR = "[2027-04-01,2027-05-01)";
+
+  it("the preview refuses May on 15 April with the one sentence, and reads nothing else", async () => {
+    db.lot_reservations = [stay("9", "may-9", MAY)];
+    const res = await previewChargeRun(PARK, "2027-05");
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("May 2027 hasn't started — bill it on the 1st.");
+    expect(res.plan).toBeUndefined();
+  });
+
+  it("the run refuses it too, and writes nothing", async () => {
+    db.lot_reservations = [stay("9", "may-9", MAY)];
+    const res = await runCharges(PARK, "2027-05");
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("May 2027 hasn't started — bill it on the 1st.");
+    expect(db.park_charges).toHaveLength(0);
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("a month neither door can read is refused with a sentence, and the insert is never reached", async () => {
+    // `2027-4` passed the go-live string compare and reached the insert,
+    // where 0070's CHECK on period_month refused it as a raw constraint
+    // error — the only refusal it had.
+    db.lot_reservations = [stay("9", "apr-9", APR)];
+    const pre = await previewChargeRun(PARK, "2027-4");
+    expect(pre.ok).toBe(false);
+    expect(pre.error).toBe("That isn't a month — use the month links to pick one.");
+    const run = await runCharges(PARK, "2027-4");
+    expect(run.ok).toBe(false);
+    expect(run.error).toBe("That isn't a month — use the month links to pick one.");
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("the current month still raises — collapsed the other way", async () => {
+    db.lot_reservations = [stay("9", "apr-9", APR)];
+    const pre = await previewChargeRun(PARK, "2027-04");
+    expect(pre.ok).toBe(true);
+    expect(pre.plan!.toBill).toHaveLength(1);
+    const run = await runCharges(PARK, "2027-04");
+    expect(run.ok).toBe(true);
+    expect(run.raised).toBe(1);
+  });
+
+  it("is the same helper in both doors, beside the go-live refusal", () => {
+    const src = readFileSync(join(process.cwd(), "src/app/park/ledger-actions.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const calls = src.match(/notYetBillableRefusal\(month, todayLakeDate\(\), prettyMonth\)/g) ?? [];
+    expect(calls).toHaveLength(2);
+    const preview = src.slice(src.indexOf("export async function previewChargeRun"), src.indexOf("export async function runCharges"));
+    const run = src.slice(src.indexOf("export async function runCharges"), src.indexOf("function paymentRefusedSentence"));
+    for (const fn of [preview, run]) {
+      expect(fn.indexOf("preCutoverRefusal(")).toBeGreaterThan(0);
+      expect(fn.indexOf("notYetBillableRefusal(")).toBeGreaterThan(fn.indexOf("preCutoverRefusal("));
+      expect(fn.indexOf("notYetBillableRefusal(")).toBeLessThan(fn.indexOf('.from("park_lots")'));
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // MONEY ON ACCOUNT COMES OFF THE NEXT BILLS (0167) — decision three, verbatim:
 // "need it applied to the months if there is a prepay."
 //
@@ -838,6 +915,48 @@ describe("a household with money on account who pays again", () => {
     expect(body).toMatch(/From on account \$342\.53/);
     expect(body).toContain("$342.53 you already had on account with the office went against this");
     expect(body).toMatch(/nothing further owing on this one/);
+  });
+
+  it("a bill part-paid from money on account on an EARLIER day: the paper still names it", async () => {
+    // $200 of money on account went against January on the 3rd; on the 6th
+    // the household hands over $342.53. Nothing is applied inside this call
+    // (paid_total already held the $200), so the receipt read "Amount $342.53
+    // / Against January rent — $542.53 / nothing further owing" with no line
+    // explaining the difference — on the only copy a paper household keeps.
+    janBill("9", { paid_total: 200 });
+    const early = onAccount("9", 200, "2026-12-28");
+    db.park_payment_allocations.push({ id: "al-early", park_id: PARK, payment_id: early.id, charge_id: "charge-9", amount: 200, applied_via: "office", applied_at: "2027-01-03T15:00:00Z", removed_at: null });
+    const res = await recordPayment(PARK, "charge-9", 342.53, "cash", "", TODAY, "", "form-key");
+    expect(res.ok).toBe(true);
+    expect(db.park_payment_allocations, "nothing new applied — the $200 was already on it").toHaveLength(1);
+    // The toast is about THIS act, and this act applied nothing.
+    expect(res.signal).toBe("Recorded — that one's settled.");
+    // The paper is about the bill, and the bill has $200 of their money on it.
+    expect(res.receipt?.fromOnAccount).toBe(200);
+    expect(res.receipt?.balanceAfter).toBe(0);
+    const body = receiptBody(res.receipt!);
+    expect(body).toMatch(/From on account \$200\.00/);
+    expect(body).toContain("$200.00 you already had on account with the office went against this");
+    expect(body).toMatch(/nothing further owing on this one/);
+    // A line the office took back off the bill, and a line from a bounced
+    // cheque, are not money on the bill.
+    db.park_payment_allocations[0].removed_at = "2027-01-04T00:00:00Z";
+    const res2 = await recordPayment(PARK, "charge-9", 0.01, "cash", "", TODAY, "", "form-key-2");
+    expect(res2.receipt?.fromOnAccount).toBeNull();
+  });
+
+  it("the same-day case reads the same: what settleOnAccount just applied is on the bill too", async () => {
+    janBill("9");
+    onAccount("9", 342.53, "2026-12-28");
+    const res = await recordPayment(PARK, "charge-9", 200, "cash", "", TODAY, "", "form-key");
+    expect(res.receipt?.fromOnAccount).toBe(342.53);
+    // And a failed read of the bill's lines degrades to the same-call figure — the money is recorded.
+    janBill("14");
+    onAccount("14", 100, "2026-12-28");
+    nextReadError = { table: "park_payment_allocations", column: "charge_id", error: { code: "57P01", message: "terminating connection" } };
+    const res2 = await recordPayment(PARK, "charge-14", 200, "cash", "", TODAY, "", "form-key-14");
+    expect(res2.ok).toBe(true);
+    expect(res2.receipt?.fromOnAccount).toBe(100);
   });
 
   it("only as much as the bill still needs; the rest stays on account", async () => {
@@ -1069,6 +1188,37 @@ describe("taking back a split cheque takes back both halves", () => {
     expect(acct.reversed_reason).toBe("typo");
   });
 
+  // MONEY HANDED BACK CANNOT BE UNSAID (0168). A reversal says the cheque
+  // never arrived; the record says $57.47 of it went back across the window.
+  // The database refuses the update by name; the door says it in a sentence
+  // first, whichever half is tapped — and "try again" would never come true.
+  it("a handed-back on-account row refuses the reversal, from either half", async () => {
+    const { bill, acct } = await splitThenFebruary();
+    acct.returned_on = "2027-02-05"; acct.returned_amount = 57.47; acct.return_note = "moved out";
+    const fromAcct = await reversePayment(PARK, acct.id as string, "the cheque bounced");
+    expect(fromAcct.ok).toBe(false);
+    // The day it went back is named, the dead end is said (a hand-back has
+    // no un-record yet), and no method word: a $600 cash split writes the
+    // same two rows, and "the cheque" about cash was the lie.
+    expect(fromAcct.error).toBe("The record shows $57.47 of that handed back to them on February 5, 2027 — reversing it would contradict the record, and there's no way yet to undo a hand-back.");
+    const fromBill = await reversePayment(PARK, bill.id as string, "the cheque bounced");
+    expect(fromBill.ok).toBe(false);
+    expect(fromBill.error).toBe("The record shows $57.47 of the on-account half of that payment handed back to them on February 5, 2027 — reversing the payment would contradict the record, and there's no way yet to undo a hand-back.");
+    for (const e of [fromAcct.error, fromBill.error]) {
+      expect(e).not.toMatch(/cheque|try again|2027-02-05/);
+    }
+    expect(updated).toHaveLength(0);
+    expect(bill.reversed_at).toBeNull();
+    expect(acct.reversed_at).toBeNull();
+  });
+
+  it("a returned deposit keeps its own sentence, read off the same row", async () => {
+    db.park_payments.push({ id: "dep", park_id: PARK, renter_id: "renter-9", charge_id: null, kind: "deposit", amount: 500, method: "cash", received_on: "2027-01-02", reversed_at: null, returned_at: null, returned_on: "2027-03-01", returned_amount: 500, receipt_no: 77 });
+    const res = await reversePayment(PARK, "dep", "typo");
+    expect(res.error).toBe("That deposit was already returned — reversing it would contradict the record.");
+    expect(updated).toHaveLength(0);
+  });
+
   it("the other half is looked up park-scoped, through the one spelling of the key, and written in one update over both ids", () => {
     const src = readFileSync(join(process.cwd(), "src", "app", "park", "ledger-actions.ts"), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -1190,15 +1340,24 @@ describe("money on account settles the oldest open bill first, wherever it is ap
     onAccount("9", 600, "2027-01-20");
     const pre = await previewChargeRun(PARK, "2027-02");
     expect(pre.ok).toBe(true);
-    // The preview promises only what is left AFTER January: $57.47 of February.
+    // February's share is what is left AFTER January: $57.47 — and the plan
+    // CARRIES January. It used to plan the $542.53 against January and drop
+    // it, so the sentence he approved from said "$57.47 of it already on
+    // account" while the run moved $600. A PREVIEW MUST SHOW WHAT THE RUN
+    // WILL ACTUALLY DO.
     expect(pre.plan!.toBill[0].fromOnAccount).toBe(57.47);
     expect(pre.plan!.fromOnAccount).toBe(57.47);
+    expect(pre.plan!.toOlderBills).toEqual([{ periodMonth: "2027-01", amount: 542.53 }]);
+    expect(runSummary(pre.plan!, "2027-02")).toBe(
+      "Bill 1 household for February 2027 — $542.53; $600.00 of money on account goes against January 2027 and February 2027",
+    );
     expect(db.park_payment_allocations, "a preview writes nothing").toHaveLength(0);
 
     const run = await runCharges(PARK, "2027-02");
     expect(run.ok).toBe(true);
+    // THE RUN'S SENTENCE IS THE PREVIEW'S, past tense: same figure, same months.
     expect(run.signal).toBe(
-      "1 bill raised for February 2027 — $542.53, $57.47 of it settled from money on account. $542.53 of money on account went against older open bills first. Nobody has been told.",
+      "1 bill raised for February 2027 — $542.53; $600.00 of money on account went against January 2027 and February 2027. Nobody has been told.",
     );
     expect(db.park_payment_allocations.map((a) => [a.charge_id, a.amount, a.applied_via])).toEqual([
       ["charge-9", 542.53, "run"],
@@ -1213,12 +1372,21 @@ describe("money on account settles the oldest open bill first, wherever it is ap
     janBill("9");                                                    // pushed first…
     db.park_charges.push({ id: "charge-dec", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "dec-9", period_month: "2026-12", due_on: "2026-12-01", amount: 40, paid_total: 0, status: "open" });  // …December second
     onAccount("9", 560, "2027-01-20");
+    // THE WORST SHAPE for the preview: the older bills absorb ALL the money,
+    // so the plan's fromOnAccount is 0 and the old sentence said nothing
+    // about money on account at all — then the run moved $560.
+    const pre = await previewChargeRun(PARK, "2027-02");
+    expect(pre.plan!.fromOnAccount).toBe(0);
+    expect(pre.plan!.toOlderBills).toEqual([{ periodMonth: "2026-12", amount: 40 }, { periodMonth: "2027-01", amount: 520 }]);
+    expect(runSummary(pre.plan!, "2027-02")).toBe(
+      "Bill 1 household for February 2027 — $542.53; $560.00 of money on account goes against December 2026 and January 2027",
+    );
     const run = await runCharges(PARK, "2027-02");
     expect(db.park_payment_allocations.map((a) => [a.charge_id, a.amount])).toEqual([
       ["charge-dec", 40],
       ["charge-9", 520],
     ]);
-    expect(run.signal).toBe("1 bill raised for February 2027 — $542.53. $560.00 of money on account went against older open bills first. Nobody has been told.");
+    expect(run.signal).toBe("1 bill raised for February 2027 — $542.53; $560.00 of money on account went against December 2026 and January 2027. Nobody has been told.");
     expect(db.park_charges.find((c) => c.id === "charge-9")).toMatchObject({ paid_total: 520, status: "open" });
   });
 
@@ -1229,7 +1397,10 @@ describe("money on account settles the oldest open bill first, wherever it is ap
     nextAllocationError = { after: 0, error: { code: "P0001", message: "park_payment_allocations: that bill only has 0.00 left on it, and this would apply 542.53" } };
     const run = await runCharges(PARK, "2027-02");
     expect(run.signal).toContain("⚠️ $542.53 of a household's money on account couldn't be put against its January 2027 bill");
+    // Only what LANDED is in the clause: January was refused, so no older
+    // month is named and the short form stands.
     expect(run.signal).toContain("$57.47 of it settled from money on account.");
+    expect(run.signal).not.toMatch(/went against January/);
   });
 
   it("recordPayment: the excess of a split settles an OLDER open bill the moment it is recorded, and the paper household is told", async () => {

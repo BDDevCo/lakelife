@@ -16,7 +16,7 @@ import {
 } from "@/app/park/sign-helpers";
 import type { TenantInput, TenantEditInput } from "@/app/park/park-helpers";
 import {
-  agreementStartFor, SIGNED_START_HORIZON_DAYS, dayInWords, EDITABLE_TERMS, TERM_EACH,
+  agreementStartFor, latestAgreementStart, dayInWords, EDITABLE_TERMS, TERM_EACH,
 } from "@/app/park/park-helpers";
 import { offeredAgreementLengths, lengthInWords } from "@/app/park/agreement-helpers";
 import { prettyMonth } from "@/app/park/ledger-helpers";
@@ -78,9 +78,31 @@ export interface RollRowView {
    * need showing, which is the entire reason notice is recorded.
    */
   expectedMoveOut: string | null;
+  /**
+   * The link the notice stands on — the one "They're staying" must clear.
+   * Not always the current link: a notice given in January for a February
+   * day stays on the January link after the February successor takes over.
+   */
+  noticeReservationId: string | null;
   nightsLeft: number | null;
   /** A month-to-month tenancy: no real end date, so no countdown. */
   rolling?: boolean;
+  /**
+   * "3-month lease to April 1, 2027" — the current agreement's own length
+   * and end, when it has one. Every fixed-length lease used to read
+   * "month-to-month" here (`rolling` meant "paid monthly", not "no end
+   * date") while the Today card said its agreement ends in twelve days.
+   */
+  agreementWords?: string | null;
+  /**
+   * A FIRST AGREEMENT THE OFFICE FILED AHEAD OF ITS DAY — a signed lease
+   * filed on 20 December for 1 January — and the household's only record.
+   * Until it starts the row has no current link, so Edit is offered for
+   * this one instead, and "Filed by mistake — take them off" withdraws it.
+   * Never an approved applicant (decided_at set), never a successor.
+   */
+  filedByHandId: string | null;
+  filedByHandRenter: string | null;
   nextRenter: string | null;
   nextFrom: string | null;
   /**
@@ -96,6 +118,14 @@ export interface RollRowView {
    * 'next' one, and un-approving an applicant is not this control's to do.
    */
   nextReservationId: string | null;
+  /**
+   * WHAT WITHDRAWING THE NEXT AGREEMENT LEAVES BEHIND, when that agreement
+   * is a signing recorded ahead of its day: the holdover was trimmed to end
+   * the day the lease begins, and nothing puts its horizon back. The day
+   * the household's record then ends, for the confirm to say — null on
+   * every other shape.
+   */
+  withdrawUncoversFrom?: string | null;
   /**
    * THEY SIGNED THE NEW LEASE — set when the stay this row is about is a
    * holdover on the arrangement they already had. Carries what the form
@@ -127,8 +157,6 @@ export interface RollRowView {
     termMonths: number | null;
     /** What a signed agreement on this lot is charged each month, by the biller's rule. */
     feePerMonth: number;
-    /** Set before the ledger starts: the day from which a signing can be recorded. */
-    recordableFrom: string | null;
   } | null;
   pending: {
     id: string;
@@ -169,6 +197,12 @@ const STATE_STYLE: Record<RollRowView["state"], { pill: string; label: string }>
   inactive: { pill: "slate", label: "Off" },
 };
 
+/**
+ * A SHORT day for the two ends of an application's range ("Jan 5 – Jan 12 ·
+ * nightly") — a compact pair inside a card. Every single day a person reads
+ * on this screen is dayInWords, with its year: a 'through Apr 1' beside a
+ * roll dated in December was a day with no year on it.
+ */
 function pretty(iso: string | null): string {
   if (!iso) return "—";
   const [y, m, d] = iso.split("-").map(Number);
@@ -252,6 +286,8 @@ export function ParkRentRoll({
   const [signingId, setSigningId] = useState<string | null>(null);
   // The withdrawal: which successor he is about to take back.
   const [withdrawingId, setWithdrawingId] = useState<string | null>(null);
+  // Filed by mistake: which not-yet-started first agreement he is about to take off.
+  const [removingId, setRemovingId] = useState<string | null>(null);
 
   function decide(id: string, decision: "approve" | "decline") {
     setBusyId(id);
@@ -328,6 +364,12 @@ export function ParkRentRoll({
   // lot until its end, still billed, and could be reached from no screen:
   // Move out and Gave notice were offered only for the row covering today.
   // Cancelled, not ended — nobody lived in it, so there is nothing to bill.
+  //
+  // THE SENTENCE IS THE SERVER'S. This toasted "nothing bills for it" from
+  // the client, while the successor's February bill — raised on the 1st,
+  // $57.47 of the household's money already spent on it — stood open on a
+  // cancelled agreement. endTenancy now cancels that bill (money on account
+  // goes back) and says so, or refuses when money was taken against it.
   function withdraw(nextId: string) {
     setBusyId(nextId);
     startTransition(async () => {
@@ -335,7 +377,29 @@ export function ParkRentRoll({
       setBusyId(null);
       setWithdrawingId(null);
       if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
-      toast.ok("Their next agreement is withdrawn — nothing bills for it.");
+      toast.ok(res.signal ?? "Their next agreement is withdrawn.");
+      router.refresh();
+    });
+  }
+
+  // FILED BY MISTAKE — a first agreement the office filed ahead of its day,
+  // taken off before it starts. The same `cancelled` branch (nobody lived
+  // there, nothing to prorate), its own words: this is not "the next
+  // agreement", it is the household's only record, and once it is gone the
+  // lot is open again on Who lives here (getOnboardSeeds re-offers it).
+  //
+  // THE FIRST SENTENCE IS THE SERVER'S. A row filed ahead can already be
+  // billed (a typed ?month= raises January in December), and the cancelled
+  // branch voids that bill and says so — a toast written here dropped that
+  // sentence, the way withdraw() once did.
+  function takeOff(id: string, lotNumber: string) {
+    setBusyId(id);
+    startTransition(async () => {
+      const res = await endTenancy(id, "cancelled");
+      setBusyId(null);
+      setRemovingId(null);
+      if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
+      toast.ok(`${res.signal ?? "Taken off."} Lot ${lotNumber} is open again on Who lives here.`);
       router.refresh();
     });
   }
@@ -568,13 +632,15 @@ export function ParkRentRoll({
                           <span className="mut">
                             {r.rolling
                               ? " · month-to-month"
-                              : ` · through ${pretty(r.currentUntil)}`}
+                              : r.agreementWords
+                                ? ` · ${r.agreementWords}`
+                                : ` · through ${r.currentUntil ? dayInWords(r.currentUntil) : "—"}`}
                             {r.nightsLeft != null && ` (${r.nightsLeft} night${r.nightsLeft === 1 ? "" : "s"} left)`}
                           </span>
                         </>
                       )}
                       {r.state === "reserved" && (
-                        <span className="mut">{r.nextRenter} arrives {pretty(r.nextFrom)}</span>
+                        <span className="mut">{r.nextRenter} arrives {r.nextFrom ? dayInWords(r.nextFrom) : "—"}</span>
                       )}
                       {r.owedThisMonth && (
                         <span className="mut"> · {r.owedThisMonth}</span>
@@ -609,15 +675,49 @@ export function ParkRentRoll({
                         invitedAt={r.invitedAt}
                       />
                     )}
-                    {r.currentReservationId && (
+                    {/* EDIT: the current link, else the agreement the office
+                        filed ahead of its day. A wrong rent typed on
+                        20 December for 1 January had no door until the 1st,
+                        the morning January bills. */}
+                    {(r.currentReservationId ?? r.filedByHandId) && (
                       <button
                         className="ll-btn ghost"
-                        onClick={() =>
-                          setEditingId(editingId === r.currentReservationId ? null : r.currentReservationId)
-                        }
+                        onClick={() => {
+                          const id = r.currentReservationId ?? r.filedByHandId!;
+                          setEditingId(editingId === id ? null : id);
+                        }}
                       >
-                        {editingId === r.currentReservationId ? "Cancel" : "Edit"}
+                        {editingId === (r.currentReservationId ?? r.filedByHandId) ? "Cancel" : "Edit"}
                       </button>
+                    )}
+                    {/* FILED BY MISTAKE — take a not-yet-started first
+                        agreement off the roll. Its own words, never the
+                        withdraw control's: this is not a "next" agreement. */}
+                    {r.filedByHandId && !r.currentReservationId && (
+                      removingId === r.filedByHandId ? (
+                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                          <span className="mut" style={{ fontSize: 13 }}>
+                            Take {r.filedByHandRenter ?? "them"} off lot {r.lotNumber}? If it&apos;s already billed, that bill is cancelled; the lot opens again on Who lives here.
+                          </span>
+                          <button className="ll-btn sm" style={{ minHeight: 36 }}
+                            disabled={pending && busyId === r.filedByHandId}
+                            onClick={() => takeOff(r.filedByHandId!, r.lotNumber)}>
+                            {pending && busyId === r.filedByHandId ? "Taking off…" : "Yes"}
+                          </button>
+                          <button className="ll-btn ghost sm" style={{ minHeight: 36 }}
+                            onClick={() => setRemovingId(null)}>
+                            No
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          className="ll-btn ghost"
+                          onClick={() => setRemovingId(r.filedByHandId)}
+                          disabled={pending && busyId === r.filedByHandId}
+                        >
+                          Filed by mistake — take them off
+                        </button>
+                      )
                     )}
                     {r.currentReservationId && (
                       <button
@@ -635,7 +735,7 @@ export function ParkRentRoll({
                         nothing called and shown on no screen; this pill and
                         the Today card are the whole of its readership. */}
                     {r.expectedMoveOut && (
-                      <span className="ll-pill warn">Leaving {pretty(r.expectedMoveOut)}</span>
+                      <span className="ll-pill warn">Leaving {dayInWords(r.expectedMoveOut)}</span>
                     )}
                     {r.currentReservationId && !r.expectedMoveOut && (
                       <button
@@ -649,11 +749,15 @@ export function ParkRentRoll({
                         {noticeId === r.currentReservationId ? "Cancel" : "Gave notice"}
                       </button>
                     )}
-                    {r.currentReservationId && r.expectedMoveOut && (
+                    {/* CLEARED ON THE LINK THAT HOLDS IT. Notice given in
+                        January for a February day stands on the January
+                        link; on the 1st the February successor is `current`
+                        and clearing it there would clear nothing. */}
+                    {(r.noticeReservationId ?? r.currentReservationId) && r.expectedMoveOut && (
                       <button
                         className="ll-btn ghost"
-                        onClick={() => unnotice(r.currentReservationId!)}
-                        disabled={pending && busyId === r.currentReservationId}
+                        onClick={() => unnotice((r.noticeReservationId ?? r.currentReservationId)!)}
+                        disabled={pending && busyId === (r.noticeReservationId ?? r.currentReservationId)}
                       >
                         They&apos;re staying
                       </button>
@@ -679,7 +783,14 @@ export function ParkRentRoll({
                       withdrawingId === r.nextReservationId ? (
                         <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                           <span className="mut" style={{ fontSize: 13 }}>
-                            Withdraw their {r.nextFrom ? prettyMonth(r.nextFrom.slice(0, 7)) : "next"} agreement? Nothing bills for it.
+                            Withdraw their {r.nextFrom ? prettyMonth(r.nextFrom.slice(0, 7)) : "next"} agreement? If it&apos;s already billed, that bill is cancelled and money on account for it goes back.
+                            {r.withdrawUncoversFrom && (
+                              // A signing recorded ahead: the arrangement
+                              // before it was trimmed to end on the lease
+                              // day, and withdrawing the lease does not put
+                              // that back — the lot reads open from then.
+                              <> The arrangement they had still ends on {dayInWords(r.withdrawUncoversFrom)} — record the signing again from this row, or the lot reads open from that day.</>
+                            )}
                           </span>
                           <button className="ll-btn sm" style={{ minHeight: 36 }}
                             disabled={pending && busyId === r.nextReservationId}
@@ -747,8 +858,10 @@ export function ParkRentRoll({
                         />
                         <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
                           Their final month bills for the days they were here —
-                          not the whole month. Get this right now: it is what
-                          the last bill is calculated from.
+                          not the whole month. If that month is already billed,
+                          the close-out re-does the bill for those days where it
+                          can and says what happened to any money on it. Get this
+                          right now: it is what the last bill is calculated from.
                         </p>
                         <button
                           className="ll-btn gold"
@@ -769,10 +882,10 @@ export function ParkRentRoll({
                   </div>
                 </div>
 
-                {editingId && editingId === r.currentReservationId && (
+                {editingId && editingId === (r.currentReservationId ?? r.filedByHandId) && (
                   <EditTenant
-                    reservationId={r.currentReservationId}
-                    name={r.currentRenter ?? ""}
+                    reservationId={editingId}
+                    name={r.currentRenter ?? r.filedByHandRenter ?? ""}
                     rent={r.currentRent}
                     dueDay={r.currentDueDay}
                     source={r.currentSource}
@@ -842,10 +955,14 @@ function AddTenant({
   // same list the server judges the choice against (chooseAgreementLength).
   const lengths = offeredAgreementLengths(termMonths, capMonths);
 
-  // THE DAY A SIGNED LEASE RUNS FROM, seeded when the tick is set: the later
-  // of today and the cutover, changeable to the date on the paper. Cleared
-  // with the tick — a holdover has no agreement start. THE LENGTH likewise:
-  // seeded with the park's house style, his to change, cleared with the tick.
+  // THE DAY A SIGNED LEASE RUNS FROM, seeded when the tick is set: the
+  // cutover before go-live (the one date true of a lease collected early),
+  // BLANK after it — seeded with today it filed a lease that says the 1st
+  // from the day it was typed, under a hint reading "the day on the paper,
+  // not today". agreementStartFor refuses a blank after go-live, so the box
+  // starts empty and he types the date. Cleared with the tick — a holdover
+  // has no agreement start. THE LENGTH likewise: seeded with the park's
+  // house style, his to change, cleared with the tick.
   const defaultStart = agreementStartFor("", today, cutoverDate);
   const tick = (signed: boolean) =>
     setForm((f) => ({
@@ -854,10 +971,7 @@ function AddTenant({
       agreementStartsOn: signed && defaultStart.ok ? defaultStart.start : "",
       agreementMonths: signed ? termMonths : null,
     }));
-  const latestStart = (() => {
-    const [y, m, d] = today.split("-").map(Number);
-    return new Date(Date.UTC(y, m - 1, d + SIGNED_START_HORIZON_DAYS)).toISOString().slice(0, 10);
-  })();
+  const latestStart = latestAgreementStart(today);
 
   function save() {
     startTransition(async () => {
@@ -902,6 +1016,17 @@ function AddTenant({
           <input inputMode="decimal" value={form.rent} placeholder="340"
             onChange={(e) => set("rent", e.target.value)} style={{ marginTop: 4 }} />
         </label>
+        {/* WHEN THEY ARRIVED — the field the filing screen already had and
+            this door did not. Kept apart from the agreement window: a
+            household of eleven years filed on the arrangement they had is
+            billed from where the ledger's claim on them starts, and their
+            arrival is recorded as what it was. Blank means unknown, and
+            stays unknown. */}
+        <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
+          <span className="mut">Moved in on (optional)</span>
+          <input type="date" value={form.movedInOn} max={today}
+            onChange={(e) => set("movedInOn", e.target.value)} style={{ marginTop: 4 }} />
+        </label>
         <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
           <span className="mut">Paid</span>
           {/* The same four ways, in the same words, as the Edit panel's select. */}
@@ -915,8 +1040,9 @@ function AddTenant({
 
       {/* THE TICK THE FILING SCREEN HAS AND THIS DOOR DID NOT. Clear writes a
           holdover on the arrangement they already had — no fee, no cap — from
-          today. Ticked writes a real agreement, from the day the lease says,
-          and needs both ways to reach them. */}
+          where the ledger's claim on them starts (the cutover once it has
+          passed, else today). Ticked writes a real agreement, from the day
+          the lease says, and needs both ways to reach them. */}
       <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 12, fontSize: 14 }}>
         <input type="checkbox" checked={!!form.signedNewLease} style={{ marginTop: 3 }}
           onChange={(e) => tick(e.target.checked)} />
@@ -957,7 +1083,7 @@ function AddTenant({
           </div>
           <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
             The day on the paper, not today — the first month bills from this
-            day{form.agreementStartsOn ? ` (${dayInWords(form.agreementStartsOn)})` : ""}.
+            day{form.agreementStartsOn ? ` (${dayInWords(form.agreementStartsOn)})` : ", so type it"}.
             {lengths.length > 1 ? " The length is theirs to pick at every renewal too." : ""}
             {" "}Email and phone are a condition of the new lease, so both are needed.
           </p>
@@ -1078,17 +1204,13 @@ function SignedNewLease({
     });
   }
 
-  // BEFORE THE LEDGER STARTS, THERE IS NOTHING TO RECORD YET. A lease signed
-  // in December for 1 January begins on 1 January; recording it then is what
-  // dates the new agreement — and the fee — from the right day.
-  if (seed.recordableFrom) {
-    return (
-      <div className="ll-notice" style={{ width: "100%", marginTop: 8, fontSize: 13, lineHeight: 1.5 }}>
-        Their new agreement can be recorded from {dayInWords(seed.recordableFrom)}, the
-        day the ledger starts. Until then they stay on the arrangement they already had.
-      </div>
-    );
-  }
+  // A LEASE IN HIS HAND IS A FACT THE DAY IT IS IN HIS HAND. This screen
+  // used to refuse a December signing until 1 January ("can be recorded
+  // from … the day the ledger starts") while "Who lives here" filed the
+  // same paper the same afternoon — and the wait put every on-time signing
+  // AFTER January's bills. The box takes the same window the filing screen
+  // does: from the cutover, up to two months ahead.
+  const latestStart = latestAgreementStart(today);
 
   return (
     <div className="ll-field" style={{ width: "100%", marginTop: 8 }}>
@@ -1099,7 +1221,7 @@ function SignedNewLease({
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
         <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
           <span className="mut">The new lease runs from</span>
-          <input type="date" value={form.signedOn} min={cutoverDate ?? undefined} max={today}
+          <input type="date" value={form.signedOn} min={cutoverDate ?? undefined} max={latestStart}
             onChange={(e) => set("signedOn", e.target.value)} style={{ marginTop: 4 }} />
         </label>
         {/* HOW LONG THE LEASE RUNS — one of the lengths the park offers. */}

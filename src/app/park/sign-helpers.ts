@@ -41,10 +41,19 @@
  *     not the number changed. It is on a lease he holds; the seller's roll
  *     is never the source of a figure on the park's own paper.
  *   - signedOn is THE DAY THE NEW LEASE RUNS FROM — the day on the paper,
- *     not the day it is recorded. Bounded [cutover_date, today]: a day still
- *     to come is not a fact yet, and one before go-live would bill a month
- *     that was never ours. The form defaults it to the holdover's own first
- *     day when that is on or after the cutover (an imported row's 1 January)
+ *     not the day it is recorded. Bounded by THE SAME RULE the filing
+ *     screen applies (agreementStartFor): never before the cutover — one
+ *     before go-live would bill a month that was never ours — and never
+ *     more than SIGNED_START_HORIZON_DAYS ahead. A lease in his hand on
+ *     20 December effective 1 January is a fact on 20 December; this door
+ *     used to refuse it ("that hasn't come yet") while "Who lives here"
+ *     filed the same paper the same afternoon, so Today kept nagging about
+ *     a household that had signed, and the forced wait put the signing
+ *     AFTER January's bills — the ordering behind a double January bill.
+ *     A day still to come writes the successor `approved` (it holds the lot
+ *     without claiming anyone is on it yet); one already running writes it
+ *     `active`. The form defaults the box to the holdover's own first day
+ *     when that is on or after the cutover (an imported row's 1 January)
  *     and otherwise leaves it blank — never today, which is the day the
  *     office got round to it, and dating the agreement from it bills the
  *     first month short and runs every later link 4th-to-4th.
@@ -67,10 +76,10 @@ import { successorRow, type PriorLink, type SuccessorRow } from "@/lib/successor
 import type { DateRange } from "@/lib/parks";
 import { toE164 } from "@/lib/phone";
 import {
-  dayInWords, capitalise,
+  dayInWords, capitalise, agreementStartFor,
   agreementEndFrom, alreadyOverClause, agreementAlreadyOver, SIGNED_LEASE_LABEL,
 } from "./park-helpers";
-import { chooseAgreementLength, lengthAdjective, lengthInWords } from "./agreement-helpers";
+import { chooseAgreementLength, lengthAdjective, lengthInWords, successorStatus } from "./agreement-helpers";
 import { contactProblem } from "./onboard-helpers";
 import { prettyMonth } from "./ledger-helpers";
 
@@ -167,18 +176,11 @@ export function planSigning(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(signedOn)) {
     return { ok: false, error: "Pick the day the new lease runs from." };
   }
-  if (signedOn > ctx.todayISO) {
-    return {
-      ok: false,
-      error: `The new lease runs from ${dayInWords(signedOn)} — that hasn't come yet. Record it from that day.`,
-    };
-  }
-  if (ctx.cutoverDate && signedOn < ctx.cutoverDate) {
-    return {
-      ok: false,
-      error: `The ledger starts on ${dayInWords(ctx.cutoverDate)} — the new agreement can't begin before that.`,
-    };
-  }
+  // ONE WINDOW FOR BOTH DOORS. The filing screen's rule, in its words: not
+  // before the ledger starts, not more than two months out. Either side of
+  // today is a day a lease can run from.
+  const at = agreementStartFor(signedOn, ctx.todayISO, ctx.cutoverDate);
+  if (!at.ok) return { ok: false, error: at.error };
   if (signedOn >= prior.range.end) {
     return {
       ok: false,
@@ -221,9 +223,10 @@ export function planSigning(
   const successor = successorRow(prior, {
     start: signedOn,
     end,
-    // Always active: a signing is only ever recorded on or after its day
-    // (the bound above), so the agreement is already running when it lands.
-    status: "active",
+    // A lease that has not started yet holds the lot as `approved`; one
+    // already running is `active` — the one rule every door writes
+    // (successorStatus), and the run bills whichever covers the month.
+    status: successorStatus(signedOn, ctx.todayISO),
     quotedAmount: rent,
     origin: "office",
     continuesChain: true,

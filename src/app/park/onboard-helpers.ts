@@ -44,8 +44,9 @@
 
 // The same start-date rule the server applies, so the screen refuses what the
 // server would refuse and names the lot instead of failing at File.
-import { agreementStartFor, dayInWords, SIGNED_LEASE_LABEL } from "./park-helpers";
+import { agreementStartFor, dayInWords, holdoverWindowStart, SIGNED_LEASE_LABEL } from "./park-helpers";
 import { prettyMonth } from "./ledger-helpers";
+import { firstBillablePeriod } from "@/lib/billing-start";
 import {
   chooseAgreementLength, offeredAgreementLengths, lengthInWords, lengthsInWords, lengthAdjective,
 } from "./agreement-helpers";
@@ -289,6 +290,14 @@ export function onboardSummary(
    * Defaulted to 0, so a park with no fees reads exactly as it did before.
    */
   feePerSignedLot = 0,
+  /**
+   * WHERE A HOLDOVER'S WINDOW STARTS — today, or the cutover once it has
+   * passed (the floor buildTenant writes). Without it the first-month figure
+   * counts the signed leases alone: a holdover's window cannot be placed
+   * against a month without knowing the day and the cutover, and a number
+   * built without them would be a guess. The filing screen passes both.
+   */
+  window: { todayISO: string; cutoverDate: string | null } | null = null,
 ): string {
   if (plan.toFile.length === 0) {
     return plan.problems.length > 0
@@ -374,7 +383,7 @@ export function onboardSummary(
   // the first month is only that when every signed lease starts on the 1st.
   // Filed on the 4th for the 4th it is a part month, and the number he checks
   // against his leases has to be the one that bills.
-  const firstMonth = firstBilledMonth(plan, feePerSignedLot);
+  const firstMonth = firstBilledMonth(plan, feePerSignedLot, window);
   if (firstMonth) parts.push(firstMonth);
 
   const noRent = plan.toFile.filter((r) => r.rent == null).map((r) => r.lotNumber);
@@ -404,28 +413,80 @@ function capRule(months: number): string {
 }
 
 /**
- * The first month a signed lease bills, in words, with its figure.
+ * The first month that bills, in words, with its figure.
  *
- * Only the SIGNED rows with a rent are counted — a holdover starts today and
- * is billed as it always was, and a row with no rent is not billed at all.
- * When every signed lease starts on the 1st of one month the figure is the
- * whole month; otherwise it is a part month and says so rather than quoting a
- * number the run will not raise.
+ * THE NUMBER HE CHECKS AGAINST HIS LEASES HAS TO BE THE ONE THAT BILLS. This
+ * counted the SIGNED rows alone — "a holdover starts today and is billed as
+ * it always was" — so on 20 December, with eighteen leases ticked and lot 27
+ * filed on the arrangement they had, the sentence said "January 2027 bills
+ * $9,765.54" and the January run raised $10,165.54: the holdover's window
+ * covers all of January and January is ours. Now a holdover with a rent is
+ * on the first month's bill whenever its window covers it, named by lot
+ * (small-N: name the household, never a bare count) and kept apart from the
+ * leases, because no fee bills for it.
+ *
+ * The first month is the earliest month anybody's window reaches that is
+ * OURS (firstBillablePeriod — a holdover filed on 20 December covers
+ * December, which the seller collected). When every window that starts in
+ * that month starts on the 1st the figure is the whole month; otherwise it
+ * is a part month and says so rather than quoting a number the run will not
+ * raise. Rows with no rent are not billed at all and are not counted.
  */
-function firstBilledMonth(plan: OnboardPlan, feePerSignedLot: number): string | null {
-  const signed = plan.toFile.filter((r) => r.signedNewLease && r.rent != null && r.agreementStartsOn);
-  if (signed.length === 0) return null;
-  const earliest = signed.map((r) => r.agreementStartsOn!).sort()[0];
-  const month = earliest.slice(0, 7);
-  // Only the leases that START in the first month are on its bill; one dated
-  // for the month after is simply not there yet.
-  const inMonth = signed.filter((r) => r.agreementStartsOn!.slice(0, 7) === month);
-  if (!inMonth.every((r) => r.agreementStartsOn!.endsWith("-01"))) {
-    return `from ${dayInWords(earliest)}, so ${prettyMonth(month)} bills a part month`;
+function firstBilledMonth(
+  plan: OnboardPlan,
+  feePerSignedLot: number,
+  window: { todayISO: string; cutoverDate: string | null } | null,
+): string | null {
+  const signed = plan.toFile
+    .filter((r) => r.signedNewLease && r.rent != null && r.agreementStartsOn)
+    .map((r) => ({ lotNumber: r.lotNumber, rent: r.rent!, start: r.agreementStartsOn! }));
+  // A holdover's window starts where the ledger's claim on them starts —
+  // buildTenant's own rule (holdoverWindowStart), asked, never copied.
+  const holdovers = window
+    ? plan.toFile
+        .filter((r) => !r.signedNewLease && r.rent != null)
+        .map((r) => ({
+          lotNumber: r.lotNumber,
+          rent: r.rent!,
+          start: holdoverWindowStart(r.movedInOn, window.todayISO, window.cutoverDate),
+        }))
+    : [];
+  if (signed.length === 0 && holdovers.length === 0) return null;
+
+  const earliest = [...signed, ...holdovers].map((r) => r.start).sort()[0];
+  const firstOurs = window ? firstBillablePeriod(window.cutoverDate) : null;
+  const month = firstOurs && earliest.slice(0, 7) < firstOurs ? firstOurs : earliest.slice(0, 7);
+  const monthStart = `${month}-01`;
+  // On the first month's bill: every window that starts in it, and every
+  // one already running when it begins. One dated for the month after is
+  // simply not there yet.
+  const covers = (start: string) => start < monthStart || start.slice(0, 7) === month;
+  const signedIn = signed.filter((r) => covers(r.start));
+  const holdIn = holdovers.filter((r) => covers(r.start));
+  const from = earliest >= monthStart ? earliest : monthStart;
+  const partial = [...signedIn, ...holdIn].some((r) => r.start.slice(0, 7) === month && !r.start.endsWith("-01"));
+  if (partial) {
+    return `from ${dayInWords(from)}, so ${prettyMonth(month)} bills a part month`;
   }
-  const rent = inMonth.reduce((s, r) => s + (r.rent ?? 0), 0);
-  const total = Math.round((rent + feePerSignedLot * inMonth.length) * 100) / 100;
-  return `from ${dayInWords(earliest)} — ${prettyMonth(month)} bills ${money(total)}`;
+  const signedTotal = Math.round(
+    (signedIn.reduce((s, r) => s + r.rent, 0) + feePerSignedLot * signedIn.length) * 100,
+  ) / 100;
+  const holdTotal = Math.round(holdIn.reduce((s, r) => s + r.rent, 0) * 100) / 100;
+  const total = Math.round((signedTotal + holdTotal) * 100) / 100;
+  const lots = holdIn.map((r) => r.lotNumber);
+  const named = lots.length === 1
+    ? `lot ${lots[0]}`
+    : `lots ${lots.slice(0, -1).join(", ")} and ${lots[lots.length - 1]}`;
+  if (holdIn.length === 0) {
+    return `from ${dayInWords(from)} — ${prettyMonth(month)} bills ${money(total)}`;
+  }
+  if (signedIn.length === 0) {
+    return `from ${dayInWords(from)} — ${prettyMonth(month)} bills ${money(total)} for ${named} on the arrangement they had`;
+  }
+  return (
+    `from ${dayInWords(from)} — ${prettyMonth(month)} bills ${money(total)} ` +
+    `(${money(signedTotal)} on the new ${signedIn.length === 1 ? "lease" : "leases"} + ${money(holdTotal)} for ${named} on the arrangement they had)`
+  );
 }
 
 /**

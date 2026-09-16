@@ -7,6 +7,7 @@ import {
   AGREEMENT_LENGTHS, offeredAgreementLengths, agreementMonthsFor, chooseAgreementLength,
   lengthInWords, lengthsInWords, lengthAdjective, lengthNotOfferedText,
   renewalLeadDays, RENEWAL_LEAD_CAP_DAYS, agreementSpanWords, agreementSeasonEnd,
+  successorStatus, latestSeqByChain, hasLaterLink, perTermWords, backfillWords,
   type AgreementTerms, type PriorAgreement, type RenewalRefusal, type PlannedRenewal,
 } from "./agreement-helpers";
 import { parkOpenFor, type ParkSeason } from "@/lib/parks";
@@ -282,6 +283,89 @@ describe("renewing", () => {
       .toBe("not_yet_renewable");
   });
 
+  // -------------------------------------------------------------------------
+  // THE RULE IS ON THE PLAN. A lapsed agreement is planned consecutively from
+  // its own end (the household never left; the successor covers the days
+  // since). What cannot be written is a successor that is OVER before it
+  // exists. The old guard read `!continuesChain && todayISO > prior.end &&
+  // startFrom === undefined` — self-contradictory, so `already_ended` could
+  // never return: on 17 June it planned Feb 1 – Mar 1 as ok, the button wrote
+  // it, and the card re-listed the lot every morning one month further on.
+  // -------------------------------------------------------------------------
+  describe("already_ended is judged on the plan's own end", () => {
+    const jan: PriorAgreement = { ...first, start: "2027-01-01", end: "2027-02-01" };
+    const haven: AgreementTerms = { maxAgreementMonths: 6, defaultAgreementMonths: 1, depositAmount: null };
+
+    it("a short lapse backfills consecutively — 16 February plans Feb 1 to Mar 1", () => {
+      const r = planRenewal(jan, haven, "2027-02-16", 1);
+      expect(r).toMatchObject({ ok: true, start: "2027-02-01", end: "2027-03-01", continuesChain: true });
+    });
+
+    it("refuses a plan that would be over already, with and without a start date", () => {
+      // 17 June: one month from 1 February ended 1 March.
+      expect(planRenewal(jan, haven, "2027-06-17", 1).refusal).toBe("already_ended");
+      expect(planRenewal(jan, haven, "2027-06-17", 3).refusal).toBe("already_ended");
+      // A start date passed in changes nothing about the rule: from 1 March,
+      // one month is over by 1 April.
+      expect(planRenewal(jan, haven, "2027-06-17", 1, "2027-03-01").refusal).toBe("already_ended");
+      // And the boundary: a plan ending TODAY is over — checkout was this morning.
+      expect(planRenewal(jan, haven, "2027-03-01", 1).refusal).toBe("already_ended");
+      expect(planRenewal(jan, haven, "2027-02-28", 1).ok).toBe(true);
+    });
+
+    it("but a length that reaches past today is still written — six months from 1 February reaches August", () => {
+      const r = planRenewal(jan, haven, "2027-06-17", 6);
+      expect(r).toMatchObject({ ok: true, start: "2027-02-01", end: "2027-08-01", continuesChain: true, nextSeq: 2 });
+      // A fresh start from a later date is judged the same way.
+      const fresh = planRenewal(jan, haven, "2027-06-17", 1, "2027-07-01");
+      expect(fresh).toMatchObject({ ok: true, start: "2027-07-01", end: "2027-08-01", continuesChain: false, nextSeq: 1 });
+    });
+
+    it("the sentence instructs no door the card lacks, and claims no duration", () => {
+      const t = renewalRefusalText("already_ended", "1", [1, 3, 6]);
+      expect(t).not.toMatch(/Start a new one/);
+      expect(t).toMatch(/nothing to write from here/);
+      // One day past the only length a park writes is not "so long ago"; the
+      // true claim is about the longest length, run from the end.
+      expect(t).not.toMatch(/so long ago/);
+      expect(t).toBe(
+        "That agreement has run out, and even the longest agreement this park writes, run from its end, would be over already — there's nothing to write from here.",
+      );
+    });
+
+    describe("backfillWords — the money fact of a successor written from the past", () => {
+      it("names the months from the plan's start through today's, in words", () => {
+        expect(backfillWords("2027-02-01", "2027-06-17")).toBe(
+          "It reaches back over February 2027 through June 2027, which nothing has billed yet.",
+        );
+        expect(backfillWords("2027-02-01", "2027-03-01")).toBe(
+          "It reaches back over February 2027 through March 2027, which nothing has billed yet.",
+        );
+      });
+
+      it("one month when the lapse is inside the month the plan starts", () => {
+        expect(backfillWords("2027-02-01", "2027-02-02")).toBe("It reaches back over February 2027, which nothing has billed yet.");
+        expect(backfillWords("2027-02-15", "2027-02-28")).toBe("It reaches back over February 2027, which nothing has billed yet.");
+      });
+
+      it("nothing for a successor that starts today or later — no fact to state", () => {
+        expect(backfillWords("2027-02-01", "2027-02-01")).toBeNull();
+        expect(backfillWords("2027-02-01", "2027-01-20")).toBeNull();
+      });
+
+      it("never an ISO month", () => {
+        expect(backfillWords("2027-02-01", "2027-06-17")).not.toMatch(/\d{4}-\d{2}/);
+      });
+    });
+
+    it("the dead clause is gone from the source", () => {
+      const src = readFileSync(fileURLToPath(new URL("./agreement-helpers.ts", import.meta.url)), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+      expect(src).not.toMatch(/startFrom === undefined/);
+      expect(src).toMatch(/if \(end <= todayISO\) \{\s*return \{ ok: false, refusal: "already_ended" \};/);
+    });
+  });
+
   it("gives every refusal a sentence", () => {
     const all: Record<RenewalRefusal, true> = {
       no_cap: true, not_offered: true, already_ended: true, not_yet_renewable: true, season_closed: true, inherited: true,
@@ -491,5 +575,47 @@ describe("daysBetween", () => {
         }
       }
     }
+  });
+});
+
+describe("the successor's status — one rule for both doors", () => {
+  it("approved until it starts, active from its first morning", () => {
+    expect(successorStatus("2027-02-01", "2027-01-20")).toBe("approved");
+    expect(successorStatus("2027-02-01", "2027-02-01")).toBe("active");
+    // A lapsed agreement backfilled from its own end has already started.
+    expect(successorStatus("2027-02-01", "2027-02-16")).toBe("active");
+  });
+});
+
+describe("a chain's later links — the predicate the owner's list and the nightly share", () => {
+  const rows = [
+    { agreement_chain_id: "chain-a", agreement_seq: 1 },
+    { agreement_chain_id: "chain-a", agreement_seq: 2 },
+    { agreement_chain_id: "chain-b", agreement_seq: 1 },
+    { agreement_chain_id: null, agreement_seq: 1 },
+  ];
+  it("knows which chains already have their next agreement written", () => {
+    const maxSeq = latestSeqByChain(rows);
+    expect(maxSeq.get("chain-a")).toBe(2);
+    expect(maxSeq.get("chain-b")).toBe(1);
+    expect(hasLaterLink(rows[0], maxSeq)).toBe(true);
+    expect(hasLaterLink(rows[1], maxSeq)).toBe(false);
+    expect(hasLaterLink(rows[2], maxSeq)).toBe(false);
+    // No chain id: nothing to compare against.
+    expect(hasLaterLink(rows[3], maxSeq)).toBe(false);
+    // A missing seq reads as 1.
+    expect(hasLaterLink({ agreement_chain_id: "chain-a" }, maxSeq)).toBe(true);
+  });
+});
+
+describe("the words after a rent figure", () => {
+  it("come from the term, and an unknown term gets none", () => {
+    expect(perTermWords("monthly")).toBe("a month");
+    expect(perTermWords("weekly")).toBe("a week");
+    expect(perTermWords("nightly")).toBe("a night");
+    expect(perTermWords("annual")).toBe("a year");
+    expect(perTermWords("seasonal")).toBe("for the season");
+    expect(perTermWords(null)).toBe("");
+    expect(perTermWords("quarterly")).toBe("");
   });
 });

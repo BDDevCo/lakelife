@@ -526,12 +526,27 @@ describe("bills that don't come every month", () => {
    * nags twelve times a year about a bill that arrives once.
    */
 
-  it("gives a monthly bill the month", () => {
+  it("gives a monthly bill the month as its key, and its DUE DAY as its name", () => {
     const p = billPeriod("monthly", null, 5, "2026-08-14");
     expect(p.key).toBe("2026-08");
-    expect(p.label).toBe("August 2026");
+    // NOT "August 2026": the sewer bill dated the 5th is for the previous
+    // month's service (the park's own note), so naming the bill by the month
+    // it is due in called December's bill "January". The due day is the one
+    // fact the schedule holds.
+    expect(p.label).toBe("(bill due August 5)");
     expect(p.dueOn).toBe("2026-08-05");
     expect([p.from, p.to]).toEqual(["2026-08-01", "2026-09-01"]);
+  });
+
+  it("names a quarterly bill by its due day too, and a yearly one by its due date with the year", () => {
+    expect(billPeriod("quarterly", 2, 10, "2026-03-31").label).toBe("(bill due February 10)");
+    // "2027" about the bill due 10 November 2027 was the seller's 2026 tax
+    // under the buyer's year (Indiana bills in arrears). The date, not a year.
+    expect(billPeriod("annual", 11, 10, "2027-11-11").label).toBe("due November 10, 2027");
+    for (const p of [billPeriod("monthly", null, 5, "2026-08-14"), billPeriod("quarterly", 2, 10, "2026-03-31"), billPeriod("annual", 11, 10, "2027-11-11")]) {
+      expect(p.label).not.toMatch(/\d{4}-\d{2}/);
+      expect(p.label).not.toMatch(/^(January|February|March|April|May|June|July|August|September|October|November|December) \d{4}$/);
+    }
   });
 
   it("rolls a monthly window over the year end", () => {
@@ -548,7 +563,7 @@ describe("bills that don't come every month", () => {
     expect(march.key).toBe("2026");
     expect(nov.key).toBe("2026");
     expect(dec.key).toBe("2026");
-    expect(nov.label).toBe("2026");
+    expect(nov.label).toBe("due November 10, 2026");
     expect(nov.dueOn).toBe("2026-11-10");
     // ...and the window is the whole year, so a bill entered in December
     // still answers November's reminder.

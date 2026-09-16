@@ -1,26 +1,26 @@
 "use server";
 
+import { feesFor, unbilledCostShares } from "./charge-edits";
 import { rentForPeriod, lastDayOfMonth } from "./rerate-helpers";
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
-import { buildStatement, type StatementFee } from "./statement-helpers";
-import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
+import { buildStatement } from "./statement-helpers";
 import { feesForTenancy } from "./fee-helpers";
 import {
   planRun, toRows, summarise, currentPeriod, prettyMonth, shiftMonth, nothingToBillReason,
-  handKeyedRefusal, PROCESSOR_ONLY, paymentAmountRefusal, withOnAccount,
+  handKeyedRefusal, PROCESSOR_ONLY, paymentAmountRefusal, withOnAccount, onAccountClause,
   onAccountKey, splitSiblingKey, reversalSentence, type ReopenedLine,
   type Charge, type LedgerRow, type LedgerSummary, type RunPlan, type HandKeyedMethod, dueDayFor,
 } from "./ledger-helpers";
 import {
-  planSettlement, plannedByKey, allocatedTotal, settleOnAccount, describeSettlement,
+  planSettlement, plannedByKey, allocatedTotal, settleOnAccount, describeSettlement, splitApplied,
   onAccountSources, openBillsFor, money,
   type AllocationLine,
 } from "@/lib/allocations";
-import { preCutoverRefusal } from "@/lib/billing-start";
+import { preCutoverRefusal, notYetBillableRefusal } from "@/lib/billing-start";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { giveRefund } from "@/lib/charge-gate";
 import { remainingRefundable, refundRefusal, refundAmountRefusal, refundCents, refundSignal } from "./refund-helpers";
@@ -28,6 +28,7 @@ import { sendEmail } from "@/lib/email";
 import { html } from "@/lib/html-safe";
 import { receiptBody, type ReceiptLines } from "./receipt-helpers";
 import { whyItDidntGo } from "./reminder-helpers";
+import { dayInWords } from "./park-helpers";
 // The ENGINE, not the action: runCharges has already asserted membership
 // twenty lines up, so going back through the authorized wrapper would just
 // re-ask the same question.
@@ -73,101 +74,8 @@ function paymentDateProblem(receivedOn: string, todayISO: string): string | null
   return null;
 }
 
-// A FAILED FEE READ IS NOT A PARK WITH NO FEES. Swallowed, it drops the
-// monthly fees off every bill the run raises — nineteen households under-billed,
-// with nothing on any screen to say so. The error travels back to the caller,
-// which is an action and can say it in a sentence.
-async function feesFor(
-  admin: ReturnType<typeof createServiceClient>,
-  parkId: string,
-): Promise<{ fees: StatementFee[]; error: unknown }> {
-  const { data, error } = await admin
-    .from("park_fees")
-    .select("label, amount, cadence, applies_to, active")
-    .eq("park_id", parkId)
-    .eq("active", true);
-  if (error) return { fees: [], error };
-  return {
-    fees: (data ?? [])
-      .filter((f) => ["all_lots", "long_term"].includes(f.applies_to as string))
-      .map((f) => ({
-        label: f.label as string,
-        amount: Number(f.amount),
-        cadence: f.cadence as string,
-      })),
-    error: null,
-  };
-}
-
-
-/**
- * UNBILLED COST SHARES, per tenancy.
- *
- * `lot_cost_shares` had exactly two references in the codebase — one insert
- * and one row count — so a water bill the owner split across nineteen
- * households reached none of them. This is the reader it never had.
- *
- * A share is billed ONCE: the run stamps `billed_on_charge_id`, and only a
- * void releases it again.
- */
-async function unbilledCostShares(
-  admin: ReturnType<typeof createServiceClient>,
-  parkId: string,
-  reservationIds: string[],
-): Promise<{
-  shares: Map<string, Array<{ id: string; label: string; amount: number; basis: string }>>;
-  error: unknown;
-}> {
-  const out = new Map<string, Array<{ id: string; label: string; amount: number; basis: string }>>();
-  if (reservationIds.length === 0) return { shares: out, error: null };
-
-  // A FAILED READ HERE IS NOT "NOTHING TO SPLIT". Swallowed, the water the
-  // owner has already paid for silently misses this month's bills — the exact
-  // failure this reader was written to end. Both reads report back instead.
-  const sharesRes = await admin
-    .from("lot_cost_shares")
-    .select("id, cost_id, reservation_id, amount, basis")
-    .in("reservation_id", reservationIds)
-    .is("billed_on_charge_id", null);
-  if (sharesRes.error) return { shares: out, error: sharesRes.error };
-  const shares = sharesRes.data;
-  if (!shares?.length) return { shares: out, error: null };
-
-  const costIds = [...new Set(shares.map((s) => s.cost_id as string))];
-  const costsRes = await admin
-    .from("park_costs")
-    .select("id, park_id, category, period_start, period_end")
-    .in("id", costIds)
-    .eq("park_id", parkId);          // never bill another park's water
-  if (costsRes.error) return { shares: out, error: costsRes.error };
-  const costById = new Map((costsRes.data ?? []).map((c) => [c.id as string, c]));
-
-  for (const sh of shares) {
-    const cost = costById.get(sh.cost_id as string);
-    if (!cost) continue;             // a cost from elsewhere, or since removed
-    // THE SAME WORDS THE OWNER SEES, from the one label map.
-    //
-    // This built the label by de-underscoring the raw enum, so a resident's
-    // bill read "grounds — your share" while the costs screen called it
-    // "Grounds & mowing", and "unit electric — your share" — which means
-    // nothing to anybody — against "Electric on a home you own". A bill line
-    // is the most-read sentence in the whole product and it was the only one
-    // written by a regex.
-    const cat = String(cost.category ?? "other") as CostCategory;
-    const label = `${COST_CATEGORY_LABEL[cat] ?? "Cost"} — your share`;
-    const list = out.get(sh.reservation_id as string) ?? [];
-    list.push({
-      id: sh.id as string,
-      label,
-      amount: Number(sh.amount ?? 0),
-      basis: cost.period_start && cost.period_end
-        ? `for ${cost.period_start} to ${cost.period_end}`
-        : "as allocated",
-    });
-    out.set(sh.reservation_id as string, list);
-  }
-  return { shares: out, error: null };
-}
+// feesFor and unbilledCostShares live in ./charge-edits now — the run, the
+// signing door and the move-out door assemble a statement the SAME way.
 
 /** What a run WOULD do. Nothing is written. */
 export async function previewChargeRun(
@@ -203,6 +111,11 @@ export async function previewChargeRun(
   const tooEarly = preCutoverRefusal(
     month, (park?.cutover_date as string | null) ?? null, prettyMonth);
   if (tooEarly) return { ok: false, error: tooEarly };
+  // AND NOT A MONTH THAT HAS NOT STARTED. The rent screen hides the forward
+  // link past the current month; a typed `?month=` reached this door with
+  // no rule behind it and raised February on 28 January.
+  const tooSoon = notYetBillableRefusal(month, todayLakeDate(), prettyMonth);
+  if (tooSoon) return { ok: false, error: tooSoon };
 
   const lotsRes = await admin
     .from("park_lots")
@@ -347,7 +260,18 @@ export async function previewChargeRun(
     ],
     srcRes.sources,
   );
-  return { ok: true, plan: withOnAccount(plan, plannedByKey(allocations).byKey) };
+  // THE SAME PARTITION THE RUN MAKES (splitApplied): a planned dollar keyed
+  // on a bill being raised is that bill's; one keyed on an older open bill
+  // is named with its month. The older ones used to be planned here and
+  // discarded, so the sentence he approved from said "$57.47 of it already
+  // on account" while the run moved $600 — January first, then February.
+  const olderMonth = new Map(olderRes.bills.map((b) => [b.key, b.periodMonth]));
+  const parted = splitApplied(
+    plannedByKey(allocations).byKey,
+    new Set(plan.toBill.map((b) => b.reservationId)),
+    (key) => olderMonth.get(key),
+  );
+  return { ok: true, plan: withOnAccount(plan, plannedByKey(allocations).byKey, parted.toOlderBills) };
 }
 
 /**
@@ -413,6 +337,10 @@ export async function runCharges(
   const tooEarly = preCutoverRefusal(
     month, (park?.cutover_date as string | null) ?? null, prettyMonth);
   if (tooEarly) return { ok: false, error: tooEarly };
+  // The same rule as the preview, checked again here rather than trusted:
+  // a month that has not started is not raised early by a typed URL.
+  const tooSoon = notYetBillableRefusal(month, todayLakeDate(), prettyMonth);
+  if (tooSoon) return { ok: false, error: tooSoon };
 
   const lotsRes = await admin
     .from("park_lots")
@@ -680,7 +608,7 @@ export async function runCharges(
     .map((c) => (stayById.get(c.reservation_id as string)?.renter_id as string | null) ?? "")
     .filter(Boolean);
   let fromOnAccount = 0;
-  let toOlderBills = 0;
+  let toOlderBills: { periodMonth: string; amount: number }[] = [];
   const applyProblems: string[] = [];
   const settled = await settleOnAccount(admin, parkId, billedHouseholds, "run", null);
   if ("error" in settled) {
@@ -690,13 +618,12 @@ export async function runCharges(
       "the bills stand, the money stays on account, and you can apply it from \"Money not against a bill\".",
     );
   } else {
-    for (const [chargeId, amount] of settled.applied) {
-      if (keptIds.has(chargeId)) fromOnAccount += Math.round(amount * 100);
-      else toOlderBills += Math.round(amount * 100);
-    }
-    fromOnAccount /= 100;
-    toOlderBills /= 100;
     const monthOf = new Map(settled.bills.map((b) => [b.key, b.periodMonth]));
+    // THE SAME PARTITION THE PREVIEW MADE (splitApplied): a dollar on a bill
+    // raised this morning, or on an older open bill — named with its month.
+    const parted = splitApplied(settled.applied, keptIds, (key) => monthOf.get(key));
+    fromOnAccount = parted.fromOnAccount;
+    toOlderBills = parted.toOlderBills;
     for (const f of settled.failed) {
       const lot = lotOfCharge.get(f.key);
       applyProblems.push(
@@ -715,11 +642,12 @@ export async function runCharges(
     total,
     signal:
       `${keptRows.length} ${keptRows.length === 1 ? "bill" : "bills"} raised for ${prettyMonth(month)} — ${money(total)}` +
-      (fromOnAccount > 0 ? `, ${money(fromOnAccount)} of it settled from money on account` : "") +
+      // WHERE MONEY ON ACCOUNT WENT — older open months first (R1), then the
+      // bills just raised — in the ONE clause the preview used, so the
+      // figure he approved from is the figure he reads now: "$1,085.06 of
+      // money on account went against January 2027 and February 2027".
+      onAccountClause(fromOnAccount, toOlderBills, month, { preview: "settled from money on account", older: "went" }) +
       "." +
-      // OLDER MONTHS SETTLED IN THE SAME PASS (R1): named, or the owner reads
-      // "$542.53 of it settled" and finds January paid and February not.
-      (toOlderBills > 0 ? ` ${money(toOlderBills)} of money on account went against older open bills first.` : "") +
       (sharesBilled > 0
         ? ` ${sharesBilled} cost ${sharesBilled === 1 ? "share" : "shares"} you'd allocated went onto those bills.`
         : "") +
@@ -852,9 +780,9 @@ export async function recordPayment(
     return {
       ok: false,
       error:
-        `That bill only has $${against.toFixed(2)} left on it and isn't tied to a household, ` +
-        `so the other $${onAccount.toFixed(2)} can't be held on account here. Record ` +
-        `$${against.toFixed(2)} against it, and put the rest under "Money not against a bill" ` +
+        `That bill only has ${money(against)} left on it and isn't tied to a household, ` +
+        `so the other ${money(onAccount)} can't be held on account here. Record ` +
+        `${money(against)} against it, and put the rest under "Money not against a bill" ` +
         `for the household it came from.`,
     };
   }
@@ -908,8 +836,8 @@ export async function recordPayment(
       // "The bill took $0.00 of $57.47" is true and reads wrong. Say which
       // shape this is.
       note: againstCents > 0
-        ? `Paid over the ${prettyMonth(String(charge.period_month ?? ""))} bill — the bill took $${against.toFixed(2)} of $${amount.toFixed(2)}.`
-        : `The ${prettyMonth(String(charge.period_month ?? ""))} bill was already settled, so all $${amount.toFixed(2)} is on account.`,
+        ? `Paid over the ${prettyMonth(String(charge.period_month ?? ""))} bill — the bill took ${money(against)} of ${money(amount)}.`
+        : `The ${prettyMonth(String(charge.period_month ?? ""))} bill was already settled, so all ${money(amount)} is on account.`,
       // The slip serial rides on the bill's row when there is one. When there
       // is not, this is the only row, and the serial was being dropped.
       ...(againstCents === 0 ? { drop_slip_no: dropSlipNo?.trim() || null } : {}),
@@ -951,7 +879,7 @@ export async function recordPayment(
       .update({
         resolved_at: new Date().toISOString(),
         resolution: "matched",
-        resolution_note: `The office confirmed collecting $${onAccount.toFixed(2)}. That bill was already settled, so it was recorded on account.`,
+        resolution_note: `The office confirmed collecting ${money(onAccount)}. That bill was already settled, so it was recorded on account.`,
         resolved_by: await currentUserId(),
       })
       .eq("id", settlesClaimId)
@@ -1005,6 +933,38 @@ export async function recordPayment(
         applyProblem = `${money(missed)} of their money on account couldn't be put against a bill — it stays on account.`;
       }
     }
+  }
+
+  // WHAT THE OFFICE ALREADY HELD THAT IS ON THIS BILL — for the paper, ALL
+  // of it. `fromOnAccount` above is what settleOnAccount applied INSIDE this
+  // call; a bill part-paid from money on account on an EARLIER day ($200 of
+  // a $542.53 January, applied on the 3rd; $342.53 cash keyed on the 6th)
+  // was already in `charge.paid_total`, so nothing was applied today and the
+  // receipt read "Amount $342.53 / Against January rent — $542.53 / nothing
+  // further owing" with no line explaining the difference, on the only copy
+  // the household keeps. Read AFTER the settlement so today's lines are in
+  // it too: the live allocations on this bill from payments that still
+  // stand, the filter park_charge_paid_total applies. Its own variable —
+  // `fromOnAccount` still feeds the balance fallback below (where the
+  // pre-insert paid_total already holds the earlier lines) and the toast's
+  // "went against it too", which is about THIS act. The money is recorded,
+  // so a failed read degrades to the same-call figure and is logged.
+  let onBillFromAccount = fromOnAccount;
+  const onBillRes = await admin
+    .from("park_payment_allocations")
+    .select("amount, park_payments!inner(reversed_at, returned_at)")
+    .eq("charge_id", chargeId)
+    .is("removed_at", null);
+  if (onBillRes.error) {
+    console.error("[read failed] what was already on this bill from money on account:", onBillRes.error);
+  } else {
+    onBillFromAccount = (onBillRes.data ?? [])
+      .filter((a) => {
+        const p = Array.isArray(a.park_payments) ? a.park_payments[0] : a.park_payments;
+        const pay = p as { reversed_at?: unknown; returned_at?: unknown } | null;
+        return pay != null && pay.reversed_at == null && pay.returned_at == null;
+      })
+      .reduce((t, a) => t + cents(Number(a.amount ?? 0)), 0) / 100;
   }
 
   // WHAT OF THE EXCESS IS STILL HELD — the database's answer, read after the
@@ -1113,9 +1073,10 @@ export async function recordPayment(
         }
       : null,
     // Money of theirs the office was already holding, put against this bill
-    // beside what they handed over today. On the paper, or "still owing" is
+    // beside what they handed over today OR on an earlier day. On the paper,
+    // or "nothing further owing" on a $542.53 bill for a $342.53 payment is
     // a figure the household cannot reconcile to what they paid.
-    fromOnAccount: fromOnAccount > 0 ? fromOnAccount : null,
+    fromOnAccount: onBillFromAccount > 0 ? onBillFromAccount : null,
     confirmUrl: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/paid/${confirmToken}`,
   };
 
@@ -1184,7 +1145,7 @@ export async function emailReceipt(
   const body = receiptBody(receipt);
   const res = await sendEmail({
     to,
-    subject: `${receipt.parkName} — receipt for $${receipt.amount.toFixed(2)}`,
+    subject: `${receipt.parkName} — receipt for ${money(receipt.amount)}`,
     text: body,
     html: html`<pre style="font:14px/1.6 ui-monospace,Menlo,monospace;white-space:pre-wrap">${body}</pre>`,
   });
@@ -1810,7 +1771,7 @@ export async function reversePayment(
     // idempotency_key: how the other half of a split is found. A select
     // without it reads `undefined`, finds no sibling, and reverses half of
     // one cheque without a word — the shape this round fixed.
-    .select("id, amount, receipt_no, reversed_at, park_id, kind, charge_id, method, idempotency_key")
+    .select("id, amount, receipt_no, reversed_at, park_id, kind, charge_id, method, idempotency_key, returned_on, returned_amount")
     .eq("id", paymentId)
     .eq("park_id", parkId)
     .maybeSingle();
@@ -1844,24 +1805,27 @@ export async function reversePayment(
     };
   }
 
-  // A DEPOSIT ALREADY GIVEN BACK CANNOT BE UNSAID. Reversing means "this never
-  // happened", and the money demonstrably did go back out — leaving a
+  // MONEY ALREADY HANDED BACK CANNOT BE UNSAID. Reversing means "this never
+  // happened", and the money demonstrably did go back out across the window
+  // — a deposit returned (0102), rent on account handed back (0168). A
   // returned_amount on a reversed row would be the ledger holding two
-  // contradictory facts about the same cash.
-  if (pay.kind === "deposit") {
-    const depRes = await admin
-      .from("park_payments").select("returned_on").eq("id", paymentId).maybeSingle();
-    // FAILS OPEN IF SWALLOWED. `dep?.returned_on` on a failed read is
-    // undefined, the guard falls through, and a deposit that has demonstrably
-    // gone back to the household gets reversed — the ledger then holding two
-    // contradictory facts about the same cash, which is what this refuses.
-    if (depRes.error) {
-      return { ok: false, error: readFailedMessage("whether that deposit was already returned", depRes.error, { money: true }) };
-    }
-    const dep = depRes.data;
-    if (dep?.returned_on) {
-      return { ok: false, error: "That deposit was already returned — reversing it would contradict the record." };
-    }
+  // contradictory facts about the same cash; the database refuses it too.
+  // Read off the row itself, in the same select, so a failed read refuses
+  // above rather than falling through here.
+  //
+  // AND NO DOOR OUT IS NAMED, BECAUSE THERE IS NONE YET. A cheque that
+  // bounces AFTER part of it was handed back has no exit: a hand-back is
+  // recorded once and nothing un-records it (0168 says so in its own
+  // header). The sentence says that plainly — the office must not go
+  // looking for a button, and "try again" would never come true. Whether
+  // a hand-back gets its own correction-with-a-reason is the owner's call.
+  if (pay.returned_on) {
+    return {
+      ok: false,
+      error: pay.kind === "deposit"
+        ? "That deposit was already returned — reversing it would contradict the record."
+        : `The record shows ${money(Number(pay.returned_amount ?? 0))} of that handed back to them on ${dayInWords(String(pay.returned_on))} — reversing it would contradict the record, and there's no way yet to undo a hand-back.`,
+    };
   }
 
   // THE OTHER HALF OF A SPLIT CHEQUE. recordPayment writes $600 on a
@@ -1882,7 +1846,7 @@ export async function reversePayment(
   if (sibKey) {
     const sibRes = await admin
       .from("park_payments")
-      .select("id, amount, charge_id")
+      .select("id, amount, charge_id, returned_on, returned_amount")
       .eq("idempotency_key", sibKey)
       .eq("park_id", parkId)
       .is("reversed_at", null)
@@ -1891,6 +1855,18 @@ export async function reversePayment(
       return { ok: false, error: readFailedMessage("the other half of that payment", sibRes.error, { money: true }) };
     }
     if (sibRes.data) {
+      // The other half handed back (0168) takes the whole payment with it:
+      // one statement reverses both rows, the database refuses the
+      // handed-back one, and "try again" would never become true. "The
+      // payment", never "the cheque" — recordPayment writes the same two
+      // rows for a $600 cash split, and a method word hardcoded here was
+      // the lie J's fix removed from the confirm one screen over.
+      if (sibRes.data.returned_on) {
+        return {
+          ok: false,
+          error: `The record shows ${money(Number(sibRes.data.returned_amount ?? 0))} of the on-account half of that payment handed back to them on ${dayInWords(String(sibRes.data.returned_on))} — reversing the payment would contradict the record, and there's no way yet to undo a hand-back.`,
+        };
+      }
       sibling = {
         id: sibRes.data.id as string,
         amount: Number(sibRes.data.amount ?? 0),
@@ -2011,6 +1987,8 @@ export interface RefundableState {
   fee: number;
   /** Null when a refund is possible; otherwise the sentence saying why not. */
   refusal: string | null;
+  /** The rail the money took — 'card' or 'ach' — so the sentence names it. */
+  method: string | null;
 }
 
 /**
@@ -2095,6 +2073,7 @@ export async function refundableOn(parkId: string, paymentId: string): Promise<R
       exhausted && allocated > 0
         ? `All of that payment is either against bills (${money(allocated)}) or already gone back — there is nothing unapplied to send.`
         : refusal,
+    method: (pay.method as string | null) ?? null,
   };
 }
 
@@ -2200,7 +2179,7 @@ export async function refundParkPayment(
     // refund, so the money went back once and is recorded once. Saying it
     // failed would invite a third attempt.
     if ((error as { code?: string }).code === "23505") {
-      return { ok: true, signal: `$${(amount + feeAmount).toFixed(2)} is on its way back.` };
+      return { ok: true, signal: `${money(amount + feeAmount)} is on its way back.` };
     }
     // Money left and the ledger did not record it. Recoverable, but only if
     // the reference reaches a person — so it goes in the sentence.
@@ -2213,5 +2192,5 @@ export async function refundParkPayment(
   revalidatePath("/park/rent");
   revalidatePath("/park/today");
   revalidatePath("/park");
-  return { ok: true, signal: refundSignal(amount, feeAmount, Boolean(refRes.data?.charge_id)) };
+  return { ok: true, signal: refundSignal(amount, feeAmount, Boolean(refRes.data?.charge_id), state.method) };
 }

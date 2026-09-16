@@ -10,7 +10,7 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { pendingReRates } from "@/app/park/rerate-actions";
 import { buildStatement, rollUp, statementLine, type StatementFee } from "@/app/park/statement-helpers";
 import { getMyPark, getParkLots, getParkRoll, type ParkUnitView } from "@/app/park/data";
-import { agreementMonthsFor } from "@/app/park/park-helpers";
+import { agreementMonthsFor, agreementSpan } from "@/app/park/park-helpers";
 import { signingRentSeed } from "@/app/park/sign-helpers";
 import { lotFits, fitProblemText, type Lot } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
@@ -301,8 +301,21 @@ export default async function ParkPage() {
    * control is shown and says from when it works. The rent starts from the
    * lot's rate card, the number the lease was written from, else from what
    * they paid before.
+   *
+   * NOT ONCE THEIR OWN SIGNING IS RECORDED. A lease in his hand on
+   * 20 December for 1 January is recorded that day: the holdover is trimmed
+   * to end on 1 January and stays `current` (grandfathered, covering today)
+   * with the signed successor standing behind it as `next`. Judged on
+   * origin alone this row kept offering the control for twelve days, and a
+   * second tap was refused with a sentence about the arrangement ending
+   * ("that's after it, so there's nothing to carry on from") — a household
+   * who HAD signed, told they had not. A holdover whose same household
+   * already holds the next link has signed; 'Withdraw the next agreement'
+   * is the control that row gets. Today's "haven't signed" card is the
+   * other door of this rule (today-actions holdoverLots).
    */
-  const holdover = slipFor?.origin === "grandfathered" ? slipFor : null;
+  const signedAhead = !!r.current && !!r.next && r.current.origin === "grandfathered" && r.next.renterId === r.current.renterId;
+  const holdover = slipFor?.origin === "grandfathered" && !signedAhead ? slipFor : null;
   const rateCard = lotById.get(r.lot.id)?.rates.find((c) => c.term === "monthly")?.amount ?? null;
   /**
    * WHAT A SIGNED AGREEMENT ON THIS LOT IS CHARGED EACH MONTH, by the
@@ -341,6 +354,35 @@ export default async function ParkPage() {
    * this row's to withdraw.
    */
   const nextIsRenewal = !!r.next && (r.current == null ? r.next.origin === "office" : r.next.renterId === r.current.renterId);
+  /**
+   * A FIRST AGREEMENT THE OFFICE FILED AHEAD OF ITS DAY — a signed lease
+   * "Who lives here" or "Someone lives here" filed on 20 December for
+   * 1 January. From filing day to the day it starts the row was `reserved`
+   * with no current link, and every control here is gated on the current
+   * link (Edit, Move out, Gave notice) or on `nextIsRenewal` (Withdraw), so
+   * a wrong rent, a wrong name or a wrong lot typed on the 20th stayed
+   * wrong for twelve days while editTenancy and endTenancy both accepted
+   * the row. Kept SEPARATE from nextIsRenewal on purpose: 'Withdraw the
+   * next agreement' describes a successor, and this is a household's only
+   * record. Distinguishable from an APPROVED APPLICANT — the other shape
+   * wearing 'application' with no current link — by `decided_at`: only
+   * decideApplication stamps it, the public door writes 'applied', and
+   * both office doors leave it null. Un-approving an applicant is not this
+   * screen's to do; correcting the office's own filing is.
+   */
+  const filedByHand = r.current == null && r.next?.origin === "application" && r.next.decidedAt == null ? r.next : null;
+  /** The stay the Edit panel is about: the one covering today, else the one the office filed ahead. */
+  const editable = r.current ?? filedByHand;
+  /**
+   * WHAT THE ROW SAYS THEY ARE ON. "month-to-month" was "paid monthly" —
+   * every 1-, 3- and 6-month lease read as rolling while the Today card
+   * said its agreement ends in twelve days. Only a grandfathered holdover,
+   * or a monthly row at a park with no cap, rolls (agreementSpan).
+   */
+  const span = agreementSpan(
+    r.current ? { term: r.current.term, origin: r.current.origin ?? null, range: r.current.range ?? null } : null,
+    (parkRow?.max_agreement_months as number | null) ?? null,
+  );
   return {
     lotId: r.lot.id,
     lotNumber: r.lot.lotNumber,
@@ -358,14 +400,24 @@ export default async function ParkPage() {
     claimStatus: slipFor?.renterId ? claimStatuses[slipFor.renterId] ?? "none" : null,
     renterEmail: slipFor?.renterId ? contact.get(slipFor.renterId)?.email ?? null : null,
     invitedAt: slipFor?.renterId ? contact.get(slipFor.renterId)?.invitedAt ?? null : null,
-    currentRent: r.current?.quotedAmount ?? null,
-    currentDueDay: r.current?.dueDay ?? null,
-    currentSource: r.current?.amountSource ?? null,
+    // THE EDIT PANEL'S FIELDS come from the stay it edits — the current
+    // link, else the agreement the office filed ahead of its day. The
+    // occupancy fields above stay on `current` alone: the roll must not
+    // say somebody lives on a lot before they do.
+    filedByHandId: filedByHand?.id ?? null,
+    filedByHandRenter: filedByHand ? roll.renterNames.get(filedByHand.renterId) ?? "Renter" : null,
+    currentRent: editable?.quotedAmount ?? null,
+    currentDueDay: editable?.dueDay ?? null,
+    currentSource: editable?.amountSource ?? null,
     // How they pay, for the Edit panel's "Paid" select — the one control
     // that can move a tenancy the monthly run cannot bill onto monthly.
-    currentTerm: r.current?.term ?? null,
+    currentTerm: editable?.term ?? null,
     owedThisMonth: owed.get(r.lot.id) ?? null,
-    expectedMoveOut: r.current?.expectedMoveOut ?? null,
+    // THE NOTICE, from whichever held link carries it (buildRentRoll's
+    // `noticed`) — not `current` alone, which on the 1st is the successor
+    // written in January and carries nothing.
+    expectedMoveOut: r.noticed?.expectedMoveOut ?? null,
+    noticeReservationId: r.noticed?.id ?? null,
     // A countdown is only true for a SHORT stay. A month-to-month tenant's end
     // date is a rolling horizon we write silently (phase 2 design §1h) — it is
     // not a lease end, and "365 nights left" reads like one. Say the honest
@@ -373,10 +425,18 @@ export default async function ParkPage() {
     nightsLeft: r.current && (r.current.term === "nightly" || r.current.term === "weekly")
       ? r.nightsLeft
       : null,
-    rolling: !!r.current && r.current.term !== "nightly" && r.current.term !== "weekly",
+    rolling: span.rolling,
+    // "3-month lease to April 1, 2027" — the agreement's own length and end,
+    // in the Agreements-to-write list's words; null when the row rolls or
+    // counts nights.
+    agreementWords: span.words,
     nextRenter: r.next ? roll.renterNames.get(r.next.renterId) ?? "Renter" : null,
     nextFrom: r.next?.range?.start ?? null,
     nextReservationId: nextIsRenewal ? r.next!.id : null,
+    // The withdrawal's own consequence on this shape: the trimmed holdover
+    // still ends the day the lease began, so withdrawing the lease leaves
+    // the household with a record that ends there. The confirm says so.
+    withdrawUncoversFrom: signedAhead ? r.current!.range?.end ?? null : null,
     signing: holdover
       ? {
           reservationId: holdover.id,
@@ -394,8 +454,6 @@ export default async function ParkPage() {
           holdoverFrom: holdover.range?.start ?? null,
           termMonths,
           feePerMonth: signedFeePerMonth,
-          // A signing may not be recorded before the ledger starts.
-          recordableFrom: cutoverDate && cutoverDate > roll.today ? cutoverDate : null,
         }
       : null,
     pending: r.pending.map((p) => ({

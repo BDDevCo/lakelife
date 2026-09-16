@@ -15,9 +15,10 @@ import { coiRevalidationDue } from "@/app/vendor/onboarding-helpers";
 import { proposeAutopilotDate } from "@/lib/autopilot";
 import { shouldDemote, healBase, isCoolingDown } from "@/lib/lake-standing";
 import { warningDue, isExpired, WAITLIST_WARNING_KIND, expiryActionFor, PROTECTIVE_ESCALATION_KIND } from "@/lib/waitlist";
-import { remindDecision } from "@/lib/extend-stay";
+import { remindDecision, lotWord, renewalRentWords } from "@/lib/extend-stay";
 import { extendViewFor, type ExtendView } from "@/lib/extend-server";
-import { lengthsInWords } from "@/app/park/agreement-helpers";
+import { lengthsInWords, latestSeqByChain, hasLaterLink } from "@/app/park/agreement-helpers";
+import { money } from "@/app/park/ledger-helpers";
 import { longDate } from "@/lib/lake-time";
 import { parseDaterange, type Term } from "@/lib/parks";
 import { rushWindowOpen } from "@/lib/rush";
@@ -4371,7 +4372,16 @@ export async function sendNightlyDigest(results: {
  */
 export async function remindExpiringStays(): Promise<{
   ok: boolean;
+  /** Households a message actually REACHED — a door took it. */
   reminded: number;
+  /**
+   * Households the message reached by NO door — under the notice hold, or a
+   * night both transports refused. Their claim is released (no stamp, no
+   * token), so they are asked again tomorrow; nothing counts as reminded
+   * that nobody heard. One line per run reaches the digest, not one a night
+   * per household.
+   */
+  unreached: number;
   /**
    * Stays inside the lead window the page itself would refuse, COUNTED by the
    * refusal — a household still on the seller's arrangement, a lot already let
@@ -4395,25 +4405,47 @@ export async function remindExpiringStays(): Promise<{
   const skipped: string[] = [];
   const refused = { inherited: 0, lot_taken: 0, no_rate: 0, other: 0 };
 
+  // EVERY live row, stamped or not: the chain map below has to see a
+  // household's later agreement even once that one has been asked in its own
+  // right, and the stamp is judged per row by remindDecision (`alreadySent`).
   const stays = mustRead("the stays coming to an end", await admin
     .from("lot_reservations")
     // ONE string literal — supabase-js types a concatenated select as an error.
-    .select("id, park_lot_id, renter_id, during, term, status, origin, quoted_amount, extended_count, extend_reminded_at")
-    .in("status", ["approved", "active"])
-    .is("extend_reminded_at", null));
+    .select("id, park_lot_id, renter_id, during, term, status, origin, quoted_amount, extended_count, extend_reminded_at, agreement_chain_id, agreement_seq")
+    .in("status", ["approved", "active"]));
+
+  // A CHAIN WITH A LATER LINK ALREADY HAS ITS NEXT AGREEMENT WRITTEN — the
+  // owner's "Agreements to write" predicate, read here too. Without it the
+  // night after a household renewed (by their tap, or the office for them)
+  // the old row was read again and its own successor counted as "lot taken".
+  // Not a refusal, no stamp, no count: they were not refused, they renewed.
+  const maxSeq = latestSeqByChain(stays ?? []);
 
   let reminded = 0;
+  let unreached = 0;
+  // Claims released after a refused send — collapsed into ONE line per run
+  // below: they are asked again tomorrow, and a line a night per household
+  // for a fortnight is the nag the refused counts were built to avoid.
+  let released = 0;
+  const unreachedNotes: string[] = [];
 
   for (const s of stays ?? []) {
     const range = parseDaterange(s.during as string);
     const term = s.term as Term;
+
+    // The cheap first gate, and belt-and-braces: a renewed household is kept
+    // out of the sweep twice more below — the predecessor keeps its stamp
+    // (`alreadySent`), and the loader answers `already_renewed`, which is
+    // `continue`d, not counted. This line spares the renter read and the view
+    // resolution for every household that has already renewed.
+    if (hasLaterLink(s, maxSeq)) continue;
 
     const decision = remindDecision({
       range,
       term,
       status: s.status as string,
       todayISO: today,
-      alreadySent: false, // the query already filtered on the stamp
+      alreadySent: s.extend_reminded_at != null,
       extendedCount: (s.extended_count as number) ?? 0,
     });
     if (decision !== "send" || !range) continue;
@@ -4488,6 +4520,11 @@ export async function remindExpiringStays(): Promise<{
     // household is asked again tomorrow, when the reason may be gone.
     if (!view || view.refusal || !view.newEnd || view.price == null) {
       const why = view?.refusal;
+      // Their own next agreement is already written — not a refusal and not
+      // a count; the chain check above catches the same household when the
+      // successor shares the chain, and this catches a gap renewal that does
+      // not.
+      if (why === "already_renewed") continue;
       if (why === "inherited" || why === "lot_taken" || why === "no_rate") refused[why]++;
       else refused.other++;
       continue;
@@ -4498,15 +4535,23 @@ export async function remindExpiringStays(): Promise<{
     // The STAMP IS THE CLAIM: setting it while it is still null is what makes
     // this exactly-once even if two runs race. If it comes back empty, another
     // run already took this stay.
-    const { data: claimed } = await admin
+    const { data: claimed, error: claimErr } = await admin
       .from("lot_reservations")
       .update({ extend_reminded_at: new Date().toISOString(), extend_token: token })
       .eq("id", s.id as string)
       .is("extend_reminded_at", null)
       .select("id");
+    // A FAILED WRITE IS NOT "ANOTHER RUN TOOK IT". `{ data: null, error }`
+    // read as an empty claim and was skipped without a word — no text, no
+    // token, and nothing in the digest; the household would be asked again
+    // tomorrow only if the write happened to work then.
+    if (claimErr) {
+      console.error(`[write failed] claiming the extend reminder on stay ${s.id}:`, claimErr);
+      skipped.push(`Stay ${s.id}: couldn't mark the reminder as sent, so the extend question wasn't asked — the tenancy still ends ${longDate(range.end)} unless somebody asks by hand.`);
+      continue;
+    }
     if (!claimed || claimed.length === 0) continue;
 
-    reminded++;
     const msg = extendReminderText(view, `${site}/x/${token}`);
     // THE SMS GATE ABOVE IS UNTOUCHED — nobody new is messaged. The email is
     // the second door to the SAME renter, and the park module already treats
@@ -4518,10 +4563,59 @@ export async function remindExpiringStays(): Promise<{
       { phone, email: renter?.email as string | null },
       msg,
     );
-    if (!told.reached && told.note) skipped.push(told.note);
+    // "REMINDED" COUNTED HOUSEHOLDS WE DID NOT REACH, AND THE CLAIM OUTLIVED
+    // THE REFUSED SEND. The stamp is written before the send (the race), and
+    // nothing released it when notify() reached nobody — so under the notice
+    // hold every consenting household's one reminder was consumed on a night
+    // no door was open, and after the hold lifted nobody was ever asked. The
+    // hold is NOT re-checked here: it lives in the two transports and
+    // nowhere else (notice-hold.ts). A refused send is the same case as a
+    // refusal above — no stamp, asked again tomorrow when the reason may be
+    // gone — so the claim is released, guarded on the token so nothing
+    // else's write is clobbered.
+    if (told.reached) {
+      reminded++;
+      continue;
+    }
+    unreached++;
+    const { error: releaseErr } = await admin
+      .from("lot_reservations")
+      .update({ extend_reminded_at: null, extend_token: null })
+      .eq("id", s.id as string)
+      .eq("extend_token", token);
+    if (releaseErr) {
+      // A failed release is a failed write, and rendering it as "asked again
+      // tomorrow" would be a lie: the stamp stands, and this household is out
+      // of the sweep for good unless somebody asks by hand.
+      console.error(`[write failed] releasing the extend reminder on stay ${s.id}:`, releaseErr);
+      skipped.push(
+        `Stay ${s.id}: the message didn't reach the household (${told.note ?? "no door took it"}) and the ` +
+        `reminder couldn't be released, so they will NOT be asked again automatically — the tenancy still ` +
+        `ends ${longDate(range.end)} unless somebody asks by hand.`,
+      );
+      continue;
+    }
+    released++;
+    if (told.note) unreachedNotes.push(told.note);
   }
 
-  return { ok: true, reminded, refused, skipped };
+  if (released > 0) {
+    // The transport's own reason, once — every note this run says the same
+    // thing about a night no door was open.
+    const why = unreachedNotes[0]?.replace(/^Couldn't tell them about [^—]*— /, "") ?? "no door took the message.";
+    // "Tomorrow night" was false on the last night of a lead window — a
+    // household unreached on its end day is `too_late` the next night and
+    // never asked again — and "renews" was false at a park with no cap. The
+    // line is one per run over households on either path, so it says the
+    // true thing about all of them.
+    skipped.push(
+      `${released} household${released === 1 ? "" : "s"} couldn't be told ${released === 1 ? "its" : "their"} ` +
+      `agreement is ending, with the one tap that renews or extends it — ${why} ` +
+      `Nothing was stamped; ${released === 1 ? "it" : "they"} will be asked again the next night the agreement is still running.`,
+    );
+  }
+
+  return { ok: true, reminded, unreached, refused, skipped };
 }
 
 /**
@@ -4537,10 +4631,19 @@ export function extendReminderText(
   view: ExtendView,
   link: string,
 ): { sms: string; subject: string; body: string } {
-  const lot = view.lotNumber ? `site ${view.lotNumber}` : "your site";
+  // "lot" for a household that lives there, "site" for a pad booked by the
+  // night — the noun their lease, their invite and their home page use. The
+  // text said "site 2" to a long-term household whose everything says Lot 2.
+  const noun = lotWord(view.rentalMode);
+  const lot = view.lotNumber ? `${noun} ${view.lotNumber}` : `your ${noun}`;
   const ends = longDate(view.currentEnd);
   const to = longDate(view.newEnd);
-  const price = `$${(view.price ?? 0).toLocaleString()}`;
+  // ONE shape for a money figure (money): the renewal branch below prints
+  // "$500.00" through renewalRentWords, and this branch printed "$500" —
+  // the same rent two ways depending on whether the park caps agreements.
+  // The sweep never sends without a price; an empty string is the honest
+  // fallback if it ever did, never "$0".
+  const forPrice = view.price == null ? "" : ` for ${money(view.price)}`;
 
   if (view.isRenewal) {
     // The lengths the page will offer — the ones the park writes whose dates
@@ -4548,7 +4651,10 @@ export function extendReminderText(
     const lengths = lengthsInWords(
       view.offeredMonths.length ? view.offeredMonths : view.renewMonths != null ? [view.renewMonths] : [],
     );
-    const rent = `${price}${view.term === "monthly" ? " a month" : ""}`;
+    // RENT AND THE FEE BESIDE IT — "$400.00 rent plus the $142.53 Grounds fee
+    // — $542.53 a month" — from the one home the page reads (renewalRentWords),
+    // so the text never quotes an all-in a third short of the bill.
+    const rent = renewalRentWords({ price: view.price, term: view.term, fees: view.monthlyFees });
     const offer = `renew for ${lengths} at ${rent}`;
     // The same gate as the page this links to: a deposit is mentioned only
     // to somebody the park is holding one for. Printed to everyone, it told
@@ -4564,12 +4670,15 @@ export function extendReminderText(
     };
   }
 
+  // The subject reads the same noun as the body: "Your site is booked" sat
+  // over "Your lot 14 is booked" for a long-term household at a park with
+  // no cap.
   return {
-    sms: `LakeLife: your ${lot} is booked through ${ends}. Want to keep it through ${to} for ${price}? One tap: ${link}`,
-    subject: `Your site is booked through ${ends} — keep it through ${to}?`,
+    sms: `LakeLife: your ${lot} is booked through ${ends}. Want to keep it through ${to}${forPrice}? One tap: ${link}`,
+    subject: `Your ${lot} is booked through ${ends} — keep it through ${to}?`,
     body:
       `Your ${lot} is booked through ${ends}.\n\n` +
-      `Want to keep it through ${to} for ${price}?\n\n` +
+      `Want to keep it through ${to}${forPrice}?\n\n` +
       `One tap:\n  ${link}`,
   };
 }

@@ -5,6 +5,7 @@ import { IPaidForm } from "@/components/IPaidForm";
 import { TextOptIn } from "@/components/TextOptIn";
 import { EnableLotBooking } from "@/components/EnableLotBooking";
 import { money } from "@/app/park/ledger-helpers";
+import { longDay } from "@/lib/lake-time";
 
 /**
  * WHAT THE RESIDENT SEES.
@@ -20,7 +21,12 @@ import { money } from "@/app/park/ledger-helpers";
  * collector without anybody deciding to.
  */
 
-/** "3 July 2026" — a date a person reads, never 2026-07-03. */
+/**
+ * "3 July 2026" — a date a person reads, never 2026-07-03. FOR A BARE DATE
+ * ONLY (YYYY-MM-DD): it splits on "-", so a timestamptz such as `reversed_at`
+ * or `returned_at` comes out "Invalid Date". Those go through `longDay` from
+ * lib/lake-time, which parses a timestamp on the lakes' clock.
+ */
 function pretty(iso: string | null): string {
   if (!iso) return "—";
   const [y, m, d] = iso.split("-").map(Number);
@@ -125,7 +131,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
           <p className="mut" style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.55 }}>
             You moved out on {pretty(view.tenancyEnded)}. This page stays here
             while anything is still open between you and the park &mdash;{" "}
-            <strong>anything you still owe, and any deposit still held.</strong>{" "}
+            <strong>anything you still owe, any deposit still held, and any money of yours still on account.</strong>{" "}
             Your receipts stay too &mdash; the last two years are below, and the
             office holds every one of them by receipt number.
           </p>
@@ -373,7 +379,16 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
               </div>
             </>
           ) : (
-            <div className="mut" style={{ fontSize: 13, marginTop: 4 }}>None held.</div>
+            /* NOT "None held." ALONE the week after the office handed $500
+               back across the window. The card said nothing of the return
+               she was waiting on; the stamp on the deposit row is the
+               record, and this reads it. */
+            <div className="mut" style={{ fontSize: 13, marginTop: 4, lineHeight: 1.4 }}>
+              None held.
+              {view.depositReturned && (
+                <> {money(view.depositReturned.amount)} was handed back to you on {longDay(view.depositReturned.on)}.</>
+              )}
+            </div>
           )}
         </div>
         {/* MONEY OF THEIRS STILL ON ACCOUNT. The office has seen this row
@@ -389,7 +404,17 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
             and the figure is what is STILL held, not what she handed over.
             Not "next bills": after the office takes a line back off a bill
             (R3) the money is on account while that bill is open again, and
-            it is that bill, not a next one, the next run puts it against. */}
+            it is that bill, not a next one, the next run puts it against.
+
+            UNTIL THERE IS NO NEXT BILL. Once the tenancy has ended AND the
+            move-out month is billed, nothing further is raised for her —
+            "comes off your bills" promised a bill that will never come, to
+            the one person the money belongs to. The card then says only what
+            is true: the office holds it and nothing more bills. Whether it is
+            owed back to her, or held against something, is the office's to
+            say — not this card's. While the final month is still to be
+            billed the money WILL come off it, so `tenancyEnded` alone is not
+            the test. */}
         {view.onAccount != null && view.onAccount > 0 && (
           <div className="ll-card ll-card-pad" style={{ flex: "1 1 200px" }}>
             <div className="mut" style={{ fontSize: 13 }}>On account</div>
@@ -397,7 +422,9 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
               {money(view.onAccount)}
             </div>
             <div className="mut" style={{ fontSize: 12, lineHeight: 1.4 }}>
-              with the office — it comes off your bills, oldest first
+              {view.tenancyEnded && view.finalMonthBilled
+                ? "with the office — nothing more bills for you"
+                : "with the office — it comes off your bills, oldest first"}
             </div>
           </div>
         )}
@@ -436,11 +463,13 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                   style={{
                     marginLeft: "auto",
                     fontWeight: 700,
-                    // Struck through, not deleted. Their bank statement shows
-                    // the debit AND the reversal; a row that quietly vanished
-                    // from our copy would make us look wrong about their money.
-                    textDecoration: p.bankReturnedOn ? "line-through" : undefined,
-                    opacity: p.bankReturnedOn ? 0.55 : undefined,
+                    // Struck through, not deleted — by EITHER route. Their bank
+                    // statement shows the debit AND the reversal; she holds the
+                    // receipt for the cheque that bounced. A row that quietly
+                    // vanished from our copy would make us look wrong about
+                    // their money.
+                    textDecoration: p.takenBackOn ? "line-through" : undefined,
+                    opacity: p.takenBackOn ? 0.55 : undefined,
                   }}
                 >
                   {money(p.amount)}
@@ -467,10 +496,38 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                     shows the payment and its receipt number. The resident rings
                     the office quoting a receipt for money that is not there.
                     Says what happened and what it means, in that order. */}
-                {p.bankReturnedOn && (
+                {/* `longDay`, not `pretty`: these are timestamps, and pretty()
+                    printed "Invalid Date" for one. */}
+                {p.bankReturnedOn ? (
                   <span style={{ flexBasis: "100%", fontSize: 12, lineHeight: 1.4, color: "var(--danger)" }}>
-                    Your bank sent this payment back on {pretty(p.bankReturnedOn)}, so this
+                    Your bank sent this payment back on {longDay(p.bankReturnedOn)}, so this
                     month is showing as unpaid again.
+                  </span>
+                ) : p.takenBackOn ? (
+                  /* THE OFFICE TOOK IT BACK — a bounced cheque, a number keyed
+                     wrong. Never "your bank": the ledger cannot tell a bounce
+                     from a typo; only the office's reason can, and it is the
+                     same reason /paid/[token] already shows her. Anything the
+                     payment had settled reopened that day (recompute_charge_paid
+                     drops it and its allocations) — said as the EVENT, not as
+                     the state of her bills now: once she has paid January
+                     again another way, "is showing as owed again" is false on
+                     the same screen that shows it paid. */
+                  <span style={{ flexBasis: "100%", fontSize: 12, lineHeight: 1.4, color: "var(--danger)" }}>
+                    This payment was taken back on {longDay(p.takenBackOn)}
+                    {p.takenBackWhy?.trim() ? ` — ${p.takenBackWhy.trim()}` : ""}. Anything it
+                    had paid was reopened that day.
+                  </span>
+                ) : null}
+                {/* MONEY FROM THIS PAYMENT HANDED BACK TO HER (0168). The row
+                    stays at what she handed over; this is where the rest went
+                    — the $57.47 of a $600 cheque, across the window after she
+                    left. Her on-account card above has already stopped
+                    counting it (the view's remaining); without this line the
+                    card simply shrank and the cheque sat here unmarked. */}
+                {p.handedBack > 0 && p.handedBackOn && (
+                  <span className="mut" style={{ flexBasis: "100%", fontSize: 12, lineHeight: 1.4 }}>
+                    {money(p.handedBack)} of this was handed back to you on {longDay(p.handedBackOn)}.
                   </span>
                 )}
               </div>

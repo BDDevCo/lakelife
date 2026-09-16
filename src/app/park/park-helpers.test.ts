@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  TYPE_THE_LEASE_DAY, agreementSpan,
   toStay, buildRentRoll, summarise, coversDay, canApprove, decideProblemText,
   buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
   planBulkRates, buildTenant, buildParkDialsRow, dialsWarning, noticeShape,
   agreementMonthsFor, agreementStartFor, dayInWords, planMoveOut, SIGNED_START_HORIZON_DAYS,
+  latestAgreementStart, holdoverWindowStart,
   alreadyOverClause, agreementEndFrom, agreementAlreadyOver, capitalise,
   type BulkRateTarget, type TenantInput, type ChainLink,
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
@@ -106,6 +108,22 @@ describe("buildRentRoll — the whole park on one screen", () => {
     for (const status of ["declined", "cancelled", "ended"]) {
       expect(buildRentRoll([lot()], [stay({ status })], "2026-07-05")[0].state).toBe("vacant");
     }
+  });
+  it("the NOTICE is read from whichever held link carries it — the January link after the February successor takes over — and never from a link that no longer holds", () => {
+    // Notice given 20 January for 15 February, on the January link; the
+    // February renewal was written on the 16th. On 1 February the successor
+    // is `current` and carries nothing.
+    const jan = stay({ id: "jan", during: "[2027-01-01,2027-02-01)", status: "active", term: "monthly", expected_move_out: "2027-02-15", notice_given_on: "2027-01-20" } as Partial<RawReservation>);
+    const feb = stay({ id: "feb", during: "[2027-02-01,2027-05-01)", status: "approved", term: "monthly" });
+    const onFirst = buildRentRoll([lot()], [jan, feb], "2027-02-01")[0];
+    expect(onFirst.current?.id).toBe("feb");
+    expect(onFirst.current?.expectedMoveOut).toBeNull();
+    expect(onFirst.noticed).toMatchObject({ id: "jan", expectedMoveOut: "2027-02-15" });
+    // Collapsed the other way: the same notice on a CANCELLED link is nobody's.
+    const withdrawn = buildRentRoll([lot()], [{ ...jan, status: "cancelled" }, feb], "2027-02-01")[0];
+    expect(withdrawn.noticed).toBeNull();
+    // And with no notice anywhere, nothing.
+    expect(buildRentRoll([lot()], [{ ...jan, expectedMoveOut: null }, feb], "2027-02-01")[0].noticed).toBeNull();
   });
   it("picks the SOONEST upcoming stay as `next`", () => {
     const rows = buildRentRoll([lot()], [
@@ -636,7 +654,7 @@ describe("buildTenant — the tenant who was already there", () => {
   });
 
   it("the same date under a cap is still a live window, not an expired one", () => {
-    const res = buildTenant(input({ movedInOn: "2019-05-01", signedNewLease: true }), TODAY, 3);
+    const res = buildTenant(input({ movedInOn: "2019-05-01", signedNewLease: true, agreementStartsOn: TODAY }), TODAY, 3);
     expect(res.tenancy!.start).toBe(TODAY);
     expect(res.tenancy!.end > TODAY).toBe(true);
     expect(res.tenancy!.beganOn).toBe("2019-05-01");
@@ -931,10 +949,12 @@ describe("park dials — the numbers nothing could write", () => {
 describe("adding a tenant under an agreement cap", () => {
   // A term is a fact about a SIGNED agreement. These rows are ticked, because
   // an unsigned household is on the horizon whatever the park's term is.
+  // The lease's own day is typed (a blank is refused after go-live — see
+  // agreementStartFor); here it is the day it is filed.
   const input = {
     displayName: "Roy Amberg", movedInOn: "", term: "monthly",
     rent: "395", mobile: "", email: "", source: "owner_knowledge",
-    signedNewLease: true,
+    signedNewLease: true, agreementStartsOn: "2026-08-11",
   };
 
   it("writes a 365-day range when the park has NO cap", () => {
@@ -954,7 +974,7 @@ describe("adding a tenant under an agreement cap", () => {
   it("clamps a short month instead of producing an impossible date", () => {
     // Filed ON January 31st — the window starts today, so this is the only way
     // the short-month case now arises through this path.
-    const r = buildTenant({ ...input, movedInOn: "2026-01-31" }, "2026-01-31", 1);
+    const r = buildTenant({ ...input, movedInOn: "2026-01-31", agreementStartsOn: "2026-01-31" }, "2026-01-31", 1);
     expect(r.tenancy!.end).toBe("2026-02-28");
   });
 
@@ -985,14 +1005,14 @@ describe("adding a tenant under an agreement cap", () => {
   });
 
   it("a SIGNED lease is an agreement with this owner, under the term", () => {
-    const r = buildTenant(input, "2027-01-02", 1);
+    const r = buildTenant({ ...input, agreementStartsOn: "2027-01-02" }, "2027-01-02", 1);
     expect(r.tenancy!.origin).toBe("application");
     expect(r.tenancy!.end).toBe("2027-02-02");
   });
 
   it("collapses both ways: no pairing of 'grandfathered' with a term, or 'application' with the horizon", () => {
     for (const signed of [true, false]) {
-      const r = buildTenant({ ...input, signedNewLease: signed }, "2027-01-02", 1);
+      const r = buildTenant({ ...input, signedNewLease: signed, agreementStartsOn: "2027-01-02" }, "2027-01-02", 1);
       const onTerm = r.tenancy!.end === "2027-02-02";
       expect({ signed, origin: r.tenancy!.origin, onTerm })
         .toEqual({ signed, origin: signed ? "application" : "grandfathered", onTerm: signed });
@@ -1034,20 +1054,70 @@ describe("when a signed lease runs from", () => {
     expect(r.tenancy!.status).toBe("active");
   });
 
-  it("DEFAULTS to the cutover when filed before it, and to today after it", () => {
+  it("DEFAULTS to the cutover when filed before it — and REFUSES a blank after it, never today", () => {
     // Blank on 20 December is 1 January, not 20 December — the one date that
     // is true of a lease collected early.
     expect(buildTenant(signed(), "2026-12-20", 1, { cutoverDate: CUTOVER }).tenancy!.start).toBe("2027-01-01");
-    expect(buildTenant(signed(), "2027-01-04", 1, { cutoverDate: CUTOVER }).tenancy!.start).toBe("2027-01-04");
-    // A park that never changed hands: today.
-    expect(buildTenant(signed(), "2026-12-20", 1).tenancy!.start).toBe("2026-12-20");
+    // Blank on 4 January used to be 4 January: a lease that says the 1st,
+    // filed [4 Jan, 4 Feb), January billed 28 of 31 days, every later link
+    // 4th-to-4th — under a hint reading "the day on the paper, not today".
+    const after = buildTenant(signed(), "2027-01-04", 1, { cutoverDate: CUTOVER });
+    expect(after.ok).toBe(false);
+    expect(after.error).toBe(TYPE_THE_LEASE_DAY);
+    expect(after.error).toBe("Type the day the lease runs from — the day on the paper, not today.");
+    // A park that never changed hands has no true default either.
+    const never = buildTenant(signed(), "2026-12-20", 1);
+    expect(never.ok).toBe(false);
+    expect(never.error).toBe(TYPE_THE_LEASE_DAY);
+    // Typing today is still a day the paper can say.
+    expect(buildTenant(signed({ agreementStartsOn: "2027-01-04" }), "2027-01-04", 1, { cutoverDate: CUTOVER }).tenancy!.start).toBe("2027-01-04");
   });
 
-  it("would have written [2026-12-20, 2027-01-20) under the old clamp — kept as the defect", () => {
-    // The unsigned path still starts today, which is right for a holdover
-    // and was wrong for a lease. Same input, tick clear: the clamp.
+  it("a holdover filed BEFORE the cutover starts today — those days are not ours anyway", () => {
+    // Same input, tick clear, on 20 December: the floor is today, because the
+    // cutover has not passed. (This fixture exercises only the safe half; the
+    // post-cutover half is the next test.)
     const r = buildTenant(signed({ signedNewLease: false, agreementStartsOn: "2027-01-01" }), "2026-12-20", 1, { cutoverDate: CUTOVER });
     expect(r.tenancy!.start).toBe("2026-12-20");
+    expect(r.tenancy!.status).toBe("active");
+  });
+
+  it("a holdover filed AFTER the cutover starts AT the cutover — the month they lived whole bills whole", () => {
+    // Filed by hand on 2 January "on the arrangement they already had": the
+    // household was there on the 1st and for years before. Started today,
+    // January billed 30 of 31 days and the roll row read "part month". The
+    // importer dates the same household from the cutover (rangeForTerm);
+    // this is the second doorway reading the same rule.
+    const r = buildTenant(signed({ signedNewLease: false }), "2027-01-02", 1, { cutoverDate: CUTOVER });
+    expect(r.ok, r.error).toBe(true);
+    expect(r.tenancy!.start).toBe("2027-01-01");
+    expect(r.tenancy!.status).toBe("active");
+    expect(r.tenancy!.origin).toBe("grandfathered");
+    expect(r.tenancy!.beganOn).toBeNull();
+    // A move-in typed BEFORE the floor is kept as the arrival, and the
+    // window still starts at the cutover.
+    const old = buildTenant(signed({ signedNewLease: false, movedInOn: "2015-04-02" }), "2027-01-02", 1, { cutoverDate: CUTOVER });
+    expect(old.tenancy!.start).toBe("2027-01-01");
+    expect(old.tenancy!.beganOn).toBe("2015-04-02");
+    // A move-in typed AFTER the floor — a new arrival filed through this
+    // door — starts from its own day.
+    const fresh = buildTenant(signed({ signedNewLease: false, movedInOn: "2027-01-15" }), "2027-01-20", 1, { cutoverDate: CUTOVER });
+    expect(fresh.tenancy!.start).toBe("2027-01-15");
+    expect(fresh.tenancy!.beganOn).toBe("2027-01-15");
+    // No cutover: today, as before.
+    expect(buildTenant(signed({ signedNewLease: false }), "2027-01-02", 1).tenancy!.start).toBe("2027-01-02");
+  });
+
+  it("the holdover's horizon rolls from the day it is written, so a cutover long past cannot refuse it", () => {
+    // Filed 400 days after the cutover. Ending the horizon from the window's
+    // START would end it before today and refuse with "check the start
+    // date" — a box the holdover form does not have.
+    const r = buildTenant(signed({ signedNewLease: false }), "2028-02-05", 1, { cutoverDate: CUTOVER });
+    expect(r.ok, r.error).toBe(true);
+    expect(r.tenancy!.start).toBe("2027-01-01");
+    // 365 days from the day it is written (2028 is a leap year).
+    expect(r.tenancy!.end).toBe("2029-02-04");
+    expect(r.tenancy!.end > "2028-02-05").toBe(true);
   });
 
   it("refuses a start before the cutover — the ledger starts at go-live", () => {
@@ -1095,13 +1165,16 @@ describe("when a signed lease runs from", () => {
   it("a holdover ignores the lease date entirely — it has no lease", () => {
     const r = buildTenant(signed({ signedNewLease: false, agreementStartsOn: "2026-06-01" }), "2027-01-04", 1, { cutoverDate: CUTOVER });
     expect(r.ok).toBe(true);
-    expect(r.tenancy!.start).toBe("2027-01-04");
+    // The floor is the cutover once it has passed, not the day it was typed.
+    expect(r.tenancy!.start).toBe("2027-01-01");
   });
 
-  it("agreementStartFor is the one rule both screens read", () => {
+  it("agreementStartFor is the one rule all three doors read", () => {
     expect(agreementStartFor("", "2026-12-20", CUTOVER)).toEqual({ ok: true, start: "2027-01-01" });
-    expect(agreementStartFor("", "2027-01-04", CUTOVER)).toEqual({ ok: true, start: "2027-01-04" });
-    expect(agreementStartFor("", "2026-12-20", null)).toEqual({ ok: true, start: "2026-12-20" });
+    // Blank after go-live, or with no go-live: refused, never today.
+    expect(agreementStartFor("", "2027-01-04", CUTOVER)).toEqual({ ok: false, error: TYPE_THE_LEASE_DAY });
+    expect(agreementStartFor("", "2027-01-01", CUTOVER)).toEqual({ ok: false, error: TYPE_THE_LEASE_DAY });
+    expect(agreementStartFor("", "2026-12-20", null)).toEqual({ ok: false, error: TYPE_THE_LEASE_DAY });
     expect(agreementStartFor("2027-01-01", "2026-12-20", CUTOVER)).toEqual({ ok: true, start: "2027-01-01" });
     expect(agreementStartFor("2026-12-31", "2026-12-20", CUTOVER).ok).toBe(false);
     expect(agreementStartFor("Jan 1", "2026-12-20", CUTOVER).ok).toBe(false);
@@ -1110,6 +1183,68 @@ describe("when a signed lease runs from", () => {
   it("names days in words", () => {
     expect(dayInWords("2027-01-01")).toBe("January 1, 2027");
     expect(dayInWords("nonsense")).toBe("nonsense");
+  });
+
+  it("latestAgreementStart is the pickers' max and agreementStartFor's bound — one subtraction, four readers", () => {
+    const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(latestAgreementStart("2026-12-20")).toBe("2027-02-18");
+    expect(agreementStartFor("2027-02-18", "2026-12-20", CUTOVER)).toEqual({ ok: true, start: "2027-02-18" });
+    expect(agreementStartFor("2027-02-19", "2026-12-20", CUTOVER).ok).toBe(false);
+    expect(SIGNED_START_HORIZON_DAYS).toBe(60);
+    const helpers = strip(readFileSync(fileURLToPath(new URL("./park-helpers.ts", import.meta.url)), "utf8"));
+    expect(helpers).toMatch(/if \(raw > latestAgreementStart\(todayISO\)\) \{/);
+    // The three pickers ask it; none carries its own `d + SIGNED_START_HORIZON_DAYS`.
+    const roll = strip(readFileSync(fileURLToPath(new URL("../../components/ParkRentRoll.tsx", import.meta.url)), "utf8"));
+    const onboard = strip(readFileSync(fileURLToPath(new URL("../../components/ParkOnboard.tsx", import.meta.url)), "utf8"));
+    expect(roll.match(/const latestStart = latestAgreementStart\(today\);/g)).toHaveLength(2);
+    expect(onboard.match(/const latestStart = latestAgreementStart\(today\);/g)).toHaveLength(1);
+    expect(roll).not.toMatch(/SIGNED_START_HORIZON_DAYS/);
+    expect(onboard).not.toMatch(/SIGNED_START_HORIZON_DAYS/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHERE A HOLDOVER'S WINDOW STARTS is one rule, asked by the builder that
+// writes it and by the filing screen's summary that quotes it. The summary
+// carried its own two-line copy — the shape that put "January 2027 bills
+// $9,765.54" beside a run that raised $10,165.54.
+// ---------------------------------------------------------------------------
+describe("holdoverWindowStart — the builder's rule, and the summary asks it", () => {
+  const CUTOVER = "2027-01-01";
+  const holdover = (movedInOn: string): TenantInput => ({
+    displayName: "Amberg, Roy", mobile: "", email: "", movedInOn,
+    term: "monthly", rent: "400", source: "owner_knowledge", signedNewLease: false,
+  });
+
+  it("blank → the floor (cutover once passed, else today); typed before the floor → the floor; typed after → its own day", () => {
+    expect(holdoverWindowStart("", "2027-01-02", CUTOVER)).toBe("2027-01-01");
+    expect(holdoverWindowStart("", "2026-12-20", CUTOVER)).toBe("2026-12-20");
+    expect(holdoverWindowStart("", "2027-01-02", null)).toBe("2027-01-02");
+    expect(holdoverWindowStart("2015-04-02", "2027-01-02", CUTOVER)).toBe("2027-01-01");
+    expect(holdoverWindowStart("2027-01-15", "2027-01-20", CUTOVER)).toBe("2027-01-15");
+    expect(holdoverWindowStart(null, "2027-01-02", CUTOVER)).toBe("2027-01-01");
+  });
+
+  it("buildTenant writes exactly what it says, for all three shapes", () => {
+    for (const [movedInOn, today] of [["", "2027-01-02"], ["2015-04-02", "2027-01-02"], ["2027-01-15", "2027-01-20"]] as const) {
+      const r = buildTenant(holdover(movedInOn), today, 1, { cutoverDate: CUTOVER });
+      expect(r.ok, r.error).toBe(true);
+      expect(r.tenancy!.start).toBe(holdoverWindowStart(movedInOn, today, CUTOVER));
+    }
+  });
+
+  it("both callers ask the helper — neither carries the floor arithmetic", () => {
+    const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const helpers = strip(readFileSync(fileURLToPath(new URL("./park-helpers.ts", import.meta.url)), "utf8"));
+    const build = helpers.slice(helpers.indexOf("export function buildTenant("), helpers.indexOf("export function buildTenantEdit("));
+    expect(build, "buildTenant is gone — this scan measures nothing").not.toBe("");
+    expect(build).toMatch(/rangeStart = holdoverWindowStart\(input\.movedInOn, todayISO, bounds\.cutoverDate\);/);
+    expect(build).not.toMatch(/cutoverDate <= todayISO \? /);
+    const onboard = strip(readFileSync(fileURLToPath(new URL("./onboard-helpers.ts", import.meta.url)), "utf8"));
+    expect(onboard).toMatch(/holdoverWindowStart\(r\.movedInOn, window\.todayISO, window\.cutoverDate\)/);
+    expect(onboard).not.toMatch(/cutoverDate <= window\.todayISO/);
+    // The one definition.
+    expect(helpers.match(/cutoverDate && cutoverDate <= todayISO \? cutoverDate : todayISO/g)).toHaveLength(1);
   });
 });
 
@@ -1649,7 +1784,7 @@ describe("how long one new agreement runs", () => {
   it("dates a month-to-month agreement one month out, not three", () => {
     const r = buildTenant(
       { displayName: "Amberg, Roy", mobile: "", email: "", movedInOn: "",
-        term: "monthly", rent: "400", source: "owner_knowledge", signedNewLease: true },
+        term: "monthly", rent: "400", source: "owner_knowledge", signedNewLease: true, agreementStartsOn: "2027-01-01" },
       "2027-01-01",
       agreementMonthsFor(1, 3),
     );
@@ -1662,7 +1797,7 @@ describe("how long one new agreement runs", () => {
     // straight through is what put every household's expiry on one morning.
     const r = buildTenant(
       { displayName: "Amberg, Roy", mobile: "", email: "", movedInOn: "",
-        term: "monthly", rent: "400", source: "owner_knowledge", signedNewLease: true },
+        term: "monthly", rent: "400", source: "owner_knowledge", signedNewLease: true, agreementStartsOn: "2027-01-01" },
       "2027-01-01",
       3,
     );
@@ -1728,5 +1863,48 @@ describe("who a claim slip is for", () => {
       expect(line, `${field} missing`).not.toBe("");
       expect(line, `${field} now reads the arriving tenant`).not.toMatch(/slipFor/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EVERY FIXED-LENGTH LEASE READ "month-to-month" ON THE ROLL. `rolling` was
+// "paid monthly", not "no end date": a 3-month lease to April 1 read as a
+// rolling tenancy on the screen he looks at most, while the Today card said
+// its agreement ends in 12 days. Only a grandfathered holdover, or a monthly
+// row at a park with NO cap, rolls.
+// ---------------------------------------------------------------------------
+describe("how the roll names what a household is on", () => {
+  const office = (start: string, end: string) => ({ term: "monthly", origin: "office", range: { start, end } });
+
+  it("a signed 3-month lease at a capped park is NOT month-to-month — it names its length and its end", () => {
+    expect(agreementSpan(office("2027-01-01", "2027-04-01"), 6)).toEqual({ rolling: false, words: "3-month lease to April 1, 2027" });
+    expect(agreementSpan(office("2027-01-01", "2027-02-01"), 6)).toEqual({ rolling: false, words: "one-month lease to February 1, 2027" });
+    expect(agreementSpan(office("2027-01-01", "2027-07-01"), 6)).toEqual({ rolling: false, words: "6-month lease to July 1, 2027" });
+    // An approved applicant's first agreement is a lease too.
+    expect(agreementSpan({ ...office("2027-01-01", "2027-04-01"), origin: "application" }, 6).words).toBe("3-month lease to April 1, 2027");
+  });
+
+  it("a grandfathered holdover rolls — the silent horizon is not a lease end", () => {
+    expect(agreementSpan({ term: "monthly", origin: "grandfathered", range: { start: "2027-01-01", end: "2028-01-01" } }, 6))
+      .toEqual({ rolling: true, words: null });
+  });
+
+  it("at a park with NO cap a monthly row rolls — printing its horizon as an end would be the lie the page warns against", () => {
+    expect(agreementSpan(office("2027-01-01", "2028-01-01"), null)).toEqual({ rolling: true, words: null });
+    // The SAME row at a capped park is a lease with an end.
+    expect(agreementSpan(office("2027-01-01", "2028-01-01"), 12).rolling).toBe(false);
+  });
+
+  it("a nightly or weekly stay is neither — the row counts nights", () => {
+    expect(agreementSpan({ term: "nightly", origin: "application", range: { start: "2027-06-01", end: "2027-06-04" } }, 6))
+      .toEqual({ rolling: false, words: null });
+    expect(agreementSpan(null, 6)).toEqual({ rolling: false, words: null });
+  });
+
+  it("the words are the day the agreement runs TO — the half-open end, as every other door says it — never ISO", () => {
+    const w = agreementSpan(office("2027-01-01", "2027-04-01"), 6).words!;
+    expect(w).not.toMatch(/2027-0/);
+    expect(w).toMatch(/to April 1, 2027$/);
+    expect(w).not.toMatch(/March 31/);
   });
 });

@@ -80,6 +80,41 @@ export function preCutoverRefusal(
 }
 
 /**
+ * THE OTHER END: A MONTH THAT HAS NOT STARTED IS NOT BILLED EARLY.
+ *
+ * The rent screen stops its forward link at the current month on purpose
+ * ("the Bill button on a future month would raise everybody's rent early"),
+ * and that rule lived in the link alone: `?month=2027-02` typed on 28
+ * January previewed and raised February four days early — classifying every
+ * not-yet-renewed January agreement as "run out", and snapshotting a served
+ * increase effective 1 February into a bill cancelReRate could not reach.
+ * Both actions ask here now, the way both ask preCutoverRefusal.
+ *
+ * Paying ahead loses nothing by this: money that arrives before its bill
+ * goes on account (0102) and is applied the morning the bill is raised.
+ *
+ * `month` and `todayISO` are the park's calendar — the caller passes the
+ * lake date, never the server clock.
+ *
+ * A MONTH IT CANNOT READ IS REFUSED TOO. Nothing else on the way in checks
+ * the shape: the rent page hands `?month=` straight to the ledger,
+ * preCutoverRefusal is a string compare, and `2027-2` passed both ("2027-2"
+ * >= "2027-01") to reach the insert, where 0070's CHECK on period_month
+ * refused it as a raw constraint error. Both doors ask here first, so the
+ * office reads a sentence.
+ */
+export function notYetBillableRefusal(
+  month: string,
+  todayISO: string,
+  prettyMonth: (period: string) => string,
+): string | null {
+  if (!/^\d{4}-\d{2}$/.test(month)) return "That isn't a month — use the month links to pick one.";
+  const current = todayISO.slice(0, 7);
+  if (month <= current) return null;
+  return `${prettyMonth(month)} hasn't started — bill it on the 1st.`;
+}
+
+/**
  * THE SAME BOUNDARY, ON THE COST DOOR — or null when the bill is ours.
  *
  * A park_costs row is the other half of the ledger: it is split across the

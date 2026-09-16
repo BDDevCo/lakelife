@@ -155,6 +155,12 @@ describe("The Haven's actual numbers, as recorded today", () => {
     const c = checkCoverage(fees, new Map([["f1", 0]]), COSTS);
     expect(c.feeIncome).toBe(0);
     expect(coverageSummary(c, 0, 1)).toBe("Nobody is on a lot yet, so this fee is collecting nothing.");
+    // And once the eighteen are filed for 1 January, the sentence names them
+    // — leading with what the count measures (billed), because lot 27's
+    // holdover IS on a lot that afternoon and is billed nothing.
+    expect(coverageSummary(c, 0, 1, { count: 18, fromMonth: "2027-01", income: 2565.54 })).toBe(
+      "Nobody is billed it yet — 18 households will be from January 2027, $2,565.54 a month. Nothing is billed before then.",
+    );
   });
 
   it("$48.16 of headroom is what has to absorb trash and the wells", () => {

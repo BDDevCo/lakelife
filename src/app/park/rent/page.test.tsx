@@ -42,8 +42,9 @@ class Q {
 
 const quarterRow = () => ({
   paymentId: "pay-acct", renterId: "renter-9", renterName: "Household 9",
-  amount: 1627.59, remaining: 542.53, allocated: 1085.06,
-  method: "check", receivedOn: "2026-12-28", reference: "1042", receiptNo: 12,
+  amount: 1627.59, remaining: 542.53, allocated: 1085.06, refunded: 0, refunds: [], handedBack: 0, handedBackOn: null, handedBackNote: null,
+  method: "check", receivedOn: "2026-12-28", reference: "1042", receiptNo: 12, split: null,
+  tenancyEnded: false, movedOutOn: null, finalMonthBilled: false,
 });
 const held = {
   onAccount: [quarterRow()],

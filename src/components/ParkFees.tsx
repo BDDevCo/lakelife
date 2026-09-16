@@ -6,10 +6,11 @@ import { toast } from "@/components/Toast";
 import { saveFee, setFeeActive, type FeesPage } from "@/app/park/fee-actions";
 import { SIGNED_LEASE_LABEL } from "@/app/park/sign-helpers";
 import {
-  COVER_LABEL, CADENCE_LABEL, APPLIES_LABEL, coverageSummary, evidenceLine,
+  COVER_LABEL, CADENCE_LABEL, APPLIES_LABEL, coverageSummary, evidenceLine, monthlyIncome,
   FEE_COVERS, FEE_EXTRA_COVERS,
   type FeeCadence, type FeeAppliesTo,
 } from "@/app/park/fee-helpers";
+import { prettyMonth } from "@/app/park/ledger-helpers";
 
 /**
  * FEES, AND WHETHER THEY COVER WHAT THEY CLAIM TO.
@@ -137,7 +138,7 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
       {page.fees.length > 0 && (
         <div className="ll-card ll-card-pad"
           style={{ marginBottom: 14, background: short ? "rgba(200,60,40,.07)" : undefined }}>
-          <strong style={{ fontSize: 15 }}>{coverageSummary(c, page.coveragePayers, page.fees.length)}</strong>
+          <strong style={{ fontSize: 15 }}>{coverageSummary(c, page.coveragePayers, page.fees.length, page.upcoming)}</strong>
           {/* HOW THIN THE EVIDENCE IS, PER BILL. This used to say "averaged
               over N months" with N counted across every bill — true of the
               sewer, which arrives monthly, and false of the three baselines
@@ -177,12 +178,21 @@ export function ParkFees({ parkId, page }: { parkId: string; page: FeesPage }) {
               <span className="mut" style={{ flex: 1 }}>
                 {APPLIES_LABEL[f.appliesTo]} ·{" "}
                 {/* "0 paying" is true and reads as a fault. Until the roll is
-                    named there is nobody to bill, which is a different thing. */}
-                {f.payers === 0 ? "nobody on a lot yet" : `${f.payers} paying`}
+                    named there is nobody to bill, which is a different thing.
+                    AND BEFORE GO-LIVE the true count is the households filed
+                    to pay from their day — relabelled, never "paying": no
+                    bill exists yet (the rent roll's "Spoken for" precedent). */}
+                {f.payers === 0
+                  ? page.upcoming && ["all_lots", "long_term"].includes(f.appliesTo)
+                    ? `${page.upcoming.count} from ${prettyMonth(page.upcoming.fromMonth)}`
+                    : "nobody on a lot yet"
+                  : `${f.payers} paying`}
                 {f.covers.length > 0 && ` · covers ${f.covers.map((x) => COVER_LABEL[x] ?? x).join(", ")}`}
               </span>
               <span style={{ minWidth: 90, textAlign: "right", fontWeight: 700 }}>
-                {money(f.monthly)}/mo
+                {f.payers === 0 && page.upcoming && ["all_lots", "long_term"].includes(f.appliesTo)
+                  ? `${money(monthlyIncome(f, page.upcoming.count))}/mo from ${prettyMonth(page.upcoming.fromMonth)}`
+                  : `${money(f.monthly)}/mo`}
               </span>
               <button className="ll-btn ghost" disabled={busy}
                 onClick={() => {

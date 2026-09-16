@@ -272,7 +272,9 @@ export async function commitOnboarding(
         // into origin, length, start and status together — signed means a
         // real agreement exists on paper and is written under the park's term
         // from the day it runs; unsigned is a holdover on the rolling horizon
-        // from today, which the 0065 trigger exempts by origin.
+        // from where the ledger's claim on them starts (holdoverWindowStart:
+        // the cutover once passed, else today, or a later typed move-in),
+        // which the 0065 trigger exempts by origin.
         signedNewLease: r.signedNewLease,
         agreementStartsOn: r.agreementStartsOn ?? "",
       },
