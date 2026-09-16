@@ -94,9 +94,10 @@ export function ParkBoard({
     (acc, p) => ({
       lots: acc.lots + p.lots,
       occupied: acc.occupied + p.occupied,
+      lapsed: acc.lapsed + p.lapsed,
       pending: acc.pending + p.pending,
     }),
-    { lots: 0, occupied: 0, pending: 0 },
+    { lots: 0, occupied: 0, lapsed: 0, pending: 0 },
   );
 
   return (
@@ -104,10 +105,15 @@ export function ParkBoard({
       <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", marginBottom: 16 }}>
         <Kpi v={String(parks.length)} l="Parks" />
         <Kpi v={String(totals.lots)} l="Lots on platform" />
+        {/* LIVED ON, whether or not the paperwork is in date — the same
+            arithmetic each park's own occupancyPct uses (park-helpers
+            summarise). A household whose agreement ran out is still there;
+            counted as empty, the platform read emptier every morning a
+            one-month park's leases expired. */}
         <Kpi
-          v={totals.lots ? `${Math.round((totals.occupied / totals.lots) * 100)}%` : "—"}
+          v={totals.lots ? `${Math.round(((totals.occupied + totals.lapsed) / totals.lots) * 100)}%` : "—"}
           l="Occupancy"
-          d={`${totals.occupied} occupied`}
+          d={`${totals.occupied} occupied${totals.lapsed ? ` · ${totals.lapsed} ran out` : ""}`}
         />
         <Kpi v={String(totals.pending)} l="Applications waiting" />
       </div>
@@ -129,9 +135,12 @@ export function ParkBoard({
                   {p.members === 0 && " ⚠️"}
                 </div>
                 <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
+                  {/* "N ran out" beside vacant: a lot whose paperwork ran
+                      out is lived on and is NOT in `vacant` — the number
+                      here follows the roll's own summary. */}
                   {p.occupancyPct == null
                     ? "No lots set up yet"
-                    : `${p.occupancyPct}% full · ${p.vacant} vacant`}
+                    : `${p.occupancyPct}% full · ${p.vacant} vacant${p.lapsed > 0 ? ` · ${p.lapsed} ran out` : ""}`}
                   {p.pending > 0 && ` · ${p.pending} waiting on the owner`}
                 </div>
               </div>

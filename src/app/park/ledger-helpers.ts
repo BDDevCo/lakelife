@@ -209,7 +209,33 @@ export function splitSiblingKey(key: string | null | undefined, chargeId: unknow
 export interface ReopenedLine {
   /** YYYY-MM of the bill it had been put against. */
   periodMonth: string;
+  /** The ALLOCATION's amount — what of this payment was on that bill. Never the bill's. */
   amount: number;
+  /**
+   * The bill's own amount (park_charges.amount), when the caller read it.
+   * Named only for the line that shares its month with the cancelled bill
+   * the money was released from (0169): "$300.00 of it had been put
+   * against January 2027" is the allocation, and the bill it reopens is
+   * "the $472.53 bill raised again for January 2027" — a partial cheque
+   * makes the two differ, so neither may stand in for the other.
+   */
+  billAmount?: number | null;
+  /** The re-raise's basis ("27 of 31 days"), set only on the colliding line — see AllocationLine.raisedAgain. */
+  raisedAgain?: { basis: string | null };
+}
+
+/**
+ * "January 2027", or "the bill raised again for January 2027 (27 of 31
+ * days)" for a line marked as the re-raise (0169) — with the bill's own
+ * amount when the caller carried it: "the $472.53 bill raised again for
+ * January 2027 (27 of 31 days)". The ONE copy of that phrase; every
+ * allocation line (lib/allocations' allocationWords) and the reversal's
+ * sentence name a bill through it.
+ */
+export function billWords(l: { periodMonth: string; raisedAgain?: { basis: string | null }; billAmount?: number | null }): string {
+  if (!l.raisedAgain) return prettyMonth(l.periodMonth);
+  const amount = l.billAmount != null ? `${money(l.billAmount)} ` : "";
+  return `the ${amount}bill raised again for ${prettyMonth(l.periodMonth)}${l.raisedAgain.basis ? ` (${l.raisedAgain.basis})` : ""}`;
 }
 
 /**
@@ -217,9 +243,28 @@ export interface ReopenedLine {
  * way a person says a list. Empty for none.
  */
 export function monthList(periods: readonly string[]): string {
-  const months = [...new Set(periods)].sort().map(prettyMonth);
-  if (months.length <= 1) return months.join("");
-  return `${months.slice(0, -1).join(", ")} and ${months[months.length - 1]}`;
+  return joinList([...new Set(periods)].sort().map(prettyMonth));
+}
+
+/** "a, b and c" — the way a person says a list. Empty for none. */
+function joinList(names: readonly string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * The reopened bills, named in month order through `billWords` — one name
+ * per month, the colliding one as "the $472.53 bill raised again for
+ * January 2027 (27 of 31 days)" and every other as its month alone.
+ */
+function reopenedList(lines: readonly ReopenedLine[]): string {
+  const byMonth = new Map<string, ReopenedLine>();
+  for (const l of [...lines].sort((a, b) => a.periodMonth.localeCompare(b.periodMonth))) {
+    const prev = byMonth.get(l.periodMonth);
+    // Two lines in one month: the one that carries the re-raise names it.
+    if (!prev || (!prev.raisedAgain && l.raisedAgain)) byMonth.set(l.periodMonth, l);
+  }
+  return joinList([...byMonth.values()].map(billWords));
 }
 
 /**
@@ -233,9 +278,23 @@ export function monthList(periods: readonly string[]): string {
  *     which half the office tapped, and how much the on-account half was —
  *     it is one cheque, and the sentence says both halves went.
  *   `hadGone` is every LIVE allocation reopened — the row's own for money on
- *     account, the sibling's for a split — and each month is named, or the
- *     office reads "off the household's account" while three months just
- *     went back to owing.
+ *     account, the sibling's for a split, both for a released row — and each
+ *     month is named, or the office reads "off the household's account"
+ *     while three months just went back to owing.
+ *   `billCancelled` says the bill the row was against is VOID (0169): its
+ *     money had been released onto account, so nothing reopens on that bill
+ *     — the sentence must not claim it does — while the months the released
+ *     money had been put against (the part month) still reopen and are
+ *     still named from `hadGone`.
+ *   `billAmount` is the cancelled bill's own amount, when the caller read
+ *     it. THE PART MONTH SHARES THE CANCELLED BILL'S MONTH: the move-out
+ *     raises January again under the same period_month, so "January 2027's
+ *     bill was already cancelled … it had been put against January 2027 —
+ *     that bill is outstanding again" was two January bills under one word,
+ *     with two opposite verbs. When a reopened line's month IS the
+ *     cancelled bill's month, both bills are named apart: "January 2027's
+ *     $542.53 bill was already cancelled … the $472.53 bill raised again
+ *     for January 2027 (27 of 31 days) — that one is outstanding again".
  */
 export function reversalSentence(input: {
   amount: number;
@@ -244,28 +303,51 @@ export function reversalSentence(input: {
   billMonth: string | null;
   split: { tapped: "bill" | "on_account"; onAccount: number; against: number } | null;
   hadGone: readonly ReopenedLine[];
+  billCancelled?: boolean;
+  billAmount?: number | null;
 }): string {
   const head = `${money(input.amount)} taken back${input.receiptNo != null ? ` (receipt ${input.receiptNo})` : ""}`;
   const gone = input.hadGone.filter((l) => Math.round(l.amount * 100) > 0);
   const goneTotal = gone.reduce((s, l) => s + Math.round(l.amount * 100), 0) / 100;
-  const goneMonths = monthList(gone.map((l) => l.periodMonth));
+  const cancelled = input.billCancelled === true && !!input.billMonth;
+  // THE COLLIDING LINE: a reopened bill in the cancelled bill's own month
+  // is the bill raised again for it (0169) — named as such whether or not
+  // the caller carried its basis, or the sentence reads one month with two
+  // opposite verbs.
+  const collides = (l: ReopenedLine) => cancelled && l.periodMonth === input.billMonth;
+  const goneMonths = reopenedList(gone.map((l) => (collides(l) ? { ...l, raisedAgain: l.raisedAgain ?? { basis: null } } : l)));
   const plural = new Set(gone.map((l) => l.periodMonth)).size > 1;
-  const reopened = plural ? "those bills are outstanding again" : "that bill is outstanding again";
-  const bill = input.billMonth ? `The ${prettyMonth(input.billMonth)} bill` : "The bill";
+  const reopened = plural
+    ? "those bills are outstanding again"
+    : gone.some(collides) ? "that one is outstanding again" : "that bill is outstanding again";
+  // A CANCELLED BILL REOPENS NOTHING. "The January 2027 bill is outstanding
+  // again" about a void bill would send the office chasing a household for
+  // a month the ledger says nobody owes. Its own amount is said only when a
+  // line collides with it — the plain sentence is enough when nothing else
+  // in it is called January.
+  const cancelledAmount = gone.some(collides) && input.billAmount != null ? `${money(input.billAmount)} ` : "";
+  const bill = cancelled
+    ? `${prettyMonth(input.billMonth!)}'s ${cancelledAmount}bill was already cancelled, so nothing reopens on it`
+    : `${input.billMonth ? `The ${prettyMonth(input.billMonth)} bill` : "The bill"} is outstanding again`;
 
   if (input.split) {
     // ONE CHEQUE, BOTH HALVES. Whichever half was tapped, the other went
-    // with it, and each thing that reopened is named.
+    // with it, and each thing that reopened is named. On a released row
+    // both halves' money is on account, so the lines are "of it", not "of
+    // the on-account half".
     const halves = `both halves of it, the ${money(input.split.against)} against ${input.billMonth ? prettyMonth(input.billMonth) : "the bill"} and the ${money(input.split.onAccount)} on account`;
     return (
-      `${head} — ${halves}. ${bill} is outstanding again` +
+      `${head} — ${halves}. ${bill}` +
       (gone.length > 0
-        ? `, and ${money(goneTotal)} of the on-account half had been put against ${goneMonths} — ${plural ? "those bills are" : "that bill is"} outstanding again too`
+        ? `, and ${money(goneTotal)} of ${cancelled ? "it" : "the on-account half"} had been put against ${goneMonths} — ${reopened} too`
         : "") +
       `. The record shows why.`
     );
   }
-  if (input.billMonth) return `${head}. ${bill} is outstanding again, and the record shows why.`;
+  if (cancelled) {
+    return `${head}. ${bill}${gone.length > 0 ? `; it had been put against ${goneMonths} — ${reopened}` : ""}, and the record shows why.`;
+  }
+  if (input.billMonth) return `${head}. ${bill}, and the record shows why.`;
   if (input.kind === "deposit") return `${head}. That deposit is no longer held, and the record shows why.`;
   if (gone.length > 0) return `${head}. It had been put against ${goneMonths} — ${reopened}, and the record shows why.`;
   return `${head}. It's off the household's account, and the record shows why.`;

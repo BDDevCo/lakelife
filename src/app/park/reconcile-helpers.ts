@@ -17,9 +17,16 @@
  *   EVERY HEADLINE CARRIES ITS OWN DENOMINATOR. "17 of 21 lots have a rent I
  *   trust" is honest. "$5,200 billed" alone is a claim about a whole park made
  *   from whatever happened to be readable.
+ *
+ * ONE MONTH WAS THE WRONG QUESTION. This used to ask, per lot, "is this month
+ * billed?". A row written from a lapsed agreement's own end (decision 3)
+ * makes past months billable; the run visits a month once; so "is this month
+ * billed" answered yes about a lot whose February was never raised, every
+ * night, forever. The caller now hands over EVERY unbilled month per lot
+ * (unbilled-months.ts), and the sentence names them.
  */
 
-import { prettyMonth } from "./ledger-helpers";
+import { prettyMonth, monthList } from "./ledger-helpers";
 import { periodIsBillable } from "@/lib/billing-start";
 
 export type FindingKind =
@@ -46,10 +53,22 @@ export interface ReconcileInput {
     occupiedToday: boolean;
     /** Null when nobody ever set a rent — NOT zero. */
     quotedAmount: number | null;
-    /** True when a tenancy exists but its range has already ended. */
-    tenancyExpired: boolean;
-    /** True when this lot has a charge for the current month. */
-    billedThisMonth: boolean;
+    /**
+     * LIVED ON, PAPERWORK RUN OUT — the roll's own `lapsed` (park-helpers
+     * lapsedRowOf): a held monthly row behind today with nothing current,
+     * nothing coming and nobody closed out after it. Somebody lives there;
+     * the roll counts the lot as taken, and so does this read.
+     */
+    lapsed: boolean;
+    /**
+     * Every month from the lot's held rows' coverage, floored at the first
+     * billable period and capped at the current month, with no live charge
+     * on that row — the current month included. Empty means every month it
+     * should have a bill for has one. Built by `unbilledMonthsFor`; only
+     * rows the run would bill (term monthly, approved/active, a live lot)
+     * put a month here, so nothing named is a month the rent screen refuses.
+     */
+    unbilledMonths: string[];
     /** The statement totalled to zero, so the charge run silently dropped it. */
     statementZero: boolean;
   }[];
@@ -74,13 +93,18 @@ export interface ReconcileInput {
 /** Above this many days, a disagreement nobody answered is itself the problem. */
 export const CLAIM_STALE_DAYS = 14;
 
-function nameList(lots: string[], max = 4): string {
-  const shown = lots.slice(0, max).map((l) => `lot ${l}`);
-  if (lots.length <= max) {
+/** Up to `max` of `items` the way a person lists them, then "and N more". */
+function listOf(items: readonly string[], max = 4): string {
+  const shown = items.slice(0, max);
+  if (items.length <= max) {
     if (shown.length === 1) return shown[0];
     return shown.slice(0, -1).join(", ") + " and " + shown[shown.length - 1];
   }
-  return `${shown.join(", ")} and ${lots.length - max} more`;
+  return `${shown.join(", ")} and ${items.length - max} more`;
+}
+
+function nameList(lots: string[], max = 4): string {
+  return listOf(lots.map((l) => `lot ${l}`), max);
 }
 
 export function reconcile(input: ReconcileInput): Finding[] {
@@ -88,7 +112,7 @@ export function reconcile(input: ReconcileInput): Finding[] {
   const { lots, openClaims, month, cutoverDate } = input;
 
   /**
-   * A MONTH WE MAY NOT BILL IS THE ONLY MONTH THIS SILENCE IS FOR.
+   * A MONTH WE MAY NOT BILL IS NEVER CALLED UNBILLED.
    *
    * This read `cutoverMonth === month`, which suppressed the alarm for the
    * takeover month WHATEVER DAY the takeover fell on. Set go-live to the first
@@ -102,31 +126,63 @@ export function reconcile(input: ReconcileInput): Finding[] {
    * on the 1st is not.
    *
    * `periodIsBillable` is the same function the ledger refuses on, so the
-   * reconciler now goes quiet about exactly the months the ledger will not
-   * charge for, and about no others.
+   * reconciler goes quiet about exactly the months the ledger will not charge
+   * for, and about no others. It is applied PER MONTH now, not once to the
+   * current month: a lot whose rows reach back over the takeover still has
+   * December struck out and January named.
    */
-  const cannotBillThisMonth = !periodIsBillable(month, cutoverDate);
+  const unbilled = lots
+    .map((l) => ({
+      ...l,
+      months: [...l.unbilledMonths].sort().filter((m) => periodIsBillable(m, cutoverDate)),
+    }))
+    // A LAPSED LOT IS LIVED ON. The roll and Today count it as taken; the
+    // run WOULD bill its months from the rent screen (classifyForRun says
+    // "bill" for a row that covers the month, however it stands today). So
+    // "occupied" here is the roll's, not the current link's — on
+    // `occupiedToday` alone the one lot reading "Ran out … nothing billed
+    // since" with an interior hole was the one lot this line never named.
+    .filter((l) => (l.occupiedToday || l.lapsed) && l.months.length > 0)
+    // EARLIEST HOLE FIRST. On the night of the 1st, before he presses Bill,
+    // every occupied lot is missing the current month — and in read order
+    // the one lot missing February as well sat inside "and 15 more" until
+    // the run. The list names at most four lots, so the four it names must
+    // be the ones with the oldest gap. Stable, so ties keep read order.
+    .sort((a, b) => (a.months[0] < b.months[0] ? -1 : a.months[0] > b.months[0] ? 1 : 0));
 
   // SOMEBODY LIVES THERE AND NOBODY IS BILLING THEM. This is the failure with
   // no error anywhere: a lapsed range, a dropped charge, and the money just
   // stops while the household stays put.
-  const unbilled = lots.filter((l) => l.occupiedToday && !l.billedThisMonth);
-  if (unbilled.length > 0 && !cannotBillThisMonth) {
+  if (unbilled.length > 0) {
     const names = unbilled.map((l) => l.lotNumber);
-    out.push({
-      kind: "live_lot_unbilled",
-      urgent: true,
-      lotNumbers: names,
-      line:
-        `${names.length} occupied ${names.length === 1 ? "lot has" : "lots have"} ` +
+    const n = names.length;
+    // THE NIGHT BEFORE THE RUN is the common case: every named lot is missing
+    // exactly the current month, and the sentence he has read every month
+    // since the check began still says it best. Anything else — an older
+    // month on any lot — gets the sentence that names the months, because
+    // "no bill for March" about a lot with no bill for February is the lie
+    // this file exists to stop telling.
+    const onlyThisMonth = unbilled.every(
+      (l) => l.months.length === 1 && l.months[0] === month,
+    );
+    const line = onlyThisMonth
+      ? `${n} occupied ${n === 1 ? "lot has" : "lots have"} ` +
         `no bill for ${prettyMonth(month)} — ${nameList(names)}. Somebody lives there and ` +
-        `nothing is being charged.`,
-    });
+        `nothing is being charged.`
+      // "the rent screen's month links reach back" is an instruction the
+      // screen HAS: ParkRent.tsx's month nav steps back a month at a time to
+      // any earlier month, and each month's page carries its own Bill button.
+      : `${n} occupied ${n === 1 ? "lot has" : "lots have"} months with no bill — ` +
+        `${listOf(unbilled.map((l) => `lot ${l.lotNumber} (${monthList(l.months)})`))}. ` +
+        `Somebody lives there and nothing is being charged for ` +
+        `${n === 1 ? "them" : "those months"}; the rent screen's month links reach back ` +
+        `to bill them.`;
+    out.push({ kind: "live_lot_unbilled", urgent: true, lotNumbers: names, line });
   }
 
   // A tenancy that ran out while the household stayed. Never auto-ended: the
   // trigger is the office not having done paperwork, not anybody leaving.
-  const expired = lots.filter((l) => l.tenancyExpired);
+  const expired = lots.filter((l) => l.lapsed);
   if (expired.length > 0) {
     const names = expired.map((l) => l.lotNumber);
     out.push({

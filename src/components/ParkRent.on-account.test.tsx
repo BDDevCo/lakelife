@@ -26,7 +26,7 @@ vi.mock("@/components/ParkReceipt", () => ({ ReceiptPanel: () => null, DropSlips
 
 const { fromOnAccountSentence, ParkRent } = await import("./ParkRent");
 const { renderToStaticMarkup } = await import("react-dom/server");
-const { summarise } = await import("@/app/park/ledger-helpers");
+const { summarise, toRows } = await import("@/app/park/ledger-helpers");
 
 const bill = (lotNumber: string, fromOnAccount?: number) => ({ reservationId: `r-${lotNumber}`, lotNumber, amount: 542.53, fromOnAccount });
 
@@ -100,5 +100,55 @@ describe("the Bill button on a month that has not started", () => {
     expect(src).toMatch(/import \{ notYetBillableRefusal \} from "@\/lib\/billing-start"/);
     expect(src).toMatch(/const notYet = notYetBillableRefusal\(page\.month, page\.today, prettyMonth\)/);
     expect(src).toMatch(/\{notYet \? \(/);
+  });
+});
+
+/**
+ * A FULLY-PAID BILL HAS A CANCEL DOOR. "Cancel this bill" sat inside the
+ * Record-payment panel, which only opens on a balance, so a bill paid in
+ * full — the January the sign door refuses a signing over — could not be
+ * cancelled from anywhere. It is a row control now, on every live row; a
+ * void row has no button, and the prompt states only what the ledger says
+ * (voidCharge decides where the money goes, and refuses money on account
+ * by name — the row cannot tell the two kinds apart, so it must not claim).
+ */
+describe("Cancel this bill on the ledger rows", () => {
+  const charge = (over: Partial<{ paidTotal: number; status: "open" | "paid" | "void" }>) => ({
+    id: "chg-jan", lotNumber: "14", renterName: "Test Household", periodMonth: "2027-01",
+    dueOn: "2027-01-01", amount: 542.53, paidTotal: 0, status: "open" as const, ...over,
+  });
+  const page = (row: ReturnType<typeof charge>) => {
+    // The 2nd: due yesterday, inside the catch-up window, so nobody is late
+    // and no reminder button joins the list.
+    const rows = toRows([row], "2027-01-02", 3);
+    return { month: "2027-01", rows, claims: {}, summary: summarise(rows), lagDays: 3, today: "2027-01-02" };
+  };
+  const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
+
+  it("a bill paid in full — balance 0, no Record payment — still has it", () => {
+    const html = renderToStaticMarkup(<ParkRent parkId="park-haven" page={page(charge({ paidTotal: 542.53, status: "paid" }))} />);
+    expect(buttons(html)).toEqual(["Bill January 2027", "They say they paid", "Cancel this bill"]);
+  });
+
+  it("a bill with nothing on it has it next to Record payment", () => {
+    const html = renderToStaticMarkup(<ParkRent parkId="park-haven" page={page(charge({}))} />);
+    expect(buttons(html)).toEqual(["Bill January 2027", "Record payment", "They say they paid", "Cancel this bill"]);
+  });
+
+  it("a cancelled bill does not — collapsed the other way", () => {
+    const html = renderToStaticMarkup(<ParkRent parkId="park-haven" page={page(charge({ status: "void" }))} />);
+    expect(buttons(html)).toEqual(["Bill January 2027"]);
+  });
+
+  it("is a row control calling voidCharge, not a corner of the payment form, and the prompt quotes the ledger's figure without saying where it goes", () => {
+    const src = readFileSync(fileURLToPath(new URL("./ParkRent.tsx", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src.match(/Cancel this bill/g)).toHaveLength(1);
+    expect(src.match(/voidCharge\(/g)).toHaveLength(1);
+    const form = src.slice(src.indexOf("function PaymentForm("));
+    expect(form).not.toMatch(/voidCharge|Cancel this bill/);
+    expect(src).toMatch(/r\.state !== "void" && payingId !== r\.id && claimingId !== r\.id && resolvingId !== r\.id && \(/);
+    expect(src).toMatch(/\$\{money\(r\.paidTotal\)\} is recorded against this bill\. Why are you cancelling it\?/);
+    expect(src).not.toMatch(/puts that money on their account|goes on their account/);
   });
 });

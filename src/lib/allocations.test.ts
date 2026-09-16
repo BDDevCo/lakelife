@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  planAllocations, plannedByKey, describeAllocations, allocatedTotal,
+  planAllocations, plannedByKey, describeAllocations, allocatedTotal, allocationWords, withRaisedAgain, proratedBasisOf,
   oldestFirst, planSettlement, describeSettlement, money, splitApplied, heldOnAccountFor,
 } from "./allocations";
 
@@ -96,6 +96,36 @@ describe("describeAllocations", () => {
 
   it("formats thousands the way a receipt does", () => {
     expect(describeAllocations([], 1085.06)).toBe("$1,085.06 on account");
+  });
+
+  it("names the bill raised again for the cancelled bill's own month apart from it (0169), and only that line", () => {
+    // The move-out re-raises January under the same period_month, so
+    // "$472.53 to January 2027" right after "their January 2027 bill was
+    // cancelled" was two bills under one word. Marked lines say which.
+    expect(describeAllocations(
+      [{ periodMonth: "2027-02", amount: 70 }, { periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: "27 of 31 days" } }],
+      0,
+    )).toBe("$472.53 to the bill raised again for January 2027 (27 of 31 days), $70.00 to February 2027");
+    // A whole-month re-raise (a new rent) has no days basis to print.
+    expect(allocationWords({ periodMonth: "2027-01", amount: 600, raisedAgain: { basis: null } })).toBe("$600.00 to the bill raised again for January 2027");
+    // Unmarked, every line keeps its shape.
+    expect(allocationWords({ periodMonth: "2027-01", amount: 600 })).toBe("$600.00 to January 2027");
+  });
+
+  it("withRaisedAgain marks a line only when its month is the released-from month, with the re-raised bill's own basis", () => {
+    const lines = [{ label: "Lot rent", amount: 348.39, basis: "27 of 31 days" }, { label: "Grounds", amount: 124.14, basis: "27 of 31 days" }];
+    expect(withRaisedAgain({ periodMonth: "2027-01", amount: 472.53 }, "2027-01", lines))
+      .toEqual({ periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: "27 of 31 days" } });
+    // Another month, no released-from month, or a null one: untouched, and no key added.
+    expect(withRaisedAgain({ periodMonth: "2027-02", amount: 70 }, "2027-01", lines)).toEqual({ periodMonth: "2027-02", amount: 70 });
+    expect(withRaisedAgain({ periodMonth: "2027-01", amount: 472.53 }, null, lines)).toEqual({ periodMonth: "2027-01", amount: 472.53 });
+    expect("raisedAgain" in withRaisedAgain({ periodMonth: "2027-01", amount: 472.53 }, undefined, lines)).toBe(false);
+    // The basis is the bill's frozen one; "for the month" and no snapshot are no basis.
+    expect(proratedBasisOf(lines)).toBe("27 of 31 days");
+    expect(proratedBasisOf([{ label: "Lot rent", amount: 400, basis: "for the month" }])).toBeNull();
+    expect(proratedBasisOf([])).toBeNull();
+    expect(proratedBasisOf(null)).toBeNull();
+    expect(withRaisedAgain({ periodMonth: "2027-01", amount: 600 }, "2027-01", null)).toEqual({ periodMonth: "2027-01", amount: 600, raisedAgain: { basis: null } });
   });
 
   it("allocatedTotal is exact to the cent", () => {

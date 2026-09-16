@@ -154,10 +154,14 @@ describe("'Refund to card' is not offered without a processor", () => {
 
   it("collapses both ways: the same row would render the button with the flag on", () => {
     // Pin the branch rather than its absence: one guard renders on true, the
-    // other on false, on the same method condition.
-    const on = st.match(/\(r\.method === "card" \|\| r\.method === "ach"\) && paymentsLive && \(/g) ?? [];
-    const off = st.match(/\(r\.method === "card" \|\| r\.method === "ach"\) && !paymentsLive && \(/g) ?? [];
+    // other on false, on the same method condition — the ONE rail predicate
+    // (rail-helpers' canReverse), not an inline list of methods that could
+    // drift from the panel's.
+    const on = st.match(/!canReverse\(r\.method\) && paymentsLive && \(/g) ?? [];
+    const off = st.match(/!canReverse\(r\.method\) && !paymentsLive && \(/g) ?? [];
     expect(on).toHaveLength(1);
     expect(off).toHaveLength(1);
+    expect(st).toMatch(/import \{ canReverse \} from "@\/app\/park\/rail-helpers"/);
+    expect(st).not.toMatch(/r\.method [!=]== "card"/);
   });
 });

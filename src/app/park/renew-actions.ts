@@ -9,11 +9,12 @@ import {
   planRenewal, renewalRefusalText, chainNotice, monthsBetween,
   offeredAgreementLengths, agreementMonthsFor, lengthNotOfferedText, agreementSpanWords,
   renewalLeadDays, RENEWAL_LEAD_CAP_DAYS, agreementSeasonEnd, successorStatus,
-  latestSeqByChain, hasLaterLink, perTermWords, backfillWords, lengthInWords, lengthsInWords,
+  latestSeqByChain, hasLaterLink, perTermWords, backfillWords, lostMonths, lengthInWords, lengthsInWords,
   type PlannedRenewal, type AgreementTerms,
 } from "./agreement-helpers";
 import { rentForPeriod, addDays } from "./rerate-helpers";
-import { money } from "./ledger-helpers";
+import { money, currentPeriod } from "./ledger-helpers";
+import { parkRanMonth, billLostMonths, lostMonthsWords } from "./gap-bills";
 import { longDate } from "@/lib/lake-time";
 import { servedRentHistory } from "@/lib/rent-changes";
 import { successorRow, type PriorLink } from "@/lib/successor-row";
@@ -61,6 +62,15 @@ import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
  * increase had been applied wrote the successor at the old number. The
  * increase then evaporated after one month, with nothing on any screen saying
  * so.
+ *
+ * THE DOOR BILLS THE MONTHS IT MADE BILLABLE (decision 3, 16 Sep). A
+ * successor written from a lapsed agreement's own end starts in the past;
+ * the run keys 'already billed' per reservation and visits a month once, so
+ * nothing would ever raise those months again. reraiseMonth — the same
+ * re-raise the signing door uses — raises each lost month on the new row,
+ * oldest first, settled from money on account, and the toast names each
+ * (gap-bills.ts). The current month is left to the run unless the run has
+ * already happened.
  */
 
 const DENIED = "You don't manage that park.";
@@ -114,12 +124,24 @@ export interface RenewalPreview {
   /** The length the choice starts on: the park's house style under its cap. */
   defaultMonths: number | null;
   /**
-   * THE MONEY FACT OF A BACKFILL — "It reaches back over February 2027
-   * through June 2027, which nothing has billed yet." (backfillWords) when
-   * the successor starts before today, else null. The same for every length
-   * on the row: they share the start, and the months since it are the
-   * months no run has raised for this household. The card prints it under
-   * the dates and the toast says it back.
+   * THE MONTHS THE TAP WILL BILL — every month from the plan's start that
+   * the run has already passed (agreement-helpers lostMonths: months behind
+   * today, and the current month once its run has happened, floored at the
+   * ledger's start). The same for every length on the row: they share the
+   * start. Empty when the plan refuses, or when the current month is still
+   * the run's to bill.
+   */
+  lostMonths: string[];
+  /**
+   * THE MONEY FACT OF A BACKFILL — "Writing it bills this agreement for
+   * February 2027 and March 2027 — nothing has billed it for those months
+   * yet." (backfillWords). The tap bills them (decision 3): the card prints
+   * it under the dates before the tap, and the toast says what landed after
+   * it (lostMonthsWords). Null when nothing is missed and the plan starts
+   * today or later. "If there is any": with no rent set, or a row filed as
+   * paid some other way than monthly, the tap cannot bill them, and the
+   * note says so instead — with the door that sets a rent, or the run's own
+   * not-monthly sentence — rather than promising months.
    */
   backfillNote: string | null;
 }
@@ -129,13 +151,15 @@ async function loadTerms(
   parkId: string,
   lotId: string,
   startISO: string,
-): Promise<AgreementTerms> {
+): Promise<{ terms: AgreementTerms; cutoverDate: string | null }> {
   const [parkRes, lotRes] = await Promise.all([
     admin.from("parks")
       // THE HOUSE STYLE TOO. This selected only the cap, and the cap was then
       // used as the length — so the default the owner set (one month) was
-      // read by no door at renewal time.
-      .select("max_agreement_months, default_agreement_months, deposit_amount, season_open_month, season_open_day, season_close_month, season_close_day")
+      // read by no door at renewal time. AND THE CUTOVER: the months a
+      // backfill bills are floored at the ledger's start (lostMonths), and a
+      // cutover read as null would bill the seller's months.
+      .select("max_agreement_months, default_agreement_months, deposit_amount, cutover_date, season_open_month, season_open_day, season_close_month, season_close_day")
       .eq("id", parkId).maybeSingle(),
     admin.from("park_lots")
       .select("season_open_month, season_open_day, season_close_month, season_close_day")
@@ -178,10 +202,13 @@ async function loadTerms(
   // night short of what the booking gate sells, and wrong by a year for a
   // window that wraps the New Year.
   return {
-    maxAgreementMonths: (park?.max_agreement_months as number) ?? null,
-    defaultAgreementMonths: (park?.default_agreement_months as number) ?? null,
-    depositAmount: park?.deposit_amount == null ? null : Number(park.deposit_amount),
-    seasonEnd: agreementSeasonEnd(startISO, season),
+    terms: {
+      maxAgreementMonths: (park?.max_agreement_months as number) ?? null,
+      defaultAgreementMonths: (park?.default_agreement_months as number) ?? null,
+      depositAmount: park?.deposit_amount == null ? null : Number(park.deposit_amount),
+      seasonEnd: agreementSeasonEnd(startISO, season),
+    },
+    cutoverDate: (park?.cutover_date as string | null) ?? null,
   };
 }
 
@@ -199,11 +226,18 @@ type Planned = PreviewResult & { prior?: PriorLink };
  * sentence for the button that is awaiting one, and `renewalsDue` lets it go up
  * to the page boundary, because a household quietly dropped out of the "write
  * the next one" list is the failure this whole file exists to prevent.
+ *
+ * `ranCurrent` — whether this month's run has already happened — is read
+ * here once per call (parkRanMonth) unless the caller already knows it:
+ * renewalsDue reads it ONCE and passes it to every row. A failed read
+ * throws too: the sentence "bills when you bill the month" about a month
+ * that already ran would leave that month to nobody.
  */
 async function planNextAgreement(
   parkId: string,
   reservationId: string,
   startFrom?: string,
+  ranCurrent?: boolean,
 ): Promise<Planned> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
@@ -234,7 +268,16 @@ async function planNextAgreement(
   if (!range) return { ok: false, error: "That tenancy has no dates to renew from." };
 
   const today = todayLakeDate();
-  const terms = await loadTerms(admin, parkId, lot.id as string, startFrom ?? range.end);
+  const { terms, cutoverDate } = await loadTerms(admin, parkId, lot.id as string, startFrom ?? range.end);
+  let ran = ranCurrent;
+  if (ran === undefined) {
+    const r = await parkRanMonth(admin, parkId, currentPeriod(today));
+    if (typeof r !== "boolean") {
+      console.error(`[read failed] ${r.what}:`, r.error);
+      throw new ReadFailed(r.what, String((r.error as { message?: string })?.message ?? ""));
+    }
+    ran = r;
+  }
   const chainId = (res.agreement_chain_id as string) ?? (res.id as string);
   const seq = (res.agreement_seq as number) ?? 1;
   const priorQuoted = res.quoted_amount == null ? null : Number(res.quoted_amount);
@@ -244,12 +287,23 @@ async function planNextAgreement(
   // which at a park whose first lease is one month and whose renewals are three
   // said "six months" after four. A failed read here would make the chain look
   // short and keep the sentence quiet, so it stops instead.
+  //
+  // THE ENDED LINKS COME TOO, for one question: was a LATER link of this
+  // chain closed out? A move-out inside a successor marks only that link
+  // `ended` and leaves this one held, run out, with nothing held after it —
+  // the lapsed shape, read from held rows alone. This is a public endpoint
+  // (previewRenewal, renewAgreement), so hiding the card is not the guard:
+  // the planner itself refuses, below.
   const links = mustRead("that household's earlier agreements", await admin
     .from("lot_reservations")
-    .select("id, during, agreement_seq")
+    .select("id, during, agreement_seq, status")
     .eq("agreement_chain_id", chainId)
-    .in("status", ["approved", "active"]));
+    .in("status", ["approved", "active", "ended"]));
+  const closedOutLater = (links ?? []).some(
+    (l) => l.status === "ended" && ((l.agreement_seq as number) ?? 1) > seq,
+  );
   const chainMonthsSoFar = (links ?? [])
+    .filter((l) => l.status !== "ended")
     .filter((l) => l.id !== res.id && ((l.agreement_seq as number) ?? 1) < seq)
     .reduce((sum, l) => {
       const r = parseDaterange(l.during as string);
@@ -302,6 +356,13 @@ async function planNextAgreement(
   if (res.origin === "grandfathered") {
     plan = { ok: false, refusal: "inherited" };
   }
+  // THE HOUSEHOLD MOVED OUT — closed out of a later link of this chain. The
+  // final fact, whatever else the planner said: a successor written from
+  // this row's end would land over the family who left, and the door would
+  // then bill them for every month since (billLostMonths).
+  if (closedOutLater) {
+    plan = { ok: false, refusal: "moved_out" };
+  }
   // A refusal is true of every length; the card offers nothing to pick.
   if (!plan.ok) lengths = [];
 
@@ -330,6 +391,15 @@ async function planNextAgreement(
     : null;
 
   const lotNumber = (lot.lot_number as string) ?? "?";
+  // THE MONTHS THE TAP WILL BILL, and the sentence that says so — from the
+  // plan's own start, today, the ledger's floor and whether this month ran.
+  // The sentence is judged on the row too: the rent the successor is written
+  // at and the term it copies, because the tap cannot bill a row with no
+  // rent or one filed as paid some other way than monthly, and the card must
+  // not promise months it cannot bill (backfillWords says which, and where
+  // the door is).
+  const lost = plan.ok && plan.start ? lostMonths(plan.start, today, cutoverDate, ran) : [];
+  const priorTerm = (res.term as string) ?? "monthly";
   return {
     ok: true,
     preview: {
@@ -347,7 +417,10 @@ async function planNextAgreement(
       chainNote: plan.totalMonthsAfter ? chainNotice(plan.totalMonthsAfter) : null,
       lengths,
       defaultMonths,
-      backfillNote: plan.ok && plan.start ? backfillWords(plan.start, today) : null,
+      lostMonths: lost,
+      backfillNote: plan.ok && plan.start
+        ? backfillWords(plan.start, today, lost, { quotedAmount, term: priorTerm, lotNumber })
+        : null,
     },
     prior: {
       id: res.id as string,
@@ -476,7 +549,7 @@ export async function renewAgreement(
   // an agreement the owner wrote is 'office' — never a copy of the prior's.
   // A gap OMITS the chain column so the database mints a new chain; sending
   // null to it is a constraint error, not a fresh start.
-  const { error } = await admin.from("lot_reservations").insert(successorRow(pre.prior, {
+  const { data: inserted, error } = await admin.from("lot_reservations").insert(successorRow(pre.prior, {
     start: plan.start,
     end: plan.end,
     // ONE RULE with the resident's door: approved until it starts, active
@@ -491,7 +564,7 @@ export async function renewAgreement(
     // consecutive renewal regardless — so the two cannot drift apart.
     depositAmount: plan.depositDue ? plan.depositAmount : null,
     nowISO: new Date().toISOString(),
-  }));
+  })).select("id").single();
   if (error) {
     return {
       ok: false,
@@ -504,6 +577,16 @@ export async function renewAgreement(
   revalidatePath("/park");
   revalidatePath("/park/today");
   revalidatePath("/park/rent");
+
+  // THE MONTHS THE RUN HAS ALREADY PASSED are billed now, on the row just
+  // written (decision 3). THE SAME MONTHS THE CARD NAMED — the planner's
+  // own list (every length shares the start, and the planner read whether
+  // this month ran) — each raised the way the run would raise it and
+  // settled from money on account, oldest first. A month the run did raise
+  // comes back 'already' and is silent; a month that could not be billed is
+  // said, with its door.
+  const billed = await billLostMonths(admin, parkId, (inserted?.id as string) ?? "", pre.preview.lostMonths);
+  const tail = lostMonthsWords(billed);
   // A date a person reads is words — "May 1, 2027", never "2027-05-01" — and
   // the length they picked is said back, so a one-month renewal written by
   // mistake for six is caught by the toast and not by the ledger. THE WORDS
@@ -528,15 +611,12 @@ export async function renewAgreement(
     ? "Consecutive with the last one."
     : `Starts a new chain — there was a gap after ${longDate(pre.preview.priorEnd)}.` +
       (plan.depositDue && plan.depositAmount != null ? ` A deposit of ${money(plan.depositAmount)} is due.` : "");
-  // THE MONEY FACT OF A BACKFILL, said back: a successor written from a
-  // lapsed agreement's own end just made every month since billable, and
-  // no run has raised any of them. The same words the card printed
-  // (backfillWords) — a statement, not an instruction.
-  const backfill = backfillWords(plan.start, todayLakeDate());
+  // THE MONEY FACT OF A BACKFILL, said back: what the tap billed, month by
+  // month, in the words gap-bills gives every door (lostMonthsWords).
   return {
     ok: true,
     newEnd: plan.end,
-    signal: `Lot ${lotNumber} renewed for ${span}${rent}. ${chain}${backfill ? ` ${backfill}` : ""}`,
+    signal: `Lot ${lotNumber} renewed for ${span}${rent}. ${chain}${tail ? ` ${tail}` : ""}`,
   };
 }
 
@@ -576,19 +656,36 @@ export async function renewalsDue(
   // The maxSeq map below decides which agreements ALREADY have a successor
   // written. Built from a failed read it would be empty, and every chain would
   // look unrenewed — so this read has to answer or stop.
-  const stays = mustRead("who is on your lots", await admin
+  //
+  // THE ENDED ROWS ARE READ TOO, so a later link that was closed out — the
+  // household moved out inside its successor — still counts as a later
+  // link. Without them the expired prior (held, run out, nothing held after
+  // it) sat here under "Agreements to write" beside a tap that would have
+  // billed a family who had left. Only held rows are candidates below.
+  const everyRow = mustRead("who is on your lots", await admin
     .from("lot_reservations")
-    .select("id, park_lot_id, during, agreement_chain_id, agreement_seq")
+    .select("id, park_lot_id, during, status, agreement_chain_id, agreement_seq")
     .in("park_lot_id", ids)
-    .in("status", ["approved", "active"]));
+    .in("status", ["approved", "active", "ended"]));
+  const stays = (everyRow ?? []).filter((s) => s.status === "approved" || s.status === "active");
 
   // A chain with a later link already has its next agreement written — the
   // one predicate (agreement-helpers), which the nightly reminder reads too.
-  const maxSeq = latestSeqByChain(stays ?? []);
+  const maxSeq = latestSeqByChain(everyRow ?? []);
+
+  // WHETHER THIS MONTH'S RUN HAS HAPPENED — read once for the whole list, not
+  // once per row. It decides whether the current month is among the months a
+  // backfill bills; a failed read stops the list (a row told "bills when you
+  // bill the month" about a month that ran would leave that month to nobody).
+  const ran = await parkRanMonth(admin, parkId, currentPeriod(today));
+  if (typeof ran !== "boolean") {
+    console.error(`[read failed] ${ran.what}:`, ran.error);
+    throw new ReadFailed(ran.what, String((ran.error as { message?: string })?.message ?? ""));
+  }
 
   // Each agreement's own lead: the morning it enters its last half, or
   // `leadCapDays` before its end, whichever is later. Listed from that day.
-  const due = (stays ?? []).filter((s) => {
+  const due = stays.filter((s) => {
     const r = parseDaterange(s.during as string);
     if (!r) return false;
     const askFrom = addDays(r.end, -renewalLeadDays(r.start, r.end, leadCapDays));
@@ -601,7 +698,7 @@ export async function renewalsDue(
     // The THROWING core, not the button-shaped wrapper. `if (p.ok)` would drop
     // a household whose read failed straight out of the list, silently, which
     // is the one outcome this list exists to make impossible.
-    const p = await planNextAgreement(parkId, s.id as string);
+    const p = await planNextAgreement(parkId, s.id as string, undefined, ran);
     if (p.ok && p.preview) rows.push(p.preview);
   }
   rows.sort((a, b) => a.priorEnd.localeCompare(b.priorEnd));

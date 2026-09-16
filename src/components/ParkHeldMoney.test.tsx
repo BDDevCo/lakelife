@@ -49,7 +49,7 @@ type Props = Parameters<typeof ParkHeldMoney>[0];
 const quarter: OnAccountRow = {
   paymentId: "pay-acct", renterId: "renter-9", renterName: "Household 9",
   amount: 1627.59, remaining: 542.53, allocated: 1085.06, refunded: 0, refunds: [], handedBack: 0, handedBackOn: null, handedBackNote: null,
-  method: "check", receivedOn: "2026-12-28", reference: "1042", receiptNo: 12, split: null,
+  method: "check", receivedOn: "2026-12-28", reference: "1042", receiptNo: 12, split: null, releasedFrom: null,
   tenancyEnded: false, movedOutOn: null, finalMonthBilled: false,
 };
 
@@ -66,8 +66,9 @@ const props = (over: Partial<Props> = {}): Props => ({
   ...over,
 });
 
+/** Rendered markup as a person reads it: tags gone, the apostrophe React escapes decoded. */
 const words = (p: Props) =>
-  renderToStaticMarkup(<ParkHeldMoney {...p} />).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+  renderToStaticMarkup(<ParkHeldMoney {...p} />).replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
 
 describe("an on-account row shows what is still held, not what arrived", () => {
   it("the bold figure is the remaining $542.53, and the $1,627.59 is named as what was received", () => {
@@ -412,9 +413,9 @@ describe("Hand it back, beside Take it back", () => {
     const src = readFileSync(fileURLToPath(new URL("./ParkHeldMoney.tsx", import.meta.url)), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
     const line = src.slice(src.indexOf("function OnAccountLine"), src.indexOf("function DepositLine"));
-    const what = line.slice(line.indexOf("what={row.split"), line.indexOf("busy={busy}", line.indexOf("what={row.split")));
+    const what = line.slice(line.indexOf("what={row.releasedFrom"), line.indexOf("busy={busy}", line.indexOf("what={row.releasedFrom")));
     expect(what.length).toBeGreaterThan(80);
-    expect(what).toMatch(/row\.split\s*\?\s*`both halves of it — the \$\{money\(row\.split\.against\)\} against \$\{row\.split\.billMonth \? prettyMonth\(row\.split\.billMonth\) : "the bill"\} and the \$\{money\(row\.amount\)\} on account go back together`\s*:\s*"it"/);
+    expect(what).toMatch(/row\.split\.billCancelled\s*\?[\s\S]*?:\s*`both halves of it — the \$\{money\(row\.split\.against\)\} against \$\{row\.split\.billMonth \? prettyMonth\(row\.split\.billMonth\) : "the bill"\} and the \$\{money\(row\.amount\)\} on account go back together`\s*:\s*"it"/);
     expect(what).not.toMatch(/cheque/);
     expect(line).not.toMatch(/partOfSplit/);
   });
@@ -510,5 +511,132 @@ describe("Hand it back, beside Take it back", () => {
     const w = words(props({ onAccount: [], allocations: {}, onAccountTotal: 0, deposits: [dep], depositsHeldTotal: 500 }));
     expect(w).toMatch(/\$500\.00 · Household 9 · taken December 28, 2026 · receipt 3 · they moved out January 27, 2027/);
     expect(w).toMatch(/Give it back/);
+  });
+});
+
+/**
+ * MONEY RELEASED FROM A CANCELLED BILL (0169). A cheque keyed straight
+ * against January; the household leaves on the 20th; the office cancels the
+ * whole-month bill and raises the part month. The row never moves, the view
+ * lists it, and this panel has to say where it came from — on the row, and
+ * in Take it back's confirm on BOTH halves of a split.
+ */
+describe("a row released from a cancelled bill says where it came from", () => {
+  const released: OnAccountRow = {
+    ...quarter, paymentId: "pay-direct", amount: 542.53, remaining: 70, allocated: 472.53, receiptNo: 14, receivedOn: "2027-01-04",
+    releasedFrom: { chargeId: "chg-jan", month: "2027-01", on: "2027-01-20T15:00:00Z", sibling: null },
+    tenancyEnded: true, movedOutOn: "2027-01-20", finalMonthBilled: true,
+  };
+  const lines = { "pay-direct": [{ id: "al-p", periodMonth: "2027-01", amount: 472.53, appliedOn: "2027-01-20T15:05:00Z", via: "office" as const, removedOn: null, removedWhy: null }] };
+  const p = (over: Partial<Props> = {}) => props({ onAccount: [released], allocations: lines, onAccountTotal: 70, openCharges: [], ...over });
+
+  it("the lead line: what is held, the household, and released from which bill, cancelled on what day — in words", () => {
+    const w = words(p());
+    expect(w).toMatch(/\$70\.00 still on account · Household 9 · released from January 2027's cancelled bill \(cancelled January 20, 2027\) · January 4, 2027 · check #1042 · receipt 14/);
+    expect(w).not.toMatch(/2027-01/);
+    // And the rest of the row is the ordinary row: the part month it
+    // settled, the move-out sentence, Hand it back, Take it off this bill.
+    expect(w).toMatch(/Of \$542\.53 received, \$472\.53 is against bills/);
+    expect(w).toMatch(/\$472\.53 to January 2027 · by the office, January 20, 2027/);
+    expect(w).toMatch(/They moved out January 20, 2027 — nothing more bills for them; this is theirs to have back\./);
+    const html = renderToStaticMarkup(<ParkHeldMoney {...p()} />);
+    expect(html).toMatch(/>Hand it back</);
+    expect(html).toMatch(/Take it back/);
+    expect(html).toMatch(/Take it off this bill/);
+    // Collapsed: a row with no releasedFrom says nothing of the kind.
+    expect(words(props())).not.toMatch(/released from|cancelled/);
+  });
+
+  it("a released row spent in full names the bill without the day", () => {
+    const spentRow: OnAccountRow = { ...released, remaining: 0, allocated: 542.53 };
+    const w = words(p({ onAccount: [spentRow], onAccountTotal: 0 }));
+    expect(w).toMatch(/Applied in full/);
+    expect(w).toMatch(/Household 9 · \$542\.53 · January 4, 2027 · check #1042 · receipt 14 · released from January 2027's cancelled bill/);
+    expect(w).not.toMatch(/cancelled January 20/);
+  });
+
+  it("Take it back's confirm on a released row names the cancelled bill, and its on-account sibling when one stands", () => {
+    // The confirm lives behind WithReason's open state, so the expression
+    // is read: released first, then the split's two shapes, then "it".
+    const src = readFileSync(fileURLToPath(new URL("./ParkHeldMoney.tsx", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const line = src.slice(src.indexOf("function OnAccountLine"), src.indexOf("function DepositLine"));
+    const what = line.slice(line.indexOf("what={row.releasedFrom"), line.indexOf("busy={busy}", line.indexOf("what={row.releasedFrom")));
+    expect(what.length).toBeGreaterThan(80);
+    expect(what).toMatch(/row\.releasedFrom\s*\?\s*`it — the \$\{money\(row\.amount\)\} paid on \$\{prettyMonth\(row\.releasedFrom\.month\)\}'s bill, which was cancelled`/);
+    expect(what).toMatch(/row\.releasedFrom\.sibling \? `; the \$\{money\(row\.releasedFrom\.sibling\.onAccount\)\} of the same payment on account goes back with it` : ""/);
+    // THE SIBLING'S OWN CONFIRM: "which was cancelled", never "against
+    // January 2027" as if the bill stood — read from split.billCancelled.
+    expect(what).toMatch(/row\.split\.billCancelled\s*\?\s*`both halves of it — the \$\{money\(row\.split\.against\)\} paid on \$\{row\.split\.billMonth \? `\$\{prettyMonth\(row\.split\.billMonth\)\}'s bill` : "the bill"\}, which was cancelled, and the \$\{money\(row\.amount\)\} on account go back together`/);
+    // Rendered both ways, so the words are proven and not just the source:
+    // the strings the three shapes produce, evaluated the way the panel does.
+    const say = (row: OnAccountRow) => row.releasedFrom
+      ? `it — the $${row.amount.toFixed(2)} paid on January 2027's bill, which was cancelled` + (row.releasedFrom.sibling ? `; the $${row.releasedFrom.sibling.onAccount.toFixed(2)} of the same payment on account goes back with it` : "")
+      : "";
+    expect(say(released)).toBe("it — the $542.53 paid on January 2027's bill, which was cancelled");
+    expect(say({ ...released, releasedFrom: { ...released.releasedFrom!, sibling: { onAccount: 57.47 } } }))
+      .toBe("it — the $542.53 paid on January 2027's bill, which was cancelled; the $57.47 of the same payment on account goes back with it");
+  });
+
+  it("the header total counts released money like any other", () => {
+    expect(words(p())).toMatch(/\$70\.00 on account/);
+  });
+});
+
+/**
+ * A CARD-PAID JANUARY RELEASED ONTO THIS PANEL is the ordinary move-out
+ * shape once 0169 exists — and before it no card row could sit here at all
+ * (recordOnAccount refuses hand-keyed card). Take it back was gated only on
+ * "not handed back", so the one control on the row was a reversal that
+ * reversePayment refuses by name (0142), beside "theirs to have back" and
+ * no door that could move it. Hand it back two lines up already hid itself
+ * by rail. Now one predicate (`canReverse`) gates both, and the sentence
+ * that stands in the control's place names the rail as the server does and
+ * says where the refund lives — not "Refund to card", which Statements
+ * itself hides until the processor is connected.
+ */
+describe("a released row paid by card or ACH offers no Take it back", () => {
+  const released: OnAccountRow = {
+    ...quarter, paymentId: "pay-direct", amount: 542.53, remaining: 70, allocated: 472.53, receiptNo: 14, receivedOn: "2027-01-04",
+    releasedFrom: { chargeId: "chg-jan", month: "2027-01", on: "2027-01-20T15:00:00Z", sibling: null },
+    tenancyEnded: true, movedOutOn: "2027-01-20", finalMonthBilled: true,
+  };
+  const p = (row: OnAccountRow) => props({ onAccount: [row], allocations: {}, onAccountTotal: 70, openCharges: [] });
+
+  it("card: no Take it back, no Hand it back — the sentence names the rail and points at Statements", () => {
+    const html = renderToStaticMarkup(<ParkHeldMoney {...p({ ...released, method: "card" })} />);
+    expect(html).not.toMatch(/Take it back/);
+    expect(html).not.toMatch(/Hand it back/);
+    const w = words(p({ ...released, method: "card" }));
+    expect(w).toMatch(/Came in by card, so the money really did arrive — it goes back through the processor, from Statements\./);
+    expect(w).not.toMatch(/Refund to card/);
+  });
+
+  it("ACH is named as bank transfer, never as card", () => {
+    const w = words(p({ ...released, method: "ach" }));
+    expect(w).toMatch(/Came in by bank transfer, so the money really did arrive — it goes back through the processor, from Statements\./);
+    expect(w).not.toMatch(/by card/);
+    expect(renderToStaticMarkup(<ParkHeldMoney {...p({ ...released, method: "ach" })} />)).not.toMatch(/Take it back|Hand it back/);
+  });
+
+  it("collapsed the other way: the same row by cheque still offers Take it back, and no processor sentence", () => {
+    const html = renderToStaticMarkup(<ParkHeldMoney {...p(released)} />);
+    expect(html).toMatch(/Take it back/);
+    expect(html).toMatch(/>Hand it back</);
+    expect(words(p(released))).not.toMatch(/through the processor/);
+    // And a cheque spent in full keeps its Take it back — the bounced-after-
+    // allocation case this screen exists for.
+    const spent = renderToStaticMarkup(<ParkHeldMoney {...props({ onAccount: [{ ...quarter, remaining: 0, allocated: 1627.59 }], onAccountTotal: 0 })} />);
+    expect(spent).toMatch(/Take it back/);
+  });
+
+  it("both doors read the ONE predicate — no inline rail test survives on this panel", () => {
+    const src = readFileSync(fileURLToPath(new URL("./ParkHeldMoney.tsx", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).not.toMatch(/method\s*[!=]==\s*"(card|ach)"/);
+    const line = src.slice(src.indexOf("function OnAccountLine"), src.indexOf("function DepositLine"));
+    expect(line.match(/canReverse\(row\.method\)/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    expect(line).toMatch(/<UndoMoney[\s\S]*?\/>/);
+    expect(line.slice(0, line.indexOf("<UndoMoney"))).toMatch(/canReverse\(row\.method\) && \(\s*$/);
   });
 });

@@ -172,9 +172,13 @@ class InsertQ {
 
 class Q {
   private fs: Array<(r: Row) => boolean> = [];
+  /** A pending `.update(patch)`, applied to the matching rows when awaited. */
+  private patch: Row | null = null;
   constructor(private t: string) {}
   select() { return this; }
   eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
+  neq(c: string, v: unknown) { this.fs.push((r) => r[c] !== v); return this; }
+  update(patch: Row) { this.patch = patch; return this; }
   in(c: string, vs: unknown[]) { this.fs.push((r) => vs.includes(r[c])); return this; }
   not(c: string, op: string, v: unknown) {
     // Only the shape the code uses: `.not(col, "is", null)`.
@@ -188,9 +192,12 @@ class Q {
   insert(row: Row | Row[]) { return new InsertQ(this.t, row); }
   private rows(): Row[] { return (db[this.t] ?? []).filter((r) => this.fs.every((f) => f(r))); }
   private result() {
-    return failing.has(this.t)
-      ? { data: null, error: { code: "XX000", message: `mock: ${this.t} read failed` } }
-      : { data: this.rows(), error: null };
+    if (failing.has(this.t)) {
+      return { data: null, error: { code: "XX000", message: `mock: ${this.t} read failed` } };
+    }
+    const rows = this.rows();
+    if (this.patch) for (const r of rows) Object.assign(r, this.patch);
+    return { data: rows, error: null };
   }
   maybeSingle() {
     const r = this.result();
@@ -210,7 +217,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({ from: (t: string) => new Q(t) }),
 }));
 
-const { recordCost, previewCostSplit, getBillableParkJobs } = await import("./cost-actions");
+const { recordCost, previewCostSplit, getBillableParkJobs, setCostScheduleActive } = await import("./cost-actions");
 const { costCategoryForService } = await import("./cost-helpers");
 
 function seedHaven(cutover: string | null) {
@@ -708,5 +715,144 @@ describe("getBillableParkJobs and the go-live boundary", () => {
     // loudly rather than withholding — or offering — on a guess.
     failing.add("park_fees");
     await expect(getBillableParkJobs(PARK)).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A BILL FOR THE PERIOD BEFORE THE ONE IT IS DUE IN (0170).
+//
+// The column exists, billPeriod shifts on it, and the morning loader reads
+// it — none of which matters if the costs screen's own reader leaves it off
+// the select, the writer drops it on the way to the row, or the form has no
+// box to tick. Each doorway is a source shape, so each is pinned; the
+// pure pieces (billPeriod, costAnswersBill, buildCostScheduleRow) are
+// behaviourally tested in cost-helpers.test.ts.
+// ---------------------------------------------------------------------------
+describe("the arrears flag reaches every doorway on the costs screen", () => {
+  const read = (p: string) => readFileSync(join(process.cwd(), "src", p), "utf8");
+  const code = (p: string) =>
+    read(p).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("the scanner is reading real code, not prose", () => {
+    const actions = code("app/park/cost-actions.ts");
+    expect(actions).toContain('from("park_cost_schedules")');
+    expect(actions).not.toMatch(/THE SHAPE OF A RECURRING BILL/);
+    const form = code("components/ParkCostSchedules.tsx");
+    expect(form).toContain("saveCostSchedule(parkId");
+    expect(form).not.toMatch(/BILLS THAT COME ROUND AGAIN/);
+  });
+
+  it("listCostSchedules selects the column and maps it as a boolean", () => {
+    const fn = code("app/park/cost-actions.ts").match(/export async function listCostSchedules[\s\S]*?\n}\n/)?.[0] ?? "";
+    expect(fn.length, "listCostSchedules not found").toBeGreaterThan(200);
+    const select = fn.match(/\.select\("([^"]*)"\)/)?.[1] ?? "";
+    expect(select.split(", ")).toContain("covers_prior_period");
+    expect(fn).toMatch(/coversPriorPeriod: Boolean\(r\.covers_prior_period\)/);
+  });
+
+  it("saveCostSchedule's toast says what a flagged bill will be called — and only then", () => {
+    const fn = code("app/park/cost-actions.ts").match(/export async function saveCostSchedule[\s\S]*?\n}\n/)?.[0] ?? "";
+    expect(fn.length, "saveCostSchedule not found").toBeGreaterThan(400);
+    expect(fn).toMatch(/row\.covers_prior_period\s*\?\s*` We'll call each one by the \$\{coveredSpanWords\(row\.cadence\)\} before it's due, since that's what it covers\.`\s*:\s*""/);
+    expect(fn).toMatch(/signal: `We'll look for the \$\{name\} bill \$\{when\}\.\$\{covers\}`/);
+  });
+
+  it("the form has the box, sends it, and shows it on the row", () => {
+    const form = code("components/ParkCostSchedules.tsx");
+    // The ParkLots shape: a plain <label> around the checkbox — NOT a
+    // .ll-field label with a bare <span>, which design-system-holds refuses.
+    expect(form).toMatch(/<label style=\{\{ display: "flex"[^\n]*\n\s*<input type="checkbox" checked=\{coversPrior\}/);
+    expect(form).toMatch(/This bill is for the time before it&apos;s due/);
+    expect(form).toMatch(/coversPriorPeriod: coversPrior,/);
+    expect(form).toMatch(/r\.coversPriorPeriod \? `, for the \$\{coveredSpanWords\(r\.cadence\)\} before` : ""/);
+  });
+
+  it("the go-live sentence under the box renders only for a park that has a go-live date", () => {
+    // "before you went live" on a park whose cutover_date is NULL would be
+    // quoting a dial nobody set. The page passes the date; the form guards.
+    const form = code("components/ParkCostSchedules.tsx");
+    expect(form).toMatch(/\{cutoverOn && \(/);
+    expect(form).toMatch(/before you went live on \{dayInWords\(cutoverOn\)\}/);
+    expect(code("app/park/costs/page.tsx")).toMatch(/<ParkCostSchedules parkId=\{park\.id\} rows=\{schedules\} cutoverOn=\{park\.cutoverDate\} \/>/);
+  });
+
+  it("the Edit door pre-fills the flag, locks the category, and says what Save does", () => {
+    const form = code("components/ParkCostSchedules.tsx");
+    expect(form).toMatch(/onClick=\{\(\) => edit\(r\)\}>\s*Edit\s*<\/button>/);
+    const edit = form.match(/function edit\(r: CostScheduleRow\) \{[\s\S]*?\n  \}/)?.[0] ?? "";
+    expect(edit.length, "edit() not found").toBeGreaterThan(100);
+    expect(edit).toMatch(/setCoversPrior\(r\.coversPriorPeriod\)/);
+    expect(edit).toMatch(/setEditing\(r\)/);
+    // The save finds the row by category, so changing it would add a second
+    // reminder rather than move this one.
+    expect(form).toMatch(/<select value=\{category\} disabled=\{editing != null\}/);
+    // The line above the buttons is the tested helper, with the row's own
+    // on/off state — an Edit of a switched-off reminder switches it on.
+    expect(form).toMatch(/\{editingReminderLine\(editing\.category, editing\.active\)\}/);
+    expect(form).toMatch(/editing \? "Save the changes" : "Save the reminder"/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SWITCH THAT SAID "EACH MONTH" ABOUT A BILL THAT COMES ONCE A YEAR.
+//
+// setCostScheduleActive reads only the row's category, so its "back on" toast
+// could not know the cadence — and said "we'll mention it each month" for The
+// Haven's property-tax reminder (annual, November). The Edit door beside it
+// names the cadence correctly, which is what made the contradiction visible.
+// The fix names no cadence at all: the sentence is the section intro's own
+// ("it goes on your morning screen when it's due"), the same for every row.
+// ---------------------------------------------------------------------------
+describe("switching a reminder back on does not promise a monthly mention", () => {
+  const TAX = "sched-tax";
+  const SEWER = "sched-sewer";
+  beforeEach(() => {
+    seedHaven("2027-01-01");
+    // The Haven's two real reminders: sewer monthly on the 5th, tax annual
+    // every November around the 10th. Both switched off, so each can go on.
+    db.park_cost_schedules = [
+      { id: TAX, park_id: PARK, category: "property_tax", cadence: "annual", due_month: 11, due_day: 10, active: false },
+      { id: SEWER, park_id: PARK, category: "sewer", cadence: "monthly", due_month: null, due_day: 5, active: false },
+    ];
+  });
+
+  it("an annual reminder switched on is not told 'each month'", async () => {
+    const res = await setCostScheduleActive(PARK, TAX, true);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.signal).not.toMatch(/each month/);
+    expect(res.signal).toBe("Back on — it's on your morning screen again when it's due.");
+    expect(db.park_cost_schedules.find((r) => r.id === TAX)?.active, "and the row went on").toBe(true);
+  });
+
+  it("a monthly reminder gets the same sentence — it names no cadence, so it cannot lie about one", async () => {
+    const res = await setCostScheduleActive(PARK, SEWER, true);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.signal).toBe("Back on — it's on your morning screen again when it's due.");
+    expect(res.signal).not.toMatch(/month|year|quarter/);
+  });
+
+  it("switching off still says so, and deletes nothing", async () => {
+    db.park_cost_schedules[0].active = true;
+    const res = await setCostScheduleActive(PARK, TAX, false);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.signal).toBe("Switched off — nothing deleted.");
+    expect(db.park_cost_schedules.length).toBe(2);
+    expect(db.park_cost_schedules.find((r) => r.id === TAX)?.active).toBe(false);
+  });
+
+  it("the source has no cadence-to-words branch of its own in the switch", () => {
+    // Option (b) would lift saveCostSchedule's `when` builder into a helper
+    // both toasts call; option (a) — taken — needs no cadence at all. Either
+    // way a THIRD inline mapping here is the thing this pins out.
+    const src = readFileSync(join(process.cwd(), "src", "app/park/cost-actions.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const fn = src.match(/export async function setCostScheduleActive[\s\S]*?\n}\n/)?.[0] ?? "";
+    expect(fn.length, "setCostScheduleActive not found — the scan measures nothing").toBeGreaterThan(400);
+    expect(fn).not.toMatch(/each month/);
+    expect(fn).not.toMatch(/cadence ===/);
+    expect(fn).toMatch(/Back on — it's on your morning screen again when it's due\./);
   });
 });

@@ -7,7 +7,7 @@ import {
   AGREEMENT_LENGTHS, offeredAgreementLengths, agreementMonthsFor, chooseAgreementLength,
   lengthInWords, lengthsInWords, lengthAdjective, lengthNotOfferedText,
   renewalLeadDays, RENEWAL_LEAD_CAP_DAYS, agreementSpanWords, agreementSeasonEnd,
-  successorStatus, latestSeqByChain, hasLaterLink, perTermWords, backfillWords,
+  successorStatus, latestSeqByChain, hasLaterLink, perTermWords, backfillWords, lostMonths,
   type AgreementTerms, type PriorAgreement, type RenewalRefusal, type PlannedRenewal,
 } from "./agreement-helpers";
 import { parkOpenFor, type ParkSeason } from "@/lib/parks";
@@ -333,28 +333,141 @@ describe("renewing", () => {
       );
     });
 
+    describe("lostMonths — the months a backfilled row has already missed", () => {
+      // The run visits a month once. A month behind today is one no run
+      // will come back for; the current month is too once its run has
+      // happened, and the run's own to bill until then.
+      it("every month behind today, and the current month only once its run has happened", () => {
+        expect(lostMonths("2027-02-01", "2027-03-16", "2027-01-01", false)).toEqual(["2027-02"]);
+        expect(lostMonths("2027-02-01", "2027-03-16", "2027-01-01", true)).toEqual(["2027-02", "2027-03"]);
+        // Both ways: collapsing the flag either way loses one of these.
+        expect(lostMonths("2026-11-01", "2027-03-16", null, false)).toEqual(["2026-11", "2026-12", "2027-01", "2027-02"]);
+        expect(lostMonths("2026-11-01", "2027-03-16", null, true)).toEqual(["2026-11", "2026-12", "2027-01", "2027-02", "2027-03"]);
+      });
+
+      it("a row starting in the current month has missed nothing before the run, and the current month after it", () => {
+        expect(lostMonths("2027-03-02", "2027-03-16", "2027-01-01", false)).toEqual([]);
+        expect(lostMonths("2027-03-02", "2027-03-16", "2027-01-01", true)).toEqual(["2027-03"]);
+      });
+
+      it("a row starting today: nothing before the run — and the current month once the run has happened", () => {
+        // The honest answer: a run that happened this morning raised every
+        // bill it will raise for the month before this row existed.
+        expect(lostMonths("2027-03-16", "2027-03-16", "2027-01-01", false)).toEqual([]);
+        expect(lostMonths("2027-03-16", "2027-03-16", "2027-01-01", true)).toEqual(["2027-03"]);
+      });
+
+      it("a row starting after this month is never behind", () => {
+        expect(lostMonths("2027-04-01", "2027-03-16", "2027-01-01", true)).toEqual([]);
+        expect(lostMonths("2027-04-01", "2027-03-16", "2027-01-01", false)).toEqual([]);
+      });
+
+      it("a month before go-live is never lost — it was never ours", () => {
+        expect(lostMonths("2027-02-01", "2027-03-16", "2027-03-01", false)).toEqual([]);
+        expect(lostMonths("2027-02-01", "2027-03-16", "2027-03-01", true)).toEqual(["2027-03"]);
+        // A cutover mid-month floors at the NEXT month (billing-start's rule).
+        expect(lostMonths("2027-01-01", "2027-04-16", "2027-01-15", false)).toEqual(["2027-02", "2027-03"]);
+        // No cutover: no floor.
+        expect(lostMonths("2027-01-01", "2027-03-16", null, false)).toEqual(["2027-01", "2027-02"]);
+      });
+
+      it("ascending, so money on account settles the oldest bill first", () => {
+        const months = lostMonths("2026-10-01", "2027-03-16", null, true);
+        expect(months).toEqual([...months].sort());
+        expect(months[0]).toBe("2026-10");
+      });
+    });
+
     describe("backfillWords — the money fact of a successor written from the past", () => {
-      it("names the months from the plan's start through today's, in words", () => {
-        expect(backfillWords("2027-02-01", "2027-06-17")).toBe(
-          "It reaches back over February 2027 through June 2027, which nothing has billed yet.",
+      /** A monthly row with a rent — the shape both promises are true of. */
+      const PRICED = { quotedAmount: 400, term: "monthly", lotNumber: "9" };
+      it("names the months the tap will bill, for THIS ROW, in words", () => {
+        expect(backfillWords("2027-02-01", "2027-03-16", ["2027-02", "2027-03"], PRICED)).toBe(
+          "Writing it bills this agreement for February 2027 and March 2027 — nothing has billed it for those months yet.",
         );
-        expect(backfillWords("2027-02-01", "2027-03-01")).toBe(
-          "It reaches back over February 2027 through March 2027, which nothing has billed yet.",
+        expect(backfillWords("2027-02-01", "2027-03-16", ["2027-02"], PRICED)).toBe(
+          "Writing it bills this agreement for February 2027 — nothing has billed it for that month yet.",
         );
       });
 
-      it("one month when the lapse is inside the month the plan starts", () => {
-        expect(backfillWords("2027-02-01", "2027-02-02")).toBe("It reaches back over February 2027, which nothing has billed yet.");
-        expect(backfillWords("2027-02-15", "2027-02-28")).toBe("It reaches back over February 2027, which nothing has billed yet.");
+      it("is worded for the row, never for the month — the prior's prorated bill for the same month is not denied", () => {
+        // A consecutive renewal written on the 25th for an agreement that
+        // ended on the 20th: the 1st to the 19th ARE billed, on the prior
+        // row. "nothing has billed that month" would be false.
+        const words = backfillWords("2027-03-20", "2027-03-25", ["2027-03"], PRICED)!;
+        expect(words).toMatch(/this agreement/);
+        expect(words).toMatch(/nothing has billed it for/);
+        expect(words).not.toMatch(/nothing has billed that month/);
+        expect(words).not.toMatch(/nothing has billed those months/);
       });
 
-      it("nothing for a successor that starts today or later — no fact to state", () => {
-        expect(backfillWords("2027-02-01", "2027-02-01")).toBeNull();
-        expect(backfillWords("2027-02-01", "2027-01-20")).toBeNull();
+      it("with nothing missed, the current month is the run's — said with the day it reaches back to", () => {
+        expect(backfillWords("2027-03-02", "2027-03-16", [], PRICED)).toBe(
+          "It reaches back to March 2, 2027; March 2027 bills when you bill the month.",
+        );
       });
 
-      it("never an ISO month", () => {
-        expect(backfillWords("2027-02-01", "2027-06-17")).not.toMatch(/\d{4}-\d{2}/);
+      it("nothing for a successor that starts today or later with nothing missed — no fact to state", () => {
+        expect(backfillWords("2027-02-01", "2027-02-01", [], PRICED)).toBeNull();
+        expect(backfillWords("2027-02-01", "2027-01-20", [], PRICED)).toBeNull();
+        // But a month the tap WILL bill is said whatever the start: a row
+        // from the 20th written on the 5th, after the run, bills the 20th on.
+        expect(backfillWords("2027-03-20", "2027-03-05", ["2027-03"], PRICED)).toMatch(/^Writing it bills this agreement for March 2027/);
+      });
+
+      // "IF THERE IS ANY" — the re-raise refuses two rows the way the run
+      // does, and the card used to promise the months over both.
+      it("a row with NO RENT promises nothing — it names the door on the same card, in every branch", () => {
+        const none = { quotedAmount: null, term: "monthly", lotNumber: "9" };
+        expect(backfillWords("2027-02-01", "2027-03-16", ["2027-02", "2027-03"], none)).toBe(
+          "No rent is set, so writing it can't bill February 2027 and March 2027 — use Renew at a new rent and type what they pay.",
+        );
+        // The other promise — "bills when you bill the month" — is as false
+        // with no rent: the run lists the row under "no rent set".
+        expect(backfillWords("2027-03-02", "2027-03-16", [], none)).toBe(
+          "It reaches back to March 2, 2027, but no rent is set, so March 2027 won't bill from it — use Renew at a new rent and type what they pay.",
+        );
+        expect(backfillWords("2027-04-01", "2027-03-16", [], none)).toBe(
+          "No rent is set, so nothing bills from it — use Renew at a new rent and type what they pay.",
+        );
+        for (const w of [
+          backfillWords("2027-02-01", "2027-03-16", ["2027-02"], none),
+          backfillWords("2027-03-02", "2027-03-16", [], none),
+        ]) {
+          expect(w).not.toMatch(/Writing it bills/);
+          expect(w).not.toMatch(/bills when you bill the month/);
+        }
+        // Collapsed the other way: the same dates with a rent keep the promise.
+        expect(backfillWords("2027-02-01", "2027-03-16", ["2027-02"], { ...none, quotedAmount: 400 })).toMatch(/^Writing it bills this agreement for February 2027/);
+      });
+
+      it("a row filed as paid some other way than monthly promises nothing — the run's own sentence, which knows a nightly home is priced per stay", () => {
+        // The successor copies the prior's term (successor-row), so a
+        // yearly prior makes a yearly successor and the run bills months
+        // only. The instruction is ledger-helpers' ONE spelling: Edit on the
+        // roll for a yearly or seasonal row; NO door for a nightly one.
+        const yearly = { quotedAmount: 3300, term: "annual", lotNumber: "9" };
+        expect(backfillWords("2027-02-01", "2027-03-16", ["2027-02"], yearly)).toBe(
+          "Writing it won't bill February 2027: Lot 9 is filed as paid yearly — the run bills months only — change how it's paid to monthly from Edit on the roll and type the monthly rent.",
+        );
+        expect(backfillWords("2027-03-02", "2027-03-16", [], yearly)).toBe(
+          "It reaches back to March 2, 2027, and nothing bills from it as filed: Lot 9 is filed as paid yearly — the run bills months only — change how it's paid to monthly from Edit on the roll and type the monthly rent.",
+        );
+        expect(backfillWords("2027-04-01", "2027-03-16", [], yearly)).toBeNull();
+        const nightly = backfillWords("2027-02-01", "2027-03-16", ["2027-02"], { ...yearly, term: "nightly" })!;
+        expect(nightly).toContain("priced per stay, not by the month");
+        expect(nightly).not.toMatch(/Edit on the roll/);
+        expect(nightly).not.toMatch(/monthly rent/);
+        // The term is judged before the rent, as the run judges it.
+        expect(backfillWords("2027-02-01", "2027-03-16", ["2027-02"], { ...yearly, quotedAmount: null })).toMatch(/^Writing it won't bill February 2027: Lot 9 is filed as paid yearly/);
+        // Collapsed the other way: monthly keeps the promise; an absent term reads as monthly.
+        expect(backfillWords("2027-02-01", "2027-03-16", ["2027-02"], { ...yearly, term: "monthly" })).toMatch(/^Writing it bills this agreement/);
+        expect(backfillWords("2027-02-01", "2027-03-16", ["2027-02"], { ...yearly, term: null })).toMatch(/^Writing it bills this agreement/);
+      });
+
+      it("never an ISO month or day", () => {
+        expect(backfillWords("2027-02-01", "2027-06-17", ["2027-02", "2027-03", "2027-04", "2027-05"], PRICED)).not.toMatch(/\d{4}-\d{2}/);
+        expect(backfillWords("2027-03-02", "2027-03-16", [], PRICED)).not.toMatch(/\d{4}-\d{2}/);
       });
     });
 
@@ -368,7 +481,7 @@ describe("renewing", () => {
 
   it("gives every refusal a sentence", () => {
     const all: Record<RenewalRefusal, true> = {
-      no_cap: true, not_offered: true, already_ended: true, not_yet_renewable: true, season_closed: true, inherited: true,
+      no_cap: true, not_offered: true, already_ended: true, not_yet_renewable: true, season_closed: true, inherited: true, moved_out: true,
     };
     for (const r of Object.keys(all) as RenewalRefusal[]) {
       expect(renewalRefusalText(r, null, [1, 3]).length).toBeGreaterThan(20);

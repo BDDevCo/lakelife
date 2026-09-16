@@ -4408,18 +4408,27 @@ export async function remindExpiringStays(): Promise<{
   // EVERY live row, stamped or not: the chain map below has to see a
   // household's later agreement even once that one has been asked in its own
   // right, and the stamp is judged per row by remindDecision (`alreadySent`).
-  const stays = mustRead("the stays coming to an end", await admin
+  // THE ENDED ROWS COME TOO — read once, then split, the way the owner's
+  // "Agreements to write" list (renewalsDue) and Today read them. A
+  // household closed out of its successor leaves the link before it
+  // approved/active, run out, with nothing HELD after it — but it has a
+  // later link, it is just `ended`. Built from the held rows alone the map
+  // could not see that link, and the night the prior's end fell inside the
+  // lead the sweep asked a family who had moved out whether they wanted to
+  // renew. Only the held rows are candidates below.
+  const everyRow = mustRead("the stays coming to an end", await admin
     .from("lot_reservations")
     // ONE string literal — supabase-js types a concatenated select as an error.
     .select("id, park_lot_id, renter_id, during, term, status, origin, quoted_amount, extended_count, extend_reminded_at, agreement_chain_id, agreement_seq")
-    .in("status", ["approved", "active"]));
+    .in("status", ["approved", "active", "ended"]));
+  const stays = (everyRow ?? []).filter((s) => s.status === "approved" || s.status === "active");
 
   // A CHAIN WITH A LATER LINK ALREADY HAS ITS NEXT AGREEMENT WRITTEN — the
   // owner's "Agreements to write" predicate, read here too. Without it the
   // night after a household renewed (by their tap, or the office for them)
   // the old row was read again and its own successor counted as "lot taken".
   // Not a refusal, no stamp, no count: they were not refused, they renewed.
-  const maxSeq = latestSeqByChain(stays ?? []);
+  const maxSeq = latestSeqByChain(everyRow ?? []);
 
   let reminded = 0;
   let unreached = 0;

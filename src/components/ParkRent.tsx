@@ -14,7 +14,7 @@ import type { ReceiptLines } from "@/app/park/receipt-helpers";
 import {
   LEDGER_LABEL, ledgerHeadline, runSummary, prettyMonth, shiftMonth, currentPeriod,
   notMonthlySentence, lotList, perStayTerm,
-  type RunPlan,
+  type RunPlan, type LedgerRow,
 } from "@/app/park/ledger-helpers";
 import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
 import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
@@ -104,6 +104,20 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
       toast(res.signal ?? "Done.");
       setPlan(null);
       router.refresh();
+    });
+  }
+
+  function cancelBill(r: LedgerRow) {
+    start(async () => {
+      const why = window.prompt(
+        r.paidTotal > 0
+          ? `${money(r.paidTotal)} is recorded against this bill. Why are you cancelling it?`
+          : "Why are you cancelling this bill?",
+      );
+      if (!why) return;
+      const res = await voidCharge(parkId, r.id, why);
+      toast(res.ok ? (res.signal ?? "Cancelled.") : (res.error ?? "Couldn't cancel."));
+      if (res.ok) router.refresh();
     });
   }
 
@@ -323,6 +337,23 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                         setPayingId(null);
                       }}>
                       {claimingId === r.id ? "Cancel" : "They say they paid"}
+                    </button>
+                  )}
+                  {/* CANCELLING THE BILL — on every live row, whatever is on
+                      it. This sat inside the Record-payment panel, which
+                      only opens on a balance, so a bill paid in full had no
+                      cancel door anywhere: the sign door refused a signing
+                      over a paid January and sent the office here, and here
+                      had nothing. voidCharge decides what the money on it
+                      does (0169 releases money taken against it onto the
+                      household's account; money on account refuses by name),
+                      so the prompt states only what the ledger says and lets
+                      the answer say where the money went. Hidden while a
+                      panel is open on the row — that row already has a
+                      "Cancel" that means "close this". */}
+                  {r.state !== "void" && payingId !== r.id && claimingId !== r.id && resolvingId !== r.id && (
+                    <button className="ll-btn ghost" disabled={busy} onClick={() => cancelBill(r)}>
+                      Cancel this bill
                     </button>
                   )}
                 </div>
@@ -616,18 +647,6 @@ function PaymentForm({
             })
           }>
           Record it
-        </button>
-        <button className="ll-btn ghost" disabled={busy}
-          onClick={() =>
-            start(async () => {
-              const why = window.prompt("Why are you cancelling this bill?");
-              if (!why) return;
-              const res = await voidCharge(parkId, chargeId, why);
-              toast(res.ok ? (res.signal ?? "Cancelled.") : (res.error ?? "Couldn't cancel."));
-              if (res.ok) onDone();
-            })
-          }>
-          Cancel this bill
         </button>
       </div>
     </div>

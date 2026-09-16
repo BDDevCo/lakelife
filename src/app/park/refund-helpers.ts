@@ -26,6 +26,17 @@ export interface RefundablePayment {
    * refundableOn's select in refund-helpers.test.ts.
    */
   charge_id: string | null;
+  /**
+   * THE BILL IT WAS AGAINST IS CANCELLED (0169): the money is released onto
+   * the household's account, derived — `charge_id` still names the void
+   * bill, and reading it alone would call a released cash row "against a
+   * bill" and send the office to a reversal it does not want. NOT a column:
+   * refundableOn derives it from the view (`released_from_charge_id` set on
+   * the row's `park_on_account_payments` entry). REQUIRED for the reason
+   * `returned_at` is: an optional field is a branch that silently never
+   * fires. Pinned in refund-helpers.test.ts against refundableOn's view read.
+   */
+  released: boolean;
   kind: string | null;
   reversed_at: string | null;
   /**
@@ -115,13 +126,15 @@ export function refundRefusal(pay: RefundablePayment, left: Remaining): string |
     // money handed across the window is the stamp on the row (0102 for a
     // deposit, 0168 for rent on account), written from that row's own line
     // under "Money not against a bill" on the Rent screen. Money against a
-    // bill has no hand-back: it is the bill's money, and the only correction
-    // is taking a WRONG record back, with the reason.
+    // LIVE bill has no hand-back: it is the bill's money, and the only
+    // correction is taking a WRONG record back, with the reason. Money
+    // against a CANCELLED bill is on account (0169) and goes back the way
+    // any money on account does.
     const by = `That was paid by ${pay.method ?? "hand"}, so there is no card to send it back to.`;
     if (pay.kind === "deposit") {
       return `${by} Give it back from its own line under Deposits on the Rent screen — that records the day and the amount.`;
     }
-    if (!pay.charge_id) {
+    if (!pay.charge_id || pay.released) {
       return `${by} Hand it back across the window and record it with "Hand it back" on its line under Money not against a bill, on the Rent screen — never by taking the record back.`;
     }
     return `${by} It is against a bill, so it isn't handed back — if the record is wrong, take it back with the reason.`;
@@ -195,7 +208,11 @@ export function refundCents(amount: number, feeAmount: number): number {
   return Math.round(round2(amount + feeAmount) * 100);
 }
 
-/** What the office is told once the money is on its way. */
+/**
+ * What the office is told once the money is on its way. `hasCharge` means
+ * the bill it was against is LIVE — a released row (0169) reopens nothing,
+ * its bill is void and the refund came off what was still on account.
+ */
 export function refundSignal(amount: number, feeAmount: number, hasCharge: boolean, method: string | null = null): string {
   // "SENT BACK TO THEIR CARD" WAS SAID OF ACH TOO. The rail is a fact the
   // row carries; the sentence names it rather than assuming the common case.

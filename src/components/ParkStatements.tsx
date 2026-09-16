@@ -7,11 +7,12 @@ import { getStatement, type StatementPage } from "@/app/park/receipts-actions";
 import { reversePayment, refundParkPayment, refundableOn } from "@/app/park/ledger-actions";
 import {
   money, receiptsHeadline, monthPeriod, quarterPeriod, yearPeriod, customPeriod,
-  notCollectedAt, takenBackWhy, onAccountKindLabel, isOnAccountRow, METHOD_LABEL,
+  notCollectedAt, takenBackWhy, onAccountKindLabel, isOnAccountRow, METHOD_LABEL, handedBackWhere,
   type Period, type OtherReceipt, type Method,
 } from "@/app/park/receipts-helpers";
-import { prettyMonth } from "@/app/park/ledger-helpers";
 import { longDate } from "@/lib/lake-time";
+import { describeAllocations, allocationWords } from "@/lib/allocations";
+import { canReverse } from "@/app/park/rail-helpers";
 
 /**
  * WHAT CAME IN, FOR THE ACCOUNTANT.
@@ -258,12 +259,41 @@ export function ParkStatements({
           <div className="ll-card ll-card-pad">
             <strong style={{ fontSize: 15 }}>Worth a look</strong>
             <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+              {/* RENT PAID ON A BILL THAT WAS LATER CANCELLED. Counted, because
+                  the money arrived — and since 0169 the ordinary move-out
+                  shape: the whole-month bill cancelled, its money released
+                  onto the household's account, the part month settled from
+                  it. `released` is the loader's read of where that money is
+                  now (the live allocations, the view's remaining, the
+                  hand-back stamp); a cancelled bill the view does not list
+                  (a void from before 0169, a released row since taken back)
+                  carries none and the sentence stops at "arrived". */}
               {s.againstVoided.map((r) => (
                 <div key={r.paymentId} style={{ fontSize: 13, lineHeight: 1.5 }}>
                   <strong>Lot {r.lotNumber}</strong> — {money(r.amountCents)} came in
                   on {longDate(r.receivedOn)} against a bill that was later cancelled. It&apos;s
-                  counted here because the money arrived. If you sent it back to a
-                  card, that refund is its own line below and in the file.
+                  counted here because the money arrived.
+                  {r.released
+                    ? ` It went on their account: ${describeAllocations(r.released.allocations, r.released.remainingCents / 100) || "none of it is still held"}.`
+                    : ""}
+                  {/* WHERE THE HAND-BACK'S LINE IS — the one helper the note
+                      uses, so "below and in the file" is said only when the
+                      loader's windowed read put the row in THIS file, and a
+                      hand-back in a later month names that month's statement. */}
+                  {r.released?.handedBackCents
+                    ? ` ${handedBackWhere(r.released, { asSentence: true })}.`
+                    : ""}
+                  {/* A REFUND, likewise, is in the file for the window it went
+                      back in (0142, by the day it went back). With the view's
+                      refunded figure on the row the sentence says what went
+                      back and where its line is; a released row nothing went
+                      back on keeps the "if" — a cancelled-bill receipt the view
+                      does not list carries no figure to say either way. */}
+                  {r.released
+                    ? (r.released.refundedCents > 0
+                        ? ` ${money(r.released.refundedCents)} went back to a card — ${r.released.refundedInFile ? "its own line below and in the file" : "its own line in the statement for the month it went back"}.`
+                        : "")
+                    : " If you sent it back to a card, that refund is its own line below and in the file."}
                 </div>
               ))}
               {/* MONEY TAKEN BACK. Kept out of every total above — a bounced
@@ -440,20 +470,20 @@ export function ParkStatements({
                 {/* AND NOT OFFERED WITHOUT A PROCESSOR TO DO IT. A switch is a
                     wish; the rail is what refunds. Hidden, and the owner told
                     why, rather than a button that declines every time. */}
-                {!notCollectedAt(r) && (r.method === "card" || r.method === "ach") && paymentsLive && (
+                {!notCollectedAt(r) && !canReverse(r.method) && paymentsLive && (
                   <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
                     onClick={() => openRefund(r.paymentId)}>
                     Refund to card
                   </button>
                 )}
-                {!notCollectedAt(r) && (r.method === "card" || r.method === "ach") && !paymentsLive && (
+                {!notCollectedAt(r) && !canReverse(r.method) && !paymentsLive && (
                   <span className="mut" style={{ fontSize: 12 }}>
                     refund needs the processor, which isn&apos;t connected
                   </span>
                 )}
                 {/* A TRANSPOSED DIGIT USED TO BE PERMANENT. The row survives
                     with its receipt number; only the money stops counting. */}
-                {!notCollectedAt(r) && r.method !== "card" && r.method !== "ach" && (
+                {!notCollectedAt(r) && canReverse(r.method) && (
                   <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
                     onClick={() => setReversing(r.paymentId)}>
                     Take it back
@@ -638,13 +668,17 @@ function OnAccountRows({ rows }: { rows: OtherReceipt[] }) {
                   {applied.length === 0
                     // "Comes off the next bill" is true only while the view says
                     // something is still held; a row given back, or one taken
-                    // back between the loader's two reads, must not promise it.
+                    // back between the loader's two reads, must not promise it
+                    // — and nor may a household nothing more bills for (the
+                    // loader's tenancy read, the held panel's own sentence).
                     ? (o.remainingCents === 0
                         ? "Given back."
                         : o.remainingCents == null
                           ? ""
-                          : "Not yet put against a bill — it comes off the next bill raised for that household.")
-                    : applied.map((a) => `${money(a.amountCents)} to ${prettyMonth(a.periodMonth)}`).join(", ")}
+                          : o.nothingMoreBills
+                            ? `Not yet put against a bill. They moved out${o.movedOutOn ? ` ${longDate(o.movedOutOn)}` : ""} — nothing more bills for them; this is theirs to have back.`
+                            : "Not yet put against a bill — it comes off the next bill raised for that household.")
+                    : applied.map((a) => allocationWords({ periodMonth: a.periodMonth, amount: a.amountCents / 100 })).join(", ")}
                 </div>
               )}
             </div>

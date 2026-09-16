@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   planSigning, defaultSigningDay, firstMonthBills, agreementAlreadyOver, agreementEndFrom,
   alreadyOverClause, signingRentSeed, SIGNED_LEASE_LABEL, newLeaseWords,
-  signingDayForLength, blankDayWords,
+  signingDayForLength, blankDayWords, signingSeedFor, ranOutRefusal, ranOutLeadWords,
   type Holdover, type SigningContext, type SigningInput,
 } from "./sign-helpers";
 import { contactProblem, signingExplainer } from "./onboard-helpers";
@@ -369,14 +369,125 @@ describe("what it refuses, and in what words", () => {
     expect(p.ok).toBe(true);
   });
 
-  it("a day after the arrangement ends has nothing to continue", () => {
+  // -------------------------------------------------------------------------
+  // THE DAY THE ROW RUNS FROM is judged against the arrangement's END
+  // (decision 3, 16 Sep: "it's billed at the new rent, if there is any").
+  // This door used to refuse every day on or after the end — the exactly
+  // consecutive day, and every lapsed holdover — as "nothing to carry on
+  // from", so a household whose arrangement ran out could never sign.
+  // -------------------------------------------------------------------------
+  it("a lease dated the arrangement's last morning is the consecutive case, not a gap — from that day, nothing trimmed", () => {
     const p = planSigning(
-      signed({ signedOn: "2028-01-05" }),
+      signed({ signedOn: "2028-01-01", agreementMonths: 3 }),
       imported(),
-      { ...HAVEN, todayISO: "2028-01-05" },
+      { ...HAVEN, todayISO: "2028-01-01" },
+    );
+    expect(p.ok, !p.ok ? p.error : "").toBe(true);
+    if (!p.ok) return;
+    expect(p.from).toBe("2028-01-01");
+    expect(p.holdover).toEqual({ id: "res-14", keep: true });
+    expect(p.successor.during).toBe("[2028-01-01,2028-04-01)");
+    expect(p.successor.status).toBe("active");
+    // The paper's day IS the day the row runs from: the sentence it always was.
+    expect(p.signal).toBe(
+      "On the new 3-month lease from January 1, 2028 — January 2028 bills $542.53 ($400.00 rent + $142.53 fees).",
+    );
+  });
+
+  it("an arrangement that RAN OUT writes the successor from its own end, whatever later day the paper says — and says so", () => {
+    // Lapsed 1 January 2028; the lease in his hand says the 15th, recorded
+    // on the 20th. The row runs from 1 January: the days since it ran out
+    // are on the lease's rent (the fee included), not free, not a fresh
+    // start from the next 1st.
+    const p = planSigning(
+      signed({ signedOn: "2028-01-15", agreementMonths: 3 }),
+      imported(),
+      { ...HAVEN, todayISO: "2028-01-20" },
+    );
+    expect(p.ok, !p.ok ? p.error : "").toBe(true);
+    if (!p.ok) return;
+    expect(p.from).toBe("2028-01-01");
+    expect(p.holdover).toEqual({ id: "res-14", keep: true });
+    expect(p.successor.during).toBe("[2028-01-01,2028-04-01)");
+    expect(p.successor.status).toBe("active");
+    expect(p.signal).toBe(
+      "Their arrangement ran out on January 1, 2028, so the new 3-month lease is recorded from that day — " +
+      "January 2028 bills $542.53 ($400.00 rent + $142.53 fees).",
+    );
+    // A mid-month end: the month bills both halves, and the lease's day is named.
+    const mid = planSigning(
+      signed({ signedOn: "2027-12-15", agreementMonths: 3 }),
+      imported({ range: { start: "2027-01-01", end: "2027-12-10" } }),
+      { ...HAVEN, todayISO: "2027-12-20" },
+    );
+    if (!mid.ok) throw new Error(mid.error);
+    expect(mid.from).toBe("2027-12-10");
+    expect(mid.successor.during).toBe("[2027-12-10,2028-03-10)");
+    expect(mid.signal).toBe(
+      "Their arrangement ran out on December 10, 2027, so the new 3-month lease is recorded from that day — " +
+      "December 2027 bills the arrangement they had to December 9, 2027, then the new lease from December 10, 2027 — " +
+      "$542.53 a month after that ($400.00 rent + $142.53 fees).",
+    );
+    // A day INSIDE the old window, recorded after it ran out, is still the
+    // trim — the paper's day is what the row runs from.
+    const inside = planSigning(
+      signed({ signedOn: "2027-12-15", agreementMonths: 3 }),
+      imported(),
+      { ...HAVEN, todayISO: "2028-01-20" },
+    );
+    if (!inside.ok) throw new Error(inside.error);
+    expect(inside.from).toBe("2027-12-15");
+    expect(inside.holdover).toEqual({ id: "res-14", trimTo: { start: "2027-01-01", end: "2027-12-15" } });
+    expect(inside.successor.during).toBe("[2027-12-15,2028-03-15)");
+    expect(inside.signal).toMatch(/^On the new 3-month lease from December 15, 2027/);
+  });
+
+  it("a day after an arrangement that has NOT yet ended has nothing to continue", () => {
+    const p = planSigning(
+      signed({ signedOn: "2028-01-15" }),
+      imported(),
+      { ...HAVEN, todayISO: "2027-12-01" },
     );
     expect(p.ok).toBe(false);
-    expect(!p.ok && p.error).toMatch(/ends on January 1, 2028/);
+    expect(!p.ok && p.error).toBe("Their current arrangement ends on January 1, 2028 — that's after it, so there's nothing to carry on from.");
+    expect(p).not.toHaveProperty("from");
+  });
+
+  it("already-over is judged from the day the row runs from — and, for an arrangement that ran out, names a length that reaches rather than a day box that cannot help", () => {
+    // Lapsed 1 June 2027, recorded 1 August at one month: [1 Jun, 1 Jul) is
+    // over. Three months from 1 June reaches 1 September — so pick that.
+    const p = planSigning(
+      signed({ signedOn: "2027-08-01", agreementMonths: 1 }),
+      imported({ range: { start: "2027-01-01", end: "2027-06-01" } }),
+      { ...HAVEN, todayISO: "2027-08-01" },
+    );
+    expect(p.ok).toBe(false);
+    expect(!p.ok && p.error).toBe(
+      "Their arrangement ran out on June 1, 2027, and from that day 1 month would be over already — pick 3 months.",
+    );
+    expect(!p.ok && p.error).not.toMatch(/check the day/);
+    // On 2 September even three months from 1 June is over: no length reaches.
+    const none = planSigning(
+      signed({ signedOn: "2027-09-02", agreementMonths: 1 }),
+      imported({ range: { start: "2027-01-01", end: "2027-06-01" } }),
+      { ...HAVEN, todayISO: "2027-09-02" },
+    );
+    expect(!none.ok && none.error).toBe(
+      "Their arrangement ran out on June 1, 2027, and even the longest agreement this park writes, run from that day, " +
+      "would be over already — there's nothing to record from here.",
+    );
+    expect(!none.ok && none.error).not.toMatch(/pick|check the day/);
+    // The same words, from the helper the form reads before the tap.
+    expect(ranOutRefusal("2027-06-01", 1, [1, 3], "2027-08-01")).toBe(!p.ok ? p.error : "");
+    expect(ranOutRefusal("2027-06-01", 1, [1, 3], "2027-09-02")).toBe(!none.ok ? none.error : "");
+    // At three months it is written — from 1 June, active, to 1 September.
+    const three = planSigning(
+      signed({ signedOn: "2027-08-01", agreementMonths: 3 }),
+      imported({ range: { start: "2027-01-01", end: "2027-06-01" } }),
+      { ...HAVEN, todayISO: "2027-08-01" },
+    );
+    if (!three.ok) throw new Error(three.error);
+    expect(three.successor.during).toBe("[2027-06-01,2027-09-01)");
   });
 
   it("the lease has a rent on it — never assumed", () => {
@@ -481,22 +592,88 @@ describe("what it refuses, and in what words", () => {
 });
 
 describe("the day the form starts from — never today", () => {
+  const TODAY = "2027-01-04";
+
   it("an imported row's own first day, when the ledger already covers it", () => {
     // Everybody's lease runs from the takeover day; on the 4th the box
     // already says the 1st.
-    expect(defaultSigningDay("2027-01-01", "2027-01-01")).toBe("2027-01-01");
-    expect(defaultSigningDay("2027-01-01", null)).toBe("2027-01-01");
+    expect(defaultSigningDay("2027-01-01", "2027-01-01", "2028-01-01", TODAY)).toBe("2027-01-01");
+    expect(defaultSigningDay("2027-01-01", null, "2028-01-01", TODAY)).toBe("2027-01-01");
+    expect(defaultSigningDay("2027-01-01", null, null, TODAY)).toBe("2027-01-01");
   });
 
   it("blank for a holdover filed by hand before go-live — its first day is not a day a lease can run from", () => {
-    expect(defaultSigningDay("2026-12-20", "2027-01-01")).toBe("");
-    expect(defaultSigningDay(null, "2027-01-01")).toBe("");
+    expect(defaultSigningDay("2026-12-20", "2027-01-01", "2027-12-20", TODAY)).toBe("");
+    expect(defaultSigningDay(null, "2027-01-01", null, TODAY)).toBe("");
   });
 
-  it("takes no notion of today at all", () => {
-    // The signature has no today in it, on purpose: there is no way for the
-    // day the office got round to it to leak into the agreement's start.
-    expect(defaultSigningDay.length).toBe(2);
+  it("a holdover that RAN OUT seeds its own end — the day the row will run from whatever the paper says", () => {
+    // Lapsed 1 January 2028, the form opened on the 20th: the box says
+    // 1 January 2028, not 1 January 2027 (a day the trim would take, but
+    // not the day this lease runs from) and never the 20th.
+    expect(defaultSigningDay("2027-01-01", "2027-01-01", "2028-01-01", "2028-01-20")).toBe("2028-01-01");
+    // On the end day itself it has run out — the consecutive case seeds the same day.
+    expect(defaultSigningDay("2027-01-01", "2027-01-01", "2028-01-01", "2028-01-01")).toBe("2028-01-01");
+    // Still running: the start, as before. Both ways of the boundary.
+    expect(defaultSigningDay("2027-01-01", "2027-01-01", "2028-01-01", "2027-12-31")).toBe("2027-01-01");
+    // A hand-filed holdover from before go-live that ran out: its end, not blank.
+    expect(defaultSigningDay("2026-06-20", "2027-01-01", "2027-06-20", "2027-07-01")).toBe("2027-06-20");
+  });
+
+  it("today reaches it only as the judge of 'ran out' — it is never the seed", () => {
+    for (const today of ["2027-01-04", "2027-06-15", "2028-01-20"]) {
+      const day = defaultSigningDay("2027-01-01", "2027-01-01", "2028-01-01", today);
+      expect(day).not.toBe(today);
+      expect(["2027-01-01", "2028-01-01"]).toContain(day);
+    }
+  });
+});
+
+describe("the day box for a holdover that ran out — the seed IS the day", () => {
+  // Lapsed 1 January 2028, recorded 15 February at one month: from the
+  // end, one month is over. signingDayForLength would EMPTY the box, under
+  // a tap that then says "Pick the day the new lease runs from" about a
+  // day the row will carry whatever he types. The seed stays; the server
+  // names a longer length (ranOutRefusal).
+  it("keeps the seeded end whatever length is picked, fills a blank box with it, and leaves a typed day alone", () => {
+    expect(signingSeedFor("2028-01-01", "2028-01-01", 1, "2028-02-15", true)).toBe("2028-01-01");
+    expect(signingSeedFor("2028-01-01", "", 1, "2028-02-15", true)).toBe("2028-01-01");
+    expect(signingSeedFor("2028-01-01", "2027-12-15", 1, "2028-02-15", true)).toBe("2027-12-15");
+    // And the rule it bypasses would have emptied it.
+    expect(signingDayForLength("2028-01-01", "2028-01-01", 1, "2028-02-15")).toBe("");
+  });
+
+  it("is signingDayForLength for a holdover still running — both ways", () => {
+    for (const [seed, signedOn, months, today] of [
+      ["2027-01-01", "2027-01-01", 1, "2027-02-15"],
+      ["2027-01-01", "", 3, "2027-02-15"],
+      ["2027-01-01", "2027-02-01", 1, "2027-02-15"],
+      ["", "", 1, "2027-02-15"],
+    ] as const) {
+      expect(signingSeedFor(seed, signedOn, months, today, false)).toBe(signingDayForLength(seed, signedOn, months, today));
+    }
+    // The two rules disagree exactly where it matters.
+    expect(signingSeedFor("2028-01-01", "2028-01-01", 1, "2028-02-15", false)).toBe("");
+    expect(signingSeedFor("2028-01-01", "2028-01-01", 1, "2028-02-15", true)).toBe("2028-01-01");
+  });
+
+  it("the lead line says what the row will carry, and — only when the picked length is over from the end — what to pick", () => {
+    expect(ranOutLeadWords("2028-01-01", 3, [1, 3], "2028-01-20")).toBe(
+      "Their arrangement ran out on January 1, 2028 — the new lease is recorded from that day when the paper's day is later, " +
+      "and January 2028 bills from it at the lease's rent.",
+    );
+    expect(ranOutLeadWords("2028-01-01", 1, [1, 3], "2028-02-15")).toBe(
+      "Their arrangement ran out on January 1, 2028 — the new lease is recorded from that day when the paper's day is later, " +
+      "and January 2028 bills from it at the lease's rent. From that day 1 month would be over already — pick 3 months.",
+    );
+    // No length reaches: says so, instructs nothing the screen cannot honour.
+    const none = ranOutLeadWords("2028-01-01", 3, [1, 3], "2028-04-02");
+    expect(none).toMatch(/there's nothing to record from here\.$/);
+    expect(none).not.toMatch(/pick|type the day|check the day/);
+    // The tail is the server's own refusal, so the form and the tap agree.
+    const tail = ranOutLeadWords("2028-01-01", 1, [1, 3], "2028-02-15").split("rent. ")[1];
+    expect(ranOutRefusal("2028-01-01", 1, [1, 3], "2028-02-15")).toMatch(new RegExp(tail.charAt(0).toLowerCase() + tail.slice(1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$"));
+    expect(ranOutLeadWords("2028-01-01", 3, [1, 3], "2028-01-20")).not.toMatch(/\d{4}-\d{2}/);
   });
 });
 
@@ -631,17 +808,20 @@ describe("the form on the roll asks for the same fact the arithmetic uses", () =
     expect(form).not.toMatch(/ends the day they signed/);
   });
 
-  it("seeds the date from the holdover's own day and never from today", () => {
+  it("seeds the date from the holdover's own day — its END once it ran out — and never from today", () => {
     const seeded = form.match(/const seededDay = ([^;]+);/)?.[1] ?? "";
     expect(seeded, "the form no longer computes seededDay — this scan measures nothing").not.toBe("");
-    expect(seeded).toMatch(/defaultSigningDay\(/);
-    expect(seeded).not.toMatch(/\btoday\b/);
-    // The seed is the helper's answer for the house style; `today` reaches it
-    // only as the judge of 'already over' — signingDayForLength never
-    // returns it (pinned above).
-    const seed = form.match(/signedOn:\s*(signingDayForLength\([^)]*\))/)?.[1] ?? "";
+    // The one helper, handed the holdover's end too: for an arrangement
+    // that ran out it answers the end, the day the row is written from
+    // (planSigning's `keep`). `today` reaches it only as the judge of 'ran
+    // out' — defaultSigningDay never returns it (pinned above).
+    expect(seeded).toBe("defaultSigningDay(seed.holdoverFrom, cutoverDate, seed.holdoverTo, today)");
+    // The box's first value: signingDayForLength's rule, bypassed for an
+    // arrangement that ran out (signingSeedFor — the seed IS the day).
+    const seed = form.match(/signedOn:\s*(signingSeedFor\([^)]*\))/)?.[1] ?? "";
     expect(seed, "the form no longer seeds signedOn").not.toBe("");
-    expect(seed).toBe("signingDayForLength(seededDay, seededDay, seed.termMonths, today)");
+    expect(seed).toBe("signingSeedFor(seededDay, seededDay, seed.termMonths, today, ranOut)");
+    expect(form).toMatch(/const ranOut = !!seed\.holdoverTo && seed\.holdoverTo <= today;/);
   });
 
   it("judges 'already over' at the LENGTH PICKED, every render — not the house style once at mount", () => {
@@ -651,6 +831,8 @@ describe("the form on the roll asks for the same fact the arithmetic uses", () =
     const over = form.match(/const seededDayOver = ([^;]+);/)?.[1] ?? "";
     expect(over, "the form no longer decides seededDayOver").not.toBe("");
     expect(over).toMatch(/agreementAlreadyOver\(seededDay, form\.agreementMonths, today\)/);
+    // Not for an arrangement that ran out: its box is never blanked.
+    expect(over).toMatch(/^!ranOut &&/);
     expect(form).not.toMatch(/agreementAlreadyOver\(seededDay, seed\.termMonths, today\)/);
     expect(form).not.toMatch(/alreadyOverClause\(seededDay, seed\.termMonths\)/);
     expect(form).toMatch(/The day is left blank: \{blankDayWords\(seededDay, form\.agreementMonths, lengths, today\)\}\./);
@@ -659,8 +841,27 @@ describe("the form on the roll asks for the same fact the arithmetic uses", () =
   it("changing the length re-seeds the day through the same helper — a blank box fills when the pick keeps the day open", () => {
     const onChange = form.match(/onChange=\{\(e\) => \{\s*const months = [\s\S]*?\}\}/)?.[0] ?? "";
     expect(onChange, "the length select's onChange is gone — this scan measures nothing").not.toBe("");
-    expect(onChange).toMatch(/signedOn: signingDayForLength\(seededDay, f\.signedOn, months, today\)/);
+    expect(onChange).toMatch(/signedOn: signingSeedFor\(seededDay, f\.signedOn, months, today, ranOut\)/);
     expect(onChange).toMatch(/agreementMonths: months/);
+    // Never the bare rule, which empties the box of a day that is not his to pick.
+    expect(form).not.toMatch(/signingDayForLength\(/);
+  });
+
+  it("an arrangement that ran out: the box stays typeable (a day inside the old window is the trim), the lead line is the planner's own words, and the sentence quotes the day the row runs from", () => {
+    // 1H as decided: seed the END, leave the box typeable for a day inside
+    // the window, and write a later day from the end. A disabled box would
+    // remove a row the server accepts (a lease dated 15 December recorded
+    // on 20 January bills 15–31 December at the lease's rent plus the fee).
+    const input = form.match(/<input type="date" value=\{form\.signedOn\}[^>]*>/)?.[0] ?? "";
+    expect(input, "the date input is gone — this scan measures nothing").not.toBe("");
+    expect(input).not.toMatch(/disabled/);
+    expect(form).toMatch(/ranOutLeadWords\(seededDay, form\.agreementMonths, lengths, today\)/);
+    // The first-month sentence is about the day the row is WRITTEN from —
+    // the end for a later typed day, the typed day inside the window.
+    expect(form).toMatch(/const runsFrom = ranOut && form\.signedOn > seededDay \? seededDay : form\.signedOn;/);
+    expect(form).toMatch(/from <strong>\{dayInWords\(runsFrom\)\}<\/strong>/);
+    // Copy that reads 'whatever day is on the paper' would deny the trim.
+    expect(form).not.toMatch(/whatever day is on the paper/);
   });
 
   it("when the box is blank for that reason, the lead line is the other branch's alone", () => {
@@ -670,7 +871,9 @@ describe("the form on the roll asks for the same fact the arithmetic uses", () =
     // keeps the seeded day open — pinned above) and what any typed day does.
     const helper = form.slice(form.indexOf("{seededDayOver ? ("), form.indexOf("{seed.rentFromRateCard"));
     expect(helper, "the helper line's branch is gone — this scan measures nothing").not.toBe("");
-    const [overBranch, elseBranch] = helper.split(") : (");
+    const branches = helper.split(") : ");
+    const overBranch = branches[0];
+    const elseBranch = branches[branches.length - 1];
     expect(overBranch).toMatch(/The day you type is the day the new\s+agreement runs from, and the first month\s+bills from it\./);
     expect(overBranch).not.toMatch(/The day on the paper/);
     expect(overBranch).not.toMatch(/can&apos;t be recorded/);
@@ -692,7 +895,7 @@ describe("the form on the roll asks for the same fact the arithmetic uses", () =
   });
 
   it("the sentence before the write carries the holdover's first day, so it can say both halves", () => {
-    expect(form).toMatch(/firstMonthBills\(form\.signedOn, Math\.round\(rentTyped \* 100\) \/ 100, seed\.feePerMonth, seed\.holdoverFrom\)/);
+    expect(form).toMatch(/firstMonthBills\(runsFrom, Math\.round\(rentTyped \* 100\) \/ 100, seed\.feePerMonth, seed\.holdoverFrom\)/);
   });
 
   it("the control is labelled from the one home for its words", () => {
@@ -744,8 +947,8 @@ describe("the form on the roll asks for the same fact the arithmetic uses", () =
   });
 
   it("says what the first month bills before the write, from the shared sentence", () => {
-    expect(form).toMatch(/firstMonthBills\(form\.signedOn/);
-    expect(form).toMatch(/On the \{newLeaseWords\(form\.agreementMonths\)\} from <strong>\{dayInWords\(form\.signedOn\)\}<\/strong> — \{firstMonth\}\./);
+    expect(form).toMatch(/firstMonthBills\(runsFrom/);
+    expect(form).toMatch(/On the \{newLeaseWords\(form\.agreementMonths\)\} from <strong>\{dayInWords\(runsFrom\)\}<\/strong> — \{firstMonth\}\./);
   });
 
   // THE LENGTH IS THE HOUSEHOLD'S CHOICE, on this form and on "Someone lives
@@ -793,6 +996,11 @@ describe("the page seeds the form from the same helpers the planner refuses on",
     expect(signing).toMatch(/rent: signingRentSeed\(rateCard, holdover\.term, holdover\.quotedAmount\)/);
     expect(signing).not.toMatch(/rent: rateCard \?\? holdover\.quotedAmount/);
     expect(signing).toMatch(/holdoverTerm: holdover\.term/);
+  });
+
+  it("the seed carries the holdover's END as well as its start — the day a lapsed arrangement's successor runs from", () => {
+    expect(signing).toMatch(/holdoverFrom: holdover\.range\?\.start \?\? null,/);
+    expect(signing).toMatch(/holdoverTo: holdover\.range\?\.end \?\? null,/);
   });
 
   it("the term is read from the park's dials with the arithmetic recordSigning uses", () => {

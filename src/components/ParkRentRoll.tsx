@@ -11,8 +11,8 @@ import {
 } from "@/app/park/actions";
 import { recordSigning } from "@/app/park/sign-actions";
 import {
-  defaultSigningDay, firstMonthBills, agreementAlreadyOver, signingDayForLength, blankDayWords,
-  SIGNED_LEASE_LABEL, newLeaseWords, type SigningInput,
+  defaultSigningDay, firstMonthBills, agreementAlreadyOver, signingSeedFor, blankDayWords,
+  ranOutLeadWords, SIGNED_LEASE_LABEL, newLeaseWords, type SigningInput,
 } from "@/app/park/sign-helpers";
 import type { TenantInput, TenantEditInput } from "@/app/park/park-helpers";
 import {
@@ -35,7 +35,7 @@ export interface RollRowView {
   lotId: string;
   lotNumber: string;
   siteType: string;
-  state: "inactive" | "occupied" | "reserved" | "vacant";
+  state: "inactive" | "occupied" | "lapsed" | "reserved" | "vacant";
   active: boolean;
   currentRenter: string | null;
   currentUnit: string | null;
@@ -43,6 +43,19 @@ export interface RollRowView {
   currentReservationId: string | null;
   /** The FILE, not the tenancy — a slip is issued against the household. */
   currentRenterId: string | null;
+  /**
+   * THE HOUSEHOLD WHOSE PAPERWORK RAN OUT — state `lapsed`: a held agreement
+   * ended with nothing written after it, and nobody moved out. Who they
+   * are, the day it ran out, the row itself (Edit and the close-out are
+   * keyed on it, as they are on the current link — a household who could be
+   * renewed but not edited, closed out or sent a slip is the bug), and the
+   * last day that row covers, which is the latest last-day a close-out can
+   * take. All null on every other state.
+   */
+  lapsedRenter: string | null;
+  lapsedOn: string | null;
+  lapsedReservationId: string | null;
+  lapsedLastDay: string | null;
   /**
    * The household a claim slip should go to, whether they have arrived yet or
    * not. Distinct from currentRenterId, which is who is on the lot TODAY —
@@ -150,6 +163,12 @@ export interface RollRowView {
     /** The holdover's own first day — the form's default when the ledger covers it. */
     holdoverFrom: string | null;
     /**
+     * The holdover's END. On or before today, the arrangement has RUN OUT:
+     * the successor is written from this day whatever later day is on the
+     * paper (planSigning, decision 3), so the form seeds it and says so.
+     */
+    holdoverTo: string | null;
+    /**
      * The park's house style under its cap — the length the form's choice
      * STARTS on, never what the successor must run for; the household picks
      * from the lengths the park offers. Null on a park with neither dial.
@@ -173,6 +192,8 @@ export interface RollRowView {
 export interface RollSummaryView {
   lots: number;
   occupied: number;
+  /** Lived on, paperwork run out — never counted in `vacant`. */
+  lapsed: number;
   reserved: number;
   vacant: number;
   inactive: number;
@@ -192,6 +213,9 @@ const TERM_OPTION: Record<string, string> = {
 
 const STATE_STYLE: Record<RollRowView["state"], { pill: string; label: string }> = {
   occupied: { pill: "", label: "Occupied" },
+  // Somebody lives here and the paperwork ran out. Read "Vacant / Open"
+  // before, on the one screen he looks at most.
+  lapsed: { pill: "warn", label: "Ran out" },
   reserved: { pill: "warn", label: "Reserved" },
   vacant: { pill: "slate", label: "Vacant" },
   inactive: { pill: "slate", label: "Off" },
@@ -320,9 +344,11 @@ export function ParkRentRoll({
         // sentence points at: 'Withdraw the next agreement' when the standing
         // successor is still to start, or Move out on the successor itself
         // when it already covers today (a late close-out). A successor that
-        // has already lapsed leaves the lot vacant and the sentence says so;
-        // no control follows. Without a refresh a second tap only gets "That
-        // one is already closed."
+        // has already lapsed reads "Ran out" on the row, and Move out is
+        // keyed on it too — the sentence still says the record stands, since
+        // closing it at a day inside its range is not the day they left.
+        // Without a refresh a second tap only gets "That one is already
+        // closed."
         if (/^Closed out/.test(res.error ?? "")) {
           setClosingId(null);
           setLastDay("");
@@ -430,8 +456,9 @@ export function ParkRentRoll({
   );
 
   // Households are on the roll, but none of their tenancies has started yet —
-  // the shape of a park imported before its closing date.
-  const notYetStarted = summary.occupied === 0 && summary.reserved > 0;
+  // the shape of a park imported before its closing date. A lapsed tenancy
+  // HAS started: its household lives there on paper that ran out.
+  const notYetStarted = summary.occupied === 0 && summary.lapsed === 0 && summary.reserved > 0;
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
@@ -446,9 +473,12 @@ export function ParkRentRoll({
             This read "Occupied 0 · 0% · Owed $0" for the four months leading up
             to December 15th — on the default landing screen, about a fully let
             park. A measured-looking zero is worse than no number. */}
+        {/* LIVED ON, whether or not the paperwork is in date — the same count
+            the percentage beside it is built from. "Occupied 0 · 100%" is
+            what these two tiles said the morning every lease lapsed. */}
         <Stat
           label={notYetStarted ? "Spoken for" : "Occupied"}
-          value={notYetStarted ? `${summary.reserved}` : `${summary.occupied}`}
+          value={notYetStarted ? `${summary.reserved}` : `${summary.occupied + summary.lapsed}`}
           sub={`of ${summary.lots} lots`}
         />
         <Stat
@@ -466,7 +496,15 @@ export function ParkRentRoll({
                 : ""
           }
         />
-        <Stat label="Vacant" value={`${summary.vacant}`} sub={summary.reserved ? `${summary.reserved} reserved` : ""} />
+        {/* RAN OUT IS NOT VACANT. A household whose agreement expired with
+            nothing written after it still lives there; the morning eighteen
+            one-month leases lapsed this tile read "18" about a full park.
+            They are counted in the percentage above and named here. */}
+        <Stat
+          label="Vacant"
+          value={`${summary.vacant}`}
+          sub={summary.lapsed ? `${summary.lapsed} ran out` : summary.reserved ? `${summary.reserved} reserved` : ""}
+        />
         <Stat label="Waiting on you" value={`${summary.pending}`} sub={summary.pending === 1 ? "application" : "applications"} />
         {/* OWED MEANS BILLED AND NOT PAID.
             This tile used to roll up what rent WOULD be for every current
@@ -618,6 +656,11 @@ export function ParkRentRoll({
         <div style={{ display: "grid", gap: 8 }}>
           {rows.map((r) => {
             const s = STATE_STYLE[r.state];
+            // THE HOUSEHOLD ON THE LOT: the link covering today, else the
+            // one that ran out with them still there. Edit, Move out and the
+            // close-out panel are keyed on it — keyed on the current link
+            // alone, a lapsed row offered nothing but a renewal.
+            const onLot = r.currentReservationId ?? r.lapsedReservationId;
             return (
               <div key={r.lotId} className="ll-card ll-card-pad" style={{ opacity: r.state === "inactive" ? 0.6 : 1 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -641,6 +684,23 @@ export function ParkRentRoll({
                       )}
                       {r.state === "reserved" && (
                         <span className="mut">{r.nextRenter} arrives {r.nextFrom ? dayInWords(r.nextFrom) : "—"}</span>
+                      )}
+                      {/* RAN OUT, NOT VACANT. Nobody moved out; the paperwork
+                          ended, and nothing has billed since (the run skips
+                          an expired row). The door is the household's own
+                          signing control when the arrangement was the
+                          seller's, else Today's Agreements-to-write list —
+                          the same door the rent screen's expired line names. */}
+                      {r.state === "lapsed" && (
+                        <>
+                          {r.lapsedRenter}
+                          <span className="mut">
+                            {" — "}agreement ran out {r.lapsedOn ? dayInWords(r.lapsedOn) : "—"}; nothing billed since.
+                            {!r.signing && (
+                              <> Renew it under <Link href="/park/today">Agreements to write on Today</Link>.</>
+                            )}
+                          </span>
+                        </>
                       )}
                       {r.owedThisMonth && (
                         <span className="mut"> · {r.owedThisMonth}</span>
@@ -675,19 +735,20 @@ export function ParkRentRoll({
                         invitedAt={r.invitedAt}
                       />
                     )}
-                    {/* EDIT: the current link, else the agreement the office
-                        filed ahead of its day. A wrong rent typed on
-                        20 December for 1 January had no door until the 1st,
-                        the morning January bills. */}
-                    {(r.currentReservationId ?? r.filedByHandId) && (
+                    {/* EDIT: the link on the lot (current, else the one that
+                        ran out), else the agreement the office filed ahead
+                        of its day. A wrong rent typed on 20 December for
+                        1 January had no door until the 1st, the morning
+                        January bills. */}
+                    {(onLot ?? r.filedByHandId) && (
                       <button
                         className="ll-btn ghost"
                         onClick={() => {
-                          const id = r.currentReservationId ?? r.filedByHandId!;
+                          const id = onLot ?? r.filedByHandId!;
                           setEditingId(editingId === id ? null : id);
                         }}
                       >
-                        {editingId === (r.currentReservationId ?? r.filedByHandId) ? "Cancel" : "Edit"}
+                        {editingId === (onLot ?? r.filedByHandId) ? "Cancel" : "Edit"}
                       </button>
                     )}
                     {/* FILED BY MISTAKE — take a not-yet-started first
@@ -719,16 +780,21 @@ export function ParkRentRoll({
                         </button>
                       )
                     )}
-                    {r.currentReservationId && (
+                    {/* MOVE OUT, for the link on the lot. On a row that ran
+                        out the last day starts on — and cannot pass — the
+                        last day that row covers (planMoveOut refuses a day
+                        none of their agreements covers); seeded with today
+                        it opened on a day the server would refuse. */}
+                    {onLot && (
                       <button
                         className="ll-btn ghost"
                         onClick={() => {
-                          setClosingId(closingId === r.currentReservationId ? null : r.currentReservationId);
-                          setLastDay(today);
+                          setClosingId(closingId === onLot ? null : onLot);
+                          setLastDay(r.currentReservationId ? today : r.lapsedLastDay ?? today);
                         }}
-                        disabled={pending && busyId === r.currentReservationId}
+                        disabled={pending && busyId === onLot}
                       >
-                        {closingId === r.currentReservationId ? "Cancel" : "Move out"}
+                        {closingId === onLot ? "Cancel" : "Move out"}
                       </button>
                     )}
                     {/* THE READER. `expected_move_out` was written by an action
@@ -847,16 +913,22 @@ export function ParkRentRoll({
                         </button>
                       </div>
                     )}
-                    {closingId && closingId === r.currentReservationId && (
+                    {closingId && closingId === onLot && (
                       <div className="ll-field" style={{ width: "100%", marginTop: 8 }}>
                         <label>Last day they lived here</label>
                         <input
                           type="date"
                           value={lastDay}
-                          max={today}
+                          max={r.currentReservationId ? today : r.lapsedLastDay ?? today}
                           onChange={(e) => setLastDay(e.target.value)}
                         />
                         <p className="mut" style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
+                          {/* A ROW THAT RAN OUT covers nothing after its end.
+                              A later last day is refused by the server, so
+                              the box stops there and the reason is said. */}
+                          {!r.currentReservationId && r.lapsedLastDay && (
+                            <>Their record here runs to {dayInWords(r.lapsedLastDay)} — the last day can&apos;t be after that. </>
+                          )}
                           Their final month bills for the days they were here —
                           not the whole month. If that month is already billed,
                           the close-out re-does the bill for those days where it
@@ -866,10 +938,10 @@ export function ParkRentRoll({
                         <button
                           className="ll-btn gold"
                           style={{ marginTop: 8, minHeight: 44 }}
-                          disabled={!lastDay || (pending && busyId === r.currentReservationId)}
-                          onClick={() => close(r.currentReservationId!, lastDay)}
+                          disabled={!lastDay || (pending && busyId === onLot)}
+                          onClick={() => close(onLot, lastDay)}
                         >
-                          {pending && busyId === r.currentReservationId ? "Closing…" : "Close it out"}
+                          {pending && busyId === onLot ? "Closing…" : "Close it out"}
                         </button>
                       </div>
                     )}
@@ -882,10 +954,10 @@ export function ParkRentRoll({
                   </div>
                 </div>
 
-                {editingId && editingId === (r.currentReservationId ?? r.filedByHandId) && (
+                {editingId && editingId === (onLot ?? r.filedByHandId) && (
                   <EditTenant
                     reservationId={editingId}
-                    name={r.currentRenter ?? r.filedByHandRenter ?? ""}
+                    name={r.currentRenter ?? r.lapsedRenter ?? r.filedByHandRenter ?? ""}
                     rent={r.currentRent}
                     dueDay={r.currentDueDay}
                     source={r.currentSource}
@@ -1140,6 +1212,21 @@ function AddTenant({
  * running, and the box fills. Which link to write for a lease recorded a
  * month late is the owner's call; the form does not guess.
  *
+ * AN ARRANGEMENT THAT RAN OUT (seed.holdoverTo on or before today) seeds its
+ * own END instead — decision 3, 16 Sep: the successor is written from the
+ * day the arrangement ended, so the days since are on the lease's rent, not
+ * free and not a fresh start from the next 1st. The box stays typeable: a
+ * day INSIDE the old arrangement is the trim case the server accepts (the
+ * paper ran from 15 December; the arrangement ran out 1 January; the row is
+ * written from the 15th), and a later day is written from the end whatever
+ * it says — so the lead line (ranOutLeadWords) says both. The box is never
+ * emptied for that shape (signingSeedFor): the rule that blanks a day whose
+ * agreement is over at the length picked would leave an empty box under
+ * "Pick the day the new lease runs from" — an instruction with no control,
+ * since the end is the day whatever he types. When the pick is over from
+ * the end, the lead line names the lengths that reach (or that none does)
+ * and the button is withheld, rather than refusing after the tap.
+ *
  * The rent box holds a MONTHLY figure or nothing (signingRentSeed); the
  * phone is shown back the way a person writes it.
  */
@@ -1160,17 +1247,25 @@ function SignedNewLease({
   // park's house style (seed.termMonths). The server judges the pick against
   // the same list, so nothing is offered here that it would refuse.
   const lengths = offeredAgreementLengths(seed.termMonths, capMonths);
+  // THE ARRANGEMENT HAS RUN OUT: its end is on or before today. The
+  // successor is written from that end (planSigning), so the end is the
+  // seed and the judge of 'already over' — never re-run through
+  // signingDayForLength, which would empty the box.
+  const ranOut = !!seed.holdoverTo && seed.holdoverTo <= today;
   // THE DAY THE BOX WOULD START FROM, AND WHETHER IT MAY. An imported row's
   // 1 January under a one-month term, recorded on 15 February, is an
   // agreement already over — the planner refuses it, so the box is left
   // blank and the reason is said, rather than seeding the one day that
-  // cannot be recorded and telling him to keep it.
-  const seededDay = defaultSigningDay(seed.holdoverFrom, cutoverDate);
+  // cannot be recorded and telling him to keep it. For an arrangement that
+  // ran out, defaultSigningDay answers its END.
+  const seededDay = defaultSigningDay(seed.holdoverFrom, cutoverDate, seed.holdoverTo, today);
   const [form, setForm] = useState<SigningInput>({
     // Seeded for the house style — blank when an agreement from that day
-    // would already be over at it (signingDayForLength, the rule the length
-    // select re-applies on every change).
-    signedOn: signingDayForLength(seededDay, seededDay, seed.termMonths, today),
+    // would already be over at it (signingSeedFor: signingDayForLength's
+    // rule, the one the length select re-applies on every change — except
+    // for an arrangement that ran out, which keeps its end in the box
+    // whatever the length: the end IS the day).
+    signedOn: signingSeedFor(seededDay, seededDay, seed.termMonths, today, ranOut),
     rent: seed.rent == null ? "" : String(seed.rent),
     email: seed.email ?? "",
     // Shown back the way a person writes it, never in the stored form.
@@ -1181,15 +1276,28 @@ function SignedNewLease({
   // JUDGED AT THE LENGTH PICKED, EVERY RENDER. 1 January on 15 February is
   // over at one month and running at three; judged at the house style once,
   // the blank-box sentence outlived his pick of '3 months' and told him the
-  // one day the server would take could not be recorded.
-  const seededDayOver = !!seededDay && agreementAlreadyOver(seededDay, form.agreementMonths, today);
+  // one day the server would take could not be recorded. Not for an
+  // arrangement that ran out — its box is never blanked; see below.
+  const seededDayOver = !ranOut && !!seededDay && agreementAlreadyOver(seededDay, form.agreementMonths, today);
+  // AN ARRANGEMENT THAT RAN OUT, AT THE LENGTH PICKED. The successor runs
+  // from the end (or from a typed day inside the old arrangement, which is
+  // earlier still and reaches less far), so the end is the furthest any
+  // length reaches: over from it at the pick, nothing this form can send
+  // is accepted. The lead line (ranOutLeadWords) names the lengths that do
+  // reach, in the server's own words; the button is withheld rather than
+  // refused after the tap.
+  const ranOutOverAtPick = ranOut && agreementAlreadyOver(seededDay, form.agreementMonths, today);
+  // THE DAY THE ROW IS WRITTEN FROM — what the sentence below is about. A
+  // day typed after an arrangement that ran out is written from the end
+  // (planSigning); one inside the arrangement is the trim case, from itself.
+  const runsFrom = ranOut && form.signedOn > seededDay ? seededDay : form.signedOn;
   // WHAT THE FIRST MONTH BILLS, from the date and rent as typed — the same
   // sentence the toast will quote, so nothing is learned only after the
   // write. Nothing is quoted until both boxes hold something real.
   const rentTyped = Number(form.rent.trim().replace(/[$,\s]/g, ""));
   const firstMonth =
-    /^\d{4}-\d{2}-\d{2}$/.test(form.signedOn) && form.rent.trim() && Number.isFinite(rentTyped) && rentTyped >= 0
-      ? firstMonthBills(form.signedOn, Math.round(rentTyped * 100) / 100, seed.feePerMonth, seed.holdoverFrom)
+    /^\d{4}-\d{2}-\d{2}$/.test(runsFrom) && form.rent.trim() && Number.isFinite(rentTyped) && rentTyped >= 0
+      ? firstMonthBills(runsFrom, Math.round(rentTyped * 100) / 100, seed.feePerMonth, seed.holdoverFrom)
       : null;
   const set = <K extends keyof SigningInput>(k: K, v: SigningInput[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -1215,8 +1323,17 @@ function SignedNewLease({
   return (
     <div className="ll-field" style={{ width: "100%", marginTop: 8 }}>
       <p style={{ fontSize: 13, margin: "0 0 8px", lineHeight: 1.5 }}>
-        <strong>{seed.renterName}</strong> signed the new lease. The arrangement they
-        had ends the day the new lease starts and the new agreement runs from it.
+        <strong>{seed.renterName}</strong> signed the new lease.{" "}
+        {ranOut
+          // THE ARRANGEMENT RAN OUT. The row is written from its end whatever
+          // later day is on the paper — the days since are on the lease's
+          // rent (decision 3) — and a day inside the old arrangement is the
+          // trim case the server accepts. Said whole, in the planner's own
+          // words (ranOutLeadWords, which adds the lengths that reach when
+          // the pick is over from that day), so the box he can type in is
+          // not a promise the write will keep.
+          ? ranOutLeadWords(seededDay, form.agreementMonths, lengths, today)
+          : "The arrangement they had ends the day the new lease starts and the new agreement runs from it."}
       </p>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
         <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
@@ -1233,11 +1350,14 @@ function SignedNewLease({
                 const months = e.target.value ? Number(e.target.value) : null;
                 // The day box follows the pick: a blank box fills with the
                 // seeded day once a length keeps it open, and empties again
-                // when it does not. A day he typed is never touched.
+                // when it does not. A day he typed is never touched. An
+                // arrangement that ran out keeps its day: the end is the
+                // day whatever the length, and emptying the box would leave
+                // "Pick the day" about a day that is not his to pick.
                 setForm((f) => ({
                   ...f,
                   agreementMonths: months,
-                  signedOn: signingDayForLength(seededDay, f.signedOn, months, today),
+                  signedOn: signingSeedFor(seededDay, f.signedOn, months, today, ranOut),
                 }));
               }}>
               {lengths.map((m) => (
@@ -1274,6 +1394,10 @@ function SignedNewLease({
             The day you type is the day the new agreement runs from, and the first month
             bills from it.{" "}
           </>
+        ) : ranOut ? (
+          // The lead line above has already said where the row runs from
+          // and, when the pick is over from that day, which lengths reach.
+          <>The day on the paper only if it falls inside the old arrangement — otherwise the day it ran out.{" "}</>
         ) : (
           <>The day on the paper, not today — the first month bills from this day.{" "}</>
         )}
@@ -1288,14 +1412,16 @@ function SignedNewLease({
               : "No rent was on file for them — type what the lease says each month. "}
         Email and phone are a condition of the new lease, so both are needed.
       </p>
-      {firstMonth && (
+      {firstMonth && !ranOutOverAtPick && (
+        // FROM THE DAY THE ROW IS WRITTEN FROM (runsFrom) — for an
+        // arrangement that ran out, its end, not a later day in the box.
         <p style={{ fontSize: 13, margin: "8px 0 0", lineHeight: 1.5 }}>
-          On the {newLeaseWords(form.agreementMonths)} from <strong>{dayInWords(form.signedOn)}</strong> — {firstMonth}.
+          On the {newLeaseWords(form.agreementMonths)} from <strong>{dayInWords(runsFrom)}</strong> — {firstMonth}.
         </p>
       )}
       <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
         <button className="ll-btn gold" style={{ minHeight: 44 }} onClick={save}
-          disabled={pending || !form.signedOn || !form.rent.trim()}>
+          disabled={pending || !form.signedOn || !form.rent.trim() || ranOutOverAtPick}>
           {pending ? "Recording…" : "Record the new lease"}
         </button>
         <button className="ll-btn ghost" onClick={onDone} disabled={pending}>Cancel</button>

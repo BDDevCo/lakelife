@@ -37,7 +37,7 @@ import { dayInWords } from "./park-helpers";
 // list it links to (renew-actions renewalsDue) both read renewalLeadDays, so
 // the card can never name a household the list keeps quiet about.
 import { renewalLeadDays } from "./agreement-helpers";
-import { periodIsBillable } from "@/lib/billing-start";
+import { periodIsBillable, preCutoverCostRefusal } from "@/lib/billing-start";
 import { parseDaterange } from "@/lib/parks";
 
 // Notification thresholds, not pricing — so they live here rather than in the
@@ -147,9 +147,19 @@ export function householdsIn(rows: readonly { lotNumber: string }[]): number {
  * month, with the card pointing at a button that would refuse them.
  *
  * `latestSeqInChain` is the loader's own map (the one the renewal card's
- * `hasSuccessor` reads): the highest agreement_seq standing — approved or
- * active — in each chain. A holdover whose chain carries a later link has
- * signed; it is left off. Sorted numerically by lot, as the card prints it.
+ * `hasSuccessor` reads): the highest agreement_seq in each chain, across
+ * the held rows AND the ended ones — a signed lease the household was
+ * later closed out of is still a later link, and the trimmed holdover
+ * before it must not come back as "hasn't signed" the day they leave. A
+ * holdover whose chain carries a later link has signed; it is left off.
+ * Sorted numerically by lot, as the card prints it.
+ *
+ * A HOLDOVER THAT RAN OUT IS STILL A HOLDOVER. The date filter is `start <=
+ * today` and nothing about the end: a grandfathered row whose range has
+ * lapsed with no later link in its chain has STILL not signed the new lease,
+ * and on 1 January — the morning every one of them is meant to have signed —
+ * the `today < end` half read the whole roll as "everybody signed" the moment
+ * their old ranges expired. The lapsed-tenancy build relies on this count.
  */
 export function holdoverLotsOf(
   stays: readonly {
@@ -167,7 +177,7 @@ export function holdoverLotsOf(
     .filter((s) => s.origin === "grandfathered")
     .filter((s) => {
       const r = parseDaterange(s.during);
-      return r != null && r.start <= today && today < r.end;
+      return r != null && r.start <= today;
     })
     .filter((s) => {
       const cid = s.agreement_chain_id;
@@ -398,6 +408,12 @@ export interface TaskFacts {
     periodFrom: string;
     dueOn: string;
     typical: number | null;
+    /**
+     * 0170: the schedule says the bill is FOR the period before its due
+     * date. periodFrom/periodKey/periodLabel are then the COVERED period;
+     * dueOn is still the real due date.
+     */
+    coversPriorPeriod: boolean;
   }[];
   /**
    * MONEY THE PARK HOLDS FOR A HOUSEHOLD THAT HAS LEFT — on account with
@@ -707,19 +723,14 @@ export function generateTasks(f: TaskFacts): Task[] {
     // on the due month instead, the two doors disagreed for a mid-year
     // go-live: this card raised a bill the door then refused.
     //
-    // WHAT THIS GATE CANNOT KNOW: whether the bill is FOR the period it is
-    // due in. The schedule form asks when a bill lands, not what it covers,
-    // and no column says. A bill paid in arrears — Indiana property tax
-    // (the bill due 10 November 2027 is for 2026, the seller's year, a
-    // closing-table credit and never a park_costs row) or a sewer bill
-    // dated the 5th for the previous month's service — is keyed here on
-    // the due period, so a 1 January go-live IS shown a card for the bill
-    // due that November. Until the schedule carries which period a bill
-    // covers, the card names only what it does know — the DUE DATE — and
-    // never a year or a month it is guessing at. The gate is the LOADER's
-    // rule; whether a schedule shifts its period back one cadence is the
-    // owner's, not this file's.
-    if (!periodIsBillable(b.periodFrom.slice(0, 7), f.cutoverOn)) continue;
+    // THE SCHEDULE CAN NOW SAY WHAT A BILL COVERS (0170). When it does,
+    // `periodFrom` is the covered period — the sewer bill dated 5 January
+    // for December's service is keyed on December, the Indiana tax bill due
+    // 10 November 2027 on 2026 — and the card reads "Sewer for December
+    // 2026 (bill due January 5)". When it does not, the card still names
+    // only the due date, because that is all the schedule knows. Whether a
+    // schedule shifts its period back one cadence is the owner's decision,
+    // made per schedule on the costs screen; the gate is the LOADER's rule.
 
     const daysToDue = daysBetween(f.today, b.dueOn);
     const late = daysToDue < 0;
@@ -741,19 +752,64 @@ export function generateTasks(f: TaskFacts): Task[] {
     //
     // A LATE bill is never clipped. Once the due day is past, the reminder is
     // the whole point and it stays until the bill is entered.
+    //
+    // Applied BEFORE the gate, so the not-ours line below is clipped the same
+    // way: the seller's tax is not announced in January for November.
     if (!late && daysToDue > BILL_DUE_LEAD_DAYS) continue;
+
+    if (!periodIsBillable(b.periodFrom.slice(0, 7), f.cutoverOn)) {
+      // ONE LINE, NOT SILENCE — but only when the schedule KNOWS the bill is
+      // for the period before (flag on) and the envelope lands on HIS desk
+      // (due on or after go-live). On 5 January he is holding LaGrange's
+      // December bill; a silent screen reads as "the reminder is broken" or
+      // "enter it", and the cost door then refuses with a paragraph. So the
+      // card names the envelope in his hand and where it goes, asks for
+      // nothing (dismissible, no due date, "when you can"), and disappears on
+      // its own when the key rolls — 1 February for the sewer, 1 January
+      // 2028 for the 2026 tax.
+      //
+      // An UNFLAGGED schedule keeps today's silence: the card would be
+      // guessing what the bill covers. A bill due BEFORE go-live stays
+      // silent too — it was never his envelope.
+      //
+      // "STARTS before you went live", not "is from before": for a go-live on
+      // the 15th the December sewer is half his, and the rule is about where
+      // the period begins (billing-start). The detail is the cost door's OWN
+      // sentence, so the reminder and the door literally share one — and it
+      // ends with what the button under it does, because every card renders
+      // "Sort it" and this one asks for nothing.
+      if (b.coversPriorPeriod && f.cutoverOn && b.dueOn >= f.cutoverOn) {
+        const refusal = preCutoverCostRefusal(b.periodFrom.slice(0, 7), f.cutoverOn, prettyMonth, null);
+        out.push({
+          key: `bill_not_ours:${b.scheduleId}:${b.periodKey}`,
+          title: `${b.label} ${b.periodLabel} starts before you went live`,
+          detail:
+            `${refusal} 'Sort it' opens the costs screen, which says the same — unless ` +
+            `one of your fees covers this bill, when it can still go in there as ` +
+            `evidence for the fee comparison.`,
+          urgency: "whenever",
+          dueOn: null,
+          href: "/park/costs",
+          canDismiss: true,
+        });
+      }
+      continue;
+    }
 
     out.push({
       // KEYED ON THE BILL'S OWN PERIOD, not the calendar month. A tax bill is
       // one task a year — keying it on the month made it twelve tasks a
       // year for something that arrives once.
       key: `bill_due:${b.scheduleId}:${b.periodKey}`,
-      // NAMED BY ITS DUE DATE, never by a period it does not know. "Property
-      // tax for 2027" about the bill due 10 November 2027 was the seller's
-      // 2026 tax under the buyer's year; "sewer for January 2027" about the
-      // bill dated 5 January was December's service. `periodLabel` is
-      // billPeriod's: "due November 10, 2027" for a yearly bill, "(bill due
-      // January 5)" for a monthly or quarterly one.
+      // NAMED BY ITS DUE DATE, and by the period it covers only when the
+      // schedule says what that is (0170). "Property tax for 2027" about the
+      // bill due 10 November 2027 was the seller's 2026 tax under the
+      // buyer's year; "sewer for January 2027" about the bill dated 5
+      // January was December's service — both guesses. `periodLabel` is
+      // billPeriod's: unflagged, "due November 10, 2027" for a yearly bill
+      // and "(bill due January 5)" for a monthly or quarterly one; flagged,
+      // "for December 2026 (bill due January 5)" and "for 2026, due November
+      // 10, 2027", because then the covered period is a fact, not a guess.
       // "Sewer (bill due January 5) is coming up" — the label already carries
       // "due", so the not-yet-late form does not say it twice ("due January
       // 5 is due about now" was the stutter on the screen he opens with

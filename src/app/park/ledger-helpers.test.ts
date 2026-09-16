@@ -1108,6 +1108,92 @@ describe("the sentence a reversal prints", () => {
       .toMatch(/off the household's account/);
   });
 
+  it("a row against a CANCELLED bill (0169): the bill reopens nothing, and the months its released money had settled are still named", () => {
+    // January's $542.53 was released when the whole-month bill was
+    // cancelled and $472.53 of it settled the part month. Reversing the
+    // cheque reopens the PART month — not the void bill, which "is
+    // outstanding again" would claim about a month nobody owes.
+    // THE PART MONTH SHARES JANUARY'S PERIOD (the re-raise keeps
+    // period_month), so "January 2027's bill was already cancelled … it had
+    // been put against January 2027 — that bill is outstanding again" was
+    // two bills under one word with two opposite verbs. The colliding line
+    // is named as the bill raised again — with its own amount and basis
+    // when the caller read them, and as "the bill raised again" without.
+    expect(reversalSentence({
+      amount: 542.53, receiptNo: 12, kind: "rent", billMonth: "2027-01", split: null,
+      hadGone: [{ periodMonth: "2027-01", amount: 472.53 }], billCancelled: true,
+    })).toBe(
+      "$542.53 taken back (receipt 12). January 2027's bill was already cancelled, so nothing reopens on it; " +
+      "it had been put against the bill raised again for January 2027 — that one is outstanding again, and the record shows why.",
+    );
+    expect(reversalSentence({
+      amount: 542.53, receiptNo: 12, kind: "rent", billMonth: "2027-01", split: null, billAmount: 542.53,
+      hadGone: [{ periodMonth: "2027-01", amount: 472.53, billAmount: 472.53, raisedAgain: { basis: "27 of 31 days" } }], billCancelled: true,
+    })).toBe(
+      "$542.53 taken back (receipt 12). January 2027's $542.53 bill was already cancelled, so nothing reopens on it; " +
+      "it had been put against the $472.53 bill raised again for January 2027 (27 of 31 days) — that one is outstanding again, and the record shows why.",
+    );
+    // A PARTIAL CHEQUE: $300 against January, released, $300 of it put on
+    // the $472.53 part month. The bill named is the BILL's amount, never
+    // the allocation's — "January 2027's $300.00 bill" would be a new lie.
+    const partial = reversalSentence({
+      amount: 300, receiptNo: 12, kind: "rent", billMonth: "2027-01", split: null, billAmount: 542.53,
+      hadGone: [{ periodMonth: "2027-01", amount: 300, billAmount: 472.53, raisedAgain: { basis: "27 of 31 days" } }], billCancelled: true,
+    });
+    expect(partial).toContain("January 2027's $542.53 bill was already cancelled");
+    expect(partial).toContain("the $472.53 bill raised again for January 2027 (27 of 31 days)");
+    expect(partial).not.toMatch(/\$300\.00 bill/);
+    // A whole-month re-raise (a new rent) has no days basis to print.
+    expect(reversalSentence({
+      amount: 542.53, receiptNo: 12, kind: "rent", billMonth: "2027-01", split: null, billAmount: 542.53,
+      hadGone: [{ periodMonth: "2027-01", amount: 542.53, billAmount: 600, raisedAgain: { basis: null } }], billCancelled: true,
+    })).toContain("it had been put against the $600.00 bill raised again for January 2027 — that one is outstanding again");
+    // A line in January against a LIVE January (the flag off) is January
+    // itself: the re-raise words never appear without the cancel.
+    expect(reversalSentence({
+      amount: 542.53, receiptNo: 12, kind: "rent", billMonth: "2027-01", split: null, billAmount: 542.53,
+      hadGone: [{ periodMonth: "2027-01", amount: 42.53 }], billCancelled: false,
+    })).not.toMatch(/raised again|\$542\.53 bill/);
+    // Nothing of the released money applied yet: the cancelled bill alone.
+    expect(reversalSentence({ amount: 542.53, receiptNo: 12, kind: "rent", billMonth: "2027-01", split: null, hadGone: [], billCancelled: true }))
+      .toBe("$542.53 taken back (receipt 12). January 2027's bill was already cancelled, so nothing reopens on it, and the record shows why.");
+    // Several months, plural.
+    expect(reversalSentence({
+      amount: 1085.06, receiptNo: 12, kind: "rent", billMonth: "2027-01", split: null,
+      hadGone: [{ periodMonth: "2027-02", amount: 542.53 }, { periodMonth: "2027-01", amount: 472.53 }], billCancelled: true,
+    })).toMatch(/it had been put against the bill raised again for January 2027 and February 2027 — those bills are outstanding again, and the record shows why\.$/);
+    // THE SPLIT: the $600 cheque whose $542.53 half was released and whose
+    // $57.47 half was on account — both halves' lines are "of it".
+    expect(reversalSentence({
+      amount: 600, receiptNo: 12, kind: "rent", billMonth: "2027-01",
+      split: { tapped: "bill", against: 542.53, onAccount: 57.47 },
+      hadGone: [{ periodMonth: "2027-01", amount: 472.53 }, { periodMonth: "2026-12", amount: 57.47 }],
+      billCancelled: true,
+    })).toBe(
+      "$600.00 taken back (receipt 12) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. " +
+      "January 2027's bill was already cancelled, so nothing reopens on it, and $530.00 of it had been put against December 2026 and the bill raised again for January 2027 — those bills are outstanding again too. The record shows why.",
+    );
+    expect(reversalSentence({
+      amount: 600, receiptNo: 12, kind: "rent", billMonth: "2027-01",
+      split: { tapped: "on_account", against: 542.53, onAccount: 57.47 }, hadGone: [], billCancelled: true,
+    })).toBe(
+      "$600.00 taken back (receipt 12) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. " +
+      "January 2027's bill was already cancelled, so nothing reopens on it. The record shows why.",
+    );
+    // COLLAPSED THE OTHER WAY: the flag false, or absent, keeps every
+    // existing sentence — a live bill DOES reopen.
+    expect(reversalSentence({ amount: 542.53, receiptNo: 12, kind: "rent", billMonth: "2027-01", split: null, hadGone: [], billCancelled: false }))
+      .toBe("$542.53 taken back (receipt 12). The January 2027 bill is outstanding again, and the record shows why.");
+    expect(reversalSentence({
+      amount: 600, receiptNo: 12, kind: "rent", billMonth: "2027-01",
+      split: { tapped: "bill", against: 542.53, onAccount: 57.47 }, hadGone: [{ periodMonth: "2027-02", amount: 57.47 }], billCancelled: false,
+    })).toMatch(/The January 2027 bill is outstanding again, and \$57\.47 of the on-account half had been put against February 2027/);
+    // And with no bill month there is nothing to call cancelled: the flag
+    // changes nothing about money that never had a bill.
+    expect(reversalSentence({ amount: 50, receiptNo: 48, kind: "rent", billMonth: null, split: null, hadGone: [], billCancelled: true }))
+      .toBe("$50.00 taken back (receipt 48). It's off the household's account, and the record shows why.");
+  });
+
   it("monthList reads like a person saying it", () => {
     expect(monthList([])).toBe("");
     expect(monthList(["2027-02"])).toBe("February 2027");

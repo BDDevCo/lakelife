@@ -129,15 +129,27 @@ class Q {
     failNextTable = null;
     return { data: null, error: { message: `connection terminated (${this.t})` } };
   }
+  private ins: Row[] | null = null;
   maybeSingle() {
     const f = this.failed();
     if (f) return Promise.resolve(f);
     const rows = this.rows(); return Promise.resolve({ data: rows[0] ?? null, error: null });
   }
-  async insert(row: Row) {
-    inserted.push({ ...row, __table: this.t });
-    (db[this.t] ??= []).push({ id: `new-${inserted.length}`, ...row });
-    return { error: null };
+  /** `.insert(row)` awaited bare, or `.insert(row).select("id").single()` —
+   *  the shape the owner's door reads the new row's id back with. */
+  insert(row: Row | Row[]) { this.ins = Array.isArray(row) ? row : [row]; return this; }
+  private written(): Row[] {
+    return this.ins!.map((row) => {
+      inserted.push({ ...row, __table: this.t });
+      const w = { id: `new-${inserted.length}`, ...row };
+      (db[this.t] ??= []).push(w);
+      return w;
+    });
+  }
+  single() {
+    if (!this.ins) return this.maybeSingle();
+    const [w] = this.written();
+    return Promise.resolve({ data: w, error: null });
   }
   update(patch: Row) { this.patch = patch; return this; }
   then<A, B>(
@@ -146,6 +158,7 @@ class Q {
   ): PromiseLike<A | B> {
     const f = this.failed();
     if (f) return Promise.resolve(f).then(ok, bad);
+    if (this.ins) return Promise.resolve({ data: this.written(), error: null }).then(ok, bad);
     const rows = this.rows();
     if (this.patch) {
       for (const r of rows) Object.assign(r, this.patch);
@@ -172,6 +185,20 @@ vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({ from: (t: string) => new Q(t) }),
 }));
 vi.mock("@/app/park/data", () => ({ assertMyPark: async () => ({ role: "owner" }) }));
+// THE DOOR BILLS THE MONTHS IT MADE BILLABLE (gap-bills). The re-raise itself
+// is charge-edits', tested there and in sign-actions.test.ts; here the two
+// reads are spies, so what is asserted is what the owner's door ASKS: which
+// months, on which row, and what it says back. The words are the real ones.
+const gap = vi.hoisted(() => ({
+  ran: false as boolean | { error: unknown; what: string },
+  parkRanMonth: vi.fn(),
+  billLostMonths: vi.fn(),
+}));
+vi.mock("@/app/park/gap-bills", async (orig) => ({
+  ...(await orig<typeof import("@/app/park/gap-bills")>()),
+  parkRanMonth: gap.parkRanMonth,
+  billLostMonths: gap.billLostMonths,
+}));
 vi.mock("@/lib/booking", async (orig) => ({
   ...(await orig<typeof import("@/lib/booking")>()),
   todayLakeDate: () => TODAY,
@@ -238,6 +265,12 @@ function seed(over: Partial<Row> = {}) {
   failNextWriteTable = null;
   db.park_payments = [];
   db.park_fees = [];
+  gap.ran = false;
+  gap.parkRanMonth.mockReset().mockImplementation(async () => gap.ran);
+  gap.billLostMonths.mockReset().mockImplementation(async (_a: unknown, _p: string, _r: string, months: readonly string[]) => ({
+    raised: months.map((month) => ({ month, amount: 400, fromOnAccount: 0, toOlderBills: [], settleProblem: null })),
+    problems: [],
+  }));
   // The Haven: a one-month house style under a three-month cap, so the
   // household picks one or three months (six once the cap is raised).
   db.parks = [{
@@ -598,7 +631,7 @@ describe("a lapsed agreement on the owner's card", () => {
     expect(inserted[0].during).toBe("[2027-02-01,2027-05-01)");
   });
 
-  it("writes the length that reaches past today — consecutively, already ACTIVE because it has started, and says which months it made billable", async () => {
+  it("writes the length that reaches past today — consecutively, already ACTIVE because it has started, and BILLS the months the run has passed", async () => {
     const res = await renewAgreement("park-1", "res-jan", { months: 6 });
     expect(res.ok, res.error).toBe(true);
     expect(inserted[0].during).toBe("[2027-02-01,2027-08-01)");
@@ -607,13 +640,17 @@ describe("a lapsed agreement on the owner's card", () => {
     // ONE RULE with the resident's door: approved until it starts, active
     // from its first morning. This door hardcoded `approved`.
     expect(inserted[0].status).toBe("active");
-    // THE MONEY FACT: one tap made February–June billable at the rent, and
-    // no run has raised any of it (the bills key on the row, and this row is
-    // new). A statement — whether to run those months is his call.
+    // THE MONEY FACT (decision 3): one tap made February–June billable at
+    // the rent, and the run keys its bills on the row — so the door bills
+    // them, on the row it just wrote, oldest first. June's run has not
+    // happened (gap.ran is false), so June is the run's.
+    expect(gap.billLostMonths).toHaveBeenCalledTimes(1);
+    expect(gap.billLostMonths.mock.calls[0].slice(1)).toEqual(["park-1", "new-1", ["2027-02", "2027-03", "2027-04", "2027-05"]]);
     expect(res.signal).toBe(
       "Lot 14 renewed for 6 months, February 1, 2027 to August 1, 2027 at $400.00 a month. Consecutive with the last one. " +
-      "It reaches back over February 2027 through June 2027, which nothing has billed yet.",
+      "February 2027, March 2027, April 2027 and May 2027 are now billed — $400.00, $400.00, $400.00 and $400.00 ($1,600.00 in all).",
     );
+    expect(res.signal).not.toMatch(/nothing has billed/);
     // No treadmill: the lot is not back on the card tomorrow reading "ends
     // March 1" — the six-month successor is its own agreement, listed on its
     // own lead (Aug 1 is 45 days out on 17 June, so it IS due, as itself).
@@ -657,27 +694,203 @@ describe("a lapsed agreement on the owner's card", () => {
     expect(inserted[0].deposit_amount).toBe(300);
   });
 
-  it("the boundary is the plan's end, not the prior's: one day lapsed still backfills", async () => {
+  it("the boundary is the plan's end, not the prior's: one day lapsed still backfills — and the current month is the run's until its run has happened", async () => {
     TODAY = "2027-02-02";
     const [row] = await listed();
     expect(row.lapsed).toBe(true);
     expect(row.plan).toMatchObject({ ok: true, start: "2027-02-01", end: "2027-03-01", termMonths: 1 });
-    // One month reached back over: a February run on the 1st found no
-    // tenancy on this lot, so this row's February is unbilled.
-    expect(row.backfillNote).toBe("It reaches back over February 2027, which nothing has billed yet.");
+    // February's run has not happened: nothing is behind, and the card
+    // says the month bills when he bills the month.
+    expect(row.lostMonths).toEqual([]);
+    expect(row.backfillNote).toBe("It reaches back to February 1, 2027; February 2027 bills when you bill the month.");
     const res = await renewAgreement("park-1", "res-jan", { months: 1 });
     expect(res.ok, res.error).toBe(true);
     expect(inserted[0].during).toBe("[2027-02-01,2027-03-01)");
     expect(inserted[0].status).toBe("active");
-    expect(res.signal).toMatch(/Consecutive with the last one\. It reaches back over February 2027, which nothing has billed yet\.$/);
+    expect(gap.billLostMonths).toHaveBeenCalledWith(expect.anything(), "park-1", "new-1", []);
+    expect(res.signal).toMatch(/Consecutive with the last one\.$/);
+
+    // February's run HAS happened (a bill stands on some lot): February is
+    // a month no run comes back for, so the card names it and the tap bills it.
+    seed(); db.parks[0].max_agreement_months = 6; gap.ran = true;
+    const [ranRow] = await listed();
+    expect(ranRow.lostMonths).toEqual(["2027-02"]);
+    expect(ranRow.backfillNote).toBe("Writing it bills this agreement for February 2027 — nothing has billed it for that month yet.");
+    const after = await renewAgreement("park-1", "res-jan", { months: 1 });
+    expect(after.ok, after.error).toBe(true);
+    expect(gap.billLostMonths).toHaveBeenLastCalledWith(expect.anything(), "park-1", "new-1", ["2027-02"]);
+    expect(after.signal).toMatch(/Consecutive with the last one\. February 2027 is now billed — \$400\.00\.$/);
+
     // And an agreement that has NOT lapsed is not called lapsed, and carries
     // no such note — nor does one written before it starts.
     seed(); db.parks[0].max_agreement_months = 6; TODAY = "2027-01-20";
     const [ahead] = await listed();
     expect(ahead.lapsed).toBe(false);
+    expect(ahead.lostMonths).toEqual([]);
     expect(ahead.backfillNote).toBeNull();
     const early = await renewAgreement("park-1", "res-jan", { months: 1 });
     expect(early.signal).not.toMatch(/reaches back|billed/);
+  });
+
+  it("whether this month ran is read ONCE for the whole list, and once per tap", async () => {
+    db.park_lots.push({ id: "lot-15", lot_number: "15", park_id: "park-1", lifecycle: "live",
+      season_open_month: null, season_open_day: null, season_close_month: null, season_close_day: null });
+    db.lot_reservations.push({
+      id: "res-15", park_lot_id: "lot-15", renter_id: "renter-doris", during: "[2027-01-01,2027-02-01)",
+      status: "active", term: "monthly", quoted_amount: 400, origin: "application", agreement_chain_id: "chain-b", agreement_seq: 1,
+    });
+    const rows = await listed();
+    expect(rows).toHaveLength(2);
+    expect(gap.parkRanMonth).toHaveBeenCalledTimes(1);
+    expect(gap.parkRanMonth.mock.calls[0].slice(1)).toEqual(["park-1", "2027-06"]);
+    gap.parkRanMonth.mockClear();
+    await renewAgreement("park-1", "res-jan", { months: 6 });
+    expect(gap.parkRanMonth).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed read of whether this month ran is a sentence, never 'bills when you bill the month' about a month that ran", async () => {
+    gap.ran = { error: { message: "connection terminated" }, what: "the bills already raised this month" };
+    const pre = await previewRenewal("park-1", "res-jan");
+    expect(pre.ok).toBe(false);
+    expect(pre.error).toMatch(/couldn't/i);
+    expect(pre.preview).toBeUndefined();
+    const res = await renewAgreement("park-1", "res-jan", { months: 6 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe(pre.error);
+    expect(inserted).toHaveLength(0);
+    expect(gap.billLostMonths).not.toHaveBeenCalled();
+    // The list stops rather than dropping the household — its caller is a
+    // page under the error boundary.
+    await expect(renewalsDue("park-1")).rejects.toThrow(/the bills already raised this month/);
+  });
+
+  it("what the tap could not bill is said with its door, after what it did", async () => {
+    gap.billLostMonths.mockImplementation(async () => ({
+      raised: [{ month: "2027-02", amount: 400, fromOnAccount: 150, toOlderBills: [], settleProblem: null }],
+      problems: [{ month: "2027-03", reason: "no rent is set for the lot — set their rent on the roll, then bill it from the rent screen", why: "noRent" }],
+    }));
+    const res = await renewAgreement("park-1", "res-jan", { months: 6 });
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toMatch(
+      /Consecutive with the last one\. February 2027 is now billed — \$400\.00, \$150\.00 of it settled from money on account\. ⚠️ March 2027 couldn't be billed — no rent is set for the lot — set their rent on the roll, then bill it from the rent screen\.$/,
+    );
+  });
+});
+
+describe("extendByToken — the resident's door — bills the remainder of the month it made billable", () => {
+  // The tap lands on the agreement's last day (extend-stay refuses only a
+  // stay already ended), so the successor starts TODAY. When this month's
+  // run has already happened, the run visited the month before the row
+  // existed and keys "already billed" per reservation — nothing else would
+  // ever raise the remainder. Three doors write successors; this was the
+  // one that did not bill what it made billable.
+  beforeEach(() => {
+    seed({ during: "[2027-01-01,2027-01-20)" });
+    db.parks[0].cutover_date = "2027-01-01";
+    TODAY = "2027-01-20";
+  });
+
+  it("the view carries the park and its go-live day — what the tap bills against, and the floor", async () => {
+    const view = await loadExtendByToken(TOKEN, 1);
+    expect(view!.parkId).toBe("park-1");
+    expect(view!.cutoverDate).toBe("2027-01-01");
+    expect(view!.newStart).toBe("2027-01-20");
+  });
+
+  it("after January's run, the tap bills January on the row it just wrote", async () => {
+    gap.ran = true;
+    const res = await extendByToken(TOKEN, 1);
+    expect(res.ok, res.ok ? "" : res.error).toBe(true);
+    expect(inserted[0].during).toBe("[2027-01-20,2027-02-20)");
+    expect(gap.parkRanMonth.mock.calls[0].slice(1)).toEqual(["park-1", "2027-01"]);
+    expect(gap.billLostMonths).toHaveBeenCalledTimes(1);
+    expect(gap.billLostMonths.mock.calls[0].slice(1)).toEqual(["park-1", "new-1", ["2027-01"]]);
+  });
+
+  it("before the run, nothing is behind — January is the run's", async () => {
+    gap.ran = false;
+    const res = await extendByToken(TOKEN, 1);
+    expect(res.ok).toBe(true);
+    expect(gap.billLostMonths).toHaveBeenCalledWith(expect.anything(), "park-1", "new-1", []);
+  });
+
+  it("a month before go-live is never billed here — the floor is the park's cutover", async () => {
+    db.parks[0].cutover_date = "2027-02-01";
+    gap.ran = true;
+    await extendByToken(TOKEN, 1);
+    expect(gap.billLostMonths).toHaveBeenCalledWith(expect.anything(), "park-1", "new-1", []);
+  });
+
+  it("a failed read of whether this month ran is logged — the successor stands, nothing is billed, nothing is sent", async () => {
+    gap.ran = { error: { message: "connection terminated" }, what: "the bills already raised this month" };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await extendByToken(TOKEN, 1);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("the bills already raised this month"), expect.anything());
+    spy.mockRestore();
+    expect(res.ok).toBe(true);
+    expect(inserted).toHaveLength(1);
+    expect(gap.billLostMonths).not.toHaveBeenCalled();
+  });
+
+  it("the source: the successor insert reads its id back, and the bill runs on it (never on the prior row)", () => {
+    const src = code("src/lib/extend-server.ts");
+    expect(src).toMatch(/const \{ data: succ, error: insErr \} = await admin\.from\("lot_reservations"\)\.insert\(successorRow\(/);
+    expect(src).toMatch(/\)\)\.select\("id"\)\.single\(\);/);
+    expect(src).toMatch(/billLostMonths\(admin, view\.parkId, succ\.id as string, lostMonths\(view\.newStart, today, view\.cutoverDate, ran\)\)/);
+  });
+});
+
+// A MOVE-OUT INSIDE A SUCCESSOR marks only that link `ended` (planMoveOut
+// trims it and withdraws the later ones) and leaves the expired prior held,
+// run out, with nothing held after it. Read from held rows alone that is
+// the lapsed shape: the family who left on 10 February sat under
+// "Agreements to write", and the tap — a public endpoint — would have
+// written a successor from 1 February over them and billed every month since.
+describe("a household closed out of its successor has moved out — nothing to renew", () => {
+  const feb = (status: string) => ({
+    id: "res-feb", park_lot_id: "lot-14", renter_id: "renter-doris", renter_unit_id: "unit-1",
+    during: "[2027-02-01,2027-02-11)", status, term: "monthly", quoted_amount: 400,
+    origin: "office", agreement_chain_id: "chain-a", agreement_seq: 2,
+    due_day: 15, tenancy_began_on: "2019-04-01", amount_source: "tenant_confirmed", amount_source_at: "2027-01-01T15:00:00Z",
+    extend_token: null, extended_count: 0, moved_out_on: status === "ended" ? "2027-02-10" : null,
+  });
+  beforeEach(() => { seed(); db.parks[0].max_agreement_months = 6; TODAY = "2027-03-16"; gap.ran = true; });
+
+  it("is not listed, the preview refuses, and the tap writes nothing and bills nothing", async () => {
+    db.lot_reservations.push(feb("ended"));
+    expect((await renewalsDue("park-1")).rows).toEqual([]);
+    const p = await previewRenewal("park-1", "res-jan");
+    expect(p.ok).toBe(true);
+    expect(p.preview!.plan).toEqual({ ok: false, refusal: "moved_out" });
+    expect(p.preview!.refusalText).toBe("Lot 14 was closed out after this agreement — they moved out — so there's nothing to renew.");
+    expect(p.preview!.lengths).toEqual([]);
+    expect(p.preview!.lostMonths).toEqual([]);
+    expect(p.preview!.backfillNote).toBeNull();
+    const res = await renewAgreement("park-1", "res-jan", { months: 3 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Lot 14 was closed out after this agreement — they moved out — so there's nothing to renew.");
+    expect(inserted).toHaveLength(0);
+    expect(gap.billLostMonths).not.toHaveBeenCalled();
+  });
+
+  it("collapsed the other way: the same successor WITHDRAWN leaves January lapsed and renewable", async () => {
+    db.lot_reservations.push(feb("cancelled"));
+    const rows = (await renewalsDue("park-1")).rows!;
+    expect(rows.map((r) => r.reservationId)).toEqual(["res-jan"]);
+    expect(rows[0].lapsed).toBe(true);
+    expect(rows[0].plan.ok).toBe(true);
+    const res = await renewAgreement("park-1", "res-jan", { months: 3 });
+    expect(res.ok, res.error).toBe(true);
+    expect(inserted[0].during).toBe("[2027-02-01,2027-05-01)");
+  });
+
+  it("an ended link EARLIER in the chain is history, not a close-out", async () => {
+    // Seq 0 never happens, but an earlier ended link can: the prior of a
+    // prior, closed by the old one-click path. The latest link is what counts.
+    db.lot_reservations.push({ ...feb("ended"), id: "res-dec", during: "[2026-12-01,2026-12-20)", agreement_seq: 0, moved_out_on: null });
+    const rows = (await renewalsDue("park-1")).rows!;
+    expect(rows.map((r) => r.reservationId)).toEqual(["res-jan"]);
+    expect(rows[0].plan.ok).toBe(true);
   });
 });
 
@@ -692,12 +905,60 @@ describe("the card's own words for a lapsed agreement", () => {
     expect(html).toContain("lapsed February 1, 2027 — nothing billed since");
     expect(html).not.toContain("ends February 1, 2027");
     expect(html).not.toContain("run out soon");
-    expect(html).toContain("Next one: 6 months, February 1, 2027 to August 1, 2027. Consecutive with the last one. It reaches back over February 2027 through June 2027, which nothing has billed yet.");
+    expect(html).toContain("Next one: 6 months, February 1, 2027 to August 1, 2027. Consecutive with the last one. Writing it bills this agreement for February 2027, March 2027, April 2027 and May 2027 — nothing has billed it for those months yet.");
     expect(html).toContain("From February 1, 2027, 1 or 3 months would be over already, so only 6 months reaches past today.");
     expect(html).not.toMatch(/no new deposit|New chain/);
     // No chip for a length that cannot be written; one length is not a choice.
     expect(html).not.toContain("Renew for</span>");
     expect(html).toContain("Renew at the same rent");
+  });
+
+  // "IF THERE IS ANY" — the card promised "Writing it bills this agreement
+  // for February 2027" over a row with no rent, beside a "Renew at the same
+  // rent" button; the tap wrote the successor with no rent and the toast
+  // said February couldn't be billed. Same for a row filed as paid yearly:
+  // the successor copies the term, the run bills months only.
+  it("a row with NO RENT promises nothing, names the door on the same card, and the same-rent button says what it writes", async () => {
+    TODAY = "2027-03-16"; gap.ran = true;
+    db.lot_reservations[0].quoted_amount = null;
+    const html = await card();
+    expect(html).toContain("No rent is set, so writing it can&#x27;t bill February 2027 and March 2027 — use Renew at a new rent and type what they pay.");
+    expect(html).not.toContain("Writing it bills this agreement");
+    expect(html).toContain("Renew with no rent set");
+    expect(html).not.toContain("Renew at the same rent");
+    expect(html).toContain("Renew at a new rent");
+    // The tap at "the same rent" still writes what it says — no rent — and
+    // the same-rent refusal names the button by the label it had.
+    const res = await renewAgreement("park-1", "res-jan", { months: 3 });
+    expect(res.ok, res.error).toBe(true);
+    expect(inserted[0].quoted_amount).toBeNull();
+    // Typing a rent on the door the note names is what makes February bill.
+    seed(); db.parks[0].max_agreement_months = 6; gap.ran = true; db.lot_reservations[0].quoted_amount = null;
+    const typed = await renewAgreement("park-1", "res-jan", { months: 3, newRent: "425" });
+    expect(typed.ok, typed.error).toBe(true);
+    expect(inserted[0].quoted_amount).toBe(425);
+    // Collapsed the other way: with a rent, the promise stands.
+    seed(); db.parks[0].max_agreement_months = 6; gap.ran = true;
+    expect(await card()).toContain("Writing it bills this agreement for February 2027 and March 2027 — nothing has billed it for those months yet.");
+  });
+
+  it("a row filed as paid yearly promises nothing — the run's own sentence, Edit on the roll — and a nightly one is priced per stay", async () => {
+    TODAY = "2027-03-16"; gap.ran = true;
+    db.lot_reservations[0].term = "annual"; db.lot_reservations[0].quoted_amount = 3300;
+    const [row] = (await renewalsDue("park-1")).rows!;
+    expect(row.backfillNote).toBe(
+      "Writing it won't bill February 2027 and March 2027: Lot 14 is filed as paid yearly — the run bills months only — change how it's paid to monthly from Edit on the roll and type the monthly rent.",
+    );
+    expect(row.backfillNote).not.toMatch(/Writing it bills/);
+    // The successor still copies the term — the sentence is true of the row written.
+    const res = await renewAgreement("park-1", "res-jan", { months: 3 });
+    expect(res.ok, res.error).toBe(true);
+    expect(inserted[0].term).toBe("annual");
+    seed(); db.parks[0].max_agreement_months = 6; gap.ran = true;
+    db.lot_reservations[0].term = "nightly"; db.lot_reservations[0].quoted_amount = 80;
+    const [night] = (await renewalsDue("park-1")).rows!;
+    expect(night.backfillNote).toContain("priced per stay, not by the month");
+    expect(night.backfillNote).not.toMatch(/Edit on the roll|monthly rent/);
   });
 
   it("with one length over and two that reach, the sentence is singular and the chips are the two", async () => {
@@ -711,7 +972,8 @@ describe("the card's own words for a lapsed agreement", () => {
     expect(html).toContain(">6 months<");
     expect(html).not.toContain(">1 month<");
     // The headline is the shortest that reaches, and February is named as unbilled.
-    expect(html).toContain("Next one: 3 months, February 1, 2027 to May 1, 2027. Consecutive with the last one. It reaches back over February 2027 through March 2027, which nothing has billed yet.");
+    // February is behind; March's run has not happened, so it is not named.
+    expect(html).toContain("Next one: 3 months, February 1, 2027 to May 1, 2027. Consecutive with the last one. Writing it bills this agreement for February 2027 — nothing has billed it for that month yet.");
   });
 
   it("splits the heading when some have lapsed and some are running out", async () => {
@@ -1696,14 +1958,58 @@ describe("a household who already renewed", () => {
     expect(row().extend_token).toBeNull();
   });
 
+  it("a household closed out THROUGH its renewal link is not asked to renew the link before it — an ended successor is a later link", async () => {
+    // The office renewed lot 14 in January before the sweep asked (no stamp
+    // on the prior), then the family left on the morning of 1 February —
+    // recorded through the successor, which is `ended` now; the January
+    // link is approved/active with nothing HELD after it. On the night of
+    // 1 February January has 0 days left — inside the lead — and a chain
+    // map built from the held rows alone could not see the successor: the
+    // sweep texted a family who had moved out, asking whether they wanted
+    // to renew.
+    db.lot_reservations.push({
+      id: "res-feb", park_lot_id: "lot-14", renter_id: "renter-doris", renter_unit_id: "unit-1",
+      during: "[2027-02-01,2027-02-02)", status: "ended", moved_out_on: "2027-02-01", term: "monthly", quoted_amount: 400,
+      origin: "renewal", agreement_chain_id: "chain-a", agreement_seq: 2, extend_token: null, extend_reminded_at: null, extended_count: 0,
+    });
+    TODAY = "2027-02-01";
+    const out = await remindExpiringStays();
+    expect(out).toEqual({ ok: true, reminded: 0, unreached: 0, refused: NONE_REFUSED, skipped: [] });
+    expect(sent).toEqual([]);
+    expect(row().extend_token).toBeNull();
+    expect(row().extend_reminded_at).toBeNull();
+    // The same night with the successor WITHDRAWN instead (cancelled — the
+    // renewal never stood) the prior has no later link, and IS asked: the
+    // rule is about a link that was lived in, not any row with a bigger
+    // sequence number. Both halves, or the pin measures nothing.
+    db.lot_reservations[1].status = "cancelled";
+    db.lot_reservations[1].moved_out_on = null;
+    const asked = await remindExpiringStays();
+    expect(asked.reminded).toBe(1);
+    expect(sent).toHaveLength(1);
+  });
+
   it("the sweep reads the same predicate the owner's list does (source)", () => {
     const auto = code("src/lib/automation.ts");
     const sweep = auto.slice(auto.indexOf("export async function remindExpiringStays"), auto.indexOf("export function extendReminderText"));
-    expect(sweep).toMatch(/const maxSeq = latestSeqByChain\(stays \?\? \[\]\);/);
+    // Built from EVERY row including the ended ones — read once, split
+    // once — exactly the shape renewalsDue below and Today use; only the
+    // held rows are swept.
+    expect(sweep).toMatch(/\.in\("status", \["approved", "active", "ended"\]\)/);
+    expect(sweep).toContain('const stays = (everyRow ?? []).filter((s) => s.status === "approved" || s.status === "active");');
+    expect(sweep).toMatch(/const maxSeq = latestSeqByChain\(everyRow \?\? \[\]\);/);
+    expect(sweep).not.toMatch(/latestSeqByChain\(stays/);
+    expect(sweep).toMatch(/for \(const s of stays \?\? \[\]\)/);
     expect(sweep).toMatch(/if \(hasLaterLink\(s, maxSeq\)\) continue;/);
     const renew = code("src/app/park/renew-actions.ts");
     const due = renew.slice(renew.indexOf("export async function renewalsDue("));
-    expect(due).toMatch(/latestSeqByChain\(stays \?\? \[\]\)/);
+    // Built from EVERY row including the ended ones — a household closed
+    // out of its successor has a later link, it is just `ended` — while
+    // only the held rows are candidates.
+    expect(due).toMatch(/latestSeqByChain\(everyRow \?\? \[\]\)/);
+    expect(due).toMatch(/\.in\("status", \["approved", "active", "ended"\]\)/);
+    expect(due).toContain('const stays = (everyRow ?? []).filter((s) => s.status === "approved" || s.status === "active");');
+    expect(due).toMatch(/const due = stays\.filter/);
     expect(due).toMatch(/!hasLaterLink\(s, maxSeq\)/);
     expect(due).not.toMatch(/new Map<string, number>/);
     // The stamp is not cleared on the predecessor by the resident's door.

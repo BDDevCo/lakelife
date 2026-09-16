@@ -8,6 +8,8 @@ import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { handKeyedRefusal, paymentAmountRefusal, prettyMonth, splitSiblingKey, type HandKeyedMethod } from "./ledger-helpers";
 import { settleOnAccount, describeSettlement, heldOnAccountFor, money, type AllocationLine } from "@/lib/allocations";
 import { dayInWords } from "./park-helpers";
+import { tenancyFactsFor } from "@/lib/tenancy-facts";
+import { dbSaid } from "@/lib/db-said";
 import type { ReceiptLines } from "./receipt-helpers";
 
 /**
@@ -42,6 +44,18 @@ import type { ReceiptLines } from "./receipt-helpers";
  *
  * A DEPOSIT IS HELD MONEY, NOT INCOME. It may never carry a charge_id at all —
  * the database refuses it — so it can never quietly settle a rent bill.
+ *
+ * A CANCELLED BILL RELEASES ITS MONEY ONTO ACCOUNT (0169). A payment keyed
+ * straight against a bill keeps its charge_id forever — the row never moves
+ * — and when the office cancels that bill the money does not vanish and
+ * does not reopen anything: the view lists the payment as on account, with
+ * `released_from_charge_id`, the bill's month and the day it was cancelled
+ * appended, and `remaining` is still the one remainder. So "on account" is
+ * MEMBERSHIP IN THE VIEW, never `charge_id is null` decided here: a door
+ * that keyed its refusal on charge_id alone would turn a released $542.53
+ * away as "already against a bill" — the bill it names is cancelled. The
+ * two doors below read the view row first; absent, with a charge, the money
+ * is a live bill's and the sentence says so.
  */
 
 export interface MoneyResult {
@@ -345,7 +359,23 @@ export async function applyOnAccount(
   }
   const pay = payRes.data;
   if (!pay) return { ok: false, error: "That payment isn't here." };
-  if (pay.charge_id) return { ok: false, error: "That one is already against a bill." };
+
+  // IS IT ON ACCOUNT AT ALL — the view's answer, read before any refusal
+  // that names a bill (0169). A payment against a bill the office has since
+  // cancelled is in the view with its money released; the same row against
+  // a LIVE bill is not, and that money is the bill's. `pay.charge_id` alone
+  // cannot tell the two apart, so it is never the test here.
+  const leftRes = await admin
+    .from("park_on_account_payments")
+    .select("payment_id, remaining")
+    .eq("payment_id", paymentId)
+    .maybeSingle();
+  if (leftRes.error) {
+    return { ok: false, error: readFailedMessage("what's left on that payment", leftRes.error, { money: true }) };
+  }
+  if (!leftRes.data && pay.charge_id) {
+    return { ok: false, error: "That money is against a live bill — it is that bill's money." };
+  }
   if (pay.reversed_at) return { ok: false, error: "That payment was reversed." };
   // A RETURN IS NOT A REVERSAL AND IT IS NOT A REFUND (0155). The bank pulled
   // this money back, so it is not sitting on account and cannot settle a bill.
@@ -358,14 +388,6 @@ export async function applyOnAccount(
 
   // WHAT IS STILL ON ACCOUNT — the database's answer, not amount. A payment
   // that has been put against February already has less to give.
-  const leftRes = await admin
-    .from("park_on_account_payments")
-    .select("payment_id, remaining")
-    .eq("payment_id", paymentId)
-    .maybeSingle();
-  if (leftRes.error) {
-    return { ok: false, error: readFailedMessage("what's left on that payment", leftRes.error, { money: true }) };
-  }
   const remaining = Number(leftRes.data?.remaining ?? 0);
   if (remaining <= 0) {
     return { ok: false, error: "Nothing is left on that payment — all of it has already been put against bills." };
@@ -419,7 +441,7 @@ export async function applyOnAccount(
           `To put more of it against that bill, take the existing line off first ("Take it off this bill" under "Money not against a bill"), then apply it again for the new amount.`,
       };
     }
-    return { ok: false, error: `Couldn't apply that — ${(error.message ?? "").replace(/^park_payment_allocations:\s*/, "")}` };
+    return { ok: false, error: `Couldn't apply that — ${dbSaid(error.message, "park_payment_allocations")}` };
   }
 
   // THE MONEY IS ALREADY APPLIED, so this cannot refuse — but it must not let
@@ -525,7 +547,7 @@ export async function unapplyAllocation(
     .is("removed_at", null)          // once — a double tap does not remove it twice
     .select("id");
   if (error) {
-    return { ok: false, error: `Couldn't take that off — ${(error.message ?? "").replace(/^park_payment_allocations:\s*/, "")}` };
+    return { ok: false, error: `Couldn't take that off — ${dbSaid(error.message, "park_payment_allocations")}` };
   }
   if (!done?.length) return { ok: false, error: "That one was just taken off its bill by somebody else." };
 
@@ -788,8 +810,21 @@ export async function handBackOnAccount(
   const pay = payRes.data;
   if (!pay) return { ok: false, error: "That payment isn't here." };
   if (pay.kind === "deposit") return { ok: false, error: "That's a deposit — give it back from its own line under Deposits." };
-  if (pay.kind !== "rent" || pay.charge_id) {
-    return { ok: false, error: "That money is against a bill, so it isn't on account — take it back with a reason if it was recorded wrongly." };
+
+  // ON ACCOUNT IS MEMBERSHIP IN THE VIEW (0169), and the ceiling is the
+  // view's figure — one read for both. A payment against a bill the office
+  // cancelled is in the view, its money released, and goes back across the
+  // window like any other; the same row against a LIVE bill is not, and
+  // that money is the bill's. A failed read refuses: "you can't hand back
+  // more than $57.47" about a figure nobody read is the sentence that hands
+  // back money that is on a bill.
+  const leftRes = await admin
+    .from("park_on_account_payments").select("payment_id, remaining").eq("payment_id", paymentId).maybeSingle();
+  if (leftRes.error) {
+    return { ok: false, error: readFailedMessage("what's still on account from that payment", leftRes.error, { money: true }) };
+  }
+  if (!leftRes.data && pay.charge_id) {
+    return { ok: false, error: "That money is against a live bill, so it isn't on account — take it back with a reason if it was recorded wrongly." };
   }
   if (pay.method === "card" || pay.method === "ach") {
     return {
@@ -807,14 +842,7 @@ export async function handBackOnAccount(
     return { ok: false, error: `Money from that payment was already handed back on ${dayInWords(String(pay.returned_on))} — a hand-back is recorded once.` };
   }
 
-  // THE CEILING IS WHAT IS STILL ON ACCOUNT — the view's figure. A failed
-  // read refuses: "you can't hand back more than $57.47" about a figure
-  // nobody read is the sentence that hands back money that is on a bill.
-  const leftRes = await admin
-    .from("park_on_account_payments").select("remaining").eq("payment_id", paymentId).maybeSingle();
-  if (leftRes.error) {
-    return { ok: false, error: readFailedMessage("what's still on account from that payment", leftRes.error, { money: true }) };
-  }
+  // THE CEILING IS WHAT IS STILL ON ACCOUNT — the view's figure, read above.
   const remaining = Number(leftRes.data?.remaining ?? 0);
   if (remaining <= 0) {
     return { ok: false, error: "Nothing of that payment is still on account — all of it has gone against bills or already gone back." };
@@ -834,7 +862,7 @@ export async function handBackOnAccount(
     .is("returned_on", null)        // once — a double tap does not hand it back twice
     .select("id");
   if (error) {
-    return { ok: false, error: `Couldn't record that — ${(error.message ?? "").replace(/^park_payments:\s*/, "")}` };
+    return { ok: false, error: `Couldn't record that — ${dbSaid(error.message, "park_payments")}` };
   }
   if (!done?.length) return { ok: false, error: "That one was just handed back by somebody else." };
 
@@ -907,9 +935,28 @@ export interface OnAccountRow {
    * the confirm asked the office to reverse "the whole cheque — and the
    * part against the bill" about $542.53 in cash with no other half. This
    * is set only when the sibling bill row STANDS — the same read
-   * reversePayment makes — and carries what that half is.
+   * reversePayment makes — and carries what that half is. `billCancelled`
+   * says the bill that half was paid on has since been cancelled (0169) —
+   * that half is then itself on account, listed on its own row, and the
+   * confirm must not describe "$542.53 against January 2027" as though
+   * January still stood. Null on a released row itself: `split` means "the
+   * other half is against a bill", and a released row's other half is on
+   * account — see `releasedFrom.sibling`.
    */
-  split: { against: number; billMonth: string | null } | null;
+  split: { against: number; billMonth: string | null; billCancelled: boolean } | null;
+  /**
+   * MONEY RELEASED FROM A CANCELLED BILL (0169). Set when this payment was
+   * keyed straight against a bill the office has since cancelled: the row
+   * never moved (charge_id still names the bill), the view lists it as on
+   * account, and the screen says where it came from — the bill's month and
+   * the day it was cancelled — or "$542.53 still on account" stands over
+   * money the household remembers paying on January. `sibling` is the
+   * on-account half of the same cheque when one STANDS (a $600 cheque on a
+   * $542.53 bill — recordPayment's split), because reversePayment takes
+   * both halves back whichever is tapped and the confirm must say so. Null
+   * for money keyed on account through its own door.
+   */
+  releasedFrom: { chargeId: string; month: string; on: string; sibling: { onAccount: number } | null } | null;
   /**
    * THE HOUSEHOLD HAS LEFT. No approved or active tenancy, and at least one
    * ended; `movedOutOn` is the last day they lived here.
@@ -935,70 +982,14 @@ export interface DepositRow extends OnAccountRow {
   returnNote: string | null;
 }
 
-/** The tenancy facts one household's rows share — read once per household. */
-interface TenancyFacts {
-  tenancyEnded: boolean;
-  movedOutOn: string | null;
-  finalMonthBilled: boolean;
-}
-
-/**
- * WHETHER EACH HOUSEHOLD HAS LEFT, AND WHETHER THEIR LAST MONTH IS BILLED.
- *
- * One read of their tenancies, one of the charges on the links they moved
- * out from. mustRead on both: a failed read defaulting to "still here"
- * would print "No open bill for them yet" — a promise of a next bill —
- * over money the park owes back, which is the exact sentence this exists
- * to end.
- */
-async function tenancyFactsFor(
-  admin: ReturnType<typeof createServiceClient>,
-  renterIds: readonly string[],
-): Promise<Map<string, TenancyFacts>> {
-  const out = new Map<string, TenancyFacts>();
-  if (renterIds.length === 0) return out;
-  const stays = mustRead(
-    "whether those households are still here",
-    await admin.from("lot_reservations")
-      .select("id, renter_id, status, moved_out_on, during")
-      .in("renter_id", [...renterIds])
-      .in("status", ["approved", "active", "ended"]),
-  ) ?? [];
-  // The link each departed household moved out FROM — the one carrying the
-  // last day. Its final month is the month of that day.
-  const lastLink = new Map<string, { id: string; movedOutOn: string }>();
-  const stillHere = new Set<string>();
-  for (const s of stays) {
-    const rid = s.renter_id as string;
-    if (s.status === "approved" || s.status === "active") { stillHere.add(rid); continue; }
-    const day = (s.moved_out_on as string | null) ?? null;
-    if (!day) continue;
-    const prev = lastLink.get(rid);
-    if (!prev || day > prev.movedOutOn) lastLink.set(rid, { id: s.id as string, movedOutOn: day });
-  }
-  const linkIds = [...lastLink.values()].map((l) => l.id);
-  const billed = new Set<string>();
-  if (linkIds.length) {
-    const charges = mustRead(
-      "whether their final month is billed",
-      await admin.from("park_charges")
-        .select("reservation_id, period_month, status")
-        .in("reservation_id", linkIds)
-        .neq("status", "void"),
-    ) ?? [];
-    for (const c of charges) billed.add(`${c.reservation_id}:${c.period_month}`);
-  }
-  for (const rid of renterIds) {
-    const link = lastLink.get(rid);
-    const ended = !stillHere.has(rid) && link != null;
-    out.set(rid, {
-      tenancyEnded: ended,
-      movedOutOn: ended ? link!.movedOutOn : null,
-      finalMonthBilled: ended && billed.has(`${link!.id}:${link!.movedOutOn.slice(0, 7)}`),
-    });
-  }
-  return out;
-}
+// WHETHER EACH HOUSEHOLD HAS LEFT, AND WHETHER THEIR LAST MONTH IS BILLED —
+// tenancyFactsFor, from @/lib/tenancy-facts. It lived here as a private
+// copy, word for word the one the resident receipt and the resident home
+// carried too, and the three had already begun to disagree. The shared
+// one reads exactly what this one read (both through mustRead: a failed
+// read defaulting to "still here" would print "No open bill for them yet"
+// — a promise of a next bill — over money the park owes back), so the
+// held panel's rows carry the same three facts they always did.
 
 /** Money sitting against households, and deposits being held. */
 export async function getHeldMoney(parkId: string): Promise<{
@@ -1031,7 +1022,12 @@ export async function getHeldMoney(parkId: string): Promise<{
   // nothing handed back and nothing left (refunded in full): there is
   // nothing to take back and nothing to show. The total sums `remaining`, so
   // a spent cheque adds $0 to "on account".
-  const acctCols = "payment_id, renter_id, amount, allocated, refunded, remaining, handed_back, handed_back_on, handed_back_note, method, received_on, reference, receipt_no, note, idempotency_key";
+  //
+  // AND MONEY RELEASED FROM A CANCELLED BILL (0169) is in the view with the
+  // three columns at the end: the bill it was paid on, that bill's month and
+  // the day it was cancelled. The row is listed like any other — its
+  // `remaining` is the same figure — and says where it came from.
+  const acctCols = "payment_id, renter_id, amount, allocated, refunded, remaining, handed_back, handed_back_on, handed_back_note, method, received_on, reference, receipt_no, note, idempotency_key, released_from_charge_id, released_from_month, released_on";
   const depCols = "id, renter_id, amount, fee_amount, method, received_on, reference, receipt_no, kind, charge_id, returned_on, returned_amount, return_note, note, reversed_at, returned_at";
   // MONEY THE BANK TOOK BACK IS NOT MONEY THE PARK IS HOLDING, and a deposit
   // has no charge for `recompute_charge_paid` to correct — that is the whole
@@ -1069,13 +1065,26 @@ export async function getHeldMoney(parkId: string): Promise<{
 
   // THE OTHER HALF OF A SPLIT, READ. One `.in()` over the sibling keys, the
   // same standing filter reversePayment uses (park-scoped, not reversed,
-  // against a bill), then the bills' months in one more read. mustRead: a
-  // failed read defaulting to "no split" would print "Reverse it" on a real
-  // $600 split — the exact lie the flag exists to prevent.
-  const sibKeys = (acctRows ?? [])
+  // bank-returned neither), then the bills' months in one more read.
+  // mustRead: a failed read defaulting to "no split" would print "Reverse
+  // it" on a real $600 split — the exact lie the flag exists to prevent.
+  //
+  // TWO DIRECTIONS, ONE READ. An on-account row (key `…:onaccount`) looks
+  // for the bill's half under the base key — a row AGAINST a bill. A
+  // released row (0169: charge_id set, key = the base key) looks the other
+  // way, for the on-account half under `…:onaccount` — a row with NO bill.
+  // Both key shapes go into the one `.in`, and the rows that come back are
+  // sorted by which half they are.
+  const acctSibKeys = (acctRows ?? [])
     .map((r) => splitSiblingKey((r.idempotency_key as string | null) ?? null, null))
     .filter((k): k is string => k != null);
+  const releasedSibKeys = (acctRows ?? [])
+    .filter((r) => r.released_from_charge_id != null)
+    .map((r) => splitSiblingKey((r.idempotency_key as string | null) ?? null, r.released_from_charge_id))
+    .filter((k): k is string => k != null);
+  const sibKeys = [...new Set([...acctSibKeys, ...releasedSibKeys])];
   const sibByKey = new Map<string, { against: number; chargeId: string }>();
+  const acctSibByKey = new Map<string, { onAccount: number }>();
   if (sibKeys.length) {
     const sibs = mustRead(
       "the other half of those payments",
@@ -1083,7 +1092,10 @@ export async function getHeldMoney(parkId: string): Promise<{
         .eq("park_id", parkId).in("idempotency_key", sibKeys).is("reversed_at", null).is("returned_at", null),
     ) ?? [];
     for (const s of sibs) {
-      if (!s.charge_id) continue;
+      if (!s.charge_id) {
+        acctSibByKey.set(s.idempotency_key as string, { onAccount: Number(s.amount ?? 0) });
+        continue;
+      }
       sibByKey.set(s.idempotency_key as string, { against: Number(s.amount ?? 0), chargeId: s.charge_id as string });
     }
   }
@@ -1109,14 +1121,22 @@ export async function getHeldMoney(parkId: string): Promise<{
       refundsByPayment.set(r.payment_id as string, list);
     }
   }
+  // THE BILL THE OTHER HALF IS AGAINST — its month, and whether it still
+  // stands. A bill the office cancelled (0169) has released that half onto
+  // account; the on-account row's confirm then says "which was cancelled"
+  // rather than naming January as a live bill the money goes back off.
   const monthOfCharge = new Map<string, string>();
+  const cancelledCharge = new Set<string>();
   const sibChargeIds = [...new Set([...sibByKey.values()].map((s) => s.chargeId))];
   if (sibChargeIds.length) {
     const chs = mustRead(
       "the bills the other halves are against",
-      await admin.from("park_charges").select("id, period_month").in("id", sibChargeIds),
+      await admin.from("park_charges").select("id, period_month, status").in("id", sibChargeIds),
     ) ?? [];
-    for (const c of chs) monthOfCharge.set(c.id as string, String(c.period_month ?? ""));
+    for (const c of chs) {
+      monthOfCharge.set(c.id as string, String(c.period_month ?? ""));
+      if (c.status === "void") cancelledCharge.add(c.id as string);
+    }
   }
 
   const base = (r: Record<string, unknown>, id: string): OnAccountRow => {
@@ -1138,18 +1158,39 @@ export async function getHeldMoney(parkId: string): Promise<{
       reference: (r.reference as string) ?? null,
       receiptNo: (r.receipt_no as number) ?? null,
       split: null,
+      releasedFrom: null,
       tenancyEnded: facts?.tenancyEnded ?? false,
       movedOutOn: facts?.movedOutOn ?? null,
       finalMonthBilled: facts?.finalMonthBilled ?? false,
     };
   };
 
-  const onAccount = (acctRows ?? []).map((r) => {
-    const sibKey = splitSiblingKey((r.idempotency_key as string | null) ?? null, null);
+  const onAccount = (acctRows ?? []).map((r): OnAccountRow => {
+    const key = (r.idempotency_key as string | null) ?? null;
+    const releasedFromChargeId = (r.released_from_charge_id as string | null) ?? null;
+    // A RELEASED ROW (0169): where it came from, and its on-account half if
+    // one stands. `split` stays null — its meaning is "the other half is
+    // against a bill", and this row's other half is on account.
+    if (releasedFromChargeId) {
+      const sibKey = splitSiblingKey(key, releasedFromChargeId);
+      const sib = sibKey ? acctSibByKey.get(sibKey) : undefined;
+      return {
+        ...base(r, r.payment_id as string),
+        releasedFrom: {
+          chargeId: releasedFromChargeId,
+          month: String(r.released_from_month ?? ""),
+          on: String(r.released_on ?? ""),
+          sibling: sib ? { onAccount: sib.onAccount } : null,
+        },
+      };
+    }
+    const sibKey = splitSiblingKey(key, null);
     const sib = sibKey ? sibByKey.get(sibKey) : undefined;
     return {
       ...base(r, r.payment_id as string),
-      split: sib ? { against: sib.against, billMonth: monthOfCharge.get(sib.chargeId) ?? null } : null,
+      split: sib
+        ? { against: sib.against, billMonth: monthOfCharge.get(sib.chargeId) ?? null, billCancelled: cancelledCharge.has(sib.chargeId) }
+        : null,
     };
   });
   // A deposit is never applied to anything (0102), so all of it is held

@@ -24,17 +24,27 @@ const cents = (n: unknown) => Math.round(Number(n ?? 0) * 100);
 /** Make the next read of this table fail with this error. */
 let nextReadError: { table: string; error: { code: string; message: string } } | null = null;
 
-/** park_on_account_payments, as 0167 defines it. */
+/**
+ * park_on_account_payments, as 0167 defines it and 0169 widens it: kind rent,
+ * standing, and no charge OR a charge whose status is void — a payment against
+ * a cancelled bill is on account, its money released, the row never moved.
+ * renter_id is coalesced from the charge; released_from_* are appended.
+ */
 function onAccountView(): Row[] {
+  const chargeOf = (id: unknown) => (db.park_charges ?? []).find((c) => c.id === id) ?? null;
   return (db.park_payments ?? [])
-    .filter((p) => p.kind === "rent" && p.charge_id == null && p.reversed_at == null && p.returned_at == null)
+    .filter((p) => p.kind === "rent" && p.reversed_at == null && p.returned_at == null
+      && (p.charge_id == null || chargeOf(p.charge_id)?.status === "void"))
     .map((p) => {
       const allocated = (db.park_payment_allocations ?? [])
         .filter((a) => a.payment_id === p.id && a.removed_at == null).reduce((t, a) => t + cents(a.amount), 0);
+      const handedBack = p.returned_on != null ? cents(p.returned_amount) : 0;
+      const c = p.charge_id == null ? null : chargeOf(p.charge_id);
       return {
-        payment_id: p.id, park_id: p.park_id, renter_id: p.renter_id, amount: p.amount,
+        payment_id: p.id, park_id: p.park_id, renter_id: p.renter_id ?? c?.renter_id ?? null, amount: p.amount,
         received_on: p.received_on, allocated: allocated / 100, refunded: 0,
-        remaining: Math.max(0, cents(p.amount) - allocated) / 100,
+        remaining: Math.max(0, cents(p.amount) - allocated - handedBack) / 100,
+        released_from_charge_id: c ? c.id : null, released_from_month: c ? c.period_month : null, released_on: c ? (c.voided_at ?? null) : null,
       };
     });
 }
@@ -397,6 +407,287 @@ describe("the loader's shape, pinned in source", () => {
 });
 
 /**
+ * MONEY A CANCELLED BILL RELEASED (0169). She paid January in full on the
+ * 4th; she left on the 20th; the office cancelled the whole-month bill and
+ * raised the $472.53 part month, which was settled from the money the
+ * cancelled bill released. The payment row never moved (charge_id still
+ * names January) and the view lists it, with the cancelled bill's month.
+ * Her screen has to count what is left of it as hers, and the part month
+ * has to say where its money came from — the January bill she can see her
+ * cheque against, not "money you had on account".
+ */
+describe("money released from a cancelled bill is on her page, and the part month names it", () => {
+  const walked = (over: Partial<Row> = {}) => {
+    clock.today = "2027-02-02";
+    db.lot_reservations = [{
+      id: "res-9", park_lot_id: "lot-9", renter_id: "renter-9", during: "[2027-01-01,2027-01-21)", term: "monthly",
+      status: "ended", expected_move_out: "2027-01-20", tenancy_began_on: "2015-04-01", moved_out_on: "2027-01-20", created_at: "2026-12-20",
+    }];
+    db.park_charges = [
+      { id: "charge-jan", reservation_id: "res-9", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, paid_total: 0, status: "void",
+        voided_at: "2027-01-20T15:00:00Z", void_reason: "moved out 20 Jan; part month raised", lines: [] },
+      { id: "charge-part", reservation_id: "res-9", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 472.53, paid_total: 472.53, status: "paid",
+        lines: [{ label: "Lot rent", amount: 348.39, basis: "27 of 31 days" }] },
+    ];
+    db.park_payments = [{
+      id: "pay-direct", park_id: "park-haven", renter_id: "renter-9", kind: "rent", charge_id: "charge-jan", amount: 542.53,
+      fee_amount: null, method: "check", received_on: "2027-01-04", receipt_no: 14,
+      returned_on: null, reversed_at: null, returned_at: null, ...over,
+    }];
+    db.park_payment_allocations = [
+      { id: "al-p", park_id: "park-haven", payment_id: "pay-direct", charge_id: "charge-part", amount: 472.53, applied_via: "office", applied_at: "2027-01-20T15:05:00Z" },
+    ];
+  };
+
+  it("the $70.00 left is on account by the view's word, the tenancy has ended and the final month is billed", async () => {
+    walked();
+    const v = await getRenterHome();
+    expect(v!.onAccount).toBe(70);
+    expect(v!.tenancyEnded).toBe("2027-01-20");
+    // The part month is a live January bill: "nothing more bills for you".
+    expect(v!.finalMonthBilled).toBe(true);
+  });
+
+  /**
+   * THE LINE AGAINST THE JANUARY RAISED AGAIN is marked apart from the
+   * January cancelled (0169), the way /paid/[token] marks it: the same
+   * month as the cancelled bill the money was released from, so the
+   * sentence can say "the $472.53 bill raised again for January 2027 (27
+   * of 31 days)" rather than "January 2027" — two bills in one word. The
+   * basis is the bill's OWN frozen text, carried verbatim; the amount is
+   * the bill's, not the line's.
+   */
+  const partMonth = { periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: "27 of 31 days" }, billAmount: 472.53 };
+
+  it("the released cheque's own row says which bill was cancelled, where its money went, and the $70.00 still held", async () => {
+    walked();
+    const v = await getRenterHome();
+    const row = v!.payments.find((p) => p.receiptNo === 14)!;
+    // By the view's word (released_from_month), never the row's charge_id.
+    expect(row.releasedFrom).toEqual({ month: "2027-01" });
+    // Its live allocations, with the month of the bill each went to — and
+    // the January raised again named apart, with its own amount and basis.
+    expect(row.allocations).toStrictEqual([partMonth]);
+    // The view's remaining — the same figure the On account card sums.
+    expect(row.onAccountRemaining).toBe(70);
+    expect(v!.onAccount).toBe(row.onAccountRemaining);
+    // Nothing left of it: zero, not a missing key, and the origin still named.
+    walked({ amount: 472.53 });
+    const spent = (await getRenterHome())!.payments.find((p) => p.receiptNo === 14)!;
+    expect(spent.releasedFrom).toEqual({ month: "2027-01" });
+    expect(spent.onAccountRemaining).toBe(0);
+    expect(spent.allocations).toStrictEqual([partMonth]);
+    // Nothing applied yet — the bill cancelled, the part month not raised:
+    // no lines, the whole still held.
+    walked();
+    db.park_charges = db.park_charges.filter((c) => c.id === "charge-jan");
+    db.park_payment_allocations = [];
+    const held = (await getRenterHome())!.payments.find((p) => p.receiptNo === 14)!;
+    expect(held.releasedFrom).toEqual({ month: "2027-01" });
+    expect(held.allocations).toEqual([]);
+    expect(held.onAccountRemaining).toBe(542.53);
+  });
+
+  it("a payment no cancelled bill released carries null, and its own remaining", async () => {
+    // The quarter paid ahead from seed(): on account through its own door.
+    const v = await getRenterHome();
+    const acct = v!.payments.find((p) => p.receiptNo === 12)!;
+    expect(acct.releasedFrom).toBeNull();
+    // An ordinary line keeps its shape: no cancelled bill released this
+    // money, so nothing collides and no mark rides — no key at all, not an
+    // undefined one.
+    expect(acct.allocations).toStrictEqual([{ periodMonth: "2027-01", amount: 542.53 }]);
+    expect(acct.onAccountRemaining).toBe(1085.06);
+    // And a cheque against a live bill: nothing of it is on account.
+    walked();
+    db.park_charges[0].status = "paid"; db.park_charges[0].paid_total = 542.53;
+    db.park_payment_allocations = [];
+    const direct = (await getRenterHome())!.payments.find((p) => p.receiptNo === 14)!;
+    expect(direct.releasedFrom).toBeNull();
+    expect(direct.allocations).toEqual([]);
+    expect(direct.onAccountRemaining).toBe(0);
+  });
+
+  it("a released cheque since reversed carries no lines and nothing held — its allocations are record, as for the bill", async () => {
+    walked({ reversed_at: "2027-01-22T10:00:00Z", reversed_reason: "the cheque bounced" });
+    const row = (await getRenterHome())!.payments.find((p) => p.receiptNo === 14)!;
+    expect(row.takenBackOn).not.toBeNull();
+    expect(row.allocations).toEqual([]);
+    expect(row.onAccountRemaining).toBe(0);
+  });
+
+  /**
+   * TWO CANCELLED BILLS' MONEY ON ONE PART MONTH — the shape the close-out
+   * cascade writes (finalMonthNow, park/actions.ts). January part-paid $400
+   * by cheque; February raised early on the successor and paid $542.53; the
+   * move-out (27 January) recorded on 3 February. endTenancy cancelled both
+   * bills, and the part month was settled from BOTH: $400 of January's
+   * money and $72.53 of February's. Naming the larger month alone left the
+   * $72.53 to read as "money you had on account" — her February cheque.
+   */
+  it("a part month settled from two cancelled bills' money names both months and sums the amount", async () => {
+    clock.today = "2027-02-04";
+    db.lot_reservations = [
+      { id: "res-9", park_lot_id: "lot-9", renter_id: "renter-9", during: "[2027-01-01,2027-01-28)", term: "monthly",
+        status: "ended", expected_move_out: "2027-01-27", tenancy_began_on: "2015-04-01", moved_out_on: "2027-01-27", created_at: "2026-12-20" },
+    ];
+    db.park_charges = [
+      { id: "charge-jan", reservation_id: "res-9", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, paid_total: 0, status: "void",
+        voided_at: "2027-02-03T15:00:00Z", void_reason: "moved out 27 Jan; part month raised", lines: [] },
+      { id: "charge-feb", reservation_id: "res-9", renter_id: "renter-9", period_month: "2027-02", due_on: "2027-02-01", amount: 542.53, paid_total: 0, status: "void",
+        voided_at: "2027-02-03T15:00:00Z", void_reason: "moved out 27 Jan", lines: [] },
+      { id: "charge-part", reservation_id: "res-9", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 472.53, paid_total: 472.53, status: "paid",
+        lines: [{ label: "Lot rent", amount: 348.39, basis: "27 of 31 days" }] },
+    ];
+    db.park_payments = [
+      { id: "pay-j", park_id: "park-haven", renter_id: "renter-9", kind: "rent", charge_id: "charge-jan", amount: 400,
+        fee_amount: null, method: "check", received_on: "2027-01-04", receipt_no: 14, returned_on: null, reversed_at: null, returned_at: null },
+      { id: "pay-f", park_id: "park-haven", renter_id: "renter-9", kind: "rent", charge_id: "charge-feb", amount: 542.53,
+        fee_amount: null, method: "check", received_on: "2027-01-20", receipt_no: 15, returned_on: null, reversed_at: null, returned_at: null },
+    ];
+    db.park_payment_allocations = [
+      { id: "al-j", park_id: "park-haven", payment_id: "pay-j", charge_id: "charge-part", amount: 400, applied_via: "office", applied_at: "2027-02-03T15:05:00Z" },
+      { id: "al-f", park_id: "park-haven", payment_id: "pay-f", charge_id: "charge-part", amount: 72.53, applied_via: "office", applied_at: "2027-02-03T15:05:00Z" },
+    ];
+    const v = await getRenterHome();
+    expect(v!.bill!.monthLabel).toBe("January 2027");
+    expect(v!.bill!.fromOnAccount).toBe(472.53);
+    // Both months, in order, whichever cheque was larger; the amount summed.
+    expect(v!.bill!.fromCancelledBill).toEqual({ months: ["2027-01", "2027-02"], amount: 472.53 });
+    // $470.00 of February's cheque is what is left, and its row says so.
+    expect(v!.onAccount).toBe(470);
+    const feb = v!.payments.find((p) => p.receiptNo === 15)!;
+    expect(feb.releasedFrom).toEqual({ month: "2027-02" });
+    // February's money on the January part month: the months differ, so
+    // the line is January itself — not "the bill raised again for
+    // February", which was never raised. Bare shape, no mark.
+    expect(feb.allocations).toStrictEqual([{ periodMonth: "2027-01", amount: 72.53 }]);
+    expect(feb.onAccountRemaining).toBe(470);
+    const jan = v!.payments.find((p) => p.receiptNo === 14)!;
+    expect(jan.releasedFrom).toEqual({ month: "2027-01" });
+    // January's money on the January part month collides: marked, with the
+    // bill's own $472.53 beside the $400.00 this cheque put against it.
+    expect(jan.allocations).toStrictEqual([{ periodMonth: "2027-01", amount: 400, raisedAgain: { basis: "27 of 31 days" }, billAmount: 472.53 }]);
+    expect(jan.onAccountRemaining).toBe(0);
+    // Collapsed: take February's line away and one month is named.
+    db.park_payment_allocations = db.park_payment_allocations.filter((a) => a.id !== "al-f");
+    db.park_charges[2].paid_total = 400;
+    const one = await getRenterHome();
+    expect(one!.bill!.fromCancelledBill).toEqual({ months: ["2027-01"], amount: 400 });
+  });
+
+  it("the part month says $472.53 of it came from what she'd paid on the cancelled January bill", async () => {
+    walked();
+    const v = await getRenterHome();
+    expect(v!.bill!.monthLabel).toBe("January 2027");
+    expect(v!.bill!.outstanding).toBe(0);
+    expect(v!.bill!.fromOnAccount).toBe(472.53);
+    expect(v!.bill!.fromCancelledBill).toEqual({ months: ["2027-01"], amount: 472.53 });
+    // The cancelled bill itself is not on her screen (the charges read skips void).
+    expect(v!.arrears).toEqual([]);
+  });
+
+  it("…and still says so when nothing of the released money is left — the read is not the 'still held' one", async () => {
+    // A $472.53 cheque on January, cancelled, released in full onto the part
+    // month: remaining 0, so the on-account read (.gt remaining 0) never
+    // sees it. The sentence must not fall back to "money you had on account".
+    walked({ amount: 472.53 });
+    const v = await getRenterHome();
+    expect(v!.onAccount).toBe(0);
+    expect(v!.bill!.fromCancelledBill).toEqual({ months: ["2027-01"], amount: 472.53 });
+  });
+
+  it("a released cheque that was later reversed is record, not money that paid the month", async () => {
+    walked({ reversed_at: "2027-01-22T10:00:00Z", reversed_reason: "the cheque bounced" });
+    db.park_charges[1].paid_total = 0; db.park_charges[1].status = "open";
+    const v = await getRenterHome();
+    expect(v!.bill!.fromOnAccount).toBe(0);
+    expect(v!.bill!.fromCancelledBill).toBeNull();
+    expect(v!.onAccount).toBe(0);
+  });
+
+  it("money keyed on account through its own door carries null — the old sentence stands for it", async () => {
+    const v = await getRenterHome();
+    expect(v!.arrears).toEqual([]);
+    expect(v!.bill!.fromCancelledBill).toBeNull();
+    db.park_charges = db.park_charges.filter((c) => c.id === "charge-jan");
+    const jan = await getRenterHome();
+    expect(jan!.bill!.fromOnAccount).toBe(542.53);
+    expect(jan!.bill!.fromCancelledBill).toBeNull();
+  });
+
+  it("the $600 split, walked: the released half and the on-account half both settle the part month, and only the released dollars name the bill", async () => {
+    walked();
+    db.park_payments.push({
+      id: "pay-half", park_id: "park-haven", renter_id: "renter-9", kind: "rent", charge_id: null, amount: 57.47,
+      fee_amount: null, method: "check", received_on: "2027-01-04", receipt_no: 15, returned_on: null, reversed_at: null, returned_at: null,
+    });
+    db.park_payment_allocations = [
+      { id: "al-h", park_id: "park-haven", payment_id: "pay-half", charge_id: "charge-part", amount: 57.47, applied_via: "office", applied_at: "2027-01-20T15:05:00Z" },
+      { id: "al-p", park_id: "park-haven", payment_id: "pay-direct", charge_id: "charge-part", amount: 415.06, applied_via: "office", applied_at: "2027-01-20T15:05:00Z" },
+    ];
+    const v = await getRenterHome();
+    expect(v!.bill!.fromOnAccount).toBe(472.53);
+    expect(v!.bill!.fromCancelledBill).toEqual({ months: ["2027-01"], amount: 415.06 });
+    expect(v!.onAccount).toBe(127.47);
+    // And under each cheque: the released half's line is the January
+    // raised again; the on-account half's, against the same bill, is plain
+    // January — no cancelled bill released it, so nothing collides.
+    expect(v!.payments.find((p) => p.receiptNo === 14)!.allocations).toStrictEqual([{ ...partMonth, amount: 415.06 }]);
+    expect(v!.payments.find((p) => p.receiptNo === 15)!.allocations).toStrictEqual([{ periodMonth: "2027-01", amount: 57.47 }]);
+  });
+
+  it("refuses rather than saying 'money you had on account' when where it came from cannot be read", async () => {
+    walked();
+    // The first view read succeeds; the second — the unfiltered one — fails.
+    let reads = 0;
+    const orig = Q.prototype.then;
+    Q.prototype.then = function (this: Q, ok, bad) {
+      if ((this as unknown as { t: string }).t === "park_on_account_payments" && ++reads === 2) {
+        return Promise.resolve({ data: null, error: { code: "57P01", message: "terminating connection" }, count: null }).then(ok, bad);
+      }
+      return orig.call(this, ok, bad);
+    } as typeof orig;
+    try {
+      await expect(getRenterHome()).rejects.toBeInstanceOf(ReadFailed);
+    } finally {
+      Q.prototype.then = orig;
+    }
+  });
+
+  it("pinned in source: a second, unfiltered view read by renter_id, and the test is the view's word, never charge_id", () => {
+    const src = readFileSync(fileURLToPath(new URL("./my-data.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const at = src.indexOf("await Promise.all([");
+    const batch = src.slice(at, src.indexOf("]);", at));
+    expect(batch).toMatch(/\.select\("payment_id, released_from_month"\)\n\s*\.eq\("renter_id", file\.id as string\),/);
+    expect((batch.match(/\.from\("park_on_account_payments"\)/g) ?? []).length).toBe(2);
+    expect(src).toMatch(/mustRead\("where your money came from", releasedRes\)/);
+    expect(src).toMatch(/fromCancelledBill: fromCancelledBill\(c\.id as string\),/);
+    expect(src).toMatch(/releasedMonthOf\.get\(a\.payment_id as string\)/);
+    expect(src, "decided by charge_id, not the view").not.toMatch(/pay\?\.charge_id/);
+    // EVERY cancelled bill, summed — never the largest month alone. The
+    // cascade writes two, and the sort-and-take-first read one.
+    expect(src).not.toMatch(/sort\(\(a, b\) => b\[1\] - a\[1\]/);
+    expect(src).toMatch(/months = \[\.\.\.byMonth\.keys\(\)\]\.sort\(\)/);
+    // The payment row reads the same two maps, and the view's remaining —
+    // never the cheque less its lines.
+    expect(src).toMatch(/releasedFrom: releasedMonthOf\.has\(p\.id as string\)/);
+    expect(src).toMatch(/onAccountRemaining: remainingOf\.get\(p\.id as string\) \?\? 0,/);
+    expect(src).toMatch(/\.select\("id, amount, fee_amount, method, received_on/);
+    // THE RE-RAISE IS MARKED THROUGH lib/allocations, never a second copy of
+    // the collision test or the basis read: withRaisedAgain over the bill
+    // row's own lines, the released-from month passed in; the bill's amount
+    // rides on the colliding line alone. The bills read carries the lines
+    // and amount it needs.
+    expect(src).toMatch(/withRaisedAgain\(\n\s*\{ periodMonth: String\(bill\.period_month \?\? ""\), amount: c \/ 100 \},\n\s*month \?\? null,\n\s*bill\.lines,\n\s*\)/);
+    expect(src).toMatch(/line\.raisedAgain && bill\.amount != null \? \{ \.\.\.line, billAmount: Number\(bill\.amount\) \} : line/);
+    expect(src, "the collision decided here, not in lib/allocations").not.toMatch(/periodMonth === |=== month\b|"for the month"/);
+    expect(batch).toMatch(/\.select\("id, period_month, due_on, amount, paid_total, status, lines"\)/);
+  });
+});
+
+/**
  * THE LINK THAT COVERS TODAY, NOT THE NEWEST ROW. A renewal is a successor
  * row written in the agreement's last half; the notice she gave stands on
  * the link the roll called current. Picking the newest row read the
@@ -507,11 +798,42 @@ describe("during the notice window, with the next agreement already written", ()
     expect(v!.leavingOn).toBe("2027-01-27");
   });
 
-  it("the pick is by coverage — pinned in source, using the roll's own coversDay", () => {
+  it("closed out THROUGH the renewal: the ended successor is a later link, and the run-out January link is not where she lives", async () => {
+    // She renewed for February, then left on 10 February — recorded on the
+    // successor, which is `ended` (trimmed to the day). January is still
+    // approved/active, run out, with nothing HELD after it: read from the
+    // live links alone that is the lapsed-holdover shape, and the screen
+    // showed her January's lot — "rolls on" — ten days after she had gone,
+    // with her final part month and her deposit nowhere on it.
+    clock.today = "2027-02-20";
+    db.lot_reservations = [
+      { ...jan, expected_move_out: null },
+      { ...feb, status: "ended", during: "[2027-02-01,2027-02-11)", moved_out_on: "2027-02-10" },
+    ];
+    const v = await getRenterHome();
+    expect(v!.tenancyEnded).toBe("2027-02-10");
+    // The other half: the successor WITHDRAWN (cancelled — never lived in)
+    // leaves January the lapsed holdover it is; she is still living there.
+    db.lot_reservations = [
+      { ...jan, expected_move_out: null },
+      { ...feb, status: "cancelled" },
+    ];
+    const still = await getRenterHome();
+    expect(still!.tenancyEnded).toBeNull();
+    expect(still!.lotNumber).toBe("9");
+  });
+
+  it("the pick is by coverage — pinned in source, using the roll's own coversDay, and the lapsed fallback is the roll's own lapsedRowOf", () => {
     const src = readFileSync(fileURLToPath(new URL("./my-data.ts", import.meta.url)), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-    expect(src).toMatch(/import \{ coversDay \} from "@\/app\/park\/park-helpers"/);
+    expect(src).toMatch(/import \{ coversDay, lapsedRowOf \} from "@\/app\/park\/park-helpers"/);
     expect(src).toMatch(/liveStays\.find\(\(r\) => coversDay\(parseDaterange\(r\.during as string\), today\)\)/);
+    // The fallback is the ONE rule, fed EVERY row (stays — held and ended),
+    // never "any live link": collapse it to `liveStays[0]` and a household
+    // closed out through their renewal reads as living on the run-out link.
+    expect(src).toMatch(/const lapsed = lapsedRowOf\(\s*\(stays \?\? \[\]\)\.map/);
+    expect(src).toMatch(/\?\? lapsed;/);
+    expect(src).not.toMatch(/\?\? liveStays\[0\]/);
     expect(src, "the notice is read off one link again").not.toMatch(/leavingOn: \(stay\.expected_move_out/);
     expect(src).toMatch(/liveStays\.map\(\(r\) => \(r\.expected_move_out as string \| null\) \?\? null\)\.find/);
   });

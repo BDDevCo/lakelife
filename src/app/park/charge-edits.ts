@@ -19,10 +19,14 @@
  * takes the admin client and is called from inside an action that has
  * already asserted the park), so the two doors read the same rules:
  *
- *   - A bill with money on it is NEVER voided here. 0072 refuses it in the
- *     database; the caller reads `chargeStandings` first and says which
- *     kind of money it is — handed over, or put against it from money on
- *     account — because the way out differs.
+ *   - A bill with money ON ACCOUNT against it is never voided here: the
+ *     lines come off first (unapplyAllocation, R3) and the database refuses
+ *     the void while they stand (0169). A bill paid STRAIGHT against it may
+ *     be voided only when the caller says so (`releaseDirect`): a cancelled
+ *     bill releases that money onto the household's account, derived — the
+ *     payment row never moves — and the caller's sentence says where it
+ *     went. The caller reads `chargeStandings` first and says which kind of
+ *     money it is, because the way out differs.
  *   - A void carries a reason (0070's constraint) and releases the cost
  *     shares it was carrying (0104), exactly as voidCharge does.
  *   - A month is re-raised through the same buildStatement/planRun path the
@@ -40,7 +44,7 @@ import { planRun, dueDayFor, classifyForRun, type RunCandidate, type SkipWhy } f
 import { feesForTenancy } from "./fee-helpers";
 import { rentForPeriod, lastDayOfMonth } from "./rerate-helpers";
 import { servedRentHistory } from "@/lib/rent-changes";
-import { settleOnAccount } from "@/lib/allocations";
+import { settleOnAccount, splitApplied } from "@/lib/allocations";
 import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
 
 type Admin = ReturnType<typeof createServiceClient>;
@@ -70,10 +74,91 @@ export interface ChargeStanding {
    *   on_account  — settled only from money on account; the lines can be
    *                 taken off (unapplyAllocation) and then it can be voided.
    *   direct      — money was taken against it (or paid_total says so and
-   *                 no row explains it). Never voided here; the caller says
-   *                 the truth instead.
+   *                 no row explains it). Voided only by a caller that asks
+   *                 for it (voidUnpaidChargesFor's releaseDirect): the money
+   *                 is released onto the household's account (0169) and the
+   *                 caller's sentence says so.
    */
   money: "none" | "on_account" | "direct";
+}
+
+/**
+ * WHAT MONEY IS ON THESE BILLS — the ONE read for it. chargeStandings and
+ * voidUnpaidChargesFor both ask, so a change to what counts (a reversed
+ * payment, a removed line) cannot leave the read-before-write and the void
+ * disagreeing about the same bill.
+ *
+ * MONEY HANDED OVER against a bill: rows that still stand. A reversed or
+ * bank-returned row is not money on the bill (0167's recompute agrees), and
+ * a refund does not un-take the payment: the row stands and so does the
+ * fact that money was taken. MONEY ON ACCOUNT put against it: live lines
+ * (removed_at null) whose payment still stands — an allocation SURVIVES a
+ * reversal as record, and reading it as money on the bill would name "Take
+ * it off this bill" on a line no screen lists.
+ *
+ * `parkId` null skips the park filter (the void door has only reservation
+ * ids); the charge ids are the park's own already.
+ */
+async function moneyOnCharges(
+  admin: Admin,
+  parkId: string | null,
+  chargeIds: readonly string[],
+): Promise<
+  | {
+      /** Dollars handed over against the bill by rows that still stand. */
+      directOn: (chargeId: string) => number;
+      /** The standing rows themselves — their ids are what the view keys released money on. */
+      directRowsOn: (chargeId: string) => { id: string; amount: number }[];
+      allocationsOn: (chargeId: string) => { id: string; paymentId: string; amount: number }[];
+    }
+  | ReadProblem
+> {
+  if (chargeIds.length === 0) {
+    return { directOn: () => 0, directRowsOn: () => [], allocationsOn: () => [] };
+  }
+  let directQ = admin
+    .from("park_payments")
+    .select("id, charge_id, amount")
+    .in("charge_id", [...chargeIds])
+    .is("reversed_at", null)
+    .is("returned_at", null);
+  let allocQ = admin
+    .from("park_payment_allocations")
+    .select("id, payment_id, charge_id, amount")
+    .in("charge_id", [...chargeIds])
+    .is("removed_at", null);
+  if (parkId) {
+    directQ = directQ.eq("park_id", parkId);
+    allocQ = allocQ.eq("park_id", parkId);
+  }
+  const [directRes, allocRes] = await Promise.all([directQ, allocQ]);
+  if (directRes.error) return { error: directRes.error, what: "what's been paid against those bills" };
+  if (allocRes.error) return { error: allocRes.error, what: "what's been put against those bills" };
+
+  // An allocation counts only while the payment it came from stands.
+  const allocRows = allocRes.data ?? [];
+  const standing = new Set<string>();
+  if (allocRows.length > 0) {
+    const payRes = await admin
+      .from("park_payments")
+      .select("id, reversed_at, returned_at")
+      .in("id", [...new Set(allocRows.map((a) => a.payment_id as string))]);
+    if (payRes.error) return { error: payRes.error, what: "the payments behind those bills" };
+    for (const p of payRes.data ?? []) {
+      if (p.reversed_at == null && p.returned_at == null) standing.add(p.id as string);
+    }
+  }
+
+  const cents = (n: unknown) => Math.round(Number(n ?? 0) * 100);
+  const directRows = directRes.data ?? [];
+  return {
+    directOn: (id) => directRows.filter((p) => p.charge_id === id).reduce((s, p) => s + cents(p.amount), 0) / 100,
+    directRowsOn: (id) => directRows.filter((p) => p.charge_id === id).map((p) => ({ id: p.id as string, amount: Number(p.amount ?? 0) })),
+    allocationsOn: (id) =>
+      allocRows
+        .filter((a) => a.charge_id === id && standing.has(a.payment_id as string))
+        .map((a) => ({ id: a.id as string, paymentId: a.payment_id as string, amount: Number(a.amount ?? 0) })),
+  };
 }
 
 /**
@@ -103,57 +188,20 @@ export async function chargeStandings(
   if (rows.length === 0) return { charges: [] };
   const chargeIds = rows.map((c) => c.id as string);
 
-  // MONEY HANDED OVER against these bills — rows that still stand. A
-  // reversed or bank-returned row is not money on the bill (0167's
-  // recompute agrees), and a refund does not un-take the payment: the row
-  // stands and so does the fact that money was taken.
-  const [directRes, allocRes] = await Promise.all([
-    admin
-      .from("park_payments")
-      .select("id, charge_id, amount")
-      .eq("park_id", parkId)
-      .in("charge_id", chargeIds)
-      .is("reversed_at", null)
-      .is("returned_at", null),
-    admin
-      .from("park_payment_allocations")
-      .select("id, payment_id, charge_id, amount")
-      .eq("park_id", parkId)
-      .in("charge_id", chargeIds)
-      .is("removed_at", null),
-  ]);
-  if (directRes.error) return { error: directRes.error, what: "what's been paid against those bills" };
-  if (allocRes.error) return { error: allocRes.error, what: "what's been put against those bills" };
+  const onThem = await moneyOnCharges(admin, parkId, chargeIds);
+  if ("error" in onThem) return onThem;
 
-  // An allocation counts only while the payment it came from stands.
-  const allocRows = allocRes.data ?? [];
-  const standing = new Set<string>();
-  if (allocRows.length > 0) {
-    const payRes = await admin
-      .from("park_payments")
-      .select("id, reversed_at, returned_at")
-      .in("id", [...new Set(allocRows.map((a) => a.payment_id as string))]);
-    if (payRes.error) return { error: payRes.error, what: "the payments behind those bills" };
-    for (const p of payRes.data ?? []) {
-      if (p.reversed_at == null && p.returned_at == null) standing.add(p.id as string);
-    }
-  }
-
-  const cents = (n: unknown) => Math.round(Number(n ?? 0) * 100);
   const charges = rows.map((c) => {
     const id = c.id as string;
-    const direct = (directRes.data ?? [])
-      .filter((p) => p.charge_id === id)
-      .reduce((s, p) => s + cents(p.amount), 0) / 100;
-    const allocations = allocRows
-      .filter((a) => a.charge_id === id && standing.has(a.payment_id as string))
-      .map((a) => ({ id: a.id as string, paymentId: a.payment_id as string, amount: Number(a.amount ?? 0) }));
+    const direct = onThem.directOn(id);
+    const allocations = onThem.allocationsOn(id);
     const paidTotal = Number(c.paid_total ?? 0);
     const money: ChargeStanding["money"] =
       direct > 0 ? "direct"
       : allocations.length > 0 ? "on_account"
       // paid_total says money is on it and no standing row explains it —
-      // the ledger's figure is the one 0072 enforces, so it is not "none".
+      // the ledger's own figure, so it is not "none"; nothing here releases
+      // money it cannot name a row for.
       : paidTotal > 0 ? "direct"
       : "none";
     return {
@@ -174,25 +222,56 @@ export async function chargeStandings(
 // ------------------------------------------------------------- the void ---
 
 export interface VoidOutcome {
-  /** Cancelled, with the reason, and their cost shares released. */
-  voided: { id: string; reservationId: string; month: string; amount: number }[];
-  /** Left standing: money is on them (0072 would refuse the void anyway). */
+  /**
+   * Cancelled, with the reason, and their cost shares released. `released`
+   * is the money that was paid straight against the bill and is on the
+   * household's account now (0169) — the view's `remaining` for those rows,
+   * read AFTER the void, never amount minus something here. 0 for a bill
+   * nothing was paid on. `releasedPaymentIds` are the rows it lives on, so
+   * a caller can tell whether a settlement came from THAT money.
+   *
+   * `taken` and `refunded` are the view's `amount` and `refunded` for the
+   * same rows — what was paid straight against the bill, and how much of
+   * that had already gone back through the processor (0142) before the
+   * void. A door that says only `released` as "the $300.00 paid on it"
+   * names the remainder as the amount paid when $400 was paid and $100 had
+   * already gone back to the card; with all three it can say the whole
+   * truth. All three are the view's own columns, never one minus another.
+   */
+  voided: {
+    id: string; reservationId: string; month: string; amount: number;
+    taken: number; refunded: number; released: number; releasedPaymentIds: string[];
+  }[];
+  /** Left standing: money is on them and this call may not release it (the database refuses the void too). */
   skipped: { id: string; reservationId: string; month: string; amount: number; paidTotal: number }[];
   /** The update itself was refused. Said by the caller, never swallowed. */
   failed: { id: string; reservationId: string; month: string; amount: number; message: string }[];
   /** Cost shares released back to "unbilled" by the voids (0104). */
   sharesReleased: number;
+  /**
+   * The bills were cancelled and their money IS released — but the read
+   * that says how much of it is still on account failed afterwards, so
+   * every `released` above reads 0 without meaning it. The caller says the
+   * money is on account without a figure and names where to look; it must
+   * never print "$0.00" or nothing about it.
+   */
+  releaseProblem: ReadProblem | null;
 }
 
 /**
- * VOID THE UNPAID BILLS on these reservations from `fromMonth` on, with the
- * reason the caller gives — the shape the run's own take-back and voidCharge
- * both write (status, voided_at, void_reason), plus voidCharge's release of
- * the cost shares the bill was carrying, so a share on a cancelled bill does
+ * VOID THE BILLS on these reservations from `fromMonth` on, with the reason
+ * the caller gives — the shape the run's own take-back and voidCharge both
+ * write (status, voided_at, void_reason), plus voidCharge's release of the
+ * cost shares the bill was carrying, so a share on a cancelled bill does
  * not vanish from every future run.
  *
- * A bill with money on it is SKIPPED, not attempted: the caller has already
- * decided what to say about it. The database would refuse it too (0072).
+ * WHICH BILLS: unpaid, or — with `releaseDirect` — paid straight against
+ * it: a cancelled bill releases that money onto account (0169); money on
+ * account must come off first. Without `releaseDirect` (the default, and
+ * the signing door's contract) any bill with money on it is SKIPPED, not
+ * attempted. With it, a bill with LIVE lines from money on account is still
+ * skipped — the database refuses that void by name, and the caller has
+ * already had its chance to take the lines off with a reason (R3).
  */
 export async function voidUnpaidChargesFor(
   admin: Admin,
@@ -200,12 +279,14 @@ export async function voidUnpaidChargesFor(
   /** YYYY-MM, inclusive; null means every month on those reservations. */
   fromMonth: string | null,
   reason: string,
+  opts?: { releaseDirect?: boolean },
 ): Promise<VoidOutcome | ReadProblem> {
-  const out: VoidOutcome = { voided: [], skipped: [], failed: [], sharesReleased: 0 };
+  const out: VoidOutcome = { voided: [], skipped: [], failed: [], sharesReleased: 0, releaseProblem: null };
   const ids = [...new Set(reservationIds.filter(Boolean))];
   if (ids.length === 0) return out;
   const why = reason.trim();
   if (!why) return { error: new Error("a void needs a reason"), what: "why the bill is cancelled" };
+  const releaseDirect = opts?.releaseDirect === true;
 
   let q = admin
     .from("park_charges")
@@ -215,8 +296,19 @@ export async function voidUnpaidChargesFor(
   if (fromMonth) q = q.gte("period_month", fromMonth);
   const res = await q;
   if (res.error) return { error: res.error, what: "the bills already raised for them" };
+  const candidates = res.data ?? [];
 
-  for (const c of res.data ?? []) {
+  // WITH releaseDirect the skip is decided by what is actually on the bill
+  // — through the ONE reader chargeStandings uses — not by paid_total: a
+  // live line from money on account blocks the void; money handed over
+  // does not. Read before any write, so a refusal changes nothing.
+  const onThem = releaseDirect
+    ? await moneyOnCharges(admin, null, candidates.map((c) => c.id as string))
+    : null;
+  if (onThem && "error" in onThem) return onThem;
+
+  const withDirect = new Map<string, string[]>();
+  for (const c of candidates) {
     const row = {
       id: c.id as string,
       reservationId: c.reservation_id as string,
@@ -224,7 +316,14 @@ export async function voidUnpaidChargesFor(
       amount: Number(c.amount ?? 0),
     };
     const paidTotal = Number(c.paid_total ?? 0);
-    if (paidTotal > 0) { out.skipped.push({ ...row, paidTotal }); continue; }
+    if (onThem) {
+      if (onThem.allocationsOn(row.id).length > 0) { out.skipped.push({ ...row, paidTotal }); continue; }
+      const rows = onThem.directRowsOn(row.id);
+      if (rows.length > 0) withDirect.set(row.id, rows.map((r) => r.id));
+    } else if (paidTotal > 0) {
+      out.skipped.push({ ...row, paidTotal });
+      continue;
+    }
 
     const { error } = await admin
       .from("park_charges")
@@ -235,7 +334,7 @@ export async function voidUnpaidChargesFor(
       out.failed.push({ ...row, message: String(error.message ?? "") });
       continue;
     }
-    out.voided.push(row);
+    out.voided.push({ ...row, taken: 0, refunded: 0, released: 0, releasedPaymentIds: withDirect.get(row.id) ?? [] });
 
     // RELEASE THE COST SHARES THIS BILL WAS CARRYING (0104) — voidCharge's
     // rule. The bill is cancelled by now, so a failure here cannot refuse;
@@ -249,6 +348,33 @@ export async function voidUnpaidChargesFor(
       console.error("[read failed] the cost shares on that bill:", released.error);
     } else {
       out.sharesReleased += released.data?.length ?? 0;
+    }
+  }
+
+  // WHAT THE VOIDS RELEASED, from the view — the rows are in it now that
+  // their bills are void, and `remaining` is the one definition of what is
+  // still on account (park_payment_remaining: net of refunds and anything
+  // already applied). Never amount minus refunds in JavaScript. `amount`
+  // and `refunded` ride along so the caller's sentence can name what was
+  // paid and what had already gone back, not just what is left — the same
+  // three columns voidCharge reads for its own sentence.
+  const releasedIds = out.voided.filter((v) => v.releasedPaymentIds.length > 0).map((v) => v.id);
+  if (releasedIds.length > 0) {
+    const viewRes = await admin
+      .from("park_on_account_payments")
+      .select("payment_id, released_from_charge_id, amount, refunded, remaining")
+      .in("released_from_charge_id", releasedIds);
+    if (viewRes.error) {
+      out.releaseProblem = { error: viewRes.error, what: "what was paid on the cancelled bills" };
+    } else {
+      const cents = (n: unknown) => Math.round(Number(n ?? 0) * 100);
+      for (const v of out.voided) {
+        const mine = (viewRes.data ?? []).filter((r) => r.released_from_charge_id === v.id);
+        const sum = (col: "amount" | "refunded" | "remaining") => mine.reduce((s, r) => s + cents(r[col]), 0) / 100;
+        v.taken = sum("amount");
+        v.refunded = sum("refunded");
+        v.released = sum("remaining");
+      }
     }
   }
   return out;
@@ -470,6 +596,22 @@ export interface ReraiseOutcome {
   why: SkipWhy | null;
   /** Dollars of the household's money on account put against it the moment it landed (R1). */
   fromOnAccount: number;
+  /**
+   * WHICH PAYMENTS settled it, one line per (payment, this bill) that
+   * landed. A caller that just released money from a cancelled bill (0169)
+   * says "all of it settled from that money" only when every line here
+   * came from the released rows — R1 is oldest-money-first over the
+   * household's whole account, so a $57.47 sibling or a withdrawn month's
+   * released cheque can be what actually paid the part month.
+   */
+  settledFrom: { paymentId: string; amount: number }[];
+  /**
+   * R1 is oldest-OPEN-BILL-first: money on account the re-raise found (a
+   * released $542.53, say) may have gone against an older open month
+   * before this one. Each older bill it reached, by month, so the sentence
+   * can say so — from splitApplied, never total minus fromOnAccount.
+   */
+  toOlderBills: { periodMonth: string; amount: number }[];
   /** A settlement read or row that failed — the bill stands, the money stays on account. */
   settleProblem: string | null;
   /**
@@ -508,7 +650,7 @@ export async function reraiseMonth(
     ms.stay.status === "approved" || ms.stay.status === "active" ||
     (ms.stay.status === "ended" && ms.stay.movedOutOn != null);
   if (!billableStatus) {
-    return { raised: null, why: ms.stay.status === "ended" ? "movedOut" : "expired", fromOnAccount: 0, settleProblem: null, sharesStamped: 0 };
+    return { raised: null, why: ms.stay.status === "ended" ? "movedOut" : "expired", fromOnAccount: 0, settledFrom: [], toOlderBills: [], settleProblem: null, sharesStamped: 0 };
   }
 
   const existingRes = await admin
@@ -523,7 +665,7 @@ export async function reraiseMonth(
   const plan = planRun([ms.candidate], already, month);
   if (plan.toBill.length === 0) {
     const why = classifyForRun(ms.candidate, month, already);
-    return { raised: null, why: why === "bill" ? "noRent" : why, fromOnAccount: 0, settleProblem: null, sharesStamped: 0 };
+    return { raised: null, why: why === "bill" ? "noRent" : why, fromOnAccount: 0, settledFrom: [], toOlderBills: [], settleProblem: null, sharesStamped: 0 };
   }
   const st = ms.statement!;
 
@@ -573,6 +715,8 @@ export async function reraiseMonth(
   // through the one door — oldest open bill first, which may be an older
   // month than this one.
   let fromOnAccount = 0;
+  let settledFrom: ReraiseOutcome["settledFrom"] = [];
+  let toOlderBills: ReraiseOutcome["toOlderBills"] = [];
   let settleProblem: string | null = null;
   if (ms.stay.renterId) {
     const settled = await settleOnAccount(admin, parkId, [ms.stay.renterId], "office", null);
@@ -580,7 +724,16 @@ export async function reraiseMonth(
       console.error(`[reraiseMonth] couldn't read ${settled.what}:`, settled.error);
       settleProblem = `we couldn't read ${settled.what}, so no money on account was put against it — apply it from "Money not against a bill"`;
     } else {
-      fromOnAccount = settled.applied.get(chargeId) ?? 0;
+      // The one partition of "this bill's" against "older bills'" (the
+      // preview and the run use it too); the lines are the rows that
+      // landed, keyed on the bill they paid.
+      const monthOf = new Map(settled.bills.map((b) => [b.key, b.periodMonth]));
+      const split = splitApplied(settled.applied, new Set([chargeId]), (key) => monthOf.get(key));
+      fromOnAccount = split.fromOnAccount;
+      toOlderBills = split.toOlderBills.map((o) => ({ periodMonth: o.periodMonth, amount: o.amount }));
+      settledFrom = settled.lines
+        .filter((l) => l.key === chargeId)
+        .map((l) => ({ paymentId: l.paymentId, amount: l.amount }));
       if (settled.failed.some((f) => f.key === chargeId)) {
         settleProblem = "money on account couldn't be put against it — the bill stands and the money stays on account";
       }
@@ -591,6 +744,8 @@ export async function reraiseMonth(
     raised: { id: chargeId, month, amount: plan.toBill[0].amount, dueOn: st.dueOn, basis: basisOf(st) },
     why: null,
     fromOnAccount,
+    settledFrom,
+    toOlderBills,
     settleProblem,
     sharesStamped: chargeId ? ms.shareIds.length : 0,
   };

@@ -32,6 +32,7 @@ class Q {
   constructor(private t: string) {}
   select() { return this; }
   eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
+  neq(c: string, v: unknown) { this.fs.push((r) => r[c] !== v); return this; }
   in(c: string, vs: unknown[]) { this.fs.push((r) => vs.includes(r[c])); return this; }
   is(c: string, v: unknown) { this.fs.push((r) => (v === null ? r[c] == null : r[c] === v)); return this; }
   gte(c: string, v: string) { this.fs.push((r) => String(r[c]) >= v); return this; }
@@ -122,6 +123,20 @@ describe("money on account, on the screen and against the months it settled", ()
     const unread = words(page([acct({ appliedTo: [] })]));
     expect(unread).not.toMatch(/comes off the next bill/);
     expect(unread).not.toMatch(/Given back/);
+  });
+
+  it("money held for a household nothing more bills for does not promise a next bill — the held panel's own sentence, from the loader's read", () => {
+    // The $57.47 half of a departed household's split: tenancy ended, the
+    // part month billed. "It comes off the next bill raised for that
+    // household" promised a bill the park will never raise, on the office's
+    // own statement, while every other door had stopped.
+    const gone = words(page([acct({ appliedTo: [], remainingCents: 5747, nothingMoreBills: true, movedOutOn: "2027-01-27" })]));
+    expect(gone).toMatch(/Not yet put against a bill\. They moved out January 27, 2027 — nothing more bills for them; this is theirs to have back\./);
+    expect(gone).not.toMatch(/comes off the next bill/);
+    // Still here (read, and false): the promise stands.
+    const here = words(page([acct({ appliedTo: [], remainingCents: 5747, nothingMoreBills: false, movedOutOn: null })]));
+    expect(here).toMatch(/comes off the next bill raised for that household/);
+    expect(here).not.toMatch(/nothing more bills/);
   });
 
   it("a caller that did not read where it went makes no claim either way", () => {
@@ -411,5 +426,107 @@ describe("money handed back across the window, and the rail a refund went back o
     expect(own).toMatch(/Given back\./);
     expect(own).not.toMatch(/comes off the next bill/);
     expect(w).toMatch(/Download 3 lines for your accountant/);
+  });
+});
+
+/**
+ * A CANCELLED BILL RELEASES ITS MONEY ONTO ACCOUNT (0169). Lot 9 paid
+ * January in full, left on the 20th; the office cancelled the whole-month
+ * bill and raised the part month again, settled from the released money;
+ * $70.00 is still on account, later handed back. The receipt against the
+ * cancelled bill is STILL the receipt — counted once, under "Worth a look"
+ * as before — and the sentence there now says where the money went, in
+ * words, from the loader's own read (`released`), so the writer and the
+ * reader are proven together.
+ */
+describe("rent paid on a bill that was cancelled after it was paid", () => {
+  const rec = (over: Partial<StatementPage["receipts"][number]> = {}): StatementPage["receipts"][number] => ({
+    paymentId: "pay-jan", chargeId: "jan", amountCents: 54_253, feeCents: 0, method: "check", reference: "1042", receivedOn: "2027-01-04",
+    lotNumber: "9", payerName: "Household 9", periodMonth: "2027-01", chargeAmountCents: 54_253, chargeStatus: "void", chargeLines: [],
+    reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null, ...over,
+  });
+  const jan = monthPeriod("2027-01", TODAY)!;
+  const withReceipt = (r: StatementPage["receipts"][number]) =>
+    page([], [], { period: jan, receipts: [r], summary: summariseReceipts([r], jan) });
+  // The render escapes the apostrophe in "It's"; read it back as a person would.
+  const say = (p: StatementPage) => words(p).replace(/&#x27;/g, "'");
+
+  const released = { allocations: [{ periodMonth: "2027-01", amount: 472.53 }], remainingCents: 7_000, handedBackCents: 0, handedBackOn: null, handedBackInFile: false, refundedCents: 0, refundedInFile: false };
+
+  it("says where the released money went — the part month it paid and what is still held — and the hand-back when there is one", () => {
+    const w = say(withReceipt(rec({ released })));
+    expect(w).toMatch(/Lot 9 — \$542\.53 came in on January 4, 2027 against a bill that was later cancelled\. It's counted here because the money arrived\. It went on their account: \$472\.53 to January 2027, \$70\.00 on account\. /);
+    expect(w).not.toMatch(/handed back/);
+    // With the loader's figures on the row, "if you sent it back to a card"
+    // is not a guess to make: nothing was refunded, so nothing is said.
+    expect(w).not.toMatch(/If you sent it back to a card/);
+    const handed = say(withReceipt(rec({ released: { ...released, remainingCents: 0, handedBackCents: 7_000, handedBackOn: "2027-01-22", handedBackInFile: true } })));
+    expect(handed).toMatch(/It went on their account: \$472\.53 to January 2027\. \$70\.00 was handed back on January 22, 2027 — its own line below and in the file\. /);
+    expect(handed).not.toMatch(/2027-01-22/);
+    // A hand-back in the NEXT month is in February's file, and this screen
+    // says so rather than promising a line below that is not there.
+    const later = say(withReceipt(rec({ released: { ...released, remainingCents: 0, handedBackCents: 7_000, handedBackOn: "2027-02-03", handedBackInFile: false } })));
+    expect(later).toMatch(/\$70\.00 was handed back on February 3, 2027 — its own line in the statement for February 2027\./);
+    expect(later).not.toMatch(/below and in the file/);
+    // A refund, likewise, by whether its negative row is in this file.
+    const refunded = say(withReceipt(rec({ released: { ...released, remainingCents: 0, refundedCents: 7_000, refundedInFile: true } })));
+    expect(refunded).toMatch(/\$70\.00 went back to a card — its own line below and in the file\./);
+    const refundedLater = say(withReceipt(rec({ released: { ...released, remainingCents: 0, refundedCents: 7_000, refundedInFile: false } })));
+    expect(refundedLater).toMatch(/\$70\.00 went back to a card — its own line in the statement for the month it went back\./);
+    // The colliding line — the part month shares January's period — is
+    // named as the bill raised again, through the one allocation sentence.
+    const collide = say(withReceipt(rec({ released: { ...released, allocations: [{ periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: "27 of 31 days" } }] } })));
+    expect(collide).toMatch(/It went on their account: \$472\.53 to the bill raised again for January 2027 \(27 of 31 days\), \$70\.00 on account\./);
+    // Nothing applied, nothing held, nothing handed back: it went back to a card.
+    const none = say(withReceipt(rec({ released: { ...released, allocations: [], remainingCents: 0 } })));
+    expect(none).toMatch(/It went on their account: none of it is still held\. /);
+  });
+
+  it("a cancelled bill the loader found nothing released for keeps the old sentence — no claim about where money went", () => {
+    const w = say(withReceipt(rec()));
+    expect(w).toMatch(/against a bill that was later cancelled\. It's counted here because the money arrived\. If you sent it back to a card, that refund is its own line below and in the file\./);
+    expect(w).not.toMatch(/went on their account/);
+  });
+
+  it("through the real loader: the released January, the part month, the $70 held — on the screen, in the notes, once in the total", async () => {
+    for (const k of Object.keys(db)) delete db[k];
+    const PARK = "park-haven";
+    db.parks = [{ id: PARK, name: "The Haven", office_recording_lag_days: 0 }];
+    db.park_lots = [{ id: "lot-9", park_id: PARK, lot_number: "9" }];
+    db.park_renters = [{ id: "renter-9", park_id: PARK, display_name: "Household 9" }];
+    db.park_fees = [];
+    db.park_charges = [
+      { id: "jan", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, status: "void", voided_at: "2027-01-20T16:00:00Z", lines: [] },
+      { id: "jan-part", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 472.53, status: "paid", lines: [] },
+    ];
+    db.park_payments = [
+      { id: "pay-jan", park_id: PARK, renter_id: "renter-9", charge_id: "jan", kind: "rent", amount: 542.53, fee_amount: null, method: "check", reference: "1042", received_on: "2027-01-04", reversed_at: null, returned_at: null, returned_on: null, returned_amount: null, return_note: null },
+    ];
+    db.park_payment_allocations = [{ id: "al-part", park_id: PARK, payment_id: "pay-jan", charge_id: "jan-part", amount: 472.53, removed_at: null }];
+    // The view as 0169 lists it: still against the void bill, released.
+    db.park_on_account_payments = [{ payment_id: "pay-jan", park_id: PARK, remaining: 70, released_from_charge_id: "jan", released_from_month: "2027-01", released_on: "2027-01-20T16:00:00Z", handed_back: 0, handed_back_on: null }];
+    db.lot_reservations = [{ id: "res-9", renter_id: "renter-9", park_lot_id: "lot-9", status: "ended", during: "[2026-01-01,2027-01-21)", moved_out_on: "2027-01-20" }];
+    db.park_refunds = [];
+    const real = (await getStatement(PARK, "2027-01-01", "2027-01-31"))!;
+    expect(real.receipts[0].released, "the loader wrote it").toBeDefined();
+    const w = say(real);
+    expect(w).toMatch(/\$542\.53 came in — 1 payment\./);
+    expect(w).toMatch(/Lot 9 — \$542\.53 came in on January 4, 2027 against a bill that was later cancelled\. It's counted here because the money arrived\. It went on their account: \$472\.53 to the bill raised again for January 2027, \$70\.00 on account\./);
+    expect(w).toMatch(/\$542\.53 that Lot 9 paid on their January 2027 bill went on account for them when that bill was cancelled on January 20, 2027\./);
+    expect(w).toMatch(/bill cancelled/);
+    // Not a second row under money on account, and no on-account figure about it.
+    expect(w).not.toMatch(/Money on account in this window/);
+    expect(w).not.toMatch(/received on account/);
+    expect(w).toMatch(/Download 1 line for your accountant/);
+  });
+
+  it("the screen prints the released figures through the one sentence helper and the one date formatter", () => {
+    const src = readFileSync(fileURLToPath(new URL("./ParkStatements.tsx", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).toMatch(/describeAllocations\(r\.released\.allocations, r\.released\.remainingCents \/ 100\)/);
+    // The hand-back's whereabouts through the note's own helper — one copy.
+    expect(src).toMatch(/handedBackWhere\(r\.released, \{ asSentence: true \}\)/);
+    expect(src).not.toMatch(/was handed back\$\{/);
+    expect(src).not.toMatch(/released\.remainingCents \/ 100\)\.toFixed/);
   });
 });

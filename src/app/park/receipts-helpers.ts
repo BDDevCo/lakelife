@@ -43,6 +43,7 @@ import { lakeDateOf } from "@/lib/booking";
 import { prettyMonth } from "./ledger-helpers";
 import { longDate } from "@/lib/lake-time";
 import { csvCell as csvText } from "@/lib/csv";
+import { allocationWords, type AllocationLine } from "@/lib/allocations";
 
 export type Method = "cash" | "check" | "card" | "ach" | "transfer" | "other";
 
@@ -125,6 +126,48 @@ export interface Receipt {
   bankReturnedAt: string | null;
   /** The processor's own code for the return — R01, R02, R10. Free text. */
   returnCode: string | null;
+  /**
+   * WHERE THIS MONEY WENT ONCE ITS BILL WAS CANCELLED (0169). A bill with a
+   * payment straight against it can be cancelled now, and the payment does
+   * not vanish: the row stays exactly where it was (charge_id still the
+   * cancelled bill, `chargeStatus` "void"), and its money is released onto
+   * the household's account — the view park_on_account_payments lists it,
+   * and the run or the office puts it against bills as allocations. Cash
+   * basis is untouched: this receipt is still dated the day it arrived and
+   * counted ONCE, here, as rent received — it is never a second row under
+   * "money on account".
+   *
+   * Present only when the loader found the row in the view (a released row
+   * that still stands). `allocations` are the LIVE ones, in dollars, the
+   * shape describeAllocations prints — the line against the bill raised
+   * again for the cancelled bill's own month marked as such (0169: the
+   * re-raise keeps the period, so "to January 2027" beside "their January
+   * bill was cancelled" is two bills under one word otherwise);
+   * `remainingCents` is the view's `remaining` — never amount − allocations
+   * here; `handedBackCents` / `handedBackOn` are the hand-back stamp (0168),
+   * which is ALSO its own negative row in the file on the day it went back
+   * — IN THE FILE FOR THE WINDOW IT WENT BACK IN. `handedBackInFile` says
+   * whether that is THIS file: the stamp is read off the view with no
+   * window, the negative row by returned_on inside the window, and a
+   * January statement promised "its own line below and in the file" about
+   * a $70.00 handed back on 3 February that was only in February's.
+   * Derived from the loader's own hand-back read, never by comparing dates
+   * here — the sentence and the row it promises come from ONE read.
+   * `refundedCents` is the view's `refunded` (0142 refunds off this row);
+   * `refundedInFile` likewise says whether a refund row for it is in this
+   * window's file. Absent for every receipt against a live bill, and for a
+   * cancelled-bill receipt that predates 0169's release or was itself
+   * taken back.
+   */
+  released?: {
+    allocations: AllocationLine[];
+    remainingCents: number;
+    handedBackCents: number;
+    handedBackOn: string | null;
+    handedBackInFile: boolean;
+    refundedCents: number;
+    refundedInFile: boolean;
+  };
 }
 
 /**
@@ -293,13 +336,17 @@ export interface ReceiptSummary {
   /**
    * Cash taken against a bill that was later cancelled. Real income.
    *
-   * 0072 makes this impossible to create going forward — a paid bill can no
-   * longer be voided, and a payment can't be recorded against a void one. This
-   * stays because it is the correct CASH answer for any row that predates that
-   * migration or arrives by a path nobody has written yet. A refund to a card
-   * (0142) is its own row in `otherReceipts`, kind "refund", dated the day the
-   * money went back — so a payment against a cancelled bill that was then
-   * refunded shows here AND as a negative row, and the two tie to the bank.
+   * THE ORDINARY MOVE-OUT SHAPE SINCE 0169. A bill paid straight against it
+   * can be cancelled — a January paid in full, then the household leaves on
+   * the 20th and the whole-month bill is cancelled and raised again for the
+   * part month — and the money is released onto the household's account
+   * rather than lost (0072's fear). The receipt stays HERE, counted once as
+   * rent received on the day it arrived; `released` on the row says where
+   * that money has gone since. A refund to a card (0142) is its own row in
+   * `otherReceipts`, kind "refund", dated the day the money went back — so a
+   * payment against a cancelled bill that was then refunded shows here AND
+   * as a negative row, and the two tie to the bank. A hand-back (0168) the
+   * same way.
    */
   againstVoided: Receipt[];
   /**
@@ -534,6 +581,18 @@ export interface OtherReceipt {
    * back to a card.
    */
   remainingCents?: number;
+  /**
+   * WHETHER ANYTHING MORE WILL EVER BILL for the household an on-account
+   * row belongs to (lib/tenancy-facts: the tenancy has ended and the month
+   * they left in is billed). "It comes off the next bill raised for that
+   * household" is a promise, and the office's statement made it about the
+   * $57.47 half of a departed household's split while every other door —
+   * the held panel, the resident's home, the receipt — had stopped. Present
+   * only on rent-on-account rows the loader read the facts for; `movedOutOn`
+   * is the day they left, for the sentence.
+   */
+  nothingMoreBills?: boolean;
+  movedOutOn?: string | null;
 }
 
 /** What a person calls each kind, for the Kind column. */
@@ -601,6 +660,35 @@ export function appliedToCell(o: OtherReceipt): string {
     .sort((a, b) => a.periodMonth.localeCompare(b.periodMonth))
     .map((a) => `${a.periodMonth}: ${decimal(a.amountCents)}`)
     .join("; ");
+}
+
+/**
+ * THE BILL STATUS CELL, and — for a cancelled bill whose money was released
+ * (0169) — WHERE THAT MONEY WENT. "CANCELLED" alone told the accountant the
+ * January bill was void and the $542.53 paid on it was… somewhere: the part
+ * month it settled has the SAME Bill month (the re-raise keeps the period),
+ * so without this the file could not tie the cancelled January to the paid
+ * part month, while the on-account rows' Bill month cell already names
+ * where THEIR money went. The same shape as that cell — "2027-01: 472.53"
+ * — then what is still held and what was handed back, so the row reads as
+ * one story: received, released, applied, held, given back. Starts with
+ * CANCELLED so a filter on the word still finds every such row.
+ */
+export function billStatusCell(r: Pick<Receipt, "chargeStatus" | "released">): string {
+  if (r.chargeStatus !== "void") return r.chargeStatus;
+  const rel = r.released;
+  if (!rel) return "CANCELLED";
+  const parts = [...rel.allocations]
+    .filter((a) => Math.round(a.amount * 100) > 0)
+    .sort((a, b) => a.periodMonth.localeCompare(b.periodMonth))
+    .map((a) => `${a.periodMonth}: ${decimal(Math.round(a.amount * 100))}`);
+  if (rel.remainingCents > 0) parts.push(`still held: ${decimal(rel.remainingCents)}`);
+  if (rel.handedBackCents > 0) parts.push(`handed back${rel.handedBackOn ? ` ${rel.handedBackOn}` : ""}: ${decimal(rel.handedBackCents)}`);
+  // Nothing applied, nothing held, nothing handed back: it went back through
+  // the processor — the refund is its own negative row, and the cell says
+  // only what is true of the money now.
+  if (parts.length === 0) parts.push("none still held");
+  return `CANCELLED — money released on account: ${parts.join("; ")}`;
 }
 
 const HEADERS = [
@@ -682,7 +770,10 @@ export function receiptsCsv(
       csvText(r.payerName),
       csvText(r.periodMonth),
       csvText(decimal(r.chargeAmountCents)),
-      csvText(r.chargeStatus === "void" ? "CANCELLED" : r.chargeStatus),
+      // CANCELLED — and, when the bill's money was released onto account
+      // (0169), where it went since. The one writer, shared with nothing:
+      // the screen's sentence reads the same `released` fields in words.
+      csvText(billStatusCell(r)),
       csvText(linesCell(r.chargeLines)),
       csvText(r.paymentId),
       csvText(r.chargeId),
@@ -829,6 +920,74 @@ export interface ExclusionContext {
     /** The office's reason, when the record carries one. */
     note: string | null;
   }>;
+  /**
+   * RENT RECEIVED IN THIS WINDOW AGAINST A BILL THAT WAS LATER CANCELLED,
+   * whose money was released onto the household's account (0169) — one
+   * entry per such receipt. ITS OWN SENTENCE, never folded into the
+   * on-account figures above: those sum money RECEIVED ON ACCOUNT in this
+   * window, and this money was received as RENT and is in the total above.
+   * Adding a released $70.00 into `onAccountHeldCents` would print "$X of
+   * the money on account has since been put against bills — and $70.00 is
+   * still held" about $70 that was never part of that X. The figures here
+   * are the loader's reads (live allocations, the view's `remaining`, the
+   * hand-back stamp), never arithmetic.
+   */
+  releasedFromCancelled?: Array<{
+    amountCents: number;
+    /** YYYY-MM of the bill the money was paid on — the cancelled one. */
+    billMonth: string;
+    /** When the bill was cancelled (the view's released_on), or null when the record lacks it. */
+    releasedOn: string | null;
+    lotNumber: string | null;
+    payerName: string | null;
+    allocations: AllocationLine[];
+    remainingCents: number;
+    handedBackCents: number;
+    handedBackOn: string | null;
+    handedBackInFile: boolean;
+  }>;
+}
+
+/**
+ * "$472.53 to January 2027, $70.00 still held" — where a released receipt's
+ * money is now, in words, for the note. Bills in month order (each line
+ * through the one allocation sentence, so the re-raised month is named
+ * apart from the cancelled one), what is still held after them, the
+ * hand-back last; "none of it is still held" when all three are empty (it
+ * went back through the processor — the refund sentence names that).
+ */
+function releasedWhere(rel: {
+  allocations: AllocationLine[]; remainingCents: number; handedBackCents: number; handedBackOn: string | null; handedBackInFile: boolean;
+}): string {
+  const parts = [...rel.allocations]
+    .filter((a) => Math.round(a.amount * 100) > 0)
+    .sort((a, b) => a.periodMonth.localeCompare(b.periodMonth))
+    .map(allocationWords);
+  if (rel.remainingCents > 0) parts.push(`${money(rel.remainingCents)} still held`);
+  if (rel.handedBackCents > 0) parts.push(handedBackWhere(rel));
+  return parts.length ? parts.join(", ") : "none of it is still held";
+}
+
+/**
+ * "$70.00 handed back on February 3, 2027 — its own line below and in the
+ * file", or "— its own line in the statement for February 2027" when the
+ * day it went back is outside this window. One copy: the note and the
+ * screen both say where that line is, and "below and in the file" is said
+ * only when the loader's windowed hand-back read found it (the file's
+ * negative row and this sentence come from the same read). A reference,
+ * not an instruction: the statement screen has a period picker.
+ */
+export function handedBackWhere(
+  rel: { handedBackCents: number; handedBackOn: string | null; handedBackInFile: boolean },
+  opts?: { asSentence?: boolean },
+): string {
+  const when = rel.handedBackOn ? ` on ${longDate(rel.handedBackOn)}` : "";
+  const where = rel.handedBackInFile
+    ? "its own line below and in the file"
+    : rel.handedBackOn
+      ? `its own line in the statement for ${prettyMonth(rel.handedBackOn.slice(0, 7))}`
+      : "its own line in the statement for the month it went back";
+  return `${money(rel.handedBackCents)} ${opts?.asSentence ? "was " : ""}handed back${when} — ${where}`;
 }
 
 /** "a card", "cards", "a bank account", "bank accounts", or "cards and bank accounts" — whichever rails the refunds went back on. */
@@ -947,6 +1106,23 @@ export function exclusionLines(ctx: ExclusionContext): string[] {
     lines.push(
       `${money(back)} was handed back across the window in this period — ${each.join("; ")}. ` +
       `It is NOT taken off the total above: each hand-back is its own line in the file, dated the day it went back, with a negative amount, so the Amount column still adds up to your bank.`,
+    );
+  }
+  // RENT PAID ON A BILL THAT WAS LATER CANCELLED (0169). The money IS in the
+  // total above — it arrived as rent, on the day it arrived, and the bill's
+  // cancellation does not un-receive it — and it was released onto the
+  // household's account, where the run put it against the part month and
+  // the office may have handed the rest back. One sentence per receipt,
+  // apart from the on-account figures above, whose population is money
+  // received ON ACCOUNT in this window; this was received as rent.
+  const released = ctx.releasedFromCancelled ?? [];
+  for (const r of released) {
+    const who = r.lotNumber ? `Lot ${r.lotNumber}` : (r.payerName ?? "a household");
+    lines.push(
+      `${money(r.amountCents)} that ${who} paid on their ${prettyMonth(r.billMonth)} bill went on account for them when that bill was cancelled` +
+      (r.releasedOn ? ` on ${longDate(r.releasedOn)}` : "") +
+      `. It IS in the total above — it arrived as rent — and the file marks that bill CANCELLED and says where the money went: ` +
+      `${releasedWhere(r)}.`,
     );
   }
   const fees = ctx.cardFeesReceivedCents ?? 0;

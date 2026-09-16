@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, onAccountKindLabel, otherKindLabel, isOnAccountRow, appliedToCell, takenBackCells, notCollectedAt, takenBackWhy, takenBackOfRow, METHOD_LABEL, type Receipt, type OtherReceipt } from "./receipts-helpers";
+import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, handedBackWhere, onAccountKindLabel, otherKindLabel, isOnAccountRow, appliedToCell, billStatusCell, takenBackCells, notCollectedAt, takenBackWhy, takenBackOfRow, METHOD_LABEL, type Receipt, type OtherReceipt } from "./receipts-helpers";
 import { METHOD_WORD } from "./receipt-helpers";
 
 const TODAY = "2026-08-11";
@@ -854,6 +854,9 @@ describe("every CSV row is as wide as the header", () => {
         receipt(),
         receipt({ paymentId: "r2", reversedAt: "2026-07-21T00:00:00Z", reversedReason: "typed twice" }),
         receipt({ paymentId: "r3", bankReturnedAt: "2026-07-22T00:00:00Z", returnCode: "R02" }),
+        // A receipt whose bill was cancelled after it was paid (0169): the
+        // Bill status cell carries where the money went — one cell, not more.
+        receipt({ paymentId: "r4", chargeStatus: "void", released: { allocations: [{ periodMonth: "2026-07", amount: 400 }], remainingCents: 5500, handedBackCents: 0, handedBackOn: null, handedBackInFile: false, refundedCents: 0, refundedInFile: false } }),
       ],
       [
         { paymentId: "o1", kind: "deposit", amountCents: 50000, feeCents: 0, method: "check", reference: "88", receivedOn: "2026-07-04",
@@ -1082,9 +1085,11 @@ describe("a refund to a card, in the file", () => {
       amenityReceivedCents: 120_000, cardFeesReceivedCents: 100_000, otherTakenBackCents: 162_759,
       refunds: [{ amountCents: 162_759, feeCents: 0, refundedOn: "2027-01-26", lotNumber: "9", payerName: null, method: "card" }],
       handedBack: [{ amountCents: 108_506, on: "2027-02-03", lotNumber: "9", payerName: null, kind: "rent", note: "moved out" }],
+      releasedFromCancelled: [{ amountCents: 162_759, billMonth: "2027-01", releasedOn: "2027-01-20T16:00:00Z", lotNumber: "9", payerName: null,
+        allocations: [{ periodMonth: "2027-01", amount: 1085.06 }], remainingCents: 54_253, handedBackCents: 0, handedBackOn: null, handedBackInFile: false }],
     });
     const joined = lines.join(" ");
-    for (const figure of ["$1,500.00", "$1,627.59", "$1,085.06", "$1,200.00", "$1,000.00", "$1,085.06 of their money on account"]) {
+    for (const figure of ["$1,500.00", "$1,627.59", "$1,085.06", "$1,200.00", "$1,000.00", "$1,085.06 of their money on account", "$1,085.06 to January 2027, $542.53 still held"]) {
       expect(joined).toContain(figure);
     }
     // The bare four-digit form is the toFixed shape, and it is gone.
@@ -1227,5 +1232,92 @@ describe("money handed back across the window", () => {
     expect(exclusionLines({ ...ctx, refunds: [one("ach"), one("ach")] }).find((l) => /sent back/.test(l))).toContain("was sent back to bank accounts in this period");
     expect(exclusionLines({ ...ctx, refunds: [one("card"), one("ach")] }).find((l) => /sent back/.test(l))).toContain("was sent back to cards and bank accounts in this period");
     expect(exclusionLines({ ...ctx, refunds: [one("card")] }).find((l) => /sent back/.test(l))).toContain("was sent back to a card in this period");
+  });
+});
+
+/**
+ * A CANCELLED BILL RELEASES ITS MONEY ONTO ACCOUNT (0169). The receipt
+ * against the cancelled bill stays a receipt — counted once as rent, on the
+ * day it arrived — and the file and the note must say where that money went
+ * since: the part month it settled has the SAME Bill month as the cancelled
+ * bill, so "CANCELLED" alone could not tie the two. Its own sentence and its
+ * own cell; never folded into the on-account figures, whose population is
+ * money received ON ACCOUNT.
+ */
+describe("money released from a cancelled bill, in the file and the note", () => {
+  const released = { allocations: [{ periodMonth: "2027-01", amount: 472.53 }], remainingCents: 7_000, handedBackCents: 0, handedBackOn: null, handedBackInFile: false, refundedCents: 0, refundedInFile: false };
+
+  it("the Bill status cell ties the cancelled bill to the months its money paid, what is still held, and what was handed back", () => {
+    expect(billStatusCell(receipt({ chargeStatus: "void", released }))).toBe("CANCELLED — money released on account: 2027-01: 472.53; still held: 70.00");
+    expect(billStatusCell(receipt({ chargeStatus: "void", released: { ...released, remainingCents: 0, handedBackCents: 7_000, handedBackOn: "2027-01-22" } })))
+      .toBe("CANCELLED — money released on account: 2027-01: 472.53; handed back 2027-01-22: 70.00");
+    // Months in order; nothing applied and nothing held reads as none held
+    // (it went back through the processor — the refund is its own row).
+    expect(billStatusCell(receipt({ chargeStatus: "void", released: { ...released, allocations: [{ periodMonth: "2027-02", amount: 1 }, { periodMonth: "2027-01", amount: 2 }], remainingCents: 0 } })))
+      .toBe("CANCELLED — money released on account: 2027-01: 2.00; 2027-02: 1.00");
+    expect(billStatusCell(receipt({ chargeStatus: "void", released: { ...released, allocations: [], remainingCents: 0 } })))
+      .toBe("CANCELLED — money released on account: none still held");
+    // Collapsed both ways: a cancelled bill the loader found nothing released
+    // for is CANCELLED and no more; a live bill is its own status.
+    expect(billStatusCell(receipt({ chargeStatus: "void" }))).toBe("CANCELLED");
+    expect(billStatusCell(receipt({ chargeStatus: "paid" }))).toBe("paid");
+    expect(billStatusCell(receipt({ chargeStatus: "open", released }))).toBe("open");
+  });
+
+  it("the file carries that cell in the Bill status column, and the row stays Rent on the day it arrived", () => {
+    const csv = receiptsCsv([receipt({ chargeStatus: "void", released })], [], { parkName: "P", generatedAt: "t" });
+    const header = csv.split("\r\n")[0].split(",");
+    const cells = csv.split("\r\n")[1];
+    // No comma in the cell, so it goes unquoted — a filter on CANCELLED still finds it.
+    expect(cells.split(",")[header.indexOf("Bill status")]).toBe("CANCELLED — money released on account: 2027-01: 472.53; still held: 70.00");
+    expect(cells.split(",")[header.indexOf("Kind")]).toBe("Rent");
+    expect(cells.split(",")[header.indexOf("Date received")]).toBe("2026-07-03");
+  });
+
+  it("the note gives it its own sentence — in words, and never through the on-account figures", () => {
+    const base = { recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false };
+    const lines = exclusionLines({ ...base, onAccountReceivedCents: 10_000, onAccountAppliedCents: 0, onAccountHeldCents: 10_000,
+      releasedFromCancelled: [{ amountCents: 54_253, billMonth: "2027-01", releasedOn: "2027-01-20T16:00:00Z", lotNumber: "9", payerName: "Household 9", ...released }] });
+    const own = lines.find((l) => /bill was cancelled/.test(l))!;
+    expect(own).toBe(
+      "$542.53 that Lot 9 paid on their January 2027 bill went on account for them when that bill was cancelled on January 20, 2027. " +
+      "It IS in the total above — it arrived as rent — and the file marks that bill CANCELLED and says where the money went: $472.53 to January 2027, $70.00 still held.",
+    );
+    // The on-account sentence is about the $100 received on account, untouched.
+    const acct = lines.find((l) => /NOT in the total above/.test(l))!;
+    expect(acct).toContain("$100.00 received on account");
+    expect(acct).not.toMatch(/\$70\.00|\$170\.00|still held/);
+    expect(lines.join(" ")).not.toMatch(/2027-01/);
+    // The hand-back clause, the household by name when there is no lot, and
+    // no date clause when the record lacks one.
+    const handed = exclusionLines({ ...base, releasedFromCancelled: [{ amountCents: 54_253, billMonth: "2027-01", releasedOn: null, lotNumber: null, payerName: "Household 9",
+      allocations: released.allocations, remainingCents: 0, handedBackCents: 7_000, handedBackOn: "2027-01-22", handedBackInFile: true }] }).find((l) => /bill was cancelled/.test(l))!;
+    expect(handed).toContain("$542.53 that Household 9 paid on their January 2027 bill went on account for them when that bill was cancelled. It IS in the total above");
+    expect(handed).toContain("$472.53 to January 2027, $70.00 handed back on January 22, 2027 — its own line below and in the file.");
+    // WHICH FILE THE HAND-BACK'S LINE IS IN. The stamp is read off the view
+    // with no window; the negative row by the day it went back. A $70.00
+    // handed back on 3 February is in FEBRUARY's file, and January's note
+    // promised "its own line below and in the file" about a line it did
+    // not carry. The loader's own windowed read decides (handedBackInFile).
+    const later = exclusionLines({ ...base, releasedFromCancelled: [{ amountCents: 54_253, billMonth: "2027-01", releasedOn: null, lotNumber: "9", payerName: null,
+      allocations: released.allocations, remainingCents: 0, handedBackCents: 7_000, handedBackOn: "2027-02-03", handedBackInFile: false }] }).find((l) => /bill was cancelled/.test(l))!;
+    expect(later).toContain("$472.53 to January 2027, $70.00 handed back on February 3, 2027 — its own line in the statement for February 2027.");
+    expect(later).not.toMatch(/below and in the file/);
+    // The one helper, both ways, and as a sentence for the screen.
+    expect(handedBackWhere({ handedBackCents: 7_000, handedBackOn: "2027-02-03", handedBackInFile: false }, { asSentence: true }))
+      .toBe("$70.00 was handed back on February 3, 2027 — its own line in the statement for February 2027");
+    expect(handedBackWhere({ handedBackCents: 7_000, handedBackOn: "2027-01-22", handedBackInFile: true }))
+      .toBe("$70.00 handed back on January 22, 2027 — its own line below and in the file");
+    expect(handedBackWhere({ handedBackCents: 7_000, handedBackOn: null, handedBackInFile: false }))
+      .toBe("$70.00 handed back — its own line in the statement for the month it went back");
+    // THE PART MONTH SHARES THE CANCELLED BILL'S MONTH (0169): a line the
+    // loader marked as the re-raise is named as such, apart from the
+    // cancelled January the sentence just named.
+    const collide = exclusionLines({ ...base, releasedFromCancelled: [{ ...released, amountCents: 54_253, billMonth: "2027-01", releasedOn: null, lotNumber: "9", payerName: null,
+      allocations: [{ periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: "27 of 31 days" } }] }] }).find((l) => /bill was cancelled/.test(l))!;
+    expect(collide).toContain("says where the money went: $472.53 to the bill raised again for January 2027 (27 of 31 days), $70.00 still held.");
+    // Nothing released: no sentence.
+    expect(exclusionLines({ ...base }).some((l) => /bill was cancelled/.test(l))).toBe(false);
+    expect(exclusionLines({ ...base, releasedFromCancelled: [] }).some((l) => /bill was cancelled/.test(l))).toBe(false);
   });
 });

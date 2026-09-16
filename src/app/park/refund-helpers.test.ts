@@ -18,6 +18,7 @@ const CARD: RefundablePayment = {
   method: "card",
   reference: "ch_mock_abc",
   charge_id: "charge-9",
+  released: false,
   kind: "rent",
   reversed_at: null,
   returned_at: null,
@@ -113,11 +114,27 @@ describe("why a payment cannot be refunded", () => {
       expect(why).not.toMatch(/reverse|Hand it back/);
     });
 
-    it("money against a bill: not handed back — only a WRONG record is taken back, with the reason", () => {
+    it("money against a LIVE bill: not handed back — only a WRONG record is taken back, with the reason", () => {
       const p = { ...CARD, method: "check", reference: null };
       const why = refundRefusal(p, { amount: 400, fee: 0 })!;
       expect(why).toMatch(/against a bill, so it isn't handed back — if the record is wrong, take it back with the reason/);
       expect(why).not.toMatch(/reverse the record|Hand it back/);
+    });
+
+    it("money against a CANCELLED bill is on account (0169): hand it back from its line — its charge_id still names the void bill", () => {
+      // `charge_id` alone reads a released cheque as "against a bill" and
+      // sends the office to a reversal of money the household is owed.
+      // Pinned both ways: the same row with released false keeps the
+      // live-bill sentence (the test above), so neither collapse passes.
+      const p = { ...CARD, method: "check", reference: null, charge_id: "charge-9", released: true };
+      const why = refundRefusal(p, { amount: 70, fee: 0 })!;
+      expect(why).toMatch(/Hand it back across the window and record it with "Hand it back" on its line under Money not against a bill/);
+      expect(why).not.toMatch(/against a bill, so it isn't handed back/);
+      // And released reads the same for cash as for a cheque.
+      expect(refundRefusal({ ...p, method: "cash" }, { amount: 70, fee: 0 })).toMatch(/paid by cash.*Hand it back/);
+      // A released CARD row is still refundable — the method branch never
+      // fires — and released changes nothing about that.
+      expect(refundRefusal({ ...CARD, released: true }, { amount: 70, fee: 0 })).toBeNull();
     });
 
     it("the sentence 'reverse the record' is gone from this file", () => {
@@ -370,15 +387,36 @@ describe("the query fetches every column the guard reads", () => {
     expect(declared, "the field this whole test exists for is gone").toContain("returned_at");
   });
 
+  /**
+   * `released` is the one field that is NOT a column: it is derived from the
+   * view (0169 — a row is on account when `released_from_charge_id` is set
+   * on its park_on_account_payments entry). It is pinned the other way
+   * below: refundableOn must read it off the view and hand it over by name.
+   */
+  const DERIVED = ["released"];
+
   it("selects every field RefundablePayment declares", () => {
     const columns = select.split(",").map((c) => c.trim());
-    const missing = declared.filter((f) => !columns.includes(f));
+    const missing = declared.filter((f) => !DERIVED.includes(f) && !columns.includes(f));
     expect(
       missing,
       "refundRefusal reads these and refundableOn does not fetch them, so each " +
         "one is `undefined` at runtime and the branch that reads it silently " +
         "never fires. Add them to the select.",
     ).toEqual([]);
+  });
+
+  it("derives `released` from the view's released_from_charge_id and hands it to refundRefusal by name", () => {
+    expect(declared, "the derived field this pin is about is gone").toContain("released");
+    const fn = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
+      .match(/export async function refundableOn[\s\S]*?\n}/)?.[0] ?? "";
+    expect(fn.length, "refundableOn not found — this scan measures nothing").toBeGreaterThan(400);
+    expect(fn).toMatch(/from\("park_on_account_payments"\)[\s\S]*?\.select\("payment_id, remaining, released_from_charge_id"\)/);
+    expect(fn).toMatch(/const released = row\?\.released_from_charge_id != null;/);
+    // Every field named, no `as never` between the row and the guard.
+    expect(fn).toMatch(/const forRefusal: RefundablePayment = \{[\s\S]*?released,[\s\S]*?\};/);
+    expect(fn).toMatch(/refundRefusal\(forRefusal, unapplied\)/);
+    expect(fn).not.toMatch(/refundRefusal\(pay as never/);
   });
 
   it("checks the return BEFORE it checks anything else", () => {

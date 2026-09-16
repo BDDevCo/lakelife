@@ -4,6 +4,7 @@ import { ReadFailed } from "@/lib/must-read";
 import { escapeHtml } from "@/lib/html-safe";
 import { longDay } from "@/lib/lake-time";
 import { money } from "@/app/park/ledger-helpers";
+import { releasedLead as releasedLeadWords } from "@/lib/released-words";
 
 /**
  * "DOES THIS LOOK RIGHT?" — the renter's half of the receipt.
@@ -35,6 +36,39 @@ function pretty(iso: string): string {
 /** "It comes off the next bill the park raises for you." — true since 0167: the run applies money on account, oldest first. Said only of a payment that still stands. */
 const COMES_OFF = "It comes off the next bill the park raises for you.";
 const STILL_COMES_OFF = "what's still on account comes off the next bill the park raises for you.";
+/**
+ * …UNLESS NO NEXT BILL WILL EVER COME. The household has moved out and the
+ * move-out month is billed (`nothingMoreBills` — the loader's read of the
+ * same two facts the resident's home screen uses). Then "comes off the next
+ * bill" promises a bill the park will never raise, on the receipt of the one
+ * person the money belongs to — and since 0169 that is the DEFAULT state of
+ * every move-out overpayment: January paid in full, the bill cancelled, the
+ * part month settled from it, $70.00 left. The office's own screen calls
+ * that "theirs to have back"; this page says only what it knows.
+ */
+const OFFICE_HAS_IT = "The office has it for you.";
+const STILL_OFFICE_HAS_IT = "the office has what's still on account for you.";
+function comesOff(view: ConfirmView): string {
+  return view.nothingMoreBills ? OFFICE_HAS_IT : COMES_OFF;
+}
+function stillComesOff(view: ConfirmView): string {
+  return view.nothingMoreBills ? STILL_OFFICE_HAS_IT : STILL_COMES_OFF;
+}
+
+/**
+ * THE BILL THIS PAID WAS CANCELLED (0169), and the money went on account —
+ * the sentence that leads every standing shape of a released receipt: read
+ * without it, "That money went on account with the office" on a receipt
+ * that plainly says "against your January bill" reads as a mistake. Said
+ * only while the payment stands: a released row since taken back is a
+ * taken-back receipt, and the taken-back branch says so. The words are
+ * lib/released-words' — the household's own front page says the same
+ * sentence under the cheque, from the same place.
+ */
+function releasedLead(view: ConfirmView): string {
+  if (!view.releasedFrom) return "";
+  return ` ${releasedLeadWords(view.releasedFrom.month, view.releasedFrom.on)}`;
+}
 
 /**
  * THE SIBLING'S OWN STANDING, if the loader hands it. A split is two rows
@@ -72,11 +106,16 @@ function siblingTakenBackOn(view: ConfirmView): string | null {
  *   a payment that IS money on account (a cheque before its bill existed, a
  *   quarter paid ahead) — `onAccount` is null and `onAccountRemaining` is its
  *   own; the same sentence, about the whole;
- *   a bill payment with nothing on account, or a deposit — nothing to say.
+ *   a bill payment with nothing on account, or a deposit — nothing to say;
+ *   a payment whose BILL WAS CANCELLED after it was paid (0169) — the money
+ *   was released onto account, the row never moved; the page leads with
+ *   which bill and when, then the same held / applied / gone states, over
+ *   this row AND its split sibling together.
  *
  * "It comes off the next bill" is said only while something is still held —
- * in EVERY branch. The not-applied branches used to say "held for you … it
- * comes off the next bill" unconditionally, so money on account sent back
+ * in EVERY branch — and only while a next bill can come (`comesOff`). The
+ * not-applied branches used to say "held for you … it comes off the next
+ * bill" unconditionally, so money on account sent back
  * to the card, or handed back across the window, before anything was
  * applied read "held for you" and "was sent back to you" in one breath.
  * When nothing is applied and nothing is held, the money went somewhere,
@@ -94,9 +133,9 @@ function onAccountWords(view: ConfirmView): string {
       return (
         ` The part of this against your bill was ${when}. ` +
         (view.onAccountApplied
-          ? `${rest}, and has since been put against a bill. That's ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
+          ? `${rest}, and has since been put against a bill. That's ${view.whereItWent}${held ? ` — ${stillComesOff(view)}` : "."}`
           : held
-            ? `${rest}, held for you, not yet put against a bill. ${COMES_OFF}`
+            ? `${rest}, held for you, not yet put against a bill. ${comesOff(view)}`
             : `${rest}; none of it is still held.`)
       );
     }
@@ -111,18 +150,34 @@ function onAccountWords(view: ConfirmView): string {
       ` This payment was ${when}.`
     );
   }
+  // THE BILL WAS CANCELLED AFTER SHE PAID IT (0169). The whole of this money
+  // is on account now — and on a split, so was the $57.47 from the start —
+  // and the loader's `whereItWent` / `onAccountRemaining` already cover both
+  // rows. One lead, then the same three states as every other shape.
+  const cancelled = releasedLead(view);
+  if (cancelled) {
+    return (
+      cancelled +
+      (view.onAccount != null ? ` ${money(view.onAccount)} of it had been on account from the start.` : "") +
+      (view.onAccountApplied
+        ? ` Where it went: ${view.whereItWent}${held ? ` — ${stillComesOff(view)}` : "."}`
+        : held
+          ? ` It's held for you. ${comesOff(view)}`
+          : ` None of it is still held.`)
+    );
+  }
   if (view.onAccount == null) {
     if (view.onAccountRemaining == null) return "";
     return view.onAccountApplied
-      ? ` That money went on account with the office. Where it went: ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
+      ? ` That money went on account with the office. Where it went: ${view.whereItWent}${held ? ` — ${stillComesOff(view)}` : "."}`
       : held
-        ? ` That money is on account with the office — held for you. ${COMES_OFF}`
+        ? ` That money is on account with the office — held for you. ${comesOff(view)}`
         : ` That money went on account with the office; none of it is still held.`;
   }
   return view.onAccountApplied
-    ? ` ${money(view.onAccount)} of that went on account with the office and has since been put against a bill. That's ${view.whereItWent}${held ? ` — ${STILL_COMES_OFF}` : "."}`
+    ? ` ${money(view.onAccount)} of that went on account with the office and has since been put against a bill. That's ${view.whereItWent}${held ? ` — ${stillComesOff(view)}` : "."}`
     : held
-      ? ` ${money(view.onAccount)} of that is on account with the office — held for you, not yet put against a bill. ${COMES_OFF}`
+      ? ` ${money(view.onAccount)} of that is on account with the office — held for you, not yet put against a bill. ${comesOff(view)}`
       : ` ${money(view.onAccount)} of that went on account with the office; none of it is still held.`;
 }
 

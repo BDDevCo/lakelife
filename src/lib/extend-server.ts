@@ -10,6 +10,10 @@ import { isExtendToken } from "@/lib/token-format";
 import { servedRentHistory } from "@/lib/rent-changes";
 import { rentForPeriod } from "@/app/park/rerate-helpers";
 import { successorRow } from "@/lib/successor-row";
+// A SUCCESSOR WRITTEN INTO THE PAST BILLS THE MONTHS IT MADE BILLABLE — the
+// same rule and re-raise the owner's Renew and signing doors use (decision 3).
+import { lostMonths } from "@/app/park/agreement-helpers";
+import { parkRanMonth, billLostMonths } from "@/app/park/gap-bills";
 
 /**
  * The server half of the one-tap extend. Pure decisions live in
@@ -18,6 +22,15 @@ import { successorRow } from "@/lib/successor-row";
 
 export interface ExtendView {
   reservationId: string;
+  /** The park the lot belongs to — what the tap bills a past month against. */
+  parkId: string;
+  /**
+   * THE PARK'S GO-LIVE DAY (parks.cutover_date). A successor written from an
+   * agreement that ended today, after this month's run, has a remainder the
+   * run will never come back for; which months of it are ours to bill floors
+   * here (lostMonths). Null when the park has not set one.
+   */
+  cutoverDate: string | null;
   lotNumber: string;
   /** long_term | short_term — what the lot is called to the household
    *  ("lot" or "site", lotWord) and whether a monthly fee reaches it. */
@@ -205,7 +218,7 @@ export async function extendViewFor(
     // THE HOUSE STYLE TOO. Only the cap was read, and the cap was the length.
     // And the park's season, which the lot inherits when it has none of its own.
     admin.from("parks")
-      .select("name, max_agreement_months, default_agreement_months, season_open_month, season_open_day, season_close_month, season_close_day")
+      .select("name, max_agreement_months, default_agreement_months, season_open_month, season_open_day, season_close_month, season_close_day, cutover_date")
       .eq("id", lot.park_id as string).maybeSingle(),
     admin.from("lot_rates").select("term, amount").eq("park_lot_id", res.park_lot_id),
     // WHOSE, as well as when: the household's own next agreement sits on
@@ -373,6 +386,8 @@ export async function extendViewFor(
 
   return {
     reservationId: res.id,
+    parkId: lot.park_id as string,
+    cutoverDate: (park?.cutover_date as string | null) ?? null,
     lotNumber: (lot.lot_number as string) ?? "",
     rentalMode: (lot.rental_mode as string | null) ?? null,
     parkName: (park?.name as string) ?? "the park",
@@ -508,7 +523,7 @@ export async function extendByToken(
     const priorQuoted = current!.quoted_amount == null ? null : Number(current!.quoted_amount);
     const quotedAmount = view.price;
 
-    const { error: insErr } = await admin.from("lot_reservations").insert(successorRow(
+    const { data: succ, error: insErr } = await admin.from("lot_reservations").insert(successorRow(
       {
         id: view.reservationId,
         park_lot_id: current!.park_lot_id as string,
@@ -537,7 +552,7 @@ export async function extendByToken(
         nextSeq: ((current!.agreement_seq as number) ?? 1) + 1,
         nowISO: new Date().toISOString(),
       },
-    ));
+    )).select("id").single();
 
     if (insErr) {
       if (insErr.code === "23P01") return { ok: false, error: refusalText("lot_taken", null, view.rentalMode) };
@@ -553,6 +568,23 @@ export async function extendByToken(
       .from("lot_reservations")
       .update({ extended_at: new Date().toISOString() })
       .eq("id", view.reservationId);
+
+    // THE REMAINDER OF THIS MONTH, when the tap lands on the agreement's last
+    // day (extend-stay refuses only a stay already ended) after the month's
+    // run has happened: the successor starts today, the run visited this
+    // month before it existed and keys "already billed" per reservation, so
+    // nothing else would ever raise it. Bill it now through the one re-raise
+    // every such door uses. Three doors write successors; this was the one
+    // that did not bill what it made billable. The outcome's words go
+    // nowhere — nothing here sends to a resident — so a failed read is
+    // logged, and the month is left for the owner's rent screen.
+    const today = todayLakeDate();
+    const ran = await parkRanMonth(admin, view.parkId, today.slice(0, 7));
+    if (typeof ran !== "boolean") {
+      console.error(`[read failed] ${ran.what}:`, ran.error);
+    } else if (succ?.id) {
+      await billLostMonths(admin, view.parkId, succ.id as string, lostMonths(view.newStart, today, view.cutoverDate, ran));
+    }
 
     // `depositHeld` travels with the answer so the page after the tap can say
     // "nothing more to pay on your deposit" only to somebody who paid one —

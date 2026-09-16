@@ -98,8 +98,23 @@ export function toStay(r: RawReservation): Stay {
   };
 }
 
-/** What a lot is doing right now. Ordered by how much the owner cares. */
-export type LotState = "inactive" | "occupied" | "reserved" | "vacant";
+/**
+ * What a lot is doing right now. Ordered by how much the owner cares.
+ *
+ * `lapsed` is a lot somebody lives on whose paperwork has run out — a held
+ * row that ended with nothing after it. It used to read `vacant`, which
+ * offered "Someone lives here" (the door that files a SECOND renter for the
+ * same household) and dropped the lot from occupancy the morning a lease
+ * expired, as if the park had emptied. Nobody moved out.
+ */
+export type LotState = "inactive" | "occupied" | "lapsed" | "reserved" | "vacant";
+
+/**
+ * A stay by the night or the week ends when it ends: the guest checked out.
+ * ONE home for the set — the roll, Today and the nightly all decide "lapsed"
+ * through `lapsedRowOf` below, so a term added here is excluded everywhere.
+ */
+export const STAY_BY_THE_NIGHT = new Set<string>(["nightly", "weekly"]);
 
 export interface RollRow {
   lot: Lot;
@@ -108,6 +123,19 @@ export interface RollRow {
   current: Stay | null;
   /** The next decided stay that has not started yet. */
   next: Stay | null;
+  /**
+   * A HELD ROW THAT ENDED WITH NOTHING AFTER IT ON THE LOT — the latest-
+   * ending one, and only when `current` and `next` are both null. The
+   * household never left: nobody moved out, nothing ended it, the paperwork
+   * ran out. A successor would be `current` or `next`, so "no current, no
+   * next, a held row behind today" is "lapsed with nothing filed" without
+   * reading the chain — UNLESS an ended row ends after it: then somebody was
+   * closed out after the paperwork ran out, and the lot is empty. Never a
+   * stay by the night or the week — a guest whose checkout morning has
+   * passed has gone, and their row has nothing to renew. (lapsedRowOf, the
+   * one rule.)
+   */
+  lapsed: Stay | null;
   /** Undecided applications waiting on this lot — the owner's to-do list. */
   pending: Stay[];
   /** Nights until `current` ends. Null when nothing is on the lot. */
@@ -132,6 +160,56 @@ const HOLDS = new Set(["approved", "active"]);
 export function coversDay(range: DateRange | null, todayISO: string): boolean {
   if (!range) return false;
   return range.start <= todayISO && todayISO < range.end;
+}
+
+/** What `lapsedRowOf` reads off a row — a Stay, or a raw row shaped to it. */
+export interface LapseCandidate {
+  status: string;
+  range: DateRange | null;
+  term: string;
+}
+
+/**
+ * THE ROW THAT RAN OUT ON A LOT SOMEBODY STILL LIVES ON — the ONE rule, for
+ * every doorway that asks it: the roll (buildRentRoll), Today's occupancy
+ * (today-actions) and the nightly's `tenancy_expired` (park-machine). Each
+ * used to answer it inline, and each answered it a little differently.
+ *
+ * Given EVERY row on one lot — held, ended, cancelled, whatever — and today:
+ *
+ *   A held row covering today, or one still to start, means the household's
+ *   record continues; nothing is lapsed, whatever ended before it.
+ *
+ *   A CLOSE-OUT BEHIND THE CHAIN MEANS NOBODY IS ON THE LOT. A move-out
+ *   inside a successor marks only the link that covered the day `ended`
+ *   (planMoveOut trims that one and withdraws the later ones) and leaves the
+ *   expired links before it exactly as they were — approved or active, run
+ *   out, with nothing held after them. Read from the held rows alone that is
+ *   the lapsed shape, and it read a family who moved out on 10 February as
+ *   "Ran out", lived-in, 100% occupied, listed under "Agreements to write",
+ *   where the tap would have billed them for every month since. So the
+ *   latest-ENDING row across held and ended is asked first: if it is the
+ *   ended one, somebody was closed out after everything that ran out, and
+ *   the lot is empty. (A tie goes to the close-out: a row that ended the
+ *   same morning as one that was closed still has nobody behind it.)
+ *
+ *   Otherwise the latest-ending held row already behind today — and never a
+ *   stay by the night or the week: a guest whose checkout morning has
+ *   passed has gone, and nothing ends short stays after checkout.
+ *
+ * Pure; `null` when nothing is lapsed.
+ */
+export function lapsedRowOf<T extends LapseCandidate>(rows: readonly T[], todayISO: string): T | null {
+  const held = rows.filter((s) => HOLDS.has(s.status) && s.range);
+  if (held.some((s) => coversDay(s.range, todayISO))) return null;
+  if (held.some((s) => s.range!.start > todayISO)) return null;
+  const latest = rows
+    .filter((s) => s.range && (HOLDS.has(s.status) || s.status === "ended"))
+    .sort((a, b) => (a.range!.end > b.range!.end ? -1 : a.range!.end < b.range!.end ? 1 : a.status === "ended" ? -1 : b.status === "ended" ? 1 : 0))[0];
+  if (latest?.status === "ended") return null;
+  return held
+    .filter((s) => s.range!.end <= todayISO && !STAY_BY_THE_NIGHT.has(s.term))
+    .sort((a, b) => (a.range!.end > b.range!.end ? -1 : 1))[0] ?? null;
 }
 
 /**
@@ -167,20 +245,28 @@ export function buildRentRoll(
     const pending = mine
       .filter((s) => s.status === "applied")
       .sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
+    // THE PAPERWORK THAT RAN OUT, with nobody current, nobody coming and
+    // nobody closed out after it — the one rule (lapsedRowOf), read from
+    // every row on the lot, so an ended successor closes the chain here as
+    // it does on Today and in the nightly.
+    const lapsed = lapsedRowOf(mine, todayISO);
 
     const state: LotState = !lot.active
       ? "inactive"
       : current
         ? "occupied"
-        : next
-          ? "reserved"
-          : "vacant";
+        : lapsed
+          ? "lapsed"
+          : next
+            ? "reserved"
+            : "vacant";
 
     return {
       lot,
       state,
       current,
       next,
+      lapsed,
       pending,
       nightsLeft: current?.range ? nightsIn({ start: todayISO, end: current.range.end }) : null,
       noticed: held.find((s) => s.expectedMoveOut != null) ?? null,
@@ -191,13 +277,22 @@ export function buildRentRoll(
 export interface RollSummary {
   lots: number;        // active lots only — an inactive lot is not inventory
   occupied: number;
+  /**
+   * Lived on, paperwork run out (RollRow.lapsed). Counted apart from
+   * `occupied` so the roll can say "3 ran out", and NEVER in `vacant`: the
+   * morning eighteen one-month leases expired this read "18 vacant" about a
+   * full park.
+   */
+  lapsed: number;
   reserved: number;
   vacant: number;
   inactive: number;
   pending: number;     // applications awaiting a decision, across the park
-  /** Occupied / active lots, 0-100, rounded. Null when there are no active
-   *  lots — a brand-new park is not "0% full", it has nothing to be full of,
-   *  and showing 0% on setup day is a discouraging lie. */
+  /** (Occupied + lapsed) / active lots, 0-100, rounded — they live there,
+   *  and a percentage that drops the day paperwork runs out would say the
+   *  park emptied. Null when there are no active lots — a brand-new park is
+   *  not "0% full", it has nothing to be full of, and showing 0% on setup
+   *  day is a discouraging lie. */
   occupancyPct: number | null;
 
   /**
@@ -218,7 +313,7 @@ export interface RollSummary {
 
 export function summarise(rows: RollRow[]): RollSummary {
   const s: RollSummary = {
-    lots: 0, occupied: 0, reserved: 0, vacant: 0, inactive: 0, pending: 0,
+    lots: 0, occupied: 0, lapsed: 0, reserved: 0, vacant: 0, inactive: 0, pending: 0,
     occupancyPct: null,
     planned: 0, renovating: 0, shortTermLots: 0,
   };
@@ -239,10 +334,12 @@ export function summarise(rows: RollRow[]): RollSummary {
     if (r.state === "inactive") { s.inactive++; continue; }
     s.lots++;
     if (r.state === "occupied") s.occupied++;
+    else if (r.state === "lapsed") s.lapsed++;
     else if (r.state === "reserved") s.reserved++;
     else s.vacant++;
   }
-  if (s.lots > 0) s.occupancyPct = Math.round((s.occupied / s.lots) * 100);
+  // A household whose paperwork ran out still lives there.
+  if (s.lots > 0) s.occupancyPct = Math.round(((s.occupied + s.lapsed) / s.lots) * 100);
   return s;
 }
 

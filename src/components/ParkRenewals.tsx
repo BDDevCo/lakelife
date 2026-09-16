@@ -173,9 +173,10 @@ export function ParkRenewals({
                     ? " Consecutive with the last one."
                     : ` Starts a new chain — there was a gap after ${longDate(r.priorEnd)}.` +
                       (at.plan.depositDue && at.plan.depositAmount != null ? ` A deposit of ${money(at.plan.depositAmount)} is due.` : "")}
-                  {/* THE MONEY FACT OF A BACKFILL, from the server (it knows
-                      today): the tap below makes the months since the lapse
-                      billable, and none has been raised. */}
+                  {/* THE MONEY FACT OF A BACKFILL: the tap below BILLS the
+                      months the run has already passed (gap-bills); the
+                      sentence is the server's, which knows today and whether
+                      this month ran. */}
                   {r.backfillNote ? ` ${r.backfillNote}` : ""}
                 </div>
                 {over.length > 0 && (
@@ -215,11 +216,17 @@ export function ParkRenewals({
                   </div>
                 ) : (
                   <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                    {/* The common case is one tap and nothing typed. */}
+                    {/* The common case is one tap and nothing typed. THE
+                        LABEL IS WHAT THE TAP WRITES: with no rent on the row
+                        this tap writes the successor with none, and "the
+                        same rent" named a rent that does not exist — beside
+                        a note that says which door sets one. */}
                     <button className="ll-btn" disabled={busy}
                       style={{ padding: "6px 14px", fontSize: 14 }}
                       onClick={() => renew(r)}>
-                      {rentMoves(r) ? `Renew at ${money(r.quotedAmount!)}` : "Renew at the same rent"}
+                      {r.quotedAmount == null
+                        ? "Renew with no rent set"
+                        : rentMoves(r) ? `Renew at ${money(r.quotedAmount)}` : "Renew at the same rent"}
                     </button>
                     <button className="ll-btn ghost" disabled={busy}
                       style={{ padding: "6px 12px", fontSize: 14 }}

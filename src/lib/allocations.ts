@@ -2,8 +2,10 @@
  * WHICH DOLLARS PAY WHICH BILL — the pure half of 0167.
  *
  * Money on account (a cheque taken before its bill existed, a quarter paid
- * ahead, the excess over a bill) is put against bills as `park_payment_
- * allocations` rows. The database owns every conservation rule — what is left
+ * ahead, the excess over a bill, or money released from a cancelled bill —
+ * 0169: a payment against a bill with status void is on account, derived;
+ * the view lists it and nothing here needs to know) is put against bills as
+ * `park_payment_allocations` rows. The database owns every conservation rule — what is left
  * on a payment, what is left on a bill, whose money it is — and refuses by
  * name. This file owns the two things that are not rules but ARITHMETIC a
  * screen has to show before anything is written:
@@ -31,7 +33,7 @@
  * summed as floats is not $1,627.59.
  */
 
-import { prettyMonth, money } from "@/app/park/ledger-helpers";
+import { prettyMonth, money, billWords } from "@/app/park/ledger-helpers";
 import type { createServiceClient } from "@/lib/supabase/server";
 
 // The one money formatter, re-exported so a caller that already imports the
@@ -196,7 +198,10 @@ type Admin = ReturnType<typeof createServiceClient>;
  * a bill or sent back — never `amount`. Oldest first, so a quarter paid ahead
  * in December is spent before a cheque taken in February. One reader for the
  * preview, the run and every payment door, so none of them can define "on
- * account" its own way.
+ * account" its own way — and MEMBERSHIP IN THE VIEW is that definition:
+ * money released from a cancelled bill (0169 — a payment against a bill
+ * with status void, the row never moved) joins the sources by itself,
+ * oldest first like any other, with no test of its own here.
  *
  * A FAILED READ IS NOT "NOTHING ON ACCOUNT". The preview would then promise
  * the owner the full figure is owed, the run would raise the bills and apply
@@ -428,6 +433,66 @@ export interface AllocationLine {
   /** YYYY-MM of the bill it went against. */
   periodMonth: string;
   amount: number;
+  /**
+   * THE BILL RAISED AGAIN FOR THAT MONTH (0169). A move-out cancels the
+   * whole-month bill and raises the month again for the days they were
+   * here — same reservation, same period_month (0081's unique allows the
+   * two while one is void) — so "$472.53 to January 2027" read right after
+   * "their January 2027 bill was cancelled" is two different January bills
+   * in one word, and the office cannot tell which. Set by a loader ONLY on
+   * the colliding line — an allocation whose month equals the month of the
+   * cancelled bill the money was released from — and printed only when set,
+   * so every ordinary line keeps its shape. `basis` is the re-raised bill's
+   * own frozen basis ("27 of 31 days"); null when the re-raise was a whole
+   * month (a new rent) or the bill carries no snapshot.
+   */
+  raisedAgain?: { basis: string | null };
+  /**
+   * The re-raised bill's own amount, when the loader read it — printed
+   * before "bill raised again" (billWords) so "$472.53 to the $472.53 bill
+   * raised again for January 2027 (27 of 31 days)" names the part month as
+   * a bill of its own. Set beside `raisedAgain` only; an ordinary line
+   * never carries it.
+   */
+  billAmount?: number | null;
+}
+
+/**
+ * "27 of 31 days" off a bill's frozen lines (park_charges.lines[].basis —
+ * the same field charge-edits' basisOf reads off a statement), or null for
+ * a whole-month bill or one with no snapshot. The days basis is the only
+ * one worth printing: "raised again for January 2027 (for the month)" says
+ * nothing a person needs.
+ */
+export function proratedBasisOf(lines: unknown): string | null {
+  if (!Array.isArray(lines)) return null;
+  const basis = String((lines[0] as { basis?: unknown } | undefined)?.basis ?? "").trim();
+  return basis && basis !== "for the month" ? basis : null;
+}
+
+/**
+ * The line with the re-raise marked when its month is the cancelled bill's
+ * — the one place that decides which line collides, so a loader passes the
+ * released-from month and the re-raised bill's lines and never compares
+ * months itself.
+ */
+export function withRaisedAgain(
+  line: AllocationLine,
+  releasedFromMonth: string | null | undefined,
+  billLines: unknown,
+): AllocationLine {
+  if (!releasedFromMonth || line.periodMonth !== releasedFromMonth) return line;
+  return { ...line, raisedAgain: { basis: proratedBasisOf(billLines) } };
+}
+
+/**
+ * "$472.53 to January 2027" — or, for the colliding line, "$472.53 to the
+ * bill raised again for January 2027 (27 of 31 days)". One copy: the
+ * receipt, the statement's note and screen all print a line through this,
+ * and the reversal's sentence names the bill through the same `billWords`.
+ */
+export function allocationWords(l: AllocationLine): string {
+  return `${money(l.amount)} to ${billWords(l)}`;
 }
 
 /**
@@ -442,7 +507,7 @@ export function describeAllocations(lines: readonly AllocationLine[], remaining:
   const parts = [...lines]
     .filter((l) => cents(l.amount) > 0)
     .sort((a, b) => a.periodMonth.localeCompare(b.periodMonth))
-    .map((l) => `${money(l.amount)} to ${prettyMonth(l.periodMonth)}`);
+    .map(allocationWords);
   if (cents(remaining) > 0) parts.push(`${money(remaining)} on account`);
   return parts.join(", ");
 }

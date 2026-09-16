@@ -120,6 +120,9 @@ const PAID: PaymentRow = {
   takenBackWhy: null,
   handedBack: 0,
   handedBackOn: null,
+  releasedFrom: null,
+  allocations: [],
+  onAccountRemaining: 0,
 };
 
 describe("a payment the bank sent back", () => {
@@ -278,7 +281,7 @@ const owing = (over: Partial<RenterHomeView> = {}) =>
     bill: {
       id: "c1", monthLabel: "January 2027", dueOn: "2027-01-01",
       amount: 542.53, paidTotal: 0, outstanding: 542.53,
-      status: "open", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0,
+      status: "open", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0, fromCancelledBill: null,
     },
     ...over,
   });
@@ -309,7 +312,7 @@ describe("a household that pays cash", () => {
     const paid = owing({
       bill: { id: "c1", monthLabel: "January 2027", dueOn: "2027-01-01",
         amount: 542.53, paidTotal: 542.53, outstanding: 0,
-        status: "paid", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0 },
+        status: "paid", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0, fromCancelledBill: null },
     });
     expect(words(paid)).not.toMatch(/pay the office/i);
   });
@@ -321,10 +324,10 @@ describe("a household that pays cash", () => {
     const backOnly = owing({
       bill: { id: "c2", monthLabel: "January 2027", dueOn: "2027-01-01",
         amount: 542.53, paidTotal: 542.53, outstanding: 0,
-        status: "paid", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0 },
+        status: "paid", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0, fromCancelledBill: null },
       arrears: [{ id: "c1", monthLabel: "December 2026", dueOn: "2026-12-01",
         amount: 542.53, paidTotal: 0, outstanding: 542.53,
-        status: "open", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0 }],
+        status: "open", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0, fromCancelledBill: null }],
     });
     expect(words(backOnly), "a household in arrears is told nothing").toMatch(/pay the office/i);
   });
@@ -404,5 +407,82 @@ describe("money handed back to her across the window", () => {
     expect(src).toMatch(/p\.handedBack > 0 && p\.handedBackOn &&/);
     expect(src).toMatch(/longDay\(p\.handedBackOn\)/);
     expect(src).toMatch(/longDay\(view\.depositReturned\.on\)/);
+  });
+});
+
+/**
+ * THE CHEQUE A CANCELLED BILL RELEASED (0169), on her own list. She paid
+ * January in full on the 4th; she left on the 20th; the office cancelled
+ * the whole-month bill and raised the $472.53 part month, settled from the
+ * released money. Her screen then read: a $542.53 cheque on the list, an
+ * On account card at $70.00, and a part month saying $472.53 "came from
+ * what you'd already paid on the January 2027 bill that was cancelled" —
+ * the $70.00 tied to the cheque by nothing but her own subtraction, and the
+ * cancelled bill itself not on her screen at all. The row now says so, in
+ * the words her receipt page uses.
+ */
+describe("a payment whose bill was cancelled says where its money is", () => {
+  // THE LINE AGAINST THE JANUARY RAISED AGAIN is marked the way the loader
+  // marks it (my-data.ts through withRaisedAgain, with the re-raised
+  // bill's own amount and frozen basis) — the same shape /paid/[token]'s
+  // fixture carries, so the two pages are pinned to one sentence.
+  const released: PaymentRow = {
+    ...PAID, method: "check", receiptNo: 14, on: "2027-01-04", amount: 542.53,
+    releasedFrom: { month: "2027-01" },
+    allocations: [{ periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: "27 of 31 days" }, billAmount: 472.53 }],
+    onAccountRemaining: 70,
+  };
+
+  it("under the cheque: the bill that was cancelled, where the money went, and what is still held — in words", () => {
+    const w = words(view({ payments: [released], onAccount: 70, tenancyEnded: "2027-01-20", finalMonthBilled: true }));
+    expect(w).toMatch(/\$542\.53 #14 The January 2027 bill this paid was cancelled, so this money went on account with the office\. Where it went: \$472\.53 to the \$472\.53 bill raised again for January 2027 \(27 of 31 days\), \$70\.00 on account\./);
+    expect(w).not.toMatch(/2027-01/);
+    // Two January bills in one word was the defect: "$472.53 to January
+    // 2027" a sentence after "the January 2027 bill this paid was
+    // cancelled" read as money put against the bill just cancelled. The
+    // line the loader marks is named apart, in billWords' one phrase —
+    // never a rewording of it here, and never the cancelled bill's reason
+    // (a void carries a free-text office reason).
+    expect(w).not.toMatch(/\$472\.53 to January 2027/);
+    expect(w).not.toMatch(/re-raised|raised twice|days you were here/);
+    // The card is left alone — it is the sum over every row, not this one.
+    const card = w.slice(w.indexOf("On account"), w.indexOf("Your agreement"));
+    expect(card).toMatch(/\$70\.00 with the office — nothing more bills for you/);
+    expect(card).not.toMatch(/January/);
+  });
+
+  it("nothing applied yet: held for you; nothing applied and nothing held: none of it is still held", () => {
+    const held = words(view({ payments: [{ ...released, allocations: [], onAccountRemaining: 542.53 }] }));
+    expect(held).toMatch(/was cancelled, so this money went on account with the office\. It&#x27;s held for you\./);
+    expect(held).not.toMatch(/Where it went/);
+    // Handed back across the window after nothing was applied: gone, and
+    // the handed-back line under it says where.
+    const gone = words(view({ payments: [{ ...released, allocations: [], onAccountRemaining: 0, handedBack: 542.53, handedBackOn: "2027-01-28" }] }));
+    expect(gone).toMatch(/went on account with the office\. None of it is still held\. \$542\.53 of this was handed back to you on Thursday, January 28, 2027\./);
+    // Applied in full: the sentence stops at the bill, no "$0.00 on account".
+    const all = words(view({ payments: [{ ...released, amount: 472.53, onAccountRemaining: 0 }] }));
+    expect(all).toMatch(/Where it went: \$472\.53 to the \$472\.53 bill raised again for January 2027 \(27 of 31 days\)\./);
+    expect(all).not.toMatch(/\$0\.00/);
+  });
+
+  it("says nothing of the kind about a payment no cancelled bill released — even one with money on account", () => {
+    expect(words(view({ payments: [PAID] }))).not.toMatch(/cancelled|Where it went|held for you/);
+    // A $600 split's on-account half: releasedFrom null, remaining 57.47.
+    // Its origin is not a cancelled bill, and this line is only about those.
+    const split = words(view({ payments: [{ ...PAID, amount: 57.47, onAccountRemaining: 57.47 }] }));
+    expect(split).not.toMatch(/cancelled|Where it went|held for you/);
+  });
+
+  it("a released cheque since taken back is a taken-back receipt, not money on account", () => {
+    const bounced = words(view({ payments: [{ ...released, takenBackOn: "2027-01-22T10:00:00Z", takenBackWhy: "the cheque bounced", allocations: [], onAccountRemaining: 0 }] }));
+    expect(bounced).toMatch(/This payment was taken back on/);
+    expect(bounced).not.toMatch(/went on account with the office/);
+    const src = readFileSync(fileURLToPath(new URL("./RenterHome.tsx", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(src).toMatch(/p\.releasedFrom && !p\.takenBackOn &&/);
+    // ONE sentence for where money on account went — lib/allocations — and
+    // the remainder is the view's, never the cheque less the lines.
+    expect(src).toMatch(/describeAllocations\(p\.allocations, p\.onAccountRemaining\)/);
+    expect(src).not.toMatch(/p\.amount - /);
   });
 });

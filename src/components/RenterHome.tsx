@@ -1,10 +1,12 @@
 import Link from "next/link";
-import type { RenterHome as RenterHomeView } from "@/app/parks/my-data";
+import type { RenterHome as RenterHomeView, Bill } from "@/app/parks/my-data";
 import { PayRentButton } from "@/components/PayRentButton";
 import { IPaidForm } from "@/components/IPaidForm";
 import { TextOptIn } from "@/components/TextOptIn";
 import { EnableLotBooking } from "@/components/EnableLotBooking";
-import { money } from "@/app/park/ledger-helpers";
+import { money, monthList } from "@/app/park/ledger-helpers";
+import { describeAllocations } from "@/lib/allocations";
+import { releasedLead } from "@/lib/released-words";
 import { longDay } from "@/lib/lake-time";
 
 /**
@@ -35,14 +37,58 @@ function pretty(iso: string | null): string {
   });
 }
 
+/** The two figures every "where did the money come from" sentence reads. */
+type Source = Pick<Bill, "fromOnAccount" | "fromCancelledBill">;
+
+/**
+ * WHAT WAS PAID ON A BILL THE OFFICE CANCELLED (0169) — "what you'd already
+ * paid on the January 2027 bill that was cancelled". She paid January; she
+ * left on the 20th; the office cancelled the whole-month bill and raised
+ * the part month, settled from the money the cancelled bill released. Her
+ * list shows that cheque against January, so "money you had on account" is
+ * a sentence about money she never put on account. Said in her words.
+ *
+ * AND BOTH BILLS WHEN THERE WERE TWO — "the January 2027 and February 2027
+ * bills that were cancelled". The close-out cascade settles a part month
+ * from a part-paid January AND a February she had paid ahead; naming one
+ * left her February cheque read as "money you had on account". `monthList`
+ * is the one joiner (ledger-helpers), never a second copy.
+ */
+function cancelledBillWords(c: NonNullable<Bill["fromCancelledBill"]>): string {
+  const bills = c.months.length === 1 ? "bill that was" : "bills that were";
+  return `what you'd already paid on the ${monthList(c.months)} ${bills} cancelled`;
+}
+
+/**
+ * The part of `fromOnAccount` that is NOT a cancelled bill's money — a
+ * cheque she put on account, the excess over an earlier bill. Two figures
+ * from the same allocation rows, nested by the loader (every cancelled
+ * bill's share, summed, is counted inside `fromOnAccount`), so the rest is
+ * what is left of the one after the other. Zero when all of it was released
+ * money.
+ */
+function plainOnAccount(b: Source): number {
+  if (!b.fromCancelledBill) return b.fromOnAccount;
+  return Math.max(0, Math.round((b.fromOnAccount - b.fromCancelledBill.amount) * 100)) / 100;
+}
+
 /**
  * "$542.53 of it came from money you had on account." — the sentence a settled
  * or part-settled bill adds when money on account paid some of it (0167).
  * Said in her words: she "had money on account"; the run "put it against"
  * the bill. Only ever rendered when the figure is above zero.
+ *
+ * WHEN THAT MONEY WAS A CANCELLED BILL'S (0169): "$472.53 of it came from
+ * what you'd already paid on the January 2027 bill that was cancelled." —
+ * and, if some of it was ordinary money on account too, that after it, so
+ * the $57.47 of a $600 cheque is not left unaccounted for.
  */
-function fromOnAccountWords(b: { fromOnAccount: number }): string {
-  return `${money(b.fromOnAccount)} of it came from money you had on account.`;
+function fromOnAccountWords(b: Source): string {
+  const c = b.fromCancelledBill;
+  if (!c) return `${money(b.fromOnAccount)} of it came from money you had on account.`;
+  const rest = plainOnAccount(b);
+  return `${money(c.amount)} of it came from ${cancelledBillWords(c)}`
+    + (rest > 0 ? `, and ${money(rest)} from money you had on account.` : ".");
 }
 
 /**
@@ -52,14 +98,52 @@ function fromOnAccountWords(b: { fromOnAccount: number }): string {
  * (recompute_charge_paid adds allocations), so the two figures are nested,
  * not added. When ALL of it came off money on account there is no cheque
  * for this month on her list, and the sentence says so in one breath.
+ *
+ * AND THE SAME THREAD FOR A CANCELLED BILL'S MONEY (0169): a $400 cheque on
+ * January released against a $472.53 part month reads "$400.00 received so
+ * far — all of it from what you'd already paid on the January 2027 bill
+ * that was cancelled." — never "from money you had on account" about the
+ * cheque she can see against January on her own list.
  */
-function receivedSoFar(b: { paidTotal: number; fromOnAccount: number }): string {
+function receivedSoFar(b: { paidTotal: number } & Source): string {
   const head = `${money(b.paidTotal)} received so far`;
   if (b.fromOnAccount <= 0) return `${head}.`;
+  const c = b.fromCancelledBill;
+  if (c) {
+    const all = Math.round(c.amount * 100) >= Math.round(b.paidTotal * 100);
+    const rest = plainOnAccount(b);
+    return `${head} — ${all ? "all of it" : `${money(c.amount)} of it`} from ${cancelledBillWords(c)}`
+      + (rest > 0 ? `, and ${money(rest)} from money you had on account.` : ".");
+  }
   if (Math.round(b.fromOnAccount * 100) >= Math.round(b.paidTotal * 100)) {
     return `${head} — from money you had on account.`;
   }
   return `${head} — ${money(b.fromOnAccount)} of it from money you had on account.`;
+}
+
+/** The three fields the released cheque's own line reads. */
+type Released = Pick<RenterHomeView["payments"][number], "releasedFrom" | "allocations" | "onAccountRemaining">;
+
+/**
+ * "The January 2027 bill this paid was cancelled, so this money went on
+ * account with the office. Where it went: $472.53 to the $472.53 bill
+ * raised again for January 2027 (27 of 31 days), $70.00 on account." —
+ * under the cheque, so the $70.00 on her card is tied to the cheque it is
+ * left of. The lead is /paid/[token]'s, from the ONE place both read it
+ * (lib/released-words — that page also names the day, which this loader
+ * does not read); the three states after it are that page's too: applied,
+ * held, or gone — and when it has gone the handed-back line under this one
+ * says where. The January raised again is named apart from the January
+ * cancelled because the loader marks that line (withRaisedAgain) and
+ * describeAllocations prints the mark — nothing here decides which line
+ * collides. Empty for a payment no cancelled bill released.
+ */
+function releasedWords(p: Released): string {
+  if (!p.releasedFrom) return "";
+  const lead = releasedLead(p.releasedFrom.month);
+  const applied = p.allocations.some((l) => l.amount > 0);
+  if (applied) return `${lead} Where it went: ${describeAllocations(p.allocations, p.onAccountRemaining)}.`;
+  return p.onAccountRemaining > 0 ? `${lead} It's held for you.` : `${lead} None of it is still held.`;
 }
 
 /**
@@ -329,10 +413,14 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
               {/* WHAT MONEY ON ACCOUNT ALREADY TOOK OFF THIS MONTH. The big
                   number is what is left; without this line a household whose
                   quarter-ahead cheque half-covered January reads $242.53 owed
-                  with no sign the other $300 was ever counted. */}
+                  with no sign the other $300 was ever counted. And when that
+                  money was a cancelled bill's (0169), the bill is named —
+                  the same thread as the current month's sentence. */}
               {a.fromOnAccount > 0 && (
                 <div className="mut" style={{ fontSize: 12.5, marginTop: 2 }}>
-                  {money(a.fromOnAccount)} came off money you had on account.
+                  {a.fromCancelledBill
+                    ? fromOnAccountWords(a)
+                    : `${money(a.fromOnAccount)} came off money you had on account.`}
                 </div>
               )}
 
@@ -519,6 +607,29 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                     had paid was reopened that day.
                   </span>
                 ) : null}
+                {/* THE BILL THIS PAID WAS CANCELLED (0169), and where its money
+                    is now. Her list showed a $542.53 cheque, the part month
+                    said $472.53 came from what she'd paid on the cancelled
+                    January bill, and the On account card said $70.00 — three
+                    figures on one screen and nothing tying them together but
+                    her own subtraction. Said only of a payment that stands
+                    (a released row since taken back is a taken-back receipt,
+                    and the branch above says so), in the words /paid/[token]
+                    already uses for the same row, and never the cancelled
+                    bill's reason: a void has a free-text office reason and
+                    the part month it may or may not have been re-raised as
+                    is a bill on this screen, not a fact this row holds.
+                    `describeAllocations` is the ONE sentence for where money
+                    on account went; the remainder is the view's, never the
+                    cheque less the lines. Not on the On account card: the
+                    card is the sum over every row still held, and a cheque
+                    on account beside a released one would make "left over
+                    from your January cheque" a lie there. */}
+                {p.releasedFrom && !p.takenBackOn && (
+                  <span className="mut" style={{ flexBasis: "100%", fontSize: 12, lineHeight: 1.4 }}>
+                    {releasedWords(p)}
+                  </span>
+                )}
                 {/* MONEY FROM THIS PAYMENT HANDED BACK TO HER (0168). The row
                     stays at what she handed over; this is where the rest went
                     — the $57.47 of a $600 cheque, across the window after she

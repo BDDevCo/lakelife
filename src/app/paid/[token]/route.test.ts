@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConfirmView } from "@/lib/confirm-server";
+import { describeAllocations } from "@/lib/allocations";
 
 /**
  * "DOES THIS LOOK RIGHT?" READS WHERE THE MONEY ON ACCOUNT WENT (0167).
@@ -32,7 +33,7 @@ const base = (over: Partial<ConfirmView> = {}): ConfirmView => ({
   parkName: "The Haven", lotNumber: "9", amount: 600, onAccount: 57.47, onAccountApplied: false,
   onAccountRemaining: 57.47, allocations: [], whereItWent: "$57.47 on account",
   takenBackOn: null, takenBackWhy: null, siblingTakenBackOn: null, siblingTakenBackWhy: null,
-  sentBack: [], handedBack: [], canDispute: true,
+  sentBack: [], handedBack: [], releasedFrom: null, nothingMoreBills: false, canDispute: true,
   fee: null, method: "check", reference: "1042", receivedOn: "2027-01-03",
   ref: "TH-2027-0012", alreadyConfirmedAt: null, ...over,
 });
@@ -235,7 +236,7 @@ describe("a payment the office took back, or the bank returned", () => {
     const fn = src.slice(src.indexOf("function onAccountWords"), src.indexOf("export async function GET"));
     expect(fn.length).toBeGreaterThan(200);
     expect(fn.indexOf("view.takenBackOn")).toBeGreaterThan(0);
-    expect(fn.indexOf("view.takenBackOn")).toBeLessThan(fn.indexOf("COMES_OFF"));
+    expect(fn.indexOf("view.takenBackOn")).toBeLessThan(fn.indexOf("comesOff(view)"));
     expect(fn).toMatch(/longDay\(view\.takenBackOn\)/);
   });
 });
@@ -398,16 +399,22 @@ describe("nothing applied and nothing held: the money went somewhere, and the pa
       .toMatch(/That money is on account with the office — held for you\. It comes off the next bill the park raises for you\./);
   });
 
-  it("the source: every not-applied sentence is gated on `held`", () => {
+  it("the source: every not-applied sentence is gated on `held`, and every comes-off clause goes through the one helper that knows whether a next bill can come", () => {
     const src = readFileSync(join(process.cwd(), "src", "app", "paid", "[token]", "route.ts"), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     const fn = src.slice(src.indexOf("function onAccountWords"), src.indexOf("function sentBackWords"));
-    // The bare COMES_OFF (not STILL_COMES_OFF, which was always gated) is
-    // used exactly three times, each inside a `held ?` arm.
-    const uses = [...fn.matchAll(/(?<!STILL_)COMES_OFF\}/g)].length;
-    expect(uses).toBe(3);
-    expect([...fn.matchAll(/held\s*\n?\s*\?/g)].length).toBeGreaterThanOrEqual(3);
+    // The bare comes-off clause (not the "still" one, which was always
+    // gated) is used exactly four times — the split-taken-back, released,
+    // own-row and split shapes — each inside a `held ?` arm.
+    const uses = [...fn.matchAll(/comesOff\(view\)\}/g)].length;
+    expect(uses).toBe(4);
+    expect([...fn.matchAll(/held\s*\n?\s*\?/g)].length).toBeGreaterThanOrEqual(4);
     expect(fn).toMatch(/none of it is still held/);
+    // The constants themselves are spelled only inside the two helpers.
+    expect(fn).not.toMatch(/COMES_OFF/);
+    const helpers = src.slice(src.indexOf("function comesOff"), src.indexOf("function releasedLead"));
+    expect(helpers).toMatch(/view\.nothingMoreBills \? OFFICE_HAS_IT : COMES_OFF/);
+    expect(helpers).toMatch(/view\.nothingMoreBills \? STILL_OFFICE_HAS_IT : STILL_COMES_OFF/);
   });
 });
 
@@ -450,5 +457,119 @@ describe("money handed back across the window is said on the page", () => {
     }));
     expect(t).toMatch(/\$100\.00 was sent back to your bank account on Wednesday, January 6, 2027\./);
     expect(t).not.toMatch(/your card/);
+  });
+});
+
+/**
+ * THE BILL THIS PAID WAS CANCELLED AFTER SHE PAID IT (0169). January paid in
+ * full on the 3rd; she left on the 20th; the office cancelled the whole-month
+ * bill and raised the part month again, settled from the released money, and
+ * $70.00 is on account. Her receipt still says "against your January bill",
+ * so the page must lead with what happened to that bill before it says
+ * where the money went — and, once she has moved out and the final month is
+ * billed, it must not promise a next bill that will never come.
+ */
+describe("a receipt whose bill was cancelled after it was paid", () => {
+  // THE LINE AGAINST THE JANUARY RAISED AGAIN is marked the way the loader
+  // marks it (withRaisedAgain, with the re-raised bill's own amount and
+  // frozen basis), and `whereItWent` is built through the one sentence the
+  // loader builds it through — never a typed literal, or this fixture
+  // would go on describing a shape the loader no longer produces.
+  const partMonth = { periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: "27 of 31 days" }, billAmount: 472.53 };
+  const released = (over: Partial<ConfirmView> = {}) => base({
+    amount: 542.53, onAccount: null, onAccountApplied: true, onAccountRemaining: 70,
+    allocations: [partMonth], whereItWent: describeAllocations([partMonth], 70),
+    releasedFrom: { month: "2027-01", on: "2027-01-20T16:00:00Z" }, canDispute: false, ...over,
+  });
+
+  it("leads with which bill was cancelled and when, then where the money went — the January raised again named apart from the January cancelled — and, while a next bill can come, that it comes off it", async () => {
+    const t = await text(released());
+    expect(t).toMatch(/recorded \$542\.53 from lot 9, paid by check 1042 on Sunday, January 3, 2027\. Receipt TH-2027-0012\. The January 2027 bill this paid was cancelled on Wednesday, January 20, 2027, so this money went on account with the office\. Where it went: \$472\.53 to the \$472\.53 bill raised again for January 2027 \(27 of 31 days\), \$70\.00 on account — what's still on account comes off the next bill the park raises for you\./);
+    expect(t).not.toMatch(/That money went on account/);
+    // Two January bills in one word was the defect: "$472.53 to January
+    // 2027" a sentence after "the January 2027 bill this paid was
+    // cancelled" read as money put against the bill just cancelled.
+    expect(t).not.toMatch(/\$472\.53 to January 2027/);
+  });
+
+  it("moved out and the final month billed: the office has it — never 'comes off the next bill' about a bill that will never come", async () => {
+    const t = await text(released({ nothingMoreBills: true }));
+    expect(t).toMatch(/Where it went: \$472\.53 to the \$472\.53 bill raised again for January 2027 \(27 of 31 days\), \$70\.00 on account — the office has what's still on account for you\./);
+    expect(t).not.toMatch(/comes off/);
+    // Nothing applied yet, all of it held.
+    const held = await text(released({ nothingMoreBills: true, onAccountApplied: false, onAccountRemaining: 542.53, allocations: [], whereItWent: "$542.53 on account" }));
+    expect(held).toMatch(/so this money went on account with the office\. It's held for you\. The office has it for you\./);
+    expect(held).not.toMatch(/comes off/);
+    // Collapsed: while a bill can still come, the promise stands.
+    const coming = await text(released({ onAccountApplied: false, onAccountRemaining: 542.53, allocations: [], whereItWent: "$542.53 on account" }));
+    expect(coming).toMatch(/It's held for you\. It comes off the next bill the park raises for you\./);
+  });
+
+  it("a released split names both halves: the $57.47 that was on account from the start, and one held figure over both", async () => {
+    const t = await text(released({ amount: 600, onAccount: 57.47, onAccountRemaining: 127.47, whereItWent: describeAllocations([partMonth], 127.47) }));
+    expect(t).toMatch(/recorded \$600\.00 from lot 9/);
+    expect(t).toMatch(/so this money went on account with the office\. \$57\.47 of it had been on account from the start\. Where it went: \$472\.53 to the \$472\.53 bill raised again for January 2027 \(27 of 31 days\), \$127\.47 on account — what's still on account comes off the next bill/);
+    expect(t).not.toMatch(/\$57\.47 of that/);
+  });
+
+  it("all of it gone — handed back, or spent on the part month: no promise, and the hand-back is its own sentence", async () => {
+    const t = await text(released({
+      onAccountRemaining: 0, whereItWent: describeAllocations([partMonth], 0),
+      handedBack: [{ amount: 70, on: "2027-01-22", note: "moved out; overpaid the part month" }],
+    }));
+    expect(t).toMatch(/Where it went: \$472\.53 to the \$472\.53 bill raised again for January 2027 \(27 of 31 days\)\. \$70\.00 of that was handed back to you on Friday, January 22, 2027\./);
+    expect(t).not.toMatch(/comes off|held for you|office has/);
+    const none = await text(released({ onAccountApplied: false, onAccountRemaining: 0, allocations: [], whereItWent: "", sentBack: [{ amount: 542.53, fee: 0, on: "2027-01-21T15:00:00Z", method: "card" }] }));
+    expect(none).toMatch(/so this money went on account with the office\. None of it is still held\. \$542\.53 was sent back to your card on Thursday, January 21, 2027\./);
+  });
+
+  it("a cancellation the record dates nowhere names the bill and no day — never 'on ,'", async () => {
+    const t = await text(released({ releasedFrom: { month: "2027-01", on: "" } }));
+    expect(t).toMatch(/The January 2027 bill this paid was cancelled, so this money went on account with the office\./);
+    expect(t).not.toMatch(/on ,/);
+  });
+
+  it("the lead is ONE sentence, from lib/released-words — this page and the household's front page read it from there, and neither spells it", async () => {
+    // Two literals of the same sentence, one per page, held together by a
+    // comment saying "in the same words": the day a word changed on one the
+    // other went on saying the old sentence about the same cheque.
+    const { releasedLead } = await import("@/lib/released-words");
+    expect(releasedLead("2027-01", "2027-01-20T16:00:00Z")).toBe("The January 2027 bill this paid was cancelled on Wednesday, January 20, 2027, so this money went on account with the office.");
+    expect(releasedLead("2027-01")).toBe("The January 2027 bill this paid was cancelled, so this money went on account with the office.");
+    expect(releasedLead("2027-01", "")).toBe("The January 2027 bill this paid was cancelled, so this money went on account with the office.");
+    const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/^\s*\/\/.*$/gm, "");
+    for (const rel of [["app", "paid", "[token]", "route.ts"], ["components", "RenterHome.tsx"]]) {
+      const src = strip(readFileSync(join(process.cwd(), "src", ...rel), "utf8"));
+      expect(src, rel.join("/")).toMatch(/from "@\/lib\/released-words"/);
+      expect(src, rel.join("/")).not.toMatch(/bill this paid was cancelled/);
+      expect(src, rel.join("/")).not.toMatch(/so this money went on account/);
+    }
+    // The words live in exactly one place.
+    const home = strip(readFileSync(join(process.cwd(), "src", "lib", "released-words.ts"), "utf8"));
+    expect(home.match(/bill this paid was cancelled/g)).toHaveLength(1);
+  });
+
+  it("a released row since taken back is a taken-back receipt: no lead, no 'went on account'", async () => {
+    const t = await text(released({ takenBackOn: "2027-01-25T15:00:00Z", takenBackWhy: "the cheque bounced", onAccountRemaining: 0 }));
+    expect(t).toMatch(/This payment was taken back on Monday, January 25, 2027 — the cheque bounced\./);
+    expect(t).not.toMatch(/was cancelled/);
+    expect(t).not.toMatch(/went on account/);
+  });
+
+  it("no second button: the bill is void, so the page names the office and the receipt, and the date is in words", async () => {
+    view.current = released();
+    const res = await GET(new Request("https://lakelife.test/paid/x"), { params: Promise.resolve({ token: TOKEN }) });
+    const h = await res.text();
+    expect(h).not.toMatch(/value="no"/);
+    expect(h).toMatch(/ring the office and quote receipt TH-2027-0012/);
+    expect(h).not.toMatch(/2027-01-20/);
+  });
+
+  it("the ordinary shapes read the same helper: a household that has left with $57.47 still on account is told the office has it", async () => {
+    expect(await text(base({ nothingMoreBills: true }))).toMatch(/held for you, not yet put against a bill\. The office has it for you\./);
+    expect(await text(base({ nothingMoreBills: true, lotNumber: "—", amount: 1627.59, onAccount: null, onAccountRemaining: 1627.59, whereItWent: "$1,627.59 on account" })))
+      .toMatch(/That money is on account with the office — held for you\. The office has it for you\./);
+    // And nothing changes while a bill can come.
+    expect(await text(base())).toMatch(/It comes off the next bill the park raises for you\./);
   });
 });

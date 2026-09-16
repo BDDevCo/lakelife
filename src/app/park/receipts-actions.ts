@@ -6,6 +6,8 @@ import { todayLakeDate, lakeDateOf } from "@/lib/booking";
 import { mustRead } from "@/lib/must-read";
 import { parseDaterange } from "@/lib/parks";
 import { coversDay } from "./park-helpers";
+import { withRaisedAgain } from "@/lib/allocations";
+import { tenancyFactsFor, nothingMoreBills } from "@/lib/tenancy-facts";
 import {
   monthPeriod,
   quarterPeriod,
@@ -205,7 +207,7 @@ export async function getStatement(
     "the bills you've raised",
     await admin
       .from("park_charges")
-      .select("id, park_lot_id, renter_id, period_month, due_on, amount, status, lines")
+      .select("id, park_lot_id, renter_id, period_month, due_on, amount, status, voided_at, lines")
       .eq("park_id", parkId),
   );
   const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
@@ -242,50 +244,78 @@ export async function getStatement(
   // no bills has no allocations to read (they reference bills), so the empty
   // branch below writes `[]` and 0 rather than skipping the fields.
   const acctIds = standing.filter(isAcct).map((p2) => p2.id as string);
-  const allocRows = acctIds.length && chargeIds.length
+
+  // WHAT IS STILL HELD — the VIEW'S `remaining`, never `received − applied`
+  // here. The one definition of what is left on a payment lives in
+  // park_payment_remaining (amount − live allocations − refunds); a
+  // subtraction in this file would print "$57.47 is still held" in the
+  // accountant's file about $57.47 that went back to a card. Read ONCE for
+  // the whole park, because the view lists two populations now (0169): rent
+  // recorded on account (charge_id null — the rows in `acctIds`), and rent
+  // paid straight against a bill that was LATER CANCELLED, released onto the
+  // household's account with the row left where it was (charge_id still the
+  // void bill; released_from_charge_id names it). The second population is
+  // not in `acctIds` — those rows are RECEIPTS, against their cancelled
+  // bill, counted once as rent received below — but their remainder and
+  // allocations are what the accountant asks about, so they are read here
+  // and carried on the Receipt (`released`). A row absent from the view was
+  // taken back between the reads and is read as nothing held rather than
+  // guessed. mustRead: a failed read must not print "still held" about a
+  // figure nobody looked at.
+  const viewRows = mustRead(
+    "what is still held on account",
+    await admin
+      .from("park_on_account_payments")
+      .select("payment_id, remaining, refunded, released_from_charge_id, handed_back, handed_back_on")
+      .eq("park_id", parkId),
+  ) ?? [];
+  const remainingByPayment = new Map(viewRows.map((h) => [h.payment_id as string, cents(h.remaining)]));
+  // THE ON-ACCOUNT FIGURE IS THE ON-ACCOUNT ROWS' ALONE. Released money is
+  // not folded in: the note's "$X of the money on account has since been
+  // put against bills — and $Y is still held" is about money RECEIVED ON
+  // ACCOUNT in this window, and a released $70.00 was received as rent. It
+  // gets its own sentence (releasedFromCancelled, below).
+  const onAccountHeldCents = acctIds.reduce((s2, id) => s2 + (remainingByPayment.get(id) ?? 0), 0);
+  const releasedById = new Map(
+    viewRows
+      .filter((h) => h.released_from_charge_id != null)
+      .map((h) => [h.payment_id as string, h]),
+  );
+  const releasedIds = [...releasedById.keys()];
+
+  // WHERE THE MONEY HAS SINCE GONE (0167): the live allocations off the
+  // on-account rows AND off the released rows, in one read — a released
+  // $542.53 is put against the part month exactly as a cheque on account is.
+  const allocIds = [...acctIds, ...releasedIds];
+  const allocRows = allocIds.length && chargeIds.length
     ? (mustRead(
         "where the money on account went",
         await admin
           .from("park_payment_allocations")
           .select("payment_id, charge_id, amount")
           .eq("park_id", parkId)
-          .in("payment_id", acctIds)
+          .in("payment_id", allocIds)
           .is("removed_at", null),
       ) ?? [])
     : [];
-  const appliedByPayment = new Map<string, Array<{ periodMonth: string; amountCents: number }>>();
+  const appliedByPayment = new Map<string, Array<{ periodMonth: string; amountCents: number; chargeId: string }>>();
   for (const a of allocRows) {
     const list = appliedByPayment.get(a.payment_id as string) ?? [];
     list.push({
       periodMonth: String(chargeById.get(a.charge_id as string)?.period_month ?? ""),
       amountCents: cents(a.amount),
+      chargeId: a.charge_id as string,
     });
     appliedByPayment.set(a.payment_id as string, list);
   }
-  const onAccountAppliedCents = allocRows.reduce((s2, a) => s2 + cents(a.amount), 0);
-
-  // WHAT IS STILL HELD of that money — the VIEW'S `remaining`, summed over
-  // the same rows, never `received − applied` here. The one definition of
-  // what is left on a payment lives in park_payment_remaining (amount − live
-  // allocations − refunds); a subtraction in this file would print "$57.47
-  // is still held" in the accountant's file about $57.47 that went back to
-  // a card. Every on-account row in `acctIds` still stands, so each has a
-  // row in the view; one absent is read as nothing held rather than
-  // guessed. mustRead: a failed read must not print "still held" about a
-  // figure nobody looked at.
-  const heldRows = acctIds.length
-    ? (mustRead(
-        "what is still held on account",
-        await admin
-          .from("park_on_account_payments")
-          .select("payment_id, remaining")
-          .eq("park_id", parkId)
-          .in("payment_id", acctIds),
-      ) ?? [])
-    : [];
-  const remainingByPayment = new Map(heldRows.map((h) => [h.payment_id as string, cents(h.remaining)]));
-  const onAccountHeldCents = acctIds.reduce((s2, id) => s2 + (remainingByPayment.get(id) ?? 0), 0);
-
+  // The applied figure is the on-account rows' alone, for the same reason
+  // the held figure is: the sentence it feeds is about money received on
+  // account. A released row's allocations reach the note through its own
+  // sentence and the file through its own cell.
+  const acctIdSet = new Set(acctIds);
+  const onAccountAppliedCents = allocRows
+    .filter((a) => acctIdSet.has(a.payment_id as string))
+    .reduce((s2, a) => s2 + cents(a.amount), 0);
   // MONEY THAT WENT BACK OUT TO A CARD (0142), dated the day it went back —
   // lake-local, like every other date in this file. The refund reduces what
   // the bill counts as paid and what the view says is still held, but this
@@ -322,6 +352,38 @@ export async function getStatement(
     : [];
   const refundedPaymentById = new Map(refundedPayments.map((p2) => [p2.id as string, p2]));
 
+  /**
+   * WHERE A RELEASED RECEIPT'S MONEY IS NOW (0169) — the writer for
+   * Receipt.released, read by the statement screen's sentence, the file's
+   * Bill status cell and the note. Only for a row the view lists (it still
+   * stands and its bill is void); every other receipt carries nothing.
+   *
+   * WHICH FILE ITS HAND-BACK AND REFUND ROWS ARE IN comes from the windowed
+   * reads that build those rows — `handedBackInWindow` and `refundsInWindow`
+   * — never from comparing the stamp's date against the window here: the
+   * two reads can fail apart, and the sentence must promise a row only the
+   * read that writes the row has seen.
+   */
+  const handedBackIds = new Set(handedBackInWindow.map((p2) => p2.id as string));
+  const refundedInWindowIds = new Set(refundedPaymentIds);
+  const releasedOf = (paymentId: string): Receipt["released"] | undefined => {
+    const row = releasedById.get(paymentId);
+    if (!row) return undefined;
+    // The month the money was released FROM — the cancelled bill's — so
+    // the line against the month raised again for it is named apart.
+    const releasedFromMonth = String(chargeById.get(row.released_from_charge_id as string)?.period_month ?? "") || null;
+    return {
+      allocations: (appliedByPayment.get(paymentId) ?? []).map((a) =>
+        withRaisedAgain({ periodMonth: a.periodMonth, amount: a.amountCents / 100 }, releasedFromMonth, chargeById.get(a.chargeId)?.lines)),
+      remainingCents: cents(row.remaining),
+      handedBackCents: cents(row.handed_back),
+      handedBackOn: (row.handed_back_on as string | null) ?? null,
+      handedBackInFile: handedBackIds.has(paymentId),
+      refundedCents: cents(row.refunded),
+      refundedInFile: refundedInWindowIds.has(paymentId),
+    };
+  };
+
   // THE LOT EACH HOUSEHOLD IS ON — the roll's own rule (buildRentRoll's
   // `current`, my-data's `stay`): the link covering today, else the next to
   // start, else any live link, else the one they most recently LEFT. Ended
@@ -349,6 +411,13 @@ export async function getStatement(
         .in("status", ["approved", "active", "ended"])
     : { data: [], error: null };
   const stays = mustRead("the households' lots", staysRes) ?? [];
+  // WHETHER ANYTHING MORE BILLS for the households whose rent on account is
+  // in this window — the one rule (lib/tenancy-facts), so the statement's
+  // "comes off the next bill raised for that household" stops where every
+  // other door's does. mustRead inside: a failed read throws rather than
+  // rendering the promise.
+  const acctHouseholds = [...new Set(standing.filter(isAcct).map((p2) => p2.renter_id as string | null).filter((id): id is string => !!id))];
+  const tenancy = await tenancyFactsFor(admin, acctHouseholds);
   const startOf = (r: { during?: unknown }) => parseDaterange(r.during as string)?.start ?? "";
   const endOf = (r: { during?: unknown; moved_out_on?: unknown }) =>
     (r.moved_out_on as string | null) ?? parseDaterange(r.during as string)?.end ?? "";
@@ -418,7 +487,7 @@ export async function getStatement(
     // held figure (the view no longer lists it).
     ...(isAcct(p2)
       ? {
-          appliedTo: appliedByPayment.get(p2.id as string) ?? [],
+          appliedTo: (appliedByPayment.get(p2.id as string) ?? []).map(({ periodMonth, amountCents }) => ({ periodMonth, amountCents })),
           // The view's figure per row, so a screen can say "still held"
           // only about money that is — a refunded row has none. Carried
           // only when the view had the row: a row it lacks was taken back
@@ -426,6 +495,14 @@ export async function getStatement(
           // rather than reading "given back" off a figure nobody wrote.
           ...(remainingByPayment.has(p2.id as string)
             ? { remainingCents: remainingByPayment.get(p2.id as string) }
+            : {}),
+          // The household's facts, when the row names one: read, never
+          // assumed, so a departed household's row does not promise a bill.
+          ...(p2.renter_id && tenancy.has(p2.renter_id as string)
+            ? {
+                nothingMoreBills: nothingMoreBills(tenancy.get(p2.renter_id as string)),
+                movedOutOn: tenancy.get(p2.renter_id as string)!.movedOutOn,
+              }
             : {}),
         }
       : {}),
@@ -521,6 +598,13 @@ export async function getStatement(
     const c = chargeById.get(p.charge_id as string)!;
     const payer = renterName.get(c.renter_id as string) ?? null;
     if (!payer) anyMissingPayerName = true;
+    // A receipt against a CANCELLED bill whose money was released (0169):
+    // the row never moved, so it is read here with every other receipt and
+    // counted once; where its money is now comes from the view and the
+    // allocations read above. Keyed on the view, never on `c.status` alone
+    // — a void bill from before 0169, or a released row since taken back,
+    // has nothing on account and must not say it has.
+    const released = c.status === "void" ? releasedOf(p.id as string) : undefined;
     // The frozen snapshot. Read, never recomputed — re-rating somebody in June
     // must not move what May's bill said it was for.
     const raw = Array.isArray(c.lines) ? (c.lines as Record<string, unknown>[]) : [];
@@ -550,6 +634,10 @@ export async function getStatement(
       // others. Without them the file counts a bounced ACH as collected rent.
       bankReturnedAt: (p.returned_at as string) ?? null,
       returnCode: (p.return_code as string) ?? null,
+      // Only on a row the view lists as released (0169) — a conditional
+      // spread, so a receipt against a live bill carries no `released` key
+      // at all rather than an undefined one a reader might test for.
+      ...(released ? { released } : {}),
     };
   });
 
@@ -589,6 +677,23 @@ export async function getStatement(
   // the file's Card fee column.
   const cardFeesReceivedCents = summary.cardFeesCents + otherFeesCents;
 
+  // RENT IN THIS WINDOW PAID ON A BILL SINCE CANCELLED, its money released
+  // onto account (0169) — the writer for the note's own sentence. From the
+  // receipts the file carries, so the note and the file name the same rows;
+  // `released` exists only on a standing row the view lists, so a reversed
+  // one names nothing here. The day the bill was cancelled is the bill's
+  // own record (voided_at), read with the charges above.
+  const releasedFromCancelled = inWindow
+    .filter((r): r is Receipt & { released: NonNullable<Receipt["released"]> } => r.released != null)
+    .map((r) => ({
+      amountCents: r.amountCents,
+      billMonth: r.periodMonth,
+      releasedOn: (chargeById.get(r.chargeId)?.voided_at as string | null) ?? null,
+      lotNumber: r.lotNumber === "?" ? null : r.lotNumber,
+      payerName: r.payerName,
+      ...r.released,
+    }));
+
   return {
     parkName,
     period,
@@ -601,6 +706,7 @@ export async function getStatement(
       onAccountAppliedCents, onAccountHeldCents, otherTakenBackCents,
       refunds: refundNotes,
       handedBack: handedBackNotes,
+      releasedFromCancelled,
       cardFeesReceivedCents,
     }),
     cardFeesReceivedCents,

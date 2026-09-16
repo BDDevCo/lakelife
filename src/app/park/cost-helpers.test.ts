@@ -5,7 +5,7 @@ import {
   type CostLot, type CostCategory, canSplit, whyNotSplit,
   carriedLine,
   buildCostScheduleRow, SCHEDULABLE_CATEGORIES, type CostScheduleInput,
-  carryFromRow, billPeriod,
+  carryFromRow, billPeriod, costAnswersBill, coveredSpanWords, editingReminderLine,
 } from "./cost-helpers";
 import { addDays } from "./today-helpers";
 import { overlaps } from "@/lib/parks";
@@ -370,8 +370,40 @@ describe("a reminder for a bill that arrives every month", () => {
     expect(r.ok).toBe(true);
     expect(r.row).toEqual({
       category: "sewer", due_day: 5, due_month: null, typical_amount: 1430,
-      label: null, cadence: "monthly", active: true,
+      label: null, cadence: "monthly", active: true, covers_prior_period: false,
     });
+  });
+
+  // WHAT THE BILL COVERS (0170) is a strict boolean on the way in. A string
+  // "true" from some future form is refused into false — never accidentally
+  // true, because true moves the reminder a whole cadence.
+  it("stores the arrears flag only when it is literally true", () => {
+    expect(buildCostScheduleRow(input()).row?.covers_prior_period).toBe(false);
+    expect(buildCostScheduleRow(input({ coversPriorPeriod: false })).row?.covers_prior_period).toBe(false);
+    expect(buildCostScheduleRow(input({ coversPriorPeriod: true })).row?.covers_prior_period).toBe(true);
+    expect(buildCostScheduleRow(input({ coversPriorPeriod: "true" as unknown as boolean })).row?.covers_prior_period).toBe(false);
+  });
+
+  it("the edit line says the reminder goes back on only when it is off", () => {
+    // buildCostScheduleRow always returns active: true and the save writes
+    // the whole row, so an Edit of a switched-off reminder switches it on.
+    // The line above the buttons has to say so BEFORE he presses Save.
+    // "Everything": the Edit door leaves how-often, the month and the
+    // covers-prior flag live and the save writes the whole row, so a line
+    // naming only the day, amount and name under-told what Save does.
+    expect(editingReminderLine("sewer", true))
+      .toBe("Editing your Sewer reminder — everything you save here replaces what's there.");
+    expect(editingReminderLine("sewer", false))
+      .toBe("Editing your Sewer reminder — everything you save here replaces what's there, and it goes back on.");
+    expect(editingReminderLine("tax", true)).toContain(COST_CATEGORY_LABEL.tax);
+    expect(editingReminderLine("tax", true)).not.toMatch(/goes back on/);
+    expect(editingReminderLine("tax", false)).toMatch(/goes back on\.$/);
+  });
+
+  it("names the span a flagged bill covers in the words the toast, the row and the hint share", () => {
+    expect(coveredSpanWords("monthly")).toBe("month");
+    expect(coveredSpanWords("quarterly")).toBe("three months");
+    expect(coveredSpanWords("annual")).toBe("year");
   });
 
   it("refuses a day February does not have, in a sentence", () => {
@@ -606,6 +638,198 @@ describe("bills that don't come every month", () => {
   it("survives a leap year", () => {
     expect(billPeriod("monthly", null, 28, "2028-02-29").dueOn).toBe("2028-02-28");
     expect(billPeriod("monthly", null, 5, "2028-02-29").key).toBe("2028-02");
+  });
+
+  it("an unflagged period is its own due period — the four-arg call is the five-arg call with false", () => {
+    for (const p of [billPeriod("monthly", null, 5, "2027-01-20"), billPeriod("quarterly", 2, 5, "2027-02-20"), billPeriod("annual", 11, 10, "2027-11-15")]) {
+      expect(p.dueFrom).toBe(p.from);
+      expect(p.dueTo).toBe(p.to);
+      expect(p.coversPriorPeriod).toBe(false);
+    }
+    expect(billPeriod("monthly", null, 5, "2027-01-20")).toEqual(billPeriod("monthly", null, 5, "2027-01-20", false));
+    expect(billPeriod("annual", 11, 10, "2027-11-15")).toEqual(billPeriod("annual", 11, 10, "2027-11-15", false));
+  });
+
+  // -------------------------------------------------------------------------
+  // A BILL FOR THE PERIOD BEFORE THE ONE IT IS DUE IN (0170).
+  //
+  // Indiana bills property tax in arrears and LaGrange sewer's bill dated the
+  // 5th is for last month. The schedule can now say so, and then the period
+  // the reminder is keyed, labelled and windowed on is one cadence earlier —
+  // while the due date, and the period the bill is due IN, stay exactly
+  // where they were.
+  // -------------------------------------------------------------------------
+  describe("a bill that covers the period before", () => {
+    it("a monthly bill keeps its due day and moves its period back a month", () => {
+      const p = billPeriod("monthly", null, 5, "2027-01-20", true);
+      expect(p.key).toBe("2026-12");
+      expect([p.from, p.to]).toEqual(["2026-12-01", "2027-01-01"]);
+      expect(p.dueOn).toBe("2027-01-05");
+      expect([p.dueFrom, p.dueTo]).toEqual(["2027-01-01", "2027-02-01"]);
+      expect(p.label).toBe("for December 2026 (bill due January 5)");
+      expect(p.coversPriorPeriod).toBe(true);
+      // Collapsed: unflagged, today's values exactly.
+      const u = billPeriod("monthly", null, 5, "2027-01-20", false);
+      expect(u.key).toBe("2027-01");
+      expect(u.label).toBe("(bill due January 5)");
+      expect([u.from, u.to]).toEqual(["2027-01-01", "2027-02-01"]);
+      expect(u.dueFrom).toBe(u.from);
+    });
+
+    it("the yearly bill is for LAST year, and the label says which year and when it is due", () => {
+      const p = billPeriod("annual", 11, 10, "2027-11-15", true);
+      expect(p.key).toBe("2026");
+      expect([p.from, p.to]).toEqual(["2026-01-01", "2027-01-01"]);
+      expect(p.dueOn).toBe("2027-11-10");
+      expect([p.dueFrom, p.dueTo]).toEqual(["2027-01-01", "2028-01-01"]);
+      expect(p.label).toBe("for 2026, due November 10, 2027");
+      const u = billPeriod("annual", 11, 10, "2027-11-15", false);
+      expect(u.key).toBe("2027");
+      expect(u.label).toBe("due November 10, 2027");
+    });
+
+    it("a quarterly bill covers the three months before its quarter, and keeps one key across that quarter", () => {
+      // Anchored February, due the 5th: the bill due 5 February covers
+      // November to January.
+      const feb = billPeriod("quarterly", 2, 5, "2027-02-20", true);
+      const mar = billPeriod("quarterly", 2, 5, "2027-03-20", true);
+      expect(feb.key).toBe("2026-Q11");
+      expect(mar.key).toBe(feb.key);
+      expect([feb.from, feb.to]).toEqual(["2026-11-01", "2027-02-01"]);
+      expect(feb.dueOn).toBe("2027-02-05");
+      expect([feb.dueFrom, feb.dueTo]).toEqual(["2027-02-01", "2027-05-01"]);
+      expect(feb.label).toBe("for November 2026 to January 2027 (bill due February 5)");
+      const u = billPeriod("quarterly", 2, 5, "2027-02-20", false);
+      expect(u.key).toBe("2027-Q2");
+      expect(u.label).toBe("(bill due February 5)");
+    });
+
+    it("the flag never moves the due date — any cadence, the 1st or the 28th", () => {
+      for (const today of ["2027-01-01", "2027-01-28", "2027-12-01", "2027-12-28", "2028-02-29"]) {
+        for (const day of [1, 28]) {
+          expect(billPeriod("monthly", null, day, today, true).dueOn).toBe(billPeriod("monthly", null, day, today, false).dueOn);
+          expect(billPeriod("quarterly", 2, day, today, true).dueOn).toBe(billPeriod("quarterly", 2, day, today, false).dueOn);
+          expect(billPeriod("annual", 11, day, today, true).dueOn).toBe(billPeriod("annual", 11, day, today, false).dueOn);
+        }
+      }
+    });
+
+    it("names the months in words, never 2026-12", () => {
+      for (const p of [billPeriod("monthly", null, 5, "2027-01-20", true), billPeriod("quarterly", 2, 5, "2027-02-20", true), billPeriod("annual", 11, 10, "2027-11-15", true)]) {
+        expect(p.label).not.toMatch(/\d{4}-\d{2}/);
+        expect(p.label).toMatch(/^for /);
+      }
+    });
+
+    it("the flag rides on the result — a shifted window and its rule cannot be handed apart", () => {
+      // from !== dueFrom exactly when the schedule said so, and the result
+      // says so itself, so costAnswersBill reads the rule off the same shape
+      // it reads the window from.
+      expect(billPeriod("monthly", null, 5, "2027-01-20", true).from).not.toBe(billPeriod("monthly", null, 5, "2027-01-20", true).dueFrom);
+      expect(billPeriod("monthly", null, 5, "2027-01-20", false).from).toBe(billPeriod("monthly", null, 5, "2027-01-20", false).dueFrom);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // DOES THIS COST ANSWER THE REMINDER? One rule; two signals while the
+  // schedule has NOT said its bill is in arrears (with the `>=` that is only
+  // right then), the period alone once it has.
+  // -------------------------------------------------------------------------
+  describe("costAnswersBill", () => {
+    const july = { category: "sewer", period_start: "2026-07-01", period_end: "2026-08-01", enteredOn: "2026-08-05" };
+
+    it("flag ON: July's bill answers the card for July on its period, and the day it was typed proves nothing", () => {
+      const forJuly = billPeriod("monthly", null, 5, "2026-08-20", true);
+      expect(forJuly.key).toBe("2026-07");
+      // Its period overlaps the covered period — whenever it was entered.
+      expect(costAnswersBill({ ...july, enteredOn: "2026-10-30" }, forJuly, "sewer")).toBe(true);
+      expect(costAnswersBill(july, forJuly, "sewer")).toBe(true);
+      // A JANUARY bill typed on 5 August is not July's, however well the
+      // date fits the envelope. This used to be pinned TRUE ("signal 1
+      // alone"), and the card for a missing month cleared on the wrong one.
+      expect(costAnswersBill({ ...july, period_start: "2026-01-01", period_end: "2026-02-01" }, forJuly, "sewer")).toBe(false);
+    });
+
+    it("flag ON: a cost for the wrong month entered in the due window leaves the card up — that is how he finds the wrong month", () => {
+      // The card on 6 February 2027 is for January's service, due 5 February.
+      const forJanuary = billPeriod("monthly", null, 5, "2027-02-06", true);
+      expect(forJanuary.key).toBe("2027-01");
+      expect([forJanuary.dueFrom, forJanuary.dueTo]).toEqual(["2027-02-01", "2027-03-01"]);
+      // February's bill, typed on 6 February, is for February.
+      const february = { category: "sewer", period_start: "2027-02-01", period_end: "2027-03-01", enteredOn: "2027-02-06" };
+      expect(costAnswersBill(february, forJanuary, "sewer")).toBe(false);
+      // A December catch-up typed the same day is for December.
+      const december = { category: "sewer", period_start: "2026-12-01", period_end: "2027-01-01", enteredOn: "2027-02-06" };
+      expect(costAnswersBill(december, forJanuary, "sewer")).toBe(false);
+      // January's own bill answers, typed on 6 February or in the autumn.
+      const january = { category: "sewer", period_start: "2027-01-01", period_end: "2027-02-01", enteredOn: "2027-02-06" };
+      expect(costAnswersBill(january, forJanuary, "sewer")).toBe(true);
+      expect(costAnswersBill({ ...january, enteredOn: "2027-10-30" }, forJanuary, "sewer")).toBe(true);
+      // Collapsed the other way: unflagged, the entered-in-the-window signal
+      // still stands, because that schedule cannot know the period.
+      expect(costAnswersBill(february, { ...forJanuary, coversPriorPeriod: false }, "sewer")).toBe(true);
+      expect(costAnswersBill(december, { ...forJanuary, coversPriorPeriod: false }, "sewer")).toBe(true);
+      // And on 6 March the card for February is not cleared by January's
+      // bill entered late on 3 March.
+      const forFebruary = billPeriod("monthly", null, 5, "2027-03-06", true);
+      expect(forFebruary.key).toBe("2027-02");
+      expect(costAnswersBill({ ...january, enteredOn: "2027-03-03" }, forFebruary, "sewer")).toBe(false);
+      expect(costAnswersBill({ ...february, enteredOn: "2027-03-03" }, forFebruary, "sewer")).toBe(true);
+    });
+
+    it("flag ON, yearly: the whole calendar year is the due window, and the 2028 tax entered in March does not answer the card for 2027", () => {
+      // 11 November 2028: the 2027 tax, due 10 November 2028, is a day late.
+      const for2027 = billPeriod("annual", 11, 10, "2028-11-11", true);
+      expect(for2027.key).toBe("2027");
+      expect([for2027.dueFrom, for2027.dueTo]).toEqual(["2028-01-01", "2029-01-01"]);
+      const tax2028 = { category: "tax", period_start: "2028-01-01", period_end: "2029-01-01", enteredOn: "2028-03-01" };
+      expect(costAnswersBill(tax2028, for2027, "tax")).toBe(false);
+      expect(costAnswersBill({ ...tax2028, period_start: "2027-01-01", period_end: "2028-01-01" }, for2027, "tax")).toBe(true);
+      // Unflagged, the same March entry would have cleared it.
+      expect(costAnswersBill(tax2028, { ...for2027, coversPriorPeriod: false }, "tax")).toBe(true);
+    });
+
+    it("flag ON: July's bill does NOT answer the card for August's service, due 5 September", () => {
+      const forAugust = billPeriod("monthly", null, 5, "2026-09-20", true);
+      expect(forAugust.key).toBe("2026-08");
+      // Not entered in September (signal 1), and 1 August touching the
+      // window's start is not overlap (signal 2) — the `>=` would have said
+      // it was, and cleared the card for a bill that is not in.
+      expect(costAnswersBill(july, forAugust, "sewer")).toBe(false);
+      expect(costAnswersBill({ ...july, enteredOn: "2026-10-30" }, forAugust, "sewer")).toBe(false);
+    });
+
+    it("flag OFF: the same July bill DOES answer the card for the period due in August — the workaround, pinned", () => {
+      // The schedule has not said the bill is in arrears, so the window is
+      // August and July's bill ends exactly on its first day. Refusing that
+      // was the reminder that would not clear after he entered the bill.
+      const dueAugust = billPeriod("monthly", null, 5, "2026-08-20", false);
+      expect(dueAugust.key).toBe("2026-08");
+      expect(costAnswersBill({ ...july, enteredOn: "2026-10-30" }, dueAugust, "sewer")).toBe(true);
+      // And collapsed: with the flag on, the touching end is not enough.
+      expect(costAnswersBill({ ...july, enteredOn: "2026-10-30" }, { ...dueAugust, coversPriorPeriod: true }, "sewer")).toBe(false);
+    });
+
+    it("a hand-typed inclusive end still answers the covered month, and the next month's bill does not", () => {
+      const forDecember = billPeriod("monthly", null, 5, "2027-01-20", true);
+      expect(costAnswersBill({ category: "sewer", period_start: "2026-12-01", period_end: "2026-12-31", enteredOn: "2027-03-01" }, forDecember, "sewer")).toBe(true);
+      expect(costAnswersBill({ category: "sewer", period_start: "2027-01-01", period_end: "2027-02-01", enteredOn: "2027-03-01" }, forDecember, "sewer")).toBe(false);
+    });
+
+    it("the yearly bill: the 2026 tax entered in December 2027 answers the card for 2026, and the 2027 tax does not", () => {
+      const for2026 = billPeriod("annual", 11, 10, "2027-11-15", true);
+      expect(costAnswersBill({ category: "tax", period_start: "2026-01-01", period_end: "2027-01-01", enteredOn: "2027-12-20" }, for2026, "tax")).toBe(true);
+      expect(costAnswersBill({ category: "tax", period_start: "2027-01-01", period_end: "2028-01-01", enteredOn: "2028-11-20" }, for2026, "tax")).toBe(false);
+    });
+
+    it("a different category never answers, whatever the dates", () => {
+      for (const flag of [true, false]) {
+        const p = billPeriod("monthly", null, 5, "2026-08-20", flag);
+        expect(costAnswersBill({ ...july, category: "water" }, p, "sewer")).toBe(false);
+        expect(costAnswersBill(july, p, "water")).toBe(false);
+        expect(costAnswersBill(july, p, "sewer")).toBe(true);
+      }
+    });
   });
 });
 

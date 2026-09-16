@@ -9,42 +9,67 @@ import type { Lot } from "@/lib/parks";
 // in-memory table, so the mocks are declared up front (vitest hoists them).
 // The pure-helper tests above are untouched by them.
 //
-// The fake is deliberately dumb: filters, inserts, updates, and the two
+// The fake is deliberately dumb: filters, inserts, updates, and the
 // triggers that matter for a move-out inside a billed month — a charge's
-// paid_total follows its payments and allocations (recompute_charge_paid),
-// and the 0167 view says what is still on account. Nothing here is a copy of
-// the code under test.
+// paid_total follows its payments and allocations (recompute_charge_paid), the
+// 0167 view says what is still on account, and 0169's void guard: a bill with
+// a live line from money on account refuses the void by name, a void bill
+// holds 0, and a payment against a void bill is money on account (in the view,
+// with the bill's month beside it). Nothing here is a copy of the code under
+// test.
 // ---------------------------------------------------------------------------
 type Row = Record<string, unknown>;
 const db: Record<string, Row[]> = { lot_reservations: [], park_members: [], park_lots: [], parks: [], park_renters: [] };
 const writes: Array<{ op: string; patch: Row; matched: string[] }> = [];
-const failNext: { update?: boolean } = {};
+const failNext: { update?: boolean; select?: string } = {};
 
 const cents = (n: unknown) => Math.round(Number(n ?? 0) * 100);
 const liveAlloc = (a: Row) => a.removed_at == null;
 const stands = (p: Row | undefined) => !!p && p.reversed_at == null && p.returned_at == null;
+/** The view's `refunded`: 0142 rows against the payment, money gone back through the processor. */
+function refundedOf(p: Row): number {
+  return (db.park_refunds ?? []).filter((r) => r.payment_id === p.id).reduce((s, r) => s + cents(r.amount), 0) / 100;
+}
+/** park_payment_remaining (0168): amount − live allocations − refunds. */
 function remainingOf(p: Row): number {
   const allocated = (db.park_payment_allocations ?? []).filter((a) => a.payment_id === p.id && liveAlloc(a)).reduce((s, a) => s + cents(a.amount), 0);
-  return Math.max(0, cents(p.amount) - allocated) / 100;
+  return Math.max(0, cents(p.amount) - allocated - cents(refundedOf(p))) / 100;
 }
+/** The view (0169): rent, standing, and no bill OR a bill since cancelled; renter_id from the bill when the row has none. */
 function onAccountView(): Row[] {
+  const chargeOf = (p: Row) => (db.park_charges ?? []).find((c) => c.id === p.charge_id) ?? null;
   return (db.park_payments ?? [])
-    .filter((p) => (p.kind ?? "rent") === "rent" && p.charge_id == null && stands(p))
-    .map((p) => ({
-      payment_id: p.id, park_id: p.park_id, renter_id: p.renter_id, amount: p.amount, received_on: p.received_on,
-      created_at: p.created_at ?? null, remaining: remainingOf(p),
-    }));
+    .filter((p) => (p.kind ?? "rent") === "rent" && stands(p) && (p.charge_id == null || chargeOf(p)?.status === "void"))
+    .map((p) => {
+      const c = chargeOf(p);
+      return {
+        payment_id: p.id, park_id: p.park_id, renter_id: p.renter_id ?? c?.renter_id ?? null, amount: p.amount, received_on: p.received_on,
+        created_at: p.created_at ?? null, refunded: refundedOf(p), remaining: remainingOf(p),
+        released_from_charge_id: c?.id ?? null, released_from_month: c?.period_month ?? null, released_on: c?.voided_at ?? null,
+      };
+    });
 }
+/** recompute_charge_paid (0142: a payment counts net of its refunds), with 0169's park_charge_paid_total: a void bill holds 0. */
 function recompute(chargeId: string) {
   const c = (db.park_charges ?? []).find((x) => x.id === chargeId);
   if (!c) return;
-  const direct = (db.park_payments ?? []).filter((p) => p.charge_id === chargeId && stands(p)).reduce((s, p) => s + cents(p.amount), 0);
+  if (c.status === "void") { c.paid_total = 0; return; }
+  const direct = (db.park_payments ?? []).filter((p) => p.charge_id === chargeId && stands(p)).reduce((s, p) => s + cents(p.amount) - cents(refundedOf(p)), 0);
   const applied = (db.park_payment_allocations ?? []).filter((a) => a.charge_id === chargeId && liveAlloc(a))
     .filter((a) => stands((db.park_payments ?? []).find((p) => p.id === a.payment_id)))
     .reduce((s, a) => s + cents(a.amount), 0);
   const paid = (direct + applied) / 100;
   c.paid_total = paid;
-  if (c.status !== "void") c.status = paid >= Number(c.amount) ? "paid" : "open";
+  c.status = paid >= Number(c.amount) ? "paid" : "open";
+}
+/** guard_park_charge_void (0169): refused by name while a live line from a standing payment is on it. */
+function guardVoid(c: Row, patch: Row): { message: string } | null {
+  if (patch.status !== "void" || c.status === "void") return null;
+  const held = (db.park_payment_allocations ?? []).filter((a) => a.charge_id === c.id && liveAlloc(a))
+    .filter((a) => stands((db.park_payments ?? []).find((p) => p.id === a.payment_id)))
+    .reduce((s, a) => s + cents(a.amount), 0);
+  if (held > 0) return { message: `park_charges: ${(held / 100).toFixed(2)} of money on account is against this bill — take it off the bill first (with a reason), then cancel it` };
+  return null;
 }
 
 class Q implements PromiseLike<{ data: Row[] | null; error: { message: string } | null }> {
@@ -64,6 +89,8 @@ class Q implements PromiseLike<{ data: Row[] | null; error: { message: string } 
   is(c: string, v: unknown) { this.fs.push((r) => (v === null ? r[c] == null : r[c] === v)); return this; }
   not(c: string, _op: string, v: unknown) { this.fs.push((r) => !(v === null ? r[c] == null : r[c] === v)); return this; }
   order(c: string, o?: { ascending?: boolean }) { this.sort = { c, asc: o?.ascending !== false }; return this; }
+  // gap-bills parkRanMonth asks for one standing bill of the month — enough to know the run happened.
+  limit(_n: number) { return this; }
   update(patch: Row) { this.op = "update"; this.patch = patch; return this; }
   // The "Someone lives here" door inserts a renter file then a tenancy, and
   // deletes the file when the tenancy cannot land.
@@ -98,11 +125,16 @@ class Q implements PromiseLike<{ data: Row[] | null; error: { message: string } 
     }
     if (this.op === "update") {
       if (failNext.update) { delete failNext.update; return { data: null, error: { message: "boom" } }; }
+      if (this.t === "park_charges") {
+        for (const r of hit) { const refused = guardVoid(r, this.patch!); if (refused) return { data: null, error: refused }; }
+      }
       for (const r of hit) Object.assign(r, this.patch);
+      if (this.t === "park_charges") for (const r of hit) if (r.status === "void") r.paid_total = 0;
       if (this.t === "park_payment_allocations") for (const r of hit) recompute(r.charge_id as string);
       writes.push({ op: "update", patch: this.patch!, matched: hit.map((r) => r.id as string) });
       return { data: hit.map((r) => ({ id: r.id, during: r.during })), error: null };
     }
+    if (failNext.select === this.t) { delete failNext.select; return { data: null, error: { message: "boom" } }; }
     return {
       data: hit.map((r) => (this.embed ? { ...r, park_lots: { park_id: "park-1" } } : r)),
       error: null,
@@ -408,9 +440,11 @@ describe("closing one out withdraws what was written for after", () => {
     // They left on 27 January; the office records it on 15 March, with the
     // February link [1 Feb, 1 Mar) run its course. The old two-way sentence
     // took 'started' for 'running' and sent him to Move out — but February
-    // neither covers today nor is next, so buildRentRoll reads the lot
-    // vacant and the row offers neither control; and 'still bills' was
-    // false of a link that billed February and bills nothing now.
+    // neither covers today nor is next: buildRentRoll reads the lot LAPSED
+    // (asserted below), and the row's Move out on that link takes only a
+    // day inside February, which is not the day they left, so the sentence
+    // names no control; and 'still bills' was false of a link that billed
+    // February and bills nothing now.
     clock.today = "2027-03-15";
     Object.assign(db.lot_reservations.find((r) => r.id === "feb")!, { status: "active", during: "[2027-02-01,2027-03-01)" });
     const res = await withCascadeFailure(() => endTenancy("jan", "ended", "2027-01-27"));
@@ -431,7 +465,12 @@ describe("closing one out withdraws what was written for after", () => {
     expect(db.lot_reservations.find((r) => r.id === "jan")!.status).toBe("ended");
     expect(db.lot_reservations.find((r) => r.id === "feb")!.status).toBe("active");
 
-    // The roll, on 15 March, from that state: nothing current, nothing next.
+    // The roll, on 15 March, from that state: nothing current, nothing next
+    // — and the February link, held and behind today, is LAPSED, not vacant:
+    // the row reads 'Ran out' and Move out is keyed on it, so the sentence
+    // above stays true (the record stands) and the second-renter door
+    // ("Someone lives here", vacant only) stays shut on a lot the failed
+    // cascade left standing.
     const rows = buildRentRoll(
       [lot({ id: "lot-9", lotNumber: "9" })],
       db.lot_reservations.map((r) => toStay({
@@ -443,7 +482,8 @@ describe("closing one out withdraws what was written for after", () => {
     );
     expect(rows[0].current).toBeNull();
     expect(rows[0].next).toBeNull();
-    expect(rows[0].state).toBe("vacant");
+    expect(rows[0].state).toBe("lapsed");
+    expect(rows[0].lapsed?.id).toBe("feb");
   });
 
   it("a lapsed link AND one still to come: the one still to come is withdrawable, so that control is named", async () => {
@@ -601,6 +641,62 @@ describe("addTenant — the roll's one-at-a-time door — takes the chosen lengt
     expect(writes).toEqual([]);
     expect(db.park_renters).toEqual([]);
   });
+
+  // A LEASE DATED INTO THE PAST BILLS THE MONTHS THE RUN WENT BY (decision 3).
+  // The run visits a month once, when he presses Bill <month>, and keys
+  // "already billed" per reservation — so a row written after the press is
+  // never billed for it by anything. The door bills it, through the same
+  // re-raise the signing and renew doors use, and the toast says so.
+  const januaryRan = () => {
+    db.park_lots[0].rental_mode = "long_term";
+    db.park_lots[0].lifecycle = "live";
+    db.parks[0].rent_due_day = 1;
+    db.park_fees = [{ park_id: "park-1", active: true, label: "Grounds", amount: 142.53, cadence: "monthly", applies_to: "long_term" }];
+    db.park_charges = [{ id: "chg-other", park_id: "park-1", park_lot_id: "lot-2", reservation_id: "res-2", renter_id: "file-2", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, paid_total: 0, status: "open", lines: [] }];
+    db.park_payments = []; db.park_payment_allocations = []; db.lot_cost_shares = [];
+  };
+
+  it("a signed lease from 1 January filed on the 4th, after January's run: January is billed on the new row, and the toast says so", async () => {
+    januaryRan();
+    const res = await addTenant("park-1", "lot-9", signed(1));
+    expect(res.ok, res.error).toBe(true);
+    const own = db.park_charges.filter((c) => c.reservation_id === tenancy().id);
+    expect(own).toHaveLength(1);
+    expect(own[0]).toMatchObject({ period_month: "2027-01", amount: 542.53, status: "open" });
+    expect(res.signal).toContain("on the new one-month lease from January 1, 2027.");
+    expect(res.signal).toContain("January 2027 is now billed — $542.53.");
+  });
+
+  it("…and before January's run, nothing is billed here — the run will raise it with everybody else's", async () => {
+    januaryRan();
+    db.park_charges = [];
+    const res = await addTenant("park-1", "lot-9", signed(1));
+    expect(res.ok, res.error).toBe(true);
+    expect(db.park_charges).toEqual([]);
+    expect(res.signal).not.toMatch(/now billed/);
+  });
+
+  it("a holdover filed after the run is left to the run — its window floors at the cutover and the next press bills it", async () => {
+    januaryRan();
+    const res = await addTenant("park-1", "lot-9", { ...signed(3), signedNewLease: false, agreementStartsOn: "" });
+    expect(res.ok, res.error).toBe(true);
+    expect(db.park_charges.filter((c) => c.reservation_id === tenancy().id)).toEqual([]);
+    expect(res.signal).not.toMatch(/now billed/);
+  });
+
+  it("a failed read of whether January ran is SAID — never guessed either way — and the row still lands", async () => {
+    januaryRan();
+    failNext.select = "park_charges";
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await addTenant("park-1", "lot-9", signed(1));
+    spy.mockRestore();
+    expect(res.ok, res.error).toBe(true);
+    expect(db.lot_reservations).toHaveLength(1);
+    expect(db.park_charges.filter((c) => c.reservation_id === tenancy().id)).toEqual([]);
+    expect(res.signal).toContain(
+      "⚠️ We couldn't read the bills already raised this month, so no earlier month was billed for them — bill it from the rent screen.",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -629,10 +725,11 @@ describe("closing one out inside a month already billed", () => {
     db.parks = [{ id: "park-1", rent_due_day: 1, cutover_date: "2027-01-01", max_agreement_months: 6, default_agreement_months: 1 }];
     db.park_fees = [{ park_id: "park-1", active: true, label: "Grounds", amount: 142.53, cadence: "monthly", applies_to: "long_term" }];
     db.park_renters = [{ id: "file-9", park_id: "park-1", display_name: "Household 9" }];
-    db.park_charges = []; db.park_payments = []; db.park_payment_allocations = []; db.lot_cost_shares = [];
+    db.park_charges = []; db.park_payments = []; db.park_payment_allocations = []; db.lot_cost_shares = []; db.park_refunds = [];
     db.lot_reservations = [link({ id: "jan", during: "[2027-01-01,2027-02-01)", status: "active", agreement_seq: 1 })];
     writes.length = 0;
     delete failNext.update;
+    delete failNext.select;
     clock.today = "2027-01-27";
   });
 
@@ -711,21 +808,130 @@ describe("closing one out inside a month already billed", () => {
     expect(res.signal).not.toMatch(/They still hold/);
   });
 
-  it("a bill with a CHEQUE taken against it is left exactly as it is, and the toast says the arithmetic — nothing is reversed", async () => {
+  it("with TWO lines on the bill and the second refusing to come off, the toast names the line that stuck — never the first line, which did come off", async () => {
+    // January settled from two payments on account: $100 (pay-a) and
+    // $442.53 (pay-b). The first take-off lands; the second is refused.
+    // The sentence said "$100.00 of money on account couldn't be taken off
+    // it" — the $100 that HAD come off, and the very $100 the held sentence
+    // names — while the $442.53 that stuck went unmentioned.
+    db.park_payments.push({ id: "pay-a", park_id: "park-1", renter_id: "file-9", amount: 100, kind: "rent", charge_id: null, received_on: "2027-01-02", reversed_at: null, returned_at: null });
+    db.park_payments.push({ id: "pay-b", park_id: "park-1", renter_id: "file-9", amount: 442.53, kind: "rent", charge_id: null, received_on: "2027-01-03", reversed_at: null, returned_at: null });
+    db.park_charges.push(janBill());
+    db.park_payment_allocations.push({ id: "al-a", park_id: "park-1", payment_id: "pay-a", charge_id: "chg-jan", amount: 100, removed_at: null, applied_via: "run" });
+    db.park_payment_allocations.push({ id: "al-b", park_id: "park-1", payment_id: "pay-b", charge_id: "chg-jan", amount: 442.53, removed_at: null, applied_via: "run" });
+    recompute("chg-jan");
+    // Update 1 is the trim, 2 the first take-off, 3 the second: fail the third, once.
+    const orig = (Q.prototype as unknown as { run: () => unknown }).run;
+    const failUpdateAfter = (n: number) => {
+      let armed = false;
+      (Q.prototype as unknown as { run: () => unknown }).run = function (this: Q) {
+        const out = orig.call(this);
+        if (writes.length === n && !armed) { armed = true; failNext.update = true; }
+        return out;
+      };
+    };
+    failUpdateAfter(2);
+    let res;
+    try { res = await endTenancy("jan", "ended", "2027-01-27"); } finally { (Q.prototype as unknown as { run: () => unknown }).run = orig; }
+    expect(res.ok, res.error).toBe(true);
+    expect(db.park_payment_allocations.find((a) => a.id === "al-a")!.removed_at).toBeTruthy();
+    expect(db.park_payment_allocations.find((a) => a.id === "al-b")!.removed_at).toBeNull();
+    expect(db.park_charges[0]).toMatchObject({ status: "open", paid_total: 442.53 });
+    expect(res.signal).toBe(
+      "Closed out — last day January 27, 2027. January 2027's $542.53 bill still stands for the whole month — " +
+      "$442.53 of money on account couldn't be taken off it (Couldn't take that off — boom); $100.00 came off it first. Sort it out from the rent screen. " +
+      "They still hold $100.00 on account with you.",
+    );
+    expect(res.signal).not.toMatch(/\$100\.00 of money on account couldn't/);
+    // With the FIRST line stuck nothing came off first, and the sentence says only that.
+    db.park_payment_allocations.forEach((a) => { a.removed_at = null; a.removed_reason = null; });
+    db.lot_reservations = [link({ id: "jan", during: "[2027-01-01,2027-02-01)", status: "active", agreement_seq: 1 })];
+    db.park_charges[0].status = "open"; recompute("chg-jan"); writes.length = 0; delete failNext.update;
+    failUpdateAfter(1);
+    let first;
+    try { first = await endTenancy("jan", "ended", "2027-01-27"); } finally { (Q.prototype as unknown as { run: () => unknown }).run = orig; }
+    expect(first.ok, first.error).toBe(true);
+    expect(first.signal).toContain("$100.00 of money on account couldn't be taken off it (Couldn't take that off — boom). Sort it out from the rent screen.");
+    expect(first.signal).not.toMatch(/came off it first/);
+  });
+
+  it("a bill paid straight against it: cancelled, the part month raised and settled from the released money, $70.00 still on account — the walked case", async () => {
+    // A CANCELLED BILL RELEASES ITS MONEY ONTO ACCOUNT (0169). The $542.53
+    // cheque stays exactly the row it was — same charge_id, standing — and
+    // is money on account because its bill is void. R1 puts $472.53 of it
+    // against the part month; the $70.00 left is theirs, named by the one
+    // held sentence (the view's remaining), and the hand-back door is where
+    // it goes back.
     db.park_charges.push(janBill());
     db.park_payments.push({ id: "pay-c", park_id: "park-1", renter_id: "file-9", amount: 542.53, kind: "rent", charge_id: "chg-jan", method: "check", received_on: "2027-01-05", reversed_at: null, returned_at: null });
     recompute("chg-jan");
     const res = await endTenancy("jan", "ended", "2027-01-27");
     expect(res.ok, res.error).toBe(true);
-    expect(db.park_charges).toHaveLength(1);
-    expect(db.park_charges[0]).toMatchObject({ id: "chg-jan", status: "paid", paid_total: 542.53, amount: 542.53 });
-    expect(db.park_payments[0].reversed_at).toBeNull();
     expect(res.signal).toBe(
-      "Closed out — last day January 27, 2027. January 2027 was billed $542.53 for the whole month and paid; " +
-      "they were here 27 of 31 days ($472.53) — $70.00 is theirs to have back.",
+      "Closed out — last day January 27, 2027. January 2027's $542.53 bill for the whole month was cancelled — the $542.53 paid on it is on account — " +
+      "and raised again for the 27 of 31 days they were here — $472.53, all of it settled from that money. " +
+      "They still hold $70.00 on account with you.",
     );
+    expect(db.park_charges.find((c) => c.id === "chg-jan")).toMatchObject({ status: "void", paid_total: 0 });
+    const now = liveCharges();
+    expect(now).toHaveLength(1);
+    expect(now[0]).toMatchObject({ amount: 472.53, paid_total: 472.53, status: "paid" });
+    expect(db.park_payment_allocations).toEqual([expect.objectContaining({ payment_id: "pay-c", charge_id: now[0].id, amount: 472.53 })]);
+    expect(db.park_payments[0]).toMatchObject({ charge_id: "chg-jan", reversed_at: null });
+    expect(onAccountView()).toEqual([expect.objectContaining({ payment_id: "pay-c", remaining: 70, released_from_month: "2027-01" })]);
+    expect(res.signal).not.toMatch(/theirs to have back|money on account\./);
     // The trim still lands: the days are what the arithmetic rests on.
     expect(db.lot_reservations[0]).toMatchObject({ status: "ended", during: "[2027-01-01,2027-01-28)", moved_out_on: "2027-01-27" });
+  });
+
+  it("…and when $50.00 of that card payment had already gone back, the sentence names all three figures and the part month still settles from what is left", async () => {
+    // $542.53 by card, $50.00 refunded before the move-out: the view says
+    // $492.53 is on account. "The $492.53 paid on it" would name the
+    // remainder as the amount paid. R1 puts $472.53 of the $492.53 against
+    // the part month; $20.00 is theirs, from the one held sentence.
+    db.park_charges.push(janBill());
+    db.park_payments.push({ id: "pay-c", park_id: "park-1", renter_id: "file-9", amount: 542.53, kind: "rent", charge_id: "chg-jan", method: "card", reference: "ch_1", received_on: "2027-01-05", reversed_at: null, returned_at: null });
+    db.park_refunds.push({ id: "rf-1", park_id: "park-1", payment_id: "pay-c", amount: 50, fee_amount: 0 });
+    recompute("chg-jan");
+    expect(db.park_charges[0]).toMatchObject({ paid_total: 492.53, status: "open" });
+    const res = await endTenancy("jan", "ended", "2027-01-27");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      "Closed out — last day January 27, 2027. January 2027's $542.53 bill for the whole month was cancelled — " +
+      "of the $542.53 paid on it, $50.00 was already refunded and the other $492.53 is on account — " +
+      "and raised again for the 27 of 31 days they were here — $472.53, all of it settled from that money. " +
+      "They still hold $20.00 on account with you.",
+    );
+    expect(res.signal).not.toMatch(/the \$492\.53 paid on it/);
+    const now = liveCharges();
+    expect(now).toHaveLength(1);
+    expect(now[0]).toMatchObject({ amount: 472.53, paid_total: 472.53, status: "paid" });
+    expect(onAccountView()).toEqual([expect.objectContaining({ payment_id: "pay-c", amount: 542.53, refunded: 50, remaining: 20, released_from_month: "2027-01" })]);
+  });
+
+  it("'from that money' is said only when every line that settled the part month came from the released row — a $57.47 sibling on account is not January's payment", async () => {
+    // $600 split: $542.53 against January (released by the cancel) and
+    // $57.47 on account since the 5th. R1 is oldest-money-first with the
+    // same day for both, so the part month can be paid from BOTH rows; the
+    // toast keeps the unattributed shape rather than crediting January's
+    // payment with the sibling's dollars.
+    db.park_charges.push(janBill({ id: "chg-dec", period_month: "2026-12", due_on: "2026-12-01", amount: 100 }));
+    db.park_charges.push(janBill());
+    db.park_payments.push({ id: "pay-c", park_id: "park-1", renter_id: "file-9", amount: 542.53, kind: "rent", charge_id: "chg-jan", method: "check", received_on: "2027-01-05", reversed_at: null, returned_at: null, idempotency_key: "k" });
+    db.park_payments.push({ id: "pay-s", park_id: "park-1", renter_id: "file-9", amount: 57.47, kind: "rent", charge_id: null, method: "check", received_on: "2027-01-05", reversed_at: null, returned_at: null, idempotency_key: "k:onaccount" });
+    recompute("chg-jan");
+    const res = await endTenancy("jan", "ended", "2027-01-27");
+    expect(res.ok, res.error).toBe(true);
+    // $100 of the released money went against December first (R1 is
+    // oldest-open-bill-first), the rest and $30 of the sibling paid the part
+    // month: two sources, so the figure is said and the older month named.
+    expect(res.signal).toBe(
+      "Closed out — last day January 27, 2027. January 2027's $542.53 bill for the whole month was cancelled — the $542.53 paid on it is on account — " +
+      "and raised again for the 27 of 31 days they were here — $472.53, $472.53 of it settled from money on account; $100.00 went against December 2026. " +
+      "They still hold $27.47 on account with you.",
+    );
+    expect(res.signal).not.toMatch(/from that money/);
+    expect(db.park_charges.find((c) => c.id === "chg-dec")).toMatchObject({ paid_total: 100, status: "paid" });
   });
 
   it("with no bill raised yet the sentence is the old one — the run will bill the part month", async () => {
@@ -755,29 +961,72 @@ describe("closing one out inside a month already billed", () => {
     expect(db.park_charges.find((c) => c.id === "chg-feb")).toMatchObject({ status: "void", void_reason: "Withdrawn — moved out January 27, 2027" });
     expect(db.park_payment_allocations.find((a) => a.id === "al-feb")).toMatchObject({ removed_reason: "Withdrawn — moved out January 27, 2027" });
     expect(onAccountView().find((p) => p.payment_id === "pay-x")!.remaining).toBe(57.47);
+    // January, paid by cheque, goes the walked way too (0169): its $542.53
+    // is released, the part month settles from it, and the household holds
+    // the $70.00 left of it plus the $57.47 that came back off February.
     expect(res.signal).toBe(
-      "Closed out — last day January 27, 2027. January 2027 was billed $542.53 for the whole month and paid; " +
-      "they were here 27 of 31 days ($472.53) — $70.00 is theirs to have back. " +
+      "Closed out — last day January 27, 2027. January 2027's $542.53 bill for the whole month was cancelled — the $542.53 paid on it is on account — " +
+      "and raised again for the 27 of 31 days they were here — $472.53, all of it settled from that money. " +
       "Their February 2027 agreement was withdrawn too — their February 2027 bill of $542.53 was cancelled and $57.47 went back on account. " +
-      "They still hold $57.47 on account with you.",
+      "They still hold $127.47 on account with you.",
     );
-    expect(res.signal).not.toMatch(/nothing bills for it/);
+    expect(res.signal).not.toMatch(/nothing bills for it|theirs to have back/);
   });
 
-  it("a withdrawn successor with a CHEQUE taken against its bill refuses the whole close-out before any write", async () => {
+  it("the close-out cascade over a directly-paid February cancels it and says the money is on account — and the part month settles from it", async () => {
+    // February was raised early on the successor and paid by cheque on the
+    // 2nd; the office records the 27 January move-out on 3 February. The
+    // cascade releases February's $542.53 (0169) BEFORE the final month is
+    // re-done, so the January part month is settled from it — and the
+    // toast says so without crediting January's own payment, which there
+    // was none of.
     clock.today = "2027-02-03";
     db.lot_reservations.push(link({ id: "feb", during: "[2027-02-01,2027-05-01)", status: "active", agreement_seq: 2 }));
+    db.park_charges.push(janBill());
     db.park_charges.push(janBill({ id: "chg-feb", reservation_id: "feb", period_month: "2027-02", due_on: "2027-02-01" }));
-    db.park_payments.push({ id: "pay-f", park_id: "park-1", renter_id: "file-9", amount: 542.53, kind: "rent", charge_id: "chg-feb", received_on: "2027-02-02", reversed_at: null, returned_at: null });
+    db.park_payments.push({ id: "pay-f", park_id: "park-1", renter_id: "file-9", amount: 542.53, kind: "rent", charge_id: "chg-feb", method: "check", received_on: "2027-02-02", reversed_at: null, returned_at: null });
     recompute("chg-feb");
     const res = await endTenancy("feb", "ended", "2027-01-27");
-    expect(res.ok).toBe(false);
-    expect(res.error).toBe(
-      "Their February 2027 bill of $542.53 has $542.53 taken against it — cancelling it would make that money disappear " +
-      "from your totals while it's still in the bank. Sort that payment out first, then close them out.",
+    expect(res.ok, res.error).toBe(true);
+    expect(db.lot_reservations.find((r) => r.id === "feb")!.status).toBe("cancelled");
+    expect(db.park_charges.find((c) => c.id === "chg-feb")).toMatchObject({ status: "void", paid_total: 0, void_reason: "Withdrawn — moved out January 27, 2027" });
+    expect(db.park_payments[0]).toMatchObject({ id: "pay-f", charge_id: "chg-feb", reversed_at: null });
+    const jan = db.park_charges.filter((c) => c.period_month === "2027-01" && c.status !== "void");
+    expect(jan[0]).toMatchObject({ amount: 472.53, paid_total: 472.53, status: "paid" });
+    expect(onAccountView()).toEqual([expect.objectContaining({ payment_id: "pay-f", remaining: 70, released_from_month: "2027-02" })]);
+    expect(res.signal).toBe(
+      "Closed out — last day January 27, 2027. January 2027's $542.53 bill for the whole month was cancelled and " +
+      "raised again for the 27 of 31 days they were here — $472.53, $472.53 of it settled from money on account. " +
+      "Their February 2027 agreement was withdrawn too — their February 2027 bill of $542.53 was cancelled — the $542.53 paid on it went on their account. " +
+      "They still hold $70.00 on account with you.",
     );
-    expect(writes).toEqual([]);
-    expect(db.lot_reservations.find((r) => r.id === "jan")).toMatchObject({ status: "active", during: "[2027-01-01,2027-02-01)" });
+    expect(res.signal).not.toMatch(/from that money|taken against it|disappear/);
+    // PAST TENSE: the withdrawal ran BEFORE the final month was re-done and
+    // $472.53 of the released money settled the part month, so "is on
+    // account for them now" beside "They still hold $70.00" was a toast
+    // contradicting itself. What they hold is the held sentence's alone.
+    expect(res.signal).not.toMatch(/is on account for them now/);
+    // The order: February's void (releasing the money) before January's.
+    const voids = writes.filter((w) => w.op === "update" && w.patch.status === "void").map((w) => w.matched[0]);
+    expect(voids).toEqual(["chg-feb", "chg-jan"]);
+  });
+
+  it("a month after the last day's, raised early and paid, is cancelled with nothing to raise again — and the sentence still says where the money went", async () => {
+    // February raised by hand on the January link and paid; they left on
+    // 27 January. No days of February to bill; the released $542.53 is on
+    // account and the toast must say so — 'they weren't here for any of
+    // it' alone would leave $542.53 unmentioned.
+    db.park_charges.push(janBill({ id: "chg-feb", period_month: "2027-02", due_on: "2027-02-01" }));
+    db.park_payments.push({ id: "pay-f", park_id: "park-1", renter_id: "file-9", amount: 542.53, kind: "rent", charge_id: "chg-feb", method: "check", received_on: "2027-01-20", reversed_at: null, returned_at: null });
+    recompute("chg-feb");
+    const res = await endTenancy("jan", "ended", "2027-01-27");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      "Closed out — last day January 27, 2027. February 2027's $542.53 bill was cancelled — they weren't here for any of it, and the $542.53 paid on it is on account. " +
+      "They still hold $542.53 on account with you.",
+    );
+    expect(db.park_charges.find((c) => c.id === "chg-feb")).toMatchObject({ status: "void", paid_total: 0 });
+    expect(liveCharges()).toEqual([]);
   });
 
   it("'Withdraw the next agreement' cancels the successor's unpaid bill first, and the sentence is the server's", async () => {
@@ -794,17 +1043,192 @@ describe("closing one out inside a month already billed", () => {
     expect(ops.indexOf('update:"void"')).toBeLessThan(ops.indexOf('update:"cancelled"'));
   });
 
-  it("'Withdraw the next agreement' with money taken against its bill is refused, naming the bill", async () => {
+  it("withdrawing a successor whose bill was paid directly cancels it and says the money is on account", async () => {
     db.lot_reservations.push(link({ id: "feb", during: "[2027-02-01,2027-05-01)", status: "approved", agreement_seq: 2 }));
     db.park_charges.push(janBill({ id: "chg-feb", reservation_id: "feb", period_month: "2027-02", due_on: "2027-02-01" }));
-    db.park_payments.push({ id: "pay-f", park_id: "park-1", renter_id: "file-9", amount: 100, kind: "rent", charge_id: "chg-feb", received_on: "2027-01-28", reversed_at: null, returned_at: null });
+    db.park_payments.push({ id: "pay-f", park_id: "park-1", renter_id: "file-9", amount: 100, kind: "rent", charge_id: "chg-feb", method: "cash", received_on: "2027-01-28", reversed_at: null, returned_at: null });
     recompute("chg-feb");
+    clock.today = "2027-01-28";
+    const res = await endTenancy("feb", "cancelled");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe("Reservation cancelled. Their February 2027 bill of $542.53 was cancelled — the $100.00 paid on it went on their account.");
+    expect(res.signal).not.toMatch(/taken against it|disappear|sort that payment/i);
+    expect(db.lot_reservations.find((r) => r.id === "feb")!.status).toBe("cancelled");
+    expect(db.park_charges.find((c) => c.id === "chg-feb")).toMatchObject({ status: "void", paid_total: 0, void_reason: "Agreement withdrawn on January 28, 2027" });
+    expect(db.park_payments[0]).toMatchObject({ charge_id: "chg-feb", reversed_at: null });
+    expect(onAccountView()).toEqual([expect.objectContaining({ payment_id: "pay-f", remaining: 100, released_from_month: "2027-02" })]);
+  });
+
+  // THE THREE FIGURES (0169 + 0142). "The $300.00 paid on it" named the
+  // view's remainder as the amount paid when $400.00 was paid by card and
+  // $100.00 had already gone back to it — the office would go looking for
+  // a $300.00 payment that never existed. With a refunded part each door
+  // says what was paid, what went back, and what is on account; with none,
+  // the plain sentence above is unchanged (pinned there).
+  it("withdrawing a successor whose card payment was part-refunded names all three figures — paid, refunded, and what went on account", async () => {
+    db.lot_reservations.push(link({ id: "feb", during: "[2027-02-01,2027-05-01)", status: "approved", agreement_seq: 2 }));
+    db.park_charges.push(janBill({ id: "chg-feb", reservation_id: "feb", period_month: "2027-02", due_on: "2027-02-01" }));
+    db.park_payments.push({ id: "pay-f", park_id: "park-1", renter_id: "file-9", amount: 400, kind: "rent", charge_id: "chg-feb", method: "card", reference: "ch_1", received_on: "2027-01-28", reversed_at: null, returned_at: null });
+    db.park_refunds.push({ id: "rf-1", park_id: "park-1", payment_id: "pay-f", amount: 100, fee_amount: 0 });
+    recompute("chg-feb");
+    expect(db.park_charges[0]).toMatchObject({ paid_total: 300, status: "open" });
+    clock.today = "2027-01-28";
+    const res = await endTenancy("feb", "cancelled");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      "Reservation cancelled. Their February 2027 bill of $542.53 was cancelled — of the $400.00 paid on it, $100.00 was already refunded and the other $300.00 went on their account.",
+    );
+    expect(res.signal).not.toMatch(/the \$300\.00 paid on it/);
+    expect(db.park_charges.find((c) => c.id === "chg-feb")).toMatchObject({ status: "void", paid_total: 0 });
+    expect(onAccountView()).toEqual([expect.objectContaining({ payment_id: "pay-f", amount: 400, refunded: 100, remaining: 300, released_from_month: "2027-02" })]);
+  });
+
+  // THE FIGURE THE VIEW COULDN'T GIVE (0169). The void releases the money;
+  // the view (park_on_account_payments) is what says how much. When that
+  // read fails the money IS on account all the same, so each door says so
+  // as a failed read — never "$0.00", never silence about $542.53. These
+  // pin the two doors' sentences verbatim: collapse either branch to the
+  // `released > 0` shape and the toast goes quiet about money that exists.
+  it("move-out over a directly-paid January whose released figure couldn't be read says so — and the part month still settles from it", async () => {
+    db.park_charges.push(janBill());
+    db.park_payments.push({ id: "pay-c", park_id: "park-1", renter_id: "file-9", amount: 542.53, kind: "rent", charge_id: "chg-jan", method: "check", received_on: "2027-01-05", reversed_at: null, returned_at: null });
+    recompute("chg-jan");
+    failNext.select = "park_on_account_payments";
+    const res = await endTenancy("jan", "ended", "2027-01-27");
+    expect(res.ok, res.error).toBe(true);
+    // The flag was consumed: the view WAS read, and it was that read that failed.
+    expect(failNext.select).toBeUndefined();
+    expect(res.signal).toBe(
+      "Closed out — last day January 27, 2027. January 2027's $542.53 bill for the whole month was cancelled — " +
+      "what was paid on it is on account, though the figure couldn't be read — check \"Money not against a bill\" — " +
+      "and raised again for the 27 of 31 days they were here — $472.53, all of it settled from that money. " +
+      "They still hold $70.00 on account with you.",
+    );
+    expect(res.signal).not.toMatch(/\$0\.00/);
+    expect(db.park_charges.find((c) => c.id === "chg-jan")).toMatchObject({ status: "void", paid_total: 0 });
+    const now = liveCharges();
+    expect(now).toHaveLength(1);
+    expect(now[0]).toMatchObject({ amount: 472.53, paid_total: 472.53, status: "paid" });
+    expect(db.park_payments[0]).toMatchObject({ charge_id: "chg-jan", reversed_at: null });
+  });
+
+  it("withdrawing a directly-paid successor whose released figure couldn't be read says so — never '$0.00', never nothing", async () => {
+    db.lot_reservations.push(link({ id: "feb", during: "[2027-02-01,2027-05-01)", status: "approved", agreement_seq: 2 }));
+    db.park_charges.push(janBill({ id: "chg-feb", reservation_id: "feb", period_month: "2027-02", due_on: "2027-02-01" }));
+    db.park_payments.push({ id: "pay-f", park_id: "park-1", renter_id: "file-9", amount: 542.53, kind: "rent", charge_id: "chg-feb", method: "check", received_on: "2027-01-28", reversed_at: null, returned_at: null });
+    recompute("chg-feb");
+    clock.today = "2027-01-28";
+    failNext.select = "park_on_account_payments";
+    const res = await endTenancy("feb", "cancelled");
+    expect(res.ok, res.error).toBe(true);
+    expect(failNext.select).toBeUndefined();
+    expect(res.signal).toBe(
+      "Reservation cancelled. Their February 2027 bill of $542.53 was cancelled — " +
+      "what was paid on it went on their account, though the figure couldn't be read; check \"Money not against a bill\".",
+    );
+    expect(res.signal).not.toMatch(/\$0\.00/);
+    expect(db.lot_reservations.find((r) => r.id === "feb")!.status).toBe("cancelled");
+    expect(db.park_charges.find((c) => c.id === "chg-feb")).toMatchObject({ status: "void", paid_total: 0, void_reason: "Agreement withdrawn on January 28, 2027" });
+    expect(db.park_payments[0]).toMatchObject({ charge_id: "chg-feb", reversed_at: null });
+    // The money is there for the view to show once it reads again.
+    expect(onAccountView()).toEqual([expect.objectContaining({ payment_id: "pay-f", remaining: 542.53, released_from_month: "2027-02" })]);
+  });
+
+  it("…and with BOTH kinds of money on it, the line comes off first and the sentence carries both", async () => {
+    db.lot_reservations.push(link({ id: "feb", during: "[2027-02-01,2027-05-01)", status: "approved", agreement_seq: 2 }));
+    db.park_charges.push(janBill({ id: "chg-feb", reservation_id: "feb", period_month: "2027-02", due_on: "2027-02-01" }));
+    db.park_payments.push({ id: "pay-x", park_id: "park-1", renter_id: "file-9", amount: 57.47, kind: "rent", charge_id: null, received_on: "2027-01-05", reversed_at: null, returned_at: null });
+    db.park_payment_allocations.push({ id: "al-feb", park_id: "park-1", payment_id: "pay-x", charge_id: "chg-feb", amount: 57.47, removed_at: null, applied_via: "run" });
+    db.park_payments.push({ id: "pay-f", park_id: "park-1", renter_id: "file-9", amount: 485.06, kind: "rent", charge_id: "chg-feb", method: "check", received_on: "2027-01-28", reversed_at: null, returned_at: null });
+    recompute("chg-feb");
+    expect(db.park_charges[0]).toMatchObject({ paid_total: 542.53, status: "paid" });
+    clock.today = "2027-01-28";
+    const res = await endTenancy("feb", "cancelled");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      "Reservation cancelled. Their February 2027 bill of $542.53 was cancelled — the $485.06 paid on it went on their account and $57.47 went back on account.",
+    );
+    expect(db.park_payment_allocations[0]).toMatchObject({ removed_reason: "Agreement withdrawn on January 28, 2027" });
+    expect(onAccountView().map((v) => [v.payment_id, v.remaining])).toEqual([["pay-x", 57.47], ["pay-f", 485.06]]);
+  });
+
+  it("a live line the door could not take off still refuses the void — by the database's name — and nothing is withdrawn", async () => {
+    // The unapply fails (the fake's next update), the line stands, and the
+    // void is refused by 0169's guard rather than skipped on paid_total.
+    db.lot_reservations.push(link({ id: "feb", during: "[2027-02-01,2027-05-01)", status: "approved", agreement_seq: 2 }));
+    db.park_charges.push(janBill({ id: "chg-feb", reservation_id: "feb", period_month: "2027-02", due_on: "2027-02-01" }));
+    db.park_payments.push({ id: "pay-x", park_id: "park-1", renter_id: "file-9", amount: 57.47, kind: "rent", charge_id: null, received_on: "2027-01-05", reversed_at: null, returned_at: null });
+    db.park_payment_allocations.push({ id: "al-feb", park_id: "park-1", payment_id: "pay-x", charge_id: "chg-feb", amount: 57.47, removed_at: null, applied_via: "run" });
+    recompute("chg-feb");
+    failNext.update = true;
     const res = await endTenancy("feb", "cancelled");
     expect(res.ok).toBe(false);
-    expect(res.error).toMatch(/^Their February 2027 bill of \$542\.53 has \$100\.00 taken against it/);
-    expect(res.error).toMatch(/then withdraw it\.$/);
+    expect(res.error).toMatch(/^Couldn't take \$57\.47 off their February 2027 bill \(/);
+    // The roll has no "take it off the bill" control, so the door is named.
+    expect(res.error).toMatch(/Nothing was withdrawn — sort the bill out from the rent screen, then withdraw it again\.$/);
     expect(db.lot_reservations.find((r) => r.id === "feb")!.status).toBe("approved");
-    expect(writes).toEqual([]);
+    expect(db.park_charges[0].status).toBe("open");
+  });
+
+  it("the database's own refusal reaches the withdraw toast — a line that lands between the take-off and the void is named, not 'couldn't be cancelled.'", async () => {
+    // The race 0169's guard exists for: the successor's February bill is
+    // clean when the door reads it, a $100 line from money on account
+    // lands before the void, and the guard refuses by name. voidCharge
+    // printed that sentence; this door printed "couldn't be cancelled."
+    // with neither the reason nor a door.
+    db.lot_reservations.push(link({ id: "feb", during: "[2027-02-01,2027-05-01)", status: "approved", agreement_seq: 2 }));
+    db.park_charges.push(janBill({ id: "chg-feb", reservation_id: "feb", period_month: "2027-02", due_on: "2027-02-01" }));
+    db.park_payments.push({ id: "pay-x", park_id: "park-1", renter_id: "file-9", amount: 100, kind: "rent", charge_id: null, received_on: "2027-01-05", reversed_at: null, returned_at: null });
+    clock.today = "2027-01-28";
+    const line = () => db.park_payment_allocations.push({ id: "al-late", park_id: "park-1", payment_id: "pay-x", charge_id: "chg-feb", amount: 100, removed_at: null, applied_via: "run" });
+    const orig = (Q.prototype as unknown as { run: () => unknown }).run;
+    /** Land the line on the Nth park_charges read (after the door's own standing read), or on the void's write itself. */
+    const landOn = (when: { select: number } | "update") => {
+      let seen = 0;
+      (Q.prototype as unknown as { run: () => unknown }).run = function (this: Q) {
+        const q = this as unknown as { t: string; op: string };
+        if (q.t === "park_charges" && db.park_payment_allocations.length === 0) {
+          if (when === "update" ? q.op === "update" : q.op === "select" && ++seen === when.select) line();
+        }
+        return orig.call(this);
+      };
+    };
+    try {
+      // Between the door's read of what is on the bill and the void's own:
+      // the void is not attempted (skipped), and the line is what stands
+      // in the way.
+      landOn({ select: 2 });
+      const res = await endTenancy("feb", "cancelled");
+      expect(res.ok).toBe(false);
+      expect(res.error).toBe(
+        "Their February 2027 bill of $542.53 couldn't be cancelled — a line from money on account is still against it, and it has to come off the bill first (with a reason). " +
+        "Nothing was withdrawn — sort the bill out from the rent screen, then withdraw it again.",
+      );
+      expect(res.error).not.toMatch(/park_charges:|couldn't be cancelled\. /);
+      expect(db.lot_reservations.find((r) => r.id === "feb")!.status).toBe("approved");
+      expect(db.park_charges[0].status).toBe("open");
+      // Between the void's own read and its write: the database refuses by
+      // name (0169), and its sentence is the toast's.
+      db.park_payment_allocations = [];
+      landOn("update");
+      const refused = await endTenancy("feb", "cancelled");
+      expect(refused.ok).toBe(false);
+      expect(refused.error).toBe(
+        "Their February 2027 bill of $542.53 couldn't be cancelled — 100.00 of money on account is against this bill — take it off the bill first (with a reason), then cancel it. " +
+        "Nothing was withdrawn — sort the bill out from the rent screen, then withdraw it again.",
+      );
+      expect(refused.error).not.toMatch(/park_charges:/);
+    } finally {
+      (Q.prototype as unknown as { run: () => unknown }).run = orig;
+    }
+    // And a plain write failure carries the database's words too.
+    db.park_payment_allocations = [];
+    failNext.update = true;
+    const plain = await endTenancy("feb", "cancelled");
+    expect(plain.ok).toBe(false);
+    expect(plain.error).toBe(
+      "Their February 2027 bill of $542.53 couldn't be cancelled — boom. Nothing was withdrawn — sort the bill out from the rent screen, then withdraw it again.",
+    );
   });
 
   it("a failed cancel of the final month's bill is SAID — never a toast that claims it bills for the days", async () => {
@@ -819,8 +1243,49 @@ describe("closing one out inside a month already billed", () => {
     const res = await endTenancy("jan", "ended", "2027-01-27");
     (Q.prototype as unknown as { run: () => unknown }).run = orig;
     expect(res.ok, res.error).toBe(true);
-    expect(res.signal).toContain("⚠️ January 2027's $542.53 bill for the whole month is still open — cancel it from the rent screen, then bill January 2027 again.");
+    // WHY, in the database's words — "is still open — cancel it" said
+    // neither the reason nor which of three things happened.
+    expect(res.signal).toContain("⚠️ January 2027's $542.53 bill for the whole month is still open — boom. Cancel it from the rent screen, then bill January 2027 again.");
     expect(res.signal).not.toMatch(/final month bills for the days/);
+    expect(db.park_charges[0].status).toBe("open");
+  });
+
+  it("…and a line that lands on the final month's bill before its void names the line, and the database's refusal names itself", async () => {
+    db.park_charges.push(janBill());
+    db.park_payments.push({ id: "pay-x", park_id: "park-1", renter_id: "file-9", amount: 100, kind: "rent", charge_id: null, received_on: "2027-01-05", reversed_at: null, returned_at: null });
+    const line = () => db.park_payment_allocations.push({ id: "al-late", park_id: "park-1", payment_id: "pay-x", charge_id: "chg-jan", amount: 100, removed_at: null, applied_via: "run" });
+    const orig = (Q.prototype as unknown as { run: () => unknown }).run;
+    const landOn = (when: { select: number } | "update") => {
+      let seen = 0;
+      (Q.prototype as unknown as { run: () => unknown }).run = function (this: Q) {
+        const q = this as unknown as { t: string; op: string };
+        if (q.t === "park_charges" && db.park_payment_allocations.length === 0) {
+          if (when === "update" ? q.op === "update" : q.op === "select" && ++seen === when.select) line();
+        }
+        return orig.call(this);
+      };
+    };
+    try {
+      // After the door's standing read (1), on the void's own (2): skipped.
+      landOn({ select: 2 });
+      const skipped = await endTenancy("jan", "ended", "2027-01-27");
+      expect(skipped.ok, skipped.error).toBe(true);
+      expect(skipped.signal).toContain(
+        "⚠️ January 2027's $542.53 bill for the whole month is still open — a line from money on account is still against it, and it has to come off the bill first (with a reason). Cancel it from the rent screen, then bill January 2027 again.",
+      );
+      // On the write: refused by the guard, in its words.
+      db.park_payment_allocations = [];
+      db.lot_reservations = [link({ id: "jan", during: "[2027-01-01,2027-02-01)", status: "active", agreement_seq: 1 })];
+      landOn("update");
+      const refused = await endTenancy("jan", "ended", "2027-01-27");
+      expect(refused.ok, refused.error).toBe(true);
+      expect(refused.signal).toContain(
+        "⚠️ January 2027's $542.53 bill for the whole month is still open — 100.00 of money on account is against this bill — take it off the bill first (with a reason), then cancel it. Cancel it from the rent screen, then bill January 2027 again.",
+      );
+      expect(refused.signal).not.toMatch(/park_charges:/);
+    } finally {
+      (Q.prototype as unknown as { run: () => unknown }).run = orig;
+    }
     expect(db.park_charges[0].status).toBe("open");
   });
 
@@ -866,10 +1331,14 @@ describe("the roll offers Edit and 'Filed by mistake' for a first agreement the 
     expect(evaluate({ current: null, next: null })).toBeNull();
   });
 
-  it("Edit is gated on the current link OR the hand-filed one; Move out and Gave notice stay on current", () => {
-    expect(roll).toMatch(/\(r\.currentReservationId \?\? r\.filedByHandId\) && \(/);
-    const moveOut = roll.slice(roll.indexOf('"Move out"') - 700, roll.indexOf('"Move out"'));
-    expect(moveOut).toMatch(/r\.currentReservationId && \(/);
+  it("Edit is gated on the link ON THE LOT (current, else the one that ran out) OR the hand-filed one; Move out stays on the lot, Gave notice on current", () => {
+    // `onLot` is the current link, else the lapsed one — a household whose
+    // paperwork ran out is still there (park-helpers RollRow.lapsed). Never
+    // the hand-filed row for Move out: nobody has lived in it.
+    expect(roll).toMatch(/const onLot = r\.currentReservationId \?\? r\.lapsedReservationId;/);
+    expect(roll).toMatch(/\(onLot \?\? r\.filedByHandId\) && \(/);
+    const moveOut = roll.slice(roll.indexOf('"Move out"') - 500, roll.indexOf('"Move out"'));
+    expect(moveOut).toMatch(/\{onLot && \(/);
     expect(moveOut).not.toMatch(/filedByHandId/);
     const notice = roll.slice(roll.indexOf('"Gave notice"') - 600, roll.indexOf('"Gave notice"'));
     expect(notice).toMatch(/r\.currentReservationId && !r\.expectedMoveOut/);
@@ -907,7 +1376,8 @@ describe("the roll offers Edit and 'Filed by mistake' for a first agreement the 
   });
 
   it("the Edit panel's fields come from the stay it edits", () => {
-    expect(page).toMatch(/const editable = r\.current \?\? filedByHand;/);
+    expect(page).toMatch(/const onLot = r\.current \?\? r\.lapsed;/);
+    expect(page).toMatch(/const editable = onLot \?\? filedByHand;/);
     expect(page).toMatch(/currentRent: editable\?\.quotedAmount \?\? null/);
     expect(page).toMatch(/currentTerm: editable\?\.term \?\? null/);
     // The occupancy fields stay on `current` alone.
@@ -970,7 +1440,10 @@ describe("the roll offers no signing control once the household's own signing st
 
   it("finds the rule it is scanning", () => {
     expect(rule, "signedAhead is gone — this scan measures nothing").not.toBe("");
-    expect(gate).toBe('slipFor?.origin === "grandfathered" && !signedAhead ? slipFor : null');
+    // The second half is the holdover whose paperwork RAN OUT (RollRow.lapsed,
+    // set only when nothing is current or next) — Today's "haven't signed"
+    // card sends him to this control for exactly that row.
+    expect(gate).toBe('(slipFor?.origin === "grandfathered" && !signedAhead ? slipFor : null) ?? (r.lapsed?.origin === "grandfathered" ? r.lapsed : null)');
   });
 
   it("the rule, run: a holdover alone → the control; a holdover with its OWN successor recorded → none; a different household's next → the control; before go-live → the control", () => {
@@ -991,6 +1464,14 @@ describe("the roll offers no signing control once the household's own signing st
     // A signed lease running today with a renewal behind it is not a holdover at all.
     const lease = { id: "jan", renterId: "f", origin: "office", range: { start: "2027-01-01", end: "2027-02-01" } };
     expect(evaluate({ current: lease, next: succ }, lease)).toBeNull();
+    // A holdover that RAN OUT — nothing current, nothing next, the lapsed
+    // row grandfathered: the control, so the signing can be recorded from
+    // the arrangement's end. A lapsed OFFICE lease gets nothing here (its
+    // door is Today's Agreements-to-write list).
+    const lapsedHold = { id: "imp", renterId: "f", origin: "grandfathered", range: { start: "2027-01-01", end: "2027-06-01" } };
+    expect(evaluate({ current: null, next: null, lapsed: lapsedHold }, null)).toBe(lapsedHold);
+    expect(evaluate({ current: null, next: null, lapsed: lease }, null)).toBeNull();
+    expect(evaluate({ current: null, next: null, lapsed: null }, null)).toBeNull();
   });
 
   it("the same shape gets the withdrawal — and the confirm says what withdrawing the signing leaves behind", () => {
@@ -1059,7 +1540,7 @@ describe("a close-out whose cascade fails still re-does the final month's bill, 
     expect(res.error).toBe(
       "Closed out — last day January 27, 2027. January 2027's $542.53 bill for the whole month was cancelled and " +
       "raised again for the 27 of 31 days they were here — $472.53. But their next agreement couldn't be withdrawn: " +
-      "Their February 2027 bill of $542.53 couldn't be cancelled. It still stands and still bills; " +
+      "Their February 2027 bill of $542.53 couldn't be cancelled — boom. It still stands and still bills; " +
       "sort the bill out from the rent screen, then withdraw it from their row on the roll.",
     );
     // January's bill WAS re-done — not left whole under a sentence about February.

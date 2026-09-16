@@ -25,6 +25,13 @@ export interface OpsParkRow {
   active: boolean;
   lots: number;
   occupied: number;
+  /**
+   * Lived on, paperwork run out (park-helpers RollRow.lapsed). Not vacant —
+   * the roll's own summary stopped calling it that, and this board read the
+   * same `vacant` — and counted in `occupancyPct` with the occupied, since
+   * the household is still there. Shown beside vacant when there are any.
+   */
+  lapsed: number;
   vacant: number;
   pending: number;
   occupancyPct: number | null;
@@ -112,8 +119,10 @@ export async function getOpsParks(): Promise<OpsParkRow[]> {
       active: !!p.active,
       lots: summary.lots,
       occupied: summary.occupied,
+      lapsed: summary.lapsed,
       vacant: summary.vacant,
       pending: summary.pending,
+      // (occupied + lapsed) / lots — the summary's own figure, not a copy.
       occupancyPct: summary.occupancyPct,
       members: memberCount.get(p.id as string) ?? 0,
     };

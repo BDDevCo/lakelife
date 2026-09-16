@@ -10,7 +10,7 @@ import {
   allocateCost, recoveryByCategory, canSplit, whyNotSplit,
   type CostCategory, type CostLot, type CostAllocation,
   buildCostScheduleRow, type CostScheduleInput, COST_CATEGORY_LABEL,
-  costCategoryForService,
+  costCategoryForService, coveredSpanWords,
   carryFromRow, type CostCarry,} from "./cost-helpers";
 import { preCutoverCostRefusal, preCutoverEvidenceSignal, preCutoverJobNote } from "@/lib/billing-start";
 import { prettyMonth } from "./ledger-helpers";
@@ -928,6 +928,8 @@ export interface CostScheduleRow {
   typicalAmount: number | null;
   label: string | null;
   active: boolean;
+  /** 0170: the bill is FOR the period before the one it is due in. */
+  coversPriorPeriod: boolean;
 }
 
 export async function listCostSchedules(parkId: string): Promise<CostScheduleRow[]> {
@@ -935,7 +937,7 @@ export async function listCostSchedules(parkId: string): Promise<CostScheduleRow
   const admin = createServiceClient();
   const data = mustRead("your bill reminders", await admin
     .from("park_cost_schedules")
-    .select("id, category, cadence, due_day, due_month, typical_amount, label, active")
+    .select("id, category, cadence, due_day, due_month, typical_amount, label, active, covers_prior_period")
     .eq("park_id", parkId)
     .order("due_day", { ascending: true }));
 
@@ -951,6 +953,7 @@ export async function listCostSchedules(parkId: string): Promise<CostScheduleRow
     typicalAmount: r.typical_amount == null ? null : Number(r.typical_amount),
     label: (r.label as string) ?? null,
     active: Boolean(r.active),
+    coversPriorPeriod: Boolean(r.covers_prior_period),
   }));
 }
 
@@ -1027,7 +1030,13 @@ export async function saveCostSchedule(
     row.cadence === "monthly" ? `every month around the ${ordinal(row.due_day)}`
     : row.cadence === "annual" ? `every ${MONTHS[(row.due_month ?? 1) - 1]}, around the ${ordinal(row.due_day)}`
     : `every three months from ${MONTHS[(row.due_month ?? 1) - 1]}, around the ${ordinal(row.due_day)}`;
-  return { ok: true, signal: `We'll look for the ${name} bill ${when}.` };
+  // A flagged bill is named by what it covers as well as when it lands
+  // (0170), and the toast says so — it is the one moment he can tell the box
+  // did what he meant.
+  const covers = row.covers_prior_period
+    ? ` We'll call each one by the ${coveredSpanWords(row.cadence)} before it's due, since that's what it covers.`
+    : "";
+  return { ok: true, signal: `We'll look for the ${name} bill ${when}.${covers}` };
 }
 
 export async function setCostScheduleActive(
@@ -1081,10 +1090,14 @@ export async function setCostScheduleActive(
 
   revalidatePath("/park/costs");
   revalidatePath("/park/today");
+  // The switch reads only the category, not the cadence — and it said "each
+  // month" about The Haven's tax reminder, which comes once a year. The
+  // sentence names no cadence at all, the way the section intro does: the
+  // save toast is the one that knows when, and it already says so.
   return {
     ok: true,
     signal: active
-      ? "Back on — we'll mention it each month."
+      ? "Back on — it's on your morning screen again when it's due."
       : "Switched off — nothing deleted.",
   };
 }

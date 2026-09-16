@@ -18,8 +18,8 @@ type Row = Record<string, unknown>;
 const db: Record<string, Row[]> = {};
 /** Every write, in the order it happened. */
 const writes: Array<{ table: string; op: "update" | "insert"; patch: Row; matched: string[] }> = [];
-/** Make the next insert / update on a table fail. */
-const failNext: { insert?: string; update?: { table: string; message: string } } = {};
+/** Make the next insert / update / read on a table fail. */
+const failNext: { insert?: string; update?: { table: string; message: string }; select?: { table: string; message: string } } = {};
 
 const cents = (n: unknown) => Math.round(Number(n ?? 0) * 100);
 const live = (a: Row) => a.removed_at == null;
@@ -56,8 +56,10 @@ class Q implements PromiseLike<{ data: Row[] | null; error: { code?: string; mes
   private ins: Row[] | null = null;
   private sel = "";
   private sort: { c: string; asc: boolean } | null = null;
+  private cap: number | null = null;
   constructor(private t: string) {}
   select(cols?: string) { this.sel = cols ?? ""; return this; }
+  limit(n: number) { this.cap = n; return this; }
   eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
   neq(c: string, v: unknown) { this.fs.push((r) => r[c] !== v); return this; }
   in(c: string, vs: unknown[]) { this.fs.push((r) => vs.includes(r[c])); return this; }
@@ -78,6 +80,7 @@ class Q implements PromiseLike<{ data: Row[] | null; error: { code?: string; mes
     if (this.sel.includes("park_lots(")) {
       out = out.map((r) => ({ ...r, park_lots: { park_id: "park-1", rental_mode: "long_term" } }));
     }
+    if (this.cap != null) out = out.slice(0, this.cap);
     return out;
   }
   private run(): { data: Row[] | null; error: { code?: string; message: string } | null } {
@@ -106,6 +109,10 @@ class Q implements PromiseLike<{ data: Row[] | null; error: { code?: string; mes
       if (this.t === "park_payment_allocations") for (const r of hit) recompute(r.charge_id as string);
       writes.push({ table: this.t, op: "update", patch: this.patch!, matched: hit.map((r) => r.id as string) });
       return { data: hit.map((r) => ({ id: r.id, during: r.during })), error: null };
+    }
+    if (failNext.select && failNext.select.table === this.t) {
+      const message = failNext.select.message; delete failNext.select;
+      return { data: null, error: { message } };
     }
     return { data: this.rows(), error: null };
   }
@@ -156,7 +163,7 @@ function seed(during = "[2027-01-01,2028-01-01)") {
   db.park_charges = []; db.park_payments = []; db.park_payment_allocations = []; db.lot_cost_shares = [];
   writes.length = 0;
   revalidated.length = 0;
-  delete failNext.insert; delete failNext.update;
+  delete failNext.insert; delete failNext.update; delete failNext.select;
   clock.today = "2027-01-01";
 }
 
@@ -396,13 +403,20 @@ describe("the bills already raised on the arrangement they had", () => {
     expect(res.ok).toBe(false);
     expect(res.error).toBe(
       "You've already taken $400.00 against January 2027's bill on the arrangement they had — " +
-      "cancelling it would make that money disappear from your totals while it's still in the bank. " +
-      "Nothing was recorded; January 2027 needs sorting out before the new lease is dated into it.",
+      "this door doesn't cancel a paid bill. " +
+      "Nothing was recorded. Cancel January 2027's bill from the rent screen first (\"Cancel this bill\" on the January 2027 line) — " +
+      "the $400.00 goes on their account and the new lease is billed from it — then record the signing.",
     );
+    // The door it names is the figure it names: $400.00 is what was taken,
+    // not the $542.53 the new lease bills — and "needs sorting out" named
+    // no door at all.
+    expect(res.error).not.toMatch(/needs sorting out/);
+    expect(res.error).not.toMatch(/\$542\.53/);
     // 'or record the new lease from February 1, 2027' dated the paper to a
     // day it does not carry — every new lease runs from 1 January — and made
     // the owner's decision (what a month paid at the old rate owes under a
-    // lease effective that month) for him. Neither door is named now.
+    // lease effective that month) for him. Neither is offered now — the
+    // one door named is the rent screen's, which decides nothing.
     expect(res.error).not.toMatch(/record the new lease from/);
     expect(res.error).not.toMatch(/Sort that payment out/);
     expect(writes).toEqual([]);
@@ -461,7 +475,7 @@ describe("the bills already raised on the arrangement they had", () => {
     const res = await recordSigning("park-1", "res-14", INPUT);
     expect(res.ok, res.error).toBe(true);
     expect(res.signal).toContain(
-      "⚠️ January 2027's $400.00 bill on the old arrangement is still open — cancel it from the rent screen, then bill January 2027 again.",
+      "⚠️ January 2027's $400.00 bill on the old arrangement is still open — boom. Cancel it from the rent screen, then bill January 2027 again.",
     );
     expect(db.park_charges[0].status).toBe("open");
     // Nothing was raised on the successor — the live-per-month rule would
@@ -523,6 +537,204 @@ describe("the bills already raised on the arrangement they had", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// THE MONTHS THE RUN HAS PASSED (decision 3, 16 Sep: "it's billed at the new
+// rent, if there is any"). A lease recorded after the 1st's run — or after
+// the arrangement ran out — writes a row the run has already gone past; the
+// run keys "already billed" per reservation and visits a month once, so the
+// door bills those months itself, on the new lease.
+// ---------------------------------------------------------------------------
+describe("the months the run has already passed are billed on the new lease", () => {
+  /** The 1 January run at another lot — the month's run has happened. */
+  function ranMonth(month: string) {
+    db.park_lots.push({ id: "lot-9", park_id: "park-1", lot_number: "9", rental_mode: "long_term", lifecycle: "live" });
+    db.park_charges.push({
+      id: `chg-9-${month}`, park_id: "park-1", park_lot_id: "lot-9", reservation_id: "res-9", renter_id: "file-9",
+      period_month: month, due_on: `${month}-01`, amount: 400, paid_total: 0, status: "open", lines: [],
+    });
+  }
+
+  it("an arrangement that RAN OUT: the successor is written from its end, the holdover is left as it is, and the month since is billed on the lease", async () => {
+    // Lapsed 1 January 2028; the lease says the 15th; recorded on the 20th,
+    // after January's run. Before this the door refused ("nothing to carry
+    // on from"), and had it written the row, January 2028 would have sat
+    // unbilled for this household forever.
+    clock.today = "2028-01-20";
+    ranMonth("2028-01");
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2028-01-15", agreementMonths: 3 });
+    expect(res.ok, res.error).toBe(true);
+    // No update on the holdover: it already ends where the successor starts.
+    expect(writes.map((w) => `${w.table}:${w.op}`)).toEqual([
+      "park_renters:update", "lot_reservations:insert", "park_charges:insert",
+    ]);
+    expect(db.lot_reservations[0]).toMatchObject({ status: "active", during: "[2027-01-01,2028-01-01)" });
+    expect(writes[1].patch).toMatchObject({ during: "[2028-01-01,2028-04-01)", status: "active", origin: "office", agreement_seq: 2 });
+    const succ = db.lot_reservations.find((r) => r.agreement_seq === 2)!;
+    const jan = liveCharges().filter((c) => c.reservation_id === succ.id);
+    expect(jan).toHaveLength(1);
+    expect(jan[0]).toMatchObject({ period_month: "2028-01", amount: 542.53, due_on: "2028-01-01", status: "open" });
+    expect(res.signal).toBe(
+      "Their arrangement ran out on January 1, 2028, so the new 3-month lease is recorded from that day — " +
+      "January 2028 bills $542.53 ($400.00 rent + $142.53 fees). January 2028 is now billed — $542.53.",
+    );
+  });
+
+  it("before the month's run, the current month is left to the run — nothing is raised here", async () => {
+    clock.today = "2028-01-20";
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2028-01-15", agreementMonths: 3 });
+    expect(res.ok, res.error).toBe(true);
+    expect(writes.filter((w) => w.table === "park_charges")).toEqual([]);
+    expect(res.signal).not.toMatch(/now billed/);
+  });
+
+  it("several months behind: each is billed, oldest first, and the toast names them all", async () => {
+    // Lapsed 1 January 2028, recorded 20 March under the three-month term
+    // (1 Jan – 1 Apr reaches past today). January and February are behind;
+    // March's run has happened too.
+    clock.today = "2028-03-20";
+    ranMonth("2028-03");
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2028-03-10", agreementMonths: 3 });
+    expect(res.ok, res.error).toBe(true);
+    const succ = db.lot_reservations.find((r) => r.agreement_seq === 2)!;
+    const months = writes.filter((w) => w.table === "park_charges").map((w) => w.patch.period_month);
+    expect(months).toEqual(["2028-01", "2028-02", "2028-03"]);
+    expect(liveCharges().filter((c) => c.reservation_id === succ.id).map((c) => c.amount)).toEqual([542.53, 542.53, 542.53]);
+    expect(res.signal).toContain(
+      "January 2028, February 2028 and March 2028 are now billed — $542.53, $542.53 and $542.53 ($1,627.59 in all).",
+    );
+  });
+
+  it("a legitimate PAID bill on the arrangement's own last days neither refuses the signing nor is cancelled", async () => {
+    // A hand-filed holdover [4 March 2027, 4 March 2028) lapsed; the run on
+    // 1 March 2028 raised its three days ($26.61) and they paid it. The
+    // lease says 10 March, recorded on the 20th: the row runs from the 4th.
+    // Step 0 used to refuse this — 'You've already taken $26.61 against
+    // March's bill' — over a bill that is right as it stands.
+    seed("[2027-03-04,2028-03-04)");
+    clock.today = "2028-03-20";
+    db.park_charges.push({
+      id: "chg-res-14-mar", park_id: "park-1", park_lot_id: "lot-14", reservation_id: "res-14", renter_id: "file-14",
+      period_month: "2028-03", due_on: "2028-03-01", amount: 26.61, paid_total: 0, status: "open",
+      lines: [{ label: "Lot rent", amount: 26.61, basis: "3 of 31 days" }],
+    });
+    db.park_payments.push({ id: "pay-1", park_id: "park-1", renter_id: "file-14", amount: 26.61, kind: "rent", charge_id: "chg-res-14-mar", received_on: "2028-03-05", reversed_at: null, returned_at: null });
+    recompute("chg-res-14-mar");
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2028-03-10", agreementMonths: 1 });
+    expect(res.ok, res.error).toBe(true);
+    expect(db.park_charges.find((c) => c.id === "chg-res-14-mar")).toMatchObject({ status: "paid" });
+    expect(db.park_charges.find((c) => c.id === "chg-res-14-mar")).not.toHaveProperty("void_reason");
+    expect(writes.filter((w) => w.table === "park_charges" && w.op === "update")).toEqual([]);
+    // The lease's own March: the 4th to the 31st, rent plus the fee.
+    const succ = db.lot_reservations.find((r) => r.agreement_seq === 2)!;
+    expect(succ.during).toBe("[2028-03-04,2028-04-04)");
+    const mar = liveCharges().find((c) => c.reservation_id === succ.id)!;
+    expect(mar).toMatchObject({ period_month: "2028-03" });
+    expect(mar.lines).toEqual([
+      { label: "Lot rent", amount: 361.29, basis: "28 of 31 days" },
+      { label: "Grounds", amount: 128.74, basis: "28 of 31 days" },
+    ]);
+    expect(res.signal).toContain("March 2028 is now billed — $490.03.");
+    expect(res.signal).not.toMatch(/cancelled/);
+  });
+
+  it("the owner's own second tap on a lapsed arrangement says the lease is already recorded, and writes nothing", async () => {
+    clock.today = "2028-01-20";
+    ranMonth("2028-01");
+    const first = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2028-01-15", agreementMonths: 3 });
+    expect(first.ok, first.error).toBe(true);
+    writes.length = 0;
+    const again = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2028-01-15", agreementMonths: 3 });
+    expect(again.ok).toBe(false);
+    // Not 'Something else already holds that lot' — it is his own lease.
+    expect(again.error).toBe("That lease is already recorded from January 1, 2028.");
+    expect(writes).toEqual([]);
+    expect(db.lot_reservations).toHaveLength(2);
+  });
+
+  it("a lapsed arrangement at a length that is over from its end is refused naming a length that reaches — never the day box", async () => {
+    // Lapsed 1 January 2028, recorded 15 February at one month.
+    clock.today = "2028-02-15";
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2028-02-10", agreementMonths: 1 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("Their arrangement ran out on January 1, 2028, and from that day 1 month would be over already — pick 3 months.");
+    expect(writes).toEqual([]);
+  });
+
+  it("when whether this month ran cannot be read, the toast says so and no earlier month is guessed at", async () => {
+    clock.today = "2028-01-20";
+    failNext.select = { table: "park_charges", message: "boom" };
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2028-01-15", agreementMonths: 3 });
+    expect(res.ok, res.error).toBe(true);
+    expect(db.lot_reservations).toHaveLength(2);
+    expect(writes.filter((w) => w.table === "park_charges")).toEqual([]);
+    expect(res.signal).toContain(
+      "⚠️ We couldn't read the bills already raised this month, so no earlier month was billed for the new lease — bill them from the rent screen.",
+    );
+    expect(res.signal).not.toMatch(/now billed/);
+  });
+
+  it("a lease from mid-month recorded after that month ran: the lease's months on the successor, and the arrangement's own days before it in the lease's month", async () => {
+    // A holdover filed on 10 January (after the 1 January run, so nothing
+    // was ever raised on it); the lease says 15 January; recorded 20
+    // February, after February's run. January 15–31 and all of February on
+    // the lease; 10–14 January on the arrangement they had.
+    seed("[2027-01-10,2028-01-10)");
+    clock.today = "2027-02-20";
+    ranMonth("2027-02");
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2027-01-15", agreementMonths: 3 });
+    expect(res.ok, res.error).toBe(true);
+    expect(db.lot_reservations[0].during).toBe("[2027-01-10,2027-01-15)");
+    const succ = db.lot_reservations.find((r) => r.agreement_seq === 2)!;
+    const onLease = liveCharges().filter((c) => c.reservation_id === succ.id).map((c) => `${c.period_month}:${c.amount}`);
+    expect(onLease).toEqual(["2027-01:297.51", "2027-02:542.53"]);
+    const onHoldover = liveCharges().filter((c) => c.reservation_id === "res-14");
+    expect(onHoldover).toHaveLength(1);
+    // 5 of 31 days of the $275 they were paying, no fee.
+    expect(onHoldover[0]).toMatchObject({ period_month: "2027-01", amount: 44.35 });
+    expect(res.signal).toBe(
+      "On the new 3-month lease from January 15, 2027 — January 2027 bills the arrangement they had to January 14, 2027, " +
+      "then the new lease from January 15, 2027 — $542.53 a month after that ($400.00 rent + $142.53 fees). " +
+      "January 2027 and February 2027 are now billed — $297.51 and $542.53 ($840.04 in all). " +
+      "On the arrangement they had, to January 14, 2027: January 2027 is now billed — $44.35.",
+    );
+  });
+
+  it("a lease from the 1st: the trimmed arrangement covers no day of that month, and nothing false is said about it", async () => {
+    seed("[2027-01-10,2028-01-10)");
+    clock.today = "2027-02-20";
+    ranMonth("2027-02");
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2027-02-01", agreementMonths: 1 });
+    expect(res.ok, res.error).toBe(true);
+    expect(liveCharges().filter((c) => c.reservation_id === "res-14")).toEqual([]);
+    expect(res.signal).toContain("February 2027 is now billed — $542.53.");
+    // '⚠️ February 2027 couldn't be billed — the run wouldn't raise it' was
+    // printed for a row with no days in February.
+    expect(res.signal).not.toMatch(/couldn't be billed|arrangement they had, to/);
+  });
+
+  it("a month step 4 already raised again is silent here — one live bill per month", async () => {
+    januaryBilled();
+    clock.today = "2027-01-02";
+    const res = await recordSigning("park-1", "res-14", INPUT);
+    expect(res.ok, res.error).toBe(true);
+    expect(liveCharges()).toHaveLength(1);
+    expect(res.signal).not.toMatch(/is now billed/);
+  });
+
+  it("a month whose bill on the old arrangement still stands is NOT raised on the new lease — the double bill step 4 exists to end", async () => {
+    // The void failed (tested above as SAID); the successor's January must
+    // not be raised beside the standing one.
+    januaryBilled();
+    clock.today = "2027-01-02";
+    failNext.update = { table: "park_charges", message: "boom" };
+    const res = await recordSigning("park-1", "res-14", INPUT);
+    expect(res.ok, res.error).toBe(true);
+    expect(liveCharges()).toHaveLength(1);
+    expect(liveCharges()[0].reservation_id).toBe("res-14");
+    expect(res.signal).not.toMatch(/is now billed/);
+  });
+});
+
 describe("when a write fails, the sentence is true", () => {
   it("a failed renter patch changes nothing else", async () => {
     failNext.update = { table: "park_renters", message: "boom" };
@@ -566,6 +778,21 @@ describe("when a write fails, the sentence is true", () => {
     expect(res.ok).toBe(false);
     expect(db.lot_reservations[0].during).toBe("[2026-12-20,2027-12-20)");
     expect(res.error).toMatch(/nothing bills differently/);
+  });
+
+  it("a failed successor insert on an arrangement that ran out puts nothing back — there is nothing to put back — and says so", async () => {
+    clock.today = "2028-01-20";
+    failNext.insert = "overlap";
+    const res = await recordSigning("park-1", "res-14", { ...INPUT, signedOn: "2028-01-15", agreementMonths: 3 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe(
+      "The new agreement couldn't be written — they're still on the arrangement they had. " +
+      "Something else already holds that lot from that day — check the roll.",
+    );
+    expect(res.error).not.toMatch(/put back/);
+    expect(writes.map((w) => `${w.table}:${w.op}`)).toEqual(["park_renters:update"]);
+    expect(db.lot_reservations).toHaveLength(1);
+    expect(db.lot_reservations[0]).toMatchObject({ status: "active", during: "[2027-01-01,2028-01-01)" });
   });
 
   it("a double-tap: the second recorder finds the holdover already changed", async () => {

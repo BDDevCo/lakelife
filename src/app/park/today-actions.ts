@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
-import { COST_CATEGORY_LABEL, type CostCategory , billPeriod, type Cadence} from "./cost-helpers";
+import { COST_CATEGORY_LABEL, type CostCategory , billPeriod, costAnswersBill, type Cadence} from "./cost-helpers";
 import { todayLakeDate, lakeDateOf } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import {
@@ -17,7 +17,7 @@ import {
 } from "./today-helpers";
 import { getHeldMoney } from "./money-actions";
 // A day a person reads is words — the snooze toast said "Back on 2027-02-01".
-import { dayInWords } from "./park-helpers";
+import { dayInWords, lapsedRowOf } from "./park-helpers";
 import { latestSeqByChain } from "./agreement-helpers";
 import { livenessLine, lastNightsFindings, type RunRow, type LivenessLine } from "./machine-helpers";
 import { mustRead } from "@/lib/must-read";
@@ -79,6 +79,10 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // The widest window any bill cadence can need (0123): a property tax entered
   // in March must still answer November's reminder.
   const year = today.slice(0, 4);
+  // And one year wider (0170): a flagged annual bill covers the year BEFORE
+  // the one it is due in, so the widest period a reminder can now ask about
+  // starts on 1 January of last year.
+  const priorYear = String(Number(year) - 1);
 
   // EVERY READ IN THIS LOADER EITHER ANSWERS OR THROWS. Today is the screen he
   // opens with coffee, and every branch below has a calm empty-case sentence
@@ -110,23 +114,31 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const liveIds = liveLots.map((l) => l.id as string);
   const lotName = new Map((lots ?? []).map((l) => [l.id as string, l.lot_number as string]));
 
-  const stays = liveIds.length
+  // THE ENDED ROWS COME TOO — read once, then split. A household closed out
+  // of its successor leaves the expired link before it approved/active, run
+  // out, with nothing held after it: the lapsed shape, unless the close-out
+  // is seen. Everything below that lists agreements, notices or holdovers
+  // reads `stays` (held rows only, as before); the ended rows reach only the
+  // two facts that must see them — whether a lot is lapsed (lapsedRowOf) and
+  // whether a chain already has a later link (`chains`).
+  const everyRow = liveIds.length
     ? mustRead(
         "who's on your lots",
         await admin
           .from("lot_reservations")
-          .select("id, park_lot_id, renter_id, during, status, origin, agreement_chain_id, agreement_seq, notice_given_on, expected_move_out")
+          .select("id, park_lot_id, renter_id, during, status, origin, agreement_chain_id, agreement_seq, notice_given_on, expected_move_out, term")
           .in("park_lot_id", liveIds)
-          .in("status", ["approved", "active"]),
+          .in("status", ["approved", "active", "ended"]),
       )
     : ([] as Record<string, unknown>[]);
+  const stays = (everyRow ?? []).filter((s) => s.status === "approved" || s.status === "active");
 
   const occupiedLotIds = new Set<string>();
   const reservedLotIds = new Set<string>();
-  for (const s of stays ?? []) {
+  for (const s of stays) {
     const r = parseDaterange(s.during as string);
     if (!r) continue;
-    // Half-open: `end` is checkout morning, so today === end is NOT occupied.
+    // Half-open: `end` is checkout morning, so today === end is NOT in date.
     if (r.start <= today && today < r.end) occupiedLotIds.add(s.park_lot_id as string);
     else if (r.start > today) reservedLotIds.add(s.park_lot_id as string);
   }
@@ -135,6 +147,27 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // sets and every renewal inflates occupancy by a lot that did not change
   // hands. Found by driving it: 3 lots, 1 tenant, "2 of 3 taken".
   for (const id of occupiedLotIds) reservedLotIds.delete(id);
+  // LIVED ON, PAPERWORK RUN OUT: the roll's own rule (park-helpers
+  // lapsedRowOf), read from every row on the lot — a held monthly row behind
+  // today with nothing current, nothing coming and nobody closed out after
+  // it. Nobody moved out, so the lot is not empty: the roll says "Ran out"
+  // for the same row; Today read it as "Empty: lot 9". A stay by the night
+  // or the week is not lapsed once its checkout passes, and a household
+  // closed out of its successor has left — both the helper's, not this
+  // file's, so the three screens cannot drift.
+  const rowsOfLot = new Map<string, { status: string; range: ReturnType<typeof parseDaterange>; term: string }[]>();
+  for (const s of everyRow ?? []) {
+    const list = rowsOfLot.get(s.park_lot_id as string) ?? [];
+    list.push({ status: s.status as string, range: parseDaterange(s.during as string), term: s.term as string });
+    rowsOfLot.set(s.park_lot_id as string, list);
+  }
+  const lapsedLotIds = new Set<string>();
+  for (const [lotId, rows] of rowsOfLot) {
+    if (lapsedRowOf(rows, today)) lapsedLotIds.add(lotId);
+  }
+  // What is left is a lot somebody lives on with no paperwork in date:
+  // counted as taken, never empty.
+  for (const id of lapsedLotIds) occupiedLotIds.add(id);
 
   const vacantLots = liveLots.filter(
     (l) => !occupiedLotIds.has(l.id as string) && !reservedLotIds.has(l.id as string),
@@ -227,6 +260,8 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   //
   // Keyed on park_id, which 0102 made NOT NULL on this table — so no row can
   // escape it, and the query needs no bills to exist.
+  //
+  // A payment against a CANCELLED bill (0169: released onto account) stays in receipts — it arrived against that bill; what is still held of it reaches the hand-back card through getHeldMoney below.
   const payments = mustRead(
     "the money that's come in",
     await admin.from("park_payments")
@@ -306,9 +341,12 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // ---- the to-do list -----------------------------------------------------
   // ONE predicate for "already has a successor" — the same map the
   // renewals card and the nightly reminder read (latestSeqByChain); this
-  // loader used to build its own copy.
+  // loader used to build its own copy. Built from EVERY row including the
+  // ended ones: a household closed out of its successor has a later link
+  // — it is just `ended` — and the prior must not read as "write the next
+  // one" (nor a lapsed holdover as "hasn't signed").
   const chains = latestSeqByChain(
-    (stays ?? []).map((s) => ({
+    (everyRow ?? []).map((s) => ({
       agreement_chain_id: (s.agreement_chain_id as string | null) ?? null,
       agreement_seq: (s.agreement_seq as number | null) ?? null,
     })),
@@ -317,7 +355,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // reservation -> lot, so a rent change can name its lot without a column
   // that does not exist.
   const lotOfReservation = new Map(
-    (stays ?? []).map((s) => [s.id as string, s.park_lot_id as string]),
+    stays.map((s) => [s.id as string, s.park_lot_id as string]),
   );
 
   const renters = mustRead(
@@ -326,7 +364,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   );
   const renterName = new Map((renters ?? []).map((r) => [r.id as string, r.display_name as string]));
 
-  const agreements = (stays ?? []).flatMap((s) => {
+  const agreements = stays.flatMap((s) => {
     const r = parseDaterange(s.during as string);
     if (!r) return [];
     const cid = (s.agreement_chain_id as string) ?? null;
@@ -389,27 +427,18 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // than amount, because two identical bills are two bills.
   const [schedulesRes, monthCostsRes] = await Promise.all([
     admin.from("park_cost_schedules")
-      .select("id, category, cadence, due_day, due_month, typical_amount, label")
+      .select("id, category, cadence, due_day, due_month, typical_amount, label, covers_prior_period")
       .eq("park_id", parkId).eq("active", true),
-    // WHAT COUNTS AS "DEALT WITH", and this has been wrong twice.
-    //
-    // FIRST it matched `period_start >= this-month`. But the sewer bill that
-    // ARRIVES on 1 August is the bill FOR JULY, so the period he types starts
-    // before the window and "Sewer for August still isn't entered" stayed up
-    // after he entered it. A reminder that will not clear teaches a person to
-    // stop reading the screen, which costs more than the reminder was worth.
-    //
-    // THEN the window stayed a MONTH after 0123 gave bills a quarterly and an
-    // annual rhythm. A property tax entered in March would not be fetched at
-    // all when November's reminder asked, so the year's biggest bill would
-    // have nagged from the day it was paid.
-    //
-    // So the fetch spans the widest period any cadence can need — the year —
-    // and `billPeriod` narrows it per schedule below.
+    // WHAT COUNTS AS "DEALT WITH" lives in `costAnswersBill` (cost-helpers),
+    // with the history of the two times it was wrong. What is decided HERE
+    // is only how much to fetch: the widest period any cadence can need. That
+    // was the year (0123); a flagged annual bill covers the year BEFORE the
+    // one it is due in (0170), so it is now last 1 January onward, and
+    // `costAnswersBill` narrows it per schedule below.
     admin.from("park_costs")
       .select("category, period_start, period_end, created_at")
       .eq("park_id", parkId)
-      .or(`created_at.gte.${year}-01-01,period_end.gte.${year}-01-01`),
+      .or(`created_at.gte.${priorYear}-01-01,period_end.gte.${priorYear}-01-01`),
   ]);
   const schedules = mustRead("the bills that recur here", schedulesRes);
   // This one decides whether a bill reminder CLEARS. An empty read makes every
@@ -478,7 +507,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     // 20th. `chains` (built above for the renewal card) knows the later
     // link; holdoverLotsOf leaves those off.
     holdoverLots: holdoverLotsOf(
-      (stays ?? []).map((s) => ({
+      stays.map((s) => ({
         park_lot_id: s.park_lot_id as string,
         during: s.during as string,
         origin: (s.origin as string | null) ?? null,
@@ -554,23 +583,31 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     // quiet from the moment it is entered until next November.
     billsDue: (schedules ?? [])
       .map((sc) => {
+        // The schedule may say its bill is FOR the period before the one it
+        // is due in (0170). billPeriod then keys and windows on the covered
+        // period and carries the flag on its result, so the clear rule and
+        // the card read one shape.
         const p = billPeriod(
           (sc.cadence as Cadence) ?? "monthly",
           sc.due_month == null ? null : Number(sc.due_month),
           Number(sc.due_day ?? 5),
           today,
+          Boolean(sc.covers_prior_period),
         );
         return { sc, p };
       })
-      // Cleared by a cost of that category ANYWHERE IN THE PERIOD — recorded
-      // in it, or covering a stretch that overlaps it. Same two honest signals
-      // the monthly window already used, widened to the period.
-      .filter(({ sc, p }) => !allCosts.some((c) => {
-        if (c.category !== sc.category) return false;
-        const entered = lakeDateOf(String(c.created_at ?? "")) ?? "";
-        if (entered >= p.from && entered < p.to) return true;
-        return String(c.period_start ?? "") < p.to && String(c.period_end ?? "") >= p.from;
-      }))
+      // Cleared by a cost of that category that answers the reminder — the
+      // ONE rule, in cost-helpers, with its history.
+      .filter(({ sc, p }) => !allCosts.some((c) => costAnswersBill(
+        {
+          category: String(c.category),
+          period_start: String(c.period_start ?? ""),
+          period_end: String(c.period_end ?? ""),
+          enteredOn: lakeDateOf(String(c.created_at ?? "")) ?? "",
+        },
+        p,
+        String(sc.category),
+      )))
       .map(({ sc, p }) => ({
         scheduleId: sc.id as string,
         category: sc.category as string,
@@ -584,8 +621,9 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
         periodFrom: p.from,
         dueOn: p.dueOn,
         typical: sc.typical_amount == null ? null : Number(sc.typical_amount),
+        coversPriorPeriod: p.coversPriorPeriod,
       })),
-    noticed: (stays ?? [])
+    noticed: stays
       .filter((s) => s.expected_move_out)
       .map((s) => ({
         reservationId: s.id as string,

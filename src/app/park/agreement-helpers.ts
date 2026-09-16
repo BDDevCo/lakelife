@@ -31,7 +31,8 @@
 
 import { longDate } from "@/lib/lake-time";
 import { isSeasonal, type ParkSeason } from "@/lib/parks";
-import { prettyMonth } from "./ledger-helpers";
+import { periodIsBillable } from "@/lib/billing-start";
+import { prettyMonth, monthList, shiftMonth, currentPeriod, notMonthlySentence } from "./ledger-helpers";
 
 /**
  * Add whole months, clamping to the end of the target month.
@@ -342,7 +343,16 @@ export type RenewalRefusal =
   | "already_ended"
   | "not_yet_renewable"
   | "season_closed"
-  | "inherited";
+  | "inherited"
+  /**
+   * A LATER LINK OF THIS CHAIN WAS CLOSED OUT — the household moved out
+   * inside a successor, which marks that link `ended` and leaves this one
+   * exactly as it was: held, run out, nothing held after it. Read from the
+   * held rows alone that is the lapsed shape, and the Renew tap would have
+   * written a successor from this row's end over the family who left and
+   * billed them for every month since.
+   */
+  | "moved_out";
 
 /**
  * THE LABEL ON THE ROLL'S SIGNING CONTROL — the one home for the words Today,
@@ -401,6 +411,10 @@ export function renewalRefusalText(
       return "That spot is closed for the season. You can book it again when the season opens.";
     case "inherited":
       return inheritedRefusalText(lotNumber);
+    // No door: the lot is open on the roll, and a new household is filed
+    // from there the ordinary way.
+    case "moved_out":
+      return `${lotNumber ? `Lot ${lotNumber}` : "This household"} was closed out after this agreement — they moved out — so there's nothing to renew.`;
   }
 }
 
@@ -539,23 +553,98 @@ export function agreementSpanWords(plan: PlannedRenewal): string {
 }
 
 /**
- * THE MONTHS A BACKFILLED AGREEMENT REACHES BACK OVER, in words — "It
- * reaches back over February 2027 through June 2027, which nothing has
- * billed yet." A successor planned from a lapsed agreement's own end starts
- * in the past, and the one tap that writes it makes every month since
- * billable at the rent; the bills run keys on the row, and this row is new,
- * so none of them has been raised — including a month whose run already
- * happened on the 1st and found no tenancy on the lot. Named so the click
- * that made five months billable says so on screen. A statement, not an
- * instruction: whether to run those months is the owner's call. Null when
- * the plan starts today or later. Months in words (prettyMonth), never ISO.
+ * THE MONTHS A BACKFILLED ROW HAS ALREADY MISSED. The run visits a month
+ * once, when he presses Bill <month>; a month behind today, or the current
+ * month once its run has happened, is one no run will come back for — so the
+ * door that wrote the row bills them (gap-bills.ts). The current month before
+ * its run is left to the run.
+ *
+ * Every YYYY-MM from `startISO`'s month up to the last month a run has
+ * passed — the current month when `currentMonthRan`, else the month before
+ * it — filtered by the ledger's own floor (periodIsBillable: a month that
+ * began before go-live was never ours). Empty when the row starts after the
+ * last month included. A row starting today, written after today's run has
+ * happened, has missed the current month: the run raised every bill it will
+ * raise for this month before the row existed. Ascending, so money on
+ * account settles the oldest bill first (settleOnAccount's rule).
  */
-export function backfillWords(startISO: string, todayISO: string): string | null {
+export function lostMonths(
+  startISO: string,
+  todayISO: string,
+  cutoverDate: string | null,
+  currentMonthRan: boolean,
+): string[] {
+  const current = currentPeriod(todayISO);
+  const last = currentMonthRan ? current : shiftMonth(current, -1);
+  const out: string[] = [];
+  for (let m = startISO.slice(0, 7); m <= last; m = shiftMonth(m, 1)) {
+    if (periodIsBillable(m, cutoverDate)) out.push(m);
+  }
+  return out;
+}
+
+/** What the money fact of a backfill is judged on, besides the dates. */
+export interface BackfillRow {
+  /** The rent the successor will be written at — null when none is set. */
+  quotedAmount: number | null;
+  /** How the tenancy is paid; the successor copies it (successor-row). Absent reads as monthly. */
+  term: string | null;
+  lotNumber: string;
+}
+
+/**
+ * THE MONEY FACT OF A BACKFILL, in words, from the months the tap will bill
+ * — "Writing it bills this agreement for February 2027 and March 2027 —
+ * nothing has billed it for those months yet." The tap BILLS the months the
+ * run has already passed (decision 3, 16 Sep: "it's billed at the new rent,
+ * if there is any"), so the card says so before the tap and the toast says
+ * what landed after it (lostMonthsWords).
+ *
+ * WORDED FOR THE ROW, never for the month: a consecutive renewal written on
+ * the 25th for an agreement that ended on the 20th has the 1st to the 19th
+ * billed already — on the prior row, by the run, prorated — so "nothing has
+ * billed that month" would be false while "nothing has billed this
+ * agreement for it" is true. When no month has been missed the sentence says
+ * the current month is the run's: "It reaches back to March 2, 2027;
+ * March 2027 bills when you bill the month." Null when the plan starts
+ * today or later and nothing is missed — no fact to state. Months and days
+ * in words (prettyMonth/longDate), never ISO.
+ *
+ * "IF THERE IS ANY" IS HALF THE DECISION. Both sentences above promise a
+ * bill, and the re-raise refuses two rows the way the run does: a row FILED
+ * AS PAID SOME OTHER WAY THAN MONTHLY (the successor copies the term, so a
+ * yearly prior makes a yearly successor and the run bills months only) and
+ * a row WITH NO RENT. The card said "Writing it bills this agreement for
+ * February 2027" over both, beside a tap that could not — so the two are
+ * said first, in the run's own words: the not-monthly sentence is
+ * ledger-helpers' (one spelling, which knows a nightly home is priced per
+ * stay and must not be told to become monthly), and the no-rent one names
+ * the door on the same card that sets a rent.
+ */
+export function backfillWords(
+  startISO: string,
+  todayISO: string,
+  lost: readonly string[],
+  row: BackfillRow,
+): string | null {
+  if (row.term != null && row.term !== "monthly") {
+    const said = notMonthlySentence([{ lotNumber: row.lotNumber, term: row.term }]);
+    if (lost.length > 0) return `Writing it won't bill ${monthList(lost)}: ${said}`;
+    if (!(startISO < todayISO)) return null;
+    return `It reaches back to ${longDate(startISO)}, and nothing bills from it as filed: ${said}`;
+  }
+  if (row.quotedAmount == null) {
+    const door = "use Renew at a new rent and type what they pay.";
+    if (lost.length > 0) return `No rent is set, so writing it can't bill ${monthList(lost)} — ${door}`;
+    if (!(startISO < todayISO)) return `No rent is set, so nothing bills from it — ${door}`;
+    return `It reaches back to ${longDate(startISO)}, but no rent is set, so ${prettyMonth(currentPeriod(todayISO))} won't bill from it — ${door}`;
+  }
+  if (lost.length > 0) {
+    const these = lost.length === 1 ? "that month" : "those months";
+    return `Writing it bills this agreement for ${monthList(lost)} — nothing has billed it for ${these} yet.`;
+  }
   if (!(startISO < todayISO)) return null;
-  const first = startISO.slice(0, 7);
-  const last = todayISO.slice(0, 7);
-  const span = first === last ? prettyMonth(first) : `${prettyMonth(first)} through ${prettyMonth(last)}`;
-  return `It reaches back over ${span}, which nothing has billed yet.`;
+  return `It reaches back to ${longDate(startISO)}; ${prettyMonth(currentPeriod(todayISO))} bills when you bill the month.`;
 }
 
 /**

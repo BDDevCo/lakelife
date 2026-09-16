@@ -53,22 +53,39 @@ function remainingOf(p: Row): number {
   const refunded = (db.park_refunds ?? []).filter((r) => r.payment_id === p.id).reduce((s, r) => s + cents(r.amount), 0);
   return Math.max(0, cents(p.amount) - allocated - refunded) / 100;
 }
+/** The view (0167, widened by 0169): rent, standing, and no bill OR a bill since cancelled — released money, with the bill's month beside it. */
 function onAccountView(): Row[] {
+  const chargeOf = (p: Row) => (db.park_charges ?? []).find((c) => c.id === p.charge_id) ?? null;
   return (db.park_payments ?? [])
-    .filter((p) => (p.kind ?? "rent") === "rent" && p.charge_id == null && p.reversed_at == null && p.returned_at == null)
-    .map((p) => ({
-      payment_id: p.id, park_id: p.park_id, renter_id: p.renter_id, amount: p.amount, received_on: p.received_on,
-      created_at: p.created_at ?? null, method: p.method, reference: p.reference ?? null, receipt_no: p.receipt_no ?? null,
-      note: p.note ?? null, idempotency_key: p.idempotency_key ?? null,
-      allocated: (db.park_payment_allocations ?? []).filter((a) => a.payment_id === p.id && live(a)).reduce((s, a) => s + Number(a.amount), 0),
-      refunded: (db.park_refunds ?? []).filter((r) => r.payment_id === p.id).reduce((s, r) => s + Number(r.amount), 0),
-      remaining: remainingOf(p),
-    }));
+    .filter((p) => (p.kind ?? "rent") === "rent" && p.reversed_at == null && p.returned_at == null && (p.charge_id == null || chargeOf(p)?.status === "void"))
+    .map((p) => {
+      const c = chargeOf(p);
+      return {
+        payment_id: p.id, park_id: p.park_id, renter_id: p.renter_id ?? c?.renter_id ?? null, amount: p.amount, received_on: p.received_on,
+        created_at: p.created_at ?? null, method: p.method, reference: p.reference ?? null, receipt_no: p.receipt_no ?? null,
+        note: p.note ?? null, idempotency_key: p.idempotency_key ?? null,
+        allocated: (db.park_payment_allocations ?? []).filter((a) => a.payment_id === p.id && live(a)).reduce((s, a) => s + Number(a.amount), 0),
+        refunded: (db.park_refunds ?? []).filter((r) => r.payment_id === p.id).reduce((s, r) => s + Number(r.amount), 0),
+        remaining: remainingOf(p),
+        released_from_charge_id: c?.id ?? null, released_from_month: c?.period_month ?? null, released_on: c?.voided_at ?? null,
+      };
+    });
 }
-/** recompute_charge_paid (0167): direct payments less refunds, plus allocations from payments that still stand. */
+/** guard_park_charge_void (0169): refused by name while a live line from a standing payment is on it. */
+function guardVoid(c: Row, patch: Row): { code: string; message: string } | null {
+  if (patch.status !== "void" || c.status === "void") return null;
+  const stands = (p: Row | undefined) => !!p && p.reversed_at == null && p.returned_at == null;
+  const held = (db.park_payment_allocations ?? []).filter((a) => a.charge_id === c.id && live(a))
+    .filter((a) => stands((db.park_payments ?? []).find((p) => p.id === a.payment_id)))
+    .reduce((s, a) => s + cents(a.amount), 0);
+  if (held > 0) return { code: "P0001", message: `park_charges: ${(held / 100).toFixed(2)} of money on account is against this bill — take it off the bill first (with a reason), then cancel it` };
+  return null;
+}
+/** recompute_charge_paid (0167): direct payments less refunds, plus allocations from payments that still stand; a void bill holds 0 (0169). */
 function recompute(chargeId: string) {
   const c = (db.park_charges ?? []).find((x) => x.id === chargeId);
   if (!c) return;
+  if (c.status === "void") { c.paid_total = 0; return; }
   const stands = (p: Row | undefined) => !!p && p.reversed_at == null && p.returned_at == null;
   const direct = (db.park_payments ?? []).filter((p) => p.charge_id === chargeId && stands(p))
     .reduce((s, p) => s + cents(p.amount) - (db.park_refunds ?? []).filter((r) => r.payment_id === p.id).reduce((t, r) => t + cents(r.amount), 0), 0);
@@ -194,7 +211,11 @@ class Q {
     }
     if (this.patch) {
       const hit = this.rows();
+      if (this.t === "park_charges") {
+        for (const r of hit) { const refused = guardVoid(r, this.patch); if (refused) return Promise.resolve({ data: null, error: refused }); }
+      }
       for (const r of hit) Object.assign(r, this.patch);
+      if (this.t === "park_charges") for (const r of hit) if (r.status === "void") r.paid_total = 0;
       updated.push({ table: this.t, patch: this.patch });
       // A reversed payment drops out of every bill it touched (0167's
       // widened sync_charge_paid) — its own charge and every allocated one.
@@ -1517,45 +1538,206 @@ describe("the doors around an allocation taken back off its bill", () => {
     expect(db.park_charges[0].status).toBe("paid");
   });
 
-  it("…and a bill with BOTH kinds of money on it says both, each with its own door", async () => {
+  it("…and a bill with BOTH kinds of money on it names the allocation's door alone — the line comes off first, and only then does the cancel release the rest", async () => {
     janBill("9");
     const q = onAccount("9", 100, "2026-12-28");
     db.park_payment_allocations.push({ id: "al-1", park_id: PARK, payment_id: q.id, charge_id: "charge-9", amount: 100, applied_via: "run", removed_at: null });
     db.park_payments.push({ id: "direct", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 200, method: "cash", received_on: "2027-01-04", reversed_at: null, returned_at: null });
     db.park_charges[0].paid_total = 300;
     const res = await voidCharge(PARK, "charge-9", "raised twice");
+    expect(res.ok).toBe(false);
     expect(res.error).toBe(
-      "$100.00 of this bill was settled from money on account — take that off it first (under \"Money not against a bill\", \"Take it off this bill\" on the January 2027 line). " +
-      "You've already taken $200.00 against this bill as well — cancelling it would make that money disappear from your totals while it's still in the bank, so sort that payment out first.",
+      "$100.00 of this bill was settled from money on account — take that off it first (under \"Money not against a bill\", \"Take it off this bill\" on the January 2027 line).",
+    );
+    expect(res.error).not.toMatch(/disappear|sort that payment out/);
+    expect(db.park_charges[0].status).toBe("open");
+  });
+
+  /**
+   * A CANCELLED BILL RELEASES ITS MONEY ONTO ACCOUNT (0169). "Cancel this
+   * bill" on a bill paid straight against it used to refuse — "cancelling it
+   * would make that money disappear from your totals" — which is a lie now:
+   * the money is the household's, on account, derived from the void; the
+   * payment row never moves. The door proceeds and says where it went.
+   */
+  it("voidCharge with direct money only PROCEEDS and says it is on account for the household, with the doors out", async () => {
+    // A household still here, January cancelled: the run bills a void
+    // month again, and the money comes off THAT — said by month, not as
+    // "their next bill".
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-02-01)")];
+    janBill("9", { paid_total: 200 });
+    db.park_payments.push({ id: "direct", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 200, method: "cash", received_on: "2027-01-04", reversed_at: null, returned_at: null });
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      "Cancelled. The $200.00 taken against it is on account for Household 9 now — it comes off January 2027 when you bill it again, " +
+      "or hand it back from \"Money not against a bill\" on the Rent screen.",
+    );
+    expect(res.signal).not.toMatch(/disappear|sort that payment/);
+    expect(db.park_charges[0]).toMatchObject({ status: "void", paid_total: 0, void_reason: "raised twice" });
+    // The row never moved, and the view lists it as released from January.
+    expect(db.park_payments[0]).toMatchObject({ charge_id: "charge-9", reversed_at: null });
+    expect(onAccountView()).toEqual([expect.objectContaining({ payment_id: "direct", remaining: 200, released_from_charge_id: "charge-9", released_from_month: "2027-01" })]);
+    // No auto-settle: nothing was put against anything.
+    expect(db.park_payment_allocations).toEqual([]);
+    // The old refusal is gone from the file, in code and in prose alike.
+    const src = readFileSync(join(process.cwd(), "src", "app", "park", "ledger-actions.ts"), "utf8");
+    expect(src).not.toMatch(/money disappear/);
+  });
+
+  it("…a card payment names the processor's door, and both rails name both; a bill with no household says 'that household'", async () => {
+    // Raised twice: a second live January stands, so the run would not
+    // bill January again — the money comes off their next bill.
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-02-01)")];
+    janBill("9", { paid_total: 500 });
+    db.park_charges.push({ id: "charge-9-twin", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, paid_total: 0, status: "open" });
+    db.park_payments.push({ id: "card", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 300, method: "card", reference: "ch_1", received_on: "2027-01-04", reversed_at: null, returned_at: null });
+    db.park_payments.push({ id: "cash", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 200, method: "cash", received_on: "2027-01-04", reversed_at: null, returned_at: null });
+    const both = await voidCharge(PARK, "charge-9", "raised twice");
+    expect(both.signal).toBe(
+      "Cancelled. The $500.00 taken against it is on account for Household 9 now — it comes off their next bill, " +
+      "or hand it back from \"Money not against a bill\" on the Rent screen, or send it back through \"Refund to card\" on Statements.",
+    );
+    reset();
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-02-01)", { renter_id: null })];
+    janBill("9", { paid_total: 300, renter_id: null });
+    db.park_charges.push({ id: "charge-9-twin", park_id: PARK, park_lot_id: "lot-9", renter_id: null, reservation_id: "jan-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, paid_total: 0, status: "open" });
+    db.park_payments.push({ id: "card", park_id: PARK, renter_id: null, charge_id: "charge-9", kind: "rent", amount: 300, method: "ach", reference: "ch_1", received_on: "2027-01-04", reversed_at: null, returned_at: null });
+    const rail = await voidCharge(PARK, "charge-9", "raised twice");
+    // No household on the bill: nothing to ask "nothing more bills?" of,
+    // so no promise either way — the doors alone.
+    expect(rail.signal).toBe(
+      "Cancelled. The $300.00 taken against it is on account for that household now — " +
+      "send it back through \"Refund to card\" on Statements.",
     );
   });
 
-  it("a bill with only money handed over keeps the old sentence, and a failed allocations read refuses rather than instructing the wrong door", async () => {
+  /**
+   * "IT COMES OFF THEIR NEXT BILL" IS A PROMISE, decided on the bill just
+   * cancelled — never assumed. The resident's receipt (nothingMoreBillsFor)
+   * and the held panel (tenancyFactsFor) had already stopped making it to
+   * a household who moved out with their final month billed; voidCharge
+   * was the one doorway still promising a bill the park will never raise.
+   * Three shapes, each pinned, and a failed read makes no promise at all.
+   */
+  it("voidCharge's promise is decided on the tenancy: the month bills again, nothing more bills, the next bill — and no promise on a failed read", async () => {
+    // GONE, final month billed: the January part month stands on the link
+    // they left from; a February bill raised early by hand on that link is
+    // cancelled. February is after their last day, so the run would not
+    // bill it again; nothing more bills for them.
+    const gone = () => {
+      reset();
+      db.lot_reservations = [stay("9", "jan-9", "[2026-06-01,2027-01-16)", { status: "ended", moved_out_on: "2027-01-15" })];
+      db.park_charges.push({ id: "charge-jan-part", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2027-01", due_on: "2027-01-01", amount: 262.51, paid_total: 262.51, status: "paid" });
+      db.park_charges.push({ id: "charge-feb", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2027-02", due_on: "2027-02-01", amount: 542.53, paid_total: 542.53, status: "paid" });
+      db.park_payments.push({ id: "feb-cheque", park_id: PARK, renter_id: "renter-9", charge_id: "charge-feb", kind: "rent", amount: 542.53, method: "check", received_on: "2027-01-10", reversed_at: null, returned_at: null });
+    };
+    gone();
+    const departed = await voidCharge(PARK, "charge-feb", "raised for a month after they left");
+    expect(departed.ok, departed.error).toBe(true);
+    expect(departed.signal).toBe(
+      "Cancelled. The $542.53 taken against it is on account for Household 9 now — nothing more bills for them; " +
+      "hand it back from \"Money not against a bill\" on the Rent screen.",
+    );
+    expect(departed.signal).not.toMatch(/next bill|bill it again/);
+
+    // GONE, but the bill cancelled is an IN-STAY month (December): the run
+    // bills a void month again on an ended row that carries its last day,
+    // and takes the money back off account when it does — "theirs to have
+    // back" here would instruct a hand-back the next bill then chases.
+    gone();
+    db.park_charges.push({ id: "charge-dec", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2026-12", due_on: "2026-12-01", amount: 542.53, paid_total: 542.53, status: "paid" });
+    db.park_payments.push({ id: "dec-cheque", park_id: PARK, renter_id: "renter-9", charge_id: "charge-dec", kind: "rent", amount: 542.53, method: "check", received_on: "2026-12-02", reversed_at: null, returned_at: null });
+    const inStay = await voidCharge(PARK, "charge-dec", "wrong rent");
+    expect(inStay.ok, inStay.error).toBe(true);
+    expect(inStay.signal).toContain("is on account for Household 9 now — it comes off December 2026 when you bill it again, or hand it back");
+    expect(inStay.signal).not.toMatch(/nothing more bills|next bill/);
+
+    // GONE, final month NOT yet billed: a next bill (the part month) is
+    // still coming, and it settles from this money (R1).
+    gone();
+    db.park_charges = db.park_charges.filter((c) => c.id !== "charge-jan-part");
+    const notYet = await voidCharge(PARK, "charge-feb", "raised for a month after they left");
+    expect(notYet.ok, notYet.error).toBe(true);
+    expect(notYet.signal).toContain("is on account for Household 9 now — it comes off their next bill, or hand it back");
+
+    // A FAILED READ of the tenancy: the money IS on account; no promise
+    // is made about what happens to it, in either direction.
+    gone();
+    nextReadError = { table: "lot_reservations", error: { code: "57P01", message: "terminating connection" } };
+    const unread = await voidCharge(PARK, "charge-feb", "raised for a month after they left");
+    expect(unread.ok, unread.error).toBe(true);
+    expect(nextReadError, "the tenancy read never happened").toBeNull();
+    expect(unread.signal).toBe(
+      "Cancelled. The $542.53 taken against it is on account for Household 9 now — hand it back from \"Money not against a bill\" on the Rent screen.",
+    );
+    expect(unread.signal).not.toMatch(/next bill|nothing more bills|bill it again/);
+    // The promise is read from the shared helper, not a fourth private copy.
+    const src = readFileSync(join(process.cwd(), "src", "app", "park", "ledger-actions.ts"), "utf8");
+    expect(src).toMatch(/from "@\/lib\/tenancy-facts"/);
+  });
+
+  it("…the figure is the view's remaining (net of a refund already given), a failed read of it is said, and the DB's own refusal reaches him by name", async () => {
+    janBill("9");
+    db.park_payments.push({ id: "card", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 400, method: "card", reference: "ch_1", received_on: "2027-01-04", reversed_at: null, returned_at: null });
+    db.park_refunds.push({ id: "rf-1", payment_id: "card", park_id: PARK, amount: 100, fee_amount: 0 });
+    recompute("charge-9");
+    expect(db.park_charges[0].paid_total).toBe(300);
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+    // $400 was taken; $100 already went back to the card; $300 is on
+    // account. Three figures, all the view's — "The $300.00 taken against
+    // it" named the remainder as the amount taken.
+    expect(res.signal).toMatch(/^Cancelled\. The \$400\.00 taken against it, less the \$100\.00 already refunded, leaves \$300\.00 on account for Household 9 now/);
+    expect(res.signal).not.toMatch(/\$300\.00 taken against/);
+
+    // A failed view read after the void: the money IS on account and the
+    // sentence says so without a figure — never "$0.00", never silence.
+    reset();
     janBill("9", { paid_total: 200 });
     db.park_payments.push({ id: "direct", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 200, method: "cash", received_on: "2027-01-04", reversed_at: null, returned_at: null });
-    const plain = await voidCharge(PARK, "charge-9", "raised twice");
-    expect(plain.error).toBe(
-      "You've already taken $200.00 against this bill — cancelling it would make that money disappear from your totals while it's still in the bank, so sort that payment out first.",
+    nextReadError = { table: "park_on_account_payments", error: { code: "57P01", message: "terminating connection" } };
+    const unread = await voidCharge(PARK, "charge-9", "raised twice");
+    expect(unread.ok).toBe(true);
+    expect(unread.signal).toBe(
+      "Cancelled. What was taken against it is on account for Household 9 now, though the figure couldn't be read — check \"Money not against a bill\" on the Rent screen.",
     );
+    expect(unread.signal).not.toMatch(/\$0\.00/);
+    expect(db.park_charges[0].status).toBe("void");
+
+    // A line that lands between the read and the write: the database
+    // refuses by name, and the sentence is its own, not "try again".
+    reset();
+    janBill("9", { paid_total: 200 });
+    db.park_payments.push({ id: "direct", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 200, method: "cash", received_on: "2027-01-04", reversed_at: null, returned_at: null });
+    const q = onAccount("9", 100, "2026-12-28");
+    beforeUpdate = { table: "park_charges", act: () => { db.park_payment_allocations.push({ id: "al-late", park_id: PARK, payment_id: q.id, charge_id: "charge-9", amount: 100, applied_via: "run", removed_at: null }); } };
+    const late = await voidCharge(PARK, "charge-9", "raised twice");
+    expect(late.ok).toBe(false);
+    expect(late.error).toBe("Couldn't cancel that — 100.00 of money on account is against this bill — take it off the bill first (with a reason), then cancel it.");
+    expect(late.error).not.toMatch(/park_charges:|try again/);
+    expect(db.park_charges[0].status).toBe("open");
+  });
+
+  it("a failed allocations read refuses rather than releasing money it could not see; so does a failed read of the money handed over", async () => {
+    janBill("9", { paid_total: 200 });
+    db.park_payments.push({ id: "direct", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 200, method: "cash", received_on: "2027-01-04", reversed_at: null, returned_at: null });
     nextReadError = { table: "park_payment_allocations", error: { code: "57P01", message: "terminating connection" } };
     const failed = await voidCharge(PARK, "charge-9", "raised twice");
     expect(failed.ok).toBe(false);
     expect(failed.error).toMatch(/couldn't check something just now, so no money has moved/);
     expect(nextReadError).toBeNull();
-    // And a failed read of the money handed over refuses the same way.
     nextReadError = { table: "park_payments", column: "charge_id", error: { code: "57P01", message: "terminating connection" } };
     const failed2 = await voidCharge(PARK, "charge-9", "raised twice");
     expect(failed2.ok).toBe(false);
     expect(failed2.error).toMatch(/couldn't check something just now, so no money has moved/);
     expect(nextReadError).toBeNull();
+    expect(db.park_charges[0].status).toBe("open");
   });
 
-  it("a live allocation from a cheque that has since BOUNCED is not money on the bill: the $100 in the bank is named, and no 'Take it off this bill'", async () => {
+  it("a live allocation from a cheque that has since BOUNCED is not money on the bill: the void proceeds, and the $100 in the bank is what is released", async () => {
     // paid_total (the DB) counts an allocation only while its payment
-    // stands; this door used to read the allocation regardless, so
-    // `direct` came out 0 and the refusal named a line no screen lists —
-    // the bounced cheque is not in the held-money view — while the $100
-    // that actually blocks the void went unmentioned.
+    // stands; reading the bounced line regardless would refuse a void the
+    // database accepts, naming a line no screen lists.
     janBill("9");
     const q = onAccount("9", 442.53, "2026-12-28", { reversed_at: "2027-01-20T10:00:00Z", reversed_reason: "the cheque bounced" });
     db.park_payment_allocations.push({ id: "al-1", park_id: PARK, payment_id: q.id, charge_id: "charge-9", amount: 442.53, applied_via: "run", removed_at: null });
@@ -1563,29 +1745,17 @@ describe("the doors around an allocation taken back off its bill", () => {
     recompute("charge-9");
     expect(db.park_charges[0].paid_total).toBe(100);
     const res = await voidCharge(PARK, "charge-9", "raised twice");
-    expect(res.ok).toBe(false);
-    expect(res.error).toBe(
-      "You've already taken $100.00 against this bill — cancelling it would make that money disappear from your totals while it's still in the bank, so sort that payment out first.",
-    );
-    expect(res.error).not.toMatch(/Take it off this bill/);
-    expect(res.error).not.toMatch(/442\.53/);
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toMatch(/^Cancelled\. The \$100\.00 taken against it is on account for Household 9 now/);
+    expect(res.signal).not.toMatch(/Take it off this bill|442\.53/);
   });
 
-  it("money handed over is read net of its refunds, and a stale paid_total with no rows behind it still refuses in words", async () => {
-    janBill("9");
-    db.park_payments.push({ id: "card", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 400, method: "card", reference: "ch_1", received_on: "2027-01-04", reversed_at: null, returned_at: null });
-    db.park_refunds.push({ id: "rf-1", payment_id: "card", park_id: PARK, amount: 100, fee_amount: 0 });
-    recompute("charge-9");
-    expect(db.park_charges[0].paid_total).toBe(300);
-    const res = await voidCharge(PARK, "charge-9", "raised twice");
-    expect(res.error).toMatch(/^You've already taken \$300\.00 against this bill/);
-    // paid_total says money is on it and no standing row can be found —
-    // the sentence still names the figure rather than printing ".".
-    db.park_payments.length = 0; db.park_refunds.length = 0;
-    db.park_charges[0].paid_total = 250;
+  it("a stale paid_total with no rows behind it still refuses in words — nothing is released that cannot be named", async () => {
+    janBill("9", { paid_total: 250 });
     const stale = await voidCharge(PARK, "charge-9", "raised twice");
     expect(stale.ok).toBe(false);
     expect(stale.error).toBe("$250.00 is recorded against this bill, so it can't be cancelled — check its payments first.");
+    expect(db.park_charges[0].status).toBe("open");
   });
 
   it("an allocation already taken off its bill is not a month the reversal reopens", async () => {
@@ -1599,5 +1769,160 @@ describe("the doors around an allocation taken back off its bill", () => {
     const res = await reversePayment(PARK, q.id as string, "the cheque bounced");
     expect(res.signal).toMatch(/It had been put against January 2027 — that bill is outstanding again/);
     expect(res.signal).not.toMatch(/February/);
+  });
+});
+
+/**
+ * A ROW AGAINST A CANCELLED BILL IS MONEY ON ACCOUNT (0169). January is paid
+ * by cheque, the household leaves on the 27th, the bill is cancelled and the
+ * part month settled from the released $542.53. The row's charge_id still
+ * names the void bill, so every door that decided "on account" by
+ * `charge_id` alone read a released row as "against a bill": the reversal
+ * dropped the part month from its sentence while it silently reopened, the
+ * refund said "the bill is outstanding again" about a void bill, and the
+ * refusal for a released cheque pointed at a reversal. Each keys on the
+ * VIEW now.
+ */
+describe("a row against a cancelled bill is money on account", () => {
+  /** January paid, cancelled on the move-out, the part month settled from the released money. */
+  async function releasedJanuary(over: Partial<Row> = {}) {
+    janBill("9");
+    db.park_payments.push({
+      id: "rel", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 542.53, method: "check",
+      reference: null, fee_amount: null, received_on: "2027-01-05", receipt_no: 12, reversed_at: null, returned_at: null, idempotency_key: "form-rel", ...over,
+    });
+    recompute("charge-9");
+    const cancelled = await voidCharge(PARK, "charge-9", "moved out January 27, 2027");
+    expect(cancelled.ok, cancelled.error).toBe(true);
+    db.park_charges.push({ id: "charge-9p", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2027-01", due_on: "2027-01-01", amount: 472.53, paid_total: 0, status: "open",
+      lines: [{ label: "Lot rent", amount: 348.39, basis: "27 of 31 days" }, { label: "Grounds", amount: 124.14, basis: "27 of 31 days" }] });
+    db.park_payment_allocations.push({ id: "al-p", park_id: PARK, payment_id: "rel", charge_id: "charge-9p", amount: 472.53, applied_via: "office", removed_at: null });
+    recompute("charge-9p");
+    expect(db.park_charges.find((c) => c.id === "charge-9p")).toMatchObject({ paid_total: 472.53, status: "paid" });
+    expect(onAccountView().find((v) => v.payment_id === "rel")).toMatchObject({ remaining: 70, released_from_charge_id: "charge-9" });
+    updated.length = 0;
+  }
+
+  it("reversePayment on a released row reads its OWN allocations, names the part month, and says the cancelled bill reopens nothing", async () => {
+    await releasedJanuary();
+    const res = await reversePayment(PARK, "rel", "the cheque bounced");
+    expect(res.ok, res.error).toBe(true);
+    // TWO JANUARY BILLS, NAMED APART: the re-raise keeps period_month, so
+    // "January 2027's bill was already cancelled … put against January 2027
+    // — that bill is outstanding again" was one month with two opposite
+    // verbs. The cancelled bill by its amount; the re-raise by its amount
+    // and its own frozen basis — both read off park_charges, never pay.amount.
+    expect(res.signal).toBe(
+      "$542.53 taken back (receipt 12). January 2027's $542.53 bill was already cancelled, so nothing reopens on it; " +
+      "it had been put against the $472.53 bill raised again for January 2027 (27 of 31 days) — that one is outstanding again, and the record shows why.",
+    );
+    expect(res.signal).not.toMatch(/The January 2027 bill is outstanding again|against January 2027 —/);
+    // The part month reopened; the void bill is exactly as it was.
+    expect(db.park_charges.find((c) => c.id === "charge-9p")).toMatchObject({ paid_total: 0, status: "open" });
+    expect(db.park_charges.find((c) => c.id === "charge-9")).toMatchObject({ paid_total: 0, status: "void" });
+    expect(db.park_payments.find((p) => p.id === "rel")!.reversed_at).toBeTruthy();
+  });
+
+  it("…with a $57.47 sibling on account: one update over both rows, BOTH rows' lines read, every reopened month named", async () => {
+    // The $600 split — $542.53 against January (released) and $57.47 on
+    // account, put against February by the run.
+    db.park_charges.push({ id: "charge-feb", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "feb-9", period_month: "2027-02", due_on: "2027-02-01", amount: 542.53, paid_total: 0, status: "open" });
+    await releasedJanuary();
+    db.park_payments.push({ id: "sib", park_id: PARK, renter_id: "renter-9", charge_id: null, kind: "rent", amount: 57.47, method: "check", received_on: "2027-01-05", receipt_no: 13, reversed_at: null, returned_at: null, idempotency_key: "form-rel:onaccount" });
+    db.park_payment_allocations.push({ id: "al-f", park_id: PARK, payment_id: "sib", charge_id: "charge-feb", amount: 57.47, applied_via: "run", removed_at: null });
+    recompute("charge-feb");
+    const res = await reversePayment(PARK, "rel", "the cheque bounced");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      "$600.00 taken back (receipt 12) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. " +
+      "January 2027's $542.53 bill was already cancelled, so nothing reopens on it, and $530.00 of it had been put against the $472.53 bill raised again for January 2027 (27 of 31 days) and February 2027 — those bills are outstanding again too. The record shows why.",
+    );
+    expect(updated.filter((u) => u.table === "park_payments")).toHaveLength(1);
+    expect(db.park_payments.find((p) => p.id === "sib")!.reversed_at).toBe(db.park_payments.find((p) => p.id === "rel")!.reversed_at);
+    expect(db.park_charges.find((c) => c.id === "charge-9p")).toMatchObject({ paid_total: 0, status: "open" });
+    expect(db.park_charges.find((c) => c.id === "charge-feb")).toMatchObject({ paid_total: 0, status: "open" });
+    // Tapped from the on-account half: the released half's line is read
+    // too, and its void bill is still not said to reopen.
+    reset();
+    db.park_charges.push({ id: "charge-feb", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "feb-9", period_month: "2027-02", due_on: "2027-02-01", amount: 542.53, paid_total: 0, status: "open" });
+    await releasedJanuary();
+    db.park_payments.push({ id: "sib", park_id: PARK, renter_id: "renter-9", charge_id: null, kind: "rent", amount: 57.47, method: "check", received_on: "2027-01-05", receipt_no: 13, reversed_at: null, returned_at: null, idempotency_key: "form-rel:onaccount" });
+    const fromSib = await reversePayment(PARK, "sib", "keyed twice");
+    expect(fromSib.ok, fromSib.error).toBe(true);
+    expect(fromSib.signal).toBe(
+      "$600.00 taken back (receipt 13) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. " +
+      "January 2027's $542.53 bill was already cancelled, so nothing reopens on it, and $472.53 of it had been put against the $472.53 bill raised again for January 2027 (27 of 31 days) — that one is outstanding again too. The record shows why.",
+    );
+    expect(fromSib.signal).not.toMatch(/The January 2027 bill is outstanding again/);
+    expect(db.park_charges.find((c) => c.id === "charge-9p")).toMatchObject({ paid_total: 0, status: "open" });
+  });
+
+  it("a failed read of whether the row is on account refuses before anything is written", async () => {
+    await releasedJanuary();
+    nextReadError = { table: "park_on_account_payments", error: { code: "57P01", message: "terminating connection" } };
+    const res = await reversePayment(PARK, "rel", "the cheque bounced");
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/couldn't check something just now, so no money has moved/);
+    expect(nextReadError, "the view read never happened").toBeNull();
+    expect(db.park_payments.find((p) => p.id === "rel")!.reversed_at).toBeNull();
+    expect(updated).toHaveLength(0);
+  });
+
+  it("refundableOn on a released CARD row caps at the view's remaining, and the refund's sentence does not claim the void bill is outstanding", async () => {
+    await releasedJanuary({ method: "card", reference: "ch_rel" });
+    refundResult = { ok: true, ref: "re_1" };
+    const tooMuch = await refundParkPayment(PARK, "rel", { amount: 70.01, feeAmount: 0, reason: "overpaid the part month", idempotencyKey: "k1" });
+    expect(tooMuch.ok).toBe(false);
+    expect(tooMuch.error).toBe("That's more than is left on this payment — at most $70.00 can still go back.");
+    expect(refundAsks).toBe(0);
+    const ok = await refundParkPayment(PARK, "rel", { amount: 70, feeAmount: 0, reason: "overpaid the part month", idempotencyKey: "k2" });
+    expect(ok.ok, ok.error).toBe(true);
+    expect(ok.signal).toBe("$70.00 sent back to their card. It's off the household's account, and the record shows why.");
+    expect(ok.signal).not.toMatch(/outstanding again/);
+    expect(refundAsks).toBe(1);
+    // The part month is untouched and the void bill holds 0 after the
+    // refund's recompute.
+    expect(db.park_charges.find((c) => c.id === "charge-9p")).toMatchObject({ paid_total: 472.53, status: "paid" });
+    expect(db.park_charges.find((c) => c.id === "charge-9")).toMatchObject({ paid_total: 0, status: "void" });
+    expect(onAccountView().find((v) => v.payment_id === "rel")!.remaining).toBe(0);
+    // Collapsed the other way: a LIVE bill's card row still says the bill
+    // reopens.
+    reset();
+    janBill("9");
+    db.park_payments.push({ id: "live", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 542.53, method: "card", reference: "ch_2", fee_amount: null, received_on: "2027-01-02", reversed_at: null, returned_at: null });
+    recompute("charge-9");
+    const onLive = await refundParkPayment(PARK, "live", { amount: 100, feeAmount: 0, reason: "x", idempotencyKey: "k3" });
+    expect(onLive.signal).toMatch(/The bill is outstanding again by that much/);
+  });
+
+  it("a released CASH row is told to hand it back under Money not against a bill — refundRefusal gets `released`", async () => {
+    await releasedJanuary();
+    const res = await refundParkPayment(PARK, "rel", { amount: 70, feeAmount: 0, reason: "x", idempotencyKey: "k1" });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/paid by check.*Hand it back across the window and record it with "Hand it back" on its line under Money not against a bill/);
+    expect(res.error).not.toMatch(/It is against a bill/);
+    expect(refundAsks).toBe(0);
+  });
+
+  it("neither refundableOn nor reversePayment decides 'on account' by charge_id alone — both read the view", () => {
+    const src = readFileSync(join(process.cwd(), "src", "app", "park", "ledger-actions.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const refundable = src.match(/export async function refundableOn[\s\S]*?\n}/)?.[0] ?? "";
+    const reverse = src.match(/export async function reversePayment[\s\S]*?\n}/)?.[0] ?? "";
+    expect(refundable.length, "refundableOn not found — this scan measures nothing").toBeGreaterThan(500);
+    expect(reverse.length, "reversePayment not found — this scan measures nothing").toBeGreaterThan(500);
+    expect(refundable).not.toMatch(/!pay\.charge_id/);
+    expect(refundable).toMatch(/from\("park_on_account_payments"\)[\s\S]*?\.eq\("payment_id", paymentId\)/);
+    expect(refundable).toMatch(/if \(row\) \{/);
+    // reversePayment: its own lines are read whenever the row is on account
+    // — no bill, OR released — and the on-account sibling's beside them.
+    expect(reverse).toMatch(/from\("park_on_account_payments"\)[\s\S]*?\.select\("payment_id, remaining, released_from_charge_id"\)[\s\S]*?\.in\("payment_id", \[paymentId, \.\.\.\(sibling \? \[sibling\.id\] : \[\]\)\]\)/);
+    expect(reverse).toMatch(/const released = releasedRow\(paymentId\);/);
+    expect(reverse).toMatch(/const sibReleased = sibling != null && releasedRow\(sibling\.id\);/);
+    expect(reverse).toMatch(/const ownAcct = !pay\.charge_id \|\| released;/);
+    expect(reverse).toMatch(/const sibAcct = sibling != null && \(!sibling\.charge_id \|\| sibReleased\);/);
+    expect(reverse).toMatch(/\.in\("payment_id", acctRowIds\)/);
+    expect(reverse).toMatch(/billCancelled: pay\.charge_id \? released : withSibling && sibReleased,/);
+    expect(reverse.match(/!pay\.charge_id/g), "one for ownAcct, one for the sibling's bill month — never a third deciding on account").toHaveLength(2);
   });
 });

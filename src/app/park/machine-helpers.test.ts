@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { liveness, livenessLine, lastNightsFindings, JOB_CEILING, mayAct, type RunRow } from "./machine-helpers";
 import {
   reconcile, reconcileSummary, cutoverMonthNote, CLAIM_STALE_DAYS,
@@ -95,7 +97,7 @@ describe("what the machine is allowed to do", () => {
 
 const lot = (o: Partial<ReconcileInput["lots"][number]> = {}) => ({
   lotNumber: "3", occupiedToday: true, quotedAmount: 455,
-  tenancyExpired: false, billedThisMonth: true, statementZero: false, ...o,
+  lapsed: false, unbilledMonths: [] as string[], statementZero: false, ...o,
 });
 
 const input = (o: Partial<ReconcileInput> = {}): ReconcileInput => ({
@@ -111,14 +113,14 @@ describe("what the nightly read notices", () => {
   it("catches the failure with no error anywhere — lived in, never billed", () => {
     // A lapsed range makes buildStatement return zero days, the charge run
     // drops the row, and the money stops with nothing on any screen.
-    const f = reconcile(input({ lots: [lot({ billedThisMonth: false })] }));
+    const f = reconcile(input({ lots: [lot({ unbilledMonths: ["2026-08"] })] }));
     expect(f[0].kind).toBe("live_lot_unbilled");
     expect(f[0].urgent).toBe(true);
     expect(f[0].line).toMatch(/Somebody lives there and nothing is being charged/);
   });
 
   it("names a household living on an agreement that ran out", () => {
-    const f = reconcile(input({ lots: [lot({ tenancyExpired: true })] }));
+    const f = reconcile(input({ lots: [lot({ occupiedToday: false, lapsed: true })] }));
     expect(f.some((x) => x.kind === "tenancy_expired")).toBe(true);
   });
 
@@ -168,7 +170,7 @@ describe("what the nightly read notices", () => {
     // is half-entered. "Late" is a claim this data cannot support.
     const f = reconcile(input({
       month: "2026-12", cutoverDate: "2026-12-15",
-      lots: [lot({ billedThisMonth: false })],
+      lots: [lot({ unbilledMonths: ["2026-12"] })],
     }));
     expect(f.some((x) => x.kind === "live_lot_unbilled")).toBe(false);
     expect(cutoverMonthNote("2026-12", "2026-12-15")).toMatch(/nobody is being called late/);
@@ -177,7 +179,7 @@ describe("what the nightly read notices", () => {
   it("goes back to normal the month after the takeover", () => {
     const f = reconcile(input({
       month: "2027-01", cutoverDate: "2026-12-15",
-      lots: [lot({ billedThisMonth: false })],
+      lots: [lot({ unbilledMonths: ["2027-01"] })],
     }));
     expect(f.some((x) => x.kind === "live_lot_unbilled")).toBe(true);
     expect(cutoverMonthNote("2027-01", "2026-12-15")).toBeNull();
@@ -198,7 +200,7 @@ describe("what the nightly read notices", () => {
   it("DOES call unbilled lots in a takeover month that starts on the 1st", () => {
     const f = reconcile(input({
       month: "2027-01", cutoverDate: "2027-01-01",
-      lots: [lot({ billedThisMonth: false })],
+      lots: [lot({ unbilledMonths: ["2027-01"] })],
     }));
     expect(f.some((x) => x.kind === "live_lot_unbilled")).toBe(true);
   });
@@ -220,7 +222,7 @@ describe("what the nightly read notices", () => {
     ] as const) {
       expect(periodIsBillable(month, cutover)).toBe(billable);
       const f = reconcile(input({
-        month, cutoverDate: cutover, lots: [lot({ billedThisMonth: false })],
+        month, cutoverDate: cutover, lots: [lot({ unbilledMonths: [month] })],
       }));
       expect({ month, cutover, alarms: f.some((x) => x.kind === "live_lot_unbilled") })
         .toEqual({ month, cutover, alarms: billable });
@@ -229,13 +231,13 @@ describe("what the nightly read notices", () => {
 
   it("puts the urgent findings first", () => {
     const f = reconcile(input({
-      lots: [lot({ lotNumber: "1", quotedAmount: null }), lot({ lotNumber: "2", tenancyExpired: true })],
+      lots: [lot({ lotNumber: "1", quotedAmount: null }), lot({ lotNumber: "2", occupiedToday: false, lapsed: true })],
     }));
     expect(f[0].urgent).toBe(true);
   });
 
   it("names up to four lots then counts the rest", () => {
-    const many = ["1","2","3","4","5","6"].map((n) => lot({ lotNumber: n, billedThisMonth: false }));
+    const many = ["1","2","3","4","5","6"].map((n) => lot({ lotNumber: n, unbilledMonths: ["2026-08"] }));
     const f = reconcile(input({ lots: many }));
     expect(f[0].line).toMatch(/lot 1, lot 2, lot 3, lot 4 and 2 more/);
   });
@@ -243,6 +245,194 @@ describe("what the nightly read notices", () => {
   it("summarises for a subject line without inventing urgency", () => {
     const f = reconcile(input({ lots: [lot({ statementZero: true })] }));
     expect(reconcileSummary(f)).toBe("1 worth a look.");
+  });
+});
+
+/**
+ * ONE MONTH WAS THE WRONG QUESTION.
+ *
+ * A successor written from a lapsed agreement's own end (decision 3) starts
+ * in February and is written in March. The run visits a month once, keyed
+ * per reservation, so nothing ever raises that February — and a check that
+ * asked "is March billed?" said yes about that lot every night, forever.
+ */
+describe("every unbilled month per lot, not just this one", () => {
+  const MARCH = { today: "2027-03-16", month: "2027-03", cutoverDate: "2027-01-01" };
+
+  it("names an earlier month on the lot that was backfilled", () => {
+    const f = reconcile(input({
+      ...MARCH,
+      lots: [lot({ lotNumber: "9", unbilledMonths: ["2027-02", "2027-03"] })],
+    }));
+    const u = f.find((x) => x.kind === "live_lot_unbilled")!;
+    expect(u.urgent).toBe(true);
+    expect(u.line).toMatch(/lot 9 \(February 2027 and March 2027\)/);
+    // An instruction the screen has: ParkRent.tsx's month nav reaches back.
+    expect(u.line).toMatch(/month links reach back/);
+    expect(u.line).not.toMatch(/\d{4}-\d{2}/);
+  });
+
+  it("the current-month-only shape keeps its old sentence", () => {
+    // The night before the run is the common case; the sentence he has read
+    // every month since the check began still says it best.
+    const f = reconcile(input({
+      ...MARCH,
+      lots: [lot({ lotNumber: "3", unbilledMonths: ["2027-03"] }),
+             lot({ lotNumber: "9", unbilledMonths: ["2027-03"] })],
+    }));
+    expect(f[0].line).toBe(
+      "2 occupied lots have no bill for March 2027 — lot 3 and lot 9. " +
+      "Somebody lives there and nothing is being charged.",
+    );
+    expect(f[0].line).not.toMatch(/month links/);
+  });
+
+  it("an older hole on ONE lot switches every lot to the sentence that names months", () => {
+    // "No bill for March" about a lot with no bill for February is the lie
+    // this exists to stop telling.
+    const f = reconcile(input({
+      ...MARCH,
+      lots: [lot({ lotNumber: "3", unbilledMonths: ["2027-03"] }),
+             lot({ lotNumber: "9", unbilledMonths: ["2027-02", "2027-03"] })],
+    }));
+    expect(f[0].line).toMatch(/months with no bill/);
+    expect(f[0].line).toMatch(/lot 3 \(March 2027\)/);
+    expect(f[0].line).toMatch(/those months/);
+  });
+
+  it("puts the EARLIEST hole first, so the 1st of the month can't bury it", () => {
+    // On the night of the 1st every lot is missing the current month; the
+    // one lot missing February as well must not sit inside "and N more".
+    const many = ["1", "2", "3", "4", "5"].map((n) => lot({ lotNumber: n, unbilledMonths: ["2027-03"] }));
+    const f = reconcile(input({
+      ...MARCH,
+      lots: [...many, lot({ lotNumber: "9", unbilledMonths: ["2027-02", "2027-03"] })],
+    }));
+    expect(f[0].line).toMatch(
+      /lot 9 \(February 2027 and March 2027\), lot 1 \(March 2027\), lot 2 \(March 2027\), lot 3 \(March 2027\) and 2 more/,
+    );
+    // Ties keep read order — lot 1 before lot 2 — so the sort is stable.
+    expect(f[0].lotNumbers).toEqual(["9", "1", "2", "3", "4", "5"]);
+  });
+
+  it("a lot with one older month and nothing this month is still named", () => {
+    const f = reconcile(input({
+      ...MARCH,
+      lots: [lot({ lotNumber: "9", unbilledMonths: ["2027-02"] })],
+    }));
+    expect(f[0].line).toBe(
+      "1 occupied lot has months with no bill — lot 9 (February 2027). " +
+      "Somebody lives there and nothing is being charged for them; " +
+      "the rent screen's month links reach back to bill them.",
+    );
+  });
+
+  it("a month before go-live is never called unbilled", () => {
+    // The Haven closes 15 December: December was the seller's to collect.
+    // A row reaching back over the takeover has December struck out, and
+    // with only January left the sentence is the plain one-month line.
+    const f = reconcile(input({
+      today: "2027-01-20", month: "2027-01", cutoverDate: "2026-12-15",
+      lots: [lot({ lotNumber: "9", unbilledMonths: ["2026-12", "2027-01"] })],
+    }));
+    expect(f[0].line).toMatch(/no bill for January 2027 — lot 9/);
+    expect(f[0].line).not.toMatch(/December/);
+    // And when EVERY month is before go-live, there is nothing to say.
+    expect(reconcile(input({
+      today: "2026-12-20", month: "2026-12", cutoverDate: "2026-12-15",
+      lots: [lot({ lotNumber: "9", unbilledMonths: ["2026-11", "2026-12"] })],
+    })).some((x) => x.kind === "live_lot_unbilled")).toBe(false);
+  });
+
+  it("a LAPSED lot is lived on — its unbilled months are named, the way the roll counts it as taken", () => {
+    // The roll says "Ran out … nothing billed since" and counts the lot as
+    // occupied; the rent screen's Bill button would raise its February
+    // (classifyForRun: the row covers the month). The nightly read
+    // `occupiedToday` — the CURRENT link alone — so the one lot with an
+    // interior hole was the one lot the sentence "names every unbilled
+    // month" skipped, and the only line it got was tenancy_expired.
+    const f = reconcile(input({
+      ...MARCH,
+      lots: [lot({ lotNumber: "9", occupiedToday: false, lapsed: true, unbilledMonths: ["2027-02"] })],
+    }));
+    const u = f.find((x) => x.kind === "live_lot_unbilled")!;
+    expect(u).toBeDefined();
+    expect(u.line).toContain("lot 9 (February 2027)");
+    expect(f.some((x) => x.kind === "tenancy_expired")).toBe(true);
+    // Collapsed the other way: neither lived on nor lapsed — a lot that is
+    // empty today (the caller hands one over only when a held row that no
+    // longer covers today left months behind) is nobody's "somebody lives
+    // there". This line must not say it about an empty lot.
+    const empty = reconcile(input({
+      ...MARCH,
+      lots: [lot({ lotNumber: "9", occupiedToday: false, lapsed: false, unbilledMonths: ["2027-02"] })],
+    }));
+    expect(empty.some((x) => x.kind === "live_lot_unbilled")).toBe(false);
+    expect(empty.some((x) => x.kind === "tenancy_expired")).toBe(false);
+  });
+
+  it("a lapsed lot with no rent on its current link is not an unknown rent — nothing is current", () => {
+    // `rent_unknown` is about a household being billed against a rent
+    // nobody set; a lapsed lot has no current link to read a rent from,
+    // and calling it "I don't know what lot 9 should pay" every night was
+    // the wrong alarm for the right lot.
+    const f = reconcile(input({
+      ...MARCH,
+      lots: [lot({ lotNumber: "9", occupiedToday: false, lapsed: true, quotedAmount: null })],
+    }));
+    expect(f.some((x) => x.kind === "rent_unknown")).toBe(false);
+  });
+
+  it("a hole reported out of order is still the earliest hole", () => {
+    const f = reconcile(input({
+      ...MARCH,
+      lots: [lot({ lotNumber: "9", unbilledMonths: ["2027-03", "2027-02"] })],
+    }));
+    expect(f[0].line).toMatch(/lot 9 \(February 2027 and March 2027\)/);
+  });
+});
+
+describe("the nightly's charge read is wide enough to see a hole", () => {
+  const strip = (src: string) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const machine = strip(readFileSync(
+    fileURLToPath(new URL("../../lib/park-machine.ts", import.meta.url)), "utf8"));
+
+  it("still finds the read at all", () => {
+    // A scanner that matches nothing passes every "not" below for free.
+    expect(machine).toMatch(/from\("park_charges"\)/);
+    expect(machine).toMatch(/unbilledMonthsFor\(heldRows, billed, \{ today, cutoverDate \}\)/);
+  });
+
+  it("excludes a voided bill, as the run's own 'already billed' set does", () => {
+    expect(machine).toMatch(/\.neq\("status", "void"\)/);
+  });
+
+  it("reads from a floor month, never one month", () => {
+    // `.eq("period_month", month)` was the one-month question; a February
+    // hole on a row backfilled in March was invisible every night after
+    // 1 March.
+    expect(machine).toMatch(/\.gte\("period_month", floor\)/);
+    expect(machine).not.toMatch(/\.eq\("period_month", month\)/);
+  });
+
+  it("carries the row's term, so a yearly row is never named as unbilled months", () => {
+    expect(machine).toMatch(/term: \(s\.term as string \| null\) \?\? null/);
+  });
+
+  it("reads the ended rows for the lapsed test, and keeps them OUT of the rows the run would bill", () => {
+    // A household closed out of its successor leaves the expired link
+    // before it held and run out; without the ended row the nightly called
+    // that family "living here with no agreement". The ended rows reach
+    // `lapsedRowOf` only — `heldRows` (and so unbilledMonthsFor) is still
+    // built from the held ones, on purpose (the file says why).
+    expect(machine).toMatch(/\.in\("status", \["approved", "active", "ended"\]\)/);
+    expect(machine).toContain('const stays = everyRow.filter((s) => s.status === "approved" || s.status === "active");');
+    expect(machine).toMatch(/const heldRows = stays\.map/);
+    expect(machine).toMatch(/lapsed: lapsedRowOf\(slot\.rows, today\) != null/);
+    // The old inline rule — any held row behind today — is gone.
+    expect(machine).not.toMatch(/slot\.expired/);
+    expect(machine).not.toMatch(/r\.end <= today/);
   });
 });
 

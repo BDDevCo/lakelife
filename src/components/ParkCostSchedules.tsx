@@ -6,8 +6,12 @@ import { toast } from "@/components/Toast";
 import {
   saveCostSchedule, setCostScheduleActive, type CostScheduleRow,
 } from "@/app/park/cost-actions";
-import { COST_CATEGORY_LABEL, SCHEDULABLE_CATEGORIES } from "@/app/park/cost-helpers";
+import {
+  COST_CATEGORY_LABEL, SCHEDULABLE_CATEGORIES, coveredSpanWords, editingReminderLine,
+} from "@/app/park/cost-helpers";
 import { ordinal } from "@/app/park/today-helpers";
+// A day a person reads is words — never "2027-01-01" beside a checkbox.
+import { dayInWords } from "@/app/park/park-helpers";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -28,10 +32,21 @@ const money = (n: number) =>
  * much — and never the amount that gets billed. That number is always read off
  * a real invoice by a person. The hint exists so a wrong invoice is noticeable,
  * not so it can be used.
+ *
+ * AND, SINCE 0170, WHAT THE BILL COVERS. Indiana bills property tax in
+ * arrears and LaGrange sewer's bill dated the 5th is for the previous month,
+ * so a reminder that named the due period called December's sewer "January"
+ * and the seller's 2026 tax "2027". The checkbox is the owner's word on it,
+ * per bill; nothing infers it.
+ *
+ * `cutoverOn` is the park's go-live date, or null for a park with no
+ * handover. The hint under the checkbox names it only when it is set — a
+ * sentence about "before you went live" on a park that never went live
+ * anywhere would be quoting a dial nobody set.
  */
 export function ParkCostSchedules({
-  parkId, rows,
-}: { parkId: string; rows: CostScheduleRow[] }) {
+  parkId, rows, cutoverOn = null,
+}: { parkId: string; rows: CostScheduleRow[]; cutoverOn?: string | null }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [category, setCategory] = useState<string>("");
@@ -40,17 +55,42 @@ export function ParkCostSchedules({
   const [dueDay, setDueDay] = useState("");
   const [typical, setTypical] = useState("");
   const [label, setLabel] = useState("");
+  const [coversPrior, setCoversPrior] = useState(false);
+  /**
+   * The row being EDITED, or null when adding. The write path is the same
+   * either way — saveCostSchedule finds the park's row for the category and
+   * updates it — so the only thing edit mode changes on screen is that the
+   * category cannot be switched (that would create a second reminder, not
+   * move this one) and the copy says what pressing Save does.
+   */
+  const [editing, setEditing] = useState<CostScheduleRow | null>(null);
   const [busy, start] = useTransition();
 
   function reset() {
     setCategory(""); setCadence("monthly"); setDueMonth("");
-    setDueDay(""); setTypical(""); setLabel(""); setOpen(false);
+    setDueDay(""); setTypical(""); setLabel(""); setCoversPrior(false);
+    setEditing(null); setOpen(false);
+  }
+
+  // THE EDIT DOOR. The Haven's two schedules predate the checkbox; without
+  // this the only way to tick it was to switch a reminder off and retype it.
+  function edit(r: CostScheduleRow) {
+    setCategory(r.category);
+    setCadence(r.cadence);
+    setDueMonth(r.dueMonth == null ? "" : String(r.dueMonth));
+    setDueDay(String(r.dueDay));
+    setTypical(r.typicalAmount == null ? "" : String(r.typicalAmount));
+    setLabel(r.label ?? "");
+    setCoversPrior(r.coversPriorPeriod);
+    setEditing(r);
+    setOpen(true);
   }
 
   function save() {
     start(async () => {
       const res = await saveCostSchedule(parkId, {
         category, cadence, dueMonth, dueDay, typicalAmount: typical, label,
+        coversPriorPeriod: coversPrior,
       });
       toast(res.ok ? (res.signal ?? "Saved.") : (res.error ?? "Couldn't save that."));
       if (res.ok) { reset(); router.refresh(); }
@@ -96,18 +136,24 @@ export function ParkCostSchedules({
                 {r.label || COST_CATEGORY_LABEL[r.category]}
               </strong>
               <span className="mut" style={{ minWidth: 190 }}>
-                {/* "the 5" reads like a truncated number; "the 5th" is a date. */}
+                {/* "the 5" reads like a truncated number; "the 5th" is a date.
+                    A flagged bill says what it covers, in the row, so he can
+                    see the box took without opening the form. */}
                 {r.cadence === "monthly"
                   ? `monthly, around the ${ordinal(r.dueDay)}`
                   : r.cadence === "annual"
                     ? `every ${MONTHS[(r.dueMonth ?? 1) - 1]}, around the ${ordinal(r.dueDay)}`
                     : `every 3 months from ${MONTHS[(r.dueMonth ?? 1) - 1]}, around the ${ordinal(r.dueDay)}`}
+                {r.coversPriorPeriod ? `, for the ${coveredSpanWords(r.cadence)} before` : ""}
               </span>
               <span className="mut" style={{ flex: 1, minWidth: 150 }}>
                 {r.typicalAmount != null
                   ? `usually about ${money(r.typicalAmount)}`
                   : "amount unknown — that's fine"}
               </span>
+              <button className="ll-btn ghost" disabled={busy} onClick={() => edit(r)}>
+                Edit
+              </button>
               <button className="ll-btn ghost" disabled={busy} onClick={() => toggle(r)}>
                 {r.active ? "Switch off" : "Switch on"}
               </button>
@@ -125,7 +171,11 @@ export function ParkCostSchedules({
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <label className="ll-field" style={{ fontSize: 13, margin: 0 }}>
               <span className="mut">Which bill</span>
-              <select value={category} onChange={(e) => setCategory(e.target.value)}>
+              {/* LOCKED WHILE EDITING. saveCostSchedule finds the row by
+                  category, so changing it here would add a second reminder
+                  and leave this one exactly as it was. */}
+              <select value={category} disabled={editing != null}
+                      onChange={(e) => setCategory(e.target.value)}>
                 <option value="">Pick one…</option>
                 {SCHEDULABLE_CATEGORIES.map((c) => (
                   <option key={c} value={c}>{COST_CATEGORY_LABEL[c]}</option>
@@ -173,6 +223,30 @@ export function ParkCostSchedules({
             </label>
           </div>
 
+          {/* WHAT THE BILL COVERS (0170). A plain label around the box — not a
+              .ll-field, whose caption rule would style the sentence as a
+              12.5px heading. */}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12, fontSize: 14, cursor: "pointer" }}>
+            <input type="checkbox" checked={coversPrior}
+              onChange={(e) => setCoversPrior(e.target.checked)} />
+            This bill is for the time before it&apos;s due — like a tax bill for
+            last year, or a sewer bill for last month&apos;s service.
+          </label>
+          {coversPrior && (
+            <p className="mut" style={{ fontSize: 12.5, margin: "6px 0 0", lineHeight: 1.5 }}>
+              The reminder will name the {coveredSpanWords(cadence)} the bill
+              covers as well as the day it&apos;s due.
+              {/* Only for a park that has a go-live date — the sentence quotes
+                  it, and a park with none has no "before" to speak of. */}
+              {cutoverOn && (
+                <>
+                  {" "}A bill for time from before you went live on {dayInWords(cutoverOn)} is
+                  never asked for — if the park changed hands, that belongs on the closing statement.
+                </>
+              )}
+            </p>
+          )}
+
           <p className="mut" style={{ fontSize: 12, margin: "4px 0 12px", lineHeight: 1.5 }}>
             The property tax and the insurance come once a year — set those to
             &ldquo;once a year&rdquo; and they&apos;ll be one reminder each,
@@ -184,9 +258,15 @@ export function ParkCostSchedules({
             as it goes so every month has it.
           </p>
 
+          {editing && (
+            <p className="mut" style={{ fontSize: 13, margin: "0 0 10px", lineHeight: 1.5 }}>
+              {editingReminderLine(editing.category, editing.active)}
+            </p>
+          )}
+
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="ll-btn" onClick={save} disabled={busy || !category}>
-              {busy ? "Saving…" : "Save the reminder"}
+              {busy ? "Saving…" : editing ? "Save the changes" : "Save the reminder"}
             </button>
             <button className="ll-btn ghost" onClick={reset} disabled={busy}>
               Cancel

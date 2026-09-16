@@ -3,12 +3,13 @@ import { chainReservationIds } from "@/lib/tenancy-chain";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 import { parseDaterange } from "@/lib/parks";
-import { coversDay } from "@/app/park/park-helpers";
+import { coversDay, lapsedRowOf } from "@/app/park/park-helpers";
 import { notCollectedAt, takenBackWhy, takenBackOfRow } from "@/app/park/receipts-helpers";
 import { todayLakeDate, lakeDaysSince } from "@/lib/booking";
 import { paymentsAreLive } from "@/lib/charge-gate";
 import { mustRead, mustCount, softRead } from "@/lib/must-read";
 import { surchargePct } from "@/app/parks/card-fee";
+import { withRaisedAgain, type AllocationLine } from "@/lib/allocations";
 
 /**
  * THE RESIDENT'S OWN SCREEN.
@@ -65,6 +66,28 @@ export interface Bill {
    * touched it.
    */
   fromOnAccount: number;
+  /**
+   * AND WHEN THAT MONEY HAD BEEN PAID ON A BILL THE OFFICE CANCELLED (0169).
+   * She paid January in full; she left on the 20th; the office cancelled the
+   * whole-month bill and raised the part month, which was settled from the
+   * money the cancelled bill released. "$472.53 of it came from money you
+   * had on account" is then a sentence about money she never put on account
+   * — she paid a January bill, and her list shows that cheque against
+   * January. This names the bills it was paid on: `months` is their YYYY-MM,
+   * sorted (prettyMonth at the edge), `amount` the dollars of THIS bill that
+   * came from them together — counted inside `fromOnAccount` already, so the
+   * two are nested, not added. Null when none of it did. Membership in the
+   * on-account view (released_from_month set) is the test, never the
+   * payment's charge_id.
+   *
+   * A LIST, because the close-out cascade writes two. January part-paid by
+   * cheque, February raised early and paid in full, the move-out recorded
+   * after both: endTenancy cancels both bills, and the part month is settled
+   * from both cancelled bills' money (finalMonthNow, park/actions.ts). One
+   * month named here left the other's cheque read as "money you had on
+   * account" — money she never put there.
+   */
+  fromCancelledBill: { months: string[]; amount: number } | null;
 }
 
 export interface RenterHome {
@@ -195,6 +218,11 @@ export interface RenterHome {
    * read $1,627.59 "on account" the morning January was settled from it, and
    * still in March when every cent was spent. This is the view's `remaining`.
    *
+   * INCLUDING MONEY A CANCELLED BILL RELEASED (0169). The view lists a
+   * payment against a bill the office has since cancelled — the row never
+   * moved — so the $70.00 left of her January cheque after the part month
+   * took its share is here by the view's own word, with no test of its own.
+   *
    * AND NOW A PROMISE THE SOFTWARE KEEPS. Every door settles her OLDEST open
    * bill from it (R1): the run the moment it raises one, the office the
    * moment money is keyed, or by hand — so the screen may say "it comes off
@@ -252,6 +280,34 @@ export interface RenterHome {
      */
     handedBack: number;
     handedBackOn: string | null;
+    /**
+     * THE BILL THIS PAID WAS CANCELLED (0169), and its money went on account
+     * — by the on-account view's word (released_from_month), never the
+     * row's charge_id. `month` is that bill's YYYY-MM. Null for every other
+     * payment. Before this the released cheque sat on her list at $542.53
+     * against nothing, the part month said $472.53 "came from what you'd
+     * already paid on the January 2027 bill that was cancelled", and the
+     * On account card said $70.00 — and the only way to tie the three
+     * together was her own subtraction. The row now says so itself, under
+     * the cheque, in the words /paid/[token] already uses.
+     */
+    releasedFrom: { month: string } | null;
+    /**
+     * WHERE THIS PAYMENT'S MONEY ON ACCOUNT WENT — its live allocations,
+     * each with the month of the bill it went to, and what the view says is
+     * STILL held of it (`onAccountRemaining`, the same `remaining` the On
+     * account card sums; zero when nothing is, or when nothing of this
+     * payment was ever on account). Read, never derived: the lines are the
+     * allocation rows scoped to her household above, the remainder is the
+     * view's. A line against a bill outside the 24-bill slice on screen
+     * carries no month here and is left out of the sentence rather than
+     * named as a bill she cannot see. The line against the bill raised
+     * again for the cancelled month is marked apart (`raisedAgain`, with
+     * that bill's own `billAmount`) the way /paid/[token] marks it, so
+     * "Where it went" reads the same on both.
+     */
+    allocations: AllocationLine[];
+    onAccountRemaining: number;
   }[];
 
   /** Reported from their lot, during their tenancy. */
@@ -320,17 +376,31 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // (renew-actions), and the notice she gave stands on the link the roll
   // called current; picking the newest row read the February successor
   // (no notice) and told her "rolls on". Falls back to the next link to
-  // start (signed, not yet moved in), then to ANY live link — a household
-  // whose monthly agreement lapsed with no successor written is still living
-  // there and must not get the wrap-up screen — and only then to the ended
-  // row, which carries the wrap-up.
+  // start (signed, not yet moved in), then to the link that LAPSED — a
+  // household whose monthly agreement ran out with no successor written is
+  // still living there and must not get the wrap-up screen — and only then
+  // to the ended row, which carries the wrap-up.
+  //
+  // "LAPSED" IS THE ROLL'S ONE RULE (lapsedRowOf), which sees the ended
+  // rows. "Any live link" was the fallback here, and it could not: a
+  // household closed out THROUGH their renewal leaves the link before it
+  // approved/active, run out, with nothing held after it — the successor
+  // they moved out from is `ended`, a later link all the same — and that
+  // run-out link was picked as where she lives. Ten days after she left,
+  // her screen was January's lot, not the wrap-up with her final month and
+  // her deposit on it. The roll, Today and the nightly all ask lapsedRowOf;
+  // so does this.
   const today = todayLakeDate();
   const liveStays = (stays ?? []).filter((r) => (r.status as string) !== "ended");
   const startOf = (r: Record<string, unknown>) => parseDaterange(r.during as string)?.start ?? "";
+  const lapsed = lapsedRowOf(
+    (stays ?? []).map((r) => ({ row: r, status: String(r.status ?? ""), range: parseDaterange(r.during as string), term: String(r.term ?? "") })),
+    today,
+  )?.row;
   const liveStay =
     liveStays.find((r) => coversDay(parseDaterange(r.during as string), today))
     ?? [...liveStays].filter((r) => startOf(r) > today).sort((a, b) => startOf(a).localeCompare(startOf(b)))[0]
-    ?? liveStays[0];
+    ?? lapsed;
   const stay = liveStay ?? stays?.[0];
   if (!stay) return null;
   const tenancyEnded = liveStay
@@ -371,7 +441,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // person acts on: the lot number she'd quote to the office, the park's name,
   // whether a Pay button appears at all, the percentage added if she uses it,
   // what she owes, what she has paid, and her deposit.
-  const [lotRes, parkRes, cardsRes, chargesRes, paysRes, propsRes, reqsRes, acctRes, allocRes] = await Promise.all([
+  const [lotRes, parkRes, cardsRes, chargesRes, paysRes, propsRes, reqsRes, acctRes, allocRes, releasedRes] = await Promise.all([
     // `qr_token` because the "What you reported" card asserts a sticker on
     // her pedestal. No lot at The Haven has one — a token exists only after
     // the office runs mintStickers and physically fixes them — so the card
@@ -408,7 +478,9 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       // the window — a deposit (0102), rent on account (0168) — with
       // `returned_amount` saying how much. Both are on this row, one letter
       // apart, and the list below reads both.
-      .select("amount, fee_amount, method, received_on, receipt_no, kind, returned_on, returned_amount, reversed_at, reversed_reason, returned_at, return_code")
+      // `id` so the row can be tied to its allocations and to the view's
+      // remaining — the same keys the office's screens use.
+      .select("id, amount, fee_amount, method, received_on, receipt_no, kind, returned_on, returned_amount, reversed_at, reversed_reason, returned_at, return_code")
       .eq("renter_id", file.id as string)
       .order("received_on", { ascending: false })
       .limit(24),
@@ -457,6 +529,18 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       .select("charge_id, payment_id, amount, park_payments!inner(renter_id, reversed_at, returned_at)")
       .eq("park_payments.renter_id", file.id as string)
       .is("removed_at", null),
+    // WHERE HER MONEY ON ACCOUNT CAME FROM (0169): the same view, every row
+    // of hers whether or not anything is left on it, with the month of the
+    // cancelled bill a released row was paid on. Its own read rather than
+    // the one above, because that one keeps only what is still held — and
+    // the part month settled in full from released money is exactly the
+    // case where nothing is left. A released row's money is spoken of as
+    // "what you'd already paid on the January 2027 bill that was cancelled",
+    // never as money she had on account.
+    admin
+      .from("park_on_account_payments")
+      .select("payment_id, released_from_month")
+      .eq("renter_id", file.id as string),
   ]);
   const lot = mustRead("your lot", lotRes);
   const park = mustRead("your park", parkRes);
@@ -519,7 +603,22 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // sentence that sends somebody to the office to ask where their money went.
   // mustRead, like every other money read on this screen.
   const allocRows = mustRead("where your money on account went", allocRes);
+  // WHICH OF HER PAYMENTS ARE MONEY A CANCELLED BILL RELEASED (0169), by the
+  // view's own word — a failed read here would print "came from money you
+  // had on account" about a January cheque she can see on her own list.
+  const releasedMonthOf = new Map<string, string>();
+  for (const r of mustRead("where your money came from", releasedRes) ?? []) {
+    if (r.released_from_month != null) releasedMonthOf.set(r.payment_id as string, String(r.released_from_month));
+  }
   const fromOnAccountCents = new Map<string, number>();
+  // Per bill, per cancelled bill's month: the cents that came from it.
+  const fromCancelledCents = new Map<string, Map<string, number>>();
+  // Per PAYMENT: the bills its money on account went to. The bills read
+  // above are the only ones in hand — the whole row, not its month alone,
+  // because the line against a bill raised again needs that bill's frozen
+  // lines and amount (below).
+  const billOf = new Map((charges ?? []).map((c) => [c.id as string, c]));
+  const wentTo = new Map<string, AllocationLine[]>();
   for (const a of allocRows ?? []) {
     // A reversed or bank-returned cheque's allocations are the record of
     // where it HAD gone; recompute_charge_paid no longer counts them and
@@ -528,8 +627,52 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     const pay = (Array.isArray(raw) ? raw[0] : raw) as { reversed_at?: unknown; returned_at?: unknown } | null;
     if (pay?.reversed_at != null || pay?.returned_at != null) continue;
     const key = a.charge_id as string;
-    fromOnAccountCents.set(key, (fromOnAccountCents.get(key) ?? 0) + Math.round(Number(a.amount ?? 0) * 100));
+    const c = Math.round(Number(a.amount ?? 0) * 100);
+    fromOnAccountCents.set(key, (fromOnAccountCents.get(key) ?? 0) + c);
+    // The same line, keyed the other way — by the payment it came off — for
+    // the sentence under the cheque. Only a bill in hand can be named.
+    const month = releasedMonthOf.get(a.payment_id as string);
+    const bill = billOf.get(key);
+    if (bill != null && c > 0) {
+      // THE BILL RAISED AGAIN FOR THE CANCELLED MONTH is named apart (0169),
+      // as /paid/[token] names it. A move-out cancels January and raises
+      // January again for the days they were here — same month, two bills
+      // — and "$472.53 to January 2027" one sentence after "the January
+      // 2027 bill this paid was cancelled" read as money put against the
+      // bill just cancelled. The one decision of which line collides is
+      // lib/allocations' (withRaisedAgain: the line whose month is the
+      // released-from month — every live line in that month IS the
+      // re-raise, since 0169's guard refuses to cancel a bill with live
+      // lines on it); the re-raised bill's own amount rides on that line
+      // alone so every ordinary line keeps its shape.
+      const line = withRaisedAgain(
+        { periodMonth: String(bill.period_month ?? ""), amount: c / 100 },
+        month ?? null,
+        bill.lines,
+      );
+      const mine = wentTo.get(a.payment_id as string) ?? [];
+      mine.push(line.raisedAgain && bill.amount != null ? { ...line, billAmount: Number(bill.amount) } : line);
+      wentTo.set(a.payment_id as string, mine);
+    }
+    if (month == null) continue;
+    const byMonth = fromCancelledCents.get(key) ?? new Map<string, number>();
+    byMonth.set(month, (byMonth.get(month) ?? 0) + c);
+    fromCancelledCents.set(key, byMonth);
   }
+  /**
+   * EVERY cancelled bill this bill drew from, and how much from them
+   * together. The close-out cascade settles a part month from two cancelled
+   * bills' money when the household had paid the month after as well, so
+   * naming one month would leave the other cheque unaccounted for on her
+   * screen. Months sorted; the amount is the sum, in cents until the edge.
+   */
+  const fromCancelledBill = (chargeId: string): Bill["fromCancelledBill"] => {
+    const byMonth = fromCancelledCents.get(chargeId);
+    if (!byMonth) return null;
+    const months = [...byMonth.keys()].sort();
+    const c = [...byMonth.values()].reduce((sum, n) => sum + n, 0);
+    return c > 0 ? { months, amount: c / 100 } : null;
+  };
 
   /** One charge row shaped for the screen. Used for the current bill and each
    *  arrears month, so they cannot drift apart. */
@@ -547,6 +690,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       disputed: claimedOn.has(c.id as string),
       claimedPaidOn: claimedOn.get(c.id as string) ?? null,
       fromOnAccount: (fromOnAccountCents.get(c.id as string) ?? 0) / 100,
+      fromCancelledBill: fromCancelledBill(c.id as string),
       lines: ((c.lines as { label?: string; amount?: number; basis?: string }[]) ?? []).map((l) => ({
         label: String(l.label ?? "Rent"),
         amount: Number(l.amount ?? 0),
@@ -603,6 +747,10 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   const onAccount = Math.round(
     (acctRows ?? []).reduce((sum, p) => sum + Number(p.remaining ?? 0), 0) * 100,
   ) / 100;
+  // The same rows by payment, so the cheque the $70.00 is left of can say
+  // so on its own line, and the card and the row cannot disagree.
+  const remainingOf = new Map<string, number>();
+  for (const p of acctRows ?? []) remainingOf.set(p.payment_id as string, Number(p.remaining ?? 0));
 
   // ---- what they reported -------------------------------------------------
   // Scoped to their tenancy's start: park_requests key on the LOT, not the
@@ -724,6 +872,13 @@ export async function getRenterHome(): Promise<RenterHome | null> {
         // (the view's remaining) and this row agree.
         handedBack: p.returned_on != null ? Number(p.returned_amount ?? 0) : 0,
         handedBackOn: p.returned_on != null && Number(p.returned_amount ?? 0) > 0 ? String(p.returned_on) : null,
+        // The bill this paid was cancelled (0169) — by the view's word — and
+        // where its money is now: the allocations keyed by this payment
+        // above, and the view's remaining. Both maps are already in hand;
+        // the row was the one reader of neither.
+        releasedFrom: releasedMonthOf.has(p.id as string) ? { month: releasedMonthOf.get(p.id as string) as string } : null,
+        allocations: wentTo.get(p.id as string) ?? [],
+        onAccountRemaining: remainingOf.get(p.id as string) ?? 0,
       })),
     reported,
     reportedFailed,

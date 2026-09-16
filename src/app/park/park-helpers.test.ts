@@ -7,7 +7,7 @@ import {
   buildLotRow, buildLotRange, buildParkProfileRow, buildRateRows, previewStayValue,
   planBulkRates, buildTenant, buildParkDialsRow, dialsWarning, noticeShape,
   agreementMonthsFor, agreementStartFor, dayInWords, planMoveOut, SIGNED_START_HORIZON_DAYS,
-  latestAgreementStart, holdoverWindowStart,
+  latestAgreementStart, holdoverWindowStart, lapsedRowOf, STAY_BY_THE_NIGHT,
   alreadyOverClause, agreementEndFrom, agreementAlreadyOver, capitalise,
   type BulkRateTarget, type TenantInput, type ChainLink,
   type RawReservation, type Stay, type LotFormInput, type LotRangeInput, type ParkProfileInput,
@@ -151,6 +151,157 @@ describe("buildRentRoll — the whole park on one screen", () => {
   it("an unparseable range never occupies a lot — we do not guess at dates", () => {
     const rows = buildRentRoll([lot()], [stay({ during: "garbage" })], "2026-07-05");
     expect(rows[0].state).toBe("vacant");
+    expect(rows[0].lapsed).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // THE LOT THAT WAS NOT VACANT. A one-month lease [1 Jan, 1 Feb) still held
+  // `active` on 16 February, with nothing written after it: nobody moved out,
+  // the paperwork ran out. The roll read it "Vacant / Open" and offered
+  // "Someone lives here" — the door that files a second renter for the same
+  // household — and occupancy dropped the morning eighteen such leases
+  // expired, as if the park had emptied.
+  // -------------------------------------------------------------------------
+  describe("a held row that ended with nothing after it is LAPSED, not vacant", () => {
+    const ran = stay({ id: "jan", during: "[2027-01-01,2027-02-01)", status: "active", term: "monthly" });
+
+    it("reads lapsed, carrying the row that ran out", () => {
+      const row = buildRentRoll([lot()], [ran], "2027-02-16")[0];
+      expect(row.state).toBe("lapsed");
+      expect(row.lapsed?.id).toBe("jan");
+      expect(row.current).toBeNull();
+      expect(row.next).toBeNull();
+      expect(row.nightsLeft).toBeNull();
+    });
+
+    it("on its checkout morning — the half-open end — it has already run out", () => {
+      expect(buildRentRoll([lot()], [ran], "2027-02-01")[0].state).toBe("lapsed");
+      // The night before, it is still theirs.
+      expect(buildRentRoll([lot()], [ran], "2027-01-31")[0].state).toBe("occupied");
+    });
+
+    it("with a CURRENT successor the lot is occupied and nothing is lapsed — the row it ended from is history", () => {
+      const feb = stay({ id: "feb", during: "[2027-02-01,2027-05-01)", status: "active", term: "monthly" });
+      const row = buildRentRoll([lot()], [ran, feb], "2027-02-16")[0];
+      expect(row.state).toBe("occupied");
+      expect(row.current?.id).toBe("feb");
+      expect(row.lapsed).toBeNull();
+    });
+
+    it("with only a FUTURE row the lot is reserved — a household whose record continues is not lapsed", () => {
+      // The successor was written from the end but has not started: an
+      // approved link still to come, or an application approved for March.
+      const mar = stay({ id: "mar", during: "[2027-03-01,2027-06-01)", status: "approved", term: "monthly" });
+      const row = buildRentRoll([lot()], [ran, mar], "2027-02-16")[0];
+      expect(row.state).toBe("reserved");
+      expect(row.next?.id).toBe("mar");
+      expect(row.lapsed).toBeNull();
+    });
+
+    it("a row that was ENDED or CANCELLED never lapses — somebody closed it, and the lot is open", () => {
+      for (const status of ["ended", "cancelled", "declined"]) {
+        const row = buildRentRoll([lot()], [{ ...ran, status }], "2027-02-16")[0];
+        expect(row.state, status).toBe("vacant");
+        expect(row.lapsed, status).toBeNull();
+      }
+    });
+
+    it("a stay by the night or the week ends when it ends — the guest checked out, nothing ran out", () => {
+      for (const term of ["nightly", "weekly"]) {
+        const row = buildRentRoll([lot()], [stay({ during: "[2027-01-05,2027-01-12)", status: "approved", term })], "2027-02-16")[0];
+        expect(row.state, term).toBe("vacant");
+        expect(row.lapsed, term).toBeNull();
+      }
+      // Collapsed the other way: the same dates on a monthly row lapse.
+      expect(buildRentRoll([lot()], [stay({ during: "[2027-01-05,2027-01-12)", status: "approved", term: "monthly" })], "2027-02-16")[0].state).toBe("lapsed");
+    });
+
+    it("of two rows that ran out, the LATEST-ending one is the lapsed row", () => {
+      const older = stay({ id: "old", during: "[2026-07-01,2026-10-01)", status: "active", term: "monthly" });
+      const row = buildRentRoll([lot()], [older, ran], "2027-02-16")[0];
+      expect(row.lapsed?.id).toBe("jan");
+    });
+
+    it("an inactive lot is INACTIVE whatever ran out on it", () => {
+      expect(buildRentRoll([lot({ active: false })], [ran], "2027-02-16")[0].state).toBe("inactive");
+    });
+
+    // A move-out inside the successor marks only the link covering the day
+    // `ended` (planMoveOut: "a last day inside the successor trims the
+    // successor and leaves January alone") — the expired January link stays
+    // active, run out, with nothing held after it. Read from the held rows
+    // alone that IS the lapsed shape, so a family who left on 10 February
+    // read "Ran out", lived-in, 100% occupied, and sat under "Agreements to
+    // write" where the tap would have billed them from February on.
+    it("a household closed out of its SUCCESSOR has left — the expired prior is not lapsed, the lot is vacant", () => {
+      const feb = stay({ id: "feb", during: "[2027-02-01,2027-02-11)", status: "ended", term: "monthly" });
+      const row = buildRentRoll([lot()], [ran, feb], "2027-03-16")[0];
+      expect(row.state).toBe("vacant");
+      expect(row.lapsed).toBeNull();
+      expect(summarise([row])).toMatchObject({ occupied: 0, lapsed: 0, vacant: 1, occupancyPct: 0 });
+      // Collapsed the other way: the same successor WITHDRAWN (cancelled,
+      // never lived in) leaves January the latest thing that was ever held
+      // — the household is still there, and January is lapsed.
+      const withdrawn = stay({ id: "feb", during: "[2027-02-01,2027-02-11)", status: "cancelled", term: "monthly" });
+      const still = buildRentRoll([lot()], [ran, withdrawn], "2027-03-16")[0];
+      expect(still.state).toBe("lapsed");
+      expect(still.lapsed?.id).toBe("jan");
+    });
+
+    it("a close-out BEFORE the row that ran out is history — a new household on the lot lapses on its own", () => {
+      // Somebody else was closed out of this lot last summer; the January
+      // household is the latest thing held, and its paperwork ran out.
+      const gone = stay({ id: "gone", during: "[2026-05-01,2026-06-15)", status: "ended", term: "monthly" });
+      const row = buildRentRoll([lot()], [gone, ran], "2027-02-16")[0];
+      expect(row.state).toBe("lapsed");
+      expect(row.lapsed?.id).toBe("jan");
+    });
+  });
+});
+
+describe("lapsedRowOf — the one rule every doorway reads", () => {
+  const jan = { id: "jan", status: "active", range: parseDaterange("[2027-01-01,2027-02-01)"), term: "monthly" };
+  const TODAY = "2027-03-16";
+
+  it("a held monthly row behind today with nothing after it is lapsed", () => {
+    expect(lapsedRowOf([jan], TODAY)?.id).toBe("jan");
+  });
+
+  it("a current or a coming held row means the record continues", () => {
+    const now = { id: "now", status: "active", range: parseDaterange("[2027-03-01,2027-04-01)"), term: "monthly" };
+    const soon = { id: "soon", status: "approved", range: parseDaterange("[2027-04-01,2027-05-01)"), term: "monthly" };
+    expect(lapsedRowOf([jan, now], TODAY)).toBeNull();
+    expect(lapsedRowOf([jan, soon], TODAY)).toBeNull();
+  });
+
+  it("an ended row ending AFTER the expired one closes the chain; one ending before it is history", () => {
+    const after = { id: "feb", status: "ended", range: parseDaterange("[2027-02-01,2027-02-11)"), term: "monthly" };
+    const before = { id: "old", status: "ended", range: parseDaterange("[2026-05-01,2026-06-15)"), term: "monthly" };
+    expect(lapsedRowOf([jan, after], TODAY)).toBeNull();
+    expect(lapsedRowOf([jan, before], TODAY)?.id).toBe("jan");
+    // A withdrawn or declined row is neither held nor a close-out.
+    for (const status of ["cancelled", "declined", "applied"]) {
+      expect(lapsedRowOf([jan, { ...after, status }], TODAY)?.id, status).toBe("jan");
+    }
+  });
+
+  it("a tie on the end day goes to the close-out", () => {
+    const sameDay = { id: "x", status: "ended", range: parseDaterange("[2027-01-15,2027-02-01)"), term: "monthly" };
+    expect(lapsedRowOf([jan, sameDay], TODAY)).toBeNull();
+  });
+
+  it("a checked-out stay by the night or the week is not lapsed; the same dates paid monthly are", () => {
+    const stayed = { id: "wk", status: "approved", range: parseDaterange("[2027-01-05,2027-01-12)"), term: "weekly" };
+    expect(lapsedRowOf([stayed], TODAY)).toBeNull();
+    expect(lapsedRowOf([{ ...stayed, term: "nightly" }], TODAY)).toBeNull();
+    expect(lapsedRowOf([{ ...stayed, term: "monthly" }], TODAY)?.id).toBe("wk");
+    // The set has one home, and the helper reads it.
+    expect([...STAY_BY_THE_NIGHT].sort()).toEqual(["nightly", "weekly"]);
+  });
+
+  it("a row with no dates contributes nothing either way", () => {
+    expect(lapsedRowOf([{ id: "?", status: "ended", range: null, term: "monthly" }, jan], TODAY)?.id).toBe("jan");
+    expect(lapsedRowOf([{ id: "?", status: "active", range: null, term: "monthly" }], TODAY)).toBeNull();
   });
 });
 
@@ -166,10 +317,41 @@ describe("summarise", () => {
       "2026-07-05",
     );
     expect(summarise(rows)).toEqual({
-      lots: 3, occupied: 1, reserved: 1, vacant: 1, inactive: 1, pending: 1, occupancyPct: 33,
+      lots: 3, occupied: 1, lapsed: 0, reserved: 1, vacant: 1, inactive: 1, pending: 1, occupancyPct: 33,
       // 0065: inventory that isn't real yet, counted apart from occupancy.
       planned: 0, renovating: 0, shortTermLots: 0,
     });
+  });
+  it("a lot whose paperwork ran out is counted as LAPSED — never vacant — and still lives in the percentage", () => {
+    // Four lots: one occupied, one lapsed (a January lease held on 16
+    // February with nothing after it), one reserved, one empty.
+    const rows = buildRentRoll(
+      [lot({ id: "a" }), lot({ id: "b" }), lot({ id: "c" }), lot({ id: "d" })],
+      [
+        stay({ id: "1", park_lot_id: "a", during: "[2027-01-01,2027-04-01)", status: "active", term: "monthly" }),
+        stay({ id: "2", park_lot_id: "b", during: "[2027-01-01,2027-02-01)", status: "active", term: "monthly" }),
+        stay({ id: "3", park_lot_id: "c", during: "[2027-03-01,2027-06-01)", status: "approved", term: "monthly" }),
+      ],
+      "2027-02-16",
+    );
+    const s = summarise(rows);
+    expect(s).toMatchObject({ lots: 4, occupied: 1, lapsed: 1, reserved: 1, vacant: 1 });
+    // (1 occupied + 1 lapsed) / 4 — not 1 / 4 = 25, which would say the park
+    // emptied the morning a lease expired.
+    expect(s.occupancyPct).toBe(50);
+    // Collapsed the other way: renew lot b and the numbers move from lapsed
+    // to occupied, the percentage unchanged — the household was there all along.
+    const renewed = buildRentRoll(
+      [lot({ id: "a" }), lot({ id: "b" }), lot({ id: "c" }), lot({ id: "d" })],
+      [
+        stay({ id: "1", park_lot_id: "a", during: "[2027-01-01,2027-04-01)", status: "active", term: "monthly" }),
+        stay({ id: "2", park_lot_id: "b", during: "[2027-01-01,2027-02-01)", status: "active", term: "monthly" }),
+        stay({ id: "2b", park_lot_id: "b", during: "[2027-02-01,2027-03-01)", status: "active", term: "monthly" }),
+        stay({ id: "3", park_lot_id: "c", during: "[2027-03-01,2027-06-01)", status: "approved", term: "monthly" }),
+      ],
+      "2027-02-16",
+    );
+    expect(summarise(renewed)).toMatchObject({ occupied: 2, lapsed: 0, vacant: 1, occupancyPct: 50 });
   });
   it("an INACTIVE lot is not inventory — it never dilutes occupancy", () => {
     const rows = buildRentRoll([lot({ id: "a" }), lot({ id: "b", active: false })], [stay({ park_lot_id: "a" })], "2026-07-05");
@@ -1832,9 +2014,9 @@ describe("who a claim slip is for", () => {
     expect(roll).toMatch(/\{r\.slipRenterId && slug && \(/);
   });
 
-  it("the page falls back to the household who arrives", () => {
+  it("the page falls back to the household who arrives — and to the one whose paperwork ran out", () => {
     expect(page, "slipFor is gone — the roll only knows about today again")
-      .toMatch(/const slipFor = r\.current \?\? r\.next;/);
+      .toMatch(/const slipFor = r\.current \?\? r\.next \?\? r\.lapsed;/);
     expect(page).toMatch(/slipRenterId: slipFor\?\.renterId/);
   });
 
@@ -1906,5 +2088,148 @@ describe("how the roll names what a household is on", () => {
     expect(w).not.toMatch(/2027-0/);
     expect(w).toMatch(/to April 1, 2027$/);
     expect(w).not.toMatch(/March 31/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE LOT THAT WAS NOT VACANT — every reader of the new state. A lapsed lot
+// used to read "Vacant / Open", offer "Someone lives here" (a SECOND renter
+// for the same household), lose every control keyed on the current link, and
+// drop out of occupancy on the roll AND on the ops board the morning its
+// paperwork expired. Source-scanned with comments stripped, and each scan
+// proves it found the thing before judging it.
+// ---------------------------------------------------------------------------
+describe("the roll, the page and the ops board read a lapsed lot as lived on", () => {
+  const strip = (src: string) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const read = (rel: string) =>
+    strip(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8"));
+  const roll = read("../../components/ParkRentRoll.tsx");
+  const page = read("./page.tsx");
+  const opsData = read("../ops/parks-data.ts");
+  const board = read("../../components/ops/ParkBoard.tsx");
+  const rows = roll.slice(roll.indexOf("{rows.map((r) => {"), roll.indexOf("function AddTenant("));
+
+  it("finds the roll's rows — a scan of nothing proves nothing", () => {
+    expect(rows.length).toBeGreaterThan(2000);
+    expect(rows).toContain("STATE_STYLE[r.state]");
+    expect(roll).not.toMatch(/\/\*/);
+  });
+
+  it("the row has a 'Ran out' pill and says who, when, and that nothing has billed since — in words, never ISO", () => {
+    expect(roll).toMatch(/lapsed: \{ pill: "warn", label: "Ran out" \}/);
+    const line = rows.match(/\{r\.state === "lapsed" && \([\s\S]*?\)\}\s*\{r\.owedThisMonth/)?.[0] ?? "";
+    expect(line, "the lapsed row line is gone — this scan measures nothing").not.toBe("");
+    expect(line).toMatch(/\{r\.lapsedRenter\}/);
+    expect(line).toMatch(/agreement ran out \{r\.lapsedOn \? dayInWords\(r\.lapsedOn\) : "—"\}; nothing billed since\./);
+    expect(line).not.toMatch(/\.slice\(0, 7\)|toISOString/);
+  });
+
+  it("with no signing control the row names Today's list — the door the rent screen's expired line names — and links it", () => {
+    const line = rows.match(/\{r\.state === "lapsed" && \([\s\S]*?\)\}\s*\{r\.owedThisMonth/)?.[0] ?? "";
+    expect(line).toMatch(/\{!r\.signing && \(/);
+    expect(line).toMatch(/Renew it under <Link href="\/park\/today">Agreements to write on Today<\/Link>\./);
+    // Collapsed the other way: a grandfathered holdover that ran out gets
+    // the signing control instead (page.tsx, below), so the row must not
+    // ALSO send him to a list that refuses it as 'inherited'.
+    expect(line).not.toMatch(/\{r\.signing && /);
+  });
+
+  it("'Someone lives here' renders for VACANT only — a lapsed lot is not open, so the second-renter door stays shut", () => {
+    const door = rows.match(/\{r\.state === "vacant" && \(\s*<button[\s\S]*?Someone lives here[\s\S]*?\)\}/)?.[0] ?? "";
+    expect(door, "the 'Someone lives here' door is gone — this scan measures nothing").not.toBe("");
+    expect(rows.match(/Someone lives here/g)?.length, "the label appears under more than one condition").toBe(1);
+    expect(rows).not.toMatch(/\(r\.state === "vacant" \|\| r\.state === "lapsed"\)/);
+    expect(rows).not.toMatch(/r\.state === "lapsed" && \(\s*<button[^>]*>\s*\{addingTo/);
+  });
+
+  it("Edit, Move out and the close-out are keyed on the link ON THE LOT — current, else the one that ran out", () => {
+    expect(rows).toMatch(/const onLot = r\.currentReservationId \?\? r\.lapsedReservationId;/);
+    // Edit: the link on the lot, else the one filed ahead of its day.
+    expect(rows).toMatch(/\{\(onLot \?\? r\.filedByHandId\) && \(/);
+    expect(rows).toMatch(/editingId === \(onLot \?\? r\.filedByHandId\) \? "Cancel" : "Edit"/);
+    expect(rows).not.toMatch(/\(r\.currentReservationId \?\? r\.filedByHandId\) && \(/);
+    // Move out and its panel.
+    expect(rows).toMatch(/\{onLot && \(\s*<button[\s\S]*?closingId === onLot \? "Cancel" : "Move out"/);
+    expect(rows).toMatch(/\{closingId && closingId === onLot && \(/);
+    expect(rows).toMatch(/onClick=\{\(\) => close\(onLot, lastDay\)\}/);
+    expect(rows).not.toMatch(/close\(r\.currentReservationId!, lastDay\)/);
+    // The Edit panel takes the lapsed household's name.
+    expect(rows).toMatch(/name=\{r\.currentRenter \?\? r\.lapsedRenter \?\? r\.filedByHandRenter \?\? ""\}/);
+  });
+
+  it("the close-out on a row that ran out starts on — and stops at — the last day that row covers", () => {
+    // planMoveOut refuses a day none of their agreements covers; seeded with
+    // today the panel opened on the one day the server would refuse.
+    expect(rows).toMatch(/setLastDay\(r\.currentReservationId \? today : r\.lapsedLastDay \?\? today\);/);
+    expect(rows).toMatch(/max=\{r\.currentReservationId \? today : r\.lapsedLastDay \?\? today\}/);
+    expect(rows).toMatch(/Their record here runs to \{dayInWords\(r\.lapsedLastDay\)\} — the last day can&apos;t be after that\./);
+    expect(page).toMatch(/lapsedLastDay: r\.lapsed\?\.range \? addDays\(r\.lapsed\.range\.end, -1\) : null,/);
+  });
+
+  it("the page carries the lapsed household to the row and seeds the signing control for a grandfathered one", () => {
+    expect(page).toMatch(/lapsedRenter: r\.lapsed \? roll\.renterNames\.get\(r\.lapsed\.renterId\) \?\? "Renter" : null,/);
+    expect(page).toMatch(/lapsedOn: r\.lapsed\?\.range\?\.end \?\? null,/);
+    expect(page).toMatch(/lapsedReservationId: r\.lapsed\?\.id \?\? null,/);
+    const holdover = page.match(/const holdover =[^;]*;/)?.[0] ?? "";
+    expect(holdover, "the holdover selection is gone — this scan measures nothing").not.toBe("");
+    expect(holdover).toMatch(/r\.lapsed\?\.origin === "grandfathered" \? r\.lapsed : null/);
+    // The seed carries the END, the day the successor is written from.
+    expect(page).toMatch(/holdoverTo: holdover\.range\?\.end \?\? null,/);
+    // The Edit panel's fields follow the same household; occupancy does not.
+    expect(page).toMatch(/const onLot = r\.current \?\? r\.lapsed;/);
+    expect(page).toMatch(/const editable = onLot \?\? filedByHand;/);
+    for (const field of ["currentRenter:", "currentUntil:", "currentReservationId:"]) {
+      const line = page.match(new RegExp(`${field} [^\\n]*`))?.[0] ?? "";
+      expect(line, `${field} missing`).not.toBe("");
+      expect(line, `${field} reads the lapsed household as living there today`).not.toMatch(/lapsed|onLot/);
+    }
+  });
+
+  it("the signing form seeds a holdover that ran out with its END, never blanks it, and says so in the planner's words", () => {
+    const form = roll.slice(roll.indexOf("function SignedNewLease("), roll.indexOf("function Stat("));
+    expect(form, "the form is gone — this scan measures nothing").toContain("recordSigning(");
+    expect(form).toMatch(/const ranOut = !!seed\.holdoverTo && seed\.holdoverTo <= today;/);
+    expect(form).toMatch(/const seededDay = defaultSigningDay\(seed\.holdoverFrom, cutoverDate, seed\.holdoverTo, today\);/);
+    // The one helper that keeps the end in the box: first render and every
+    // length change, never signingDayForLength directly.
+    expect(form).toMatch(/signedOn: signingSeedFor\(seededDay, seededDay, seed\.termMonths, today, ranOut\),/);
+    expect(form).toMatch(/signedOn: signingSeedFor\(seededDay, f\.signedOn, months, today, ranOut\),/);
+    expect(form).not.toMatch(/signingDayForLength\(/);
+    // The box stays typeable — a day inside the old arrangement is the trim.
+    const input = form.match(/<input type="date" value=\{form\.signedOn\}[^>]*>/)?.[0] ?? "";
+    expect(input, "the date input is gone").not.toBe("");
+    expect(input).not.toMatch(/disabled/);
+    // The blank-box branch is the other shape's alone.
+    expect(form).toMatch(/const seededDayOver = !ranOut && !!seededDay && agreementAlreadyOver\(seededDay, form\.agreementMonths, today\);/);
+    // The lead line is the planner's (ranOutLeadWords), at the length picked.
+    expect(form).toMatch(/\? ranOutLeadWords\(seededDay, form\.agreementMonths, lengths, today\)/);
+    // The first-month sentence is about the day the ROW runs from — the end
+    // when the typed day is later — and the button is withheld when the
+    // pick is over from it.
+    expect(form).toMatch(/const runsFrom = ranOut && form\.signedOn > seededDay \? seededDay : form\.signedOn;/);
+    expect(form).toMatch(/firstMonthBills\(runsFrom, Math\.round\(rentTyped \* 100\) \/ 100, seed\.feePerMonth, seed\.holdoverFrom\)/);
+    expect(form).toMatch(/from <strong>\{dayInWords\(runsFrom\)\}<\/strong> — \{firstMonth\}\./);
+    expect(form).toMatch(/const ranOutOverAtPick = ranOut && agreementAlreadyOver\(seededDay, form\.agreementMonths, today\);/);
+    expect(form).toMatch(/\{firstMonth && !ranOutOverAtPick && \(/);
+    expect(form).toMatch(/disabled=\{pending \|\| !form\.signedOn \|\| !form\.rent\.trim\(\) \|\| ranOutOverAtPick\}/);
+  });
+
+  it("the stat tiles count a lapsed lot as lived on, and name it beside Vacant", () => {
+    expect(roll).toMatch(/value=\{notYetStarted \? `\$\{summary\.reserved\}` : `\$\{summary\.occupied \+ summary\.lapsed\}`\}/);
+    expect(roll).toMatch(/sub=\{summary\.lapsed \? `\$\{summary\.lapsed\} ran out` : summary\.reserved \? `\$\{summary\.reserved\} reserved` : ""\}/);
+    expect(roll).toMatch(/const notYetStarted = summary\.occupied === 0 && summary\.lapsed === 0 && summary\.reserved > 0;/);
+    // The re-rate panel stays up for a park whose leases all ran out.
+    expect(page).toMatch(/roll\.summary\.occupied \+ roll\.summary\.lapsed \+ roll\.summary\.reserved > 0/);
+  });
+
+  it("the ops board reads the same numbers — lapsed apart from vacant, and inside the percentage", () => {
+    expect(opsData).toMatch(/lapsed: summary\.lapsed,/);
+    expect(opsData).toMatch(/occupancyPct: summary\.occupancyPct,/);
+    expect(board).toMatch(/\$\{p\.occupancyPct\}% full · \$\{p\.vacant\} vacant\$\{p\.lapsed > 0 \? ` · \$\{p\.lapsed\} ran out` : ""\}/);
+    // The platform KPI is the same arithmetic as each park's own figure.
+    expect(board).toMatch(/Math\.round\(\(\(totals\.occupied \+ totals\.lapsed\) \/ totals\.lots\) \* 100\)/);
+    expect(board).toMatch(/lapsed: acc\.lapsed \+ p\.lapsed,/);
+    expect(board).not.toMatch(/Math\.round\(\(totals\.occupied \/ totals\.lots\) \* 100\)/);
   });
 });

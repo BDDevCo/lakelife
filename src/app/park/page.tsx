@@ -12,6 +12,9 @@ import { buildStatement, rollUp, statementLine, type StatementFee } from "@/app/
 import { getMyPark, getParkLots, getParkRoll, type ParkUnitView } from "@/app/park/data";
 import { agreementMonthsFor, agreementSpan } from "@/app/park/park-helpers";
 import { signingRentSeed } from "@/app/park/sign-helpers";
+// The day before a half-open end — the last day a row covers. The same
+// helper the signing and renewal doors read; not a fourth copy.
+import { addDays } from "@/app/park/rerate-helpers";
 import { lotFits, fitProblemText, type Lot } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
 import { periodIsBillable, firstBillablePeriod } from "@/lib/billing-start";
@@ -218,13 +221,15 @@ export default async function ParkPage() {
   // failed attempt must not become a durable note about a resident on their
   // landlord's screen.
   //
-  // THE SAME HOUSEHOLD THE SLIP IS FOR — `current ?? next`, the rule the row
-  // uses forty lines down. This read `current` alone, so a household arriving
-  // on 1 January held a slip the office had printed in December and the row
-  // still said "Print a slip": the status was never looked up for anyone who
-  // had not arrived, which is exactly who the December slips are for.
+  // THE SAME HOUSEHOLD THE SLIP IS FOR — `current ?? next ?? lapsed`, the
+  // rule the row uses forty lines down. This read `current` alone, so a
+  // household arriving on 1 January held a slip the office had printed in
+  // December and the row still said "Print a slip": the status was never
+  // looked up for anyone who had not arrived, which is exactly who the
+  // December slips are for. And a household whose paperwork ran out is still
+  // the household on the lot.
   const renterIds = roll.rows
-    .map((r) => (r.current ?? r.next)?.renterId)
+    .map((r) => (r.current ?? r.next ?? r.lapsed)?.renterId)
     .filter((x): x is string => !!x);
   const claimStatuses = await claimStatusFor(renterIds);
 
@@ -292,8 +297,14 @@ export default async function ParkPage() {
    *
    * Kept SEPARATE from the occupancy fields on purpose: the roll must not
    * start saying somebody lives on a lot before they do.
+   *
+   * AND THE HOUSEHOLD WHOSE PAPERWORK RAN OUT (r.lapsed — never set beside a
+   * current or next link). They still live there; the slip, the Edit panel
+   * and the close-out are theirs. Read `current ?? next` alone, a lapsed
+   * row lost every control at once — a household who could be renewed but
+   * not edited, closed out, or sent a slip.
    */
-  const slipFor = r.current ?? r.next;
+  const slipFor = r.current ?? r.next ?? r.lapsed;
   /**
    * THEY SIGNED THE NEW LEASE — offered for the stay the row is about (the
    * one covering today, else the one still to start) whenever that stay is
@@ -301,6 +312,12 @@ export default async function ParkPage() {
    * control is shown and says from when it works. The rent starts from the
    * lot's rate card, the number the lease was written from, else from what
    * they paid before.
+   *
+   * AND FOR A HOLDOVER THAT RAN OUT. Today's "haven't signed" card sends him
+   * to exactly this control for a lapsed grandfathered row, and the roll —
+   * reading `current ?? next` — offered it for nobody: the row read vacant.
+   * The form seeds the arrangement's END, the day the successor is written
+   * from (decision 3, 16 Sep), and carries it as `holdoverTo`.
    *
    * NOT ONCE THEIR OWN SIGNING IS RECORDED. A lease in his hand on
    * 20 December for 1 January is recorded that day: the holdover is trimmed
@@ -315,7 +332,10 @@ export default async function ParkPage() {
    * other door of this rule (today-actions holdoverLots).
    */
   const signedAhead = !!r.current && !!r.next && r.current.origin === "grandfathered" && r.next.renterId === r.current.renterId;
-  const holdover = slipFor?.origin === "grandfathered" && !signedAhead ? slipFor : null;
+  // slipFor already falls through to r.lapsed when nothing is current or
+  // next, so a lapsed grandfathered holdover reaches here by the same rule;
+  // spelled out so the fallback survives a slipFor that narrows again.
+  const holdover = (slipFor?.origin === "grandfathered" && !signedAhead ? slipFor : null) ?? (r.lapsed?.origin === "grandfathered" ? r.lapsed : null);
   const rateCard = lotById.get(r.lot.id)?.rates.find((c) => c.term === "monthly")?.amount ?? null;
   /**
    * WHAT A SIGNED AGREEMENT ON THIS LOT IS CHARGED EACH MONTH, by the
@@ -371,8 +391,14 @@ export default async function ParkPage() {
    * screen's to do; correcting the office's own filing is.
    */
   const filedByHand = r.current == null && r.next?.origin === "application" && r.next.decidedAt == null ? r.next : null;
-  /** The stay the Edit panel is about: the one covering today, else the one the office filed ahead. */
-  const editable = r.current ?? filedByHand;
+  /**
+   * THE HOUSEHOLD ON THE LOT, for Edit, Move out and the slip: the link
+   * covering today, else the one that ran out with them still there. Never
+   * `next` — the roll must not say somebody lives on a lot before they do.
+   */
+  const onLot = r.current ?? r.lapsed;
+  /** The stay the Edit panel is about: the one on the lot, else the one the office filed ahead. */
+  const editable = onLot ?? filedByHand;
   /**
    * WHAT THE ROW SAYS THEY ARE ON. "month-to-month" was "paid monthly" —
    * every 1-, 3- and 6-month lease read as rolling while the Today card
@@ -394,16 +420,24 @@ export default async function ParkPage() {
     currentUntil: r.current?.range?.end ?? null,
     currentReservationId: r.current?.id ?? null,
     currentRenterId: r.current?.renterId ?? null,
+    // THE PAPERWORK THAT RAN OUT with the household still there: who, the
+    // day it ran out, the row (for Edit and the close-out), and the last day
+    // that row covers — the latest last-day a close-out can take.
+    lapsedRenter: r.lapsed ? roll.renterNames.get(r.lapsed.renterId) ?? "Renter" : null,
+    lapsedOn: r.lapsed?.range?.end ?? null,
+    lapsedReservationId: r.lapsed?.id ?? null,
+    lapsedLastDay: r.lapsed?.range ? addDays(r.lapsed.range.end, -1) : null,
     // The household a slip should go to, whether they are here yet or not.
     slipRenterId: slipFor?.renterId ?? null,
     slipRenterName: slipFor ? roll.renterNames.get(slipFor.renterId) ?? "Renter" : null,
     claimStatus: slipFor?.renterId ? claimStatuses[slipFor.renterId] ?? "none" : null,
     renterEmail: slipFor?.renterId ? contact.get(slipFor.renterId)?.email ?? null : null,
     invitedAt: slipFor?.renterId ? contact.get(slipFor.renterId)?.invitedAt ?? null : null,
-    // THE EDIT PANEL'S FIELDS come from the stay it edits — the current
-    // link, else the agreement the office filed ahead of its day. The
-    // occupancy fields above stay on `current` alone: the roll must not
-    // say somebody lives on a lot before they do.
+    // THE EDIT PANEL'S FIELDS come from the stay it edits — the link on the
+    // lot (current, else the one that ran out), else the agreement the
+    // office filed ahead of its day. The occupancy fields above stay on
+    // `current` alone: the roll must not say somebody lives on a lot before
+    // they do.
     filedByHandId: filedByHand?.id ?? null,
     filedByHandRenter: filedByHand ? roll.renterNames.get(filedByHand.renterId) ?? "Renter" : null,
     currentRent: editable?.quotedAmount ?? null,
@@ -452,6 +486,10 @@ export default async function ParkPage() {
           // ledger already covers it (an imported row's 1 January), never
           // today. See defaultSigningDay.
           holdoverFrom: holdover.range?.start ?? null,
+          // And its END. Once that is behind today the arrangement has run
+          // out, and the successor is written from this day whatever later
+          // day is on the paper (planSigning); the form seeds it and says so.
+          holdoverTo: holdover.range?.end ?? null,
           termMonths,
           feePerMonth: signedFeePerMonth,
         }
@@ -492,7 +530,11 @@ export default async function ParkPage() {
         </div>
       )}
 
-      {roll.summary.occupied + roll.summary.reserved > 0 && (
+      {/* AND LAPSED: a household whose paperwork ran out is still a tenancy
+          a rent notice is served on — the successor carries the served
+          rent. Without it the panel vanished the morning every lease at a
+          one-month park expired. */}
+      {roll.summary.occupied + roll.summary.lapsed + roll.summary.reserved > 0 && (
         <div className="wrap" style={{ paddingTop: 14, paddingBottom: 0 }}>
           <ParkReRate
             parkId={park.id}

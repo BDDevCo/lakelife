@@ -25,15 +25,25 @@ const inserted: Record<string, Row[]> = {};
 const updates: Array<{ table: string; ids: string[]; patch: Row }> = [];
 
 const cents = (n: unknown) => Math.round(Number(n ?? 0) * 100);
-/** park_on_account_payments, modelled (0167): standing rent with no bill, with the database's own `remaining` — live allocations and refunds netted. */
+/**
+ * park_on_account_payments, modelled (0167 + 0168 + 0169): standing rent
+ * with no bill, OR standing rent against a bill whose status is void (its
+ * money released onto account — the row never moves), with the database's
+ * own `remaining` — live allocations, refunds and a hand-back netted — and
+ * the three released_* columns 0169 appends.
+ */
 function onAccountView(): Row[] {
+  const chargeOf = (p: Row) => (db.park_charges ?? []).find((c) => c.id === p.charge_id);
   return (db.park_payments ?? [])
-    .filter((p) => (p.kind ?? "rent") === "rent" && p.charge_id == null && p.reversed_at == null && p.returned_at == null)
+    .filter((p) => (p.kind ?? "rent") === "rent" && (p.charge_id == null || chargeOf(p)?.status === "void") && p.reversed_at == null && p.returned_at == null)
     .map((p) => {
       const allocated = (db.park_payment_allocations ?? []).filter((a) => a.payment_id === p.id && a.removed_at == null).reduce((t, a) => t + cents(a.amount), 0);
       const refunded = (db.park_refunds ?? []).filter((r) => r.payment_id === p.id).reduce((t, r) => t + cents(r.amount), 0);
-      return { payment_id: p.id, park_id: p.park_id, renter_id: p.renter_id, amount: p.amount,
-        allocated: allocated / 100, refunded: refunded / 100, remaining: Math.max(0, cents(p.amount) - allocated - refunded) / 100 };
+      const handedBack = p.returned_on != null ? cents(p.returned_amount) : 0;
+      const c = chargeOf(p);
+      return { payment_id: p.id, park_id: p.park_id, renter_id: p.renter_id ?? c?.renter_id ?? null, amount: p.amount,
+        allocated: allocated / 100, refunded: refunded / 100, remaining: Math.max(0, cents(p.amount) - allocated - refunded - handedBack) / 100,
+        released_from_charge_id: c?.id ?? null, released_from_month: c?.period_month ?? null, released_on: c?.voided_at ?? null };
     });
 }
 class Q {
@@ -51,6 +61,7 @@ class Q {
   eq(c: string, v: unknown) { this.cols.push(c); this.fs.push((r) => r[c] === v); return this; }
   in(c: string, vs: unknown[]) { this.cols.push(c); this.fs.push((r) => vs.includes(r[c])); return this; }
   is(c: string, v: unknown) { this.cols.push(c); this.fs.push((r) => (v === null ? r[c] == null : r[c] === v)); return this; }
+  neq(c: string, v: unknown) { this.cols.push(c); this.fs.push((r) => r[c] !== v); return this; }
   maybeSingle() {
     if (nextReadError && nextReadError.table === this.t && this.cols.includes(nextReadError.column)) {
       const e = nextReadError.error; nextReadError = null;
@@ -637,7 +648,7 @@ describe("money sent back to the card is read for the row and its sibling", () =
     const src = readFileSync(join(process.cwd(), "src", "lib", "confirm-server.ts"), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     expect(src).not.toMatch(/toFixed/);
-    expect(src).toMatch(/import \{ describeAllocations, money, type AllocationLine \} from "@\/lib\/allocations"/);
+    expect(src).toMatch(/import \{ describeAllocations, withRaisedAgain, money, type AllocationLine \} from "@\/lib\/allocations"/);
   });
 });
 
@@ -793,5 +804,206 @@ describe("money handed back across the window is read for the row and its siblin
     expect(src).not.toMatch(/"returned by the bank"/);
     // And never off the on-account view's columns, which 0168 has not yet landed.
     expect(src).not.toMatch(/handed_back/);
+  });
+});
+
+/**
+ * A CANCELLED BILL RELEASES ITS MONEY ONTO ACCOUNT (0169). She paid January
+ * in full on the 4th and left on the 20th; the office cancelled the
+ * whole-month bill and raised the part month again — $472.53, settled from
+ * the released money — and $70.00 is on account. The payment row never
+ * moved: charge_id is still the cancelled January. Her receipt's link must
+ * now read the row's OWN allocations and remainder, say which bill was
+ * cancelled and when — and on a split, BOTH rows' money, or the page names
+ * $57.47 held when $127.47 is. Decided by the view listing the row, never by
+ * dropping the charge_id test: an ordinary receipt against a live bill keeps
+ * `onAccountRemaining` null.
+ */
+describe("a receipt whose bill was cancelled after it was paid", () => {
+  const RELEASED_TOKEN = "e".repeat(32) + "f".repeat(8);
+  beforeEach(() => {
+    db.park_charges = [
+      { id: "charge-9", park_id: "park-haven", park_lot_id: "lot-9", renter_id: "renter-9", period_month: "2027-01", status: "void", voided_at: "2027-01-20T16:00:00Z", void_reason: "moved out 20 January" },
+      { id: "charge-part", park_id: "park-haven", park_lot_id: "lot-9", reservation_id: "res-9", renter_id: "renter-9", period_month: "2027-01", status: "paid", amount: 472.53,
+        lines: [{ label: "Lot rent", amount: 348.39, basis: "27 of 31 days" }, { label: "Grounds fee", amount: 124.14, basis: "27 of 31 days" }] },
+      { id: "charge-feb", park_id: "park-haven", park_lot_id: "lot-9", renter_id: "renter-9", period_month: "2027-02", status: "open" },
+    ];
+    // The lone case: a $542.53 cheque straight against January, no sibling.
+    db.park_payments = [{
+      id: "pay-rel", charge_id: "charge-9", park_id: "park-haven", renter_id: "renter-9", kind: "rent", amount: 542.53, fee_amount: null,
+      method: "check", reference: "1042", received_on: "2027-01-04", receipt_no: 104, renter_confirmed_at: null,
+      confirm_token: RELEASED_TOKEN, idempotency_key: "rel-key", reversed_at: null,
+    }];
+    db.park_payment_allocations = [{ id: "al-part", payment_id: "pay-rel", charge_id: "charge-part", amount: 472.53 }];
+    db.lot_reservations = [{ id: "res-9", renter_id: "renter-9", status: "active", during: "[2026-01-01,2027-02-01)", expected_move_out: null, moved_out_on: null }];
+  });
+
+  it("a released bill row reports its own allocations and remainder, and which bill was cancelled when — and names the January raised again apart from the January cancelled", async () => {
+    const v = (await loadPaymentByToken(RELEASED_TOKEN))!;
+    expect(v.amount).toBe(542.53);
+    expect(v.onAccount, "no sibling — nothing was recorded on account at the time").toBeNull();
+    expect(v.onAccountApplied).toBe(true);
+    expect(v.onAccountRemaining).toBe(70);
+    // TWO JANUARY BILLS IN ONE WORD: "$472.53 to January 2027" one sentence
+    // after "the January 2027 bill this paid was cancelled" read as money
+    // put against the bill just cancelled. The colliding line is marked
+    // the way the office's receipts and the reversal sentence mark it
+    // (withRaisedAgain), with the re-raised bill's own amount and basis.
+    expect(v.allocations).toEqual([{ periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: "27 of 31 days" }, billAmount: 472.53 }]);
+    expect(v.whereItWent).toBe("$472.53 to the $472.53 bill raised again for January 2027 (27 of 31 days), $70.00 on account");
+    expect(v.releasedFrom).toEqual({ month: "2027-01", on: "2027-01-20T16:00:00Z" });
+    expect(v.takenBackOn).toBeNull();
+    expect(v.lotNumber).toBe("9");
+    // A re-raise with no frozen basis is still named as the re-raise, with
+    // no bracket; and a line in ANOTHER month is an ordinary line.
+    db.park_charges.find((c) => c.id === "charge-part")!.lines = null;
+    db.park_payment_allocations.push({ id: "al-feb", payment_id: "pay-rel", charge_id: "charge-feb", amount: 0.01 });
+    const plain = (await loadPaymentByToken(RELEASED_TOKEN))!;
+    expect(plain.allocations).toEqual([
+      { periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: null }, billAmount: 472.53 },
+      { periodMonth: "2027-02", amount: 0.01 },
+    ]);
+    expect(plain.whereItWent).toBe("$472.53 to the $472.53 bill raised again for January 2027, $0.01 to February 2027, $69.99 on account");
+  });
+
+  it("a released SPLIT reads both rows: the $57.47 sibling and the released $542.53 together — $127.47 held, never $57.47", async () => {
+    db.park_payments.push({
+      id: "pay-rel-acct", charge_id: null, park_id: "park-haven", renter_id: "renter-9", kind: "rent", amount: 57.47, fee_amount: null,
+      method: "check", reference: "1042", received_on: "2027-01-04", receipt_no: 105, renter_confirmed_at: null,
+      confirm_token: "9".repeat(40), idempotency_key: "rel-key:onaccount", reversed_at: null,
+    });
+    const v = (await loadPaymentByToken(RELEASED_TOKEN))!;
+    expect(v.amount).toBe(600);
+    expect(v.onAccount).toBe(57.47);
+    expect(v.onAccountRemaining).toBe(127.47);
+    expect(v.allocations).toEqual([{ periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: "27 of 31 days" }, billAmount: 472.53 }]);
+    expect(v.whereItWent).toBe("$472.53 to the $472.53 bill raised again for January 2027 (27 of 31 days), $127.47 on account");
+    expect(v.releasedFrom).toEqual({ month: "2027-01", on: "2027-01-20T16:00:00Z" });
+    // The sibling's own allocation shows too, and the remainder follows.
+    db.park_payment_allocations.push({ id: "al-sib", payment_id: "pay-rel-acct", charge_id: "charge-feb", amount: 57.47 });
+    const again = (await loadPaymentByToken(RELEASED_TOKEN))!;
+    expect(again.onAccountRemaining).toBe(70);
+    expect(again.whereItWent).toBe("$472.53 to the $472.53 bill raised again for January 2027 (27 of 31 days), $57.47 to February 2027, $70.00 on account");
+  });
+
+  it("an ordinary receipt against a LIVE bill still has onAccountRemaining null and no releasedFrom — the view decides, not charge_id", async () => {
+    // The regression: dropping the charge_id test alone makes every plain
+    // receipt read "none of it is still held". The same row, bill live.
+    db.park_charges[0].status = "paid"; db.park_charges[0].voided_at = null;
+    const v = (await loadPaymentByToken(RELEASED_TOKEN))!;
+    expect(v.onAccountRemaining).toBeNull();
+    expect(v.releasedFrom).toBeNull();
+    expect(v.onAccountApplied).toBe(false);
+    expect(v.whereItWent).toBe("");
+    expect(v.canDispute).toBe(true);
+    // And a released row that was since taken back is a plain taken-back
+    // receipt again: the view no longer lists it.
+    db.park_charges[0].status = "void"; db.park_charges[0].voided_at = "2027-01-20T16:00:00Z";
+    db.park_payments[0].reversed_at = "2027-01-25T15:00:00Z"; db.park_payments[0].reversed_reason = "bounced";
+    const gone = (await loadPaymentByToken(RELEASED_TOKEN))!;
+    expect(gone.takenBackOn).toBe("2027-01-25T15:00:00Z");
+    expect(gone.releasedFrom).toBeNull();
+    expect(gone.onAccountRemaining).toBeNull();
+  });
+
+  it("a released row cannot be disputed from the link — its bill is void, and no screen lists a claim on a void bill", async () => {
+    expect((await loadPaymentByToken(RELEASED_TOKEN))!.canDispute).toBe(false);
+    const res = await disputeByToken(RELEASED_TOKEN);
+    expect(res.ok).toBe(false);
+    expect(res.unsupported).toBe(true);
+    expect(res.error).toBe("The January 2027 bill this paid was cancelled, so this money is on account with the office now, and that can't be flagged from this link yet. Ring the office and quote receipt TH-2027-0104 — they can log it for you.");
+    expect(inserted.park_payment_claims ?? []).toHaveLength(0);
+    // Collapsed: the same row against a live bill files its claim as before.
+    db.park_charges[0].status = "paid"; db.park_charges[0].voided_at = null;
+    expect(await disputeByToken(RELEASED_TOKEN)).toEqual({ ok: true });
+    expect((inserted.park_payment_claims ?? [])[0]?.charge_id).toBe("charge-9");
+  });
+
+  it("'Yes, that's right' still stamps a released row, and its standing sibling with it", async () => {
+    db.park_payments.push({ id: "pay-rel-acct", charge_id: null, park_id: "park-haven", renter_id: "renter-9", kind: "rent", amount: 57.47,
+      received_on: "2027-01-04", receipt_no: 105, renter_confirmed_at: null, confirm_token: "9".repeat(40), idempotency_key: "rel-key:onaccount", reversed_at: null });
+    expect(await confirmByToken(RELEASED_TOKEN)).toEqual({ ok: true });
+    expect(updates[0].ids.sort()).toEqual(["pay-rel", "pay-rel-acct"]);
+  });
+
+  describe("whether a next bill will ever come — read for the one sentence it changes", () => {
+    it("tenancy ended and the move-out month billed: nothing more bills", async () => {
+      db.lot_reservations = [{ id: "res-9", renter_id: "renter-9", status: "ended", during: "[2026-01-01,2027-01-21)", expected_move_out: "2027-01-20", moved_out_on: "2027-01-20" }];
+      const v = (await loadPaymentByToken(RELEASED_TOKEN))!;
+      expect(v.onAccountRemaining).toBe(70);
+      expect(v.nothingMoreBills).toBe(true);
+    });
+
+    it("false while a link still stands, false while the move-out month is not yet billed, false with no tenancy at all", async () => {
+      expect((await loadPaymentByToken(RELEASED_TOKEN))!.nothingMoreBills, "a live link").toBe(false);
+      // Ended, but the part month has not been raised: the money WILL come off it.
+      db.lot_reservations = [{ id: "res-9", renter_id: "renter-9", status: "ended", during: "[2026-01-01,2027-01-21)", expected_move_out: null, moved_out_on: "2027-01-20" }];
+      db.park_charges = db.park_charges.filter((c) => c.id !== "charge-part");
+      db.park_payment_allocations = [];
+      expect((await loadPaymentByToken(RELEASED_TOKEN))!.nothingMoreBills, "final month unbilled").toBe(false);
+      // A void bill for that month does not count as billed.
+      db.park_charges.push({ id: "charge-part", park_id: "park-haven", park_lot_id: "lot-9", reservation_id: "res-9", renter_id: "renter-9", period_month: "2027-01", status: "void" });
+      expect((await loadPaymentByToken(RELEASED_TOKEN))!.nothingMoreBills, "only a void bill for the month").toBe(false);
+      db.lot_reservations = [];
+      expect((await loadPaymentByToken(RELEASED_TOKEN))!.nothingMoreBills, "no tenancy").toBe(false);
+    });
+
+    it("closed out THROUGH the renewal: the ended successor is a later link, and the run-out link before it does not make them 'still here'", async () => {
+      // The link before the renewal is approved/active, run out, with
+      // nothing HELD after it — a move-out marks only the link that covered
+      // the day. Read as "a held link exists, so they're here", this receipt
+      // told a household that had left that their money "comes off the next
+      // bill". The roll's rule sees the close-out behind the chain. Dates in
+      // the past against the real clock, the way this suite reads today.
+      db.lot_reservations = [
+        { id: "res-prior", renter_id: "renter-9", status: "active", during: "[2026-01-01,2026-08-01)", term: "monthly", expected_move_out: null, moved_out_on: null, agreement_chain_id: "chain-9", agreement_seq: 1 },
+        { id: "res-9", renter_id: "renter-9", status: "ended", during: "[2026-08-01,2026-08-11)", term: "monthly", expected_move_out: null, moved_out_on: "2026-08-10", agreement_chain_id: "chain-9", agreement_seq: 2 },
+      ];
+      db.park_charges.push({ id: "charge-aug", park_id: "park-haven", park_lot_id: "lot-9", reservation_id: "res-9", renter_id: "renter-9", period_month: "2026-08", status: "paid", amount: 175.01 });
+      expect((await loadPaymentByToken(RELEASED_TOKEN))!.nothingMoreBills).toBe(true);
+      // The other half: the successor WITHDRAWN (never lived in) leaves the
+      // run-out link a lapsed holdover — they are still living there, and a
+      // next bill WILL come.
+      db.lot_reservations[1].status = "cancelled";
+      expect((await loadPaymentByToken(RELEASED_TOKEN))!.nothingMoreBills).toBe(false);
+    });
+
+    it("read only while something is held; a failed read refuses rather than promising a next bill", async () => {
+      db.park_payment_allocations = [{ id: "al-part", payment_id: "pay-rel", charge_id: "charge-part", amount: 542.53 }];
+      nextReadError = { table: "lot_reservations", column: "renter_id", error: { code: "57P01", message: "x" } };
+      const spent = (await loadPaymentByToken(RELEASED_TOKEN))!;
+      expect(spent.onAccountRemaining).toBe(0);
+      expect(spent.nothingMoreBills).toBe(false);
+      expect(nextReadError, "nothing held — the tenancy was not read").not.toBeNull();
+      nextReadError = null;
+      db.park_payment_allocations = [{ id: "al-part", payment_id: "pay-rel", charge_id: "charge-part", amount: 472.53 }];
+      nextReadError = { table: "lot_reservations", column: "renter_id", error: { code: "57P01", message: "x" } };
+      await expect(loadPaymentByToken(RELEASED_TOKEN)).rejects.toBeInstanceOf(ReadFailed);
+      expect(nextReadError).toBeNull();
+    });
+
+    it("the ordinary split — $57.47 held for a household still living there — reads the same fact, and it is false", async () => {
+      db.park_charges[0].status = "paid"; db.park_charges[0].voided_at = null;
+      db.park_payments.push({ id: "pay-rel-acct", charge_id: null, park_id: "park-haven", renter_id: "renter-9", kind: "rent", amount: 57.47,
+        received_on: "2027-01-04", receipt_no: 105, renter_confirmed_at: null, confirm_token: "9".repeat(40), idempotency_key: "rel-key:onaccount", reversed_at: null });
+      const v = (await loadPaymentByToken(RELEASED_TOKEN))!;
+      expect(v.onAccountRemaining).toBe(57.47);
+      expect(v.nothingMoreBills).toBe(false);
+    });
+  });
+
+  it("the helper decides by view membership: the candidates are read from the view, and a bill row's allocations only when it is listed", () => {
+    const src = readFileSync(join(process.cwd(), "src", "lib", "confirm-server.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const went = src.match(/async function whereItWent[\s\S]*?\n}/)?.[0] ?? "";
+    expect(went.length).toBeGreaterThan(400);
+    expect(went).toMatch(/\.select\("payment_id, remaining, released_from_month, released_on"\)/);
+    expect(went).toMatch(/\.in\("payment_id", candidates\)/);
+    expect(went).toMatch(/candidates\.filter\(\(id\) => members\.has\(id\)\)/);
+    const helper = src.slice(src.indexOf("async function wholeHandedOver"), src.indexOf("async function nothingMoreBillsFor"));
+    expect(helper).toMatch(/const released = !!pay\.charge_id && own != null && went\.members\.has\(own\);/);
+    expect(helper).toMatch(/sibling \|\| onAccountByRecord \|\| released \? went\.remaining : null/);
+    const load = src.match(/export async function loadPaymentByToken[\s\S]*?\n}/)?.[0] ?? "";
+    expect(load).toMatch(/canDispute: !!pay\.charge_id && !released,/);
   });
 });

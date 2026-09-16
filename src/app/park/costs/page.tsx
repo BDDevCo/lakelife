@@ -51,7 +51,10 @@ export default async function ParkCostsPage() {
            lot, the screen claims costs are being recovered that are not. */
         recoveredByFee={feesPage.coveragePayers > 0
           && feesPage.fees.some((f) => f.active && f.covers.length > 0)}
-        schedules={<ParkCostSchedules parkId={park.id} rows={schedules} />}
+        /* The go-live date, so the reminder form's hint about a bill from
+           before it can name the day — and stay silent on a park that has
+           none (0170). */
+        schedules={<ParkCostSchedules parkId={park.id} rows={schedules} cutoverOn={park.cutoverDate} />}
         fees={<ParkFees parkId={park.id} page={feesPage} />}
       />
     </>

@@ -21,18 +21,24 @@ import {
 import { canEnableParkServices } from "./service-helpers";
 // The one set of sentences for "both are a condition of renting".
 import { contactProblem } from "./onboard-helpers";
-// The one judgement of a chosen agreement length, and its words.
-import { chooseAgreementLength, lengthAdjective } from "./agreement-helpers";
+// The one judgement of a chosen agreement length, and its words — and the
+// months a row written into the past has already missed.
+import { chooseAgreementLength, lengthAdjective, lostMonths } from "./agreement-helpers";
+// THE DOOR THAT WRITES A ROW INTO THE PAST BILLS THE MONTHS IT MADE BILLABLE
+// (decision 3) — the same re-raise the signing and renew doors use.
+import { parkRanMonth, billLostMonths, lostMonthsWords } from "./gap-bills";
 // Months a person reads are words; the withdrawn-agreement signal names them.
 import { prettyMonth, money } from "./ledger-helpers";
 // WHAT A MOVE-OUT DOES TO THE BILLS ALREADY RAISED — the void, the re-raise,
 // what money is on a bill, and what the household still holds.
 import {
-  chargeStandings, voidUnpaidChargesFor, reraiseMonth, statementFor, basisOf, strandedSharesSentence,
+  chargeStandings, voidUnpaidChargesFor, reraiseMonth, strandedSharesSentence,
   type ChargeStanding,
 } from "./charge-edits";
 // Taking money on account back off a bill keeps the row with a reason (R3).
 import { unapplyAllocation } from "./money-actions";
+// The one strip of the table a database refusal prefixes.
+import { dbSaid } from "@/lib/db-said";
 // What a household still holds with the park — the held panel's and Today's
 // own read (the 0167 view's `remaining`, deposits not yet returned), so the
 // close-out names the same money they do.
@@ -599,7 +605,7 @@ export async function addTenant(
     .single();
   if (renterErr || !renter) return { ok: false, error: "Couldn't save that tenant — try again." };
 
-  const { error: resErr } = await admin.from("lot_reservations").insert({
+  const { data: resRow, error: resErr } = await admin.from("lot_reservations").insert({
     park_lot_id: lotId,
     renter_id: renter.id,
     during: toDaterange({ start: built.tenancy.start, end: built.tenancy.end }),
@@ -620,7 +626,7 @@ export async function addTenant(
     // The office's sheet is the owner's knowledge, never the tenant's — the
     // same value the filing screen writes.
     amount_source: "owner_knowledge",
-  });
+  }).select("id").single();
 
   if (resErr) {
     // Don't strand a renter file with no tenancy — she would show nowhere and
@@ -637,7 +643,30 @@ export async function addTenant(
     return { ok: false, error: "Couldn't put them on that lot — try again." };
   }
 
+  // A SIGNED LEASE DATED INTO THE PAST HAS MONTHS THE RUN ALREADY WENT BY.
+  // agreementStartFor accepts any day on or after the cutover, so a lease
+  // filed here in March from 1 January covers January and February — months
+  // the run visited once, before this row existed, and will never come back
+  // for. Bill them now, through the one re-raise every such door uses
+  // (gap-bills); the toast says what landed. A holdover is left to the run
+  // as before: its window floors at the cutover and the run bills it on the
+  // next press. A failed read of whether this month ran is said, never
+  // guessed — see sign-actions for why either guess is wrong.
+  const today = todayLakeDate();
+  const ran = await parkRanMonth(admin, parkId, today.slice(0, 7));
+  let billedTail = "";
+  if (typeof ran !== "boolean") {
+    console.error(`[read failed] ${ran.what}:`, ran.error);
+    billedTail = ` ⚠️ We couldn't read ${ran.what}, so no earlier month was billed for them — bill it from the rent screen.`;
+  } else if (built.tenancy.origin !== "grandfathered" && resRow?.id) {
+    const said = lostMonthsWords(
+      await billLostMonths(admin, parkId, resRow.id as string, lostMonths(built.tenancy.start, today, cutoverDate, ran)),
+    );
+    billedTail = said ? ` ${said}` : "";
+  }
+
   revalidatePath("/park");
+  revalidatePath("/park/rent");
   return {
     ok: true,
     // "THEY'LL GET RECEIPTS AND REMINDERS BY TEXT" WAS NOT TRUE OF ANYBODY.
@@ -669,7 +698,8 @@ export async function addTenant(
         : `, on the new ${agreementMonths == null ? "" : `${lengthAdjective(agreementMonths)} `}lease from ${dayInWords(built.tenancy.start)}.`) +
       (built.renter.phone_on_file_with_park
         ? " The number is on file for you to ring — they'll get anything automated only once they ask for it themselves."
-        : ""),
+        : "") +
+      billedTail,
   };
 }
 
@@ -917,17 +947,19 @@ export async function endTenancy(
   // account already spent on it. The bill is dealt with FIRST, before the
   // link: money on account comes back off it (a removal with a reason, R3),
   // the bill is cancelled with the reason, and only then is the agreement
-  // withdrawn. Money TAKEN against it refuses the whole thing — that is not
-  // a bill this door may cancel (0072), and the sentence says so.
+  // withdrawn. Money TAKEN against it is released onto the household's
+  // account by the cancel (0169) — the payment row never moves — and the
+  // sentence says where it went.
   if (reason === "cancelled") {
     const standing = await chargeStandings(admin, parkId, [reservationId]);
     if ("error" in standing) {
       return { ok: false, error: readFailedMessage(standing.what, standing.error, { money: true }) };
     }
-    const direct = standing.charges.filter((c) => c.money === "direct");
-    if (direct.length > 0) return { ok: false, error: directPaidRefusal(direct, "withdraw it") };
     const cleared = await clearBillsBeforeCancel(parkId, standing.charges, `Agreement withdrawn on ${dayInWords(todayLakeDate())}`);
-    if (!cleared.ok) return { ok: false, error: `${cleared.error} Nothing was withdrawn.` };
+    // The refusal names an action the roll lacks ("take it off the bill
+    // first"), so the door is named too — the same one the move-out caller
+    // points at.
+    if (!cleared.ok) return { ok: false, error: `${cleared.error} Nothing was withdrawn — sort the bill out from the rent screen, then withdraw it again.` };
 
     const { data: done, error } = await admin
       .from("lot_reservations")
@@ -998,10 +1030,9 @@ export async function endTenancy(
 
   // THE BILLS ALREADY RAISED, read BEFORE any write — the covering link's
   // from the last day's month on, and every bill on the links the cascade
-  // withdraws. A withdrawn link with money TAKEN against its bill refuses
-  // the whole close-out while nothing has changed: that bill is not this
-  // door's to cancel, and a trim that then leaves it standing is the shape
-  // this reads to prevent.
+  // withdraws. A failed read refuses the whole close-out while nothing has
+  // changed: a trim that then leaves a bill standing unmentioned is the
+  // shape this reads to prevent.
   const coveringId = plan.trim?.id ?? links.find((l) => l.agreementSeq === plan.coveringSeq)?.id ?? null;
   const cancelIds = plan.cancel.map((c) => c.id);
   const lastMonth = lastDay.slice(0, 7);
@@ -1010,8 +1041,6 @@ export async function endTenancy(
     return { ok: false, error: readFailedMessage(standing.what, standing.error, { money: true }) };
   }
   const onWithdrawn = standing.charges.filter((c) => cancelIds.includes(c.reservationId));
-  const withdrawnDirect = onWithdrawn.filter((c) => c.money === "direct");
-  if (withdrawnDirect.length > 0) return { ok: false, error: directPaidRefusal(withdrawnDirect, "close them out") };
   const onCovering = standing.charges.filter((c) => c.reservationId === coveringId && c.month >= lastMonth);
 
   if (plan.trim) {
@@ -1036,8 +1065,10 @@ export async function endTenancy(
   // February bill still open that money would land on February a moment
   // before the cascade tried to cancel it — the cascade's read of what is
   // on that bill was taken before any write, so it would void nothing and
-  // refuse. Cancelled bills first, then the final month. The cascade's two
-  // failure paths call it anyway, so no sentence about a close-out ever
+  // refuse. Cancelled bills first, then the final month — and money the
+  // cascade released from a directly-paid February (0169) is on account by
+  // the time the part month is raised, so it can settle it. The cascade's
+  // two failure paths call it anyway, so no sentence about a close-out ever
   // leaves the whole-month bill standing unmentioned.
   const finalMonthNow = async () =>
     plan.trim && coveringId
@@ -1140,13 +1171,14 @@ export async function endTenancy(
   // THE FINAL MONTH'S BILL, if it was already raised. "Their final month
   // bills for the days they were here" was said unconditionally, while a
   // whole-month bill raised on the 1st stood untouched and the run — keyed
-  // on "already billed" — never came back to it. Now: unpaid → cancelled
-  // and raised again for the days they were here; settled from money on
-  // account → the lines come off (R3), the bill is cancelled and raised
-  // again, and the money settles the new one (R1); money TAKEN against it
-  // → the bill and the money stay exactly as they are and the sentence says
-  // the arithmetic, because there is no ledger shape yet for the park owing
-  // a household cash back, and inventing one here is not this door's call.
+  // on "already billed" — never came back to it. Now every bill from the
+  // last day's month on goes the same way: money on account comes off it
+  // (R3), it is cancelled with the move-out as the reason — which releases
+  // anything paid straight against it onto the household's account (0169),
+  // the payment row untouched — and the month is raised again for the days
+  // they were here, settled from money on account as it lands (R1). What
+  // is left of the released money is theirs: the `held` sentence below
+  // names it, and the hand-back door (0168) is where it goes back.
   const finalMonth = await finalMonthNow();
 
   // WHAT THEY STILL HOLD WITH THE PARK — money on account, a deposit. A
@@ -1183,27 +1215,21 @@ export async function endTenancy(
 }
 
 /**
- * WHY A WITHDRAWAL OR A CLOSE-OUT IS REFUSED: a bill on a link this door
- * would cancel has money TAKEN against it. voidCharge's own sentence, with
- * what to do — the bill is named by month, nothing has changed.
- */
-function directPaidRefusal(bills: readonly ChargeStanding[], then: string): string {
-  const b = [...bills].sort((a, c) => a.month.localeCompare(c.month))[0];
-  const taken = b.direct > 0 ? b.direct : b.paidTotal;
-  return (
-    `Their ${prettyMonth(b.month)} bill of ${money(b.amount)} has ${money(taken)} taken against it — ` +
-    `cancelling it would make that money disappear from your totals while it's still in the bank. ` +
-    `Sort that payment out first, then ${then}.`
-  );
-}
-
-/**
  * CLEAR THE BILLS ON LINKS ABOUT TO BE CANCELLED. Money on account comes
  * back off each bill (unapplyAllocation — a removal with a reason, never a
- * reversal of a good payment), then the bill is cancelled with the reason.
- * The caller has already refused any bill with money taken against it.
- * Returns what to say: "Their February 2027 bill of $542.53 was cancelled
- * and $57.47 went back on account."
+ * reversal of a good payment), then the bill is cancelled with the reason —
+ * a bill paid straight against it too: the cancel releases that money onto
+ * the household's account (0169), the payment row untouched, and the
+ * sentence says so. Returns what to say: "their February 2027 bill of
+ * $542.53 was cancelled — the $542.53 paid on it went on their account and
+ * $57.47 went back on account."
+ *
+ * PAST TENSE ON PURPOSE. In the move-out cascade this runs BEFORE the final
+ * month is re-done, and the part month is settled from the very money it
+ * released — so "is on account for them now" was false by the time the
+ * toast printed it, one sentence away from the held figure saying $70.00.
+ * "Went on their account" is the write fact and stays true whatever
+ * settled afterwards; what they hold now is the `held` sentence's alone.
  */
 async function clearBillsBeforeCancel(
   parkId: string,
@@ -1222,25 +1248,74 @@ async function clearBillsBeforeCancel(
       backOnAccount += Math.round(a.amount * 100);
     }
   }
-  const voided = await voidUnpaidChargesFor(admin, [...new Set(bills.map((c) => c.reservationId))], null, reason);
+  const voided = await voidUnpaidChargesFor(admin, [...new Set(bills.map((c) => c.reservationId))], null, reason, { releaseDirect: true });
   if ("error" in voided) return { ok: false, error: `Couldn't read ${voided.what}.` };
-  if (voided.failed.length > 0 || voided.skipped.length > 0) {
-    const f = voided.failed[0] ?? voided.skipped[0];
-    return { ok: false, error: `Their ${prettyMonth(f.month)} bill of ${money(f.amount)} couldn't be cancelled.` };
+  // WHY NOT, in the database's words. "Couldn't be cancelled." alone left the
+  // office with neither the reason nor the door, while voidCharge printed the
+  // same refusal by name. A failed row carries the refusal (0169's guard, or
+  // the write itself); a skipped row is one a line from money on account
+  // landed on between the take-off above and the void — the void was not
+  // attempted, and the line is what stands in the way.
+  if (voided.failed.length > 0) {
+    const f = voided.failed[0];
+    return { ok: false, error: `Their ${prettyMonth(f.month)} bill of ${money(f.amount)} couldn't be cancelled — ${dbSaid(f.message, "park_charges")}.` };
+  }
+  if (voided.skipped.length > 0) {
+    const f = voided.skipped[0];
+    return { ok: false, error: `Their ${prettyMonth(f.month)} bill of ${money(f.amount)} couldn't be cancelled — a line from money on account is still against it, and it has to come off the bill first (with a reason).` };
   }
   const named = [...voided.voided].sort((a, b) => a.month.localeCompare(b.month));
   if (named.length === 0) return { ok: true, said: "" };
-  const list = named.length === 1
+  const one = named.length === 1;
+  const list = one
     ? `their ${prettyMonth(named[0].month)} bill of ${money(named[0].amount)} was cancelled`
     : `their ${named.map((v) => prettyMonth(v.month)).join(", ")} bills were cancelled`;
+  // WHERE THE MONEY PAID ON THEM WENT (0169): the view's figures, read
+  // after the void, summed over every bill cancelled here. A failed read
+  // of them is said as a failed read — the money IS on account, and "$0.00"
+  // or silence about it would be the lie.
+  const total = (col: "taken" | "refunded" | "released") => named.reduce((t, v) => t + Math.round(v[col] * 100), 0) / 100;
+  const went = wherePaidMoneyWent({ taken: total("taken"), refunded: total("refunded"), released: total("released") }, one ? "it" : "them", "went on their account");
+  const released = voided.releaseProblem
+    ? ` — what was paid on ${one ? "it" : "them"} went on their account, though the figure couldn't be read; check "Money not against a bill"`
+    : went
+      ? ` — ${went}`
+      : "";
   const back = backOnAccount > 0 ? ` and ${money(backOnAccount / 100)} went back on account` : "";
-  return { ok: true, said: `${list}${back}.` };
+  return { ok: true, said: `${list}${released}${back}.` };
+}
+
+/**
+ * WHERE THE MONEY PAID STRAIGHT AGAINST A CANCELLED BILL WENT — the one
+ * shape both doors above and below say it in, from the three figures
+ * voidUnpaidChargesFor reads off the view (0169): what was paid against
+ * it, what had already gone back through the processor, and what is on
+ * account. "The $300.00 paid on it" named the remainder as the amount paid
+ * when $400.00 was paid and $100.00 had already gone back to the card —
+ * the office then went looking for a $300.00 cheque. When anything was
+ * refunded the sentence carries all three; when nothing was, what was
+ * paid IS what went on account and the plain sentence stays. The verb is
+ * the door's: the withdraw door speaks in the past ("went on their
+ * account" — the write fact, true whatever settled afterwards), the
+ * move-out's part-month sentence in the present.
+ */
+function wherePaidMoneyWent(
+  f: { taken: number; refunded: number; released: number },
+  it: "it" | "them",
+  verb: "went on their account" | "is on account",
+): string {
+  const on = (n: number) => (it === "it" ? `the ${money(n)} paid on it` : `${money(n)} paid on them`);
+  if (f.refunded > 0) {
+    return f.released > 0
+      ? `of ${on(f.taken)}, ${money(f.refunded)} was already refunded and the other ${money(f.released)} ${verb}`
+      : `of ${on(f.taken)}, ${money(f.refunded)} was already refunded and nothing ${verb}`;
+  }
+  return f.released > 0 ? `${on(f.released)} ${verb}` : "";
 }
 
 /**
  * THE FINAL MONTH'S BILL, once the covering link is trimmed. The sentence
- * for the toast, and the writes behind it — or the truth about a bill this
- * door leaves alone.
+ * for the toast, and the writes behind it.
  */
 async function finalMonthBill(
   parkId: string,
@@ -1253,64 +1328,82 @@ async function finalMonthBill(
   const admin = createServiceClient();
   const said: string[] = [];
   const ordered = [...bills].sort((a, b) => a.month.localeCompare(b.month));
+  const cents = (n: number) => Math.round(n * 100);
 
-  // MONEY TAKEN AGAINST A BILL: say the arithmetic; touch nothing. The
-  // re-rated statement is built the way the run would build it (statementFor
-  // reads the trimmed range) — never a second copy of the maths.
-  for (const c of ordered.filter((x) => x.money === "direct")) {
-    const month = prettyMonth(c.month);
-    const st = await statementFor(admin, parkId, coveringId, c.month);
-    const part = "error" in st ? null : st.statement;
-    const taken = c.direct > 0 ? c.direct : c.paidTotal;
-    const owed = part?.total ?? null;
-    const back = owed == null ? null : Math.round((taken - owed) * 100) / 100;
-    said.push(
-      `${month} was billed ${money(c.amount)} for the whole month and ${taken >= c.amount ? "paid" : `${money(taken)} was taken against it`}; ` +
-      (part && owed != null
-        ? `they were here ${basisOf(part)} (${money(owed)})` +
-          (back != null && back > 0 ? ` — ${money(back)} is theirs to have back.` : back != null && back < 0 ? ` — ${money(-back)} is still owed on it.` : ".")
-        : "that bill stands as it is."),
-    );
-  }
-
-  // EVERYTHING ELSE: money on account comes off first (R3, with the move-out
-  // as the reason), then every unpaid bill from the last day's month on is
-  // cancelled in one pass, then each cancelled month is raised again for the
-  // days they were here (R1 settles it from money on account as it lands).
-  const toClear = ordered.filter((x) => x.money !== "direct");
-  if (toClear.length === 0) return said.join(" ");
-  const stuck = new Map<string, string>();
-  for (const c of toClear) {
+  // EVERY BILL, THE SAME WAY: money on account comes off first (R3, with the
+  // move-out as the reason), then every bill from the last day's month on is
+  // cancelled in one pass — a bill paid straight against it releases that
+  // money onto the household's account (0169) — then each cancelled month is
+  // raised again for the days they were here, and R1 settles it from money
+  // on account as it lands, the released money included.
+  // THE LINE THAT STUCK, not the first line. With two lines on a bill and
+  // the second refusing to come off, the sentence named the first line's
+  // amount — money that HAD come off — as what couldn't be taken off. The
+  // stuck line itself is recorded, and what came off before it is said as
+  // the write fact alone ("came off it first"); where that money is now is
+  // the held sentence's to say, from the view.
+  const stuck = new Map<string, { amount: number; why: string; offFirst: number }>();
+  for (const c of ordered) {
+    let offFirst = 0;
     for (const a of c.allocations) {
       const off = await unapplyAllocation(parkId, a.id, `Moved out ${dayInWords(lastDay)} — the month is billed again for the days they were here`);
-      if (!off.ok) { stuck.set(c.id, off.error ?? "the ledger refused it"); break; }
+      if (!off.ok) { stuck.set(c.id, { amount: a.amount, why: off.error ?? "the ledger refused it", offFirst: offFirst / 100 }); break; }
+      offFirst += cents(a.amount);
     }
   }
-  const voided = await voidUnpaidChargesFor(admin, [coveringId], lastMonth, `Moved out ${dayInWords(lastDay)} — billed again for the days they were here`);
-  const gone = new Set("error" in voided ? [] : voided.voided.map((v) => v.id));
+  const voided = await voidUnpaidChargesFor(
+    admin, [coveringId], lastMonth, `Moved out ${dayInWords(lastDay)} — billed again for the days they were here`, { releaseDirect: true },
+  );
+  const gone = new Map("error" in voided ? [] : voided.voided.map((v) => [v.id, v]));
   // Cost shares the voids released (0104) against those the re-raises took
   // up — a month with no days left in it takes up none, and the difference
   // is stranded on a closed-out link the run never bills again. Said.
   let stamped = 0;
-  for (const c of toClear) {
+  for (const c of ordered) {
     const month = prettyMonth(c.month);
-    if (stuck.has(c.id)) {
-      said.push(`${month}'s ${money(c.amount)} bill still stands for the whole month — ${money(c.allocations[0]?.amount ?? 0)} of money on account couldn't be taken off it (${stuck.get(c.id)}). Sort it out from the rent screen.`);
+    const s = stuck.get(c.id);
+    if (s) {
+      said.push(
+        `${month}'s ${money(c.amount)} bill still stands for the whole month — ${money(s.amount)} of money on account couldn't be taken off it (${s.why})` +
+        (s.offFirst > 0 ? `; ${money(s.offFirst)} came off it first` : "") +
+        `. Sort it out from the rent screen.`,
+      );
       continue;
     }
-    if (!gone.has(c.id)) {
-      said.push(`⚠️ ${month}'s ${money(c.amount)} bill for the whole month is still open — cancel it from the rent screen, then bill ${month} again.`);
+    const v = gone.get(c.id);
+    if (!v) {
+      // THREE DIFFERENT THINGS were one sentence here — the whole void call
+      // failing to read, the write being refused, a line landing on the bill
+      // between the take-off and the void — and none of them said why. Each
+      // is named from what voidUnpaidChargesFor carries for it.
+      const why = "error" in voided
+        ? `${voided.what} couldn't be read`
+        : (() => {
+            const f = voided.failed.find((x) => x.id === c.id);
+            if (f) return dbSaid(f.message, "park_charges");
+            return voided.skipped.some((x) => x.id === c.id)
+              ? "a line from money on account is still against it, and it has to come off the bill first (with a reason)"
+              : "it wasn't reached";
+          })();
+      said.push(`⚠️ ${month}'s ${money(c.amount)} bill for the whole month is still open — ${why}. Cancel it from the rent screen, then bill ${month} again.`);
       continue;
     }
+    // WHERE THE MONEY PAID ON IT WENT (0169): the view's figures, read
+    // after the void — never a subtraction here. A failed read of them is
+    // said as one: the money IS on account, and silence about it would be
+    // the lie.
+    const released = !("error" in voided) && voided.releaseProblem && v.releasedPaymentIds.length > 0
+      ? `what was paid on it is on account, though the figure couldn't be read — check "Money not against a bill"`
+      : wherePaidMoneyWent(v, "it", "is on account");
     const again = await reraiseMonth(admin, parkId, coveringId, c.month);
     if ("error" in again) {
-      said.push(`${month}'s ${money(c.amount)} bill for the whole month was cancelled, but ${month} couldn't be billed again for the days they were here — bill ${month} from the rent screen.`);
+      said.push(`${month}'s ${money(c.amount)} bill for the whole month was cancelled${released ? ` — ${released} —` : ","} but ${month} couldn't be billed again for the days they were here — bill ${month} from the rent screen.`);
       continue;
     }
     if (!again.raised) {
       // A month after the last day's, raised early by hand: no days left in
-      // it, so the cancel alone is the whole story.
-      said.push(`${month}'s ${money(c.amount)} bill was cancelled — they weren't here for any of it.`);
+      // it, so the cancel — and where its money went — is the whole story.
+      said.push(`${month}'s ${money(c.amount)} bill was cancelled — they weren't here for any of it${released ? `, and ${released}` : ""}.`);
       continue;
     }
     const r = again.raised;
@@ -1320,10 +1413,31 @@ async function finalMonthBill(
     // they still hold is the view's one sentence (heldOnAccountFor, in the
     // caller) — never a subtraction here, which R1's oldest-open-first could
     // have put against an older bill instead.
+    //
+    // "ALL OF IT SETTLED FROM THAT MONEY" only when every line that settled
+    // the part month came from the rows this bill just released. R1 is
+    // oldest-money-first over the household's whole account — a $57.47
+    // sibling from the same day, or a withdrawn February's cheque released a
+    // moment earlier, can be what actually paid it — and the toast must not
+    // credit January's payment with money that was somebody else's row.
+    const fromThatMoney =
+      v.releasedPaymentIds.length > 0 &&
+      again.settledFrom.length > 0 &&
+      again.settledFrom.every((l) => v.releasedPaymentIds.includes(l.paymentId)) &&
+      cents(again.fromOnAccount) >= cents(r.amount);
+    const settled = fromThatMoney
+      ? ", all of it settled from that money"
+      : again.fromOnAccount > 0
+        ? `, ${money(again.fromOnAccount)} of it settled from money on account`
+        : "";
+    // R1 is oldest-OPEN-BILL-first: released money may have gone against an
+    // older open month before this one. Said, by month, in order.
+    const older = again.toOlderBills.length > 0
+      ? `; ${again.toOlderBills.map((o, i) => `${money(o.amount)}${i === 0 ? " went" : ""} against ${prettyMonth(o.periodMonth)}`).join(", ")}`
+      : "";
     said.push(
-      `${month}'s ${money(c.amount)} bill for the whole month was cancelled and raised again for the ${r.basis} they were here — ${money(r.amount)}` +
-      (again.fromOnAccount > 0 ? `, ${money(again.fromOnAccount)} of it settled from money on account` : "") +
-      "." +
+      `${month}'s ${money(c.amount)} bill for the whole month was cancelled${released ? ` — ${released} —` : ""} and raised again for the ${r.basis} they were here — ${money(r.amount)}` +
+      settled + older + "." +
       (again.settleProblem ? ` ⚠️ ${again.settleProblem}.` : ""),
     );
   }

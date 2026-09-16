@@ -22,6 +22,14 @@
  * doing.
  */
 
+// Months in words for the flagged reminder label — "for December 2026", never
+// "2026-12". ledger-helpers imports nothing, so there is no cycle.
+import { prettyMonth } from "./ledger-helpers";
+// The ONE month arithmetic (clamps to the end of the target month, takes a
+// negative count). agreement-helpers imports lake-time, parks and
+// ledger-helpers, none of which import this file — checked, no cycle.
+import { addMonths } from "./agreement-helpers";
+
 export type CostCategory =
   | "water" | "sewer" | "trash" | "common_electric" | "grounds"
   // 0144. The fee could claim snow from 0067 onward and no bill could carry
@@ -528,6 +536,38 @@ export interface CostScheduleInput {
   /** Blank is allowed and means "I don't know what it usually comes to". */
   typicalAmount: string;
   label: string;
+  /**
+   * The bill is FOR the period before the one it is due in — a tax bill for
+   * last year, a sewer bill for last month (0170). Optional so every caller
+   * that predates it is unchanged; absent reads false.
+   */
+  coversPriorPeriod?: boolean;
+}
+
+/**
+ * The two periods a reminder can be about, and what to call the bill.
+ *
+ * `from`/`to`/`key`/`label` describe the period the bill COVERS — the one the
+ * task is keyed on, the one a matching cost must overlap, and the one the
+ * go-live gate compares. `dueFrom`/`dueTo` describe the period the bill is
+ * due IN. The two are the same period unless the schedule says the bill is
+ * in arrears (`coversPriorPeriod`), and then the covered period is one
+ * cadence earlier. `dueOn` is the real due date on either reading.
+ */
+export interface BillPeriod {
+  key: string;
+  label: string;
+  dueOn: string;
+  from: string;
+  to: string;
+  dueFrom: string;
+  dueTo: string;
+  /**
+   * Carried on the result so a reader cannot be handed the shifted window and
+   * the flag separately and pair them wrongly — `from !== dueFrom` exactly
+   * when this is true.
+   */
+  coversPriorPeriod: boolean;
 }
 
 /**
@@ -542,37 +582,49 @@ export interface CostScheduleInput {
  * other window here. `key` goes in the task id, so the same bill in the same
  * period is the same task no matter how many mornings he opens the screen.
  *
- * THE LABEL NAMES THE DUE DATE, NOT A PERIOD. This used to label the yearly
- * bill by the year it is due in ("2027") and the monthly one by its due
- * month ("January 2027"), and the card read "Property tax for 2027" about
- * the bill due 10 November 2027 — which at an Indiana park is the 2026 tax,
- * the seller's year — and "sewer for January 2027" about the bill dated
- * 5 January for December's service. The schedule knows WHEN a bill lands;
- * it does not know what period it covers, so the label says only what it
- * knows: "due November 10, 2027" for a yearly bill, "(bill due January 5)"
- * for a monthly or quarterly one.
+ * THE SCHEDULE CAN NOW SAY WHAT A BILL COVERS (0170). It used to know only
+ * WHEN a bill lands, and the label said only that: this used to label the
+ * yearly bill by the year it is due in ("2027") and the monthly one by its
+ * due month ("January 2027"), and the card read "Property tax for 2027"
+ * about the bill due 10 November 2027 — which at an Indiana park is the
+ * 2026 tax, the seller's year — and "sewer for January 2027" about the bill
+ * dated 5 January for December's service. So:
+ *
+ *   UNFLAGGED, it still names only the due date — "due November 10, 2027"
+ *   for a yearly bill, "(bill due January 5)" for a monthly or quarterly
+ *   one — and the covered period IS the due period.
+ *
+ *   FLAGGED (`coversPriorPeriod`), the covered period is one cadence before
+ *   the due period, and the label names BOTH, because the owner reads both
+ *   off the envelope: "for December 2026 (bill due January 5)", "for
+ *   November 2026 to January 2027 (bill due February 5)", "for 2026, due
+ *   November 10, 2027". The due date itself never moves.
  */
 export function billPeriod(
   cadence: Cadence,
   dueMonth: number | null,
   dueDay: number,
   todayISO: string,
-): { key: string; label: string; dueOn: string; from: string; to: string } {
+  coversPriorPeriod = false,
+): BillPeriod {
   const [y, m] = todayISO.split("-").map(Number);
   // Capped at 28 so February always has the day — the same clamp the column's
   // CHECK makes structural.
   const day = String(Math.min(Math.max(dueDay, 1), 28)).padStart(2, "0");
   const iso = (yy: number, mm: number) => `${yy}-${String(mm).padStart(2, "0")}-01`;
 
+  // THE PERIOD THE BILL IS DUE IN — today's-period arithmetic, unchanged.
+  let due: { key: string; label: string; dueOn: string; from: string; to: string };
+  let dueDayWords: string;
+
   if (cadence === "monthly") {
     const key = `${y}-${String(m).padStart(2, "0")}`;
-    return {
-      key, label: `(bill due ${monthDay(y, m, Number(day))})`, dueOn: `${key}-${day}`,
+    dueDayWords = monthDay(y, m, Number(day));
+    due = {
+      key, label: `(bill due ${dueDayWords})`, dueOn: `${key}-${day}`,
       from: iso(y, m), to: m === 12 ? iso(y + 1, 1) : iso(y, m + 1),
     };
-  }
-
-  if (cadence === "quarterly") {
+  } else if (cadence === "quarterly") {
     // The cycle is anchored to due_month: an anchor of 2 means Feb, May, Aug,
     // Nov. Find the anchor month of the quarter TODAY sits in.
     const anchor = ((dueMonth ?? 1) - 1) % 3;          // 0, 1 or 2 within a quarter
@@ -583,24 +635,118 @@ export function billPeriod(
     const em = sm + 3;
     const ey = em > 12 ? sy + 1 : sy;
     const emm = em > 12 ? em - 12 : em;
-    return {
+    dueDayWords = monthDay(sy, sm, Number(day));
+    due = {
       key: `${sy}-Q${sm}`,
-      label: `(bill due ${monthDay(sy, sm, Number(day))})`,
+      label: `(bill due ${dueDayWords})`,
       dueOn: `${sy}-${String(sm).padStart(2, "0")}-${day}`,
       from: iso(sy, sm), to: iso(ey, emm),
     };
+  } else {
+    // ANNUAL. The year it is due in is THIS year if the due month has not
+    // passed by more than its window, and the window is the whole year — a
+    // tax bill entered in December still answers November's reminder.
+    const dm = dueMonth ?? 1;
+    dueDayWords = monthDay(y, dm, Number(day));
+    due = {
+      key: String(y),
+      label: `due ${dueDayWords}, ${y}`,
+      dueOn: `${y}-${String(dm).padStart(2, "0")}-${day}`,
+      from: iso(y, 1), to: iso(y + 1, 1),
+    };
   }
 
-  // ANNUAL. The year it is due in is THIS year if the due month has not passed
-  // by more than its window, and the window is the whole year — a tax bill
-  // entered in December still answers November's reminder.
-  const dm = dueMonth ?? 1;
+  if (!coversPriorPeriod) {
+    return { ...due, dueFrom: due.from, dueTo: due.to, coversPriorPeriod: false };
+  }
+
+  // THE PERIOD THE BILL COVERS: one cadence earlier. `due.from` is always the
+  // 1st, so the month clamp in addMonths never bites; it is used anyway so
+  // this file holds no second copy of month arithmetic.
+  const months = cadence === "monthly" ? 1 : cadence === "quarterly" ? 3 : 12;
+  const from = addMonths(due.from, -months);
+  const to = due.from;
+  const fromMonth = from.slice(0, 7);
+  const [fy, fm] = from.split("-").map(Number);
+
+  const covered =
+    cadence === "monthly"
+      ? { key: fromMonth, label: `for ${prettyMonth(fromMonth)} (bill due ${dueDayWords})` }
+      : cadence === "quarterly"
+        // Same key shape as the due-period key ("2026-Q11"), so the task id
+        // reads the same way whichever period it is keyed on.
+        ? {
+            key: `${fy}-Q${fm}`,
+            label: `for ${prettyMonth(fromMonth)} to ${prettyMonth(addMonths(from, 2).slice(0, 7))} (bill due ${dueDayWords})`,
+          }
+        : { key: String(fy), label: `for ${fy}, due ${dueDayWords}, ${y}` };
+
   return {
-    key: String(y),
-    label: `due ${monthDay(y, dm, Number(day))}, ${y}`,
-    dueOn: `${y}-${String(dm).padStart(2, "0")}-${day}`,
-    from: iso(y, 1), to: iso(y + 1, 1),
+    ...covered,
+    dueOn: due.dueOn,
+    from, to,
+    dueFrom: due.from, dueTo: due.to,
+    coversPriorPeriod: true,
   };
+}
+
+/**
+ * DOES THIS COST ANSWER THE REMINDER? The ONE home of the clear rule; the
+ * morning loader (today-actions) calls it per schedule, per cost.
+ *
+ * Two honest signals while the schedule has NOT said which period its bill
+ * covers, either clears the card:
+ *
+ *   1. It was ENTERED in the period the bill is due in — he typed it in
+ *      the days after the envelope arrived. Judged on `dueFrom`/`dueTo`
+ *      whichever period the bill covers, because that is when he types.
+ *
+ *   2. Its PERIOD overlaps the period the bill COVERS.
+ *
+ * Signal 1 exists because an unflagged schedule cannot know the period; once
+ * it does (0170), the period is the ONLY honest signal. A cost for the wrong
+ * month entered in the due window must leave the card up, because that is
+ * how he finds the wrong month: with signal 1 still live, February's bill
+ * typed on 6 February cleared "Sewer for January", and so did a December
+ * catch-up entered the same day, and the year's tax entered in March cleared
+ * the card for the year before — the screen built to catch a missing bill
+ * said it was in.
+ *
+ * WHAT COUNTS AS "DEALT WITH", and this has been wrong twice before it was
+ * moved here. FIRST it matched `period_start >= this-month`. But the sewer
+ * bill that ARRIVES on 1 August is the bill FOR JULY, so the period he types
+ * starts before the window and "Sewer for August still isn't entered"
+ * stayed up after he entered it. A reminder that will not clear teaches a
+ * person to stop reading the screen, which costs more than the reminder was
+ * worth. THEN the window stayed a MONTH after 0123 gave bills a quarterly
+ * and an annual rhythm, so the year's biggest bill would have nagged from
+ * the day it was paid.
+ *
+ * THE `>=` ON THE UNFLAGGED OVERLAP IS THE ARREARS WORKAROUND. A schedule
+ * that has NOT said its bill is in arrears still has to clear when July's
+ * bill (period 1 July to 1 August, half-open) is entered against the card
+ * for the period due in August — so its end is allowed to touch the window's
+ * start. Once the schedule HAS said so (0170), the window already IS July,
+ * and the same `>=` would let July's bill (ending 1 August) clear the card
+ * for AUGUST's service due 5 September. So the flagged overlap is the true
+ * half-open one.
+ */
+export function costAnswersBill(
+  cost: { category: string; period_start: string; period_end: string; enteredOn: string },
+  p: BillPeriod,
+  /** The schedule's category — `p` describes a period, not a bill. */
+  scheduleCategory: string,
+): boolean {
+  // Matched on category rather than amount, because two identical bills are
+  // two bills.
+  if (cost.category !== scheduleCategory) return false;
+  // The flag is read off `p` itself — never passed beside it — so a shifted
+  // window cannot be paired with the unshifted rule or the other way round.
+  // Flagged: the period alone, half-open. The day he typed it says nothing
+  // about which month it was for.
+  if (p.coversPriorPeriod) return cost.period_start < p.to && cost.period_end > p.from;
+  if (cost.enteredOn >= p.dueFrom && cost.enteredOn < p.dueTo) return true;
+  return cost.period_start < p.to && cost.period_end >= p.from;
 }
 
 /** "November 10" — a due day without its year (the yearly label adds it). */
@@ -621,7 +767,33 @@ export interface CostScheduleResult {
     label: string | null;
     cadence: string;
     active: boolean;
+    /** 0170. */
+    covers_prior_period: boolean;
   };
+}
+
+/**
+ * "month" / "three months" / "year" — the span a flagged bill covers, in the
+ * words the save toast, the row summary and the form hint all use. One home
+ * so the three cannot call the same quarter two things.
+ */
+export function coveredSpanWords(cadence: string): string {
+  return cadence === "monthly" ? "month" : cadence === "annual" ? "year" : "three months";
+}
+
+/**
+ * THE LINE ABOVE THE BUTTONS WHEN HE IS EDITING A REMINDER, not adding one.
+ *
+ * `buildCostScheduleRow` always returns `active: true` and saveCostSchedule
+ * writes the whole row, so an Edit of a switched-off reminder switches it
+ * back on. That is fine — he opened it to change it — as long as the screen
+ * says so before he presses Save, which the toast alone did not.
+ */
+export function editingReminderLine(category: CostCategory, active: boolean): string {
+  // "Everything" is true only because the Which-bill select is locked while
+  // editing (ParkCostSchedules); every other field writes.
+  const base = `Editing your ${COST_CATEGORY_LABEL[category]} reminder — everything you save here replaces what's there`;
+  return active ? `${base}.` : `${base}, and it goes back on.`;
 }
 
 /**
@@ -699,6 +871,10 @@ export function buildCostScheduleRow(input: CostScheduleInput): CostScheduleResu
       label: label || null,
       cadence,
       active: true,
+      // STRICT BOOLEAN. A string "on" or "true" from any future form is
+      // refused into false — never accidentally true, because true moves the
+      // reminder a whole cadence.
+      covers_prior_period: input.coversPriorPeriod === true,
     },
   };
 }

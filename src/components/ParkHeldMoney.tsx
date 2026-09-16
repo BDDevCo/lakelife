@@ -9,6 +9,7 @@ import {
 } from "@/app/park/money-actions";
 import { reversePayment } from "@/app/park/ledger-actions";
 import { prettyMonth, money } from "@/app/park/ledger-helpers";
+import { canReverse, processorRail } from "@/app/park/rail-helpers";
 import { longDate } from "@/lib/lake-time";
 import { ReceiptPanel } from "@/components/ParkReceipt";
 import type { ReceiptLines } from "@/app/park/receipt-helpers";
@@ -74,6 +75,18 @@ export interface HeldAllocation {
  * final month already billed. Before that month is billed, "No open bill
  * for them yet" is the truth — the run raises their part-month and settles
  * it from this money.
+ *
+ * MONEY RELEASED FROM A CANCELLED BILL (0169) is on this list too. A cheque
+ * keyed straight against January, then the office cancels January to raise
+ * the part month: the payment row never moves (charge_id still names the
+ * cancelled bill), the view lists it as on account, and every control here
+ * — Apply, Hand it back, the lines, Take it off this bill — works on it as
+ * on any other row. What the row adds is WHERE IT CAME FROM: "released from
+ * January 2027's cancelled bill (cancelled January 20, 2027)", or "$70.00
+ * still on account" stands over money the household remembers paying on
+ * January and the office cannot tell it from a cheque keyed on account. And
+ * Take it back's confirm says the cancelled bill by name on BOTH halves of a
+ * split — never "the $542.53 against January 2027" as if January stood.
  */
 export function ParkHeldMoney({
   parkId,
@@ -333,6 +346,14 @@ function OnAccountLine({
   const takenOff = lines
     .filter((a) => a.removedOn)
     .sort((a, b) => String(a.removedOn).localeCompare(String(b.removedOn)));
+  // WHERE RELEASED MONEY CAME FROM (0169): the bill it was paid on and the
+  // day that bill was cancelled. On a row still held it leads the detail —
+  // it is the fact the office needs before offering the money against
+  // anything; on a spent row the day is left off, the month is enough.
+  const released = row.releasedFrom
+    ? `released from ${prettyMonth(row.releasedFrom.month)}'s cancelled bill`
+    : null;
+  const releasedOn = row.releasedFrom?.on ? ` (cancelled ${longDate(row.releasedFrom.on)})` : "";
 
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "8px 0", borderTop: "1px dashed var(--line)" }}>
@@ -347,12 +368,14 @@ function OnAccountLine({
             <span className="mut">
               {" "}· {money(row.amount)} · {longDate(row.receivedOn)} · {row.method}{row.reference ? ` #${row.reference}` : ""}
               {row.receiptNo ? ` · receipt ${row.receiptNo}` : ""}
+              {released ? ` · ${released}` : ""}
             </span>
           </>
         ) : (
           <>
             <b>{money(row.remaining)}</b> still on account · {row.renterName}
             <span className="mut">
+              {released ? ` · ${released}${releasedOn}` : ""}
               {" "}· {longDate(row.receivedOn)} · {row.method}{row.reference ? ` #${row.reference}` : ""}
               {row.receiptNo ? ` · receipt ${row.receiptNo}` : ""}
             </span>
@@ -399,8 +422,9 @@ function OnAccountLine({
           account, and the row can never be reversed afterwards. Not for card
           or ACH money — that goes back through the processor (0142), from
           the statement's refund control — so the button that could only be
-          refused is not offered. */}
-      {!spent && row.handedBack <= 0 && row.method !== "card" && row.method !== "ach" && (
+          refused is not offered. `canReverse` is the one rail test, shared
+          with Take it back below. */}
+      {!spent && row.handedBack <= 0 && canReverse(row.method) && (
         <button className="ll-btn ghost sm" disabled={busy} onClick={() => setHanding((h) => !h)}>
           {handing ? "Cancel" : "Hand it back"}
         </button>
@@ -415,13 +439,38 @@ function OnAccountLine({
           NOT ON A ROW ALREADY HANDED BACK: money that went out across the
           window demonstrably arrived, the database refuses the reversal by
           name, and a button that can only say no goes — the line below says
-          what happened instead. */}
-      {row.handedBack <= 0 && (
+          what happened instead.
+          A CANCELLED BILL IS SAID BY NAME (0169), on both halves. The
+          released row is "the $542.53 paid on January 2027's bill, which was
+          cancelled" — and its on-account sibling goes back with it. The
+          sibling's own confirm used to read "the $542.53 against January
+          2027" about a bill that is cancelled and money that is itself
+          listed on account two lines up; `split.billCancelled` is read from
+          the bill, so it says so.
+          NOT ON CARD OR ACH MONEY EITHER. The same rail test as Hand it back,
+          because reversePayment refuses those two by name (0142) and this
+          used to be the ONE control offered on a card-paid row released
+          from a cancelled bill (0169) — beside "theirs to have back", with
+          no door on this panel that could move it. The sentence below
+          stands where the button would have: the rail, named as the server
+          names it, and where the refund lives. Statements says for itself
+          whether the processor is connected to do it. */}
+      {row.handedBack <= 0 && canReverse(row.method) && (
         <UndoMoney parkId={parkId} paymentId={row.paymentId}
-          what={row.split
-            ? `both halves of it — the ${money(row.split.against)} against ${row.split.billMonth ? prettyMonth(row.split.billMonth) : "the bill"} and the ${money(row.amount)} on account go back together`
-            : "it"}
+          what={row.releasedFrom
+            ? `it — the ${money(row.amount)} paid on ${prettyMonth(row.releasedFrom.month)}'s bill, which was cancelled`
+              + (row.releasedFrom.sibling ? `; the ${money(row.releasedFrom.sibling.onAccount)} of the same payment on account goes back with it` : "")
+            : row.split
+              ? row.split.billCancelled
+                ? `both halves of it — the ${money(row.split.against)} paid on ${row.split.billMonth ? `${prettyMonth(row.split.billMonth)}'s bill` : "the bill"}, which was cancelled, and the ${money(row.amount)} on account go back together`
+                : `both halves of it — the ${money(row.split.against)} against ${row.split.billMonth ? prettyMonth(row.split.billMonth) : "the bill"} and the ${money(row.amount)} on account go back together`
+              : "it"}
           busy={busy} start={start} router={router} />
+      )}
+      {row.handedBack <= 0 && !canReverse(row.method) && (
+        <span className="mut" style={{ fontSize: 12.5 }}>
+          Came in {processorRail(row.method)}, so the money really did arrive — it goes back through the processor, from Statements.
+        </span>
       )}
       {handing && !spent && row.handedBack <= 0 && (
         <GiveBackForm

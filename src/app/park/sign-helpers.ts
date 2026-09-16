@@ -29,7 +29,7 @@
  *     range is refused by the database, so it is `cancelled` instead.
  *   - The successor is `successorRow(prior, ...)`: same renter, same chain,
  *     next seq, no deposit, origin 'office' — the park's own paper — from
- *     signedOn for THE LENGTH THE HOUSEHOLD CHOSE (the owner's decision:
+ *     the day the row runs from (`from`, below) for THE LENGTH THE HOUSEHOLD CHOSE (the owner's decision:
  *     one, three or six months, from the lengths the park offers; the form
  *     starts on the park's house style). A length the park does not offer
  *     is refused in words that name the ones it does; the toast says the
@@ -57,15 +57,37 @@
  *     and otherwise leaves it blank — never today, which is the day the
  *     office got round to it, and dating the agreement from it bills the
  *     first month short and runs every later link 4th-to-4th.
- *   - AND THE SUCCESSOR MUST STILL BE RUNNING. A 1 January lease under a
- *     one-month term recorded on 15 February would cancel the holdover and
- *     write a successor [1 Jan, 1 Feb) — already over — so from that moment
- *     nothing held the lot: the roll read it vacant, Today dropped the
- *     household, and every later run billed them nothing, rent AND the fee
- *     this door exists to bill. Refused, in the filing screen's words, with
- *     nothing trimmed or cancelled; the form leaves the box blank for the
- *     same day and says why. (Which link to write for a lease recorded a
- *     month late is the owner's call, not a default.)
+ *   - THE DAY THE ROW RUNS FROM is not always the day on the paper. Three
+ *     shapes, judged against the arrangement's END (decision 3, 16 Sep:
+ *     "it's billed at the new rent, if there is any"):
+ *       · a day INSIDE the arrangement's window — the holdover is trimmed
+ *         (or cancelled) to it and the successor runs from it: the trim;
+ *       · a day ON the arrangement's last morning — the consecutive case,
+ *         not a gap: the holdover already ends there, nothing is trimmed,
+ *         and the successor runs from that morning (`keep`);
+ *       · an arrangement that has RUN OUT (its end is on or before today)
+ *         — whatever later day the paper says, the successor is written
+ *         from the arrangement's own end, the rule planRenewal applies, so
+ *         the days since it ran out are on the lease's rent: not free, and
+ *         not a fresh start from the next 1st. `keep` again. The day on
+ *         the paper is stored nowhere (lot_reservations has no column for
+ *         it); `during` is the billing period, and the sentence he reads
+ *         says which day the row runs from;
+ *       · a day AFTER an arrangement that has not yet ended is refused —
+ *         there is nothing to carry on from across the gap.
+ *     `from` is on the plan, and sign-actions keys every bill on it — never
+ *     on the typed day.
+ *   - AND THE SUCCESSOR MUST STILL BE RUNNING, judged from `from`. A
+ *     1 January lease under a one-month term recorded on 15 February would
+ *     cancel the holdover and write a successor [1 Jan, 1 Feb) — already
+ *     over — so from that moment nothing held the lot: the roll read it
+ *     vacant, Today dropped the household, and every later run billed them
+ *     nothing, rent AND the fee this door exists to bill. Refused, in the
+ *     filing screen's words, with nothing trimmed or cancelled; the form
+ *     leaves the box blank for the same day and says why. For an
+ *     arrangement that ran out the day is not his to change — the row runs
+ *     from the end — so the refusal names the lengths that DO reach past
+ *     today (ranOutRefusal), or says none does; never "check the day".
  *   - Email AND mobile are a condition of the new lease, in the same words
  *     the filing screen uses.
  *   - The rent is the lease's own number. Defaulted on screen from the lot's
@@ -79,7 +101,9 @@ import {
   dayInWords, capitalise, agreementStartFor,
   agreementEndFrom, alreadyOverClause, agreementAlreadyOver, SIGNED_LEASE_LABEL,
 } from "./park-helpers";
-import { chooseAgreementLength, lengthAdjective, lengthInWords, successorStatus } from "./agreement-helpers";
+import {
+  chooseAgreementLength, offeredAgreementLengths, lengthAdjective, lengthInWords, lengthsInWords, successorStatus,
+} from "./agreement-helpers";
 import { contactProblem } from "./onboard-helpers";
 import { prettyMonth } from "./ledger-helpers";
 
@@ -138,10 +162,17 @@ export type SigningPlan =
   | { ok: false; error: string }
   | {
       ok: true;
+      /**
+       * THE SUCCESSOR'S FIRST DAY — the typed day inside the arrangement's
+       * window, else the arrangement's own end. sign-actions keys its bill
+       * work on this, never on the typed day.
+       */
+      from: string;
       /** What happens to the holdover row. */
       holdover:
-        | { id: string; trimTo: { start: string; end: string } }  // `during` becomes [start, signedOn)
-        | { id: string; cancel: true };                            // never had a day
+        | { id: string; trimTo: { start: string; end: string } }  // `during` becomes [start, from)
+        | { id: string; cancel: true }                             // never had a day
+        | { id: string; keep: true };                              // already ends where the successor starts
       successor: SuccessorRow;
       /** The renter-file patch — both are a condition of the lease. */
       renter: { email: string; phone_on_file_with_park: string };
@@ -181,7 +212,33 @@ export function planSigning(
   // today is a day a lease can run from.
   const at = agreementStartFor(signedOn, ctx.todayISO, ctx.cutoverDate);
   if (!at.ok) return { ok: false, error: at.error };
-  if (signedOn >= prior.range.end) {
+
+  // WHERE THE ROW RUNS FROM, and what becomes of the holdover — the three
+  // shapes the header describes. `from`, not the typed day, is what every
+  // later judgement and every bill keys on.
+  const lapsed = prior.range.end <= ctx.todayISO;
+  let from: string;
+  let holdover: Extract<SigningPlan, { ok: true }>["holdover"];
+  if (signedOn < prior.range.end) {
+    // THE TRIM: the lease runs from a day the arrangement still covered. If
+    // the signing day is on or before the holdover's first day it never had
+    // a day at all, and an empty range is refused by the database.
+    from = signedOn;
+    holdover = signedOn <= prior.range.start
+      ? { id: prior.id, cancel: true as const }
+      : { id: prior.id, trimTo: { start: prior.range.start, end: signedOn } };
+  } else if (signedOn === prior.range.end || lapsed) {
+    // CONSECUTIVE, OR AN ARRANGEMENT THAT RAN OUT (decision 3, 16 Sep: "it's
+    // billed at the new rent, if there is any"). The successor is written
+    // from the arrangement's own END — the same rule planRenewal applies —
+    // so the days since it ran out are on the lease's rent, not free and not
+    // a fresh start from the next 1st. Nothing is trimmed: the row already
+    // ends there. The day on the paper is not stored anywhere
+    // (lot_reservations has no column for it) — `during` is the billing
+    // period, and the sentence says which day it runs from.
+    from = prior.range.end;
+    holdover = { id: prior.id, keep: true as const };
+  } else {
     return {
       ok: false,
       error: `Their current arrangement ends on ${dayInWords(prior.range.end)} — that's after it, so there's nothing to carry on from.`,
@@ -199,11 +256,18 @@ export function planSigning(
   const pick = chooseAgreementLength(input.agreementMonths, ctx.defaultAgreementMonths, ctx.maxAgreementMonths);
   if (!pick.ok) return { ok: false, error: pick.error };
   const months = pick.months;
-  const end = agreementEndFrom(signedOn, months);
+  const end = agreementEndFrom(from, months);
   if (end <= ctx.todayISO) {
+    // An arrangement that ran out runs the row from its own end whatever
+    // the paper says, so "check the day" would name a box that cannot help;
+    // the refusal names the lengths that reach past today instead.
+    if ("keep" in holdover) {
+      const offered = offeredAgreementLengths(ctx.defaultAgreementMonths, ctx.maxAgreementMonths);
+      return { ok: false, error: ranOutRefusal(from, months, offered, ctx.todayISO) };
+    }
     return {
       ok: false,
-      error: `${capitalise(alreadyOverClause(signedOn, months))} — check the day the lease runs from.`,
+      error: `${capitalise(alreadyOverClause(from, months))} — check the day the lease runs from.`,
     };
   }
 
@@ -221,12 +285,12 @@ export function planSigning(
   if (!phone) return { ok: false, error: "That phone number doesn't look right." };
 
   const successor = successorRow(prior, {
-    start: signedOn,
+    start: from,
     end,
     // A lease that has not started yet holds the lot as `approved`; one
     // already running is `active` — the one rule every door writes
     // (successorStatus), and the run bills whichever covers the month.
-    status: successorStatus(signedOn, ctx.todayISO),
+    status: successorStatus(from, ctx.todayISO),
     quotedAmount: rent,
     origin: "office",
     continuesChain: true,
@@ -245,13 +309,54 @@ export function planSigning(
   // said January bills $542.53.
   successor.term = "monthly";
 
-  const holdover = signedOn <= prior.range.start
-    ? { id: prior.id, cancel: true as const }
-    : { id: prior.id, trimTo: { start: prior.range.start, end: signedOn } };
+  // THE SENTENCE NAMES THE DAY THE ROW RUNS FROM. When that is the day on
+  // the paper it is the sentence it always was; when the arrangement's end
+  // set it, it says so — a lease dated the 15th recorded from the 1st would
+  // otherwise read as running from the 15th, and January's bill would
+  // surprise him. firstMonthBills with the holdover's first day before
+  // `from` already says both halves for a mid-month end.
+  const bills = firstMonthBills(from, rent, ctx.feePerMonth, prior.range.start);
+  const signal = from === signedOn
+    ? `On the ${newLeaseWords(months)} from ${dayInWords(from)} — ${bills}.`
+    : `Their arrangement ${lapsed ? "ran out" : "ends"} on ${dayInWords(from)}, so the ${newLeaseWords(months)} is recorded from that day — ${bills}.`;
 
-  const signal = `On the ${newLeaseWords(months)} from ${dayInWords(signedOn)} — ${firstMonthBills(signedOn, rent, ctx.feePerMonth, prior.range.start)}.`;
+  return { ok: true, from, holdover, successor, renter: { email, phone_on_file_with_park: phone }, signal };
+}
 
-  return { ok: true, holdover, successor, renter: { email, phone_on_file_with_park: phone }, signal };
+/**
+ * WHY A LEASE ON AN ARRANGEMENT THAT RAN OUT IS REFUSED at the length
+ * picked — the row runs from the arrangement's end whatever the paper says,
+ * so the day is not his to change and "check the day the lease runs from"
+ * would name a box that cannot help. Names the lengths the park offers that
+ * DO reach past today from that end ("pick 3 or 6 months"), or says none
+ * does — the renew door's own shape for the same fact. Read by the planner
+ * and, before the tap, by the form.
+ */
+export function ranOutRefusal(
+  endISO: string,
+  months: number | null,
+  offered: readonly number[],
+  todayISO: string,
+): string {
+  return `Their arrangement ran out on ${dayInWords(endISO)}, and ${ranOutOverClause(endISO, months, offered, todayISO)}`;
+}
+
+/**
+ * "from that day 1 month would be over already — pick 3 months." — the
+ * clause both ranOutRefusal and the form's lead line end with. No leading
+ * capital; each caller opens its own sentence.
+ */
+function ranOutOverClause(
+  endISO: string,
+  months: number | null,
+  offered: readonly number[],
+  todayISO: string,
+): string {
+  if (months == null) return "an agreement from that day would already be over by now — there's nothing to record from here.";
+  const reach = offered.filter((m) => !agreementAlreadyOver(endISO, m, todayISO));
+  return reach.length > 0
+    ? `from that day ${lengthInWords(months)} would be over already — pick ${lengthsInWords(reach)}.`
+    : "even the longest agreement this park writes, run from that day, would be over already — there's nothing to record from here.";
 }
 
 const money = (x: number) =>
@@ -393,6 +498,13 @@ export function blankDayWords(
  * and its first day is not a day a lease can run from; the box is left blank
  * and he types the day on the paper.
  *
+ * A HOLDOVER THAT RAN OUT seeds its own END: that is the day the successor
+ * is written from whatever the paper says (planSigning's `keep` branch), so
+ * the box shows the day the row will carry. A day inside the old window is
+ * still his to type — that is the trim — and a later one writes the same
+ * row from the end. `todayISO` reaches this only as the judge of "ran out";
+ * it is never the seed.
+ *
  * Today is the day the office got round to it. Seeded as the agreement's
  * start it billed January three days of the seller's rent plus 28/31 of the
  * lease, and ran every later link 4th-to-4th.
@@ -400,8 +512,54 @@ export function blankDayWords(
 export function defaultSigningDay(
   holdoverStart: string | null,
   cutoverDate: string | null,
+  holdoverEnd: string | null,
+  todayISO: string,
 ): string {
+  if (holdoverEnd != null && holdoverEnd <= todayISO) return holdoverEnd;
   if (!holdoverStart) return "";
   if (cutoverDate && holdoverStart < cutoverDate) return "";
   return holdoverStart;
+}
+
+/**
+ * THE DAY BOX'S VALUE, for the form's first render and every length change
+ * — signingDayForLength's rule, EXCEPT for a holdover that ran out. There
+ * the seed is the arrangement's end, the one day the row will run from
+ * whatever is typed, and the box must not empty when the picked length is
+ * over from it (the server refuses that pick in words that name a longer
+ * one — ranOutRefusal — and an empty box under "Pick the day the new lease
+ * runs from" names a control that cannot help). A blank box fills with the
+ * seed; a day he typed is left alone.
+ */
+export function signingSeedFor(
+  seededDay: string,
+  signedOn: string,
+  months: number | null,
+  todayISO: string,
+  ranOut: boolean,
+): string {
+  if (ranOut) return signedOn === "" ? seededDay : signedOn;
+  return signingDayForLength(seededDay, signedOn, months, todayISO);
+}
+
+/**
+ * THE FORM'S LEAD LINE FOR A HOLDOVER THAT RAN OUT — what the row will
+ * carry, before the tap: "Their arrangement ran out on January 1, 2028 —
+ * the new lease is recorded from that day when the paper's day is later,
+ * and January 2028 bills from it at the lease's rent." When the length
+ * picked is over from that day, the same words the server would refuse
+ * with follow (ranOutRefusal's tail), so he learns it before the tap. No
+ * trailing space: the form adds the rent and contact sentences after it.
+ */
+export function ranOutLeadWords(
+  endISO: string,
+  months: number | null,
+  offered: readonly number[],
+  todayISO: string,
+): string {
+  const lead =
+    `Their arrangement ran out on ${dayInWords(endISO)} — the new lease is recorded from that day when the ` +
+    `paper's day is later, and ${prettyMonth(endISO.slice(0, 7))} bills from it at the lease's rent.`;
+  if (!agreementAlreadyOver(endISO, months, todayISO)) return lead;
+  return `${lead} ${capitalise(ranOutOverClause(endISO, months, offered, todayISO))}`;
 }
