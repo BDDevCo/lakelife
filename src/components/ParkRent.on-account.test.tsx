@@ -24,9 +24,10 @@ vi.mock("@/components/ClaimForm", () => ({ ClaimForm: () => null }));
 vi.mock("@/components/ResolveClaimForm", () => ({ ResolveClaimForm: () => null }));
 vi.mock("@/components/ParkReceipt", () => ({ ReceiptPanel: () => null, DropSlips: () => null }));
 
-const { fromOnAccountSentence, ParkRent } = await import("./ParkRent");
+const { fromOnAccountSentence, ParkRent, PaymentForm } = await import("./ParkRent");
 const { renderToStaticMarkup } = await import("react-dom/server");
 const { summarise, toRows } = await import("@/app/park/ledger-helpers");
+const { amountNote } = await import("@/components/take-payment-helpers");
 
 const bill = (lotNumber: string, fromOnAccount?: number) => ({ reservationId: `r-${lotNumber}`, lotNumber, amount: 542.53, fromOnAccount });
 
@@ -150,5 +151,83 @@ describe("Cancel this bill on the ledger rows", () => {
     expect(src).toMatch(/r\.state !== "void" && payingId !== r\.id && claimingId !== r\.id && resolvingId !== r\.id && \(/);
     expect(src).toMatch(/\$\{money\(r\.paidTotal\)\} is recorded against this bill\. Why are you cancelling it\?/);
     expect(src).not.toMatch(/puts that money on their account|goes on their account/);
+  });
+});
+
+/**
+ * THE RENT SCREEN'S OWN RECORD-PAYMENT DOOR KNOWS ABOUT MONEY ON ACCOUNT,
+ * the way the ⊕ window does. getLedger reads the window's three household
+ * facts onto every row (onAccountSources, openBillsFor, tenancyFactsFor),
+ * and the form prints the window's own line under the amount from them —
+ * so a household whose own $542.53 is in the drawer reads the same sentence
+ * on both forms, and the office does not take the same rent twice from the
+ * one that said nothing. Both ways on every fact, and the source pinned to
+ * the one helper.
+ */
+describe("the Record-payment form's line under the amount", () => {
+  const charge = () => ({
+    id: "chg-jan", lotNumber: "14", renterName: "Test Household", periodMonth: "2027-01",
+    dueOn: "2027-01-01", amount: 542.53, paidTotal: 0, status: "open" as const,
+  });
+  const row = (facts: { onAccount?: number; openCount?: number; nothingMoreBills?: boolean | null } = {}) =>
+    toRows([charge()], "2027-01-02", 3, new Set(), new Map([["chg-jan", { onAccount: 0, openCount: 1, nothingMoreBills: false, ...facts }]]))[0];
+  const words = (html: string) =>
+    html.replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim();
+  const form = (r: ReturnType<typeof row>) =>
+    words(renderToStaticMarkup(<PaymentForm parkId="park-haven" row={r} today="2027-01-02" onDone={() => {}} />));
+  const DOOR = '"Money not against a bill"';
+
+  it("money of theirs already on account: the sentence, word for word the window's", () => {
+    const w = form(row({ onAccount: 542.53 }));
+    expect(w).toContain(`Settles January 2027. $542.53 of theirs is already on account and would cover this — record this and that stays on account and comes off the next bill you raise for them; to use it on this bill instead, put it on the bill from ${DOOR}.`);
+    // The window's line for the same row, from the same helper.
+    expect(w).toContain(amountNote("542.53", { openCount: 1, oldestOpen: { chargeId: "chg-jan", month: "2027-01", balance: 542.53, disputed: false }, onAccount: 542.53, nothingMoreBills: false })!);
+  });
+
+  it("nothing on account: no held-money sentence — collapsed the other way", () => {
+    const w = form(row({ onAccount: 0 }));
+    expect(w).toContain("Settles January 2027.");
+    expect(w).not.toMatch(/on account|Money not against a bill/);
+  });
+
+  it("held money short of the bill does not 'cover' it; another bill open sends it there instead", () => {
+    expect(form(row({ onAccount: 200 }))).toContain("$200.00 of theirs is already on account — record this and that stays on account");
+    expect(form(row({ onAccount: 542.53, openCount: 2 }))).toContain("record this and that goes against their next open bill instead");
+  });
+
+  it("the promise is the tenancy's — theirs to have back, or none when the fact could not be read", () => {
+    const gone = form(row({ onAccount: 542.53, nothingMoreBills: true }));
+    expect(gone).toContain(`record this and that stays on account — nothing more bills for them, so it's theirs to have back from ${DOOR} on the Rent screen;`);
+    expect(gone).not.toMatch(/comes off/);
+    const unread = form(row({ onAccount: 542.53, nothingMoreBills: null }));
+    expect(unread).toContain("record this and that stays on account; to use it on this bill instead");
+    expect(unread).not.toMatch(/comes off|theirs to have back/);
+  });
+
+  it("a disputed row does not print the window's claim note — its second sentence sends the office here", () => {
+    const disputed = toRows([charge()], "2027-01-02", 3, new Set(["chg-jan"]))[0];
+    expect(disputed.state).toBe("disputed");
+    expect(form(disputed)).not.toMatch(/claim as answered|record it from the rent screen/);
+  });
+
+  it("is the window's helper, imported from the one module, on both forms — and no private line of its own", () => {
+    const strip = (src: string) =>
+      src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const rent = strip(readFileSync(fileURLToPath(new URL("./ParkRent.tsx", import.meta.url)), "utf8"));
+    const pos = strip(readFileSync(fileURLToPath(new URL("./TakePayment.tsx", import.meta.url)), "utf8"));
+    for (const src of [rent, pos]) {
+      expect(src).toMatch(/import \{[^}]*\bamountNote\b[^}]*\} from "@\/components\/take-payment-helpers"/);
+    }
+    const formSrc = rent.slice(rent.indexOf("export function PaymentForm("));
+    expect(formSrc.length).toBeGreaterThan(500);
+    expect(formSrc).toMatch(/const note = amountNote\(amount, facts\)/);
+    expect(formSrc).toMatch(/onAccount: row\.onAccount,/);
+    expect(formSrc).toMatch(/openCount: row\.openCount,/);
+    expect(formSrc).toMatch(/nothingMoreBills: row\.nothingMoreBills,/);
+    expect(formSrc).toMatch(/\{note && \(/);
+    expect(formSrc).not.toMatch(/disputedNote|still be owing|comes off|on account and/);
+    // The amount is parsed by the same strip the window uses, not a second copy.
+    expect(formSrc).toMatch(/parseAmount\(amount\)/);
+    expect(formSrc).not.toMatch(/replace\(\/\[\$,\\s\]\/g/);
   });
 });

@@ -3,6 +3,10 @@ import { mustRead, mustCount } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { clockLabel } from "@/lib/duration";
+// THE SPLIT AND THE PLACEHOLDER HAVE ONE HOME. Today's "N crews on site"
+// line reads the same helper, so the two screens cannot disagree about
+// which day a visit belongs to or whether "Crew to be assigned" is a crew.
+import { splitVisits, UNASSIGNED_CREW } from "./visits-helpers";
 
 /**
  * WHO IS ON MY PROPERTY, AND WHEN.
@@ -106,26 +110,17 @@ export async function getSiteVisits(parkId: string): Promise<VisitBoard | null> 
   }
   const startHour = Number(dialsRes.data?.sell_start_hour ?? 7);
 
-  const all: Array<SiteVisit & { _d: string }> = (rows ?? []).map((r) => ({
-    _d: r.visit_date as string,
+  const all: SiteVisit[] = (rows ?? []).map((r) => ({
     date: r.visit_date as string,
-    crew: (r.crew as string) ?? "Crew to be assigned",
+    crew: (r.crew as string) ?? UNASSIGNED_CREW,
     service: (r.service as string) ?? "Work",
     status: (r.status as string) ?? "scheduled",
     lotNumber: (r.lot_number as string) ?? null,
     window: windowFor((r.est_minutes as number | null) ?? null, startHour),
   }));
 
-  // Thirty days back is enough to answer "was that truck last Tuesday ours?"
-  // without turning into a history of the tenants.
-  const cutoff = new Date(`${today}T00:00:00Z`);
-  cutoff.setUTCDate(cutoff.getUTCDate() - 30);
-  const cutoffISO = cutoff.toISOString().slice(0, 10);
-
   return {
-    today: all.filter((v) => v._d === today),
-    upcoming: all.filter((v) => v._d > today),
-    recent: all.filter((v) => v._d < today && v._d >= cutoffISO).reverse(),
+    ...splitVisits(all, today),
     anyLinkedProperties: linked > 0,
   };
 }

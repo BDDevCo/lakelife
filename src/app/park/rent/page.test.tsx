@@ -60,8 +60,10 @@ vi.mock("@/components/ParkNav", () => ({ ParkNav: () => <i>nav</i> }));
 vi.mock("@/components/ParkRent", () => ({ ParkRent: () => <i>rent</i> }));
 vi.mock("@/lib/env", () => ({ hasSupabaseEnv: () => true }));
 vi.mock("@/app/park/data", () => ({ getMyPark: async () => ({ id: "park-haven", name: "The Haven" }) }));
+// Switchable so the page's own guard on a null ledger can be pinned both ways.
+let ledger: Record<string, unknown> | null = { month: "2027-03", rows: [], claims: {}, summary: {}, lagDays: 3, today: "2027-03-02" };
 vi.mock("@/app/park/ledger-actions", () => ({
-  getLedger: async () => ({ month: "2027-03", rows: [], claims: {}, summary: {}, lagDays: 3, today: "2027-03-02" }),
+  getLedger: async () => ledger,
   reversePayment: async () => ({ ok: true }),
   emailReceipt: async () => ({ ok: true }),
   takeDropSlipSerials: async () => ({ ok: true }),
@@ -90,6 +92,7 @@ const render = async () =>
 beforeEach(() => {
   for (const k of Object.keys(db)) delete db[k];
   nextReadError = null;
+  ledger = { month: "2027-03", rows: [], claims: {}, summary: {}, lagDays: 3, today: "2027-03-02" };
   db.park_charges = [
     { id: "charge-jan", park_id: "park-haven", period_month: "2027-01" },
     { id: "charge-feb", park_id: "park-haven", period_month: "2027-02" },
@@ -149,6 +152,25 @@ describe("the rent page hands the panel where each payment's money went", () => 
   it("a failed allocations read takes the page to its error boundary rather than rendering 'nothing applied'", async () => {
     nextReadError = { table: "park_payment_allocations", error: { code: "57P01", message: "terminating connection" } };
     await expect(ParkRentPage({ searchParams: Promise.resolve({}) })).rejects.toBeInstanceOf(ReadFailed);
+  });
+
+  /**
+   * getLedger is null only when assertMyPark is — and getMyPark has just
+   * proved the park is his. The page used to render "Nothing here." with no
+   * strip for that: a failed read shown as an empty month, and a dead end.
+   */
+  it("a ledger that did not answer for a proven park goes to the error boundary, never 'Nothing here.'", async () => {
+    ledger = null;
+    let thrown: unknown;
+    try { await ParkRentPage({ searchParams: Promise.resolve({}) }); } catch (e) { thrown = e; }
+    expect(thrown).toBeInstanceOf(ReadFailed);
+    expect((thrown as ReadFailed).what).toBe("this month's bills");
+  });
+
+  it("a ledger that answered renders the strip and the month — the other side of the same guard", async () => {
+    const w = await render();
+    expect(w).toMatch(/topbar nav rent/);
+    expect(w).not.toMatch(/Nothing here/);
   });
 
   it("makes no allocations read at all when nothing is on account", async () => {

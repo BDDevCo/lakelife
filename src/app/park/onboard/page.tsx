@@ -27,6 +27,18 @@ export default async function ParkOnboardPage() {
   }
 
   const res = await getOnboardSeeds(park.id);
+  // A REFUSED OR FAILED LOADER IS A SENTENCE, not "everyone is housed". This
+  // passed `res.seeds ?? []` straight through, so a denied membership check
+  // rendered "Every live lot already has somebody on it. Nothing left to file."
+  if (!res.ok) {
+    return (
+      <>
+        <TopBar />
+        <ParkNav park={park} />
+        <div className="wrap" style={{ paddingTop: 24 }}>{res.error}</div>
+      </>
+    );
+  }
   return (
     <>
       <TopBar />
@@ -34,6 +46,9 @@ export default async function ParkOnboardPage() {
       <ParkOnboard
         parkId={park.id}
         seeds={res.seeds ?? []}
+        // `!res.ok` returned above, so a missing count can only mean zero.
+        liveLots={res.liveLots ?? 0}
+        totalLots={res.totalLots ?? 0}
         today={res.today ?? ""}
         capMonths={res.capMonths ?? null}
         termMonths={res.termMonths ?? null}

@@ -177,6 +177,7 @@ const MAY_SEE_FIXTURES: Record<string, string> = {
   "src/app/ops/parks-data.ts": "ops park admin",
   "src/app/ops/parks-actions.ts": "ops park admin",
   "src/app/park/data.ts": "a signed-in park owner's own park",
+  "src/app/park/readiness-data.ts": "a signed-in park owner's own setup checklist — resolves the lake NAME for the park's own lake_id",
   "src/app/parks/public-data.ts": "resolves a lake NAME by id for an already-active park; fencing here blanks a label rather than hiding a page",
   "src/app/profile/actions.ts": "a signed-in customer's own property",
   "src/app/profile/setup/page.tsx": "a signed-in customer picking their lake",

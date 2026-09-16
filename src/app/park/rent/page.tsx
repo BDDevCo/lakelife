@@ -8,7 +8,7 @@ import { getLedger } from "@/app/park/ledger-actions";
 import { ParkHeldMoney, type HeldAllocation } from "@/components/ParkHeldMoney";
 import { getHeldMoney, getHouseholds, getOpenChargesForApply } from "@/app/park/money-actions";
 import { createServiceClient } from "@/lib/supabase/server";
-import { mustRead } from "@/lib/must-read";
+import { mustRead, ReadFailed } from "@/lib/must-read";
 
 /**
  * WHERE EACH LISTED PAYMENT'S MONEY HAS GONE (0167), by payment id.
@@ -83,6 +83,16 @@ export default async function ParkRentPage({
 
   const { month } = await searchParams;
   const page = await getLedger(park.id, month);
+  // getLedger answers null only when assertMyPark does — and getMyPark has
+  // just read the same membership table and proved this park is his. So a
+  // null here is, in every case the code can reach, a read that did not
+  // answer, and it goes to the error boundary the way getHeldMoney's and
+  // allocationsUnder's failures do. It used to render "Nothing here." with
+  // no strip: a failed read shown as an empty month, on a screen with no
+  // way off it but the browser. assertMyPark logged the failure itself.
+  if (!page) {
+    throw new ReadFailed("this month's bills", "the ledger read gave no answer for a park the owner was just proven to manage");
+  }
   const [held, households, openCharges] = await Promise.all([
     getHeldMoney(park.id),
     getHouseholds(park.id),
@@ -90,9 +100,6 @@ export default async function ParkRentPage({
   ]);
   // Needs the listed payment ids, so it follows the batch rather than joining it.
   const allocations = await allocationsUnder(park.id, held.onAccount.map((r) => r.paymentId));
-  if (!page) {
-    return (<><TopBar /><div className="wrap" style={{ paddingTop: 48 }}>Nothing here.</div></>);
-  }
 
   return (
     <>

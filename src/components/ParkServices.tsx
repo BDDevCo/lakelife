@@ -40,109 +40,118 @@ export function ParkServices({
   const on = propertyId != null;
 
   return (
-    <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
-      <h3 style={{ fontSize: 16, margin: 0 }}>Services for the park itself</h3>
-      <p className="mut" style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.55 }}>
-        Work on the common ground — the roads, the verges, the trash corral.
-        This is the park buying work as a customer, on your card and in your
-        name. It has nothing to do with the rent roll, in either direction.
-      </p>
+    <>
+      {/* THE PAGE TITLE. This screen opened on the card's h3 — it and Park
+          setup were the two park tabs with no title of their own (both got
+          one the same day) — while every other page in the product draws one
+          at 26 (park-page-titles.test.ts). It
+          is also the word on the pill that brings him here, so the word he
+          taps is the word he lands on. */}
+      <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Park services</h1>
+      <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
+        <h3 style={{ fontSize: 16, margin: 0 }}>Services for the park itself</h3>
+        <p className="mut" style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.55 }}>
+          Work on the common ground — the roads, the verges, the trash corral.
+          This is the park buying work as a customer, on your card and in your
+          name. It has nothing to do with the rent roll, in either direction.
+        </p>
 
-      {!on && (
-        <div style={{ marginTop: 12 }}>
-          {blockers.length > 0 ? (
-            <Blockers rows={blockers} />
-          ) : (
-            <p className="mut" style={{ fontSize: 13, margin: "0 0 10px", lineHeight: 1.55 }}>
-              {/* The space after an interpolation is not reliable in JSX here
-                  — it rendered "The Havena LakeLife" on screen. Explicit. */}
-              Turning this on makes {parkName}{" "}a LakeLife customer with one
-              address — the park&apos;s own. Nothing is booked and nothing is
-              charged until you pick a service and a day.
-            </p>
-          )}
-          <button
-            className="ll-btn gold"
-            style={{ minHeight: 44 }}
-            disabled={busy || !canEnable || blockers.length > 0}
-            onClick={() =>
-              start(async () => {
-                const res = await enableParkServices(parkId);
-                toast(res.ok ? (res.signal ?? "On.") : (res.error ?? "Couldn't do that."));
-                if (res.ok) router.refresh();
-              })
-            }
-          >
-            {busy ? "Setting up…" : "Turn on park services"}
-          </button>
-        </div>
-      )}
-
-      {on && blockers.length > 0 && <Blockers rows={blockers} />}
-
-      {on && (
-        <div style={{ marginTop: 14 }}>
-          {/* THE DERIVATION, not just the price. */}
-          <div style={{ fontSize: 13.5, fontWeight: 800 }}>
-            {liveLots} live {liveLots === 1 ? "lot" : "lots"} — every price below is worked out from that
+        {!on && (
+          <div style={{ marginTop: 12 }}>
+            {blockers.length > 0 ? (
+              <Blockers rows={blockers} />
+            ) : (
+              <p className="mut" style={{ fontSize: 13, margin: "0 0 10px", lineHeight: 1.55 }}>
+                {/* The space after an interpolation is not reliable in JSX here
+                    — it rendered "The Havena LakeLife" on screen. Explicit. */}
+                Turning this on makes {parkName}{" "}a LakeLife customer with one
+                address — the park&apos;s own. Nothing is booked and nothing is
+                charged until you pick a service and a day.
+              </p>
+            )}
+            <button
+              className="ll-btn gold"
+              style={{ minHeight: 44 }}
+              disabled={busy || !canEnable || blockers.length > 0}
+              onClick={() =>
+                start(async () => {
+                  const res = await enableParkServices(parkId);
+                  toast(res.ok ? (res.signal ?? "On.") : (res.error ?? "Couldn't do that."));
+                  if (res.ok) router.refresh();
+                })
+              }
+            >
+              {busy ? "Setting up…" : "Turn on park services"}
+            </button>
           </div>
+        )}
 
-          {menu.length === 0 ? (
-            <p className="mut" style={{ fontSize: 13, margin: "8px 0 0", lineHeight: 1.55 }}>
-              No grounds services are switched on yet. Tell us what you want for
-              the common areas and we&apos;ll price it against your lot count.
-            </p>
-          ) : (
-            <div style={{ marginTop: 8 }}>
-              {menu.map((s) => (
-                <RateRow key={s.id} parkId={parkId} row={s} liveLots={liveLots} />
-              ))}
+        {on && blockers.length > 0 && <Blockers rows={blockers} />}
+
+        {on && (
+          <div style={{ marginTop: 14 }}>
+            {/* THE DERIVATION, not just the price. */}
+            <div style={{ fontSize: 13.5, fontWeight: 800 }}>
+              {liveLots} live {liveLots === 1 ? "lot" : "lots"} — every price below is worked out from that
             </div>
-          )}
 
-          {menu.some((s) => s.price == null) && (
+            {menu.length === 0 ? (
+              <p className="mut" style={{ fontSize: 13, margin: "8px 0 0", lineHeight: 1.55 }}>
+                No grounds services are switched on yet. Tell us what you want for
+                the common areas and we&apos;ll price it against your lot count.
+              </p>
+            ) : (
+              <div style={{ marginTop: 8 }}>
+                {menu.map((s) => (
+                  <RateRow key={s.id} parkId={parkId} row={s} liveLots={liveLots} />
+                ))}
+              </div>
+            )}
+
+            {menu.some((s) => s.price == null) && (
+              <p className="mut" style={{ fontSize: 12.5, margin: "10px 0 0", lineHeight: 1.5 }}>
+                The ones without a price need your rate before they can be booked
+                — every park pays a different number for these, and we will not
+                guess yours from somebody else&apos;s.
+              </p>
+            )}
+
+            {/* WHAT THE NUMBER IS. Every other word on this screen — "what you
+                pay", "every park pays a different number" — reads as *what the
+                crew charges me*, and it is not: it becomes the ALL-IN price, and
+                the crew's share is capped below it. Type the figure your current
+                contractor quotes and no crew can clear the floor, so the job sits
+                on "Finding a crew" and nothing here ever says why.
+                No figure is suggested — an unpriced park service is the safe
+                state, and his number is his. */}
             <p className="mut" style={{ fontSize: 12.5, margin: "10px 0 0", lineHeight: 1.5 }}>
-              The ones without a price need your rate before they can be booked
-              — every park pays a different number for these, and we will not
-              guess yours from somebody else&apos;s.
+              These are <b>all-in prices</b> — what the park is billed for the
+              visit. The crew&apos;s share comes out of it, so a figure set at
+              exactly what a contractor quotes you leaves nothing in between, and
+              no crew can take the job.
             </p>
-          )}
 
-          {/* WHAT THE NUMBER IS. Every other word on this screen — "what you
-              pay", "every park pays a different number" — reads as *what the
-              crew charges me*, and it is not: it becomes the ALL-IN price, and
-              the crew's share is capped below it. Type the figure your current
-              contractor quotes and no crew can clear the floor, so the job sits
-              on "Finding a crew" and nothing here ever says why.
-              No figure is suggested — an unpriced park service is the safe
-              state, and his number is his. */}
-          <p className="mut" style={{ fontSize: 12.5, margin: "10px 0 0", lineHeight: 1.5 }}>
-            These are <b>all-in prices</b> — what the park is billed for the
-            visit. The crew&apos;s share comes out of it, so a figure set at
-            exactly what a contractor quotes you leaves nothing in between, and
-            no crew can take the job.
-          </p>
-
-          <button
-            className="ll-btn"
-            style={{ marginTop: 10, minHeight: 44 }}
-            disabled={busy || menu.every((s) => s.price == null) || blockers.length > 0}
-            onClick={() =>
-              start(async () => {
-                // Points the booking screen at the PARK. Without this the
-                // switcher falls back to his oldest property, which for an
-                // owner who also has a lake house is the wrong place entirely.
-                const res = await focusParkProperty(parkId);
-                if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
-                router.push("/book");
-              })
-            }
-          >
-            Book park work →
-          </button>
-        </div>
-      )}
-    </div>
+            <button
+              className="ll-btn"
+              style={{ marginTop: 10, minHeight: 44 }}
+              disabled={busy || menu.every((s) => s.price == null) || blockers.length > 0}
+              onClick={() =>
+                start(async () => {
+                  // Points the booking screen at the PARK. Without this the
+                  // switcher falls back to his oldest property, which for an
+                  // owner who also has a lake house is the wrong place entirely.
+                  const res = await focusParkProperty(parkId);
+                  if (!res.ok) { toast.err(res.error ?? "Couldn't do that."); return; }
+                  router.push("/book");
+                })
+              }
+            >
+              Book park work →
+            </button>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -329,6 +338,8 @@ function Blockers({ rows }: { rows: string[] }) {
                 <Link href="/profile">Go to my account →</Link>
               </>
             )}
+            {/* Only the address blocker says this now. The lake one prints
+                NO_LAKE_LINE, because ParkSetup has no lake field to open. */}
             {r.includes("Set it in Park setup") && (
               <>
                 {" "}

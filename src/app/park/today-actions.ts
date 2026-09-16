@@ -12,12 +12,22 @@ import {
 } from "./ledger-helpers";
 import { summariseReceipts, customPeriod, type Receipt, type Method } from "./receipts-helpers";
 import {
-  moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, preCutover, householdsIn, holdoverLotsOf,
-  type MoneyBlock, type Task, type TaskState, type OccupancySnapshot,
+  moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, householdsIn, holdoverLotsOf, lotOccupancy,
+  type MoneyBlock, type Task, type TaskState,
 } from "./today-helpers";
 import { getHeldMoney } from "./money-actions";
 // A day a person reads is words — the snooze toast said "Back on 2027-02-01".
-import { dayInWords, lapsedRowOf } from "./park-helpers";
+import { dayInWords } from "./park-helpers";
+// THE READINESS LIST AND THE FIRST-RUN CARD: derived from the rows this loader
+// already holds plus a handful of light reads (readinessExtras). The
+// pre-cutover checklist this replaces read only when a takeover day was set
+// and in the future — so a park with no takeover day never saw it.
+import {
+  readinessFactsFrom, readinessFor, readinessHeadline, showReadinessOnToday, firstRunCard, firstRunTaskKey,
+  type ReadinessRow, type FirstRunCard,
+} from "./readiness";
+import { readinessExtras } from "./readiness-data";
+import { crewsOnSite, UNASSIGNED_CREW } from "./visits-helpers";
 import { latestSeqByChain } from "./agreement-helpers";
 import { livenessLine, lastNightsFindings, type RunRow, type LivenessLine } from "./machine-helpers";
 import { mustRead } from "@/lib/must-read";
@@ -53,7 +63,19 @@ export interface TodayView {
   tasks: Task[];
   notes: { id: string; body: string; createdAt: string }[];
   quiet: { headline: string; checkedLine: string } | null;
-  preCutover: ReturnType<typeof preCutover> | null;
+  /** The welcome card, while the park is unpublished and has raised no bill; null once it is either, or he has dismissed it. */
+  firstRun: FirstRunCard | null;
+  /**
+   * A takeover day set and strictly in the future. Before it there is no
+   * money and no occupancy, so the readiness list stands where the money
+   * card would. ON the day the park is his — `>=` held the list up for one
+   * morning too many, the morning nineteen bills fell due.
+   */
+  beforeGoLive: boolean;
+  /** The readiness list — non-null before go-live, and whenever the park is unpublished or a required row is undone. */
+  readiness: { headline: string; sub: string; rows: ReadinessRow[] } | null;
+  /** Distinct crews with a visit in the park today; the line renders only above zero. */
+  crewsOnSite: number;
   /**
    * Whether the evening check is actually running.
    *
@@ -71,7 +93,8 @@ export interface TodayView {
 }
 
 export async function getToday(parkId: string): Promise<TodayView | null> {
-  if (!(await assertMyPark(parkId))) return null;
+  const membership = await assertMyPark(parkId);
+  if (!membership) return null;
 
   const admin = createServiceClient();
   const today = todayLakeDate();
@@ -93,7 +116,9 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     "your park",
     await admin
       .from("parks")
-      .select("name, rent_due_day, office_recording_lag_days, max_agreement_months, cutover_date")
+      // The readiness list's columns ride on the same read: published,
+      // the lake, the pin, the hold, the online-rent switch.
+      .select("name, rent_due_day, office_recording_lag_days, max_agreement_months, cutover_date, active, lake_id, lat, lng, notices_held_at, accepts_online_rent")
       .eq("id", parkId)
       .maybeSingle(),
   );
@@ -107,7 +132,9 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     "your lots",
     await admin
       .from("park_lots")
-      .select("id, lot_number, lifecycle")
+      // `active` is the "In service" switch — the column the publish gate
+      // counts, so the readiness list can say when every lot is off.
+      .select("id, lot_number, lifecycle, active")
       .eq("park_id", parkId),
   );
   const liveLots = (lots ?? []).filter((l) => (l.lifecycle as string) === "live");
@@ -133,55 +160,22 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     : ([] as Record<string, unknown>[]);
   const stays = (everyRow ?? []).filter((s) => s.status === "approved" || s.status === "active");
 
-  const occupiedLotIds = new Set<string>();
-  const reservedLotIds = new Set<string>();
-  for (const s of stays) {
-    const r = parseDaterange(s.during as string);
-    if (!r) continue;
-    // Half-open: `end` is checkout morning, so today === end is NOT in date.
-    if (r.start <= today && today < r.end) occupiedLotIds.add(s.park_lot_id as string);
-    else if (r.start > today) reservedLotIds.add(s.park_lot_id as string);
-  }
-  // A LOT IS COUNTED ONCE. Renewing somebody writes a future tenancy on a lot
-  // that already has a current one, so without this the same lot lands in both
-  // sets and every renewal inflates occupancy by a lot that did not change
-  // hands. Found by driving it: 3 lots, 1 tenant, "2 of 3 taken".
-  for (const id of occupiedLotIds) reservedLotIds.delete(id);
-  // LIVED ON, PAPERWORK RUN OUT: the roll's own rule (park-helpers
-  // lapsedRowOf), read from every row on the lot — a held monthly row behind
-  // today with nothing current, nothing coming and nobody closed out after
-  // it. Nobody moved out, so the lot is not empty: the roll says "Ran out"
-  // for the same row; Today read it as "Empty: lot 9". A stay by the night
-  // or the week is not lapsed once its checkout passes, and a household
-  // closed out of its successor has left — both the helper's, not this
-  // file's, so the three screens cannot drift.
-  const rowsOfLot = new Map<string, { status: string; range: ReturnType<typeof parseDaterange>; term: string }[]>();
-  for (const s of everyRow ?? []) {
-    const list = rowsOfLot.get(s.park_lot_id as string) ?? [];
-    list.push({ status: s.status as string, range: parseDaterange(s.during as string), term: s.term as string });
-    rowsOfLot.set(s.park_lot_id as string, list);
-  }
-  const lapsedLotIds = new Set<string>();
-  for (const [lotId, rows] of rowsOfLot) {
-    if (lapsedRowOf(rows, today)) lapsedLotIds.add(lotId);
-  }
-  // What is left is a lot somebody lives on with no paperwork in date:
-  // counted as taken, never empty.
-  for (const id of lapsedLotIds) occupiedLotIds.add(id);
-
-  const vacantLots = liveLots.filter(
-    (l) => !occupiedLotIds.has(l.id as string) && !reservedLotIds.has(l.id as string),
+  // WHICH LOTS ARE TAKEN — the one copy of the rule (today-helpers
+  // lotOccupancy: half-open ranges, a lot counted once across a renewal,
+  // lapsed paperwork counted as taken). The readiness list reads the same
+  // function, so the two cards on this screen cannot count a lot two ways.
+  const occupancy = lotOccupancy(
+    (everyRow ?? []).map((s) => ({
+      park_lot_id: s.park_lot_id as string,
+      during: s.during as string,
+      status: s.status as string,
+      term: s.term as string,
+    })),
+    liveLots.map((l) => ({ id: l.id as string, lot_number: l.lot_number as string })),
+    today,
   );
-
-  const snapshot: OccupancySnapshot = {
-    liveLots: liveLots.length,
-    occupied: occupiedLotIds.size,
-    reserved: reservedLotIds.size,
-    vacant: vacantLots.length,
-    vacantLotNumbers: vacantLots
-      .map((l) => l.lot_number as string)
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-  };
+  const occupiedLotIds = occupancy.occupiedLotIds;
+  const snapshot = occupancy.snapshot;
 
   // ---- money --------------------------------------------------------------
   const charges = mustRead(
@@ -360,7 +354,10 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
 
   const renters = mustRead(
     "the households",
-    await admin.from("park_renters").select("id, display_name").eq("park_id", parkId),
+    // email, the office number, the invite stamp and the slip stamp are the
+    // readiness list's: who still lacks a contact, and whether anyone was
+    // invited or had a slip printed.
+    await admin.from("park_renters").select("id, display_name, email, phone_on_file_with_park, invite_sent_at, claim_code_issued_at").eq("park_id", parkId),
   );
   const renterName = new Map((renters ?? []).map((r) => [r.id as string, r.display_name as string]));
 
@@ -384,21 +381,18 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     }];
   });
 
-  // Rate cards, actually counted. Claiming "3 of 3" from the lot count alone
-  // would put a tick against work nobody has done.
+  // Rate cards, actually counted — by the readiness builder, off the live
+  // lots. Claiming "21 of 21" from the lot count alone would put a tick
+  // against work nobody has done.
   const rates = liveIds.length
     ? mustRead(
         "your rate cards",
         await admin.from("lot_rates").select("park_lot_id, term, amount")
-          .in("park_lot_id", (lots ?? []).map((l) => l.id as string)),
+          .in("park_lot_id", liveIds),
       )
     : ([] as Record<string, unknown>[]);
-  const lotsWithRates = new Set((rates ?? []).map((r) => r.park_lot_id as string)).size;
-  const monthlyRoll = (rates ?? [])
-    .filter((r) => (r.term as string) === "monthly")
-    .reduce((s, r) => s + Number(r.amount), 0);
 
-  const [costsRes, rentChangesRes, statesRes, noteRes] =
+  const [costsRes, rentChangesRes, statesRes, noteRes, visitsRes] =
     await Promise.all([
       admin.from("park_costs").select("id, category, amount_paid, allocated_total, park_absorbed, denominator_lots, payer_lots, allocation_method").eq("park_id", parkId),
       // lot_rent_changes keys on park_id and RESERVATION_id — it has no
@@ -414,8 +408,14 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
       admin.from("park_task_states").select("task_key, snoozed_until, dismissed_at").eq("park_id", parkId),
       admin.from("park_notes").select("id, body, created_at")
         .eq("park_id", parkId).is("done_at", null).order("created_at", { ascending: false }),
+      // Who is on the land today — the visits board's own view, so the one
+      // line here and the board agree about what a visit is.
+      admin.from("park_site_visits").select("crew").eq("park_id", parkId).eq("visit_date", today),
     ]);
   const costs = mustRead("your costs", costsRes);
+  // A failed read here would print no line — and the line's absence is what
+  // a quiet drive looks like. It throws instead.
+  const visitsToday = mustRead("who's on site today", visitsRes);
   const rentChanges = mustRead("the rent changes you've scheduled", rentChangesRes);
   // A failed task-state read reads as "nothing snoozed or dismissed", which
   // brings back every chore he has already decided against.
@@ -530,6 +530,11 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     // "1 household". The same helper moneyBlock counts with.
     arrearsCount: householdsIn(arrears),
     arrearsAmount: arrears.reduce((sum, r) => sum + r.balance, 0),
+    // The oldest open month, so the card's door opens on the rent screen for
+    // THAT month rather than the current one, where the bill is not.
+    arrearsOldestMonth: arrears.length
+      ? arrears.reduce((m, r) => (r.periodMonth < m ? r.periodMonth : m), arrears[0].periodMonth)
+      : null,
     // MONEY HELD FOR A HOUSEHOLD THAT HAS LEFT — the held panel's own read
     // (getHeldMoney), so Today and the Rent screen name the same money. Only
     // when the final month is billed: before that, the run raises their
@@ -657,6 +662,39 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   if ((costs ?? []).length) checked.push("costs");
   if ((rentChanges ?? []).length) checked.push("rent changes");
 
+  // ---- readiness and the first-run card ---------------------------------
+  // The rows this loader already holds, plus the light reads neither card
+  // had (lake name, fees, deliveries, reminders, acceptance, processor).
+  const extras = await readinessExtras(
+    parkId,
+    (park?.lake_id as string | null) ?? null,
+    (renters ?? []).map((r) => r.id as string),
+  );
+  const ready = readinessFactsFrom({
+    today,
+    viewerIsOwner: membership.role === "owner",
+    park: park ?? null,
+    lots: lots ?? [],
+    reservations: everyRow ?? [],
+    renters: renters ?? [],
+    rates: rates ?? [],
+    chargesRaised: (charges ?? []).length,
+    extras,
+  });
+  const rows = readinessFor(ready.facts);
+  const beforeGoLive = cutoverOn != null && cutoverOn > today;
+  // NO TAKEOVER-DATE GATE ON THE LIST. Before go-live it stands in for the
+  // money card; otherwise it shows whenever the park is unpublished or a
+  // required row is undone — a park with no takeover day sees it too.
+  const readiness = beforeGoLive || showReadinessOnToday(ready.facts, rows)
+    ? { ...readinessHeadline(ready.facts, rows), rows }
+    : null;
+  // "Don't show this again" is a task state like any other dismissal.
+  const firstRunDismissed = (states ?? []).some(
+    (st) => st.task_key === firstRunTaskKey(parkId) && st.dismissed_at != null,
+  );
+  const firstRun = firstRunDismissed ? null : firstRunCard(ready.facts, ready.contact, rows);
+
   const runRows: RunRow[] = (runs ?? []).map((r) => ({
     runner: r.runner as string,
     runOn: r.run_on as string,
@@ -694,22 +732,10 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
         && money.arrearsLine === null && money.disputedLine === null
         ? quietState(checked)
         : null,
-    // ON the go-live day the park IS his, so `>=` held the readiness checklist
-    // up for one day too many — and ParkToday renders the checklist INSTEAD of
-    // the money card. With go-live 1 Jan 2027 and rent due on the 1st, that is
-    // the morning nineteen bills fall due and he would have been looking at a
-    // setup list.
-    preCutover: cutoverOn && cutoverOn > today
-      ? preCutover({
-          today, cutoverOn, parkName,
-          lots: (lots ?? []).length,
-          lotsWithRates,
-          monthlyRoll,
-          households: (renters ?? []).length,
-          rentDueDay,
-          maxAgreementMonths: (park?.max_agreement_months as number) ?? null,
-        })
-      : null,
+    firstRun,
+    beforeGoLive,
+    readiness,
+    crewsOnSite: crewsOnSite((visitsToday ?? []).map((v) => ({ crew: String(v.crew ?? UNASSIGNED_CREW) }))),
   };
 }
 

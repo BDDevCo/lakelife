@@ -10,7 +10,8 @@ import { ParkOwnedHomes } from "@/components/ParkOwnedHomes";
 /**
  * WHERE "Book services for the park" FINALLY LEADS.
  *
- * That link has been in ParkNav since the park module shipped, pointing at
+ * That link sat in ParkNav from the day the park module shipped until the
+ * six-tab strip (it is now the Park services pill under On site), pointing at
  * /book — which tells a park owner with no property to "Set up your property
  * first" and hands him the lake-house wizard. This is the door it always
  * implied.

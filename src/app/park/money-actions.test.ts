@@ -177,6 +177,8 @@ function recompute(chargeId: string) {
 const updated: Array<{ table: string; patch: Row; ids: string[] }> = [];
 /** Fail the next `.update` on that table. */
 let nextUpdateError: { table: string; error: { code: string; message: string } } | null = null;
+/** Fail the next plain read on that table — a dropped connection between a door's insert and its sentence. */
+let nextReadError: { table: string; error: { code: string; message: string } } | null = null;
 class Q {
   private fs: Array<(r: Row) => boolean> = [];
   private pending: Row[] | null = null;
@@ -256,6 +258,10 @@ class Q {
       if (this.t === "park_payment_allocations") for (const r of hit) recompute(r.charge_id as string);
       return Promise.resolve({ data: hit, error: null });
     }
+    if (nextReadError && nextReadError.table === this.t) {
+      const e = nextReadError.error; nextReadError = null;
+      return Promise.resolve({ data: null, error: e });
+    }
     return Promise.resolve({ data: this.rows(), error: null });
   }
   single() { return this.resolve().then((r) => ({ data: r.data?.[0] ?? null, error: r.error })); }
@@ -277,7 +283,7 @@ const TODAY = todayLakeDate();
 
 function seed() {
   for (const k of Object.keys(db)) delete db[k];
-  inserted.length = 0; touched.length = 0; updated.length = 0; nextAllocationError = null; nextUpdateError = null;
+  inserted.length = 0; touched.length = 0; updated.length = 0; nextAllocationError = null; nextUpdateError = null; nextReadError = null;
   db.parks = [{ id: "park-haven", name: "The Haven", address: "9085 E 500 S" }];
   db.park_renters = [{ id: "renter-9", display_name: "Household 9", park_id: "park-haven", merged_into: null, email: "nine@example.com", contact_pref: "email" }];
   db.lot_reservations = [{ id: "stay-9", renter_id: "renter-9", park_lot_id: "lot-9", status: "active" }];
@@ -570,7 +576,7 @@ describe("getHeldMoney lists what is still held, not what arrived", () => {
   it("recordOnAccount with nothing open: the sentence promises only what the run keeps", async () => {
     const res = await recordOnAccount("park-haven", "renter-9", 1627.59, "check", "1042", TODAY, "", "k1");
     expect(res.ok).toBe(true);
-    expect(res.signal).toBe("$1,627.59 recorded for Household 9. It's on account — it comes off the next bill you raise for them, or put it against an open one now.");
+    expect(res.signal).toBe("$1,627.59 recorded for Household 9. It's on account and comes off the next bill you raise for them — or put it against an open bill now from \"Money not against a bill\".");
     expect(res.signal).not.toMatch(/until you put it against/);
     expect(db.park_payment_allocations).toHaveLength(0);
   });
@@ -643,9 +649,83 @@ describe("recordOnAccount settles the oldest open bill the moment the money is k
     expect(res.ok).toBe(true);
     expect(inserted.filter((r) => r.__table === "park_payments")).toHaveLength(1);
     expect(res.signal).toBe(
-      "$542.53 recorded for Household 9. It's on account — it comes off the next bill you raise for them, or put it against an open one now. ⚠️ $542.53 of it couldn't be put against a bill — it stays on account.",
+      "$542.53 recorded for Household 9. It's on account and comes off the next bill you raise for them — or put it against an open bill now from \"Money not against a bill\". ⚠️ $542.53 of it couldn't be put against a bill — it stays on account.",
     );
     expect(res.receipt?.onAccount).toMatchObject({ appliedTo: [], remaining: 542.53 });
+  });
+
+  /**
+   * THE POST-TAP SENTENCE AGREES WITH THE PRE-TAP NOTE. The ⊕ window's note
+   * keys "comes off the next bill you raise for them" on lib/tenancy-facts;
+   * this door said it to everybody — so a household who had moved out with
+   * their final month billed read "theirs to have back" on the note and
+   * "comes off the next bill you raise for them" on the toast, about the
+   * same cheque. Three shapes on both branches of the toast, the fact read
+   * once, and a failed read making no promise at all.
+   */
+  describe("the promise about what stays on account is decided on the tenancy", () => {
+    const DOOR = "\"Money not against a bill\"";
+    /** Moved out 27 January with January billed and paid: nothing more bills for them. */
+    const departed = () => {
+      db.lot_reservations = [{ id: "stay-9", renter_id: "renter-9", park_lot_id: "lot-9", status: "ended", moved_out_on: "2027-01-27", during: "[2027-01-01,2027-01-28)", term: "monthly" }];
+      db.park_charges.push({ id: "jan-9", park_id: "park-haven", reservation_id: "stay-9", renter_id: "renter-9", period_month: "2027-01", due_on: "2027-01-01", amount: 542.53, paid_total: 542.53, status: "paid" });
+    };
+    const reads = () => touched.filter((t) => t === "lot_reservations").length;
+
+    it("departed, final month billed, nothing open: theirs to have back — never 'comes off', and no by-hand door for money nothing can use", async () => {
+      departed();
+      const res = await recordOnAccount("park-haven", "renter-9", 57.47, "check", "1042", TODAY, "", "k1");
+      expect(res.ok).toBe(true);
+      expect(res.signal).toBe(`$57.47 recorded for Household 9. It's on account — nothing more bills for them, so it's theirs to have back from ${DOOR} on the Rent screen.`);
+      expect(res.signal).not.toMatch(/comes off|next bill|open bill now/);
+      // One read for the fact, beside the receipt's own read of their lot (lot_reservations too).
+      expect(reads()).toBe(2);
+    });
+
+    it("departed, with an old bill still open: it settles that, and what is left is theirs to have back", async () => {
+      departed();
+      bill("dec", "2026-12", { amount: 40, reservation_id: "stay-9" });
+      const res = await recordOnAccount("park-haven", "renter-9", 100, "cash", "", TODAY, "", "k1");
+      expect(res.signal).toBe(`$100.00 recorded for Household 9. $40.00 went against December 2026 — $60.00 stays on account — nothing more bills for them, so it's theirs to have back from ${DOOR} on the Rent screen.`);
+      expect(res.signal).not.toMatch(/comes off/);
+    });
+
+    it("still here: comes off the next bill you raise — the window's own words — on both branches", async () => {
+      const res = await recordOnAccount("park-haven", "renter-9", 57.47, "check", "1042", TODAY, "", "k1");
+      expect(res.signal).toBe(`$57.47 recorded for Household 9. It's on account and comes off the next bill you raise for them — or put it against an open bill now from ${DOOR}.`);
+      // A fresh household (the $57.47 above would settle January first, oldest money first).
+      seed();
+      bill("jan", "2027-01");
+      const more = await recordOnAccount("park-haven", "renter-9", 600, "check", "1043", TODAY, "", "k2");
+      expect(more.signal).toBe("$600.00 recorded for Household 9. $542.53 went against January 2027 — $57.47 stays on account and comes off the next bill you raise for them.");
+      expect(more.signal).not.toMatch(/theirs to have back/);
+    });
+
+    it("the tenancy could not be read: the money is on account and NO promise is made either way", async () => {
+      departed();
+      nextReadError = { table: "lot_reservations", error: { code: "57P01", message: "terminating connection" } };
+      const res = await recordOnAccount("park-haven", "renter-9", 57.47, "check", "1042", TODAY, "", "k1");
+      expect(res.ok, "the money is recorded; a failed read of the fact cannot refuse it").toBe(true);
+      expect(nextReadError, "the tenancy read happened").toBeNull();
+      expect(res.signal).toBe("$57.47 recorded for Household 9. It's on account.");
+      expect(res.signal).not.toMatch(/comes off|theirs to have back|nothing more bills|open bill now/);
+      expect(inserted.filter((r) => r.__table === "park_payments")).toHaveLength(1);
+
+      // The other branch, unread: where it went, what stays, and nothing promised.
+      seed(); departed();
+      bill("dec", "2026-12", { amount: 40, reservation_id: "stay-9" });
+      nextReadError = { table: "lot_reservations", error: { code: "57P01", message: "terminating connection" } };
+      const older = await recordOnAccount("park-haven", "renter-9", 100, "cash", "", TODAY, "", "k2");
+      expect(older.signal).toBe("$100.00 recorded for Household 9. $40.00 went against December 2026 — $60.00 stays on account.");
+    });
+
+    it("is the shared clause, from the one helper — no private copy of the promise in this door", () => {
+      const fn = fnBody(SRC(), "recordOnAccount", 800);
+      expect(fn).toMatch(/nothingMoreBills\(\(await tenancyFactsFor\(admin, \[renterId\]\)\)\.get\(renterId\)\)/);
+      expect(fn.match(/onAccountPromise\(nothingMore/g)).toHaveLength(2);
+      expect(fn).not.toMatch(/comes off the next bill|theirs to have back|put it against an open one now/);
+      expect(SRC()).toMatch(/onAccountPromise,? /);
+    });
   });
 
   it("the settle helper is the run's — one door, the same rows, the same order", () => {
@@ -735,7 +815,7 @@ describe("unapplyAllocation takes money back off a bill, with a reason, and says
     // … It's on account" and nothing about the $542.53 that had just gone
     // back onto February.
     expect(cash.signal).toBe(
-      "$100.00 recorded for Household 9. It's on account — it comes off the next bill you raise for them, or put it against an open one now. " +
+      "$100.00 recorded for Household 9. It's on account and comes off the next bill you raise for them — or put it against an open bill now from \"Money not against a bill\". " +
       "And $542.53 went against February 2027 from money they already had on account.",
     );
   });
@@ -1049,7 +1129,7 @@ describe("getHeldMoney carries whether the household has left and whether their 
     // and keeps no private copy — and the shared one still reads both
     // facts through mustRead.
     const here = SRC();
-    expect(here).toMatch(/import \{ tenancyFactsFor \} from "@\/lib\/tenancy-facts";/);
+    expect(here).toMatch(/import \{ tenancyFactsFor, nothingMoreBills \} from "@\/lib\/tenancy-facts";/);
     expect(here).not.toMatch(/async function tenancyFactsFor/);
     expect(here).toMatch(/await tenancyFactsFor\(admin, renterIds\)/);
     const src = code("lib/tenancy-facts.ts");

@@ -10,10 +10,8 @@ import {
 } from "@/app/park/amenity-actions";
 import { reversePayment } from "@/app/park/ledger-actions";
 import { METHOD_WORD } from "@/app/park/receipt-helpers";
+import { money } from "@/app/park/ledger-helpers";
 import { priceLine, daysIn } from "@/lib/amenities";
-
-const money = (n: number) =>
-  `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** Presentation only. Nothing else in this file may branch on `kind`. */
 const ICON: Record<string, string> = {
@@ -368,9 +366,24 @@ function AmenityCard({
                     ))}
                   </div>
                 )}
+
+                {h.status !== "blackout" && <GuestLinkLine row={h} busy={busy} />}
               </div>
             );
           })
+        )}
+        {/* WHAT THE LINK DOES, once per card, honest to the route it opens:
+            a GET only renders; every tap posts against the stay the token
+            resolves to; it is not one-use; and loadGuestView returns null
+            for any stay that is not approved or active. */}
+        {upcoming.some((h) => h.status !== "blackout" && h.guestLink) && (
+          <p className="mut" style={{ fontSize: 12, margin: "8px 0 0", lineHeight: 1.5 }}>
+            The link on each booking is their own page for this stay, no sign-in
+            needed: they can take or give back days on anything you rent out and
+            see what they owe. It keeps working until their stay ends, and
+            anyone holding it can book against their stay — so it&apos;s for them
+            alone.
+          </p>
         )}
       </div>
 
@@ -379,6 +392,67 @@ function AmenityCard({
         onDone={() => router.refresh()}
       />
     </section>
+  );
+}
+
+/**
+ * THE LINK THE OFFICE COULD NEVER HAND OUT.
+ *
+ * 0120 mints a one-tap booking link on every live stay and the /use/[token]
+ * route consumes it, and no screen, email or toast anywhere in the app ever
+ * showed the URL. The office booked the boat over the phone and then had
+ * nothing to text the guest. Here it is, on the booking it belongs to, as the
+ * full address so it can be copied — or read out over the counter.
+ *
+ * NOTHING IS SENT. Copying to the clipboard is the whole action; the office
+ * puts it in its own text message. Notices are held (parks.notices_held_at)
+ * and this door does not go round that.
+ *
+ * NEVER AN EMPTY CELL. A missing link says why in a sentence: the stay is
+ * over (the route would answer "that link isn't right"), or the stay carries
+ * no token at all. Both are facts about the stay, not instructions — there
+ * is no owner-side control that mints a token; 0120's trigger does that when
+ * a stay becomes approved or active.
+ */
+function GuestLinkLine({ row, busy }: { row: AmenityRow["held"][number]; busy: boolean }) {
+  if (!row.guestLink) {
+    return (
+      <p className="mut" style={{ flexBasis: "100%", fontSize: 12, margin: "4px 0 0" }}>
+        {row.stayLive
+          ? "No booking link on this stay yet."
+          : "Their stay is over or was cancelled, so their booking link no longer opens."}
+      </p>
+    );
+  }
+  const url = row.guestLink;
+  return (
+    <div style={{ flexBasis: "100%", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
+      <span className="mut" style={{ fontSize: 12 }}>Their link</span>
+      <code style={{
+        flex: "1 1 220px", minWidth: 0, fontSize: 12.5, padding: "8px 10px",
+        border: "1.5px solid var(--line)", borderRadius: 8,
+        // Wraps rather than truncates: a link with its middle elided cannot be
+        // read out to somebody, and reading it out is the fallback when the
+        // clipboard is refused. One tap selects the whole thing.
+        wordBreak: "break-all", userSelect: "all",
+      }}>
+        {url}
+      </code>
+      <button
+        type="button" className="ll-btn ghost sm" disabled={busy} style={{ minHeight: 44 }}
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(url);
+            toast.ok("Link copied — text it to them from your own phone.");
+          } catch {
+            // The URL is on screen in full precisely so this sentence is true.
+            toast("Couldn't copy — the link is on screen to read out or select.");
+          }
+        }}
+      >
+        Copy link
+      </button>
+    </div>
   );
 }
 

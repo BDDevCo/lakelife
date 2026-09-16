@@ -6,6 +6,8 @@
  * database — the same split every other park slice uses.
  */
 
+import { NO_LAKE_LINE } from "./readiness";
+
 /** Who may switch park services on. Not every member — this spends money. */
 export function canEnableParkServices(role: string | null | undefined): boolean {
   // A manager runs the park day to day; committing the park to a paid service
@@ -39,7 +41,11 @@ export function buildParkBlockers(r: ParkReadiness): string[] {
     out.push("Only the park's owner can turn on services — you're listed as a manager.");
   }
   if (!r.lakeId) {
-    out.push("This park isn't attached to a lake yet, and a lake decides the season. Set it in Park setup.");
+    // THE SHARED SENTENCE, not "Set it in Park setup": parks.lake_id is written
+    // by ops alone (NewPark) and no owner screen has a lake control. The publish
+    // gate and the readiness row already say so in these words; this was the
+    // third doorway still sending him to a field that isn't there.
+    out.push(NO_LAKE_LINE);
   }
   if (!r.address?.trim()) {
     out.push("The park has no street address, so a crew can't be sent to it. Set it in Park setup.");

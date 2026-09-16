@@ -8,7 +8,8 @@ import {
   prettyMonth, shiftMonth, dueDayFor, nothingToBillReason, lotList,
   handKeyedRefusal, HAND_KEYED, PROCESSOR_ONLY, paymentAmountRefusal, perStayTerm,
   onAccountKey, splitSiblingKey, ON_ACCOUNT_KEY_SUFFIX, monthList, reversalSentence, onAccountClause,
-  type Charge, type RunCandidate,
+  onAccountPromise, HELD_DOOR,
+  type Charge, type RunCandidate, type HouseholdMoney,
 } from "./ledger-helpers";
 import { buildStatement } from "./statement-helpers";
 import { EDITABLE_TERMS } from "./park-helpers";
@@ -1259,5 +1260,79 @@ describe("onAccountClause and the preview's toOlderBills", () => {
     expect(runSummary(withOlder, "2027-02")).toBe("Bill 1 household for February 2027 — $542.53; $600.00 of money on account goes against January 2027 and February 2027");
     // The bills are still raised in full: total is what is billed, not what is owed.
     expect(withOlder.total).toBe(542.53);
+  });
+});
+
+/**
+ * THE ONE PROMISE ABOUT MONEY LEFT ON ACCOUNT. Three doorways made it in
+ * their own words — the ⊕ window's note before the tap, the two doors'
+ * toasts after it — and the toasts made it unconditionally, so a household
+ * who had moved out with their final month billed read "theirs to have
+ * back" on the note and "comes off the next bill you raise" on the toast
+ * about the same $57.47. Every shape pinned, and collapsed the other way.
+ */
+describe("onAccountPromise — the clause after 'on account', keyed on the tenancy", () => {
+  it("nothing more bills: theirs to have back, and the hand-back door — never 'comes off'", () => {
+    const p = onAccountPromise(true);
+    expect(p).toBe(` — nothing more bills for them, so it's theirs to have back from ${HELD_DOOR} on the Rent screen`);
+    expect(p).not.toMatch(/comes off/);
+    // The month and the by-hand door change nothing: nothing more bills.
+    expect(onAccountPromise(true, { next: "February 2027", orApplyNow: true })).toBe(p);
+  });
+
+  it("a next bill is coming: it comes off that — the month when the caller knows it, 'the next bill you raise' when it does not", () => {
+    expect(onAccountPromise(false)).toBe(" and comes off the next bill you raise for them");
+    expect(onAccountPromise(false, { next: "February 2027" })).toBe(" and comes off February 2027 when you raise it");
+    expect(onAccountPromise(false)).not.toMatch(/theirs to have back|Money not against a bill/);
+  });
+
+  it("the by-hand door rides on the promise alone", () => {
+    expect(onAccountPromise(false, { next: "February 2027", orApplyNow: true }))
+      .toBe(` and comes off February 2027 when you raise it — or put it against an open bill now from ${HELD_DOOR}`);
+    expect(onAccountPromise(false, { orApplyNow: true }))
+      .toBe(` and comes off the next bill you raise for them — or put it against an open bill now from ${HELD_DOOR}`);
+    // With the fact unread an instruction to apply it is a guess about the bills.
+    expect(onAccountPromise(null, { orApplyNow: true })).toBe("");
+  });
+
+  it("the fact could not be read: no promise either way — an empty clause, never 'comes off' by default", () => {
+    expect(onAccountPromise(null)).toBe("");
+    expect(onAccountPromise(null, { next: "February 2027" })).toBe("");
+  });
+
+  it("the door it names is the one every held-money sentence points at", () => {
+    expect(HELD_DOOR).toBe('"Money not against a bill"');
+  });
+});
+
+/**
+ * THE ROWS CARRY THE HOUSEHOLD'S MONEY FACTS — what the rent screen's
+ * Record-payment form reads for the window's own sentence. By charge id,
+ * because a Charge names its household and does not carry its id; a row
+ * with no entry gets the row alone.
+ */
+describe("toRows carries each household's money facts onto its row", () => {
+  const facts = (over: Partial<HouseholdMoney> = {}): HouseholdMoney => ({ onAccount: 542.53, openCount: 2, nothingMoreBills: false, ...over });
+
+  it("an entry for the charge lands on its row, and nobody else's", () => {
+    const rows = toRows([charge({ id: "a" }), charge({ id: "b", lotNumber: "2" })], TODAY, 3, new Set(), new Map([["a", facts()]]));
+    expect(rows[0]).toMatchObject({ id: "a", onAccount: 542.53, openCount: 2, nothingMoreBills: false });
+    expect(rows[1]).toMatchObject({ id: "b", onAccount: 0, openCount: 1, nothingMoreBills: null });
+  });
+
+  it("every shape of the fact survives the trip — true, false and unknown", () => {
+    for (const nothingMoreBills of [true, false, null] as const) {
+      const [row] = toRows([charge()], TODAY, 3, new Set(), new Map([["c1", facts({ nothingMoreBills })]]));
+      expect(row.nothingMoreBills).toBe(nothingMoreBills);
+    }
+  });
+
+  it("with no map at all the row stands alone: nothing held, this bill the only open one when it is open, no promise", () => {
+    const [open] = toRows([charge()], TODAY, 3);
+    expect(open).toMatchObject({ onAccount: 0, openCount: 1, nothingMoreBills: null });
+    const [paid] = toRows([charge({ status: "paid", paidTotal: 455 })], TODAY, 3);
+    expect(paid.openCount).toBe(0);
+    const [gone] = toRows([charge({ status: "void" })], TODAY, 3);
+    expect(gone.openCount).toBe(0);
   });
 });

@@ -29,6 +29,8 @@ import { chooseAgreementLength, lengthAdjective, lostMonths } from "./agreement-
 import { parkRanMonth, billLostMonths, lostMonthsWords } from "./gap-bills";
 // Months a person reads are words; the withdrawn-agreement signal names them.
 import { prettyMonth, money } from "./ledger-helpers";
+// ONE sentence for the publish gate and the readiness row it mirrors.
+import { NO_LAKE_LINE, NO_PIN_LINE } from "./readiness";
 // WHAT A MOVE-OUT DOES TO THE BILLS ALREADY RAISED — the void, the re-raise,
 // what money is on a bill, and what the household still holds.
 import {
@@ -258,11 +260,14 @@ export async function setParkLive(parkId: string, active: boolean): Promise<Park
     // which decides who can serve a job by lake and by distance. That failure
     // is silent: no crew is offered the work and nobody is told why. Publishing
     // is the last moment it can be caught before a renter books something.
+    // A FACT NAMING WHO FIXES IT. The old refusals said "Set the park's lake
+    // first" to a person with no screen that sets it; the readiness list's
+    // map row prints the same sentence, from the same constant.
     if (!park?.lake_id) {
-      return { ok: false, error: "Set the park's lake first — without it no crew can be dispatched here." };
+      return { ok: false, error: NO_LAKE_LINE };
     }
     if (park.lat == null || park.lng == null) {
-      return { ok: false, error: "Set the park's map location first — routing needs it to reach you." };
+      return { ok: false, error: NO_PIN_LINE };
     }
 
     if (!park?.slug) {

@@ -6,6 +6,7 @@ import {
   usesPerLotRate,
   type ParkReadiness,
 } from "./service-helpers";
+import { NO_LAKE_LINE } from "./readiness";
 
 const READY: ParkReadiness = {
   parkName: "The Haven",
@@ -38,8 +39,20 @@ describe("why he cannot turn it on yet", () => {
     expect(buildParkBlockers(READY)).toEqual([]);
   });
 
-  it("names the lake, because a lake decides the season", () => {
-    expect(buildParkBlockers({ ...READY, lakeId: null })[0]).toMatch(/lake/i);
+  it("names the lake in the shared sentence, because no owner screen sets one", () => {
+    // /lake/i pinned nothing: it passed while the line ended "Set it in Park
+    // setup", and ParkSetup has no lake field. parks.lake_id is ops-written
+    // (NewPark), so the blocker must say what the publish gate and the
+    // readiness row say — exactly, so the three doorways can never drift.
+    expect(buildParkBlockers({ ...READY, lakeId: null })[0]).toBe(NO_LAKE_LINE);
+    expect(NO_LAKE_LINE).not.toContain("Set it in Park setup");
+    // Both ways: with a lake, the sentence is gone.
+    expect(buildParkBlockers(READY)).not.toContain(NO_LAKE_LINE);
+    expect(buildParkBlockers({ ...READY, address: null })).not.toContain(NO_LAKE_LINE);
+  });
+
+  it("the address blocker is the one that may open Park setup — it has an input there", () => {
+    expect(buildParkBlockers({ ...READY, address: null })[0]).toContain("Set it in Park setup");
   });
 
   it("names the address, because a crew has to find the place", () => {
@@ -183,6 +196,23 @@ describe("the screen and the server both ask the helper", () => {
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
       .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  it("the lake blocker never sends him to Park setup, in any doorway", () => {
+    // The link in ParkServices attaches to every row containing "Set it in
+    // Park setup". A lake line carrying those words would be a door to a
+    // field ParkSetup does not have — so the sentence may appear at most once
+    // in the helper (the address), and the lake branch must use the constant.
+    const helper = read("./service-helpers.ts");
+    const lakeBranch = helper.match(/if \(!r\.lakeId\) \{[\s\S]*?\n  \}/)?.[0] ?? "";
+    expect(lakeBranch, "the lake branch not found — this scan is measuring nothing").not.toBe("");
+    expect(lakeBranch).toMatch(/out\.push\(NO_LAKE_LINE\)/);
+    expect(lakeBranch).not.toContain("Set it in Park setup");
+    expect(helper.split("Set it in Park setup").length - 1).toBe(1);
+
+    const setup = read("../../components/ParkSetup.tsx");
+    expect(setup, "ParkSetup grew a lake control — the blocker may name it again").not.toMatch(/lake_id|lakeId/);
+    expect(setup, "ParkSetup lost its address input — the address blocker now lies too").toMatch(/address/i);
+  });
 
   it("the editor hides the per-lot box when the model ignores it", () => {
     const src = read("../../components/ParkServices.tsx");

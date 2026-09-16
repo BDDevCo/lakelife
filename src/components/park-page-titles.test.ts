@@ -41,6 +41,12 @@ describe("a park page title is 26, like every other page title", () => {
     expect(strip(readFileSync(join(dir, "ParkRentRoll.tsx"), "utf8"))).toMatch(/<h1[^>]*>Rent roll<\/h1>/);
   });
 
+  it("Park services has one too, and it is the word on its pill", () => {
+    // It opened on the card's h3 until the six-tab strip put it behind a
+    // pill — the word he taps has to be the word he lands on.
+    expect(strip(readFileSync(join(dir, "ParkServices.tsx"), "utf8"))).toMatch(/<h1[^>]*>Park services<\/h1>/);
+  });
+
   it("still finds page titles to judge", () => {
     // Without this the size check passes on a tree with no h1 at all.
     const n = park.reduce((s, f) => s + (strip(readFileSync(join(dir, f), "utf8")).match(/<h1/g) ?? []).length, 0);

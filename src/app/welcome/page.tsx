@@ -6,6 +6,7 @@ import { mustRead } from "@/lib/must-read";
 import { hasSupabaseEnv } from "@/lib/env";
 import { SignOutButton } from "@/components/SignOutButton";
 import { listProperties } from "@/app/profile/data";
+import { isParkMember } from "@/app/park/data";
 
 export default async function WelcomePage() {
   let name = "there";
@@ -19,6 +20,13 @@ export default async function WelcomePage() {
       data: { user },
     } = await supabase.auth.getUser();
     if (user) {
+      // A PARK OWNER'S FIRST SIGN-IN LANDS HERE. Ops creates the park against
+      // an account that already exists (NewPark: "they need an account
+      // already"), so the owner's first visit reaches this page — which told
+      // him to set up a lake house. His park is where he goes; the portal's
+      // own check, one helper for both doors.
+      if (await isParkMember(user.id)) redirect("/park");
+
       // A customer who already has a property doesn't need onboarding —
       // send them straight to the portal.
       const properties = await listProperties();

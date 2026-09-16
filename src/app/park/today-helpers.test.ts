@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   moneyBlock, describeOffBook, occupancyLine, generateTasks, visibleTasks, quietState, preCutover,
-  addDays, daysBetween, ordinal, householdsIn, holdoverLotsOf,
+  addDays, daysBetween, ordinal, householdsIn, holdoverLotsOf, lotOccupancy,
   type TaskFacts, type OccupancySnapshot,
 } from "./today-helpers";
 import { toRows, summarise, prettyMonth, type Charge } from "./ledger-helpers";
@@ -30,6 +30,7 @@ const facts = (over: Partial<TaskFacts> = {}): TaskFacts => ({
   lateAmount: 0,
   arrearsCount: 0,
   arrearsAmount: 0,
+  arrearsOldestMonth: null,
   disputedCount: 0,
   unallocatedCosts: [],
   holdoverLots: [],
@@ -618,16 +619,23 @@ describe("the quiet state — which is most days", () => {
 });
 
 describe("before the park goes live", () => {
-  const base = {
-    today: TODAY, cutoverOn: "2026-12-15", parkName: "The Haven",
-    lots: 21, lotsWithRates: 21, monthlyRoll: 5200, households: 0,
-    rentDueDay: 1, maxAgreementMonths: 3,
-  };
+  // Only the countdown lives here now. The checklist that hung under it
+  // (lots, rate cards, households, rent due day, cap) is the readiness
+  // list's — readiness.test.ts pins every row both ways.
+  const base = { today: TODAY, cutoverOn: "2026-12-15", parkName: "The Haven" };
 
   it("counts down to go-live rather than showing an empty park", () => {
     const p = preCutover(base);
     expect(p.headline).toBe("The Haven — 126 days to go-live.");
-    expect(p.sub).toMatch(/Nothing is collectable/);
+    // A mid-month go-live bills from the month after (lib/billing-start).
+    expect(p.sub).toBe("You go live on December 15, 2026. The first month you bill is January 2027; money handed in before that goes on account.");
+  });
+
+  it("never says nothing is collectable — the Take a payment button above it records money on account", () => {
+    expect(preCutover(base).sub).not.toMatch(/collectable/i);
+    expect(preCutover({ ...base, cutoverOn: "2027-01-01" }).sub).toContain("The first month you bill is January 2027");
+    expect(occupancyLine({ liveLots: 21, occupied: 0, reserved: 19, vacant: 2, vacantLotNumbers: ["3", "8"] }).sub)
+      .toBe("Their tenancies start later — anything handed in now goes on account.");
   });
 
   it("counts down without assuming the park was BOUGHT", () => {
@@ -635,23 +643,6 @@ describe("before the park goes live", () => {
     // purchase — just the day they start running the place on this system.
     const p = preCutover(base);
     expect(`${p.headline} ${p.sub}`).not.toMatch(/closing|seller|purchase|take over/i);
-  });
-
-  it("measures readiness against lots and rates, which exist", () => {
-    const p = preCutover(base);
-    const rates = p.items.find((i) => i.label === "Rate cards")!;
-    expect(rates.value).toBe("21 of 21 — $5,200.00 a month");
-    expect(rates.done).toBe(true);
-    // Tenancies do NOT exist yet — the roll names nobody — so this must read as
-    // outstanding rather than as a failure.
-    expect(p.items.find((i) => i.label === "Households on the roll")!.done).toBe(false);
-  });
-
-  it("flags an unset agreement cap, since its trigger silently skips on NULL", () => {
-    const p = preCutover({ ...base, maxAgreementMonths: null });
-    const cap = p.items.find((i) => i.label === "Agreement cap")!;
-    expect(cap.value).toBe("not set");
-    expect(cap.done).toBe(false);
   });
 
   it("changes its words on the day itself", () => {
@@ -1447,16 +1438,29 @@ describe("the read behind it", () => {
     // Today derived occupied/reserved/vacant itself, not through summarise(),
     // so a household living on lot 9 past a lapsed monthly agreement read as
     // "Empty: lot 9" here while the roll said "Ran out" beside their name.
-    const stmt = src.split("\n").join(" ").match(/const occupiedLotIds = new Set<string>\(\);[\s\S]*?const vacantLots/);
+    // THE BLOCK MOVED: it is lotOccupancy in today-helpers now, because the
+    // readiness list needed the same answer and a second copy would have
+    // been the third occupancy rule in the module. The loader calls it and
+    // no longer carries the sets itself.
+    const helpers = readFileSync(
+      fileURLToPath(new URL("./today-helpers.ts", import.meta.url)),
+      "utf8",
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const stmt = helpers.split("\n").join(" ").match(/const occupiedLotIds = new Set<string>\(\);[\s\S]*?const vacantLots/);
     expect(stmt).not.toBeNull();
     const block = stmt![0];
+    expect(src).toMatch(/const occupancy = lotOccupancy\(/);
+    expect(src).not.toContain("const occupiedLotIds = new Set<string>()");
+    expect(src).not.toContain("lapsedLotIds");
     expect(block).toContain("const lapsedLotIds = new Set<string>();");
     // THE RULE HAS ONE HOME — park-helpers lapsedRowOf, which the roll and
     // the nightly read too. This loader used to carry its own copy (an
     // inline ["nightly", "weekly"] and its own "later agreement wins"
     // deletes), which is how a household closed out of its successor stayed
     // "taken" here: the copy never saw the ended row.
-    expect(block).toMatch(/if \(lapsedRowOf\(rows, today\)\) lapsedLotIds\.add\(lotId\);/);
+    expect(block).toMatch(/if \(lapsedRowOf\(lotRows, today\)\) lapsedLotIds\.add\(lotId\);/);
     expect(block).not.toMatch(/\["nightly", ?"weekly"\]/);
     expect(block).not.toMatch(/r\.end <= today/);
     // A lapsed lot counts as taken.
@@ -1469,7 +1473,9 @@ describe("the read behind it", () => {
     expect(read![2]).toBe('"approved", "active", "ended"');
     expect(src).toContain('const stays = (everyRow ?? []).filter((s) => s.status === "approved" || s.status === "active");');
     // The lapsed test and the chain map see every row; the lists see `stays`.
-    expect(src).toMatch(/for \(const s of everyRow \?\? \[\]\) \{\s*const list = rowsOfLot/);
+    // The lapsed test is inside lotOccupancy, which is handed EVERY row.
+    expect(src).toMatch(/const occupancy = lotOccupancy\(\s*\(everyRow \?\? \[\]\)\.map/);
+    expect(block).toMatch(/for \(const s of rows\) \{\s*const list = rowsOfLot/);
     expect(src).toMatch(/const chains = latestSeqByChain\(\s*\(everyRow \?\? \[\]\)\.map/);
     expect(src).toMatch(/const agreements = stays\.flatMap/);
     expect(src).toMatch(/noticed: stays\s*\.filter/);
@@ -1696,11 +1702,8 @@ describe("money held for a household that has left", () => {
 // ---------------------------------------------------------------------------
 describe("months and days in words, and one money() shape, across the office's sentences", () => {
   it("the readiness panel names the go-live day in words", () => {
-    const p = preCutover({
-      today: "2026-12-20", cutoverOn: "2027-01-01", parkName: "The Haven",
-      lots: 21, lotsWithRates: 21, monthlyRoll: 8400, households: 0, rentDueDay: 1, maxAgreementMonths: 6,
-    });
-    expect(p.sub).toBe("You go live on January 1, 2027. Nothing is collectable until then.");
+    const p = preCutover({ today: "2026-12-20", cutoverOn: "2027-01-01", parkName: "The Haven" });
+    expect(p.sub).toBe("You go live on January 1, 2027. The first month you bill is January 2027; money handed in before that goes on account.");
     expect(p.headline).toBe("The Haven — 12 days to go-live.");
   });
 
@@ -1738,5 +1741,97 @@ describe("months and days in words, and one money() shape, across the office's s
     const rows = toRows([charge({ periodMonth: "2027-01", dueOn: "2027-01-01", amount: 542.53 })], "2027-02-10", 3, new Set());
     const card = moneyBlock({ monthToDateCents: 0, todayCents: 0, monthSummary: summarise([]), lagDays: 3, arrears: rows, today: "2027-02-10" });
     expect(card.arrearsLine).toBe("$542.53 still owing from earlier months — 1 household, oldest due January 1, 2027 (40 days).");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE ONE OCCUPANCY RULE, as a function. It lived inline in the Today loader;
+// the readiness list needed the same answer, so it moved here where both
+// read it. These pin the behaviour the loader's comments described.
+// ---------------------------------------------------------------------------
+describe("lotOccupancy — which live lots have somebody on them", () => {
+  const lots = [
+    { id: "l1", lot_number: "1" },
+    { id: "l2", lot_number: "2" },
+    { id: "l10", lot_number: "10" },
+  ];
+  const row = (over: Partial<{ park_lot_id: string; during: string; status: string; term: string }>) => ({
+    park_lot_id: "l1", during: "[2026-01-01,2026-12-31)", status: "active", term: "monthly", ...over,
+  });
+
+  it("counts a lot ONCE across a renewal — a current row and a future row on the same lot", () => {
+    const o = lotOccupancy([
+      row({ during: "[2026-01-01,2026-09-01)" }),
+      row({ during: "[2026-09-01,2027-09-01)", status: "approved" }),
+    ], lots, TODAY);
+    expect(o.occupiedLotIds).toEqual(new Set(["l1"]));
+    expect(o.reservedLotIds).toEqual(new Set());
+    expect(o.snapshot).toMatchObject({ liveLots: 3, occupied: 1, reserved: 0, vacant: 2 });
+  });
+
+  it("a lapsed monthly row with nothing after it is OCCUPIED, not vacant", () => {
+    // Lived on, paperwork run out: the roll says "Ran out"; this must not say "Empty".
+    const o = lotOccupancy([row({ during: "[2026-01-01,2026-08-01)" })], lots, TODAY);
+    expect(o.occupiedLotIds.has("l1")).toBe(true);
+    expect(o.snapshot.vacantLotNumbers).toEqual(["2", "10"]);
+  });
+
+  it("the same lapsed row, closed out (ended), is a vacancy — the ended row must reach the rule", () => {
+    const o = lotOccupancy([row({ during: "[2026-01-01,2026-08-01)", status: "ended" })], lots, TODAY);
+    expect(o.occupiedLotIds.has("l1")).toBe(false);
+    expect(o.snapshot.vacant).toBe(3);
+  });
+
+  it("today === the range end is NOT occupied (half-open: end is checkout morning)", () => {
+    // A nightly stay ending today: not in date, and not lapsed either.
+    const o = lotOccupancy([row({ during: `[2026-08-09,${TODAY})`, term: "nightly" })], lots, TODAY);
+    expect(o.occupiedLotIds.has("l1")).toBe(false);
+  });
+
+  it("a row starting after today is reserved, and vacant lot numbers sort numerically", () => {
+    const o = lotOccupancy([row({ park_lot_id: "l2", during: "[2026-09-01,2027-09-01)", status: "approved" })], lots, TODAY);
+    expect(o.reservedLotIds).toEqual(new Set(["l2"]));
+    // "2" before "10" — not "10" before "2".
+    expect(o.snapshot.vacantLotNumbers).toEqual(["1", "10"]);
+  });
+});
+
+describe("the doors on the arrears and notice cards open where the control is", () => {
+  it("the arrears card opens the rent screen ON the oldest open month, and names it", () => {
+    // /park/rent alone opens the current month; getLedger is scoped to one
+    // period, so the oldest open bill is structurally not on that screen.
+    const [t] = generateTasks(facts({ currentMonth: "2027-03", arrearsCount: 2, arrearsAmount: 1085.06, arrearsOldestMonth: "2027-01" }));
+    expect(t.href).toBe("/park/rent?month=2027-01");
+    expect(t.detail).toBe("$1,085.06 still outstanding from before March 2027 — the oldest is January 2027.");
+    expect(t.detail).not.toMatch(/\d{4}-\d{2}/);
+  });
+
+  it("with no oldest month it falls back to the rent screen and the old sentence", () => {
+    const [t] = generateTasks(facts({ currentMonth: "2027-03", arrearsCount: 1, arrearsAmount: 542.53, arrearsOldestMonth: null }));
+    expect(t.href).toBe("/park/rent");
+    expect(t.detail).toBe("$542.53 still outstanding from before March 2027.");
+  });
+
+  it("both rent-notice cards open the Rent roll, where 'Record it' and 'Call it off' are — never Lots & rates", () => {
+    // The writer (rerate-actions recordNotice / cancelReRate) is mounted by
+    // ParkReRate on /park. These sent him to /park/lots, which has neither.
+    const change = { id: "rc1", lotNumber: "5", effectiveOn: "2026-09-25", noticeDaysRequired: 45, noticeServedOn: null };
+    const [cliff] = generateTasks(facts({ today: "2026-08-11", pendingRentChanges: [change] }));
+    expect(cliff.key).toBe("notice_cliff:rc1");
+    expect(cliff.href).toBe("/park");
+    expect(cliff.detail).toBe("45 days' notice before it starts September 25, 2026. When you've given it, 'Record it' on the rent roll.");
+    const [missed] = generateTasks(facts({ today: "2026-08-20", pendingRentChanges: [change] }));
+    expect(missed.key).toBe("notice_missed:rc1");
+    expect(missed.href).toBe("/park");
+    expect(missed.detail).toBe(
+      "You needed to give 45 days' notice by August 11, 2026. " +
+      "On the rent roll, 'Call it off', then 'Change the rent on everyone' with a later start — " +
+      "or, if you did give notice, 'Record it' there.",
+    );
+    for (const t of [cliff, missed]) {
+      expect(t.detail).toContain("'Record it'");
+      expect(t.href).not.toContain("/park/lots");
+      expect(t.detail).not.toContain("/park/lots");
+    }
   });
 });

@@ -537,7 +537,35 @@ export function nothingToBillReason(
   return `Nothing to bill for ${monthLabel} — nobody is on a lot.`;
 }
 
-export interface LedgerRow extends Charge {
+/**
+ * WHAT THE RECORD-PAYMENT FORM ON A ROW HAS TO KNOW ABOUT THE HOUSEHOLD,
+ * beyond the bill — the three facts the ⊕ Take a payment window carries on
+ * every row of its list (pos-actions PaymentTarget), so the two forms say
+ * the same thing about the same household in the same state. The rent
+ * screen's form read the bill alone and said nothing at all about held
+ * money — "Record it" under a box pre-filled to $542.53, for a household
+ * whose own $542.53 was in the drawer — while the window, on the same
+ * morning, said that money would cover it and named the door that uses it.
+ */
+export interface HouseholdMoney {
+  /**
+   * Money of theirs the office already holds on account — 0167's view's
+   * `remaining`, summed (onAccountSources, the settlement door's own read).
+   * NEVER deposits: a deposit is not money that covers a rent bill, so this
+   * is not heldOnAccountFor's figure. Zero when nothing is held.
+   */
+  onAccount: number;
+  /** How many bills are open for them, this one included — across every month, not the ledger's one. */
+  openCount: number;
+  /**
+   * Whether anything more will ever bill for them (lib/tenancy-facts).
+   * `null` when that could not be read: the form then makes NO promise
+   * either way, never "comes off their next bill" by default.
+   */
+  nothingMoreBills: boolean | null;
+}
+
+export interface LedgerRow extends Charge, HouseholdMoney {
   balance: number;
   state: LedgerState;
   /** Days past due. Negative means not due yet. */
@@ -550,12 +578,21 @@ export function toRows(
   lagDays: number,
   /** Charge ids with an unanswered "I paid this" against them. */
   claimedChargeIds: ReadonlySet<string> = new Set(),
+  /**
+   * The household's money facts, BY CHARGE ID — a Charge names its household
+   * and does not carry its id, so the loader that read both does the join.
+   * A row with no entry gets the row alone: nothing held, this bill the only
+   * open one, no promise. getLedger, whose rows open the form, hands every
+   * row its entry; Today's rows never open it.
+   */
+  householdMoney: ReadonlyMap<string, HouseholdMoney> = new Map(),
 ): LedgerRow[] {
   return charges.map((c) => ({
     ...c,
     balance: balanceOf(c),
     state: ledgerState(c, todayISO, lagDays, claimedChargeIds.has(c.id)),
     overdueDays: daysBetween(c.dueOn, todayISO),
+    ...(householdMoney.get(c.id) ?? { onAccount: 0, openCount: c.status === "open" ? 1 : 0, nothingMoreBills: null }),
   }));
 }
 
@@ -861,6 +898,51 @@ export function onAccountClause(
   }
   const months = monthList([...older.map((o) => o.periodMonth), ...(fromOnAccount > 0 ? [month] : [])]);
   return `; ${money(round2(olderTotal + fromOnAccount))} of money on account ${verb.older} against ${months}`;
+}
+
+/** The door on the Rent screen every held-money sentence points at. */
+export const HELD_DOOR = `"Money not against a bill"`;
+
+/**
+ * WHAT HAPPENS TO MONEY LEFT ON ACCOUNT — the promise, in ONE place.
+ *
+ * "It comes off their next bill" is a promise, and it was made in three
+ * doorways in their own words: the ⊕ window's note before the tap
+ * (take-payment-helpers), and the two doors' toasts after it (recordPayment,
+ * recordOnAccount) — the toasts unconditionally. So a household who had
+ * moved out with their final month billed read "theirs to have back" on the
+ * note and "comes off the next bill you raise for them" on the toast, about
+ * the same $57.47, in the same minute. The fact it keys on is
+ * lib/tenancy-facts' (nothingMoreBills), read once per door; the words are
+ * here, so the note and the toasts cannot drift.
+ *
+ * Three shapes, as the clause after "on account" / "stays on account" /
+ * "goes on account":
+ *   true  — nothing more bills for them: it is theirs to have back, and the
+ *           door that hands it back is named;
+ *   false — a next bill is coming: it comes off that. The bill door knows
+ *           which month that is and says so (`next`); the on-account door
+ *           has no bill to count from and says "the next bill you raise";
+ *   null  — the fact could not be read: NO promise. The money IS on account,
+ *           and which way the promise goes is the one thing this must not
+ *           guess.
+ * `orApplyNow` adds the by-hand door to the PROMISE alone, the way the two
+ * toasts have always said it: with nothing more billing the hand-back door
+ * is already named, and with the fact unread an instruction to put it
+ * against a bill is a guess about the bills.
+ */
+export function onAccountPromise(
+  nothingMoreBills: boolean | null,
+  opts: { next?: string; orApplyNow?: boolean } = {},
+): string {
+  if (nothingMoreBills === true) {
+    return ` — nothing more bills for them, so it's theirs to have back from ${HELD_DOOR} on the Rent screen`;
+  }
+  if (nothingMoreBills === false) {
+    return ` and comes off ${opts.next ? `${opts.next} when you raise it` : "the next bill you raise for them"}`
+      + (opts.orApplyNow ? ` — or put it against an open bill now from ${HELD_DOOR}` : "");
+  }
+  return "";
 }
 
 export function runSummary(plan: RunPlan, month: string): string {

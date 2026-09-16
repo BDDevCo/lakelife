@@ -28,7 +28,11 @@ const WHERE_TO_GO: Partial<Record<RevenueStream, { href: string; label: string }
   short_term_homes:   { href: "/park/lots",  label: "Lots & rates" },
   boat_slips:         { href: "/park/lots",  label: "Lots & rates" },
   storage:            { href: "/park/lots",  label: "Lots & rates" },
-  cost_recovery:      { href: "/park/costs", label: "Costs" },
+  // The label is the page's own h1 — the word he taps is the word he lands
+  // on. `fees` had no entry at all: its "Add a fee" line was a Next with no
+  // door.
+  cost_recovery:      { href: "/park/costs", label: "Costs & fees" },
+  fees:               { href: "/park/costs", label: "Costs & fees" },
 };
 
 export function ParkStreams({

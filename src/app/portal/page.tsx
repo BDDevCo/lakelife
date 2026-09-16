@@ -5,6 +5,7 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { claimCrewInvite } from "@/app/ops/crews-invite";
 import { claimCustomerImports } from "@/app/vendor/import-actions";
 import { claimReferral } from "./referral-actions";
+import { isParkMember } from "@/app/park/data";
 
 /**
  * The one front door after sign-in: sends each person to THEIR portal.
@@ -48,22 +49,13 @@ export default async function PortalPage() {
   // side table precisely so it never has to touch users.role; honouring that
   // here means checking membership before anything can rewrite the role.
   if (role !== "ops") {
-    const admin = createServiceClient();
-    // FAILS OPEN if left alone, and this is the guard the comment above is
-    // about: a failed read reads as "not a park member", so the park owner
-    // falls straight into claimCrewInvite, which REWRITES users.role to
-    // 'vendor' on an email match — a write guard_role_change then makes
-    // awkward to undo. It must not be skipped because a read blipped.
-    const membership = mustRead(
-      "whether you own or manage a park",
-      await admin
-        .from("park_members")
-        .select("park_id")
-        .eq("user_id", user.id)
-        .limit(1)
-        .maybeSingle(),
-    );
-    if (membership) redirect("/park");
+    // FAILS CLOSED, and this is the guard the comment above is about: a
+    // failed read that read as "not a park member" would drop the park owner
+    // straight into claimCrewInvite, which REWRITES users.role to 'vendor'
+    // on an email match — a write guard_role_change then makes awkward to
+    // undo. isParkMember (park/data) throws on a failed read; /welcome asks
+    // the same helper.
+    if (await isParkMember(user.id)) redirect("/park");
   }
 
   if (role !== "vendor" && role !== "ops") {

@@ -6,6 +6,9 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { snoozeTask, dismissTask, addNote, doneNote, type TodayView } from "@/app/park/today-actions";
 import { addDays, type Task } from "@/app/park/today-helpers";
+import { firstRunTaskKey } from "@/app/park/readiness";
+import { crewsOnSiteLine } from "@/app/park/visits-helpers";
+import { ParkReadiness } from "@/components/ParkReadiness";
 
 /**
  * THE MORNING SCREEN.
@@ -58,6 +61,35 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
         </div>
       )}
 
+      {/* ---- THE FIRST RUN ----------------------------------------------
+          The blueprint's welcome card, with first lines that read the park's
+          actual state, while nothing is published and no bill has been
+          raised. Under the dead-man line, deliberately: that alarm outranks
+          everything, a welcome included. "Let's look at it" opens the first
+          thing on the list that is not done. */}
+      {view.firstRun && (
+        <div className="ll-card ll-card-pad" style={{ marginTop: 10 }}>
+          <strong style={{ fontSize: 19 }}>{view.firstRun.heading}</strong>
+          <div style={{ fontSize: 15, fontWeight: 700, marginTop: 8 }}>{view.firstRun.parkLine}</div>
+          <div className="mut" style={{ fontSize: 14 }}>{view.firstRun.stateLine}</div>
+          <p style={{ fontSize: 14, marginTop: 10, lineHeight: 1.5 }}>{view.firstRun.contactLine}</p>
+          <p className="mut" style={{ fontSize: 14, lineHeight: 1.5 }}>{view.firstRun.listLine}</p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <Link className="ll-btn" href={view.firstRun.cta.href}>{view.firstRun.cta.label}</Link>
+            {view.firstRun.alt && (
+              <Link className="ll-btn ghost" href={view.firstRun.alt.href}>{view.firstRun.alt.label}</Link>
+            )}
+            {/* A park kept private on purpose would otherwise read this every
+                morning. The same dismissal every task uses. */}
+            <button className="ll-btn ghost" disabled={busy}
+              style={{ padding: "6px 12px", fontSize: 14 }}
+              onClick={() => act(() => dismissTask(parkId, firstRunTaskKey(parkId), ""))}>
+              Don&apos;t show this again
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ---- WHAT THE EVENING CHECK FOUND --------------------------------
           The reconciler computed these every night and threw them away — the
           count went into a column nothing read, and the sentences went
@@ -87,22 +119,8 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
       )}
 
       {/* ---- before it's his, there is no money and no occupancy ---------- */}
-      {view.preCutover ? (
-        <div className="ll-card ll-card-pad" style={{ marginTop: 10 }}>
-          <strong style={{ fontSize: 19 }}>{view.preCutover.headline}</strong>
-          <p className="mut" style={{ fontSize: 14, marginTop: 6, marginBottom: 12, lineHeight: 1.5 }}>
-            {view.preCutover.sub}
-          </p>
-          <div style={{ display: "grid", gap: 6 }}>
-            {view.preCutover.items.map((i) => (
-              <div key={i.label} style={{ display: "flex", gap: 10, fontSize: 14 }}>
-                <span style={{ width: 18 }}>{i.done ? "✓" : "☐"}</span>
-                <span className="mut" style={{ flex: 1 }}>{i.label}</span>
-                <strong>{i.value}</strong>
-              </div>
-            ))}
-          </div>
-        </div>
+      {view.beforeGoLive && view.readiness ? (
+        <ParkReadiness headline={view.readiness.headline} sub={view.readiness.sub} rows={view.readiness.rows} />
       ) : (
         <div className="ll-card ll-card-pad" style={{ marginTop: 10 }}>
           <strong style={{ fontSize: 19 }}>{view.money.headline}</strong>
@@ -139,6 +157,22 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
             {view.occupancy.sub ? ` ${view.occupancy.sub}` : ""}
           </div>
         </div>
+      )}
+
+      {/* ---- what is left to set up -------------------------------------
+          Under the money card once the park is his; shown whenever it is
+          unpublished or a required row is undone, takeover day or not. */}
+      {!view.beforeGoLive && view.readiness && (
+        <ParkReadiness headline={view.readiness.headline} sub={view.readiness.sub} rows={view.readiness.rows} />
+      )}
+
+      {/* ---- who is on the land -----------------------------------------
+          One line, the whole sentence a link to the board, and only when
+          somebody is: a zero line teaches him to stop reading it. */}
+      {view.crewsOnSite > 0 && (
+        <p style={{ fontSize: 14, marginTop: 10, marginBottom: 0 }}>
+          <Link href="/park/visits">{crewsOnSiteLine(view.crewsOnSite)}</Link>
+        </p>
       )}
 
       {/* ---- needs you --------------------------------------------------- */}

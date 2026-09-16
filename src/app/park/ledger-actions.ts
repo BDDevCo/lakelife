@@ -11,15 +11,15 @@ import { buildStatement } from "./statement-helpers";
 import { feesForTenancy } from "./fee-helpers";
 import {
   planRun, toRows, summarise, currentPeriod, prettyMonth, shiftMonth, nothingToBillReason,
-  handKeyedRefusal, PROCESSOR_ONLY, paymentAmountRefusal, withOnAccount, onAccountClause,
-  onAccountKey, splitSiblingKey, reversalSentence, classifyForRun, type ReopenedLine,
+  handKeyedRefusal, PROCESSOR_ONLY, paymentAmountRefusal, withOnAccount, onAccountClause, onAccountPromise,
+  onAccountKey, splitSiblingKey, reversalSentence, classifyForRun, type ReopenedLine, type HouseholdMoney,
   type Charge, type LedgerRow, type LedgerSummary, type RunPlan, type HandKeyedMethod, dueDayFor,
 } from "./ledger-helpers";
 // The one strip of the table a database refusal prefixes.
 import { dbSaid } from "@/lib/db-said";
 // Whether anything more will ever bill for a household — the one read every
 // "comes off their next bill" keys on.
-import { tenancyFactsFor, nothingMoreBills } from "@/lib/tenancy-facts";
+import { tenancyFactsFor, nothingMoreBills, type TenancyFacts } from "@/lib/tenancy-facts";
 import {
   planSettlement, plannedByKey, allocatedTotal, settleOnAccount, describeSettlement, splitApplied,
   onAccountSources, openBillsFor, money, withRaisedAgain,
@@ -1087,6 +1087,25 @@ export async function recordPayment(
 
   const monthLabel = prettyMonth((full?.period_month as string) ?? String(charge.period_month ?? ""));
   const nextLabel = prettyMonth(shiftMonth((full?.period_month as string) ?? String(charge.period_month ?? ""), 1));
+
+  // WHETHER ANYTHING MORE BILLS FOR THEM — the fact the promise below keys
+  // on (lib/tenancy-facts: the void door's, the ⊕ window's and the held
+  // panel's one read), read once, and only when there is excess to make a
+  // promise about. This toast said "comes off February 2027 when you raise
+  // it" to every household, including one who had moved out with their
+  // final month billed — while the window's note, a moment earlier, had
+  // read the fact and said "theirs to have back" about the same $57.47.
+  // tenancyFactsFor throws on a failed read; the money is recorded, so that
+  // cannot refuse — the fact stays unknown and the sentence makes no promise
+  // either way (onAccountPromise), never "comes off the next bill" by default.
+  let nothingMore: boolean | null = null;
+  if (onAccountCents > 0 && renterId) {
+    try {
+      nothingMore = nothingMoreBills((await tenancyFactsFor(admin, [renterId])).get(renterId));
+    } catch (e) {
+      console.error("[read failed] whether anything more bills for them:", e);
+    }
+  }
   revalidatePath("/park/rent");
   // The on-account pile shows on the roll's money line too, as recordOnAccount
   // already revalidates.
@@ -1106,19 +1125,24 @@ export async function recordPayment(
       // the household's oldest open bill the moment it is recorded (R1) and
       // comes off the next bill the run raises; what it did just now is
       // said, or the office reads "$57.47 on account" about money that is
-      // already on December.
+      // already on December. What happens to what is still held is the one
+      // promise (onAccountPromise), keyed on the tenancy: the month after
+      // this bill when a next bill is coming, theirs to have back when
+      // nothing more bills, and no promise at all when that could not be
+      // read — the clause sits right after "on account", so the unknown
+      // shape is a sentence that simply stops there.
       ? (againstCents > 0
           ? `${money(amount)} received — ${money(against)} against ${monthLabel}, ` +
-            `${money(onAccount)} on account.`
-          : `${money(amount)} received — ${monthLabel} was already settled, so all of it is on account.`) +
+            `${money(onAccount)} on account`
+          : `${money(amount)} received — ${monthLabel} was already settled, so all of it is on account`) +
         (elsewhere
-          ? ` Of that, ${elsewhere} — ${
+          ? `. Of that, ${elsewhere} — ${
               stillHeld == null
                 ? "what's left stays on account"
                 : stillHeld > 0
-                  ? `${money(stillHeld)} stays on account and comes off ${nextLabel} when you raise it`
+                  ? `${money(stillHeld)} stays on account${onAccountPromise(nothingMore, { next: nextLabel })}`
                   : "nothing stays on account"}.`
-          : ` It comes off ${nextLabel} when you raise it — or put it against an open bill now from "Money not against a bill".`) +
+          : `${onAccountPromise(nothingMore, { next: nextLabel, orApplyNow: true })}.`) +
         (older ? ` And ${older} from money they already had on account.` : "") +
         (claimStillOpen
           ? " The claim it answers is still open — we couldn't close it; answer it from the ledger."
@@ -1585,6 +1609,66 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
   const lotName = new Map((lots ?? []).map((l) => [l.id as string, l.lot_number as string]));
   const renterName = new Map((renters ?? []).map((r) => [r.id as string, r.display_name as string]));
 
+  // WHAT THE RECORD-PAYMENT FORM ON EACH ROW HAS TO KNOW ABOUT THE
+  // HOUSEHOLD — the ⊕ window's three facts (paymentTargets, pos-actions),
+  // from the SAME readers, so the two forms cannot describe one household
+  // in one state two ways. The form here read the bill alone and said
+  // nothing about held money — "Record it" under a box pre-filled to
+  // $542.53, for a household whose own $542.53 was in the drawer — while
+  // the window said that money would cover it and named the door.
+  //   Money on account: onAccountSources — the view's `remaining`, the
+  //   settlement door's own read. Never heldOnAccountFor: its figure carries
+  //   deposits, and a deposit is not money that pays a rent bill.
+  //   Open bills: openBillsFor, across EVERY month — this loader is scoped
+  //   to one, and an older bill still open is exactly what decides where an
+  //   over-payment goes the moment it is recorded (R1).
+  // Both throw the way every read above does: "nothing on account" for
+  // everybody is how the office takes the same rent twice, and a bare `[]`
+  // here would be that.
+  const heldRes = await onAccountSources(admin, parkId, renterIds);
+  const heldSources = mustRead(
+    "the money households have on account",
+    { data: heldRes.sources, error: heldRes.error as { message?: string; code?: string } | null },
+  );
+  const heldCentsOf = new Map<string, number>();
+  for (const src of heldSources) {
+    if (!src.renterId) continue;
+    heldCentsOf.set(src.renterId, (heldCentsOf.get(src.renterId) ?? 0) + Math.round(src.remaining * 100));
+  }
+  const billsRes = await openBillsFor(admin, parkId, renterIds);
+  const openBills = mustRead(
+    "the bills still open",
+    { data: billsRes.bills, error: billsRes.error as { message?: string; code?: string } | null },
+  );
+  const openCountOf = new Map<string, number>();
+  for (const b of openBills) {
+    if (!b.renterId) continue;
+    openCountOf.set(b.renterId, (openCountOf.get(b.renterId) ?? 0) + 1);
+  }
+  //   Whether anything more bills for them: tenancyFactsFor, which throws on
+  //   a failed read. The ledger is still right about what is owed and what
+  //   is held, so the page stands and every row carries `null` — the form
+  //   then makes NO promise for anybody (the window does the same), never a
+  //   guessed one.
+  let facts: Map<string, TenancyFacts> | null = null;
+  try {
+    facts = await tenancyFactsFor(admin, renterIds, today);
+  } catch (e) {
+    console.error("[read failed] whether anything more bills for these households:", e);
+  }
+  // By charge id: a Charge names its household and does not carry its id.
+  const householdMoney = new Map<string, HouseholdMoney>();
+  for (const c of data ?? []) {
+    const rid = (c.renter_id as string | null) ?? null;
+    householdMoney.set(c.id as string, {
+      onAccount: rid ? (heldCentsOf.get(rid) ?? 0) / 100 : 0,
+      // The row's own bill counts when it is open, whatever the household's
+      // other months hold — a bill with no household is still one open bill.
+      openCount: rid ? (openCountOf.get(rid) ?? 0) : (c.status === "open" ? 1 : 0),
+      nothingMoreBills: facts && rid ? nothingMoreBills(facts.get(rid)) : null,
+    });
+  }
+
   const charges: Charge[] = (data ?? []).map((c) => ({
     id: c.id as string,
     lotNumber: lotName.get(c.park_lot_id as string) ?? "?",
@@ -1596,7 +1680,7 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
     status: c.status as Charge["status"],
   }));
 
-  const rows = toRows(charges, today, lagDays, claimed)
+  const rows = toRows(charges, today, lagDays, claimed, householdMoney)
     // Late first — it is the only part that needs him today.
     .sort((a, b) => {
       // Disputed first: it is the only row that says we might be wrong.

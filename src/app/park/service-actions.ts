@@ -16,7 +16,8 @@ import {
 /**
  * THE PARK'S OWN SERVICE DESK.
  *
- * "Book services for the park" has sat in ParkNav since it shipped, pointing at
+ * "Book services for the park" sat in ParkNav from the day it shipped until the
+ * six-tab strip (it is now the Park services pill under On site), pointing at
  * /book — which tells a park owner with no property to "Set up your property
  * first" and hands him the lake-house wizard. This is the mechanism that button
  * always implied.

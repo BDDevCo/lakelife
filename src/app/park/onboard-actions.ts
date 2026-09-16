@@ -66,6 +66,13 @@ export async function getOnboardSeeds(
    * never changed hands.
    */
   cutoverDate?: string | null;
+  /**
+   * How many lots are LIVE, and how many exist at all — so an empty seed
+   * list can say which of three things it is: no lots, lots not yet live,
+   * or every live lot taken. All three rendered the same sentence.
+   */
+  liveLots?: number;
+  totalLots?: number;
 }> {
   if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
 
@@ -73,14 +80,18 @@ export async function getOnboardSeeds(
   const today = todayLakeDate();
 
   // An empty list here means "this park has no live lots" and the screen says
-  // so. A failed read said the same thing to a park with seventy-nine of them.
-  const lots = mustRead("your lots", await admin
+  // so — by name, now: it used to print "Every live lot already has somebody
+  // on it" for a park with no lots at all. A failed read said the same thing
+  // to a park with seventy-nine of them.
+  const allLots = mustRead("your lots", await admin
     .from("park_lots")
-    .select("id, lot_number")
-    .eq("park_id", parkId)
-    .eq("lifecycle", "live"));
-  const lotIds = (lots ?? []).map((l) => l.id as string);
-  if (lotIds.length === 0) return { ok: true, seeds: [], today };
+    .select("id, lot_number, lifecycle")
+    .eq("park_id", parkId));
+  const lots = (allLots ?? []).filter((l) => (l.lifecycle as string) === "live");
+  const lotIds = lots.map((l) => l.id as string);
+  if (lotIds.length === 0) {
+    return { ok: true, seeds: [], today, liveLots: 0, totalLots: (allLots ?? []).length };
+  }
 
   // Anything already held is not on offer — this screen only fills gaps.
   //
@@ -104,7 +115,7 @@ export async function getOnboardSeeds(
     .eq("term", "monthly"));
   const rateByLot = new Map((rates ?? []).map((r) => [r.park_lot_id as string, Number(r.amount)]));
 
-  const seeds = (lots ?? [])
+  const seeds = lots
     .filter((l) => !takenIds.has(l.id as string))
     .map((l) => ({
       lotId: l.id as string,
@@ -167,6 +178,8 @@ export async function getOnboardSeeds(
     rentsFromImport: importCount > 0,
     feePerSignedLot: Math.round(feePerSignedLot * 100) / 100,
     cutoverDate: (parkRow?.cutover_date as string | null) ?? null,
+    liveLots: lotIds.length,
+    totalLots: (allLots ?? []).length,
   };
 }
 

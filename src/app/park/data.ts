@@ -123,6 +123,30 @@ export async function getMyPark(): Promise<MyPark | null> {
   };
 }
 
+/**
+ * Does this user own or manage ANY park? The front doors ask this before they
+ * decide where a person lands: /portal, so a park owner is routed to his park
+ * before claimCrewInvite can rewrite his role, and /welcome, which used to
+ * push the lake-house wizard at a park owner whose park ops had just created.
+ * One helper for both, beside getMyPark, which reads the same table.
+ *
+ * FAILS CLOSED: a failed read throws rather than answering "no park", because
+ * "no park" sends him down the homeowner path — and at /portal into a write.
+ */
+export async function isParkMember(userId: string): Promise<boolean> {
+  const admin = createServiceClient();
+  const membership = mustRead(
+    "whether you own or manage a park",
+    await admin
+      .from("park_members")
+      .select("park_id")
+      .eq("user_id", userId)
+      .limit(1)
+      .maybeSingle(),
+  );
+  return membership != null;
+}
+
 /** Does the signed-in user administer THIS park? The guard every server action
  *  calls before it writes. Never trust a parkId from the browser. */
 export async function assertMyPark(parkId: string): Promise<{ role: string } | null> {

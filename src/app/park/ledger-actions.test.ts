@@ -43,6 +43,8 @@ let receiptNo = 100;
 let nextAllocationError: { after: number; error: { code: string; message: string } } | null = null;
 /** Fail the next plain read on that table — or, with `column`, the next read on it that filters on that column, so the SIBLING read can fail while the row's own succeeds. */
 let nextReadError: { table: string; column?: string; error: { code: string; message: string } } | null = null;
+/** Every table a door opened, in order — so "read once" is counted, not assumed. */
+const opened: string[] = [];
 
 const cents = (n: unknown) => Math.round(Number(n ?? 0) * 100);
 /** A live allocation — not taken back off its bill (0167 R3). Removed rows count toward nothing. */
@@ -258,7 +260,7 @@ vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 vi.mock("@/app/park/data", () => ({ assertMyPark: async () => true }));
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "owner-1" } } }) } }),
-  createServiceClient: () => ({ from: (t: string) => new Q(t) }),
+  createServiceClient: () => ({ from: (t: string) => { opened.push(t); return new Q(t); } }),
 }));
 vi.mock("@/lib/rent-changes", () => ({
   applyDueRentChangesFor: async () => ({ applied: 0, skipped: [] }),
@@ -274,7 +276,7 @@ vi.mock("@/lib/charge-gate", () => ({
 
 const {
   recordPayment, confirmClaimCollected, reversePayment, emailReceipt, refundParkPayment,
-  previewChargeRun, runCharges, voidCharge,
+  previewChargeRun, runCharges, voidCharge, getLedger,
 } = await import("./ledger-actions");
 
 const PARK = "park-haven";
@@ -284,7 +286,7 @@ const HAVEN = ["1", "2", "6", "7", "9", "10", "14", "15", "16", "17", "18", "19"
 
 function reset() {
   for (const k of Object.keys(db)) delete db[k];
-  inserted.length = 0; updated.length = 0; insertCalls.length = 0; emails.length = 0;
+  inserted.length = 0; updated.length = 0; insertCalls.length = 0; emails.length = 0; opened.length = 0;
   nextInsertError = null; nextUpdateError = null; nextAllocationError = null; nextReadError = null; beforeUpdate = null; receiptNo = 100;
   emailResult = { ok: true }; refundAsks = 0;
   db.parks = [{ id: PARK, name: "The Haven", address: "9085 E 500 S", rent_due_day: 1, cutover_date: "2027-01-01" }];
@@ -449,10 +451,12 @@ describe("more than the bill is split, not credited and not refused", () => {
     janBill("9");
     const res = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "form-key");
     // THE RUN APPLIES IT NOW (0167), so the sentence may say it comes off
-    // February — and still names the by-hand door for a bill that already exists.
+    // February — and still names the by-hand door for a bill that already
+    // exists. The promise is the shared clause (onAccountPromise), word for
+    // word what the ⊕ window's note said before the tap.
     expect(res.signal).toBe(
-      "$600.00 received — $542.53 against January 2027, $57.47 on account. " +
-      "It comes off February 2027 when you raise it — or put it against an open bill now from \"Money not against a bill\".",
+      "$600.00 received — $542.53 against January 2027, $57.47 on account" +
+      " and comes off February 2027 when you raise it — or put it against an open bill now from \"Money not against a bill\".",
     );
     expect(res.signal).not.toMatch(/credit/);
   });
@@ -559,7 +563,7 @@ describe("more than the bill is split, not credited and not refused", () => {
     expect(res.ok).toBe(true);
     expect(inserted).toHaveLength(1);
     expect(db.park_payment_claims[0].resolved_at).toBeNull();
-    expect(res.signal).toMatch(/\$57\.47 received — January 2027 was already settled, so all of it is on account\./);
+    expect(res.signal).toMatch(/\$57\.47 received — January 2027 was already settled, so all of it is on account and comes off February 2027 when you raise it — or put it against an open bill now from "Money not against a bill"\./);
     expect(res.signal).toMatch(/The claim it answers is still open — we couldn't close it; answer it from the ledger\.$/);
   });
 
@@ -1031,6 +1035,185 @@ describe("a household with money on account who pays again", () => {
   });
 });
 
+/**
+ * THE POST-TAP SENTENCE AGREES WITH THE PRE-TAP NOTE. The ⊕ window's note
+ * keys "comes off their next bill" on lib/tenancy-facts; this door's toast
+ * said it to everybody — so a household who had moved out with their final
+ * month billed read "theirs to have back" on the note and "comes off
+ * February 2027 when you raise it" on the toast, about the same $57.47, in
+ * the same minute. Three shapes on both branches of the toast (the excess
+ * untouched; some of it gone onto an older bill), the fact read ONCE and
+ * only when there is excess to promise about, and a failed read making no
+ * promise at all.
+ */
+describe("recordPayment's promise about the excess is decided on the tenancy", () => {
+  const DOOR = "\"Money not against a bill\"";
+  /** Moved out 15 January, the January part month billed and paid: nothing more bills for them. */
+  const departed = () => {
+    db.lot_reservations = [stay("9", "jan-9", "[2026-06-01,2027-01-16)", { status: "ended", moved_out_on: "2027-01-15" })];
+    db.park_charges.push({ id: "charge-jan-part", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2027-01", due_on: "2027-01-01", amount: 262.51, paid_total: 262.51, status: "paid" });
+  };
+  /** The bill the cheque is keyed against — December, raised by hand, still open. */
+  const decBill = (over: Partial<Row> = {}) => janBill("9", { id: "charge-dec", period_month: "2026-12", due_on: "2026-12-01", reservation_id: "jan-9", ...over });
+  const reads = (table: string) => opened.filter((t) => t === table).length;
+
+  it("departed, final month billed: theirs to have back — never 'comes off', on both branches", async () => {
+    departed();
+    decBill();
+    const res = await recordPayment(PARK, "charge-dec", 600, "check", "1042", TODAY, "", "form-key");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      `$600.00 received — $542.53 against December 2026, $57.47 on account — nothing more bills for them, so it's theirs to have back from ${DOOR} on the Rent screen.`,
+    );
+    expect(res.signal).not.toMatch(/comes off|when you raise it/);
+    expect(reads("lot_reservations"), "the fact is read once").toBe(1);
+
+    // The other branch: an older bill still open takes $40 of the excess,
+    // and what is left is theirs to have back.
+    reset(); departed();
+    decBill();
+    db.park_charges.push({ id: "charge-nov", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2026-11", due_on: "2026-11-01", amount: 40, paid_total: 0, status: "open" });
+    const older = await recordPayment(PARK, "charge-dec", 600, "check", "1042", TODAY, "", "form-key");
+    expect(older.ok, older.error).toBe(true);
+    expect(older.signal).toBe(
+      `$600.00 received — $542.53 against December 2026, $57.47 on account. Of that, $40.00 went against November 2026 — $17.47 stays on account — nothing more bills for them, so it's theirs to have back from ${DOOR} on the Rent screen.`,
+    );
+    expect(older.signal).not.toMatch(/comes off|when you raise it/);
+  });
+
+  it("still here: it comes off the month after this bill — the same words the window's note said before the tap", async () => {
+    db.lot_reservations = [stay("9", "jan-9", "[2026-06-01,2027-06-01)")];
+    decBill();
+    const res = await recordPayment(PARK, "charge-dec", 600, "check", "1042", TODAY, "", "form-key");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      `$600.00 received — $542.53 against December 2026, $57.47 on account and comes off January 2027 when you raise it — or put it against an open bill now from ${DOOR}.`,
+    );
+    expect(res.signal).not.toMatch(/theirs to have back|nothing more bills/);
+    expect(reads("lot_reservations")).toBe(1);
+  });
+
+  it("the tenancy could not be read: the money is on account and NO promise is made either way", async () => {
+    departed();
+    decBill();
+    nextReadError = { table: "lot_reservations", error: { code: "57P01", message: "terminating connection" } };
+    const res = await recordPayment(PARK, "charge-dec", 600, "check", "1042", TODAY, "", "form-key");
+    expect(res.ok, "the money is recorded; a failed read of the fact cannot refuse it").toBe(true);
+    expect(nextReadError, "the tenancy read happened").toBeNull();
+    expect(res.signal).toBe("$600.00 received — $542.53 against December 2026, $57.47 on account.");
+    expect(res.signal).not.toMatch(/comes off|theirs to have back|nothing more bills|Money not against a bill/);
+    expect(inserted.filter((r) => r.__table === "park_payments")).toHaveLength(2);
+
+    // The older-bill branch, unread: the figure, and where it went, and nothing promised.
+    reset(); departed();
+    decBill();
+    db.park_charges.push({ id: "charge-nov", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2026-11", due_on: "2026-11-01", amount: 40, paid_total: 0, status: "open" });
+    nextReadError = { table: "lot_reservations", error: { code: "57P01", message: "terminating connection" } };
+    const older = await recordPayment(PARK, "charge-dec", 600, "check", "1042", TODAY, "", "form-key");
+    expect(older.signal).toBe("$600.00 received — $542.53 against December 2026, $57.47 on account. Of that, $40.00 went against November 2026 — $17.47 stays on account.");
+  });
+
+  it("an exact or part payment has no excess to promise about, and does not read the tenancy at all", async () => {
+    departed();
+    decBill();
+    await recordPayment(PARK, "charge-dec", 542.53, "check", "1042", TODAY, "", "form-key");
+    expect(reads("lot_reservations")).toBe(0);
+    reset(); departed(); decBill();
+    const part = await recordPayment(PARK, "charge-dec", 200, "cash", "", TODAY, "", "form-key");
+    expect(part.signal).toBe("Recorded. $342.53 still outstanding.");
+    expect(reads("lot_reservations")).toBe(0);
+  });
+
+  it("is the shared clause, from the one helper — no private copy of the promise in this door", () => {
+    const src = readFileSync(join(process.cwd(), "src", "app", "park", "ledger-actions.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const at = src.indexOf("export async function recordPayment(");
+    expect(at, "recordPayment is gone — this scan measures nothing").toBeGreaterThan(0);
+    const body = src.slice(at, src.indexOf("\nexport async function ", at + 1));
+    expect(body.length).toBeGreaterThan(2000);
+    expect(body).toMatch(/nothingMoreBills\(\(await tenancyFactsFor\(admin, \[renterId\]\)\)\.get\(renterId\)\)/);
+    expect(body.match(/onAccountPromise\(nothingMore/g)).toHaveLength(2);
+    expect(body).not.toMatch(/comes off \$\{nextLabel\}|when you raise it|theirs to have back/);
+    expect(src).toMatch(/onAccountPromise,?\s/);
+  });
+});
+
+/**
+ * THE LEDGER ROWS CARRY WHAT THE RECORD-PAYMENT FORM HAS TO KNOW, from the
+ * ⊕ window's own readers — never heldOnAccountFor, whose figure carries
+ * deposits. A failed read of the money on account throws the way every
+ * read in this loader does; a failed read of the tenancy leaves the page
+ * standing with no promise for anybody.
+ */
+describe("getLedger carries each household's money facts on its rows", () => {
+  const facts = (rows: Awaited<ReturnType<typeof getLedger>>, id: string) => {
+    const r = rows!.rows.find((x) => x.id === id)!;
+    return { onAccount: r.onAccount, openCount: r.openCount, nothingMoreBills: r.nothingMoreBills };
+  };
+
+  it("money on account is the view's remaining, summed per household — deposits never count", async () => {
+    janBill("9"); janBill("14");
+    db.lot_reservations = [stay("9", "jan-9", "[2026-06-01,2027-06-01)"), stay("14", "jan-14", "[2026-06-01,2027-06-01)")];
+    onAccount("9", 200, "2026-12-28");
+    onAccount("9", 342.53, "2027-01-03");
+    // A deposit sits on the same household and must not read as rent money.
+    db.park_payments.push({ id: "dep-9", park_id: PARK, renter_id: "renter-9", charge_id: null, kind: "deposit", amount: 500, method: "check", received_on: "2026-12-28", reversed_at: null, returned_at: null });
+    const page = await getLedger(PARK, "2027-01");
+    expect(facts(page, "charge-9")).toEqual({ onAccount: 542.53, openCount: 1, nothingMoreBills: false });
+    expect(facts(page, "charge-14")).toEqual({ onAccount: 0, openCount: 1, nothingMoreBills: false });
+  });
+
+  it("open bills are counted across every month, not the ledger's one — the older bill decides where an over-payment goes", async () => {
+    janBill("9");
+    db.park_charges.push({ id: "charge-dec", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2026-12", due_on: "2026-12-01", amount: 542.53, paid_total: 0, status: "open" });
+    db.park_charges.push({ id: "charge-nov", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2026-11", due_on: "2026-11-01", amount: 542.53, paid_total: 542.53, status: "paid" });
+    db.lot_reservations = [stay("9", "jan-9", "[2026-06-01,2027-06-01)")];
+    const page = await getLedger(PARK, "2027-01");
+    expect(page!.rows.map((r) => r.id)).toEqual(["charge-9"]);
+    expect(facts(page, "charge-9").openCount).toBe(2);
+  });
+
+  it("whether anything more bills is the shared fact, both ways", async () => {
+    janBill("9", { reservation_id: "jan-9" });
+    db.lot_reservations = [stay("9", "jan-9", "[2026-06-01,2027-01-16)", { status: "ended", moved_out_on: "2027-01-15" })];
+    expect(facts(await getLedger(PARK, "2027-01"), "charge-9").nothingMoreBills).toBe(true);
+    // The same household with a February link still to come: a next bill is coming.
+    db.lot_reservations.push(stay("9", "feb-9", "[2027-02-01,2027-08-01)", { status: "approved" }));
+    expect(facts(await getLedger(PARK, "2027-01"), "charge-9").nothingMoreBills).toBe(false);
+  });
+
+  it("a failed read of the tenancy leaves the page standing with NO promise on any row; a failed read of the money on account throws", async () => {
+    janBill("9"); janBill("14");
+    db.lot_reservations = [stay("9", "jan-9", "[2026-06-01,2027-06-01)")];
+    onAccount("9", 200, "2026-12-28");
+    nextReadError = { table: "lot_reservations", error: { code: "57P01", message: "terminating connection" } };
+    const page = await getLedger(PARK, "2027-01");
+    expect(nextReadError).toBeNull();
+    expect(page!.rows.map((r) => r.nothingMoreBills)).toEqual([null, null]);
+    // What is owed and held is still right.
+    expect(facts(page, "charge-9").onAccount).toBe(200);
+
+    nextReadError = { table: "park_on_account_payments", error: { code: "57P01", message: "terminating connection" } };
+    await expect(getLedger(PARK, "2027-01")).rejects.toThrow(/the money households have on account/);
+    nextReadError = { table: "park_charges", column: "status", error: { code: "57P01", message: "terminating connection" } };
+    await expect(getLedger(PARK, "2027-01")).rejects.toThrow(/the bills still open/);
+  });
+
+  it("reads the window's readers, never heldOnAccountFor", () => {
+    const src = readFileSync(join(process.cwd(), "src", "app", "park", "ledger-actions.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const at = src.indexOf("export async function getLedger(");
+    expect(at, "getLedger is gone — this scan measures nothing").toBeGreaterThan(0);
+    const body = src.slice(at, src.indexOf("\nexport ", at + 1));
+    expect(body.length).toBeGreaterThan(1500);
+    expect(body).toMatch(/await onAccountSources\(admin, parkId, renterIds\)/);
+    expect(body).toMatch(/await openBillsFor\(admin, parkId, renterIds\)/);
+    expect(body).toMatch(/await tenancyFactsFor\(admin, renterIds, today\)/);
+    expect(body).toMatch(/toRows\(charges, today, lagDays, claimed, householdMoney\)/);
+    expect(body).not.toMatch(/heldOnAccountFor/);
+  });
+});
+
 describe("taking back money that had been put against bills", () => {
   it("reversing a quarter-ahead cheque reopens all three months and names them", async () => {
     db.lot_reservations = [stay("7", "q-7", "[2027-01-01,2027-05-01)")];
@@ -1490,7 +1673,7 @@ describe("money on account settles the oldest open bill first, wherever it is ap
     const res = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "form-key");
     expect(db.park_payment_allocations).toHaveLength(0);
     expect(res.signal).toBe(
-      "$600.00 received — $542.53 against January 2027, $57.47 on account. It comes off February 2027 when you raise it — or put it against an open bill now from \"Money not against a bill\".",
+      "$600.00 received — $542.53 against January 2027, $57.47 on account and comes off February 2027 when you raise it — or put it against an open bill now from \"Money not against a bill\".",
     );
   });
 

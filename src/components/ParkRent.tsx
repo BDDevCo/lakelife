@@ -20,6 +20,7 @@ import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
 import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
 import { escapeHtml } from "@/lib/html-safe";
 import { notYetBillableRefusal } from "@/lib/billing-start";
+import { amountNote, parseAmount, type MoneyFacts } from "@/components/take-payment-helpers";
 
 /**
  * WHO OWES, WHO PAID, WHO IS LATE.
@@ -390,8 +391,7 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
                 {payingId === r.id && (
                   <PaymentForm
                     parkId={parkId}
-                    chargeId={r.id}
-                    balance={r.balance}
+                    row={r}
                     today={page.today}
                     onDone={(r) => {
                       setPayingId(null);
@@ -573,16 +573,31 @@ function Reminders({
   );
 }
 
-function PaymentForm({
-  parkId, chargeId, balance, today, onDone,
+/**
+ * RECORDING MONEY AGAINST ONE ROW'S BILL.
+ *
+ * The line under the amount is the ⊕ Take a payment window's (amountNote,
+ * take-payment-helpers), read off the row's own household facts — what of
+ * theirs is already on account, how many bills are open for them, whether
+ * anything more will ever bill — which getLedger reads with the window's
+ * readers and carries on every row. This form used to read the bill alone,
+ * so for a household whose own $542.53 was in the drawer it said nothing
+ * over "Record it" while the window, on the same morning, said that money
+ * would cover the bill and named the door that uses it; the office took the
+ * same rent twice, or told the household two things. Exported so a static
+ * render can draw it with a row.
+ */
+export function PaymentForm({
+  parkId, row, today, onDone,
 }: {
-  parkId: string; chargeId: string; balance: number; today: string;
+  parkId: string; row: LedgerRow; today: string;
   onDone: (receipt?: { lines: ReceiptLines; email: string | null }) => void;
 }) {
+  const chargeId = row.id;
   const [busy, start] = useTransition();
   // Defaults to the full balance and to CHECK — the overwhelmingly common case
   // is somebody handing over the exact amount.
-  const [amount, setAmount] = useState(balance.toFixed(2));
+  const [amount, setAmount] = useState(row.balance.toFixed(2));
   const [method, setMethod] = useState<(typeof METHODS)[number]["value"]>("check");
   const [reference, setReference] = useState("");
   const [receivedOn, setReceivedOn] = useState(today);
@@ -597,6 +612,17 @@ function PaymentForm({
     typeof crypto !== "undefined" && crypto.randomUUID
       ? crypto.randomUUID()
       : `${chargeId}:${Date.now()}:${Math.random()}`);
+  // THE ROW, AS THE WINDOW'S LINE READS IT. This bill is the one the money
+  // goes on, so it stands where the window's oldest open bill stands; the
+  // three household facts are the row's. Not the window's disputedNote: its
+  // second sentence sends the office to the rent screen, and this is it.
+  const facts: MoneyFacts = {
+    openCount: row.openCount,
+    oldestOpen: { chargeId, month: row.periodMonth, balance: row.balance, disputed: row.state === "disputed" },
+    onAccount: row.onAccount,
+    nothingMoreBills: row.nothingMoreBills,
+  };
+  const note = amountNote(amount, facts);
 
   return (
     <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
@@ -630,12 +656,19 @@ function PaymentForm({
         </label>
       </div>
 
+      {/* The same sentence the window prints under its amount, for the same
+          household in the same state — "Money not against a bill", when it
+          is named, is the panel under this ledger. */}
+      {note && (
+        <p className="mut" style={{ fontSize: 12.5, margin: "8px 0 0", lineHeight: 1.5 }}>{note}</p>
+      )}
+
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
         <button className="ll-btn" disabled={busy}
           onClick={() =>
             start(async () => {
               const res = await recordPayment(
-                parkId, chargeId, Number(amount.replace(/[$,\s]/g, "")),
+                parkId, chargeId, parseAmount(amount),
                 method, reference, receivedOn, dropSlipNo, idemKey,
               );
               toast(res.ok ? (res.signal ?? "Recorded.") : (res.error ?? "Couldn't record that."));

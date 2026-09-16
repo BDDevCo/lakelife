@@ -360,9 +360,19 @@ describe("what the screens say about leaving the date blank", () => {
    * Any screen that offers this field has to agree with the code, so the guard
    * is on the claim rather than on the one component that made it.
    */
+  //
+  // AND THE OTHER LIE OF THE SAME SHAPE: "nothing is collectable" on a screen
+  // that carries the Take a payment button. No BILL can be raised before
+  // go-live or before a tenancy starts, but money handed in goes on account
+  // (recordOnAccount has no cutover gate) — so the readiness card's sub, the
+  // occupancy line and the rent roll's Owed tile said "nothing is
+  // collectable" 40px under a gold button that collects.
   const SCREENS = [
     "src/components/ParkDials.tsx",
     "src/components/ParkImportPaste.tsx",
+    "src/app/park/today-helpers.ts",
+    "src/app/park/readiness.ts",
+    "src/components/ParkRentRoll.tsx",
   ];
 
   const bodyOf = (rel: string) =>
@@ -372,17 +382,32 @@ describe("what the screens say about leaving the date blank", () => {
     for (const f of SCREENS) expect(bodyOf(f).length).toBeGreaterThan(200);
   });
 
-  it("no screen claims that a blank date blocks billing", () => {
-    // The exact false promise, and the shapes it would most likely come back in.
+  it("no screen claims that a blank date blocks billing, or that nothing is collectable under the Take a payment button", () => {
+    // The exact false promises, and the shapes they would most likely come back in.
     const lies = [
       /Nothing is collectable before it/i,
       /nothing can be billed until/i,
       /leave (it )?blank[^.]*nothing[^.]*bill/i,
+      /nothing (is )?collect[ai]ble/i,
+      /can't collect|cannot collect/i,
     ];
     for (const f of SCREENS) {
-      const body = bodyOf(f);
-      for (const lie of lies) expect(body).not.toMatch(lie);
+      // Comments stripped: the guard is on what a person reads, and a
+      // comment is allowed to name the lie it removed.
+      const body = bodyOf(f)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+        .replace(/(^|[^:])\/\/.*$/gm, "$1");
+      for (const lie of lies) expect(body, f).not.toMatch(lie);
     }
+  });
+
+  it("the sentences that replaced it name the first month billed, through the rule itself", () => {
+    // preCutover reads firstBillablePeriod rather than restating it.
+    const helpers = bodyOf("src/app/park/today-helpers.ts");
+    expect(helpers).toMatch(/firstBillablePeriod\(cutoverOn\)/);
+    expect(helpers).toContain("The first month you bill is ${prettyMonth(first)}; money handed in before that goes on account.");
+    expect(bodyOf("src/components/ParkRentRoll.tsx")).toContain('sub="not billed yet · anything paid goes on account"');
   });
 
   it("the dial says what blank actually does", () => {

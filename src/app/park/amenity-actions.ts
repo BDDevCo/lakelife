@@ -5,7 +5,8 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
-import { handKeyedRefusal, paymentAmountRefusal } from "./ledger-helpers";
+import { siteUrl } from "@/lib/env";
+import { handKeyedRefusal, paymentAmountRefusal, money } from "./ledger-helpers";
 import { parseDaterange, toDaterange, type ParkSeason } from "@/lib/parks";
 import {
   quoteAmenity, runWindow, daysIn,
@@ -63,7 +64,38 @@ export interface AmenityRow extends Amenity {
      * was missing was somewhere to press it.
      */
     payments: Array<{ id: string; amount: number; method: string; on: string }>;
+    /**
+     * THE LINK THE OFFICE HANDS THE GUEST — the full URL, or null.
+     *
+     * 0120 mints `use_token` on every live stay and /use/[token] consumes it,
+     * and between those two nothing in the app ever showed the URL to anybody.
+     * The migration's own comment says "so the office can text the link the
+     * day it books a guest in" — and the office had no way to see it. A
+     * capability nobody can hand out is a column with no reader.
+     *
+     * Null when the stay carries no token, or when the stay is no longer
+     * approved/active — the route answers "that link isn't right" to a
+     * finished or cancelled stay, so printing its URL as a working link would
+     * be a lie. `stayLive` says which of the two it was.
+     */
+    guestLink: string | null;
+    /** The route opens the link only while the stay is approved or active. */
+    stayLive: boolean;
   }>;
+}
+
+/** The statuses under which /use/[token] will open a stay's page. Mirrors loadGuestView. */
+const LIVE_STAY = new Set(["approved", "active"]);
+
+/**
+ * The guest's one-tap URL, built from the ONE site origin every other public
+ * link uses. A relative "/use/abc" is a working link in a browser already on
+ * the site and a dead string in a text message — the same scar the lot
+ * stickers carry (request-actions). No second copy of the origin here.
+ */
+function guestLinkFor(token: string | null | undefined, status: string | null | undefined): string | null {
+  if (!token || !LIVE_STAY.has(status ?? "")) return null;
+  return `${siteUrl().replace(/\/+$/, "")}/use/${token}`;
 }
 
 function splitMd(raw: string): { m: number | null; d: number | null } | null {
@@ -116,8 +148,12 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
       ? admin.from("park_renters").select("id, display_name").in("id", renterIds)
       : Promise.resolve({ data: [] as { id: string; display_name: string }[], error: null }),
     stayIds.length
-      ? admin.from("lot_reservations").select("id, park_lot_id").in("id", stayIds)
-      : Promise.resolve({ data: [] as { id: string; park_lot_id: string }[], error: null }),
+      // `use_token` and `status` ride along: the token IS the guest's link
+      // and the status decides whether that link still opens. It is the
+      // office's own stay row, read through the same service-role path as
+      // everything else on this screen and shown only to this park's owner.
+      ? admin.from("lot_reservations").select("id, park_lot_id, use_token, status").in("id", stayIds)
+      : Promise.resolve({ data: [] as { id: string; park_lot_id: string; use_token: string | null; status: string }[], error: null }),
     bookingIds.length
       ? admin.from("park_payments")
           .select("id, amenity_booking_id, amount, method, received_on, reversed_at, returned_at").in("amenity_booking_id", bookingIds)
@@ -131,6 +167,7 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
 
   const nameById = new Map((names ?? []).map((r) => [r.id as string, r.display_name as string]));
   const lotIdByStay = new Map((stays ?? []).map((s) => [s.id as string, s.park_lot_id as string]));
+  const stayById = new Map((stays ?? []).map((s) => [s.id as string, s]));
   const lotIds = [...new Set([...lotIdByStay.values()])];
   const lots = mustRead("their lots", lotIds.length
     ? await admin.from("park_lots").select("id, lot_number").in("id", lotIds)
@@ -186,6 +223,7 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
         .map((b) => {
           const r = parseDaterange(b.during as string);
           const stayLot = b.stay_id ? lotIdByStay.get(b.stay_id as string) : null;
+          const stay = b.stay_id ? stayById.get(b.stay_id as string) : null;
           return {
             id: b.id as string,
             unitId: b.unit_id as string,
@@ -198,6 +236,8 @@ export async function listAmenities(parkId: string): Promise<AmenityRow[]> {
             quotedAmount: b.quoted_amount == null ? null : Number(b.quoted_amount),
             collected: collectedByBooking.get(b.id as string) ?? 0,
             payments: paymentsByBooking.get(b.id as string) ?? [],
+            guestLink: guestLinkFor(stay?.use_token as string | null, stay?.status as string | null),
+            stayLive: LIVE_STAY.has((stay?.status as string) ?? ""),
           };
         })
         .sort((x, y) => x.from.localeCompare(y.from)),
@@ -489,9 +529,13 @@ export async function bookAmenityForStay(
   revalidatePath("/park/today");
   return {
     ok: true,
+    // THE LINK IS ON THE BOOKING. The confirmation used to end at the money,
+    // and the office booking over the phone had nowhere to go next to hand
+    // the guest her own page. The row this refresh draws carries the URL and
+    // a Copy link button; the toast only has to say so.
     signal: quoted > 0
-      ? `Booked — $${quoted.toFixed(2)} to collect.`
-      : "Booked. Included with their stay.",
+      ? `Booked — ${money(quoted)} to collect. Their link is on the booking.`
+      : "Booked. Included with their stay. Their link is on the booking.",
   };
 }
 
@@ -570,7 +614,7 @@ export async function collectAmenityMoney(
 
   revalidatePath("/park/amenities");
   revalidatePath("/park/statements");
-  return { ok: true, signal: `$${(Math.round(n * 100) / 100).toFixed(2)} recorded.` };
+  return { ok: true, signal: `${money(Math.round(n * 100) / 100)} recorded.` };
 }
 
 /** The stays a booking could hang off — for the office's own booking form. */

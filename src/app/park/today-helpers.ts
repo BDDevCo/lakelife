@@ -32,12 +32,12 @@ import type { LedgerRow, LedgerSummary } from "./ledger-helpers";
 // morning card and the rent screen cannot print one figure two ways.
 import { ledgerHeadline, prettyMonth, money } from "./ledger-helpers";
 import { SIGNED_LEASE_LABEL } from "./sign-helpers";
-import { dayInWords } from "./park-helpers";
+import { dayInWords, lapsedRowOf } from "./park-helpers";
 // THE RENEWAL LEAD HAS ONE HOME. The card below and the "Agreements to write"
 // list it links to (renew-actions renewalsDue) both read renewalLeadDays, so
 // the card can never name a household the list keeps quiet about.
 import { renewalLeadDays } from "./agreement-helpers";
-import { periodIsBillable, preCutoverCostRefusal } from "@/lib/billing-start";
+import { periodIsBillable, preCutoverCostRefusal, firstBillablePeriod } from "@/lib/billing-start";
 import { parseDaterange } from "@/lib/parks";
 
 // Notification thresholds, not pricing — so they live here rather than in the
@@ -275,10 +275,13 @@ export function occupancyLine(s: OccupancySnapshot): { main: string; sub: string
   }
   const filled = s.occupied + s.reserved;
 
+  // NOT "nothing is collectable yet": the Take a payment button on every park
+  // screen records a deposit or a cheque on account with no bill open
+  // (recordOnAccount), and this line sits beneath it.
   if (s.occupied === 0 && s.reserved > 0) {
     return {
       main: `${s.reserved} of ${s.liveLots} lots spoken for.`,
-      sub: "Their tenancies start later — nothing is collectable yet.",
+      sub: "Their tenancies start later — anything handed in now goes on account.",
     };
   }
 
@@ -355,6 +358,14 @@ export interface TaskFacts {
    */
   arrearsCount: number;
   arrearsAmount: number;
+  /**
+   * The oldest month still open, so the card can land on THAT month's rent
+   * screen. `/park/rent` alone opens the current month, where the oldest open
+   * bill is structurally invisible (getLedger is scoped to one period) — the
+   * "Sort it" button on an arrears card was a door onto a screen that could
+   * not show the debt. Null only when there is nothing in arrears.
+   */
+  arrearsOldestMonth: string | null;
   /** Costs entered but never split across lots — they bill nobody. */
   unallocatedCosts: { id: string; label: string; amount: number }[];
   /**
@@ -473,10 +484,14 @@ export function generateTasks(f: TaskFacts): Task[] {
     out.push({
       key: `arrears:${f.parkId}`,
       title: `${f.arrearsCount} ${f.arrearsCount === 1 ? "household owes" : "households owe"} from earlier months`,
-      detail: `${money(f.arrearsAmount)} still outstanding from before ${prettyMonth(f.currentMonth)}.`,
+      detail: f.arrearsOldestMonth
+        ? `${money(f.arrearsAmount)} still outstanding from before ${prettyMonth(f.currentMonth)} — the oldest is ${prettyMonth(f.arrearsOldestMonth)}.`
+        : `${money(f.arrearsAmount)} still outstanding from before ${prettyMonth(f.currentMonth)}.`,
       urgency: "overdue",
       dueOn: null,
-      href: "/park/rent",
+      // The rent screen takes `?month=` (rent/page.tsx); without it the door
+      // opens on the current month and the oldest open bill is not on it.
+      href: f.arrearsOldestMonth ? `/park/rent?month=${f.arrearsOldestMonth}` : "/park/rent",
       canDismiss: false,
     });
   }
@@ -678,22 +693,29 @@ export function generateTasks(f: TaskFacts): Task[] {
       out.push({
         key: `notice_missed:${rc.id}`,
         title: `Lot ${rc.lotNumber}'s new rent can't start ${dayInWords(rc.effectiveOn)}`,
+        // NAMES THE CONTROLS AT THE DOOR IT OPENS. This sent him to Lots &
+        // rates, where no rent change can be recorded or called off — the
+        // writer (rerate-actions recordNotice / cancelReRate) is mounted by
+        // ParkReRate on the Rent roll, and these are its buttons' own words.
         detail:
           `You needed to give ${rc.noticeDaysRequired} days' notice by ${dayInWords(serveBy)}. ` +
-          `Move the date or serve it now and start later.`,
+          `On the rent roll, 'Call it off', then 'Change the rent on everyone' with a later start — ` +
+          `or, if you did give notice, 'Record it' there.`,
         urgency: "overdue",
         dueOn: serveBy,
-        href: "/park/lots",
+        href: "/park",
         canDismiss: false,
       });
     } else if (until <= NOTICE_WARN_DAYS) {
       out.push({
         key: `notice_cliff:${rc.id}`,
         title: `Lot ${rc.lotNumber} needs its rent notice by ${dayInWords(serveBy)}`,
-        detail: `${rc.noticeDaysRequired} days' notice before it starts ${dayInWords(rc.effectiveOn)}.`,
+        detail:
+          `${rc.noticeDaysRequired} days' notice before it starts ${dayInWords(rc.effectiveOn)}. ` +
+          `When you've given it, 'Record it' on the rent roll.`,
         urgency: "soon",
         dueOn: serveBy,
-        href: "/park/lots",
+        href: "/park",
         canDismiss: false,
       });
     }
@@ -954,9 +976,83 @@ export function quietState(checked: readonly string[]): { headline: string; chec
   };
 }
 
-// --------------------------------------------------------- before go-live ---
+// ------------------------------------------------------------- occupancy ---
 
-export interface ReadinessItem { label: string; value: string; done: boolean }
+/**
+ * WHICH LIVE LOTS HAVE SOMEBODY ON THEM TODAY — the one copy of the rule.
+ *
+ * This block lived inline in the Today loader. The readiness list needs the
+ * same answer ("N of M live lots have a household on them"), and a second
+ * copy would be the third occupancy rule in the module — the roll's
+ * summarise() being the first — so the loader now calls this and the
+ * readiness builder calls this.
+ *
+ * `rows` are the park's lot_reservations on live lots in status approved,
+ * active OR ended: the ended rows reach only the lapsed test (a household
+ * closed out of its successor has left; without the ended row the successor
+ * looks like a lapsed holdover).
+ */
+export function lotOccupancy(
+  rows: readonly { park_lot_id: string; during: string; status: string; term: string }[],
+  liveLots: readonly { id: string; lot_number: string }[],
+  today: string,
+): { occupiedLotIds: Set<string>; reservedLotIds: Set<string>; snapshot: OccupancySnapshot } {
+  const stays = rows.filter((s) => s.status === "approved" || s.status === "active");
+
+  const occupiedLotIds = new Set<string>();
+  const reservedLotIds = new Set<string>();
+  for (const s of stays) {
+    const r = parseDaterange(s.during);
+    if (!r) continue;
+    // Half-open: `end` is checkout morning, so today === end is NOT in date.
+    if (r.start <= today && today < r.end) occupiedLotIds.add(s.park_lot_id);
+    else if (r.start > today) reservedLotIds.add(s.park_lot_id);
+  }
+  // A LOT IS COUNTED ONCE. Renewing somebody writes a future tenancy on a lot
+  // that already has a current one, so without this the same lot lands in both
+  // sets and every renewal inflates occupancy by a lot that did not change
+  // hands. Found by driving it: 3 lots, 1 tenant, "2 of 3 taken".
+  for (const id of occupiedLotIds) reservedLotIds.delete(id);
+  // LIVED ON, PAPERWORK RUN OUT: the roll's own rule (park-helpers
+  // lapsedRowOf), read from every row on the lot — a held monthly row behind
+  // today with nothing current, nothing coming and nobody closed out after
+  // it. Nobody moved out, so the lot is not empty: the roll says "Ran out"
+  // for the same row; Today read it as "Empty: lot 9". A stay by the night
+  // or the week is not lapsed once its checkout passes, and a household
+  // closed out of its successor has left — both the helper's, not this
+  // file's, so the three screens cannot drift.
+  const rowsOfLot = new Map<string, { status: string; range: ReturnType<typeof parseDaterange>; term: string }[]>();
+  for (const s of rows) {
+    const list = rowsOfLot.get(s.park_lot_id) ?? [];
+    list.push({ status: s.status, range: parseDaterange(s.during), term: s.term });
+    rowsOfLot.set(s.park_lot_id, list);
+  }
+  const lapsedLotIds = new Set<string>();
+  for (const [lotId, lotRows] of rowsOfLot) {
+    if (lapsedRowOf(lotRows, today)) lapsedLotIds.add(lotId);
+  }
+  // What is left is a lot somebody lives on with no paperwork in date:
+  // counted as taken, never empty.
+  for (const id of lapsedLotIds) occupiedLotIds.add(id);
+
+  const vacantLots = liveLots.filter(
+    (l) => !occupiedLotIds.has(l.id) && !reservedLotIds.has(l.id),
+  );
+
+  const snapshot: OccupancySnapshot = {
+    liveLots: liveLots.length,
+    occupied: occupiedLotIds.size,
+    reserved: reservedLotIds.size,
+    vacant: vacantLots.length,
+    vacantLotNumbers: vacantLots
+      .map((l) => l.lot_number)
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+  };
+
+  return { occupiedLotIds, reservedLotIds, snapshot };
+}
+
+// --------------------------------------------------------- before go-live ---
 
 /** "the 1" reads like a truncated number; "the 1st" reads like a date. */
 export function ordinal(n: number): string {
@@ -967,21 +1063,26 @@ export function ordinal(n: number): string {
 }
 
 /**
- * Before the park is his, there is no money and no occupancy — only whether the
- * file is ready. Counted against LOTS AND RATE CARDS, which exist, never
- * against tenancies, which do not.
+ * Before the park is his, there is no occupancy — only the countdown. The
+ * checklist that used to hang under it (lots, rate cards, households, rent
+ * due day, cap) is the readiness list's now (readiness.ts), which reads every
+ * one of those columns and seven more, and links each to the control that
+ * writes it. This keeps only the two sentences.
+ *
+ * NOT "nothing is collectable until then". No BILL can be raised before
+ * go-live (ledger-actions preCutoverRefusal), but the gold Take a payment
+ * button is on every park screen, this card sits directly under it, and its
+ * on-account path (recordOnAccount) has no cutover gate: a cheque at signing
+ * in December is recorded, receipted and allocated to the first bill. So the
+ * sentence names the first month that IS billed — lib/billing-start's rule,
+ * a mid-month go-live bills from the month after — and where earlier money
+ * goes.
  */
 export function preCutover(input: {
   today: string;
   cutoverOn: string;
   parkName: string;
-  lots: number;
-  lotsWithRates: number;
-  monthlyRoll: number;
-  households: number;
-  rentDueDay: number;
-  maxAgreementMonths: number | null;
-}): { headline: string; sub: string; items: ReadinessItem[] } {
+}): { headline: string; sub: string } {
   const days = daysBetween(input.today, input.cutoverOn);
   return {
     headline: days === 0
@@ -993,23 +1094,14 @@ export function preCutover(input: {
       : `${input.parkName} — ${days} ${days === 1 ? "day" : "days"} to go-live.`,
     sub: days === 0
       ? "Money and occupancy start now."
-      : `You go live on ${dayInWords(input.cutoverOn)}. Nothing is collectable until then.`,
-    items: [
-      { label: "Lots on file", value: String(input.lots), done: input.lots > 0 },
-      {
-        label: "Rate cards",
-        value: input.lots
-          ? `${input.lotsWithRates} of ${input.lots}${input.monthlyRoll ? ` — ${money(input.monthlyRoll)} a month` : ""}`
-          : "—",
-        done: input.lots > 0 && input.lotsWithRates === input.lots,
-      },
-      { label: "Households on the roll", value: String(input.households), done: input.households > 0 },
-      { label: "Rent due day", value: `the ${ordinal(input.rentDueDay)}`, done: true },
-      {
-        label: "Agreement cap",
-        value: input.maxAgreementMonths ? `${input.maxAgreementMonths} months` : "not set",
-        done: input.maxAgreementMonths != null,
-      },
-    ],
+      : `You go live on ${dayInWords(input.cutoverOn)}. ${firstBillLine(input.cutoverOn)}`,
   };
+}
+
+/** The first month we bill, and where money handed in before it goes. */
+function firstBillLine(cutoverOn: string): string {
+  const first = firstBillablePeriod(cutoverOn);
+  return first
+    ? `The first month you bill is ${prettyMonth(first)}; money handed in before that goes on account.`
+    : "Money handed in before then goes on account.";
 }

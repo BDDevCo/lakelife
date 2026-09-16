@@ -142,8 +142,8 @@ export function NewPark({ lakes }: { lakes: Array<{ id: string; name: string }> 
       </div>
 
       <p className="mut" style={{ fontSize: 12, margin: "10px 0 0", lineHeight: 1.5 }}>
-        It starts unpublished. The owner adds lots and publishes it themselves
-        from <b>/park/setup</b> — nothing goes public from here.
+        It starts unpublished. The owner adds lots and rates, then publishes it
+        from the <b>Rent roll</b> (/park) — nothing goes public from here.
       </p>
     </div>
   );

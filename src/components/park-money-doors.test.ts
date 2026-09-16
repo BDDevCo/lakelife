@@ -34,6 +34,9 @@ describe("hand-keyed money is the same four ways on every office door", () => {
   // processor reference, so the database refused every one and the office
   // read the constraint's name.
   const amenities = code("./ParkAmenities.tsx");
+  // The ⊕ Take a payment window in the park-name row: the fourth office door
+  // that keys a method, and the one a queue at the counter goes through.
+  const pos = code("./TakePayment.tsx");
 
   it("the rent screen's payment form offers exactly what the claim form offers", () => {
     // Same values, same order. "Bank transfer" is `transfer` on both — the
@@ -41,18 +44,19 @@ describe("hand-keyed money is the same four ways on every office door", () => {
     // processor money it will never let him reverse.
     expect(methodValues(rent, "ParkRent")).toEqual(methodValues(claim, "ClaimForm"));
     expect(methodValues(rent, "ParkRent")).toEqual(["check", "cash", "transfer", "other"]);
+    expect(methodValues(pos, "TakePayment")).toEqual(["check", "cash", "transfer", "other"]);
   });
 
   it("never offers a processor rail by hand", () => {
     expect(amenities, "ParkAmenities' picker is gone — this scan is measuring nothing").toMatch(/aria-label="How they paid"/);
-    for (const [name, src] of [["ParkRent", rent], ["ClaimForm", claim], ["IPaidForm", ipaid], ["ParkHeldMoney", held], ["ParkAmenities", amenities]] as const) {
+    for (const [name, src] of [["ParkRent", rent], ["ClaimForm", claim], ["IPaidForm", ipaid], ["ParkHeldMoney", held], ["ParkAmenities", amenities], ["TakePayment", pos]] as const) {
       expect(src, `${name} offers card`).not.toMatch(/value[=:]\s*"card"/);
       expect(src, `${name} offers ach`).not.toMatch(/value[=:]\s*"ach"/);
     }
   });
 
   it("calls 'Bank transfer' the same thing on every door", () => {
-    for (const [name, src] of [["ParkRent", rent], ["ClaimForm", claim], ["IPaidForm", ipaid]] as const) {
+    for (const [name, src] of [["ParkRent", rent], ["ClaimForm", claim], ["IPaidForm", ipaid], ["TakePayment", pos]] as const) {
       expect(src, name).toMatch(/value: "transfer", label: "Bank transfer"/);
     }
     expect(held).toMatch(/<option value="transfer">Bank transfer<\/option>/);
@@ -100,8 +104,11 @@ describe("the rent screen names each skip by its own cause", () => {
     // second spelling of nightly/weekly here.
     expect(para).toMatch(/plan\.notMonthly\.some\(\(l\) => !perStayTerm\(l\.term\)\)/);
     expect(para).not.toMatch(/"nightly"|"weekly"/);
-    // And the roll IS the door at /park.
-    expect(code("./ParkNav.tsx")).toMatch(/\{ href: "\/park", label: "Rent roll" \}/);
+    // And the roll IS the door at /park — a pill under the Renters tab now
+    // that the strip is six tabs, still the tab's own landing screen.
+    const nav = code("./ParkNav.tsx");
+    const renters = nav.slice(nav.indexOf('label: "Renters"'), nav.indexOf('label: "Money"'));
+    expect(renters).toMatch(/\{ href: "\/park", label: "Rent roll" \}/);
   });
 
   it("tells him where the renew button is when agreements have run out", () => {

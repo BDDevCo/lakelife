@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "@/components/Toast";
 import { commitOnboarding, type OnboardSeed } from "@/app/park/onboard-actions";
 import {
@@ -23,9 +24,18 @@ import { offeredAgreementLengths, lengthInWords } from "@/app/park/agreement-hel
  */
 export function ParkOnboard({
   parkId, seeds, today, capMonths, termMonths = null, rentsFromImport, feePerSignedLot = 0, cutoverDate = null,
+  liveLots, totalLots,
 }: {
   parkId: string;
   seeds: OnboardSeed[];
+  /**
+   * How many lots are live, and how many exist. An empty seed list is three
+   * different facts — no lots, lots not yet live, every live lot taken — and
+   * the screen said "Every live lot already has somebody on it" for all of
+   * them, including a park with no lots at all.
+   */
+  liveLots: number;
+  totalLots: number;
   today: string;
   /** The park's own agreement cap, or null when it has not set one. */
   capMonths: number | null;
@@ -118,7 +128,21 @@ export function ParkOnboard({
       <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
         <h1 style={{ fontSize: 26, margin: "0 0 6px" }}>Who lives here</h1>
         <p className="mut" style={{ fontSize: 14, lineHeight: 1.5 }}>
-          Every live lot already has somebody on it. Nothing left to file.
+          {totalLots === 0 ? (
+            <>
+              No lots on file yet, so there&apos;s nobody to put on one. Add your
+              lots first — under <Link href="/park/lots">Lots &amp; rates</Link>, or
+              by <Link href="/park/import">loading a rent roll</Link>.
+            </>
+          ) : liveLots === 0 ? (
+            <>
+              Your {totalLots === 1 ? "lot isn't" : `${totalLots} lots aren't`} live yet, so
+              there&apos;s nobody to put on one. Set each one to &lsquo;Live&rsquo; under{" "}
+              <Link href="/park/lots">Lots &amp; rates</Link> first.
+            </>
+          ) : (
+            <>Every live lot already has somebody on it. Nothing left to file.</>
+          )}
         </p>
       </div>
     );

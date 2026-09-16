@@ -5,10 +5,10 @@ import { revalidatePath } from "next/cache";
 import { todayLakeDate, lakeDateOf } from "@/lib/booking";
 import { assertMyPark } from "./data";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
-import { handKeyedRefusal, paymentAmountRefusal, prettyMonth, splitSiblingKey, type HandKeyedMethod } from "./ledger-helpers";
+import { handKeyedRefusal, paymentAmountRefusal, prettyMonth, splitSiblingKey, onAccountPromise, type HandKeyedMethod } from "./ledger-helpers";
 import { settleOnAccount, describeSettlement, heldOnAccountFor, money, type AllocationLine } from "@/lib/allocations";
 import { dayInWords } from "./park-helpers";
-import { tenancyFactsFor } from "@/lib/tenancy-facts";
+import { tenancyFactsFor, nothingMoreBills } from "@/lib/tenancy-facts";
 import { dbSaid } from "@/lib/db-said";
 import type { ReceiptLines } from "./receipt-helpers";
 
@@ -252,6 +252,23 @@ export async function recordOnAccount(
   if (heldRes.error) console.error("[read failed] what is still on account:", heldRes.error);
   const remaining = heldRes.error ? null : Number(heldRes.data?.remaining ?? 0);
 
+  // WHETHER ANYTHING MORE BILLS FOR THEM — the fact the promise in the
+  // sentence keys on (lib/tenancy-facts: the held panel's own read, the one
+  // getHeldMoney makes further down this file), read once. This door said
+  // "comes off the next bill you raise for them" to every household,
+  // including one who had moved out with their final month billed — while
+  // the ⊕ window's note, read off the same fact a moment earlier, had said
+  // "theirs to have back" about the same money. tenancyFactsFor throws on a
+  // failed read; the money is recorded, so that cannot refuse — the fact
+  // stays unknown and the sentence makes no promise either way
+  // (onAccountPromise).
+  let nothingMore: boolean | null = null;
+  try {
+    nothingMore = nothingMoreBills((await tenancyFactsFor(admin, [renterId])).get(renterId));
+  } catch (e) {
+    console.error("[read failed] whether anything more bills for them:", e);
+  }
+
   // THE PAPER. Same reads the bill door makes, degrading the same way: the
   // money exists, so a receipt reading "This park" is logged, not refused.
   const [parkRes, lotRes, whoRes] = await Promise.all([
@@ -300,10 +317,14 @@ export async function recordOnAccount(
     "error" in settled ? { lines: [], bills: [] } : settled,
     (l) => l.paymentId === paymentId,
   );
+  // What happens to what is still held is the one promise (onAccountPromise,
+  // ledger-helpers — the clause the ⊕ window's note and the bill door's
+  // toast carry): the next bill you raise, theirs to have back, or nothing
+  // at all. No month named: this door has no bill to count from.
   const stays = remaining == null
     ? "what's left stays on account"
     : remaining > 0
-      ? `${money(remaining)} stays on account and comes off the next bill you raise for them`
+      ? `${money(remaining)} stays on account${onAccountPromise(nothingMore)}`
       : "nothing stays on account";
   return {
     ok: true,
@@ -312,12 +333,14 @@ export async function recordOnAccount(
     receipt,
     renterEmail: (whoRes.data?.contact_pref as string) === "paper" ? null : ((whoRes.data?.email as string) ?? null),
     // WHAT HAPPENED TO IT, BOTH ROADS (R1): settled the oldest open bill now,
-    // or nothing was open and it waits for the run.
+    // or nothing was open and it waits for the run — and what it waits for
+    // is the same promise, with the by-hand door beside it the way this
+    // sentence has always offered it.
     signal:
       `${money(amount)} recorded for ${renter.name}. ` +
       (where
         ? `${where.charAt(0).toUpperCase()}${where.slice(1)} — ${stays}.`
-        : "It's on account — it comes off the next bill you raise for them, or put it against an open one now.") +
+        : `It's on account${onAccountPromise(nothingMore, { orApplyNow: true })}.`) +
       // AND WHAT OLDER MONEY OF THEIRS MOVED, the way recordPayment says it.
       (older ? ` And ${older} from money they already had on account.` : "") +
       (problem ? ` ⚠️ ${problem}` : ""),

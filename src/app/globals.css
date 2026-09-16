@@ -231,6 +231,31 @@ textarea {
   color: var(--sub);
 }
 
+/* ---------------- second-level tab ---------------- */
+/* THE ONE SECOND-LEVEL DEVICE. The park owner's strip is six tabs, and a tab
+   that groups screens shows them as a row of these underneath — the
+   prototype's `.vt` (lakelife.html:199-200), mirrored exactly: a white pill
+   with a hairline, ink-filled when it is the screen you are on. It is a link,
+   so a screen behind a pill is still a URL, not a state of the page. Not a
+   `.ll-pill` — that is a status word, not a door. */
+.ll-subtab {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 15px;
+  border-radius: 99px;
+  border: 1.5px solid var(--line);
+  background: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--sub);
+  text-decoration: none;
+}
+.ll-subtab.on {
+  background: var(--ink);
+  color: #fff;
+  border-color: var(--ink);
+}
+
 /* ---------------- button ---------------- */
 .ll-btn {
   display: inline-flex;

@@ -522,7 +522,7 @@ export function ParkRentRoll({
             sub={`not ours to bill · LakeLife starts ${preGoLive.label}`}
           />
         ) : owedTotal != null && notYetStarted ? (
-          <Stat label="Owed this month" value="—" sub="nothing is collectable yet" />
+          <Stat label="Owed this month" value="—" sub="not billed yet · anything paid goes on account" />
         ) : !billedThisMonth ? (
           <Stat
             label="Owed this month"

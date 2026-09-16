@@ -10,6 +10,9 @@ import { getParkDials, getOnlineRent } from "@/app/park/actions";
 import { ParkDials } from "@/components/ParkDials";
 import { ParkOnlineRent } from "@/components/ParkOnlineRent";
 import { NoticeHold } from "@/components/NoticeHold";
+import { ParkReadiness } from "@/components/ParkReadiness";
+import { getReadinessFacts } from "@/app/park/readiness-data";
+import { readinessFor, readinessHeadline } from "@/app/park/readiness";
 import type { ParkProfileInput } from "@/app/park/park-helpers";
 
 const md = (m: number | null, d: number | null) =>
@@ -48,16 +51,26 @@ export default async function ParkSetupPage() {
     houseRules: park.houseRules ?? "",
   };
 
-  const [statuses, dials, online] = await Promise.all([
+  const [statuses, dials, online, ready] = await Promise.all([
     parkStreamStatuses(park.id),
     getParkDials(park.id),
     getOnlineRent(park.id),
+    getReadinessFacts(park.id),
   ]);
+  // `ready` is null only for a non-member, already shown the door above.
+  const rows = ready ? readinessFor(ready.facts) : [];
+  const heading = ready ? readinessHeadline(ready.facts, rows) : null;
 
   return (
     <>
       <TopBar />
       <ParkNav park={park} />
+      {/* THE PAGE TITLE, and under it what is left to set up — always shown
+          here, gated nowhere: this is the tab he opens to find out. */}
+      <div className="wrap" style={{ paddingTop: 14 }}>
+        <h1 style={{ fontSize: 26, margin: "0 0 10px" }}>Park setup</h1>
+        {heading && <ParkReadiness headline={heading.headline} sub={heading.sub} rows={rows} />}
+      </div>
       <div className="wrap">
         <NoticeHold
           parkId={park.id}
