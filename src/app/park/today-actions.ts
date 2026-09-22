@@ -3,9 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
-import { COST_CATEGORY_LABEL, type CostCategory , billPeriod, costAnswersBill, type Cadence} from "./cost-helpers";
+import { COST_CATEGORY_LABEL, type CostCategory , costAnswersBill, type Cadence, type BillPeriod} from "./cost-helpers";
 import { todayLakeDate, lakeDateOf } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
+import { firstBillablePeriod } from "@/lib/billing-start";
 import {
   toRows, summarise, currentPeriod,
   type Charge, type LedgerRow, type LedgerSummary,
@@ -13,6 +14,7 @@ import {
 import { summariseReceipts, customPeriod, type Receipt, type Method } from "./receipts-helpers";
 import {
   moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, householdsIn, holdoverLotsOf, lotOccupancy,
+  oldestUnansweredBill,
   type MoneyBlock, type Task, type TaskState,
 } from "./today-helpers";
 import { getHeldMoney } from "./money-actions";
@@ -126,6 +128,23 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const lagDays = (park?.office_recording_lag_days as number) ?? 3;
   const rentDueDay = (park?.rent_due_day as number) ?? 1;
   const cutoverOn = (park?.cutover_date as string) ?? null;
+
+  // HOW FAR BACK A MISSED BILL IS STILL ASKED ABOUT.
+  //
+  // The recurring-bill reminder used to look at TODAY's period alone, so a
+  // bill he never entered stopped being mentioned the moment its period
+  // rolled. It walks back now (oldestUnansweredBill), and a walk needs a
+  // floor: the first period that is ours, and no further back than the costs
+  // this loader actually reads — a period whose costs were never fetched
+  // cannot be judged entered or not, and guessing would put a permanent card
+  // on his screen for a bill that is sitting in the books.
+  const firstOurs = firstBillablePeriod(cutoverOn);
+  const goLiveFloor = firstOurs ? `${firstOurs}-01` : null;
+  // The costs read is widened to match, so the walk is exact for any park
+  // with a go-live date — which is every park that changed hands.
+  const costsFrom = goLiveFloor && goLiveFloor < `${priorYear}-01-01`
+    ? goLiveFloor
+    : `${priorYear}-01-01`;
 
   // ---- lots and who is on them -------------------------------------------
   const lots = mustRead(
@@ -427,7 +446,9 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // than amount, because two identical bills are two bills.
   const [schedulesRes, monthCostsRes] = await Promise.all([
     admin.from("park_cost_schedules")
-      .select("id, category, cadence, due_day, due_month, typical_amount, label, covers_prior_period")
+      // `created_at` bounds the walk back: a schedule filed in March was
+      // never expected to answer for February.
+      .select("id, category, cadence, due_day, due_month, typical_amount, label, covers_prior_period, created_at")
       .eq("park_id", parkId).eq("active", true),
     // WHAT COUNTS AS "DEALT WITH" lives in `costAnswersBill` (cost-helpers),
     // with the history of the two times it was wrong. What is decided HERE
@@ -438,7 +459,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     admin.from("park_costs")
       .select("category, period_start, period_end, created_at")
       .eq("park_id", parkId)
-      .or(`created_at.gte.${priorYear}-01-01,period_end.gte.${priorYear}-01-01`),
+      .or(`created_at.gte.${costsFrom},period_end.gte.${costsFrom}`),
   ]);
   const schedules = mustRead("the bills that recur here", schedulesRes);
   // This one decides whether a bill reminder CLEARS. An empty read makes every
@@ -588,32 +609,44 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     // quiet from the moment it is entered until next November.
     billsDue: (schedules ?? [])
       .map((sc) => {
+        // Cleared by a cost of that category that answers the reminder — the
+        // ONE rule, in cost-helpers, with its history.
+        const answered = (period: BillPeriod) => allCosts.some((c) => costAnswersBill(
+          {
+            category: String(c.category),
+            period_start: String(c.period_start ?? ""),
+            period_end: String(c.period_end ?? ""),
+            enteredOn: lakeDateOf(String(c.created_at ?? "")) ?? "",
+          },
+          period,
+          String(sc.category),
+        ));
+        // THE OLDEST PERIOD NOBODY HAS ENTERED, not merely today's.
+        //
         // The schedule may say its bill is FOR the period before the one it
         // is due in (0170). billPeriod then keys and windows on the covered
         // period and carries the flag on its result, so the clear rule and
-        // the card read one shape.
-        const p = billPeriod(
-          (sc.cadence as Cadence) ?? "monthly",
-          sc.due_month == null ? null : Number(sc.due_month),
-          Number(sc.due_day ?? 5),
+        // the card read one shape — and the walk asks it per period rather
+        // than re-deriving anything.
+        //
+        // The floor is the latest of three honest limits: the costs this
+        // loader read, the first period that is ours, and the day the
+        // schedule was filed.
+        const createdOn = lakeDateOf(String(sc.created_at ?? "")) ?? costsFrom;
+        const floors = [costsFrom, `${createdOn.slice(0, 7)}-01`];
+        if (goLiveFloor) floors.push(goLiveFloor);
+        const p = oldestUnansweredBill({
+          cadence: (sc.cadence as Cadence) ?? "monthly",
+          dueMonth: sc.due_month == null ? null : Number(sc.due_month),
+          dueDay: Number(sc.due_day ?? 5),
+          coversPriorPeriod: Boolean(sc.covers_prior_period),
           today,
-          Boolean(sc.covers_prior_period),
-        );
+          floor: floors.reduce((a, b) => (a > b ? a : b)),
+          answered,
+        });
         return { sc, p };
       })
-      // Cleared by a cost of that category that answers the reminder — the
-      // ONE rule, in cost-helpers, with its history.
-      .filter(({ sc, p }) => !allCosts.some((c) => costAnswersBill(
-        {
-          category: String(c.category),
-          period_start: String(c.period_start ?? ""),
-          period_end: String(c.period_end ?? ""),
-          enteredOn: lakeDateOf(String(c.created_at ?? "")) ?? "",
-        },
-        p,
-        String(sc.category),
-      )))
-      .map(({ sc, p }) => ({
+      .flatMap(({ sc, p }) => (p == null ? [] : [{
         scheduleId: sc.id as string,
         category: sc.category as string,
         label: (sc.label as string)
@@ -627,7 +660,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
         dueOn: p.dueOn,
         typical: sc.typical_amount == null ? null : Number(sc.typical_amount),
         coversPriorPeriod: p.coversPriorPeriod,
-      })),
+      }])),
     noticed: stays
       .filter((s) => s.expected_move_out)
       .map((s) => ({

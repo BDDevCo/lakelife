@@ -303,6 +303,26 @@ async function planNextAgreement(
   const closedOutLater = (links ?? []).some(
     (l) => l.status === "ended" && ((l.agreement_seq as number) ?? 1) > seq,
   );
+  // AND WAS A LATER LINK ALREADY WRITTEN AND STILL HELD? The same read,
+  // asked the question the other two doorways already ask. `links` is
+  // filtered to approved/active/ended, so "not ended" is exactly "held" — a
+  // cancelled or declined successor is not a renewal and must not block a
+  // re-write. The earliest held one is the successor his tap wrote.
+  //
+  // 'moved_out' still has the last word below: a later link that was CLOSED
+  // out is not a renewal either, and the family who left must not be renewed
+  // over. So the 'not ended' clause here is what makes this variable mean
+  // held; the ordering is what makes the answer right.
+  //
+  // SCOPE, worth saying plainly: this finds the successor only while it is
+  // ON the chain. `successorRow` copies the chain id only when the plan is
+  // consecutive, so a renewal written from a later `startFrom` mints a new
+  // chain and is invisible here. No screen passes `startFrom`, so the door
+  // he actually taps is covered; a hand-built gap renewal is not.
+  const laterHeld = (links ?? [])
+    .filter((l) => l.status !== "ended" && ((l.agreement_seq as number) ?? 1) > seq)
+    .sort((a, b) => (((a.agreement_seq as number) ?? 1) - ((b.agreement_seq as number) ?? 1)))[0];
+  const laterHeldStart = laterHeld ? (parseDaterange(laterHeld.during as string)?.start ?? null) : null;
   const chainMonthsSoFar = (links ?? [])
     .filter((l) => l.status !== "ended")
     .filter((l) => l.id !== res.id && ((l.agreement_seq as number) ?? 1) < seq)
@@ -356,6 +376,14 @@ async function planNextAgreement(
   // send him to a door that files a second renter for the same household.
   if (res.origin === "grandfathered") {
     plan = { ok: false, refusal: "inherited" };
+  } else if (laterHeld) {
+    // HIS OWN FIRST TAP. Ordered exactly as the resident's link orders it:
+    // 'inherited' outranks it (a holdover's new lease is a different act),
+    // and it outranks 'already_ended' for the reason extend-stay gives — the
+    // old row's end is behind them precisely because the next one has begun.
+    // Without this the second tap reached the insert and came back as the
+    // database's overlap error, which reads as somebody else's tenancy.
+    plan = { ok: false, refusal: "already_renewed" };
   }
   // THE HOUSEHOLD MOVED OUT — closed out of a later link of this chain. The
   // final fact, whatever else the planner said: a successor written from
@@ -414,7 +442,7 @@ async function planNextAgreement(
       priorQuotedAmount: priorQuoted,
       rentChangeOn: inForce && quotedAmount !== priorQuoted ? inForce.effective_on : null,
       plan,
-      refusalText: plan.refusal ? renewalRefusalText(plan.refusal, lotNumber, offered) : null,
+      refusalText: plan.refusal ? renewalRefusalText(plan.refusal, lotNumber, offered, laterHeldStart) : null,
       chainNote: plan.totalMonthsAfter ? chainNotice(plan.totalMonthsAfter) : null,
       lengths,
       defaultMonths,

@@ -1331,12 +1331,17 @@ describe("the roll offers Edit and 'Filed by mistake' for a first agreement the 
     expect(evaluate({ current: null, next: null })).toBeNull();
   });
 
-  it("Edit is gated on the link ON THE LOT (current, else the one that ran out) OR the hand-filed one; Move out stays on the lot, Gave notice on current", () => {
+  it("Edit is gated on the server's editReservationId; Move out stays on the lot, Gave notice on current", () => {
     // `onLot` is the current link, else the lapsed one — a household whose
     // paperwork ran out is still there (park-helpers RollRow.lapsed). Never
     // the hand-filed row for Move out: nobody has lived in it.
+    //
+    // EDIT IS WIDER THAN `onLot`, and the widening is the server's: the page
+    // picks ONE id (editable → editReservationId) covering the hand-filed row
+    // and an undecided successor standing alone. Move out is still keyed on
+    // `onLot` alone, which is what the slice below pins.
     expect(roll).toMatch(/const onLot = r\.currentReservationId \?\? r\.lapsedReservationId;/);
-    expect(roll).toMatch(/\(onLot \?\? r\.filedByHandId\) && \(/);
+    expect(roll).toMatch(/\{r\.editReservationId && \(/);
     const moveOut = roll.slice(roll.indexOf('"Move out"') - 500, roll.indexOf('"Move out"'));
     expect(moveOut).toMatch(/\{onLot && \(/);
     expect(moveOut).not.toMatch(/filedByHandId/);
@@ -1377,7 +1382,7 @@ describe("the roll offers Edit and 'Filed by mistake' for a first agreement the 
 
   it("the Edit panel's fields come from the stay it edits", () => {
     expect(page).toMatch(/const onLot = r\.current \?\? r\.lapsed;/);
-    expect(page).toMatch(/const editable = onLot \?\? filedByHand;/);
+    expect(page).toMatch(/const editable = onLot \?\? filedByHand \?\? \(r\.next\?\.decidedAt == null \? r\.next : null\);/);
     expect(page).toMatch(/currentRent: editable\?\.quotedAmount \?\? null/);
     expect(page).toMatch(/currentTerm: editable\?\.term \?\? null/);
     // The occupancy fields stay on `current` alone.

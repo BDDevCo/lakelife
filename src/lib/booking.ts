@@ -81,11 +81,13 @@ export interface EffectiveSeason {
 /**
  * The window the calendar should actually use today (audit finding 1).
  *
- * Stored dates from a PAST year are rolled onto the current year, month and
- * day intact and both ends by the SAME number of years so the window keeps
- * its span. Dates for this year or a future one are returned untouched — a
- * window a human confirmed is never overwritten by a guess. Pure: no clock,
- * no I/O; `today` is passed in.
+ * A stored window that has already RUN OUT is rolled onto the next season,
+ * month and day intact and both ends by the SAME number of years so the
+ * window keeps its span. Run out means either its year is past OR its pull
+ * deadline is — the deadline falls in mid-November, so a window can be spent
+ * six weeks before the calendar agrees. A window still ahead of us is
+ * returned untouched: what a human confirmed is never overwritten by a guess.
+ * Pure: no clock, no I/O; `today` is passed in.
  */
 /**
  * IS THIS WINDOW A GUESS? — one answer, so every surface agrees.
@@ -128,12 +130,33 @@ export function effectiveSeason(stored: StoredSeason, today: string): EffectiveS
   const anchor = stored.iceOut ?? stored.pullDeadline;
   if (!anchor || !ISO_DATE_RE.test(anchor) || !ISO_DATE_RE.test(today)) return unrolled;
   const delta = Number(today.slice(0, 4)) - Number(anchor.slice(0, 4));
-  if (!Number.isFinite(delta) || delta <= 0) return unrolled;
+  if (!Number.isFinite(delta)) return unrolled;
+  let years = delta > 0 ? delta : 0;
+
+  // A SEASON ENDS BEFORE ITS YEAR DOES (walk 4).
+  //
+  // The roll used to fire only when the stored ANCHOR YEAR was strictly past,
+  // which left a hole between the pull deadline (12-16 November, per lake) and
+  // New Year's Day: on 20 December 2026 the year delta is 0, so the window
+  // stayed 2026-03-21 → 2026-11-14, and dayStatus refused every date in 2027.
+  // The customer could page the calendar to April 2027 — the nav has no
+  // ceiling — and read "Outside the water-work season" on every square of the
+  // first spring we intend to sell, six weeks of it, with no caveat anywhere
+  // on the page. What makes a window stale is that it has ENDED, not that the
+  // calendar has turned over, so that is what we test.
+  //
+  // The end is checked explicitly for null: a row with an ice-out and no pull
+  // deadline has no end to be past, and `today > null` would quietly coerce to
+  // false and look like the same answer for the wrong reason.
+  const endSoFar = addYearsISO(stored.pullDeadline, years);
+  if (endSoFar != null && ISO_DATE_RE.test(endSoFar) && today > endSoFar) years += 1;
+
+  if (years <= 0) return unrolled;
   return {
-    seasonStart: addYearsISO(stored.iceOut, delta),
-    seasonEnd: addYearsISO(stored.pullDeadline, delta),
+    seasonStart: addYearsISO(stored.iceOut, years),
+    seasonEnd: addYearsISO(stored.pullDeadline, years),
     wasRolled: true,
-    yearsRolled: delta,
+    yearsRolled: years,
   };
 }
 

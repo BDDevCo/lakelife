@@ -475,11 +475,20 @@ export function firstRunCard(
 ): FirstRunCard | null {
   if (f.published || contact.chargesRaised > 0 || contact.paymentsRecorded > 0) return null;
 
-  // Filed counts before it has started — the December roll is eighteen
-  // households spoken for, not nobody. The occupancy line's words again.
+  /**
+   * NOBODY IS ON THE ROLL YET. Filed counts before it has started — the
+   * December roll is eighteen households spoken for, not nobody — so the
+   * reserved set belongs in the sum beside the occupied one.
+   *
+   * Read twice below: by the state line, and by the second door. Computed
+   * once so the two can never disagree about which state the card is in.
+   */
+  const nobodyFiled = f.occupiedLiveLots + f.reservedLiveLots === 0;
+
+  // The occupancy line's words again.
   const stateLine = f.lots === 0
     ? "No lots on file yet."
-    : f.occupiedLiveLots + f.reservedLiveLots === 0
+    : nobodyFiled
       ? `${plural(f.lots, "lot", "lots")} on file · nobody filed on them yet.`
       : f.occupiedLiveLots === 0
         ? `${plural(f.lots, "lot", "lots")} · ${f.reservedLiveLots} spoken for, their tenancies start later.`
@@ -523,9 +532,25 @@ export function firstRunCard(
     contactLine,
     listLine,
     cta: { label: "Let's look at it", href: firstUndone(rows)?.href ?? "/park/setup" },
-    // The Rent roll's own empty state offers both doors; the readiness row
-    // points at Lots & rates, so the card offers the file one as well.
-    alt: f.lots === 0 ? { label: "or load a rent roll", href: "/park/import" } : null,
+    /**
+     * THE SECOND DOOR — the file — OFFERED WHENEVER NOBODY IS FILED.
+     *
+     * It was gated on `f.lots === 0`, which is the same stale premise the
+     * importer's only link once had. ParkNav says it in its own words: the
+     * link lived inside the rent roll's zero-lots empty state, "so the moment
+     * a single lot existed the file box became unreachable, and the fallback
+     * was the three hours of manual typing it exists to prevent". Gated on
+     * lots, this card reproduced that one level up — on closing week a park
+     * with its lots on file and nobody on them got ONE button, to a grid of
+     * blank rows, with the seller's roll sitting in his hand.
+     *
+     * Households is the test because that is the state the importer exists
+     * for, and it is the state the line above has already named. With no lots
+     * the sum is zero too, so the old no-lots behaviour is kept rather than
+     * re-encoded. The importer matches existing lots by number and creates
+     * only what is missing, so the door cannot duplicate lots already filed.
+     */
+    alt: nobodyFiled ? { label: "or load a rent roll", href: "/park/import" } : null,
   };
 }
 

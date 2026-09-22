@@ -116,6 +116,20 @@ export interface RollRowView {
    */
   filedByHandId: string | null;
   filedByHandRenter: string | null;
+  /**
+   * THE STAY THE EDIT PANEL EDITS, and the household it belongs to — decided
+   * on the server (page.tsx `editable`), never reassembled here.
+   *
+   * The button, its label, the panel's own guard and the panel's name seed
+   * each picked their own row out of a chain of ids, and none of the chains
+   * reached an imported holdover: every row on a roll loaded before go-live
+   * is "reserved", and the button did not exist on any of them — while the
+   * readiness list told him to add their email and phone from this screen.
+   * One id and one name, read by all four, so a shape that reaches the
+   * button also reaches the panel with a household in it.
+   */
+  editReservationId: string | null;
+  editRenterName: string | null;
   nextRenter: string | null;
   nextFrom: string | null;
   /**
@@ -736,19 +750,23 @@ export function ParkRentRoll({
                       />
                     )}
                     {/* EDIT: the link on the lot (current, else the one that
-                        ran out), else the agreement the office filed ahead
-                        of its day. A wrong rent typed on 20 December for
-                        1 January had no door until the 1st, the morning
-                        January bills. */}
-                    {(onLot ?? r.filedByHandId) && (
+                        ran out), else a household whose only record is still
+                        to start — the office's own filing, and the imported
+                        holdover waiting on the cutover. A wrong rent typed on
+                        20 December for 1 January had no door until the 1st,
+                        the morning January bills; an imported household had
+                        no door at all, on the screen the readiness list sends
+                        him to for their email and phone. One id, chosen on
+                        the server (editReservationId). */}
+                    {r.editReservationId && (
                       <button
                         className="ll-btn ghost"
                         onClick={() => {
-                          const id = onLot ?? r.filedByHandId!;
+                          const id = r.editReservationId!;
                           setEditingId(editingId === id ? null : id);
                         }}
                       >
-                        {editingId === (onLot ?? r.filedByHandId) ? "Cancel" : "Edit"}
+                        {editingId === r.editReservationId ? "Cancel" : "Edit"}
                       </button>
                     )}
                     {/* FILED BY MISTAKE — take a not-yet-started first
@@ -954,10 +972,10 @@ export function ParkRentRoll({
                   </div>
                 </div>
 
-                {editingId && editingId === (onLot ?? r.filedByHandId) && (
+                {editingId && editingId === r.editReservationId && (
                   <EditTenant
                     reservationId={editingId}
-                    name={r.currentRenter ?? r.lapsedRenter ?? r.filedByHandRenter ?? ""}
+                    name={r.editRenterName ?? ""}
                     rent={r.currentRent}
                     dueDay={r.currentDueDay}
                     source={r.currentSource}

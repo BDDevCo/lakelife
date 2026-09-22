@@ -12,7 +12,7 @@ import {
   type RenterContact, type ReminderPlan,
 } from "./reminder-helpers";
 import type { ParkResult } from "./actions";
-import { prettyMonth } from "./ledger-helpers";
+import { prettyMonth, money } from "./ledger-helpers";
 import { mustRead, softRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 /**
@@ -214,7 +214,7 @@ export async function sendReminders(
     }
     const res = await sendEmail({
       to: contact.email,
-      subject: `${parkName} — $${r.balance.toFixed(2)} outstanding on lot ${r.lotNumber}`,
+      subject: `${parkName} — ${money(r.balance)} outstanding on lot ${r.lotNumber}`,
       text: r.body,
       html: asHtml(r.body),
     });

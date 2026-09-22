@@ -32,17 +32,90 @@ export type ReRateProblem =
   | "ends_before_effective"
   | "not_monthly";
 
-export function reRateProblemText(p: ReRateProblem, lotLabel: string): string {
+/** "9", "2 and 9", "2, 9 and 14" — the way a person says a list of lots. */
+function lotList(labels: readonly string[]): string {
+  if (labels.length <= 1) return labels.join("");
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+/**
+ * WHY A LOT WAS LEFT ALONE, in words, for one lot or for every lot that was
+ * left alone for the same reason.
+ *
+ * The four reasons live here and only here. The screen used to summarise them
+ * itself — "{n} left alone — already at that rent, not monthly, or nobody on
+ * the lot" — which named THREE of the four, and the missing one
+ * (`ends_before_effective`) is the reason for nearly every lot at a park whose
+ * house style is a one-month agreement: any date the notice period allows is
+ * past the end of a one-month agreement whose successor is unwritten. So the
+ * owner scheduled a park-wide increase, most lots quietly kept the old rent,
+ * and the only explanation on screen said "nobody on the lot" about
+ * households who live there.
+ *
+ * Both doors named below are doors that exist: rates on an empty lot are set
+ * under Lots & rates ('Save rates'), and a sitting tenant's increase lands at
+ * renewal — 'Renew at a new rent', the same spelling `backfillWords` uses.
+ *
+ * ONE function, not a per-lot one and a grouped one. The per-lot version this
+ * replaces had no caller anywhere outside its own test, which is how the
+ * screen came to write its own summary in the first place.
+ */
+export function reRateProblemSentence(p: ReRateProblem, lotLabels: readonly string[]): string {
+  const many = lotLabels.length !== 1;
+  const lots = lotList(lotLabels);
+  const subject = `${many ? "Lots" : "Lot"} ${lots}`;
   switch (p) {
     case "no_tenancy":
-      return `Nobody is on lot ${lotLabel}, so there's no rent to change. Set the asking rate instead.`;
+      return `Nobody is on ${many ? "lots" : "lot"} ${lots}, so there's no rent to change — set what ${many ? "they ask" : "it asks"} under Lots & rates.`;
     case "already_at_amount":
-      return `Lot ${lotLabel} is already at that rent.`;
+      return `${subject} ${many ? "are" : "is"} already at that rent.`;
     case "ends_before_effective":
-      return `Lot ${lotLabel}'s stay ends before the new rent would start.`;
+      return `${subject} ${many ? "run" : "runs"} out before the new rent would start — an increase lands at renewal instead: use Renew at a new rent, under Agreements to write on Today.`;
     case "not_monthly":
-      return `Lot ${lotLabel} isn't a monthly tenancy — change that one on its own.`;
+      return `${subject} ${many ? "aren't monthly tenancies — change those on their own" : "isn't a monthly tenancy — change that one on its own"}.`;
   }
+}
+
+/**
+ * THE ORDER THE PLANNER ITSELF JUDGES THEM IN, so the reasons on screen read
+ * in the order they were decided rather than in whatever order the lots
+ * happened to arrive.
+ */
+const PROBLEM_ORDER: readonly ReRateProblem[] = [
+  "no_tenancy", "not_monthly", "already_at_amount", "ends_before_effective",
+];
+
+export interface ReRateSkipGroup {
+  problem: ReRateProblem;
+  /** Every lot left alone for this reason, in the order the plan lists them. */
+  lotLabels: string[];
+  /** The one sentence for all of them. */
+  text: string;
+}
+
+/**
+ * EVERY REASON A LOT WAS LEFT ALONE, one line per reason, with the lots it
+ * covers named.
+ *
+ * Grouped rather than one line per lot: at a twenty-one lot park where
+ * nothing qualifies, a line each would put twenty-one sentences above the
+ * Schedule button. Grouped, the compactness of the old one-line summary
+ * survives and every lot is still named — which is the point, because at
+ * twenty-one lots a count is not an answer.
+ */
+export function reRateSkipGroups(plan: ReRatePlan): ReRateSkipGroup[] {
+  const byProblem = new Map<ReRateProblem, string[]>();
+  for (const l of plan.skipped) {
+    if (!l.problem) continue;
+    const held = byProblem.get(l.problem) ?? [];
+    held.push(l.lotLabel);
+    byProblem.set(l.problem, held);
+  }
+  return PROBLEM_ORDER.flatMap((problem) => {
+    const lotLabels = byProblem.get(problem);
+    if (!lotLabels || lotLabels.length === 0) return [];
+    return [{ problem, lotLabels, text: reRateProblemSentence(problem, lotLabels) }];
+  });
 }
 
 export interface ReRateLine {

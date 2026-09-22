@@ -41,6 +41,7 @@ import { lakeDateOf } from "@/lib/booking";
  */
 
 import { prettyMonth } from "./ledger-helpers";
+import { firstBillablePeriod } from "@/lib/billing-start";
 import { longDate } from "@/lib/lake-time";
 import { csvCell as csvText } from "@/lib/csv";
 import { allocationWords, type AllocationLine } from "@/lib/allocations";
@@ -415,7 +416,15 @@ export function summariseReceipts(all: readonly Receipt[], period: Period): Rece
     // on a bounced payment came back too. Kept out of totalCents on purpose.
     cardFeesCents += r.feeCents;
     bump(byMethod, r.method, METHOD_LABEL[r.method] ?? r.method, r.amountCents);
-    bump(byMonth, r.receivedOn.slice(0, 7), r.receivedOn.slice(0, 7), r.amountCents);
+    // THE LABEL IS THE HUMAN HALF OF A BUCKET, and this one was the ISO
+    // period twice over — the only bucket whose label was not a person's
+    // words, beside METHOD_LABEL above and "Lot N" below. Nothing renders
+    // byMonth yet, so it read as harmless; the day somebody puts a month
+    // breakdown on the statement or in the file it would have printed
+    // "2027-01" on the accountant's own page, and the months-in-words rule
+    // would have been broken on arrival rather than in review. `key` stays
+    // ISO because the sort below is a string sort on it.
+    bump(byMonth, r.receivedOn.slice(0, 7), prettyMonth(r.receivedOn.slice(0, 7)), r.amountCents);
     bump(byHousehold, r.lotNumber, `Lot ${r.lotNumber}`, r.amountCents);
 
     if (r.chargeStatus === "void") againstVoided.push(r);
@@ -684,9 +693,18 @@ export function billStatusCell(r: Pick<Receipt, "chargeStatus" | "released">): s
     .map((a) => `${a.periodMonth}: ${decimal(Math.round(a.amount * 100))}`);
   if (rel.remainingCents > 0) parts.push(`still held: ${decimal(rel.remainingCents)}`);
   if (rel.handedBackCents > 0) parts.push(`handed back${rel.handedBackOn ? ` ${rel.handedBackOn}` : ""}: ${decimal(rel.handedBackCents)}`);
-  // Nothing applied, nothing held, nothing handed back: it went back through
-  // the processor — the refund is its own negative row, and the cell says
-  // only what is true of the money now.
+  // THE FOURTH WAY THE MONEY LEAVES, and the one this cell used to omit. A
+  // refund through the processor (0142) is its own NEGATIVE row dated the
+  // day it went back — which is often a later window's file — so a $542.53
+  // released and then refunded printed "none still held", and a January file
+  // had nothing anywhere saying where the money went. True, and not the
+  // question the cell exists to answer. No day here: the view's `refunded`
+  // is a sum over park_refunds, which can be several on different days, and
+  // a cell must not name one of them as the date.
+  if (rel.refundedCents > 0) parts.push(`refunded: ${decimal(rel.refundedCents)}`);
+  // Nothing applied, nothing held, nothing handed back, nothing refunded —
+  // now genuinely all four ways — so the cell says only what is true of the
+  // money now.
   if (parts.length === 0) parts.push("none still held");
   return `CANCELLED — money released on account: ${parts.join("; ")}`;
 }
@@ -826,8 +844,25 @@ export function receiptsFilename(parkName: string, period: Period): string {
 // --------------------------------------------------- what it does NOT say --
 
 export interface ExclusionContext {
-  /** Earliest payment ever recorded for this park; null when none. */
-  recordsBeginOn: string | null;
+  /**
+   * THE DAY THE PARK WENT LIVE HERE (`parks.cutover_date`), or null when he
+   * has not set one — and then this says NOTHING, which is the safe state:
+   * readiness.ts is the door that asks him for the date, and a note must not
+   * invent one.
+   *
+   * WHY THE STATEMENT NEEDS IT AT ALL. The screen opens on the last complete
+   * month, so all through January 2027 the first thing he sees is December
+   * 2026 — a window entirely before the ledger starts — reading "No money is
+   * recorded as coming in between December 1, 2026 and December 31, 2026",
+   * which is a measurement of a month in which the park took nothing. On the
+   * one screen that becomes a file an accountant keeps, the quiet state has
+   * to say what it checked.
+   *
+   * THE RULE IS NOT RE-DERIVED HERE: firstBillablePeriod owns it.
+   */
+  cutoverOn: string | null;
+  /** The last day of the window these lines are about, `YYYY-MM-DD`. */
+  windowEndsOn: string;
   lagDays: number;
   /** Fees configured but never billed — money the accountant might expect. */
   unbilledFeeLabels: string[];
@@ -945,6 +980,16 @@ export interface ExclusionContext {
     handedBackCents: number;
     handedBackOn: string | null;
     handedBackInFile: boolean;
+    /**
+     * WHAT WENT BACK THROUGH THE PROCESSOR, and whether its negative row is
+     * in THIS file — the same pair the receipt carries (`Receipt.released`),
+     * and the fourth way a released bill's money leaves. Declared here
+     * because the sentence stopped at the hand-back: the loader has spread
+     * `...r.released` into every entry since 0169, so both figures were
+     * already arriving and only the type and the sentence ignored them.
+     */
+    refundedCents: number;
+    refundedInFile: boolean;
   }>;
 }
 
@@ -953,11 +998,18 @@ export interface ExclusionContext {
  * money is now, in words, for the note. Bills in month order (each line
  * through the one allocation sentence, so the re-raised month is named
  * apart from the cancelled one), what is still held after them, the
- * hand-back last; "none of it is still held" when all three are empty (it
- * went back through the processor — the refund sentence names that).
+ * hand-back, then what went back through the processor; "none of it is
+ * still held" only when all FOUR are empty.
+ *
+ * THE REFUND WAS THE MISSING ONE. This stopped at the hand-back, so a
+ * cancelled bill whose $70.00 went back to the card was described as
+ * "none of it is still held" — true, and not an answer. The refund's own
+ * sentence elsewhere in the note covers refunds that went back IN THIS
+ * WINDOW; a refund in a later month was named in no sentence at all.
  */
 function releasedWhere(rel: {
   allocations: AllocationLine[]; remainingCents: number; handedBackCents: number; handedBackOn: string | null; handedBackInFile: boolean;
+  refundedCents: number; refundedInFile: boolean;
 }): string {
   const parts = [...rel.allocations]
     .filter((a) => Math.round(a.amount * 100) > 0)
@@ -965,6 +1017,7 @@ function releasedWhere(rel: {
     .map(allocationWords);
   if (rel.remainingCents > 0) parts.push(`${money(rel.remainingCents)} still held`);
   if (rel.handedBackCents > 0) parts.push(handedBackWhere(rel));
+  if (rel.refundedCents > 0) parts.push(refundedWhere(rel));
   return parts.length ? parts.join(", ") : "none of it is still held";
 }
 
@@ -990,6 +1043,34 @@ export function handedBackWhere(
   return `${money(rel.handedBackCents)} ${opts?.asSentence ? "was " : ""}handed back${when} — ${where}`;
 }
 
+/**
+ * "$70.00 went back — its own line below and in the file", or "— its own
+ * line in the statement for the month it went back". The refund's twin of
+ * handedBackWhere above, and for the same reason: the screen's sentence,
+ * the note and the file's own cell must say where that negative line is
+ * with ONE set of words. The screen said them inline and the note said
+ * nothing at all, which is how a refunded release came to be described
+ * three different ways on one statement.
+ *
+ * IT NAMES NO RAIL. The screen's inline copy said "went back to a card",
+ * but 0142 refunds ACH too and `released` carries no method — the view's
+ * `refunded` is a sum with no rail and no day on it. Copying that wording
+ * into two more doorways would have shipped a sentence that lies about
+ * every bank refund, so this says only that the money went back. Where a
+ * rail IS known row by row, refundRails below still names it.
+ *
+ * One phrase for both places: it reads as a fragment in the note's list
+ * ("…, $70.00 went back — its own line…") and as its own sentence on the
+ * screen, so there is no `asSentence` knob to set differently in two
+ * doorways.
+ */
+export function refundedWhere(rel: { refundedCents: number; refundedInFile: boolean }): string {
+  const where = rel.refundedInFile
+    ? "its own line below and in the file"
+    : "its own line in the statement for the month it went back";
+  return `${money(rel.refundedCents)} went back — ${where}`;
+}
+
 /** "a card", "cards", "a bank account", "bank accounts", or "cards and bank accounts" — whichever rails the refunds went back on. */
 function refundRails(methods: readonly string[]): string {
   const ach = methods.filter((m) => m === "ach").length;
@@ -1008,7 +1089,22 @@ function refundRails(methods: readonly string[]): string {
  * next to the number rather than in a footnote.
  */
 export function exclusionLines(ctx: ExclusionContext): string[] {
-  const lines: string[] = [
+  const lines: string[] = [];
+  // WHAT THIS WINDOW IS, BEFORE WHAT IT LEAVES OUT. A window that ends
+  // before the first period we may bill cannot hold anything: the ledger
+  // starts at go-live. Said FIRST, because it is the answer to the question
+  // the zero above just raised, and said only when the whole window is
+  // before that line — a December-to-January window does have January in it.
+  // Through firstBillablePeriod, which is where the go-live rule lives; this
+  // file does not get its own copy of it.
+  const firstOurs = firstBillablePeriod(ctx.cutoverOn);
+  if (firstOurs != null && ctx.windowEndsOn.slice(0, 7) < firstOurs) {
+    lines.push(
+      `These dates are all before you went live here on ${longDate(ctx.cutoverOn!)}, so there is nothing to show for them. ` +
+      `Your books here start with ${prettyMonth(firstOurs)} — anything collected before that belongs to whoever was collecting then.`,
+    );
+  }
+  lines.push(
     "This is money RECEIVED between these dates — not money billed. A bill you raised in August and got paid for in October counts in October.",
     "Expenses aren't in here. What you've spent isn't recorded with a date-paid yet, so give your accountant your bank and card statements for the outgoings.",
     // WAS: "Deposits and refunds aren't in here either — there's nowhere in
@@ -1018,7 +1114,7 @@ export function exclusionLines(ctx: ExclusionContext): string[] {
     "Deposits and money held on account aren't counted as rent received — a deposit goes back, and money on account is counted here on the day it arrived, not on the bills it later pays. Any amounts are listed below so this still reconciles to your bank.",
     "This is the day your office took the money, not the day it cleared the bank. A check taken at the end of a month may clear in the next one.",
     "Payments aren't split between rent and fees. Each one sits against a whole bill, and the file carries that bill's own breakdown so your accountant can split it.",
-  ];
+  );
   const dep = ctx.depositsReceivedCents ?? 0;
   const acct = ctx.onAccountReceivedCents ?? 0;
   const applied = Math.min(acct, ctx.onAccountAppliedCents ?? 0);

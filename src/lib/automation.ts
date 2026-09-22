@@ -1522,7 +1522,13 @@ export async function revalidateAssignments(
 }
 
 /** Night-before reminder text to each owner who has a scheduled job on `date`
- *  (default tomorrow). One text per property/day. */
+ *  (default tomorrow).
+ *
+ *  ONE TEXT PER OWNER PER DAY, not per property — the de-dupe below is keyed on
+ *  the owner's phone number. This said "one text per property/day", which is a
+ *  different promise: an owner with jobs at two places tomorrow gets a single
+ *  text naming whichever address came back first. Worth knowing before anybody
+ *  writes copy that counts on the other reading. */
 export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: boolean; sent: number }> {
   const date = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : addDays(todayLakeDate(), 1);
   const admin = createServiceClient();
@@ -1546,7 +1552,17 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
     // CHANNEL IS ASKED SEPARATELY, the same way the completion notice asks:
     // "Crew on the way / service-day reminder" is a TEXT-ONLY type on the
     // settings screen, so today the email half is always denied and this stays
-    // a text — the day that type is offered on email too, this already sends it.
+    // a text.
+    //
+    // THIS IS NOT YET WIRED FOR EMAIL, whatever the shape of the call suggests.
+    // It used to claim that the day the type is offered on email, this already
+    // sends it. It does not: the skip four lines up drops anybody with no phone
+    // on file BEFORE either channel is asked, so an email-only owner is gone
+    // before the question is put — and the de-dupe is keyed on the phone, which
+    // an email-only owner does not have. Offering `day` on email means moving
+    // that skip below this decision and re-keying the de-dupe on the owner's id.
+    // Leaving the claim here is how the next person ships the half that looks
+    // finished.
     const [dayBySms, dayByEmail] = await Promise.all([
       allowsNotification(ownerUser?.id, "day", "sms"),
       allowsNotification(ownerUser?.id, "day", "email"),
@@ -2913,7 +2929,7 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
 
   const enrollments = mustRead("the autopilot enrollments", await admin
     .from("autopilot_enrollments")
-    .select("id, property_id, service_id, locked_price, services(name, is_water_work), properties(owner_id, address, nickname, lake_id, lakes(ice_out_actual, pull_deadline))")
+    .select("id, property_id, service_id, locked_price, services(name, is_water_work), properties(owner_id, address, nickname, lake_id, lakes(name, ice_out_actual, pull_deadline, season_confirmed))")
     .eq("active", true));
 
   let proposed = 0, texted = 0;
@@ -2948,8 +2964,11 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
 
     const svc = one(e.services) as { name?: string; is_water_work?: boolean } | null;
     const prop = one(e.properties) as { owner_id?: string; address?: string; nickname?: string; lakes?: unknown } | null;
-    const lake = one(prop?.lakes) as { ice_out_actual?: string; pull_deadline?: string } | null;
+    const lake = one(prop?.lakes) as
+      { name?: string; ice_out_actual?: string; pull_deadline?: string; season_confirmed?: boolean } | null;
     if (!svc?.name || !prop?.owner_id) continue;
+    const where = prop.nickname || prop.address || "your place";
+    const lakeName = lake?.name ?? "the lake";
 
     const { data: lastDone, error: lastDoneErr } = await admin
       .from("jobs").select("date")
@@ -2964,15 +2983,42 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
       skipped.push(`Enrollment ${e.id}: couldn't read when the service was last done, so no date was penciled tonight — tomorrow's run looks again.`);
       continue;
     }
+    // THE ROLLED SEASON, NOT THE RAW COLUMNS (walk 4).
+    //
+    // This handed `lakes.ice_out_actual` and `lakes.pull_deadline` straight to
+    // the proposer. Nothing advances those columns — the only writers are the
+    // ops season form and lake-birth — so the seeded lakes carry 2026 dates
+    // forever. From 1 January 2027 both season edges sit in the past on every
+    // night of the year, `proposeAutopilotDate` returns null for every water
+    // service, and autopilot simply stops proposing water work: no proposal,
+    // no text, no line anywhere, while the Autopilot card on the customer's
+    // screen still says "We line up each season's visit and tell you first."
+    // The pull-reminder next door already rolls for exactly this reason.
+    const season = effectiveSeason(
+      { iceOut: (lake?.ice_out_actual as string) ?? null, pullDeadline: (lake?.pull_deadline as string) ?? null },
+      today,
+    );
     const date = proposeAutopilotDate({
       serviceName: svc.name,
       isWaterWork: !!svc.is_water_work,
-      iceOutISO: (lake?.ice_out_actual as string) ?? null,
-      pullDeadlineISO: (lake?.pull_deadline as string) ?? null,
+      iceOutISO: season.seasonStart,
+      pullDeadlineISO: season.seasonEnd,
       lastCompletedISO: (lastDone?.[0]?.date as string) ?? null,
       todayISO: today,
     });
-    if (!date) continue;
+    if (!date) {
+      // AUDIBLE. A bare `continue` here is the whole promise quietly not being
+      // kept: an enrollment that produces nothing on every run looks exactly
+      // like a quiet night. Say which enrollment, and say why in words ops can
+      // act on — the answer is nearly always a season nobody has filed yet.
+      const why = !svc.is_water_work
+        ? "there is no next date in this service's cadence"
+        : season.seasonStart && season.seasonEnd
+          ? `${lakeName}'s season on file runs ${longDate(season.seasonStart)} to ${longDate(season.seasonEnd)}, and neither edge is still a week or more away`
+          : `${lakeName} has no ice-out and pull deadline on file to measure from`;
+      skipped.push(`Enrollment ${e.id}: nothing was proposed for ${svc.name} at ${where} tonight — ${why}.`);
+      continue;
+    }
 
     const { data: ev } = await admin
       .from("autopilot_events")
@@ -2991,17 +3037,29 @@ export async function generateAutopilotProposals(): Promise<{ ok: boolean; propo
       skipped.push(`Enrollment ${e.id}: a visit was penciled for ${prettyDate(date)} but we couldn't read how to reach the owner — the confirm link was never sent, and it holds their slot for 14 days.`);
     }
     if (owner?.phone || owner?.email) {
-      const where = prop.nickname || prop.address || "your place";
+      // A ROLLED DATE IS A GUESS, AND THIS TEXT IS ONE TAP FROM A BILLABLE JOB.
+      //
+      // The roll above keeps autopilot alive past the stored season, but it
+      // measures off LAST year's ice-out. prettyDate prints weekday/month/day
+      // with no year, so a penciled estimate and a measured date read
+      // identically. The seasonal pull reminder carries this same hedge for
+      // this same reason; the wording is deliberately its wording so the two
+      // cannot drift. Land work has no season, so it is never hedged.
+      const provisional =
+        !!svc.is_water_work && seasonIsProvisional(season, lake?.season_confirmed as boolean | undefined);
+      const hedge = provisional
+        ? ` That date is an estimate until this year's ice-out is measured, and we'll tell you if it moves.`
+        : ``;
       // EVERY DOOR: the confirm token holds the enrollment's one open slot for
       // 14 days. A link that reaches nobody costs them the whole cycle.
       const told = await notify(
         `the owner that we penciled ${svc.name} for ${prettyDate(date)} (enrollment ${e.id})`,
         { phone: owner?.phone as string | null, email: owner?.email as string | null },
         {
-          sms: `LakeLife Autopilot 🌊: time for ${svc.name} at ${where} — we've penciled ${prettyDate(date)} at your locked price. Book it: ${site}/a/${ev.confirm_token}/confirm  ·  Skip: ${site}/a/${ev.confirm_token}/skip`,
+          sms: `LakeLife Autopilot 🌊: time for ${svc.name} at ${where} — we've penciled ${prettyDate(date)} at your locked price.${hedge} Book it: ${site}/a/${ev.confirm_token}/confirm  ·  Skip: ${site}/a/${ev.confirm_token}/skip`,
           subject: `We've penciled ${svc.name} at ${where} for ${prettyDate(date)}`,
           body:
-            `It's time for ${svc.name} at ${where} — we've penciled ${prettyDate(date)} at your locked price.\n\n` +
+            `It's time for ${svc.name} at ${where} — we've penciled ${prettyDate(date)} at your locked price.${hedge}\n\n` +
             `Book it:\n  ${site}/a/${ev.confirm_token}/confirm\n\n` +
             `Skip it:\n  ${site}/a/${ev.confirm_token}/skip`,
         },
@@ -3149,6 +3207,10 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
   // only as a console line before, and `{ok:true, born:0}` is exactly what a
   // clean night looks like. The nightly carries this into the digest.
   const skipped: string[] = [];
+  // One line per LAKE, not per boat. A stale ice-out strands every envelope on
+  // that lake at once, and a park-sized marina would otherwise fill the digest
+  // with the same sentence twenty times a night.
+  const staleIceOutLakes = new Set<string>();
 
   const groups = mustRead("the active season envelopes", await admin
     .from("job_groups")
@@ -3189,7 +3251,29 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
       continue;
     }
     if (!fall || !["complete", "paid"].includes(fall.status as string)) continue;
-    if (iceOut < ((fall.date as string) ?? "")) continue;
+    if (iceOut < ((fall.date as string) ?? "")) {
+      // A STALE ICE-OUT STRANDS THE WHOLE SPRING, SILENTLY (walk 4).
+      //
+      // This gate is right: a spring visit must belong to the spring AFTER the
+      // fall visit it follows, or last year's date births a splash-back in
+      // October. But nothing rolls `lakes.ice_out_actual`, so against a fall
+      // visit completed in November 2026 the gate is false on every night of
+      // 2027 and stays false until a human types this year's ice-out. As a
+      // bare `continue` that is indistinguishable from a quiet night, and the
+      // boat the customer paid to store simply never comes back out.
+      //
+      // We do NOT roll here. This births a BILLABLE visit with no tap from
+      // anybody; a guessed ice-out would put a crew on the water on a date
+      // nobody measured. Say what is true instead, and let ops file the date.
+      const lakeKey = (prop?.lake_id as string) ?? (lake?.name ?? "unknown lake");
+      if (!staleIceOutLakes.has(lakeKey)) {
+        staleIceOutLakes.add(lakeKey);
+        skipped.push(
+          `${lake?.name ?? "A lake"}: the ice-out on file is ${longDate(iceOut)}, which is older than the fall visits it has to follow — no spring visit can be born there until this year's ice-out is filed on the lake.`,
+        );
+      }
+      continue;
+    }
 
     // SEAM: loadPricingProfileById THROWS on a failed read (mustRead inside).
     // Uncaught, ONE property's dropped connection aborts the whole birth run
@@ -4014,8 +4098,21 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number; sk
     // Deadline pressure only means anything for WATER work, and only while
     // the deadline is still ahead — a past deadline is a different problem
     // (the season-close rails own it), not a claim-board SLA.
-    const deadlineDelta = lk?.pull_deadline
-      ? new Date((lk.pull_deadline as string) + "T00:00:00Z").getTime() - now
+    //
+    // MEASURED OFF THE ROLLED DEADLINE (walk 4). This read `lakes.pull_deadline`
+    // raw, and nothing advances that column. From the day the stored deadline
+    // passes, the delta is negative on every night thereafter, `nearDeadline`
+    // is permanently false, and the 96-hour escalation — the one that says a
+    // pier is about to be frozen in with nobody to pull it — never fires again.
+    // `overSla` still fires, so what was lost was precisely the EARLY warning:
+    // a water job younger than the SLA window sitting inside the last four days
+    // of the season. Internal ops threshold, no customer copy rides on it.
+    const effectiveDeadline = effectiveSeason(
+      { iceOut: null, pullDeadline: (lk?.pull_deadline as string) ?? null },
+      today,
+    ).seasonEnd;
+    const deadlineDelta = effectiveDeadline
+      ? new Date(effectiveDeadline + "T00:00:00Z").getTime() - now
       : null;
     const nearDeadline = !!svc?.is_water_work && deadlineDelta != null && deadlineDelta > 0 && deadlineDelta < 96 * 3_600_000;
     const overSla = String(j.created_at) < cutoffIso;

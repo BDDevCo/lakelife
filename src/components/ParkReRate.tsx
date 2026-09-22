@@ -8,7 +8,7 @@ import {
   previewReRate, scheduleReRate, recordNotice, cancelReRate,
   type PendingReRate,
 } from "@/app/park/rerate-actions";
-import { reRateSummary, type ReRatePlan } from "@/app/park/rerate-helpers";
+import { reRateSummary, reRateSkipGroups, type ReRatePlan } from "@/app/park/rerate-helpers";
 
 /**
  * CHANGING THE RENT ON PEOPLE WHO ALREADY LIVE THERE.
@@ -45,6 +45,10 @@ export function ParkReRate({
   const [effectiveOn, setEffectiveOn] = useState("");
   const [plan, setPlan] = useState<ReRatePlan | null>(null);
   const [busy, start] = useTransition();
+  // Grouped by reason, one line each — read once here so the preview block
+  // can render them in both branches (nothing changing is the branch that
+  // needs them most).
+  const skipGroups = plan ? reRateSkipGroups(plan) : [];
 
   function preview() {
     start(async () => {
@@ -212,11 +216,35 @@ export function ParkReRate({
                     </div>
                   )}
 
-                  {plan.skipped.length > 0 && (
-                    <p className="mut" style={{ fontSize: 13, marginBottom: 12 }}>
-                      {plan.skipped.length} left alone — already at that rent, not
-                      monthly, or nobody on the lot.
-                    </p>
+                  {/* WHY EACH LOT WAS LEFT ALONE, in the planner's own words.
+                      This was one sentence — so many left alone, "already at
+                      that rent, not monthly, or nobody on the lot" — which
+                      names three of the planner's four reasons. The fourth,
+                      the agreement running out before the new rent would
+                      start, is the reason for nearly every lot at a park whose
+                      house style is a one-month agreement: any date the notice
+                      period allows is already past the end of one. So a
+                      park-wide increase landed on almost nobody, and the only
+                      explanation on the screen where he sets the rent said
+                      "nobody on the lot" about households who live there.
+                      One line per reason now, each naming its own lots, and it
+                      renders whether or not anything changes — when nothing
+                      does, this is the only thing that says why. */}
+                  {skipGroups.length > 0 && (
+                    <>
+                      <p className="mut" style={{ fontSize: 13, margin: "0 0 6px" }}>
+                        {plan.skipped.length} left alone.
+                      </p>
+                      <div className="ll-card" style={{ marginBottom: 12 }}>
+                        {skipGroups.map((g) => (
+                          <div key={g.problem}
+                            className="mut"
+                            style={{ padding: "8px 12px", borderTop: "1px solid rgba(0,0,0,.06)", fontSize: 13, lineHeight: 1.5 }}>
+                            {g.text}
+                          </div>
+                        ))}
+                      </div>
+                    </>
                   )}
 
                   <p className="mut" style={{ fontSize: 13, lineHeight: 1.5 }}>

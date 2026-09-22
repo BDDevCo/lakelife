@@ -451,13 +451,17 @@ describe("more than the bill is split, not credited and not refused", () => {
     janBill("9");
     const res = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "form-key");
     // THE RUN APPLIES IT NOW (0167), so the sentence may say it comes off
-    // February — and still names the by-hand door for a bill that already
-    // exists. The promise is the shared clause (onAccountPromise), word for
-    // word what the ⊕ window's note said before the tap.
+    // February. The promise is the shared clause (onAccountPromise), word
+    // for word what the ⊕ window's note said before the tap. NO by-hand
+    // door: January is settled and it is their only bill, so "or put it
+    // against an open bill now" would send the office to a panel that says
+    // "No open bill for them yet." The clause with a bill to take it is
+    // pinned below.
     expect(res.signal).toBe(
       "$600.00 received — $542.53 against January 2027, $57.47 on account" +
-      " and comes off February 2027 when you raise it — or put it against an open bill now from \"Money not against a bill\".",
+      " and comes off February 2027 when you raise it.",
     );
+    expect(res.signal).not.toMatch(/put it against an open bill now/);
     expect(res.signal).not.toMatch(/credit/);
   });
 
@@ -465,7 +469,7 @@ describe("more than the bill is split, not credited and not refused", () => {
     janBill("9");
     const res = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "form-key");
     expect(res.receipt?.amount).toBe(600);
-    expect(res.receipt?.onAccount).toEqual({ amount: 57.47, receiptNo: 102 });
+    expect(res.receipt?.onAccount).toEqual({ amount: 57.47, receiptNo: 102, nothingMoreBills: false });
     expect(res.receipt?.receiptNo).toBe(101);
     expect(res.receipt?.balanceAfter).toBe(0);
     const body = receiptBody(res.receipt!);
@@ -563,7 +567,7 @@ describe("more than the bill is split, not credited and not refused", () => {
     expect(res.ok).toBe(true);
     expect(inserted).toHaveLength(1);
     expect(db.park_payment_claims[0].resolved_at).toBeNull();
-    expect(res.signal).toMatch(/\$57\.47 received — January 2027 was already settled, so all of it is on account and comes off February 2027 when you raise it — or put it against an open bill now from "Money not against a bill"\./);
+    expect(res.signal).toMatch(/\$57\.47 received — January 2027 was already settled, so all of it is on account and comes off February 2027 when you raise it\./);
     expect(res.signal).toMatch(/The claim it answers is still open — we couldn't close it; answer it from the ledger\.$/);
   });
 
@@ -1087,7 +1091,7 @@ describe("recordPayment's promise about the excess is decided on the tenancy", (
     const res = await recordPayment(PARK, "charge-dec", 600, "check", "1042", TODAY, "", "form-key");
     expect(res.ok, res.error).toBe(true);
     expect(res.signal).toBe(
-      `$600.00 received — $542.53 against December 2026, $57.47 on account and comes off January 2027 when you raise it — or put it against an open bill now from ${DOOR}.`,
+      "$600.00 received — $542.53 against December 2026, $57.47 on account and comes off January 2027 when you raise it.",
     );
     expect(res.signal).not.toMatch(/theirs to have back|nothing more bills/);
     expect(reads("lot_reservations")).toBe(1);
@@ -1171,6 +1175,28 @@ describe("getLedger carries each household's money facts on its rows", () => {
     const page = await getLedger(PARK, "2027-01");
     expect(page!.rows.map((r) => r.id)).toEqual(["charge-9"]);
     expect(facts(page, "charge-9").openCount).toBe(2);
+  });
+
+  it("carries the household's older open bills, in oldestFirst's order, and nothing on the row that IS the oldest", async () => {
+    // The rent screen is scoped to one month; the ⊕ window is not. Without
+    // this the row's form handed the note a field named `oldestOpen` filled
+    // with THIS row, and promised a February payer that their $150.00 on
+    // account would come off February. It goes to January.
+    janBill("9");
+    db.park_charges.push({ id: "charge-feb", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2027-02", due_on: "2027-02-01", amount: 297.51, paid_total: 0, status: "open" });
+    db.park_charges.push({ id: "charge-dec", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9", period_month: "2026-12", due_on: "2026-12-01", amount: 40, paid_total: 0, status: "open" });
+    db.lot_reservations = [stay("9", "jan-9", "[2026-06-01,2027-06-01)")];
+
+    const feb = (await getLedger(PARK, "2027-02"))!.rows.find((r) => r.id === "charge-feb")!;
+    // December, then January — the plan's own order, not the row order.
+    expect(feb.olderOpen.map((b) => [b.key, b.periodMonth, b.owing]))
+      .toEqual([["charge-dec", "2026-12", 40], ["charge-9", "2027-01", 542.53]]);
+
+    // …and on their OLDEST bill there is nothing older, though two of their
+    // bills are open beside it: the branch collapsed the other way.
+    const dec = (await getLedger(PARK, "2026-12"))!.rows.find((r) => r.id === "charge-dec")!;
+    expect(dec.openCount).toBe(3);
+    expect(dec.olderOpen).toEqual([]);
   });
 
   it("whether anything more bills is the shared fact, both ways", async () => {
@@ -1625,7 +1651,7 @@ describe("money on account settles the oldest open bill first, wherever it is ap
       "$600.00 received — $542.53 against January 2027, $57.47 on account. Of that, $40.00 went against December 2026 — $17.47 stays on account and comes off February 2027 when you raise it.",
     );
     // THE PAPER says the same — never "held by the office" about the $40.
-    expect(res.receipt?.onAccount).toEqual({ amount: 57.47, receiptNo: acct.receipt_no, appliedTo: [{ periodMonth: "2026-12", amount: 40 }], remaining: 17.47 });
+    expect(res.receipt?.onAccount).toEqual({ amount: 57.47, receiptNo: acct.receipt_no, appliedTo: [{ periodMonth: "2026-12", amount: 40 }], remaining: 17.47, nothingMoreBills: false });
     const body = receiptBody(res.receipt!);
     expect(body).toContain("Of the $57.47 on account: $40.00 to December 2026, $17.47 on account");
     expect(body).toContain("The $17.47 still on account comes off your next bill.");
@@ -1648,7 +1674,7 @@ describe("money on account settles the oldest open bill first, wherever it is ap
       "$600.00 received — $542.53 against January 2027, $57.47 on account. Of that, $40.00 went against December 2026 — what's left stays on account.",
     );
     expect(res.signal).not.toMatch(/\$57\.47 stays on account/);
-    expect(res.receipt?.onAccount).toEqual({ amount: 57.47, receiptNo: expect.any(Number), appliedTo: [{ periodMonth: "2026-12", amount: 40 }] });
+    expect(res.receipt?.onAccount).toEqual({ amount: 57.47, receiptNo: expect.any(Number), appliedTo: [{ periodMonth: "2026-12", amount: 40 }], nothingMoreBills: false });
     expect("remaining" in (res.receipt?.onAccount ?? {}), "a figure nobody read is not on the paper").toBe(false);
     const body = receiptBody(res.receipt!);
     expect(body).toContain("Of the $57.47 on account: $40.00 to December 2026");
@@ -1668,12 +1694,49 @@ describe("money on account settles the oldest open bill first, wherever it is ap
     expect(res.receipt?.fromOnAccount).toBeNull();
   });
 
+  it("the by-hand door is offered only when another bill of theirs is really still open", async () => {
+    // "…or put it against an open bill now from 'Money not against a bill'"
+    // was passed unconditionally — from inside the branch reached BECAUSE
+    // the settlement placed nothing, i.e. because there was nothing open to
+    // place it on. The office read it, crossed to the panel it names, and
+    // found "No open bill for them yet."
+    //
+    // (a) ANOTHER BILL OPEN AND THE ALLOCATION REFUSED. The bill genuinely
+    //     stands and applying by hand is the remedy, so the door is named.
+    janBill("9");
+    db.park_charges.push({ id: "charge-dec", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "dec-9", period_month: "2026-12", due_on: "2026-12-01", amount: 100, paid_total: 0, status: "open" });
+    nextAllocationError = { after: 0, error: { code: "P0001", message: "park_payment_allocations: that bill only has 0.00 left on it, and this would apply 57.47" } };
+    const refused = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "k-refused");
+    expect(refused.ok).toBe(true);
+    expect(refused.signal).toContain("or put it against an open bill now from \"Money not against a bill\"");
+    expect(db.park_charges.find((c) => c.id === "charge-dec")!.status).toBe("open");
+
+    // (b) THE BILLS COULD NOT BE READ. A failed read is not an empty one:
+    //     the door stays named, beside the ⚠️ that says nothing was applied.
+    reset();
+    janBill("9");
+    nextReadError = { table: "park_on_account_payments", error: { code: "57P01", message: "terminating connection" } };
+    const unread = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "k-unread");
+    expect(unread.ok).toBe(true);
+    expect(unread.signal).toContain("none of their money on account was put against a bill");
+    expect(unread.signal).toContain("or put it against an open bill now from \"Money not against a bill\"");
+
+    // (c) NOTHING ELSE OPEN — the branch collapsed the other way, so the two
+    //     assertions above pin the condition rather than the fixture.
+    reset();
+    janBill("9");
+    const alone = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "k-alone");
+    expect(alone.signal).not.toMatch(/put it against an open bill now/);
+  });
+
   it("the excess of a split still never pays the bill it came in over, and with nothing older open it waits for the run", async () => {
     janBill("9");
     const res = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "form-key");
     expect(db.park_payment_allocations).toHaveLength(0);
+    // …and with nothing older open, the by-hand door is not offered either:
+    // there is no bill anywhere to put it against.
     expect(res.signal).toBe(
-      "$600.00 received — $542.53 against January 2027, $57.47 on account and comes off February 2027 when you raise it — or put it against an open bill now from \"Money not against a bill\".",
+      "$600.00 received — $542.53 against January 2027, $57.47 on account and comes off February 2027 when you raise it.",
     );
   });
 

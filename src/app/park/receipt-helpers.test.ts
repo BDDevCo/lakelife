@@ -184,7 +184,11 @@ describe("a receipt for more than the bill", () => {
   const split: ReceiptLines = {
     ...base, amount: 600, billAmount: 542.53, balanceAfter: 0,
     periodMonth: "2027-01", receivedOn: "2027-01-05", receiptNo: 101,
-    onAccount: { amount: 57.47, receiptNo: 102 },
+    // A next bill IS coming for this household — the ordinary case, and
+    // the one the paper's "comes off your next bill" is true of. The
+    // shapes for a household with no next bill, and for a fact nobody
+    // could read, are pinned in their own block below.
+    onAccount: { amount: 57.47, receiptNo: 102, nothingMoreBills: false },
   };
 
   it("shows the whole amount, then how it was split", () => {
@@ -208,7 +212,7 @@ describe("a receipt for more than the bill", () => {
   });
 
   it("survives a missing second receipt number", () => {
-    const b = receiptBody({ ...split, onAccount: { amount: 57.47, receiptNo: null } });
+    const b = receiptBody({ ...split, onAccount: { amount: 57.47, receiptNo: null, nothingMoreBills: false } });
     expect(b).toContain("It stays yours until then.");
     expect(b).not.toContain("(receipt");
   });
@@ -233,13 +237,13 @@ describe("a receipt for more than the bill", () => {
   it("printed at record time, says where the on-account part went", () => {
     const b = receiptBody({
       ...split,
-      onAccount: { amount: 57.47, receiptNo: 102, appliedTo: [{ periodMonth: "2027-02", amount: 57.47 }], remaining: 0 },
+      onAccount: { amount: 57.47, receiptNo: 102, appliedTo: [{ periodMonth: "2027-02", amount: 57.47 }], remaining: 0, nothingMoreBills: false },
     });
     expect(b).toContain("Of the $57.47 on account: $57.47 to February 2027 (receipt TH-2027-0102).");
     expect(b).not.toMatch(/comes off your next/);
     const part = receiptBody({
       ...split,
-      onAccount: { amount: 57.47, receiptNo: 102, appliedTo: [{ periodMonth: "2027-02", amount: 40 }], remaining: 17.47 },
+      onAccount: { amount: 57.47, receiptNo: 102, appliedTo: [{ periodMonth: "2027-02", amount: 40 }], remaining: 17.47, nothingMoreBills: false },
     });
     expect(part).toContain("Of the $57.47 on account: $40.00 to February 2027, $17.47 on account (receipt TH-2027-0102).");
     expect(part).toContain("The $17.47 still on account comes off your next bill.");
@@ -311,6 +315,7 @@ describe("a receipt for money on account", () => {
       amount: 1627.59, receiptNo: 47,
       appliedTo: [{ periodMonth: "2027-02", amount: 542.53 }, { periodMonth: "2027-01", amount: 542.53 }],
       remaining: 542.53,
+      nothingMoreBills: false,
     },
   };
 
@@ -324,7 +329,7 @@ describe("a receipt for money on account", () => {
   });
 
   it("fresh from the window, before anything has been applied, it says only that it is held", () => {
-    const b = receiptBody({ ...ahead, onAccount: { amount: 1627.59, receiptNo: 47 } });
+    const b = receiptBody({ ...ahead, onAccount: { amount: 1627.59, receiptNo: 47, nothingMoreBills: false } });
     expect(b).not.toContain("Where it went");
     expect(b).toContain("The $1,627.59 on account is held by the office and comes off your next");
   });
@@ -357,5 +362,96 @@ describe("a receipt for money on account", () => {
 
   it("a check receipt still says what a check receipt is for", () => {
     expect(receiptBody(ahead)).toContain("This is a receipt for the check itself. If it doesn't clear, any bill");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PROMISE ON THE PAPER, KEYED ON WHETHER A NEXT BILL IS COMING.
+//
+// A household who had moved out with their final month billed overpaid at
+// the window. The office's toast said "nothing more bills for them, so it's
+// theirs to have back"; the receipt printed in the same tick, on the same
+// card, said "comes off your next bill". There is no next bill — and at a
+// park with notices held nothing is emailed, so the paper is the only record
+// that household ever gets, and it told them refundable money was spoken
+// for. `ReceiptLines` was the one printed-record type with no field for the
+// fact every other door already reads.
+//
+// Three shapes, all three pinned, and each collapsed the other way so an
+// absence-only assertion cannot pass with the branch deleted.
+// ---------------------------------------------------------------------------
+describe("what the paper promises about money still on account", () => {
+  const split = (nothingMoreBills: boolean | null): ReceiptLines => ({
+    ...base, amount: 600, billAmount: 542.53, balanceAfter: 0,
+    periodMonth: "2027-01", receivedOn: "2027-01-05", receiptNo: 101,
+    onAccount: { amount: 57.47, receiptNo: 102, nothingMoreBills },
+  });
+  const applied = (nothingMoreBills: boolean | null): ReceiptLines => ({
+    ...split(nothingMoreBills),
+    onAccount: {
+      amount: 57.47, receiptNo: 102, remaining: 17.47,
+      appliedTo: [{ periodMonth: "2026-12", amount: 40 }],
+      nothingMoreBills,
+    },
+  });
+  const onAccountReceipt = (nothingMoreBills: boolean | null): ReceiptLines => ({
+    ...base, kind: "on_account", amount: 1627.59, receivedOn: "2026-12-28",
+    periodMonth: "", billAmount: 0, balanceAfter: 0,
+    onAccount: { amount: 1627.59, receiptNo: 47, nothingMoreBills },
+  });
+
+  it("nothing more bills for them: the office has it, and no next bill is promised", () => {
+    const b = receiptBody(split(true));
+    expect(b).toContain("The $57.47 on account stays yours. The office has it for you (receipt TH-2027-0102).");
+    expect(b).not.toMatch(/comes off your next/);
+    // Collapsed the other way, the same fixture makes the promise — so the
+    // assertion above is pinning the branch, not the fixture.
+    expect(receiptBody(split(false))).toMatch(/comes off your next/);
+  });
+
+  it("a next bill is coming: the words the paper has always used, unchanged", () => {
+    const b = receiptBody(split(false));
+    expect(b).toContain("The $57.47 on account is held by the office and comes off your next");
+    expect(b).toContain("bill. It stays yours until then (receipt TH-2027-0102).");
+    expect(b).not.toContain("The office has it for you.");
+  });
+
+  it("the fact could not be read: the paper says it is held and stops — a receipt is permanent", () => {
+    for (const r of [split(null), { ...split(null), onAccount: { amount: 57.47, receiptNo: 102 } }]) {
+      const b = receiptBody(r);
+      expect(b).toContain("The $57.47 on account is held by the office. It stays yours (receipt TH-2027-0102).");
+      expect(b).not.toMatch(/comes off your next/);
+      expect(b).not.toContain("The office has it for you.");
+    }
+  });
+
+  it("the same three shapes on the line after an allocation", () => {
+    expect(receiptBody(applied(false))).toContain("The $17.47 still on account comes off your next bill.");
+    expect(receiptBody(applied(true))).toContain("The $17.47 still on account stays yours. The office has it for you.");
+    expect(receiptBody(applied(true))).not.toMatch(/comes off your next/);
+    expect(receiptBody(applied(null))).toContain("The $17.47 still on account is held by the office. It stays yours.");
+    expect(receiptBody(applied(null))).not.toMatch(/comes off your next/);
+  });
+
+  it("the same three shapes on a receipt for money on account itself", () => {
+    expect(receiptBody(onAccountReceipt(false)))
+      .toContain("The $1,627.59 on account is held by the office and comes off your next");
+    expect(receiptBody(onAccountReceipt(true)))
+      .toContain("The $1,627.59 on account stays yours. The office has it for you.");
+    expect(receiptBody(onAccountReceipt(true))).not.toMatch(/comes off your next/);
+    expect(receiptBody(onAccountReceipt(null)))
+      .toContain("The $1,627.59 on account is held by the office. It stays yours.");
+    expect(receiptBody(onAccountReceipt(null))).not.toMatch(/comes off your next/);
+  });
+
+  it("the resident's words are the /paid page's, not a fourth wording, and not the office's", () => {
+    const src = readFileSync(join(process.cwd(), "src", "app", "park", "receipt-helpers.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    // Non-vacuous: the import and the one decision point are both found.
+    expect(src).toContain("@/lib/on-account-words");
+    expect(src.match(/heldLines\(/g)?.length, "three sentences, one decision").toBe(4);
+    // The office's own promise names an office door. It must never reach paper.
+    expect(src).not.toContain("onAccountPromise");
+    expect(src).not.toContain("Money not against a bill");
   });
 });

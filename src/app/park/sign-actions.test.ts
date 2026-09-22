@@ -511,7 +511,7 @@ describe("the bills already raised on the arrangement they had", () => {
     expect(res.ok, res.error).toBe(true);
     const onHoldover = liveCharges().find((c) => c.reservation_id === "res-14")!;
     expect(db.lot_cost_shares[0].billed_on_charge_id).toBe(onHoldover.id);
-    expect(onHoldover.lines).toContainEqual({ label: "Water — your share", amount: 18.5, basis: "for 2026-12-01 to 2026-12-31" });
+    expect(onHoldover.lines).toContainEqual({ label: "Water — your share", amount: 18.5, basis: "for December 1, 2026 to December 31, 2026" });
     expect(res.signal).not.toMatch(/cost share/);
   });
 

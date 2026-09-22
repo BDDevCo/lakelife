@@ -5,6 +5,7 @@ import { escapeHtml } from "@/lib/html-safe";
 import { longDay } from "@/lib/lake-time";
 import { money } from "@/app/park/ledger-helpers";
 import { releasedLead as releasedLeadWords } from "@/lib/released-words";
+import { COMES_OFF, STILL_COMES_OFF, OFFICE_HAS_IT, STILL_OFFICE_HAS_IT } from "@/lib/on-account-words";
 
 /**
  * "DOES THIS LOOK RIGHT?" — the renter's half of the receipt.
@@ -33,21 +34,14 @@ function pretty(iso: string): string {
   return longDay(iso);
 }
 
-/** "It comes off the next bill the park raises for you." — true since 0167: the run applies money on account, oldest first. Said only of a payment that still stands. */
-const COMES_OFF = "It comes off the next bill the park raises for you.";
-const STILL_COMES_OFF = "what's still on account comes off the next bill the park raises for you.";
 /**
- * …UNLESS NO NEXT BILL WILL EVER COME. The household has moved out and the
- * move-out month is billed (`nothingMoreBills` — the loader's read of the
- * same two facts the resident's home screen uses). Then "comes off the next
- * bill" promises a bill the park will never raise, on the receipt of the one
- * person the money belongs to — and since 0169 that is the DEFAULT state of
- * every move-out overpayment: January paid in full, the bill cancelled, the
- * part month settled from it, $70.00 left. The office's own screen calls
- * that "theirs to have back"; this page says only what it knows.
+ * THE FOUR ON-ACCOUNT SENTENCES ARE NOT THIS FILE'S. They are the resident's
+ * words wherever the resident is told where their money went — this page, the
+ * printed receipt, the rent screen — so they live in ONE place
+ * (lib/on-account-words) and are imported here. This file used to hold its
+ * own verbatim copies; on-account-words.test.ts requires the two doors to
+ * agree, which is what a second copy could only ever fail at.
  */
-const OFFICE_HAS_IT = "The office has it for you.";
-const STILL_OFFICE_HAS_IT = "the office has what's still on account for you.";
 function comesOff(view: ConfirmView): string {
   return view.nothingMoreBills ? OFFICE_HAS_IT : COMES_OFF;
 }

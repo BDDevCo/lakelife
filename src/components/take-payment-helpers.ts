@@ -6,6 +6,7 @@ import type { PaymentTarget } from "@/app/park/pos-actions";
 import type { recordPayment } from "@/app/park/ledger-actions";
 import type { recordOnAccount } from "@/app/park/money-actions";
 import type { ReceiptLines } from "@/app/park/receipt-helpers";
+import { planAllocations, type BillOwing } from "@/lib/allocations";
 
 /**
  * EVERY SENTENCE AND EVERY PURE RULE OF THE ⊕ TAKE A PAYMENT WINDOW.
@@ -77,7 +78,83 @@ export function parseAmount(text: string): number {
  * joined the ledger (ledger-helpers HouseholdMoney) — and the form there
  * shapes its row to this rather than inventing a renter id it never uses.
  */
-export type MoneyFacts = Pick<PaymentTarget, "openCount" | "oldestOpen" | "onAccount" | "nothingMoreBills">;
+export type MoneyFacts =
+  Pick<PaymentTarget, "openCount" | "oldestOpen" | "onAccount" | "nothingMoreBills">
+  & {
+    /**
+     * THEIR OTHER OPEN BILLS THAT SETTLE BEFORE THIS ONE, oldest first —
+     * the ordering already done by `oldestFirst`, the ONE sort every door
+     * plans from (lib/allocations). Absent or empty means this bill IS
+     * their oldest, which is true BY CONSTRUCTION in the ⊕ window: its
+     * list is built from `oldestFirst(list)[0]`, so its `oldestOpen`
+     * really is the oldest and there is nothing older to carry.
+     *
+     * The rent screen's form is the one that needed it. It is scoped to
+     * one month while a household's money on account is not, and it filled
+     * a field named `oldestOpen` with THIS row — so on a February row with
+     * January still open it told the office the held money would come off
+     * February. It goes to January.
+     */
+    olderOpen?: readonly BillOwing[];
+  };
+
+/** One household's money, for a projection that never leaves this function. */
+const THEM = "them";
+
+/**
+ * WHAT THE MONEY THEY ALREADY HAVE ON ACCOUNT WILL ACTUALLY DO when Record
+ * is tapped — not asserted, PLANNED, by the same pure function the door
+ * writes from (planAllocations, what planSettlement delegates to).
+ *
+ * The bills are handed over in the order they settle — their older open
+ * bills, then this one at what it would still owe — so this holds no second
+ * copy of "oldest first": the loader sorted once with `oldestFirst` and this
+ * walks that order. Re-sorting here would mean inventing a due date for this
+ * row that MoneyFacts does not carry, which is how a same-month sibling
+ * (a final part-month and a renewal) would silently jump the queue.
+ *
+ * Whether this bill gets topped up at all depends on the older bills'
+ * BALANCES, not on their existence — held $400 against January owing
+ * $180.65 and February owing $97.51 settles BOTH, and a flag saying merely
+ * "you are not paying the oldest" would make the note lie the other way.
+ */
+function heldProjection(
+  t: MoneyFacts,
+  thisKey: string,
+  shortCents: number,
+): { toThis: number; toOlder: number } {
+  const older = t.olderOpen ?? [];
+  const plan = planAllocations(
+    [
+      ...older.map((b) => ({ ...b, renterId: THEM })),
+      { key: thisKey, renterId: THEM, owing: shortCents / 100 },
+    ],
+    [{ paymentId: "held", renterId: THEM, remaining: t.onAccount, receivedOn: "" }],
+  );
+  let toThis = 0;
+  let toOlder = 0;
+  for (const line of plan) {
+    if (line.key === thisKey) toThis += cents(line.amount);
+    else toOlder += cents(line.amount);
+  }
+  return { toThis: toThis / 100, toOlder: toOlder / 100 };
+}
+
+/**
+ * WHICH OF THEIR BILLS THE SPILL GOES ON. Money on account settles their
+ * OLDEST open bill, so "their next open bill" is only the right word when
+ * this row IS the oldest — which it always is in the ⊕ window and often is
+ * not on the rent screen, where the office may be keying February with
+ * January still open and off-screen.
+ */
+function otherBillWords(t: MoneyFacts): string {
+  return (t.olderOpen?.length ?? 0) > 0 ? "their oldest open bill" : "their next open bill";
+}
+
+/** "their older open bill" / "their older open bills" — one of them is not plural. */
+function olderBillWords(t: MoneyFacts): string {
+  return (t.olderOpen?.length ?? 0) === 1 ? "their older open bill" : "their older open bills";
+}
 
 /**
  * WHAT THE OFFICE ALREADY HOLDS OF THEIRS, when a bill is open and they are
@@ -97,7 +174,7 @@ function heldInstead(t: MoneyFacts): string {
   const covers = cents(t.onAccount) >= cents(t.oldestOpen.balance) ? " and would cover this" : "";
   const use = `to use it on this bill instead, put it on the bill from ${HELD_DOOR}.`;
   if (t.openCount > 1) {
-    return ` ${money(t.onAccount)} of theirs is already on account${covers} — record this and that goes against their next open bill instead; ${use}`;
+    return ` ${money(t.onAccount)} of theirs is already on account${covers} — record this and that goes against ${otherBillWords(t)} instead; ${use}`;
   }
   return ` ${money(t.onAccount)} of theirs is already on account${covers} — record this and that stays on account${onAccountPromise(t.nothingMoreBills)}; ${use}`;
 }
@@ -146,14 +223,34 @@ export function amountNote(text: string, t: MoneyFacts): string | null {
     // figure; the receipt re-reads that after the insert.
     const short = b - a;
     if (held <= 0) return `Part of ${month} — ${money(short / 100)} will still be owing.`;
-    if (held >= short) {
-      return `Part of ${month} — the other ${money(short / 100)} comes off the ${money(t.onAccount)} they have on account the moment you record this.`;
+    // WHERE THE HELD MONEY GOES, PLANNED WITH THE DOOR'S OWN ARITHMETIC.
+    // This branch was the only one that never asked whether this row was
+    // the household's oldest open bill: it promised "the other $97.51 comes
+    // off the $150.00 they have on account" on a February row whose January
+    // bill took the whole $150.00, and the bill just keyed still owed the
+    // $97.51 the office had been told was covered.
+    const p = heldProjection(t, o.chargeId, short);
+    const leftCents = short - cents(p.toThis);
+    if (cents(p.toOlder) === 0) {
+      // Nothing older to pay — this bill is the queue, and the held money
+      // reaches it in full or as far as it goes.
+      if (held >= short) {
+        return `Part of ${month} — the other ${money(short / 100)} comes off the ${money(t.onAccount)} they have on account the moment you record this.`;
+      }
+      return `Part of ${month} — the ${money(t.onAccount)} they have on account comes off it the moment you record this, leaving ${money((short - held) / 100)} still owing.`;
     }
-    return `Part of ${month} — the ${money(t.onAccount)} they have on account comes off it the moment you record this, leaving ${money((short - held) / 100)} still owing.`;
+    const goesOlder = `the ${money(t.onAccount)} they have on account goes against ${olderBillWords(t)} first the moment you record this`;
+    if (leftCents <= 0) {
+      return `Part of ${month} — ${goesOlder}, and what's left of it covers the other ${money(short / 100)} of this one.`;
+    }
+    if (cents(p.toThis) > 0) {
+      return `Part of ${month} — ${goesOlder}; ${money(p.toThis)} of it reaches this one, leaving ${money(leftCents / 100)} still owing.`;
+    }
+    return `Part of ${month} — ${money(short / 100)} will still be owing: ${goesOlder}.`;
   }
   const over = money((a - b) / 100);
   if (t.openCount > 1) {
-    return `${money(o.balance)} settles ${month}; the other ${over} goes against their next open bill.`
+    return `${money(o.balance)} settles ${month}; the other ${over} goes against ${otherBillWords(t)}.`
       + (held > 0 ? ` So does the ${money(t.onAccount)} of theirs already on account.` : "");
   }
   // The month the excess comes off is the month after THIS bill — the same

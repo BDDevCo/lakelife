@@ -321,6 +321,26 @@ describe("renewing", () => {
       expect(fresh).toMatchObject({ ok: true, start: "2027-07-01", end: "2027-08-01", continuesChain: false, nextSeq: 1 });
     });
 
+    it("his own first tap is named as such — never the database's overlap error", () => {
+      // Two tabs, two taps. The second used to reach the insert and come back
+      // as "check the dates don't overlap another tenancy on the same lot",
+      // about a successor he had written himself thirty seconds earlier.
+      expect(renewalRefusalText("already_renewed", "7", [1, 3, 6], "2027-02-01"))
+        .toBe("Lot 7's next agreement is already written, from February 1, 2027.");
+      // Months in words, never an ISO date.
+      expect(renewalRefusalText("already_renewed", "7", [1, 3, 6], "2027-02-01"))
+        .not.toMatch(/2027-02-01/);
+      // A chain read that came back without dates still produces a sentence.
+      expect(renewalRefusalText("already_renewed", "7", [1, 3, 6]))
+        .toBe("Lot 7's next agreement is already written.");
+      expect(renewalRefusalText("already_renewed", null, [1, 3, 6], "2027-02-01"))
+        .toBe("This household's next agreement is already written, from February 1, 2027.");
+      // NOT the resident's wording: "the park will send the agreement to
+      // sign" is a lie told to the park.
+      expect(renewalRefusalText("already_renewed", "7", [1, 3, 6], "2027-02-01"))
+        .not.toMatch(/send the agreement to sign|You're already set/);
+    });
+
     it("the sentence instructs no door the card lacks, and claims no duration", () => {
       const t = renewalRefusalText("already_ended", "1", [1, 3, 6]);
       expect(t).not.toMatch(/Start a new one/);
@@ -482,6 +502,7 @@ describe("renewing", () => {
   it("gives every refusal a sentence", () => {
     const all: Record<RenewalRefusal, true> = {
       no_cap: true, not_offered: true, already_ended: true, not_yet_renewable: true, season_closed: true, inherited: true, moved_out: true,
+      already_renewed: true,
     };
     for (const r of Object.keys(all) as RenewalRefusal[]) {
       expect(renewalRefusalText(r, null, [1, 3]).length).toBeGreaterThan(20);
@@ -496,7 +517,11 @@ describe("renewing", () => {
       .toBe("This park writes agreements of 1 or 3 months — pick one of those.");
     const src = readFileSync(fileURLToPath(new URL("./agreement-helpers.ts", import.meta.url)), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-    expect(src).toMatch(/offered: number\[\],\s*\): string \{/);
+    // The list stays REQUIRED. It is no longer the last parameter — the
+    // successor's start joined it, optional, for 'already_renewed' — so this
+    // pins the parameter itself rather than its position.
+    expect(src).toMatch(/offered: number\[\],/);
+    expect(src).not.toMatch(/offered\?: number\[\]/);
     expect(src).not.toMatch(/offered: number\[\] = \[\]/);
   });
 });

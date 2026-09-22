@@ -13,6 +13,13 @@
  * reading it, and then it is wrong when it matters.
  */
 
+// TYPE ONLY, and deliberately so. lib/allocations imports this file for
+// `money` and `prettyMonth`; this takes back only the SHAPE of a bill that
+// still owes something, which the compiler erases — so there is no runtime
+// circle, and a household's older open bills travel as the very type
+// `planSettlement` plans from rather than as a second description of one.
+import type { BillOwing } from "@/lib/allocations";
+
 export type ChargeStatus = "open" | "paid" | "void";
 
 /**
@@ -558,6 +565,24 @@ export interface HouseholdMoney {
   /** How many bills are open for them, this one included — across every month, not the ledger's one. */
   openCount: number;
   /**
+   * THEIR OTHER OPEN BILLS THAT SETTLE BEFORE THIS ONE — oldest first, as
+   * `oldestFirst` orders them (lib/allocations, the ONE sort every door
+   * plans from). Empty when this row IS their oldest open bill.
+   *
+   * The rent screen is scoped to ONE month; a household's money on account
+   * is not. Money on account settles their OLDEST open bill the moment a
+   * payment is recorded, so on a February row with January still open — the
+   * everyday shape from the second month of the ledger onwards — the held
+   * money goes to January and never touches the bill the office is keying.
+   * The form said "the other $97.51 comes off the $150.00 they have on
+   * account the moment you record this" about a bill that still owed it
+   * afterwards. Whether this bill gets topped up at all depends on those
+   * older bills' BALANCES, not on their existence, so the balances travel,
+   * and the note re-plans with the real arithmetic rather than asserting a
+   * sentence.
+   */
+  olderOpen: readonly BillOwing[];
+  /**
    * Whether anything more will ever bill for them (lib/tenancy-facts).
    * `null` when that could not be read: the form then makes NO promise
    * either way, never "comes off their next bill" by default.
@@ -592,7 +617,8 @@ export function toRows(
     balance: balanceOf(c),
     state: ledgerState(c, todayISO, lagDays, claimedChargeIds.has(c.id)),
     overdueDays: daysBetween(c.dueOn, todayISO),
-    ...(householdMoney.get(c.id) ?? { onAccount: 0, openCount: c.status === "open" ? 1 : 0, nothingMoreBills: null }),
+    ...(householdMoney.get(c.id)
+      ?? { onAccount: 0, openCount: c.status === "open" ? 1 : 0, nothingMoreBills: null, olderOpen: [] }),
   }));
 }
 
@@ -906,15 +932,21 @@ export const HELD_DOOR = `"Money not against a bill"`;
 /**
  * WHAT HAPPENS TO MONEY LEFT ON ACCOUNT — the promise, in ONE place.
  *
- * "It comes off their next bill" is a promise, and it was made in three
+ * "It comes off their next bill" is a promise, and it was made in FOUR
  * doorways in their own words: the ⊕ window's note before the tap
- * (take-payment-helpers), and the two doors' toasts after it (recordPayment,
- * recordOnAccount) — the toasts unconditionally. So a household who had
+ * (take-payment-helpers), the two doors' toasts after it (recordPayment,
+ * recordOnAccount) — the toasts unconditionally — and the printed RECEIPT,
+ * which this header counted as three and missed. So a household who had
  * moved out with their final month billed read "theirs to have back" on the
  * note and "comes off the next bill you raise for them" on the toast, about
- * the same $57.47, in the same minute. The fact it keys on is
- * lib/tenancy-facts' (nothingMoreBills), read once per door; the words are
- * here, so the note and the toasts cannot drift.
+ * the same $57.47, in the same minute — and walked out holding paper that
+ * said the same wrong half a third time. The fact all four key on is
+ * lib/tenancy-facts' (nothingMoreBills), read once per door.
+ *
+ * THE WORDS HERE ARE THE OFFICE'S. They name the office's own doors ("from
+ * 'Money not against a bill' on the Rent screen"), so nothing a resident
+ * reads can use them: the receipt and the /paid confirm page say the same
+ * three shapes in the resident's language, from lib/on-account-words.
  *
  * Three shapes, as the clause after "on account" / "stays on account" /
  * "goes on account":

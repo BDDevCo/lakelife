@@ -573,10 +573,14 @@ describe("getHeldMoney lists what is still held, not what arrived", () => {
     expect(held.onAccount).toHaveLength(0);
   });
 
-  it("recordOnAccount with nothing open: the sentence promises only what the run keeps", async () => {
+  it("recordOnAccount with nothing open: the sentence promises only what the run keeps, and offers no door", async () => {
     const res = await recordOnAccount("park-haven", "renter-9", 1627.59, "check", "1042", TODAY, "", "k1");
     expect(res.ok).toBe(true);
-    expect(res.signal).toBe("$1,627.59 recorded for Household 9. It's on account and comes off the next bill you raise for them — or put it against an open bill now from \"Money not against a bill\".");
+    // NOT "or put it against an open bill now": this branch is reached
+    // BECAUSE the settlement placed nothing, i.e. because they have no open
+    // bill, and the panel it named reads "No open bill for them yet."
+    expect(res.signal).toBe("$1,627.59 recorded for Household 9. It's on account and comes off the next bill you raise for them.");
+    expect(res.signal).not.toMatch(/put it against an open bill now/);
     expect(res.signal).not.toMatch(/until you put it against/);
     expect(db.park_payment_allocations).toHaveLength(0);
   });
@@ -614,6 +618,9 @@ describe("recordOnAccount settles the oldest open bill the moment the money is k
       amount: 1627.59, receiptNo: res.receiptNo,
       appliedTo: [{ periodMonth: "2027-01", amount: 542.53 }, { periodMonth: "2027-02", amount: 542.53 }],
       remaining: 542.53,
+      // The fact the paper's own promise keys on — the toast had it and the
+      // receipt built a moment later did not.
+      nothingMoreBills: false,
     });
     expect(res.receipt?.lotNumber).toBe("9");
     expect(res.receipt?.payerName).toBe("Household 9");
@@ -648,10 +655,27 @@ describe("recordOnAccount settles the oldest open bill the moment the money is k
     const res = await recordOnAccount("park-haven", "renter-9", 542.53, "check", "1042", TODAY, "", "k1");
     expect(res.ok).toBe(true);
     expect(inserted.filter((r) => r.__table === "park_payments")).toHaveLength(1);
+    // AND THE BY-HAND DOOR IS STILL NAMED. January really is still open —
+    // the guard refused the row, it did not settle the bill — so applying
+    // it by hand is the remedy, and this is the one sentence that needs it.
     expect(res.signal).toBe(
       "$542.53 recorded for Household 9. It's on account and comes off the next bill you raise for them — or put it against an open bill now from \"Money not against a bill\". ⚠️ $542.53 of it couldn't be put against a bill — it stays on account.",
     );
     expect(res.receipt?.onAccount).toMatchObject({ appliedTo: [], remaining: 542.53 });
+  });
+
+  it("the bills could not be read: the door stays named — a failed read is not 'no open bills'", async () => {
+    bill("jan", "2027-01");
+    nextReadError = { table: "park_on_account_payments", error: { code: "57P01", message: "terminating connection" } };
+    const res = await recordOnAccount("park-haven", "renter-9", 542.53, "check", "1042", TODAY, "", "k1");
+    expect(res.ok).toBe(true);
+    expect(res.signal).toContain("or put it against an open bill now from \"Money not against a bill\"");
+    expect(res.signal).toContain("it wasn't put against any bill");
+    // Collapsed the other way: with the read working AND nothing open, the
+    // clause goes — so the assertion above pins the branch, not the fixture.
+    seed();
+    const clean = await recordOnAccount("park-haven", "renter-9", 542.53, "check", "1042", TODAY, "", "k2");
+    expect(clean.signal).not.toMatch(/put it against an open bill now/);
   });
 
   /**
@@ -692,7 +716,7 @@ describe("recordOnAccount settles the oldest open bill the moment the money is k
 
     it("still here: comes off the next bill you raise — the window's own words — on both branches", async () => {
       const res = await recordOnAccount("park-haven", "renter-9", 57.47, "check", "1042", TODAY, "", "k1");
-      expect(res.signal).toBe(`$57.47 recorded for Household 9. It's on account and comes off the next bill you raise for them — or put it against an open bill now from ${DOOR}.`);
+      expect(res.signal).toBe("$57.47 recorded for Household 9. It's on account and comes off the next bill you raise for them.");
       // A fresh household (the $57.47 above would settle January first, oldest money first).
       seed();
       bill("jan", "2027-01");
@@ -815,7 +839,7 @@ describe("unapplyAllocation takes money back off a bill, with a reason, and says
     // … It's on account" and nothing about the $542.53 that had just gone
     // back onto February.
     expect(cash.signal).toBe(
-      "$100.00 recorded for Household 9. It's on account and comes off the next bill you raise for them — or put it against an open bill now from \"Money not against a bill\". " +
+      "$100.00 recorded for Household 9. It's on account and comes off the next bill you raise for them. " +
       "And $542.53 went against February 2027 from money they already had on account.",
     );
   });

@@ -46,6 +46,7 @@ import { rentForPeriod, lastDayOfMonth } from "./rerate-helpers";
 import { servedRentHistory } from "@/lib/rent-changes";
 import { settleOnAccount, splitApplied } from "@/lib/allocations";
 import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
+import { costPeriodInWords } from "@/lib/cost-period-words";
 
 type Admin = ReturnType<typeof createServiceClient>;
 
@@ -477,9 +478,15 @@ export async function unbilledCostShares(
       id: sh.id as string,
       label,
       amount: Number(sh.amount ?? 0),
-      basis: cost.period_start && cost.period_end
-        ? `for ${cost.period_start} to ${cost.period_end}`
-        : "as allocated",
+      // THE PERIOD IN WORDS, like every other line on the same bill. This
+      // read `for ${period_start} to ${period_end}` — raw ISO — so the
+      // most-read sentence in the product printed "for 2027-02-01 to
+      // 2027-03-01" beside "Lot rent · for the month" and "27 of 31 days",
+      // and a whole-year cost printed "for 2027-01-01 to 2028-01-01". The
+      // basis is frozen into park_charges.lines at raise time, so nothing
+      // downstream can put it right. One copy of the wording, shared with
+      // the owner's own costs table (lib/cost-period-words).
+      basis: costPeriodInWords(cost.period_start as string | null, cost.period_end as string | null),
     });
     out.set(sh.reservation_id as string, list);
   }

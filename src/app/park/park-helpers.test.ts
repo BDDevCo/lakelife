@@ -2145,17 +2145,21 @@ describe("the roll, the page and the ops board read a lapsed lot as lived on", (
 
   it("Edit, Move out and the close-out are keyed on the link ON THE LOT — current, else the one that ran out", () => {
     expect(rows).toMatch(/const onLot = r\.currentReservationId \?\? r\.lapsedReservationId;/);
-    // Edit: the link on the lot, else the one filed ahead of its day.
-    expect(rows).toMatch(/\{\(onLot \?\? r\.filedByHandId\) && \(/);
-    expect(rows).toMatch(/editingId === \(onLot \?\? r\.filedByHandId\) \? "Cancel" : "Edit"/);
+    // Edit: ONE id chosen by the server (editReservationId) — the link on the
+    // lot, else the one filed ahead of its day, else an undecided successor
+    // standing alone (an imported holdover, or what a failed move-out cascade
+    // leaves behind). The row no longer re-derives the target.
+    expect(rows).toMatch(/\{r\.editReservationId && \(/);
+    expect(rows).toMatch(/\{editingId === r\.editReservationId \? "Cancel" : "Edit"\}/);
     expect(rows).not.toMatch(/\(r\.currentReservationId \?\? r\.filedByHandId\) && \(/);
     // Move out and its panel.
     expect(rows).toMatch(/\{onLot && \(\s*<button[\s\S]*?closingId === onLot \? "Cancel" : "Move out"/);
     expect(rows).toMatch(/\{closingId && closingId === onLot && \(/);
     expect(rows).toMatch(/onClick=\{\(\) => close\(onLot, lastDay\)\}/);
     expect(rows).not.toMatch(/close\(r\.currentReservationId!, lastDay\)/);
-    // The Edit panel takes the lapsed household's name.
-    expect(rows).toMatch(/name=\{r\.currentRenter \?\? r\.lapsedRenter \?\? r\.filedByHandRenter \?\? ""\}/);
+    // The Edit panel takes the name of the stay it edits — the same stay
+    // editReservationId names, seeded once on the server.
+    expect(rows).toMatch(/name=\{r\.editRenterName \?\? ""\}/);
   });
 
   it("the close-out on a row that ran out starts on — and stops at — the last day that row covers", () => {
@@ -2178,7 +2182,7 @@ describe("the roll, the page and the ops board read a lapsed lot as lived on", (
     expect(page).toMatch(/holdoverTo: holdover\.range\?\.end \?\? null,/);
     // The Edit panel's fields follow the same household; occupancy does not.
     expect(page).toMatch(/const onLot = r\.current \?\? r\.lapsed;/);
-    expect(page).toMatch(/const editable = onLot \?\? filedByHand;/);
+    expect(page).toMatch(/const editable = onLot \?\? filedByHand \?\? \(r\.next\?\.decidedAt == null \? r\.next : null\);/);
     for (const field of ["currentRenter:", "currentUntil:", "currentReservationId:"]) {
       const line = page.match(new RegExp(`${field} [^\\n]*`))?.[0] ?? "";
       expect(line, `${field} missing`).not.toBe("");

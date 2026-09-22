@@ -193,6 +193,84 @@ describe("amountNote", () => {
       expect(noteNamesHeldDoor(null)).toBe(false);
     });
   });
+
+  /**
+   * WHEN THIS BILL IS NOT THEIR OLDEST — the rent screen's everyday shape
+   * from the second month of the ledger onwards, and the one the ⊕ window
+   * can never be in.
+   *
+   * The part-payment branch was the only one that never asked. It said
+   * "Part of February 2027 — the other $97.51 comes off the $150.00 they
+   * have on account the moment you record this" on a household whose
+   * January bill took the whole $150.00; the February bill the office had
+   * just keyed still owed the $97.51 it had been told was covered, and the
+   * office stopped chasing it.
+   *
+   * A flag saying merely "you are not paying the oldest" would lie the
+   * other way, because planSettlement does not STOP at the oldest bill —
+   * it walks down the list, so a big enough pile settles the older bills
+   * AND tops this one up. The note re-plans with the door's own arithmetic
+   * instead of asserting anything.
+   */
+  describe("a bill that is not their oldest", () => {
+    const olderJan = (owing: number) => [{ key: "jan", renterId: "renter-14", owing, periodMonth: "2027-01", dueOn: "2027-01-01" }];
+    const feb = (over: Partial<PaymentTarget> & { olderOpen?: ReturnType<typeof olderJan> } = {}) => ({
+      ...bill({ openCount: 2, oldestOpen: { chargeId: "feb", month: "2027-02", balance: 297.51, disputed: false } }),
+      ...over,
+    });
+
+    it("the older bill takes all of it: the shortfall is still owing, and the note says where the money went", () => {
+      const note = amountNote("200", feb({ onAccount: 150, olderOpen: olderJan(180.65) }));
+      expect(note).toBe("Part of February 2027 — $97.51 will still be owing: the $150.00 they have on account goes against their older open bill first the moment you record this.");
+      // The sentence that used to print here, on exactly this fixture.
+      expect(note).not.toMatch(/comes off the \$150\.00 they have on account/);
+    });
+
+    it("part of it reaches this bill: the note names how much, and what is left", () => {
+      // $150 held, January owing $80 — $70 spills onto February's $97.51.
+      expect(amountNote("200", feb({ onAccount: 150, olderOpen: olderJan(80) })))
+        .toBe("Part of February 2027 — the $150.00 they have on account goes against their older open bill first the moment you record this; $70.00 of it reaches this one, leaving $27.51 still owing.");
+    });
+
+    it("enough for both: nothing is still owing — the flag-shaped fix would have said there was", () => {
+      // $400 held, January owing $180.65: January is settled AND the $97.51
+      // shortfall here is covered. "97.51 will still be owing" is false.
+      const note = amountNote("200", feb({ onAccount: 400, olderOpen: olderJan(180.65) }));
+      expect(note).toBe("Part of February 2027 — the $400.00 they have on account goes against their older open bill first the moment you record this, and what's left of it covers the other $97.51 of this one.");
+      expect(note).not.toMatch(/still owing/);
+    });
+
+    it("more than one older bill is said in the plural, and they are paid in the order handed over", () => {
+      const older = [
+        { key: "dec", renterId: "renter-14", owing: 40, periodMonth: "2026-12", dueOn: "2026-12-01" },
+        ...olderJan(180.65),
+      ];
+      expect(amountNote("200", feb({ onAccount: 150, olderOpen: older })))
+        .toBe("Part of February 2027 — $97.51 will still be owing: the $150.00 they have on account goes against their older open bills first the moment you record this.");
+    });
+
+    it("the spill words name the OLDEST bill, not the 'next' one, on the two branches that name it", () => {
+      // Collapsed both ways on the same two fixtures.
+      expect(amountNote("297.51", feb({ onAccount: 542.53, olderOpen: olderJan(180.65) })))
+        .toContain("goes against their oldest open bill instead");
+      expect(amountNote("297.51", feb({ onAccount: 542.53 })))
+        .toContain("goes against their next open bill instead");
+      expect(amountNote("400", feb({ onAccount: 0, olderOpen: olderJan(180.65) })))
+        .toBe("$297.51 settles February 2027; the other $102.49 goes against their oldest open bill.");
+      expect(amountNote("400", feb({ onAccount: 0 })))
+        .toBe("$297.51 settles February 2027; the other $102.49 goes against their next open bill.");
+    });
+
+    it("an older list that owes nothing leaves every sentence exactly as it was", () => {
+      // The ⊕ window's shape: its oldestOpen really IS the oldest, so it
+      // carries no older list at all and must read byte for byte the same.
+      const held = { onAccount: 150 };
+      expect(amountNote("200", feb({ ...held, olderOpen: olderJan(0) })))
+        .toBe(amountNote("200", feb(held)));
+      expect(amountNote("200", feb(held)))
+        .toBe("Part of February 2027 — the other $97.51 comes off the $150.00 they have on account the moment you record this.");
+    });
+  });
 });
 
 /**
@@ -238,6 +316,21 @@ describe("the promise under the amount is onAccountPromise's, not this file's", 
     expect(src).not.toMatch(/nothing more bills for them/);
     expect(src).not.toMatch(/comes off the next bill|comes off their next bill/);
     expect(src).not.toMatch(/function afterwards/);
+  });
+
+  it("the projection is the door's own arithmetic — no second copy of 'oldest first' or of the apply", () => {
+    const src = readFileSync(fileURLToPath(new URL("./take-payment-helpers.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // It plans with the same pure function settleOnAccount writes from…
+    expect(src).toMatch(/import \{[^}]*\bplanAllocations\b[^}]*\} from "@\/lib\/allocations"/);
+    // …and sorts nothing itself: the loader that read the bills ordered them
+    // once with oldestFirst, and this walks that order. Non-vacuous: the
+    // same pattern finds the one real copy of the sort.
+    const SORTS = /oldestFirst|\.sort\(/;
+    expect(readFileSync(fileURLToPath(new URL("../lib/allocations.ts", import.meta.url)), "utf8")).toMatch(SORTS);
+    expect(src).not.toMatch(SORTS);
+    // Nor does it subtract its way to an answer the plan already gives.
+    expect(src).not.toMatch(/onAccount - |held - short/);
   });
 });
 

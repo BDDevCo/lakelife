@@ -12,6 +12,7 @@ import {
   type CostCategory, carriedLine,
 } from "@/app/park/cost-helpers";
 import type { recoveryByCategory } from "@/app/park/cost-helpers";
+import { costPeriodInWords } from "@/lib/cost-period-words";
 
 /**
  * WHAT THE PARK PAYS, AND WHAT COMES BACK.
@@ -426,7 +427,7 @@ export function ParkCosts({
                 style={{ padding: "10px 14px", borderTop: "1px solid rgba(0,0,0,.06)", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
                 <strong style={{ minWidth: 170 }}>{COST_CATEGORY_LABEL[r.category]}</strong>
                 <span className="mut" style={{ minWidth: 170 }}>
-                  {r.periodStart} → {r.periodEnd}
+                  {costPeriodInWords(r.periodStart, r.periodEnd)}
                 </span>
                 <span style={{ flex: 1 }}>{money(r.amountPaid)}</span>
                 {/* WHAT HE CARRIED, on the row, not just in the preview he saw

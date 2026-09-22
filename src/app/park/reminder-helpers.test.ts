@@ -526,3 +526,60 @@ describe("whyItDidntGo and holdRefusal are pinned to each other", () => {
     expect(isHoldRefusal("email not configured")).toBe(false);
   });
 });
+
+describe("every figure a person reads goes through money()", () => {
+  // THE DEFECT: three money sentences in the reminder chain were built with
+  // toFixed(2), which has no thousands separator. The project already named
+  // this shape once, in ledger-helpers' own comment: "this printed '$1085.06
+  // of $11620.20 in.'" At The Haven a single month's rent hides it — $542.53
+  // is three digits — so the figures that bite are the owner's digest, which
+  // sums every household chased, and any park whose rent is larger than his.
+  //
+  // FOUR FIGURES, DELIBERATELY. An assertion on a three-digit balance passes
+  // with the fix deleted, which is how the existing "$455.00" test went on
+  // pinning nothing.
+  const bigCharge = (id: string, lot: string) => charge({
+    id, lotNumber: lot, amount: 5425.30, paidTotal: 0,
+  });
+
+  it("separates the thousands in the resident's notice", () => {
+    const body = reminderBody({
+      name: "Wexler, Donna", lotNumber: "1", month: "2027-01", balance: 5425.30,
+      parkName: "The Haven", officeLine: "Drop it at the office.",
+    });
+    expect(body).toContain("$5,425.30 is outstanding");
+    expect(body).not.toContain("$5425.30");
+  });
+
+  it("separates the thousands in the owner's digest total", () => {
+    const rows = toRows([bigCharge("a", "1"), bigCharge("b", "2")], TODAY, 3);
+    const plan = planReminders(
+      rows,
+      new Map([["a", contact()], ["b", contact({ renterId: "r2" })]]),
+      "2026-08",
+      OPTS,
+    );
+    const d = ownerDigest(plan, "The Haven", "2026-08")!;
+    expect(d).toContain("$10,850.60 outstanding");
+    expect(d).not.toContain("$10850.60");
+  });
+
+  it("uses the DOLLARS money(), not the receipts one that takes cents", () => {
+    // Two helpers in this directory are called `money`. ledger-helpers' takes
+    // dollars; receipts-helpers' divides by 100. The wrong import turns a
+    // $542.53 reminder into "$5.43 outstanding" in a resident's inbox, and
+    // both files type-check.
+    const src = readFileSync(
+      fileURLToPath(new URL("./reminder-helpers.ts", import.meta.url)),
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).toMatch(/import \{[^}]*\bmoney\b[^}]*\} from "\.\/ledger-helpers"/);
+    expect(src).not.toContain("receipts-helpers");
+    // And nothing in the chain prints a bare toFixed money figure any more.
+    for (const file of ["./reminder-helpers.ts", "./reminder-actions.ts"]) {
+      const s = readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      expect(s, file).not.toMatch(/\$\$\{[^}]*\.toFixed\(2\)\}/);
+    }
+  });
+});

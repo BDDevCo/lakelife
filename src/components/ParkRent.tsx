@@ -614,13 +614,21 @@ export function PaymentForm({
       : `${chargeId}:${Date.now()}:${Math.random()}`);
   // THE ROW, AS THE WINDOW'S LINE READS IT. This bill is the one the money
   // goes on, so it stands where the window's oldest open bill stands; the
-  // three household facts are the row's. Not the window's disputedNote: its
+  // household facts are the row's. Not the window's disputedNote: its
   // second sentence sends the office to the rent screen, and this is it.
+  //
+  // AND WHAT IS OLDER THAN IT. The window's `oldestOpen` really is the
+  // oldest — it is built from oldestFirst — but this screen is scoped to
+  // ONE month, so the bill under the cursor is routinely not. Held money
+  // settles the oldest first, so without `olderOpen` the line promised the
+  // office that a household's $150.00 on account would come off the
+  // February bill being keyed while it was already spoken for by January.
   const facts: MoneyFacts = {
     openCount: row.openCount,
     oldestOpen: { chargeId, month: row.periodMonth, balance: row.balance, disputed: row.state === "disputed" },
     onAccount: row.onAccount,
     nothingMoreBills: row.nothingMoreBills,
+    olderOpen: row.olderOpen,
   };
   const note = amountNote(amount, facts);
 

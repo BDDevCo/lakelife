@@ -352,7 +352,20 @@ export type RenewalRefusal =
    * written a successor from this row's end over the family who left and
    * billed them for every month since.
    */
-  | "moved_out";
+  | "moved_out"
+  /**
+   * THIS HOUSEHOLD'S NEXT AGREEMENT IS ALREADY WRITTEN — a later link of the
+   * chain is still held. The owner with the page open in two tabs taps Renew
+   * twice; the first tap wrote the successor, and the second used to reach
+   * the insert and be stopped by the exclusion constraint, which the door
+   * then reported as "check the dates don't overlap another tenancy on the
+   * same lot". There is no other tenancy — it is his own first tap, and the
+   * sentence sent him hunting the roll for a double-booking that does not
+   * exist. The resident's link has answered this since it was written
+   * (`already_renewed`); the nightly and the Agreements-to-write list both
+   * filter on the same predicate. This is the third doorway.
+   */
+  | "already_renewed";
 
 /**
  * THE LABEL ON THE ROLL'S SIGNING CONTROL — the one home for the words Today,
@@ -390,6 +403,13 @@ export function renewalRefusalText(
    * cap IS set. Every caller has the list; none may leave it out.
    */
   offered: number[],
+  /**
+   * The first morning of the successor already written, for `already_renewed`
+   * — named so he can see it is his own tap he is looking at. Optional: the
+   * caller has the row in hand, but a chain read that came back without dates
+   * must still produce a sentence.
+   */
+  nextStart?: string | null,
 ): string {
   switch (r) {
     case "no_cap":
@@ -415,6 +435,14 @@ export function renewalRefusalText(
     // from there the ordinary way.
     case "moved_out":
       return `${lotNumber ? `Lot ${lotNumber}` : "This household"} was closed out after this agreement — they moved out — so there's nothing to renew.`;
+    // HIS OWN EARLIER TAP, named as such. Not the resident's wording: "the
+    // park will send the agreement to sign" is a lie told to the park. A date
+    // a person reads is words — "February 1, 2027", never "2027-02-01".
+    case "already_renewed":
+      return (
+        `${lotNumber ? `Lot ${lotNumber}'s` : "This household's"} next agreement is already written` +
+        `${nextStart ? `, from ${longDate(nextStart)}` : ""}.`
+      );
   }
 }
 

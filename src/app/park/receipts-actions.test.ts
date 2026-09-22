@@ -890,3 +890,52 @@ describe("a receipt against a bill that was cancelled after it was paid — the 
     expect(loader).not.toMatch(/releasedIds\.reduce/);
   });
 });
+
+
+/**
+ * THE CALLER, not the sentence. `exclusionLines` can be given a go-live date
+ * all day; what decides whether the owner ever sees the line is whether the
+ * LOADER reads `parks.cutover_date` and hands it over with the window it is
+ * describing. The field this replaces (`recordsBeginOn`) was computed,
+ * declared on the returned page, passed into the note — and read by nothing
+ * anywhere, for its whole life. A symbol with no caller.
+ */
+describe("the statement says when a window is from before the park's books begin", () => {
+  it("reads the go-live date with the park and says so on a pre-cutover window — in words", async () => {
+    db.parks = [{ id: PARK, name: "The Haven", office_recording_lag_days: 0, cutover_date: "2026-12-15" }];
+    db.park_payments = [];
+    const dec = (await getStatement(PARK, "2026-12-01", "2026-12-31"))!;
+    expect(dec.notes[0]).toMatch(/These dates are all before you went live here on December 15, 2026/);
+    expect(dec.notes[0]).toMatch(/Your books here start with January 2027/);
+    // Collapsed the other way: January is the park's own month, and hears
+    // nothing about a takeover.
+    const jan = (await getStatement(PARK, "2027-01-01", "2027-01-31"))!;
+    expect(jan.notes.some((l) => /went live here/.test(l))).toBe(false);
+    // THROUGH THE OTHER DOORWAY TOO. A park with no bills raised at all
+    // returns early, and that early return is exactly the December shape
+    // this line exists for — it used to hardcode the note's context.
+    db.park_charges = [];
+    const bare = (await getStatement(PARK, "2026-12-01", "2026-12-31"))!;
+    expect(bare.receipts).toEqual([]);
+    expect(bare.notes[0]).toMatch(/These dates are all before you went live here on December 15, 2026/);
+  });
+
+  it("a park with no go-live date set is told nothing — the note never invents the day", async () => {
+    db.parks = [{ id: PARK, name: "The Haven", office_recording_lag_days: 0, cutover_date: null }];
+    db.park_payments = [];
+    const dec = (await getStatement(PARK, "2026-12-01", "2026-12-31"))!;
+    expect(dec.notes.some((l) => /went live here/.test(l))).toBe(false);
+  });
+
+  it("the loader asks for the column and passes the window it is describing, and carries no unread edge-of-records field", () => {
+    const loader = readFileSync(fileURLToPath(new URL("./receipts-actions.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(loader).toMatch(/\.select\("name, office_recording_lag_days, cutover_date"\)/);
+    expect(loader).toMatch(/const cutoverOn = /);
+    // BOTH doorways: the early return for a window with no bills at all is
+    // exactly the December case this line exists for, and it used to be the
+    // one that got `recordsBeginOn: null` hardcoded.
+    expect(loader.match(/cutoverOn, windowEndsOn: period\.to,/g) ?? []).toHaveLength(2);
+    expect(loader).not.toMatch(/recordsBeginOn/);
+  });
+});

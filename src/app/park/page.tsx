@@ -397,8 +397,31 @@ export default async function ParkPage() {
    * `next` — the roll must not say somebody lives on a lot before they do.
    */
   const onLot = r.current ?? r.lapsed;
-  /** The stay the Edit panel is about: the one on the lot, else the one the office filed ahead. */
-  const editable = onLot ?? filedByHand;
+  /**
+   * THE STAY THE EDIT PANEL IS ABOUT: the one on the lot, else a household
+   * whose only record is still to start.
+   *
+   * It read `onLot ?? filedByHand`, and `filedByHand` demands
+   * origin 'application' — so an IMPORTED HOLDOVER had no Edit control at
+   * all. From the day the seller's roll lands until go-live every one of
+   * those rows is `reserved`: no current link, no lapsed link, a
+   * 'grandfathered' next link starting on the cutover. The readiness list's
+   * one required-shaped instruction before the January leases — "Add their
+   * email and phone from their row on the rent roll" — pointed at this
+   * screen, and this screen drew no Edit button on any of them, while every
+   * account needs an email and a mobile before anything bills. The nearest
+   * control that takes both is "They signed the new lease", which also
+   * writes a successor and trims the holdover: a fact he would be
+   * fabricating to reach a contact field.
+   *
+   * `decidedAt == null` is the boundary, not origin: it admits the holdover
+   * and the office's own filings (0059 forces decided_at null on a
+   * grandfathered row, and both office doors leave it null) and keeps out
+   * the one shape this screen is deliberately fenced off from — an APPROVED
+   * APPLICANT, stamped by decideApplication alone. Correcting the office's
+   * record is this screen's; un-approving an applicant is not.
+   */
+  const editable = onLot ?? filedByHand ?? (r.next?.decidedAt == null ? r.next : null);
   /**
    * WHAT THE ROW SAYS THEY ARE ON. "month-to-month" was "paid monthly" —
    * every 1-, 3- and 6-month lease read as rolling while the Today card
@@ -440,6 +463,14 @@ export default async function ParkPage() {
     // they do.
     filedByHandId: filedByHand?.id ?? null,
     filedByHandRenter: filedByHand ? roll.renterNames.get(filedByHand.renterId) ?? "Renter" : null,
+    // THE ONE ID AND THE ONE NAME THE EDIT PANEL IS KEYED ON — the stay
+    // above, resolved here rather than reassembled on the roll. The roll
+    // picked the row for Edit out of two ids and the name out of three, in
+    // four separate places, so a shape reachable by one and not the others
+    // opened a panel seeded from nobody: a blank Name box, and a save the
+    // builder refuses outright ("A tenant needs a name.").
+    editReservationId: editable?.id ?? null,
+    editRenterName: editable ? roll.renterNames.get(editable.renterId) ?? "Renter" : null,
     currentRent: editable?.quotedAmount ?? null,
     currentDueDay: editable?.dueDay ?? null,
     currentSource: editable?.amountSource ?? null,

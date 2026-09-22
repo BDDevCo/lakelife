@@ -8,7 +8,7 @@ import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { longDate } from "@/lib/lake-time";
 import { parseDaterange } from "@/lib/parks";
-import { planReRate, type ReRatePlan, type ReRateTarget } from "./rerate-helpers";
+import { planReRate, reRateSkipGroups, type ReRatePlan, type ReRateTarget } from "./rerate-helpers";
 import type { ParkResult } from "./actions";
 
 /**
@@ -171,7 +171,13 @@ export async function scheduleReRate(
     };
   }
   if (plan.changing.length === 0) {
-    return { ok: false, error: "Nothing would change." };
+    // WHY nothing would change. The Schedule button is disabled on the
+    // screen, so what lands here is a stale tab or a second window — and
+    // "Nothing would change." alone is the one door that refuses him without
+    // saying what it looked at. The reasons are the planner's own words, the
+    // same ones the preview prints.
+    const why = reRateSkipGroups(plan).map((g) => g.text).join(" ");
+    return { ok: false, error: `Nothing would change.${why ? ` ${why}` : ""}` };
   }
 
   const admin = createServiceClient();

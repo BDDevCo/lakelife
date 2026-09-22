@@ -36,7 +36,8 @@ import { dayInWords, lapsedRowOf } from "./park-helpers";
 // THE RENEWAL LEAD HAS ONE HOME. The card below and the "Agreements to write"
 // list it links to (renew-actions renewalsDue) both read renewalLeadDays, so
 // the card can never name a household the list keeps quiet about.
-import { renewalLeadDays } from "./agreement-helpers";
+import { renewalLeadDays, addMonths } from "./agreement-helpers";
+import { billPeriod, type BillPeriod, type Cadence } from "./cost-helpers";
 import { periodIsBillable, preCutoverCostRefusal, firstBillablePeriod } from "@/lib/billing-start";
 import { parseDaterange } from "@/lib/parks";
 
@@ -395,13 +396,20 @@ export interface TaskFacts {
     leavingOn: string;
   }[];
   /**
-   * Bills that arrive every month and have not been entered for this one.
+   * Recurring bills, at most one entry per schedule: its OLDEST period that
+   * nobody has entered (`oldestUnansweredBill`, which the loader calls).
    *
    * The Haven's sewer is 82% of everything the park spends on its residents'
    * behalf, and it arrives monthly. Miss it and nineteen households are never
    * billed their share — invisibly, because a cost nobody entered leaves no
    * trace. `typical` is a HINT so a wrong invoice is noticeable; it is never
    * billed and never written to park_costs.
+   *
+   * THIS USED TO BE TODAY'S PERIOD ALONE, so a bill he never entered stopped
+   * being mentioned the moment its period rolled — twenty-eight days for the
+   * sewer, and then gone with the debt. When January's is entered the next
+   * unanswered period takes its place, the way arrears names the oldest open
+   * month.
    */
   billsDue: {
     scheduleId: string;
@@ -462,6 +470,77 @@ export interface TaskFacts {
    * tests can pin it.
    */
   cutoverOn: string | null;
+}
+
+/**
+ * THE OLDEST PERIOD OF A RECURRING BILL THAT NOBODY HAS ENTERED.
+ *
+ * WHAT WENT WRONG. The morning loader asked `billPeriod` about TODAY and
+ * nothing else, so the reminder's key rolled with the calendar and took the
+ * debt off the list with it. January's sewer bill was a red, undismissable
+ * "still isn't entered" card for exactly twenty-eight days, and on 1 March it
+ * was simply gone — the same defect the arrears card was rewritten to fix,
+ * and the comment below this one ("it stays until the bill is entered")
+ * promised the opposite. Two tests pinned the promise, on fixtures the loader
+ * could never produce: the furthest a real `dueOn` could be in the past was
+ * fifty-one days. Nothing else in the product ever says a scheduled bill is
+ * missing — the nightly reconciler names unbilled RENT months only — so a
+ * bill he missed in one month was never mentioned again by anything, and an
+ * unentered cost is in nobody's books and nobody's fee comparison.
+ *
+ * ONE CARD PER SCHEDULE, NAMING THE OLDEST. Emitting every unanswered period
+ * would pile undismissable cards on the screen, which is the precise failure
+ * the 28-day lead clip and the unallocated-cost filters were written to
+ * prevent. So this mirrors arrears: the oldest open one, and the next
+ * appears when that one is entered.
+ *
+ * THE KEY STILL NAMES THE PERIOD. Keyed on the schedule alone the card would
+ * persist, but a "not this week" taken over January's bill would also
+ * silence February's — a different bill. The period in the key means a snooze
+ * dies with the period it was taken about, and a tax bill is still one task a
+ * year.
+ *
+ * THE FLOOR IS THE CALLER'S, and it is three facts at once: a period before
+ * go-live is not ours to ask about, a period before the schedule was created
+ * was never expected, and a period older than the costs the caller read
+ * cannot be judged answered or not. The caller takes the latest of the three.
+ * The period today sits in is always considered, floor or no floor, because
+ * that is the one the go-live gate downstream has its own sentence for.
+ *
+ * `billPeriod` reads only the year and month of the date it is handed, so the
+ * walk probes the 1st of each earlier month and the day never matters; it
+ * steps a MONTH at a time rather than a cadence at a time so this file holds
+ * no second copy of how long a quarter is — billPeriod names the period and a
+ * repeated key says we are still inside it.
+ */
+export function oldestUnansweredBill(input: {
+  cadence: Cadence;
+  dueMonth: number | null;
+  dueDay: number;
+  coversPriorPeriod: boolean;
+  today: string;
+  floor: string;
+  answered: (p: BillPeriod) => boolean;
+}): BillPeriod | null {
+  const { cadence, dueMonth, dueDay, coversPriorPeriod, today, floor, answered } = input;
+  const at = (iso: string) => billPeriod(cadence, dueMonth, dueDay, iso, coversPriorPeriod);
+
+  const current = at(today);
+  let oldest: BillPeriod | null = answered(current) ? null : current;
+
+  const seen = new Set<string>([current.key]);
+  let probe = `${today.slice(0, 7)}-01`;
+  while (probe >= floor) {
+    probe = addMonths(probe, -1);
+    const p = at(probe);
+    // Compared on the period's own first day — the same thing the go-live
+    // gate compares downstream, so the walk and the gate cannot disagree.
+    if (p.from < floor) break;
+    if (seen.has(p.key)) continue;
+    seen.add(p.key);
+    if (!answered(p)) oldest = p;
+  }
+  return oldest;
 }
 
 function rank(u: TaskUrgency): number {
@@ -591,7 +670,18 @@ export function generateTasks(f: TaskFacts): Task[] {
     const lapsed = ending.filter((a) => daysBetween(f.today, a.endsOn) < 0);
     const running = ending.length - lapsed.length;
     out.push({
-      key: `agreements_ending:${f.parkId}:${soonest}`,
+      // THE KEY CARRIES THE FACT. "Running out" and "have lapsed" were the
+      // same key, so a dismissal taken on 20 January — when the card was a
+      // harmless nudge about eighteen leases with a fortnight left — silently
+      // deleted the 16 March card saying the rent had stopped for all of
+      // them. Nothing else on Today says a lapsed tenancy stopped being
+      // billed, and a dismissal never expires. When the fact changes the key
+      // changes with it, and the lapsed card cannot be dismissed at all:
+      // stopped rent is money owed, and ParkToday's own rule is that money
+      // owed may not be told to go away. `soonest` stays in the key so a
+      // dismissal of the lapsed card cannot be resurrected against a later
+      // one; snoozing is still offered on both.
+      key: `agreements_ending:${f.parkId}:${soonest}${lapsed.length > 0 ? ":lapsed" : ""}`,
       title: lapsed.length > 0
         ? `${lapsed.length} ${lapsed.length === 1 ? "agreement has" : "agreements have"} lapsed` +
           (running > 0 ? ` and ${running} ${running === 1 ? "is" : "are"} running out` : "")
@@ -603,13 +693,15 @@ export function generateTasks(f: TaskFacts): Task[] {
       urgency: lapsed.length > 0 ? "overdue" : "soon",
       dueOn: soonest,
       href: "/park/today",
-      canDismiss: true,
+      canDismiss: lapsed.length === 0,
     });
   } else {
     for (const a of ending) {
       const d = daysBetween(f.today, a.endsOn);
       out.push({
-        key: `agreement_ending:${a.chainId ?? a.reservationId}:${a.seq}`,
+        // The same two facts under one key, a lot at a time: "ends in 12
+        // days" and "ran out" were both `agreement_ending:chain-9:1`.
+        key: `agreement_ending:${a.chainId ?? a.reservationId}:${a.seq}${d < 0 ? ":ranout" : ""}`,
         title: d < 0
           ? `Lot ${a.lotNumber}'s agreement ran out`
           : `Lot ${a.lotNumber}'s agreement ends in ${d} ${d === 1 ? "day" : "days"}`,
@@ -619,7 +711,7 @@ export function generateTasks(f: TaskFacts): Task[] {
         urgency: d < 0 ? "overdue" : "soon",
         dueOn: a.endsOn,
         href: "/park/today",
-        canDismiss: true,
+        canDismiss: d >= 0,
       });
     }
   }
@@ -773,7 +865,11 @@ export function generateTasks(f: TaskFacts): Task[] {
     // the behaviour the monthly tests pin exactly where it was.
     //
     // A LATE bill is never clipped. Once the due day is past, the reminder is
-    // the whole point and it stays until the bill is entered.
+    // the whole point and it stays until the bill is entered — which is only
+    // TRUE because the loader now hands over the oldest unanswered period
+    // rather than today's. When it handed over today's, this sentence and the
+    // two tests pinning it were describing a state the loader could not
+    // produce: a real `dueOn` was never more than fifty-one days past.
     //
     // Applied BEFORE the gate, so the not-ours line below is clipped the same
     // way: the seller's tax is not announced in January for November.

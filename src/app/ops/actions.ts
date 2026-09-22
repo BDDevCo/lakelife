@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { notify } from "@/lib/notify";
+import { allowsNotification } from "@/lib/notif-gate";
 import { checkNamedInsured } from "@/lib/named-insured";
 import { todayLakeDate, dayStatus, effectiveSeason, validateSeasonDates } from "@/lib/booking";
 import { runRouteBuild } from "@/lib/automation";
@@ -223,19 +224,28 @@ export async function assignAndSchedule(
   }
   const propNotifyRes = await admin
     .from("properties")
-    .select("address, users(phone, email)")
+    .select("address, users(id, phone, email)")
     .eq("id", job.property_id)
     .maybeSingle();
   if (propNotifyRes.error) console.error("[read failed] the owner's phone number (job scheduled, text not sent):", propNotifyRes.error);
   const prop = propNotifyRes.data;
-  const ownerUser = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as { phone?: string; email?: string } | null;
+  const ownerUser = (Array.isArray(prop?.users) ? prop?.users[0] : prop?.users) as { id?: string; phone?: string; email?: string } | null;
   const ownerPhone = ownerUser?.phone;
   const ownerEmail = ownerUser?.email;
   // EVERY DOOR: the owner is being told a crew and a date are locked in.
-  if (ownerPhone || ownerEmail) {
+  //
+  // GATED ON "book", THE SAME SWITCH THE OTHER TWO BOOKING DOORS ASK. This is
+  // the same sentence book/actions.ts sends, and it was the one copy of it
+  // that consulted no preference — a customer who turned "Booking confirmed"
+  // off still heard from us whenever ops scheduled the job by hand.
+  const [bookBySms, bookByEmail] = await Promise.all([
+    allowsNotification(ownerUser?.id, "book", "sms"),
+    allowsNotification(ownerUser?.id, "book", "email"),
+  ]);
+  if ((bookBySms && ownerPhone) || (bookByEmail && ownerEmail)) {
     await notify(
       "the owner that their service is scheduled",
-      { phone: ownerPhone ?? null, email: ownerEmail ?? null },
+      { phone: bookBySms ? (ownerPhone ?? null) : null, email: bookByEmail ? (ownerEmail ?? null) : null },
       {
         sms: `LakeLife: your ${svcName} is booked for ${prettyDate}. Your photos go on your job page as soon as the crew finishes. 🌊`,
         subject: `Your ${svcName} is booked for ${prettyDate}`,

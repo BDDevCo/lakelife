@@ -73,8 +73,15 @@ export interface StatementPage {
    * column summed to $34.28, because the sentence counted bill rows only.
    */
   cardFeesReceivedCents: number;
-  /** Earliest payment ever recorded here — the edge of what we can know. */
-  recordsBeginOn: string | null;
+  // WAS `recordsBeginOn`: the earliest payment ever recorded here. Nothing
+  // ever read it — not this screen, not the note it was passed to, not the
+  // file — and it could not honestly have been read: it was derived from
+  // payments joined through charges, so a signing cheque or a deposit taken
+  // before the first rent landed was not in it, and any sentence saying
+  // "nothing was keyed in before this" would have been false for exactly
+  // The Haven's January. The window's own emptiness is explained from the
+  // go-live date instead (ExclusionContext.cutoverOn), which is the fact
+  // that actually decides it.
   /** What was BILLED as due in this window. Accrual, shown for contrast only. */
   billedInWindowCents: number;
   today: string;
@@ -118,12 +125,18 @@ export async function getStatement(
     "your park",
     await admin
       .from("parks")
-      .select("name, office_recording_lag_days")
+      // THE GO-LIVE DATE IS PART OF WHAT THIS WINDOW MEANS. The screen opens
+      // on the last complete month, so before the first month we may bill
+      // the owner's first view is a window that cannot hold anything —
+      // reading as a month in which the park took nothing. The note says so,
+      // through firstBillablePeriod; a park with no date set says nothing.
+      .select("name, office_recording_lag_days, cutover_date")
       .eq("id", parkId)
       .maybeSingle(),
   );
   const parkName = (park?.name as string) ?? "This park";
   const lagDays = (park?.office_recording_lag_days as number) ?? 0;
+  const cutoverOn = (park?.cutover_date as string | null) ?? null;
 
   // CASH THAT CAME IN BUT IS NOT RENT RECEIVED (0102). This statement is built
   // by scoping payments through their charges, so a deposit and money on
@@ -569,13 +582,13 @@ export async function getStatement(
     return {
       parkName, period, summary: empty, receipts: [], otherReceipts,
       notes: exclusionLines({
-        recordsBeginOn: null, lagDays, unbilledFeeLabels: [], anyMissingPayerName: false,
+        cutoverOn, windowEndsOn: period.to, lagDays, unbilledFeeLabels: [], anyMissingPayerName: false,
         depositsReceivedCents, onAccountReceivedCents, amenityReceivedCents,
         onAccountAppliedCents, onAccountHeldCents, otherTakenBackCents,
         refunds: refundNotes, handedBack: handedBackNotes, cardFeesReceivedCents: otherFeesCents,
       }),
       cardFeesReceivedCents: otherFeesCents,
-      recordsBeginOn: null, billedInWindowCents: 0,
+      billedInWindowCents: 0,
       today, generatedAt: new Date().toISOString(),
     };
   }
@@ -648,10 +661,6 @@ export async function getStatement(
       a.receivedOn.localeCompare(b.receivedOn) ||
       a.lotNumber.localeCompare(b.lotNumber, undefined, { numeric: true }));
 
-  const recordsBeginOn = all.length
-    ? all.reduce((min, r) => (r.receivedOn < min ? r.receivedOn : min), all[0].receivedOn)
-    : null;
-
   // A fee that is switched on but has never appeared on a bill is money the
   // accountant may go looking for. Name it rather than let its absence read as
   // "nobody paid it".
@@ -701,7 +710,7 @@ export async function getStatement(
     receipts: inWindow,
     otherReceipts,
     notes: exclusionLines({
-      recordsBeginOn, lagDays, unbilledFeeLabels, anyMissingPayerName,
+      cutoverOn, windowEndsOn: period.to, lagDays, unbilledFeeLabels, anyMissingPayerName,
       depositsReceivedCents, onAccountReceivedCents, amenityReceivedCents,
       onAccountAppliedCents, onAccountHeldCents, otherTakenBackCents,
       refunds: refundNotes,
@@ -710,7 +719,6 @@ export async function getStatement(
       cardFeesReceivedCents,
     }),
     cardFeesReceivedCents,
-    recordsBeginOn,
     billedInWindowCents,
     today,
     generatedAt: new Date().toISOString(),

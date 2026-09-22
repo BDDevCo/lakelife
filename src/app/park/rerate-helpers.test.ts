@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
-  planReRate, addDays, reRateSummary, reRateProblemText,
+  planReRate, addDays, reRateSummary, reRateProblemSentence, reRateSkipGroups,
   type ReRateTarget, type ReRateProblem,
 } from "./rerate-helpers";
 
@@ -164,10 +164,95 @@ describe("the day-one re-rate", () => {
   it("gives every problem a sentence", () => {
     const all: ReRateProblem[] = ["no_tenancy", "already_at_amount", "ends_before_effective", "not_monthly"];
     for (const p of all) {
-      const s = reRateProblemText(p, "7");
+      const s = reRateProblemSentence(p, ["7"]);
       expect(s.length).toBeGreaterThan(10);
       expect(s).not.toMatch(/undefined|null/);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // WHY A LOT WAS LEFT ALONE. The screen used to summarise the planner's four
+  // reasons in one sentence that named THREE of them — "already at that rent,
+  // not monthly, or nobody on the lot". The fourth, `ends_before_effective`,
+  // is the reason for nearly every lot at a park whose house style is a
+  // one-month agreement: every date the notice period allows is past the end
+  // of one. So a park-wide increase landed on almost nobody and the only
+  // explanation on screen said "nobody on the lot" about households who live
+  // there.
+  // -------------------------------------------------------------------------
+
+  it("names the reason that is true of nearly every lot at a one-month park", () => {
+    // Eighteen lived-in lots on one-month agreements ending 1 May, one empty
+    // lot, a 30-day notice served 1 April for a 2 May start.
+    const lived: ReRateTarget[] = Array.from({ length: 18 }, (_, i) => ({
+      reservationId: `res-${i}`,
+      lotLabel: String(i + 1),
+      currentAmount: 400,
+      term: "monthly",
+      endsOn: "2027-05-01",
+    }));
+    const p = planReRate({
+      targets: [...lived, { reservationId: "", lotLabel: "27", currentAmount: null, term: "", endsOn: null }],
+      toAmount: 425,
+      effectiveOn: "2027-05-02",
+      noticeGivenOn: "2027-04-01",
+      noticeDays: 30,
+    });
+    expect(p.tooSoon).toBe(false);
+    expect(p.changing).toHaveLength(0);
+    expect(reRateSummary(p)).toBe("Nothing would change.");
+
+    const groups = reRateSkipGroups(p);
+    expect(groups.map((g) => g.problem)).toEqual(["no_tenancy", "ends_before_effective"]);
+    // The empty lot is named, and the eighteen households are NOT called empty.
+    const empty = groups.find((g) => g.problem === "no_tenancy")!;
+    expect(empty.lotLabels).toEqual(["27"]);
+    expect(empty.text).toContain("Nobody is on lot 27");
+    const ends = groups.find((g) => g.problem === "ends_before_effective")!;
+    expect(ends.lotLabels).toHaveLength(18);
+    expect(ends.text).toContain("Lots 1, 2, 3");
+    expect(ends.text).toContain("and 18 run out before the new rent would start");
+    // Nothing on this screen may say these eighteen lots are empty.
+    expect(ends.text).not.toMatch(/[Nn]obody/);
+    // One line per reason, not one per lot: two lines for nineteen lots.
+    expect(groups).toHaveLength(2);
+  });
+
+  it("each reason names a door that exists", () => {
+    // An empty lot's rent is set under Lots & rates ('Save rates'); there is
+    // no "asking rate" control anywhere in the product, and that is what this
+    // sentence used to send him to.
+    const empty = reRateProblemSentence("no_tenancy", ["27"]);
+    expect(empty).toContain("Lots & rates");
+    expect(empty).not.toMatch(/asking rate/);
+    // A sitting tenant's increase lands at renewal — the same spelling
+    // backfillWords uses, and the button ParkRenewals renders.
+    const ends = reRateProblemSentence("ends_before_effective", ["9"]);
+    expect(ends).toContain("Renew at a new rent");
+    expect(ends).toContain("Agreements to write");
+  });
+
+  it("says one lot one way and several the other", () => {
+    expect(reRateProblemSentence("already_at_amount", ["7"])).toBe("Lot 7 is already at that rent.");
+    expect(reRateProblemSentence("already_at_amount", ["7", "9"])).toBe("Lots 7 and 9 are already at that rent.");
+    expect(reRateProblemSentence("not_monthly", ["3"])).toBe("Lot 3 isn't a monthly tenancy — change that one on its own.");
+    expect(reRateProblemSentence("not_monthly", ["3", "5", "8"]))
+      .toBe("Lots 3, 5 and 8 aren't monthly tenancies — change those on their own.");
+    expect(reRateProblemSentence("no_tenancy", ["26", "27"]))
+      .toContain("Nobody is on lots 26 and 27");
+  });
+
+  it("groups only reasons that actually occurred, in the order the planner judges them", () => {
+    const p = planReRate({
+      targets: [
+        { reservationId: "a", lotLabel: "1", currentAmount: 400, term: "monthly", endsOn: "2027-12-01" },
+        { reservationId: "b", lotLabel: "2", currentAmount: 425, term: "monthly", endsOn: "2027-12-01" },
+        { reservationId: "c", lotLabel: "3", currentAmount: 400, term: "annual", endsOn: "2027-12-01" },
+      ],
+      toAmount: 425, effectiveOn: "2027-05-02", noticeGivenOn: "2027-04-01", noticeDays: 30,
+    });
+    expect(p.changing.map((l) => l.lotLabel)).toEqual(["1"]);
+    expect(reRateSkipGroups(p).map((g) => g.problem)).toEqual(["not_monthly", "already_at_amount"]);
   });
 
   it("handles a month-end effective date across a year boundary", () => {

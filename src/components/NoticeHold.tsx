@@ -4,6 +4,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { setNoticeHold } from "@/app/park/actions";
+import { dayInWords } from "@/app/park/park-helpers";
+import { lakeDateOf } from "@/lib/booking";
 
 /**
  * THE ONE SWITCH THAT STOPS EVERYTHING REACHING A HOUSEHOLD.
@@ -56,9 +58,19 @@ export function NoticeHold({
           <span className={`ll-pill ${held ? "" : "slate"}`}>
             {held ? "On hold" : "Notices can go out"}
           </span>
+          {/* THE DAY THE HOLD WENT ON, IN THE SAME WORDS THE ROW ABOVE USES.
+              This printed the raw stamp sliced to ten characters, and the
+              readiness row inches above it printed the same column through
+              lakeDateOf + dayInWords — so one screen carried two spellings of
+              one fact, and on any hold set after 7pm in Indiana the card's was
+              a day ahead of the row's ("since 2026-12-21" under "Notices on
+              hold since December 20, 2026"). A date a person reads is words,
+              and the calendar day is the one at the lakes, never UTC's. The
+              slice survives only as the fallback for a stamp that will not
+              parse, so a bad value still prints something rather than nothing. */}
           {held && heldAt && (
             <span className="mut" style={{ fontSize: 13 }}>
-              since {heldAt.slice(0, 10)}
+              since {dayInWords(lakeDateOf(heldAt) ?? heldAt.slice(0, 10))}
             </span>
           )}
         </div>

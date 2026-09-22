@@ -411,13 +411,17 @@ describe("renewAgreement — the owner's door", () => {
     db.parks[0].max_agreement_months = 6;
     const pre = await previewRenewal("park-1", "res-jan");
     expect(pre.preview!.lengths.map((l) => l.months)).toEqual([1, 3, 6]);
-    const raised = await renewAgreement("park-1", "res-jan", { months: 6 });
-    expect(raised.ok, raised.error).toBe(true);
-    expect(inserted[0].during).toBe("[2027-02-01,2027-08-01)");
-    // Twelve is still not offered at six.
+    // Twelve is still not offered at six. Asked BEFORE the renewal is
+    // written: once a successor exists, the planner refuses every length with
+    // "Lot 14's next agreement is already written" — the right answer to a
+    // second tap, and not the one this line is about.
     const twelve = await renewAgreement("park-1", "res-jan", { months: 12 });
     expect(twelve.ok).toBe(false);
     expect(twelve.error).toBe("This park writes agreements of 1, 3 or 6 months — pick one of those.");
+
+    const raised = await renewAgreement("park-1", "res-jan", { months: 6 });
+    expect(raised.ok, raised.error).toBe(true);
+    expect(inserted[0].during).toBe("[2027-02-01,2027-08-01)");
   });
 
   it("refuses a call with no length rather than writing the house style for them", async () => {
@@ -1829,15 +1833,16 @@ describe("a household who already renewed", () => {
     await tap(token, 3);
     // 2 February: the January row is over; February–May is running. The old
     // row keeps its token (the sweep no longer re-mints), so the same text
-    // link opens — and read "That stay has already finished. The park can
-    // set up a new one." to a household whose new one had begun.
+    // link opens — and read the `already_ended` sentence ("That stay has
+    // already finished. Give the park a call and they'll sort out what
+    // happens next.") to a household whose new one had begun.
     TODAY = "2027-02-02";
     const view = await loadExtendByToken(token);
     expect(view!.refusal).toBe("already_renewed");
     const html = await page(token);
     expect(html).toContain("You&#39;re already set");
     expect(html).toContain("runs February 1, 2027 to May 1, 2027");
-    expect(html).not.toMatch(/already finished|set up a new one|can&#39;t do that/);
+    expect(html).not.toMatch(/already finished|Give the park a call|can&#39;t do that/);
     const replay = await tap(token, 3);
     expect(inserted).toHaveLength(1);
     expect(replay).toContain("You&#39;re already set");

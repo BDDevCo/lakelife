@@ -71,7 +71,7 @@ const acct = (over: Partial<OtherReceipt> = {}): OtherReceipt => ({
 
 const page = (other: OtherReceipt[], notes: string[] = [], over: Partial<StatementPage> = {}): StatementPage => ({
   parkName: "The Haven", period, summary: summariseReceipts([], period), receipts: [], otherReceipts: other,
-  notes, cardFeesReceivedCents: 0, recordsBeginOn: "2026-12-28", billedInWindowCents: 0, today: TODAY, generatedAt: "2027-02-02T12:00:00Z",
+  notes, cardFeesReceivedCents: 0, billedInWindowCents: 0, today: TODAY, generatedAt: "2027-02-02T12:00:00Z",
   ...over,
 });
 
@@ -468,11 +468,16 @@ describe("rent paid on a bill that was cancelled after it was paid", () => {
     const later = say(withReceipt(rec({ released: { ...released, remainingCents: 0, handedBackCents: 7_000, handedBackOn: "2027-02-03", handedBackInFile: false } })));
     expect(later).toMatch(/\$70\.00 was handed back on February 3, 2027 — its own line in the statement for February 2027\./);
     expect(later).not.toMatch(/below and in the file/);
-    // A refund, likewise, by whether its negative row is in this file.
+    // A refund, likewise, by whether its negative row is in this file — and
+    // NO RAIL IS NAMED. This said "went back to a card"; 0142 refunds ACH
+    // too and `released` carries no method, so the card was an invention on
+    // every bank refund. Pinned both ways: the words, and the absence.
     const refunded = say(withReceipt(rec({ released: { ...released, remainingCents: 0, refundedCents: 7_000, refundedInFile: true } })));
-    expect(refunded).toMatch(/\$70\.00 went back to a card — its own line below and in the file\./);
+    expect(refunded).toMatch(/\$70\.00 went back — its own line below and in the file\./);
+    expect(refunded).not.toMatch(/back to a card/);
     const refundedLater = say(withReceipt(rec({ released: { ...released, remainingCents: 0, refundedCents: 7_000, refundedInFile: false } })));
-    expect(refundedLater).toMatch(/\$70\.00 went back to a card — its own line in the statement for the month it went back\./);
+    expect(refundedLater).toMatch(/\$70\.00 went back — its own line in the statement for the month it went back\./);
+    expect(refundedLater).not.toMatch(/back to a card/);
     // The colliding line — the part month shares January's period — is
     // named as the bill raised again, through the one allocation sentence.
     const collide = say(withReceipt(rec({ released: { ...released, allocations: [{ periodMonth: "2027-01", amount: 472.53, raisedAgain: { basis: "27 of 31 days" } }] } })));
@@ -484,7 +489,10 @@ describe("rent paid on a bill that was cancelled after it was paid", () => {
 
   it("a cancelled bill the loader found nothing released for keeps the old sentence — no claim about where money went", () => {
     const w = say(withReceipt(rec()));
-    expect(w).toMatch(/against a bill that was later cancelled\. It's counted here because the money arrived\. If you sent it back to a card, that refund is its own line below and in the file\./);
+    // "If you sent it back" — not "back to a card": the same rail that is
+    // unknown on the figures is unknown on the hypothetical.
+    expect(w).toMatch(/against a bill that was later cancelled\. It's counted here because the money arrived\. If you sent it back, that refund is its own line below and in the file\./);
+    expect(w).not.toMatch(/back to a card/);
     expect(w).not.toMatch(/went on their account/);
   });
 
@@ -528,5 +536,14 @@ describe("rent paid on a bill that was cancelled after it was paid", () => {
     expect(src).toMatch(/handedBackWhere\(r\.released, \{ asSentence: true \}\)/);
     expect(src).not.toMatch(/was handed back\$\{/);
     expect(src).not.toMatch(/released\.remainingCents \/ 100\)\.toFixed/);
+    // THE REFUND'S WHEREABOUTS THE SAME WAY. This screen wrote the sentence
+    // out inline while the note and the file said nothing about a refunded
+    // release at all — three doorways, one of them speaking. The helper is
+    // now the only writer here, and the rail it used to name is gone from
+    // the whole file (refundRails, which DOES know the rail, lives in the
+    // helpers and never reaches this component).
+    expect(src).toMatch(/refundedWhere\(r\.released\)/);
+    expect(src).not.toMatch(/refundedInFile \?/);
+    expect(src).not.toMatch(/back to a card/);
   });
 });

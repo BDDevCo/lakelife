@@ -486,7 +486,12 @@ describe("reraiseMonth — the run's own arithmetic, for one tenancy", () => {
     const r = await reraiseMonth(admin, PARK, "jan", "2027-01");
     if ("error" in r) throw new Error(r.what);
     expect(r.raised!.amount).toBe(491.03);
-    expect(db.park_charges[0].lines).toContainEqual({ label: "Water — your share", amount: 18.5, basis: "for 2026-12-01 to 2026-12-31" });
+    // The basis is the period IN WORDS, frozen into the bill. These two
+    // dates are the hand-typed shape — the cost form is two free date
+    // inputs — so the line names the days he entered, never a whole month
+    // he did not. The exclusive [1st, 1st) shape the product itself emits
+    // is pinned below.
+    expect(db.park_charges[0].lines).toContainEqual({ label: "Water — your share", amount: 18.5, basis: "for December 1, 2026 to December 31, 2026" });
     expect(db.lot_cost_shares[0].billed_on_charge_id).toBe(db.park_charges[0].id);
     // Says how many it took up, so a caller that voided can tell what a
     // void released and nothing re-billed.
@@ -548,11 +553,13 @@ describe("feesFor and unbilledCostShares — one home, and statementFor asks the
     db.lot_cost_shares.push({ id: "sh-1", reservation_id: "jan", cost_id: "c1", amount: 18.5, basis: "b", billed_on_charge_id: null });
     db.lot_cost_shares.push({ id: "sh-2", reservation_id: "jan", cost_id: "c2", amount: 9, basis: "b", billed_on_charge_id: null });
     db.lot_cost_shares.push({ id: "sh-3", reservation_id: "jan", cost_id: "c1", amount: 1, basis: "b", billed_on_charge_id: "chg-old" });
-    db.park_costs.push({ id: "c1", park_id: PARK, category: "water", period_start: "2026-12-01", period_end: "2026-12-31" });
+    // The real shape: billPeriod emits an EXCLUSIVE end, so a December
+    // cost runs 1 December to 1 January. The line says "for December 2026".
+    db.park_costs.push({ id: "c1", park_id: PARK, category: "water", period_start: "2026-12-01", period_end: "2027-01-01" });
     db.park_costs.push({ id: "c2", park_id: "park-2", category: "trash", period_start: null, period_end: null });
     const r = await unbilledCostShares(admin, PARK, ["jan"]);
     expect(r.error).toBeNull();
-    expect(r.shares.get("jan")).toEqual([{ id: "sh-1", label: "Water — your share", amount: 18.5, basis: "for 2026-12-01 to 2026-12-31" }]);
+    expect(r.shares.get("jan")).toEqual([{ id: "sh-1", label: "Water — your share", amount: 18.5, basis: "for December 2026" }]);
     expect((await unbilledCostShares(admin, PARK, [])).shares.size).toBe(0);
   });
 

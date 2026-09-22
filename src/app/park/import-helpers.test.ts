@@ -1172,7 +1172,9 @@ describe("a yearly or quarterly figure is held for the monthly rent", () => {
     // And the figure on the row is his now, not the seller's printed one.
     expect(p.ready[0].typedOver).toBe(true);
     expect(p.monthlyTotal).toBe(400);
-    expect(p.rates).toEqual([{ lineNo: 2, lotLabel: "1", amount: 400, createsLot: false }]);
+    expect(p.rates).toEqual([
+      { lineNo: 2, lotLabel: "1", amount: 400, createsLot: false, alreadyRated: false, currentRate: null },
+    ]);
   });
 
   it("'there isn't one' is also an answer", () => {
@@ -1854,5 +1856,102 @@ describe("the review screen's cadence copy follows his answers", () => {
     expect(src).toMatch(/const answered = answeredCadence\(live\);/);
     expect(src).toMatch(/\{view\.statedTotal != null && !totals && \(sheetSays \|\| cadence\.heldForMonthly > 0 \|\| answered\) && \(/);
     expect(src).toMatch(/the sheet&apos;s figure was \{figureWas\(answered\.kind\)\} and you typed the monthly rent over it,\s*so his total and the rows no longer add up the same things\./);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PREVIEW OF A WRITE THAT IS NOT GOING TO HAPPEN.
+//
+// The commit never puts a seller's figure over a card the owner set — his
+// number wins — and the Read screen still said "we'll set up 21 lots and what
+// each one brings in today" over twenty-one cards he had typed himself. The
+// plan carries the park's cards already (they are the scale `looks_yearly` is
+// measured on), so the flag costs nothing and the screen stops promising.
+// ---------------------------------------------------------------------------
+describe("a rate the import will leave alone is marked in the plan", () => {
+  const CARDS = [
+    { id: "lot-1", lotNumber: "1", monthlyRate: 400 },
+    { id: "lot-2", lotNumber: "2", monthlyRate: 400 },
+    { id: "lot-6", lotNumber: "6", monthlyRate: null },
+  ];
+  const NAMELESS = "Current Monthly\nLot 1\t325.00 $\nLot 2\t250.00 $\nLot 6\t275.00 $";
+  const NAMED = "Lot\tName\tRent\nLot 1\tEarl Dowd\t325\nLot 2\tMarva Klee\t250\nLot 6\tRay Buss\t275";
+
+  function plan(blob: string, lots: typeof CARDS) {
+    const parsed = parseRentRoll(blob, { knownLots: lots.map((l) => l.lotNumber) });
+    return planImport({
+      rows: parsed.rows, lots, liveStays: [], cutoverISO: CUTOVER, season: null,
+      namelessRoll: !parsed.shape.hasNameColumn,
+    });
+  }
+
+  it("NAMELESS: the lots with his card carry it, the one without does not", () => {
+    const p = plan(NAMELESS, CARDS);
+    expect(p.namelessRoll).toBe(true);
+    expect(p.rates.map((r) => [r.lotLabel, r.alreadyRated, r.currentRate])).toEqual([
+      ["1", true, 400],
+      ["2", true, 400],
+      ["6", false, null],
+    ]);
+    // The sheet's own figure is still carried — the screen shows both.
+    expect(p.rates.map((r) => r.amount)).toEqual([325, 250, 275]);
+  });
+
+  it("NAMED: the same flag off the same reading of the same cards", () => {
+    const p = plan(NAMED, CARDS);
+    expect(p.namelessRoll).toBe(false);
+    expect(p.rates.map((r) => [r.lotLabel, r.alreadyRated])).toEqual([
+      ["1", true], ["2", true], ["6", false],
+    ]);
+  });
+
+  it("a park with no cards at all marks nothing — collapsed the other way", () => {
+    const bare = CARDS.map((l) => ({ ...l, monthlyRate: null }));
+    expect(plan(NAMELESS, bare).rates.every((r) => r.alreadyRated === false)).toBe(true);
+    expect(plan(NAMED, bare).rates.every((r) => r.alreadyRated === false)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AND THE SCREEN THAT RENDERS IT.
+// ---------------------------------------------------------------------------
+describe("the Read screen names the rents it is leaving alone", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("../../components/ParkImportRead.tsx", import.meta.url)), "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("finds the file it is scanning", () => {
+    expect(src).toMatch(/export function ParkImportRead/);
+    expect(src).toMatch(/view\.namelessRoll \? \(/);
+  });
+
+  it("derives the kept list from the plan, not from a second reading of it", () => {
+    expect(src).toMatch(/const ratesKept = view\.rates\.filter\(\(r\) => r\.alreadyRated\);/);
+  });
+
+  it("the nameless paragraph stops promising a rent for every lot", () => {
+    // It said "and what each one brings in today" unconditionally.
+    expect(src).toMatch(/ratesKept\.length > 0 \? \(/);
+    expect(src).toMatch(/and bring in the rent for \{view\.rates\.length - ratesKept\.length\}/);
+    expect(src).toMatch(/already \{ratesKept\.length === 1 \? "has" : "have"\} a\s*\n?\s*rent you set/);
+  });
+
+  it("the per-lot line shows HIS card, not the figure that will not be written", () => {
+    expect(src).toMatch(/r\.alreadyRated \? "rent already set — yours kept" : "no name on the list"/);
+    expect(src).toMatch(/r\.alreadyRated\s*\n?\s*\? \(r\.currentRate == null \? "Rent not set" : money\(r\.currentRate\)\)/);
+  });
+
+  it("the confirm modal names the lots before he taps, because there is no undo", () => {
+    expect(src).toMatch(/\{ratesKept\.length > 0 && \(/);
+    expect(src).toMatch(/\{ratesKept\.map\(\(r\) => r\.lotLabel\)\.join\(", "\)\}/);
+    expect(src).toMatch(/Your number stays;/);
+  });
+
+  it("the receipt reads the kept list back out of the jsonb, by lot", () => {
+    expect(src).toMatch(/function commitKept\(counts: Record<string, unknown>\)/);
+    expect(src).toMatch(/const raw = counts\.ratesKept;/);
+    expect(src).toMatch(/const kept = commitKept\(view\.counts\);/);
+    expect(src).toMatch(/\{kept\.length > 0 && \(/);
+    expect(src).toMatch(/kept the rent you&apos;d\s*\n?\s*already set/);
   });
 });

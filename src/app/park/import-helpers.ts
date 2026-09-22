@@ -300,6 +300,18 @@ export interface PlannedRate {
   lotLabel: string;
   amount: number | null;
   createsLot: boolean;
+  /**
+   * The lot already carries a monthly card the owner set, so the commit will
+   * LEAVE IT ALONE — "his number wins". Here so the preview can say so before
+   * he taps: a screen that promises to set twenty-one rents and then keeps
+   * twenty-one of his own is a preview of an import that never happened.
+   *
+   * A preview, not the rule. The commit re-reads at write time and decides
+   * for itself, because he may have set a card in another tab since.
+   */
+  alreadyRated?: boolean;
+  /** What that card says today, so the screen can show both figures. */
+  currentRate?: number | null;
 }
 
 export interface ImportPlan {
@@ -450,6 +462,18 @@ export function planImport(input: PlanInput): ImportPlan {
     lots.map((l) => l.monthlyRate).filter((n): n is number => typeof n === "number" && n > 0),
   );
 
+  // THE CARD THIS LOT ALREADY CARRIES, or null. One reading of "the owner's
+  // own number is already on this pad", used by both rate lists below so the
+  // nameless roll and the named one cannot disagree about what will be kept.
+  const cardByLotId = new Map(
+    lots
+      .filter((l): l is ExistingLot & { monthlyRate: number } =>
+        typeof l.monthlyRate === "number" && l.monthlyRate > 0)
+      .map((l) => [l.id, l.monthlyRate]),
+  );
+  const existingCard = (lotId: string | null): number | null =>
+    (lotId ? cardByLotId.get(lotId) ?? null : null);
+
   // ---- pass 2: plan each row.
   const planned: PlannedRow[] = resolved.map((entry) => {
     const { row, rawLabel, real, o } = entry;
@@ -583,12 +607,21 @@ export function planImport(input: PlanInput): ImportPlan {
       p.blockers.includes("bad_term") || p.blockers.includes("looks_yearly");
     const rates: PlannedRate[] = planned
       .filter((p) => !p.skipped && p.lotLabel && !p.blockers.includes("label_too_long"))
-      .map((p) => ({
-        lineNo: p.lineNo,
-        lotLabel: p.lotLabel!,
-        amount: notMonthly(p) ? null : p.amount,
-        createsLot: p.createsLot,
-      }));
+      .map((p) => {
+        // HIS NUMBER WINS, AND THE SCREEN HAS TO SAY SO. A nameless roll's
+        // whole product is lots and rents, so this list IS the preview; a lot
+        // whose card he already typed keeps it, and the line below marks it
+        // rather than promising a figure that will never be written.
+        const card = existingCard(p.matchedLotId);
+        return {
+          lineNo: p.lineNo,
+          lotLabel: p.lotLabel!,
+          amount: notMonthly(p) ? null : p.amount,
+          createsLot: p.createsLot,
+          alreadyRated: card != null,
+          currentRate: card,
+        };
+      });
 
     return {
       rows: planned,
@@ -641,12 +674,17 @@ export function planImport(input: PlanInput): ImportPlan {
   // document beats starting from nothing.
   const rates: PlannedRate[] = ready
     .filter((p) => p.lotLabel && p.term === "monthly" && p.amount != null)
-    .map((p) => ({
-      lineNo: p.lineNo,
-      lotLabel: p.lotLabel!,
-      amount: p.amount,
-      createsLot: p.createsLot,
-    }));
+    .map((p) => {
+      const card = existingCard(p.matchedLotId);
+      return {
+        lineNo: p.lineNo,
+        lotLabel: p.lotLabel!,
+        amount: p.amount,
+        createsLot: p.createsLot,
+        alreadyRated: card != null,
+        currentRate: card,
+      };
+    });
 
   return { rows: planned, ready, needsYou, lotsToCreate, monthlyTotal, namelessRoll: false, emptyLots: [...(input.emptyLots ?? [])], rates };
 }

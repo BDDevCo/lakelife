@@ -139,6 +139,24 @@ describe("canExtend — the tap we can actually honour", () => {
     expect(canExtend({ ...base, status: "applied" }).refusal).toBe("not_extendable");
   });
 
+  it("a finished stay promises the household nothing the park may not be able to do", () => {
+    // This read "That stay has already finished. The park can set up a new
+    // one." For a few weeks that is true — the owner renews from the old
+    // agreement's own end. Once more time has passed than the longest
+    // agreement the park writes, every length he could pick would be over
+    // before it started, his own screen refuses him, and there is no door at
+    // all: a one-month household who lapsed on 1 February is in that state
+    // from 1 August. The promise was made to the household on the first day
+    // past the end, long before anyone could know which side of that line
+    // they were on.
+    const t = refusalText("already_ended");
+    expect(t).toBe("That stay has already finished. Give the park a call and they'll sort out what happens next.");
+    expect(t).not.toMatch(/set up a new one/);
+    // It still tells them what to do — a refusal that only says no is worse
+    // than one that promises too much.
+    expect(t).toMatch(/call/);
+  });
+
   it("every refusal has a sentence a stressed person can act on", () => {
     // Typed against the union: a seventh ExtendRefusal fails typecheck here
     // until it has a sentence — a literal list would let it slip past.
@@ -381,8 +399,9 @@ describe("renewal at a capped park", () => {
     it("comes after 'inherited' only — a household re-opening the link after the old row ended is still 'already set', never 'already finished'", () => {
       expect(canExtend({ ...base, capMonths: 3, ownSuccessor: next, origin: "grandfathered" }).refusal).toBe("inherited");
       // The old row [Jul 1, Jul 8) is over on 1 April; their next agreement
-      // runs 15 March – 15 June. "That stay has already finished. The park
-      // can set up a new one." was the sentence, one line above the true one.
+      // runs 15 March – 15 June. "That stay has already finished" — and
+      // nothing after it but a phone call — was the sentence, one line above
+      // the true one.
       expect(canExtend({ ...base, capMonths: 3, ownSuccessor: next, todayISO: "2027-04-01" }).refusal).toBe("already_renewed");
       // With no successor a finished stay still says so.
       expect(canExtend({ ...base, capMonths: 3, ownSuccessor: null, todayISO: "2027-04-01" }).refusal).toBe("already_ended");

@@ -4,8 +4,10 @@ import { fileURLToPath } from "node:url";
 import {
   moneyBlock, describeOffBook, occupancyLine, generateTasks, visibleTasks, quietState, preCutover,
   addDays, daysBetween, ordinal, householdsIn, holdoverLotsOf, lotOccupancy,
+  oldestUnansweredBill,
   type TaskFacts, type OccupancySnapshot,
 } from "./today-helpers";
+import { type BillPeriod } from "./cost-helpers";
 import { toRows, summarise, prettyMonth, type Charge } from "./ledger-helpers";
 import { preCutoverCostRefusal } from "@/lib/billing-start";
 import { SIGNED_LEASE_LABEL } from "./sign-helpers";
@@ -878,6 +880,13 @@ describe("bills that come round again", () => {
   it("never clips a LATE bill, however long ago it was due", () => {
     // The forgotten bill is the whole point of the reminder — a year late is
     // the case that costs money, not the case to hide.
+    //
+    // THIS FIXTURE ONCE PINNED NOTHING. While the loader asked billPeriod
+    // about today alone, a dueOn nine months past was a state it could never
+    // hand over — the furthest it could reach was fifty-one days. It is a
+    // real state now: the walk back over unentered periods produces exactly
+    // this, and "a bill nobody entered goes on being asked for" below runs
+    // the walk that produces it.
     const [t] = generateTasks(facts({ billsDue: tax({ dueOn: "2025-11-10" }) }));
     expect(t?.title).toBe("Property tax due November 10, 2025 still isn't entered");
     expect(t?.urgency).toBe("overdue");
@@ -962,7 +971,9 @@ describe("bills that come round again", () => {
 
     it("still never clips a LATE bill the gate lets through — and names it by its due date, never as 'the 2027 tax'", () => {
       // Go-live 1 Jan 2027; a tax bill due 10 Nov 2027 and it is now
-      // February 2028. THE GATE LETS IT THROUGH: the schedule is unflagged,
+      // February 2028. The walk is what produces that dueOn — see "walks a
+      // year at a time for a yearly bill", which builds this same card from
+      // oldestUnansweredBill's own result rather than a hand-written period. THE GATE LETS IT THROUGH: the schedule is unflagged,
       // so billPeriod keys the bill on the year it is due IN. At an Indiana
       // park that bill is the 2026 tax — the seller's year, a closing-table
       // credit, never a park_costs row — so calling it "Property tax for
@@ -1547,12 +1558,14 @@ describe("the read behind it", () => {
    * and the two-signal clear rule inlined here beside a copy in cost-helpers
    * is two rules that drift. Each is a source shape, so each is pinned.
    */
-  it("reads covers_prior_period off the schedule and hands it to billPeriod", () => {
-    const stmt = src.split("\n").join(" ").match(/from\("park_cost_schedules"\)[\s\S]{0,300}?\)/);
+  it("reads covers_prior_period off the schedule and hands it to the walk", () => {
+    // The walk asks billPeriod per period now, so the flag is handed to it
+    // rather than to billPeriod directly — the column still has a reader, and
+    // the card is still told from billPeriod's own result.
+    const stmt = src.split("\n").join(" ").match(/from\("park_cost_schedules"\)[\s\S]{0,400}?\)/);
     expect(stmt).not.toBeNull();
     expect(stmt![0]).toContain("covers_prior_period");
-    expect(src).toMatch(/billPeriod\(\s*[\s\S]*?,\s*Boolean\(sc\.covers_prior_period\),?\s*\)/);
-    // And the card is told from the same result, never from a second read.
+    expect(src).toMatch(/coversPriorPeriod:\s*Boolean\(sc\.covers_prior_period\)/);
     expect(src).toMatch(/coversPriorPeriod:\s*p\.coversPriorPeriod/);
   });
 
@@ -1562,11 +1575,18 @@ describe("the read behind it", () => {
     expect(src).not.toMatch(/period_end \?\? ""\) >= p\.from/);
   });
 
-  it("fetches costs back to last 1 January — a flagged annual bill covers the year before", () => {
+  it("fetches costs back to last 1 January, or to go-live when that is further back", () => {
+    // A flagged annual bill covers the year BEFORE the one it is due in, so
+    // last 1 January was the floor. The walk back over unentered periods can
+    // reach further — a park live since 2027 asking in 2029 — and a period
+    // whose costs were never read cannot be judged entered or not, so the
+    // read is widened to match the walk rather than the walk clipped to the
+    // read.
     const stmt = src.split("\n").join(" ").match(/from\("park_costs"\)\s*\.select\("category, period_start[\s\S]{0,300}?\.or\([^)]*\)/);
     expect(stmt).not.toBeNull();
-    expect(stmt![0]).toContain("priorYear");
+    expect(stmt![0]).toContain("costsFrom");
     expect(src).toMatch(/const priorYear = String\(Number\(year\) - 1\)/);
+    expect(src).toMatch(/const costsFrom = goLiveFloor && goLiveFloor < `\$\{priorYear\}-01-01`/);
   });
 });
 
@@ -1833,5 +1853,181 @@ describe("the doors on the arrears and notice cards open where the control is", 
       expect(t.href).not.toContain("/park/lots");
       expect(t.detail).not.toContain("/park/lots");
     }
+  });
+});
+
+describe("a lapsed agreement is a different fact from one running out", () => {
+  // THE DEFECT: the aggregate card kept its key when its wording changed from
+  // "18 agreements are running out" to "18 agreements have lapsed". `soonest`
+  // is the earliest end in the set and cannot move while that one stays
+  // lapsed, so the two cards were byte-identical keys. A dismissal taken on
+  // 20 January, when the card was a harmless nudge about eighteen one-month
+  // leases with a fortnight left, permanently deleted the 16 March card
+  // saying the rent had stopped for all of them — and a dismissal has no
+  // expiry. Nothing else on Today says a lapsed tenancy stopped being billed.
+  //
+  // THE HAVEN'S OWN SHAPE: eighteen leases signed 1 January 2027 for one
+  // month, none renewed.
+  const eighteen = Array.from({ length: 18 }, (_, i) => ({
+    reservationId: `r${i + 1}`,
+    lotNumber: String(i + 1),
+    renterName: null,
+    startsOn: "2027-01-01",
+    endsOn: "2027-02-01",
+    chainId: `ch${i + 1}`,
+    seq: 1,
+    hasSuccessor: false,
+  }));
+  const at = (today: string) =>
+    generateTasks(facts({ today, agreements: eighteen }))
+      .find((t) => t.key.startsWith("agreements_ending:"))!;
+
+  it("does not reuse one key for two different facts", () => {
+    const runningOut = at("2027-01-20");
+    const lapsed = at("2027-03-16");
+    // Both cards exist and say what the walker saw them say.
+    expect(runningOut.title).toBe("18 agreements are running out");
+    expect(lapsed.title).toBe("18 agreements have lapsed");
+    // And the keys are no longer the same string.
+    expect(lapsed.key).not.toBe(runningOut.key);
+    expect(lapsed.key).toBe("agreements_ending:p1:2027-02-01:lapsed");
+    expect(runningOut.key).toBe("agreements_ending:p1:2027-02-01");
+  });
+
+  it("will not offer to stop mentioning rent that has stopped", () => {
+    // ParkToday's own rule, one screen away: "Money owed and a missed notice
+    // deadline cannot be told to go away." Snoozing survives on both — the
+    // button is unconditional — so nothing becomes un-put-off-able.
+    expect(at("2027-01-20").canDismiss).toBe(true);
+    expect(at("2027-03-16").canDismiss).toBe(false);
+  });
+
+  it("a dismissal taken while it was harmless does not hide the lapsed card", () => {
+    const runningOut = at("2027-01-20");
+    const dismissal = [{
+      taskKey: runningOut.key,
+      snoozedUntil: null,
+      dismissedAt: "2027-01-20T10:00:00Z",
+    }];
+    // January: he dismissed it, so it is gone — correct, it was a nudge.
+    expect(
+      visibleTasks([runningOut], dismissal, "2027-01-20")
+        .filter((t) => t.key.startsWith("agreements_ending:")),
+    ).toEqual([]);
+    // March: the rent has stopped for eighteen households, and the card that
+    // says so is on the screen.
+    const march = visibleTasks([at("2027-03-16")], dismissal, "2027-03-16");
+    expect(march).toHaveLength(1);
+    expect(march[0].urgency).toBe("overdue");
+  });
+
+  it("does the same one lot at a time", () => {
+    // Under four ending agreements the per-lot branch runs, and it had the
+    // identical shape: `agreement_ending:ch1:1` whether the title said "ends
+    // in 12 days" or "ran out".
+    const one = [eighteen[0]];
+    const soon = generateTasks(facts({ today: "2027-01-20", agreements: one }))[0];
+    const ranOut = generateTasks(facts({ today: "2027-03-16", agreements: one }))[0];
+    expect(soon.title).toBe("Lot 1's agreement ends in 12 days");
+    expect(ranOut.title).toBe("Lot 1's agreement ran out");
+    expect(ranOut.key).not.toBe(soon.key);
+    expect(soon.key).toBe("agreement_ending:ch1:1");
+    expect(ranOut.key).toBe("agreement_ending:ch1:1:ranout");
+    expect(soon.canDismiss).toBe(true);
+    expect(ranOut.canDismiss).toBe(false);
+  });
+});
+
+describe("a bill nobody entered goes on being asked for", () => {
+  // THE DEFECT: the loader asked billPeriod about TODAY and nothing else, so
+  // the reminder's key rolled with the calendar and took the debt with it.
+  // January's sewer was a red, undismissable "still isn't entered" card for
+  // exactly twenty-eight days and was simply gone on 1 March; the annual tax
+  // lived eighty days and then became a card about a different year. Nothing
+  // else in the product ever says a scheduled bill is missing.
+  const never = () => false;
+  const only = (...keys: string[]) => (p: BillPeriod) => keys.includes(p.key);
+
+  const sewer = (today: string, answered: (p: BillPeriod) => boolean, floor = "2027-01-01") =>
+    oldestUnansweredBill({
+      cadence: "monthly", dueMonth: null, dueDay: 5, coversPriorPeriod: false,
+      today, floor, answered,
+    });
+
+  it("still names January's sewer bill in March", () => {
+    const p = sewer("2027-03-16", never);
+    expect(p?.key).toBe("2027-01");
+    expect(p?.dueOn).toBe("2027-01-05");
+  });
+
+  it("moves to the next unentered period when the oldest is entered", () => {
+    // One card per schedule, naming the oldest — the way arrears names the
+    // oldest open month. Entering January does not clear February.
+    expect(sewer("2027-03-16", only("2027-01"))?.key).toBe("2027-02");
+    expect(sewer("2027-03-16", only("2027-01", "2027-02"))?.key).toBe("2027-03");
+    expect(sewer("2027-03-16", only("2027-01", "2027-02", "2027-03"))).toBeNull();
+  });
+
+  it("never reaches back past the floor the caller set", () => {
+    // Three honest limits, and the caller takes the latest: the costs it
+    // actually read, the first period that is ours, and the day the schedule
+    // was filed. A schedule created in March was never expected to answer
+    // for February.
+    expect(sewer("2027-03-16", never, "2027-03-01")?.key).toBe("2027-03");
+    expect(sewer("2027-03-16", never, "2027-02-01")?.key).toBe("2027-02");
+  });
+
+  it("keeps today's period even when the floor is ahead of it", () => {
+    // A bill whose covered period starts before go-live still has its own
+    // sentence downstream (the "starts before you went live" card), so the
+    // walk never drops the current period.
+    const p = oldestUnansweredBill({
+      cadence: "monthly", dueMonth: null, dueDay: 5, coversPriorPeriod: true,
+      today: "2027-01-06", floor: "2027-01-01", answered: never,
+    });
+    expect(p?.key).toBe("2026-12");
+    expect(p?.dueOn).toBe("2027-01-05");
+  });
+
+  it("walks a year at a time for a yearly bill, not twelve months at a time", () => {
+    // Go-live 1 January 2027, property tax due 10 November, February 2028 and
+    // 2027's was never entered. This is the exact state the "never clips a
+    // LATE bill" test fixture describes — which the loader could not produce
+    // before, because a real dueOn was never more than fifty-one days past.
+    const p = oldestUnansweredBill({
+      cadence: "annual", dueMonth: 11, dueDay: 10, coversPriorPeriod: false,
+      today: "2028-02-11", floor: "2027-01-01", answered: never,
+    });
+    expect(p?.key).toBe("2027");
+    expect(p?.dueOn).toBe("2027-11-10");
+    // And the card built from it is the overdue, undismissable one.
+    const [t] = generateTasks(facts({
+      today: "2028-02-11", cutoverOn: "2027-01-01",
+      billsDue: [{
+        scheduleId: "s1", category: "property_tax", label: "Property tax",
+        periodKey: p!.key, periodLabel: p!.label, periodFrom: p!.from,
+        dueOn: p!.dueOn, typical: null, coversPriorPeriod: false,
+      }],
+    }));
+    expect(t.title).toBe("Property tax due November 10, 2027 still isn't entered");
+    expect(t.urgency).toBe("overdue");
+    expect(t.canDismiss).toBe(false);
+  });
+
+  it("the morning loader actually walks — it does not ask about today alone", () => {
+    // A pure helper nothing calls fixes nothing. The loader's own source must
+    // hand its schedules to the walk, and must no longer build a single
+    // billPeriod from `today`.
+    const src = readFileSync(
+      fileURLToPath(new URL("./today-actions.ts", import.meta.url)),
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).toContain("oldestUnansweredBill({");
+    // The old shape, verbatim: billPeriod(...) whose fourth argument is today.
+    expect(src).not.toMatch(/billPeriod\(\s*\n?[^)]*\n\s*today,/);
+    // And the walk is given all three floors.
+    expect(src).toContain("floor: floors.reduce");
+    expect(src).toContain("goLiveFloor");
+    expect(src).toContain("sc.created_at");
   });
 });

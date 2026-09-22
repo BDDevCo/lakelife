@@ -45,7 +45,16 @@ export interface ReadView {
   lotsToCreate: string[];
   monthlyTotal: number;
   namelessRoll: boolean;
-  rates: { lineNo: number; lotLabel: string; amount: number | null; createsLot: boolean }[];
+  rates: {
+    lineNo: number;
+    lotLabel: string;
+    amount: number | null;
+    createsLot: boolean;
+    /** The lot already carries a card he set. The commit keeps his number. */
+    alreadyRated?: boolean;
+    /** What that card says today. */
+    currentRate?: number | null;
+  }[];
   others: { lineNo: number; text: string; verdict: string; why: string | null }[];
   blockQuestions: { code: string; question: string }[];
   /** jsonb — tallies AND, since the failures fix, the list of rows that
@@ -81,6 +90,27 @@ function commitFailures(counts: Record<string, unknown>): CommitFailure[] {
   );
 }
 
+export interface CommitKept { lot: string; message: string }
+
+/**
+ * The lots whose rent the commit left alone, BY NAME — out of the same jsonb
+ * bag the failures come from, so the receipt still names them after a reload.
+ *
+ * A rate card has no undo. "21 lots set up" over twenty-one cards the owner
+ * typed himself was a true sentence about the wrong thing, and this is the
+ * half that was missing from it.
+ */
+function commitKept(counts: Record<string, unknown>): CommitKept[] {
+  const raw = counts.ratesKept;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (k): k is CommitKept =>
+      !!k && typeof k === "object" &&
+      typeof (k as CommitKept).lot === "string" &&
+      typeof (k as CommitKept).message === "string",
+  );
+}
+
 const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
 
@@ -110,6 +140,19 @@ export function ParkImportRead({ view }: { view: ReadView }) {
    */
   const absent = view.reconciliation.neverMentioned;
   const skipped = view.others.filter((o) => o.verdict !== "vacant");
+
+  /**
+   * THE LOTS WHOSE RENT THIS IMPORT WILL NOT TOUCH.
+   *
+   * The commit never overwrites a card the owner set — his number wins — and
+   * this screen used to promise "we'll set up 21 lots and what each one brings
+   * in today" over twenty-one cards he had typed himself. He read a preview of
+   * an import that was not going to happen, and nothing on the receipt said
+   * otherwise.
+   *
+   * A preview, not the rule: the commit re-reads at write time.
+   */
+  const ratesKept = view.rates.filter((r) => r.alreadyRated);
 
   // WHAT THE LIST SAYS, NOT WHAT IS READY TO WRITE.
   //
@@ -524,9 +567,21 @@ export function ParkImportRead({ view }: { view: ReadView }) {
           <p className="mut" style={{ margin: "0 0 14px", lineHeight: 1.5 }}>
             So we won&apos;t record anyone as living anywhere — it doesn&apos;t say
             who. We&apos;ll set up {view.rates.length}{" "}
-            {view.rates.length === 1 ? "lot" : "lots"} and what each one brings
-            in today. Add the people as you meet them; every lot below will be
-            waiting for a name.
+            {view.rates.length === 1 ? "lot" : "lots"}
+            {ratesKept.length > 0 ? (
+              <>
+                {" "}and bring in the rent for {view.rates.length - ratesKept.length}{" "}
+                of them. <strong>
+                  {ratesKept.length} already {ratesKept.length === 1 ? "has" : "have"} a
+                  rent you set, and we&apos;ll leave {ratesKept.length === 1 ? "it" : "those"} alone
+                </strong>{" "}
+                — your number wins over the seller&apos;s sheet.
+              </>
+            ) : (
+              <> and what each one brings in today.</>
+            )}{" "}
+            Add the people as you meet them; every lot below will be waiting for
+            a name.
           </p>
           <div className="ll-card">
             {view.rates.map((r) => (
@@ -538,8 +593,23 @@ export function ParkImportRead({ view }: { view: ReadView }) {
                 }}
               >
                 <strong style={{ minWidth: 72 }}>Lot {r.lotLabel}</strong>
-                <span className="mut" style={{ flex: 1 }}>no name on the list</span>
-                <span>{r.amount == null ? "Rent not set" : money(r.amount)}</span>
+                <span className="mut" style={{ flex: 1 }}>
+                  {/* A LOT WHOSE RENT WE WILL NOT TOUCH SAYS SO HERE. The
+                      figure beside it is HIS card, not the sheet's — printing
+                      the sheet's number would be a preview of a write that is
+                      never going to happen. */}
+                  {r.alreadyRated ? "rent already set — yours kept" : "no name on the list"}
+                </span>
+                <span>
+                  {r.alreadyRated
+                    ? (r.currentRate == null ? "Rent not set" : money(r.currentRate))
+                    : (r.amount == null ? "Rent not set" : money(r.amount))}
+                </span>
+                {r.alreadyRated && r.amount != null && r.currentRate !== r.amount && (
+                  <span className="mut" style={{ fontSize: 13 }}>
+                    (your list says {money(r.amount)})
+                  </span>
+                )}
                 {r.createsLot && <span className="ll-pill slate">new lot</span>}
               </div>
             ))}
@@ -662,8 +732,10 @@ export function ParkImportRead({ view }: { view: ReadView }) {
         >
           <span className="mut" style={{ flex: 1, fontSize: 14 }}>
             {view.namelessRoll
-              ? `${view.rates.length} lots · no names on this list · ${walk.length + absent.length} empty`
-              : `${view.ready.length} ready · ${view.needsYou.length} need you · ${walk.length + absent.length} empty`}
+              ? `${view.rates.length} lots · no names on this list · ${walk.length + absent.length} empty` +
+                (ratesKept.length > 0 ? ` · ${ratesKept.length} keeping your rent` : "")
+              : `${view.ready.length} ready · ${view.needsYou.length} need you · ${walk.length + absent.length} empty` +
+                (ratesKept.length > 0 ? ` · ${ratesKept.length} keeping your rent` : "")}
           </span>
           <button
             className="ll-btn"
@@ -689,8 +761,11 @@ export function ParkImportRead({ view }: { view: ReadView }) {
                 {view.namelessRoll ? (
                   <>
                     This sets up {view.rates.length}{" "}
-                    {view.rates.length === 1 ? "lot" : "lots"} and what each one
-                    rents for. <strong>Nobody is recorded as living on them</strong> —
+                    {view.rates.length === 1 ? "lot" : "lots"} and what{" "}
+                    {ratesKept.length > 0
+                      ? `${view.rates.length - ratesKept.length} of them rent`
+                      : "each one rents"}{" "}
+                    for. <strong>Nobody is recorded as living on them</strong> —
                     your list doesn&apos;t say who.
                   </>
                 ) : (
@@ -702,6 +777,22 @@ export function ParkImportRead({ view }: { view: ReadView }) {
                   </>
                 )}
               </p>
+              {ratesKept.length > 0 && (
+                /* THE THING HE CANNOT GET BACK, SAID BEFORE HE TAPS. There is
+                   no undo for a rate card, so the one line the modal owes him
+                   is which rents this leaves alone — and it leaves alone every
+                   one he set himself. */
+                <p style={{ lineHeight: 1.5 }}>
+                  <strong>
+                    {ratesKept.length} {ratesKept.length === 1 ? "lot" : "lots"} already{" "}
+                    {ratesKept.length === 1 ? "has" : "have"} a rent you set
+                  </strong>{" "}
+                  — {ratesKept.length === 1 ? "Lot" : "Lots"}{" "}
+                  {ratesKept.map((r) => r.lotLabel).join(", ")}. Your number stays;
+                  the list&apos;s figure is not written over it. Change any of them
+                  on Lots &amp; rates.
+                </p>
+              )}
               <p className="mut" style={{ lineHeight: 1.5 }}>
                 Nothing gets texted, emailed, or charged to anybody. Rent amounts
                 come in as the list&apos;s numbers — not as anything a household
@@ -911,6 +1002,7 @@ function Receipt({ view }: { view: ReadView }) {
   const monthly = num(view.counts, "monthly");
   const failed = num(view.counts, "failed");
   const failures = commitFailures(view.counts);
+  const kept = commitKept(view.counts);
 
   return (
     <div className="wrap" style={{ paddingTop: 24, paddingBottom: 60, maxWidth: 640 }}>
@@ -969,6 +1061,34 @@ function Receipt({ view }: { view: ReadView }) {
               Everything else went in. Open the rent roll to see where the gaps are.
             </p>
           )}
+        </div>
+      )}
+
+      {/* ---- THE RENTS THIS IMPORT LEFT ALONE ----------------------------
+          Its own card, NOT under "didn't take": nothing failed and nothing
+          needs retrying. But a rate card has no undo, so the one thing the
+          receipt owes him is which rents are still his — and the lots that
+          kept his number are not in the "expected each month" figure above,
+          which is the sheet's arithmetic either way. */}
+      {kept.length > 0 && (
+        <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
+          <strong>
+            {kept.length} {kept.length === 1 ? "lot" : "lots"} kept the rent you&apos;d
+            already set
+          </strong>
+          <ul style={{ margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.7 }}>
+            {/* The message names its own lot — the commit wrote that sentence
+                and it is the only copy of it. Bolding "Lot 14" in front of it
+                would print the lot twice. */}
+            {kept.map((k, i) => (
+              <li key={i}>{k.message}</li>
+            ))}
+          </ul>
+          <p className="mut" style={{ margin: "10px 0 0", lineHeight: 1.5 }}>
+            Your number wins over the seller&apos;s sheet, so nothing was written
+            over. The figure above is what the list said it collects — those lots
+            still rent for what you set.
+          </p>
         </div>
       )}
 

@@ -8,6 +8,7 @@ import { reversePayment, refundParkPayment, refundableOn } from "@/app/park/ledg
 import {
   money, receiptsHeadline, monthPeriod, quarterPeriod, yearPeriod, customPeriod,
   notCollectedAt, takenBackWhy, onAccountKindLabel, isOnAccountRow, METHOD_LABEL, handedBackWhere,
+  refundedWhere,
   type Period, type OtherReceipt, type Method,
 } from "@/app/park/receipts-helpers";
 import { longDate } from "@/lib/lake-time";
@@ -284,16 +285,18 @@ export function ParkStatements({
                     ? ` ${handedBackWhere(r.released, { asSentence: true })}.`
                     : ""}
                   {/* A REFUND, likewise, is in the file for the window it went
-                      back in (0142, by the day it went back). With the view's
-                      refunded figure on the row the sentence says what went
-                      back and where its line is; a released row nothing went
-                      back on keeps the "if" — a cancelled-bill receipt the view
-                      does not list carries no figure to say either way. */}
+                      back in (0142, by the day it went back). Through the
+                      note's own helper, the way the hand-back above is — this
+                      was the same sentence written out inline here, which is
+                      how the note and the file came to say nothing about a
+                      refunded release while this screen said it in full.
+                      NO RAIL IS NAMED: it said "back to a card", and 0142
+                      refunds ACH too. A released row nothing went back on
+                      keeps the "if" — a cancelled-bill receipt the view does
+                      not list carries no figure to say either way. */}
                   {r.released
-                    ? (r.released.refundedCents > 0
-                        ? ` ${money(r.released.refundedCents)} went back to a card — ${r.released.refundedInFile ? "its own line below and in the file" : "its own line in the statement for the month it went back"}.`
-                        : "")
-                    : " If you sent it back to a card, that refund is its own line below and in the file."}
+                    ? (r.released.refundedCents > 0 ? ` ${refundedWhere(r.released)}.` : "")
+                    : " If you sent it back, that refund is its own line below and in the file."}
                 </div>
               ))}
               {/* MONEY TAKEN BACK. Kept out of every total above — a bounced

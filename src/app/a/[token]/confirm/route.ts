@@ -20,7 +20,14 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   if (!ev) return htmlPage("That link isn't right", "This link doesn't match anything — book anytime at lakelife.ai. 🌊", false);
 
   if (ev.status === "confirmed") {
-    return htmlPage("Already booked ✓", `${ev.enrollment.serviceName} at ${ev.enrollment.where} is on the books for ${prettyDay(ev.proposed_date)}. We'll remind you the night before. 🌊`);
+    // NO NIGHT-BEFORE PROMISE HERE. This branch knows the proposal was
+    // confirmed and nothing else: `loadTokenEvent` reads the event and its
+    // enrollment, never the job. The reminder only goes out to jobs that are
+    // `scheduled` (sendNightBeforeReminders filters on it), and a confirmed
+    // proposal whose dispatch found no crew leaves the job `requested`
+    // forever. A customer re-tapping the link they tapped a minute ago read a
+    // promise nobody here is in a position to make.
+    return htmlPage("Already booked ✓", `${ev.enrollment.serviceName} at ${ev.enrollment.where} is on the books for ${prettyDay(ev.proposed_date)}. 🌊`);
   }
   if (ev.status !== "proposed" || !ev.enrollment.active || ev.proposed_date <= todayLakeDate()) {
     return htmlPage("This one expired", "No worries — nothing was booked. You can book anytime at lakelife.ai/book. 🌊", false);
@@ -118,10 +125,29 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
     return htmlPage("Hmm, that didn't take", "Give it another tap in a minute, or book at lakelife.ai/book. 🌊", false);
   }
   await admin.from("autopilot_events").update({ job_id: job.id }).eq("id", ev.id);
-  await autoAssignJob(job.id as string);
 
-  return htmlPage(
-    "You're booked 🌊",
-    `${ev.enrollment.serviceName} at ${ev.enrollment.where} — ${prettyDay(ev.proposed_date)}, at your locked price. We'll remind you the night before, and your photos go on the job page as soon as the crew finishes.`,
-  );
+  // THE OUTCOME IS THE WHOLE POINT OF THE SENTENCE BELOW.
+  //
+  // This used to be a bare `await`, and the page said "You're booked 🌊 … we'll
+  // remind you the night before, and your photos go on the job page as soon as
+  // the crew finishes" either way. When dispatch finds nobody the job stays
+  // `requested`: no crew is coming, the night-before reminder only ever goes to
+  // `scheduled` jobs, and there are no photos to promise. Both halves of that
+  // sentence were false, and this page is the ONLY message this path sends —
+  // the customer had nothing else to tell them otherwise.
+  //
+  // The batch booking door was already fixed for exactly this fact and branches
+  // its subject and body on the same outcome. This is the second door; it now
+  // says what that one says, in the same words, so the two cannot drift.
+  const outcome = await autoAssignJob(job.id as string);
+
+  return outcome.assigned
+    ? htmlPage(
+        "You're booked 🌊",
+        `${ev.enrollment.serviceName} at ${ev.enrollment.where} — ${prettyDay(ev.proposed_date)}, at your locked price. We'll remind you the night before, and your photos go on the job page as soon as the crew finishes.`,
+      )
+    : htmlPage(
+        "We've got it 🌊",
+        `${ev.enrollment.serviceName} at ${ev.enrollment.where} — ${prettyDay(ev.proposed_date)}, at your locked price. We're lining up a crew for that day now and you'll hear the moment one is locked in. Nothing is confirmed until then.`,
+      );
 }

@@ -25,8 +25,18 @@ export function NotifPrefs({ initial }: { initial: NotifPrefState }) {
   return (
     <div className="ll-card ll-card-pad">
       <h3 style={{ fontSize: 16, marginBottom: 4 }}>Notifications</h3>
+      {/*
+        "EACH KIND OF UPDATE" WAS A BIGGER CLAIM THAN THE SIX SWITCHES KEEP.
+        Several owner-facing sends consult no preference at all — the Autopilot
+        proposal, the waitlist warning, the expiry and late-cancellation
+        notices, "a crew picked up your job", and the ops-scheduled booking —
+        and none of them maps onto one of the six labels below. A customer who
+        switched everything off still heard from us. Whether those deserve
+        switches of their own is a product decision; what is not a decision is
+        that this sentence has to describe the switches that are actually here.
+      */}
       <p className="mut" style={{ fontSize: 13, marginBottom: 4 }}>
-        Choose how LakeLife reaches you for each kind of update.
+        Choose how LakeLife reaches you for these updates.
       </p>
       <p className="mut" style={{ fontSize: 12.5, marginBottom: 6 }}>
         Receipts &amp; invoices always send by email so you never miss a charge. 🌊

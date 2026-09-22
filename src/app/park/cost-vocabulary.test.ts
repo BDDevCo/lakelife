@@ -77,8 +77,10 @@ describe("every category a person can pick is one the database accepts", () => {
 
   it("offers every splittable category except the deliberate omissions", () => {
     // `unit_electric` is deliberately absent (power for a park-owned home is
-    // metered to that home). `tax` and `insurance` are real bills but no fee
-    // may claim them, so they are entered as schedules, not split costs.
+    // metered to that home). `tax` and `insurance` ARE in the dropdown —
+    // ParkCosts added them so a tax or insurance reminder had a door that
+    // opens — but a fee may never claim them, so they are omitted from this
+    // particular assertion rather than from the screen.
     const OMITTED = new Set(["unit_electric", "tax", "insurance"]);
     const offered = new Set(screenCategories());
     for (const c of dbCategories()) {

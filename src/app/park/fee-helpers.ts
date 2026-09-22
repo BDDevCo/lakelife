@@ -23,7 +23,8 @@
  * stuff" could never be reconciled against anything.
  */
 
-import type { CostCategory } from "./cost-helpers";
+// The cost screen's words for the cost categories — imported, never retyped.
+import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
 // Months in words and the one money formatter — never ISO, never toFixed here.
 import { prettyMonth, money } from "./ledger-helpers";
 
@@ -55,17 +56,40 @@ export const FEE_COVERS: CostCategory[] = [
 /** Extra coverage words a fee may claim that are not billable cost categories. */
 export const FEE_EXTRA_COVERS = ["maintenance", "snow", "pest", "amenities"] as const;
 
+/**
+ * THE WORDS A COVERAGE LINE PRINTS — one source, not a second copy.
+ *
+ * This used to hand-list ten strings, seven of them a duplicate of the cost
+ * screen's own words. Two things went wrong with that, and both showed up on
+ * the one card built to answer "is my fee covering my costs?".
+ *
+ * The copy had DRIFTED: this map called snow "Snow removal" while the costs
+ * screen called the very same category "Snow clearing", so one bill was named
+ * two ways on two screens.
+ *
+ * And it was INCOMPLETE. `checkCoverage` lists every recorded cost category no
+ * active fee claims, and tax and insurance can never be claimed by a fee
+ * (FEE_COVERS leaves them out on purpose), so the month he files the insurance
+ * premium they are GUARANTEED to land in `uncovered`. With no entry here,
+ * ParkFees falls back to the raw slug — it printed the bare word `tax` beside
+ * "Water, Trash", a database enum sitting in an English sentence.
+ *
+ * Spreading the cost screen's map fixes both at once and, more to the point,
+ * cannot drift again when the next category lands: whatever the costs screen
+ * calls it, the fee screen calls it that too. The three extras below are the
+ * coverage words a fee may claim that are not billable categories at all.
+ *
+ * ONE GUARDRAIL. The checkbox row on the fee form is built from
+ * `[...FEE_COVERS, ...FEE_EXTRA_COVERS]`, NOT from this map's keys — leave it
+ * that way. Iterating these keys instead would quietly give a fee tickboxes
+ * for Property tax and Insurance, reversing the deliberate rule above and
+ * making a product decision the owner has not made.
+ */
 export const COVER_LABEL: Record<string, string> = {
-  water: "Water",
-  sewer: "Sewer",
-  trash: "Trash",
-  common_electric: "Park lighting & common areas",
-  grounds: "Grounds & mowing",
+  ...COST_CATEGORY_LABEL,
   maintenance: "Maintenance",
-  snow: "Snow removal",
   pest: "Pest control",
   amenities: "Amenities",
-  other: "Other",
 };
 
 export const CADENCE_LABEL: Record<FeeCadence, string> = {

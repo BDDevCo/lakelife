@@ -525,8 +525,17 @@ describe("the first-run card", () => {
     expect(firstRunCard(facts, NOBODY, rows)!.cta.href).toBe("/park/lots");
   });
 
-  it("offers the roll door only with no lots", () => {
-    expect(card({ lots: 0, liveLots: 0, activeLots: 0, occupiedLiveLots: 0 })!.alt).toEqual({ label: "or load a rent roll", href: "/park/import" });
+  it("offers the roll door only while nobody is filed — lots on file with nobody on them is exactly when it is wanted", () => {
+    const DOOR = { label: "or load a rent roll", href: "/park/import" };
+    // No lots at all: unchanged.
+    expect(card({ lots: 0, liveLots: 0, activeLots: 0, occupiedLiveLots: 0 })!.alt).toEqual(DOOR);
+    // Closing week — 21 lots on file, nobody on any of them. The card used to
+    // offer one button, to 21 blank rows, while the seller's roll was in hand.
+    expect(card({ occupiedLiveLots: 0 })!.alt).toEqual(DOOR);
+    expect(card({ occupiedLiveLots: 0 })!.stateLine).toBe("21 lots on file · nobody filed on them yet.");
+    // Spoken for is FILED, so the door closes for the December roll too.
+    expect(card({ occupiedLiveLots: 0, reservedLiveLots: 18 })!.alt).toBeNull();
+    // Households living here: nothing to load.
     expect(card({})!.alt).toBeNull();
   });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, handedBackWhere, onAccountKindLabel, otherKindLabel, isOnAccountRow, appliedToCell, billStatusCell, takenBackCells, notCollectedAt, takenBackWhy, takenBackOfRow, METHOD_LABEL, type Receipt, type OtherReceipt } from "./receipts-helpers";
+import { monthPeriod, quarterPeriod, yearPeriod, customPeriod, inPeriod, summariseReceipts, receiptsCsv, receiptsFilename, receiptsHeadline, csvText, linesCell, money, decimal, exclusionLines, handedBackWhere, refundedWhere, onAccountKindLabel, otherKindLabel, isOnAccountRow, appliedToCell, billStatusCell, takenBackCells, notCollectedAt, takenBackWhy, takenBackOfRow, METHOD_LABEL, type Receipt, type OtherReceipt } from "./receipts-helpers";
 import { METHOD_WORD } from "./receipt-helpers";
 
 const TODAY = "2026-08-11";
@@ -150,6 +150,14 @@ describe("grouping", () => {
       q3,
     );
     expect(s.byMonth.map((b) => b.key)).toEqual(["2026-07", "2026-08", "2026-09"]);
+    // THE LABEL IS THE HALF A PERSON READS, and it was the ISO period again —
+    // the only bucket whose label was not words. Nothing renders byMonth
+    // today, so the day somebody puts a month breakdown on the statement it
+    // would have printed "2026-07" at an accountant, and the months-in-words
+    // rule would have been broken on arrival. Pinned here because a label
+    // nothing asserted is exactly how it drifted.
+    expect(s.byMonth.map((b) => b.label)).toEqual(["July 2026", "August 2026", "September 2026"]);
+    expect(s.byMonth.some((b) => b.label === b.key)).toBe(false);
   });
 
   it("orders households by money, then by lot NUMERICALLY", () => {
@@ -162,6 +170,12 @@ describe("grouping", () => {
       JULY,
     );
     expect(s.byHousehold.map((b) => b.key)).toEqual(["7", "2", "10"]);
+    // THE SAME PIN ON THE SIBLING. byHousehold is unread in exactly the way
+    // byMonth was, and its label was already words — so what kept it right
+    // was luck, not a test. Both buckets are kept rather than deleted (a
+    // month or household breakdown on a quarter or year window is the
+    // likeliest next thing asked for) and both now have their labels held.
+    expect(s.byHousehold.map((b) => b.label)).toEqual(["Lot 7", "Lot 2", "Lot 10"]);
   });
 
   it("reports the first and last cash date actually seen", () => {
@@ -246,7 +260,7 @@ describe("what it says", () => {
 
   it("always names the expense, deposit and billed-vs-received gaps", () => {
     const lines = exclusionLines({
-      recordsBeginOn: "2026-07-01", lagDays: 3,
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 3,
       unbilledFeeLabels: [], anyMissingPayerName: false,
     });
     expect(lines.some((l) => /Expenses aren't in here/.test(l))).toBe(true);
@@ -260,13 +274,13 @@ describe("what it says", () => {
 
   it("only mentions an unbilled fee when one exists", () => {
     const none = exclusionLines({
-      recordsBeginOn: null, lagDays: 0,
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0,
       unbilledFeeLabels: [], anyMissingPayerName: false,
     });
     expect(none.some((l) => /never been billed/.test(l))).toBe(false);
 
     const some = exclusionLines({
-      recordsBeginOn: null, lagDays: 0,
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0,
       unbilledFeeLabels: ["grounds fee"], anyMissingPayerName: false,
     });
     expect(some.some((l) => /grounds fee/.test(l))).toBe(true);
@@ -321,7 +335,7 @@ describe("a payment that was taken back is not income", () => {
 
 describe("cash that came in but is not rent received", () => {
   const base = {
-    recordsBeginOn: "2026-07-01", lagDays: 0,
+    cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0,
     unbilledFeeLabels: [], anyMissingPayerName: false,
   };
 
@@ -521,7 +535,7 @@ describe("the card fee on a statement", () => {
 
   it("says out loud that the bank deposit will be bigger than the total", () => {
     const said = exclusionLines({
-      recordsBeginOn: "2026-01-01", lagDays: 0, unbilledFeeLabels: [],
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [],
       anyMissingPayerName: false, cardFeesReceivedCents: 1365,
     });
     const line = said.find((l) => l.includes("card fees"));
@@ -539,7 +553,7 @@ describe("the card fee on a statement", () => {
     // A statement that carries a disclaimer about money nobody paid is noise,
     // and noise is how a reader learns to skip the notes.
     const said = exclusionLines({
-      recordsBeginOn: "2026-01-01", lagDays: 0, unbilledFeeLabels: [],
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [],
       anyMissingPayerName: false, cardFeesReceivedCents: 0,
     });
     expect(said.some((l) => l.includes("card fees"))).toBe(false);
@@ -556,7 +570,7 @@ describe("money from things the park rents out", () => {
    */
   it("names amenity income as income, and not as rent", () => {
     const said = exclusionLines({
-      recordsBeginOn: "2026-01-01", lagDays: 0, unbilledFeeLabels: [],
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [],
       anyMissingPayerName: false, amenityReceivedCents: 30000,
     });
     const line = said.find((l) => l.includes("rent out"));
@@ -568,7 +582,7 @@ describe("money from things the park rents out", () => {
 
   it("does not confuse it with money held on account", () => {
     const said = exclusionLines({
-      recordsBeginOn: "2026-01-01", lagDays: 0, unbilledFeeLabels: [],
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [],
       anyMissingPayerName: false, amenityReceivedCents: 30000,
     });
     expect(said.some((l) => l.includes("rent out") && l.includes("on account"))).toBe(false);
@@ -576,7 +590,7 @@ describe("money from things the park rents out", () => {
 
   it("says nothing when the park rents nothing out", () => {
     const said = exclusionLines({
-      recordsBeginOn: "2026-01-01", lagDays: 0, unbilledFeeLabels: [],
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [],
       anyMissingPayerName: false, amenityReceivedCents: 0,
     });
     expect(said.some((l) => l.includes("rent out"))).toBe(false);
@@ -989,14 +1003,14 @@ describe("a deposit or on-account row that was taken back is kept, marked, and c
   });
 
   it("the note names the money that went back out, separately from rent taken back", () => {
-    const lines = exclusionLines({ recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, otherTakenBackCents: 162_759 });
+    const lines = exclusionLines({ cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, otherTakenBackCents: 162_759 });
     const line = lines.find((l) => /later taken back/.test(l))!;
     expect(line).toBeTruthy();
     expect(line).toContain("$1,627.59 that arrived in this period as a deposit, on account or for something you rent out was later taken back");
     expect(line).toMatch(/counts toward nothing above/);
     expect(line).toMatch(/marked "Taken back"/);
     // Silent when nothing was.
-    expect(exclusionLines({ recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, otherTakenBackCents: 0 })
+    expect(exclusionLines({ cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, otherTakenBackCents: 0 })
       .some((l) => /later taken back/.test(l))).toBe(false);
   });
 });
@@ -1062,7 +1076,7 @@ describe("a refund to a card, in the file", () => {
 
   it("the note names each refund and says it is NOT taken off the total", () => {
     const lines = exclusionLines({
-      recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false,
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false,
       refunds: [
         { amountCents: 10_000, feeCents: 0, refundedOn: "2027-01-26", lotNumber: "26", payerName: "Household 26", method: "card" },
         { amountCents: 4_000, feeCents: 120, refundedOn: "2027-01-25", lotNumber: null, payerName: "Household 15", method: "card" },
@@ -1074,19 +1088,19 @@ describe("a refund to a card, in the file", () => {
     expect(line).toContain("$1.20 of card fee went back with it.");
     expect(line).toMatch(/It is NOT taken off the total above/);
     // Silent when there were none.
-    expect(exclusionLines({ recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, refunds: [] })
+    expect(exclusionLines({ cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, refunds: [] })
       .some((l) => /sent back/.test(l))).toBe(false);
   });
 
   it("every money figure in the notes goes through money() — a thousands comma, never toFixed", () => {
     const lines = exclusionLines({
-      recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false,
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false,
       depositsReceivedCents: 150_000, onAccountReceivedCents: 162_759, onAccountAppliedCents: 108_506, onAccountHeldCents: 54_253,
       amenityReceivedCents: 120_000, cardFeesReceivedCents: 100_000, otherTakenBackCents: 162_759,
       refunds: [{ amountCents: 162_759, feeCents: 0, refundedOn: "2027-01-26", lotNumber: "9", payerName: null, method: "card" }],
       handedBack: [{ amountCents: 108_506, on: "2027-02-03", lotNumber: "9", payerName: null, kind: "rent", note: "moved out" }],
       releasedFromCancelled: [{ amountCents: 162_759, billMonth: "2027-01", releasedOn: "2027-01-20T16:00:00Z", lotNumber: "9", payerName: null,
-        allocations: [{ periodMonth: "2027-01", amount: 1085.06 }], remainingCents: 54_253, handedBackCents: 0, handedBackOn: null, handedBackInFile: false }],
+        allocations: [{ periodMonth: "2027-01", amount: 1085.06 }], remainingCents: 54_253, handedBackCents: 0, handedBackOn: null, handedBackInFile: false, refundedCents: 0, refundedInFile: false }],
     });
     const joined = lines.join(" ");
     for (const figure of ["$1,500.00", "$1,627.59", "$1,085.06", "$1,200.00", "$1,000.00", "$1,085.06 of their money on account", "$1,085.06 to January 2027, $542.53 still held"]) {
@@ -1208,7 +1222,7 @@ describe("money handed back across the window", () => {
 
   it("the note names each hand-back — what it was, the day, the reason — and says it is NOT taken off the total", () => {
     const lines = exclusionLines({
-      recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false,
+      cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false,
       handedBack: [
         { amountCents: 5_747, on: "2027-01-28", lotNumber: "9", payerName: "Household 9", kind: "rent", note: "moved out 27 January; nothing more bills" },
         { amountCents: 50_000, on: "2027-02-03", lotNumber: null, payerName: "Household 14", kind: "deposit", note: null },
@@ -1221,12 +1235,12 @@ describe("money handed back across the window", () => {
     expect(line).toMatch(/negative amount/);
     expect(line).not.toMatch(/null/);
     // Silent when there were none.
-    expect(exclusionLines({ recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, handedBack: [] })
+    expect(exclusionLines({ cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false, handedBack: [] })
       .some((l) => /handed back/.test(l))).toBe(false);
   });
 
   it("a refund's note names the rail it went back on — a card, or a bank account (0142 refunds ACH too)", () => {
-    const ctx = { recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false };
+    const ctx = { cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false };
     const one = (method: string) => ({ amountCents: 4_000, feeCents: 0, refundedOn: "2027-01-25", lotNumber: "15", payerName: null, method });
     expect(exclusionLines({ ...ctx, refunds: [one("ach")] }).find((l) => /sent back/.test(l))).toContain("$40.00 was sent back to a bank account in this period");
     expect(exclusionLines({ ...ctx, refunds: [one("ach"), one("ach")] }).find((l) => /sent back/.test(l))).toContain("was sent back to bank accounts in this period");
@@ -1257,6 +1271,27 @@ describe("money released from a cancelled bill, in the file and the note", () =>
       .toBe("CANCELLED — money released on account: 2027-01: 2.00; 2027-02: 1.00");
     expect(billStatusCell(receipt({ chargeStatus: "void", released: { ...released, allocations: [], remainingCents: 0 } })))
       .toBe("CANCELLED — money released on account: none still held");
+    // THE FOURTH WAY THE MONEY LEAVES, which this cell used to omit. The
+    // refund is its own negative row dated the day it went back — often a
+    // LATER window's file — so a $542.53 released and refunded printed
+    // "none still held" and January's file said nowhere where the money
+    // went. The Amount column still says $542.53 came in; the column that
+    // exists to answer "where did a cancelled bill's money go" now answers.
+    expect(billStatusCell(receipt({ chargeStatus: "void", released: { ...released, allocations: [], remainingCents: 0, refundedCents: 54_253 } })))
+      .toBe("CANCELLED — money released on account: refunded: 542.53");
+    expect(billStatusCell(receipt({ chargeStatus: "void", released: { ...released, remainingCents: 0, refundedCents: 7_000 } })))
+      .toBe("CANCELLED — money released on account: 2027-01: 472.53; refunded: 70.00");
+    // All four, in the one order the row reads as a story.
+    expect(billStatusCell(receipt({ chargeStatus: "void", released: { ...released, handedBackCents: 1_000, handedBackOn: "2027-01-22", refundedCents: 7_000 } })))
+      .toBe("CANCELLED — money released on account: 2027-01: 472.53; still held: 70.00; handed back 2027-01-22: 10.00; refunded: 70.00");
+    // NO DATE ON IT, on purpose: the view's `refunded` is a sum over
+    // park_refunds, which can be several on different days, and a cell must
+    // not name one of them as the day the money went.
+    expect(billStatusCell(receipt({ chargeStatus: "void", released: { ...released, remainingCents: 0, refundedCents: 7_000 } })))
+      .not.toMatch(/refunded 20/);
+    // Collapsed the other way: nothing refunded says nothing about a refund.
+    expect(billStatusCell(receipt({ chargeStatus: "void", released: { ...released, allocations: [], remainingCents: 0, refundedCents: 0 } })))
+      .not.toMatch(/refunded/);
     // Collapsed both ways: a cancelled bill the loader found nothing released
     // for is CANCELLED and no more; a live bill is its own status.
     expect(billStatusCell(receipt({ chargeStatus: "void" }))).toBe("CANCELLED");
@@ -1272,10 +1307,15 @@ describe("money released from a cancelled bill, in the file and the note", () =>
     expect(cells.split(",")[header.indexOf("Bill status")]).toBe("CANCELLED — money released on account: 2027-01: 472.53; still held: 70.00");
     expect(cells.split(",")[header.indexOf("Kind")]).toBe("Rent");
     expect(cells.split(",")[header.indexOf("Date received")]).toBe("2026-07-03");
+    // AND THE REFUNDED SHARE, in the same cell — this is the accountant's
+    // own file, and the refund's negative row is dated a different window.
+    const back = receiptsCsv([receipt({ chargeStatus: "void", released: { ...released, remainingCents: 0, refundedCents: 7_000 } })], [], { parkName: "P", generatedAt: "t" });
+    expect(back.split("\r\n")[1].split(",")[header.indexOf("Bill status")])
+      .toBe("CANCELLED — money released on account: 2027-01: 472.53; refunded: 70.00");
   });
 
   it("the note gives it its own sentence — in words, and never through the on-account figures", () => {
-    const base = { recordsBeginOn: "2027-01-01", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false };
+    const base = { cutoverOn: null, windowEndsOn: "2027-01-31", lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false };
     const lines = exclusionLines({ ...base, onAccountReceivedCents: 10_000, onAccountAppliedCents: 0, onAccountHeldCents: 10_000,
       releasedFromCancelled: [{ amountCents: 54_253, billMonth: "2027-01", releasedOn: "2027-01-20T16:00:00Z", lotNumber: "9", payerName: "Household 9", ...released }] });
     const own = lines.find((l) => /bill was cancelled/.test(l))!;
@@ -1291,7 +1331,7 @@ describe("money released from a cancelled bill, in the file and the note", () =>
     // The hand-back clause, the household by name when there is no lot, and
     // no date clause when the record lacks one.
     const handed = exclusionLines({ ...base, releasedFromCancelled: [{ amountCents: 54_253, billMonth: "2027-01", releasedOn: null, lotNumber: null, payerName: "Household 9",
-      allocations: released.allocations, remainingCents: 0, handedBackCents: 7_000, handedBackOn: "2027-01-22", handedBackInFile: true }] }).find((l) => /bill was cancelled/.test(l))!;
+      allocations: released.allocations, remainingCents: 0, handedBackCents: 7_000, handedBackOn: "2027-01-22", handedBackInFile: true, refundedCents: 0, refundedInFile: false }] }).find((l) => /bill was cancelled/.test(l))!;
     expect(handed).toContain("$542.53 that Household 9 paid on their January 2027 bill went on account for them when that bill was cancelled. It IS in the total above");
     expect(handed).toContain("$472.53 to January 2027, $70.00 handed back on January 22, 2027 — its own line below and in the file.");
     // WHICH FILE THE HAND-BACK'S LINE IS IN. The stamp is read off the view
@@ -1300,7 +1340,7 @@ describe("money released from a cancelled bill, in the file and the note", () =>
     // promised "its own line below and in the file" about a line it did
     // not carry. The loader's own windowed read decides (handedBackInFile).
     const later = exclusionLines({ ...base, releasedFromCancelled: [{ amountCents: 54_253, billMonth: "2027-01", releasedOn: null, lotNumber: "9", payerName: null,
-      allocations: released.allocations, remainingCents: 0, handedBackCents: 7_000, handedBackOn: "2027-02-03", handedBackInFile: false }] }).find((l) => /bill was cancelled/.test(l))!;
+      allocations: released.allocations, remainingCents: 0, handedBackCents: 7_000, handedBackOn: "2027-02-03", handedBackInFile: false, refundedCents: 0, refundedInFile: false }] }).find((l) => /bill was cancelled/.test(l))!;
     expect(later).toContain("$472.53 to January 2027, $70.00 handed back on February 3, 2027 — its own line in the statement for February 2027.");
     expect(later).not.toMatch(/below and in the file/);
     // The one helper, both ways, and as a sentence for the screen.
@@ -1310,6 +1350,36 @@ describe("money released from a cancelled bill, in the file and the note", () =>
       .toBe("$70.00 handed back on January 22, 2027 — its own line below and in the file");
     expect(handedBackWhere({ handedBackCents: 7_000, handedBackOn: null, handedBackInFile: false }))
       .toBe("$70.00 handed back — its own line in the statement for the month it went back");
+    // THE REFUND'S TWIN, one copy for three doorways. The screen said this
+    // sentence inline and the note said nothing at all, so a refunded
+    // release was described in full on screen and nowhere in the file the
+    // owner forwards. And it names NO RAIL: 0142 refunds ACH as well as
+    // cards and `released` carries no method, so "back to a card" was an
+    // invention on every bank refund.
+    expect(refundedWhere({ refundedCents: 7_000, refundedInFile: true }))
+      .toBe("$70.00 went back — its own line below and in the file");
+    expect(refundedWhere({ refundedCents: 7_000, refundedInFile: false }))
+      .toBe("$70.00 went back — its own line in the statement for the month it went back");
+    expect(refundedWhere({ refundedCents: 7_000, refundedInFile: true })).not.toMatch(/card|bank account/);
+    // AND THE NOTE SAYS IT. A refund that went back in a LATER window is in
+    // no other sentence on this page — the refund list above is refunds
+    // that went back IN THIS WINDOW — so without this the January note
+    // explained $472.53 of a $542.53 receipt and stopped.
+    const sentBack = exclusionLines({ ...base, releasedFromCancelled: [{ amountCents: 54_253, billMonth: "2027-01", releasedOn: null, lotNumber: "9", payerName: null,
+      allocations: released.allocations, remainingCents: 0, handedBackCents: 0, handedBackOn: null, handedBackInFile: false, refundedCents: 7_000, refundedInFile: false }] }).find((l) => /bill was cancelled/.test(l))!;
+    expect(sentBack).toContain("says where the money went: $472.53 to January 2027, $70.00 went back — its own line in the statement for the month it went back.");
+    expect(sentBack).not.toMatch(/none of it is still held/);
+    // The whole receipt refunded: "none of it is still held" was all this
+    // said about $542.53 that had left the bank.
+    const allBack = exclusionLines({ ...base, releasedFromCancelled: [{ amountCents: 54_253, billMonth: "2027-01", releasedOn: null, lotNumber: "9", payerName: null,
+      allocations: [], remainingCents: 0, handedBackCents: 0, handedBackOn: null, handedBackInFile: false, refundedCents: 54_253, refundedInFile: true }] }).find((l) => /bill was cancelled/.test(l))!;
+    expect(allBack).toContain("says where the money went: $542.53 went back — its own line below and in the file.");
+    expect(allBack).not.toMatch(/none of it is still held/);
+    // Collapsed: nothing refunded, and the old sentence stands unchanged.
+    const nothingBack = exclusionLines({ ...base, releasedFromCancelled: [{ amountCents: 54_253, billMonth: "2027-01", releasedOn: null, lotNumber: "9", payerName: null,
+      allocations: [], remainingCents: 0, handedBackCents: 0, handedBackOn: null, handedBackInFile: false, refundedCents: 0, refundedInFile: false }] }).find((l) => /bill was cancelled/.test(l))!;
+    expect(nothingBack).toContain("says where the money went: none of it is still held.");
+    expect(nothingBack).not.toMatch(/went back/);
     // THE PART MONTH SHARES THE CANCELLED BILL'S MONTH (0169): a line the
     // loader marked as the re-raise is named as such, apart from the
     // cancelled January the sentence just named.
@@ -1319,5 +1389,74 @@ describe("money released from a cancelled bill, in the file and the note", () =>
     // Nothing released: no sentence.
     expect(exclusionLines({ ...base }).some((l) => /bill was cancelled/.test(l))).toBe(false);
     expect(exclusionLines({ ...base, releasedFromCancelled: [] }).some((l) => /bill was cancelled/.test(l))).toBe(false);
+  });
+});
+
+
+/**
+ * A WINDOW FROM BEFORE THE LEDGER BEGINS SAYS SO.
+ *
+ * The statement opens on the LAST COMPLETE MONTH, so all through January
+ * 2027 the first thing The Haven's owner sees is December 2026 — a window
+ * entirely before go-live, where by the ledger rule nothing can exist — and
+ * the headline reads "No money is recorded as coming in between December 1,
+ * 2026 and December 31, 2026". A zero that looks like a measurement reads as
+ * "the park took nothing", on the one screen that becomes a file somebody
+ * keeps. The quiet state has to say what it checked.
+ *
+ * IT IS SAID FROM THE GO-LIVE DATE, not from the earliest payment. The field
+ * that used to be carried here (`recordsBeginOn`) was the earliest payment
+ * joined THROUGH A CHARGE, so a signing cheque or a deposit taken before the
+ * first rent was not in it — and it had no reader anywhere. Any sentence
+ * built on it ("nothing was keyed in before that") would have been false for
+ * exactly The Haven's January, and would have printed directly beneath
+ * "Also received in this period: $X in deposits taken".
+ */
+describe("a window that ends before the park's books begin", () => {
+  const base = { lagDays: 0, unbilledFeeLabels: [], anyMissingPayerName: false };
+  const first = (ctx: Parameters<typeof exclusionLines>[0]) => exclusionLines(ctx)[0];
+
+  it("names the go-live day and the first month of the books, in words, before anything else", () => {
+    const lines = exclusionLines({ ...base, cutoverOn: "2026-12-15", windowEndsOn: "2026-12-31" });
+    expect(lines[0]).toBe(
+      "These dates are all before you went live here on December 15, 2026, so there is nothing to show for them. " +
+      "Your books here start with January 2027 — anything collected before that belongs to whoever was collecting then.",
+    );
+    // Months and days in words, never the ISO the loader passes.
+    expect(lines.join(" ")).not.toMatch(/2026-12-15|2027-01\b/);
+  });
+
+  it("says nothing once the window reaches a month the park may bill", () => {
+    // The whole window has to be before the line: a December-to-January
+    // window DOES have January in it, and January is ours.
+    expect(first({ ...base, cutoverOn: "2026-12-15", windowEndsOn: "2027-01-31" })).toMatch(/money RECEIVED between these dates/);
+    expect(first({ ...base, cutoverOn: "2026-12-15", windowEndsOn: "2027-01-01" })).toMatch(/money RECEIVED between these dates/);
+    // And the last day before it still says it.
+    expect(first({ ...base, cutoverOn: "2026-12-15", windowEndsOn: "2026-12-31" })).toMatch(/before you went live/);
+  });
+
+  it("a park that went live on the FIRST owns that whole month, and hears nothing about it", () => {
+    // firstBillablePeriod's own rule, not a second copy of it here: go-live
+    // on the 1st makes that month billable, so December is not "before".
+    expect(first({ ...base, cutoverOn: "2026-12-01", windowEndsOn: "2026-12-31" })).toMatch(/money RECEIVED between these dates/);
+    expect(first({ ...base, cutoverOn: "2026-12-02", windowEndsOn: "2026-12-31" })).toMatch(/before you went live/);
+  });
+
+  it("a park with no go-live date set says nothing at all — it does not invent one", () => {
+    // readiness.ts is the door that asks him for the date. A note that
+    // guessed would be a sentence nobody can act on, on a filed document.
+    expect(exclusionLines({ ...base, cutoverOn: null, windowEndsOn: "2026-12-31" }).some((l) => /went live/.test(l))).toBe(false);
+    expect(exclusionLines({ ...base, cutoverOn: "", windowEndsOn: "2026-12-31" }).some((l) => /went live/.test(l))).toBe(false);
+  });
+
+  it("does not contradict the deposits sentence it sits above", () => {
+    // The shape that killed the first draft of this fix: "nothing was keyed
+    // in before that" printed straight above "Also received in this period:
+    // $1,000.00 in deposits taken". This sentence is about what the park may
+    // BILL, so both can be true at once — and it never claims an empty till.
+    const both = exclusionLines({ ...base, cutoverOn: "2026-12-15", windowEndsOn: "2026-12-31", depositsReceivedCents: 100_000 });
+    expect(both[0]).toMatch(/before you went live/);
+    expect(both.some((l) => /\$1,000\.00 in deposits taken/.test(l))).toBe(true);
+    expect(both.join(" ")).not.toMatch(/nothing was keyed in|never been recorded/);
   });
 });

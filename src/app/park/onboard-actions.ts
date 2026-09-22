@@ -7,6 +7,7 @@ import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { toDaterange } from "@/lib/parks";
 import { buildTenant, agreementMonthsFor } from "./park-helpers";
+import { lotsSomebodyHolds } from "./onboard-occupancy";
 import { planOnboarding, type OnboardRow } from "./onboard-helpers";
 import type { ParkResult } from "./actions";
 
@@ -95,16 +96,38 @@ export async function getOnboardSeeds(
 
   // Anything already held is not on offer — this screen only fills gaps.
   //
-  // FAILS OPEN, AND THE GAP IT LEAVES IS THE WHOLE POINT OF THE SCREEN.
-  // `taken ?? []` cannot tell a dropped read from a park where nobody lives, so
-  // a failure offers every OCCUPIED lot as an empty row to fill in — which is
-  // how one afternoon files a second household onto somebody's home.
-  const taken = mustRead("who is already on your lots", await admin
+  // IT ASKS THE ROLL'S OWN QUESTION NOW, not a fourth version of it. This read
+  // was `status in (approved, active)` with no date test at all, so ANY row
+  // ever written on a lot held it off this screen for ever. A move-out ends
+  // only the link covering the last day and cancels the ones behind it
+  // (planMoveOut); every earlier link of the chain stays `active` with a range
+  // wholly in the past. At a park writing one-month agreements every household
+  // has a second link within two months, so on the first move-out after
+  // go-live this screen said "Every live lot already has somebody on it" while
+  // the rent roll one pill away called that same lot Vacant.
+  //
+  // `lotOccupancy` is the one copy of the rule — Today's occupancy and the
+  // readiness list both call it, and it reads `lapsedRowOf`, the roll's own
+  // test — so all four doorways now agree about who holds a lot. It needs the
+  // ENDED rows too: without them a household closed out of its successor looks
+  // like a holdover whose paperwork merely ran out, and the lot reads lived-in.
+  // A lapsed lot is deliberately still held: the household never left, and
+  // renewing them is their door, not a second filing on their home.
+  //
+  // FAILS CLOSED, AND THE GAP IT WOULD LEAVE IS THE WHOLE POINT OF THE SCREEN.
+  // `?? []` cannot tell a dropped read from a park where nobody lives, so a
+  // failure would offer every OCCUPIED lot as an empty row to fill in — which
+  // is how one afternoon files a second household onto somebody's home.
+  const held = mustRead("who is already on your lots", await admin
     .from("lot_reservations")
-    .select("park_lot_id")
+    .select("park_lot_id, during, status, term")
     .in("park_lot_id", lotIds)
-    .in("status", ["approved", "active"]));
-  const takenIds = new Set((taken ?? []).map((r) => r.park_lot_id as string));
+    .in("status", ["approved", "active", "ended"]));
+  const takenIds = lotsSomebodyHolds(
+    held,
+    lots.map((l) => ({ id: l.id as string, lot_number: l.lot_number as string })),
+    today,
+  );
 
   // The pre-filled rent is a number he confirms rather than types. A failed
   // read blanks every one of them and reads as "no rent on file anywhere".
@@ -246,20 +269,29 @@ export async function commitOnboarding(
   }
   // Re-check what is already held, so a second submit cannot double-file.
   //
-  // FAILS OPEN. `taken ?? []` on a dropped read holds nobody, so the check
-  // below never fires and a second tap files the whole list again — a second
+  // THE SAME COMPOSITION AS THE READ THAT DREW THE SCREEN (lotsSomebodyHolds),
+  // in the same commit as it: a screen that offers a lot the save refuses is
+  // an afternoon's typing answered with "Somebody is already on that lot."
+  //
+  // FAILS CLOSED. `?? []` on a dropped read holds nobody, so the check below
+  // never fires and a second tap files the whole list again — a second
   // household written onto a lot somebody already lives on. The exclusion
   // constraint refuses only the rows whose DATES overlap; this is the guard
-  // that refuses the rest.
+  // that refuses the rest, and after a move-out the old ranges no longer
+  // overlap anything.
   const takenRes = await admin
     .from("lot_reservations")
-    .select("park_lot_id")
+    .select("park_lot_id, during, status, term")
     .in("park_lot_id", plan.toFile.map((r) => r.lotId))
-    .in("status", ["approved", "active"]);
+    .in("status", ["approved", "active", "ended"]);
   if (takenRes.error) {
     return { ok: false, error: readFailedMessage("who is already on your lots", takenRes.error) };
   }
-  const takenIds = new Set((takenRes.data ?? []).map((r) => r.park_lot_id as string));
+  const takenIds = lotsSomebodyHolds(
+    takenRes.data,
+    plan.toFile.map((r) => ({ id: r.lotId, lot_number: r.lotNumber })),
+    today,
+  );
 
   let filed = 0;
 

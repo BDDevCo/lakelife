@@ -73,8 +73,16 @@ export interface StatementFee {
   amount: number;
   /** Only monthly fees land on a monthly statement. */
   cadence: string;
-  /** Prorated with the rent when the stay is partial. */
-  prorate?: boolean;
+  // EVERY MONTHLY FEE IS CUT WITH THE RENT, and there is no per-fee dial.
+  // There was a `prorate?: boolean` here, read by the line below as
+  // `f.prorate !== false` — and written by NOTHING: no caller, no fixture,
+  // no column on park_fees. The false half could never be taken, so the type
+  // advertised a choice the product does not have, inside the move-out
+  // re-rate arithmetic, one comment away from the paragraph above that says
+  // WHY a fee prorates and a cost share does not. Gone, so the code says
+  // what it does. Whether a fee built out of a FLAT-RATE cost (sewer at The
+  // Haven) should be cut by days lived is a question for the owner, not a
+  // dial nobody set.
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -195,11 +203,10 @@ export function buildStatement(input: StatementInput): Statement {
     // there is no editing one out afterwards. A resident reading "$0.00" beside
     // a fee name learns nothing and rings the office.
     if (round2(f.amount) === 0) continue;
-    const doProrate = prorated && f.prorate !== false;
     lines.push({
       label: f.label,
-      amount: doProrate ? share(f.amount) : round2(f.amount),
-      basis: doProrate ? proratedBasis : "for the month",
+      amount: prorated ? share(f.amount) : round2(f.amount),
+      basis: prorated ? proratedBasis : "for the month",
     });
   }
 

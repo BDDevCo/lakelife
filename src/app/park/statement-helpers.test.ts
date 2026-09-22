@@ -56,6 +56,25 @@ describe("part months", () => {
     expect(s.lines[1].amount).toBe(21.29);
     expect(s.total).toBe(176.13);
     expect(s.lines[0].basis).toBe("12 of 31 days");
+    // AND THE FEE'S OWN BASIS SAYS SO TOO. There is no per-fee "don't
+    // prorate" dial: `StatementFee.prorate` was declared, read here as
+    // `f.prorate !== false`, and written by nothing — no caller, no
+    // fixture, no column on park_fees — so the false half could never be
+    // taken while the type advertised a choice inside the move-out re-rate
+    // arithmetic. Every monthly fee is cut with the rent; a cost share
+    // never is, for the reason stated at the top of that file.
+    expect(s.lines[1].basis).toBe("12 of 31 days");
+  });
+
+  it("no fee can opt out of being cut with the rent — the dial nothing ever set is gone", () => {
+    const withDial = { ...GROUNDS, prorate: false } as StatementFee & { prorate: boolean };
+    const s = buildStatement({
+      month: "2027-03", stay: { start: "2027-03-20", end: "2028-01-01" },
+      rent: 400, fees: [withDial], dueDay: 1,
+    });
+    // An extra key on the object changes nothing: 55 × 12/31 either way.
+    expect(s.lines[1].amount).toBe(21.29);
+    expect(s.lines[1].basis).toBe("12 of 31 days");
   });
 
   it("charges nothing for a month they were not there", () => {

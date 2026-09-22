@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 import {
   payersFor, monthlyIncome, checkCoverage, coverageSummary, feesForTenancy, feePayableCount,
   type ParkFee, nightlyRecoveryTarget, nightlyRecoveryLine,
+  COVER_LABEL, FEE_COVERS, FEE_EXTRA_COVERS,
 } from "./fee-helpers";
-import type { CostCategory } from "./cost-helpers";
+import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
 
 /** The Haven's grounds fee: one flat charge covering the lot. */
 const GROUNDS: ParkFee = {
@@ -535,5 +536,86 @@ describe("the rent roll uses the biller's own fee rule", () => {
       .toEqual([{ id: "f" }]);
     expect(feesForTenancy([{ id: "f" }], { rental_mode: "short_term" }, { origin: "application" }))
       .toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE COVERAGE LINE MUST NEVER PRINT A DATABASE WORD.
+//
+// `checkCoverage` names every recorded cost category no active fee claims, and
+// the card renders `COVER_LABEL[x] ?? x` — so a category with no entry here
+// falls through to its raw slug and the sentence reads "You pay for Water,
+// Trash, tax and no fee covers it". Tax and insurance are not a maybe: a fee
+// may never claim them (FEE_COVERS leaves them out on purpose), so the month
+// he files the insurance premium they are GUARANTEED to land in `uncovered`.
+//
+// The costs screen already had a test asserting every legal category has a
+// label. The fee screen had none, which is how this map both fell behind the
+// database AND drifted from the costs screen's own wording for snow.
+// ---------------------------------------------------------------------------
+describe("every cost category a coverage line can name has English words", () => {
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+  /** The categories the DATABASE will actually accept, read from the migration. */
+  function dbCategories(): string[] {
+    const sql = read("../../../supabase/migrations/0144_somebody_has_to_plough_the_road.sql");
+    const block = sql.match(
+      /alter table public\.park_costs add constraint park_costs_category_check[\s\S]*?\);/,
+    )?.[0] ?? "";
+    expect(block, "the park_costs category check was not found — this scan is stale")
+      .not.toBe("");
+    const inList = block.match(/check \(category in \(([\s\S]*?)\)\)/)?.[1] ?? "";
+    const found = [...inList.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(found.length, "no categories parsed out of the CHECK").toBeGreaterThan(5);
+    return found;
+  }
+
+  it("labels every category the database accepts, including the ones no fee may claim", () => {
+    for (const c of dbCategories()) {
+      expect(
+        COVER_LABEL[c],
+        `${c} is a legal cost category with no coverage label — it would print as the raw word`,
+      ).toBeTruthy();
+    }
+  });
+
+  it("labels tax and insurance by name, the two that always reach it", () => {
+    expect(COVER_LABEL.tax).toBe("Property tax");
+    expect(COVER_LABEL.insurance).toBe("Insurance");
+  });
+
+  it("labels every extra coverage word a fee may claim", () => {
+    expect(FEE_EXTRA_COVERS.length).toBeGreaterThan(0);
+    for (const c of [...FEE_COVERS, ...FEE_EXTRA_COVERS]) {
+      expect(COVER_LABEL[c], `a fee may claim ${c} and nothing names it`).toBeTruthy();
+    }
+  });
+
+  it("names a category the same way the costs screen does", () => {
+    // The drift that started this: "Snow removal" here, "Snow clearing" there,
+    // one bill with two names. Spreading the cost screen's map is what makes
+    // this hold for the NEXT category as well as for snow.
+    for (const [category, words] of Object.entries(COST_CATEGORY_LABEL)) {
+      expect(COVER_LABEL[category], `${category} is named two ways on two screens`).toBe(words);
+    }
+    expect(COVER_LABEL.snow).toBe("Snow clearing");
+  });
+
+  it("but the fee's tickboxes still come from FEE_COVERS, not from these labels", () => {
+    // THE GUARDRAIL. Giving tax and insurance labels must not give them
+    // checkboxes: a fee may never claim them, and iterating COVER_LABEL's keys
+    // to build the form would reverse that rule silently.
+    const tsx = read("../../components/ParkFees.tsx")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+    const assignment = tsx.match(/const ALL_COVERS = [^;]+;/)?.[0] ?? "";
+    expect(assignment, "ALL_COVERS is gone — this scan no longer checks anything").not.toBe("");
+    expect(assignment, "the checkbox row is built from the label map")
+      .not.toMatch(/COVER_LABEL/);
+    expect(assignment).toMatch(/FEE_COVERS/);
+    expect(assignment).toMatch(/FEE_EXTRA_COVERS/);
+    expect(tsx, "a checkbox row is being built out of the label map's keys")
+      .not.toMatch(/Object\.keys\(COVER_LABEL\)/);
   });
 });

@@ -236,16 +236,18 @@ export function canExtend(input: {
 
   if (!range) return { ok: false, refusal: "not_found" };
   if (status !== "approved" && status !== "active") return { ok: false, refusal: "not_extendable" };
-  // Before 'already_ended', as on the owner's side: that sentence sends them
-  // to "the park can set up a new one", and a new one is exactly what the
-  // roll's signing control records — this link must not be a second door to it.
+  // Before 'already_ended', as on the owner's side. A holdover's new lease is
+  // a particular act, recorded from the roll's signing control, and this
+  // household has a sentence that says exactly that — where 'already_ended'
+  // could only send them to the phone. This link must not be a second door to
+  // the signing control either.
   if (origin === "grandfathered") return { ok: false, refusal: "inherited" };
   // THEIR NEXT AGREEMENT IS ALREADY WRITTEN — a renewal-path fact, so only at
   // a capped park. Nothing to choose, the clash test below must never see it
   // as somebody else's booking, and it outranks 'already_ended': the old
   // row's end is behind them precisely because the next one has begun, and
-  // "that stay has already finished — the park can set up a new one" is a
-  // lie to a household whose new one is in force.
+  // "that stay has already finished" — with nothing after it but a phone
+  // call — is a lie to a household whose new one is in force.
   if (capMonths != null && ownSuccessor) return { ok: false, refusal: "already_renewed" };
   if (range.end < todayISO) return { ok: false, refusal: "already_ended" };
 
@@ -322,7 +324,15 @@ export function refusalText(
   switch (r) {
     case "not_found":       return "We couldn't find that stay. Give the park a call and they'll sort it out.";
     case "not_extendable":  return "This stay can't be extended from here — the park can still do it for you.";
-    case "already_ended":   return "That stay has already finished. The park can set up a new one.";
+    // NAMES NO DOOR AT THE PARK, because there is not always one. A stay that
+    // ran out a few weeks ago the owner can still renew from its own end. Once
+    // more time has passed than the longest agreement the park writes, every
+    // length he could pick would be over before it started and his screen
+    // refuses him too — and "the park can set up a new one" was then a promise
+    // made to the household about a control the park does not have. Calling
+    // them is true on either side of that line, and it is the only thing this
+    // page can honestly ask them to do.
+    case "already_ended":   return "That stay has already finished. Give the park a call and they'll sort out what happens next.";
     // Their own next agreement is written — by their tap, or by the office
     // for them. Not an error, and never "spoken for": the site is theirs.
     case "already_renewed":

@@ -57,8 +57,11 @@ for (const m of ALL.matchAll(/allowsNotification\(\s*[^,]+,\s*"([a-z]+)"\s*,\s*"
  */
 const KNOWINGLY_DEAD: Record<string, string> = {
   "day:email":
-    "the service-day reminder is text-only by design; the send path already " +
-    "asks, so the day we offer it on email it works with no code change",
+    "the service-day reminder is text-only by design; the send path asks about " +
+    "email so the gate is ready, but it is NOT wired — sendNightBeforeReminders " +
+    "drops anybody with no phone on file before either channel is asked, and " +
+    "de-dupes on the phone number. Offering this on email means moving that " +
+    "skip below the channel decision and re-keying the de-dupe on the owner id",
 };
 
 describe("the scanner still finds things", () => {

@@ -248,7 +248,11 @@ describe("the on-account receipt is shown through the rent screen's ReceiptPanel
     kind: "on_account", parkName: "The Haven", officeLine: "Questions? Ask at the office.", receiptNo: 12,
     feeAmount: null, lotNumber: "9", payerName: "Household 9", amount: 1627.59, method: "check", reference: "1042",
     receivedOn: "2026-12-28", periodMonth: "", billAmount: 0, balanceAfter: 0,
-    onAccount: { amount: 1627.59, receiptNo: 12, appliedTo: [{ periodMonth: "2027-01", amount: 542.53 }], remaining: 1085.06 },
+    // A next bill IS coming for this household, which is what the paper's
+    // "comes off your next bill" is true of. The receipt now carries that
+    // fact because it used to promise a next bill to a household that had
+    // none, on the only record a park with notices held ever hands over.
+    onAccount: { amount: 1627.59, receiptNo: 12, appliedTo: [{ periodMonth: "2027-01", amount: 542.53 }], remaining: 1085.06, nothingMoreBills: false },
     confirmUrl: "https://lakelife.test/paid/abc",
   };
 
@@ -260,6 +264,13 @@ describe("the on-account receipt is shown through the rent screen's ReceiptPanel
     expect(w).toMatch(/Where it went \$542\.53 to January 2027, \$1,085\.06 on account/);
     expect(w).toMatch(/The \$1,085\.06 on account is held by the office and comes off your next bill/);
     expect(w).not.toMatch(/Against .* rent —/);
+    // …and for a household nothing more bills for, the same panel says so.
+    const gone = renderToStaticMarkup(
+      <ReceiptPanel parkId="park-haven" renterEmail={null} onClose={() => {}}
+        receipt={{ ...receipt, onAccount: { ...receipt.onAccount!, nothingMoreBills: true } }} />,
+    ).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+    expect(gone).toMatch(/The \$1,085\.06 on account stays yours\. The office has it for you\./);
+    expect(gone).not.toMatch(/comes off your next bill/);
     expect(w).toMatch(/Print both halves/);
   });
 });

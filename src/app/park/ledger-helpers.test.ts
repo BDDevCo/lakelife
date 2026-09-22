@@ -1312,7 +1312,8 @@ describe("onAccountPromise — the clause after 'on account', keyed on the tenan
  * with no entry gets the row alone.
  */
 describe("toRows carries each household's money facts onto its row", () => {
-  const facts = (over: Partial<HouseholdMoney> = {}): HouseholdMoney => ({ onAccount: 542.53, openCount: 2, nothingMoreBills: false, ...over });
+  const facts = (over: Partial<HouseholdMoney> = {}): HouseholdMoney =>
+    ({ onAccount: 542.53, openCount: 2, nothingMoreBills: false, olderOpen: [], ...over });
 
   it("an entry for the charge lands on its row, and nobody else's", () => {
     const rows = toRows([charge({ id: "a" }), charge({ id: "b", lotNumber: "2" })], TODAY, 3, new Set(), new Map([["a", facts()]]));

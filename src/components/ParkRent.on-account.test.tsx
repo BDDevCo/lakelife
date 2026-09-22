@@ -27,6 +27,7 @@ vi.mock("@/components/ParkReceipt", () => ({ ReceiptPanel: () => null, DropSlips
 const { fromOnAccountSentence, ParkRent, PaymentForm } = await import("./ParkRent");
 const { renderToStaticMarkup } = await import("react-dom/server");
 const { summarise, toRows } = await import("@/app/park/ledger-helpers");
+type HouseholdMoney = import("@/app/park/ledger-helpers").HouseholdMoney;
 const { amountNote } = await import("@/components/take-payment-helpers");
 
 const bill = (lotNumber: string, fromOnAccount?: number) => ({ reservationId: `r-${lotNumber}`, lotNumber, amount: 542.53, fromOnAccount });
@@ -169,8 +170,9 @@ describe("the Record-payment form's line under the amount", () => {
     id: "chg-jan", lotNumber: "14", renterName: "Test Household", periodMonth: "2027-01",
     dueOn: "2027-01-01", amount: 542.53, paidTotal: 0, status: "open" as const,
   });
-  const row = (facts: { onAccount?: number; openCount?: number; nothingMoreBills?: boolean | null } = {}) =>
-    toRows([charge()], "2027-01-02", 3, new Set(), new Map([["chg-jan", { onAccount: 0, openCount: 1, nothingMoreBills: false, ...facts }]]))[0];
+  const row = (facts: Partial<HouseholdMoney> = {}) =>
+    toRows([charge()], "2027-01-02", 3, new Set(),
+      new Map([["chg-jan", { onAccount: 0, openCount: 1, nothingMoreBills: false, olderOpen: [], ...facts }]]))[0];
   const words = (html: string) =>
     html.replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim();
   const form = (r: ReturnType<typeof row>) =>
@@ -204,6 +206,36 @@ describe("the Record-payment form's line under the amount", () => {
     expect(unread).not.toMatch(/comes off|theirs to have back/);
   });
 
+  it("a row that is not their oldest: the note says where the held money really goes", () => {
+    // THE SCREEN IS SCOPED TO ONE MONTH and their money on account is not.
+    // Keying February with January still open and off-screen, the form used
+    // to promise that the $150.00 held would come off the February bill in
+    // front of the office. settleOnAccount puts it on January.
+    const olderJan = [{ key: "chg-jan", renterId: "renter-9", owing: 180.65, periodMonth: "2027-01", dueOn: "2027-01-01" }];
+    const febRow = {
+      ...row({ onAccount: 150, openCount: 2, olderOpen: olderJan }),
+      id: "chg-feb", periodMonth: "2027-02", amount: 297.51, paidTotal: 0, dueOn: "2027-02-01",
+    };
+    // The box opens at the balance, so a static render shows the whole-bill
+    // sentence — which is the one that names where the held money goes.
+    const w = form({ ...febRow, balance: 297.51 });
+    expect(w).toContain("record this and that goes against their oldest open bill instead");
+    expect(w).not.toMatch(/their next open bill/);
+
+    // Collapsed the other way — the same row as their oldest bill keeps the
+    // word it has always had.
+    const alone = form({ ...febRow, balance: 297.51, olderOpen: [] });
+    expect(alone).toContain("record this and that goes against their next open bill instead");
+
+    // And the part-payment line, which the box cannot open on, from the
+    // same facts the form builds: the whole point of carrying olderOpen.
+    expect(amountNote("200", {
+      openCount: 2,
+      oldestOpen: { chargeId: "chg-feb", month: "2027-02", balance: 297.51, disputed: false },
+      onAccount: 150, nothingMoreBills: false, olderOpen: olderJan,
+    })).toBe("Part of February 2027 — $97.51 will still be owing: the $150.00 they have on account goes against their older open bill first the moment you record this.");
+  });
+
   it("a disputed row does not print the window's claim note — its second sentence sends the office here", () => {
     const disputed = toRows([charge()], "2027-01-02", 3, new Set(["chg-jan"]))[0];
     expect(disputed.state).toBe("disputed");
@@ -224,6 +256,7 @@ describe("the Record-payment form's line under the amount", () => {
     expect(formSrc).toMatch(/onAccount: row\.onAccount,/);
     expect(formSrc).toMatch(/openCount: row\.openCount,/);
     expect(formSrc).toMatch(/nothingMoreBills: row\.nothingMoreBills,/);
+    expect(formSrc).toMatch(/olderOpen: row\.olderOpen,/);
     expect(formSrc).toMatch(/\{note && \(/);
     expect(formSrc).not.toMatch(/disputedNote|still be owing|comes off|on account and/);
     // The amount is parsed by the same strip the window uses, not a second copy.

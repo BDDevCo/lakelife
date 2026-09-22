@@ -88,6 +88,9 @@ type Method = HandKeyedMethod;
 
 const DENIED = "You don't manage that park.";
 
+/** Integer cents, so $542.53 against $542.53 is exactly nothing over. */
+const cents = (n: number) => Math.round(n * 100);
+
 /**
  * Mirrors 0102's DB check, so somebody gets a sentence rather than a 23514.
  *
@@ -228,6 +231,18 @@ export async function recordOnAccount(
    * February. The office told the household it would sit until March.
    */
   let older = "";
+  /**
+   * WHETHER "or put it against an open bill now" IS AN OFFER ANYBODY CAN
+   * TAKE. The clause was passed unconditionally — and only from inside the
+   * branch reached BECAUSE the settlement placed nothing, i.e. because the
+   * household has no other open bill. The office read it, crossed to the
+   * held-money panel it names, and found "No open bill for them yet."
+   *
+   * Starts TRUE and is narrowed only by a settlement we actually read: a
+   * failed read is not "no open bills", and that branch is exactly where
+   * `problem` has just sent the office to that same door by hand.
+   */
+  let anotherOpenBill = true;
   const settled = await settleOnAccount(admin, parkId, [renterId], "office", await currentUserId());
   if ("error" in settled) {
     console.error(`[recordOnAccount] couldn't read ${settled.what}:`, settled.error);
@@ -238,6 +253,13 @@ export async function recordOnAccount(
       .filter((l) => l.paymentId === paymentId)
       .map((l) => ({ periodMonth: monthOf.get(l.key) ?? "", amount: l.amount }));
     older = describeSettlement(settled, (l) => l.paymentId !== paymentId);
+    // What the settle APPLIED, not what it read: `settled.bills` is the open
+    // list read BEFORE the allocations were written, so a bill this very
+    // call settled in full is still in it. A row the guard refused leaves
+    // its bill genuinely open, so it counts and the door stays offered.
+    anotherOpenBill = settled.bills.some(
+      (b) => cents(b.owing) - cents(settled.applied.get(b.key) ?? 0) > 0,
+    );
     if (settled.failed.length > 0) {
       const missed = Math.round(settled.failed.reduce((t, f) => t + f.amount, 0) * 100) / 100;
       problem = `${money(missed)} of it couldn't be put against a bill — it stays on account.`;
@@ -307,6 +329,13 @@ export async function recordOnAccount(
       receiptNo: (data.receipt_no as number) ?? null,
       appliedTo: went,
       ...(remaining == null ? {} : { remaining }),
+      // THE PAPER GETS THE FACT THE TOAST GETS. This door read
+      // `nothingMore` for its own sentence and the receipt built a moment
+      // later carried no field for it, so the printed copy — the only
+      // record a household at a park with notices held ever receives —
+      // promised a next bill to a household that had none, while the toast
+      // beside it on the same card said the money was theirs to have back.
+      nothingMoreBills: nothingMore,
     },
     confirmUrl: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/paid/${confirmToken}`,
   };
@@ -340,7 +369,7 @@ export async function recordOnAccount(
       `${money(amount)} recorded for ${renter.name}. ` +
       (where
         ? `${where.charAt(0).toUpperCase()}${where.slice(1)} — ${stays}.`
-        : `It's on account${onAccountPromise(nothingMore, { orApplyNow: true })}.`) +
+        : `It's on account${onAccountPromise(nothingMore, { orApplyNow: anotherOpenBill })}.`) +
       // AND WHAT OLDER MONEY OF THEIRS MOVED, the way recordPayment says it.
       (older ? ` And ${older} from money they already had on account.` : "") +
       (problem ? ` ⚠️ ${problem}` : ""),

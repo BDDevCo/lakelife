@@ -29,7 +29,7 @@
  */
 
 import type { LedgerRow } from "./ledger-helpers";
-import { prettyMonth } from "./ledger-helpers";
+import { prettyMonth, money } from "./ledger-helpers";
 
 export type ReminderChannel = "email" | "sms" | "paper" | "none";
 export type ReminderOutcome = "sent" | "printed" | "blocked" | "failed";
@@ -93,6 +93,13 @@ export interface ReminderOptions {
  * no fee that has not been agreed, no tone. A rent reminder that reads as a
  * warning turns a forgotten cheque into a fight, and the overwhelming majority
  * of these are forgotten cheques.
+ *
+ * THE FIGURE GOES THROUGH money(), like every other figure a person reads.
+ * This printed "$1085.06 outstanding" — toFixed has no thousands separator,
+ * and a household carrying two months, or any park whose rent is larger than
+ * The Haven's, reads a number in a shape nothing else on the screen uses.
+ * Note there are two `money` in this directory: ledger-helpers' takes
+ * DOLLARS, receipts-helpers' takes CENTS. A balance is dollars.
  */
 export function reminderBody(input: {
   name: string;
@@ -106,7 +113,7 @@ export function reminderBody(input: {
   return [
     `Hi ${name.split(",")[0].trim() || "there"},`,
     ``,
-    `This is a reminder that $${balance.toFixed(2)} is outstanding on lot ${lotNumber} for ${prettyMonth(month)}.`,
+    `This is a reminder that ${money(balance)} is outstanding on lot ${lotNumber} for ${prettyMonth(month)}.`,
     ``,
     `If you've already paid, thank you — nothing more to do, and it may have crossed with this.`,
     ``,
@@ -293,7 +300,7 @@ export function ownerDigest(plan: ReminderPlan, parkName: string, month: string)
   const lines = [
     `${parkName} — ${prettyMonth(month)} reminders`,
     ``,
-    `${plan.totalChased} ${plan.totalChased === 1 ? "household" : "households"} chased, $${total.toFixed(2)} outstanding.`,
+    `${plan.totalChased} ${plan.totalChased === 1 ? "household" : "households"} chased, ${money(total)} outstanding.`,
   ];
   if (plan.toPrint.length > 0) {
     lines.push(``, `${plan.toPrint.length} need a printed notice — they're not on email.`);

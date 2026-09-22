@@ -27,6 +27,7 @@
 import { prettyMonth } from "./ledger-helpers";
 import { longDate } from "@/lib/lake-time";
 import { describeAllocations, type AllocationLine } from "@/lib/allocations";
+import { OFFICE_HAS_IT } from "@/lib/on-account-words";
 
 export interface ReceiptLines {
   parkName: string;
@@ -73,6 +74,18 @@ export interface ReceiptLines {
     receiptNo: number | null;
     appliedTo?: AllocationLine[];
     remaining?: number;
+    /**
+     * WHETHER ANYTHING MORE WILL EVER BILL for this household
+     * (lib/tenancy-facts: the tenancy has ended AND their final month is
+     * billed). The paper said "comes off your next bill" to everybody,
+     * including a household who had moved out with their final month
+     * billed — while the office's own toast, printed in the same tick on
+     * the same card, said the opposite about the same dollars. Every other
+     * door reads this fact; ReceiptLines was the only printed-record type
+     * without a field for it. `null` — or absent — is the unread case, and
+     * a receipt is permanent paper, so it then makes NO promise either way.
+     */
+    nothingMoreBills?: boolean | null;
   } | null;
   /**
    * MONEY OF THEIRS THE OFFICE WAS ALREADY HOLDING, put against this bill
@@ -135,6 +148,38 @@ function stillHeld(
 /** The line printed in place of a held figure nobody read. */
 const NOT_READ_LINE = `What's still on account wasn't read when this was printed — ask at the office.`;
 
+/**
+ * WHAT HAPPENS TO WHAT IS STILL ON ACCOUNT, ON THE PAPER — three shapes,
+ * decided in ONE place for all three of the receipt's held-money sentences.
+ *
+ * This is the resident's half of what `onAccountPromise` (ledger-helpers)
+ * says to the office, keyed on the same fact and wearing the same three
+ * shapes — but in the resident's language, from lib/on-account-words, which
+ * the /paid confirm page reads too. The office's words name the office's own
+ * doors and cannot go on a household's receipt.
+ *
+ *   true  — nothing more bills for them: the money is theirs and the office
+ *           has it. Never HOW it comes back: LakeLife handles no cash.
+ *   false — a next bill is coming: it comes off that, in the words the paper
+ *           has always used.
+ *   null  — the fact could not be read: the paper says the money is held and
+ *           stops. A receipt is permanent, and a guessed promise on it
+ *           cannot be corrected later.
+ *
+ * `lead` names the figure ("The $296.77 on account"); `comesOff` is the
+ * false case's own lines, because the two callers wrap it differently for
+ * the width of the paper.
+ */
+function heldLines(
+  lead: string,
+  nothingMoreBills: boolean | null | undefined,
+  comesOff: readonly string[],
+): string[] {
+  if (nothingMoreBills === true) return [`${lead} stays yours. ${OFFICE_HAS_IT}`];
+  if (nothingMoreBills === false) return [...comesOff];
+  return [`${lead} is held by the office. It stays yours.`];
+}
+
 /** A human-quotable reference: park initials, year, receipt number. */
 export function receiptRef(parkName: string, receiptNo: number | null, receivedOn: string): string {
   if (receiptNo == null) return "—";
@@ -180,8 +225,10 @@ export function receiptBody(r: ReceiptLines): string {
       lines.push(NOT_READ_LINE);
       lines.push(``);
     } else if (remaining > 0) {
-      lines.push(`The ${money(remaining)} on account is held by the office and comes off your next`);
-      lines.push(`bill. It stays yours until then.`);
+      lines.push(...heldLines(`The ${money(remaining)} on account`, r.onAccount?.nothingMoreBills, [
+        `The ${money(remaining)} on account is held by the office and comes off your next`,
+        `bill. It stays yours until then.`,
+      ]));
       lines.push(``);
     }
     if (r.method === "check") {
@@ -265,12 +312,22 @@ export function receiptBody(r: ReceiptLines): string {
       if (remaining == null) {
         lines.push(NOT_READ_LINE);
       } else if (remaining > 0) {
-        lines.push(`The ${money(remaining)} still on account comes off your next bill.`);
+        lines.push(...heldLines(`The ${money(remaining)} still on account`, acct.nothingMoreBills, [
+          `The ${money(remaining)} still on account comes off your next bill.`,
+        ]));
       }
     } else {
-      lines.push(`The ${money(acct.amount)} on account is held by the office and comes off your next`);
-      lines.push(`bill. It stays yours until then${
-        acct.receiptNo != null ? ` (receipt ${receiptRef(r.parkName, acct.receiptNo, r.receivedOn)})` : ""}.`);
+      const ref = acct.receiptNo != null
+        ? ` (receipt ${receiptRef(r.parkName, acct.receiptNo, r.receivedOn)})`
+        : "";
+      const held = heldLines(`The ${money(acct.amount)} on account`, acct.nothingMoreBills, [
+        `The ${money(acct.amount)} on account is held by the office and comes off your next`,
+        `bill. It stays yours until then`,
+      ]);
+      // The receipt number for the on-account half belongs on the last line
+      // of whichever shape printed, not only on the "comes off" one.
+      held[held.length - 1] = `${held[held.length - 1].replace(/\.$/, "")}${ref}.`;
+      lines.push(...held);
     }
   }
 

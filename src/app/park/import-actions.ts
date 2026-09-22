@@ -225,6 +225,53 @@ async function loadLotNumbers(
   return (res.data ?? []).map((l) => l.lot_number as string);
 }
 
+/**
+ * THE LOTS WHOSE RENT IS ALREADY THE OWNER'S OWN.
+ *
+ * "If the owner has already set a rate on a lot, his number wins" was the
+ * decided rule and it lived in ONE of the two doorways. The NAMED path read
+ * this first and skipped; the NAMELESS path — the shape a seller's proforma
+ * actually is, and the shape of The Haven's — upserted straight over every
+ * card. One paste against the twenty-one cards he had typed himself replaced
+ * all twenty-one, with no line on the receipt and no undo that puts a card
+ * back. Those figures are what the January bills are raised from, what the
+ * public park page quotes and what an applicant is told.
+ *
+ * So the read lives here now and both doorways call it.
+ *
+ * `readFailed` FAILS CLOSED into the one thing this promises not to do. An
+ * empty set reads as "nobody has a rate yet", so on a failed read no card is
+ * written at all and every lot gets its own sentence by name.
+ */
+async function lotsAlreadyRated(
+  admin: ReturnType<typeof createServiceClient>,
+  lotIds: readonly string[],
+): Promise<{ ids: Set<string>; readFailed: boolean }> {
+  const distinct = [...new Set(lotIds)];
+  if (distinct.length === 0) return { ids: new Set<string>(), readFailed: false };
+  const res = await admin
+    .from("lot_rates")
+    .select("park_lot_id")
+    .in("park_lot_id", distinct)
+    .eq("term", "monthly");
+  if (res.error) {
+    console.error("[read failed] the rates already on those lots:", res.error);
+    return { ids: new Set<string>(), readFailed: true };
+  }
+  return {
+    ids: new Set((res.data ?? []).map((r) => r.park_lot_id as string)),
+    readFailed: false,
+  };
+}
+
+/** The sentence for a lot we could not check. One copy, both doorways. */
+const rateCheckFailedText = (label: string) =>
+  `We couldn't check whether lot ${label} already had a rent set, so we left it alone. Set it on Lots & rates.`;
+
+/** The sentence for a lot whose card he had already typed. Not a failure. */
+const rateKeptText = (label: string) =>
+  `Lot ${label} already had a rent set, so we left it alone. Change it on Lots & rates.`;
+
 // ---------------------------------------------------------------- the plan --
 
 export interface LoadedBatch {
@@ -529,6 +576,14 @@ export interface CommitOutcome extends ParkResult {
   monthlyTotal?: number;
   /** Per row, in his words. Never a 500, never a rollback of what worked. */
   failures?: { lot: string | null; name: string | null; message: string }[];
+  /**
+   * The lots that kept the rent the owner had already set, BY NAME. Not
+   * failures — nothing went wrong and nothing needs retrying — but not
+   * silence either: on a nameless roll the rents are the whole import, and a
+   * receipt that says "21 lots" without saying which twenty-one kept his own
+   * number is a receipt for an import that did not happen.
+   */
+  ratesKept?: { lot: string; message: string }[];
   /** A file with no lot. Kept ON PURPOSE — see the orphan rule below. */
   orphans?: { renterId: string; name: string }[];
 }
@@ -564,6 +619,7 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
   const defaults = SITE_DEFAULTS[defaultSiteType] ?? { hasWater: true, hasSewer: true };
 
   const failures: CommitOutcome["failures"] = [];
+  const ratesKept: NonNullable<CommitOutcome["ratesKept"]> = [];
   const orphans: CommitOutcome["orphans"] = [];
   let tenantsAdded = 0;
   let lotsCreated = 0;
@@ -632,9 +688,46 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
   // not do.
   if (loaded.plan.namelessRoll) {
     let ratesWritten = 0;
+    // HIS NUMBER WINS HERE TOO. The same read the named path has always done,
+    // now the same helper — see `lotsAlreadyRated`. Without it a seller's
+    // proforma pasted against the cards the owner typed himself replaced
+    // every one of them, quietly.
+    const rated = await lotsAlreadyRated(
+      admin,
+      loaded.plan.rates
+        .map((r) => lotIdByLabel.get(r.lotLabel))
+        .filter((id): id is string => !!id),
+    );
+
     for (const r of loaded.plan.rates) {
       const lotId = lotIdByLabel.get(r.lotLabel);
       if (!lotId) continue;
+
+      // THE ROW RECORD FIRST, WHATEVER HAPPENS TO THE RENT.
+      //
+      // It carries matched_lot_id and created_lot_id, and created_lot_id is
+      // the ONLY thing that tells undo which pads this import brought into
+      // existence. It used to be written after the upsert, behind two
+      // `continue`s — so a lot with no figure on the sheet, or one whose card
+      // we decline to touch, was a lot the undo could no longer remove.
+      await admin
+        .from("park_import_rows")
+        .update({
+          matched_lot_id: lotId,
+          created_lot_id: lotsWeCreated.has(r.lotLabel) ? lotId : null,
+          commit_error: null,
+        })
+        .eq("batch_id", batchId)
+        .eq("line_no", r.lineNo);
+
+      if (rated.readFailed) {
+        failures.push({ lot: r.lotLabel, name: null, message: rateCheckFailedText(r.lotLabel) });
+        continue;
+      }
+      if (rated.ids.has(lotId)) {
+        ratesKept.push({ lot: r.lotLabel, message: rateKeptText(r.lotLabel) });
+        continue;
+      }
       if (r.amount == null) continue;
 
       const { error } = await admin
@@ -648,21 +741,13 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
         continue;
       }
       ratesWritten += 1;
-      await admin
-        .from("park_import_rows")
-        .update({
-          matched_lot_id: lotId,
-          created_lot_id: lotsWeCreated.has(r.lotLabel) ? lotId : null,
-          commit_error: null,
-        })
-        .eq("batch_id", batchId)
-        .eq("line_no", r.lineNo);
     }
 
     // THE LIST, NOT JUST THE TALLY. "3 rows didn't take" sent him to hunt
     // three households across a 79-row roll where a lost one and an empty lot
-    // look identical.
-    const counts = { tenants: 0, lots: lotsCreated, rates: ratesWritten, failed: failures.length, monthly: loaded.plan.monthlyTotal, failures };
+    // look identical. `ratesKept` is the same rule for the quiet half: the
+    // lots whose rent is still his.
+    const counts = { tenants: 0, lots: lotsCreated, rates: ratesWritten, failed: failures.length, kept: ratesKept.length, monthly: loaded.plan.monthlyTotal, failures, ratesKept };
     await admin
       .from("park_import_batches")
       .update({ committed_at: new Date().toISOString(), counts })
@@ -676,8 +761,16 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
       lotsCreated,
       monthlyTotal: loaded.plan.monthlyTotal,
       failures,
+      ratesKept,
       orphans: [],
-      signal: `${lotsCreated} ${lotsCreated === 1 ? "lot" : "lots"} set up. Nobody was filed as living on them — your list didn't say who.`,
+      // The kept half is said OUT LOUD, in the one sentence he is certain to
+      // read. "21 lots set up" over twenty-one cards he had typed himself is
+      // a true sentence about the wrong thing.
+      signal:
+        `${lotsCreated} ${lotsCreated === 1 ? "lot" : "lots"} set up. Nobody was filed as living on them — your list didn't say who.` +
+        (ratesKept.length > 0
+          ? ` ${ratesKept.length} ${ratesKept.length === 1 ? "lot" : "lots"} already had a rent you'd set, and we left ${ratesKept.length === 1 ? "it" : "those"} alone.`
+          : ""),
     };
   }
 
@@ -808,35 +901,32 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
   // park about rates" on every lot of the public page.
   //
   // NEVER OVERWRITES. If the owner has already set a rate on a lot, his number
-  // wins — the seller's sheet is where this started, not where it ends.
+  // wins — the seller's sheet is where this started, not where it ends. The
+  // read itself is `lotsAlreadyRated`, because the nameless roll above needs
+  // exactly the same rule and used to have none of it.
   let ratesWritten = 0;
   if (loaded.plan.rates.length > 0) {
-    const rateLotIds = loaded.plan.rates
-      .map((r) => lotIdByLabel.get(r.lotLabel))
-      .filter(Boolean) as string[];
-    const haveRatesRes = rateLotIds.length
-      ? await admin.from("lot_rates").select("park_lot_id").in("park_lot_id", rateLotIds).eq("term", "monthly")
-      : { data: [] as { park_lot_id: string }[], error: null };
-    // FAILS OPEN INTO THE ONE THING THIS BLOCK PROMISES NOT TO DO. An empty
-    // set means "nobody has a rate yet", so the upsert below would put the
-    // seller's number over the owner's own on every lot. We cannot tell which
-    // are his, so none are written and the receipt says so by name.
-    const rateReadFailed = !!haveRatesRes.error;
-    if (rateReadFailed) {
-      console.error("[read failed] the rates already on those lots:", haveRatesRes.error);
-    }
-    const alreadyRated = new Set((haveRatesRes.data ?? []).map((r) => r.park_lot_id as string));
+    const rated = await lotsAlreadyRated(
+      admin,
+      loaded.plan.rates
+        .map((r) => lotIdByLabel.get(r.lotLabel))
+        .filter((id): id is string => !!id),
+    );
 
     for (const r of loaded.plan.rates) {
       const lotId = lotIdByLabel.get(r.lotLabel);
-      if (rateReadFailed) {
-        failures.push({
-          lot: r.lotLabel, name: null,
-          message: `We couldn't check whether lot ${r.lotLabel} already had a rent set, so we left it alone. Set it on Lots & rates.`,
-        });
+      if (rated.readFailed) {
+        failures.push({ lot: r.lotLabel, name: null, message: rateCheckFailedText(r.lotLabel) });
         continue;
       }
-      if (!lotId || r.amount == null || alreadyRated.has(lotId)) continue;
+      if (!lotId) continue;
+      if (rated.ids.has(lotId)) {
+        // Said out loud rather than skipped in silence — the same sentence
+        // the nameless path gives, because it is the same decision.
+        ratesKept.push({ lot: r.lotLabel, message: rateKeptText(r.lotLabel) });
+        continue;
+      }
+      if (r.amount == null) continue;
       const { error } = await admin
         .from("lot_rates")
         .upsert({ park_lot_id: lotId, term: "monthly", amount: r.amount },
@@ -883,9 +973,11 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
     lots: lotsCreated,
     rates: ratesWritten,
     failed: failures.length,
+    kept: ratesKept.length,
     monthly: loaded.plan.monthlyTotal,
     // Kept so the receipt can NAME them, and still name them after a reload.
     failures,
+    ratesKept,
   };
   await admin
     .from("park_import_batches")
@@ -938,11 +1030,15 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
     lotsCreated,
     monthlyTotal: loaded.plan.monthlyTotal,
     failures,
+    ratesKept,
     orphans,
     signal:
       `${tenantsAdded} ${tenantsAdded === 1 ? "tenant is" : "tenants are"} in.` +
       (ratesWritten > 0
         ? ` ${ratesWritten} ${ratesWritten === 1 ? "lot has" : "lots have"} a rent card off your sheet — check them on Lots & rates.`
+        : "") +
+      (ratesKept.length > 0
+        ? ` ${ratesKept.length} ${ratesKept.length === 1 ? "lot" : "lots"} already had a rent you'd set, and we left ${ratesKept.length === 1 ? "it" : "those"} alone.`
         : ""),
   };
 }
