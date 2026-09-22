@@ -4,6 +4,7 @@ import { todayLakeDate, effectiveSeason, seasonIsProvisional } from "@/lib/booki
 import { getPlatformSettings } from "@/lib/settings";
 import { marginPct } from "@/lib/dispatch";
 import { mustRead, mustCount } from "@/lib/must-read";
+import { isServedLake, isAwaitingPromotion, daysWaiting } from "@/lib/lake-visibility";
 
 /** The one place margin lives (rule 1): ops-only. Everything here is service-role
  *  read, gated by assertOps — never import this into a vendor/owner surface. */
@@ -659,16 +660,35 @@ export interface LakeCondition {
    * screen that exists to fix that, and it could not say which lake needed it.
    */
   provisional: boolean;
+  /** 'ops' | 'customer' | 'crew' — who put the row there (lakes_source_check). */
+  source: string;
+  /** LakeLife advertises this lake. See lib/lake-visibility.ts. */
+  served: boolean;
+  /**
+   * A REAL LAKE DEMAND CREATED THAT NOBODY HERE HAS SAID YES TO.
+   *
+   * The gate that keeps these off the front page is only half a fix. A
+   * customer names a lake we don't work on, the row is created, their set-up
+   * completes — and before this nothing anywhere told a person at LakeLife
+   * that a market had asked for us. A silent gate is a lost market.
+   */
+  awaiting_promotion: boolean;
+  /** Whole days since the row was created; NULL when we couldn't work it out
+   *  (never 0, which is a real answer — see daysWaiting). */
+  days_waiting: number | null;
 }
 
 export async function getLakeConditions(): Promise<LakeCondition[]> {
   const admin = createServiceClient();
   const today = todayLakeDate();
+  // One clock for the whole list, so two cards rendered a millisecond apart
+  // cannot report different waits.
+  const now = new Date();
   const lakes = mustRead(
     "the lakes and their season dates",
     await admin
       .from("lakes")
-      .select("id, name, ice_out_actual, hard_freeze_est, pull_deadline, is_fixture, season_confirmed")
+      .select("id, name, ice_out_actual, hard_freeze_est, pull_deadline, is_fixture, season_confirmed, source, created_at")
       .order("name", { ascending: true }),
   );
 
@@ -686,6 +706,10 @@ export async function getLakeConditions(): Promise<LakeCondition[]> {
       active_properties: byLake.get(l.id as string) ?? 0,
       is_fixture: l.is_fixture === true,
       season_confirmed: l.season_confirmed !== false,
+      source: (l.source as string) ?? "ops",
+      served: isServedLake(l as { is_fixture?: unknown; source?: unknown }),
+      awaiting_promotion: isAwaitingPromotion(l as { is_fixture?: unknown; source?: unknown }),
+      days_waiting: daysWaiting((l.created_at as string) ?? null, now),
       provisional: seasonIsProvisional(
         effectiveSeason(
           { iceOut: (l.ice_out_actual as string) ?? null, pullDeadline: (l.pull_deadline as string) ?? null },

@@ -9,9 +9,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { updateLakeConditions } from "@/app/ops/actions";
+import { updateLakeConditions, promoteLakeToServed } from "@/app/ops/actions";
 import { toast } from "@/components/Toast";
 import type { LakeCondition } from "@/app/ops/data";
+import { waitingWords } from "@/lib/lake-visibility";
 
 /** Hard freeze (yyyy-mm-dd) minus 8 days, formatted "Mon D". "—" if empty/invalid. */
 function pullDeadlineLabel(hardFreeze: string): string {
@@ -23,8 +24,37 @@ function pullDeadlineLabel(hardFreeze: string): string {
 }
 
 export function LakeConditions({ lakes }: { lakes: LakeCondition[] }) {
+  // LAKES SOMEBODY ASKED FOR AND NOBODY HERE HAS ANSWERED.
+  //
+  // The gate that keeps an unpromoted lake off the front page is only half the
+  // job: a real customer names water we don't work on, the row is created,
+  // their set-up completes — and without this line nobody at LakeLife ever
+  // learns a market asked for us. Named at the top of the screen rather than
+  // left as a badge on a card somebody has to scroll to, because the whole
+  // failure mode is nobody looking.
+  const waiting = lakes.filter((l) => l.awaiting_promotion);
   return (
     <>
+      {waiting.length > 0 && (
+        <div className="ll-notice" style={{ marginBottom: 16 }}>
+          <b>
+            {waiting.length === 1
+              ? "1 lake is waiting on you"
+              : `${waiting.length} lakes are waiting on you`}
+          </b>{" "}
+          — named by a customer or a crew, and not on the public site until you
+          say we serve it. Their homes, season dates and bookings all work
+          meanwhile.
+          <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+            {waiting.map((l) => (
+              <li key={l.id} style={{ fontSize: 13 }}>
+                <b>{l.name}</b> — from a {l.source}, {l.active_properties}{" "}
+                {l.active_properties === 1 ? "home" : "homes"}, {waitingWords(l.days_waiting)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div
         style={{
           display: "grid",
@@ -50,6 +80,25 @@ function LakeCard({ lake }: { lake: LakeCondition }) {
   const [iceOut, setIceOut] = useState(lake.ice_out_actual ?? "");
   const [hardFreeze, setHardFreeze] = useState(lake.hard_freeze_est ?? "");
   const [busy, setBusy] = useState(false);
+  const [promoting, setPromoting] = useState(false);
+
+  async function promote() {
+    setPromoting(true);
+    try {
+      const res = await promoteLakeToServed(lake.id);
+      if (res.ok) {
+        // The warning arm is "it was already public" — a true sentence that is
+        // not a success, so it must not be shown as one.
+        if (res.warning) toast.ok(res.warning);
+        else toast.ok(`${lake.name} is on the public site now.`);
+        router.refresh();
+      } else {
+        toast.err(res.error ?? "Couldn't publish that lake.");
+      }
+    } finally {
+      setPromoting(false);
+    }
+  }
 
   async function save() {
     setBusy(true);
@@ -88,6 +137,29 @@ function LakeCard({ lake }: { lake: LakeCondition }) {
       {lake.is_fixture && (
         <div className="mut" style={{ fontSize: 12.5, marginTop: 2 }}>
           Not a real lake — nothing here reaches a customer.
+        </div>
+      )}
+
+      {/* THE OTHER HALF OF THE GATE, ON THE CARD ITSELF.
+          The banner at the top of this screen says a lake is waiting; this is
+          where somebody does something about it. Without a control the rule
+          would be a hole ops could see and not close — the only way to promote
+          a lake would be an UPDATE typed against production. */}
+      {lake.awaiting_promotion && (
+        <div className="ll-notice" style={{ marginTop: 8 }}>
+          <b>Not on the public site.</b>{" "}
+          {lake.source === "crew"
+            ? "A crew added this lake to their service area."
+            : "A customer named this lake when they set up."}{" "}
+          It is off the front page, /lakes, the sitemap and the link-preview
+          card until you say we serve it — {waitingWords(lake.days_waiting)}.
+          The {lake.active_properties === 1 ? "home" : "homes"} already here
+          book and get their season dates either way.
+          <div style={{ marginTop: 10 }}>
+            <button className="ll-btn sm" onClick={promote} disabled={promoting}>
+              {promoting ? "Saving…" : "Yes — we serve this lake"}
+            </button>
+          </div>
         </div>
       )}
 

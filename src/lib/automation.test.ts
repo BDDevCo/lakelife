@@ -471,6 +471,77 @@ describe("sendNightlyDigest — money sections and the AI count fallback", () =>
     expect(html).toContain("Refunds reconciled");
   });
 
+  /**
+   * A GATE WITH NO NOTICE IS A SILENT HOLE.
+   *
+   * Public surfaces now advertise a lake only once somebody at LakeLife has
+   * said we serve it (lib/lake-visibility.ts). Without these lines a real
+   * customer names water we don't work on, the row is created, their set-up
+   * completes — and nobody here ever learns a market asked for us.
+   */
+  describe("lakes waiting on a decision", () => {
+    const born = (over: Record<string, unknown>) =>
+      table("lakes").push({ id: "lake-a", name: "Adams Lake", source: "customer", is_fixture: false, created_at: iso(10), ...over });
+
+    it("names the lake, who asked, how many homes and how long", async () => {
+      seedOps();
+      born({});
+      table("properties").push({ id: "p1", lake_id: "lake-a" });
+      table("properties").push({ id: "p2", lake_id: "lake-a" });
+      await sendNightlyDigest(base);
+      const html = lastHtml();
+      expect(html).toContain("1 lake waiting on you");
+      expect(html).toContain("Adams Lake");
+      expect(html).toContain("from a customer");
+      expect(html).toContain("2 homes");
+      expect(html).toContain("waiting 10 days");
+    });
+
+    it("a lake ops put there is neither waiting nor news — the night stays quiet", async () => {
+      seedOps();
+      born({ source: "ops" });
+      await sendNightlyDigest(base);
+      expect(lastHtml()).toContain("Quiet night");
+    });
+
+    it("a fixture is never offered for promotion", async () => {
+      seedOps();
+      born({ is_fixture: true });
+      await sendNightlyDigest(base);
+      expect(lastHtml()).toContain("Quiet night");
+    });
+
+    it("keeps waiting after the night it was born — 'New lakes' fires once", async () => {
+      // The 24-hour window is what made this invisible: a lake could wait a
+      // month and be mentioned exactly once, on day one.
+      seedOps();
+      born({});
+      const html = (await sendNightlyDigest(base), lastHtml());
+      expect(html).not.toContain("New lakes");
+      expect(html).toContain("waiting 10 days");
+    });
+
+    it("and on the night it IS born it appears in both, counted by instants not by text", async () => {
+      // The cutoff compares parsed times: `dayAgo` is a JS ISO string and
+      // PostgREST renders a timestamptz its own way, so a raw `>=` on the text
+      // is right most days and wrong at the boundary.
+      seedOps();
+      born({ created_at: new Date(Date.now() - 2 * 3_600_000).toISOString() });
+      await sendNightlyDigest(base);
+      const html = lastHtml();
+      expect(html).toContain("New lakes");
+      expect(html).toContain("1 lake waiting on you");
+      expect(html).toContain("named today");
+    });
+
+    it("a lake with no homes on it yet still gets named", async () => {
+      seedOps();
+      born({});
+      await sendNightlyDigest(base);
+      expect(lastHtml()).toContain("0 homes");
+    });
+  });
+
   it("AI reply texts survive a head-count that comes back null", async () => {
     seedOps();
     // A message row exists, but the head-count path yields null in production

@@ -6,6 +6,7 @@ import { mustRead } from "@/lib/must-read";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getFullProfile } from "../data";
 import type { ServiceRule } from "@/lib/pricing";
+import { SERVED_LAKE_MATCH } from "@/lib/lake-visibility";
 
 export default async function SetupPage({
   searchParams,
@@ -46,7 +47,12 @@ export default async function SetupPage({
   }
 
   const [lakeRes, parkRes, serviceRes, profile] = await Promise.all([
-    supabase.from("lakes").select("name").eq("is_fixture", false).order("name"),
+    // SERVED LAKES ONLY (lib/lake-visibility.ts). These chips are headed
+    // "Which lake are you on or near?" and read as the list of places
+    // LakeLife works — so an unpromoted lake sitting in them republishes one
+    // stranger's typing to every customer who sets up after them, which is the
+    // front-door defect one door in. Their OWN lake is unioned back below.
+    supabase.from("lakes").select("name").match(SERVED_LAKE_MATCH).order("name"),
     // Published parks only — an unpublished one is still being set up and its
     // owner has not asked to be listed anywhere.
     supabase.from("parks").select("id, name").eq("active", true).order("name"),
@@ -61,7 +67,21 @@ export default async function SetupPage({
   const parkRows = mustRead("the parks we serve", parkRes);
   const serviceRows = mustRead("the service menu", serviceRes);
 
-  const lakes = (lakeRows ?? []).map((l) => l.name);
+  // THEIR OWN LAKE IS ALWAYS ONE OF THE CHIPS, served or not.
+  //
+  // The gate above decides what LakeLife advertises; it must not decide what a
+  // person who is already here can see about themselves. A homeowner who named
+  // their lake last night would otherwise open this wizard to find no chip
+  // selected and their lake missing from the list — they would pick a
+  // neighbouring lake or re-type their own, and either way the property they
+  // already have moves to a different row. Unioned rather than re-queried: the
+  // name is already on the profile we just read.
+  const servedLakeNames = (lakeRows ?? []).map((l) => l.name as string);
+  const ownLake = profile?.hasProfile === true ? (profile.lake ?? null) : null;
+  const lakes =
+    ownLake && !servedLakeNames.includes(ownLake)
+      ? [...servedLakeNames, ownLake]
+      : servedLakeNames;
   const parks = (parkRows ?? []).map((r) => ({ id: r.id as string, name: r.name as string }));
   const services = (serviceRows ?? []) as unknown as ServiceRule[];
   const editingPropertyId = !addingNew && profile?.hasProfile ? profile.propertyId : null;

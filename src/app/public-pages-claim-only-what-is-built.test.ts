@@ -57,6 +57,11 @@ const PUBLIC_PAGES = [
   "page.tsx", // the front door
   "lakes/page.tsx",
   "lakes/[slug]/page.tsx",
+  // The 404 body for that route. A stranger reads it — either because the slug
+  // is nonsense, or because the lake exists but nobody at LakeLife has said we
+  // serve it yet — so its sentences are under the same rules as the page it
+  // stands in for.
+  "lakes/[slug]/not-found.tsx",
   "for-parks/page.tsx",
   "sms/page.tsx",
   "privacy/page.tsx",

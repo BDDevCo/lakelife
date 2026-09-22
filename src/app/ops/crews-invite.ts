@@ -6,6 +6,7 @@ import { html } from "@/lib/html-safe";
 import { likeLiteral } from "@/lib/sql-like";
 import { assertOps } from "./data";
 import { readFailedMessage } from "@/lib/must-read";
+import { SERVED_LAKE_MATCH } from "@/lib/lake-visibility";
 
 export interface InviteResult {
   ok: boolean;
@@ -128,11 +129,13 @@ async function sendInvitation(
   { company, email, site }: { company: string; email: string; site: string },
 ): Promise<{ ok: boolean; error?: string }> {
   // Lake list is DYNAMIC — an invite sent the day a new lake launches must
-  // name it. Fixtures excluded by lakes.is_fixture (0124): this list goes out
-  // in a real email to a real crew, so a scratch lake here is not a cosmetic
-  // slip, it is a fake place named in correspondence.
+  // name it. SERVED LAKES ONLY (lib/lake-visibility.ts): this list goes out in
+  // a real email to a real crew as the water LakeLife works, so naming a place
+  // nobody here has agreed to is not a cosmetic slip — it is a promise of work
+  // made in correspondence, and the crew would be right to hold us to it. The
+  // old fence, `is_fixture = false`, only kept our own scratch rows out.
   const lakeRes = await admin
-    .from("lakes").select("name").eq("is_fixture", false).order("name");
+    .from("lakes").select("name").match(SERVED_LAKE_MATCH).order("name");
   // Soft on purpose: the vendors row is already inserted by the caller, so
   // refusing here would leave an invite nobody can claim. The fallback names no
   // place that doesn't exist — but it logs, because "your local lakes" going

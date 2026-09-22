@@ -89,6 +89,24 @@ function embedReaders(): Array<{ file: string; sel: string }> {
   return out;
 }
 
+/**
+ * WHAT COUNTS AS FENCED.
+ *
+ * `is_fixture = false` was the whole fence until 22 Sep 2026, and it only ever
+ * meant "not one of our own scratch rows". It said nothing about whether
+ * LakeLife had agreed to work on the lake, so a row a CUSTOMER created in the
+ * set-up wizard passed every check in this file and went straight onto the
+ * front page, /lakes, its own indexed landing page, the sitemap and the link
+ * preview. The fix is a strictly stronger predicate carried as one call —
+ * `.match(SERVED_LAKE_MATCH)`, which is `{ is_fixture: false, source: 'ops' }`
+ * (lib/lake-visibility.ts).
+ *
+ * So a chain satisfies this file if it names EITHER. lake-visibility.test.ts
+ * is the other half and is the stricter one: it requires the public surfaces
+ * to use the predicate and refuses `is_fixture` on its own.
+ */
+const FENCED = /is_fixture|SERVED_LAKE_MATCH/;
+
 /** Every `.from("lakes")` in the codebase, with the query chain that follows. */
 function lakeQueries() {
   const out: Array<{ file: string; chain: string; isInsert: boolean }> = [];
@@ -220,7 +238,7 @@ describe("the fixture fence", () => {
   it("EVERY PUBLIC AND OUTBOUND READ EXCLUDES FIXTURES", () => {
     const unfenced = queries
       .filter((q) => q.file in MUST_FENCE && !q.isInsert)
-      .filter((q) => !q.chain.includes("is_fixture"))
+      .filter((q) => !FENCED.test(q.chain))
       .map((q) => `${q.file} — ${MUST_FENCE[q.file]}`);
     expect(unfenced, `these reach the public without excluding fixtures:\n${unfenced.join("\n")}`)
       .toEqual([]);
@@ -229,7 +247,7 @@ describe("the fixture fence", () => {
   it("EVERY QUERY-LEVEL RULE HOLDS", () => {
     const broken = MUST_FENCE_QUERY.filter((r) => {
       const hit = queries.find((q) => q.file === r.file && r.anchor.test(q.chain));
-      return !hit || !hit.chain.includes("is_fixture");
+      return !hit || !FENCED.test(hit.chain);
     }).map((r) => `${r.file} [${r.anchor}] — ${r.why}`);
     expect(broken, `unfenced, or the anchor stopped matching:\n${broken.join("\n")}`).toEqual([]);
   });

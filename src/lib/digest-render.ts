@@ -1,4 +1,5 @@
 import { html, type RawHtml } from "@/lib/html-safe";
+import { waitingWords } from "@/lib/lake-visibility";
 /**
  * THE NIGHTLY DIGEST composer (Autonomy Ladder) — PURE, no I/O, fully
  * unit-testable, same pattern as comms-render and the refund math. The ONE
@@ -43,6 +44,23 @@ export interface DigestSections {
   disputeSweep: { fired: number; escalated: number; quietCloses?: number; reconciled?: number };
   escalatedDisputes: Array<{ service: string; note: string }>;
   lakesBorn: Array<{ name: string; source: string }>;
+  /**
+   * LAKES SOMEBODY ASKED FOR THAT NOBODY HERE HAS ANSWERED.
+   *
+   * Public surfaces now advertise a lake only once somebody at LakeLife has
+   * said we serve it (lib/lake-visibility.ts). A gate with no notice is a
+   * silent hole: a real customer names water we don't work on, the row is
+   * created, their set-up completes, and without this section nobody here ever
+   * learns that a market asked for us. "New lakes" above says it once, on the
+   * night it happens, and then never again — so this is the STANDING queue,
+   * said every morning until somebody acts, in the same spirit as the unpaid
+   * invoice and the open-work count.
+   *
+   * `properties` is NULL when the homes on a lake could not be counted, never
+   * 0 — "no homes on it yet" is a real and rather different fact.
+   * Optional, like every other section added after the fact: absent is silence.
+   */
+  lakesWaiting?: Array<{ name: string; source: string; properties: number | null; days: number | null }>;
   routes: { hoursBust?: number };
   aiAutoReplies: number;
   aiReplyTexts: string[];
@@ -251,6 +269,25 @@ export function composeNightlyDigest(sections: DigestSections): string {
     const n = sections.lakesBorn.length;
     const items = sections.lakesBorn.map((l) => html`<li>${l.name} — from a ${l.source}</li>`);
     parts.push(html`<h3>New lakes</h3><p>${n} lake${plural(n)} born in the last 24 hours:</p><ul>${items}</ul>`);
+  }
+
+  // THE STANDING QUEUE, not last night's news. See DigestSections.lakesWaiting.
+  if (sections.lakesWaiting && sections.lakesWaiting.length > 0) {
+    const n = sections.lakesWaiting.length;
+    const it = n === 1 ? "it" : "them";
+    const items = sections.lakesWaiting.map((l) => {
+      // A FAILED COUNT IS NOT ZERO HOMES. "0 homes" reads as a lake nobody
+      // lives on, which is the single fact most likely to make somebody skip
+      // it — and it would be the sentence we print precisely when we could not
+      // look.
+      const homes = l.properties === null
+        ? html`we couldn't count the homes on it`
+        : html`${l.properties} home${plural(l.properties)}`;
+      return html`<li>${l.name} — from a ${l.source}, ${homes}, ${waitingWords(l.days)}</li>`;
+    });
+    parts.push(
+      html`<h3>${n} lake${plural(n)} waiting on you</h3><p>A customer or a crew named ${it}, and ${n === 1 ? "it is" : "they are"} off the front page, /lakes, the sitemap and the link-preview card until somebody says we serve ${it}. The homes already on ${it} book and get their season dates meanwhile. The button is on the lake's card in ops.</p><ul>${items}</ul>`,
+    );
   }
 
   const hoursBust = sections.routes.hoursBust ?? 0;

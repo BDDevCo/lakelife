@@ -35,7 +35,14 @@ const { TOKEN_PATHS } = await import("@/lib/token-paths");
 const url = (u: unknown) => String(u);
 
 beforeEach(() => {
-  const chain = { select: () => chain, eq: () => Promise.resolve({ data: [{ slug: "big-long-lake" }], error: null }) };
+  // `.match(SERVED_LAKE_MATCH)` is how the sitemap asks for served lakes now —
+  // one call carrying the whole predicate (lib/lake-visibility.ts). `eq` stays
+  // so this stub keeps answering any other caller that lands on it.
+  const chain = {
+    select: () => chain,
+    match: () => Promise.resolve({ data: [{ slug: "big-long-lake" }], error: null }),
+    eq: () => Promise.resolve({ data: [{ slug: "big-long-lake" }], error: null }),
+  };
   from.mockReturnValue(chain);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });

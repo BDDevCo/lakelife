@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 import { TopBar } from "@/components/Brand";
 import { RefCatcher } from "@/components/RefCatcher";
 import { createServiceClient } from "@/lib/supabase/server";
@@ -8,6 +9,7 @@ import type { ServiceRule } from "@/lib/pricing";
 import { effectiveSeason, seasonIsProvisional, todayLakeDate } from "@/lib/booking";
 import { mustRead, mustCount } from "@/lib/must-read";
 import { checkNamedInsured } from "@/lib/named-insured";
+import { SERVED_LAKE_MATCH } from "@/lib/lake-visibility";
 
 /**
  * Public per-lake landing page (§8 SEO) — every number on it is LIVE
@@ -35,22 +37,37 @@ interface LakeRow {
 
 async function loadLake(slug: string): Promise<LakeRow | null> {
   const admin = createServiceClient();
-  // A FAILED READ IS NOT AN UNKNOWN LAKE. The `null` branch below renders "We
-  // don't know that lake yet" — a sentence that tells somebody standing on
-  // their own dock we don't serve their water, and that a search engine will
-  // happily cache. It has to mean the row is genuinely absent (or a fixture,
-  // per the note inside), so a read that could not run throws instead.
+  // A FAILED READ IS NOT AN UNKNOWN LAKE. The `null` branch below 404s to
+  // not-found.tsx — "We don't serve that lake yet", a sentence that tells
+  // somebody standing on their own dock we don't work their water, and that a
+  // search engine will happily cache. It has to mean the row is genuinely
+  // absent (or fenced, per the note inside), so a read that could not run
+  // throws instead.
   const data = mustRead(`the ${slug} lake page`, await admin
     .from("lakes")
     .select("id, name, slug, ice_out_actual, pull_deadline, season_confirmed, hoa_user_id, hoa_name")
     .eq("slug", slug)
-    // A FIXTURE IS A 404 TO THE WORLD (0124). The old zz- convention never
-    // reached this route: the directory and the sitemap both filtered it out,
-    // so nobody noticed that the URL itself still rendered — a full landing
-    // page for a fake lake, complete with its own SEO title and description,
-    // to anyone who typed or was linked the slug. Same posture parks already
-    // take in parks/public-data.ts, where an inactive park is a 404.
-    .eq("is_fixture", false)
+    // A LAKE WE HAVE NOT AGREED TO SERVE IS A 404 TO THE WORLD, exactly as a
+    // fixture has been since 0124 — one predicate now covers both
+    // (lib/lake-visibility.ts).
+    //
+    // 0124 closed this route to scratch rows and nobody noticed the other half
+    // was still open: a lake a customer named in the set-up wizard is
+    // `is_fixture = false`, so it rendered a FULL landing page here — season
+    // dates, a crew count, and a priced menu of work no crew has agreed to do
+    // on that water — with its own SEO title and description, to anyone who
+    // typed or was linked the slug.
+    //
+    // WHY 404 AND NOT A SOFT "we don't serve this lake yet" PAGE. This route
+    // is ISR-cached for an hour, is declared in the sitemap and is indexed. A
+    // 200 with an apologetic sentence is still a URL a crawler keeps, ranks
+    // and serves against the lake's name — the page would go on existing in
+    // search results long after anybody read it. A 404 is the one answer that
+    // gets the URL dropped. The reader still gets the branded card and a way
+    // back: not-found.tsx beside this file carries the same words it always
+    // did, now with the status code that matches them. The day ops promotes
+    // the lake the same URL is a real page again.
+    .match(SERVED_LAKE_MATCH)
     .maybeSingle());
   return (data as LakeRow | null) ?? null;
 }
@@ -80,20 +97,9 @@ const pretty = (iso: string | null) =>
 export default async function LakePage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const lake = await loadLake(slug);
-  if (!lake) {
-    return (
-      <>
-        <TopBar />
-        <div className="wrap" style={{ paddingTop: 48, maxWidth: 520 }}>
-          <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
-            <h2 style={{ fontSize: 22, margin: "0 0 6px" }}>We don&apos;t know that lake yet 🌊</h2>
-            <p className="mut" style={{ fontSize: 14, marginBottom: 14 }}>But we&apos;re always adding water.</p>
-            <Link className="ll-btn" href="/lakes">See our lakes</Link>
-          </div>
-        </div>
-      </>
-    );
-  }
+  // The same words as before, moved into not-found.tsx so they arrive with a
+  // 404 rather than a 200 — see the note inside loadLake.
+  if (!lake) notFound();
 
   const admin = createServiceClient();
   // EVERY NUMBER BELOW IS A CLAIM ABOUT THIS LAKE, and each empty branch was

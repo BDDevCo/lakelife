@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { createServiceClient } from "@/lib/supabase/server";
+import { SERVED_LAKE_MATCH } from "@/lib/lake-visibility";
 
 /** Sitemap (§8 SEO): the public front door + every lake landing page. */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
@@ -23,9 +24,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   ];
   try {
     const admin = createServiceClient();
-    // 0124: fixtures are excluded by the column. This is the surface that
-    // matters most — a crawled URL outlives the fixture that created it.
-    const res = await admin.from("lakes").select("slug").eq("is_fixture", false);
+    // SERVED LAKES ONLY — the one predicate, lib/lake-visibility.ts. This is
+    // the surface that matters most: a crawled URL outlives whatever created
+    // it, and until now anything a stranger typed into the set-up wizard was
+    // declared here as a page LakeLife wants indexed.
+    const res = await admin.from("lakes").select("slug").match(SERVED_LAKE_MATCH);
     // A FAILED READ IS NOT AN EMPTY LAKES TABLE. It was indistinguishable from
     // one here, and the catch below was written for a DIFFERENT failure — an
     // env-less build — so a database error silently shipped a sitemap claiming

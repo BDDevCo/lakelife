@@ -3,7 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { LakeCondition } from "@/app/ops/data";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
-vi.mock("@/app/ops/actions", () => ({ updateLakeConditions: async () => ({ ok: true }) }));
+vi.mock("@/app/ops/actions", () => ({
+  updateLakeConditions: async () => ({ ok: true }),
+  promoteLakeToServed: async () => ({ ok: true }),
+}));
 vi.mock("@/components/Toast", () => ({ toast: () => {} }));
 
 const { LakeConditions } = await import("./LakeConditions");
@@ -11,7 +14,10 @@ const { LakeConditions } = await import("./LakeConditions");
 const lake = (over: Partial<LakeCondition>): LakeCondition => ({
   id: "l1", name: "Big Long Lake",
   ice_out_actual: "2026-03-21", hard_freeze_est: "2026-11-22", pull_deadline: "2026-11-14",
-  active_properties: 12, is_fixture: false, season_confirmed: true, provisional: false, ...over,
+  active_properties: 12, is_fixture: false, season_confirmed: true, provisional: false,
+  // The default is a lake ops themselves added — the only kind that was ever
+  // meant to be on the public site.
+  source: "ops", served: true, awaiting_promotion: false, days_waiting: 400, ...over,
 });
 
 describe("the ops season editor marks a test lake", () => {
@@ -83,3 +89,76 @@ describe("ops can see which lake is still a guess", () => {
     expect(html).not.toContain("Still provisional");
   });
 })
+
+/**
+ * A LAKE NOBODY AT LAKELIFE HAS ANSWERED.
+ *
+ * A customer typing "my lake isn't listed" creates the row, their set-up
+ * completes, and every public surface now correctly refuses to advertise it
+ * (lib/lake-visibility.ts). That gate is only half a fix: without a line on
+ * this screen nobody here ever learns a market asked for us, and without a
+ * button nobody can do anything about it.
+ */
+describe("ops is told which lakes are waiting, and can say yes", () => {
+  const waiting = (over: Partial<LakeCondition> = {}) =>
+    lake({ id: "l9", name: "Adams Lake", source: "customer", served: false,
+           awaiting_promotion: true, days_waiting: 4, active_properties: 2, ...over });
+
+  it("says nothing at all when every lake is already served", () => {
+    const html = renderToStaticMarkup(<LakeConditions lakes={[lake({})]} />);
+    expect(html).not.toContain("waiting on you");
+    expect(html).not.toContain("Not on the public site");
+    expect(html).not.toContain("we serve this lake");
+  });
+
+  it("names the lake at the top of the screen, with its homes and its wait", () => {
+    const html = renderToStaticMarkup(<LakeConditions lakes={[lake({}), waiting()]} />);
+    expect(html).toContain("1 lake is waiting on you");
+    expect(html).toContain("Adams Lake");
+    expect(html).toContain("from a customer");
+    expect(html).toContain("2 homes");
+    expect(html).toContain("waiting 4 days");
+  });
+
+  it("counts several, and does not count the lakes already served", () => {
+    const html = renderToStaticMarkup(
+      <LakeConditions lakes={[lake({}), waiting(), waiting({ id: "l10", name: "Witmer Lake", source: "crew" })]} />,
+    );
+    expect(html).toContain("2 lakes are waiting on you");
+    expect(html).not.toContain("3 lakes");
+  });
+
+  it("puts the control on the card, and says what is and is not affected", () => {
+    const html = renderToStaticMarkup(<LakeConditions lakes={[waiting()]} />);
+    expect(html).toContain("Not on the public site");
+    expect(html).toContain("Yes — we serve this lake");
+    // The customer is fine. Without this sentence ops reads the notice as a
+    // breakage and goes hunting for one.
+    expect(html).toContain("book and get their season dates either way");
+  });
+
+  it("says which door it came through, because the two are different news", () => {
+    const customer = renderToStaticMarkup(<LakeConditions lakes={[waiting()]} />);
+    expect(customer).toContain("A customer named this lake when they set up");
+    const crew = renderToStaticMarkup(<LakeConditions lakes={[waiting({ source: "crew" })]} />);
+    expect(crew).toContain("A crew added this lake to their service area");
+    expect(crew).not.toContain("A customer named this lake");
+  });
+
+  it("never offers to publish a fixture", () => {
+    // isAwaitingPromotion already refuses one; this is the screen half of the
+    // same rule, so a fixture cannot be promoted by a click either.
+    const html = renderToStaticMarkup(
+      <LakeConditions lakes={[lake({ is_fixture: true, source: "customer", served: false, awaiting_promotion: false })]} />,
+    );
+    expect(html).toContain("Test lake");
+    expect(html).not.toContain("we serve this lake");
+    expect(html).not.toContain("waiting on you");
+  });
+
+  it("a wait it could not work out is never rendered as no wait at all", () => {
+    const html = renderToStaticMarkup(<LakeConditions lakes={[waiting({ days_waiting: null })]} />);
+    expect(html).toContain("couldn&#x27;t work out how long");
+    expect(html).not.toContain("waiting 0 days");
+  });
+});

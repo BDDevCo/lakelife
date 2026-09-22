@@ -6,6 +6,7 @@ import { ConfigNotice } from "@/components/ConfigNotice";
 import { hasSupabaseEnv, hasTwilioVerifyEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import { softRead } from "@/lib/must-read";
+import { SERVED_LAKE_MATCH } from "@/lib/lake-visibility";
 
 export default async function Home() {
   const supaOk = hasSupabaseEnv();
@@ -18,8 +19,15 @@ export default async function Home() {
   let signedIn = false;
   // The lake list is DYNAMIC (new lakes row = new copy, zero code changes);
   // the founding three stay as the env-less fallback so the page never
-  // renders empty. Fixtures excluded by lakes.is_fixture — the column, not the
-  // name (0124); this list is the one a scratch lake actually reached.
+  // renders empty.
+  //
+  // SERVED LAKES ONLY, and this chip is why the predicate exists. The filter
+  // here used to be `is_fixture = false` alone, which asks "is this one of our
+  // own scratch rows" — a question that says nothing about whether LakeLife
+  // works there. A customer typing "Adamm Lake" into the set-up wizard put
+  // their typo in this sentence, on the front door, with nobody in between.
+  // lib/lake-visibility.ts holds the whole rule; this is one call so it cannot
+  // be half-taken.
   let shortNames = ["Big Long", "Pretty", "Big Turkey"];
   if (supaOk) {
     const supabase = await createClient();
@@ -38,7 +46,7 @@ export default async function Home() {
     // here they can still name themselves at booking (lib/lake-birth.ts).
     const [lakeRows] = softRead(
       "the list of lakes for the front door",
-      await supabase.from("lakes").select("name").eq("is_fixture", false).order("name"),
+      await supabase.from("lakes").select("name").match(SERVED_LAKE_MATCH).order("name"),
       null,
     );
     if (lakeRows && lakeRows.length > 0) {

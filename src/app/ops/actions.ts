@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { notify } from "@/lib/notify";
 import { checkNamedInsured } from "@/lib/named-insured";
@@ -8,6 +9,7 @@ import { runRouteBuild } from "@/lib/automation";
 import { getPlatformSettings } from "@/lib/settings";
 import { assertOps } from "./data";
 import { readFailedMessage } from "@/lib/must-read";
+import { SERVED_LAKE_SOURCE } from "@/lib/lake-visibility";
 
 export interface OpsResult {
   ok: boolean;
@@ -265,6 +267,75 @@ export async function buildRoutesForDate(dateISO?: string): Promise<BuildRoutesR
   // Same engine the nightly cron runs — authorized here by assertOps.
   const r = await runRouteBuild(dateISO);
   return { ok: r.ok, error: r.error, routes: r.routes, stops: r.stops, overflow: r.overflow, notified: r.notified, unreached: r.unreached };
+}
+
+/**
+ * "YES, WE SERVE THIS LAKE." The one door that opens the gate.
+ *
+ * A customer typing their lake into the set-up wizard, or a crew widening its
+ * service area, creates a real `lakes` row (lib/lake-birth.ts) — and every
+ * public surface now refuses to advertise it until somebody here says so
+ * (lib/lake-visibility.ts). A gate ops cannot open is worse than no gate at
+ * all: the lake would sit unadvertised forever, and the only way to promote it
+ * would be a hand-written UPDATE against production.
+ *
+ * THE PROMOTION IS THE `source` COLUMN MOVING TO 'ops', which is the same
+ * sentence the predicate reads: somebody at LakeLife put this here. No
+ * migration, no second column, nothing for a reader to disagree with.
+ *
+ * WHAT IT COSTS, SAID PLAINLY: the row stops recording that demand created it.
+ * `lakes.source` is the only column carrying that, the CHECK allows exactly
+ * three words, and there is nowhere else to put it without a migration. The
+ * nightly digest names the lake on the night it is born, so the provenance is
+ * written down in the record that already exists — but after this the row
+ * itself cannot tell you.
+ *
+ * A FIXTURE IS REFUSED. `is_fixture` is a separate fact and promotion does not
+ * touch it; a scratch lake promoted to 'ops' would pass one half of the
+ * predicate and be held out only by the other, which is exactly the
+ * half-a-fence this whole pass exists to delete.
+ */
+export async function promoteLakeToServed(lakeId: string): Promise<OpsResult> {
+  const ops = await assertOps();
+  if (!ops) return { ok: false, error: "Ops only." };
+
+  const admin = createServiceClient();
+  const lakeRes = await admin
+    .from("lakes")
+    .select("id, name, is_fixture, source")
+    .eq("id", lakeId)
+    .maybeSingle();
+  // A FAILED READ IS NOT A MISSING LAKE. "That lake no longer exists" is a
+  // claim about the row ops is looking at on their own screen, and a dropped
+  // connection has no standing to make it.
+  if (lakeRes.error) return { ok: false, error: readFailedMessage("that lake", lakeRes.error) };
+  const lake = lakeRes.data;
+  if (!lake) return { ok: false, error: "That lake no longer exists — refresh and try again." };
+  if (lake.is_fixture === true) {
+    return { ok: false, error: "That's a test lake. Nothing about it may reach a customer — rename it or delete it instead." };
+  }
+  if (lake.source === SERVED_LAKE_SOURCE) {
+    return { ok: true, warning: `${lake.name as string} was already on the public site.` };
+  }
+
+  const { error } = await admin
+    .from("lakes")
+    .update({ source: SERVED_LAKE_SOURCE })
+    .eq("id", lakeId);
+  if (error) return { ok: false, error: error.message };
+
+  // THE PUBLIC PAGES ARE CACHED FOR AN HOUR. Without this, ops clicks the
+  // button, reloads /lakes and sees nothing — and the reasonable conclusion is
+  // that the button is broken, so they click it again. Every surface the
+  // predicate guards is named here; the sitemap is regenerated on its own
+  // route, which is why it is in the list.
+  revalidatePath("/");
+  revalidatePath("/lakes");
+  revalidatePath("/lakes/[slug]", "page");
+  revalidatePath("/sitemap.xml");
+  revalidatePath("/opengraph-image");
+
+  return { ok: true };
 }
 
 /**

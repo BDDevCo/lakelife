@@ -36,6 +36,7 @@ import { withParkRate } from "@/lib/park-rates";
 import { groundsFor, loadParkRates } from "@/app/park/rate-data";
 import { mustRead, ReadFailed } from "@/lib/must-read";
 import { smsDeliveryReport } from "@/lib/sms-receipts";
+import { isAwaitingPromotion, daysWaiting } from "@/lib/lake-visibility";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -4257,9 +4258,57 @@ export async function sendNightlyDigest(results: {
     .from("properties").select("id", { count: "exact", head: true }).is("lake_id", null);
   noteRead("the homes with no lake", lakelessErr);
 
-  const { data: bornRows, error: bornErr } = await admin.from("lakes").select("name, source").gte("created_at", dayAgo);
-  noteRead("the lakes born today", bornErr);
-  const lakesBorn = (bornRows ?? []).map((l) => ({ name: l.name as string, source: (l.source as string) ?? "ops" }));
+  // ONE READ, TWO SECTIONS. "New lakes" is last night's news and "waiting on
+  // you" is the standing queue, and they are the same rows seen through two
+  // different questions — so the date filter came off the query and moved into
+  // the arithmetic below. Asking twice would be two chances to disagree about
+  // what the table holds.
+  const { data: bornRows, error: bornErr } = await admin
+    .from("lakes").select("id, name, source, is_fixture, created_at");
+  noteRead("the lakes on the books", bornErr);
+  // THE CUTOFF IS ARITHMETIC, NOT A STRING COMPARE. `dayAgo` is a JS ISO
+  // string ("…T11:00:00.000Z") and PostgREST hands back its own rendering of a
+  // timestamptz; the two agree digit for digit up to the offset and then stop,
+  // so `>=` on the raw text is a comparison that is right most days and wrong
+  // at the boundary. Parse both and compare instants.
+  const dayAgoMs = Date.parse(dayAgo);
+  const lakesBorn = (bornRows ?? [])
+    .filter((l) => {
+      // An unreadable timestamp is not "born tonight" — it is surfaced in the
+      // waiting section below instead, where daysWaiting says so out loud
+      // rather than printing a number nobody measured.
+      const t = Date.parse((l.created_at as string) ?? "");
+      return !Number.isNaN(t) && t >= dayAgoMs;
+    })
+    .map((l) => ({ name: l.name as string, source: (l.source as string) ?? "ops" }));
+
+  // LAKES A CUSTOMER OR A CREW NAMED THAT NOBODY HERE HAS ANSWERED. The pure
+  // predicate decides, never a second copy of it in a `.neq()` here
+  // (lib/lake-visibility.ts).
+  const waitingRows = (bornRows ?? []).filter((l) => isAwaitingPromotion(l as { is_fixture?: unknown; source?: unknown }));
+  // A FAILED COUNT IS NOT "NO HOMES ON IT". `null` travels all the way to the
+  // sentence, which then says we could not look rather than printing the one
+  // number most likely to make somebody skip the lake.
+  let homesByLake: Map<string, number> | null = null;
+  if (waitingRows.length > 0) {
+    const homesRes = await admin
+      .from("properties").select("lake_id").in("lake_id", waitingRows.map((l) => l.id as string));
+    noteRead("how many homes are on the lakes waiting to be published", homesRes.error);
+    if (!homesRes.error) {
+      homesByLake = new Map<string, number>();
+      for (const row of homesRes.data ?? []) {
+        const id = row.lake_id as string | null;
+        if (id) homesByLake.set(id, (homesByLake.get(id) ?? 0) + 1);
+      }
+    }
+  }
+  const nowForWaits = new Date();
+  const lakesWaiting = waitingRows.map((l) => ({
+    name: l.name as string,
+    source: (l.source as string) ?? "customer",
+    properties: homesByLake ? homesByLake.get(l.id as string) ?? 0 : null,
+    days: daysWaiting((l.created_at as string) ?? null, nowForWaits),
+  }));
 
   const { count: aiCount, error: aiCountErr } = await admin
     .from("messages")
@@ -4292,6 +4341,7 @@ export async function sendNightlyDigest(results: {
     disputeSweep: results.disputeSweep,
     escalatedDisputes,
     lakesBorn,
+    lakesWaiting,
     routes: results.routes,
     // AUDIT BUG 10b: `aiCount ?? 0` on a null head-count zeroed the section's
     // gate while the TEXTS (a different query) survived — the safety net

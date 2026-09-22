@@ -8,9 +8,24 @@ import { readFailedMessage } from "@/lib/must-read";
 /**
  * Demand-born lakes (owner directive, 2026-07-23): a customer whose lake
  * isn't listed, or a crew expanding their service area, CREATES the lake —
- * ops gets an FYI, never an approval gate. Every surface downstream (ops
- * calendar chips, landing copy, /lakes pages, sitemap, dispatch, cold-start
- * booking ladder) is already dynamic, so a new row IS a new market.
+ * no approval gate stands between them and a working set-up. That half is
+ * unchanged, and it is the half that matters to the person typing.
+ *
+ * WHAT THIS PARAGRAPH USED TO SAY, AND WHY IT IS NOT TRUE ANY MORE. It said
+ * every surface downstream was already dynamic, "so a new row IS a new
+ * market" — and it named the landing copy, the /lakes pages and the sitemap
+ * among them. That was the defect, written down as a feature: one person's
+ * typing became the front page's hero chip, a card in /lakes, an indexed
+ * landing page with a priced menu on it, a line in sitemap.xml and a name on
+ * the Open Graph card that rides into every shared link, with nobody at
+ * LakeLife in between.
+ *
+ * So a new row is now a new market EVERYWHERE EXCEPT IN PUBLIC. Dispatch,
+ * the season gates, the cold-start booking ladder and the ops calendar chips
+ * all still see it the moment it exists. What LakeLife ADVERTISES waits for
+ * somebody here to say we serve it — lib/lake-visibility.ts holds that one
+ * predicate, ops/actions.ts promoteLakeToServed is the door, and the lake is
+ * named in the ops screen and every nightly digest until somebody answers.
  */
 
 export interface LakeBirthResult {
@@ -29,7 +44,9 @@ export interface LakeBirthResult {
  * climate) as a PROVISIONAL default, rolled onto the current season year
  * so the born lake can actually take water bookings, and is flagged
  * season_confirmed=false with an ops FYI so the dates get trued up. No
- * approval step anywhere.
+ * approval step stands between the person naming it and a working set-up;
+ * the only thing that waits on a human is whether we advertise the lake
+ * (lib/lake-visibility.ts).
  */
 export async function findOrCreateLake(
   rawName: string,

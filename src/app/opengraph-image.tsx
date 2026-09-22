@@ -10,6 +10,7 @@ import {
 import { hasSupabaseEnv } from "@/lib/env";
 import { escapeHtml } from "@/lib/html-safe";
 import { createServiceClient } from "@/lib/supabase/server";
+import { SERVED_LAKE_MATCH } from "@/lib/lake-visibility";
 
 /**
  * THE LINK PREVIEW.
@@ -70,7 +71,15 @@ export function stripLakeSuffix(name: string): string {
 
 /**
  * The lake names, read the way the front door reads them: the `lakes` table,
- * fenced by the is_fixture COLUMN (0124) and not by a name, ordered by name.
+ * through the one served-lake predicate (lib/lake-visibility.ts), ordered by
+ * name.
+ *
+ * THIS CARD IS WHY THE PREDICATE IS NOT OPTIONAL. The fence here was
+ * `is_fixture = false` alone, which only ever meant "not one of our own
+ * scratch rows". A lake a customer named in the set-up wizard passed it, and
+ * this image rides into every text, Slack paste and Facebook share of
+ * www.lakelife.ai — so a stranger's typo was printed on the brand's own link
+ * preview, at the size of a headline, everywhere the site was shared.
  *
  * The SERVICE client, not the cookie-bound one, and deliberately: this route
  * is a cacheable image with no visitor attached, and reaching for `cookies()`
@@ -89,7 +98,7 @@ export async function lakeNames(): Promise<string[]> {
     const res = await admin
       .from("lakes")
       .select("name")
-      .eq("is_fixture", false)
+      .match(SERVED_LAKE_MATCH)
       .order("name");
     if (res.error) {
       console.error(

@@ -4,6 +4,7 @@ import { TopBar } from "@/components/Brand";
 import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead } from "@/lib/must-read";
 import { checkNamedInsured } from "@/lib/named-insured";
+import { SERVED_LAKE_MATCH } from "@/lib/lake-visibility";
 
 /** Public index of the lakes we serve — the SEO hub the per-lake pages hang off. */
 
@@ -25,9 +26,14 @@ export default async function LakesIndexPage() {
   // over nothing at all, and a search engine would keep it. Same posture the
   // single-lake page takes.
   const [lakesRes, crewsRes] = await Promise.all([
-    // 0124: the column, not the slug. This guard used to read `slug`, and a
-    // fixture with a NULL slug was excluded only because NOT(NULL) is NULL.
-    admin.from("lakes").select("id, name, slug").eq("is_fixture", false).order("name"),
+    // SERVED LAKES ONLY — the one predicate, lib/lake-visibility.ts.
+    //
+    // 0124 moved this guard off the slug and onto the column, which stopped a
+    // scratch row reaching the directory. It did not stop a REAL row nobody at
+    // LakeLife had agreed to: a lake born from "my lake isn't listed" was
+    // `is_fixture = false` like any other, so it landed on this page — a card
+    // headed "Lakes we serve" — the moment a stranger typed its name.
+    admin.from("lakes").select("id, name, slug").match(SERVED_LAKE_MATCH).order("name"),
     // Same fence as the single-lake page and the router: a fixture crew must
     // never be counted in a number the public reads.
     admin.from("vendors").select("service_lakes, coi_expiry, coi_named_insured, company, users!vendors_user_id_fkey!inner(is_fixture)").eq("status", "active").eq("users.is_fixture", false),

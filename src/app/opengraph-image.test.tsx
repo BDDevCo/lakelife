@@ -29,10 +29,14 @@ const brand = await import("@/components/Brand");
 const src = (u: string) => u.slice(u.indexOf(",") + 1);
 const decode = (u: string) => Buffer.from(src(u), "base64").toString("utf8");
 
-/** One query builder: .select().eq().order() resolving to whatever is given. */
+/** One query builder: .select().match().order() resolving to whatever is given.
+ *  `.match` is the served-lake predicate arriving as a single call
+ *  (lib/lake-visibility.ts); `.eq` is kept so the stub still answers an older
+ *  shape rather than throwing a TypeError that would read as a failed read. */
 function reads(result: { data?: unknown; error?: unknown }) {
   const chain = {
     select: () => chain,
+    match: () => chain,
     eq: () => chain,
     order: () => Promise.resolve({ data: result.data ?? null, error: result.error ?? null }),
   };
