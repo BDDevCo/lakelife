@@ -49,7 +49,11 @@ export default async function Home() {
   return (
     <>
       <RefCatcher />
-      <TopBar />
+      {/* The same `signedIn` the hero chip below already acts on. Handing it to
+          the top bar is what puts a sign-up control into the HTML a crawler
+          reads — until now the bar shipped as an empty 64px spacer and the
+          hero's own chip was the only door in the served markup. */}
+      <TopBar signedIn={signedIn} />
       <ConfigNotice missing={{ supabase: !supaOk, twilio: !twilioOk }} />
 
       <main>

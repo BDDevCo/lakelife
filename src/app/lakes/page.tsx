@@ -2,6 +2,8 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { TopBar } from "@/components/Brand";
 import { createServiceClient } from "@/lib/supabase/server";
+import { mustRead } from "@/lib/must-read";
+import { checkNamedInsured } from "@/lib/named-insured";
 
 /** Public index of the lakes we serve — the SEO hub the per-lake pages hang off. */
 
@@ -16,15 +18,27 @@ export const metadata: Metadata = {
 export default async function LakesIndexPage() {
   const admin = createServiceClient();
   const today = new Date().toISOString().slice(0, 10);
-  const [{ data: lakes }, { data: crews }] = await Promise.all([
+  // A FAILED READ IS NOT AN EMPTY DIRECTORY. Both branches below are written
+  // for a platform that genuinely has none — "Recruiting crews" under a lake
+  // with no insured crew, and an empty grid where the lakes should be. On a
+  // public, hourly-cached page a dropped read would render "Lakes we serve"
+  // over nothing at all, and a search engine would keep it. Same posture the
+  // single-lake page takes.
+  const [lakesRes, crewsRes] = await Promise.all([
     // 0124: the column, not the slug. This guard used to read `slug`, and a
     // fixture with a NULL slug was excluded only because NOT(NULL) is NULL.
     admin.from("lakes").select("id, name, slug").eq("is_fixture", false).order("name"),
     // Same fence as the single-lake page and the router: a fixture crew must
     // never be counted in a number the public reads.
-    admin.from("vendors").select("service_lakes, coi_expiry, users!vendors_user_id_fkey!inner(is_fixture)").eq("status", "active").eq("users.is_fixture", false),
+    admin.from("vendors").select("service_lakes, coi_expiry, coi_named_insured, company, users!vendors_user_id_fkey!inner(is_fixture)").eq("status", "active").eq("users.is_fixture", false),
   ]);
-  const insured = (crews ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today);
+  const lakes = mustRead("the lakes we serve", lakesRes);
+  const crews = mustRead("the crews on the water", crewsRes);
+  // The same reading of "insured" the router uses, and the single-lake page
+  // beside it: unexpired AND named to the business (0152), nulls grandfathered.
+  const insured = (crews ?? []).filter((v) =>
+    v.coi_expiry != null && String(v.coi_expiry) >= today &&
+    (v.coi_named_insured == null || checkNamedInsured(v.coi_named_insured as string, (v.company as string | null) ?? null).ok));
   const crewCount = (lakeId: string) => insured.filter((v) => ((v.service_lakes as string[]) ?? []).includes(lakeId)).length;
 
   return (

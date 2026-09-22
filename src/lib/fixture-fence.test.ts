@@ -117,6 +117,7 @@ const MUST_FENCE: Record<string, string> = {
   "src/app/lakes/page.tsx": "the public lake directory",
   "src/app/lakes/[slug]/page.tsx": "the public lake landing page — had NO guard at all before 0124",
   "src/app/sitemap.ts": "sitemap.xml — a crawled URL outlives the fixture that made it",
+  "src/app/opengraph-image.tsx": "the link-preview card — a scratch lake would ride into every share",
   "src/app/parks/public-data.ts": "labels a public park page with its lake's name",
   // (b) leaves the system as an email or an SMS
   "src/app/ops/crews-invite.ts": "names the lakes in an invitation EMAIL to a real crew",

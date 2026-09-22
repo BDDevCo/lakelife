@@ -3,10 +3,11 @@ import type { Metadata } from "next";
 import { TopBar } from "@/components/Brand";
 import { RefCatcher } from "@/components/RefCatcher";
 import { createServiceClient } from "@/lib/supabase/server";
-import { fromPrice } from "@/lib/lake-pages";
+import { fromPrice, OWNER_FIXTURE_EMBED, OWNER_FIXTURE_FILTER } from "@/lib/lake-pages";
 import type { ServiceRule } from "@/lib/pricing";
 import { effectiveSeason, seasonIsProvisional, todayLakeDate } from "@/lib/booking";
 import { mustRead, mustCount } from "@/lib/must-read";
+import { checkNamedInsured } from "@/lib/named-insured";
 
 /**
  * Public per-lake landing page (§8 SEO) — every number on it is LIVE
@@ -98,16 +99,33 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
   // any of it against. The page fails to the error boundary rather than
   // publish a number it could not read.
   const [servicesRes, crewsRes, completedRes, thumbsRes, hoaRes] = await Promise.all([
-    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work").eq("active", true).or("kind.eq.standalone,solo_bookable.eq.true").order("name"),
+    // A LAKE HOUSE'S MENU, the same fence the booking menu uses for one
+    // (profile/data.ts: `.eq("park_only", false)`). A park_only service —
+    // common-area cleanup, park grounds mowing, road snow — is not
+    // bookable by anyone reading this page; it is invisible here today only
+    // because 0115 zeroed its global price, which is an accident, not a
+    // fence. The day one of those carries a global number it would advertise
+    // itself to lake homeowners who cannot buy it.
+    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work").eq("active", true).eq("park_only", false).or("kind.eq.standalone,solo_bookable.eq.true").order("name"),
     // FIXTURE CREWS ARE NOT A CREW BENCH. This is a public, SEO-indexed page
     // that prints "N insured local crews serving <lake>". Two of the three
     // vendors are the owner's own scratch accounts, so every lake advertised
     // two crews to the world while the routing pool for those lakes is
     // deliberately empty — a number no booking could cash. Derived from the
     // owner (0126), same as the router: see dispatch.ts.
-    admin.from("vendors").select("id, coi_expiry, service_lakes, users!vendors_user_id_fkey!inner(is_fixture)").eq("status", "active").eq("users.is_fixture", false).contains("service_lakes", [lake.id]),
-    admin.from("jobs").select("id, properties!inner(lake_id)", { count: "exact", head: true }).eq("properties.lake_id", lake.id).in("status", ["complete", "paid"]),
-    admin.from("job_confirmations").select("verdict, properties!inner(lake_id)").eq("properties.lake_id", lake.id).eq("verdict", "good"),
+    admin.from("vendors").select("id, coi_expiry, coi_named_insured, company, service_lakes, users!vendors_user_id_fkey!inner(is_fixture)").eq("status", "active").eq("users.is_fixture", false).contains("service_lakes", [lake.id]),
+    // FIXTURE JOBS ARE NOT COMPLETED WORK — the same hole the crew count
+    // above was patched for, left open one line below it. Every completed
+    // job in production belongs to the owner's own scratch homeowner and was
+    // done by his own scratch crew; the sentence is hidden today only
+    // because crewCount is 0, so the day a real crew lists a lake this page
+    // would have printed "3 jobs completed" that never happened. A job is a
+    // fixture because its PROPERTY'S OWNER is (OWNER_FIXTURE_EMBED) — the
+    // same derivation, never a second way of deciding it.
+    admin.from("jobs").select(`id, properties!inner(lake_id, ${OWNER_FIXTURE_EMBED})`, { count: "exact", head: true }).eq("properties.lake_id", lake.id).eq(OWNER_FIXTURE_FILTER, false).in("status", ["complete", "paid"]),
+    // Its twin: a thumbs-up on a fixture job is a fixture thumb, and it
+    // prints in the same sentence.
+    admin.from("job_confirmations").select(`verdict, properties!inner(lake_id, ${OWNER_FIXTURE_EMBED})`).eq("properties.lake_id", lake.id).eq(OWNER_FIXTURE_FILTER, false).eq("verdict", "good"),
     lake.hoa_user_id
       ? admin.from("referral_earnings").select("amount").eq("beneficiary", lake.hoa_user_id).neq("status", "void")
       : Promise.resolve({ data: null, error: null }),
@@ -119,7 +137,15 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
   const hoaEarnings = mustRead("the association fund total", hoaRes);
 
   const today = new Date().toISOString().slice(0, 10);
-  const crewCount = (crews ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today).length;
+  // "INSURED" HAS TO MEAN WHAT THE ROUTER MEANS BY IT. dispatch.ts refuses a
+  // crew whose certificate names a business other than theirs (0152), so a
+  // crew counted here on an unexpired date alone could be advertised to the
+  // public as insured while no booking could ever reach them. Same helper,
+  // same grandfathering of a null: never a second reading of the same rule.
+  const insured = (v: { coi_expiry?: unknown; coi_named_insured?: unknown; company?: unknown }) =>
+    v.coi_expiry != null && String(v.coi_expiry) >= today &&
+    (v.coi_named_insured == null || checkNamedInsured(v.coi_named_insured as string, (v.company as string | null) ?? null).ok);
+  const crewCount = (crews ?? []).filter(insured).length;
   const thumbCount = (thumbs ?? []).length;
   const hoaTotal = (hoaEarnings ?? []).reduce((s, e) => s + Number(e.amount ?? 0), 0);
   const iceOut = pretty(lake.ice_out_actual);

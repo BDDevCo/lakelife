@@ -10,8 +10,34 @@ import { hasSupabaseEnv } from "@/lib/env";
 /**
  * Right-side top-bar control. Shows "Sign in" when signed out (opens the modal
  * straight to sign-in), and "My profile" + "Sign out" once signed in.
+ *
+ * THE CONTROL USED TO BE INVISIBLE TO EVERY CRAWLER.
+ *
+ * Every render began at `signedIn === null` — "still asking" — which draws a
+ * 64px spacer, and the answer only arrived from `auth.getUser()` a beat after
+ * hydration. Server-rendered HTML is taken at the moment it is produced, so
+ * the shipped markup of www.lakelife.ai contained neither "Sign in" nor "Get
+ * set up": verified 22 September 2026 with
+ *
+ *     curl -s https://www.lakelife.ai/ | grep -c "Get set up"   →   0
+ *
+ * A search crawler that does not run scripts, a link-preview fetcher, a
+ * reader-mode pane and a visitor with scripting off all saw a top bar with no
+ * way into the product.
+ *
+ * `initialSignedIn` lets a SERVER page that has already asked — page.tsx does
+ * exactly this read, for the hero's own shortcut — hand the answer down so the
+ * right control is in the first byte of HTML. The effect below still runs and
+ * still wins: a session that expired between the render and the hydrate, or a
+ * sign-out in another tab, corrects the control the same way it always did.
+ *
+ * A PAGE THAT CANNOT KNOW MUST NOT GUESS. Omitting the prop keeps today's
+ * behaviour exactly — spacer, then ask — because the failure directions are
+ * not symmetric: a beat of spacer costs a crawler nothing, while a page that
+ * guessed "signed out" would show a signed-in homeowner a sign-up pitch, and
+ * one that guessed "signed in" would offer a stranger a portal link.
  */
-export function TopBarAuth() {
+export function TopBarAuth({ initialSignedIn }: { initialSignedIn?: boolean } = {}) {
   const router = useRouter();
   // `null` means "still asking"; false means "definitely signed out". With no
   // Supabase configured there is nothing to ask, so that answer is known at
@@ -21,7 +47,14 @@ export function TopBarAuth() {
   // NEXT_PUBLIC_ variables, which Next inlines at build time, so the server
   // and the browser compute the same value and there is no hydration mismatch.
   // The same trick would be a bug for anything read off `window`.
-  const [signedIn, setSignedIn] = useState<boolean | null>(hasSupabaseEnv() ? null : false);
+  //
+  // `initialSignedIn` is safe for the same reason and one more: it travels in
+  // the RSC payload, so the browser's first render computes the identical
+  // value the server did. `??` and not `||` — `false` is an answer, not an
+  // absence, and `||` would throw away the commonest one.
+  const [signedIn, setSignedIn] = useState<boolean | null>(
+    initialSignedIn ?? (hasSupabaseEnv() ? null : false),
+  );
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"signin" | "signup">("signin");
 

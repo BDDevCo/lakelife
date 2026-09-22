@@ -918,31 +918,34 @@ describe("public lake pages — 'from' pricing must be honest", () => {
         .filter((n) => n > 0);
       if (!bills.length) continue;
       const min = Math.min(...bills);
-      if (s.name === "Pier install / removal" || s.name === "Water toy prep & storage") continue; // see below
       expect(fp.amount, S(`${s.name}: quoted from $${fp.amount} but the cheapest real bill is $${min}`)).toBeLessThanOrEqual(min);
     }
   });
 
-  it("SIM-FOUND BUG: per_section ignores `base` — the pier quote is off by $220 on every bill", () => {
+  it("SIM-FOUND BUG, FIXED: per_section now carries `base` — the pier floor is the real one", () => {
     const pier = svc("Pier install / removal");
     const fp = fromPrice(pier)!;
-    expect(fp, S("pier from-price")).toEqual({ amount: 48, unit: "per pier section", from: true });
     // The cheapest bill any homeowner can possibly receive:
     const onlyOneSection = priceService(pier, { ...makeProfile(mulberry32(1)), pier_sections: 1, boats: [], toys: [] });
     expect(onlyOneSection, S("cheapest real pier bill")).toBe(268);
-    // The public page renders "from $48 per pier section". A 6-section pier
-    // reads as $288 and bills $508.
+    expect(fp, S("pier from-price")).toEqual({ amount: onlyOneSection, unit: null, from: true });
+    // The page used to render "from $48 per pier section" for work that starts
+    // at $268 — and the noun is gone with the understatement, because a second
+    // section adds $48, not $268.
     const six = priceService(pier, { ...makeProfile(mulberry32(1)), pier_sections: 6, boats: [], toys: [] });
     expect(six).toBe(508);
-    expect(6 * fp.amount).toBe(288);
+    expect(fp.amount, S("floor must not exceed any real bill")).toBeLessThanOrEqual(six);
   });
 
-  it("SIM-FOUND BUG: a flat service with additive terms is quoted as an EXACT price", () => {
+  it("SIM-FOUND BUG, FIXED: a flat service with additive terms is a floor, not an exact price", () => {
     const toys = svc("Water toy prep & storage");
     const fp = fromPrice(toys)!;
-    expect(fp.from, S("water toys quoted as exact, not 'from'")).toBe(false);
-    expect(fp.amount).toBe(120);
-    // But the bill scales with lifts and toys — the page says "$120".
+    expect(fp.from, S("water toys must read as 'from'")).toBe(true);
+    // It cannot be booked with no toys and no lifts, so $120 was never a bill
+    // anyone could receive: one loose toy is the smallest real job.
+    const oneToy = priceService(toys, { ...makeProfile(mulberry32(2)), toy_lifts: 0, toys: [{}] as never });
+    expect(oneToy, S("cheapest real water-toy bill")).toBe(135);
+    expect(fp.amount, S("water-toy floor")).toBe(135);
     const real = priceService(toys, { ...makeProfile(mulberry32(2)), toy_lifts: 2, toys: [{}, {}, {}] as never });
     expect(real, S("real water-toy bill")).toBeGreaterThan(fp.amount);
     expect(real).toBe(285);

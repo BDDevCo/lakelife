@@ -7,6 +7,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const entries: MetadataRoute.Sitemap = [
     { url: site, changeFrequency: "weekly", priority: 1 },
     { url: `${site}/lakes`, changeFrequency: "weekly", priority: 0.9 },
+    // THE SECOND FRONT DOOR. /for-parks is the park owner's entrance — the
+    // whole park side of the product is behind it — and it has been live and
+    // returning 200 while appearing in no sitemap and being linked from
+    // nowhere a crawler follows. Same weight as /lakes because it is the same
+    // kind of page: the top of an audience's funnel, not a leaf.
+    { url: `${site}/for-parks`, changeFrequency: "weekly", priority: 0.9 },
     // The legal set is crawlable on purpose: A2P campaign vetting looks for a
     // public privacy policy and messaging-terms page, and "it exists but is
     // only linked from a modal" is how that check fails.
