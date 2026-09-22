@@ -134,7 +134,7 @@ export function VerifyPanel({
           </h3>
           <div className="mut" style={{ marginTop: 4, fontSize: 13 }}>
             {sent
-              ? `Sent to ${phone} — this is the number we'll text when a crew is on the way and when work is complete.`
+              ? `Sent to ${phone} — this is the number we'll use when a crew is on the way and when work is complete.`
               : "We text you a code. This is the number we'll use when a crew is on the way and when work is complete."}
           </div>
         </div>

@@ -1,6 +1,6 @@
 import "server-only";
 import twilio from "twilio";
-import { hasTwilioEnv } from "@/lib/env";
+import { hasTwilioAccount } from "@/lib/env";
 import { smsErrorText } from "@/lib/sms-errors";
 
 /**
@@ -17,15 +17,32 @@ import { smsErrorText } from "@/lib/sms-errors";
  * asked out loud.
  *
  * ---------------------------------------------------------------------------
- * READ STRAIGHT FROM TWILIO, WITH NO TABLE OF OUR OWN.
+ * READ STRAIGHT FROM TWILIO, ALONGSIDE OUR OWN RECORD.
  *
- * Delivery status is decided by the carrier, arrives asynchronously, and is
- * already recorded — by Twilio, accurately, for free. Mirroring it into a
- * local table would mean a writer, a reconciler and a way to drift, to end up
- * with a worse copy of a log that already exists. The ops console is low
- * traffic and this is the one screen where the truth matters more than the
- * round trip.
+ * Since 0171 every accepted message leaves a receipt row (`sms_receipts`) and
+ * /api/twilio/status writes the carrier's verdict onto it, which is what the
+ * nightly digest counts. This panel deliberately does NOT read that table: it
+ * asks Twilio, so the two answers are independent and a bug in our own writer
+ * cannot make this screen agree with itself. Delivery status is decided by the
+ * carrier and already recorded by Twilio, accurately, for free; the ops console
+ * is low traffic and this is the one screen where the truth matters more than
+ * the round trip.
  */
+
+/** How far back the window reaches: the newest 200 messages in Twilio's log. */
+export const LOG_WINDOW = 200;
+
+/** The most recent attempt, and what came back on it. */
+export interface LastAttempt {
+  /** ISO, or null when Twilio gave no timestamp. */
+  at: string | null;
+  /** Twilio's own word: queued, sent, delivered, undelivered, failed. */
+  status: string;
+  /** The rejection code, when there is one. */
+  errorCode: string | null;
+  /** That code in plain English, from lib/sms-errors — the one copy. */
+  errorText: string | null;
+}
 
 export interface SmsHealth {
   configured: boolean;
@@ -35,23 +52,42 @@ export interface SmsHealth {
   reasons: { text: string; count: number; code: string }[];
   oldest: string | null;
   newest: string | null;
+  /**
+   * The newest message in the window. Null when the log is empty OR when we
+   * could not ask — `window` is what tells those two apart, and every screen
+   * that renders this must consult it.
+   */
+  lastAttempt: LastAttempt | null;
   error?: string;
 }
 
 export async function getSmsHealth(): Promise<SmsHealth> {
-  if (!hasTwilioEnv()) {
-    return { configured: false, window: null, reasons: [], oldest: null, newest: null };
+  // THE ACCOUNT, NOT THE VERIFY SERVICE. This gate used to be `hasTwilioEnv()`,
+  // which answered on the VERIFY service SID — so a delivery panel about the
+  // MESSAGING channel was switched on and off by a credential belonging to a
+  // different transport. That conflation is the one that hid the outage; see
+  // lib/env.ts. Reading the message log needs the account and nothing else.
+  if (!hasTwilioAccount()) {
+    return { configured: false, window: null, reasons: [], oldest: null, newest: null, lastAttempt: null };
   }
 
   try {
     const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
-    const msgs = await client.messages.list({ limit: 200 });
+    const msgs = await client.messages.list({ limit: LOG_WINDOW });
 
     let delivered = 0;
     let failed = 0;
     const byCode = new Map<string, number>();
     let oldest: string | null = null;
     let newest: string | null = null;
+    // THE LAST ONE WE TRIED, kept as we go rather than taken from msgs[0].
+    // Twilio returns newest-first today; relying on that would make "when did
+    // we last text anybody, and what came back" quietly wrong the day the list
+    // order changes. The timestamp already being computed decides it instead.
+    let lastAttempt: LastAttempt | null = null;
+    // A message with no timestamp at all must still be able to be the last
+    // one, when it is the only one — hence the separate flag.
+    let haveAttempt = false;
 
     for (const m of msgs) {
       const status = String(m.status ?? "");
@@ -66,6 +102,18 @@ export async function getSmsHealth(): Promise<SmsHealth> {
         if (!oldest || when < oldest) oldest = when;
         if (!newest || when > newest) newest = when;
       }
+      if (!haveAttempt || (when && (!lastAttempt?.at || when > lastAttempt.at))) {
+        const code = m.errorCode == null ? null : String(m.errorCode);
+        lastAttempt = {
+          at: when,
+          // Never blank: a status Twilio did not give us is still a fact about
+          // the attempt, and "" on an ops screen reads as nothing happened.
+          status: status || "unknown",
+          errorCode: code,
+          errorText: code === null ? null : smsErrorText(code),
+        };
+        haveAttempt = true;
+      }
     }
 
     return {
@@ -77,6 +125,7 @@ export async function getSmsHealth(): Promise<SmsHealth> {
         .map(([code, count]) => ({ code, count, text: smsErrorText(code) })),
       oldest,
       newest,
+      lastAttempt,
     };
   } catch (e) {
     // NOT SILENTLY HEALTHY. A failed lookup returns a null window, which the
@@ -84,6 +133,6 @@ export async function getSmsHealth(): Promise<SmsHealth> {
     // look like a clean bill of health.
     const error = e instanceof Error ? e.message : "could not reach Twilio";
     console.error("[ops] sms health lookup failed", error);
-    return { configured: true, window: null, reasons: [], oldest: null, newest: null, error };
+    return { configured: true, window: null, reasons: [], oldest: null, newest: null, lastAttempt: null, error };
   }
 }

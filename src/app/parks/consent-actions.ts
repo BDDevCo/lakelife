@@ -4,7 +4,7 @@ import twilio from "twilio";
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { readFailedMessage } from "@/lib/must-read";
-import { hasTwilioEnv } from "@/lib/env";
+import { hasTwilioVerifyEnv } from "@/lib/env";
 import { toE164 } from "@/lib/phone";
 import { phoneRefusal } from "@/lib/contactable";
 import { smsConsentText, optInSays, type OptInResult } from "@/lib/sms-consent";
@@ -91,7 +91,7 @@ export async function startTextOptIn(phone: string): Promise<OptInResult> {
   const refusal = phoneRefusal(e164);
   if (refusal) return { ok: false, message: optInSays("bad_phone") };
 
-  if (!hasTwilioEnv()) return { ok: false, message: optInSays("not_configured") };
+  if (!hasTwilioVerifyEnv()) return { ok: false, message: optInSays("not_configured") };
 
   try {
     const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
@@ -126,7 +126,7 @@ export async function confirmTextOptIn(phone: string, code: string): Promise<Opt
 
   const e164 = toE164(String(phone ?? ""));
   if (!e164) return { ok: false, message: optInSays("bad_phone") };
-  if (!hasTwilioEnv()) return { ok: false, message: optInSays("not_configured") };
+  if (!hasTwilioVerifyEnv()) return { ok: false, message: optInSays("not_configured") };
 
   try {
     const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);

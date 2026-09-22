@@ -65,14 +65,22 @@ describe("consent", () => {
     expect(d.channel).toBe("email");
   });
 
-  it("still reaches them while A2P is pending — texting off is not unreachable", () => {
+  it("still reaches them while texting is off — texting off is not unreachable", () => {
     const d = channelFor(contact({ contactPref: "sms" }), false);
     expect(d.blocked).toBe(false);
     expect(d.channel).toBe("email");
-    expect(d.note).toMatch(/registration is still pending/i);
+    // PINNED TO THE REASON, NOT TO A LOOSER SHAPE. This used to require
+    // "registration is still pending", which stopped being true the day the
+    // A2P campaign was approved (22 Sep 2026) while the channel stayed off
+    // for other reasons entirely. The owner-facing note now says the thing
+    // that is actually true — nothing we send has been delivered — and the
+    // assertion follows it word for word rather than being widened to any
+    // note at all, which would have passed for a note that said nothing.
+    expect(d.note).toMatch(/no message we've sent has been delivered/i);
+    expect(d.note).not.toMatch(/registration/i);
   });
 
-  it("prints for an SMS resident with no email while A2P is pending", () => {
+  it("prints for an SMS resident with no email while texting is off", () => {
     const d = channelFor(contact({ contactPref: "sms", email: null }), false);
     expect(d.blocked).toBe(false);
     expect(d.channel).toBe("paper");

@@ -44,7 +44,8 @@ export function OpsSmsHealth({ health }: { health: SmsHealth }) {
         <span className="ll-pill slate">Texts</span>
         <p className="mut" style={{ fontSize: 13.5, margin: "10px 0 0", lineHeight: 1.55 }}>
           No texts sent recently, so there&apos;s nothing to judge. This panel
-          reads Twilio&apos;s own delivery log, not ours.
+          asks Twilio&apos;s own delivery log, independently of the receipts we
+          keep ourselves — two answers from two places.
         </p>
       </div>
     );

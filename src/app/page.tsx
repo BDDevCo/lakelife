@@ -3,13 +3,16 @@ import { TopBar, Waves } from "@/components/Brand";
 import { GetStarted } from "@/components/GetStarted";
 import { RefCatcher } from "@/components/RefCatcher";
 import { ConfigNotice } from "@/components/ConfigNotice";
-import { hasSupabaseEnv, hasTwilioEnv } from "@/lib/env";
+import { hasSupabaseEnv, hasTwilioVerifyEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import { softRead } from "@/lib/must-read";
 
 export default async function Home() {
   const supaOk = hasSupabaseEnv();
-  const twilioOk = hasTwilioEnv();
+  // The VERIFY channel, explicitly: the banner this feeds says "enable text
+  // verification", which is the six-digit code on Twilio's managed pool — not
+  // the messaging channel that carries booking and dispatch texts.
+  const twilioOk = hasTwilioVerifyEnv();
 
   // A signed-in customer gets a shortcut into their portal, not a signup pitch.
   let signedIn = false;
@@ -157,7 +160,14 @@ export default async function Home() {
               gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
             }}
           >
-            {/* Copy set by Brendon, verbatim. `.ll-pill` uppercases in CSS;
+            {/* Copy set by Brendon, verbatim, EXCEPT the first card's body.
+                It said "each job is automatically scheduled in the right
+                season", and nothing in this product schedules a job on its
+                own: Autopilot proposes a date and a one-tap link books it
+                (AutopilotCard, a/[token]/confirm). A customer who never taps
+                gets no visit, so the page promised work that would never
+                happen. The replacement says the mechanism the card beside it
+                already describes. `.ll-pill` uppercases in CSS;
                 the labels are written uppercase so the source reads as the
                 page does. Note the em dashes in the BODY strings are the
                 character, not `&mdash;` — an entity in a string prop is not
@@ -165,7 +175,7 @@ export default async function Home() {
             <FeatureCard
               pill="SET IT ONCE"
               title="Choose the services your LakeLife needs"
-              body="Select the work once, and each job is automatically scheduled in the right season. Change or skip a service anytime."
+              body="Select the work once, and each season we pencil in the next visit at your locked price — one tap books it, or skip it. Change or turn off a service anytime."
             />
             <FeatureCard
               pill="SIMPLE FROM START TO FINISH"

@@ -2,6 +2,7 @@ import twilio from "twilio";
 import { phoneRefusal } from "@/lib/contactable";
 import { recipientIsFixture } from "@/lib/recipient-gate";
 import { recipientIsHeld, holdRefusal } from "@/lib/notice-hold";
+import { recordSmsAttempt, statusCallbackUrl } from "@/lib/sms-receipts";
 
 /**
  * Send an alert SMS via Twilio Messaging (booking confirmations, reminders,
@@ -28,15 +29,36 @@ import { recipientIsHeld, holdRefusal } from "@/lib/notice-hold";
  * person got the message. `queued` cannot be misread that way: it says the
  * message is with the carrier and says nothing about arrival.
  *
- * NOTHING HERE CAN TELL YOU IT ARRIVED. Delivery truth lives in Twilio's own
- * message log, which is what the ops SMS-health panel reads — see
- * src/app/ops/sms-health.ts. Do not add a "delivered" boolean to this function;
- * it would have to lie.
+ * NOTHING HERE CAN TELL YOU IT ARRIVED, AND THAT IS NOT A GAP ANY RETURN VALUE
+ * CAN FILL. Arrival is decided by the carrier seconds later, after this
+ * function has returned; a "delivered" boolean here would have to lie. What
+ * this function now does instead is make the answer FINDABLE: it files a
+ * receipt row (0171, lib/sms-receipts) and tells Twilio where to post the
+ * verdict (/api/twilio/status), so the carrier's answer lands somewhere and
+ * the nightly digest can say out loud how many texts reached a handset. The
+ * ops SMS-health panel still reads Twilio's own log directly — two sources for
+ * the same fact, deliberately, since one of them is ours to get wrong.
+ *
+ * ---------------------------------------------------------------------------
+ * THE SHAPE OF THE RETURN IS UNCHANGED, ONLY WIDENED.
+ *
+ * Forty-seven call sites take `{ queued, error?, sid?, status? }` and 44 of
+ * them discard it entirely. `recorded` is added alongside — true when the
+ * attempt was filed, false when the row could not be written — so a caller
+ * that never looks is untouched, and nothing that reads `queued` reads
+ * differently than it did yesterday.
  */
 export async function sendSms(
   to: string,
   body: string,
-): Promise<{ queued: boolean; error?: string; sid?: string; status?: string }> {
+  /**
+   * What this message is and who it is about, for the receipt row. Optional so
+   * every existing call site still compiles: a send with no label is filed as
+   * "unlabelled", which is worse to read in a week of failures than "freeze
+   * warning" but is not a reason to hold up the record.
+   */
+  about?: { kind?: string; parkId?: string | null; lakeId?: string | null },
+): Promise<{ queued: boolean; error?: string; sid?: string; status?: string; recorded?: boolean }> {
   // THE RECIPIENT GATE, AND IT COMES FIRST — before the credentials check.
   //
   // "We must not contact this person" is true whether or not Twilio happens to
@@ -59,16 +81,20 @@ export async function sendSms(
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_PHONE_NUMBER;
-  // ONCE A2P REGISTRATION CLEARS, THE SENDER IS A SERVICE, NOT A NUMBER.
+  // THE CAMPAIGN IS APPROVED. THIS LINE IS STILL WAITING ON THE ENV VAR.
   //
-  // A registered campaign is attached to a Messaging Service, and carriers
-  // route on THAT — sending from the bare number keeps the traffic
-  // unregistered no matter how green the console looks. So the day the brand
-  // is approved this becomes a one-line environment change with no deploy:
-  // set TWILIO_MESSAGING_SERVICE_SID and the send switches over.
+  // A2P 10DLC cleared on 22 Sep 2026, and by itself it delivered nothing. A
+  // registered campaign is attached to a Messaging Service, and carriers route
+  // on THAT — sending from the bare number keeps the traffic unregistered no
+  // matter how green the console looks. So the approval turned this into a
+  // one-line environment change with no deploy, and that change has not been
+  // made: set TWILIO_MESSAGING_SERVICE_SID in Vercel and the send switches
+  // over. See docs/a2p-registration.md.
   //
-  // Until it is set, nothing changes — the number is still used, and the
-  // product behaves exactly as it does today.
+  // Until it is set, nothing changes — the number is still used, the traffic
+  // is still unregistered, and the product behaves exactly as it does today.
+  // No copy anywhere may promise a text until one has actually been
+  // delivered and a receipt row (0171) can prove it.
   const serviceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
   if (!sid || !token || (!from && !serviceSid)) return { queued: false, error: "SMS not configured" };
 
@@ -93,13 +119,39 @@ export async function sendSms(
 
   try {
     const client = twilio(sid, token);
+    // WHERE TO SEND THE VERDICT. Null on a developer's machine and on any
+    // environment without a real https origin, and then it is simply left off:
+    // Twilio validates this URL as it accepts the message and refuses an
+    // unroutable one (21609), so passing a localhost callback would stop the
+    // message sending altogether — a change made to watch delivery causing an
+    // outage of its own. See statusCallbackUrl in lib/sms-receipts.
+    const statusCallback = statusCallbackUrl();
     // messagingServiceSid and from are mutually exclusive at the API: sending
     // both is an error, so the service wins when it is configured.
-    const msg = await client.messages.create(
-      serviceSid
-        ? { messagingServiceSid: serviceSid, to, body }
-        : { from: from as string, to, body },
-    );
+    const msg = await client.messages.create({
+      ...(serviceSid ? { messagingServiceSid: serviceSid } : { from: from as string }),
+      to,
+      body,
+      ...(statusCallback ? { statusCallback } : {}),
+    });
+
+    // THE RECEIPT IS FILED FOR WHAT FAILED AS WELL AS FOR WHAT FLEW. A table
+    // holding only the hopeful half of the story would report a perfect
+    // delivery rate on a night when every message was refused at the door.
+    //
+    // Awaited, not fired and forgotten: a `void` here is the exact habit that
+    // let 44 call sites lose the result of the send itself. It is one insert
+    // against a table with a single index, and the send has already happened —
+    // nothing the caller does depends on how fast this returns.
+    const { recorded } = await recordSmsAttempt({
+      sid: msg.sid,
+      to,
+      kind: about?.kind ?? null,
+      parkId: about?.parkId ?? null,
+      lakeId: about?.lakeId ?? null,
+      body,
+      acceptedStatus: msg.status,
+    });
 
     // Some failures are known immediately — a blocked or unroutable number
     // comes back already final. Those are not queued by any honest reading, so
@@ -111,10 +163,15 @@ export async function sendSms(
         error: `${msg.status}${msg.errorCode ? ` (${msg.errorCode})` : ""}`,
         sid: msg.sid,
         status: msg.status,
+        recorded,
       };
     }
-    return { queued: true, sid: msg.sid, status: msg.status };
+    return { queued: true, sid: msg.sid, status: msg.status, recorded };
   } catch (e) {
+    // NO SID, SO NOTHING TO FILE IT UNDER. A create that threw never got an
+    // id from Twilio and may never have reached them at all; inventing a key
+    // for it would put a row in the receipts table that no callback can ever
+    // answer, and that row would count against the delivery rate for ever.
     return { queued: false, error: e instanceof Error ? e.message : "send failed" };
   }
 }

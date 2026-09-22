@@ -197,11 +197,18 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
         lotNumber,
         url: inviteUrl(await originFromRequest(), token),
       }),
+      // Bypasses notify(), so it labels its own receipt — and this is the one
+      // of the four that really does know its park.
+      { kind: "park invite", parkId: (file.park_id as string) ?? null },
     );
     // QUEUED, NOT DELIVERED, and the variable says so. As of today NOTHING
-    // this app texts is being delivered — 81 sent since July, 0 arrived,
-    // rejected by the carrier as an unregistered A2P sender. The office must
-    // not be told a resident was texted on the strength of Twilio taking it.
+    // this app texts has been delivered — 81 sent since July, 0 arrived. The
+    // A2P campaign was approved on 22 Sep 2026, which is permission to send
+    // and not a delivery; until TWILIO_MESSAGING_SERVICE_SID is set the sends
+    // still leave from the bare number as unregistered traffic anyway. The
+    // office must not be told a resident was texted on the strength of Twilio
+    // taking it. `recorded` on the return (0171) is where the real verdict
+    // lands, once the carrier gives one.
     textQueued = t.queued;
     if (!t.queued) console.warn(`[invite] text to ${channels.sms} not queued: ${t.error}`);
   }
@@ -277,7 +284,7 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
     texted: textQueued,
     smsHold: channels.smsHold,
     // NEVER "and texted". A text handed to the carrier is not a text that
-    // arrived, and until registration clears none of them are.
+    // arrived, and none of ours has yet — approval is not delivery.
     message: `Emailed ${email}.` +
       (textQueued ? " A text was sent too." : "") +
       (channels.smsHold ? ` No text — ${smsHoldSays(channels.smsHold)}.` : ""),

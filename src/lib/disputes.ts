@@ -262,7 +262,7 @@ export async function crewChooseFix(crewToken: string, dateISO: string): Promise
     "the owner that their crew is coming back to make it right",
     { phone: owner?.phone, email: owner?.email },
     {
-      sms: `LakeLife: your crew is coming back ${pretty} to make the ${svcName} right — no charge. You'll get photos when it's done. 🌊`,
+      sms: `LakeLife: your crew is coming back ${pretty} to make the ${svcName} right — no charge. Your photos go on the job page when it's done. 🌊`,
       subject: `Your crew is coming back ${pretty} to make the ${svcName} right`,
     },
   );

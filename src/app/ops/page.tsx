@@ -130,7 +130,7 @@ export default async function OpsPage() {
   // down, and it must not read as healthy either — a null window renders as
   // "we couldn't check".
   let smsHealth: SmsHealth = {
-    configured: false, window: null, reasons: [], oldest: null, newest: null,
+    configured: false, window: null, reasons: [], oldest: null, newest: null, lastAttempt: null,
   };
   if (smsRes.status === "fulfilled") smsHealth = smsRes.value;
   else console.error("[ops] sms health failed", why(smsRes));
@@ -209,6 +209,16 @@ export default async function OpsPage() {
         <JobSearch />
 
         <OpsSmsHealth health={smsHealth} />
+
+        {/* THE DOOR TO THE SWITCH-ON PAGE. The panel above answers "did they
+            arrive"; it cannot answer "is texting even switched on", because
+            the two Twilio channels are configured separately and the one that
+            carries notifications needs a Messaging Service the console above
+            never looks at. That question — and the park notice hold, which
+            looks identical from here — lives on its own page. */}
+        <p className="mut" style={{ fontSize: 13, margin: "8px 0 0" }}>
+          <Link href="/ops/texting">Texting setup &amp; diagnosis →</Link>
+        </p>
 
         <OpsStuckClaims stuck={stuck} tally={tally} />
 

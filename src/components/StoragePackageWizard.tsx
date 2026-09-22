@@ -178,7 +178,7 @@ function PackageConfigurator({ pkg, boatLabel }: { pkg: PackageView; boatLabel: 
           fontSize: 13.5, lineHeight: 1.5,
         }}
       >
-        <b>New water for us 🌊</b> — we&apos;re finding your crew, you pay nothing until it&apos;s done. We&apos;ll text you the moment it&apos;s locked in.
+        <b>New water for us 🌊</b> — we&apos;re finding your crew, you pay nothing until it&apos;s done. We&apos;ll let you know the moment it&apos;s locked in.
       </div>
     );
   }

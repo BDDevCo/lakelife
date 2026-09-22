@@ -699,12 +699,18 @@ export async function createBookingBatch(
               cutoffLabel, fallback: validRushFallback(rushFallback) === "roll" ? "roll" : "cancel",
             })
           : soloAssigned
-            ? `LakeLife: ${service.name} is booked for ${pretty}. We'll text you when a crew is on the way. 🌊`
+            ? `LakeLife: ${service.name} is booked for ${pretty}. We'll let you know when a crew is on the way. 🌊`
             : `LakeLife: got it — ${service.name} for ${pretty}. We're lining up a crew now and you'll hear the moment one's locked in. You're never charged until the work is done. 🌊`
         : batchBookedLine({
             visits, serviceName: service.name, dateList: prettyDateList(bookedDates, 6),
             assigned: assignedCount, total: booked.length, missed,
           }),
+      // LABELLED, so a week of failures reads as "booking" rather than
+      // "unlabelled". This path bypasses notify(), which passes its own `what`
+      // through — the four that don't have to say it themselves. No lakeId:
+      // nothing in this scope holds one, and inventing a column's value is how
+      // a writer starts lying.
+      { kind: "booking confirmation" },
     );
   }
   if (me?.email && (await allowsNotification(user.id, "book", "email"))) {

@@ -60,9 +60,16 @@ export default function ForParksPage() {
             </div>
             <div className="ll-card ll-card-pad">
               <div className="ll-pill teal">SHARED COSTS</div>
+              {/* NOTHING IS ATTACHED, AND THERE IS NOWHERE TO ATTACH IT.
+                  `park_costs` has no file column — 0064 gave it `source_note`,
+                  a line of text in the owner's own words ("March water,
+                  Wolcottville Utilities, acct 4471"), and that note is what the
+                  costs screen renders beside each share. A park owner reading
+                  "attached" arrives expecting to upload the bill and finds a
+                  box to type in. The note is the honest word for it. */}
               <p style={{ fontSize: 14, lineHeight: 1.6, margin: "10px 0 0" }}>
                 Water, sewer, trash, common electric and grounds, split across the
-                lots that carry them, with the bill it came from attached.
+                lots that carry them, each share noting the bill it came from.
               </p>
             </div>
             <div className="ll-card ll-card-pad">

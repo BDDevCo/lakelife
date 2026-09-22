@@ -72,7 +72,7 @@ export default async function BookPage() {
             <p className="mut" style={{ fontSize: 14, marginBottom: 16 }}>
               {phoneOk
                 ? "Click the link we emailed you, then come right back."
-                : "It takes 30 seconds — this is the number crews text when they're on the way."}
+                : "It takes 30 seconds — this is the number crews use when they're on the way."}
             </p>
             {!phoneOk && <Link className="ll-btn gold" href="/verify">Verify my mobile →</Link>}
           </div>

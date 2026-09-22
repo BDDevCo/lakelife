@@ -267,6 +267,8 @@ export async function createPackageBooking(input: {
       assigned
         ? `LakeLife: ${pkg.name} is booked for ${pretty} — $${sel.fallTotal.toLocaleString()} for the fall visit, charged only when it's done and photo-verified.${springLine} 🌊`
         : `LakeLife: got it — ${pkg.name} for ${pretty}. We're lining up the right crew now (storage needs the right barn and insurance) and you'll hear the moment one's locked in. You're never charged until the work is done.${springLine} 🌊`,
+      // Bypasses notify(), so it names itself for the receipt row.
+      { kind: "storage booking confirmation" },
     );
   }
   if (me?.email && (await allowsNotification(user.id, "book", "email"))) {

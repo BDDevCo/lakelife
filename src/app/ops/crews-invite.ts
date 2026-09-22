@@ -150,8 +150,9 @@ async function sendInvitation(
   //
   // This paragraph used to say "your day's stops arrive by text, in drive
   // order, and payouts release the moment a job is photo-verified complete."
-  // Text has delivered 0 of 81 since 19 July — the A2P registration was
-  // rejected twice and the EIN is too new — while `notify()` sends by both
+  // Text has delivered 0 of 81 since 19 July — the A2P campaign was rejected
+  // twice and was finally approved on 22 Sep 2026, which changed the odds and
+  // not the record: still 0 delivered — while `notify()` sends by both
   // doors at once, so the route link a crew actually receives comes by EMAIL.
   // Naming only the dead channel tells a stranger to watch their phone for the
   // one thing that decides whether they make money that day.

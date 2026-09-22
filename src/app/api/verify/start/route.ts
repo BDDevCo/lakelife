@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import twilio from "twilio";
 import { createClient } from "@/lib/supabase/server";
-import { hasTwilioEnv } from "@/lib/env";
+import { hasTwilioVerifyEnv } from "@/lib/env";
 import { toE164 } from "@/lib/phone";
 
 /**
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
 
   // If Twilio isn't configured yet, don't crash — tell the UI so it can
   // show a friendly note. (Lets you click through before keys are in.)
-  if (!hasTwilioEnv()) {
+  if (!hasTwilioVerifyEnv()) {
     return NextResponse.json(
       { error: "Twilio isn't configured yet. Add your Twilio keys to .env.local.", needsKeys: true },
       { status: 503 },

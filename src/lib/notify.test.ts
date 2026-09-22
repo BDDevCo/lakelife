@@ -112,16 +112,46 @@ describe("the two claims that were invented", () => {
   });
 });
 
-describe("an email must not promise a channel it isn't", () => {
-  it("the crew-picked-up notice doesn't promise a text in its email body", () => {
-    // The SMS says "we'll text you when it's done" — fine in a text, a promise
-    // an email may not be able to keep for somebody with no mobile on file.
+describe("a notice must not promise a channel, or a photo it does not carry", () => {
+  it("the crew-picked-up notice promises neither, in EITHER half", () => {
+    // It used to say "We'll text you when it's done, with photos" in the text
+    // and "You'll hear from us when it's done, with photos" in the mail. Two
+    // separate lies: no completion message has ever carried a photograph (it
+    // carries a count and a link), and the text half named a channel an email
+    // recipient with no mobile on file could never be reached on. Both halves
+    // now point at the place the photos actually land — the job page.
     const s = read("../app/vendor/open-actions.ts");
     const at = s.indexOf("the owner that a crew picked up their job");
     expect(at).toBeGreaterThan(-1);
     const block = s.slice(at, at + 1200);
+    // Non-vacuity: the slice really does hold both doors of this one notice.
+    expect(block).toMatch(/sms:/);
     expect(block).toMatch(/body:/);
-    expect(block).toMatch(/You'll hear from us when it's done/);
+    expect(block).toMatch(/Your photos go on the job page as soon as they finish\./);
+    expect(block).toMatch(/Your photos go on your job page as soon as they finish\./);
+    // And neither half claims a photograph arrives in the message itself.
+    expect(block).not.toMatch(/with photos/);
+    expect(block).not.toMatch(/We'll text you|You'll get photos/);
+  });
+
+  it("no send path still says a photo rides along with the message", () => {
+    // WIDEN THE GUARD RATHER THAN FIX THE INSTANCE. The same sentence was in
+    // five places: the nightly day-before sweep, the ops scheduling notice,
+    // this vendor pickup notice, the dispute re-do notice and the anonymous
+    // one-tap confirm page. A test pinning only one of them would have let the
+    // other four keep the claim.
+    for (const rel of [
+      "./automation.ts",
+      "./disputes.ts",
+      "../app/ops/actions.ts",
+      "../app/vendor/open-actions.ts",
+      "../app/a/[token]/confirm/route.ts",
+    ]) {
+      const src = read(rel);
+      expect(src.length, `${rel} read as empty — the scanner is checking nothing`).toBeGreaterThan(200);
+      expect(src, `${rel} still says a photo comes with the message`).not.toMatch(/with photos|\(with photos\)/);
+      expect(src, `${rel} still promises a photo by text`).not.toMatch(/You'll get photos when/);
+    }
   });
 });
 

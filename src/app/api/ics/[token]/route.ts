@@ -80,7 +80,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
       `DTSTART:${dt}`,
       `SUMMARY:${esc(`LakeLife — ${svc}`)}`,
       ...(where ? [`LOCATION:${esc(where)}`] : []),
-      `DESCRIPTION:${esc("We'll text you when it's done, with photos. 🌊")}`,
+      `DESCRIPTION:${esc("Photos go on your job page as soon as the crew finishes, and nothing is charged before then. 🌊")}`,
       "END:VEVENT",
     );
   }

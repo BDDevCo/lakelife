@@ -568,6 +568,8 @@ export async function submitFlag(
           : `LakeLife: the crew at ${where} found something that doesn't match your ` +
             `profile on your ${svcName}. Nothing changes and nothing is charged until ` +
             `you say yes: ${site}/approvals 🌊`,
+        // Bypasses notify(), so it labels its own receipt row.
+        { kind: "profile correction to approve" },
       );
     }
     if (owner?.email && apprByEmail) {

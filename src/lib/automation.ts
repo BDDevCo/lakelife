@@ -35,6 +35,7 @@ import { proposedFee, deadlinePassed, tripFeeFor } from "./recovery";
 import { withParkRate } from "@/lib/park-rates";
 import { groundsFor, loadParkRates } from "@/app/park/rate-data";
 import { mustRead, ReadFailed } from "@/lib/must-read";
+import { smsDeliveryReport } from "@/lib/sms-receipts";
 
 /**
  * Scheduled/automation runners. NO auth of their own — the CALLER authorizes
@@ -1554,7 +1555,7 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
       "the owner that their crew comes tomorrow",
       { phone: dayBySms ? phone : null, email: dayByEmail ? ownerUser?.email : null },
       {
-        sms: `LakeLife reminder: ${svc} is scheduled tomorrow (${prettyDate(date)}) at ${p?.address ?? "your place"}. We'll text you when it's done, with photos. 🌊`,
+        sms: `LakeLife reminder: ${svc} is scheduled tomorrow (${prettyDate(date)}) at ${p?.address ?? "your place"}. Your photos go on your job page as soon as the crew finishes. 🌊`,
         subject: `${svc} is scheduled tomorrow at ${p?.address ?? "your place"}`,
       },
     );
@@ -4276,6 +4277,15 @@ export async function sendNightlyDigest(results: {
   noteRead("what the AI auto-replies said", aiRowsErr);
   const aiReplyTexts = (aiRows ?? []).map((m) => ((m.body as string) ?? "").slice(0, 200));
 
+  // DID ANY OF THE TEXTS ARRIVE? Nothing in this product ever asked, which is
+  // how 81 undelivered messages ran for a month. It reads its own failure —
+  // null windows, never zeroes — so the section can say "we couldn't check"
+  // rather than show a clean bill of health for a channel nobody looked at.
+  const textDelivery = await smsDeliveryReport();
+  if (textDelivery.error) {
+    noteRead("whether today's texts reached anybody", { message: textDelivery.error });
+  }
+
   const sections: DigestSections = {
     learning: results.learning,
     autoPricing: results.autoPricing,
@@ -4309,6 +4319,11 @@ export async function sendNightlyDigest(results: {
     tipsCollected: results.tipsCollected,
     failures: [...(results.failures ?? []), ...readFailures],
     homesWithNoLake: lakelessHomes ?? 0,
+    textDelivery: {
+      day: textDelivery.day,
+      week: textDelivery.week,
+      reasons: textDelivery.reasons,
+    },
     // The standing count of open work. Absent when the dispatch step died —
     // which the failures list above then says by name.
     unfilled: results.dispatch

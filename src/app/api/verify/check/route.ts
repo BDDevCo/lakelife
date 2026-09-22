@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import twilio from "twilio";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { hasTwilioEnv } from "@/lib/env";
+import { hasTwilioVerifyEnv } from "@/lib/env";
 import { toE164 } from "@/lib/phone";
 
 /**
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing phone or code." }, { status: 400 });
   }
 
-  if (!hasTwilioEnv()) {
+  if (!hasTwilioVerifyEnv()) {
     return NextResponse.json(
       { error: "Twilio isn't configured yet.", needsKeys: true },
       { status: 503 },

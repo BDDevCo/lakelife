@@ -18,10 +18,12 @@ import { mustRead, softRead, ReadFailed, readFailedMessage } from "@/lib/must-re
 /**
  * OVERDUE REMINDERS — the send path.
  *
- * SMS IS OFF UNTIL A2P 10DLC REGISTRATION CLEARS, and that is a deliberate,
- * visible refusal rather than a silent skip: the owner sees "we can't reach 4"
- * with the reason, so he knows to post those instead. Flipping it on later is
- * one constant.
+ * SMS IS OFF UNTIL A TEXT ACTUALLY ARRIVES. The A2P campaign was approved on
+ * 22 Sep 2026; nothing about this changed, because approval is permission to
+ * send and not proof of delivery — 0 of 81 have been delivered. It is a
+ * deliberate, visible refusal rather than a silent skip: the owner sees "we
+ * can't reach 4" with the reason, so he knows to post those instead.
+ * Flipping it on later is one constant.
  *
  * NOTHING IS SENT WITHOUT HIM ASKING. This is not on a cron. Chasing a
  * household for money is the most consequential message the park sends, and
@@ -32,9 +34,18 @@ import { mustRead, softRead, ReadFailed, readFailedMessage } from "@/lib/must-re
 const DENIED = "You don't manage that park.";
 
 /**
- * FALSE until the carrier registration clears. Not a config toggle by
- * accident — a constant somebody has to change deliberately, with the reason
- * written next to it.
+ * FALSE, and it stays false through A2P approval.
+ *
+ * Chasing a household for rent is the most consequential message this park
+ * sends, so it is the LAST thing to move to a channel, not the first. Three
+ * things have to be true and none of them are: a text has to have been
+ * delivered (0 of 81), TWILIO_MESSAGING_SERVICE_SID has to be set or sends
+ * still leave unregistered from the bare number, and the two consent columns
+ * need a writer. When it does move it should become hasTwilioMessagingEnv()
+ * rather than a constant.
+ *
+ * Not a config toggle by accident — a constant somebody has to change
+ * deliberately, with the reason written next to it.
  */
 const SMS_ENABLED = false;
 

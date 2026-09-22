@@ -71,9 +71,15 @@ export interface ReminderOptions {
   /** Where to pay / who to call. Printed on every notice. */
   officeLine: string;
   /**
-   * FALSE until A2P 10DLC registration clears. Blocked-with-a-reason rather
-   * than a silent skip, so the owner can see that four people would have been
-   * texted and were not.
+   * FALSE until a text this app sends is actually DELIVERED. The A2P campaign
+   * was approved on 22 Sep 2026, and that moved nothing on its own: approval
+   * is permission to send, not evidence anything arrived. 0 of 81 have. Two
+   * further gates are still shut behind it — TWILIO_MESSAGING_SERVICE_SID is
+   * unset, so sends still leave from the bare number as unregistered traffic,
+   * and `mobile_verified_at` / `sms_consent_operational_at` have no writer.
+   *
+   * Blocked-with-a-reason rather than a silent skip, so the owner can see
+   * that four people would have been texted and were not.
    */
   smsEnabled: boolean;
   /** Charges already reminded — never chased twice. */
@@ -150,7 +156,11 @@ export function channelFor(c: RenterContact, smsEnabled: boolean): ChannelDecisi
       return fallback("They asked for texts, but we don't have a verified mobile with consent.");
     }
     if (!smsEnabled) {
-      return fallback("Texting isn't switched on yet — carrier registration is still pending.");
+      // NOT "registration is still pending" any more — it cleared on 22 Sep
+      // and this sentence would have gone on telling the owner a reason that
+      // had stopped being true. What he needs to know is unchanged: this
+      // notice is not going by text. It stays true until one actually lands.
+      return fallback("Texting isn't switched on yet — no message we've sent has been delivered, so this would go nowhere.");
     }
     return { channel: "sms", blocked: false, reason: null, note: null };
   }

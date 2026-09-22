@@ -1,4 +1,5 @@
 import "server-only";
+import { hasTwilioAccount, hasTwilioMessagingEnv } from "@/lib/env";
 
 /**
  * CAN A NOTICE ACTUALLY REACH A HOUSEHOLD FROM THIS DEPLOYMENT?
@@ -69,8 +70,12 @@ export function sendCapability(): SendCapability {
     );
   }
 
-  const hasTwilio = Boolean(process.env.TWILIO_ACCOUNT_SID) && Boolean(process.env.TWILIO_AUTH_TOKEN);
-  const hasService = Boolean(process.env.TWILIO_MESSAGING_SERVICE_SID);
+  // ONE COPY OF THE RULE. These two questions used to be re-read from
+  // process.env right here, a second inline copy of what lib/env.ts already
+  // owns — the same duplication that let "is Twilio set up?" mean two
+  // different transports in two different files. Ask the named predicates.
+  const hasTwilio = hasTwilioAccount();
+  const hasService = hasTwilioMessagingEnv();
   if (!hasTwilio) {
     reasons.push("Texting isn't connected at all.");
   } else if (!hasService) {
@@ -80,7 +85,11 @@ export function sendCapability(): SendCapability {
   }
 
   const email = hasResendKey && hasFrom;
-  const sms = hasTwilio && hasService;
+  // hasTwilioMessagingEnv() already requires the account creds AND the
+  // Messaging Service SID, so `hasService` alone is the whole answer; the
+  // conjunction is kept only because `hasTwilio` above names the weaker
+  // failure separately for the owner-facing reason.
+  const sms = hasService;
   return { email, sms, none: !email && !sms, reasons };
 }
 

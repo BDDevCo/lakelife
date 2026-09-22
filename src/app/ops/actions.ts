@@ -235,7 +235,7 @@ export async function assignAndSchedule(
       "the owner that their service is scheduled",
       { phone: ownerPhone ?? null, email: ownerEmail ?? null },
       {
-        sms: `LakeLife: your ${svcName} is booked for ${prettyDate}. We'll text you when the crew is done, with photos. 🌊`,
+        sms: `LakeLife: your ${svcName} is booked for ${prettyDate}. Your photos go on your job page as soon as the crew finishes. 🌊`,
         subject: `Your ${svcName} is booked for ${prettyDate}`,
       },
     );

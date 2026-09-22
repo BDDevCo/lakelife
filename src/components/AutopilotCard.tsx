@@ -50,7 +50,7 @@ export function AutopilotCard({
       if (!res.ok) {
         toast.err(res.error ?? "Couldn't update Autopilot — try again.");
       } else if (on) {
-        toast.ok(`Autopilot on — price locked at $${res.lockedPrice ?? svc.price}. We'll text you when it's time. 🌊`);
+        toast.ok(`Autopilot on — price locked at $${res.lockedPrice ?? svc.price}. We'll let you know when it's time. 🌊`);
       } else {
         toast("Autopilot off — no more proposals for this one.");
       }
@@ -63,7 +63,7 @@ export function AutopilotCard({
     <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
       <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>Autopilot ⚡ — set &amp; forget</h3>
       <p className="mut" style={{ fontSize: 14, margin: "0 0 14px", maxWidth: 540 }}>
-        We line up each season&rsquo;s visit and text you first — one tap books it, skip
+        We line up each season&rsquo;s visit and tell you first — one tap books it, skip
         is free, and your price is locked in today.
       </p>
 

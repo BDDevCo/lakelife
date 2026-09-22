@@ -25,7 +25,7 @@ export function batchBookedLine(input: {
   missed: string;        // the refused-days clause, possibly ""
 }): string {
   const { visits, serviceName, dateList, assigned, total, missed } = input;
-  const tail = "We'll text you before each one, and you're never charged until the work is done. 🌊";
+  const tail = "We'll let you know before each one, and you're never charged until the work is done. 🌊";
   if (total > 0 && assigned === total) {
     return `LakeLife: ${visits} of ${serviceName} locked in — ${dateList}.${missed} ${tail}`;
   }

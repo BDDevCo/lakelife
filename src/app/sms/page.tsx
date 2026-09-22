@@ -15,6 +15,13 @@ import { CONTACT_EMAIL, LEGAL_ENTITY, LEGAL_VERSION } from "@/lib/legal";
  * examples are real bodies from the send paths, not invented samples, and the
  * consent sentence is the exact string in `src/lib/sms-consent.ts` that is
  * snapshotted onto the household's record at the moment they tap.
+ *
+ * WHICH MEANS THEY GO STALE WHEN A BODY CHANGES, AND ONE ALREADY HAD. The
+ * completion example quoted "4 photos are in your property log" — a screen
+ * that does not exist, and a sentence the send path stopped using when the
+ * photos were repointed at the job page. A sample nobody re-reads is a
+ * marketing invention with a citation. If you change a body in
+ * `vendor/actions.ts` or `automation.ts`, change it here in the same commit.
  */
 
 export const metadata: Metadata = {
@@ -90,14 +97,24 @@ export default function SmsTermsPage() {
         <p className="mut" style={{ fontSize: 15, lineHeight: 1.65, margin: "0 0 10px" }}>
           Real examples of what arrives:
         </p>
+        {/* THE SECOND EXAMPLE IS THE WHOLE BODY AGAIN.
+            It used to stop early. The real reminder body (automation.ts, the
+            day-before sweep) ended "We'll text you when it's done, with
+            photos", and no completion message has ever carried a photograph —
+            it carries a count and a link. Quoting that here would have
+            published a false sentence to the carriers as a description of our
+            own programme, so this quoted the true part and stopped. The body
+            has since been corrected at its source, so the full line is quoted
+            again. It must stay word-for-word identical to automation.ts: if
+            you change one, change the other in the same commit. */}
         <div className="ll-card ll-card-pad" style={{ fontSize: 14, lineHeight: 1.6, marginBottom: 10 }}>
           <div style={{ marginBottom: 8 }}>
-            &ldquo;LakeLife: Weekly mow is done at 4521 Lakeview Dr — 4 photos are in your
-            property log. All good: [link] · Something&apos;s off: [link] 🌊&rdquo;
+            &ldquo;LakeLife: Weekly mow is done at 4521 Lakeview Dr — 4 photos are on your
+            job page: [link] All good? [link] — something off? [link] 🌊&rdquo;
           </div>
           <div>
             &ldquo;LakeLife reminder: Pier removal is scheduled tomorrow (Fri, Nov 6) at 4521
-            Lakeview Dr. We&apos;ll text you when it&apos;s done, with photos. 🌊&rdquo;
+            Lakeview Dr. Your photos go on your job page as soon as the crew finishes. 🌊&rdquo;
           </div>
         </div>
 

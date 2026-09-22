@@ -137,6 +137,40 @@ export interface DigestSections {
    * minted these silently. Ops is the only thing that can fix one.
    */
   homesWithNoLake?: number;
+  /**
+   * DID ANY OF THE TEXTS ARRIVE.
+   *
+   * Between 19 July and 16 August 2026 the answer was no and had been no for a
+   * month: 81 messages sent, zero delivered, 66 of them rejected as an
+   * unregistered A2P 10DLC sender. Nothing in this product knew, because
+   * nothing in this product asked — the carrier's verdict arrives on a status
+   * callback there was no route to receive, so it was addressed to nobody.
+   *
+   * This is the line that makes a repeat impossible to sit through. It is fed
+   * by the receipt table (0171): `attempted` counts messages a carrier took,
+   * `delivered` counts the ones that reached a handset, and `waiting` is the
+   * in-flight remainder that belongs to neither. A window of NULL means the
+   * read failed — never zeroes, which would read as a clean bill of health for
+   * a channel nobody managed to check.
+   *
+   * Zero attempted is silence, like every other section: the park notice hold
+   * is on and a night with no texts is a normal night. Zero DELIVERED against
+   * a positive attempted is the loudest line in the email.
+   */
+  textDelivery?: {
+    day: SmsCounts | null;
+    week: SmsCounts | null;
+    /** Worst first, in plain English: why the week's failures failed. */
+    reasons?: Array<{ code: string; text: string; count: number }>;
+  };
+}
+
+/** One window of the text-delivery record. See DigestSections.textDelivery. */
+export interface SmsCounts {
+  attempted: number;
+  delivered: number;
+  failed: number;
+  waiting: number;
 }
 
 /** Plain-English HTML body. Every section is skippable — only what actually
@@ -334,6 +368,40 @@ export function composeNightlyDigest(sections: DigestSections): string {
     parts.push(
       html`<h3>${n} ${n === 1 ? "home has" : "homes have"} no lake set</h3><p>They're invisible to the freeze warning, the crew geo gate doesn't apply to them, and ice-out and the pull deadline enforce nothing on their water work. Set the lake on each one in ops.</p>`,
     );
+  }
+
+  // TEXTS THAT ARRIVED, AND THE ONE SENTENCE THIS SECTION EXISTS FOR.
+  //
+  // Placed last on purpose: on a healthy night it is one dull line, and it
+  // belongs below the things somebody has to act on. On an unhealthy night it
+  // is the loudest line in the email and the heading says so before the number
+  // does — "NO TEXTS ARE ARRIVING" is what a person needs to read at 8am, not
+  // a delivery percentage they have to interpret.
+  const td = sections.textDelivery;
+  if (td) {
+    const { day, week, reasons = [] } = td;
+    if (day === null && week === null) {
+      // A FAILED READ IS NOT AN EMPTY ONE. Saying nothing here would be the
+      // same silence that hid the outage; saying zero would be worse.
+      parts.push(
+        html`<h3>Texts — we couldn't check</h3><p>The delivery record wouldn't read tonight, so nobody knows whether today's texts arrived. That is not the same as none going out. Twilio's own log is the other copy: the SMS panel in ops reads it straight.</p>`,
+      );
+    } else if (week && week.attempted > 0) {
+      const d = day ?? { attempted: 0, delivered: 0, failed: 0, waiting: 0 };
+      const why = reasons.length > 0
+        ? html` The carriers' reasons, worst first: ${reasons.map((r, i) => (i === 0 ? html`${r.text} (${r.count})` : html`; ${r.text} (${r.count})`))}.`
+        : "";
+      if (week.delivered === 0) {
+        // The sentence the whole receipts table was built to be able to say.
+        parts.push(
+          html`<h3>🚨 NO TEXTS ARE ARRIVING</h3><p>${week.attempted} text${plural(week.attempted)} went to the carriers in the last seven days and <b>not one of them reached a handset</b>. ${week.failed > 0 ? html`${week.failed} came back refused` : html`${week.waiting} ${week.waiting === 1 ? "is" : "are"} still without a verdict`}.${why} This is the July-to-August outage again: booking confirmations, crew dispatch and freeze warnings are all going nowhere while it lasts. Check the Messaging Service and the A2P campaign in Twilio before anything else.</p>`,
+        );
+      } else {
+        parts.push(
+          html`<h3>Texts delivered</h3><p>${d.delivered} of ${d.attempted} reached a handset today; ${week.delivered} of ${week.attempted} over the week.${week.failed > 0 ? html` ${week.failed} failed this week.${why}` : ""}${week.waiting > 0 ? html` ${week.waiting} ${week.waiting === 1 ? "is" : "are"} still waiting on a verdict.` : ""}</p>`,
+        );
+      }
+    }
   }
 
   if (parts.length === 0) return `<p>Quiet night — nothing needed a human. 🌊</p>`;

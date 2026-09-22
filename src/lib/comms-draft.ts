@@ -53,7 +53,7 @@ export async function draftCustomerReply(
   const upcoming = ctx.jobs.find((j) => j.status === "scheduled" || j.status === "requested");
   const bits: string[] = [`Hi ${firstName} — thanks for the note.`];
   if (lastFromOwner) bits.push(`We're on it.`);
-  if (upcoming) bits.push(`Your ${upcoming.service} is set for ${upcoming.date}${upcoming.where ? ` at ${upcoming.where}` : ""} — we'll text when the crew's on the way, with photos after.`);
+  if (upcoming) bits.push(`Your ${upcoming.service} is set for ${upcoming.date}${upcoming.where ? ` at ${upcoming.where}` : ""} — we'll let you know when the crew's on the way, and the photos go on your job page after.`);
   if (ctx.creditBalance > 0) bits.push(`You've got $${ctx.creditBalance.toFixed(2)} in credits that apply automatically to your next bill.`);
   bits.push(`Anything else, just reply here. 🌊`);
   return { ok: true, text: bits.join(" "), mock: true };

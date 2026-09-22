@@ -30,7 +30,8 @@ import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
  * months twice — and until now there was NO WAY TO DO ONE from the owner's screens.
  * `planRenewal` had no caller at all, and the only path that existed was the
  * renter's own `/x/{token}` link — which needs a token minted by an SMS
- * reminder, and SMS is switched off pending carrier registration.
+ * reminder, and SMS is switched off (see reminder-actions.ts: approved by the
+ * carriers, but nothing delivered and no consent writer).
  *
  * So the Today screen said "write the next one, or their rent stops being
  * billed" and pointed at a screen that could not write it.

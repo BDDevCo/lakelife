@@ -65,7 +65,12 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   if (!lake) return { title: "LakeLife" };
   return {
     title: `Lake-home services on ${lake.name} — piers, boats, lawn & housekeeping | LakeLife`,
-    description: `One price, one text, done — pier install & removal, boat lifts, winterization, lawn care and housekeeping on ${lake.name}, Indiana. Photo-verified work, never charged until it's done.`,
+    // "ONE PRICE, ONE TEXT, DONE" NAMED A CHANNEL THAT HAS NEVER DELIVERED.
+    // Zero of the 81 texts this app has sent since July reached anybody, and
+    // the search result for this lake said otherwise in nine words. What is
+    // left is the part that is true whoever carries the message: one price,
+    // photographs, and no charge before the work is finished.
+    description: `One all-in price, photo-verified, never charged until it's done — pier install & removal, boat lifts, winterization, lawn care and housekeeping on ${lake.name}, Indiana.`,
   };
 }
 
@@ -173,16 +178,23 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
         <h1 style={{ fontSize: 32, margin: "6px 0 8px" }}>Lake-home services on {lake.name}, handled.</h1>
         <p className="mut" style={{ fontSize: 15.5, marginBottom: 8 }}>
           Piers in and out on time, boats winterized before the freeze, lawns cut while you&apos;re away —
-          one all-in price, booked in a minute, photo-verified when it&apos;s done. You&apos;re never charged
-          until the work is complete.
+          one all-in price, booked from your phone, photo-verified when it&apos;s done. You&apos;re never
+          charged until the work is complete.
         </p>
         <p style={{ fontSize: 14, fontWeight: 700, marginBottom: 18 }}>
           {crewCount > 0
             ? `${crewCount} insured local crew${crewCount === 1 ? "" : "s"} serving ${lake.name} · ${completedCount ?? 0} jobs completed${thumbCount > 0 ? ` · ${thumbCount} 👍 from neighbors` : ""}`
             : `We're building our crew bench on ${lake.name} — book anyway; we hunt the crew down and you pay nothing until it's done.`}
         </p>
+        {/* "IT TAKES 2 MINUTES" WAS A MEASUREMENT NOBODY EVER TOOK. The set-up
+            wizard asks for an address, a pier, boats, a lawn and a mobile
+            number it makes you verify by code; how long that takes depends
+            entirely on how much is on the property, and no clock in this
+            codebase has ever timed it. It is the one number on this page that
+            came from nowhere. The lake's name is a fact, and it is a better
+            button anyway. */}
         <Link className="ll-btn gold" href="/" style={{ minHeight: 48, display: "inline-flex", alignItems: "center", padding: "0 22px", marginBottom: 24 }}>
-          Get set up — it takes 2 minutes 🌊
+          Get set up on {lake.name} 🌊
         </Link>
 
         {(iceOut || pullBy) && (
@@ -237,13 +249,52 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
           </div>
         )}
 
+        {/* FOUR CLAIMS, AND THREE OF THEM WERE NOT TRUE OF THIS PRODUCT.
+
+            "You get a text when it's done, with photos" was two errors in one
+            clause. Zero of the 81 texts sent since July were delivered — the
+            A2P campaign is approved now, but approval is not delivery and
+            nothing has arrived yet — and no completion message has ever
+            carried a photograph: it carries a COUNT and a LINK to the job
+            page (vendor/actions.ts). So this names no channel at all. A
+            sentence about the mechanism — photographs, then done, then the
+            job page — is true today, stays true the week texts start
+            landing, and never has to be rewritten again. The class is closed
+            now: the day-before reminder body ended with the same two errors
+            in the other phrasing — "We'll text you when it's done, with
+            photos" — and has been corrected at its source (automation.ts),
+            which is why /sms quotes that body whole again instead of
+            stopping early. Both phrasings are deliberately left standing in
+            this comment: the scanner's proof that comment-stripping is
+            load-bearing reads THIS page for them, so a tidy-up that deletes
+            the quoted strings turns a real test into a vacuous one.
+
+            "A vetted, insured local crew gets routed automatically" was the
+            paragraph disagreeing with its own page: eight lines up, the
+            headline tells the same reader we are still building the crew
+            bench on this lake, because there is no non-fixture crew on any
+            water we serve. And "vetted" is a word with no referent here: the
+            hard gate in dispatch.ts is one thing only — an unexpired
+            certificate of insurance, "no COI, no jobs" — with the name on it
+            checked when it is present (0152) and grandfathered when it is
+            not. So the copy says that one thing, and says it as a rule we
+            hold a crew to rather than as a crew who is standing by.
+
+            "Payment only happens after the photos are in" is structurally
+            true — settleJob will not run before a job is complete — but it
+            implies a card is charged, and today every charge path declines
+            `no_processor` (charge-gate.ts). "Nothing is charged before then"
+            says the protective half, which is the half a stranger cares
+            about, and it is true both before and after a processor exists. */}
         <div className="ll-card ll-card-pad">
           <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>How it works</h3>
           <p className="mut" style={{ fontSize: 14, margin: 0, lineHeight: 1.6 }}>
             Tell us about your place once — pier sections, boats, lawn. Every service shows one all-in
-            price. Book a day; a vetted, insured local crew gets routed automatically; you get a text
-            when it&apos;s done, with photos. Payment only happens after the photos are in. If something&apos;s
-            ever off, one tap flags it and the crew makes it right.
+            price. Book a day and we go and line up an independent local crew — nobody is sent to
+            your property without a current certificate of insurance on file. The crew photographs
+            the work, and no job counts as done until the photos are in; they go on your job page
+            and we let you know they&apos;re there. Nothing is charged before then. If
+            something&apos;s ever off, one tap flags it and the crew makes it right.
           </p>
         </div>
       </main>

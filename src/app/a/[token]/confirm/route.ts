@@ -20,7 +20,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   if (!ev) return htmlPage("That link isn't right", "This link doesn't match anything — book anytime at lakelife.ai. 🌊", false);
 
   if (ev.status === "confirmed") {
-    return htmlPage("Already booked ✓", `${ev.enrollment.serviceName} at ${ev.enrollment.where} is on the books for ${prettyDay(ev.proposed_date)}. We'll text you the night before. 🌊`);
+    return htmlPage("Already booked ✓", `${ev.enrollment.serviceName} at ${ev.enrollment.where} is on the books for ${prettyDay(ev.proposed_date)}. We'll remind you the night before. 🌊`);
   }
   if (ev.status !== "proposed" || !ev.enrollment.active || ev.proposed_date <= todayLakeDate()) {
     return htmlPage("This one expired", "No worries — nothing was booked. You can book anytime at lakelife.ai/book. 🌊", false);
@@ -122,6 +122,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 
   return htmlPage(
     "You're booked 🌊",
-    `${ev.enrollment.serviceName} at ${ev.enrollment.where} — ${prettyDay(ev.proposed_date)}, at your locked price. We'll text you the night before, and again when it's done (with photos).`,
+    `${ev.enrollment.serviceName} at ${ev.enrollment.where} — ${prettyDay(ev.proposed_date)}, at your locked price. We'll remind you the night before, and your photos go on the job page as soon as the crew finishes.`,
   );
 }

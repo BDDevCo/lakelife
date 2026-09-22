@@ -95,7 +95,13 @@ export async function notify(
   // here — a notification must never be the thing that breaks the action that
   // triggered it.
   const [smsRes, emailRes] = await Promise.allSettled([
-    phone ? sendSms(phone, msg.sms) : Promise.resolve({ queued: false }),
+    // `what` is already the consequence in words — "the crew that their pay is
+    // held", "the owner that their pier removal was cancelled" — which is
+    // exactly the label the delivery receipt (0171) wants. A week of failures
+    // then names WHICH promises went unkept instead of counting anonymous
+    // rows, and the label costs nothing here because the caller already had to
+    // write it for the log line.
+    phone ? sendSms(phone, msg.sms, { kind: what }) : Promise.resolve({ queued: false }),
     email ? sendEmail({ to: email, subject: msg.subject, text: body, html: asHtml(body) })
           : Promise.resolve({ ok: false }),
   ]);

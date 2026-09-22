@@ -393,15 +393,14 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
       "the owner that a crew picked up their job",
       { phone: ownerUser.phone ?? null, email: ownerUser.email ?? null },
       {
-        sms: `LakeLife: good news — a crew picked up your ${svc.name} for ${pretty}. We'll text you when it's done, with photos. 🌊`,
+        sms: `LakeLife: good news — a crew picked up your ${svc.name} for ${pretty}. Your photos go on your job page as soon as they finish. 🌊`,
         subject: `A crew picked up your ${svc.name} for ${pretty}`,
-        // The SMS says "we'll text you when it's done", which is a promise the
-        // text can make and an email cannot — it may be going to somebody with
-        // no mobile on file at all. Same fact, without the promise about the
-        // channel it arrives on.
+        // Neither half promises a channel any more, and neither says the
+        // photos arrive IN the message — they never have. Both doors now point
+        // at the same place the photos actually land: the job page.
         body:
           `Good news — a crew picked up your ${svc.name} for ${pretty}.\n\n` +
-          `You'll hear from us when it's done, with photos.`,
+          `Your photos go on the job page as soon as they finish.`,
       },
     );
   }

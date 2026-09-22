@@ -47,9 +47,21 @@ export default async function LakesIndexPage() {
       <main className="wrap" style={{ paddingTop: 32, paddingBottom: 48, maxWidth: 680 }}>
         <div className="ll-eyebrow">Where we work</div>
         <h1 style={{ fontSize: 30, margin: "6px 0 8px" }}>Lakes we serve</h1>
+        {/* "EVERY LAKE GETS LOCAL, INSURED CREWS" IS A HEADCOUNT, IN THE
+            PRESENT TENSE, ON THE PAGE THAT THEN COUNTS THEM. Every card below
+            it says "Recruiting crews" today, because there is not one
+            non-fixture crew on any water we serve — so the paragraph promised
+            what the list underneath it immediately withdrew. What we can say
+            without a crew on the books is what we hold a crew TO: an
+            unexpired certificate of insurance before they can be routed
+            anywhere — dispatch.ts is blunt about it, "no COI, no jobs" —
+            one all-in price, and photographs before a job counts as done.
+            All three survive the week somebody signs up, which is the point
+            of writing it this way. */}
         <p className="mut" style={{ fontSize: 15, marginBottom: 20 }}>
-          Every lake gets local, insured crews, one all-in price per service, and photo-verified
-          work. Don&apos;t see your lake? Join anyway — demand is exactly how we pick the next one. 🌊
+          One all-in price per service, an independent local crew we hold to a current certificate
+          of insurance, and photographs before any job counts as done. Don&apos;t see your lake?
+          Join anyway — demand is exactly how we pick the next one. 🌊
         </p>
         <div style={{ display: "grid", gap: 12 }}>
           {(lakes ?? []).map((l) => (

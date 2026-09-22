@@ -2067,10 +2067,12 @@ export function buildTenantEdit(
   // "email me". It moves only when somebody ticks it, which is a thing the
   // owner does standing in front of them.
   //
-  // 'sms' is deliberately not accepted here. A2P registration has not cleared,
-  // and `mobile_verified_at` / `sms_consent_operational_at` still have no
-  // writer — so setting it would produce a household the software believes it
-  // can text and never will.
+  // 'sms' is deliberately not accepted here, and A2P approval (22 Sep 2026)
+  // did not change that: `mobile_verified_at` / `sms_consent_operational_at`
+  // still have no writer, so setting it would produce a household the
+  // software believes it can text and never will. The consent half of this
+  // reason always stood on its own — the registration half was only ever the
+  // second lock on the same door.
   const pref = (input.contactPref ?? "").trim();
   if (pref === "paper" || pref === "email" || pref === "none") {
     if (pref === "email" && renter.email === undefined && email === "") {
