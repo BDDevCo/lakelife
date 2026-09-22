@@ -75,13 +75,17 @@ describe("every category a person can pick is one the database accepts", () => {
     }
   });
 
-  it("offers every splittable category except the deliberate omissions", () => {
-    // `unit_electric` is deliberately absent (power for a park-owned home is
-    // metered to that home). `tax` and `insurance` ARE in the dropdown —
-    // ParkCosts added them so a tax or insurance reminder had a door that
-    // opens — but a fee may never claim them, so they are omitted from this
-    // particular assertion rather than from the screen.
-    const OMITTED = new Set(["unit_electric", "tax", "insurance"]);
+  it("offers every splittable category, and the one omission is a rule", () => {
+    // `unit_electric` is deliberately absent, and it is the ONLY one now:
+    // power for a home the park owns is metered to that home, `canSplit`
+    // refuses it and `recordCost` enforces that.
+    //
+    // `tax` and `insurance` used to sit in this exemption too, on the grounds
+    // that no fee could claim them. That was never a reason to exempt them
+    // from a test about the DROPDOWN — they were in it — and as of 0172 it is
+    // not true either: the owner put both in the fee pool on 22 September.
+    // An exemption list that outlives its reason hides the next real gap.
+    const OMITTED = new Set(["unit_electric"]);
     const offered = new Set(screenCategories());
     for (const c of dbCategories()) {
       if (OMITTED.has(c)) continue;

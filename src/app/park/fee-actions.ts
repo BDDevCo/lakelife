@@ -54,8 +54,10 @@ export interface FeesPage {
  * Every bill is averaged over the months IT was entered for (checkCoverage):
  * three months of water bills is not three months of cost per month, and one
  * denominator across every category let each new sewer bill dilute the
- * once-entered baselines beside it. The period start goes through per row so
- * the helper can count each category's own months.
+ * once-entered baselines beside it. BOTH ends of each row's period go through,
+ * so the helper counts each category's own months and a bill covering a year
+ * is a year — The Haven's $3,517.96 of property tax is $293.16 a month, not a
+ * shortfall larger than the fee.
  */
 export async function listFees(parkId: string): Promise<FeesPage> {
   const empty: FeesPage = {
@@ -188,6 +190,11 @@ export async function listFees(parkId: string): Promise<FeesPage> {
       category: c.category as CostCategory,
       amountPaid: Number(c.amount_paid),
       periodStart: String(c.period_start ?? ""),
+      // READ SINCE 0067 AND HANDED TO NOBODY. `period_end` was in the select
+      // above and stopped here, so a bill covering a year was averaged as a
+      // month — which nothing noticed while no fee could claim the one bill
+      // that arrives annually. It can claim the property tax now.
+      periodEnd: String(c.period_end ?? ""),
     })),
   );
 

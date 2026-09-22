@@ -798,8 +798,16 @@ export function ParkImportRead({ view }: { view: ReadView }) {
                 come in as the list&apos;s numbers — not as anything a household
                 has confirmed — and the rent roll will say so.
               </p>
+              {/* "THE WHOLE THING" WAS NOT THE WHOLE THING. Undo takes back the
+                  households, their tenancies and the lots this made — it has
+                  never taken back a rate card, and the card on a lot he already
+                  had outlives the undo. Promised in full here, because this is
+                  the line he decides on, and said again by the undo's own
+                  sentence afterwards. */}
               <p className="mut" style={{ lineHeight: 1.5 }}>
-                You can undo the whole thing afterwards.
+                You can undo the whole thing afterwards — the households, their
+                tenancies, and any lots this makes. A rent it writes onto a lot
+                you already had stays there; change it on Lots &amp; rates.
               </p>
               <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
                 <button className="ll-btn" onClick={commit} disabled={pending}>

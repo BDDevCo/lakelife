@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import {
   payersFor, monthlyIncome, checkCoverage, coverageSummary, feesForTenancy, feePayableCount,
   type ParkFee, nightlyRecoveryTarget, nightlyRecoveryLine,
-  COVER_LABEL, FEE_COVERS, FEE_EXTRA_COVERS,
+  COVER_LABEL, FEE_COVERS, FEE_EXTRA_COVERS, evidenceLine,
 } from "./fee-helpers";
-import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
+import { COST_CATEGORY_LABEL, COST_CATEGORIES, canSplit, type CostCategory } from "./cost-helpers";
+import { shiftMonth } from "./ledger-helpers";
 
 /** The Haven's grounds fee: one flat charge covering the lot. */
 const GROUNDS: ParkFee = {
@@ -84,9 +85,9 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     const c = checkCoverage(
       [GROUNDS], payers,
       [
-        { category: "water", amountPaid: 380, periodStart: "2026-06-01" },
-        { category: "sewer", amountPaid: 300, periodStart: "2026-06-01" },
-        { category: "trash", amountPaid: 220, periodStart: "2026-06-01" },
+        { category: "water", amountPaid: 380, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+        { category: "sewer", amountPaid: 300, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+        { category: "trash", amountPaid: 220, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
       ],
     );
     expect(c.feeIncome).toBe(1100);
@@ -99,7 +100,7 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     // $71 a lot of real cost against a $55 fee.
     const c = checkCoverage(
       [GROUNDS], payers,
-      [{ category: "water", amountPaid: 800, periodStart: "2026-06-01" }, { category: "grounds", amountPaid: 620, periodStart: "2026-06-01" }],
+      [{ category: "water", amountPaid: 800, periodStart: "2026-06-01", periodEnd: "2026-07-01" }, { category: "grounds", amountPaid: 620, periodStart: "2026-06-01", periodEnd: "2026-07-01" }],
     );
     expect(c.margin).toBeLessThan(0);
     const s = coverageSummary(c, 20);
@@ -112,16 +113,16 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     // toFixed here put the same number in two shapes on one screen.
     const c = checkCoverage(
       [GROUNDS], payers,
-      [{ category: "water", amountPaid: 2000, periodStart: "2026-06-01" }, { category: "grounds", amountPaid: 620, periodStart: "2026-06-01" }],
+      [{ category: "water", amountPaid: 2000, periodStart: "2026-06-01", periodEnd: "2026-07-01" }, { category: "grounds", amountPaid: 620, periodStart: "2026-06-01", periodEnd: "2026-07-01" }],
     );
     expect(c.feeIncome).toBe(1100);
     expect(c.actualCost).toBe(2620);
     expect(coverageSummary(c, 20)).toBe(
-      "Your fees bring in $1,100.00 a month against $2,620.00 of real cost — SHORT by $76.00 a lot, $1,520.00 a month.",
+      "Your fees bring in $1,100.00 a month against $2,620.00 a month of real cost — SHORT by $76.00 a lot, $1,520.00 a month.",
     );
-    const ahead = checkCoverage([{ ...GROUNDS, amount: 150 }], payers, [{ category: "water", amountPaid: 1000, periodStart: "2026-06-01" }]);
+    const ahead = checkCoverage([{ ...GROUNDS, amount: 150 }], payers, [{ category: "water", amountPaid: 1000, periodStart: "2026-06-01", periodEnd: "2026-07-01" }]);
     expect(coverageSummary(ahead, 20)).toBe(
-      "Your fees bring in $3,000.00 a month against $1,000.00 of real cost — ahead by $100.00 a lot.",
+      "Your fees bring in $3,000.00 a month against $1,000.00 a month of real cost — ahead by $100.00 a lot.",
     );
     expect(nightlyRecoveryLine("12", 1234.5)).toContain("$1,234.50 a night");
     // No toFixed left in the module.
@@ -134,12 +135,12 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     // Getting this wrong tells him he is losing money at three times the real
     // rate, and a wrong alarm is worse than no alarm.
     const threeMonths = [
-      { category: "water" as CostCategory, amountPaid: 380, periodStart: "2026-06-01" },
-      { category: "water" as CostCategory, amountPaid: 400, periodStart: "2026-07-01" },
-      { category: "water" as CostCategory, amountPaid: 420, periodStart: "2026-08-01" },
+      { category: "water" as CostCategory, amountPaid: 380, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+      { category: "water" as CostCategory, amountPaid: 400, periodStart: "2026-07-01", periodEnd: "2026-08-01" },
+      { category: "water" as CostCategory, amountPaid: 420, periodStart: "2026-08-01", periodEnd: "2026-09-01" },
     ];
     // The same three amounts entered against ONE month are one month's bills.
-    const oneMonth = threeMonths.map((c) => ({ ...c, periodStart: "2026-06-01" }));
+    const oneMonth = threeMonths.map((c) => ({ ...c, periodStart: "2026-06-01", periodEnd: "2026-07-01" }));
     const one = checkCoverage([GROUNDS], payers, oneMonth);
     const three = checkCoverage([GROUNDS], payers, threeMonths);
     expect(one.actualCost).toBe(1200);
@@ -166,13 +167,21 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     };
     const eighteen = new Map([["f1", 18]]);
     const june = [
-      { category: "sewer" as CostCategory, amountPaid: 1405.36, periodStart: "2026-06-01" },
-      { category: "grounds" as CostCategory, amountPaid: 198.08, periodStart: "2026-06-01" },
-      { category: "common_electric" as CostCategory, amountPaid: 144.02, periodStart: "2026-06-01" },
-      { category: "other" as CostCategory, amountPaid: 140.00, periodStart: "2026-06-01" },
+      { category: "sewer" as CostCategory, amountPaid: 1405.36, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+      { category: "grounds" as CostCategory, amountPaid: 198.08, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+      { category: "common_electric" as CostCategory, amountPaid: 144.02, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+      { category: "other" as CostCategory, amountPaid: 140.00, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
     ];
+    // A real monthly sewer bill: one month's period, the way the costs screen
+    // records one. `shiftMonth` is the ledger's own month step, so the end of
+    // the period is not a second opinion about what next month is called.
     const sewerFor = (months: string[]) =>
-      months.map((m) => ({ category: "sewer" as CostCategory, amountPaid: 1405.36, periodStart: `${m}-01` }));
+      months.map((m) => ({
+        category: "sewer" as CostCategory,
+        amountPaid: 1405.36,
+        periodStart: `${m}-01`,
+        periodEnd: `${shiftMonth(m, 1)}-01`,
+      }));
 
     it("four June rows and 18 payers: ahead by $37.67 a lot", () => {
       const c = checkCoverage([HAVEN_FEE], eighteen, june);
@@ -229,7 +238,7 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
   it("names a cost NOTHING claims to cover", () => {
     const c = checkCoverage(
       [{ ...GROUNDS, covers: ["water"] as CostCategory[] }], payers,
-      [{ category: "water", amountPaid: 380, periodStart: "2026-06-01" }, { category: "grounds", amountPaid: 500, periodStart: "2026-06-01" }],
+      [{ category: "water", amountPaid: 380, periodStart: "2026-06-01", periodEnd: "2026-07-01" }, { category: "grounds", amountPaid: 500, periodStart: "2026-06-01", periodEnd: "2026-07-01" }],
     );
     expect(c.uncovered).toContain("grounds");
     // And the uncovered cost is NOT counted against the fee — the fee never
@@ -238,7 +247,7 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
   });
 
   it("names what the fee claims but nothing has been spent on", () => {
-    const c = checkCoverage([GROUNDS], payers, [{ category: "water", amountPaid: 380, periodStart: "2026-06-01" }]);
+    const c = checkCoverage([GROUNDS], payers, [{ category: "water", amountPaid: 380, periodStart: "2026-06-01", periodEnd: "2026-07-01" }]);
     expect(c.unverified).toEqual(expect.arrayContaining(["sewer", "trash", "common_electric"]));
   });
 
@@ -248,7 +257,7 @@ describe("IS THE GROUNDS FEE SET RIGHT", () => {
     };
     const c = checkCoverage(
       [amenities], new Map([["f9", 20]]),
-      [{ category: "water", amountPaid: 380, periodStart: "2026-06-01" }],
+      [{ category: "water", amountPaid: 380, periodStart: "2026-06-01", periodEnd: "2026-07-01" }],
     );
     expect(c.feeIncome).toBe(0);
   });
@@ -545,9 +554,13 @@ describe("the rent roll uses the biller's own fee rule", () => {
 // `checkCoverage` names every recorded cost category no active fee claims, and
 // the card renders `COVER_LABEL[x] ?? x` — so a category with no entry here
 // falls through to its raw slug and the sentence reads "You pay for Water,
-// Trash, tax and no fee covers it". Tax and insurance are not a maybe: a fee
-// may never claim them (FEE_COVERS leaves them out on purpose), so the month
-// he files the insurance premium they are GUARANTEED to land in `uncovered`.
+// Trash, tax and no fee covers it".
+//
+// `unit_electric` is the one that still always reaches it: no fee may claim a
+// park-owned home's power, so the month he files that bill it lands in
+// `uncovered` by rule and has to arrive in English. Tax and insurance used to
+// be in the same position for a different reason — a rule the owner overturned
+// on 22 September — and the label they were given then is the one they keep.
 //
 // The costs screen already had a test asserting every legal category has a
 // label. The fee screen had none, which is how this map both fell behind the
@@ -603,9 +616,13 @@ describe("every cost category a coverage line can name has English words", () =>
   });
 
   it("but the fee's tickboxes still come from FEE_COVERS, not from these labels", () => {
-    // THE GUARDRAIL. Giving tax and insurance labels must not give them
-    // checkboxes: a fee may never claim them, and iterating COVER_LABEL's keys
-    // to build the form would reverse that rule silently.
+    // THE GUARDRAIL, AND IT IS NO LONGER ABOUT TAX. It used to say: giving tax
+    // and insurance labels must not give them checkboxes. They have both now,
+    // by decision. What is left is `unit_electric` — it is in this map so a
+    // coverage line can name it in English, and it must never become a
+    // tickbox, because a fee is spread across every lot and a park-owned
+    // home's power is metered to that home. Iterating COVER_LABEL's keys to
+    // build the form would hand it one silently.
     const tsx = read("../../components/ParkFees.tsx")
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
@@ -617,5 +634,268 @@ describe("every cost category a coverage line can name has English words", () =>
     expect(assignment).toMatch(/FEE_EXTRA_COVERS/);
     expect(tsx, "a checkbox row is being built out of the label map's keys")
       .not.toMatch(/Object\.keys\(COVER_LABEL\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TAX AND INSURANCE BELONG IN THE POOL.
+//
+// Brendon, 22 September 2026. The grounds fee recovers what running the park
+// costs; the tax on the parcels under it and the premium on the policy over
+// it are shared costs like any other. Four lists describe what a park spends
+// money on, and two of them — this file's FEE_COVERS and the database CHECK
+// behind it — were refusing those two words while the costs screen, the
+// reminder list and the park_costs CHECK all accepted them.
+//
+// So these tests are about AGREEMENT, not about tax. The lists have to line
+// up whatever the next category turns out to be, and the one exclusion left
+// has to be a rule somebody can point at rather than a word left out.
+// ---------------------------------------------------------------------------
+describe("what a fee may claim", () => {
+  const readRepo = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+  /** The words the DATABASE will accept in park_fees.covers, from 0172. */
+  function dbCovers(): string[] {
+    const sql = readRepo("../../../supabase/migrations/0172_tax_and_insurance_belong_in_the_pool.sql")
+      // A word inside a comment is prose, not an allowlist entry.
+      .replace(/^\s*--.*$/gm, "");
+    const block = sql.match(
+      /add constraint park_fees_covers_known check \([\s\S]*?\]::text\[\]\s*\);/,
+    )?.[0] ?? "";
+    expect(block, "the covers allowlist was not found in 0172 — this scan is stale")
+      .not.toBe("");
+    const found = [...block.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(found.length, "no words parsed out of the CHECK").toBeGreaterThan(5);
+    return found;
+  }
+
+  it("the scan reads a real allowlist, and would notice a word going missing", () => {
+    // Proving it is not vacuous: it finds the words that were there before
+    // today as well as the two added.
+    const db = dbCovers();
+    expect(db).toContain("water");
+    expect(db).toContain("amenities");
+    expect(db).not.toContain("utilities_and_stuff");
+  });
+
+  it("the two words the owner asked for", () => {
+    expect(FEE_COVERS).toContain("tax");
+    expect(FEE_COVERS).toContain("insurance");
+    expect(dbCovers()).toEqual(expect.arrayContaining(["tax", "insurance"]));
+  });
+
+  it("is every cost the park spreads, and nothing else — one rule, not a list", () => {
+    // The rule is `canSplit`, which `recordCost` already enforces. Collapsing
+    // FEE_COVERS to a hand-list is what let it fall two categories behind.
+    expect(FEE_COVERS).toEqual(COST_CATEGORIES.filter(canSplit));
+    expect(FEE_COVERS.length).toBe(COST_CATEGORIES.length - 1);
+  });
+
+  it("never a park-owned home's power, in code or in the database", () => {
+    // The one exclusion, and it is a rule with a reason: the utility meters
+    // that building and the park sets its cost against that building's own
+    // income. A fee is spread over every lot, so the two cannot meet.
+    expect(canSplit("unit_electric")).toBe(false);
+    expect(FEE_COVERS).not.toContain("unit_electric" as CostCategory);
+    expect([...FEE_EXTRA_COVERS as readonly string[]]).not.toContain("unit_electric");
+    expect(dbCovers()).not.toContain("unit_electric");
+  });
+
+  it("keeps `other`, which is where The Haven's pier sits", () => {
+    // `other` is out of the REMINDER list for a reason about reminders — two
+    // unrelated `other` bills would satisfy each other's — which says nothing
+    // about whether a fee may cover one.
+    expect(FEE_COVERS).toContain("other");
+    expect(canSplit("other")).toBe(true);
+  });
+
+  it("names snow once, in the list of real categories", () => {
+    // It was in FEE_EXTRA_COVERS — "not a billable cost category" — from
+    // before 0144 gave it a column, a dropdown and a reminder. In both lists
+    // it would be two checkboxes sharing one React key.
+    expect(FEE_COVERS).toContain("snow");
+    expect([...FEE_EXTRA_COVERS as readonly string[]]).not.toContain("snow");
+    const all = [...FEE_COVERS as readonly string[], ...FEE_EXTRA_COVERS];
+    expect(new Set(all).size, "a coverage word appears twice").toBe(all.length);
+  });
+
+  it("the fee form offers both new words, in the costs screen's own English", () => {
+    // Item four of the ask: every screen that lists coverage offers them, and
+    // no line prints a database word. The form's row is
+    // [...FEE_COVERS, ...FEE_EXTRA_COVERS] (pinned below), so this is what a
+    // person will see beside the checkbox.
+    const offered = [...FEE_COVERS as readonly string[], ...FEE_EXTRA_COVERS];
+    expect(offered).toContain("tax");
+    expect(offered).toContain("insurance");
+    for (const word of offered) {
+      expect(COVER_LABEL[word], `${word} would show as its own column name`).toBeTruthy();
+    }
+    expect(COVER_LABEL.tax).toBe(COST_CATEGORY_LABEL.tax);
+    expect(COVER_LABEL.insurance).toBe(COST_CATEGORY_LABEL.insurance);
+  });
+
+  it("and every coverage line on the card goes through the labels", () => {
+    // `uncovered` and `unverified` are enums out of the helper. Three lines
+    // print them, and one printing `x` alone would put `tax` in an English
+    // sentence — which is what happened before COVER_LABEL was widened.
+    const tsx = readRepo("../../components/ParkFees.tsx")
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    // The three lists that hold category enums, by name — a bare `.map((x) =>`
+    // would also catch the cadence dropdown, which renders a different map.
+    const maps = [...tsx.matchAll(/(?:c\.uncovered|c\.unverified|f\.covers)\.map\(\(x\) => ([^)]*)\)/g)]
+      .map((m) => m[1]);
+    expect(maps.length, "no coverage line found in ParkFees — this scan is stale")
+      .toBeGreaterThanOrEqual(3);
+    for (const body of maps) {
+      expect(body, `a coverage line renders a raw category: ${body}`).toMatch(/COVER_LABEL\[x\]/);
+    }
+  });
+
+  it("the database and the form offer the same twelve words", () => {
+    // THE WHOLE POINT. A word the form offers that the CHECK refuses is a save
+    // that fails with "we can't check that against anything"; a word the CHECK
+    // allows that no form offers is a column with no writer.
+    const code = [...FEE_COVERS as readonly string[], ...FEE_EXTRA_COVERS];
+    expect([...dbCovers()].sort()).toEqual([...code].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A BILL FOR A YEAR IS NOT A BILL FOR JANUARY.
+//
+// Every reader in this product treats a park_costs row as ONE MONTH, and
+// nothing tested it, because the only rows on file are single Junes and the
+// two annual baselines among them had been divided by twelve by hand before
+// they were typed in.
+//
+// The moment a fee may claim the property tax, that stops being safe. The
+// Haven's tax is $3,517.96 for the year across seven parcels; the insurance
+// is about $797. Read as one month each they are $4,314.96 of monthly cost
+// that does not exist.
+// ---------------------------------------------------------------------------
+describe("the coverage card and an annual bill", () => {
+  const FEE: ParkFee = {
+    ...GROUNDS,
+    amount: 142.53,
+    covers: [
+      "water", "sewer", "trash", "common_electric", "grounds", "other",
+      "tax", "insurance",
+    ] as CostCategory[],
+  };
+  const twenty = new Map([["f1", 20]]);
+  /** The four rows actually on file, each a single June. */
+  const june = [
+    { category: "sewer" as CostCategory, amountPaid: 1405.36, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+    { category: "grounds" as CostCategory, amountPaid: 198.08, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+    { category: "common_electric" as CostCategory, amountPaid: 144.02, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+    { category: "other" as CostCategory, amountPaid: 140.00, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+  ];
+  /** 25pay26: $3,517.96 over seven parcels, and the premium beside it. */
+  const yearOf = (category: CostCategory, amountPaid: number) =>
+    ({ category, amountPaid, periodStart: "2026-01-01", periodEnd: "2027-01-01" });
+
+  it("spreads the year over the year, and the fee is ahead", () => {
+    // tax 3517.96/12 = 293.16 · insurance 797/12 = 66.42 · the four Junes
+    // 1887.46 → 2247.04 against 20 × 142.53 = 2850.60.
+    const c = checkCoverage([FEE], twenty, [
+      ...june, yearOf("tax", 3517.96), yearOf("insurance", 797),
+    ]);
+    expect(c.actualCost).toBe(2247.04);
+    expect(c.feeIncome).toBe(2850.6);
+    expect(coverageSummary(c, 20, 1)).toBe(
+      "Your fees bring in $2,850.60 a month against $2,247.04 a month of real cost — ahead by $30.18 a lot.",
+    );
+    expect(c.monthsByCategory).toEqual(expect.arrayContaining([
+      { category: "tax", months: 12 },
+      { category: "insurance", months: 12 },
+      { category: "sewer", months: 1 },
+    ]));
+  });
+
+  it("COLLAPSE IT: read as one month each, the card calls the fee short by more than it charges", () => {
+    // This is what the screen said before today, and it is the reason the
+    // period had to reach the helper. $167.59 short a lot, on a $142.53 fee,
+    // weeks before that number goes into twenty leases.
+    const asMonths = [
+      ...june,
+      { ...yearOf("tax", 3517.96), periodEnd: "2026-02-01" },
+      { ...yearOf("insurance", 797), periodEnd: "2026-02-01" },
+    ];
+    const c = checkCoverage([FEE], twenty, asMonths);
+    expect(c.actualCost).toBe(6202.42);
+    expect(coverageSummary(c, 20, 1)).toContain("SHORT by $167.59 a lot");
+  });
+
+  it("and the caption says which of the two it is looking at", () => {
+    // The only honest defence against a tax bill typed in against a single
+    // month is that the card names the denominator out loud. A reader who
+    // knows the tax is annual can see "over one month" and fix the row.
+    const spread = checkCoverage([FEE], twenty, [...june, yearOf("tax", 3517.96)]);
+    expect(evidenceLine(spread)).toContain("Property tax over 12 months");
+
+    const squashed = checkCoverage([FEE], twenty, [
+      ...june, { ...yearOf("tax", 3517.96), periodEnd: "2026-02-01" },
+    ]);
+    expect(evidenceLine(squashed)).toContain("From one month of bills");
+  });
+
+  it("the headline says BOTH figures are monthly, not just the fee's", () => {
+    // "against $2,247.04 of real cost" reads as a total of what was entered.
+    // It is an average now, over periods of different lengths, and the
+    // sentence a person reads has to say so.
+    const c = checkCoverage([FEE], twenty, [...june, yearOf("tax", 3517.96)]);
+    expect(coverageSummary(c, 20, 1)).toContain("a month of real cost");
+    const short = checkCoverage([FEE], twenty, [
+      ...june, { ...yearOf("tax", 3517.96), periodEnd: "2026-02-01" },
+    ]);
+    expect(short).toBeTruthy();
+    expect(coverageSummary(short, 20, 1)).toContain("a month of real cost");
+  });
+
+  it("a quarterly bill is three months, and a fortnight is still one", () => {
+    const quarter = checkCoverage([FEE], twenty, [
+      { category: "water", amountPaid: 900, periodStart: "2026-01-01", periodEnd: "2026-04-01" },
+    ]);
+    expect(quarter.actualCost).toBe(300);
+    // ROUNDED UP TO A MONTH, never down to a fraction: a fortnight's bill read
+    // as half a month would halve the cost, and the only safe direction to be
+    // wrong in is the one that makes a fee look short.
+    const fortnight = checkCoverage([FEE], twenty, [
+      { category: "water", amountPaid: 900, periodStart: "2026-01-01", periodEnd: "2026-01-15" },
+    ]);
+    expect(fortnight.actualCost).toBe(900);
+  });
+
+  it("a year's bill and a month's bill in the same category add up honestly", () => {
+    // A tax year filed whole, then a supplemental bill for one month. 12 + 1
+    // months of evidence behind $3,517.96 + $130.
+    const c = checkCoverage([FEE], twenty, [
+      yearOf("tax", 3517.96),
+      { category: "tax", amountPaid: 130, periodStart: "2027-03-01", periodEnd: "2027-04-01" },
+    ]);
+    expect(c.monthsByCategory).toEqual([{ category: "tax", months: 13 }]);
+    expect(c.actualCost).toBe(280.61); // 3647.96 / 13
+  });
+
+  it("two rows filed against one month are still one month, however long either runs", () => {
+    // A corrected invoice entered twice against the same December is not two
+    // Decembers — the rule that was already here, and it survives the change.
+    const c = checkCoverage([FEE], twenty, [
+      { category: "sewer", amountPaid: 1405.36, periodStart: "2026-12-01", periodEnd: "2027-01-01" },
+      { category: "sewer", amountPaid: 1405.36, periodStart: "2026-12-01", periodEnd: "2027-01-01" },
+    ]);
+    expect(c.monthsByCategory).toEqual([{ category: "sewer", months: 1 }]);
+    expect(c.actualCost).toBe(2810.72);
+  });
+
+  it("a tax bill NO fee claims is still named, in English", () => {
+    // The owner decides which boxes are ticked. A park that leaves tax
+    // unticked must read "you pay for Property tax and no fee covers it" —
+    // never the bare enum, and never silence.
+    const noTax: ParkFee = { ...FEE, covers: ["sewer"] as CostCategory[] };
+    const c = checkCoverage([noTax], twenty, [...june, yearOf("tax", 3517.96)]);
+    expect(c.uncovered).toContain("tax");
+    expect(COVER_LABEL.tax).toBe("Property tax");
   });
 });

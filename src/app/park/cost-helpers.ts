@@ -28,7 +28,7 @@ import { prettyMonth } from "./ledger-helpers";
 // The ONE month arithmetic (clamps to the end of the target month, takes a
 // negative count). agreement-helpers imports lake-time, parks and
 // ledger-helpers, none of which import this file — checked, no cycle.
-import { addMonths } from "./agreement-helpers";
+import { addMonths, monthsBetween } from "./agreement-helpers";
 
 export type CostCategory =
   | "water" | "sewer" | "trash" | "common_electric" | "grounds"
@@ -133,6 +133,43 @@ export const COST_CATEGORY_LABEL: Record<CostCategory, string> = {
   insurance: "Insurance",
   other: "Other",
 };
+
+/**
+ * EVERY COST CATEGORY THERE IS, in the order the screens read them.
+ *
+ * Derived from the label map rather than hand-listed beside it, because the
+ * map is a `Record<CostCategory, string>` and the compiler will not let it be
+ * incomplete. Every other list of categories in this product is a SUBSET of
+ * this one, and each of them had drifted at least once — `snow` reached four
+ * lists in 0144 and missed a fifth; `tax` and `insurance` reached the reminder
+ * list in 0123 and not the dropdown. A subset that starts from here and
+ * filters by a stated rule cannot fall behind the next category; a subset
+ * retyped by hand always can.
+ */
+export const COST_CATEGORIES: CostCategory[] =
+  Object.keys(COST_CATEGORY_LABEL) as CostCategory[];
+
+/**
+ * HOW MANY MONTHS OF COST ONE BILL IS FOR.
+ *
+ * A park_costs row carries its own period, and every reader before this one
+ * read a row as ONE MONTH however long that period ran. That is right for the
+ * sewer, which arrives monthly, and right for the two Haven baselines whose
+ * owner divided the year by twelve himself before typing them in. It is
+ * ruinous for a bill entered whole: The Haven's property tax is $3,517.96 for
+ * the YEAR, and read as one month it is more than the entire grounds fee
+ * collects from twenty households.
+ *
+ * `monthsBetween` is the one piece of month arithmetic in this codebase and is
+ * imported rather than restated — whole months by stepping the calendar, with
+ * a remainder of fifteen days or more counting as one more. The floor of ONE
+ * is the conservative end: a fortnight's bill reads as a month's, which
+ * overstates the cost and can only make a fee look short. A fee that looks
+ * short gets checked; one that looks comfortable does not.
+ */
+export function costMonths(periodStart: string, periodEnd: string): number {
+  return Math.max(1, monthsBetween(periodStart, periodEnd));
+}
 
 /** A lot as it stood when the bill was split. */
 export interface CostLot {

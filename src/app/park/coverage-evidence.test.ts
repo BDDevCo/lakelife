@@ -97,7 +97,14 @@ describe("the coverage panel says what is missing from the number", () => {
     const call = s.match(/checkCoverage\(([\s\S]*?)\);/)?.[1] ?? "";
     expect(call.length, "listFees no longer calls checkCoverage — scan is stale").toBeGreaterThan(40);
     expect(call, "period_start must reach the helper per row").toMatch(/periodStart:\s*String\(c\.period_start/);
-    expect(s, "and the read must select it").toMatch(/select\("category, amount_paid, period_start/);
+    // AND BOTH ENDS OF IT. `period_end` was in the select for months and
+    // stopped at the loader — a column read and handed to nobody — so a bill
+    // covering a year was averaged as a month. With a fee able to claim the
+    // property tax (0172) that is $3,517.96 of monthly cost that does not
+    // exist, on the screen where the fee is set.
+    expect(call, "period_end must reach the helper too, or an annual bill reads as one month")
+      .toMatch(/periodEnd:\s*String\(c\.period_end/);
+    expect(s, "and the read must select it").toMatch(/select\("category, amount_paid, period_start, period_end/);
     expect(s, "one denominator across every bill is the defect").not.toMatch(/monthsObserved/);
   });
 
@@ -113,10 +120,10 @@ describe("the coverage panel says what is missing from the number", () => {
 describe("The Haven's actual numbers, as recorded today", () => {
   // The four rows on file, all sharing one period_start (June 2026).
   const COSTS = [
-    { category: "sewer" as const, amountPaid: 1405.36, periodStart: "2026-06-01" },
-    { category: "grounds" as const, amountPaid: 198.08, periodStart: "2026-06-01" },
-    { category: "common_electric" as const, amountPaid: 144.02, periodStart: "2026-06-01" },
-    { category: "other" as const, amountPaid: 140.00, periodStart: "2026-06-01" },
+    { category: "sewer" as const, amountPaid: 1405.36, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+    { category: "grounds" as const, amountPaid: 198.08, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+    { category: "common_electric" as const, amountPaid: 144.02, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
+    { category: "other" as const, amountPaid: 140.00, periodStart: "2026-06-01", periodEnd: "2026-07-01" },
   ];
   const FEE = {
     id: "f1",

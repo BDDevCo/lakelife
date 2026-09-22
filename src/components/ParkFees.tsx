@@ -16,8 +16,9 @@ import { prettyMonth } from "@/app/park/ledger-helpers";
  * FEES, AND WHETHER THEY COVER WHAT THEY CLAIM TO.
  *
  * The grounds fee is the one that matters: a single flat charge — an averaged
- * prorated share — covering water, sewer, trash, park lighting and
- * maintenance. The resident pays a number they can predict.
+ * prorated share — covering water, sewer, trash, park lighting, grounds and,
+ * since the owner settled it on 22 September, the property tax and the
+ * insurance premium. The resident pays a number they can predict.
  *
  * Their own electricity is not in it: the utility meters each lot and bills
  * them directly, so it never passes through the park at all.
@@ -30,6 +31,23 @@ import { prettyMonth } from "@/app/park/ledger-helpers";
 
 const money = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/**
+ * THE TICKBOXES, AND WHY THEY ARE BUILT FROM THESE TWO LISTS.
+ *
+ * `FEE_COVERS` is every cost the park spreads across its lots, derived from
+ * the cost vocabulary itself rather than typed out here — so the day a new
+ * category lands it appears on this form without anybody remembering. Since
+ * 0172 that includes Property tax and Insurance: the owner's words on
+ * 22 September were "tax and insurance belong in the pool", and until then he
+ * could record the tax bill, be reminded of the tax bill, and not say the fee
+ * he charges is what pays it. `FEE_EXTRA_COVERS` is the three promises a fee
+ * may make that no bill is ever filed against.
+ *
+ * NEVER FROM `COVER_LABEL`'s KEYS. That map names every category so a coverage
+ * line can read in English, including the one a fee may NOT claim — power for
+ * a home the park owns, which is metered to that home and set against its own
+ * income. Building the row from the labels would hand it a tickbox.
+ */
 const ALL_COVERS = [...FEE_COVERS, ...FEE_EXTRA_COVERS];
 /**
  * ONLY WHAT THE BILLER WILL ACTUALLY BILL.

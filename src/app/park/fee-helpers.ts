@@ -24,7 +24,9 @@
  */
 
 // The cost screen's words for the cost categories — imported, never retyped.
-import { COST_CATEGORY_LABEL, type CostCategory } from "./cost-helpers";
+import {
+  COST_CATEGORY_LABEL, COST_CATEGORIES, canSplit, costMonths, type CostCategory,
+} from "./cost-helpers";
 // Months in words and the one money formatter — never ISO, never toFixed here.
 import { prettyMonth, money } from "./ledger-helpers";
 
@@ -42,19 +44,54 @@ export interface ParkFee {
 }
 
 /**
- * What a fee may be reconciled against.
+ * WHAT A FEE MAY BE RECONCILED AGAINST — every shared cost the park carries.
  *
- * `unit_electric` is deliberately ABSENT: power for a park-owned home is the
- * cost of that building and belongs against its rent, not spread across every
- * lot's grounds fee. And a lot renter's own electricity never appears at all —
- * the utility meters it and bills them directly.
+ * Brendon, 22 September 2026: "tax and insurance belong in the pool." They do,
+ * and the pool is what this list describes: the grounds fee exists to recover
+ * the cost of running the park, and the tax on seven parcels and the premium
+ * on the policy over them are as shared as the sewer bill. The costs screen
+ * has said so in its own label map since 0123 — "both are shared park costs,
+ * they sit in the pool every rentable lot carries a share of, exactly like
+ * sewer" — while this list went on refusing them.
+ *
+ * THE LIST IS NO LONGER TYPED OUT. It was, and it fell behind twice. `snow`
+ * became a real cost category in 0144 and sat on in the "not a billable
+ * category" list below. `tax` and `insurance` were recordable, schedulable,
+ * splittable and in the costs dropdown, and a fee still could not claim them —
+ * so the month he files the tax bill it was GUARANTEED to land in `uncovered`,
+ * under a sentence asking whether that gap was deliberate, about a gap the
+ * product had made and he had no way to close.
+ *
+ * So the list derives from the two things that actually decide it: every cost
+ * category there is, minus the ones the park never spreads. `canSplit` is that
+ * rule and it has exactly one member — `unit_electric`, power for a home the
+ * PARK owns. Brendon settled that one too: "electrical is seperately metered
+ * and will be billed directly to renter (park take the STR bills directly but
+ * not allocated to rest of the renters)." It is one building's cost, set
+ * against that building's own income; a fee is spread across every lot, so the
+ * two can never meet. `recordCost` refuses to split it and the costs dropdown
+ * does not offer it — one rule, read here rather than restated.
+ *
+ * `other` STAYS IN, deliberately: it is where The Haven's pier sits, it is
+ * splittable, and the only list that leaves it out is the reminder list — for
+ * a reason about reminders (two unrelated `other` bills would each satisfy the
+ * other's) that says nothing about what a fee may cover.
+ *
+ * The next category to arrive lands here the day it is declared, without
+ * anybody having to remember to come back.
  */
-export const FEE_COVERS: CostCategory[] = [
-  "water", "sewer", "trash", "common_electric", "grounds", "other",
-];
+export const FEE_COVERS: CostCategory[] = COST_CATEGORIES.filter(canSplit);
 
-/** Extra coverage words a fee may claim that are not billable cost categories. */
-export const FEE_EXTRA_COVERS = ["maintenance", "snow", "pest", "amenities"] as const;
+/**
+ * Extra coverage words a fee may claim that are not billable cost categories.
+ *
+ * `snow` used to live here and no longer does. 0144 gave it a column, a
+ * dropdown and a reminder, which makes it an ordinary cost category and puts
+ * it in `FEE_COVERS` above. Leaving it in both would have given the fee form
+ * two Snow clearing checkboxes sharing one key, and gone on telling
+ * `checkCoverage` that a snow-only fee earns nothing worth checking.
+ */
+export const FEE_EXTRA_COVERS = ["maintenance", "pest", "amenities"] as const;
 
 /**
  * THE WORDS A COVERAGE LINE PRINTS — one source, not a second copy.
@@ -68,22 +105,23 @@ export const FEE_EXTRA_COVERS = ["maintenance", "snow", "pest", "amenities"] as 
  * two ways on two screens.
  *
  * And it was INCOMPLETE. `checkCoverage` lists every recorded cost category no
- * active fee claims, and tax and insurance can never be claimed by a fee
- * (FEE_COVERS leaves them out on purpose), so the month he files the insurance
- * premium they are GUARANTEED to land in `uncovered`. With no entry here,
- * ParkFees falls back to the raw slug — it printed the bare word `tax` beside
- * "Water, Trash", a database enum sitting in an English sentence.
+ * active fee claims, so a category with no entry here reached the card as its
+ * own database enum: it printed the bare word `tax` beside "Water, Trash", a
+ * column name sitting in an English sentence.
  *
  * Spreading the cost screen's map fixes both at once and, more to the point,
  * cannot drift again when the next category lands: whatever the costs screen
  * calls it, the fee screen calls it that too. The three extras below are the
  * coverage words a fee may claim that are not billable categories at all.
  *
- * ONE GUARDRAIL. The checkbox row on the fee form is built from
- * `[...FEE_COVERS, ...FEE_EXTRA_COVERS]`, NOT from this map's keys — leave it
- * that way. Iterating these keys instead would quietly give a fee tickboxes
- * for Property tax and Insurance, reversing the deliberate rule above and
- * making a product decision the owner has not made.
+ * ONE GUARDRAIL, AND IT IS NOT THE ONE IT USED TO BE. The checkbox row on the
+ * fee form is built from `[...FEE_COVERS, ...FEE_EXTRA_COVERS]`, not from this
+ * map's keys — leave it that way. It used to matter because tax and insurance
+ * had labels and no right to a tickbox; now they have both, and the word this
+ * map holds that must never become a tickbox is `unit_electric`. It is named
+ * here so a coverage line can read "you pay for Electric on a home you own and
+ * no fee covers it", which is TRUE and is the whole point of naming it; a fee
+ * still cannot claim it, because a park-owned home's power is never spread.
  */
 export const COVER_LABEL: Record<string, string> = {
   ...COST_CATEGORY_LABEL,
@@ -254,7 +292,7 @@ export interface CoverageCheck {
   /** Categories the park pays for that NO fee claims to cover. */
   uncovered: CostCategory[];
   /**
-   * How many distinct months each claimed category's monthly figure rests
+   * How many months of cost each claimed category's monthly figure rests
    * on — the evidence behind `actualCost`, per bill. Only categories with a
    * row appear; the ones without are in `unverified`.
    */
@@ -276,11 +314,50 @@ export interface CoverageCheck {
  *
  * A category's month is the month its period BEGINS (`period_start`), which
  * is the same key the rest of the ledger reads a park_costs row by.
+ *
+ * AND A BILL IS FOR AS MANY MONTHS AS ITS OWN PERIOD RUNS. Every reader in
+ * this product treats a park_costs row as one month, and until tax and
+ * insurance could be claimed nothing tested that: the four rows on file are
+ * each a single June, and the two annual baselines among them had already
+ * been divided by twelve by the man typing them in.
+ *
+ * The Haven's property tax is $3,517.96 for the YEAR across seven parcels. Ask
+ * this function the old question with that bill entered whole and a fee that
+ * claims tax, and it answered: "Your fees bring in $2,850.60 a month against
+ * $6,202.42 of real cost — SHORT by $167.59 a lot." Short by more than the fee
+ * charges, on the screen where he decides what twenty households pay for a
+ * year. The truth is $293.16 a month of tax and a fee that is ahead.
+ *
+ * So each row is divided by the months ITS period covers (`costMonths`), and a
+ * category's denominator is the sum of those spans over the distinct months
+ * its bills were filed against — which leaves every existing one-month row
+ * reading exactly as it did, and stops an annual bill reading as a January.
+ * Two rows filed against the same month are still one month of cost: a
+ * corrected invoice entered twice is not two Decembers.
+ *
+ * The denominator is not a detail a reader should have to assume, so
+ * `evidenceLine` names it per bill — "Property tax over 12 months" — and
+ * `coverageSummary` says the figures are monthly in the sentence itself.
  */
 export function checkCoverage(
   fees: readonly ParkFee[],
   payersByFee: ReadonlyMap<string, number>,
-  costs: readonly { category: CostCategory; amountPaid: number; periodStart: string }[],
+  costs: readonly {
+    category: CostCategory;
+    amountPaid: number;
+    periodStart: string;
+    /**
+     * The day the period ENDS, half-open, straight off the row.
+     *
+     * REQUIRED, not defaulted. `park_costs.period_end` is NOT NULL and
+     * `listFees` has been selecting it since before this helper could use it —
+     * a column read and handed to nobody. Making it optional here would let
+     * the next caller forget it and silently get the one-month reading back
+     * for a bill covering a year, which is the defect this parameter exists
+     * to close. The compiler asks every caller instead.
+     */
+    periodEnd: string;
+  }[],
 ): CoverageCheck {
   const live = fees.filter((f) => f.active);
 
@@ -297,14 +374,21 @@ export function checkCoverage(
   );
 
   const spentBy = new Map<CostCategory, number>();
-  const monthsBy = new Map<CostCategory, Set<string>>();
+  // Category → the month each bill was filed against → the longest span any
+  // bill filed against that month covers. Keyed by the filing month so two
+  // rows for one December stay one December; holding the LONGEST span means a
+  // year's tax filed in January counts its twelve months, and a second
+  // January row cannot shrink them.
+  const monthsBy = new Map<CostCategory, Map<string, number>>();
   for (const c of costs) {
     spentBy.set(c.category, round2((spentBy.get(c.category) ?? 0) + c.amountPaid));
-    const seen = monthsBy.get(c.category) ?? new Set<string>();
-    seen.add(String(c.periodStart ?? "").slice(0, 7));
-    monthsBy.set(c.category, seen);
+    const filed = String(c.periodStart ?? "").slice(0, 7);
+    const spans = monthsBy.get(c.category) ?? new Map<string, number>();
+    spans.set(filed, Math.max(spans.get(filed) ?? 0, costMonths(c.periodStart, c.periodEnd)));
+    monthsBy.set(c.category, spans);
   }
-  const monthsOf = (cat: CostCategory) => Math.max(1, monthsBy.get(cat)?.size ?? 0);
+  const monthsOf = (cat: CostCategory) =>
+    Math.max(1, [...(monthsBy.get(cat)?.values() ?? [])].reduce((s, n) => s + n, 0));
 
   // Per category: what it costs in a typical month. Then the sum of those.
   const actualCost = round2(
@@ -335,6 +419,12 @@ export function checkCoverage(
  * same screen. A single month is also a SEASON — a June of mowing is not a
  * January of ploughing — and a fee set on it is set for a year, so the
  * one-month caveat stays as long as any bill is resting on one.
+ *
+ * THIS IS ALSO WHERE AN ANNUAL BILL DECLARES ITSELF. A year's property tax
+ * entered whole reads "Property tax over 12 months" here, which is the only
+ * place on the card that says what the monthly figure above was divided by —
+ * and the place to look when it is wrong, because a tax bill typed in against
+ * a single month will say "over one month" and be believed.
  */
 export function evidenceLine(check: CoverageCheck): string | null {
   const rows = check.monthsByCategory;
@@ -421,10 +511,17 @@ export function coverageSummary(
   if (payers === 0) return "Nobody is paying this yet.";
 
   const perLot = round2(Math.abs(check.margin) / payers);
+  // BOTH HALVES ARE MONTHLY FIGURES AND ONLY ONE OF THEM SAID SO. The income
+  // side carried "a month" from the first draft; the cost side read "$6,202.42
+  // of real cost", which a reader takes for a total of what was entered —
+  // right while the fee could only claim bills that arrive monthly anyway. Now
+  // a fee may claim the property tax, `checkCoverage` spreads that year over
+  // twelve, and a number that is an AVERAGE has to say so in the sentence a
+  // person reads, not only in the caption underneath it.
   if (check.margin >= 0) {
-    return `Your fees bring in ${money(check.feeIncome)} a month against ${money(check.actualCost)} of real cost — ahead by ${money(perLot)} a lot.`;
+    return `Your fees bring in ${money(check.feeIncome)} a month against ${money(check.actualCost)} a month of real cost — ahead by ${money(perLot)} a lot.`;
   }
-  return `Your fees bring in ${money(check.feeIncome)} a month against ${money(check.actualCost)} of real cost — SHORT by ${money(perLot)} a lot, ${money(Math.abs(check.margin))} a month.`;
+  return `Your fees bring in ${money(check.feeIncome)} a month against ${money(check.actualCost)} a month of real cost — SHORT by ${money(perLot)} a lot, ${money(Math.abs(check.margin))} a month.`;
 }
 
 

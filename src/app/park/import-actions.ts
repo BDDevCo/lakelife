@@ -1052,12 +1052,30 @@ export async function commitImport(batchId: string): Promise<CommitOutcome> {
  *
  * Order matters: tenancies, then renter files. The other way round would fail
  * on the foreign key.
+ *
+ * WHAT IT DOES NOT PUT BACK, SAID OUT LOUD. A rate card has no undo: deleting
+ * a lot takes its card with it (0052, `on delete cascade`), but a card this
+ * import wrote onto a lot he already had stays exactly where it is, and so
+ * does a lot somebody else has since been put on. "Your roll is back how it
+ * was" was printed over both, and the office read it and stopped looking. The
+ * closing sentence now names what was left behind and where to go and change
+ * it, and only claims the roll is restored when nothing was left behind at all.
+ *
+ * EVERY READ HAPPENS BEFORE THE FIRST DELETE, for the same reason. A read that
+ * failed half-way through used to be logged and stepped over: the lot survived,
+ * `undone_at` was stamped so the undo could never be retried, and the toast
+ * still said the roll was back. Reading first means a failure refuses with
+ * nothing changed, nothing stamped, and the undo still there to try again.
  */
 export async function undoImport(batchId: string): Promise<ParkResult> {
   const admin = createServiceClient();
   const batchRes = await admin
     .from("park_import_batches")
-    .select("park_id, committed_at, undone_at")
+    // `counts` because the closing sentence needs `counts.rates` — how many
+    // rate cards the commit actually wrote. Nothing else knows that number:
+    // park_import_rows records the lot, the renter and the tenancy a line
+    // made, never its rate card.
+    .select("park_id, committed_at, undone_at, counts")
     .eq("id", batchId)
     .maybeSingle();
   if (batchRes.error) {
@@ -1069,9 +1087,10 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
   if (!batch.committed_at) return { ok: false, error: "That import was never put in." };
   if (batch.undone_at) return { ok: false, error: "That import was already undone." };
 
-  // Everything this function deletes comes off this one read. A failure gives
-  // three empty lists, and the undo then deletes nothing, stamps `undone_at`
-  // so it can never be retried, and reports "your roll is back how it was".
+  // Everything this function deletes comes off this one read, so a failure
+  // here used to give three empty lists: the undo deleted nothing, stamped
+  // `undone_at` so it could never be retried, and reported "your roll is back
+  // how it was" over a roll it had not touched. It refuses instead.
   const rowsRes = await admin
     .from("park_import_rows")
     .select("created_reservation_id, created_renter_id, created_lot_id")
@@ -1197,6 +1216,55 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
     }
   }
 
+  // ---- WHICH PADS COME OUT, DECIDED BEFORE ANYTHING IS DELETED -----------
+  //
+  // A lot this import made comes out ONLY if nobody else has since been put on
+  // it. A lot with a tenancy on it is now his inventory, not our mess.
+  //
+  // This used to be a count per lot, taken after the tenancies were deleted,
+  // where "any reservation left" meant "somebody else's". It is one read now,
+  // taken before the first delete, which is why it can refuse: a dropped read
+  // in the old place was logged and stepped over, and the undo carried on to
+  // stamp `undone_at` and say the roll was restored over a pad it had quietly
+  // left behind. Excluding this import's own tenancy ids asks the same
+  // question earlier — the ids are already in hand.
+  const lotsToRemove: string[] = [];
+  const lotsLeft: string[] = [];
+  if (lotIds.length) {
+    const onLotsRes = await admin
+      .from("lot_reservations")
+      .select("id, park_lot_id")
+      .in("park_lot_id", lotIds);
+    if (onLotsRes.error) {
+      return { ok: false, error: readFailedMessage("whether anybody's on the lots that import made", onLotsRes.error, { money: true }) };
+    }
+    const mine = new Set(resIds);
+    const busy = new Set(
+      (onLotsRes.data ?? [])
+        .filter((r) => !mine.has(r.id as string))
+        .map((r) => r.park_lot_id as string),
+    );
+    for (const lotId of new Set(lotIds)) (busy.has(lotId) ? lotsLeft : lotsToRemove).push(lotId);
+  }
+
+  // The cards that will die with their pads, read while the pads are still
+  // there. `counts.rates` is every card the commit wrote, on pads it made and
+  // pads he already had; the ones on pads that are about to go are the only
+  // ones the undo takes back, so the closing sentence is that number minus
+  // these. Monthly, because monthly is the only term an import writes.
+  const cardsOnDoomedLots = new Set<string>();
+  if (lotsToRemove.length) {
+    const ratesRes = await admin
+      .from("lot_rates")
+      .select("park_lot_id")
+      .in("park_lot_id", lotsToRemove)
+      .eq("term", "monthly");
+    if (ratesRes.error) {
+      return { ok: false, error: readFailedMessage("the rents on the lots that import made", ratesRes.error, { money: true }) };
+    }
+    for (const r of ratesRes.data ?? []) cardsOnDoomedLots.add(r.park_lot_id as string);
+  }
+
   if (resIds.length) await admin.from("lot_reservations").delete().in("id", resIds);
   if (renterIds.length) {
     // AND STOP IF IT REFUSES. A half-undone import is worse than one that
@@ -1211,21 +1279,18 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
     }
   }
 
-  // Lots created by the import come out ONLY if nobody else has since been put
-  // on them. A lot with a tenancy on it is now his inventory, not our mess.
-  for (const lotId of lotIds) {
-    const usedRes = await admin
-      .from("lot_reservations")
-      .select("id", { count: "exact", head: true })
-      .eq("park_lot_id", lotId);
-    // FAILS OPEN INTO A DELETE. `!count` is true for a failed count as well as
-    // for an empty one, so a dropped read used to remove a pad somebody had
-    // since been put on. Per-lot, so the rest of the undo still finishes.
-    if (usedRes.error) {
-      console.error(`[read failed] whether lot ${lotId} is in use:`, usedRes.error);
+  // Per-lot, so one refusal does not strand the rest of the undo — and the
+  // error is READ, because a pad that would not delete is a pad still on his
+  // roll, and the sentence below has to count it as one.
+  let cardsGone = 0;
+  for (const lotId of lotsToRemove) {
+    const { error } = await admin.from("park_lots").delete().eq("id", lotId);
+    if (error) {
+      console.error(`[delete refused] lot ${lotId} this import made:`, error);
+      lotsLeft.push(lotId);
       continue;
     }
-    if (!usedRes.count) await admin.from("park_lots").delete().eq("id", lotId);
+    if (cardsOnDoomedLots.has(lotId)) cardsGone += 1;
   }
 
   await admin
@@ -1235,7 +1300,40 @@ export async function undoImport(batchId: string): Promise<ParkResult> {
 
   revalidatePath("/park");
   revalidatePath(`/park/import/${batchId}`);
-  return { ok: true, signal: "That import is undone. Your roll is back how it was." };
+
+  // ---- WHAT THE UNDO ACTUALLY DID ----------------------------------------
+  //
+  // `counts.rates` is the commit's own record of how many rate cards it wrote.
+  // Every one of them is still on its lot unless the lot went with it, so what
+  // is left behind is that number less the cards that went. Floored at zero
+  // because he can change or clear a card himself between the commit and the
+  // undo, and a negative would be arithmetic he can see.
+  //
+  // A batch with no `rates` in its counts cannot be counted — and a number we
+  // cannot stand behind is exactly what this sentence exists to stop printing,
+  // so that case says it does not know rather than saying zero.
+  const counts = (batch.counts ?? {}) as Record<string, unknown>;
+  const ratesWritten = typeof counts.rates === "number" ? counts.rates : null;
+  const ratesLeft = ratesWritten === null ? null : Math.max(0, ratesWritten - cardsGone);
+
+  const left = lotsLeft.length;
+  const said = ["That import is undone."];
+  if (left > 0) {
+    said.push(
+      `${left} ${left === 1 ? "lot" : "lots"} this import made ${left === 1 ? "is" : "are"} still on your roll — ` +
+      `check ${left === 1 ? "it" : "them"} on Lots & rates.`,
+    );
+  }
+  if (ratesLeft === null) {
+    said.push("We can't tell what rents it set, so check Lots & rates.");
+  } else if (ratesLeft > 0) {
+    said.push(
+      `${ratesLeft} ${ratesLeft === 1 ? "lot kept the rent" : "lots kept the rents"} this import set — ` +
+      `change ${ratesLeft === 1 ? "it" : "them"} on Lots & rates.`,
+    );
+  }
+  if (left === 0 && ratesLeft === 0) said.push("Your roll is back how it was.");
+  return { ok: true, signal: said.join(" ") };
 }
 
 /** Remove a renter file that never made it onto a lot. */

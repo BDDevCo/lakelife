@@ -6,6 +6,7 @@ import {
   carriedLine,
   buildCostScheduleRow, SCHEDULABLE_CATEGORIES, type CostScheduleInput,
   carryFromRow, billPeriod, costAnswersBill, coveredSpanWords, editingReminderLine,
+  COST_CATEGORIES, costMonths,
 } from "./cost-helpers";
 import { addDays } from "./today-helpers";
 import { overlaps } from "@/lib/parks";
@@ -1058,5 +1059,107 @@ describe("the note on a bill is actually shown to the man who typed it", () => {
       "sourceNote is only ever tested for existence — the note the sentence " +
         "promises is never put on screen.",
     ).toBeGreaterThan(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HOW LONG A BILL IS FOR.
+//
+// Every reader in this product treats a park_costs row as ONE MONTH. That is
+// right for the sewer and right for a baseline somebody divided by twelve
+// before typing it in, and it is ruinous for a bill entered whole: The Haven's
+// property tax is $3,517.96 for the YEAR across seven parcels, and read as a
+// January it is more than the grounds fee collects from twenty households.
+//
+// `costMonths` is the one place that answers the question, and it answers it
+// with `monthsBetween` — the codebase's only month arithmetic — rather than a
+// second opinion about how long a month is.
+// ---------------------------------------------------------------------------
+describe("how many months of cost one bill is for", () => {
+  it("a monthly bill is one month", () => {
+    expect(costMonths("2026-06-01", "2026-07-01")).toBe(1);
+  });
+
+  it("a bill running mid-month to mid-month is still one month", () => {
+    // The sewer arrives on the 5th. A rule that counted calendar months
+    // TOUCHED would call this two and halve every utility bill on the screen.
+    expect(costMonths("2026-06-05", "2026-07-05")).toBe(1);
+  });
+
+  it("a year is twelve, leap year included", () => {
+    expect(costMonths("2026-01-01", "2027-01-01")).toBe(12);
+    expect(costMonths("2028-01-01", "2029-01-01")).toBe(12);
+  });
+
+  it("a quarter is three", () => {
+    expect(costMonths("2026-01-01", "2026-04-01")).toBe(3);
+  });
+
+  it("never less than one, however short the period", () => {
+    // The floor is the conservative end: a fortnight read as a month
+    // OVERSTATES the monthly cost, which can only make a fee look short — and
+    // a fee that looks short gets checked. The other way round is a fee that
+    // looks comfortable and is not.
+    expect(costMonths("2026-01-01", "2026-01-15")).toBe(1);
+    expect(costMonths("2026-01-01", "2026-01-02")).toBe(1);
+    // A reversed or zero-length period cannot divide anything by nothing.
+    expect(costMonths("2026-01-01", "2026-01-01")).toBe(1);
+    expect(costMonths("2026-02-01", "2026-01-01")).toBe(1);
+  });
+});
+
+describe("the list every other category list is a subset of", () => {
+  it("holds every category the label map declares, and nothing else", () => {
+    // Derived from a Record<CostCategory, string>, so the compiler will not
+    // let it fall behind the next category the way five hand-lists did.
+    expect(COST_CATEGORIES).toEqual(Object.keys(COST_CATEGORY_LABEL));
+    expect(COST_CATEGORIES).toContain("tax");
+    expect(COST_CATEGORIES).toContain("insurance");
+    expect(COST_CATEGORIES).toContain("snow");
+    expect(COST_CATEGORIES).toContain("unit_electric");
+  });
+
+  it("every schedulable category is one of them", () => {
+    for (const c of SCHEDULABLE_CATEGORIES) {
+      expect(COST_CATEGORIES, `${c} can be scheduled and is not a category`).toContain(c);
+    }
+  });
+
+  it("exactly one category is one the park never spreads", () => {
+    // The rule FEE_COVERS is built on. If a second unsplittable category ever
+    // lands, this fails and somebody has to decide what it means for a fee.
+    expect(COST_CATEGORIES.filter((c) => !canSplit(c))).toEqual(["unit_electric"]);
+  });
+});
+
+describe("and it is the codebase's month arithmetic, not a second opinion", () => {
+  /**
+   * A DAY COUNT OVER THIRTY agrees with `monthsBetween` on every period a
+   * park bill plausibly covers, which is exactly why this has to be a source
+   * scan rather than a value test: the two rules are indistinguishable from
+   * the outside until the day they are not, and by then there are two rules.
+   * `monthsBetween` is the one that already decided how long a month is for
+   * agreements, renewals and the rent roll.
+   */
+  const source = () =>
+    readFileSync(fileURLToPath(new URL("./cost-helpers.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  it("the scan reads the real function, with its prose gone", () => {
+    const body = source().match(/export function costMonths\([\s\S]*?\n\}/)?.[0] ?? "";
+    expect(body, "costMonths was not found — this scan is measuring nothing").not.toBe("");
+    expect(body, "the prose was not stripped, so a comment could satisfy the test below")
+      .not.toMatch(/ruinous/);
+  });
+
+  it("counts months by calling monthsBetween", () => {
+    const src = source();
+    const body = src.match(/export function costMonths\([\s\S]*?\n\}/)?.[0] ?? "";
+    expect(body).toMatch(/monthsBetween\(/);
+    expect(src, "and imports it rather than declaring a local one")
+      .toMatch(/import \{[^}]*monthsBetween[^}]*\} from "\.\/agreement-helpers";/);
+    expect(body, "a hand-rolled day count is a second rule about how long a month is")
+      .not.toMatch(/86[_,]?400|Date\.parse|getTime\(/);
   });
 });
