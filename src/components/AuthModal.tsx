@@ -290,11 +290,24 @@ export function AuthModal({
             )}
           </div>
 
+          {/* THIS BOX USED TO RECOMMEND THE ONE THING THAT BREAKS AN INVITATION.
+              It said Apple's Hide My Email "works fine, mail still reaches you" —
+              true for a homeowner, and the exact trigger for a crew. An invitation
+              is matched by `claimCrewInvite` with `.eq(invite_email, session email)`
+              and nothing else, so a private-relay address matches no invitation,
+              `handle_new_auth_user` lands them as role 'owner', and they arrive in
+              the homeowner property wizard. This modal cannot tell the two readers
+              apart — same box, same page — so the sentence has to be true for both,
+              and "use the address they invited" is.
+              The escape hatch for anyone who already did it is on /welcome. */}
           {mode === "signup" && (
             <div className="mut" style={{ fontSize: 11.5, marginTop: 12, lineHeight: 1.5 }}>
-              Apple/Google sign-in verifies your email in one tap — Apple&apos;s Hide My
-              Email works fine, mail still reaches you. Every account needs a working email
-              on file and a text-verified mobile before the first service books.
+              Apple/Google sign-in verifies your email in one tap. If somebody invited
+              you — a crew invitation, or a homeowner asking for your company — sign in
+              with the exact address they invited, not a relay or an alias: the
+              invitation is matched on that address and nothing else. Every account
+              needs a working email on file and a text-verified mobile before the first
+              service books.
             </div>
           )}
         </div>

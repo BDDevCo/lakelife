@@ -188,6 +188,12 @@ async function run(req: Request) {
   noteSkips("sweep", sweep);
   noteSkips("overstay", overstay);
   noteSkips("dispatch", dispatch);
+  // A CUSTOMER'S PRICE THE ROLL COULD NOT MOVE. resolveRushFallbacks rolls an
+  // unclaimed same-day job to the standard price and texts the owner the new
+  // number. On a crew-priced service there IS no standard price to roll to, so
+  // it now declines by name instead of leaving the 25% same-day premium on a
+  // job quietly — and a decline nobody reads is the same as no decline.
+  noteSkips("rushFallbacks", rushFallbacks);
   noteSkips("routes", routes);
   noteSkips("autopilot", autopilot);
   noteSkips("bases", bases);

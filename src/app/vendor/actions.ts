@@ -516,7 +516,7 @@ export async function submitFlag(
       try {
         const [ruleRes, profile] = await Promise.all([
           admin.from("services")
-            .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, needs_interior_access")
+            .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, needs_interior_access, crew_priced")
             .eq("id", job.service_id as string).maybeSingle(),
           // asService: the caller is the CREW, and the default path is owner-scoped.
           // Without this it returned {hasProfile:false} — truthy, so no throw,

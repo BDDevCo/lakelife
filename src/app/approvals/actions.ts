@@ -14,6 +14,11 @@ import { mustRead, softRead, readFailedMessage } from "@/lib/must-read";
 import { rushPrice, fillInRate } from "@/lib/rush";
 import { getPlatformSettings } from "@/lib/settings";
 import { marginPct } from "@/lib/dispatch";
+import {
+  customerPrice as feeCustomerPrice,
+  crewPayout as feeCrewPayout,
+  platformTake as feePlatformTake,
+} from "@/lib/platform-fee";
 import { money } from "@/app/park/ledger-helpers";
 
 export interface ApprovalResult {
@@ -152,7 +157,7 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
     if (profile?.hasProfile) {
       const servicesRes = await admin
         .from("services")
-        .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands");
+        .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, crew_priced");
       // An unread price list is an EMPTY price list one line below: every job
       // misses `byId`, every job `continue`s, and the owner is told "nothing
       // upcoming to re-price yet" about a season that is fully booked.
@@ -167,6 +172,8 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
       type TimedRule = ServiceRule & {
         est_minutes?: number | null;
         duration_bands?: DurationBands | null;
+        /** 0174: the crew's own card is the price; there is no menu here. */
+        crew_priced?: boolean | null;
       };
       const byId = new Map((services ?? []).map((s) => [s.id, s as unknown as TimedRule]));
       const pp = toPricingProfile(profile);
@@ -198,7 +205,11 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
         // is_rush and gap_claim are what say this job's money is not the menu
         // price. Without them the loop could not tell an agreed number from a
         // stale one, and overwrote both.
-        .select("id, service_id, vendor_id, vendor_cost, customer_price, is_rush, gap_claim")
+        // crew_quote / fee_customer_pct / fee_crew_pct are THIS JOB'S OWN frozen
+        // three (0174). A crew-priced job reprices from the percentages that
+        // were in force when the customer said yes — never from the live dial,
+        // or tuning a dial would silently reprice sold work through this door.
+        .select("id, service_id, vendor_id, vendor_cost, customer_price, is_rush, gap_claim, crew_quote, fee_customer_pct, fee_crew_pct")
         .eq("property_id", ctx.propertyId)
         .is("group_id", null) // package jobs price as a SUM of legs — repricing by the anchor alone would collapse the bundle (component-aware reprice = S3)
         .in("status", ["requested", "scheduled"]);
@@ -248,6 +259,92 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
         const raw = j.service_id ? byId.get(j.service_id) : undefined;
         if (!raw) continue;
         const rule = parkRates ? withParkRate(raw, parkRates) : raw;
+
+        // ============ THE CREW SET THIS PRICE, SO THE CREW RESETS IT (0174) ============
+        //
+        // On a crew-priced job there is no menu to re-derive from: `menu`
+        // below would price the global row, which carries the SHAPE of a rate
+        // card and not a price. What moves is the crew's own card at the
+        // corrected size — twelve pier sections instead of eight — and both
+        // ends of the job follow from it through the frozen percentages.
+        //
+        // THE PERCENTAGES ARE THE JOB'S OWN. Reading the live dial here would
+        // make this door the one place where changing a dial reprices work
+        // already sold; the whole point of freezing three columns at booking
+        // is that this cannot happen. A job missing either percentage is not a
+        // crew-priced job (0174's all-or-nothing CHECK), so the pair is read
+        // together or not at all.
+        //
+        // NO MARGIN FLOOR HERE, deliberately, and that is not the same
+        // omission the menu branch below was fixed for. Under crew pricing
+        // LakeLife keeps (c + k) / (1 + c) of the bill — the SAME fraction on
+        // every job, whatever the crew charges. A floor test against a
+        // constant is not a filter; it is a platform-wide on/off switch, which
+        // is exactly why dispatch retires it on this path too. Consulting it
+        // here would hold every crew-priced approval on the platform the day
+        // somebody nudged a dial.
+        //
+        // PARKS NEVER REACH THIS BRANCH: `parkRates` is set only for a park's
+        // grounds, and a park's rate is the park's.
+        const jobCustomerPct = j.fee_customer_pct == null ? null : Number(j.fee_customer_pct);
+        const jobCrewPct = j.fee_crew_pct == null ? null : Number(j.fee_crew_pct);
+        if (raw.crew_priced === true && !parkRates && jobCustomerPct != null && jobCrewPct != null) {
+          const fee = { customerPct: jobCustomerPct, crewPct: jobCrewPct };
+          const vrCrew = j.vendor_id && j.service_id
+            ? rateByVendorService.get(`${j.vendor_id}:${j.service_id}`)
+            : undefined;
+          // THREE KINDS OF JOB WHOSE NUMBER WE CANNOT RE-DERIVE, held whole.
+          //
+          //   NO CARD ON FILE — there is no quote to recompute, and on this
+          //   path the customer's price IS the quote. Moving one end without
+          //   the other is the "owner pays for twelve, crew paid for eight"
+          //   bug with the sides swapped.
+          //
+          //   A GAP CLAIM, whose take-home the crew negotiated against inputs
+          //   that have all moved (same reason as the menu branch).
+          //
+          //   A SAME-DAY RUSH job. A crew-priced service refuses same-day at
+          //   the booking door, so this can only be a job that predates the
+          //   flag being switched on — and its premium is a percentage of a
+          //   menu price that no longer exists.
+          //
+          // Counted as an agreement held, because that is precisely what it
+          // is: the price the customer agreed to stays exactly as agreed.
+          const isRushJob = (j as { is_rush?: boolean }).is_rush === true;
+          const isGap = (j as { gap_claim?: boolean }).gap_claim === true;
+          if (!vrCrew || isGap || isRushJob) {
+            heldAgreements += 1;
+            continue;
+          }
+          const quote = priceService({
+            name: rule.name,
+            pricing_model: rule.pricing_model,
+            base: Number(vrCrew.base ?? 0),
+            unit_rate: Number(vrCrew.unit_rate ?? 0),
+            band_pricing: (vrCrew.band_pricing as ServiceRule["band_pricing"]) ?? null,
+          }, pp);
+          // NEVER REPRICE A SOLD JOB TO NOTHING — the same backstop the menu
+          // branch has. A card that prices to zero at the new size leaves the
+          // agreed numbers alone rather than making the visit free.
+          if (!(quote > 0)) continue;
+          const { error: crewUpErr } = await admin
+            .from("jobs")
+            .update({
+              customer_price: feeCustomerPrice(quote, fee),
+              est_minutes: serviceMinutes(rule, pp),
+              vendor_cost: feeCrewPayout(quote, fee),
+              // margin has always meant "what LakeLife keeps", and
+              // feePlatformTake is customer_price − vendor_cost by
+              // construction — so guard_job_money_shape's reconciliation
+              // holds to the cent rather than to a rounding convention.
+              margin: feePlatformTake(quote, fee),
+              crew_quote: quote,
+            })
+            .eq("id", j.id);
+          if (!crewUpErr) repriced += 1;
+          continue;
+        }
+
         const menu = priceService(rule, pp);
 
         // AN AGREED PRICE IS NOT A STALE ONE.
@@ -714,7 +811,7 @@ export async function declineFlag(flagId: string): Promise<ApprovalResult> {
           // (getFullProfile throws for the same reason and lands there too.)
           const [ruleRes, profile] = await Promise.all([
             admin.from("services")
-              .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands")
+              .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, crew_priced")
               .eq("id", svcId).maybeSingle(),
             getFullProfile(ctx.propertyId),
           ]);

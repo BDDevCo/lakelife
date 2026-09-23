@@ -137,7 +137,14 @@ export default async function BookPage() {
   // led with "Pier install / removal — $0" on a mobile home. Filtering here
   // fixes it for lake homeowners too — anyone without a boat has been looking
   // at unbookable boat services since the day this page shipped.
-  const applicable = priced.filter((s) => s.price > 0);
+  //
+  // A CREW-PRICED SERVICE HAS NO PRICE AND IS STILL BOOKABLE (0174). Its
+  // `price` is 0 by design — there is no menu — so `price > 0` alone deleted
+  // the whole service from the menu of the people it exists for, with no error
+  // anywhere. `crewPriced` is the difference between "this does not apply to
+  // your property" and "the crew who takes it names the number", and the tile
+  // prints `priceNote` instead of a figure.
+  const applicable = priced.filter((s) => s.price > 0 || s.crewPriced);
 
   // Show the services this customer chose (fall back to all if none chosen).
   //
@@ -242,6 +249,8 @@ export default async function BookPage() {
             id: s.id,
             name: s.name,
             price: s.price,
+            crewPriced: s.crewPriced,
+            priceNote: s.priceNote,
             frequency_options: s.frequency_options,
             is_water_work: s.is_water_work,
             needs_pickup_spot: s.needs_pickup_spot,
@@ -251,8 +260,13 @@ export default async function BookPage() {
         />
         <AutopilotCard
           propertyId={profile.propertyId!}
+          // AUTOPILOT STAYS MENU-ONLY, and `price > 0` is the right fence for
+          // it rather than an accident: an enrollment's whole perk is a
+          // locked_price, and a crew-priced service has no number to lock.
+          // autopilot-actions.ts refuses one by name at the server door; this
+          // keeps the card from offering it in the first place.
           services={wanted
-            .filter((s) => s.price > 0)
+            .filter((s) => s.price > 0 && !s.crewPriced)
             .map((s) => ({ id: s.id, name: s.name, price: s.price }))}
           enrollments={enrollments}
         />

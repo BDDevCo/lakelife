@@ -71,7 +71,7 @@ export async function setAutopilot(propertyId: string, serviceId: string, on: bo
   // Lock TODAY's menu price for this property (rule 8: priced from the DB).
   const svcRes = await admin
     .from("services")
-    .select("id, name, pricing_model, base, unit_rate, band_pricing, active")
+    .select("id, name, pricing_model, base, unit_rate, band_pricing, active, crew_priced")
     .eq("id", serviceId)
     .maybeSingle();
   // This row IS the locked price. "That service isn't available" would be a
@@ -104,6 +104,26 @@ export async function setAutopilot(propertyId: string, serviceId: string, on: bo
     if (!(e instanceof ReadFailed)) throw e;
     return { ok: false, error: readFailedMessage("whether this property is a park's grounds", e) };
   }
+  // AUTOPILOT LOCKS TODAY'S MENU PRICE, AND A CREW-PRICED SERVICE HAS NO MENU
+  // PRICE TO LOCK (0174).
+  //
+  // The enrollment's whole perk is `locked_price`: every booking for the
+  // season is created at the number frozen here, whatever the menu does later.
+  // On a crew-priced service that number does not exist until a crew is
+  // picked, and it belongs to THAT crew — so `priceService` below would price
+  // the global row (the shape, not a price) and lock a figure nobody quoted.
+  // Every Autopilot visit for the season would then be created at it.
+  //
+  // Refused with the reason, not silently. PARK GROUNDS ARE UNAFFECTED: a
+  // park's rate is the park's, `grounds` is set for them, and 0174's CHECK
+  // already refuses `park_only and crew_priced` in the database.
+  if (svc.crew_priced === true && !grounds) {
+    return {
+      ok: false,
+      error: `We can't put ${svc.name} on Autopilot yet — the crew who takes it sets its price, so there's no price to lock in.`,
+    };
+  }
+
   const rule: ServiceRule = {
     name: svc.name as string,
     pricing_model: svc.pricing_model as ServiceRule["pricing_model"],

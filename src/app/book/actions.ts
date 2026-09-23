@@ -41,6 +41,13 @@ interface ServiceRow extends ServiceRule {
   needs_pickup_spot: boolean;
   /** 0150: a third party has to hand the boat over before the visit starts. */
   needs_release: boolean;
+  /**
+   * 0174: THE CREW SETS THE PRICE. There is no menu price for this service —
+   * `base` / `unit_rate` / `band_pricing` on the global row are not a price,
+   * they are the SHAPE a crew's own card is filled in against. Nothing here
+   * may be quoted to a customer until a crew has been picked.
+   */
+  crew_priced: boolean;
 }
 
 /** Where the boat actually is, when that is not the customer's property. */
@@ -65,7 +72,7 @@ async function loadService(serviceId: string): Promise<ServiceRow | null> {
   // white and clickable. A failed read must not reach that branch.
   const data = mustRead("this service", await supabase
     .from("services")
-    .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, is_water_work, daily_capacity, frequency_options, kind, active, needs_pickup_spot, needs_release")
+    .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, is_water_work, daily_capacity, frequency_options, kind, active, needs_pickup_spot, needs_release, crew_priced")
     .eq("id", serviceId)
     .eq("active", true)
     .or("kind.eq.standalone,solo_bookable.eq.true") // standalone, OR a package leg opened for solo booking (0147 — spring entry)
@@ -484,7 +491,31 @@ export async function createBookingBatch(
     rushCutoffHour: settings.sameDayCutoffHour,
   });
   refused.push(...plan.filter((p) => !p.ok));
-  const bookable = plan.filter((p) => p.ok);
+
+  // ================= SAME-DAY NEEDS A PRICE, AND THIS ONE HAS NONE =========
+  //
+  // The rush premium is a PERCENTAGE OF THE MENU PRICE, and a crew-priced
+  // service has no menu price. Worse, a rush job never auto-dispatches — it is
+  // born on the claim board, and the claim path prices a crew's take-home
+  // against the customer's number, which on a crew-priced job would not exist
+  // yet. Rather than let a claim invent one, same-day is refused for these
+  // services by name, and the customer is told the real reason.
+  //
+  // `crewPriced` is defined here rather than beside the pricing below because
+  // this is the first decision that needs it. PARK GROUNDS ARE NEVER
+  // CREW-PRICED (see the pricing block): a park's rate is the park's, and a
+  // park booking one of these takes the ordinary menu path.
+  const crewPriced = service.crew_priced === true && !profile.groundsForParkId;
+  if (crewPriced) {
+    for (const rushDay of plan.filter((d) => d.ok && d.isRush)) {
+      refused.push({
+        ...rushDay,
+        ok: false,
+        reason: `${service.name} isn't available same-day — the crew who takes it sets the price, so we can't confirm a number before the day starts. Pick another date.`,
+      });
+    }
+  }
+  const bookable = plan.filter((p) => p.ok && !(crewPriced && p.isRush));
   if (bookable.length === 0) {
     const copy = batchOutcomeCopy(service.name, [], refused);
     return {
@@ -523,11 +554,32 @@ export async function createBookingBatch(
   const priceRule = profile.groundsForParkId
     ? withParkRate(service, parkRates)
     : service;
-  let standardPrice = priceService(priceRule, toPricingProfile(profile));
+
+  // ================= WHO SETS THIS PRICE, AND WHEN (0174) =================
+  //
+  // On a CREW-PRICED service there is no price at this point in the function,
+  // and there cannot be one: the crew's own card IS the quote, and no crew has
+  // been picked yet. So the order inverts — book the row unpriced, dispatch,
+  // and write the money from the decision. Everything below that reads
+  // `standardPrice` is fenced accordingly.
+  //
+  // PARK GROUNDS TAKE THE MENU PATH, ALWAYS. 0174's CHECK stops a `park_only`
+  // service being crew-priced, but nothing stops a park's grounds booking an
+  // ordinary one — and then a stranger's card would quote work the park
+  // negotiated its own rate for. Park rates never combine. A park booking a
+  // crew-priced service therefore falls through to `withParkRate` above and,
+  // with no park rate on file, hits the honest park refusal below: set what
+  // you pay for it on your Services page.
+  let standardPrice = crewPriced ? 0 : priceService(priceRule, toPricingProfile(profile));
   // SIM-FOUND (Wave 1): a $0 price means the profile has none of what this
   // service counts (0 PWC lifts booking a PWC pull). A $0 job can never
   // assign and sits as phantom "demand" — refuse with the honest fix.
-  if (standardPrice <= 0) {
+  //
+  // THE CREW-PRICED PATH HAS THE SAME REFUSAL, LATER AND FOR THE SAME CAUSE.
+  // It cannot fire here because nothing has been priced yet; it fires after
+  // dispatch, off `pricedToZero`, which says exactly this: the crews' cards
+  // exist and every one of them prices this property at nothing.
+  if (!crewPriced && standardPrice <= 0) {
     return {
       ok: false,
       error: profile.groundsForParkId
@@ -550,8 +602,14 @@ export async function createBookingBatch(
   //
   // INERT TODAY: no service carries a per-mile rate, so `billsByDistance` is
   // false everywhere and this block does nothing at all.
+  //
+  // AND NOT ON THE CREW-PRICED PATH. A tow LakeLife prices on top of a number
+  // the crew chose is LakeLife setting part of the price again, which is the
+  // one thing this whole change exists to stop. On a crew-priced service the
+  // tow is inside the crew's own quote — they are the ones driving it. No
+  // service carries a per-mile rate today, so nothing changes either way.
   let transport = 0;
-  if (billsByDistance(priceRule)) {
+  if (!crewPriced && billsByDistance(priceRule)) {
     const geo = await createServiceClient()
       .from("properties").select("lat, lng").eq("id", profile.propertyId).maybeSingle();
     // A price is about to be charged against this. An unread row would leave
@@ -590,7 +648,11 @@ export async function createBookingBatch(
   const estMinutes = serviceMinutes(priceRule, toPricingProfile(profile));
 
   const admin = createServiceClient();
-  const booked: Array<{ date: string; price: number; isRush: boolean }> = [];
+  // `price: null` is a CREW-PRICED visit nobody has quoted yet — the honest
+  // "we're finding you a crew" row. It is never 0: zero is a price, and this
+  // is the absence of one. Every sentence built from this list below has to
+  // handle it, because printing $0 to a customer is the whole bug.
+  const booked: Array<{ date: string; price: number | null; isRush: boolean }> = [];
   // Only meaningful for a one-date booking, where the text says whether a crew
   // is already locked in. A batch's text speaks for the whole list instead.
   let soloAssigned = false;
@@ -606,7 +668,11 @@ export async function createBookingBatch(
   // more to the customer than an all-or-nothing rollback because the sixth
   // Tuesday filled up while they were choosing.
   for (const day of bookable) {
-    const price = day.isRush ? rushAllIn : standardPrice;
+    // NULL, NOT ZERO, on the crew-priced path. `jobs.customer_price` is
+    // nullable (0001) and every ops surface already draws a null price as
+    // "—"; a 0 would read as a free job to the invoice writer, the ledger and
+    // the person looking at the board.
+    let price: number | null = crewPriced ? null : day.isRush ? rushAllIn : standardPrice;
     const { data: inserted, error } = await admin
       .from("jobs")
       .insert({
@@ -648,6 +714,32 @@ export async function createBookingBatch(
           refused.push({ ...day, ok: false, reason: "That day just filled up — pick another date." });
           continue;
         }
+        // THE CREW-PRICED TWIN OF THE $0 REFUSAL, in its proper place.
+        //
+        // Cards exist for this work and every one of them prices THIS property
+        // at nothing — 0 PWC lifts booking a PWC pull. No crew will ever quote
+        // it, so keeping the row would be a wait that can never end, and
+        // telling the customer we are "finding a crew" would be a sentence
+        // that never comes true. The profile is the fixable thing, and it is
+        // genuinely the cause here: this is the one branch where we know the
+        // cards are fine.
+        if (outcome.pricedToZero) {
+          await admin.from("jobs").delete().eq("id", inserted.id);
+          refused.push({
+            ...day,
+            ok: false,
+            reason: `${service.name} prices to $0 for your place — your profile shows none of the equipment it covers. Update your property profile and the real price appears.`,
+          });
+          continue;
+        }
+        // THE PRICE IS WHATEVER THE CREW QUOTED. Read from the decision, not
+        // recomputed: a second computation is a second chance to disagree with
+        // the row that was just written, and the row is what gets billed.
+        // Still null when no crew was found — an unpriced visit is the SAFE
+        // state, and the copy below says so in words.
+        if (crewPriced && outcome.assigned && outcome.customerPrice != null) {
+          price = outcome.customerPrice;
+        }
       } catch {
         /* leave as requested; the waitlist sweeps will keep hunting */
       }
@@ -681,7 +773,14 @@ export async function createBookingBatch(
     weekday: "long", month: "long", day: "numeric",
   });
   const cutoffLabel = settings.sameDayCutoffHour > 12 ? settings.sameDayCutoffHour - 12 + "pm" : settings.sameDayCutoffHour + "am";
-  const total = booked.reduce((sum, b) => sum + b.price, 0);
+  // A VISIT WITH NO PRICE YET CANNOT BE ADDED UP. `booked` may now carry
+  // nulls — a crew-priced visit still waiting for a crew — and `sum + null`
+  // is `sum`, which would quietly present a partial figure as the total. Only
+  // the quoted visits are summed, and `anyUnpriced` decides whether the word
+  // "total" is even honest.
+  const pricedVisits = booked.filter((b) => b.price != null) as Array<{ date: string; price: number; isRush: boolean }>;
+  const anyUnpriced = pricedVisits.length < booked.length;
+  const total = pricedVisits.reduce((sum, b) => sum + b.price, 0);
   const visits = `${booked.length} visit${booked.length === 1 ? "" : "s"}`;
   const missed = refused.length > 0 ? ` We couldn't get ${prettyDateList(refused.map((r) => r.date), 3)} — pick those again anytime.` : "";
 
@@ -692,7 +791,13 @@ export async function createBookingBatch(
     void sendSms(
       me.phone,
       solo
-        ? only.isRush
+        // `only.price != null` is not belt-and-braces: rushOfferLine's whole
+        // sentence is the number ("$220 — first crew to accept gets it"), and
+        // a same-day visit with no price yet has nothing to offer anybody. It
+        // is unreachable today because a crew-priced service refuses same-day
+        // outright, and this is the branch that keeps it unreachable rather
+        // than printing $0 to a crew if that ever changes.
+        ? only.isRush && only.price != null
           ? rushOfferLine({
               serviceName: service.name, price: only.price,
               reached: rushReach.reached, outToday: rushReach.outToday,
@@ -737,11 +842,26 @@ export async function createBookingBatch(
           ${soloAssigned
             ? ""
             : html`<p style="color:#8a6d3b">We're lining up a crew for that day now, and you'll hear the moment one is locked in. Nothing is confirmed until then.</p>`}
-          <p style="color:#5D7681">Your price: <b>$${only.price.toLocaleString()}</b>. You're only charged after the service is completed and photos are uploaded.</p>`
+          ${only.price != null
+            ? html`<p style="color:#5D7681">Your price: <b>$${only.price.toLocaleString()}</b>. You're only charged after the service is completed and photos are uploaded.</p>`
+            // NO PRICE YET, AND WE SAY SO. A crew-priced visit is quoted by
+            // the crew who takes it, so until one is picked there is no
+            // number — and $0 in this sentence would be a promise of free
+            // work. The rest of the paragraph is the part that is already
+            // true: nothing is charged before the visit is done.
+            : html`<p style="color:#5D7681">We'll confirm your price as soon as a crew picks this up — this service is quoted by the crew who does the work, not by us. You're only charged after the service is completed and photos are uploaded.</p>`}`
             : html`<p><b>${service.name}</b> — ${visits}</p>
           <ul style="color:#20343d;padding-left:18px">${booked
-            .map((b) => html`<li>${new Date(b.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })} — $${b.price.toLocaleString()}${b.isRush ? " (same-day rush)" : ""}</li>`)}</ul>
-          <p style="color:#5D7681">Total across ${visits}: <b>$${total.toLocaleString()}</b>. Each visit is charged only after it's completed and its photos are uploaded — never before, and cancelling one visit never touches the others.</p>
+            .map((b) => html`<li>${new Date(b.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })} — ${b.price == null ? "priced by the crew who takes it" : `$${b.price.toLocaleString()}`}${b.isRush ? " (same-day rush)" : ""}</li>`)}</ul>
+          ${anyUnpriced
+            // A TOTAL THAT LEAVES VISITS OUT IS NOT A TOTAL. Some of these
+            // visits have no price yet, so any figure we printed here would be
+            // less than what they will actually pay, in bold, in an email they
+            // keep. The count of unpriced visits is the honest number.
+            ? html`<p style="color:#5D7681">${pricedVisits.length === 0
+                ? `We'll confirm each visit's price as soon as a crew picks it up`
+                : `That's $${total.toLocaleString()} for the ${pricedVisits.length} visit${pricedVisits.length === 1 ? "" : "s"} we've priced; we'll confirm the other ${booked.length - pricedVisits.length} as soon as a crew picks ${booked.length - pricedVisits.length === 1 ? "it" : "them"} up`} — this service is quoted by the crew who does the work, not by us. Each visit is charged only after it's completed and its photos are uploaded — never before, and cancelling one visit never touches the others.</p>`
+            : html`<p style="color:#5D7681">Total across ${visits}: <b>$${total.toLocaleString()}</b>. Each visit is charged only after it's completed and its photos are uploaded — never before, and cancelling one visit never touches the others.</p>`}
           ${refused.length > 0
             ? html`<p style="color:#8a6d3b">We couldn't book every day:</p><ul style="color:#8a6d3b;padding-left:18px">${copy.lines.map((l) => html`<li>${l}</li>`)}</ul><p style="color:#8a6d3b">Pick those days again anytime.</p>`
             : ""}`}

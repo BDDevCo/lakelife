@@ -8,6 +8,7 @@ import {
   formatDateHuman,
   statusLabel,
   earningsRowLabel,
+  payoutFeeLine,
   type EarningRow,
 } from "../../earnings-helpers";
 
@@ -97,6 +98,14 @@ function renderStatement(
         (r.kind === "tip" || r.kind === "trip")
           ? `<div class="who">${esc(r.crew ?? "crew not recorded")}</div>`
           : ""
+      }${
+        // WHY THE AMOUNT IS NOT THE NUMBER ON THEIR RATE CARD (0174). This is
+        // the sheet a crew hands their accountant, and on a crew-priced job
+        // the figure in the Amount column is the quote less the platform fee.
+        // Null on every menu-priced job, where the two are one number.
+        // The CSV beside this needs nothing: the amount IS the income, and the
+        // quote is not a number the accountant reports.
+        payoutFeeLine(r) ? `<div class="who">${esc(payoutFeeLine(r) as string)}</div>` : ""
       }</td>
       <td>${esc(r.address ?? "—")}</td>
       <td class="num">${esc(formatCurrency(r.amount))}</td>

@@ -133,14 +133,25 @@ export default async function WelcomePage() {
             <SignOutButton />
           </div>
 
-          {/* THE GUARD BEHIND THE REDIRECT ABOVE. A crew whose invitation went
-              to a different address than the one they signed up with isn't
-              matched by that read, and this page's only other control is Sign
-              out — which destroys the session they just built. One true
-              sentence and a door, for anyone the branch missed. */}
+          {/* THE GUARD BEHIND THE REDIRECT ABOVE — AND THE DOOR IT POINTED AT DID
+              NOT OPEN. A crew whose invitation went to a different address than the
+              one they signed up with (an Apple private-relay address is the common
+              way, and the sign-up box used to recommend exactly that) isn't matched
+              by that read. This sentence used to offer "Open your portal →", but
+              /portal calls the SAME claimCrewInvite on the SAME session email, gets
+              the same nothing, and redirects to /book. It read as a door and was a
+              corridor back to the lake-house booking page: copy naming a control the
+              screen does not have.
+              The cure is real and it is theirs — the invitation row is still open and
+              still claimable, so creating an account on the invited address works.
+              Nothing said so. Now it does, it names the address they are actually
+              signed in as (guessing which one they used would be worse than silence),
+              and it points at Sign out, a control that IS on this card, ten lines up. */}
           <p className="mut" style={{ fontSize: 13, marginTop: 14, marginBottom: 0 }}>
-            Here to take jobs as a LakeLife crew?{" "}
-            <Link href="/portal">Open your portal →</Link>
+            Here to take jobs as a LakeLife crew? You&apos;re signed in as{" "}
+            <strong>{email}</strong>. If LakeLife invited your crew at a different
+            address, sign out above and create your account with that one — your
+            invitation is still waiting on it.
           </p>
         </div>
       </div>

@@ -80,7 +80,7 @@ export function OpsShell({
   needsAttention: NeedsAttentionJob[];
   preferredJobIds: string[];
   preferredProps: PropertyPreferred[];
-  settings: { marginFloorPct: number; surgeCapPct: number };
+  settings: { marginFloorPct: number; surgeCapPct: number; feeCustomerPct: number; feeCrewPct: number };
   storageLedger: StorageLedgerData;
   payoutQueue: PayoutQueueData;
   calendarYear: number;

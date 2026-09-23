@@ -295,7 +295,7 @@ export default async function OpsPage() {
           </div>
         )}
 
-        <OpsShell marginHealth={marginHealth} storageLedger={storageLedger} payoutQueue={payoutQueue} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} coverage={coverage} crewServiceNames={crewServiceNames} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100) }} calendarYear={calendarYear} calendarRows={calendarRows}
+        <OpsShell marginHealth={marginHealth} storageLedger={storageLedger} payoutQueue={payoutQueue} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} coverage={coverage} crewServiceNames={crewServiceNames} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100), feeCustomerPct: Math.round(s.platformFeeCustomerPct * 100), feeCrewPct: Math.round(s.platformFeeCrewPct * 100) }} calendarYear={calendarYear} calendarRows={calendarRows}
           parks={parks} enquiries={enquiries} />
       </div>
     </>

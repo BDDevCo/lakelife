@@ -25,8 +25,32 @@ type Lawn = "small" | "medium" | "large";
  *
  * Exported and pure so this can be proven without driving a five-step wizard.
  */
-export function canOffer(services: ServiceRule[], name: string): boolean {
+export function canOffer(services: Array<Pick<ServiceRule, "name">>, name: string): boolean {
   return services.some((s) => s.name === name);
+}
+
+/**
+ * THE CELL A CREW-PRICED SERVICE GETS INSTEAD OF A NUMBER.
+ *
+ * Short because it sits in a price column, and deliberately not a dollar
+ * figure: on a crew-priced service LakeLife has no price to quote. An
+ * indicative number here would be the menu wearing a hat — every crew would
+ * price to it, which is the exact thing the owner decided against.
+ */
+export const CREW_QUOTED_CELL = "Crews quote this one";
+
+/** The fuller version, for a hint line with room for it. */
+export const CREW_QUOTED_HINT =
+  "Crews on your lake set their own price for this one. You'll see their quotes, days and ratings when you book.";
+
+/**
+ * What to print in a price slot: the real number, or the crew-quoted label.
+ * Pure and exported so a test can pin both halves — and so no screen below
+ * has to remember to check the flag before it formats a dollar sign.
+ */
+export function priceCellLabel(price: number, crewPriced: boolean, per = ""): string {
+  if (crewPriced) return CREW_QUOTED_CELL;
+  return per ? `${formatPrice(price)} ${per}` : formatPrice(price);
 }
 
 /**
@@ -167,7 +191,13 @@ export function ProfileWizard({
   lakes: string[];
   /** Published parks, offered so somebody living in one can say so. */
   parks?: Array<{ id: string; name: string }>;
-  services: ServiceRule[];
+  /**
+   * 0174: `crew_priced` rides along optionally. When the loader does not select
+   * it (setup/page.tsx does not yet) every service reads as false and this
+   * wizard behaves exactly as it always has — which is correct today, because
+   * nothing is crew-priced yet.
+   */
+  services: Array<ServiceRule & { crew_priced?: boolean | null }>;
   initial: Partial<Omit<Draft, "boats">> & {
     boats?: Array<{ type: string; length_ft: number; engine_type?: string | null; engine_hp?: number | null; engines?: number | null }>;
   };
@@ -228,6 +258,10 @@ export function ProfileWizard({
     const r = rule(name);
     return r ? priceService(r, pp()) : 0;
   };
+  // Does LakeLife have a price for this at all? (services.crew_priced, 0174.)
+  const crewQuotes = (name: string) => !!rule(name)?.crew_priced;
+  /** A price slot: the number, or "Crews quote this one". */
+  const priceText = (name: string, per = "") => priceCellLabel(priceOf(name), crewQuotes(name), per);
   const lawnPrice = (band: Lawn) => {
     const r = rule("Lawn mowing & trim");
     return r ? priceService(r, { ...pp(), lawn_band: band }) : 0;
@@ -384,7 +418,7 @@ export function ProfileWizard({
     }));
   }
 
-  if (done) return <Recap draft={draft} priceOf={priceOf} emailCopy={emailCopy} onGo={() => router.push("/book")} />;
+  if (done) return <Recap draft={draft} priceOf={priceOf} crewQuotes={crewQuotes} emailCopy={emailCopy} onGo={() => router.push("/book")} />;
 
   return (
     <div className="ll-card ll-card-pad" style={{ maxWidth: 560, margin: "0 auto" }}>
@@ -550,7 +584,7 @@ export function ProfileWizard({
               }}
             >
               <b style={{ minWidth: 66, textTransform: "capitalize" }}>{k}</b>
-              <span className="mut">{LAWN_DESC[k]} — {formatPrice(lawnPrice(k))}/visit</span>
+              <span className="mut">{LAWN_DESC[k]} — {crewQuotes("Lawn mowing & trim") ? CREW_QUOTED_CELL : `${formatPrice(lawnPrice(k))}/visit`}</span>
             </button>
           ))}
         </>
@@ -574,7 +608,7 @@ export function ProfileWizard({
           </div>
           {draft.panes > 0 && (
             <p style={{ fontSize: 14, marginTop: 12 }}>
-              {formatPrice(priceOf("Window washing"))} a visit
+              {priceText("Window washing", "a visit")}
             </p>
           )}
         </>
@@ -598,7 +632,7 @@ export function ProfileWizard({
             >
               <b style={{ minWidth: 66, textTransform: "capitalize" }}>{k}</b>
               <span className="mut">
-                {DRIVE_DESC[k]} — {formatPrice(drivePrice(k))} a push
+                {DRIVE_DESC[k]} — {crewQuotes("Snow removal — drive & walks") ? CREW_QUOTED_CELL : `${formatPrice(drivePrice(k))} a push`}
               </span>
             </button>
           ))}
@@ -614,7 +648,7 @@ export function ProfileWizard({
           <Stepper label="Pier sections" value={draft.pier_sections} onChange={(pier_sections) => set({ pier_sections })} min={0} max={40} />
           <Toggle label="Swim ladder" checked={draft.ladder} onChange={(ladder) => set({ ladder })} />
           <Toggle label="Bumpers / cleats" checked={draft.bumpers} onChange={(bumpers) => set({ bumpers })} />
-          <PriceHint text={`Pier install / removal: ${formatPrice(priceOf("Pier install / removal"))} per trip`} />
+          <PriceHint text={crewQuotes("Pier install / removal") ? CREW_QUOTED_HINT : `Pier install / removal: ${priceText("Pier install / removal", "per trip")}`} />
         </>
       )}
 
@@ -624,7 +658,7 @@ export function ProfileWizard({
           <p className="mut" style={{ marginBottom: 16, fontSize: 14 }}>How many boat lifts on the property?</p>
           <Stepper label="Boat lifts" value={draft.boat_lifts} onChange={(boat_lifts) => set({ boat_lifts })} min={0} max={10} />
           <Toggle label="Lift canopy" checked={draft.canopy} onChange={(canopy) => set({ canopy })} />
-          {draft.boat_lifts > 0 && <PriceHint text={`Boat lift set / pull: ${formatPrice(priceOf("Boat lift set / pull"))} per trip`} />}
+          {draft.boat_lifts > 0 && <PriceHint text={crewQuotes("Boat lift set / pull") ? CREW_QUOTED_HINT : `Boat lift set / pull: ${priceText("Boat lift set / pull", "per trip")}`} />}
         </>
       )}
 
@@ -670,7 +704,7 @@ export function ProfileWizard({
             </div>
           ))}
           <button className="ll-btn ghost sm" onClick={addBoat}>+ Add a boat</button>
-          <PriceHint text={`Boat storage: ${formatPrice(priceOf("Boat storage & winterize"))}/season`} />
+          <PriceHint text={crewQuotes("Boat storage & winterize") ? CREW_QUOTED_HINT : `Boat storage: ${formatPrice(priceOf("Boat storage & winterize"))}/season`} />
         </>
       )}
 
@@ -682,7 +716,7 @@ export function ProfileWizard({
           </p>
           <Stepper label="Jet skis" value={draft.jet_skis} onChange={(jet_skis) => set({ jet_skis })} min={0} max={12} />
           <Stepper label="PWC lifts" value={draft.pwc_lifts} onChange={(pwc_lifts) => set({ pwc_lifts })} min={0} max={12} />
-          <PriceHint text={jetHint(draft, priceOf)} />
+          <PriceHint text={jetHint(draft, priceOf, crewQuotes)} />
         </>
       )}
 
@@ -728,19 +762,36 @@ export function ProfileWizard({
   }
 }
 
-function jetHint(draft: Draft, priceOf: (n: string) => number): string {
+function jetHint(
+  draft: Draft,
+  priceOf: (n: string) => number,
+  crewQuotes: (n: string) => boolean = () => false,
+): string {
   const parts: string[] = [];
-  if (draft.jet_skis > 0) parts.push(`Jet skis ${formatPrice(priceOf("Jet ski winterize & store"))}/season`);
-  if (draft.pwc_lifts > 0) parts.push(`PWC lifts ${formatPrice(priceOf("PWC lift set / pull"))}/trip`);
+  if (draft.jet_skis > 0) {
+    parts.push(crewQuotes("Jet ski winterize & store")
+      ? `Jet skis — ${CREW_QUOTED_CELL.toLowerCase()}`
+      : `Jet skis ${formatPrice(priceOf("Jet ski winterize & store"))}/season`);
+  }
+  if (draft.pwc_lifts > 0) {
+    parts.push(crewQuotes("PWC lift set / pull")
+      ? `PWC lifts — ${CREW_QUOTED_CELL.toLowerCase()}`
+      : `PWC lifts ${formatPrice(priceOf("PWC lift set / pull"))}/trip`);
+  }
   return parts.length ? parts.join(" · ") : "Set the counts to see pricing";
 }
 
 // ---------- recap ----------
 // Exported so the three email states can be drawn without driving five steps
 // of wizard; the wizard itself is its only caller.
-export function Recap({ draft, priceOf, emailCopy, onGo }: {
+export function Recap({ draft, priceOf, crewQuotes = () => false, emailCopy, onGo }: {
   draft: Draft;
   priceOf: (name: string) => number;
+  /**
+   * services.crew_priced (0174). Defaults to "nothing is crew-priced", which
+   * is every service today and keeps this recap byte-for-byte what it was.
+   */
+  crewQuotes?: (name: string) => boolean;
   /** Settled by the wizard after the send returns; "sending" until then. */
   emailCopy: EmailCopy;
   onGo: () => void;
@@ -755,17 +806,23 @@ export function Recap({ draft, priceOf, emailCopy, onGo }: {
     else if (name === "Boat storage & winterize") detail = `${ft} ft total`;
     else if (name === "Jet ski winterize & store") detail = `${draft.jet_skis} jet ski${draft.jet_skis === 1 ? "" : "s"}`;
     else if (name === "Lawn mowing & trim") detail = `${draft.lawn_band} lawn`;
-    return [name, `${formatPrice(price)} ${per}`, detail];
+    // NO INVENTED NUMBER, AND NO $0 EITHER. A crew-priced service has no
+    // LakeLife price to recap; "$0 / visit" would read as free.
+    return [name, priceCellLabel(price, crewQuotes(name), per), detail];
   });
+  const anyCrewQuoted = draft.wanted.some((n) => crewQuotes(n));
 
   return (
     <div className="ll-card ll-card-pad" style={{ maxWidth: 560, margin: "0 auto" }}>
       <span className="ll-pill gold">All set</span>
       <h2 style={{ fontSize: 24, margin: "10px 0 4px" }}>You&apos;re all set! 🎉</h2>
       <p className="mut" style={{ fontSize: 14, marginBottom: 12 }}>
-        {draft.address ? `${draft.address} — here` : "Here"} are the services you chose,
-        priced exactly to your place. {emailCopyLine(emailCopy)}
+        {draft.address ? `${draft.address} — here` : "Here"} are the services you chose
+        {anyCrewQuoted ? "" : ", priced exactly to your place"}. {emailCopyLine(emailCopy)}
       </p>
+      {anyCrewQuoted && (
+        <p className="mut" style={{ fontSize: 13, marginBottom: 12 }}>{CREW_QUOTED_HINT}</p>
+      )}
       <div>
         {lines.map((r, i) => (
           <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 0", borderBottom: "1px dashed var(--line)" }}>

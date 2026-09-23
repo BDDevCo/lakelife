@@ -18,6 +18,8 @@ import {
   statusLabel,
   earningsRowLabel,
   tipsByCrew,
+  payoutFeeLine,
+  platformFeeSummary,
   type EarningRow,
 } from "@/app/vendor/earnings-helpers";
 
@@ -44,6 +46,13 @@ export function VendorEarnings({
 
   const range = ranges[period];
   const tips = useMemo(() => tipsByCrew(rows, range), [rows, range]);
+  // NAMED ONCE, above the statement. On a crew-priced service the crew typed a
+  // QUOTE and we paid it less the crew-side fee — same column, same screen,
+  // opposite meaning from every job before it. Null when no row on this
+  // statement carries a frozen percentage (every job today), and null again
+  // when the rows disagree about the percentage, because picking one of two
+  // would be a number nobody was charged.
+  const feeSummary = useMemo(() => platformFeeSummary(rows), [rows]);
   const csvHref = `/vendor/earnings/export?from=${range.from}&to=${range.to}`;
   const statementHref = `/vendor/earnings/statement?from=${range.from}&to=${range.to}`;
 
@@ -63,6 +72,11 @@ export function VendorEarnings({
         month-end payout. You can pull released money earlier from the card below,
         for a fee. These are your take-home numbers — yours to keep.
       </p>
+      {feeSummary && (
+        <p className="mut" style={{ fontSize: 13, marginTop: -8, marginBottom: 16, maxWidth: 560 }}>
+          {feeSummary}
+        </p>
+      )}
 
       {/* Big totals row */}
       <div
@@ -235,6 +249,7 @@ function TipsToPassOn({
 
 function JobRow({ row, first }: { row: EarningRow; first: boolean }) {
   const released = row.status === "released";
+  const feeLine = payoutFeeLine(row);
   return (
     <div
       style={{
@@ -251,6 +266,10 @@ function JobRow({ row, first }: { row: EarningRow; first: boolean }) {
           {row.jobDate}
           {row.address ? ` · ${row.address}` : ""}
         </div>
+        {/* The amount on the right is what we PAID. On a crew-priced job that
+            is not the number they typed, and a contractor reading their own
+            invoice must never have to work out the difference themselves. */}
+        {feeLine && <div className="mut" style={{ fontSize: 12 }}>{feeLine}</div>}
       </div>
       <div style={{ textAlign: "right" }}>
         <div style={{ fontSize: 15, fontWeight: 800 }}>{formatCurrency(row.amount)}</div>

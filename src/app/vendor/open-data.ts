@@ -10,6 +10,8 @@ import { loadPricingProfileById } from "@/app/book/dispatch";
 import { getPlatformSettings } from "@/lib/settings";
 import { mustRead } from "@/lib/must-read";
 import { OWNER_FIXTURE_EMBED, OWNER_FIXTURE_FILTER } from "@/lib/lake-pages";
+import { crewPayout, type PlatformFee } from "@/lib/platform-fee";
+import { quoteAndPayoutSentence } from "./rates-helpers";
 import type { MyVendor } from "./data";
 
 /**
@@ -19,6 +21,20 @@ import type { MyVendor } from "./data";
  * the customer price, the margin, or (pre-claim) the street address. The margin
  * floor is checked server-side against the hidden customer price; the crew only
  * ever learns "this one doesn't clear at your current rate."
+ *
+ * SINCE 0174 `takeHome` CAN BE A DIFFERENT NUMBER FROM THE CARD. On an
+ * ordinary service a crew's card priced against the property IS their
+ * take-home, and nothing below changes. On a `crew_priced` service their card
+ * is the QUOTE: LakeLife adds a published percentage for the customer and
+ * takes a published percentage out of it, so a $50 card pays $44. `takeHome`
+ * stays what its name has always promised — the money that reaches them — and
+ * `quote` carries the other number, with `feeNote` saying both in words. The
+ * board's existing sentence is "You'd take home $X", which is why the payout
+ * (not the quote) had to be the field that moved.
+ *
+ * RULE 1 IS UNCHANGED HERE. Nothing crew-priced is added to any crew-readable
+ * surface: `customer_price` is still read server-side only and still never
+ * returned, and no margin is computed on this path at all.
  */
 
 export interface OpenJob {
@@ -28,7 +44,22 @@ export interface OpenJob {
   date: string; // YYYY-MM-DD
   onMyLake: boolean; // job is on a lake this crew already services
   milesAway: number | null; // from crew base (null = crew has no base set)
-  takeHome: number | null; // crew's own rate priced for this property (null = no rate set)
+  takeHome: number | null; // WHAT REACHES THE CREW: their card priced for this property, less the crew-side fee on a crew-priced service (null = no rate set)
+  /**
+   * 0174, crew-priced services only: the crew's own QUOTE before the fee — the
+   * number their rate card actually says. Null on every ordinary service,
+   * where the quote and the take-home are the same number and printing two
+   * would invent a distinction that does not exist.
+   */
+  quote: number | null;
+  /** services.crew_priced — this job's price came from the crew's card. */
+  crewPriced: boolean;
+  /**
+   * Both numbers in plain words, e.g. "You quote $50.00. You're paid $44.00 —
+   * LakeLife's fee is 12%." Null on an ordinary service. A board that shows
+   * only one number on a crew-priced job is the silent-deduction bug.
+   */
+  feeNote: string | null;
   claimable: boolean;
   blocker: ClaimBlocker | null; // why not, when not claimable
   rush: boolean; // ⚡ same-day fill-in — takeHome already reflects the discount
@@ -129,7 +160,7 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   // dropped connection instead.
   const board = admin
     .from("jobs")
-    .select(`id, date, customer_price, service_id, property_id, is_rush, est_minutes, created_at, pickup_lat, pickup_lng, services(name, pricing_model, est_minutes, takes_custody), properties!inner(lake_id, lat, lng, lakes(name), ${OWNER_FIXTURE_EMBED})`)
+    .select(`id, date, customer_price, service_id, property_id, is_rush, est_minutes, created_at, pickup_lat, pickup_lng, services(name, pricing_model, est_minutes, takes_custody, crew_priced), properties!inner(lake_id, lat, lng, lakes(name), ${OWNER_FIXTURE_EMBED})`)
     .eq("status", "requested")
     .is("vendor_id", null)
     .is("group_id", null) // package visits are routed, never cold-claimed — a claim can't price multi-leg work. This filter is about MULTI-LEG, not custody: a standalone custody service carries no group and passes straight through it. takes_custody below is what guards custody.
@@ -232,12 +263,28 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
     // date never renders.
     const isRushRow = !!(j as { is_rush?: boolean }).is_rush;
     if (isRushRow && (!rushOpen || (j.date as string) !== today)) continue;
-    const svc = one(j.services) as { name?: string; pricing_model?: string; takes_custody?: boolean } | null;
+    const svc = one(j.services) as { name?: string; pricing_model?: string; takes_custody?: boolean; crew_priced?: boolean } | null;
     const prop = one(j.properties) as { lake_id?: string; lat?: number; lng?: number; lakes?: unknown } | null;
     const lakeName = (one(prop?.lakes) as { name?: string } | null)?.name ?? "a nearby lake";
 
+    // THE TWO MONEY MODELS, decided by the SERVICE and nothing else (0174).
+    //
+    // `fee` null = the menu path, byte for byte: the card priced against this
+    // property IS the take-home, and the margin floor still decides who may
+    // claim. `fee` set = the card is the crew's QUOTE, the customer's bill is
+    // built FROM it, and the crew is paid the quote less the crew-side fee.
+    //
+    // Live dials are correct here and only here: this job has not been priced
+    // by anybody yet, so there is nothing frozen on it to read. The moment a
+    // crew claims it, claimJob freezes these same two numbers onto the row
+    // (jobs.fee_customer_pct / fee_crew_pct) and every later reader uses those.
+    const fee: PlatformFee | null = svc?.crew_priced
+      ? { customerPct: settings.platformFeeCustomerPct, crewPct: settings.platformFeeCrewPct }
+      : null;
+
     // Price this job at the crew's OWN rate (their info — rule-1 safe).
     let takeHome: number | null = null;
+    let quote: number | null = null; // crew-priced only: the card BEFORE the fee
     let cardPriced: number | null = null; // UNdiscounted card vs this property — the anchor input
     let profile: Awaited<ReturnType<typeof loadPricingProfileById>> = null;
     const vr = rateBySvc.get(j.service_id as string);
@@ -255,6 +302,17 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       // Same-day fill-in: the board shows the DISCOUNTED take-home — tapping
       // Claim is accepting it (the discount is a dial, not a negotiation).
       if (takeHome != null && isRushRow) takeHome = fillInRate(takeHome, settings.sameDayFillDiscountPct);
+      if (fee) {
+        // THE DISCOUNT CUTS THE QUOTE, NOT THE PAYOUT. On a crew-priced job the
+        // customer's bill is built from the quote, so discounting the quote
+        // passes the fill-in saving to the customer as well and keeps the
+        // published percentage honest on both sides. Discounting the payout
+        // instead would take the whole haircut out of the crew while the
+        // customer paid full price — the exact deduction this file exists to
+        // make impossible.
+        quote = takeHome;
+        takeHome = quote != null ? crewPayout(quote, fee) : null;
+      }
     }
 
     const jobMinutes = (() => {
@@ -278,7 +336,14 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       blockedThatDay: blockedDates.has(j.date as string),
       minuteBudget: myMinuteBudget,
       assignedMinutes: assignedMinByDate.get(j.date as string) ?? 0,
-      crewRate: takeHome != null && takeHome > 0 ? takeHome : null,
+      // THE CREW'S OWN NUMBER, which is the quote on the crew-priced path —
+      // dispatch.ts documents `crewRate` as "the crew's quote, BEFORE either
+      // fee". Passing the payout instead would understate their card to every
+      // gate that reads it.
+      crewRate: (() => {
+        const own = fee ? quote : takeHome;
+        return own != null && own > 0 ? own : null;
+      })(),
       score: 0,
       baseLat: vendor.base_lat,
       baseLng: vendor.base_lng,
@@ -289,6 +354,13 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       todayISO: today,
       menuPrice: Number(j.customer_price ?? 0), // server-side only — never returned
       marginFloor: settings.marginFloor,
+      // Present = crew-priced, and canClaim then skips `rate_too_high`. There
+      // is no number a crew's card could be "too high" against when the
+      // customer's bill is built FROM that card, and the floor on this path is
+      // the same platform-wide on/off switch CORE describes in dispatch.ts —
+      // at 12/12 LakeLife's share is a constant 21.43% for every crew and
+      // every quote, so the test has nothing left to compare.
+      platformFee: fee,
       jobMinutes,
       // CUSTODY REACHES canClaim OR ITS REFUSAL IS DEAD CODE (0145, second door).
       //
@@ -318,7 +390,14 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
     // "aged". Rush rows are exempt (their premium funds the gap).
     const createdLakeDate = j.created_at ? lakeDateOf(String(j.created_at)) : null;
     let isGap = false;
+    // NOT ON THE CREW-PRICED PATH, and said out loud rather than left to be
+    // inferred. A fill-in offer is a number LakeLife computes from the menu
+    // price and the floor — both of which are exactly what crew pricing
+    // retires. `rate_too_high` can no longer fire above when a fee is in force,
+    // so this branch is already unreachable; naming the condition keeps it
+    // unreachable if the blocker ever comes back by another road.
     if (
+      fee == null &&
       verdict.blocker === "rate_too_high" &&
       (isRushRow || (createdLakeDate != null && createdLakeDate < today))
     ) {
@@ -354,6 +433,9 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       onMyLake: !!prop?.lake_id && vendor.service_lakes.includes(prop.lake_id as string),
       milesAway: Number.isFinite(miles) ? Math.round(miles) : null,
       takeHome,
+      quote: fee ? quote : null,
+      crewPriced: fee != null,
+      feeNote: fee ? quoteAndPayoutSentence(quote, fee) : null,
       claimable: verdict.ok,
       blocker: verdict.blocker ?? null,
       rush: isRushRow,

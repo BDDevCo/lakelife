@@ -1,12 +1,23 @@
 "use client";
 
 /**
- * "Your rates" — a crew sets their PRIVATE per-service take-home rate in their
- * own units. One card per service, inputs shaped to the service's pricing model.
+ * "Your rates" — a crew sets their PRIVATE per-service rate in their own units.
+ * One card per service, inputs shaped to the service's pricing model.
  *
- * CLAUDE.md rule 1 is the whole point of this screen: there is NO customer price,
- * NO menu anchor, NO margin, and NO "70% of X" anywhere. A crew types the number
- * THEY want to take home; whether that wins a job is decided later by dispatch.
+ * WHAT THE NUMBER MEANS DEPENDS ON THE SERVICE, and that is new (0174).
+ *  - Ordinary (menu-priced) service: the number IS the take-home. A crew types
+ *    $100 and $100 lands. That is every service today.
+ *  - crew_priced service: the number is their QUOTE. LakeLife adds a published
+ *    percentage for the customer and takes a published percentage out of the
+ *    quote, so $100 typed is $88 paid. Same column, same screen, opposite
+ *    meaning — so on those cards the label says "quote", the standing rule is
+ *    printed above the inputs, and every saved number carries a sentence naming
+ *    BOTH figures. All of that arrives already computed on the RateForm
+ *    (rates-helpers.ts); this component only decides where it sits.
+ *
+ * CLAUDE.md rule 1 still holds here in the half that survives a published
+ * percentage: there is NO customer price, NO menu anchor and NO margin on this
+ * screen. A crew's own quote and their own payout are their numbers.
  * Big tap targets for wet gloves.
  */
 
@@ -31,15 +42,23 @@ export function VendorRates({ rates, notLiveYet = false }: { rates: MyRate[]; no
     );
   }
 
+  const anyCrewPriced = rates.some((r) => r.form.crewPriced);
   const standard = rates.filter((r) => r.kind === "standalone");
   const legs = rates.filter((r) => r.kind !== "standalone");
 
   return (
     <div className="wrap" style={{ paddingTop: 24, maxWidth: 620 }}>
       <h1 style={{ fontSize: 26, marginBottom: 4 }}>Your rates</h1>
+      {/* "Your take-home" IS the number on every menu-priced service, and is
+          FALSE on a crew-priced one — there the number is the quote and the
+          payout is smaller. Copy that lies is this codebase's most expensive
+          bug class, so the sentence follows the rates actually on this page.
+          anyCrewPriced is false for every crew today, so this reads exactly as
+          it always has. */}
       <p className="mut" style={{ fontSize: 14, marginBottom: 6, maxWidth: 540 }}>
-        Set your take-home for each kind of work — in your own units. This is your
-        private number; LakeLife adds its own on top.
+        {anyCrewPriced
+          ? "Set your rate for each kind of work — in your own units. On the services you price yourself, what you type is your quote and the card says what it pays you; on the rest it's your take-home. Either way it's your private number."
+          : "Set your take-home for each kind of work — in your own units. This is your private number; LakeLife adds its own on top."}
       </p>
       {/* NECESSARY, NOT SUFFICIENT. "No rate, no routing" is the whole story
           for a live crew. For a crew still onboarding it is the smaller half:
@@ -129,6 +148,17 @@ function RateCard({ rate }: { rate: MyRate }) {
         )}
       </div>
 
+      {/* THE STANDING RULE, ABOVE THE BOX THEY ARE ABOUT TO TYPE IN.
+          The rates page prints the same thing in a summary card at the top,
+          which a crew scrolling straight to their service never reads. This is
+          the copy that is next to the control. Null on every ordinary service,
+          so nothing new appears on an ordinary card. */}
+      {rate.form.feeNote && (
+        <p className="mut" style={{ fontSize: 12.5, margin: "0 0 10px", lineHeight: 1.5 }}>
+          {rate.form.feeNote}
+        </p>
+      )}
+
       <div style={{ display: "grid", gap: 10 }}>
         {rate.form.fields.map((f) => (
           <label key={f.key} className="ll-field" style={{ display: "block" }}>
@@ -146,6 +176,15 @@ function RateCard({ rate }: { rate: MyRate }) {
                 style={{ flex: 1, fontSize: 16, minHeight: 48, width: "100%" }}
               />
             </div>
+            {/* BOTH NUMBERS, for the value that is actually SAVED. It is
+                deliberately not recomputed from what they are typing: a
+                half-typed "5" would flash a payout for a quote nobody has
+                saved. It updates when the server does. */}
+            {f.feeSentence && (
+              <span className="mut" style={{ display: "block", fontSize: 12, marginTop: 5 }}>
+                {f.feeSentence}
+              </span>
+            )}
           </label>
         ))}
       </div>

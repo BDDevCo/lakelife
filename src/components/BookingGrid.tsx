@@ -14,7 +14,17 @@ import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 interface Service {
   id: string;
   name: string;
+  /**
+   * The all-in menu price. EXACTLY 0 on a crew-priced service (0174), where
+   * there is no menu at all — read `crewPriced` before printing this, never
+   * the other way round. A "$0" on a booking tile is this codebase's oldest
+   * dead end.
+   */
   price: number;
+  /** 0174 — the crew who takes this job sets its price. No menu, no total. */
+  crewPriced: boolean;
+  /** What to say INSTEAD of a figure. Non-null exactly when crewPriced. */
+  priceNote: string | null;
   frequency_options: string[];
   is_water_work: boolean;
   /** 0148 — spring collection: this visit does NOT happen at their property. */
@@ -35,6 +45,16 @@ interface Season {
   provisional?: boolean;
 }
 
+/**
+ * THE TILE'S WORDS WHERE A FIGURE WOULD GO.
+ *
+ * Short on purpose: the tile is a 260px card and the full sentence (the one
+ * naming quotes, days and ratings) belongs in the modal where there is room to
+ * read it. Both must stay true of the same product — if the chooser screen
+ * they promise is not built, soften BOTH, not one.
+ */
+const CREW_QUOTED_TILE = "Crew-quoted";
+
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DOW = ["S", "M", "T", "W", "T", "F", "S"];
 
@@ -50,8 +70,8 @@ export function BookingGrid({ services, season }: { services: Service[]; season:
             <h3 style={{ fontSize: 17, margin: s.is_water_work ? "6px 0 2px" : "0 0 2px" }}>{s.name}</h3>
             <div className="mut" style={{ fontSize: 12.5 }}>{s.frequency_options.join(" · ")}</div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14 }}>
-              <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 20, color: "var(--ink)" }}>
-                {formatPrice(s.price)}
+              <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: s.crewPriced ? 15 : 20, color: s.crewPriced ? "var(--sub)" : "var(--ink)" }}>
+                {s.crewPriced ? CREW_QUOTED_TILE : formatPrice(s.price)}
               </span>
               <button className="ll-btn sm" onClick={() => setActive(s)}>Schedule</button>
             </div>
@@ -191,13 +211,20 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
   // TODAY is the only day that can be a rush job, and only inside the window.
   // Derived from the server's clock (not the cell) so it survives paging to
   // another month with today still selected.
-  const rushOpen = rush != null && rush.nowHour >= RUSH_OPEN_HOUR && rush.nowHour < rush.cutoffHour;
+  // NEVER ON A CREW-PRICED SERVICE. The rush premium is a percentage of a menu
+  // price that does not exist here, and createBookingBatch refuses same-day on
+  // these services by name. Leaving the ⚡ on would draw a control whose only
+  // outcome is a refusal — the screen must not offer what the door will decline.
+  const rushOpen = !service.crewPriced && rush != null && rush.nowHour >= RUSH_OPEN_HOUR && rush.nowHour < rush.cutoffHour;
   const pickedIsRush = rushOpen && picked.includes(today);
   const rushAllIn = rush ? rushPrice(service.price, rush.surchargePct) : service.price;
   // Blank until they answer. The SERVER is what actually refuses (the form can
   // be bypassed); this only stops them tapping a button that cannot succeed.
   const needsSpot = service.needs_pickup_spot && pickup.address.trim() === "";
   const needsRelease = service.needs_release && !pickup.releaseConfirmed;
+  // 0 on a crew-priced service, and nothing renders it there — summing a menu
+  // price of 0 across five visits would present "$0" as a total, in bold, to a
+  // customer about to commit.
   const totalPrice = picked.length === 0
     ? 0
     : service.price * (picked.length - (pickedIsRush ? 1 : 0)) + (pickedIsRush ? rushAllIn : 0);
@@ -257,7 +284,9 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
           <div>
             <span className="ll-pill teal">Schedule</span>
             <h3 style={{ fontSize: 20, marginTop: 8 }}>{service.name}</h3>
-            <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>{formatPrice(service.price)}</div>
+            <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
+              {service.crewPriced ? service.priceNote : formatPrice(service.price)}
+            </div>
           </div>
           <button className="ll-x" onClick={onClose} aria-label="Close">✕</button>
         </div>
@@ -447,9 +476,15 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
                 <span className="mut">{recurring && !multi ? "First visit" : "Date"}</span><b>{prettyPicked}</b>
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
-                <b>Your price</b><b>{pickedIsRush ? formatPrice(rushAllIn) : formatPrice(service.price)}</b>
-              </div>
+              {service.crewPriced ? (
+                <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>
+                  <b>Your price</b> — {service.priceNote}
+                </div>
+              ) : (
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
+                  <b>Your price</b><b>{pickedIsRush ? formatPrice(rushAllIn) : formatPrice(service.price)}</b>
+                </div>
+              )}
               {pickedIsRush && (
                 <div style={{ fontSize: 12, marginTop: 4 }}>
                   ⚡ Same-day rush — includes the rush premium
@@ -480,13 +515,24 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
                   </button>
                 ))}
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
-                <b>Your total</b><b>{formatPrice(totalPrice)}</b>
-              </div>
-              <div className="mut" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
-                {formatPrice(service.price)} per visit{pickedIsRush ? ` · today is ${formatPrice(rushAllIn)} at the rush rate` : ""}. Each
-                one is charged only after it&apos;s done — and cancelling one visit never touches the others.
-              </div>
+              {service.crewPriced ? (
+                <div className="mut" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                  Each visit is quoted by the crew who takes it, so there is no total to
+                  show yet — you&apos;ll see each price as soon as a crew picks it up. Each
+                  one is charged only after it&apos;s done, and cancelling one visit never
+                  touches the others.
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
+                    <b>Your total</b><b>{formatPrice(totalPrice)}</b>
+                  </div>
+                  <div className="mut" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
+                    {formatPrice(service.price)} per visit{pickedIsRush ? ` · today is ${formatPrice(rushAllIn)} at the rush rate` : ""}. Each
+                    one is charged only after it&apos;s done — and cancelling one visit never touches the others.
+                  </div>
+                </>
+              )}
             </div>
           )}
 

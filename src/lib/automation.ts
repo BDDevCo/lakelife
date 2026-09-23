@@ -29,6 +29,7 @@ import { getPlatformSettings } from "@/lib/settings";
 import { autoAssignJob, loadPricingProfileById } from "@/app/book/dispatch";
 import { computeScarcityOffer } from "@/app/requests/offer-data";
 import { priceService, type ServiceRule } from "@/lib/pricing";
+import { crewPayout, type PlatformFee } from "@/lib/platform-fee";
 import { computeMenuSuggestions } from "@/app/ops/data";
 import { executeMenuUpdate } from "@/lib/menu-core";
 import { composeNightlyDigest, needsLookSubject, type DigestSections, type NeedsLookKind } from "@/lib/digest-render";
@@ -54,6 +55,114 @@ function prettyDate(iso: string): string {
   return new Date(iso + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 const one = <T>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
+
+// ============================================================================
+// THE CREW SETS THE PRICE — what the nightly must stop doing (0174).
+//
+// On a service flagged `crew_priced` there IS no menu price. The crew's own
+// card is the price; the customer pays round2(q × 1.12) and the crew is paid
+// round2(q × 0.88) (src/lib/platform-fee.ts). Every number in this file that
+// was derived from a MENU is therefore either meaningless or a lie on that
+// path, and this machine runs while nobody is watching — so each site below
+// either excludes crew-priced work and SAYS SO in `skipped` (which the nightly
+// route feeds into the digest via noteSkips), or switches to the crew's card.
+//
+// Nothing here changes a single byte on the `crew_priced = false` path. That
+// is the whole contract of the flag, and automation.test.ts's existing runners
+// are the proof.
+// ============================================================================
+
+/**
+ * 0174 IS WRITTEN BUT NOT YET APPLIED, AND THE NIGHTLY SHIPS FIRST.
+ *
+ * Selecting `crew_priced` from a database that does not have the column yet is
+ * a PostgREST 42703 — an ERROR, not an empty read. If every caller below
+ * treated that as "could not tell" the nightly would start refusing to price
+ * menus on the very first evening this file deploys, before the migration
+ * lands, and the digest would fill with a skip nobody can act on.
+ *
+ * "The column is not there yet" is a FACT with a correct answer: no service is
+ * crew-priced, because the flag does not exist. That is byte-for-byte today's
+ * behaviour. A genuine read failure (a dropped connection, a permissions
+ * change) is a DIFFERENT event and must not be laundered into the same answer
+ * — see loadCrewPricedServiceIds.
+ */
+export function isMissingColumnError(error: { code?: unknown; message?: unknown } | null | undefined): boolean {
+  if (!error) return false;
+  if (String(error.code ?? "") === "42703") return true;
+  return /column\s+\S*crew_priced\S*\s+does not exist/i.test(String(error.message ?? ""));
+}
+
+/**
+ * The ids of every crew-priced service, or `null` when we could not tell.
+ *
+ * `null` is not "none". Callers that WRITE money or a live price must fail
+ * CLOSED on it (do nothing, and say why); callers that only decide how to word
+ * a number may fall back to today's behaviour. Both are spelled out at each
+ * call site — this loader never decides for them.
+ *
+ * Deliberately NOT mustRead: a throw here would take out the whole nightly
+ * step, and each of the five callers has a different right answer to "we could
+ * not tell", which is exactly the judgement mustRead is not allowed to make.
+ */
+export async function loadCrewPricedServiceIds(
+  admin: { from: (t: string) => { select: (cols: string) => PromiseLike<{ data: unknown; error: { code?: unknown; message?: unknown } | null }> } },
+): Promise<Set<string> | null> {
+  const { data, error } = await admin.from("services").select("id, crew_priced");
+  if (error) {
+    if (isMissingColumnError(error)) return new Set<string>(); // 0174 hasn't landed — nothing is crew-priced, and that is true
+    console.error("[read failed] which services the crew prices:", error);
+    return null;
+  }
+  const rows = (data as Array<{ id?: unknown; crew_priced?: unknown }> | null) ?? [];
+  return new Set(rows.filter((r) => r.crew_priced === true).map((r) => String(r.id)));
+}
+
+/** The two live dials as the one shape platform-fee.ts takes. */
+export function platformFeeOf(settings: { platformFeeCustomerPct: number; platformFeeCrewPct: number }): PlatformFee {
+  return { customerPct: settings.platformFeeCustomerPct, crewPct: settings.platformFeeCrewPct };
+}
+
+/**
+ * A FILL-IN OFFER ON A CREW-PRICED SERVICE, AS A PAYOUT.
+ *
+ * The menu-derived offer (gapTakeHome) exists to stop a crew back-solving the
+ * menu price from the number they were offered: it rounds DOWN to a $5 step
+ * and subtracts a per-job jitter so the ÷(1−floor) inversion breaks. Under a
+ * PUBLISHED percentage there is nothing left to hide — a crew who knows their
+ * own card and the 12% knows every number in the transaction — and there is no
+ * menu to be protected in the first place. So on this path:
+ *
+ *   · NO JITTER. Jittering a figure the crew can compute on their own phone
+ *     does not obscure anything; it just makes their pay look arbitrary.
+ *   · NO FLOOR. LakeLife's share is the constant (c+k)/(1+c) whatever they
+ *     charge, so there is no per-job margin left to clear.
+ *   · ANCHORED ON THEIR OWN CARD. `gapAnchorPct` (dial, 95%) of their own
+ *     trailing anchor rate, rounded DOWN to a $5 step exactly as gapOfferFor
+ *     does — hiking your card still cannot raise your offer.
+ *   · EXPRESSED AS A PAYOUT. The number returned is what lands in their
+ *     account, crewPayout() of the anchored quote. The digest calls this
+ *     "take-home" and on this path that is literally the wire amount.
+ *
+ * The dust guard is applied to the PAYOUT, not the quote: $22 of card at 12%
+ * is $19.36 in hand, and "an offer this small is noise" is a statement about
+ * what the crew receives.
+ *
+ * Returns null when there is no usable anchor or the payout is dust.
+ */
+export function crewPricedGapOffer(
+  anchorRate: number | null,
+  fee: PlatformFee,
+  anchorPct = 0.95,
+  minOffer = 20,
+): number | null {
+  if (anchorRate == null || !(anchorRate > 0)) return null; // no card, no honest offer — never a guess
+  const anchoredQuote = Math.floor((anchorRate * anchorPct) / 5) * 5;
+  if (!(anchoredQuote > 0)) return null;
+  const payout = crewPayout(anchoredQuote, fee);
+  return payout >= Math.max(20, minOffer) ? payout : null;
+}
+
 
 export interface RouteBuildOutcome {
   ok: boolean;
@@ -781,6 +890,21 @@ export async function settleJob(jobId: string): Promise<SettleOutcome> {
   }
 
   // 2) Invoice — one per job. Reuse an existing row rather than creating a second.
+  //
+  // A JOB WITH NO PRICE CANNOT BE BILLED, AND MUST NOT BE BILLED FOR NOTHING.
+  // jobs.customer_price is nullable and is genuinely null on a crew-priced
+  // visit nobody has quoted yet (0174) — the booking door writes null rather
+  // than 0 precisely so no reader mistakes "unpriced" for "free". The insert
+  // below would put that null straight into invoices.amount, and the charge
+  // rail downstream reads that amount as the sum to collect. This should be
+  // unreachable (an unpriced job has no crew, so it cannot reach `complete`
+  // and the photo gate holds it), which is exactly why it gets a hard stop
+  // rather than a comment: the settle stops here, the crew's payout above has
+  // already been handled, and a person is told what is wrong with the row.
+  if (job.customer_price == null) {
+    console.error(`[settleJob ${jobId}] no customer price on this job — refusing to raise an invoice for it`);
+    return { ok: false, error: "this job has no price yet — it can't be invoiced" };
+  }
   const { data: invoiceRow, error: invoiceReadErr } = await admin.from("invoices").select("id, status").eq("job_id", jobId).maybeSingle();
   // FAILS OPEN IF IGNORED: null reads as "no invoice yet" and raises a second
   // bill for the same job.
@@ -2164,7 +2288,9 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
  */
 export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; nearMilestoneNudges: number; territoryNudges: number; skipped: string[] }> {
   const admin = createServiceClient();
-  const { nudgeCreditThreshold, nudgeCooldownDays, lakeDemotionCooldownDays } = await getPlatformSettings();
+  const settings = await getPlatformSettings();
+  const { nudgeCreditThreshold, nudgeCooldownDays, lakeDemotionCooldownDays } = settings;
+  const fee = platformFeeOf(settings);
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
   const now = Date.now();
   // WHAT TONIGHT'S NUDGES SILENTLY DIDN'T DO. Every guard below fails CLOSED,
@@ -2299,8 +2425,19 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
     // every crew silently looks like it has no rate for anything.
     const rates = mustRead("the crews' rate cards", await admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"));
     const rateBy = new Map((rates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
+    // WHICH OF THESE SERVICES DOES THE CREW PRICE? It decides whether the
+    // dollar figure in the pitch is their card or their payout — two different
+    // numbers, 12% apart, on the same sentence. Not knowing is not a reason to
+    // pick one: the pitch is a growth email, and a growth email that overstates
+    // a contractor's pay is worse than no growth email. Same rule the tally
+    // failures below follow — the ITEM we skip is the whole pitch.
+    const crewPriced = await loadCrewPricedServiceIds(admin);
+    if (crewPriced == null) {
+      skipped.push("no territory pitches tonight: couldn't read which services the crew prices, and the dollar figure in the pitch means their card on one side of that flag and their take-home on the other");
+    }
+    const crewPricedIds = crewPriced ?? new Set<string>();
 
-    for (const v of crews ?? []) {
+    for (const v of crewPriced == null ? [] : crews ?? []) {
       if (!v.coi_expiry || String(v.coi_expiry) < today) continue;
       const myLakes = new Set((v.service_lakes as string[]) ?? []);
       // Group this crew's claimable-if-they-expanded demand by lake.
@@ -2336,7 +2473,15 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
             base: Number(vr.base ?? 0), unit_rate: Number(vr.unit_rate ?? 0),
             band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
           };
-          entry.est += priceService(rule, profile);
+          // TAKE-HOME, NOT THE CARD. The pitch below tells a crew what is
+          // "sitting there right now" at their own rates, and on a crew-priced
+          // service their card is a QUOTE: they type $100 and $88 lands in
+          // their account. Quoting the card here would inflate every territory
+          // pitch by the crew fee and then be contradicted by the first payout.
+          // On a menu-priced service the card IS the payout, so this line is
+          // byte-for-byte what it was.
+          const carded = priceService(rule, profile);
+          entry.est += crewPricedIds.has(String(j.service_id)) ? crewPayout(carded, fee) : carded;
         }
         entry.jobs.push(j);
         byLake.set(lakeId, entry);
@@ -2367,7 +2512,7 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
         const ok = await send(
           v.user_id as string, "territory",
           `${best.count} homeowner${best.count === 1 ? "" : "s"} waiting on ${best.name} 🌊`,
-          html`<p>Hi ${v.company ?? "there"},</p><p><b>${best.count} homeowner${best.count === 1 ? " is" : "s are"} waiting</b> for work you do on ${best.name} — at your rates that's about <b>$${best.est.toFixed(0)}</b> sitting there right now.</p><p>Add the lake in one tap and the machine starts routing you: <a href="${site}/vendor/availability">${site}/vendor/availability</a></p>`,
+          html`<p>Hi ${v.company ?? "there"},</p><p><b>${best.count} homeowner${best.count === 1 ? " is" : "s are"} waiting</b> for work you do on ${best.name} — at your rates that's about <b>$${best.est.toFixed(0)}</b> of take-home sitting there right now.</p><p>Add the lake in one tap and the machine starts routing you: <a href="${site}/vendor/availability">${site}/vendor/availability</a></p>`,
         );
         if (ok) territoryNudges++;
       }
@@ -2706,7 +2851,7 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
  * Runs on the intraday heartbeat (first beat past the cutoff resolves) and
  * nightly as the backstop for anything stale.
  */
-export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: number; cancelled: number }> {
+export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: number; cancelled: number; skipped: string[] }> {
   const admin = createServiceClient();
   const today = todayLakeDate();
   const { sameDayCutoffHour } = await getPlatformSettings();
@@ -2728,6 +2873,19 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
 
   const tomorrow = addDays(today, 1);
   let rolled = 0, cancelled = 0;
+  // A RUSH JOB THAT NEITHER ROLLED NOR CANCELLED IS A CUSTOMER WHO WAS NEVER
+  // TOLD. `{ok:true, rolled:0, cancelled:0}` is also what a night with no rush
+  // jobs looks like, and the `continue` below is silent — see the crew-priced
+  // branch, which is the first skip here that can fire every single night.
+  const skipped: string[] = [];
+  // THERE IS NO "STANDARD PRICE" ON A CREW-PRICED SERVICE. This function's
+  // whole job is to reprice a rush job down to the menu and text the customer
+  // that number as "the standard price". On a crew_priced service the global
+  // services row carries no price at all, priceService returns 0, the `p > 0`
+  // guard declines it and the job is left where it is — correct, and utterly
+  // invisible. Naming it is the point: the roll needs a crew's quote, and this
+  // job has no crew.
+  const crewPriced = await loadCrewPricedServiceIds(admin);
   for (const j of stuck ?? []) {
     const svcRow = one(j.services) as { name?: string; pricing_model?: string; base?: number; unit_rate?: number; band_pricing?: unknown } | null;
     const prop = one(j.properties) as { owner_id?: string; address?: string; nickname?: string } | null;
@@ -2768,6 +2926,18 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
     }
 
     // Roll: tomorrow at the STANDARD menu price, recomputed server-side.
+    // Unless the crew sets the price, in which case there is no menu to roll
+    // down to and no crew yet to quote one — so the job keeps its date, keeps
+    // its premium, and a person is told rather than a text asserting a
+    // "standard price" that is really the 25% same-day rate.
+    if (crewPriced == null || crewPriced.has(String(j.service_id))) {
+      skipped.push(
+        crewPriced == null
+          ? `rush job ${j.id} (${svcName} at ${where}) was left as it is: couldn't read whether this service is crew-priced, and rolling it would reprice it off a menu that may not exist`
+          : `rush job ${j.id} (${svcName} at ${where}) can't roll to tomorrow's standard price: ${svcName} is priced by the crew, and no crew has quoted it — it needs a person, or a crew to claim it`,
+      );
+      continue;
+    }
     let standard = Number(j.customer_price ?? 0); // fallback: keep rush price only if repricing fails
     let repriced = false;
     // SEAM: loadPricingProfileById and groundsFor THROW on a failed read now.
@@ -2834,7 +3004,7 @@ export async function resolveRushFallbacks(): Promise<{ ok: boolean; rolled: num
       );
     }
   }
-  return { ok: true, rolled, cancelled };
+  return { ok: true, rolled, cancelled, skipped };
 }
 
 /** PHASE E: per-lake auto-demotion. A crew whose net strikes (no-shows minus
@@ -3271,6 +3441,13 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
   // that lake at once, and a park-sized marina would otherwise fill the digest
   // with the same sentence twenty times a night.
   const staleIceOutLakes = new Set<string>();
+  // THE STICKY-CUSTODY WRITE BELOW IS WHAT THE STORING CREW IS PAID. On a
+  // crew_priced service their card is a QUOTE, not a payout, so this set
+  // decides between two numbers 12% apart in `jobs.vendor_cost` — the column
+  // `payouts.amount` ties to. `null` means we could not tell, and that is the
+  // one case where doing nothing beats guessing: see the sticky branch.
+  const crewPricedSpring = await loadCrewPricedServiceIds(admin);
+  const springFee = platformFeeOf(await getPlatformSettings());
 
   const groups = mustRead("the active season envelopes", await admin
     .from("job_groups")
@@ -3382,6 +3559,43 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
     legs.length = 0; legs.push(...trued);
     const price = quote > 0 ? quote : sum;
 
+    // A SPRING VISIT AT $0 IS A FREE BOAT SPLASH, AND IT WAS ONE `continue`
+    // AWAY FROM EXISTING. With no booking-time quote the price falls back to
+    // the sum of the MENU legs — and on a crew_priced service every one of
+    // those global rows carries no price, so the sum is zero, the insert
+    // succeeds, and the owner is texted "$0 as quoted at booking". Zero is not
+    // a price anywhere else in this product (dispatch refuses a rate that is
+    // not strictly positive; an unpriced service is the safe state) and it is
+    // not one here. The envelope keeps its fall visit and waits for a number
+    // somebody actually chose.
+    if (!(price > 0)) {
+      skipped.push(`Envelope ${g.id}: no spring visit born — there is no price for it (no quote from booking, and the services it is built from carry no menu price). It needs a quote before it can be scheduled.`);
+      continue;
+    }
+
+    // A BREAKDOWN THAT PUTS $0 AGAINST REAL WORK IS NOT A BREAKDOWN.
+    //
+    // trueLegsToQuote proportions the customer's promised quote across the
+    // legs BY THEIR MENU PRICES. A crew_priced leg has no menu price, so it
+    // scales to exactly $0 while the menu-priced legs absorb the entire
+    // quote — a job_items row saying the splash was free and the shrink-wrap
+    // removal cost the lot. The total is right and every line under it is
+    // wrong, which is the worst shape a money row comes in. A single leg is
+    // safe (it takes the whole quote either way); a mixed package needs a
+    // crew's quote per leg, which is the booking door's job, not the
+    // nightly's.
+    const crewPricedLegs = crewPricedSpring == null
+      ? null
+      : legs.filter((l) => crewPricedSpring.has(String(l.id)));
+    if (legs.length > 1 && (crewPricedLegs == null || crewPricedLegs.length > 0)) {
+      skipped.push(
+        crewPricedLegs == null
+          ? `Envelope ${g.id}: no spring visit born — couldn't read which of its services the crew prices, and that decides whether the per-service breakdown of the $${price.toLocaleString()} quote is honest. Tomorrow's run tries again.`
+          : `Envelope ${g.id}: no spring visit born — the crew sets the price on part of this package, so the $${price.toLocaleString()} promised at booking can't be split across its services from a menu. It needs a quote per service before it can be scheduled.`,
+      );
+      continue;
+    }
+
     const springDate = (() => {
       const d = new Date(iceOut + "T12:00:00Z");
       d.setUTCDate(d.getUTCDate() + 14);
@@ -3467,7 +3681,17 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
         } catch { /* best effort */ }
       }
     }
-    if (stay && g.storing_vendor && stickyOk) {
+    // WE COULD NOT TELL WHO SETS THE PRICE, SO WE DO NOT PAY ANYONE. The
+    // branch below writes jobs.vendor_cost, which IS the crew's payout, and
+    // the right number is their card on one side of crew_priced and 88% of it
+    // on the other. Neither guess is acceptable on a contractor's invoice, so
+    // the visit stays born-and-unassigned and a person is told. We do NOT fall
+    // through to autoAssignJob either: the boat is physically in the storing
+    // crew's barn, and there is no dispatch lottery for that.
+    const stickyReady = stay && !!g.storing_vendor && stickyOk;
+    if (stickyReady && crewPricedSpring == null) {
+      skipped.push(`Envelope ${g.id}: the spring visit was created but not assigned to the crew storing the boat — we couldn't read which services the crew prices, and that flag decides what they are paid. It is sitting on the ops board.`);
+    } else if (stickyReady && crewPricedSpring != null) {
       const { data: rates, error: ratesErr } = await admin
         .from("vendor_rates").select("service_id, base, unit_rate, band_pricing")
         .eq("vendor_id", g.storing_vendor as string).in("service_id", springIds);
@@ -3483,11 +3707,17 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
       for (const s of svcRows) {
         const vr = rateBy.get(s.id as string);
         if (!vr) continue;
-        const c = priceService({
+        const carded = priceService({
           name: s.name as string, pricing_model: s.pricing_model as ServiceRule["pricing_model"],
           base: Number(vr.base ?? 0), unit_rate: Number(vr.unit_rate ?? 0),
           band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
         }, profile);
+        // THE COLUMN KEEPS ITS MEANING: vendor_cost is WHAT WE PAY, and on a
+        // crew_priced service the card is what the crew QUOTED. Writing the
+        // card here would pay them 100% of a quote every other doorway pays
+        // 88% of — the same crew, the same card, two different cheques — and
+        // payouts.amount ties to this column, so the overpay is real money.
+        const c = crewPricedSpring.has(String(s.id)) ? crewPayout(carded, springFee) : carded;
         cost += c;
         await admin.from("job_items").update({ vendor_cost: c }).eq("job_id", job.id).eq("service_id", s.id as string);
       }
@@ -3844,9 +4074,16 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number; sk
   if (aged.length === 0) return { ok: true, sent: 0, skipped };
 
   const [crewsRes, allRatesRes, allPausesRes] = await Promise.all([
+    // FENCED, like the territory pool above and every other crew doorway. This
+    // one was not: it selected active crews with a user_id and nothing else, so
+    // the three FIXTURE crews were in the audience of a real email that names a
+    // dollar figure and a link to claim work. The fence derives from the OWNER
+    // (users.is_fixture), and the FK has to be named — vendors has two of them
+    // to users, and a bare users(...) answers PGRST201, which arrives as
+    // {data:null,error} and would take the whole digest down.
     admin.from("vendors")
-      .select("id, user_id, company, service_types, service_lakes, work_days, coi_expiry, status")
-      .eq("status", "active").not("user_id", "is", null),
+      .select("id, user_id, company, service_types, service_lakes, work_days, coi_expiry, status, users!vendors_user_id_fkey!inner(is_fixture)")
+      .eq("status", "active").eq("users.is_fixture", false).not("user_id", "is", null),
     admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"),
     admin.from("vendor_lake_demotions").select("vendor_id, lake_id, demoted_at"),
   ]);
@@ -3857,6 +4094,18 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number; sk
   const allRates = mustRead("the crews' rate cards", allRatesRes);
   const allPauses = mustRead("which crews are paused on which lakes", allPausesRes);
   const { gapTakeHome, gapOfferFor, gapJitter, marginPct } = await import("@/lib/dispatch");
+  // WHICH SERVICES HAVE NO MENU TO BE PROTECTED FROM. Everything the fill-in
+  // machinery does — the floor test, the $5 rounding, the per-job jitter — is
+  // built out of `menu`, and on a crew_priced service `jobs.customer_price`
+  // was derived from the crew's own card in the first place. `null` here is
+  // fail-CLOSED: this email tells a contractor what a job pays, and we would
+  // rather send nothing than a number computed under the wrong model.
+  const crewPricedFill = await loadCrewPricedServiceIds(admin);
+  if (crewPricedFill == null) {
+    skipped.push("no fill-in digests tonight: couldn't read which services the crew prices, and that flag decides whether an offer is a menu-derived ceiling or a payout on the crew's own card — no crew was emailed a figure computed the wrong way");
+    return { ok: true, sent: 0, skipped };
+  }
+  const fillFee = platformFeeOf(settings);
   const { loadGapAnchor } = await import("@/app/vendor/open-data");
   const rateByCrewSvc = new Map((allRates ?? []).map((r) => [`${r.vendor_id}|${r.service_id}`, r]));
   const pausedNow = new Set(
@@ -3911,10 +4160,26 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number; sk
         band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
       }, profile);
       if (!(cardPriced > 0)) continue;
+      const crewSetsThisPrice = crewPricedFill.has(String(j.service_id));
       const menu = Number(j.customer_price ?? 0);
-      if (marginPct(menu, cardPriced) >= settings.marginFloor) continue; // clears at card — not a gap for them
-      const tStar = gapTakeHome(menu, settings.marginFloor, gapJitter(j.id as string), settings.gapMinOffer);
-      if (tStar == null) continue;
+      // THE FLOOR AND THE CEILING ONLY EXIST ON THE MENU PATH.
+      //
+      // `marginPct(menu, card) >= floor` asks "does LakeLife still clear its
+      // margin if this crew does it at their card?" — on a crew_priced service
+      // LakeLife's share is the CONSTANT (c+k)/(1+c) whatever the crew charges,
+      // so the question has one answer for every job on the platform and the
+      // test is a global on/off switch, not a filter. And `gapTakeHome` builds
+      // its ceiling out of menu × (1 − floor): a menu that, on this path, is
+      // just the crew's own card with 12% on it, so the "ceiling" would sit
+      // ABOVE some crews' cards and below others for no reason anyone could
+      // explain. Both are skipped, and the offer is anchored on the crew's own
+      // card instead — see crewPricedGapOffer.
+      let tStar: number | null = null;
+      if (!crewSetsThisPrice) {
+        if (marginPct(menu, cardPriced) >= settings.marginFloor) continue; // clears at card — not a gap for them
+        tStar = gapTakeHome(menu, settings.marginFloor, gapJitter(j.id as string), settings.gapMinOffer);
+        if (tStar == null) continue;
+      }
       const anchorKey = `${v.id}|${j.service_id}|${j.property_id}`;
       let anchor = anchorCache.get(anchorKey);
       if (anchor === undefined) {
@@ -3935,7 +4200,13 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number; sk
         }
         anchorCache.set(anchorKey, anchor);
       }
-      const offer = gapOfferFor(tStar, anchor, settings.gapAnchorPct, settings.gapMinOffer);
+      // A crew with no rate history falls back to the card we just priced —
+      // gapOfferFor treats a null anchor as "no anchor, use the ceiling", but
+      // on the crew-priced path there IS no ceiling, so their own card is the
+      // only honest anchor there has ever been.
+      const offer = crewSetsThisPrice
+        ? crewPricedGapOffer(anchor ?? cardPriced, fillFee, settings.gapAnchorPct, settings.gapMinOffer)
+        : gapOfferFor(tStar, anchor, settings.gapAnchorPct, settings.gapMinOffer);
       if (offer != null) { total += offer; count++; }
     }
     // A TALLY WE COULDN'T FINISH IS NOT A SMALLER TALLY. The subject line
@@ -4273,7 +4544,39 @@ export async function autoApplyPriceSuggestions(): Promise<{
   if (!(settings.priceAutoapplyMaxPct > 0)) return { ok: true, applied: 0, changes: [], skipped };
 
   const admin = createServiceClient();
-  const suggestions = await computeMenuSuggestions(admin, settings.marginFloor);
+  const all = await computeMenuSuggestions(admin, settings.marginFloor);
+  if (all.length === 0) return { ok: true, applied: 0, changes: [], skipped };
+
+  // A CREW-PRICED SERVICE HAS NO MENU, AND THIS IS THE ONE THING IN THE
+  // CODEBASE THAT CHANGES A LIVE PRICE WITH NOBODY WATCHING.
+  //
+  // Margin health is computed from jobs.customer_price against the crews'
+  // cards; on a crew_priced service customer_price is round2(card × 1.12), so
+  // every one of those jobs reports the same constant share and a thin lake
+  // reads as a thin MENU — which this pass then "fixes" by writing a number
+  // into services.base. That is worse than a no-op: the column he decided to
+  // abolish gets a nightly writer, and the first doorway that reads it (a
+  // report, an estimate, a screen with a fallback) quotes a price no crew
+  // chose. Excluded here rather than inside computeMenuSuggestions because
+  // that function also feeds the ops Margin Health BOARD, where a human
+  // reading a row is a different thing from a robot applying one.
+  const crewPricedMenu = await loadCrewPricedServiceIds(admin);
+  if (crewPricedMenu == null) {
+    // FAIL CLOSED. A menu price is a customer-facing number that stays wrong
+    // until somebody notices, and this pass applies it unattended. One night
+    // of no auto-pricing costs nothing; one night of auto-pricing a service
+    // that has no menu costs a price nobody can explain.
+    skipped.push(`${all.length} menu suggestion${all.length === 1 ? " was" : "s were"} left for a person tonight: couldn't read which services the crew prices, and a crew-priced service has no menu to raise — they are still one tap each on the Margin Health board`);
+    return { ok: true, applied: 0, changes: [], skipped };
+  }
+  const suggestions = all.filter((s) => !crewPricedMenu.has(s.serviceId));
+  const heldBack = all.filter((s) => crewPricedMenu.has(s.serviceId));
+  if (heldBack.length > 0) {
+    // SAY WHAT WAS LEFT OUT, BY NAME. Silently listing fewer rows is how a
+    // machine that stopped doing a whole class of work reports a quiet night.
+    const names = [...new Set(heldBack.map((s) => s.serviceName))].sort();
+    skipped.push(`${names.join(", ")} ${names.length === 1 ? "was" : "were"} left out of tonight's auto-pricing: the crew sets the price on ${names.length === 1 ? "it" : "them"}, so there is no menu price to raise — what looks thin there is the platform fee, which is the same on every job`);
+  }
   if (suggestions.length === 0) return { ok: true, applied: 0, changes: [], skipped };
 
   const serviceIds = [...new Set(suggestions.map((s) => s.serviceId))];

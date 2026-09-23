@@ -40,6 +40,12 @@ export type TimedRule = ServiceRule & {
   needs_interior_access?: boolean | null;
   /** 0150: a third party must hand the customer's property over first. */
   needs_release?: boolean | null;
+  /**
+   * 0174: the crew who takes this job sets its price, so `base`/`unit_rate` on
+   * this row are a SHAPE, not a price — they are 0 and priceService returns 0
+   * at every size. Read this before printing any figure derived from the rule.
+   */
+  crew_priced?: boolean | null;
 };
 
 /** The profile fields a crew is allowed to correct. Mirrors sanitizeProposed. */
@@ -105,6 +111,18 @@ export interface CorrectionSummary {
   minutesDelta: number;
   /** Nothing actually changed — a crew confirming the profile is correct. */
   noChange: boolean;
+  /**
+   * 0174 — THE THREE PRICE FIELDS ABOVE MEAN NOTHING ON THIS SERVICE.
+   *
+   * A crew-priced service carries base 0 / unit_rate 0 on the global row, so
+   * priceService returns 0 for BOTH the before and the after and priceDelta is
+   * 0 at every size. Left unsaid, the owner's approval message read "The price
+   * doesn't change." on the one correction that definitely does change it —
+   * approveFlag reprices a crew-priced job off the crew's own card at the
+   * corrected size. Copy that lies is this codebase's dominant bug class, and
+   * this is the sentence a homeowner taps Approve under.
+   */
+  crewPriced: boolean;
 }
 
 /**
@@ -138,6 +156,9 @@ export function summariseCorrection(
     });
   }
 
+  // 0 and 0 on a crew-priced service, which is why `crewPriced` travels with
+  // them — a zero delta here is "no menu", never "no change".
+  const crewPriced = rule.crew_priced === true;
   const priceBefore = priceService(rule, before);
   const priceAfter = priceService(rule, after);
   const minutesBefore = serviceMinutes(rule, before);
@@ -148,6 +169,7 @@ export function summariseCorrection(
     priceBefore, priceAfter, priceDelta: priceAfter - priceBefore,
     minutesBefore, minutesAfter, minutesDelta: minutesAfter - minutesBefore,
     noChange: lines.length === 0,
+    crewPriced,
   };
 }
 
@@ -192,7 +214,13 @@ export function correctionMessage(
     `${opts.crewName ? `${opts.crewName} is` : "Your crew is"} at your place for ${opts.serviceName} and found ${found}.`,
   ];
 
-  if (s.priceDelta !== 0) {
+  if (s.crewPriced) {
+    // Never a figure, and never "the price doesn't change" — on this service
+    // the crew who is standing there sets the price, and a bigger job at their
+    // own rate is a bigger number. What we can promise is the rule: nothing is
+    // charged until they say yes.
+    parts.push(`Your crew prices this one, so they'll re-quote it at the corrected size — nothing is charged until you say yes.`);
+  } else if (s.priceDelta !== 0) {
     parts.push(
       `That makes it ${money(s.priceAfter)} instead of ${money(s.priceBefore)} — ` +
       `${s.priceDelta > 0 ? "up" : "down"} ${money(s.priceDelta)}.`,

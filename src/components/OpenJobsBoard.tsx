@@ -88,7 +88,9 @@ function JobCard({ job }: { job: OpenJob }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const gap = job.gap;
-  const hasSubline = job.rush || gap; // either sub-line pins the take-home line up to make room
+  // Either sub-line pins the take-home line up to make room — and so does the
+  // fee sentence on a crew-priced job, which is the one that MUST be read.
+  const hasSubline = job.rush || gap || job.feeNote != null;
 
   function claim() {
     startTransition(async () => {
@@ -128,6 +130,16 @@ function JobCard({ job }: { job: OpenJob }) {
       ) : (
         <p className="mut" style={{ fontSize: 14, margin: hasSubline ? "0 0 4px" : "0 0 12px" }}>
           Set your rate to see your take-home
+        </p>
+      )}
+      {/* WHAT THE TAKE-HOME FIGURE ABOVE IS MADE OF, on a service the crew
+          prices themselves (0174). The figure is already the PAYOUT, so it is
+          honest on its own — but a crew who set a $50 card and is offered $44
+          with no explanation will read it as us shaving their rate. Null on
+          every menu-priced job, where the quote and the payout are one number. */}
+      {job.feeNote && (
+        <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
+          {job.feeNote}
         </p>
       )}
       {job.rush && (

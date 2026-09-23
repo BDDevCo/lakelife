@@ -397,6 +397,11 @@ describe("the proof block — the only thing here that runs against a database",
       .sort((a, b) => a - b);
     expect(numbers).toContain(173);
     expect(numbers.filter((n) => n === 173)).toHaveLength(1);
-    expect(Math.max(...numbers)).toBe(173);
+    // NOT `toBe(173)`. This test is about 0173 — that it shipped, exactly once.
+    // Pinning it as the HIGHEST number on disk made the file self-breaking:
+    // every future migration turned it red for a reason that has nothing to do
+    // with the ledger, and the next author's cheapest way out is to delete the
+    // assertion that actually matters. 0174 was the first to do it.
+    expect(Math.max(...numbers)).toBeGreaterThanOrEqual(173);
   });
 });

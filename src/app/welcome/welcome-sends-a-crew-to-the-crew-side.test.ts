@@ -54,11 +54,27 @@ describe("/welcome knows a crew when it sees one", () => {
     expect(book).toBeLessThan(crew);
   });
 
-  it("and anyone the read misses still has a door that is not Sign out", () => {
-    // An invitation sent to one address and an account opened with another is
-    // not matched by any read. The page's only other control destroys the
-    // session they just built.
-    expect(src).toMatch(/href="\/portal"/);
+  it("and anyone the read misses is told the ONE thing that actually works", () => {
+    // THIS TEST USED TO PIN THE BUG. It required `href="/portal"` and called it
+    // "a door that is not Sign out" — but /portal calls the SAME claimCrewInvite
+    // on the SAME session email, gets the same nothing, and redirects to /book.
+    // Code, comment and test all agreed with each other and all three were wrong
+    // about what happens: it was a corridor back to the lake-house booking page.
+    //
+    // The cure is real and it belongs to the crew: the invitation row is still
+    // open and still claimable, so signing out and creating an account on the
+    // INVITED address matches it. So the page names the address they are signed
+    // in as, and points at Sign out — which is on this card already.
+    expect(src).not.toMatch(/href="\/portal"/);
+    expect(src).toContain("sign out above and create your account with that one");
+    expect(src.replace(/\s+/g, " ")).toContain("your invitation is still waiting on it");
+    // It must name WHICH address they are on. A sentence telling somebody to use
+    // "a different address" without saying which one they are currently using is
+    // the same dead end with better manners.
+    expect(src).toMatch(/<strong>\{email\}<\/strong>/);
+    // And Sign out has to still be on the page, or this is copy instructing a
+    // control the screen lacks — the very class the old sentence belonged to.
+    expect(src).toContain("<SignOutButton />");
   });
 });
 

@@ -100,7 +100,7 @@ export async function getOwnerFlags(): Promise<OwnerFlag[]> {
         serviceIds.length
           ? admin
               .from("services")
-              .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, needs_interior_access")
+              .select("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, needs_interior_access, crew_priced")
               .in("id", serviceIds)
           : Promise.resolve({ data: [], error: null }),
         // asService: the flag is on a property this owner owns — already

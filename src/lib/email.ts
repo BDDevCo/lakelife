@@ -115,7 +115,15 @@ export async function sendEmail(opts: {
     return { ok: false, error: holdRefusal(hold) };
   }
 
-  const from = opts.from ?? process.env.EMAIL_FROM ?? SANDBOX_FROM;
+  // `||`, NOT `??`, and the difference is the whole guard above. An env var set
+  // to the empty string — the shape a half-finished Vercel entry takes, and the
+  // shape `EMAIL_FROM=` in a .env file takes — is neither null nor undefined, so
+  // `??` hands it straight through. Resend is then posted `from: ""`, the send
+  // fails with a 4xx nobody is watching for, and the ONE line that exists to say
+  // which side of the sandbox switch this deployment is on never prints, because
+  // "" is not SANDBOX_FROM. The invitation IS the invite: a crew who never gets
+  // it has no other door in, and the Crews board just says "invited" either way.
+  const from = opts.from || process.env.EMAIL_FROM || SANDBOX_FROM;
   if (from === SANDBOX_FROM) warnSandboxSender();
 
   try {

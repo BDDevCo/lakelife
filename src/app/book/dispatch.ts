@@ -8,6 +8,7 @@ import { fleetJobCap, fleetMinuteBudget, fitsTimeBudget, jobMinutesOf, DEFAULT_J
 import { getVendorScores } from "@/lib/scoring-data";
 import { toISODate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
+import { crewPayout as feeCrewPayout } from "@/lib/platform-fee";
 import { groundsFor } from "@/app/park/rate-data";
 
 // The margin floor now lives in the DATABASE (platform_settings, rule 8) —
@@ -415,14 +416,46 @@ export interface AssignOutcome {
   assigned: boolean;
   vendorId?: string;
   decision: DispatchDecision;
+  /**
+   * WHAT THE CUSTOMER IS BILLED, when this call decided it (0174).
+   *
+   * Only ever set on a CREW-PRICED job that this call actually assigned: the
+   * price does not exist until a crew is picked, so the booking action has no
+   * number of its own to put in the confirmation. On the menu path it is
+   * undefined — the caller already knows the price, it wrote it.
+   */
+  customerPrice?: number;
+  /**
+   * EVERY ELIGIBLE CREW'S CARD PRICES THIS PROPERTY AT $0 (0174).
+   *
+   * The crew-priced twin of the menu path's `standardPrice <= 0` refusal, and
+   * the distinction matters because the two causes need opposite sentences.
+   * A crew with NO rate row for this service has `crewRate === null` — nobody
+   * has priced the work yet, which is honest waitlist demand and a recruiting
+   * signal. A crew WITH a rate row that computes to zero has `crewRate === 0`
+   * — the card is fine, the property has none of what the card counts (0 PWC
+   * lifts booking a PWC pull), and no crew will ever quote it.
+   *
+   * True only for the second: cards exist here, and every one of them prices
+   * this property at nothing. Telling that customer to wait for a crew would
+   * be a wait that can never end.
+   */
+  pricedToZero?: boolean;
 }
 
 /**
  * Auto-assign (or re-assign) ONE job. Loads the job, builds candidates, runs the
- * pure engine, and applies the winner: vendor_id + vendor_cost (crew's rate) +
- * margin (menu − rate) + status 'scheduled'. If no crew fits, the job is LEFT
- * as-is (requested) — that's the ops "needs attention" bucket. Idempotent-safe:
- * only assigns jobs still awaiting a crew.
+ * pure engine, and applies the winner: vendor_id + vendor_cost (what we PAY the
+ * crew) + margin (what LakeLife keeps) + status 'scheduled'. If no crew fits,
+ * the job is LEFT as-is (requested) — that's the ops "needs attention" bucket.
+ * Idempotent-safe: only assigns jobs still awaiting a crew.
+ *
+ * SINCE 0174 THIS DOOR CAN ALSO SET THE PRICE. On a crew-priced service there
+ * is no menu price at all: the winning crew's own card IS the quote, and this
+ * function writes all five money columns together — crew_quote, the two frozen
+ * percentages, customer_price and vendor_cost (plus margin) — because 0174's
+ * all-or-nothing CHECK refuses a half-frozen row and a constraint is a very
+ * expensive place to discover a missing field.
  */
 export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   const admin = createServiceClient();
@@ -433,7 +466,11 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   // carries no reasonNoFit — we don't know why, and won't pretend to.
   const jobRes = await admin
     .from("jobs")
-    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, est_minutes, pickup_lat, pickup_lng, services(name, pricing_model, est_minutes, takes_custody, band_pricing)")
+    // crew_quote / fee_customer_pct / fee_crew_pct are THIS JOB'S OWN frozen
+    // three (0174). They are read, never assumed: a re-dispatch must rank and
+    // price against the percentages that were in force when the customer said
+    // yes, not against whatever the dials say tonight.
+    .select("id, property_id, service_id, date, status, customer_price, vendor_id, group_id, est_minutes, pickup_lat, pickup_lng, crew_quote, fee_customer_pct, fee_crew_pct, services(name, pricing_model, est_minutes, takes_custody, band_pricing, crew_priced)")
     .eq("id", jobId)
     .maybeSingle();
   if (jobRes.error) {
@@ -444,7 +481,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   if (!job || !job.service_id || !job.date) {
     return { assigned: false, decision: { ok: false, reasonNoFit: "no_crew_for_service" } };
   }
-  const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string; est_minutes?: number; takes_custody?: boolean; band_pricing?: Record<string, unknown> | null } | null;
+  const svc = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; pricing_model?: string; est_minutes?: number; takes_custody?: boolean; band_pricing?: Record<string, unknown> | null; crew_priced?: boolean } | null;
   let profile: PricingProfile | null;
   try {
     profile = await loadPricingProfileById(admin, job.property_id as string);
@@ -573,7 +610,44 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
       ? components.reduce((s, c) => s + ((c.estMinutes ?? 0) > 0 ? (c.estMinutes as number) : DEFAULT_JOB_MINUTES), 0)
       : Number(svc.est_minutes ?? 0) > 0 ? Number(svc.est_minutes) : DEFAULT_JOB_MINUTES;
 
-  const decision = decideDispatch({
+  // ======================= WHO SETS THIS JOB'S PRICE (0174) =======================
+  //
+  // PARK WORK IS NEVER CREW-PRICED, and this is the fence. 0174 refuses
+  // `park_only and crew_priced` in the database, but that only covers a
+  // service built FOR a park; nothing stops a park's grounds booking an
+  // ordinary crew-priced service, and then the crew's own card would quote
+  // work the park negotiated its own rate for. The Haven's mow is $125 Mike
+  // agreed to — park rates never combine with anything.
+  //
+  // DERIVED FROM DATA ALREADY READ: loadPricingProfileById adds `lots` to the
+  // profile only when `groundsFor` says this property is a park's grounds, so
+  // `lots != null` IS "this is a park" without a second query and without a
+  // second read that could fail differently from the first.
+  const isParkGrounds = (profile as { lots?: number }).lots != null;
+  const crewPriced = svc.crew_priced === true && !isParkGrounds;
+
+  // THE JOB'S OWN THREE, NEVER THE LIVE DIAL — when it already has them.
+  // A job that has been priced once recomputes from what was frozen onto it,
+  // so tuning a dial tonight can never reprice work already sold. A job being
+  // priced for the FIRST time takes today's dials and freezes them below.
+  const frozenCustomerPct = job.fee_customer_pct == null ? null : Number(job.fee_customer_pct);
+  const frozenCrewPct = job.fee_crew_pct == null ? null : Number(job.fee_crew_pct);
+  const platformFee = crewPriced
+    ? {
+        customerPct: frozenCustomerPct ?? settings.platformFeeCustomerPct,
+        crewPct: frozenCrewPct ?? settings.platformFeeCrewPct,
+      }
+    : null;
+
+  // A PRICE THE CUSTOMER ALREADY AGREED TO.
+  //
+  // 0174's all-or-nothing CHECK means a non-null crew_quote is a job that has
+  // been quoted and confirmed — this crew, this number, this customer's yes.
+  // Positive, because 0 is the platform's word for "no price".
+  const agreedQuote = crewPriced ? Number(job.crew_quote ?? 0) : 0;
+  const agreedPrice = agreedQuote > 0 ? Number(job.customer_price ?? 0) : 0;
+
+  const dispatchInput: DispatchInput = {
     date: job.date as string,
     weekday: weekdayOf(job.date as string),
     serviceName: svc.name,
@@ -590,20 +664,109 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     componentNames: components?.map((c) => c.serviceName),
     jobMinutes,
     storage,
+    // NULL on every menu service and every park job — the menu path, byte for
+    // byte. Set only when the crew's own card is the price.
+    platformFee,
     crews,
-  });
+  };
 
-  if (!decision.ok || !decision.result) return { assigned: false, decision };
+  const decision = decideDispatch(dispatchInput);
+
+  // WHY THERE IS NO PRICE, when there is none. Asked of the SAME pool the
+  // engine just judged, with the same eligibility rule, so the two can never
+  // disagree about who was in the running. See AssignOutcome.pricedToZero.
+  const eligibleHere = crews.filter((c) => isEligible(c, dispatchInput));
+  const pricedToZero =
+    crewPriced &&
+    eligibleHere.some((c) => c.crewRate === 0) &&
+    !eligibleHere.some((c) => (c.crewRate ?? 0) > 0);
+
+  if (!decision.ok || !decision.result) return { assigned: false, decision, pricedToZero };
   const winnerId = decision.result.vendorId;
+
+  // A REPRICE IS A PRICE CHANGE THE CUSTOMER AGREED TO; A CREW SWAP IS NOT.
+  //
+  // Four paths drop a crew and come back through here — the nightly self-heal
+  // (revalidateJob, whose own comment says "silent"), the two capacity
+  // backstops below, and the custody release. Under a menu price all four were
+  // harmless: nobody chose the crew and the price did not move. The moment the
+  // price IS the crew's rate, the cheapest crew on the lake going on holiday
+  // rewrites a number the customer already said yes to, at night, with nobody
+  // told.
+  //
+  // REFUSED, not silently rewritten. The job keeps its frozen quote and its
+  // agreed price and stays 'requested' — the same honest "we're lining up a
+  // crew" state the booking flow already has copy for, and the state ops'
+  // needs-attention board already lists. A crew who quotes the SAME number
+  // still takes it, because nothing the customer agreed to has changed.
+  //
+  // Deliberately NOT a consent screen: asking the customer to accept a new
+  // price is the next package. This door's whole job is that no unagreed
+  // number is ever written.
+  if (agreedPrice > 0 && Math.abs(decision.result.customerPrice - agreedPrice) > 0.005) {
+    console.warn(
+      `[held] job ${jobId}: crew ${winnerId} would price it at ${decision.result.customerPrice}, ` +
+        `and the customer agreed to ${agreedPrice}. Left unassigned at the agreed price.`,
+    );
+    return { assigned: false, decision: { ok: false }, pricedToZero };
+  }
+
+  // DID THIS CALL FREEZE THE PRICE? Only when the service is crew-priced AND
+  // the job did not already carry a quote. It decides what the release paths
+  // below must undo: an assignment that never stuck agreed nothing, so its
+  // frozen three go back to null rather than locking the job to a price no
+  // customer was ever told.
+  const wroteFreeze = crewPriced && agreedQuote <= 0;
+
+  // ALL FIVE TOGETHER OR NONE. 0174's jobs_crew_price_all_or_nothing refuses a
+  // half-frozen row on purpose, and a CHECK constraint is an error handler of
+  // last resort, not a design. They are written in one object so there is no
+  // branch in which some of them land.
+  //
+  // vendor_cost is decision.result.crewPayout on BOTH paths: on the menu path
+  // crewPayout IS the crew's rate, so this line is byte-for-byte what it was.
+  // On the crew-priced path it is their quote minus the crew-side fee — which
+  // is what we actually pay, so payouts.amount = jobs.vendor_cost still ties.
+  const moneyCols = wroteFreeze
+    ? {
+        crew_quote: decision.result.crewRate,
+        fee_customer_pct: (platformFee as { customerPct: number }).customerPct,
+        fee_crew_pct: (platformFee as { crewPct: number }).crewPct,
+        customer_price: decision.result.customerPrice,
+      }
+    : {};
+
+  // AN ASSIGNMENT THAT NEVER STUCK AGREED NOTHING.
+  //
+  // The three release paths below (both capacity backstops and the custody
+  // release) undo an assignment this call had just made. If this call was also
+  // the one that froze the price, that price was never confirmed to anybody —
+  // leaving it on the row would lock the job to a number from a crew who did
+  // not get it, and the agreed-price guard above would then refuse every other
+  // crew on the lake forever. Cleared as a set, because the CHECK is
+  // all-or-nothing in both directions.
+  //
+  // A job whose quote was frozen by an EARLIER call keeps it: that one the
+  // customer was told about.
+  const releaseCols = {
+    vendor_id: null,
+    vendor_cost: null,
+    margin: null,
+    status: "requested",
+    ...(wroteFreeze
+      ? { crew_quote: null, fee_customer_pct: null, fee_crew_pct: null, customer_price: null }
+      : {}),
+  };
 
   // Apply — but only to a job that still needs a crew (no double-assign races).
   const changedRes = await admin
     .from("jobs")
     .update({
       vendor_id: winnerId,
-      vendor_cost: decision.result.crewRate,
+      vendor_cost: decision.result.crewPayout,
       margin: decision.result.margin,
       status: "scheduled",
+      ...moneyCols,
     })
     .eq("id", jobId)
     .in("status", ["requested"])
@@ -658,7 +821,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     if (busted) {
       await admin
         .from("jobs")
-        .update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" })
+        .update(releaseCols)
         .eq("id", jobId);
       applied = false;
     }
@@ -686,11 +849,22 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
       for (const comp of components) {
         const vr = byService.get(comp.serviceId);
         if (!vr) continue;
-        const cost = priceService({
+        const legQuote = priceService({
           name: comp.serviceName, pricing_model: comp.pricingModel,
           base: Number(vr.base ?? 0), unit_rate: Number(vr.unit_rate ?? 0),
           band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
         }, profile);
+        // WHAT WE PAY FOR THIS LEG, not what the crew quoted for it (0174).
+        //
+        // `jobs.vendor_cost` is the whole visit's PAYOUT — the summed quote
+        // less the crew-side fee — so stamping the raw leg quotes here would
+        // leave Σ legs above jobs.vendor_cost by exactly the fee, on every
+        // package, and every per-leg economics screen would disagree with the
+        // payout. Same arithmetic, same rounding, applied per leg.
+        //
+        // On the menu path `platformFee` is null and this IS the leg's rate,
+        // byte for byte.
+        const cost = platformFee ? feeCrewPayout(legQuote, platformFee) : legQuote;
         await admin.from("job_items").update({ vendor_cost: cost }).eq("job_id", jobId).eq("service_id", comp.serviceId);
       }
       if (storage) {
@@ -761,7 +935,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
           await admin.from("storage_stays").delete().eq("group_id", job.group_id as string).eq("status", "reserved");
           await admin.from("job_groups").update({ storing_vendor: null }).eq("id", job.group_id as string);
           await admin.from("jobs")
-            .update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" })
+            .update(releaseCols)
             .eq("id", jobId);
           applied = false;
         }
@@ -771,13 +945,23 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
       await admin.from("storage_stays").delete().eq("group_id", job.group_id as string).eq("status", "reserved");
       await admin.from("job_groups").update({ storing_vendor: null }).eq("id", job.group_id as string);
       await admin.from("jobs")
-        .update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" })
+        .update(releaseCols)
         .eq("id", jobId);
       applied = false;
     }
   }
 
-  return { assigned: applied, vendorId: applied ? winnerId : undefined, decision };
+  return {
+    assigned: applied,
+    vendorId: applied ? winnerId : undefined,
+    decision,
+    // Only on a crew-priced job THIS call priced, and only if it stuck. On the
+    // menu path the caller wrote the price itself and does not need it back;
+    // on a released assignment there is no price any more (releaseCols cleared
+    // it), so handing one back would describe a row that no longer exists.
+    customerPrice: applied && wroteFreeze ? decision.result?.customerPrice : undefined,
+    pricedToZero,
+  };
 }
 
 export interface RevalidateOutcome {

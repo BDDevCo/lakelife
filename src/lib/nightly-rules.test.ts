@@ -70,7 +70,11 @@ describe("rule 2 — a skip reaches the person who reads the email", () => {
     // These are the ones where a silent skip costs the most: a fee not charged,
     // a crew's month not batched, a referral never credited.
     const s = nightly();
-    for (const step of ["feeReconcile", "referrals", "payoutBatch", "monthlyPayouts"]) {
+    // rushFallbacks belongs here for the same reason: it is the step that
+    // moves a price a customer has already been quoted, and when it cannot
+    // (a crew-priced service has no menu to roll to) the job keeps its
+    // same-day premium until a person is told.
+    for (const step of ["feeReconcile", "referrals", "payoutBatch", "monthlyPayouts", "rushFallbacks"]) {
       expect(s, `${step} skips never reach the digest`).toMatch(
         new RegExp(`noteSkips\\("${step}"`),
       );

@@ -5,6 +5,7 @@ import { getMyVendorId, getVendorDay } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { signedJobPhotos, type JobPhoto } from "@/lib/photos";
 import { mustRead, mustCount } from "@/lib/must-read";
+import { payoutFeeLine } from "./earnings-helpers";
 
 /**
  * CREW JOB DETAIL + CREW CALENDAR reads (2026-07-26).
@@ -61,7 +62,7 @@ export async function assertVendorJob(jobId: string) {
       // Deliberately NO customer_price / vendor_cost: this is the crew code path,
       // and rule 1 forbids a vendor from ever seeing menu price or margin. Keeping
       // those columns out of reach by construction (settleJob re-loads them ops-side).
-      .select("id, status, vendor_id, service_id, date, property_id, group_id, held_at, no_show_at, stood_down_at, pickup_address, pickup_lat, pickup_lng, pickup_contact, pickup_phone, release_confirmed_at, services(name, min_photos, required_photo_slots)")
+      .select("id, status, vendor_id, service_id, date, property_id, group_id, held_at, no_show_at, stood_down_at, pickup_address, pickup_lat, pickup_lng, pickup_contact, pickup_phone, release_confirmed_at, crew_quote, fee_crew_pct, services(name, min_photos, required_photo_slots)")
       .eq("id", jobId)
       .maybeSingle(),
   );
@@ -152,6 +153,19 @@ export interface CrewJobDetail {
   gateCode: string | null;
   payouts: CrewPayoutRow[];
   takeHome: number;
+  /**
+   * WHY THE TAKE-HOME IS NOT THE NUMBER ON THEIR RATE CARD (0174).
+   *
+   * "You quote $50.00. You're paid $44.00 — LakeLife's fee is 12%." Null on
+   * every menu-priced job, where the two are one number and there is nothing
+   * to explain. Built from the JOB's own frozen crew_quote and fee_crew_pct,
+   * never from today's dial — a dial moved in March must not restate what a
+   * January job says it paid.
+   *
+   * Rule 1 holds: both figures are the crew's own. No customer price and no
+   * margin is loaded here or anywhere else on this screen.
+   */
+  feeNote: string | null;
   payOnHold: boolean;
   dispute: CrewDisputeView | null;
   /** Set when THIS job is the free make-it-right visit for an earlier job. */
@@ -323,6 +337,13 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
   }));
   const takeHome = Math.round(payouts.reduce((s, p) => s + p.amount, 0) * 100) / 100;
   const payOnHold = payouts.some((p) => p.status === "held");
+  // Both or neither — payoutFeeLine refuses to name a percentage it had to
+  // invent out of a null, because Number(null) is 0 and "LakeLife's fee is 0%"
+  // on a job that really was charged 12% is the confident kind of wrong.
+  const feeNote = payoutFeeLine({
+    crewQuote: (job as { crew_quote?: number | null }).crew_quote ?? null,
+    feeCrewPct: (job as { fee_crew_pct?: number | null }).fee_crew_pct ?? null,
+  });
 
   // The open dispute wins; otherwise the most recent one (so a settled job
   // still explains itself). Order is opened_at desc from the query.
@@ -394,6 +415,7 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
     gateCode,
     payouts,
     takeHome,
+    feeNote,
     payOnHold,
     dispute,
     correctionOf: correctionOfId ? links.get(correctionOfId) ?? null : null,

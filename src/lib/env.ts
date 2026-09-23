@@ -78,6 +78,16 @@ export function missingTwilioVars(channel: "verify" | "messaging"): string[] {
   return names.filter((n) => !process.env[n]);
 }
 
+/**
+ * The origin every generated link is built on.
+ *
+ * `||`, NOT `??`. An env var set to the empty string is neither null nor
+ * undefined, so `??` returns "" and every link built on it comes out as a bare
+ * path — a password-reset link, an auth callback, a one-login amenity link, a
+ * delivery-receipt URL. None of them throws; they just go nowhere. That is the
+ * same shape as the sandbox-sender hole in lib/email.ts and it is fixed the
+ * same way.
+ */
 export function siteUrl(): string {
-  return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  return process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 }

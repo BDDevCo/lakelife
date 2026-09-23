@@ -44,13 +44,27 @@ export async function computeScarcityOffer(jobId: string): Promise<ScarcityOffer
   const today = todayLakeDate();
   const job = mustRead("this request", await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, services(name, pricing_model, est_minutes), properties(lake_id)")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, services(name, pricing_model, est_minutes, crew_priced), properties(lake_id)")
     .eq("id", jobId)
     .maybeSingle());
   if (!job || job.status !== "requested" || job.vendor_id != null || !job.date || (job.date as string) < today) return null;
   if ((job as { is_rush?: boolean }).is_rush) return null; // rush already carries its premium — never stack a boost
-  const svc = one(job.services) as { name?: string; pricing_model?: string; est_minutes?: number } | null;
+  const svc = one(job.services) as { name?: string; pricing_model?: string; est_minutes?: number; crew_priced?: boolean } | null;
   if (!svc?.name) return null;
+  // NO OFFER ON A CREW-PRICED SERVICE — there is no floor here to clear, so
+  // there is no bump that clears it.
+  //
+  // This whole function asks "would a few more dollars lift this job over the
+  // margin floor?". On a crew-priced service customer_price IS
+  // round2(quote x (1 + customerPct)), so marginPct is the CONSTANT
+  // (c+k)/(1+c) — 21.43% at 12/12 — on every job, forever. Tune the dials to
+  // 11/11 and it is 19.82%, under the live 0.20 floor, and this function would
+  // compute a real uplift and ASK A CUSTOMER FOR MORE MONEY on every stuck job
+  // on the platform, for a shortfall no crew's rate caused and no extra dollar
+  // can fix. The guard sits HERE, not at the call sites, because there are two
+  // of them — the nightly waitlist text and the requests page — and a rule in
+  // one doorway of two is not a rule.
+  if (svc.crew_priced === true) return null;
   const menuPrice = Number(job.customer_price ?? 0);
   if (!(menuPrice > 0)) return null;
 

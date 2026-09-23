@@ -6,9 +6,28 @@
  * Owner intent: ZERO manual dispatch. The machine picks a crew at booking and
  * self-heals nightly. Customer price is fixed (menu); each crew sets their own
  * private rate; margin = menu − crew rate, and a floor protects LakeLife.
+ *
+ * SINCE 0174 THERE ARE TWO MONEY MODELS HERE, and which one runs is decided by
+ * one optional field. `input.platformFee` absent = the paragraph above, byte
+ * for byte: a menu price, a per-crew margin, a floor. `input.platformFee` set =
+ * the service is crew-priced, the crew's own card IS the price, and LakeLife
+ * adds a published percentage on top and takes a published percentage out.
+ * Both live here rather than in two engines because every OTHER rule —
+ * insurance, standing, geography, work days, capacity, the fleet minute budget,
+ * custody — is identical under both, and a second copy of those is how a gate
+ * starts lying.
  */
 import { fitsTimeBudget, DEFAULT_JOB_MINUTES } from "@/lib/fleet";
 import { checkNamedInsured } from "@/lib/named-insured";
+import {
+  customerPrice as feeCustomerPrice,
+  crewPayout as feeCrewPayout,
+  platformTake as feePlatformTake,
+  platformTakePct,
+  type PlatformFee,
+} from "@/lib/platform-fee";
+
+export type { PlatformFee };
 
 export interface CrewCandidate {
   vendorId: string;
@@ -67,6 +86,16 @@ export interface DispatchInput {
    *  `tier` is null for a standalone custody service, which declares no
    *  building — the insurance and the space still gate, the barn type cannot. */
   storage?: { tier: "outdoor" | "indoor" | null; boatFeet: number } | null;
+  /**
+   * SET WHEN THIS SERVICE IS CREW-PRICED (services.crew_priced): the crew's own
+   * card IS the price and `menuPrice` is not a price at all.
+   *
+   * Null or absent — which is every service today and every park job forever —
+   * means the menu path, unchanged. The caller passes the dials frozen onto the
+   * job at booking, never the live settings, so tuning a dial can never reprice
+   * work already sold.
+   */
+  platformFee?: PlatformFee | null;
   crews: CrewCandidate[];
 }
 
@@ -89,9 +118,28 @@ export function milesBetween(
 
 export interface DispatchResult {
   vendorId: string;
+  /** THE CREW'S OWN NUMBER, both models. On the menu path it is their private
+   *  rate; on the crew-priced path it is the quote they typed, BEFORE either
+   *  fee — not what they are paid. `crewPayout` is what they are paid. */
   crewRate: number;
-  margin: number; // menuPrice − crewRate
-  marginPct: number; // margin / menuPrice
+  /** WHAT LAKELIFE KEEPS. Menu path: menuPrice − crewRate. Crew-priced path:
+   *  customerPrice − crewPayout. Same meaning both ways, which is why every
+   *  existing reader of this field stays honest. */
+  margin: number;
+  /** margin / customerPrice. On the crew-priced path this is a CONSTANT on
+   *  purpose — (c + k) / (1 + c), 21.43% at 12/12 — the same for every crew
+   *  and every quote. See the floor note in decideDispatch. */
+  marginPct: number;
+  /** What the customer is billed. Menu path: the menu price, unchanged. */
+  customerPrice: number;
+  /** What we actually PAY the crew — payouts.amount and jobs.vendor_cost.
+   *  Menu path: their rate. Crew-priced path: their quote minus the crew fee,
+   *  which is NOT the number they typed. Every crew-facing screen showing a
+   *  rate must print both, in words. */
+  crewPayout: number;
+  /** === margin. Named for what it is on the crew-priced path so a screen
+   *  never has to subtract two numbers and drift. */
+  platformTake: number;
   preferred: boolean; // won by preferred-crew right of refusal
   reason: string;
 }
@@ -219,9 +267,23 @@ export function marginPct(menuPrice: number, crewRate: number): number {
  * (a crew already routing this lake today is effectively local) and below quality
  * (a better crew is worth a little drive). Unknown bases tie at Infinity and fall
  * through to margin, so nothing regresses until crews set a base.
+ *
+ * KEY 4 INVERTS ON THE CREW-PRICED PATH (0174). "Higher margin first" is a
+ * sentence about a menu: the price is fixed, so the cheaper crew leaves us
+ * more. Under crew pricing LakeLife's share is a fixed MULTIPLE of whatever
+ * the crew charges, so the exact same line ranks THE MOST EXPENSIVE CREW
+ * FIRST — it would quietly hand every job to the priciest card on the lake and
+ * bill the customer for it. When `fee` is present the key becomes crewRate
+ * ASCENDING: cheapest for the customer, which is also the owner's own words
+ * ("the homeowner should be given the options available ... then they make the
+ * decision" — the machine's default must be the one he would pick).
+ *
+ * `fee` null/absent = the menu comparator, unchanged. Passed in rather than
+ * read from a global because a job must rank against the dials FROZEN on it.
  */
 export function rankCrews(
   crews: CrewCandidate[], menuPrice: number, jobLat: number | null = null, jobLng: number | null = null,
+  fee: PlatformFee | null = null,
 ): CrewCandidate[] {
   return [...crews].sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
@@ -229,9 +291,15 @@ export function rankCrews(
     const da = milesBetween(jobLat, jobLng, a.baseLat, a.baseLng);
     const db = milesBetween(jobLat, jobLng, b.baseLat, b.baseLng);
     if (da !== db) return da - db; // nearer base first (Infinity ties fall through)
-    const ma = marginPct(menuPrice, a.crewRate ?? menuPrice);
-    const mb = marginPct(menuPrice, b.crewRate ?? menuPrice);
-    if (mb !== ma) return mb - ma;
+    if (fee) {
+      // Cheapest quote first — the inverse of the menu key, deliberately.
+      const ra = a.crewRate ?? Infinity, rb = b.crewRate ?? Infinity;
+      if (ra !== rb) return ra - rb;
+    } else {
+      const ma = marginPct(menuPrice, a.crewRate ?? menuPrice);
+      const mb = marginPct(menuPrice, b.crewRate ?? menuPrice);
+      if (mb !== ma) return mb - ma;
+    }
     if (a.assignedThatDay !== b.assignedThatDay) return a.assignedThatDay - b.assignedThatDay;
     return a.vendorId < b.vendorId ? -1 : 1;
   });
@@ -303,16 +371,64 @@ export function decideDispatch(input: DispatchInput): DispatchDecision {
   const withRate = eligible.filter((c) => c.crewRate != null && (c.crewRate as number) > 0);
   if (withRate.length === 0) return { ok: false, reasonNoFit: "no_qualifying_rate", eligibleCount: eligible.length };
 
-  const affordable = withRate.filter((c) => marginPct(input.menuPrice, c.crewRate as number) >= input.marginFloor);
+  // THE MARGIN FLOOR RETIRES ON THE CREW-PRICED PATH (0174).
+  //
+  // The floor is a per-crew test: against a fixed menu price, one crew's card
+  // can leave LakeLife 30% and another's 12%, and the floor refuses the second.
+  // Under crew pricing there is no such spread — LakeLife keeps
+  // (c + k) / (1 + c) of the bill, the same fraction on every job, whatever the
+  // crew charges. So the comparison stops being a filter and becomes a GLOBAL
+  // ON/OFF SWITCH: at 11%/11% it computes 19.82%, falls under the live 0.20
+  // dial, and refuses EVERY job on the platform with `below_floor` — a reason
+  // no screen prints, so the symptom would be bookings silently going nowhere
+  // platform-wide the day somebody nudged a dial by one point.
+  //
+  // What protects LakeLife on this path is not a floor, it is the arithmetic:
+  // the take is a fixed share of the bill and cannot be negative while both
+  // dials are in [0, 0.5].
+  const affordable = input.platformFee
+    ? withRate
+    : withRate.filter((c) => marginPct(input.menuPrice, c.crewRate as number) >= input.marginFloor);
   if (affordable.length === 0) return { ok: false, reasonNoFit: "below_floor", eligibleCount: eligible.length };
 
   const build = (c: CrewCandidate, preferred: boolean, reason: string): DispatchResult => {
     const rate = c.crewRate as number;
+    const fee = input.platformFee;
+    if (fee) {
+      // THE CREW'S CARD IS THE PRICE. `crewRate` stays the quote they typed;
+      // what they are PAID is the quote minus the crew-side fee, and that is
+      // the number that becomes jobs.vendor_cost and payouts.amount — so those
+      // two still tie, and the columns keep their existing meanings.
+      const customer = feeCustomerPrice(rate, fee);
+      const payout = feeCrewPayout(rate, fee);
+      const take = feePlatformTake(rate, fee);
+      return {
+        vendorId: c.vendorId,
+        crewRate: rate,
+        // margin has always meant "what LakeLife keeps". It still does.
+        margin: take,
+        // A CONSTANT ON PURPOSE — identical for every crew and every quote.
+        marginPct: platformTakePct(fee),
+        customerPrice: customer,
+        crewPayout: payout,
+        platformTake: take,
+        preferred,
+        reason,
+      };
+    }
+    // The menu path, unchanged. The three derived fields restate what has
+    // always been true here so a caller never has to know which model ran:
+    // the customer pays the menu price, the crew is paid their rate, and the
+    // difference is ours.
+    const margin = Math.round((input.menuPrice - rate) * 100) / 100;
     return {
       vendorId: c.vendorId,
       crewRate: rate,
-      margin: Math.round((input.menuPrice - rate) * 100) / 100,
+      margin,
       marginPct: marginPct(input.menuPrice, rate),
+      customerPrice: input.menuPrice,
+      crewPayout: rate,
+      platformTake: margin,
       preferred,
       reason,
     };
@@ -324,7 +440,7 @@ export function decideDispatch(input: DispatchInput): DispatchDecision {
     if (pref) return { ok: true, result: build(pref, true, "preferred crew"), eligibleCount: eligible.length };
   }
 
-  const winner = rankCrews(affordable, input.menuPrice, input.jobLat, input.jobLng)[0];
+  const winner = rankCrews(affordable, input.menuPrice, input.jobLat, input.jobLng, input.platformFee ?? null)[0];
   return { ok: true, result: build(winner, false, "best-ranked eligible crew"), eligibleCount: eligible.length };
 }
 
@@ -346,7 +462,7 @@ export type ClaimBlocker =
 export function canClaim(
   c: CrewCandidate,
   input: Pick<DispatchInput, "serviceName" | "weekday" | "todayISO" | "menuPrice" | "marginFloor"> &
-    Partial<Pick<DispatchInput, "componentNames" | "storage" | "jobMinutes">>,
+    Partial<Pick<DispatchInput, "componentNames" | "storage" | "jobMinutes" | "platformFee">>,
 ): { ok: boolean; blocker?: ClaimBlocker } {
   // Custody is never a first-tap prize: a stranger crew must not win six
   // months of holding a customer's boat off the claim board (owner decision).
@@ -378,7 +494,16 @@ export function canClaim(
     return { ok: false, blocker: "day_full" };
   }
   if (c.crewRate == null || c.crewRate <= 0) return { ok: false, blocker: "no_rate" };
-  if (marginPct(input.menuPrice, c.crewRate) < input.marginFloor) return { ok: false, blocker: "rate_too_high" };
+  // `rate_too_high` is a sentence about a menu: the customer's price is already
+  // fixed, so a card above menu × (1 − floor) cannot be paid out of it. On the
+  // crew-priced path the crew's own rate IS the price — the customer's bill is
+  // built FROM it — so there is no number it could be too high against, and the
+  // floor here would be the same platform-wide on/off switch it is in
+  // decideDispatch. A crew is never refused their own board for the price they
+  // set; the customer chooses between the crews they can see.
+  if (!input.platformFee && marginPct(input.menuPrice, c.crewRate) < input.marginFloor) {
+    return { ok: false, blocker: "rate_too_high" };
+  }
   return { ok: true };
 }
 

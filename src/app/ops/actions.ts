@@ -46,7 +46,7 @@ export async function assignAndSchedule(
   const admin = createServiceClient();
   const jobRes = await admin
     .from("jobs")
-    .select("id, status, customer_price, property_id, service_id, group_id, services(name, is_water_work)")
+    .select("id, status, customer_price, property_id, service_id, group_id, services(name, is_water_work, crew_priced)")
     .eq("id", jobId)
     .maybeSingle();
   // "Job not found." asserts the row is gone — and every check below it (the
@@ -78,7 +78,26 @@ export async function assignAndSchedule(
   // the season. Re-check the same rule here. Rush-window fields are forced
   // open: ops can place a same-day job any hour, this gate only cares whether
   // the DATE itself falls inside the season.
-  const svcRow = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; is_water_work?: boolean } | null;
+  const svcRow = (Array.isArray(job.services) ? job.services[0] : job.services) as { name?: string; is_water_work?: boolean; crew_priced?: boolean | null } | null;
+  // OPS DOES NOT SET A CREW'S PAY ON A SERVICE THE CREW PRICES (0174).
+  //
+  // Two things break here at once if this is allowed. The obvious one is the
+  // point of the whole change: typing a vendor_cost by hand IS LakeLife
+  // setting the price, on the one kind of work where the crew sets it. The
+  // quieter one is that the margin-floor cap below is the wrong test for this
+  // service — LakeLife's share is the constant (c+k)/(1+c), so the cap is
+  // either vacuous or refuses the CORRECT payout depending on where the floor
+  // dial happens to sit, and neither outcome means anything about this job.
+  //
+  // The schedule is not the problem, the money is — so this says which door
+  // does work. claimJob prices a crew-priced job from that crew's own card and
+  // freezes the two percentages in the same write.
+  if (svcRow?.crew_priced === true) {
+    return {
+      ok: false,
+      error: "The crew sets the price on this service, so ops can't cost it by hand. Leave it on the open board — whichever crew claims it prices it from their own rate card.",
+    };
+  }
   if (svcRow?.is_water_work) {
     const propRes = await admin
       .from("properties")

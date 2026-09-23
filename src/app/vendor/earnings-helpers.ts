@@ -19,6 +19,23 @@ export interface EarningRow {
   address: string | null;
   amount: number; // the crew's take-home for this job (negative for adjustments)
   /**
+   * 0174, crew-priced jobs only: `jobs.crew_quote` — what the crew's own card
+   * said BEFORE LakeLife's fee came out of it. `amount` is still, and only,
+   * what we actually paid them.
+   *
+   * Optional and absent on every ordinary job, where the quote and the payout
+   * are the same number: printing "your quote was $100, you were paid $100"
+   * would invent a deduction that never happened.
+   */
+  crewQuote?: number | null;
+  /**
+   * `jobs.fee_crew_pct` — the crew-side percentage FROZEN onto this job when it
+   * was claimed. Read from the row, never from today's dial: a statement for
+   * work done in January must keep saying January's percentage however the
+   * dial is tuned afterwards.
+   */
+  feeCrewPct?: number | null;
+  /**
    * What the CREW is told — `reportedPayoutStatus`, which deliberately
    * overrides a released row the moment it joins a batch: queued, exported,
    * paid. Right for the row list; wrong to sum lifetime money over.
@@ -399,4 +416,65 @@ export function tipsByCrew(rows: EarningRow[], range?: DateRange): TipBreakdown 
       tips.filter((r) => !r.crew).reduce((s, r) => s + r.amount, 0) * 100,
     ) / 100,
   };
+}
+
+/**
+ * THE FEE, NAMED ON THE ROW IT ACTUALLY CAME OUT OF.
+ *
+ * "Your quote was $50.00 — LakeLife's fee 12%." Null for every ordinary job,
+ * where the crew was paid exactly what they typed and there is no fee to name.
+ *
+ * Both inputs are read off the JOB (jobs.crew_quote, jobs.fee_crew_pct), never
+ * off today's dial, so a statement never rewrites itself when a dial is tuned.
+ * A quote with no frozen percentage says nothing rather than guessing one: a
+ * percentage is a claim about what was taken, and we either know it or we do
+ * not.
+ *
+ * NULL IS CHECKED BEFORE Number(), and that is not a formality. `Number(null)`
+ * is 0, which is finite and in range — so a missing frozen percentage would
+ * have printed "LakeLife's fee 0%" on a job that really was charged 12%. An
+ * absent value is not a zero value, and this sentence would have been the
+ * confident kind of wrong.
+ */
+export function payoutFeeLine(
+  row: Pick<EarningRow, "crewQuote" | "feeCrewPct">,
+): string | null {
+  if (row.crewQuote == null || row.feeCrewPct == null) return null;
+  const q = Number(row.crewQuote);
+  const pct = Number(row.feeCrewPct);
+  if (!Number.isFinite(q) || q <= 0) return null;
+  if (!Number.isFinite(pct) || pct < 0 || pct >= 1) return null;
+  return `Your quote was ${formatCurrency(q)} — LakeLife's fee ${Math.round(pct * 10_000) / 100}%.`;
+}
+
+/**
+ * The fee named ONCE for a statement, above the rows.
+ *
+ * Returns null when no row carries a frozen quote — which is every crew today
+ * — so an ordinary statement reads exactly as it always has. When the rows all
+ * carry the same percentage it is named; when they carry several (a dial tuned
+ * mid-season, each job keeping its own) it deliberately does NOT pick one, and
+ * points at the rows instead. Quoting one number for jobs charged at two is
+ * the "copy that quotes a dial nobody set" bug with extra steps.
+ */
+export function platformFeeSummary(rows: EarningRow[]): string | null {
+  const pcts = new Set<number>();
+  for (const r of rows) {
+    // Same reason as payoutFeeLine: Number(null) is 0, and a fee of "0%"
+    // asserted over a statement is worse than saying nothing.
+    if (r.crewQuote == null || r.feeCrewPct == null) continue;
+    const q = Number(r.crewQuote);
+    const pct = Number(r.feeCrewPct);
+    if (!Number.isFinite(q) || q <= 0) continue;
+    if (!Number.isFinite(pct) || pct < 0 || pct >= 1) continue;
+    pcts.add(Math.round(pct * 10_000) / 100);
+  }
+  if (pcts.size === 0) return null;
+  const every =
+    "Every amount here is what LakeLife paid you.";
+  if (pcts.size === 1) {
+    const [only] = [...pcts];
+    return `${every} On the jobs you priced yourself, that is your quote less LakeLife's ${only}% fee.`;
+  }
+  return `${every} On the jobs you priced yourself, that is your quote less the LakeLife fee shown on each one.`;
 }

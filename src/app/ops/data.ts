@@ -896,7 +896,7 @@ async function computeMarginHealthRows(
   const insured = (vendors ?? []).filter((v) => v.coi_expiry != null && String(v.coi_expiry) >= today);
   const svcRows = mustRead(
     "the menu prices",
-    await admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing"),
+    await admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, crew_priced"),
   );
   const svcById = new Map((svcRows ?? []).map((s) => [s.id as string, s]));
   for (const row of acc.values()) {
@@ -916,6 +916,24 @@ async function computeMarginHealthRows(
         ((v.service_types as string[]) ?? []).includes(svcName) &&
         ((v.service_lakes as string[]) ?? []).includes(row.lake_id as string),
     );
+
+    // MARGIN HEALTH HAS NO MEANING ON A CREW-PRICED SERVICE (0174).
+    //
+    // There is no menu to be thin. LakeLife's share of a crew-priced bill is
+    // the CONSTANT (customerPct + crewPct) / (1 + customerPct) — 21.43% at
+    // 12/12 — on every job, so `marginPct(menu, card) < floor` is not a test
+    // of this crew or this lake: it is one platform-wide answer, the same for
+    // everybody, that flips the day somebody nudges a dial. Left in, every
+    // crew-priced row would read `margin_stranded` forever, drag the lake
+    // average it sits in, and hand the NIGHTLY AUTO-APPLY PASS a suggestion to
+    // raise a `services.base` that nothing charges from — writing a menu price
+    // onto the one kind of service that has no menu, unattended.
+    //
+    // So: the crews are counted as rated (they ARE — they have a card, and
+    // there is no floor for it to fail), no etiology is assigned from a floor,
+    // and no suggestion is produced. Waiting demand on these rows still
+    // reports as the plain recruit signal, which is the honest reading.
+    const crewPricedSvc = (svcRow as { crew_priced?: boolean | null } | undefined)?.crew_priced === true;
 
     let ready = 0;
     let floorFail = 0;
@@ -939,7 +957,7 @@ async function computeMarginHealthRows(
       }
       // The SAME marginPct/floor gate the dispatch and claim engines use
       // (rule 8, one formula), at the representative size.
-      if (marginPct(menuComparable, crewComparable) < marginFloor) {
+      if (!crewPricedSvc && marginPct(menuComparable, crewComparable) < marginFloor) {
         floorFail += 1;
         if (cheapestFailingComparable == null || crewComparable < cheapestFailingComparable) {
           cheapestFailingComparable = crewComparable;
@@ -961,7 +979,7 @@ async function computeMarginHealthRows(
     // farther. Translated back into the specific field this pricing model
     // stores money in; never a cut, and capped at a 40% jump so a data
     // glitch can't propose something absurd.
-    if (row.etiology === "margin_stranded" && cheapestFailingComparable != null && menuComparable != null && svcRow) {
+    if (!crewPricedSvc && row.etiology === "margin_stranded" && cheapestFailingComparable != null && menuComparable != null && svcRow) {
       const floor = marginFloor;
       const needed = Math.ceil(cheapestFailingComparable / (1 - floor));
       const deltaPct = (needed - menuComparable) / menuComparable;

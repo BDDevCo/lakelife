@@ -71,6 +71,7 @@ export async function getActivePropertyId(): Promise<string | null> {
 }
 import {
   priceService,
+  serviceApplies,
   boatFeet,
   type ServiceRule,
   type PricingProfile,
@@ -134,7 +135,35 @@ export interface PricedService {
   needs_pickup_spot: boolean;
   /** 0150: a third party must release the boat before the crew can start. */
   needs_release: boolean;
+  /**
+   * services.crew_priced (0174). TRUE = THERE IS NO MENU PRICE FOR THIS
+   * SERVICE. The crews on this lake quote it themselves, and the customer sees
+   * their actual quotes — with days and ratings — at booking.
+   *
+   * `price` is 0 on these rows, and that is the honest value, not a failure:
+   * an indicative LakeLife number would be the menu wearing a hat. Every crew
+   * would price to it, which is precisely what the owner decided against
+   * ("I do not want lakelife setting the pricing for crews"). A caller must
+   * read this flag before it reads `price`, or it will report a $0 service.
+   */
+  crewPriced: boolean;
+  /**
+   * What to print INSTEAD of a number on a crew-priced row. Null on every
+   * ordinary service, where the price is the whole answer.
+   */
+  priceNote: string | null;
 }
+
+/**
+ * The one true sentence for a service nobody has set a price for, because
+ * nobody at LakeLife sets it.
+ *
+ * Exported so the booking menu, the wizard and the recap all print the SAME
+ * words rather than three near-misses — and so a test can pin it. It promises
+ * only what the product actually does: quotes, days and ratings at booking,
+ * which is the owner's own description of the screen.
+ */
+export const CREW_QUOTES_THIS = "Crews on your lake set their own price. You'll see their quotes, days and ratings when you book.";
 
 /**
  * Load one of the owner's property profiles. Pass a propertyId to target a
@@ -357,7 +386,7 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
   const isGrounds = p.groundsForParkId != null;
   const menuQuery = supabase
     .from("services")
-    .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work, park_only, needs_pickup_spot, needs_release")
+    .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, is_water_work, park_only, needs_pickup_spot, needs_release, crew_priced")
     .eq("active", true)
     .or("kind.eq.standalone,solo_bookable.eq.true"); // standalone, OR a package leg opened for solo booking (0147 — spring entry)
   const services = mustRead(
@@ -382,15 +411,46 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
     : (new Map() as ParkRates);
 
   const pp = toPricingProfile(p);
-  return (services ?? []).map((s) => ({
-    id: s.id,
-    name: s.name,
-    price: priceService(withParkRate(s, rates) as unknown as ServiceRule, pp),
-    frequency_options: s.frequency_options ?? [],
-    is_water_work: s.is_water_work ?? false,
-    needs_pickup_spot: s.needs_pickup_spot ?? false,
-    needs_release: s.needs_release ?? false,
-  }));
+  return (services ?? []).map((s) => {
+    // A PARK'S RATE ALWAYS WINS, AND A PARK IS NEVER CREW-PRICED (0174).
+    //
+    // `withParkRate` is the park doorway, and `services_park_is_never_crew_priced`
+    // refuses `park_only and crew_priced` in the database — so a grounds menu
+    // can never reach the branch below. Belt and braces, in the code the park
+    // menu actually runs through: The Haven's mow is the $125 Mike negotiated,
+    // 21 households sign leases against $400 + $142.53 on 1 January, and none
+    // of that is a crew's to quote.
+    //
+    // AND ONLY IF THE PROPERTY CAN ACTUALLY USE IT. `price > 0` on /book has
+    // always been doing two jobs at once: dropping the unpriced AND dropping
+    // the inapplicable ("Pier install / removal — $0" on a mobile home). A
+    // crew-priced row prices to 0 for BOTH reasons and cannot tell them apart,
+    // so without this gate the booking menu would hand a lake house with no
+    // boat a crew-quoted boat-lift tile — the exact dead end that filter was
+    // added to kill, reopened by the one kind of service it can no longer see.
+    // `serviceApplies` is the honest test: it counts the equipment, not the
+    // money.
+    const crewPriced =
+      !!s.crew_priced && !isGrounds && !s.park_only
+      && serviceApplies(s as unknown as ServiceRule, pp);
+    return {
+      id: s.id,
+      name: s.name,
+      // NO INVENTED NUMBER. On a crew-priced service the services row carries
+      // no meaningful base/unit_rate to price against, and guessing one here
+      // would publish a LakeLife price for work LakeLife does not price.
+      // 0 is this platform's existing word for "not priced" and every caller
+      // already understands it — but a caller that prints $0 instead of
+      // reading `crewPriced` is showing a lie, so the sentence travels with it.
+      price: crewPriced ? 0 : priceService(withParkRate(s, rates) as unknown as ServiceRule, pp),
+      frequency_options: s.frequency_options ?? [],
+      is_water_work: s.is_water_work ?? false,
+      needs_pickup_spot: s.needs_pickup_spot ?? false,
+      needs_release: s.needs_release ?? false,
+      crewPriced,
+      priceNote: crewPriced ? CREW_QUOTES_THIS : null,
+    };
+  });
 }
 
 /** The signed-in user's shareable referral link (roadmap §8 rails). */

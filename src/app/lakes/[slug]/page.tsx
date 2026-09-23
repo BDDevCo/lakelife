@@ -117,7 +117,7 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
     // because 0115 zeroed its global price, which is an accident, not a
     // fence. The day one of those carries a global number it would advertise
     // itself to lake homeowners who cannot buy it.
-    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work").eq("active", true).eq("park_only", false).or("kind.eq.standalone,solo_bookable.eq.true").order("name"),
+    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work, crew_priced").eq("active", true).eq("park_only", false).or("kind.eq.standalone,solo_bookable.eq.true").order("name"),
     // FIXTURE CREWS ARE NOT A CREW BENCH. This is a public, SEO-indexed page
     // that prints "N insured local crews serving <lake>". Two of the three
     // vendors are the owner's own scratch accounts, so every lake advertised
@@ -221,8 +221,20 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
           <h3 style={{ fontSize: 16, margin: "0 0 10px" }}>Services & pricing on {lake.name}</h3>
           <div style={{ display: "grid", gap: 8 }}>
             {(services ?? []).map((s) => {
-              const fp = fromPrice(s as unknown as Pick<ServiceRule, "pricing_model" | "base" | "unit_rate" | "band_pricing">);
-              if (!fp) return null;
+              // A CREW-PRICED SERVICE VANISHED FROM ITS OWN LAKE'S PAGE.
+              //
+              // `fromPrice` returns null whenever the computed amount is not
+              // > 0, and a crew-priced row carries base 0 / unit_rate 0 by
+              // design — so `if (!fp) return null` silently deleted the lake's
+              // biggest service from the public, SEO-indexed menu with no
+              // error anywhere. The safe half (no "$0" on the open internet)
+              // hid the unsafe half. Now the row renders and says who names
+              // the number.
+              const crewPriced = (s as { crew_priced?: boolean | null }).crew_priced === true;
+              const fp = crewPriced
+                ? null
+                : fromPrice(s as unknown as Pick<ServiceRule, "pricing_model" | "base" | "unit_rate" | "band_pricing">);
+              if (!fp && !crewPriced) return null;
               return (
                 <div key={s.id as string} style={{ display: "flex", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
                   <span style={{ fontSize: 14.5, fontWeight: 700 }}>
@@ -230,14 +242,23 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
                     {s.is_water_work ? <span className="ll-pill teal" style={{ marginLeft: 8, fontSize: 11 }}>seasonal</span> : null}
                   </span>
                   <span style={{ fontSize: 14.5, whiteSpace: "nowrap" }}>
-                    {fp.from ? "from " : ""}<b>${fp.amount.toLocaleString()}</b>{fp.unit ? ` ${fp.unit}` : ""}
+                    {fp
+                      ? <>{fp.from ? "from " : ""}<b>${fp.amount.toLocaleString()}</b>{fp.unit ? ` ${fp.unit}` : ""}</>
+                      : <span className="mut">crew-quoted</span>}
                   </span>
                 </div>
               );
             })}
           </div>
+          {/* "No quotes, no callbacks" IS the promise on a menu-priced lake and
+              is FALSE the moment one service above is crew-quoted — the price
+              then comes from a crew, not from this page. The sentence follows
+              the menu it sits under rather than asserting a fact about a
+              product that has changed underneath it. */}
           <p className="mut" style={{ fontSize: 12.5, margin: "10px 0 0" }}>
-            Your exact all-in price shows before you book — it depends on your pier, boat and property. No quotes, no callbacks, no surprises.
+            {(services ?? []).some((s) => (s as { crew_priced?: boolean | null }).crew_priced === true)
+              ? "Your exact all-in price shows before you book — it depends on your pier, boat and property. On the crew-quoted ones above, the crews who work this lake set their own price and you see it before anything is charged."
+              : "Your exact all-in price shows before you book — it depends on your pier, boat and property. No quotes, no callbacks, no surprises."}
           </p>
         </div>
 

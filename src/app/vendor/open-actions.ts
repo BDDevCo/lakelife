@@ -12,6 +12,7 @@ import { loadGapAnchor } from "./open-data";
 import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 import { getPlatformSettings } from "@/lib/settings";
 import { notify } from "@/lib/notify";
+import { crewPayout, customerPrice as feeCustomerPrice, type PlatformFee } from "@/lib/platform-fee";
 
 /**
  * CLAIM a job off the open board (Phase D). First qualified crew wins — the
@@ -21,6 +22,16 @@ import { notify } from "@/lib/notify";
  * the hidden customer price server-side. Claiming a job on a lake the crew
  * doesn't serve yet auto-adds that lake to their service area — that's how a
  * brand-new lake gets its first crew with zero human involvement.
+ *
+ * SINCE 0174 A CLAIM CAN ALSO SET THE CUSTOMER'S PRICE. On a `crew_priced`
+ * service there is no menu price to claim against: the crew's own card IS the
+ * price, so the claim writes all four money facts at once — the customer's
+ * bill (quote + the customer-side fee), the crew's payout (quote − the
+ * crew-side fee), the margin between them, and the quote itself with BOTH
+ * percentages frozen onto the row. Frozen because a job must recompute from
+ * its own three numbers forever: tuning a dial next season can never reprice
+ * work already sold. On every ordinary service this action is unchanged to the
+ * byte — the price was fixed at booking and the crew is paid what they typed.
  */
 
 export interface ClaimResult {
@@ -72,7 +83,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const today = todayLakeDate();
   const jobRes = await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model, est_minutes, takes_custody), properties(lake_id, address, users(phone, email, is_fixture))")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model, est_minutes, takes_custody, crew_priced), properties(lake_id, address, users(phone, email, is_fixture))")
     .eq("id", jobId)
     .maybeSingle();
   // "That job was already taken" is the one sentence that walks a crew away
@@ -87,7 +98,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     return { ok: false, error: "That job was already taken — grab the next one. 🌊" };
   }
 
-  const svc = one(job.services) as { name?: string; pricing_model?: string; takes_custody?: boolean } | null;
+  const svc = one(job.services) as { name?: string; pricing_model?: string; takes_custody?: boolean; crew_priced?: boolean } | null;
   if (!svc?.name) return { ok: false, error: "That job isn't claimable." };
 
   // THE ACTION IS THE BOUNDARY, NOT THE BOARD (the second doorway of the same
@@ -172,6 +183,14 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   // Claim IS accepting it; the discount is a dial, never a negotiation.
   const isRush = !!(job as { is_rush?: boolean }).is_rush;
   const settingsRush = await getPlatformSettings();
+  // 0174: the two dials, LIVE, because this claim is the moment the job is
+  // priced — there is nothing frozen on the row yet to read. They are frozen
+  // onto it by the guarded UPDATE below, and every later reader uses those.
+  // getPlatformSettings falls back to its documented defaults rather than
+  // throwing, so a dropped read cannot silently zero a fee.
+  const fee: PlatformFee | null = svc.crew_priced
+    ? { customerPct: settingsRush.platformFeeCustomerPct, crewPct: settingsRush.platformFeeCrewPct }
+    : null;
   if (isRush) {
     if ((job.date as string) !== today || !rushWindowOpen(lakeHour(), settingsRush.sameDayCutoffHour)) {
       return { ok: false, error: "This same-day job is past the cutoff — it's being rolled or cancelled automatically. 🌊" };
@@ -263,6 +282,11 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     todayISO: today,
     menuPrice: Number(job.customer_price ?? 0),
     marginFloor: settings.marginFloor,
+    // Present = crew-priced, and canClaim then skips `rate_too_high`: the
+    // customer's bill is built FROM this card, so there is no number it could
+    // be too high against. Same switch as the board — the board is a courtesy,
+    // this POST is the boundary, and both doorways have to carry the rule.
+    platformFee: fee,
     jobMinutes,
     // THE ACTION IS THE AUTHORITY, and it was not passing this (0145, second
     // door). The board hiding a row is a courtesy; this POST is the boundary.
@@ -282,7 +306,12 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const createdLakeDate = (job as { created_at?: string }).created_at
     ? lakeDateOf(String((job as { created_at?: string }).created_at))
     : null;
-  if (!verdict.ok && verdict.blocker === "rate_too_high" &&
+  // `fee == null` said out loud: a fill-in offer is computed from the menu
+  // price and the floor, the two things crew pricing retires. canClaim can no
+  // longer return `rate_too_high` when a fee is in force, so this is already
+  // unreachable — the condition keeps it that way if the blocker ever returns
+  // by another road. Same guard, same words, as the board.
+  if (fee == null && !verdict.ok && verdict.blocker === "rate_too_high" &&
       (isRush || (createdLakeDate != null && createdLakeDate < today))) {
     // Jitter hashes the DB row id, never the client-supplied string — uuid
     // matching is case-insensitive, so an uppercased jobId would still find
@@ -331,27 +360,82 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   }
   if (!isGapClaim && !verdict.ok) return { ok: false, error: BLOCKER_MSG[verdict.blocker ?? "not_active"] };
 
+  // NULL IS NOT ZERO, AND THE RACE KEY BELOW IS WHERE THAT BITES.
+  //
+  // A crew-priced job is BORN with customer_price NULL (book/actions.ts writes
+  // null, not 0, so no invoice or ledger reader mistakes "nobody has quoted
+  // this" for "free"), and autoAssignJob's release puts it back to null. This
+  // function read it as 0 and then keyed its guarded UPDATE on
+  // `.eq("customer_price", 0)` — which in SQL never matches a NULL row. Every
+  // claim on an unpriced job would have failed with "That job was already
+  // taken", forever, on the ONE doorway that prices it. The board's whole
+  // purpose on this path is that the first crew to claim sets the price.
+  const unpriced = job.customer_price == null;
   const priceAtRead = Number(job.customer_price ?? 0);
-  const rate = myRate as number;
-  const margin = Math.round((priceAtRead - rate) * 100) / 100;
+  // WHAT `myRate` MEANS DEPENDS ON THE SERVICE, and this is the one place the
+  // two meanings have to be told apart or a contractor is underpaid.
+  //
+  //   menu service  — myRate IS the take-home. The customer's price was fixed
+  //                   at booking, margin is what is left of it. Unchanged.
+  //   crew-priced   — myRate is the crew's QUOTE. Their payout is the quote
+  //                   less the crew-side fee, the customer's bill is the quote
+  //                   plus the customer-side fee, and margin is the difference
+  //                   between those two ROUNDED ends (never round2(q × (c+k)),
+  //                   or the invoice, the payout and the ledger stop tying by
+  //                   a cent on every job, forever).
+  //
+  // `vendor_cost` keeps its meaning in both: what we PAY, so payouts.amount =
+  // jobs.vendor_cost still ties and no payout reader has to know which model
+  // ran. Writing the quote here instead would overpay by the crew-side fee.
+  const quote = myRate as number;
+  const rate = fee ? crewPayout(quote, fee) : quote;
+  const billed = fee ? feeCustomerPrice(quote, fee) : priceAtRead;
+  const margin = Math.round((billed - rate) * 100) / 100;
+  // All three or none — jobs_crew_price_all_or_nothing (0174) rejects a
+  // half-frozen row on purpose, so they are assembled as one object.
+  const frozen = fee
+    ? { customer_price: billed, crew_quote: quote, fee_customer_pct: fee.customerPct, fee_crew_pct: fee.crewPct }
+    : {};
 
   // THE CLAIM — atomic, first valid claim wins. Price-aware: if a scarcity
   // offer bumped the customer price mid-flight, this claim loses cleanly
   // instead of writing a stale margin (hardens the pre-existing race too).
-  const claimRes = await admin
+  const claimQuery = admin
     .from("jobs")
-    .update({ vendor_id: vendor.id, vendor_cost: rate, margin, status: "scheduled", ...(isGapClaim ? { gap_claim: true } : {}) })
+    .update({ vendor_id: vendor.id, vendor_cost: rate, margin, status: "scheduled", ...frozen, ...(isGapClaim ? { gap_claim: true } : {}) })
     .eq("id", jobId)
     .eq("status", "requested")
-    .eq("customer_price", priceAtRead)
-    .is("vendor_id", null)
-    .select("id");
+    .is("vendor_id", null);
+  // Same guarantee either way: the row must still hold the price this claim
+  // was computed against. `is null` for a job nobody has priced, `eq` for one
+  // that carries a figure — a scarcity offer that bumped it mid-flight still
+  // makes this claim lose cleanly rather than write a stale margin.
+  const claimRes = await (unpriced
+    ? claimQuery.is("customer_price", null)
+    : claimQuery.eq("customer_price", priceAtRead)
+  ).select("id");
   // An errored UPDATE wrote nothing — no vendor_id, no vendor_cost, no margin —
   // so the job is still sitting on the board. Losing the race and never having
   // run are different events, and only one of them means "grab the next one".
   if (claimRes.error) return { ok: false, error: readFailedMessage("this claim", claimRes.error) };
   const won = claimRes.data;
   if (!won || won.length === 0) return { ok: false, error: "That job was already taken — grab the next one. 🌊" };
+
+  // PUTTING IT BACK MUST PUT THE PRICE BACK TOO.
+  //
+  // Both releases below hand the job to the next crew. On a crew-priced job
+  // this claim is what SET the customer's price, so leaving `customer_price`
+  // and the frozen three behind would hand the board a job carrying a price
+  // and a quote from a crew who does not have it — and 0174's all-or-nothing
+  // CHECK would then refuse the next crew's half-write. It goes back to
+  // `customer_price` NULL — not 0 — because that is what the booking door
+  // wrote when the job was born and what autoAssignJob's own release writes.
+  // Three doorways, one convention: a 0 here would put a PRICE of zero on a
+  // job nobody has quoted, which the invoice writer and the ops board both
+  // read as free, and which the next claim's `is null` race key would miss.
+  const unfreeze = fee
+    ? { customer_price: null, crew_quote: null, fee_customer_pct: null, fee_crew_pct: null }
+    : {};
 
   // Capacity backstop (same as autoAssignJob): if a concurrent claim pushed us
   // over our own daily cap — job COUNT or the fleet's MINUTE budget (two
@@ -369,7 +453,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   // returns to the board, and nobody is holding work we can't prove they can
   // do. Same release the busted branch below performs, for the same reason.
   if (afterRes.error) {
-    await admin.from("jobs").update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" }).eq("id", jobId);
+    await admin.from("jobs").update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested", ...unfreeze }).eq("id", jobId);
     return { ok: false, error: readFailedMessage("the rest of your day", afterRes.error) };
   }
   const afterJobs = afterRes.data;
@@ -377,7 +461,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const budget = fleetMinuteBudget(units);
   const bustedHours = budget != null && !fitsTimeBudget(dayJobMinutes(afterJobs), 0, budget);
   if ((cap > 0 && afterCount > cap) || bustedHours) {
-    await admin.from("jobs").update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested" }).eq("id", jobId);
+    await admin.from("jobs").update({ vendor_id: null, vendor_cost: null, margin: null, status: "requested", ...unfreeze }).eq("id", jobId);
     return { ok: false, error: "Your day filled up before this claim landed." };
   }
 

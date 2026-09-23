@@ -74,7 +74,11 @@ describe("approveFlag re-derives what it can and holds what it cannot", () => {
   it("reads the columns that say a job's money is not the menu", () => {
     // Without is_rush and gap_claim the loop cannot tell an agreed number from
     // a stale one — which is why it overwrote both.
-    expect(code).toMatch(/\.select\("id, service_id, vendor_id, vendor_cost, customer_price, is_rush, gap_claim"\)/);
+    // The list may GROW — the crew-priced reprice reads the job's frozen
+    // crew_quote and both fee percentages off the same row. What this pins is
+    // that is_rush and gap_claim are still in it, because without those two
+    // the loop cannot tell an agreed number from a stale one.
+    expect(code).toMatch(/\.select\("id, service_id, vendor_id, vendor_cost, customer_price, is_rush, gap_claim/);
   });
 
   it("re-applies the rush premium instead of writing the menu price", () => {

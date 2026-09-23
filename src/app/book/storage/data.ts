@@ -16,7 +16,7 @@ export async function getPackageViews(profile: PricingProfile): Promise<PackageV
   const [packagesRes, recipeRes, servicesRes] = await Promise.all([
     admin.from("service_packages").select("id, code, name, description, sort").eq("active", true).order("sort"),
     admin.from("package_components").select("package_id, service_id, phase, required, default_on, role"),
-    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, kind").in("kind", ["component", "addon"]),
+    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, kind, crew_priced").in("kind", ["component", "addon"]),
   ]);
   // The recipe and the component prices ARE the package price. A failed read of
   // either would render a package with legs missing — priced, bookable, and
@@ -28,7 +28,27 @@ export async function getPackageViews(profile: PricingProfile): Promise<PackageV
 
   const svcById = new Map((services ?? []).map((s) => [s.id as string, s]));
 
+  // A PACKAGE CANNOT BE CREW-PRICED, AND THIS IS WHERE THAT IS ENFORCED (0174).
+  //
+  // A package price is assembled from many legs and shown to a customer BEFORE
+  // any crew exists — that is what a package is. A crew-priced leg has no menu
+  // price at all (`services.base`/`unit_rate` mean nothing on it), so it would
+  // price to $0 and silently make the whole package cheaper by exactly the
+  // value of the missing leg: a real discount, on a real invoice, with no error
+  // on any screen. The package's own $0-legs rule below catches an EMPTY
+  // package, not a hollow one.
+  //
+  // So the whole package goes, not the leg. Dropping the leg would quietly ship
+  // a fall winterization without its winterization. Recommendation for storage
+  // specifically is in the builder's report: it should stay crew_priced = false
+  // until the per-diem and the season end are untangled — this fence is what
+  // makes flipping it a loud mistake instead of a quiet discount.
+  const crewPricedLegs = new Set(
+    (services ?? []).filter((s) => s.crew_priced).map((s) => s.id as string),
+  );
+
   const empty: string[] = [];
+  const hollow: string[] = [];
   const views = packages.map((p) => {
     const components: PackageComponentView[] = (recipe ?? [])
       .filter((r) => r.package_id === p.id)
@@ -59,6 +79,10 @@ export async function getPackageViews(profile: PricingProfile): Promise<PackageV
       })
       .sort((a, b) => (a.phase === b.phase ? (a.required === b.required ? a.name.localeCompare(b.name) : a.required ? -1 : 1) : a.phase === "fall" ? -1 : 1));
     if (components.length === 0) empty.push((p.code as string) ?? (p.id as string));
+    const crewLeg = (recipe ?? []).some(
+      (r) => r.package_id === p.id && crewPricedLegs.has(r.service_id as string),
+    );
+    if (crewLeg) hollow.push((p.code as string) ?? (p.id as string));
     return {
       id: p.id as string,
       code: p.code as string,
@@ -88,5 +112,18 @@ export async function getPackageViews(profile: PricingProfile): Promise<PackageV
       `Check package_components, and that their services still exist with kind component/addon.`,
     );
   }
-  return views.filter((v) => v.components.length > 0);
+  if (hollow.length > 0) {
+    console.error(
+      `[storage] ${hollow.length} package(s) contain a crew_priced leg and were hidden: ${hollow.join(", ")}. ` +
+      `A package is priced whole, before any crew is chosen, so a leg whose price comes from a crew's own ` +
+      `card would silently price to $0 and discount the package. Either clear services.crew_priced on that ` +
+      `leg or take it out of the package.`,
+    );
+  }
+  const hidden = new Set(hollow);
+  // Two filters, not one condition: `src/lib/nothing-is-free.test.ts` pins the
+  // empty-package rule by its exact expression, and folding a second reason
+  // into it would have quietly retired that guard while looking tidier.
+  return views.filter((v) => v.components.length > 0)
+    .filter((v) => !hidden.has(v.code ?? v.id));
 }

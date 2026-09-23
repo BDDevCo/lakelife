@@ -95,7 +95,13 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
       .from("payouts")
       // batch_id + the batch's own status: the payout row never advances past
       // 'released', so the batch is the only record of the money moving.
-      .select("id, amount, status, kind, created_at, job_id, batch_id, payout_batches(status), jobs(date, route_id, services(name), properties(address))")
+      // crew_quote / fee_crew_pct (0174) are the crew's OWN two numbers on a
+      // crew-priced job: what they typed, and the percentage that was frozen
+      // onto that job when it was sold. Read from the JOB, never from today's
+      // dial — a dial moved in March must not restate January's statement.
+      // Null on every menu-priced job, where the quote and the payout are the
+      // same number and there is no fee to name.
+      .select("id, amount, status, kind, created_at, job_id, batch_id, payout_batches(status), jobs(date, route_id, crew_quote, fee_crew_pct, services(name), properties(address))")
       .eq("vendor_id", vendorId)
       .order("created_at", { ascending: false }),
   );
@@ -157,7 +163,7 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
 
   const rows: EarningRow[] = (payouts ?? []).map((p) => {
     const job = one(p.jobs) as
-      | { date: string | null; route_id?: string | null; services: unknown; properties: unknown }
+      | { date: string | null; route_id?: string | null; crew_quote?: number | null; fee_crew_pct?: number | null; services: unknown; properties: unknown }
       | null;
     const service = (one(job?.services) as { name?: string } | null)?.name ?? null;
     const address = (one(job?.properties) as { address?: string } | null)?.address ?? null;
@@ -199,6 +205,11 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
         ((Array.isArray(p.payout_batches) ? p.payout_batches[0] : p.payout_batches) as { status?: string } | null)?.status ?? null,
       ),
       kind,
+      // Carried through so the statement can NAME the fee rather than showing
+      // a payout 12% below the card the crew set. Both or neither: payoutFeeLine
+      // refuses to render a percentage it had to invent from a null.
+      crewQuote: job?.crew_quote ?? null,
+      feeCrewPct: job?.fee_crew_pct ?? null,
       crew: (() => {
         const jid = (p as { job_id?: string | null }).job_id ?? null;
         const named = jid ? workersByJob.get(jid) : undefined;

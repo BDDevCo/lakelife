@@ -725,3 +725,165 @@ describe("a crew who cannot be sent is not a full calendar", () => {
     expect(d.reasonNoFit).toBe("no_custody_crew");
   });
 });
+
+/**
+ * 0174 — THE CREW SETS THE PRICE.
+ *
+ * Brendon, 23 September 2026: "Lake life doesnt set the pricing, crew does
+ * still... crew prices 2 acre yard at $50, we add on 12% to the home owner and
+ * take 12% from the Crew." One optional field on the input decides which money
+ * model runs, so the first thing these tests pin is that the field being ABSENT
+ * changes nothing at all.
+ */
+describe("0174: the menu path is untouched when no fee is passed", () => {
+  /* THE OTHER HALF OF THE BRANCH. Every assertion below this one is about the
+     new path; on its own that is an absence-only test, satisfied by a fixture
+     frozen on the safe side. This crew prices at 85 against a 100 menu — 15%,
+     under the 25% floor — and must STILL be refused, by name. Collapse the
+     `input.platformFee ?` ternary in decideDispatch to always-skip and this
+     goes red. */
+  it("a crew under the floor is still refused, with the same reason", () => {
+    const d = decideDispatch(input({ crews: [crew({ vendorId: "pricey", crewRate: 85 })] }));
+    expect(d.ok).toBe(false);
+    expect(d.reasonNoFit).toBe("below_floor");
+  });
+
+  it("and the derived numbers restate what the menu path has always done", () => {
+    const d = decideDispatch(input({ menuPrice: 100, crews: [crew({ crewRate: 70 })] }));
+    expect(d.result?.crewRate).toBe(70);
+    expect(d.result?.customerPrice).toBe(100); // the menu price, billed as-is
+    expect(d.result?.crewPayout).toBe(70);     // the crew is paid their rate
+    expect(d.result?.platformTake).toBe(30);
+    expect(d.result?.margin).toBe(30);
+    expect(d.result?.marginPct).toBeCloseTo(0.30);
+  });
+
+  it("canClaim still refuses a card the menu cannot pay for", () => {
+    expect(canClaim(crew({ crewRate: 85 }), {
+      serviceName: "Housekeeping", weekday: "Wed", todayISO: "2026-07-20",
+      menuPrice: 100, marginFloor: 0.25,
+    })).toEqual({ ok: false, blocker: "rate_too_high" });
+  });
+});
+
+describe("0174: a crew-priced job is priced FROM the crew's card", () => {
+  const fee = { customerPct: 0.12, crewPct: 0.12 };
+  /* A crew-priced service HAS no menu price — that is the whole point — so the
+     caller has nothing to put in menuPrice at dispatch time and passes 0. */
+  const crewPriced = (over: Partial<DispatchInput> = {}) =>
+    input({ menuPrice: 0, platformFee: fee, ...over });
+
+  it("his own example: a $50 quote bills $56 and pays the crew $44", () => {
+    const d = decideDispatch(crewPriced({ crews: [crew({ vendorId: "v1", crewRate: 50 })] }));
+    expect(d.ok).toBe(true);
+    expect(d.result?.crewRate).toBe(50);       // what they typed
+    expect(d.result?.customerPrice).toBe(56);
+    expect(d.result?.crewPayout).toBe(44);     // NOT what they typed
+    expect(d.result?.platformTake).toBe(12);
+    expect(d.result?.margin).toBe(12);         // margin still means "what LakeLife keeps"
+  });
+
+  it("THE THREE TIE on awkward cents — $416 is 465.92 / 366.08 / 99.84", () => {
+    // Hand-computed, not recomputed from the code: 416 × 0.12 = 49.92, so the
+    // customer pays 465.92, the crew is paid 366.08, and 465.92 − 366.08 = 99.84.
+    const d = decideDispatch(crewPriced({ crews: [crew({ crewRate: 416 })] }));
+    expect(d.result?.customerPrice).toBe(465.92);
+    expect(d.result?.crewPayout).toBe(366.08);
+    expect(d.result?.platformTake).toBe(99.84);
+    expect((d.result as { customerPrice: number }).customerPrice - (d.result as { crewPayout: number }).crewPayout)
+      .toBeCloseTo(99.84, 9);
+    expect(d.result?.margin).toBe(d.result?.platformTake);
+  });
+
+  it("marginPct is the SAME number on a $50 job and a $2,500 job", () => {
+    const cheap = decideDispatch(crewPriced({ crews: [crew({ crewRate: 50 })] }));
+    const dear = decideDispatch(crewPriced({ crews: [crew({ crewRate: 2500 })] }));
+    expect(cheap.result?.marginPct).toBe(dear.result?.marginPct);
+    expect(cheap.result?.marginPct).toBeCloseTo(0.2142857142857143, 12); // (0.12+0.12)/1.12
+  });
+});
+
+describe("0174: the ranker picks the cheapest crew for the customer", () => {
+  const fee = { customerPct: 0.12, crewPct: 0.12 };
+
+  /* THIS TEST BITES. The ids are chosen so the OLD fourth key cannot pass it:
+     a crew-priced service has no menu price, marginPct(0, rate) returns 0 for
+     everybody, the money key ties, and the winner falls through to the stable
+     id tie-break — "aaa", the $70 crew. Restore `marginPct(menuPrice, …)` as
+     key 4 and this goes red on the vendorId. */
+  const dear = crew({ vendorId: "aaa-dear", crewRate: 70 });
+  const cheap = crew({ vendorId: "zzz-cheap", crewRate: 50 });
+
+  it("rankCrews sorts by the crew's quote ASCENDING when a fee is passed", () => {
+    expect(rankCrews([dear, cheap], 0, null, null, fee).map((c) => c.vendorId))
+      .toEqual(["zzz-cheap", "aaa-dear"]);
+  });
+
+  it("decideDispatch hands the job to the $50 crew, not the $70 one", () => {
+    const d = decideDispatch(input({ menuPrice: 0, platformFee: fee, crews: [dear, cheap] }));
+    expect(d.result?.vendorId).toBe("zzz-cheap");
+    expect(d.result?.customerPrice).toBe(56); // and the customer is billed the cheaper bill
+  });
+
+  it("without a fee the same pool ranks the old way — the key is not global", () => {
+    // Against a real 100 menu the old key still means what it always meant.
+    expect(rankCrews([dear, cheap], 100).map((c) => c.vendorId))
+      .toEqual(["zzz-cheap", "aaa-dear"]);
+    // And with no menu price to compare against, the old key ties and the
+    // stable id order wins — which is exactly the arbitrariness the new key
+    // replaces, and why this one asserts "aaa" rather than "cheapest".
+    expect(rankCrews([dear, cheap], 0).map((c) => c.vendorId))
+      .toEqual(["aaa-dear", "zzz-cheap"]);
+  });
+
+  it("keys 1-3 still outrank money: a better-scored dear crew wins", () => {
+    const good = crew({ vendorId: "good", crewRate: 90, score: 9 });
+    const cheapLowScore = crew({ vendorId: "cheap", crewRate: 40, score: 0 });
+    expect(rankCrews([cheapLowScore, good], 0, null, null, fee)[0].vendorId).toBe("good");
+  });
+});
+
+describe("0174: the floor stops being a platform-wide off switch", () => {
+  /* At 11% each way LakeLife keeps (0.11+0.11)/1.11 = 19.82% of every bill,
+     under the live 0.20 dial. If the floor still ran on this path it would not
+     refuse SOME crews — it would refuse EVERY job on the platform, with
+     `below_floor`, a reason no screen prints. */
+  const thin = { customerPct: 0.11, crewPct: 0.11 };
+
+  it("a job still dispatches at 11/11 under a 0.20 floor", () => {
+    const d = decideDispatch(input({
+      menuPrice: 0, marginFloor: 0.20, platformFee: thin,
+      crews: [crew({ vendorId: "v1", crewRate: 50 })],
+    }));
+    expect(d.ok).toBe(true);
+    expect(d.reasonNoFit).toBeUndefined();
+    expect(d.result?.marginPct).toBeLessThan(0.20); // it really is under the dial
+  });
+
+  it("the SAME shortfall on the menu path is still refused", () => {
+    // 85 against a 100 menu is 15% — under 0.20 — and stays below_floor.
+    const d = decideDispatch(input({ menuPrice: 100, marginFloor: 0.20, crews: [crew({ crewRate: 85 })] }));
+    expect(d.reasonNoFit).toBe("below_floor");
+  });
+
+  it("no crew-priced quote can be 'too high' on the claim board", () => {
+    const board = {
+      serviceName: "Housekeeping", weekday: "Wed", todayISO: "2026-07-20",
+      menuPrice: 0, marginFloor: 0.20,
+    };
+    expect(canClaim(crew({ crewRate: 500 }), { ...board, platformFee: thin })).toEqual({ ok: true });
+    // Every OTHER blocker still bites on the crew-priced path.
+    expect(canClaim(crew({ crewRate: 0 }), { ...board, platformFee: thin }))
+      .toEqual({ ok: false, blocker: "no_rate" });
+    expect(canClaim(crew({ crewRate: 500, status: "invited" }), { ...board, platformFee: thin }))
+      .toEqual({ ok: false, blocker: "not_active" });
+  });
+
+  it("a $0 card is still not a rate, fee or no fee", () => {
+    const d = decideDispatch(input({
+      menuPrice: 0, platformFee: { customerPct: 0.12, crewPct: 0.12 },
+      crews: [crew({ crewRate: 0 })],
+    }));
+    expect(d.reasonNoFit).toBe("no_qualifying_rate");
+  });
+});

@@ -56,7 +56,11 @@ export default async function SetupPage({
     // Published parks only — an unpublished one is still being set up and its
     // owner has not asked to be listed anywhere.
     supabase.from("parks").select("id, name").eq("active", true).order("name"),
-    supabase.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing").eq("active", true).or("kind.eq.standalone,solo_bookable.eq.true"),
+    // crew_priced (0174) rides along so the wizard's price tiles can say
+    // "Crews quote this one" instead of printing the $0 a crew-priced row
+    // computes to. Without it every branch of that handling reads false and
+    // the wizard quotes a number nobody will charge.
+    supabase.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, crew_priced").eq("active", true).or("kind.eq.standalone,solo_bookable.eq.true"),
     // When adding a new property, start blank; otherwise load the active one.
     addingNew ? Promise.resolve(null) : getFullProfile(),
   ]);
@@ -83,7 +87,10 @@ export default async function SetupPage({
       ? [...servedLakeNames, ownLake]
       : servedLakeNames;
   const parks = (parkRows ?? []).map((r) => ({ id: r.id as string, name: r.name as string }));
-  const services = (serviceRows ?? []) as unknown as ServiceRule[];
+  // The cast carries crew_priced through — ProfileWizard's prop is
+  // `ServiceRule & { crew_priced?: boolean | null }` and the column is now in
+  // the select above.
+  const services = (serviceRows ?? []) as unknown as Array<ServiceRule & { crew_priced?: boolean | null }>;
   const editingPropertyId = !addingNew && profile?.hasProfile ? profile.propertyId : null;
 
   const initial =

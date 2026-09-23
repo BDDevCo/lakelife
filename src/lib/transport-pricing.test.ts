@@ -108,10 +108,23 @@ describe("the booking action is where an unmeasurable tow is refused", () => {
   const code = readFileSync(join(process.cwd(), "src/app/book/actions.ts"), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const block = () => {
-    const m = code.match(/if \(billsByDistance\(priceRule\)\) \{[\s\S]*?\n  \}/);
+    // The guard gained `!crewPriced` with 0174 — a tow LakeLife prices on top
+    // of a number the crew chose is LakeLife setting part of the price again.
+    // Matching the CONDITION rather than a loose `billsByDistance` means this
+    // scan still goes stale (loudly) if the block moves, and the fence itself
+    // is pinned by its own assertion below.
+    const m = code.match(/if \(!crewPriced && billsByDistance\(priceRule\)\) \{[\s\S]*?\n  \}/);
     expect(m?.[0], "the transport block was not found — this scan is stale").toBeTruthy();
     return m?.[0] ?? "";
   };
+
+  it("never prices a tow on top of a price the crew set", () => {
+    // On a crew_priced service the tow is inside the crew's own quote — they
+    // are the ones driving it. Adding a per-mile fee on top would be LakeLife
+    // setting part of the price, which is the one thing 0174 exists to stop.
+    expect(code, "the transport fence must read the crew-priced switch")
+      .toMatch(/if \(!crewPriced && billsByDistance\(priceRule\)\)/);
+  });
 
   it("refuses rather than quoting a price it cannot compute", () => {
     expect(block(), "an unmeasurable tow must not fall through to a free one")

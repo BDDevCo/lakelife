@@ -251,6 +251,15 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
       {/* ---------------- their money, and only theirs ---------------- */}
       <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
         <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>Your take-home</h3>
+        {/* THE NUMBER BELOW IS NOT THE ONE ON THEIR RATE CARD on a service the
+            crew prices itself, and a contractor who works that out from their
+            own bank statement has been cheated by a screen. Null on every
+            menu-priced job, where the two are the same number. */}
+        {job.feeNote && (
+          <p className="mut" style={{ fontSize: 12.5, margin: "0 0 6px", lineHeight: 1.5 }}>
+            {job.feeNote}
+          </p>
+        )}
         {job.payouts.length === 0 ? (
           <p className="mut" style={{ fontSize: 13.5, margin: 0 }}>
             {/* "FINISHING IT RELEASES THE HOLD" IS THE ONE THING IT DOES NOT DO.
