@@ -136,10 +136,22 @@ export default async function SetupPage({
       <div className="wrap" style={{ paddingTop: 40 }}>
         <div style={{ maxWidth: 560, margin: "0 auto 16px" }}>
           <h1 style={{ fontSize: 26 }}>{addingNew ? "Add another property" : "Let's set up your place"}</h1>
+          {/* "EVERY PRICE IS EXACT FROM DAY ONE" — and its twin on the second
+              property, "we'll price it exactly".
+
+              Neither is true of this product. `crew_priced` (0174) is selected
+              in the services query above precisely so the wizard's tiles can say "Crews
+              quote this one" instead of printing a figure, so the wizard this
+              sentence introduces contains services with no price at all; and
+              the numbers that DO print are seeded menu rates, not rates a crew
+              has agreed to — no crew is onboarded yet. What the wizard really
+              does is the honest and still-attractive half: it asks only about
+              what you pick, and what it can price it prices off your own
+              pier, boats and lawn rather than a flat list. */}
           <p className="mut" style={{ fontSize: 14 }}>
             {addingNew
-              ? "Same quick setup for your other home — pick its services and we'll price it exactly."
-              : "Pick the services that fit your place — we'll only ask about what you choose, and every price is exact from day one."}
+              ? "Same quick setup for your other home — pick its services and we'll price them from what's actually there."
+              : "Pick the services that fit your place — we'll only ask about what you choose, and we price from what's actually on your property."}
           </p>
         </div>
         <ProfileWizard lakes={lakes} parks={parks} services={services} initial={initial} propertyId={editingPropertyId} />

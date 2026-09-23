@@ -94,9 +94,30 @@ export function MarginTable({ rows, total }: { rows: MarginRow[]; total: MarginR
           </div>
         )}
       </div>
+      {/* "THE 30% PLATFORM FEE" WAS NOT A NUMBER ANYBODY SET.
+          It sat ten pixels above a total that read 33.9%, on a page whose
+          header pill claimed 30% too, while the only enforced dial in
+          production was `margin_floor` at 0.20 — a circuit breaker, not a
+          target — and 0174 replaced the whole idea with two published
+          percentages at 12% each. Three answers, one viewport, none of them
+          from a column.
+
+          The confidentiality half was always true and needed no percentage.
+          The figure in the sentence now is the one this table just computed,
+          named as what it is: what these jobs LEFT us, not a rate we charge.
+          It is read from the Total row above it, so it cannot drift from the
+          table it describes. Omitted entirely when there are no jobs — "0%" is
+          a claim about an empty set. */}
       <p className="mut" style={{ fontSize: 12, marginTop: 10, lineHeight: 1.5 }}>
-        Customers only ever see the single all-in price. Vendor rates and the 30% platform fee live
+        Customers only ever see the single all-in price. Crew cost and LakeLife&apos;s share live
         here and nowhere else.
+        {rows.length > 0 && (
+          <>
+            {" "}
+            Across the {total.jobs} {total.jobs === 1 ? "job" : "jobs"} above, {total.margin_pct}% was
+            left to LakeLife — what this work actually earned, not a rate we charge.
+          </>
+        )}
       </p>
     </>
   );

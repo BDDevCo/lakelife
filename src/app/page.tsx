@@ -185,10 +185,23 @@ export default async function Home() {
               title="Choose the services your LakeLife needs"
               body="Select the work once, and each season we pencil in the next visit at your locked price — one tap books it, or skip it. Change or turn off a service anytime."
             />
+            {/* "SEE THE FULL PRICE UPFRONT" on the front door, with no login
+                and no property behind it. It is the marketing form of the
+                sentence /lakes/[slug], /book and /profile/setup all gave up in
+                this pass, and it was the last one on an unauthenticated page.
+                A crew_priced service (0174) has NO number before dispatch —
+                `createBookingBatch` writes customer_price NULL and takes the
+                figure from the crew afterwards — so "upfront" is false for
+                exactly the services the owner's model is built around.
+
+                The replacement keeps the promise this product does keep, which
+                is the stronger one anyway: whoever names the number, you see
+                it before any money moves, because nothing is charged until the
+                work is complete and its photos are in. */}
             <FeatureCard
               pill="SIMPLE FROM START TO FINISH"
               title="Pricing, scheduling and payments in one place"
-              body="See the full price upfront, know when the work is scheduled, and handle payment through LakeLife."
+              body="See the price — worked out from your own property, or named by the crew who takes the job — before anything is charged. Know when the work is scheduled, and pay in one place."
             />
             <FeatureCard
               pill="PHOTO PROOF"

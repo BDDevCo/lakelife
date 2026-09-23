@@ -107,7 +107,11 @@ export default async function BookPage() {
             <span className="ll-pill gold">First things first</span>
             <h2 style={{ fontSize: 22, margin: "12px 0 6px" }}>Set up your property to see prices</h2>
             <p className="mut" style={{ fontSize: 14, marginBottom: 16 }}>
-              Once your place is set up, every service here is priced exactly to it.
+              {/* Same correction as the sub-head below: what the engine does is
+                  price from the property, which is worth saying. "Exactly" is
+                  the word that promised firmness, and a crew-priced service on
+                  this menu has no figure at all. */}
+              Once your place is set up, every service here is priced from what&apos;s actually on it.
             </p>
             <Link className="ll-btn gold" href="/profile/setup">Start guided setup →</Link>
           </div>
@@ -227,8 +231,27 @@ export default async function BookPage() {
       <OwnerHeader />
       <div className="wrap" style={{ paddingTop: 24 }}>
         <h1 style={{ fontSize: 26 }}>Book services</h1>
+        {/* "EVERY PRICE IS EXACT TO YOUR PROPERTY" WAS TWO CLAIMS AND BOTH
+            broke under 0174. The first is arithmetic and survives in a
+            narrower form: `priceService` really does compute each figure from
+            the pier sections, boats, lawn band and square footage on this
+            property, so the number is worked out FOR them. The second is the
+            one that lied — "exact" reads as firm, and on a crew-priced service
+            there is no number on this screen at all (`price` is 0 by design
+            and the tile prints the crew-quoted sentence instead). A menu that
+            contains one of those cannot lead with a sentence saying every
+            price on it is exact.
+
+            The clause is conditional rather than always-on because "some of
+            these are crew-quoted" is false on a menu that has none, and a
+            sentence hedging something the reader cannot see is its own kind of
+            noise. */}
         <p className="mut" style={{ fontSize: 14, marginBottom: 18 }}>
-          {profile.address ?? "Your place"}{lake?.name ? ` · ${lake.name}` : ""} — every price is exact to your property.
+          {profile.address ?? "Your place"}{lake?.name ? ` · ${lake.name}` : ""} — every price here is
+          worked out from your own pier, boats and lawn.
+          {wanted.some((s) => s.crewPriced)
+            ? " The crew-quoted ones have no number yet: the crew who takes the job sets it, and nothing is charged until the work is done."
+            : ""}
         </p>
         <InviteMyCrew />
         {(packageCount ?? 0) > 0 && (

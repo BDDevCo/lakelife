@@ -6,10 +6,14 @@ import { useRouter } from "next/navigation";
 import { assignAndSchedule } from "@/app/ops/actions";
 import { toast } from "@/components/Toast";
 import { RefundModal } from "@/components/ops/RefundModal";
-import type { OpsJob, ActiveVendor } from "@/app/ops/data";
+import type { OpsJob, ActiveVendor, CrewRateCard } from "@/app/ops/data";
 import { crewListsService } from "@/lib/crew-services";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+/** A CREW'S OWN RATE IS PRINTED TO THE CENT. The whole-dollar formatter above
+ *  would round $48.50 a section to $49 and put a number on screen that is not
+ *  on their card. */
+const rateUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const SLOTS = [
   { value: "8a", label: "8:00 am" },
   { value: "10a", label: "10:00 am" },
@@ -130,6 +134,16 @@ function JobRow({
           </Link>
           {isAuto && <span className="ll-pill teal" title="Placed by auto-dispatch">AUTO</span>}
           {preferred && <span className="ll-pill gold" title="Assigned crew is this property's preferred crew">⭐ preferred</span>}
+          {/* THE BOARD KEEPS THESE; THE NUMBERS ABOVE DO NOT COUNT THEM.
+              Ops is the only person who can work or clear a scratch job, so
+              hiding them here would be the worse half of the trade. Saying so
+              on the row is what stops the console contradicting itself — three
+              jobs listed, zero jobs in every figure at the top of the page. */}
+          {job.is_fixture && (
+            <span className="ll-pill slate" title="One end of this job is an account we invented, so it is left out of the revenue, margin and waiting figures.">
+              test account · not counted above
+            </span>
+          )}
         </div>
         <div className="mut" style={{ fontSize: 13 }}>{job.address ?? "Address on file"}</div>
         <div className="mut" style={{ fontSize: 12.5 }}>{meta}</div>
@@ -217,14 +231,103 @@ export function NoCrewToAssign({ title, subtitle, onClose }: { title: string; su
   );
 }
 
+/**
+ * A CREW'S RATE CARD, IN WORDS. Their numbers only — nothing derived from the
+ * customer price, nothing averaged, nothing filled in.
+ *
+ * Empty string when the card holds no number we can name, which the caller
+ * treats exactly as "no rate on file": a card that renders to nothing must
+ * never be announced as a rate.
+ */
+function rateWords(card: CrewRateCard): string {
+  const parts: string[] = [];
+  const unit =
+    card.pricing_model === "per_section" ? "section"
+      : card.pricing_model === "per_foot" ? "foot"
+        : "unit";
+  const hasUnit = card.unit_rate != null && card.unit_rate > 0;
+  if (card.base != null && card.base > 0) {
+    parts.push(hasUnit ? `${rateUsd.format(card.base)} base` : `${rateUsd.format(card.base)} flat`);
+  }
+  if (hasUnit) parts.push(`${rateUsd.format(card.unit_rate as number)} per ${unit}`);
+  const bp = card.band_pricing ?? {};
+  for (const k of ["small", "medium", "large"] as const) {
+    const v = bp[k];
+    if (typeof v === "number") parts.push(`${k} ${rateUsd.format(v)}`);
+  }
+  const tiers = bp.tiers;
+  if (Array.isArray(tiers)) {
+    tiers.forEach((t, i) => {
+      const p = (t as { price?: unknown } | null)?.price;
+      if (typeof p === "number") parts.push(`tier ${i + 1} ${rateUsd.format(p)}`);
+    });
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * THE BOX THAT SETS A CONTRACTOR'S PAY, WITH SOMETHING TRUE BESIDE IT.
+ *
+ * Both override modals used to open this field pre-filled with
+ * `round(customer_price × 0.7)` under the label "Suggested $423 (30% margin)".
+ * Nobody ever quoted that number. `assignAndSchedule` consults no rate card —
+ * it writes whatever is in the box to `jobs.vendor_cost` — so the hour the
+ * first real crew goes active, a figure this product invented becomes the
+ * default answer to "what do we pay this contractor". That is LakeLife setting
+ * a crew's price, which is the exact thing the model change abolished: "I do
+ * not want lakelife setting the pricing for crews."
+ *
+ * So the box opens EMPTY — an empty box asks a question, a filled one answers
+ * it wrongly — and what sits beside it is the crew's own card, which is a
+ * fact. The manual path itself is untouched: ops must still be able to record
+ * a number that was actually negotiated.
+ *
+ * BOTH DOORWAYS IMPORT THIS ONE. The board's modal and the job file's had two
+ * copies of the prefill and two copies of the label; a sentence about somebody
+ * else's income cannot be half-corrected later.
+ */
+export function CrewRateNote({
+  crew,
+  serviceName,
+}: {
+  crew: ActiveVendor | null;
+  serviceName: string | null;
+}) {
+  const style: React.CSSProperties = { fontSize: 12, lineHeight: 1.5, margin: "8px 0 0" };
+  if (!crew) {
+    return (
+      <p className="mut" style={style}>
+        Choose a crew above and their own rate for this service appears here.
+      </p>
+    );
+  }
+  const who = crew.company ?? "This crew";
+  const card = crew.rate_cards.find((c) => c.service_name === serviceName) ?? null;
+  const words = card && card.priced ? rateWords(card) : "";
+  if (!words) {
+    return (
+      <p style={{ ...style, color: "var(--warn)" }}>
+        {who} has no rate on file for {serviceName ?? "this service"}. Ask them for their number —
+        they set it on their own Rates screen. LakeLife doesn&apos;t price crews.
+      </p>
+    );
+  }
+  return (
+    <p className="mut" style={style}>
+      {who}&apos;s own rate for {serviceName}: <b>{words}</b>. That is their card, not this job&apos;s
+      total — the size of this property decides that.
+    </p>
+  );
+}
+
 function AssignModal({ job, vendors, onClose }: { job: OpsJob; vendors: ActiveVendor[]; onClose: () => void }) {
   const router = useRouter();
   const price = job.customer_price ?? 0;
-  // Auto-suggest a 30% margin: vendor gets 70% of the customer price.
-  const suggested = job.vendor_cost != null ? job.vendor_cost : Math.round(price * 0.7);
-
+  // NO COMPUTED DEFAULT (see CrewRateNote). A cost already on the job is a
+  // number somebody actually agreed, so a reassign still opens with it; a job
+  // with none opens EMPTY rather than with `round(price × 0.7)`.
   const [vendorId, setVendorId] = useState<string>(job.vendor_id ?? "");
-  const [cost, setCost] = useState<string>(String(suggested));
+  const [cost, setCost] = useState<string>(job.vendor_cost != null ? String(job.vendor_cost) : "");
   const [date, setDate] = useState<string>(job.date ?? "");
   const [slot, setSlot] = useState<string>(job.slot ?? "8a");
   const [busy, setBusy] = useState(false);
@@ -240,8 +343,14 @@ function AssignModal({ job, vendors, onClose }: { job: OpsJob; vendors: ActiveVe
   );
 
   // Quantize to whole cents so the preview matches what the server stores.
-  const costNum = Math.round(Number(cost) * 100) / 100;
-  const costValid = Number.isFinite(costNum) && costNum >= 0 && costNum <= price;
+  //
+  // AN EMPTY BOX IS NOT ZERO. `Number("")` is 0, so with the prefill gone the
+  // old test would have called an untouched field valid, enabled Confirm, and
+  // written vendor_cost = 0 — a crew paid nothing, through a path that looks
+  // entirely deliberate. The typed text has to be there before it can be read.
+  const typed = cost.trim();
+  const costNum = Math.round(Number(typed) * 100) / 100;
+  const costValid = typed !== "" && Number.isFinite(costNum) && costNum >= 0 && costNum <= price;
   const margin = costValid ? price - costNum : 0;
   const marginPct = price > 0 && costValid ? Math.round((margin / price) * 100) : 0;
   const chosen = vendors.find((v) => v.id === vendorId) ?? null;
@@ -320,13 +429,22 @@ function AssignModal({ job, vendors, onClose }: { job: OpsJob; vendors: ActiveVe
 
           <div className="ll-field">
             <label>Vendor cost (customer pays {money.format(price)})</label>
-            <input inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} />
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginTop: 6 }}>
-              <span className="mut">Suggested {money.format(Math.round(price * 0.7))} (30% margin)</span>
-              <span style={{ color: costValid ? "var(--teal-dark)" : "var(--warn)", fontWeight: 700 }}>
-                {costValid ? `Margin ${money.format(margin)} · ${marginPct}%` : "Cost must be 0–" + money.format(price)}
-              </span>
+            <input
+              inputMode="decimal"
+              value={cost}
+              onChange={(e) => setCost(e.target.value)}
+              placeholder="What this crew agreed to"
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", fontSize: 12.5, marginTop: 6 }}>
+              {/* An untouched field is not a wrong one — the range only shouts
+                  once somebody has typed something outside it. */}
+              {typed !== "" && (
+                <span style={{ color: costValid ? "var(--teal-dark)" : "var(--warn)", fontWeight: 700 }}>
+                  {costValid ? `Margin ${money.format(margin)} · ${marginPct}%` : "Cost must be 0–" + money.format(price)}
+                </span>
+              )}
             </div>
+            <CrewRateNote crew={chosen} serviceName={job.service_name} />
           </div>
 
           <div style={{ display: "flex", gap: 10 }}>

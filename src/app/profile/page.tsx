@@ -76,10 +76,17 @@ export default async function ProfilePage() {
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
             <span className="ll-pill gold">Next step</span>
             <h2 style={{ fontSize: 24, margin: "12px 0 6px" }}>Let&apos;s build your property profile</h2>
+            {/* "AND EVERY PRICE BECOMES EXACT TO YOUR PROPERTY" is the same
+                claim /profile/setup dropped in this pass, on the card that
+                links straight to it — two screens one tap apart, one of them
+                corrected. "Exact" reads as firm and nothing stands behind it
+                (no crew is onboarded; the menu figures descend from the
+                prototype), and a crew_priced service (0174) carries no number
+                here at all. The half that is true is the arithmetic. */}
             <p className="mut" style={{ fontSize: 14, marginBottom: 18 }}>
               Pick the services that fit your place — housekeeping, mowing, seasonal
-              open &amp; close, and waterfront work if you have it — and every price
-              becomes exact to your property.
+              open &amp; close, and waterfront work if you have it — and we price the
+              work to what&apos;s actually on your property.
             </p>
             <Link className="ll-btn gold" href="/profile/setup">Start guided setup →</Link>
           </div>

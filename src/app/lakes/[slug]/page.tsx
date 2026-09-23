@@ -4,8 +4,7 @@ import { notFound } from "next/navigation";
 import { TopBar } from "@/components/Brand";
 import { RefCatcher } from "@/components/RefCatcher";
 import { createServiceClient } from "@/lib/supabase/server";
-import { fromPrice, OWNER_FIXTURE_EMBED, OWNER_FIXTURE_FILTER } from "@/lib/lake-pages";
-import type { ServiceRule } from "@/lib/pricing";
+import { OWNER_FIXTURE_EMBED, OWNER_FIXTURE_FILTER } from "@/lib/lake-pages";
 import { effectiveSeason, seasonIsProvisional, todayLakeDate } from "@/lib/booking";
 import { mustRead, mustCount } from "@/lib/must-read";
 import { checkNamedInsured } from "@/lib/named-insured";
@@ -13,12 +12,25 @@ import { SERVED_LAKE_MATCH } from "@/lib/lake-visibility";
 
 /**
  * Public per-lake landing page (§8 SEO) — every number on it is LIVE
- * platform data, never marketing fiction: real menu floors, real crew
- * counts, real completions and thumbs, real season dates, and (when an
- * HOA partnership is linked) the real fireworks-fund total. Customer
- * menu pricing only — crew rates and margin never touch the public
- * internet (rule 1). RefCatcher rides along so a shared lake link
- * attributes referrals exactly like the front door.
+ * platform data, never marketing fiction: real crew counts, real
+ * completions and thumbs, real season dates, and (when an HOA
+ * partnership is linked) the real fireworks-fund total. RefCatcher rides
+ * along so a shared lake link attributes referrals exactly like the
+ * front door.
+ *
+ * AND AS OF THIS COMMIT IT QUOTES NO PRICE AT ALL — see the services card
+ * below. The twelve figures this page used to print were the last public
+ * survivors of the mockup: `lakelife.html` priced a pier at $700 and
+ * repriced ten sections to twelve at $796, which is $220 + $48/section
+ * exactly, and 0047 seeded those two terms into `services` with no source
+ * note while two neighbours in the same INSERT were annotated
+ * "(PLACEHOLDER rate)". The only pier number anybody has ever been
+ * charged is The Haven's $1,680 a season over 28 sections — $60 a
+ * section — against a menu that came to $3,128 a season for the same
+ * dock. No crew has agreed to any of it, because no crew has been
+ * onboarded. So the page keeps the admission it already makes in its own
+ * headline ("we're building our crew bench on this lake") and drops the
+ * figures that contradicted it.
  */
 
 export const revalidate = 3600; // ISR — fresh hourly, fast always
@@ -117,7 +129,14 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
     // because 0115 zeroed its global price, which is an accident, not a
     // fence. The day one of those carries a global number it would advertise
     // itself to lake homeowners who cannot buy it.
-    admin.from("services").select("id, name, pricing_model, base, unit_rate, band_pricing, is_water_work, crew_priced").eq("active", true).eq("park_only", false).or("kind.eq.standalone,solo_bookable.eq.true").order("name"),
+    //
+    // THE PRICING COLUMNS ARE GONE FROM THIS SELECT ON PURPOSE, and that is
+    // the fence rather than the tidy-up: `base`, `unit_rate` and
+    // `band_pricing` are the three inputs a "from $X" line is built out of,
+    // so a future edit cannot reinstate one without first re-adding the
+    // column and meeting this note. `crew_priced` (0174) stays, because the
+    // sentence under the list still has to say who names the price.
+    admin.from("services").select("id, name, is_water_work, crew_priced").eq("active", true).eq("park_only", false).or("kind.eq.standalone,solo_bookable.eq.true").order("name"),
     // FIXTURE CREWS ARE NOT A CREW BENCH. This is a public, SEO-indexed page
     // that prints "N insured local crews serving <lake>". Two of the three
     // vendors are the owner's own scratch accounts, so every lake advertised
@@ -218,47 +237,53 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
         )}
 
         <div className="ll-card ll-card-pad" style={{ marginBottom: 16 }}>
-          <h3 style={{ fontSize: 16, margin: "0 0 10px" }}>Services & pricing on {lake.name}</h3>
+          {/* NO FIGURES HERE. The heading used to read "Services & pricing on
+              {lake}" over twelve numbers, and the card's own footer promised
+              "No quotes, no callbacks, no surprises" — a sentence that did not
+              merely fail to hedge, it foreclosed the quoting model the owner
+              has since chosen. The headline above it already told the same
+              reader we are still building a crew bench on this lake.
+              A page cannot admit it has no crew and quote that crew's price in
+              one breath; the admission is the true half, so it stays and the
+              numbers go. See the file header for where the numbers came from.
+
+              A SERVICE STILL APPEARS. Vanishing silently is its own defect and
+              the worse one — a stranger who owns a pier should be able to read
+              that we arrange pier work on their water. Naming the work is a
+              claim this product can cash; naming its price is not. */}
+          <h3 style={{ fontSize: 16, margin: "0 0 10px" }}>Services on {lake.name}</h3>
           <div style={{ display: "grid", gap: 8 }}>
-            {(services ?? []).map((s) => {
-              // A CREW-PRICED SERVICE VANISHED FROM ITS OWN LAKE'S PAGE.
-              //
-              // `fromPrice` returns null whenever the computed amount is not
-              // > 0, and a crew-priced row carries base 0 / unit_rate 0 by
-              // design — so `if (!fp) return null` silently deleted the lake's
-              // biggest service from the public, SEO-indexed menu with no
-              // error anywhere. The safe half (no "$0" on the open internet)
-              // hid the unsafe half. Now the row renders and says who names
-              // the number.
-              const crewPriced = (s as { crew_priced?: boolean | null }).crew_priced === true;
-              const fp = crewPriced
-                ? null
-                : fromPrice(s as unknown as Pick<ServiceRule, "pricing_model" | "base" | "unit_rate" | "band_pricing">);
-              if (!fp && !crewPriced) return null;
-              return (
-                <div key={s.id as string} style={{ display: "flex", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
-                  <span style={{ fontSize: 14.5, fontWeight: 700 }}>
-                    {s.name as string}
-                    {s.is_water_work ? <span className="ll-pill teal" style={{ marginLeft: 8, fontSize: 11 }}>seasonal</span> : null}
-                  </span>
-                  <span style={{ fontSize: 14.5, whiteSpace: "nowrap" }}>
-                    {fp
-                      ? <>{fp.from ? "from " : ""}<b>${fp.amount.toLocaleString()}</b>{fp.unit ? ` ${fp.unit}` : ""}</>
-                      : <span className="mut">crew-quoted</span>}
-                  </span>
-                </div>
-              );
-            })}
+            {(services ?? []).map((s) => (
+              <div key={s.id as string} style={{ display: "flex", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+                <span style={{ fontSize: 14.5, fontWeight: 700 }}>
+                  {s.name as string}
+                  {s.is_water_work ? <span className="ll-pill teal" style={{ marginLeft: 8, fontSize: 11 }}>seasonal</span> : null}
+                </span>
+              </div>
+            ))}
           </div>
-          {/* "No quotes, no callbacks" IS the promise on a menu-priced lake and
-              is FALSE the moment one service above is crew-quoted — the price
-              then comes from a crew, not from this page. The sentence follows
-              the menu it sits under rather than asserting a fact about a
-              product that has changed underneath it. */}
-          <p className="mut" style={{ fontSize: 12.5, margin: "10px 0 0" }}>
+          {/* WHAT REPLACED THE PROMISE. Every clause is something the product
+              does today: crews are genuinely being onboarded on this lake (the
+              headline above says so off the same read); `priceService` really
+              does compute from the pier sections, boats and lawn on the
+              profile rather than off a flat list; `crew_priced` (0174) really
+              does hand the number to the crew who takes the job; and no charge
+              path runs before a job is complete with its photographs in.
+
+              It does NOT say a price shows before you commit, and that
+              omission is deliberate — on a crew-priced service the booking
+              door writes `customer_price` NULL, dispatches, and takes the
+              number from the crew's decision afterwards (book/actions.ts). The
+              old sentence claimed the opposite for every service on the
+              list. */}
+          <p className="mut" style={{ fontSize: 12.5, margin: "10px 0 0", lineHeight: 1.6 }}>
+            We&apos;re onboarding crews on {lake.name} now. Tell us about your place — pier
+            sections, boats, lawn — and we price the work to what&apos;s actually there,
+            not off a flat list.{" "}
             {(services ?? []).some((s) => (s as { crew_priced?: boolean | null }).crew_priced === true)
-              ? "Your exact all-in price shows before you book — it depends on your pier, boat and property. On the crew-quoted ones above, the crews who work this lake set their own price and you see it before anything is charged."
-              : "Your exact all-in price shows before you book — it depends on your pier, boat and property. No quotes, no callbacks, no surprises."}
+              ? "Some of these are quoted by the crew who takes the job rather than by us. "
+              : ""}
+            No obligation, and nothing is charged until the work is done.
           </p>
         </div>
 
@@ -316,8 +341,9 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
         <div className="ll-card ll-card-pad">
           <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>How it works</h3>
           <p className="mut" style={{ fontSize: 14, margin: 0, lineHeight: 1.6 }}>
-            Tell us about your place once — pier sections, boats, lawn. Every service shows one all-in
-            price. Book a day and we go and line up an independent local crew — nobody is sent to
+            Tell us about your place once — pier sections, boats, lawn. What we can price from that,
+            we price to your property; the rest is quoted by the crew who takes the job, and you see
+            that number on your job page. Book a day and we go and line up an independent local crew — nobody is sent to
             your property without a current certificate of insurance on file. The crew photographs
             the work, and no job counts as done until the photos are in; they go on your job page
             and we let you know they&apos;re there. Nothing is charged before then. If

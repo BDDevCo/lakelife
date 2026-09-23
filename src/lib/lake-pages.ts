@@ -1,9 +1,21 @@
 /**
- * Lake landing pages (§8 SEO) — PURE helpers. Public pages show CUSTOMER
- * menu pricing only (the menu is public by nature; crew rates and margin
- * never appear — rule 1 applies to the public internet most of all).
- * "From" pricing is honest: the lowest real number a service can bill at,
- * with its unit named when the price scales.
+ * Lake landing pages (§8 SEO) — PURE helpers.
+ *
+ * ⚠️ `fromPrice` BELOW HAS NO PRODUCTION CALLER, DELIBERATELY. /lakes/[slug]
+ * was its only one and it stopped printing figures: every menu number it
+ * computed from traces to `lakelife.html`, the prototype, and not one of them
+ * has ever been charged to anybody by a crew who agreed to it. The helper is
+ * kept — it is correct arithmetic, it is pinned hard by lake-pages.test.ts
+ * against `priceService`, and the day a crew's real rate sits behind a
+ * `services` row it is the right floor to publish. It is NOT dead code
+ * somebody should re-wire because the page looks bare: re-wiring it means
+ * putting a price claim back on the open internet, so the row it would quote
+ * needs a source note naming who charges it first.
+ *
+ * Everything else here is about what a public page may and may not show: the
+ * menu is public by nature, crew rates and margin never appear (rule 1 applies
+ * to the public internet most of all), and a job or a thumb is a fixture
+ * because its property's OWNER is.
  */
 
 import type { ServiceRule } from "@/lib/pricing";

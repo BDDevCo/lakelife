@@ -34,6 +34,11 @@ import { crewDate } from "@/lib/lake-time";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
+/** A stored fraction as the percentage a person reads: 0.12 → "12", 0.125 → "12.5".
+ *  One decimal at most, and no trailing ".0" — a dial printed as a rounded whole
+ *  number is a copy figure that no longer matches the column it came from. */
+const pct = (fraction: number) => String(Math.round(fraction * 1000) / 10);
+
 export default async function OpsPage() {
   if (!hasSupabaseEnv()) {
     return (<><TopBar /><div className="wrap" style={{ paddingTop: 48 }}>Add your Supabase keys first.</div></>);
@@ -172,7 +177,15 @@ export default async function OpsPage() {
     { v: String(summary.requestsWaiting), l: "Requests waiting" },
     { v: String(summary.jobsThisWeek), l: "Jobs this week" },
     { v: money.format(summary.weekRevenue), l: "Week revenue (customer)" },
-    { v: money.format(summary.weekMargin), l: "Week LakeLife margin", d: `${summary.weekMarginPct}% blended` },
+    {
+      v: money.format(summary.weekMargin),
+      l: "Week LakeLife margin",
+      // "0% blended" OVER AN EMPTY SET IS A PERCENTAGE NOBODY EARNED. With the
+      // fixture jobs fenced out of these figures, a quiet week is the normal
+      // state — and a blended rate is a rate ACROSS jobs, so with no jobs there
+      // is nothing to blend. Say which it is.
+      d: summary.jobsThisWeek > 0 ? `${summary.weekMarginPct}% blended` : "no jobs this week yet",
+    },
   ];
 
   return (
@@ -188,7 +201,28 @@ export default async function OpsPage() {
               {lakes.filter((l) => !l.is_fixture).map((l) => l.name.replace(/ Lake$/, "")).join(" · ") || "No lakes yet"}
             </p>
           </div>
-          <span className="ll-pill teal">30% platform margin · hidden from customers &amp; crews</span>
+          {/* THREE DIFFERENT ANSWERS TO "WHAT DOES LAKELIFE TAKE", IN ONE VIEWPORT.
+              This pill said "30% platform margin". MarginTable's footer said
+              "the 30% platform fee". The total rendered ten pixels under that
+              footer read 33.9%. There is no 30% anywhere in this product: the
+              only enforced dial was `margin_floor` at 0.20 — a circuit breaker,
+              not a target — and 0174 replaced the idea with two published
+              percentages at 12% each.
+
+              A NUMBER IN COPY MUST NAME ITS COLUMN. The pill's true half never
+              needed a percentage: this console is the only place the crew's
+              cost and LakeLife's share appear at all (rule 1), and that is
+              equally true under the menu-margin model and the crew-quote one.
+              The dials that DO exist are named underneath, read live from
+              platform_settings, and labelled as dials rather than as facts
+              about any particular job. */}
+          <div style={{ textAlign: "right" }}>
+            <span className="ll-pill teal">Crew cost &amp; LakeLife&apos;s share · shown nowhere else</span>
+            <div className="mut" style={{ fontSize: 11.5, marginTop: 5, lineHeight: 1.45 }}>
+              Live dials · platform fee +{pct(s.platformFeeCustomerPct)}% onto the customer,
+              −{pct(s.platformFeeCrewPct)}% out of the crew&apos;s quote · margin floor {pct(s.marginFloor)}%
+            </div>
+          </div>
         </div>
 
         <div

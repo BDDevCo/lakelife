@@ -255,18 +255,45 @@ function MoneyCard({ job }: { job: JobDetailView }) {
       {(() => {
         const billed = job.money.invoiceAmount;
         const quoted = job.money.customerPrice;
-        const billedDiffers = billed != null && billed !== quoted;
-        const headline = billedDiffers ? billed : quoted;
+        const billedDiffers = billed != null && quoted != null && billed !== quoted;
+        const headline = billedDiffers ? billed : (quoted ?? billed);
         return (
           <>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontSize: 26, fontWeight: 800 }}>{formatCurrency(headline)}</div>
-                <p className="mut" style={{ fontSize: 12.5, margin: "2px 0 0" }}>
-                  {billedDiffers
-                    ? `This is what we billed. The ${formatPrice(quoted)} quote was for the visit itself, which didn't happen.`
-                    : "One all-in price — crew, materials, and LakeLife. No add-ons, no surprises."}
-                </p>
+                {/* NOTHING QUOTED YET IS NOT $0.00.
+                    `formatCurrency` renders null as "$0.00" (it is the crew's
+                    take-home formatter and is null-safe by design), and
+                    `customer_price` is NULL on purpose for a crew-priced job
+                    (0174) from the moment it is booked until the crew who
+                    takes it names a figure. So this card printed "$0.00" in
+                    26px bold under "Your invoice", above a sentence promising
+                    one all-in price with no surprises — a number nobody
+                    charged, on the screen the customer opens to find out what
+                    the work will cost. /requests already drew the same column
+                    as "—"; this was the second doorway.
+
+                    "No add-ons, no surprises" is kept where it is true — a job
+                    with a real figure on it — and cannot be reached by a job
+                    with none. */}
+                {headline == null ? (
+                  <>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: "var(--sub)" }}>No price yet</div>
+                    <p className="mut" style={{ fontSize: 12.5, margin: "2px 0 0" }}>
+                      The crew who takes this job sets its price, and we&apos;ll show it here as soon
+                      as they do. Nothing is charged until the work is done and the photos are in.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 26, fontWeight: 800 }}>{formatCurrency(headline)}</div>
+                    <p className="mut" style={{ fontSize: 12.5, margin: "2px 0 0" }}>
+                      {billedDiffers && quoted != null
+                        ? `This is what we billed. The ${formatPrice(quoted)} quote was for the visit itself, which didn't happen.`
+                        : "One all-in price — crew, materials, and LakeLife. No add-ons, no surprises."}
+                    </p>
+                  </>
+                )}
               </div>
               <span className={`ll-pill ${inv.tone}`}>{inv.pill}</span>
             </div>

@@ -79,9 +79,24 @@ export default async function WelcomePage() {
         <div className="ll-hero-inner">
           <div className="ll-eyebrow">You&apos;re in</div>
           <h1>Welcome to LakeLife, {name}.</h1>
+          {/* "PRICE EVERY SERVICE EXACT TO YOUR PLACE" — the fourth copy of a
+              sentence three other screens gave up in this same pass (/book,
+              /profile/setup, /lakes/[slug]), and the one nobody's package
+              listed. Two things are wrong with it and only one of them is
+              tone. "Exact" promises firmness: no crew has been onboarded, so
+              every menu figure behind that promise traces to lakelife.html,
+              the prototype. And "every service" is false outright — a
+              crew_priced row (0174) has NO number on this product's side of
+              dispatch, which is why /book's tile prints "Crew-quoted" instead
+              of a figure.
+
+              What survives is the true and still-attractive half, in the same
+              words the booking screen now uses: the engine really does compute
+              from their own pier sections, boats and lawn rather than off a
+              flat list. */}
           <p>
             Your account is set up. Next, let&apos;s build your property profile so we can
-            price every service exact to your place.
+            price the work to what&apos;s actually on your place.
           </p>
           <div style={{ marginTop: 20 }}>
             <Link

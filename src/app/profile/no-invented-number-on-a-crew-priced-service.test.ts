@@ -129,8 +129,30 @@ describe("the wizard only changes when the service does", () => {
     }
   });
 
-  it("the recap drops 'priced exactly to your place' when something is not", () => {
+  /**
+   * THIS TEST PINNED THE LIE, AND IT IS THE MOST EXPENSIVE SHAPE THERE IS.
+   *
+   * It read `anyCrewQuoted ? "" : ", priced exactly to your place"` and
+   * asserted, correctly, that the clause is dropped when a chosen service is
+   * crew-quoted. Code, comment and test all agreed — and all three were wrong
+   * about what was being enforced. The hedge only ever answered WHO names the
+   * price. It never answered whether the number is FIRM, and on the
+   * menu-priced branch it is not: every figure in that recap descends from
+   * lakelife.html (0047 seeded $220 + $48/section straight out of the
+   * prototype, with no source note), and no crew has been onboarded to agree
+   * to one. So "priced exactly to your place" was false on exactly the branch
+   * this test protected.
+   *
+   * Updated to the new sentence rather than deleted or loosened: the BRANCH is
+   * still real and still worth pinning — it is why a crew-quoted menu says
+   * nothing about pricing and shows CREW_QUOTED_HINT instead. Only the words
+   * inside it changed, to the arithmetic half every other screen now uses.
+   */
+  it("the recap's pricing clause is about the property, not about firmness", () => {
     const src = code("components/ProfileWizard.tsx");
-    expect(src).toMatch(/anyCrewQuoted \? "" : ", priced exactly to your place"/);
+    expect(src).toMatch(/anyCrewQuoted \? "" : ", priced from what's actually on your place"/);
+    // Collapsed the other way too: the claim this replaced must not come back.
+    expect(src, "the old firmness claim is back in the recap")
+      .not.toContain("priced exactly to your place");
   });
 });

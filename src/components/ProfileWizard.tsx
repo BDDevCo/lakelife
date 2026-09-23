@@ -704,7 +704,21 @@ export function ProfileWizard({
             </div>
           ))}
           <button className="ll-btn ghost sm" onClick={addBoat}>+ Add a boat</button>
-          <PriceHint text={crewQuotes("Boat storage & winterize") ? CREW_QUOTED_HINT : `Boat storage: ${formatPrice(priceOf("Boat storage & winterize"))}/season`} />
+          {/* "/SEASON" WAS THE WRONG NOUN OVER A PER-TRIP FIGURE, and it is the
+              same money bug the booking tile just fixed, one screen earlier.
+              `Boat storage & winterize` is seeded (0047) with two frequency
+              options — "Winterize + store" and "De-winterize + launch" — and
+              `createBookingBatch` writes ONE job per booked date at this
+              price. Booking both legs of a season therefore costs twice this
+              number, so calling it the season's price understates a boat
+              owner's season by 2×.
+
+              The right noun was already in this file, in `jetHint` below,
+              where the identically-shaped `PWC lift set / pull` says "/trip"
+              — and on the pier hint above, which has said "per trip" all
+              along. The season is what the /book/storage PACKAGES sell; this
+              standalone row is a trip. */}
+          <PriceHint text={crewQuotes("Boat storage & winterize") ? CREW_QUOTED_HINT : `Boat storage: ${formatPrice(priceOf("Boat storage & winterize"))}/trip`} />
         </>
       )}
 
@@ -771,7 +785,12 @@ function jetHint(
   if (draft.jet_skis > 0) {
     parts.push(crewQuotes("Jet ski winterize & store")
       ? `Jet skis — ${CREW_QUOTED_CELL.toLowerCase()}`
-      : `Jet skis ${formatPrice(priceOf("Jet ski winterize & store"))}/season`);
+      // "/SEASON" AND "/TRIP", TWO LINES APART, FOR TWO SERVICES WITH THE SAME
+      // SHAPE. `Jet ski winterize & store` and `PWC lift set / pull` are both
+      // seeded per_section with two frequency options, and each booked date is
+      // its own job at this figure — so the jet-ski half understated a
+      // season by 2× while the PWC half beneath it was already right.
+      : `Jet skis ${formatPrice(priceOf("Jet ski winterize & store"))}/trip`);
   }
   if (draft.pwc_lifts > 0) {
     parts.push(crewQuotes("PWC lift set / pull")
@@ -818,7 +837,14 @@ export function Recap({ draft, priceOf, crewQuotes = () => false, emailCopy, onG
       <h2 style={{ fontSize: 24, margin: "10px 0 4px" }}>You&apos;re all set! 🎉</h2>
       <p className="mut" style={{ fontSize: 14, marginBottom: 12 }}>
         {draft.address ? `${draft.address} — here` : "Here"} are the services you chose
-        {anyCrewQuoted ? "" : ", priced exactly to your place"}. {emailCopyLine(emailCopy)}
+        {/* ", PRICED EXACTLY TO YOUR PLACE" — the fifth screen, and the one a
+            scanner found rather than a reader. The `anyCrewQuoted` hedge
+            beside it only ever answered WHO names the price; it never answered
+            whether the number is firm, and on a menu-priced row it is not —
+            every figure in that list descends from lakelife.html and no crew
+            has agreed to one. The arithmetic half is what survives, in the
+            same words /book, /welcome and /profile now use. */}
+        {anyCrewQuoted ? "" : ", priced from what's actually on your place"}. {emailCopyLine(emailCopy)}
       </p>
       {anyCrewQuoted && (
         <p className="mut" style={{ fontSize: 13, marginBottom: 12 }}>{CREW_QUOTED_HINT}</p>
@@ -841,9 +867,23 @@ export function Recap({ draft, priceOf, crewQuotes = () => false, emailCopy, onG
   );
 }
 
+/**
+ * THE UNIT ON THE RECAP LINE — and the fourth doorway of the same money bug.
+ *
+ * The two step hints above and the /book tile all say what one booking costs.
+ * This said "/ season" for boat storage and jet skis, which is not what the
+ * engine charges: both are seeded (0047) with two frequency options —
+ * "Winterize + store" and "De-winterize + launch" — and `createBookingBatch`
+ * writes ONE job per booked date at this figure. A season is therefore twice
+ * this number, so the recap a homeowner reads at the end of setup understated
+ * their year by 2× on exactly the services with the biggest figures.
+ *
+ * The right noun was already in this same function, on the line below: the
+ * identically-shaped pier and lift rows have said "/ trip" all along.
+ */
 function perLabel(name: string): string {
   if (name === "Housekeeping" || name === "Lawn mowing & trim") return "/ visit";
-  if (name === "Boat storage & winterize" || name === "Jet ski winterize & store") return "/ season";
+  if (name === "Boat storage & winterize" || name === "Jet ski winterize & store") return "/ trip";
   if (name.includes("Pier") || name.includes("lift")) return "/ trip";
   return "";
 }

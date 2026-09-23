@@ -22,6 +22,12 @@ import { assignAndSchedule } from "@/app/ops/actions";
 import { sendOpsMessage, draftReplyForThread } from "@/app/ops/messages-actions";
 import { RefundModal } from "@/components/ops/RefundModal";
 import { NoCrewToAssign } from "@/components/ops/JobBoard";
+// A SECOND STATEMENT FROM THE SAME MODULE, ON PURPOSE. the-override-with-
+// nobody-to-assign.test.tsx pins the line above verbatim — it is how that scan
+// proves the empty-crew sentence is imported here rather than re-typed. Folding
+// this name into it would make that guard pass on a regex that no longer
+// matches anything, which is the failure mode the scan exists to prevent.
+import { CrewRateNote } from "@/components/ops/JobBoard";
 import { toast } from "@/components/Toast";
 import type { ActiveVendor } from "@/app/ops/data";
 import { crewListsService } from "@/lib/crew-services";
@@ -120,10 +126,11 @@ function AssignModal({
 }: JobActionsProps & { onClose: () => void }) {
   const router = useRouter();
   const price = customerPrice ?? 0;
-  const suggested = vendorCost != null ? vendorCost : Math.round(price * 0.7);
-
+  // NO COMPUTED DEFAULT — the second doorway, same rule (see CrewRateNote in
+  // JobBoard.tsx). A cost already on the job is a number somebody agreed and
+  // stays; a job with none opens EMPTY rather than with `round(price × 0.7)`.
   const [chosenId, setChosenId] = useState<string>(vendorId ?? "");
-  const [cost, setCost] = useState<string>(String(suggested));
+  const [cost, setCost] = useState<string>(vendorCost != null ? String(vendorCost) : "");
   const [day, setDay] = useState<string>(date ?? "");
   const [time, setTime] = useState<string>(slot ?? "8a");
   const [busy, setBusy] = useState(false);
@@ -150,8 +157,11 @@ function AssignModal({
     );
   }
 
-  const costNum = Math.round(Number(cost) * 100) / 100;
-  const costValid = Number.isFinite(costNum) && costNum >= 0 && costNum <= price;
+  // AN EMPTY BOX IS NOT ZERO. `Number("")` is 0, which would have called an
+  // untouched field valid and let Confirm write a crew a payout of nothing.
+  const typed = cost.trim();
+  const costNum = Math.round(Number(typed) * 100) / 100;
+  const costValid = typed !== "" && Number.isFinite(costNum) && costNum >= 0 && costNum <= price;
   const marginNow = costValid ? price - costNum : 0;
   const marginPctNow = price > 0 && costValid ? Math.round((marginNow / price) * 100) : 0;
   const chosen = vendors.find((v) => v.id === chosenId) ?? null;
@@ -211,13 +221,20 @@ function AssignModal({
 
           <div className="ll-field">
             <label>Crew cost (customer pays {money.format(price)})</label>
-            <input inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} />
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginTop: 6 }}>
-              <span className="mut">Suggested {money.format(Math.round(price * 0.7))} (30% margin)</span>
-              <span style={{ color: costValid ? "var(--teal-dark)" : "var(--warn)", fontWeight: 700 }}>
-                {costValid ? `Margin ${money.format(marginNow)} · ${marginPctNow}%` : `Cost must be 0–${money.format(price)}`}
-              </span>
+            <input
+              inputMode="decimal"
+              value={cost}
+              onChange={(e) => setCost(e.target.value)}
+              placeholder="What this crew agreed to"
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", fontSize: 12.5, marginTop: 6 }}>
+              {typed !== "" && (
+                <span style={{ color: costValid ? "var(--teal-dark)" : "var(--warn)", fontWeight: 700 }}>
+                  {costValid ? `Margin ${money.format(marginNow)} · ${marginPctNow}%` : `Cost must be 0–${money.format(price)}`}
+                </span>
+              )}
             </div>
+            <CrewRateNote crew={chosen} serviceName={serviceName} />
           </div>
 
           <div style={{ display: "flex", gap: 10 }}>

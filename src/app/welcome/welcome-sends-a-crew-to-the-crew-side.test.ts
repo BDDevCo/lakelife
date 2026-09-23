@@ -8,9 +8,16 @@ import { fileURLToPath } from "node:url";
  * The invitation email links the bare site with no ?next; AuthModal sends the
  * confirmation to /auth/callback?next=/verify; VerifyPanel finishes with
  * router.push("/welcome"). So a crew invited by ops verifies their phone and
- * lands on a page whose hero says "let's build your property profile so we can
- * price every service exact to your place" — untrue for an account that exists
- * to take jobs — with both gold buttons pointing at /profile/setup.
+ * lands on a page whose hero invites them to build a property profile — untrue
+ * for an account that exists to take jobs — with both gold buttons pointing at
+ * /profile/setup.
+ *
+ * (That hero used to end "price every service exact to your place", quoted
+ * here because it was the sharpest illustration of the mismatch. It was a
+ * second lie on its own terms — no crew has agreed to any menu figure, and a
+ * crew_priced service has no figure at all — and was rewritten in the pricing
+ * sweep. This file's subject was never the pricing half, so nothing below
+ * moved; the quote is updated so the prose and the page still agree.)
  *
  * Nobody has seen it because all three production crews are fixtures. The first
  * real crew onboards this autumn, and that chain is the whole commercial

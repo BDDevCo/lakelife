@@ -3,7 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { todayLakeDate, effectiveSeason, seasonIsProvisional } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { marginPct } from "@/lib/dispatch";
-import { mustRead, mustCount } from "@/lib/must-read";
+import { mustRead } from "@/lib/must-read";
 import { isServedLake, isAwaitingPromotion, daysWaiting } from "@/lib/lake-visibility";
 
 /** The one place margin lives (rule 1): ops-only. Everything here is service-role
@@ -127,6 +127,68 @@ function netOfRefunds(
 
 const toDollars = (cents: number) => cents / 100;
 
+// ---- The fixture fence on a JOB -------------------------------------------
+
+/**
+ * A JOB COUNTS IN A REPORT ONLY IF BOTH ENDS ARE REAL PEOPLE.
+ *
+ * Nine crew doorways in this codebase already fence our own scratch accounts
+ * out by joining the OWNER's `users.is_fixture` — auto-dispatch, the coverage
+ * card, the assign dropdown, the payout batch, and the vendors read inside
+ * `computeMarginHealthRows` about three hundred lines below. The MONEY reports
+ * in this same file did not.
+ *
+ * Production holds exactly three jobs. All three are GreenEdge Lawn Co. (a
+ * fixture crew) working for a fixture homeowner, and one is a pier install at
+ * $95 — below the menu's own base, so not a price this product could have
+ * quoted. Those three rows are the whole content of "3 jobs · $339 revenue ·
+ * $115 margin · 33.9%" on the ops home screen and of the healthy teal
+ * percentages on Margin health. Every one of those figures is an average of
+ * invented work printed where a fact goes, and the panels' own empty state —
+ * "No priced jobs yet" — is the true sentence those rows were suppressing.
+ *
+ * BOTH ENDS, because either end being ours makes the money ours: a fixture
+ * crew's cost is a number we typed into a box, and a fixture household's price
+ * is a job nobody bought.
+ *
+ * POSITIVELY A FIXTURE — never "not positively real". `users.is_fixture` is
+ * `not null default false` (0126), so a real account always answers `false`,
+ * and an ABSENT embed means something else entirely: a requested job with no
+ * crew yet is the normal state of the very thing these boards exist to show.
+ * Reading absence as a fixture would delete real waiting demand from the one
+ * screen that reports it.
+ *
+ * NOT APPLIED TO THE JOB BOARD. Ops has to be able to see and work the scratch
+ * rows — the same reason the crew roster LABELS fixtures rather than hiding
+ * them (ops-fixture-fences.test.ts). `getJobBoard` carries `is_fixture` as a
+ * label so the board and these aggregates cannot silently disagree about why
+ * one shows three jobs and the other shows none.
+ */
+const CREW_FIXTURE_EMBED = "vendors(users!vendors_user_id_fkey(is_fixture))";
+/** The household half. Goes INSIDE a `properties(...)` embed a read already has —
+ *  a second `properties(...)` in one select is an ambiguous-embed error. */
+const OWNER_FIXTURE_EMBED = "users(is_fixture)";
+/** Both halves, for a read with no `properties(...)` embed of its own. */
+export const JOB_FIXTURE_EMBED = `${CREW_FIXTURE_EMBED}, properties(${OWNER_FIXTURE_EMBED})`;
+
+/** supabase-js leaves an embedded relation as object-or-array; take either. */
+function embedOne<T>(x: T | T[] | null | undefined): T | null {
+  return x == null ? null : Array.isArray(x) ? (x[0] ?? null) : x;
+}
+
+/** Is the `users` row hanging off this embed one of the accounts we invented? */
+function embeddedUserIsFixture(embed: unknown): boolean {
+  const holder = embedOne(embed) as { users?: unknown } | null;
+  const user = embedOne(holder?.users) as { is_fixture?: unknown } | null;
+  return user?.is_fixture === true;
+}
+
+/** True when EITHER end of this job — the crew's owner, or the household — is
+ *  an account we invented. The one predicate every aggregate below applies. */
+export function jobIsFixture(row: { vendors?: unknown; properties?: unknown }): boolean {
+  return embeddedUserIsFixture(row.vendors) || embeddedUserIsFixture(row.properties);
+}
+
 // ---- KPI header -----------------------------------------------------------
 
 export interface OpsSummary {
@@ -166,13 +228,20 @@ export async function getOpsSummary(): Promise<OpsSummary> {
   const admin = createServiceClient();
   const { start, end } = weekBounds();
 
-  const requestsWaiting = mustCount(
-    "the number of requests waiting",
-    await admin
-      .from("jobs")
-      .select("id", { count: "exact", head: true })
-      .eq("status", "requested"),
-  );
+  // A HEAD COUNT CANNOT BE FENCED, so this is a read. "Requests waiting" is a
+  // number a person acts on — it is the first thing on the console and it sits
+  // directly above "Ready crews: 0" — and a request from an account we
+  // invented is not work waiting on anybody. The volume here is requested jobs
+  // only, so reading the rows costs nothing the count did not.
+  const waitingRows =
+    mustRead(
+      "the requests waiting",
+      await admin
+        .from("jobs")
+        .select(`id, ${JOB_FIXTURE_EMBED}`)
+        .eq("status", "requested"),
+    ) ?? [];
+  const requestsWaiting = waitingRows.filter((r) => !jobIsFixture(r)).length;
 
   // `id` is selected so a refund can find its job. Refunds are attributed to
   // the job's week, not to the day the money went back: a week's revenue is
@@ -181,13 +250,16 @@ export async function getOpsSummary(): Promise<OpsSummary> {
   const [weekRes, refunds] = await Promise.all([
     admin
       .from("jobs")
-      .select("id, customer_price, margin")
+      .select(`id, customer_price, margin, ${JOB_FIXTURE_EMBED}`)
       .gte("date", start)
       .lte("date", end)
       .in("status", ["scheduled", "in_progress", "complete", "paid"]),
     refundsByJob(admin),
   ]);
-  const rows = mustRead("this week's jobs", weekRes) ?? [];
+  // FENCED IN JS RATHER THAN IN THE QUERY. `!inner` on the vendors embed would
+  // also drop every scheduled job that has no crew on it yet, which is a real
+  // job and real revenue; the predicate says exactly what it means instead.
+  const rows = (mustRead("this week's jobs", weekRes) ?? []).filter((r) => !jobIsFixture(r));
 
   let bookedRevenueCents = 0;
   let bookedMarginCents = 0;
@@ -240,6 +312,17 @@ export interface OpsJob {
   photo_count: number;
   min_photos: number;
   invoice_status: string | null; // 'due' | 'paid' | 'refunded' | ... — drives the Refund button + "↩ refunded" pill
+  /**
+   * EITHER END OF THIS JOB IS AN ACCOUNT WE INVENTED — a LABEL, not a fence.
+   *
+   * The aggregates in this file (the KPI strip, Revenue & margin, Margin
+   * health) exclude these rows: an average of work nobody bought is not a
+   * fact about the business. This board must still SHOW them — ops is the
+   * only person who can work or clear a scratch job — so it says so on the
+   * row instead. Without the label the console contradicts itself in one
+   * viewport: three jobs listed here, zero jobs in every number above.
+   */
+  is_fixture: boolean;
 }
 
 /**
@@ -274,8 +357,8 @@ interface JobBoardRaw {
   margin: number | null;
   vendor_id: string | null;
   services: Embed<{ name: string | null; min_photos: number | null }>;
-  properties: Embed<{ address: string | null; lakes: Embed<{ name: string | null }>; users: Embed<{ name: string | null }> }>;
-  vendors: Embed<{ company: string | null }>;
+  properties: Embed<{ address: string | null; lakes: Embed<{ name: string | null }>; users: Embed<{ name: string | null; is_fixture: boolean | null }> }>;
+  vendors: Embed<{ company: string | null; users: Embed<{ is_fixture: boolean | null }> }>;
 }
 
 export async function getJobBoard(): Promise<OpsJob[]> {
@@ -291,8 +374,12 @@ export async function getJobBoard(): Promise<OpsJob[]> {
     await admin
       .from("jobs")
       .select(
+        // The two `users(is_fixture)` embeds feed the ROW LABEL, not a fence —
+        // see OpsJob.is_fixture. The comparison added without the column is
+        // this repo's most repeated bug; both ends are selected here.
         "id, status, date, slot, frequency, service_id, customer_price, vendor_cost, margin, vendor_id, " +
-          "services(name, min_photos), properties(address, lakes(name), users(name)), vendors(company)",
+          "services(name, min_photos), properties(address, lakes(name), users(name, is_fixture)), " +
+          "vendors(company, users!vendors_user_id_fkey(is_fixture))",
       )
       // Live work in full; finished work only while somebody might still ask
       // about it. One query, so the board is still a single round trip.
@@ -357,8 +444,35 @@ export async function getJobBoard(): Promise<OpsJob[]> {
       photo_count: counts.get(r.id as string) ?? 0,
       min_photos: (svc as { min_photos?: number } | null)?.min_photos ?? 0,
       invoice_status: invoiceStatus.get(r.id as string) ?? null,
+      is_fixture: jobIsFixture(r),
     };
   });
+}
+
+/**
+ * ONE LINE OF A CREW'S OWN RATE CARD — the number THEY set, never one we did.
+ *
+ * Carried to the manual-assign modals so the box that decides a contractor's
+ * pay has something true beside it. It replaces a prefill of
+ * `round(customer_price × 0.7)` labelled "(30% margin)": a number nobody
+ * quoted, proposed as the default answer to "what do we pay this crew", on the
+ * screen ops reaches for the first time a real crew takes real work.
+ *
+ * KEYED BY SERVICE NAME, because `service_name` is the one identifier BOTH
+ * doorways already hold (the job file's modal is handed a name and no id), and
+ * it comes off `services.name` at both ends of this join — the same column,
+ * not a fuzzy match.
+ */
+export interface CrewRateCard {
+  service_name: string;
+  pricing_model: string | null;
+  base: number | null;
+  unit_rate: number | null;
+  band_pricing: Record<string, unknown> | null;
+  /** Has the crew actually put a number against this service? The same four
+   *  shapes getCrewCoverage tests (0162) — a saved row of zeroes is not a rate,
+   *  and calling one a rate is how an unpriced crew reads as priced. */
+  priced: boolean;
 }
 
 export interface ActiveVendor {
@@ -368,6 +482,8 @@ export interface ActiveVendor {
   coi_expiry: string | null;
   service_types: string[];
   daily_capacity: number;
+  /** This crew's own rate cards, one per service they have priced. */
+  rate_cards: CrewRateCard[];
 }
 
 /** All active vendors, annotated with COI validity. The assign modal filters
@@ -390,6 +506,45 @@ export async function getActiveVendors(): Promise<ActiveVendor[]> {
       .eq("users.is_fixture", false)
       .order("company", { ascending: true }),
   );
+  const vendorIds = (data ?? []).map((v) => v.id as string);
+
+  // THE CREW'S OWN NUMBER, fetched so the assign box has a fact beside it
+  // instead of a prefill. `mustRead` on purpose: an empty list renders as
+  // "no rate card on file for this service", which is a sentence ops would act
+  // on by inventing a number — exactly what a failed read must never be
+  // allowed to say.
+  const cardsByVendor = new Map<string, CrewRateCard[]>();
+  if (vendorIds.length > 0) {
+    const rateRows = mustRead(
+      "the crews' own rate cards",
+      await admin
+        .from("vendor_rates")
+        .select("vendor_id, base, unit_rate, band_pricing, services(name, pricing_model)")
+        .in("vendor_id", vendorIds),
+    );
+    for (const r of rateRows ?? []) {
+      const svc = embedOne(r.services as unknown) as { name?: string; pricing_model?: string } | null;
+      if (!svc?.name) continue;
+      const bp = (r.band_pricing ?? null) as Record<string, unknown> | null;
+      const tiers = bp?.tiers;
+      cardsByVendor.set((r.vendor_id as string), [
+        ...(cardsByVendor.get(r.vendor_id as string) ?? []),
+        {
+          service_name: svc.name,
+          pricing_model: svc.pricing_model ?? null,
+          base: r.base == null ? null : Number(r.base),
+          unit_rate: r.unit_rate == null ? null : Number(r.unit_rate),
+          band_pricing: bp,
+          priced:
+            Number(r.base ?? 0) > 0 ||
+            Number(r.unit_rate ?? 0) > 0 ||
+            typeof bp?.small === "number" ||
+            (Array.isArray(tiers) && tiers.length > 0),
+        },
+      ]);
+    }
+  }
+
   return (data ?? []).map((v) => ({
     id: v.id as string,
     company: (v.company as string) ?? null,
@@ -397,6 +552,7 @@ export async function getActiveVendors(): Promise<ActiveVendor[]> {
     coi_expiry: (v.coi_expiry as string) ?? null,
     service_types: (v.service_types as string[] | null) ?? [],
     daily_capacity: Number(v.daily_capacity ?? 0),
+    rate_cards: cardsByVendor.get(v.id as string) ?? [],
   }));
 }
 
@@ -443,11 +599,15 @@ export async function getMarginByService(): Promise<{ rows: MarginRow[]; total: 
   const [jobsRes, refunds] = await Promise.all([
     admin
       .from("jobs")
-      .select("id, customer_price, vendor_cost, margin, services(name)")
+      .select(`id, customer_price, vendor_cost, margin, services(name), ${JOB_FIXTURE_EMBED}`)
       .in("status", ["scheduled", "in_progress", "complete", "paid"]),
     refundsByJob(admin),
   ]);
-  const data = mustRead("revenue and margin by service", jobsRes);
+  // FENCED. Every priced job in production today is a fixture crew working for
+  // a fixture household, so this table's rows and its 33.9% total were an
+  // average of work nobody bought. With them out, the card's own empty state
+  // says the true thing: no priced jobs yet.
+  const data = (mustRead("revenue and margin by service", jobsRes) ?? []).filter((r) => !jobIsFixture(r));
 
   const byName = new Map<string, ServiceAcc>();
   for (const r of data ?? []) {
@@ -760,14 +920,19 @@ async function computeMarginHealthRows(
   // rows. Better the pass throws (the cron's `step` wrapper records it and the
   // other steps run on) than that it re-prices the menu off a half-read table.
   const [jobsRes, waitingRes, vendorsRes, ratesRes] = await Promise.all([
+    // FENCED, both of them, exactly as the vendors read below already is — and
+    // for the same reason. "Ready crews" was fixed by fencing the crews; the
+    // margin beside it was still computed over three fixture jobs and printed
+    // in healthy teal next to that honest red 0. The two halves of one row
+    // cannot be asking different questions about who is real.
     admin
       .from("jobs")
-      .select("customer_price, margin, service_id, services(name), properties(lake_id, lakes(name))")
+      .select(`customer_price, margin, service_id, services(name), properties(lake_id, lakes(name), ${OWNER_FIXTURE_EMBED}), ${CREW_FIXTURE_EMBED}`)
       .in("status", ["scheduled", "in_progress", "complete", "paid"])
       .not("margin", "is", null),
     admin
       .from("jobs")
-      .select("customer_price, service_id, services(name), properties(lake_id, lakes(name))")
+      .select(`customer_price, service_id, services(name), properties(lake_id, lakes(name), ${OWNER_FIXTURE_EMBED}), ${CREW_FIXTURE_EMBED}`)
       .eq("status", "requested")
       .is("vendor_id", null)
       .gte("date", today),
@@ -789,8 +954,8 @@ async function computeMarginHealthRows(
       .eq("users.is_fixture", false),
     admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"),
   ]);
-  const jobs = mustRead("the jobs behind margin health", jobsRes);
-  const waiting = mustRead("the waiting demand", waitingRes);
+  const jobs = (mustRead("the jobs behind margin health", jobsRes) ?? []).filter((r) => !jobIsFixture(r));
+  const waiting = (mustRead("the waiting demand", waitingRes) ?? []).filter((r) => !jobIsFixture(r));
   const vendors = mustRead("the active crews", vendorsRes);
   const rates = mustRead("the crews' rates", ratesRes);
 

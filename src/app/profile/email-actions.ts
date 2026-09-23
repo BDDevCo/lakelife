@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { html } from "@/lib/html-safe";
 import { ReadFailed, readFailedMessage } from "@/lib/must-read";
-import { getFullProfile, getPricedServices } from "./data";
+import { getFullProfile, getPricedServices, CREW_QUOTES_THIS } from "./data";
 import { formatPrice } from "@/lib/pricing";
 import { sendEmail } from "@/lib/email";
 
@@ -46,22 +46,43 @@ export async function sendWelcomeEmail(): Promise<{ ok: boolean; skipped?: boole
     return { ok: false, error: readFailedMessage("your profile", e) };
   }
 
-  const priceMap = new Map(services.map((s) => [s.name, s.price]));
-
-  // Only the services this customer chose.
-  const chosen = profile.wanted_services.length
-    ? profile.wanted_services
-    : services.map((s) => s.name);
-  const rows: Array<[string, string]> = chosen.map((name) => [
-    name,
-    `${formatPrice(priceMap.get(name) ?? 0)}`,
-  ]);
+  // "$0.00", IN THE FIRST EMAIL A HOMEOWNER EVER GETS.
+  //
+  // This built its rows from `wanted_services` — a list of NAMES — and looked
+  // each one up with `priceMap.get(name) ?? 0`. Two different absences both
+  // came out as a confident figure of zero:
+  //
+  //   * a crew-priced service (0174). `getPricedServices` sets `price` to
+  //     exactly 0 on those rows on purpose, because there is no menu — the
+  //     crew who takes the job names the number — and hands back `priceNote`
+  //     (CREW_QUOTES_THIS) to print instead. Every other door already reads
+  //     it: /book's tile shows "Crew-quoted", the wizard shows "Crews quote
+  //     this one". The email showed $0.00.
+  //   * a chosen name with no matching service at all — a renamed or
+  //     deactivated row, or a park resident whose wanted_services were written
+  //     by the lake-house wizard. `?? 0` turned a failed lookup into a price.
+  //
+  // So the rows are built from the SERVICES, not from the names: a name that
+  // matches nothing cannot reach the email, and a crew-priced one carries its
+  // own sentence. Order still follows the customer's own list.
+  const chosenOrder = new Map(profile.wanted_services.map((n, i) => [n, i]));
+  const rows: Array<[string, string]> = services
+    .filter((s) => chosenOrder.size === 0 || chosenOrder.has(s.name))
+    .sort((a, b) => (chosenOrder.get(a.name) ?? 0) - (chosenOrder.get(b.name) ?? 0))
+    .map((s) => [s.name, s.crewPriced ? (s.priceNote ?? CREW_QUOTES_THIS) : formatPrice(s.price)]);
 
   // THE FIRST EMAIL A HOMEOWNER EVER GETS, and it had no escaping of any kind
   // — `profile.address` is typed by them, `profile.lake` and the service names
   // come from the database. It was invisible to the first pass of this sweep
   // because it hands the body over by object shorthand (`html,`), so the
   // string `html:` never appears in the file. Shorthand is a doorway too.
+  //
+  // AND IT SAID "EVERY PRICE BELOW IS EXACT TO YOUR PROPERTY" — the same
+  // firmness claim /book, /profile/setup, /profile and /lakes/[slug] all gave
+  // up in this pass, and the only one of the five that leaves the product and
+  // lands in somebody's inbox, where it cannot be corrected later. It was
+  // false twice over: no crew has agreed to any figure under it, and the list
+  // itself can contain a service with no figure at all.
   const body = html`
   <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;color:#20343d">
     <div style="background:#0A2430;padding:20px 24px;border-radius:14px 14px 0 0">
@@ -69,7 +90,7 @@ export async function sendWelcomeEmail(): Promise<{ ok: boolean; skipped?: boole
     </div>
     <div style="border:1px solid #DCE9EC;border-top:none;border-radius:0 0 14px 14px;padding:24px">
       <h1 style="font-size:22px;margin:0 0 4px">Your place is all set${profile.address ? html`, ${profile.address}` : ""}.</h1>
-      <p style="color:#5D7681;font-size:14px;margin:0 0 18px">Every price below is exact to your property. We coordinate it all — you just pick the dates.</p>
+      <p style="color:#5D7681;font-size:14px;margin:0 0 18px">Here's what you picked, priced from what's actually on your property. We coordinate it all — you just pick the dates.</p>
       ${rows.map(([t, d]) => html`<div style="padding:10px 0;border-bottom:1px dashed #DCE9EC"><b style="font-size:14px">${t}</b><div style="color:#5D7681;font-size:13px">${d}</div></div>`)}
       <p style="color:#5D7681;font-size:12.5px;margin-top:18px">On ${profile.lake ?? "your lake"} · water work is scheduled around ice-out and the fall pull deadline automatically.</p>
     </div>

@@ -55,6 +55,41 @@ interface Season {
  */
 const CREW_QUOTED_TILE = "Crew-quoted";
 
+/**
+ * "SCHEDULE" IS THE WRONG VERB ON A SERVICE NOBODY HAS PRICED.
+ *
+ * The tile puts this button beside the figure, so on a menu-priced service it
+ * reads as "book this, at that" — which is exactly right. Beside
+ * CREW_QUOTED_TILE it read as "schedule this, at whatever", which is the
+ * defect: a control whose label promises an arrangement the screen cannot
+ * make, because no number exists on this side of dispatch. The modal behind
+ * it still books a day (that is what asking costs you, and its own footnote
+ * says so in a sentence); the label's job is to stop somebody arriving there
+ * expecting a price to be waiting.
+ */
+const CREW_QUOTED_ACTION = "Ask for a price";
+
+/**
+ * ONE FIGURE, ONE VISIT — and this sentence was already in this file, one
+ * branch away, in the several-days panel that is OFF by default.
+ *
+ * The pier tile prints its frequency options on one line ("Install (spring) ·
+ * Removal (fall)") and one figure on the next, and that figure is EACH WAY:
+ * `priceService` prices one trip, `createBookingBatch` writes one job per
+ * date, and a spring install and a fall pull are two bookings at that price.
+ * A reader seeing two seasons named above a single number reads it as the
+ * pair. ProfileWizard already says "per trip" at its own tile; the booking
+ * screen said nothing at all, and the mockup this menu descends from carries
+ * `unit: 'per visit'` on four services and "reprices from $700 to $796 per
+ * visit" on the pier.
+ *
+ * Reused rather than rewritten: the multi-day panel below calls the same
+ * helper, so the tile and the panel cannot drift into two different nouns for
+ * the same money.
+ */
+const PER_VISIT = "per visit";
+const perVisit = (price: number) => `${formatPrice(price)} ${PER_VISIT}`;
+
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DOW = ["S", "M", "T", "W", "T", "F", "S"];
 
@@ -71,9 +106,19 @@ export function BookingGrid({ services, season }: { services: Service[]; season:
             <div className="mut" style={{ fontSize: 12.5 }}>{s.frequency_options.join(" · ")}</div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14 }}>
               <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: s.crewPriced ? 15 : 20, color: s.crewPriced ? "var(--sub)" : "var(--ink)" }}>
-                {s.crewPriced ? CREW_QUOTED_TILE : formatPrice(s.price)}
+                {s.crewPriced ? CREW_QUOTED_TILE : (
+                  <>
+                    {formatPrice(s.price)}
+                    {/* The unit, not a second price: small, muted and beside the
+                        figure so "Install (spring) · Removal (fall)" above it
+                        can no longer be read as covered by one number. */}
+                    <span className="mut" style={{ fontFamily: "inherit", fontWeight: 700, fontSize: 12 }}> {PER_VISIT}</span>
+                  </>
+                )}
               </span>
-              <button className="ll-btn sm" onClick={() => setActive(s)}>Schedule</button>
+              <button className="ll-btn sm" onClick={() => setActive(s)}>
+                {s.crewPriced ? CREW_QUOTED_ACTION : "Schedule"}
+              </button>
             </div>
           </div>
         ))}
@@ -282,10 +327,14 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
       <div className="ll-modal" style={{ maxWidth: 460 }}>
         <div className="ll-modal-head">
           <div>
-            <span className="ll-pill teal">Schedule</span>
+            {/* The pill is the modal's own title, so it follows the button that
+                opened it — arriving at a pill saying "Schedule" from a tile
+                that said "Ask for a price" would undo the correction one tap
+                later. */}
+            <span className="ll-pill teal">{service.crewPriced ? CREW_QUOTED_ACTION : "Schedule"}</span>
             <h3 style={{ fontSize: 20, marginTop: 8 }}>{service.name}</h3>
             <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
-              {service.crewPriced ? service.priceNote : formatPrice(service.price)}
+              {service.crewPriced ? service.priceNote : perVisit(service.price)}
             </div>
           </div>
           <button className="ll-x" onClick={onClose} aria-label="Close">✕</button>
@@ -482,7 +531,12 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
                 </div>
               ) : (
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
-                  <b>Your price</b><b>{pickedIsRush ? formatPrice(rushAllIn) : formatPrice(service.price)}</b>
+                  {/* "Your price" over a pier booking is the price of THIS
+                      trip, and the frequency line two inches up names two
+                      seasons. The unit rides along here for the same reason it
+                      does on the tile — the modal is where somebody commits. */}
+                  <b>Your price</b>
+                  <span><b>{pickedIsRush ? formatPrice(rushAllIn) : formatPrice(service.price)}</b><span className="mut" style={{ fontSize: 12, fontWeight: 700 }}> {PER_VISIT}</span></span>
                 </div>
               )}
               {pickedIsRush && (
@@ -528,7 +582,7 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
                     <b>Your total</b><b>{formatPrice(totalPrice)}</b>
                   </div>
                   <div className="mut" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
-                    {formatPrice(service.price)} per visit{pickedIsRush ? ` · today is ${formatPrice(rushAllIn)} at the rush rate` : ""}. Each
+                    {perVisit(service.price)}{pickedIsRush ? ` · today is ${formatPrice(rushAllIn)} at the rush rate` : ""}. Each
                     one is charged only after it&apos;s done — and cancelling one visit never touches the others.
                   </div>
                 </>
@@ -633,10 +687,20 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
             </div>
           )}
 
+          {/* WHAT CONFIRMING COSTS YOU, on a service with no number on screen.
+              The tile's button now says "Ask for a price", and asking really
+              does create the job — `createBookingBatch` writes the row with
+              customer_price NULL, dispatches, and takes the figure from the
+              crew's decision (book/actions.ts). So the one place that spells
+              out what the tap does has to say that the price lands after it,
+              or the softer button label becomes its own small lie. */}
           <p className="mut" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
             {picked.length > 1
               ? `Confirming creates ${picked.length} separate requests — no standing schedule, nothing repeats. Autopay charges each one only after that visit is completed and its photos are uploaded, never before.`
               : "Confirming creates a request. Autopay charges only after the service is completed and its photos are uploaded — never before."}
+            {service.crewPriced
+              ? " The crew who picks it up sets the price, so you'll see the number after you ask, not before — and nothing is charged until the work is finished."
+              : ""}
           </p>
 
           <button className="ll-btn gold" style={{ width: "100%", marginTop: 12 }} onClick={() => confirm()} disabled={unavailable || picked.length === 0 || busy || needsSpot || needsRelease}>
@@ -647,10 +711,20 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
               : needsRelease
                 ? "Confirm you've told them we're coming"
               : picked.length > 1
-                ? `Book ${picked.length} visits — ${formatPrice(totalPrice)}`
+                // "$0" IN BOLD ON THE BUTTON THAT COMMITS. `totalPrice` is
+                // `service.price * n`, and service.price is exactly 0 on a
+                // crew-priced service — the comment beside that sum says
+                // "nothing renders it there", and this line did. The panel
+                // above already explains that each visit is quoted by its own
+                // crew, so the button counts the visits and stops.
+                ? (service.crewPriced
+                    ? `Ask for a price on ${picked.length} visits`
+                    : `Book ${picked.length} visits — ${formatPrice(totalPrice)}`)
                 : pickedIsRush
                   ? `Book today ⚡ — ${formatPrice(rushAllIn)}`
-                  : "Confirm booking"}
+                  : service.crewPriced
+                    ? CREW_QUOTED_ACTION
+                    : "Confirm booking"}
           </button>
         </div>
       </div>

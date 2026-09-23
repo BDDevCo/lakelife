@@ -61,7 +61,22 @@ export interface JobDetailRefund {
 }
 
 export interface JobDetailMoney {
-  customerPrice: number;           // the ONE all-in price
+  /**
+   * The ONE all-in price — or NULL, which is a real state and not a zero.
+   *
+   * `jobs.customer_price` is nullable (0001) and `createBookingBatch` writes
+   * NULL deliberately on the crew-priced path (0174): there is no menu, the
+   * crew who picks the job up names the figure, and it lands afterwards. This
+   * field read `Number(job.customer_price ?? 0)`, so the customer's own job
+   * page rendered "$0.00" in 26px bold under the heading "Your invoice" for
+   * every crew-quoted job between booking and dispatch — a number nobody
+   * charged, printed where a price goes, on the one screen the customer opens
+   * to find out what the work will cost.
+   *
+   * /requests already drew the same column as "—" when it was null. This is
+   * the second doorway.
+   */
+  customerPrice: number | null;
   legs: JobDetailLeg[];            // package visit: what's inside
   spring: { names: string[]; quote: number } | null;
   invoiceStatus: string | null;    // draft | due | paid | refunded
@@ -418,7 +433,7 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
     isCorrection: job.correction_of != null,
     scopeNote: (job.scope_note as string) ?? null,
     money: {
-      customerPrice: Number(job.customer_price ?? 0),
+      customerPrice: job.customer_price == null ? null : Number(job.customer_price),
       legs: breakdown?.legs ?? [],
       spring: breakdown?.spring ?? null,
       invoiceStatus: (invoice?.status as string) ?? null,

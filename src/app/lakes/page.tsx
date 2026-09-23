@@ -63,9 +63,19 @@ export default async function LakesIndexPage() {
             anywhere — dispatch.ts is blunt about it, "no COI, no jobs" —
             one all-in price, and photographs before a job counts as done.
             All three survive the week somebody signs up, which is the point
-            of writing it this way. */}
+            of writing it this way.
+
+            "PER SERVICE" DID NOT SURVIVE 0174, THOUGH. It said each SERVICE
+            has one price, which is the claim every page one click below this
+            one just gave up: a crew_priced row has no menu at all — the crew
+            who takes the job names the figure — so two crews on the same water
+            can answer the same service differently. What is true, and is what
+            the sentence was really promising, is that a JOB carries one
+            number: the customer is never handed a crew line, a materials line
+            and a LakeLife line. Nothing else in the paragraph moved. */}
         <p className="mut" style={{ fontSize: 15, marginBottom: 20 }}>
-          One all-in price per service, an independent local crew we hold to a current certificate
+          One all-in price on every job — never split into crew, materials and our share — an
+          independent local crew we hold to a current certificate
           of insurance, and photographs before any job counts as done. Don&apos;t see your lake?
           Join anyway — demand is exactly how we pick the next one. 🌊
         </p>

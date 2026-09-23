@@ -35,7 +35,13 @@
  *   they would have accepted without thinking about it.
  *
  *   IT IS PARTLY A PERCENTAGE OF OUR OWN MARGIN. The all-in price carries
- *   LakeLife's 30%. A crew's tip should not grow because our markup did.
+ *   LakeLife's share of the job as well as the crew's work, so a percentage
+ *   tip grows with our cut. (This sentence used to say "LakeLife's 30%".
+ *   There has never been a 30% column: the only enforced dial was
+ *   `margin_floor` at 0.20, a circuit breaker rather than a target, and 0174
+ *   replaced the idea altogether with two published platform-fee percentages.
+ *   The argument below does not depend on the size of the share, only on its
+ *   existence, which is why the number is gone rather than restated.)
  *
  * SO IT IS ANCHORED TO TIME ON SITE, which 0083 finally made real. Duration
  * is what a tip is actually about — somebody's afternoon — and it is the one
@@ -210,7 +216,7 @@ export function validateTip(
  *
  * Stated as a function so it is a rule with a name rather than a convention
  * somebody has to remember, and so the one place that would ever change it is
- * findable. LakeLife's 30% is on the WORK. Taking a cut of a thank-you is the
+ * findable. LakeLife's share is on the WORK. Taking a cut of a thank-you is the
  * kind of thing crews find out about and never forgive.
  */
 export function tipSplit(amount: number): { toCrew: number; toLakeLife: number } {
