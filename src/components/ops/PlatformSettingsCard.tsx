@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { updatePlatformSettings } from "@/app/ops/settings-actions";
+import { CrewStandingDial } from "@/components/ops/CrewStandingDial";
 
 /**
  * Ops pricing dials (Phase C, widened by 0174): the margin floor and surge cap
@@ -123,6 +124,13 @@ export function PlatformSettingsCard({
       <button className="ll-btn" onClick={save} disabled={pending} style={{ marginTop: 14, minHeight: 44 }}>
         {pending ? "Saving…" : "Save dials"}
       </button>
+
+      {/* THE THIRD DIAL ON THIS CARD, and the only one that is not a number
+          (0178). It saves on its own switch rather than on "Save dials"
+          because it is a decision about what crews are told about each other,
+          not a percentage — and because its own control has to show what
+          flipping it would print first. */}
+      <CrewStandingDial />
     </div>
   );
 }

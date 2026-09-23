@@ -102,6 +102,24 @@ export interface PlatformSettings {
    * jobs.fee_crew_pct.
    */
   platformFeeCrewPct: number;
+  /**
+   * IS A CREW'S STANDING SHOWN TO BUYERS? 1 = yes, 0 = no. SHIPS AT 0 (0178).
+   *
+   * Brendon, 23 September 2026: "we also dont want to hinder any crews from
+   * onboarding and staying on the platform right away, so maybe its a feature
+   * we toggle on at a later saturation date."
+   *
+   * READER: `buildCrewOffers` (app/book/crew-offers.ts) — and when this is 0 it
+   * does not compute a standing at all, so nothing leaves the server for a
+   * screen that draws nothing. WRITER: `setCrewStandingPublic`
+   * (app/ops/standing-actions.ts), the switch on the ops pricing card.
+   *
+   * Falling back to 0 is the safe direction and the same instinct as
+   * aiAutoreplyEnabled above: when we cannot read the dial we do not know
+   * whether he has decided the bench is deep enough, and the honest answer to
+   * not knowing is to print nothing about anybody.
+   */
+  crewStandingPublic: number;
 }
 
 export const DEFAULT_SETTINGS: PlatformSettings = {
@@ -152,6 +170,8 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   // (rule 8) — these are only what we fall back to when there is nothing to read.
   platformFeeCustomerPct: 0.12,
   platformFeeCrewPct: 0.12,
+  // OFF. His decision, 23 September 2026 — see the field comment.
+  crewStandingPublic: 0,
 };
 
 /** Clamp a raw stored value into a sane band; fall back on anything weird. */
@@ -169,7 +189,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       .from("platform_settings")
       .select("key, value")
       .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days", "nudge_credit_threshold", "nudge_cooldown_days", "storage_perdiem_daily", "storage_season_end_month", "storage_season_end_day", "early_payout_fee_pct", "gap_anchor_pct", "gap_min_offer", "gap_sla_hours", "fillin_digest_min", "fillin_digest_cooldown_days", "dispute_response_hours", "dispute_auto_refund_max", "dispute_fix_days", "price_autoapply_max_pct", "ai_autoreply_enabled",
-      "crew_trip_fee", "platform_fee_customer_pct", "platform_fee_crew_pct",
+      "crew_trip_fee", "platform_fee_customer_pct", "platform_fee_crew_pct", "crew_standing_public",
     ]);
     // THE FALLBACK STAYS — it is the whole design of this loader, and the one
     // dial where falling back is dangerous (aiAutoreplyEnabled) already points
@@ -219,6 +239,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       aiAutoreplyEnabled: parseSetting(byKey.get("ai_autoreply_enabled"), DEFAULT_SETTINGS.aiAutoreplyEnabled, 0, 1),
       platformFeeCustomerPct: parseSetting(byKey.get("platform_fee_customer_pct"), DEFAULT_SETTINGS.platformFeeCustomerPct, 0, 0.5),
       platformFeeCrewPct: parseSetting(byKey.get("platform_fee_crew_pct"), DEFAULT_SETTINGS.platformFeeCrewPct, 0, 0.5),
+      crewStandingPublic: parseSetting(byKey.get("crew_standing_public"), DEFAULT_SETTINGS.crewStandingPublic, 0, 1),
     };
   } catch {
     // Table missing / transient error → today's values, and note that

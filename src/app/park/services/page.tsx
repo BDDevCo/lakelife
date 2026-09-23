@@ -6,6 +6,7 @@ import { getMyPark } from "@/app/park/data";
 import { getParkServiceDesk, getParkServiceMenu, getOwnedHomes } from "@/app/park/service-actions";
 import { ParkServices } from "@/components/ParkServices";
 import { ParkOwnedHomes } from "@/components/ParkOwnedHomes";
+import { ParkInviteCrew } from "@/components/ParkInviteCrew";
 
 /**
  * WHERE "Book services for the park" FINALLY LEADS.
@@ -71,6 +72,12 @@ export default async function ParkServicesPage() {
         {desk && (
           <ParkOwnedHomes parkId={park.id} homes={homes} canEnable={desk.canEnable} />
         )}
+
+        {/* BRING YOUR OWN CREW, FOR A PARK (0178). A homeowner has had this
+            door since /book shipped; a park had none anywhere. The crew joins
+            the PLATFORM — they are not pinned to this park, and every crew who
+            can do a job shows on the Choose-your-crew screen. */}
+        <ParkInviteCrew parkId={park.id} />
       </div>
     </>
   );

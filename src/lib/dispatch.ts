@@ -96,6 +96,21 @@ export interface DispatchInput {
    * work already sold.
    */
   platformFee?: PlatformFee | null;
+  /**
+   * THE CREW THE CUSTOMER PICKED (jobs.chosen_vendor_id, 0178).
+   *
+   * Written by the offers screen when the buyer chose off a list of every crew
+   * who could take the job. CONSULTED ONLY ON THE CREW-PRICED PATH, because it
+   * is only there that the choice means anything: on a menu-priced service the
+   * price is the same whoever comes and the router picks, exactly as it always
+   * has.
+   *
+   * When it is set and that crew is no longer in the pool, the answer is
+   * `chosen_crew_unavailable` — NEVER a quiet substitution. The customer chose
+   * a name and a number; handing the job to a different crew at a different
+   * price is the one outcome that screen exists to prevent.
+   */
+  chosenVendorId?: string | null;
   crews: CrewCandidate[];
 }
 
@@ -155,7 +170,7 @@ export interface DispatchDecision {
    *  service, and not one of them can be sent on any day — still onboarding,
    *  suspended, or no certificate in date. Named apart from no_crew_on_lake
    *  because that one asserts geography, which would be a lie here. */
-  reasonNoFit?: "no_crew_for_service" | "no_crew_on_lake" | "all_full_or_blocked" | "no_qualifying_rate" | "below_floor" | "no_custody_crew" | "no_full_coverage_crew" | "no_routable_crew";
+  reasonNoFit?: "no_crew_for_service" | "no_crew_on_lake" | "all_full_or_blocked" | "no_qualifying_rate" | "below_floor" | "no_custody_crew" | "no_full_coverage_crew" | "no_routable_crew" | "chosen_crew_unavailable";
   eligibleCount?: number; // crews that cleared the hard gates (pre-rate)
 }
 
@@ -217,6 +232,25 @@ export function canEverDo(
   return true;
 }
 
+/**
+ * THE WORK-DAY HALF OF `isEligible`, ON ITS OWN — and it is exported for one
+ * reason only.
+ *
+ * `all_full_or_blocked` is the CATCH-ALL after `isEligible`, which bundles
+ * work days, day blocks, the job cap and the minute budget into a single
+ * verdict. On a platform with nothing booked, one crew working Mon–Fri makes
+ * every Saturday read "every crew who could take this is already full" — a
+ * sentence about somebody's calendar that is simply untrue, and the very lie
+ * the cold-start fix above was written to kill.
+ *
+ * The offers screen asks THIS function rather than re-testing `workDays`
+ * itself, so the sentence it prints and the gate the router applies can never
+ * drift into two different ideas of which days a crew works.
+ */
+export function worksThatWeekday(c: CrewCandidate, input: Pick<DispatchInput, "weekday">): boolean {
+  return c.workDays.includes(input.weekday);
+}
+
 export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
   // Capability, insurance, standing and geography — one shared rule.
   if (!canEverDo(c, input)) return false;
@@ -232,7 +266,7 @@ export function isEligible(c: CrewCandidate, input: DispatchInput): boolean {
     const free = (c.storageCapacityFeet ?? 0) - (c.storageCommittedFeet ?? 0);
     if (free < input.storage.boatFeet) return false;
   }
-  if (!c.workDays.includes(input.weekday)) return false;
+  if (!worksThatWeekday(c, input)) return false;
   if (c.blockedThatDay) return false;
   const cap = c.dailyCapacity > 0 ? c.dailyCapacity : 0;
   if (cap <= 0 || c.assignedThatDay >= cap) return false;
@@ -407,6 +441,7 @@ export const NO_FIT_LABEL: Record<NonNullable<DispatchDecision["reasonNoFit"]>, 
   no_qualifying_rate: "No crew here has set a rate for this work",
   below_floor: "No crew here clears the margin floor at their rate",
   no_custody_crew: "No crew here is cleared to hold a boat",
+  chosen_crew_unavailable: "The crew the customer picked can no longer take that day",
 };
 
 /**
@@ -523,8 +558,51 @@ export function decideDispatch(input: DispatchInput): DispatchDecision {
     };
   };
 
-  // Preferred crew: first right of refusal when they're in the affordable pool.
-  if (input.preferredVendorId) {
+  // ================= WHO GETS IT, AND WHO DECIDED (0178) =================
+  //
+  // Brendon, 23 September 2026: "the owner needing the service should still see
+  // all the options, if any, for the crews available and their pricing" — and,
+  // on the pricing itself, "then they make the decision."
+  //
+  // THE MENU PATH IS UNCHANGED, BYTE FOR BYTE. There is no choice to make: the
+  // price is LakeLife's and identical whoever comes, so the crew a property
+  // brought keeps its first right of refusal and the router picks otherwise.
+  //
+  // THE CREW-PRICED PATH IS WHERE THE MEANING OF `preferred_vendor` CHANGES.
+  // There, every crew quotes their own number and the customer is shown all of
+  // them side by side. First right of refusal was invisible under the old model
+  // — the router picked and the customer never saw options at all — but under a
+  // model where the customer chooses it is a soft exclusivity: the crew someone
+  // brought would take the job before the customer's own pick was consulted.
+  // So on this path preferred becomes a BADGE AND A SORT ON THE OFFERS SCREEN
+  // and nothing here. It is never a filter and never a first refusal.
+  //
+  // What DOES decide here is `chosenVendorId` — the customer's own pick. With
+  // no pick recorded (autopilot, the nightly self-heal, anything booked before
+  // the offers screen existed) the pool is ranked, exactly as it is for
+  // everyone else.
+  if (input.platformFee) {
+    if (input.chosenVendorId) {
+      const picked = affordable.find((c) => c.vendorId === input.chosenVendorId);
+      if (picked) {
+        return {
+          ok: true,
+          // `preferred` still reports the FACT — this is the crew the property
+          // brought — because the badge is drawn from it. It is no longer the
+          // reason they won; the customer choosing them is.
+          result: build(picked, picked.vendorId === input.preferredVendorId, "the crew the customer chose"),
+          eligibleCount: eligible.length,
+        };
+      }
+      // NO SILENT SUBSTITUTE. Their crew's day filled between the offers screen
+      // and the tap, or a certificate lapsed in between. Handing the job to
+      // somebody else — at somebody else's price — is exactly the swap this
+      // whole package exists to stop, so the caller is told which it was and
+      // gets to say so.
+      return { ok: false, reasonNoFit: "chosen_crew_unavailable", eligibleCount: eligible.length };
+    }
+  } else if (input.preferredVendorId) {
+    // Preferred crew: first right of refusal when they're in the affordable pool.
     const pref = affordable.find((c) => c.vendorId === input.preferredVendorId);
     if (pref) return { ok: true, result: build(pref, true, "preferred crew"), eligibleCount: eligible.length };
   }

@@ -220,6 +220,13 @@ const MAY_SEE_FIXTURES: Record<string, string> = {
   "src/app/ops/job-detail-data.ts": "ops",
   "src/app/ops/messages-data.ts": "ops",
   "src/app/ops/search-data.ts": "ops",
+  // 0178 — the offers screen and its ops dial. Both resolve a lake NAME by id
+  // to say where a crew has completed work; neither lists lakes and neither is
+  // public. The CREWS in both are already fixture-fenced through their owner
+  // (users.is_fixture), which is the fence that matters here — a fixture lake
+  // name can only appear attached to a crew that has already passed that gate.
+  "src/app/book/crew-offers.ts": "a signed-in buyer choosing a crew — names the lake a crew's finished work was on",
+  "src/app/ops/standing-actions.ts": "ops — the same lake names, previewing what the standing dial would print",
 };
 
 describe("the fixture fence", () => {

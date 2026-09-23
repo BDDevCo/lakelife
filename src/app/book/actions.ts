@@ -177,6 +177,21 @@ export interface BookingResult {
   needsVerification?: boolean;
   /** First service request: show the scroll-and-agree, retry with tosAccepted. */
   needsTos?: boolean;
+  /**
+   * WHO ACTUALLY GOT IT, ON A SINGLE-DATE BOOKING — and nothing else may be
+   * used to say so.
+   *
+   * The offers screen knew which crew the customer TAPPED and printed "Booked
+   * with Josh — $56" from its own list. A tap is not an assignment: any
+   * no-fit other than the three this function backs out of leaves the row
+   * `requested` with no crew and no price, and the customer was told somebody
+   * was coming. This is the booking's own answer — null when no crew was
+   * locked in, which is the honest "we're still lining one up".
+   *
+   * Solo bookings only, exactly like `soloAssigned` (whose value this is read
+   * from): a batch speaks for the whole list, not for one day.
+   */
+  assignedCrew?: { vendorId: string; company: string | null; customerPrice: number | null } | null;
 }
 
 export interface BatchBookingResult extends BookingResult {
@@ -200,9 +215,18 @@ export async function createBooking(
   rushFallback?: string, // same-day only: 'roll' (tomorrow at standard price) | 'cancel'
   tosAccepted?: boolean, // set by the agree modal's retry — stamps and proceeds
   pickup?: PickupSpot, // 0148: required for spring collection work
+  // 0178: the crew the customer picked off the offers screen. Crew-priced
+  // services only — on the menu path the price is the same whoever comes and
+  // the router picks, unchanged. Carried onto the job so dispatch honours the
+  // choice instead of substituting somebody else at somebody else's price.
+  chosenVendorId?: string | null,
 ): Promise<BookingResult> {
-  const res = await createBookingBatch(serviceId, [date], frequency, rushFallback, tosAccepted, pickup);
-  if (res.ok) return { ok: true };
+  const res = await createBookingBatch(serviceId, [date], frequency, rushFallback, tosAccepted, pickup, chosenVendorId);
+  // CARRIED THROUGH, because this wrapper is what the offers screen calls and
+  // that screen has no other way to know whether a crew was actually locked
+  // in. Dropping it here is what let the picker print "Booked with Josh" off
+  // its own list.
+  if (res.ok) return { ok: true, assignedCrew: res.assignedCrew ?? null };
   return {
     ok: false,
     // A one-date batch has exactly one story to tell: the batch-level error if
@@ -314,6 +338,7 @@ export async function createBookingBatch(
   rushFallback?: string, // same-day only: 'roll' (tomorrow at standard price) | 'cancel'
   tosAccepted?: boolean, // set by the agree modal's retry — stamps and proceeds
   pickup?: PickupSpot, // 0148: where the boat is, for services that ask
+  chosenVendorId?: string | null, // 0178: the crew the customer picked
 ): Promise<BatchBookingResult> {
   const supabase = await createClient();
   const {
@@ -674,6 +699,8 @@ export async function createBookingBatch(
   // Only meaningful for a one-date booking, where the text says whether a crew
   // is already locked in. A batch's text speaks for the whole list instead.
   let soloAssigned = false;
+  // Same solo-only meaning as `soloAssigned`, and overwritten beside it.
+  let soloVendorId: string | null = null;
   // ACROSS THE WHOLE BATCH. `soloAssigned` is overwritten every iteration, so
   // a three-day booking could not say how many of its days had a crew — and
   // the text called all of them "locked in" regardless.
@@ -703,6 +730,10 @@ export async function createBookingBatch(
         est_minutes: estMinutes,
         ...(day.isRush ? { is_rush: true, rush_fallback: validRushFallback(rushFallback) } : {}),
         ...pickupCols, // 0148 — empty for everything that happens at the property
+        // 0178 — ONLY ON THE CREW-PRICED PATH. On a menu-priced service there
+        // is nothing to choose between, so a choice written there would be a
+        // column with a reader that ignores it.
+        ...(crewPriced && chosenVendorId ? { chosen_vendor_id: chosenVendorId } : {}),
       })
       .select("id")
       .single();
@@ -726,7 +757,22 @@ export async function createBookingBatch(
       try {
         const outcome = await autoAssignJob(inserted.id);
         soloAssigned = outcome.assigned;
+        // THE FACT THE CONFIRMATION SCREEN IS ALLOWED TO USE. Taken from the
+        // decision that actually wrote the row, never from whatever list the
+        // caller was showing when they tapped.
+        soloVendorId = outcome.assigned ? outcome.decision.result?.vendorId ?? null : null;
         if (outcome.assigned) assignedCount += 1;
+        // THE CREW THEY PICKED CAN NO LONGER TAKE IT (0178). Between the
+        // offers screen and this tap their day filled, or a certificate
+        // lapsed. Keeping the row would leave a "finding a crew" wait that
+        // every nightly sweep refuses again for the same reason, forever —
+        // and finding a DIFFERENT crew is precisely the silent swap the
+        // offers screen exists to prevent. Back the day out and name it.
+        if (!outcome.assigned && outcome.decision.reasonNoFit === "chosen_crew_unavailable") {
+          await admin.from("jobs").delete().eq("id", inserted.id);
+          refused.push({ ...day, ok: false, reason: "That crew can't take that day any more — their day filled while you were choosing. Pick again and you'll see who's left." });
+          continue;
+        }
         if (!outcome.assigned && outcome.decision.reasonNoFit === "all_full_or_blocked") {
           await admin.from("jobs").delete().eq("id", inserted.id);
           refused.push({ ...day, ok: false, reason: "That day just filled up — pick another date." });
@@ -887,5 +933,21 @@ export async function createBookingBatch(
     });
   }
 
-  return { ok: true, booked: bookedDates, refused, headline: copy.headline, lines: copy.lines };
+  // A CREW, NAMED, ONLY WHEN ONE WAS ACTUALLY ASSIGNED. `company` is the
+  // crew's business name — the same field the offers screen already showed
+  // this customer — and the price is the row's own, not a recomputation.
+  let assignedCrew: BatchBookingResult["assignedCrew"] = null;
+  if (solo && soloAssigned && soloVendorId) {
+    const crewRes = await admin.from("vendors").select("company").eq("id", soloVendorId).maybeSingle();
+    // A failed read here loses the NAME, never the fact: they are booked
+    // either way, and "your crew" is true while a wrong name would not be.
+    if (crewRes.error) console.error("[read failed] the crew that took this booking:", crewRes.error);
+    assignedCrew = {
+      vendorId: soloVendorId,
+      company: (crewRes.data?.company as string | null) ?? null,
+      customerPrice: only.price ?? null,
+    };
+  }
+
+  return { ok: true, booked: bookedDates, refused, headline: copy.headline, lines: copy.lines, assignedCrew };
 }

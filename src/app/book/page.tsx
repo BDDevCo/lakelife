@@ -277,6 +277,24 @@ export default async function BookPage() {
           </p>
         )}
         <InviteMyCrew />
+        {/* EVERY OPTION, ON ONE SCREEN (0178). Only for work a crew prices
+            itself: on a menu-priced service the price is LakeLife's and the
+            same whoever comes, so there is nothing to choose between and
+            offering a choice would be a screen that lies. */}
+        {wanted.some((s) => s.crewPriced) && (
+          <Link href="/book/crew" style={{ textDecoration: "none", color: "inherit" }}>
+            <div className="ll-card ll-card-pad" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h3 style={{ fontSize: 17, margin: "0 0 2px" }}>See every crew and what they charge 🌊</h3>
+                <p className="mut" style={{ fontSize: 13.5, margin: 0 }}>
+                  Some of this work is priced by the crew who does it. Compare who&rsquo;s free on your
+                  day, what each one charges for your place, and pick.
+                </p>
+              </div>
+              <span aria-hidden style={{ fontSize: 18, color: "var(--sub)" }}>›</span>
+            </div>
+          </Link>
+        )}
         {(packageCount ?? 0) > 0 && (
           <Link href="/book/storage" style={{ textDecoration: "none", color: "inherit" }}>
             <div className="ll-card ll-card-pad" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>

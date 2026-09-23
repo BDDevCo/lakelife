@@ -48,8 +48,10 @@ const SRC = join(HERE, "..");
  */
 const KNOWN_DORMANT: Record<string, string> = {
   // VERIFIED HARMLESS — a thin wrapper whose real work is wired elsewhere.
-  createBooking:
-    "single-date wrapper over createBookingBatch, which the booking screens do call",
+  // createBooking WOKE UP on 23 Sep 2026: `bookWithChosenCrew`
+  // (app/book/crew-actions.ts) calls it to book the crew the customer picked
+  // off the offers screen, rather than growing a second booking doorway with
+  // its own idea of the rules.
   applyDueRentChanges:
     "wrapper over applyDueRentChangesFor, which the nightly cron and ledger-actions both call",
   previewRenewal: "called by another function inside renew-actions.ts",

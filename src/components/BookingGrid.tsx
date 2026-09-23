@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatPrice } from "@/lib/pricing";
 import { dayStatus, toISODate, isRecurring, type DayStatus } from "@/lib/booking";
@@ -685,6 +686,29 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
                 </div>
               )}
             </div>
+          )}
+
+          {/* THE CHOICE IS REACHABLE FROM THE DOORWAY THAT WOULD OTHERWISE BOOK
+              BLIND (0178).
+
+              Asking here still books the day and lets the router pick, which
+              is the honest "ask anyway" door and stays. But preferred stopped
+              being a first right of refusal on the crew-priced path, so a
+              customer who taps here now gets whichever crew ranks first, at
+              that crew's number, having never been shown that a choice existed
+              — the customer who BROUGHT a crew included. His rule is that the
+              person buying sees every option, so the option list is one tap
+              from the card that would otherwise commit them.
+
+              Deliberately placed outside the summary box: the two "Your price"
+              rows sit next to each other on purpose, and a block of links
+              between them is how the unit beside the menu figure got lost. */}
+          {service.crewPriced && (
+            <p style={{ fontSize: 13, marginTop: 10 }}>
+              <Link href={`/book/crew?service=${service.id}${picked[0] ? `&date=${picked[0]}` : ""}`}>
+                See every crew who&rsquo;s free and what each charges →
+              </Link>
+            </p>
           )}
 
           {/* WHAT CONFIRMING COSTS YOU, on a service with no number on screen.

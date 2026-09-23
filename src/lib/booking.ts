@@ -259,6 +259,17 @@ export function toISODate(d: Date): string {
 }
 
 /**
+ * THE DAY AFTER `iso`, on the calendar (never on the clock).
+ *
+ * Built on UTC arithmetic on the three numbers, so it cannot slide a day
+ * across a DST boundary the way `new Date(iso)` plus 86,400,000 can.
+ */
+export function nextDayISO(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+}
+
+/**
  * Today's date AT THE LAKES (Indiana), regardless of where the server runs.
  * Production servers run in UTC, where "today" flips at 7-8pm Indiana time —
  * using server-local time would wrongly reject evening bookings for tomorrow.

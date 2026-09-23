@@ -677,6 +677,39 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     parkRates,
   );
 
+  // ================= THE CUSTOMER'S OWN PICK, READ ON ITS OWN ==============
+  //
+  // READ SEPARATELY, AND ONLY ON THE CREW-PRICED PATH, BECAUSE OF WHAT A
+  // MISSING COLUMN DOES TO A POSTGREST SELECT.
+  //
+  // `chosen_vendor_id` arrives with 0178. Naming it in the job select above
+  // would make that select fail with 42703 on any database where the migration
+  // has not landed yet — and a failed read here returns `{assigned: false,
+  // decision: {ok: false}}` with no reasonNoFit, which the booking flow keeps
+  // as a "Finding a crew" waitlist row. So EVERY job on the platform, menu
+  // path included, would be confirmed to its customer with "we're lining up a
+  // crew" and never dispatched, with nothing on any screen saying why: a
+  // failed read rendering as a confident sentence, platform-wide.
+  //
+  // Split out, the blast radius is the crew-priced path alone. Menu bookings
+  // never read the column and are byte-for-byte unaffected by the deploy
+  // order.
+  //
+  // AND IT FAILS CLOSED. If the pick cannot be read on a crew-priced job we do
+  // NOT carry on with "no pick" — that would rank the pool and hand the job to
+  // a different crew at a different price, which is the silent swap this whole
+  // package exists to stop. No assignment, no reason invented, job stays
+  // 'requested' on ops' needs-attention board.
+  let chosenVendorId: string | null = null;
+  if (crewPriced) {
+    const pickRes = await admin.from("jobs").select("chosen_vendor_id").eq("id", jobId).maybeSingle();
+    if (pickRes.error) {
+      console.error("[read failed] the crew this customer picked:", pickRes.error);
+      return { assigned: false, decision: { ok: false } };
+    }
+    chosenVendorId = (pickRes.data?.chosen_vendor_id as string | null) ?? null;
+  }
+
   // THE JOB'S OWN THREE, NEVER THE LIVE DIAL — when it already has them.
   // A job that has been priced once recomputes from what was frozen onto it,
   // so tuning a dial tonight can never reprice work already sold. A job being
@@ -718,6 +751,10 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
     // NULL on every menu service and every park job — the menu path, byte for
     // byte. Set only when the crew's own card is the price.
     platformFee,
+    // THE CUSTOMER'S OWN PICK (0178). Written at booking by the offers screen,
+    // read by the engine only on the crew-priced path. Null on every job
+    // booked any other way, which is the ranked path, unchanged.
+    chosenVendorId,
     crews,
   };
 

@@ -103,6 +103,39 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const svc = one(job.services) as { name?: string; pricing_model?: string; takes_custody?: boolean; crew_priced?: boolean } | null;
   if (!svc?.name) return { ok: false, error: "That job isn't claimable." };
 
+  // ============ THE CUSTOMER PICKED A CREW, AND IT WASN'T YOU (0178) ========
+  //
+  // A RULE IN ONE DOORWAY OF THREE, FOUND BEFORE IT BIT. `chosen_vendor_id`
+  // had exactly one reader — the router — but three doorways attach a crew to
+  // a job, and this is one of them. A crew-priced job whose chosen crew could
+  // not be assigned stays `requested` with no vendor and no price, which is
+  // precisely the open board's own query: any crew could claim it, and the
+  // claim writes THEIR quote as the customer's bill. The buyer would have
+  // chosen Josh at $56 and been sent somebody else at their own number — the
+  // silent swap the offers screen exists to prevent, arriving by the back
+  // door.
+  //
+  // READ ON ITS OWN, AND ONLY FOR CREW-PRICED WORK, for the same reason
+  // `autoAssignJob` splits it out: the column ships with 0178, and naming it
+  // in the select above would 42703 every claim on every menu job if the code
+  // landed first. FAILS CLOSED — a pick we cannot read is not a pick that
+  // isn't there.
+  if (svc.crew_priced) {
+    const pickRes = await admin.from("jobs").select("chosen_vendor_id").eq("id", jobId).maybeSingle();
+    if (pickRes.error) {
+      return { ok: false, error: readFailedMessage("whether this customer picked a crew", pickRes.error) };
+    }
+    const pick = (pickRes.data?.chosen_vendor_id as string | null) ?? null;
+    if (pick && pick !== vendor.id) {
+      return {
+        ok: false,
+        error:
+          "This customer chose a specific crew for this one, and it isn't you. " +
+          "We can't hand their job to somebody else at a different price.",
+      };
+    }
+  }
+
   // THE ACTION IS THE BOUNDARY, NOT THE BOARD (the second doorway of the same
   // rule). getOpenJobs hides a test booking from a real crew; this refuses it,
   // so a stale page, a shared link or a replayed request cannot put a real
