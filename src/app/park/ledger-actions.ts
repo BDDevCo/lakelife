@@ -12,6 +12,7 @@ import { feesForTenancy } from "./fee-helpers";
 import {
   planRun, toRows, summarise, currentPeriod, prettyMonth, shiftMonth, nothingToBillReason,
   handKeyedRefusal, PROCESSOR_ONLY, paymentAmountRefusal, withOnAccount, onAccountClause, onAccountPromise,
+  runSkipSentence, coversMonth,
   onAccountKey, splitSiblingKey, reversalSentence, classifyForRun, type ReopenedLine, type HouseholdMoney,
   type Charge, type LedgerRow, type LedgerSummary, type RunPlan, type HandKeyedMethod, dueDayFor,
 } from "./ledger-helpers";
@@ -31,7 +32,7 @@ import { giveRefund } from "@/lib/charge-gate";
 import { remainingRefundable, refundRefusal, refundAmountRefusal, refundCents, refundSignal, type RefundablePayment } from "./refund-helpers";
 import { sendEmail } from "@/lib/email";
 import { html } from "@/lib/html-safe";
-import { receiptBody, type ReceiptLines } from "./receipt-helpers";
+import { receiptBody, receiptRef, type ReceiptLines } from "./receipt-helpers";
 import { whyItDidntGo } from "./reminder-helpers";
 import { dayInWords } from "./park-helpers";
 // The ENGINE, not the action: runCharges has already asserted membership
@@ -653,6 +654,12 @@ export async function runCharges(
       // money on account went against January 2027 and February 2027".
       onAccountClause(fromOnAccount, toOlderBills, month, { preview: "settled from money on account", older: "went" }) +
       "." +
+      // AND WHO WAS LEFT OUT. The preview's sentence named the skips ("15
+      // agreements have run out") and this one, a tap later, named only what
+      // was raised — so fifteen households and $8,137.95 of rent stopped
+      // being billed on the confirmation that said "3 bills raised" and
+      // nothing else. Same plan, same clauses (runSkipClauses).
+      runSkipSentence(plan) +
       (sharesBilled > 0
         ? ` ${sharesBilled} cost ${sharesBilled === 1 ? "share" : "shares"} you'd allocated went onto those bills.`
         : "") +
@@ -675,6 +682,40 @@ export async function runCharges(
  * held-money form already use for the same words — and it stays reversible.
  * Only `payRent` writes `card` and `ach`, with the processor's own reference.
  */
+
+/**
+ * WHETHER A HELD AGREEMENT REACHES A MONTH — asked before any sentence names
+ * that month as the one a household's money on account will come off.
+ *
+ * Held rows only (approved or active): a link somebody was closed out of
+ * bills nothing more, and a cancelled one never did. The rule itself is
+ * `coversMonth` in ledger-helpers, the same half-open test `classifyForRun`
+ * bills from, so what the promise names and what the run raises cannot
+ * disagree.
+ *
+ * A FAILED READ NAMES NO MONTH. The money is already recorded and the
+ * sentence still says it is on account; what it stops saying is which bill
+ * it comes off, which is exactly the half that could not be checked.
+ *
+ * NOT exported — see paymentDateProblem: this file carries "use server".
+ */
+async function agreementReaches(
+  admin: ReturnType<typeof createServiceClient>,
+  renterId: string | null,
+  month: string,
+): Promise<boolean> {
+  if (!renterId) return false;
+  const res = await admin
+    .from("lot_reservations")
+    .select("during")
+    .eq("renter_id", renterId)
+    .in("status", ["approved", "active"]);
+  if (res.error) {
+    console.error("[read failed] whether their agreement reaches that month:", res.error);
+    return false;
+  }
+  return (res.data ?? []).some((r) => coversMonth(parseDaterange(r.during as string), month));
+}
 
 /**
  * A 23514 IS A CHECK CONSTRAINT SAYING NO, and it will say no again. "Try
@@ -1131,8 +1172,34 @@ export async function recordPayment(
     confirmUrl: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/paid/${confirmToken}`,
   };
 
-  const monthLabel = prettyMonth((full?.period_month as string) ?? String(charge.period_month ?? ""));
-  const nextLabel = prettyMonth(shiftMonth((full?.period_month as string) ?? String(charge.period_month ?? ""), 1));
+  const thisMonth = (full?.period_month as string) ?? String(charge.period_month ?? "");
+  const monthLabel = prettyMonth(thisMonth);
+  // WHICH MONTH THE MONEY STILL HELD WILL COME OFF — two corrections to one
+  // label, both of which named a month the office then had to explain.
+  //
+  //   THE MONTH AFTER THE LAST BILL THE SETTLEMENT TOUCHED, not the month
+  // after the bill being keyed. $800 against a January bill with February
+  // also open read "$542.53 went against February 2027 — $14.94 stays on
+  // account and comes off February 2027 when you raise it": February twice,
+  // once as where the money went and once as where the remainder was going,
+  // about a bill that had just been paid in full.
+  //
+  //   AND ONLY WHEN AN AGREEMENT REACHES IT. `nothingMoreBills` asks whether
+  // the tenancy has ended; it never asks whether the paperwork covers the
+  // month being named. On 3 January a household on a lease to 1 February was
+  // told $542.53 "comes off February 2027 when you raise it", and February's
+  // run raised them no bill at all. With no agreement over that month the
+  // promise falls back to the wording the printed receipt has always used —
+  // "the next bill you raise for them" — which stays true whenever the next
+  // one is written.
+  const lastSettled = excessLines.reduce(
+    (m, l) => (l.periodMonth > m ? l.periodMonth : m),
+    thisMonth,
+  );
+  const nextMonth = shiftMonth(lastSettled, 1);
+  const nextLabel = onAccountCents > 0 && (await agreementReaches(admin, renterId, nextMonth))
+    ? prettyMonth(nextMonth)
+    : undefined;
 
   revalidatePath("/park/rent");
   // The on-account pile shows on the roll's money line too, as recordOnAccount
@@ -2036,7 +2103,9 @@ export async function reversePayment(
     // idempotency_key: how the other half of a split is found. A select
     // without it reads `undefined`, finds no sibling, and reverses half of
     // one cheque without a word — the shape this round fixed.
-    .select("id, amount, receipt_no, reversed_at, park_id, kind, charge_id, method, idempotency_key, returned_on, returned_amount")
+    // received_on: the year in the receipt's own reference (receiptRef), so
+    // the sentence names the payment the way the household's paper does.
+    .select("id, amount, receipt_no, received_on, reversed_at, park_id, kind, charge_id, method, idempotency_key, returned_on, returned_amount")
     .eq("id", paymentId)
     .eq("park_id", parkId)
     .maybeSingle();
@@ -2283,11 +2352,23 @@ export async function reversePayment(
     ...(ownAcct ? [paymentId] : []),
     ...(withSibling && sibAcct ? [sibling!.id] : []),
   ]);
+  // THE RECEIPT AS THE HOUSEHOLD READS IT. The paper they walked out with
+  // says "receipt TH-2027-0101"; this sentence said "(receipt 101)", and the
+  // office looking up a number a household quoted was looking for a
+  // different string. Same function as the paper (receiptRef), off the
+  // park's own name — a failed read names no receipt at all rather than a
+  // second spelling of it.
+  const nameRes = await admin.from("parks").select("name").eq("id", parkId).maybeSingle();
+  if (nameRes.error) console.error("[read failed] the park's name for the receipt reference:", nameRes.error);
+  const receipt = nameRes.data?.name && pay.receipt_no != null
+    ? receiptRef(String(nameRes.data.name), pay.receipt_no as number, String(pay.received_on ?? ""))
+    : null;
+
   return {
     ok: true,
     signal: reversalSentence({
       amount: whole,
-      receiptNo: (pay.receipt_no as number) ?? null,
+      receipt,
       kind: (pay.kind as string) ?? "rent",
       billMonth: !pay.charge_id && !withSibling ? null : billMonth,
       split: withSibling

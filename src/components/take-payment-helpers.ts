@@ -1,5 +1,8 @@
 import {
-  money, prettyMonth, shiftMonth, paymentAmountRefusal, onAccountPromise, HELD_DOOR, HAND_KEYED,
+  // shiftMonth went with the month this window used to name: the ⊕ note
+  // knows the bill in front of it, not whether any agreement reaches the
+  // month after it, so it names no month at all now.
+  money, prettyMonth, paymentAmountRefusal, onAccountPromise, HELD_DOOR, HAND_KEYED,
   type HandKeyedMethod,
 } from "@/app/park/ledger-helpers";
 import type { PaymentTarget } from "@/app/park/pos-actions";
@@ -141,6 +144,29 @@ function heldProjection(
 }
 
 /**
+ * WHERE AN OVER-PAYMENT ACTUALLY LANDS when they have another bill open —
+ * planned with the door's own arithmetic (planAllocations), never asserted.
+ *
+ * Only when every OTHER open bill of theirs is on the row: `olderOpen`
+ * carries the ones that settle first, `openCount` counts them all, and the
+ * ⊕ window carries the oldest bill alone — so with a newer bill off-screen
+ * there is no honest figure to name and this returns null for the caller to
+ * say so in words. Held money returns null too: it settles the same bills
+ * first, and its share is the other sentence's to describe.
+ */
+function spillPlan(t: MoneyFacts, overCents: number): { toBills: number; stays: number } | null {
+  const older = t.olderOpen ?? [];
+  if (older.length + 1 !== t.openCount) return null;
+  if (cents(t.onAccount) > 0) return null;
+  const plan = planAllocations(
+    older.map((b) => ({ ...b, renterId: THEM })),
+    [{ paymentId: "excess", renterId: THEM, remaining: overCents / 100, receivedOn: "" }],
+  );
+  const toBills = plan.reduce((n, l) => n + cents(l.amount), 0);
+  return { toBills: toBills / 100, stays: (overCents - toBills) / 100 };
+}
+
+/**
  * WHICH OF THEIR BILLS THE SPILL GOES ON. Money on account settles their
  * OLDEST open bill, so "their next open bill" is only the right word when
  * this row IS the oldest — which it always is in the ⊕ window and often is
@@ -250,12 +276,34 @@ export function amountNote(text: string, t: MoneyFacts): string | null {
   }
   const over = money((a - b) / 100);
   if (t.openCount > 1) {
-    return `${money(o.balance)} settles ${month}; the other ${over} goes against ${otherBillWords(t)}.`
-      + (held > 0 ? ` So does the ${money(t.onAccount)} of theirs already on account.` : "");
+    // WHAT ACTUALLY REACHES THE BILL. This stated the whole excess as going
+    // onto another bill without ever comparing it to what that bill owes:
+    // "$242.53 settles January 2027; the other $557.47 goes against their
+    // next open bill", after which the door put $542.53 on February and left
+    // $14.94 on account. Planned where the balances are on the row
+    // (spillPlan), and said as far as it reaches where they are not — the ⊕
+    // window carries the oldest bill and a count, not the others' figures.
+    const spill = held > 0 ? null : spillPlan(t, a - b);
+    const alsoHeld = held > 0 ? ` So does the ${money(t.onAccount)} of theirs already on account.` : "";
+    if (spill && cents(spill.stays) > 0) {
+      return (cents(spill.toBills) > 0
+        ? `${money(o.balance)} settles ${month}; ${money(spill.toBills)} of the other ${over} goes against ${otherBillWords(t)} and ${money(spill.stays)} stays on account${onAccountPromise(t.nothingMoreBills)}.`
+        : `${money(o.balance)} settles ${month}; the other ${over} goes on account${onAccountPromise(t.nothingMoreBills)}.`);
+    }
+    if (spill) return `${money(o.balance)} settles ${month}; the other ${over} goes against ${otherBillWords(t)}.`;
+    return `${money(o.balance)} settles ${month}; the other ${over} goes against ${otherBillWords(t)} — `
+      + `anything more than it owes stays on account${onAccountPromise(t.nothingMoreBills)}.`
+      + alsoHeld;
   }
-  // The month the excess comes off is the month after THIS bill — the same
-  // label recordPayment's toast names, computed the same way.
-  return `${money(o.balance)} settles ${month}; the other ${over} goes on account${onAccountPromise(t.nothingMoreBills, { next: prettyMonth(shiftMonth(o.month, 1)) })}.`
+  // NO MONTH NAMED HERE. This said "comes off February 2027", the month after
+  // this bill — true only where a held agreement reaches February. A
+  // household on a one-month lease to 1 February read exactly that at the
+  // window on 3 January, and February's run raised them no bill at all. The
+  // window knows the bill; it does not know the paperwork. The door's own
+  // toast names a month only when it has read an agreement that covers it
+  // (agreementReaches, ledger-actions); this line says the thing that is
+  // true either way — the wording the printed receipt has always used.
+  return `${money(o.balance)} settles ${month}; the other ${over} goes on account${onAccountPromise(t.nothingMoreBills)}.`
     + (held > 0 ? ` ${money(t.onAccount)} of theirs is already on account; to use it on this bill instead, put it on the bill from ${HELD_DOOR}.` : "");
 }
 

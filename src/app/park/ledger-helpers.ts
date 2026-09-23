@@ -305,7 +305,14 @@ function reopenedList(lines: readonly ReopenedLine[]): string {
  */
 export function reversalSentence(input: {
   amount: number;
-  receiptNo: number | null;
+  /**
+   * THE REFERENCE THE HOUSEHOLD IS HOLDING, not the raw number behind it.
+   * The paper says "receipt TH-2027-0101" (receiptRef); this sentence said
+   * "(receipt 101)", so a household ringing about their receipt and an
+   * office looking for it on screen were saying two different things about
+   * one row. The caller builds it with the same function the paper uses.
+   */
+  receipt: string | null;
   kind: "rent" | "deposit" | "amenity" | string;
   billMonth: string | null;
   split: { tapped: "bill" | "on_account"; onAccount: number; against: number } | null;
@@ -313,7 +320,7 @@ export function reversalSentence(input: {
   billCancelled?: boolean;
   billAmount?: number | null;
 }): string {
-  const head = `${money(input.amount)} taken back${input.receiptNo != null ? ` (receipt ${input.receiptNo})` : ""}`;
+  const head = `${money(input.amount)} taken back${input.receipt ? ` (receipt ${input.receipt})` : ""}`;
   const gone = input.hadGone.filter((l) => Math.round(l.amount * 100) > 0);
   const goneTotal = gone.reduce((s, l) => s + Math.round(l.amount * 100), 0) / 100;
   const cancelled = input.billCancelled === true && !!input.billMonth;
@@ -612,14 +619,24 @@ export function toRows(
    */
   householdMoney: ReadonlyMap<string, HouseholdMoney> = new Map(),
 ): LedgerRow[] {
-  return charges.map((c) => ({
-    ...c,
-    balance: balanceOf(c),
-    state: ledgerState(c, todayISO, lagDays, claimedChargeIds.has(c.id)),
-    overdueDays: daysBetween(c.dueOn, todayISO),
-    ...(householdMoney.get(c.id)
-      ?? { onAccount: 0, openCount: c.status === "open" ? 1 : 0, nothingMoreBills: null, olderOpen: [] }),
-  }));
+  return charges.map((c) => {
+    const state = ledgerState(c, todayISO, lagDays, claimedChargeIds.has(c.id));
+    return {
+      ...c,
+      // A CANCELLED BILL OWES NOTHING. 0169 forces a void charge's paid_total
+      // to zero, so `amount − paid_total` handed the roll the whole $542.53
+      // back as a balance — printed in the bold right-hand column that means
+      // "still owing" on every other row, while `summarise` (which skips void
+      // charges) left it out of the outstanding figure above. The column
+      // summed $8,380.48 under a card reading $7,295.42. The state already
+      // carries the fact; the money column now agrees with it.
+      balance: state === "void" ? 0 : balanceOf(c),
+      state,
+      overdueDays: daysBetween(c.dueOn, todayISO),
+      ...(householdMoney.get(c.id)
+        ?? { onAccount: 0, openCount: c.status === "open" ? 1 : 0, nothingMoreBills: null, olderOpen: [] }),
+    };
+  });
 }
 
 export interface LedgerSummary {
@@ -756,6 +773,25 @@ export interface RunCandidate {
 }
 
 /**
+ * WHETHER AN AGREEMENT REACHES A MONTH AT ALL — half-open, like the database,
+ * so a window ending on the 1st was not here that month.
+ *
+ * The ONE copy of the test. `classifyForRun` asks it to decide what the run
+ * bills; the payment doors ask it before they promise a household that money
+ * left on account "comes off February 2027", because a promise about a month
+ * no agreement reaches is a promise no run can keep — on 3 January a
+ * household whose lease ended on 1 February read exactly that, and February
+ * came and went with no bill for them.
+ */
+export function coversMonth(
+  range: { start: string; end: string } | null | undefined,
+  month: string,
+): boolean {
+  if (!range) return false;
+  return range.end > `${month}-01` && range.start < `${shiftMonth(month, 1)}-01`;
+}
+
+/**
  * Why one tenancy is billed, or why it is not. Pure, and the ONLY place the
  * question is answered — both the preview and the run read this.
  */
@@ -770,7 +806,7 @@ export function classifyForRun(
   if (c.range) {
     // Half-open, like the database: a window ending on the 1st was not here
     // this month at all.
-    const outside = c.range.end <= monthStart || c.range.start >= nextMonthStart;
+    const outside = !coversMonth(c.range, month);
     if (outside && c.status === "ended") return "movedOut";
     if (c.range.end <= monthStart) return "expired";
     if (c.range.start >= nextMonthStart) return "notYet";
@@ -830,13 +866,24 @@ export function planRun(
   const why = candidates.map((c) => classifyForRun(c, month, alreadyBilled));
 
   // FIRST PASS: what is billed, and which lots are therefore covered.
+  //
+  // AND WHICH LOTS SOMEBODY LEFT. A close-out marks the link that covered the
+  // move-out day and leaves the earlier links in the chain exactly as they
+  // were, so a household who signed in January, renewed for February and was
+  // closed out on the 10th leaves a January link that simply ran out. Without
+  // this set, March's preview counted that January link under "agreements
+  // have run out" — the count the morning screen makes from held rows alone
+  // cannot see it, so on one morning the two screens said fifteen and
+  // fourteen about one fact. Their paperwork did not lapse; they left.
   const covered = new Set<string>();
+  const departed = new Set<string>();
   candidates.forEach((c, i) => {
     if (why[i] === "already") { skippedAlreadyBilled += 1; covered.add(c.lotNumber); }
     else if (why[i] === "bill") {
       toBill.push({ reservationId: c.reservationId, lotNumber: c.lotNumber, amount: c.amount as number });
       covered.add(c.lotNumber);
     }
+    else if (why[i] === "movedOut") departed.add(c.lotNumber);
   });
 
   // SECOND PASS: the skips worth naming. A renewal leaves the prior row
@@ -850,7 +897,9 @@ export function planRun(
   const once = (list: string[], name: string) => { if (!list.includes(name)) list.push(name); };
   candidates.forEach((c, i) => {
     switch (why[i]) {
-      case "expired": if (!covered.has(c.lotNumber)) once(expired, c.lotNumber); break;
+      // `departed` as well as `covered`: see the first pass. A lot whose
+      // household was closed out has no agreement running out on it.
+      case "expired": if (!covered.has(c.lotNumber) && !departed.has(c.lotNumber)) once(expired, c.lotNumber); break;
       case "notYet": if (!covered.has(c.lotNumber)) once(notYet, c.lotNumber); break;
       case "noRent": once(noRent, c.lotNumber); break;
       case "notMonthly":
@@ -997,9 +1046,25 @@ export function runSummary(plan: RunPlan, month: string): string {
       // goes first. A PREVIEW MUST SHOW WHAT THE RUN WILL ACTUALLY DO.
       onAccountClause(plan.fromOnAccount, plan.toOlderBills ?? [], month, { preview: "already on account", older: "goes" }),
   ];
-  if (plan.skippedAlreadyBilled > 0) parts.push(`${plan.skippedAlreadyBilled} already billed`);
-  // Named in the partial line too. Ten renewed and eight not is the likelier
-  // morning, and "8 skipped — no rent set" sent him to set eight rents.
+  return [...parts, ...runSkipClauses(plan)].join(" · ");
+}
+
+/**
+ * WHO WAS LEFT OUT, AND WHY — the clauses, in one place, for the two
+ * sentences that must agree about a morning.
+ *
+ * The preview said "Bill 3 households for February 2027 — $1,627.59 · 15
+ * agreements have run out" and the run, a tap later, said "3 bills raised
+ * for February 2027 — $1,627.59. Nobody has been told." Fifteen households
+ * and $8,137.95 of rent stopped being billed between those two sentences and
+ * only the first one mentioned it. The run holds the same plan; it now reads
+ * the same clauses off it.
+ *
+ * Named in the partial line too. Ten renewed and eight not is the likelier
+ * morning, and "8 skipped — no rent set" sent him to set eight rents.
+ */
+export function runSkipClauses(plan: RunPlan): string[] {
+  const parts: string[] = [];
   if (plan.expired.length > 0) {
     const n = plan.expired.length;
     parts.push(`${n} ${n === 1 ? "agreement has" : "agreements have"} run out`);
@@ -1010,7 +1075,17 @@ export function runSummary(plan: RunPlan, month: string): string {
     const n = plan.notYet.length;
     parts.push(`${n} ${n === 1 ? "starts" : "start"} after this month`);
   }
-  return parts.join(" · ");
+  return parts;
+}
+
+/**
+ * The same clauses as a sentence, for the run's own signal — which is
+ * sentences, not the preview's "·"-separated line. Empty when nothing was
+ * skipped, so the toast is unchanged on the ordinary morning.
+ */
+export function runSkipSentence(plan: RunPlan): string {
+  const parts = runSkipClauses(plan);
+  return parts.length === 0 ? "" : ` ${parts.join(", ")}.`;
 }
 
 /**

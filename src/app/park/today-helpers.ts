@@ -105,12 +105,14 @@ const OFF_BOOK_WHAT: Record<string, string> = {
   // how many rows, so none of these may commit to a singular.
   deposit: "deposit money you're holding",
   amenity: "income from something the park rents out",
-  // A CASH-RECEIVED FIGURE, NOT A HELD ONE. This block counts every dollar
-  // that arrived this month, and money on account is applied to the
-  // household's bills the moment either exists (0167) — so "not yet put
-  // against a bill" was true of every such row until the first run spent
-  // one, and false the morning after. The label says what the figure IS.
-  rent: "money on account — counted the day it arrived, whichever bills it goes against",
+  // WHAT IS STILL ON ACCOUNT, as the held panel and the household's own
+  // screen count it — the view's `remaining`, never the amount that arrived.
+  // Counted at arrival, this line said "$1,685.06 of that is money on
+  // account" on a morning the held panel said $1,142.53 and the card's own
+  // gap was $1,142.53: the sentence whose whole job is to explain the gap
+  // was $542.53 wrong about it, because the part already spent on a bill was
+  // counted here AND in the rent line. One definition, three screens.
+  rent: "money on account — what's still held of what came in this month",
 };
 
 /** Name the kinds present, in a fixed order so the sentence never reshuffles. */
@@ -193,6 +195,14 @@ export function moneyBlock(input: {
   /** EVERY dollar received this month, bill or no bill. */
   monthToDateCents: number;
   todayCents: number;
+  /**
+   * MONEY THAT WENT BACK OUT ACROSS THE COUNTER — handed back (0168) or a
+   * deposit returned, by the day it went. On the morning the office recorded
+   * "$70.00 handed back on January 27, 2027" this screen still read "$50.00
+   * came in today" and nothing anywhere said the drawer was $20.00 down.
+   */
+  handedBackMonthCents?: number;
+  handedBackTodayCents?: number;
   /** The part of monthToDateCents with no charge behind it. */
   offBookCents?: number;
   /** Which kinds that part is made of, for the sentence. */
@@ -208,15 +218,29 @@ export function moneyBlock(input: {
   const {
     monthToDateCents, todayCents, monthSummary, lagDays, arrears,
     disputedOlder = [], today, offBookCents = 0, offBookKinds = [],
+    handedBackMonthCents = 0, handedBackTodayCents = 0,
   } = input;
 
-  const headline = monthToDateCents === 0
+  // WHAT CAME IN, AND WHAT WENT BACK OUT. The headline is every dollar
+  // received — the figure he ties to a bank statement — so a hand-back is
+  // its own clause rather than a subtraction nobody can see.
+  const headline = (monthToDateCents === 0
     ? "Nothing has come in yet this month."
-    : `${money(monthToDateCents / 100)} in so far this month.`;
+    : `${money(monthToDateCents / 100)} in so far this month.`)
+    + (handedBackMonthCents > 0 ? ` ${money(handedBackMonthCents / 100)} has been handed back.` : "");
 
   // Omitted, not zeroed. Twenty-five days a month this line would read $0.00
-  // and mean nothing at all.
-  const todayLine = todayCents === 0 ? null : `${money(todayCents / 100)} came in today.`;
+  // and mean nothing at all — but a day money went BACK out is never a quiet
+  // one, even with nothing taken in.
+  const net = todayCents - handedBackTodayCents;
+  const todayLine = todayCents === 0 && handedBackTodayCents === 0
+    ? null
+    : handedBackTodayCents === 0
+      ? `${money(todayCents / 100)} came in today.`
+      : todayCents === 0
+        ? `${money(handedBackTodayCents / 100)} went back out today, and nothing came in.`
+        : `${money(todayCents / 100)} came in today and ${money(handedBackTodayCents / 100)} went back out — `
+          + (net > 0 ? `${money(net / 100)} net in.` : net < 0 ? `${money(-net / 100)} net out.` : "nothing in net.");
 
   let arrearsLine: string | null = null;
   if (arrears.length > 0) {
@@ -239,9 +263,14 @@ export function moneyBlock(input: {
       `That is a conversation, not arrears.`;
   }
 
+  // THE SENTENCE BETWEEN THE TWO NUMBERS. "The rent line below counts bills
+  // only" was true and still left the two figures unreconciled: that line is
+  // scoped to ONE month, so money that went against an earlier month's bill
+  // is in neither it nor this clause. Saying which month it counts is the
+  // half that was missing.
   const offBookLine = offBookCents > 0
     ? `${money(offBookCents / 100)} of that is ${describeOffBook(offBookKinds)}. ` +
-      `The rent line below counts bills only.`
+      `The rent line below counts this month's bills only.`
     : null;
 
   return {
@@ -324,6 +353,8 @@ export interface TaskFacts {
   agreements: {
     reservationId: string;
     lotNumber: string;
+    /** Who the agreement is with — the key `onAccountHeld` is counted per. */
+    renterId?: string | null;
     renterName: string | null;
     /**
      * The agreement's own start — the lead is a function of its span
@@ -335,6 +366,18 @@ export interface TaskFacts {
     chainId: string | null;
     seq: number;
     hasSuccessor: boolean;
+    /**
+     * WHAT THE PARK IS STILL HOLDING FOR THIS HOUSEHOLD — the view's
+     * `remaining` (0167), the same figure the held panel and their own screen
+     * print, and zero for a household holding nothing.
+     *
+     * A LAPSED AGREEMENT STRANDS THE MONEY. Money on account comes off the
+     * next bill raised, and no bill is ever raised for a household whose
+     * paperwork ran out — so two households sat holding $542.53 each with
+     * nothing on any screen tying the held money to the reason it was stuck.
+     * The hand-back card covers households who LEFT; these had not left.
+     */
+    onAccountHeld?: number;
   }[];
   /** True when this month's charges have already been raised. */
   monthBilled: boolean;
@@ -547,6 +590,43 @@ function rank(u: TaskUrgency): number {
   return u === "overdue" ? 0 : u === "soon" ? 1 : 2;
 }
 
+/**
+ * THE MONEY A LAPSED AGREEMENT STRANDS — how many households, and how much.
+ *
+ * Money on account comes off the NEXT bill raised (0167), and a household
+ * whose paperwork has run out is raised no bill at all: the run skips them by
+ * name. So two households sat holding $542.53 each, on a morning the held
+ * panel listed both and no card anywhere tied the money to the reason it was
+ * stuck. The hand-back card is for households who LEFT; these had not left,
+ * and nobody was going to hand this back.
+ *
+ * Per HOUSEHOLD, not per agreement: `onAccountHeld` is the renter's total
+ * across the park, so a household with two lapsed links in one chain would
+ * otherwise have its money counted twice. Lots with no renter on the row are
+ * skipped rather than pooled under one blank key.
+ */
+function strandedOnAccount(
+  lapsed: readonly { renterId?: string | null; onAccountHeld?: number }[],
+): { households: number; cents: number } {
+  const per = new Map<string, number>();
+  for (const a of lapsed) {
+    const held = Math.round((a.onAccountHeld ?? 0) * 100);
+    if (!a.renterId || held <= 0) continue;
+    per.set(a.renterId, held);
+  }
+  let cents = 0;
+  for (const c of per.values()) cents += c;
+  return { households: per.size, cents };
+}
+
+/** The same fact as a sentence, and silence when there is no money stuck. */
+function strandedClause(s: { households: number; cents: number }): string {
+  if (s.households === 0 || s.cents <= 0) return "";
+  return s.households === 1
+    ? ` ${money(s.cents / 100)} of theirs is on account with no bill to come off.`
+    : ` ${s.households} of them are holding ${money(s.cents / 100)} between them, with no bill for it to come off.`;
+}
+
 export function generateTasks(f: TaskFacts): Task[] {
   const out: Task[] = [];
 
@@ -664,11 +744,22 @@ export function generateTasks(f: TaskFacts): Task[] {
   if (ending.length > 3) {
     const soonest = ending.reduce((m, a) => (a.endsOn < m ? a.endsOn : m), ending[0].endsOn);
     // LAPSED IS NOT RUNNING OUT. The per-lot branch below already says "ran
-    // out" for d < 0; this aggregate said "running out" and "the first ends"
-    // about fifteen agreements four months past their end, with nothing
-    // billed to them since. The same test, split into the two counts.
-    const lapsed = ending.filter((a) => daysBetween(f.today, a.endsOn) < 0);
+    // out"; this aggregate said "running out" and "the first ends" about
+    // fifteen agreements four months past their end, with nothing billed to
+    // them since. The same test, split into the two counts.
+    //
+    // AND THE DAY ITSELF IS PAST. `endsOn` is a half-open range's EXCLUSIVE
+    // end, so on the morning an agreement expires `daysBetween` is 0, not
+    // negative: on 1 February this card read "[soon] 14 agreements are
+    // running out — the first ends February 1, 2027", dismissible, on the
+    // same morning the run skipped all fourteen and billed them nothing. It
+    // only turned overdue on the 2nd. Zero is past, not soon.
+    const lapsed = ending.filter((a) => daysBetween(f.today, a.endsOn) <= 0);
     const running = ending.length - lapsed.length;
+    // AND THE MONEY THEY ARE STILL HOLDING FOR THEM. Once per household, in
+    // case one household has two lapsed links in the same chain — see
+    // strandedClause.
+    const stranded = strandedOnAccount(lapsed);
     out.push({
       // THE KEY CARRIES THE FACT. "Running out" and "have lapsed" were the
       // same key, so a dismissal taken on 20 January — when the card was a
@@ -688,7 +779,8 @@ export function generateTasks(f: TaskFacts): Task[] {
         : `${ending.length} agreements are running out`,
       detail: lapsed.length > 0
         ? `${lapsed.length} ${lapsed.length === 1 ? "has" : "have"} lapsed — the first on ${dayInWords(soonest)}; nothing billed since.` +
-          (running > 0 ? ` ${running} ${running === 1 ? "is" : "are"} running out.` : "")
+          (running > 0 ? ` ${running} ${running === 1 ? "is" : "are"} running out.` : "") +
+          strandedClause(stranded)
         : `The first ends ${dayInWords(soonest)}. When one lapses the rent stops being billed — quietly.`,
       urgency: lapsed.length > 0 ? "overdue" : "soon",
       dueOn: soonest,
@@ -698,20 +790,29 @@ export function generateTasks(f: TaskFacts): Task[] {
   } else {
     for (const a of ending) {
       const d = daysBetween(f.today, a.endsOn);
+      // THE LAST DAY IS EXCLUSIVE, so d === 0 is the morning the rent stops
+      // — not a day of grace. This branch printed "Lot 6's agreement ends in
+      // 0 days" and offered to dismiss it on the very morning the run
+      // skipped that lot.
+      const ranOut = d <= 0;
       out.push({
         // The same two facts under one key, a lot at a time: "ends in 12
         // days" and "ran out" were both `agreement_ending:chain-9:1`.
-        key: `agreement_ending:${a.chainId ?? a.reservationId}:${a.seq}${d < 0 ? ":ranout" : ""}`,
-        title: d < 0
+        key: `agreement_ending:${a.chainId ?? a.reservationId}:${a.seq}${ranOut ? ":ranout" : ""}`,
+        title: ranOut
           ? `Lot ${a.lotNumber}'s agreement ran out`
           : `Lot ${a.lotNumber}'s agreement ends in ${d} ${d === 1 ? "day" : "days"}`,
-        detail: a.renterName
+        detail: (a.renterName
           ? `${a.renterName} — write the next one, or their rent stops being billed.`
-          : "Write the next one, or the rent stops being billed.",
-        urgency: d < 0 ? "overdue" : "soon",
+          : "Write the next one, or the rent stops being billed.")
+          // The same money, said a lot at a time — and only once it has
+          // actually run out. While an agreement is still running the money
+          // is not stranded: the next run takes it off the next bill.
+          + strandedClause(ranOut ? strandedOnAccount([a]) : { households: 0, cents: 0 }),
+        urgency: ranOut ? "overdue" : "soon",
         dueOn: a.endsOn,
         href: "/park/today",
-        canDismiss: d >= 0,
+        canDismiss: !ranOut,
       });
     }
   }

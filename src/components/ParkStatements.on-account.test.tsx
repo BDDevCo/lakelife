@@ -175,6 +175,25 @@ describe("dates a person reads on this screen are words", () => {
     expect(own.length).toBeGreaterThan(40);
     expect(own).not.toMatch(/2026-12-\d\d/);
   });
+
+  // AND THE PART-PERIOD SENTENCE, which every test above this one missed
+  // because they all ask for a month that is over. `open` is `to >= today`,
+  // so this paragraph is the NORMAL state of the month being lived in — and
+  // it printed `2027-01-31` two lines under the same date rendered through
+  // longDate on the card above it.
+  it("the part-period sentence, on a window that has not finished", () => {
+    const jan = monthPeriod("2027-01", "2027-01-31")!;
+    expect(jan.open).toBe(true);
+    const open = page([acct({ receivedOn: "2027-01-03" })], [], {
+      period: jan, summary: summariseReceipts([], jan), today: "2027-01-31",
+    });
+    const w = renderToStaticMarkup(
+      <ParkStatements parkId="park-haven" page={open} today="2027-01-31" />,
+    ).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+    expect(w).toMatch(/This window isn&#x27;t finished yet\./);
+    expect(w).toMatch(/More money can still come in before January 31, 2027, so this is a part-period/);
+    expect(w).not.toMatch(/2027-01-31/);
+  });
 });
 
 /**

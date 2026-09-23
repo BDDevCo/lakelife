@@ -278,7 +278,11 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const payments = mustRead(
     "the money that's come in",
     await admin.from("park_payments")
-      .select("id, charge_id, kind, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason, returned_at, return_code")
+      // returned_on / returned_amount: money handed back across the counter
+    // (0168) and deposits given back. `returned_at` is the BANK pulling a
+    // payment back and is filtered out below; these two are the office's own
+    // hand, and nothing on this screen knew about them.
+    .select("id, charge_id, kind, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason, returned_at, return_code, returned_on, returned_amount")
       .eq("park_id", parkId)
       .is("reversed_at", null)
       // MONEY THE BANK PULLED BACK IS NOT MONEY THAT CAME IN. This screen
@@ -337,13 +341,62 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const sumCents = (rows: typeof offBook) =>
     rows.reduce((n, p) => n + cents(p.amount), 0);
 
+  // WHAT WENT BACK OUT, by the day it went. A hand-back (0168) leaves
+  // `reversed_at` and `returned_at` null — it is neither a bounce nor a bank
+  // return — so every read on this screen counted the money as still in the
+  // drawer. On the morning the office recorded "$70.00 handed back on
+  // January 27, 2027" Today read "$50.00 came in today" and nothing said the
+  // counter was $20.00 down.
+  const handedBackIn = (from: string, to: string) =>
+    (payments ?? [])
+      .filter((p) => {
+        const on = (p.returned_on as string | null) ?? null;
+        return on != null && on >= from && on <= to;
+      })
+      .reduce((n, p) => n + cents(p.returned_amount), 0);
+  const handedBackMonthCents = handedBackIn(monthStart, today);
+  const handedBackTodayCents = handedBackIn(today, today);
+
+  // WHAT IS STILL ON ACCOUNT of the money that arrived this month — the
+  // view's `remaining`, the figure the held panel and the household's own
+  // screen both sum (0167/0168/0169). Counted at ARRIVAL, the off-book line
+  // said "$1,685.06 of that is money on account" beside a held panel reading
+  // $1,142.53: the part already put against a bill was counted here and in
+  // the rent line at once. Deposits and amenity income are not in the view
+  // and are not on account — they keep their own arrival figure.
+  const acctRes = await admin
+    .from("park_on_account_payments")
+    .select("payment_id, remaining, received_on")
+    .eq("park_id", parkId)
+    .gt("remaining", 0);
+  // A failed read here would understate money the office is holding, which is
+  // the one figure on this card a household can contradict — it throws to the
+  // boundary like every other read on this screen.
+  const acctRows = mustRead("the money households have on account", acctRes) ?? [];
+  const remainingOf = new Map(acctRows.map((r) => [r.payment_id as string, cents(r.remaining)]));
+  const onAccountCentsIn = (rows: typeof offBook) =>
+    rows.reduce((n, p) => n + (
+      (p.kind as string) === "rent" || p.kind == null
+        ? (remainingOf.get(p.id as string) ?? 0)
+        : cents(p.amount)
+    ), 0);
+
   const money = moneyBlock({
     // EVERY dollar received, which is the only version of this number he can
     // tie to a bank statement. The split is named on its own line below.
     monthToDateCents: mtd.totalCents + sumCents(offMonth),
     todayCents: cashToday.totalCents + sumCents(offToday),
-    offBookCents: sumCents(offMonth),
-    offBookKinds: [...new Set(offMonth.map((p) => (p.kind as string) ?? "rent"))],
+    handedBackMonthCents,
+    handedBackTodayCents,
+    // Held, not arrived — see onAccountCentsIn. The kinds are still the kinds
+    // that arrived: a cheque wholly spent on a bill adds $0 here and names
+    // nothing, because `describeOffBook` is only read when the figure is > 0.
+    offBookCents: onAccountCentsIn(offMonth),
+    offBookKinds: [...new Set(offMonth.filter((p) => (
+      (p.kind as string) === "rent" || p.kind == null
+        ? (remainingOf.get(p.id as string) ?? 0) > 0
+        : cents(p.amount) > 0
+    )).map((p) => (p.kind as string) ?? "rent"))],
     monthSummary,
     lagDays,
     arrears,
@@ -388,6 +441,9 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     return [{
       reservationId: s.id as string,
       lotNumber: lotName.get(s.park_lot_id as string) ?? "?",
+      // The household, not just their name: what the park is holding for
+      // them is counted per renter (strandedOnAccount).
+      renterId: (s.renter_id as string | null) ?? null,
       renterName: renterName.get(s.renter_id as string) ?? null,
       // Both ends: the card's lead is the agreement's own span (R2).
       startsOn: r.start,
@@ -494,6 +550,23 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   }
   const heldForDeparted = [...departed.values()].filter((h) => h.onAccount > 0 || h.depositsHeld > 0);
 
+  // AND WHAT IS HELD FOR HOUSEHOLDS WHO HAVE NOT LEFT. `heldForDeparted`
+  // above is the hand-back list — it is keyed on a move-out day, so a
+  // household still living here whose agreement simply RAN OUT is not on it:
+  // no bill is ever raised for them, the money on account has nothing to come
+  // off, and on the morning of 1 February two households sat holding $542.53
+  // each with nothing on this screen tying the one fact to the other. The
+  // agreements card says it now, off the same view's `remaining` the held
+  // panel prints (one definition, three screens).
+  const heldByRenter = new Map<string, number>();
+  for (const r of held.onAccount) {
+    if (!r.renterId || r.tenancyEnded || r.remaining <= 0) continue;
+    heldByRenter.set(
+      r.renterId,
+      Math.round(((heldByRenter.get(r.renterId) ?? 0) + r.remaining) * 100) / 100,
+    );
+  }
+
   // The last week of evening checks. Absence is the alarm.
   // ABSENCE IS THE ALARM HERE, which is exactly why a failed read must not
   // look like absence — it would report the nightly check as dead on a night
@@ -517,7 +590,10 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     // and, until now, consumed only by the readiness checklist — so the
     // seller's tax and December sewer were raised as overdue on closing day.
     cutoverOn,
-    agreements,
+    agreements: agreements.map((a) => ({
+      ...a,
+      onAccountHeld: (a.renterId && heldByRenter.get(a.renterId)) || 0,
+    })),
     monthBilled: monthRows.length > 0,
     liveOccupiedLots: occupiedLotIds.size,
     // A holdover is a CURRENT tenancy written as grandfathered — somebody

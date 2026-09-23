@@ -189,9 +189,13 @@ export function ParkStatements({
 
         {page.period.open && (
           <p style={{ fontSize: 13, marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>
+            {/* THE SAME DATE, TWICE, TWO WAYS. This printed `2027-01-31` two
+                lines under the very date rendered through longDate on the
+                card above — and `open` is `to >= today`, so it is the normal
+                state of the month being lived in, not an edge case. */}
             <strong>This window isn&apos;t finished yet.</strong> More money can still
-            come in before {page.period.to}, so this is a part-period — the file
-            is named that way too.
+            come in before {longDate(page.period.to)}, so this is a part-period — the
+            file is named that way too.
           </p>
         )}
 

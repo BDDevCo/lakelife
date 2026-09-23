@@ -76,6 +76,44 @@ describe("the money block", () => {
     expect(b.todayLine).toBe("$455.00 came in today.");
   });
 
+  // A HAND-BACK IS MONEY OUT OF THE DRAWER AND THIS SCREEN DID NOT KNOW IT.
+  // A hand-back (0168) leaves `reversed_at` and `returned_at` null — it is
+  // neither a bounce nor a bank return — so every figure here counted the
+  // money as still in. On the morning the office recorded "$70.00 handed
+  // back on January 27, 2027" Today read "$50.00 came in today" and nothing
+  // anywhere said the counter was $20.00 down on the day.
+  it("says what went back out, in the month and on the day", () => {
+    const b = moneyBlock({
+      monthToDateCents: 5_000, todayCents: 5_000, handedBackMonthCents: 7_000,
+      handedBackTodayCents: 7_000, monthSummary: empty,
+      lagDays: 3, arrears: [], today: TODAY,
+    });
+    expect(b.headline).toBe("$50.00 in so far this month. $70.00 has been handed back.");
+    expect(b.todayLine).toBe("$50.00 came in today and $70.00 went back out — $20.00 net out.");
+  });
+
+  it("a day with only a hand-back on it is never a quiet day", () => {
+    const b = moneyBlock({
+      monthToDateCents: 5_000, todayCents: 0, handedBackMonthCents: 7_000,
+      handedBackTodayCents: 7_000, monthSummary: empty,
+      lagDays: 3, arrears: [], today: TODAY,
+    });
+    // The old rule — omit the line when today took nothing — would have said
+    // nothing at all on the one morning it most needed to.
+    expect(b.todayLine).toBe("$70.00 went back out today, and nothing came in.");
+  });
+
+  it("keeps its ordinary words on a day nothing went back", () => {
+    const b = moneyBlock({
+      monthToDateCents: 5_000, todayCents: 5_000, handedBackMonthCents: 0,
+      handedBackTodayCents: 0, monthSummary: empty,
+      lagDays: 3, arrears: [], today: TODAY,
+    });
+    expect(b.headline).toBe("$50.00 in so far this month.");
+    expect(b.headline).not.toMatch(/handed back/);
+    expect(b.todayLine).toBe("$50.00 came in today.");
+  });
+
   it("surfaces older months the single-month ledger cannot see", () => {
     // getLedger is scoped to one period_month, so arrears from June are
     // structurally invisible to it. This is the only place they appear.
@@ -247,6 +285,69 @@ describe("the to-do list", () => {
     const [soon] = generateTasks(facts({ today: "2027-06-25", currentMonth: "2027-06", agreements: [...running, { ...running[0], reservationId: "r2", lotNumber: "2", chainId: "c2" }] }));
     expect(soon.title).toBe("4 agreements are running out");
     expect(soon.urgency).toBe("soon");
+  });
+
+  // MONEY HELD FOR A LAPSED HOUSEHOLD HAD NO CARD AT ALL. Two households sat
+  // holding $542.53 each whose agreements ran out on 1 February: the held
+  // panel listed the money, the agreements card named the lapse, and nothing
+  // anywhere said the one was the reason the other could not move. Money on
+  // account comes off the NEXT bill raised, and no bill is ever raised for a
+  // household whose paperwork ran out.
+  it("names the money a lapsed agreement strands, and stays quiet when none is", () => {
+    const lapsed = (i: number, held: number) => ({
+      reservationId: `l${i}`, lotNumber: String(i + 1), renterId: `p${i}`, renterName: null,
+      startsOn: "2027-01-01", endsOn: "2027-02-01", chainId: `ch${i}`, seq: 1,
+      hasSuccessor: false, onAccountHeld: held,
+    });
+    // Fourteen lapsed, two of them holding $542.53 each.
+    const many = Array.from({ length: 14 }, (_, i) => lapsed(i, i < 2 ? 542.53 : 0));
+    const [t] = generateTasks(facts({ today: "2027-02-01", currentMonth: "2027-02", agreements: many }));
+    expect(t.title).toBe("14 agreements have lapsed");
+    expect(t.detail).toBe(
+      "14 have lapsed — the first on February 1, 2027; nothing billed since."
+      + " 2 of them are holding $1,085.06 between them, with no bill for it to come off.",
+    );
+    // Nobody holding anything: the clause is absent, not zeroed.
+    const [none] = generateTasks(facts({
+      today: "2027-02-01", currentMonth: "2027-02",
+      agreements: many.map((a) => ({ ...a, onAccountHeld: 0 })),
+    }));
+    expect(none.detail).toBe("14 have lapsed — the first on February 1, 2027; nothing billed since.");
+    expect(none.detail).not.toMatch(/on account/);
+  });
+
+  it("counts the stranded money once per household, and says it a lot at a time", () => {
+    // ONE household, TWO lapsed links in the same chain — `onAccountHeld` is
+    // the renter's total across the park, so adding it per agreement would
+    // print $1,085.06 for a household holding $542.53.
+    const twoLinks = [1, 2].map((seq) => ({
+      reservationId: `r${seq}`, lotNumber: "14", renterId: "p1", renterName: "Doris",
+      startsOn: "2027-01-01", endsOn: "2027-02-01", chainId: "ch1", seq,
+      hasSuccessor: false, onAccountHeld: 542.53,
+    }));
+    const four = [...twoLinks, ...[3, 4].map((i) => ({
+      reservationId: `r${i}`, lotNumber: String(i), renterId: `p${i}`, renterName: null,
+      startsOn: "2027-01-01", endsOn: "2027-02-01", chainId: `ch${i}`, seq: 1,
+      hasSuccessor: false, onAccountHeld: 0,
+    }))];
+    const [agg] = generateTasks(facts({ today: "2027-02-01", currentMonth: "2027-02", agreements: four }));
+    expect(agg.detail).toMatch(/\$542\.53 of theirs is on account with no bill to come off\.$/);
+
+    // The per-lot branch says the same thing about one household.
+    const [one] = generateTasks(facts({ today: "2027-02-01", currentMonth: "2027-02", agreements: [twoLinks[0]] }));
+    expect(one.title).toBe("Lot 14's agreement ran out");
+    expect(one.detail).toBe(
+      "Doris — write the next one, or their rent stops being billed."
+      + " $542.53 of theirs is on account with no bill to come off.",
+    );
+    // STILL RUNNING IS NOT STRANDED: the next run takes it off the next bill,
+    // so the clause belongs only to an agreement that has actually run out.
+    const [soon] = generateTasks(facts({
+      today: "2027-01-25", currentMonth: "2027-01",
+      agreements: [{ ...twoLinks[0], seq: 1 }],
+    }));
+    expect(soon.title).toBe("Lot 14's agreement ends in 7 days");
+    expect(soon.detail).toBe("Doris — write the next one, or their rent stops being billed.");
   });
 
   // R2 — THE CARD ASKS WITH THE SAME LEAD AS THE LIST IT LINKS TO. The lead
@@ -1375,7 +1476,7 @@ describe("money that arrived without a bill behind it", () => {
     });
     expect(b.headline).toBe("$4,842.00 in so far this month.");
     expect(b.offBookLine).toBe(
-      "$500.00 of that is deposit money you're holding. The rent line below counts bills only.",
+      "$500.00 of that is deposit money you're holding. The rent line below counts this month's bills only.",
     );
   });
 
@@ -1391,15 +1492,15 @@ describe("money that arrived without a bill behind it", () => {
     // The caller passes which KINDS are present, not how many rows, so a
     // sentence saying "a deposit" would be wrong the moment there are two.
     expect(describeOffBook(["deposit"])).toBe("deposit money you're holding");
-    expect(describeOffBook(["rent"])).toBe("money on account — counted the day it arrived, whichever bills it goes against");
+    expect(describeOffBook(["rent"])).toBe("money on account — what's still held of what came in this month");
     expect(describeOffBook(["amenity"])).toBe("income from something the park rents out");
     expect(describeOffBook(["rent", "deposit"])).toBe(
-      "deposit money you're holding and money on account — counted the day it arrived, whichever bills it goes against",
+      "deposit money you're holding and money on account — what's still held of what came in this month",
     );
     // Order comes from the list, not from whatever order the rows arrived in.
     expect(describeOffBook(["rent", "deposit"])).toBe(describeOffBook(["deposit", "rent"]));
     expect(describeOffBook(["amenity", "deposit", "rent"])).toBe(
-      "deposit money you're holding, income from something the park rents out and money on account — counted the day it arrived, whichever bills it goes against",
+      "deposit money you're holding, income from something the park rents out and money on account — what's still held of what came in this month",
     );
   });
 
@@ -1490,6 +1591,58 @@ describe("the read behind it", () => {
     expect(src).toMatch(/const chains = latestSeqByChain\(\s*\(everyRow \?\? \[\]\)\.map/);
     expect(src).toMatch(/const agreements = stays\.flatMap/);
     expect(src).toMatch(/noticed: stays\s*\.filter/);
+  });
+
+  // THE CALLER IS THE HALF THAT WAS MISSING. `onAccountHeld` is a column
+  // with no writer unless this loader fills it, and it must be filled from
+  // the ONE definition of "on account" — the view's `remaining` (0167), the
+  // figure the held panel and the household's own screen both print — and
+  // only for households who have NOT left, because a household who moved out
+  // is already named on the hand-back card and would otherwise be counted on
+  // two cards at once.
+  it("hands the agreements card what is still held, per household, for tenancies that have not ended", () => {
+    expect(src).toContain("for (const r of held.onAccount) {");
+    expect(src).toContain("if (!r.renterId || r.tenancyEnded || r.remaining <= 0) continue;");
+    expect(src).toMatch(/heldByRenter\.set\(\s*r\.renterId,/);
+    expect(src).toMatch(/\(heldByRenter\.get\(r\.renterId\) \?\? 0\) \+ r\.remaining/);
+    // And it reaches generateTasks on the agreement, keyed on the renter.
+    expect(src).toMatch(/agreements: agreements\.map\(\(a\) => \(\{[\s\S]{0,160}onAccountHeld: \(a\.renterId && heldByRenter\.get\(a\.renterId\)\) \|\| 0,/);
+    // The agreement fact carries the renter at all — without it the money
+    // could only be pooled under a blank key.
+    expect(src).toMatch(/renterId: \(s\.renter_id as string \| null\) \?\? null,/);
+    // NOT the arrival figure: `amount` is the receipt's number and would
+    // name money already spent on a bill.
+    expect(src).not.toMatch(/heldByRenter[\s\S]{0,200}r\.amount/);
+  });
+
+  // THE TWO FIGURES ON THAT CARD, AT THEIR SOURCE. `handedBackMonthCents`
+  // and `offBookCents` are columns with no writer unless this loader fills
+  // them — and each has exactly one honest source: the hand-back's own day
+  // and amount (0168), and the view's `remaining` (0167), which is what the
+  // held panel and the household's own screen already print.
+  it("counts a hand-back by the day it went out, off the row's own columns", () => {
+    // `returned_at` is the BANK pulling a payment back and is a different
+    // fact; these two are the office's own hand across the counter.
+    const read = src.split("\n").join(" ").match(/from\("park_payments"\)\s*\.select\("([^"]*)"\)/);
+    expect(read).not.toBeNull();
+    expect(read![1].split(", ")).toEqual(expect.arrayContaining(["returned_on", "returned_amount"]));
+    expect(src).toMatch(/const handedBackIn = \(from: string, to: string\) =>/);
+    expect(src).toContain("return on != null && on >= from && on <= to;");
+    expect(src).toMatch(/\.reduce\(\(n, p\) => n \+ cents\(p\.returned_amount\), 0\)/);
+    expect(src).toContain("const handedBackTodayCents = handedBackIn(today, today);");
+    expect(src).toMatch(/handedBackMonthCents,\s*handedBackTodayCents,/);
+  });
+
+  it("the money-on-account line counts what is STILL held, never what arrived", () => {
+    expect(src).toContain('.from("park_on_account_payments")');
+    expect(src).toMatch(/const remainingOf = new Map\(acctRows\.map\(\(r\) => \[r\.payment_id as string, cents\(r\.remaining\)\]\)\)/);
+    expect(src).toContain("offBookCents: onAccountCentsIn(offMonth),");
+    // The old shape, by name: the arrival figure counted the part already
+    // spent on a bill here AND in the rent line below it.
+    expect(src).not.toContain("offBookCents: sumCents(offMonth),");
+    // A failed read of the held money throws to the boundary like every
+    // other read on this screen — an empty map would understate it silently.
+    expect(src).toMatch(/mustRead\("the money households have on account", acctRes\)/);
   });
 
   it("asks the park for its payments, not the bills for theirs", () => {

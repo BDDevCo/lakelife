@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { receiptBody } from "./receipt-helpers";
+import { receiptBody, receiptRef } from "./receipt-helpers";
 import { runSummary, prettyMonth } from "./ledger-helpers";
 
 /**
@@ -281,6 +281,15 @@ const {
 
 const PARK = "park-haven";
 const TODAY = CLOCK;
+/**
+ * THE REFERENCE ON THE HOUSEHOLD'S OWN PAPER. The reversal toast used to say
+ * "(receipt 101)" while the receipt in their hand said "TH-2027-0101", so a
+ * household ringing about a receipt and an office looking for it were
+ * quoting two different strings for one row. Built here the way the paper
+ * builds it — one of the expectations below spells the shape out in full.
+ */
+const ref = (p: { receipt_no?: unknown; received_on?: unknown }) =>
+  receiptRef("The Haven", Number(p.receipt_no), String(p.received_on));
 /** The Haven's real lots — no lot 3, no lot 8. */
 const HAVEN = ["1", "2", "6", "7", "9", "10", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "26"];
 
@@ -449,6 +458,11 @@ describe("more than the bill is split, not credited and not refused", () => {
 
   it("says both lines, and where the second one is", async () => {
     janBill("9");
+    // THE AGREEMENT THE PROMISE IS KEYED ON. "Comes off February 2027" is
+    // only true where a held agreement reaches February; this fixture had no
+    // tenancy row at all, so the branch it pinned was the one no household
+    // is in. The lapsed shape is pinned in its own test below.
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-07-01)")];
     const res = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "form-key");
     // THE RUN APPLIES IT NOW (0167), so the sentence may say it comes off
     // February. The promise is the shared clause (onAccountPromise), word
@@ -534,6 +548,11 @@ describe("more than the bill is split, not credited and not refused", () => {
     // The trigger keys on the charge the row was recorded against; this one
     // was recorded against none. Without this the claim stays open forever on
     // a settled bill, and the only two answers left are both wrong.
+    // THE AGREEMENT THE PROMISE IS KEYED ON. "Comes off February 2027" is
+    // only true where a held agreement reaches February; this fixture had no
+    // tenancy row at all, so the branch it pinned was the one no household
+    // is in. The lapsed shape is pinned in its own test below.
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-07-01)")];
     janBill("9", { paid_total: 542.53, status: "paid" });
     db.park_payment_claims.push({
       id: "claim-1", charge_id: "charge-9", method: "cash", reference: null, resolved_at: null,
@@ -557,6 +576,8 @@ describe("more than the bill is split, not credited and not refused", () => {
     // the same cash gets keyed twice. But the claim is still open, the bill
     // still reads disputed and nothing chases it, and "received… on account"
     // alone renders that failed write as success.
+    // A held agreement over February, so the promise names it — see above.
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-07-01)")];
     janBill("9", { paid_total: 542.53, status: "paid" });
     db.park_payment_claims.push({
       id: "claim-1", charge_id: "charge-9", method: "cash", reference: null, resolved_at: null,
@@ -689,6 +710,65 @@ describe("both billing doors sort their skips the same way", () => {
     expect(run.raised).toBe(10);
     expect(db.park_charges.map((c) => c.reservation_id)).toEqual(HAVEN.slice(0, 10).map((n) => `feb-${n}`));
     expect(db.park_charges.every((c) => c.amount === 542.53)).toBe(true);
+    // AND THE RUN'S OWN SENTENCE SAYS WHAT THE PREVIEW SAID. It named only
+    // what it raised, so on the morning eight households stopped being
+    // billed the confirmation read "10 bills raised … Nobody has been told."
+    // and nothing else. Same plan, same clause.
+    expect(run.signal).toBe(
+      "10 bills raised for February 2027 — $5,425.30. 8 agreements have run out. Nobody has been told.",
+    );
+  });
+
+  it("nothing skipped: the run's sentence gains no clause at all", async () => {
+    db.lot_reservations = [
+      ...HAVEN.map((n) => stay(n, `jan-${n}`, JAN)),
+      ...HAVEN.map((n) => stay(n, `feb-${n}`, FEB)),
+    ];
+    // The condition collapsed the other way: every agreement renewed, so the
+    // skip sentence must be absent rather than a "0 agreements" clause.
+    const run = await runCharges(PARK, "2027-02");
+    expect(run.signal).toBe("18 bills raised for February 2027 — $9,765.54. Nobody has been told.");
+    expect(run.signal).not.toMatch(/run out|no rent set|not paid monthly|after this month/);
+  });
+
+  it("several causes at once: the run names each, in the preview's own order", async () => {
+    db.lot_reservations = [
+      stay("1", "feb-1", FEB),                                              // billed
+      stay("2", "jan-2", JAN),                                              // ran out
+      stay("6", "feb-6", FEB, { term: "annual", quoted_amount: 3600 }),     // not monthly
+      stay("7", "feb-7", FEB, { quoted_amount: null }),                     // no rent set
+      stay("9", "mar-9", "[2027-03-01,2027-04-01)"),                        // starts later
+    ];
+    const pre = await previewChargeRun(PARK, "2027-02");
+    const run = await runCharges(PARK, "2027-02");
+    expect(run.raised).toBe(1);
+    // The preview's clauses, in the preview's order, as sentences.
+    expect(runSummary(pre.plan!, "2027-02")).toBe(
+      "Bill 1 household for February 2027 — $542.53 · 1 agreement has run out · 1 not paid monthly · 1 skipped — no rent set · 1 starts after this month",
+    );
+    expect(run.signal).toBe(
+      "1 bill raised for February 2027 — $542.53. 1 agreement has run out, 1 not paid monthly, 1 skipped — no rent set, 1 starts after this month. Nobody has been told.",
+    );
+  });
+
+  it("a household who was closed out has no agreement running out on their lot", async () => {
+    // A close-out marks the link that covered the move-out day and leaves
+    // the earlier links alone, so the January link of a household who left
+    // in February was counted under "agreements have run out" on the March
+    // preview — while the morning screen, which reads held rows only, could
+    // not see it at all. Fifteen and fourteen, about one fact.
+    db.lot_reservations = [
+      stay("1", "jan-1", JAN),
+      stay("1", "feb-1", "[2027-02-01,2027-02-11)", { status: "ended", moved_out_on: "2027-02-10" }),
+      stay("2", "jan-2", JAN),          // genuinely lapsed — nobody left
+    ];
+    const pre = await previewChargeRun(PARK, "2027-03");
+    expect(pre.plan!.expired, "lot 1 did not lapse; they left").toEqual(["2"]);
+    // Collapsed the other way: without the close-out, lot 1 IS a lapse.
+    reset();
+    db.lot_reservations = [stay("1", "jan-1", JAN), stay("2", "jan-2", JAN)];
+    const both = await previewChargeRun(PARK, "2027-03");
+    expect(both.plan!.expired).toEqual(["1", "2"]);
   });
 
   it("all renewed: no skip anywhere, and the second run finds nothing to do", async () => {
@@ -1070,7 +1150,12 @@ describe("recordPayment's promise about the excess is decided on the tenancy", (
       `$600.00 received — $542.53 against December 2026, $57.47 on account — nothing more bills for them, so it's theirs to have back from ${DOOR} on the Rent screen.`,
     );
     expect(res.signal).not.toMatch(/comes off|when you raise it/);
-    expect(reads("lot_reservations"), "the fact is read once").toBe(1);
+    // TWO READS, TWO FACTS: whether anything more bills for them
+    // (tenancyFactsFor) and — only when a month would be named — whether an
+    // agreement of theirs reaches it. This branch names no month, so the
+    // second read decides nothing; it is still made, because the excess
+    // exists and the label is computed before the promise chooses its shape.
+    expect(reads("lot_reservations"), "the tenancy fact is read once, the coverage once").toBe(2);
 
     // The other branch: an older bill still open takes $40 of the excess,
     // and what is left is theirs to have back.
@@ -1094,7 +1179,7 @@ describe("recordPayment's promise about the excess is decided on the tenancy", (
       "$600.00 received — $542.53 against December 2026, $57.47 on account and comes off January 2027 when you raise it.",
     );
     expect(res.signal).not.toMatch(/theirs to have back|nothing more bills/);
-    expect(reads("lot_reservations")).toBe(1);
+    expect(reads("lot_reservations")).toBe(2);
   });
 
   it("the tenancy could not be read: the money is on account and NO promise is made either way", async () => {
@@ -1126,6 +1211,53 @@ describe("recordPayment's promise about the excess is decided on the tenancy", (
     const part = await recordPayment(PARK, "charge-dec", 200, "cash", "", TODAY, "", "form-key");
     expect(part.signal).toBe("Recorded. $342.53 still outstanding.");
     expect(reads("lot_reservations")).toBe(0);
+  });
+
+  it("names a month only when an agreement of theirs reaches it", async () => {
+    // THE LAPSE THE PROMISE COULD NOT SEE. Lot 14 is on a one-month lease to
+    // 1 February. On 3 January the office took $1,085.06 at the window and
+    // the screen said "$542.53 on account and comes off February 2027 when
+    // you raise it"; February's run raised them no bill at all, because
+    // their agreement had run out on the 1st. `nothingMoreBills` asks only
+    // whether the tenancy ENDED — nobody moved out here, so it says no.
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-02-01)")];
+    janBill("9");
+    const res = await recordPayment(PARK, "charge-9", 1085.06, "check", "1042", TODAY, "", "form-key");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      "$1,085.06 received — $542.53 against January 2027, $542.53 on account and comes off the next bill you raise for them.",
+    );
+    expect(res.signal).not.toMatch(/February 2027/);
+
+    // COLLAPSED THE OTHER WAY: renew them through June and February is named
+    // again — the fallback is the absence of an agreement, not the wording.
+    reset();
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-06-01)")];
+    janBill("9");
+    const renewed = await recordPayment(PARK, "charge-9", 1085.06, "check", "1042", TODAY, "", "form-key");
+    expect(renewed.signal).toBe(
+      "$1,085.06 received — $542.53 against January 2027, $542.53 on account and comes off February 2027 when you raise it.",
+    );
+  });
+
+  it("the month is the one after the LAST bill the money reached, not after the bill keyed", async () => {
+    // $800 handed over against a $242.53 part-month January with February
+    // open — the shape the close-out leaves behind (0169). The
+    // excess settles February in full, and the $14.94 left was promised to
+    // "February 2027" — the month it had just paid off, named twice in one
+    // sentence with two different meanings.
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-07-01)")];
+    janBill("9", { amount: 242.53 });
+    db.park_charges.push({
+      id: "charge-feb", park_id: PARK, park_lot_id: "lot-9", renter_id: "renter-9", reservation_id: "jan-9",
+      period_month: "2027-02", due_on: "2027-02-01", amount: 542.53, paid_total: 0, status: "open",
+    });
+    const res = await recordPayment(PARK, "charge-9", 800, "check", "1042", TODAY, "", "form-key");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      "$800.00 received — $242.53 against January 2027, $557.47 on account. " +
+      "Of that, $542.53 went against February 2027 — $14.94 stays on account and comes off March 2027 when you raise it.",
+    );
   });
 
   it("is the shared clause, from the one helper — no private copy of the promise in this door", () => {
@@ -1249,7 +1381,7 @@ describe("taking back money that had been put against bills", () => {
     const res = await reversePayment(PARK, ahead.id as string, "the cheque bounced");
     expect(res.ok).toBe(true);
     expect(res.signal).toBe(
-      `$1,627.59 taken back (receipt ${ahead.receipt_no}). It had been put against January 2027, February 2027 and March 2027 — those bills are outstanding again, and the record shows why.`,
+      `$1,627.59 taken back (receipt ${ref(ahead)}). It had been put against January 2027, February 2027 and March 2027 — those bills are outstanding again, and the record shows why.`,
     );
     expect(db.park_charges.map((c) => [c.period_month, c.paid_total, c.status])).toEqual([
       ["2027-01", 0, "open"], ["2027-02", 0, "open"], ["2027-03", 0, "open"],
@@ -1285,7 +1417,7 @@ describe("taking back money that had been put against bills", () => {
     await recordPayment(PARK, "charge-9", 542.53, "check", "1042", TODAY, "", "form-9");
     const bill = db.park_payments.find((p) => p.charge_id === "charge-9")!;
     const res = await reversePayment(PARK, bill.id as string, "the cheque bounced");
-    expect(res.signal).toBe(`$542.53 taken back (receipt ${bill.receipt_no}). The January 2027 bill is outstanding again, and the record shows why.`);
+    expect(res.signal).toBe(`$542.53 taken back (receipt ${ref(bill)}). The January 2027 bill is outstanding again, and the record shows why.`);
     expect(db.park_charges[0].status).toBe("open");
     expect(updated).toHaveLength(1);
   });
@@ -1321,7 +1453,7 @@ describe("taking back a split cheque takes back both halves", () => {
     const res = await reversePayment(PARK, bill.id as string, "the cheque bounced");
     expect(res.ok).toBe(true);
     expect(res.signal).toBe(
-      `$600.00 taken back (receipt ${bill.receipt_no}) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. ` +
+      `$600.00 taken back (receipt ${ref(bill)}) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. ` +
       "The January 2027 bill is outstanding again, and $57.47 of the on-account half had been put against February 2027 — that bill is outstanding again too. The record shows why.",
     );
     // Both rows, one update, one reason, one timestamp.
@@ -1344,7 +1476,7 @@ describe("taking back a split cheque takes back both halves", () => {
     const res = await reversePayment(PARK, acct.id as string, "keyed twice");
     expect(res.ok).toBe(true);
     expect(res.signal).toBe(
-      `$600.00 taken back (receipt ${acct.receipt_no}) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. ` +
+      `$600.00 taken back (receipt ${ref(acct)}) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. ` +
       "The January 2027 bill is outstanding again, and $57.47 of the on-account half had been put against February 2027 — that bill is outstanding again too. The record shows why.",
     );
     expect(bill.reversed_at).toBe(acct.reversed_at);
@@ -1359,7 +1491,7 @@ describe("taking back a split cheque takes back both halves", () => {
     const bill = db.park_payments.find((p) => p.charge_id === "charge-9")!;
     const res = await reversePayment(PARK, bill.id as string, "the cheque bounced");
     expect(res.signal).toBe(
-      `$600.00 taken back (receipt ${bill.receipt_no}) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. ` +
+      `$600.00 taken back (receipt ${ref(bill)}) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. ` +
       "The January 2027 bill is outstanding again. The record shows why.",
     );
     expect(db.park_payments.filter((p) => p.reversed_at != null)).toHaveLength(2);
@@ -1383,7 +1515,7 @@ describe("taking back a split cheque takes back both halves", () => {
     janBill("9");
     db.park_payments.push({ id: "other", park_id: PARK, renter_id: "renter-9", charge_id: "charge-9", kind: "rent", amount: 542.53, method: "cash", received_on: "2027-01-04", reversed_at: null, returned_at: null, idempotency_key: "form-own" });
     const res = await reversePayment(PARK, own.id as string, "typo");
-    expect(res.signal).toMatch(/^\$542\.53 taken back \(receipt \d+\)\. It's off the household's account, and the record shows why\.$/);
+    expect(res.signal).toMatch(/^\$542\.53 taken back \(receipt TH-\d{4}-\d{4}\)\. It's off the household's account, and the record shows why\.$/);
     expect(db.park_payments.find((p) => p.id === "other")!.reversed_at).toBeNull();
   });
 
@@ -1405,7 +1537,7 @@ describe("taking back a split cheque takes back both halves", () => {
     beforeUpdate = { table: "park_payments", act: () => { second.acct.reversed_at = "2027-01-20T10:00:00Z"; second.acct.reversed_reason = "elsewhere"; } };
     const alone = await reversePayment(PARK, second.bill.id as string, "the cheque bounced");
     expect(alone.ok).toBe(true);
-    expect(alone.signal).toBe(`$542.53 taken back (receipt ${second.bill.receipt_no}). The January 2027 bill is outstanding again, and the record shows why.`);
+    expect(alone.signal).toBe(`$542.53 taken back (receipt ${ref(second.bill)}). The January 2027 bill is outstanding again, and the record shows why.`);
     expect(alone.signal).not.toMatch(/both halves|February/);
     expect(second.acct.reversed_reason).toBe("elsewhere");
   });
@@ -1414,7 +1546,7 @@ describe("taking back a split cheque takes back both halves", () => {
     const { bill, acct } = await splitThenFebruary();
     acct.reversed_at = "2027-01-20T10:00:00Z"; acct.reversed_reason = "typo";
     const res = await reversePayment(PARK, bill.id as string, "the cheque bounced");
-    expect(res.signal).toBe(`$542.53 taken back (receipt ${bill.receipt_no}). The January 2027 bill is outstanding again, and the record shows why.`);
+    expect(res.signal).toBe(`$542.53 taken back (receipt ${ref(bill)}). The January 2027 bill is outstanding again, and the record shows why.`);
     expect(acct.reversed_reason).toBe("typo");
   });
 
@@ -1635,6 +1767,11 @@ describe("money on account settles the oldest open bill first, wherever it is ap
 
   it("recordPayment: the excess of a split settles an OLDER open bill the moment it is recorded, and the paper household is told", async () => {
     janBill("9");                                                    // January, open
+    // THE AGREEMENT THE PROMISE IS KEYED ON. "Comes off February 2027" is
+    // only true where a held agreement reaches February; this fixture had no
+    // tenancy row at all, so the branch it pinned was the one no household
+    // is in. The lapsed shape is pinned in its own test below.
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-07-01)")];
     db.park_charges.push({ ...janBill("9", { id: "charge-dec", period_month: "2026-12", due_on: "2026-12-01", amount: 40 }) });
     db.park_charges.pop();                                           // janBill pushed it already
     const res = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "form-key");
@@ -1731,6 +1868,11 @@ describe("money on account settles the oldest open bill first, wherever it is ap
 
   it("the excess of a split still never pays the bill it came in over, and with nothing older open it waits for the run", async () => {
     janBill("9");
+    // THE AGREEMENT THE PROMISE IS KEYED ON. "Comes off February 2027" is
+    // only true where a held agreement reaches February; this fixture had no
+    // tenancy row at all, so the branch it pinned was the one no household
+    // is in. The lapsed shape is pinned in its own test below.
+    db.lot_reservations = [stay("9", "jan-9", "[2027-01-01,2027-07-01)")];
     const res = await recordPayment(PARK, "charge-9", 600, "check", "1042", TODAY, "", "form-key");
     expect(db.park_payment_allocations).toHaveLength(0);
     // …and with nothing older open, the by-hand door is not offered either:
@@ -2059,7 +2201,7 @@ describe("a row against a cancelled bill is money on account", () => {
     // verbs. The cancelled bill by its amount; the re-raise by its amount
     // and its own frozen basis — both read off park_charges, never pay.amount.
     expect(res.signal).toBe(
-      "$542.53 taken back (receipt 12). January 2027's $542.53 bill was already cancelled, so nothing reopens on it; " +
+      "$542.53 taken back (receipt TH-2027-0012). January 2027's $542.53 bill was already cancelled, so nothing reopens on it; " +
       "it had been put against the $472.53 bill raised again for January 2027 (27 of 31 days) — that one is outstanding again, and the record shows why.",
     );
     expect(res.signal).not.toMatch(/The January 2027 bill is outstanding again|against January 2027 —/);
@@ -2080,7 +2222,7 @@ describe("a row against a cancelled bill is money on account", () => {
     const res = await reversePayment(PARK, "rel", "the cheque bounced");
     expect(res.ok, res.error).toBe(true);
     expect(res.signal).toBe(
-      "$600.00 taken back (receipt 12) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. " +
+      "$600.00 taken back (receipt TH-2027-0012) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. " +
       "January 2027's $542.53 bill was already cancelled, so nothing reopens on it, and $530.00 of it had been put against the $472.53 bill raised again for January 2027 (27 of 31 days) and February 2027 — those bills are outstanding again too. The record shows why.",
     );
     expect(updated.filter((u) => u.table === "park_payments")).toHaveLength(1);
@@ -2096,7 +2238,7 @@ describe("a row against a cancelled bill is money on account", () => {
     const fromSib = await reversePayment(PARK, "sib", "keyed twice");
     expect(fromSib.ok, fromSib.error).toBe(true);
     expect(fromSib.signal).toBe(
-      "$600.00 taken back (receipt 13) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. " +
+      "$600.00 taken back (receipt TH-2027-0013) — both halves of it, the $542.53 against January 2027 and the $57.47 on account. " +
       "January 2027's $542.53 bill was already cancelled, so nothing reopens on it, and $472.53 of it had been put against the $472.53 bill raised again for January 2027 (27 of 31 days) — that one is outstanding again too. The record shows why.",
     );
     expect(fromSib.signal).not.toMatch(/The January 2027 bill is outstanding again/);

@@ -87,16 +87,25 @@ describe("amountNote", () => {
   it("less is a part payment, and says what will still be owing", () => {
     expect(amountNote("342.53", bill())).toBe("Part of January 2027 — $200.00 will still be owing.");
   });
-  it("more goes on account when this is their only open bill — and names the month it comes off, the one the door's toast names", () => {
-    expect(amountNote("600", bill())).toBe("$542.53 settles January 2027; the other $57.47 goes on account and comes off February 2027 when you raise it.");
-    // December's excess comes off January: the month after THIS bill, whatever today is.
+  it("more goes on account, and names no month — the window knows the bill, not the paperwork", () => {
+    // This named the month after the bill ("comes off February 2027"), which
+    // is true only where a held agreement reaches February. A household on a
+    // one-month lease to 1 February read it at the window on 3 January and
+    // February's run raised them nothing. The door's toast names a month
+    // only after reading an agreement that covers it; this line makes the
+    // claim that is true either way.
+    expect(amountNote("600", bill())).toBe("$542.53 settles January 2027; the other $57.47 goes on account and comes off the next bill you raise for them.");
+    expect(amountNote("600", bill())).not.toMatch(/February 2027|when you raise it/);
     expect(amountNote("600", bill({ oldestOpen: { chargeId: "dec", month: "2026-12", balance: 542.53, disputed: false } })))
-      .toBe("$542.53 settles December 2026; the other $57.47 goes on account and comes off January 2027 when you raise it.");
+      .toBe("$542.53 settles December 2026; the other $57.47 goes on account and comes off the next bill you raise for them.");
   });
   it("more goes against their next open bill when they have another — money on account settles it now", () => {
+    // WHAT REACHES IT, NOT THE WHOLE EXCESS. The window carries the oldest
+    // bill and a count, never the other bill's balance, so the excess is
+    // said as what it covers — $557.47 named as "goes against their next
+    // open bill" put $542.53 on February and left $14.94 on account.
     expect(amountNote("1085.06", bill({ openCount: 2 })))
-      .toBe("$542.53 settles January 2027; the other $542.53 goes against their next open bill.");
-    expect(amountNote("1085.06", bill({ openCount: 2 }))).not.toMatch(/on account/);
+      .toBe("$542.53 settles January 2027; the other $542.53 goes against their next open bill — anything more than it owes stays on account and comes off the next bill you raise for them.");
   });
   it("nothing owed goes on account", () => {
     expect(amountNote("200", none)).toBe("Nothing is owed, so this goes on account and comes off the next bill you raise for them.");
@@ -130,13 +139,13 @@ describe("amountNote", () => {
       expect(note).not.toMatch(/comes off/);
       // On no lot with the final month NOT billed, the same over-payment keeps the promise.
       expect(amountNote("600", bill({ lotNumber: "—", nothingMoreBills: false })))
-        .toBe("$542.53 settles January 2027; the other $57.47 goes on account and comes off February 2027 when you raise it.");
+        .toBe("$542.53 settles January 2027; the other $57.47 goes on account and comes off the next bill you raise for them.");
       expect(amountNote("600", bill({ nothingMoreBills: null })))
         .toBe("$542.53 settles January 2027; the other $57.47 goes on account.");
     });
     it("with another bill open the excess goes against it now, whatever the tenancy", () => {
       expect(amountNote("1085.06", gone({ oldestOpen: bill().oldestOpen, openCount: 2 })))
-        .toBe("$542.53 settles January 2027; the other $542.53 goes against their next open bill.");
+        .toBe(`$542.53 settles January 2027; the other $542.53 goes against their next open bill — anything more than it owes stays on account — nothing more bills for them, so it's theirs to have back from ${DOOR} on the Rent screen.`);
     });
   });
 
@@ -183,9 +192,9 @@ describe("amountNote", () => {
     });
     it("an over-payment names the held money and the door beside the split", () => {
       expect(amountNote("600", bill({ onAccount: 542.53 })))
-        .toBe(`$542.53 settles January 2027; the other $57.47 goes on account and comes off February 2027 when you raise it. $542.53 of theirs is already on account; to use it on this bill instead, put it on the bill from ${DOOR}.`);
+        .toBe(`$542.53 settles January 2027; the other $57.47 goes on account and comes off the next bill you raise for them. $542.53 of theirs is already on account; to use it on this bill instead, put it on the bill from ${DOOR}.`);
       expect(amountNote("1085.06", bill({ onAccount: 200, openCount: 2 })))
-        .toBe("$542.53 settles January 2027; the other $542.53 goes against their next open bill. So does the $200.00 of theirs already on account.");
+        .toBe("$542.53 settles January 2027; the other $542.53 goes against their next open bill — anything more than it owes stays on account and comes off the next bill you raise for them. So does the $200.00 of theirs already on account.");
     });
     it("the exact-amount and over sentences are unchanged with nothing held", () => {
       expect(amountNote("542.53", bill({ onAccount: 0 }))).toBe("Settles January 2027.");
@@ -257,8 +266,25 @@ describe("amountNote", () => {
         .toContain("goes against their next open bill instead");
       expect(amountNote("400", feb({ onAccount: 0, olderOpen: olderJan(180.65) })))
         .toBe("$297.51 settles February 2027; the other $102.49 goes against their oldest open bill.");
+      // With the older bill's balance on the row the spill is PLANNED and
+      // reaches it in full; without it the sentence says what it covers.
       expect(amountNote("400", feb({ onAccount: 0 })))
-        .toBe("$297.51 settles February 2027; the other $102.49 goes against their next open bill.");
+        .toBe("$297.51 settles February 2027; the other $102.49 goes against their next open bill — anything more than it owes stays on account and comes off the next bill you raise for them.");
+    });
+
+    it("an over-payment bigger than the older bill is split in the words, planned not asserted", () => {
+      // The whole excess used to be stated as going onto a bill: "$297.51
+      // settles February 2027; the other $200.00 goes against their oldest
+      // open bill", after which $19.35 of it was still on account. Every
+      // other open bill of theirs is on this row (openCount 2, one older),
+      // so the note plans it with the door's own function.
+      expect(amountNote("497.51", feb({ onAccount: 0, olderOpen: olderJan(180.65) })))
+        .toBe("$297.51 settles February 2027; $180.65 of the other $200.00 goes against their oldest open bill and $19.35 stays on account and comes off the next bill you raise for them.");
+      // Collapsed: an older bill big enough to take all of it keeps the
+      // plain sentence, with nothing promised about a remainder there isn't.
+      const whole = amountNote("497.51", feb({ onAccount: 0, olderOpen: olderJan(400) }));
+      expect(whole).toBe("$297.51 settles February 2027; the other $200.00 goes against their oldest open bill.");
+      expect(whole).not.toMatch(/stays on account/);
     });
 
     it("an older list that owes nothing leaves every sentence exactly as it was", () => {
@@ -294,8 +320,8 @@ describe("the promise under the amount is onAccountPromise's, not this file's", 
     expect(amountNote("200", unknown())).toBe(`Nothing is owed, so this goes on account${onAccountPromise(null)}.`);
   });
 
-  it("an over-payment on the only open bill: the month after the bill, the way recordPayment's toast says it", () => {
-    contains(amountNote("600", bill()), onAccountPromise(false, { next: "February 2027" }));
+  it("an over-payment on the only open bill: the promise, with no month this line cannot check", () => {
+    contains(amountNote("600", bill()), onAccountPromise(false));
     contains(amountNote("600", gone({ oldestOpen: bill().oldestOpen, openCount: 1 })), onAccountPromise(true));
     expect(amountNote("600", bill({ nothingMoreBills: null }))).toBe(`$542.53 settles January 2027; the other $57.47 goes on account${onAccountPromise(null)}.`);
   });
