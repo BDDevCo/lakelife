@@ -96,7 +96,11 @@ export async function inviteMyContractor(company: string, email: string): Promis
   // Create the unclaimed crew invite, then bind it as this property's preferred crew.
   const { data: created, error: insErr } = await admin
     .from("vendors")
-    .insert({ company: co, invite_email: addr, service_types: [], daily_capacity: 1, status: "invited", invited_by: user.id })
+    // NULL, NOT 1 — the same rule as inviteCrew (app/ops/crews-invite.ts). A
+    // seeded 1 already satisfies activationGaps, so the wizard's step 5 renders
+    // ticked with a "Saved ✓" pill for a number the crew never chose, they never
+    // open it, and dispatch then caps them at one job a day forever.
+    .insert({ company: co, invite_email: addr, service_types: [], daily_capacity: null, status: "invited", invited_by: user.id })
     .select("id")
     .single();
   if (insErr || !created) return { ok: false, error: insErr?.message ?? "Couldn't send the invite." };

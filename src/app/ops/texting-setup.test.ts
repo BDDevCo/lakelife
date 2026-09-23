@@ -239,7 +239,11 @@ describe("the page is gated, and says which fact it read", () => {
   });
 
   it("has a branch for a failed Twilio read that does not say 'nothing failed'", () => {
-    expect(PAGE).toMatch(/if \(!log\.window\)/);
+    // The branch moved into one helper (deliveryVerdict, ops/sms-health.ts)
+    // when the footer checklist was found asserting "the log shows nothing
+    // delivered" on a log it had just failed to read. The page must still take
+    // that branch by name, and still say so in words.
+    expect(PAGE).toMatch(/verdict\.state === "unreadable"/);
     expect(PAGE).toMatch(/couldn&apos;t reach Twilio/);
   });
 

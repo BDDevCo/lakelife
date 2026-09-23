@@ -265,7 +265,9 @@ async function reconcileOnePark(
       .from("park_machine_runs")
       .update({ ok: false, error: message, finished_at: new Date().toISOString() })
       .eq("park_id", parkId).eq("run_on", today).eq("runner", runner);
-    return { findings: [], error: `${parkId}: ${message}` };
+    // The caller prefixes the park's NAME. Prefixing the id here as well put a
+    // raw UUID in the digest beside lines that read "The Haven: …".
+    return { findings: [], error: message };
   }
 }
 
@@ -288,7 +290,7 @@ export async function runParkNightly(): Promise<ParkRunResult> {
     for (const f of res.findings) {
       if (f.urgent) urgent.push(`${(p.name as string) ?? "A park"}: ${f.line}`);
     }
-    if (res.error) errors.push(res.error);
+    if (res.error) errors.push(`${(p.name as string) ?? "A park"}: ${res.error}`);
   }
 
   return { ok: errors.length === 0, parks: (parks ?? []).length, findings, errors, urgent };

@@ -335,26 +335,60 @@ export async function cancelRequest(jobId: string): Promise<CancelResult> {
       // A NON-ATTEMPT IS NOT A DECLINE (see charge-gate). With no processor
       // connected nobody's card was asked, so there is no attempt to file and
       // nothing to blame them for.
-      if (!charge.ok && charge.reason === NO_PROCESSOR_REASON) {
-        return { ok: false, error: "Card payments aren't switched on yet — nothing was charged. The office can take this one." };
-      }
-      const { error: payErr } = await admin.from("payments").insert({
-        invoice_id: invoice.id, amount: q.fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null,
-      });
-      // THE PROCESSOR TOOK THE MONEY AND THE LEDGER REFUSED TO RECORD IT —
-      // for any reason, not only a duplicate. The old condition named 23505
-      // alone, so a dropped connection took the fee, marked the invoice paid,
-      // and told nobody. Only a human can give that back.
       //
-      // The invoice deliberately stays 'due' when the row failed: the nightly
-      // retry finds it, sends the identical key, and the processor replays
-      // rather than charges — so the row gets another chance and the card is
-      // never touched twice.
-      if (charge.ok && payErr) {
-        await alertOpsDoubleCharge(admin, invoice.id as string, q.fee, charge.ref ?? null);
+      // AND IT IS NOT A FAILED CANCELLATION EITHER. This used to RETURN here,
+      // with "Card payments aren't switched on yet — nothing was charged. The
+      // office can take this one." Read the sixty lines above it: the job is
+      // already flipped to `cancelled`, its route stop is already cleared, and
+      // the fee invoice is already raised and sitting due. Returning ok:false
+      // over all of that made CancelRequestButton paint a red error and then
+      // refresh the visit away — the customer is told it failed while watching
+      // it succeed, and tapping Cancel again hits the status guard and earns
+      // them a second red error they can never get past.
+      //
+      // Everything the return skipped is downstream of the card and none of it
+      // is ABOUT the card: the crew's "your stop was cancelled late" notice,
+      // and the owner's notice, which is the only place a customer is ever
+      // told a late fee is now on their bill. With text delivering nothing
+      // since July and email the one live channel, this was the branch that
+      // sent neither.
+      //
+      // It also named a control nobody has: there is no door in /ops that
+      // collects a cancellation fee — the one ops charge button is the no-show
+      // visit fee — so "the office can take this one" instructed a screen that
+      // does not exist.
+      //
+      // So skip the ONE thing that would be untrue — a `failed` payment row
+      // for a card nobody presented — and let the rest run. `charged` stays
+      // false, which is exactly what gates the crew's payout below and what
+      // makes the owner's notice say "will appear on your next bill" instead
+      // of "was charged to your card on file". The invoice stays due and the
+      // nightly retry collects it the day a processor exists.
+      //
+      // Filing no row is load-bearing rather than tidy: chargeKey counts
+      // `failed` rows as prior declines and the nightly caps at five, so a
+      // phantom decline burns the retry budget against a processor that is not
+      // there.
+      const nobodyWasAsked = !charge.ok && charge.reason === NO_PROCESSOR_REASON;
+      if (!nobodyWasAsked) {
+        const { error: payErr } = await admin.from("payments").insert({
+          invoice_id: invoice.id, amount: q.fee, status: charge.ok ? "captured" : "failed", processor_ref: charge.ref ?? null,
+        });
+        // THE PROCESSOR TOOK THE MONEY AND THE LEDGER REFUSED TO RECORD IT —
+        // for any reason, not only a duplicate. The old condition named 23505
+        // alone, so a dropped connection took the fee, marked the invoice paid,
+        // and told nobody. Only a human can give that back.
+        //
+        // The invoice deliberately stays 'due' when the row failed: the nightly
+        // retry finds it, sends the identical key, and the processor replays
+        // rather than charges — so the row gets another chance and the card is
+        // never touched twice.
+        if (charge.ok && payErr) {
+          await alertOpsDoubleCharge(admin, invoice.id as string, q.fee, charge.ref ?? null);
+        }
+        if (charge.ok && !payErr) await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null }).eq("id", invoice.id);
+        charged = charge.ok;
       }
-      if (charge.ok && !payErr) await admin.from("invoices").update({ status: "paid", processor_ref: charge.ref ?? null }).eq("id", invoice.id);
-      charged = charge.ok;
     }
   }
 

@@ -750,11 +750,13 @@ export async function setNoticeHold(
     signal: held
       ? "Held. Nothing will reach your households until you lift it."
       // "Notices can now reach your households" is a claim about the world,
-      // and it was false in both channels at once: an unset EMAIL_FROM sends
-      // from a sandbox that only reaches our own inbox, and texts without a
-      // Messaging Service are unregistered and dropped. This is the last
-      // sentence he reads before believing twenty households have been told
-      // about their rent, so it says which channels actually work.
+      // and it can be false in both channels at once: an unset EMAIL_FROM
+      // sends from a sandbox that only reaches our own inbox, and texts
+      // without a Messaging Service are unregistered and dropped. Which way
+      // this deployment is set is not readable from here — sendCapability()
+      // asks the environment at runtime. This is the last sentence he reads
+      // before believing twenty households have been told about their rent,
+      // so it says which channels actually work.
       : liftedNoticesSignal(),
   };
 }

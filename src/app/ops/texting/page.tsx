@@ -3,7 +3,8 @@ import { TopBar } from "@/components/Brand";
 import { hasSupabaseEnv } from "@/lib/env";
 import { assertOps } from "@/app/ops/data";
 import { getTextingSetup, type TextingSetup } from "@/app/ops/texting-setup";
-import { LOG_WINDOW } from "@/app/ops/sms-health";
+import { LOG_WINDOW, deliveryVerdict } from "@/app/ops/sms-health";
+import { sendCapability } from "@/lib/send-capability";
 import { lakeStamp, longDate } from "@/lib/lake-time";
 
 /**
@@ -76,6 +77,7 @@ export default async function OpsTextingPage() {
         </p>
 
         <Channels setup={setup} />
+        <EmailDoor />
         <DeliveryLog setup={setup} />
         <Holds setup={setup} />
         <WhatIsStillTrue setup={setup} />
@@ -170,6 +172,62 @@ function Channels({ setup }: { setup: TextingSetup }) {
   );
 }
 
+/* -- the other door -------------------------------------------------------- */
+
+/**
+ * THE PAGE ABOUT "CAN WE REACH ANYBODY" REPORTED ONE CHANNEL OF TWO.
+ *
+ * While texting delivered nothing, email quietly became the load-bearing door
+ * for every ops alarm — the nightly digest, the crew-not-paid alert, the
+ * charged-but-not-recorded alert, the freeze-warning report — because notify()
+ * counts either door as reaching somebody and only one of them worked. A
+ * screen that answers "is anything getting out" must therefore answer for
+ * both, or the half that is actually carrying the alarms is the half nobody
+ * is watching.
+ *
+ * Read from sendCapability(), which already owns this question and already
+ * owns these sentences — the park owner reads the same ones when he lifts a
+ * notice hold. No second copy of the rule lives here.
+ *
+ * AND IT SAYS WHAT IT CANNOT SEE. Configuration is all this knows. Twilio's
+ * log gives the panel below an independent answer about arrival; there is no
+ * equivalent for email — no Resend webhook, no receipts table of our own — so
+ * a message accepted by Resend and then bounced is invisible here. That gap is
+ * named rather than papered over, because it is the same shape as the one that
+ * hid the text outage for a month.
+ */
+function EmailDoor() {
+  const cap = sendCapability();
+
+  return (
+    <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
+      <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Email — the other door</h2>
+      <p className="mut" style={{ fontSize: 13, margin: "0 0 12px", lineHeight: 1.55 }}>
+        Every ops alarm in the product goes out by email, and most notices try
+        both doors. Read from this server&apos;s settings, the same way the two
+        channels above are.
+      </p>
+
+      <div style={{ padding: "10px 12px", background: "var(--sand-light)", borderRadius: 12 }}>
+        <span className={`ll-pill ${cap.email ? "ok" : "warn"}`}>
+          {cap.email ? "Email · configured" : "Email · not configured"}
+        </span>
+        <p style={{ fontSize: 14, margin: "8px 0 0", lineHeight: 1.55 }}>
+          {cap.email
+            ? "RESEND_API_KEY and EMAIL_FROM are both set on this server, so mail goes out from our own address rather than the test one. Neither value is shown here."
+            : cap.reasons.find((r) => r.toLowerCase().startsWith("email")) ?? "Email is not fully configured on this server."}
+        </p>
+        <p className="mut" style={{ fontSize: 12.5, margin: "6px 0 0", lineHeight: 1.5 }}>
+          Configured is not delivered. Nothing in this product records whether
+          an email arrived — there is no equivalent of the message log below —
+          so a bounce shows up only in Resend&apos;s own console. Treat a green
+          pill here as &ldquo;it can go out&rdquo;, never as &ldquo;it landed&rdquo;.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /* -- what Twilio's log says ------------------------------------------------ */
 
 /**
@@ -192,8 +250,12 @@ function Channels({ setup }: { setup: TextingSetup }) {
  */
 function DeliveryLog({ setup }: { setup: TextingSetup }) {
   const { log } = setup;
+  // ONE BRANCH FOR THE WHOLE PAGE. This panel and the checklist at the foot
+  // used to decide separately whether anything had arrived, and disagreed:
+  // see deliveryVerdict in ops/sms-health.ts.
+  const verdict = deliveryVerdict(log);
 
-  if (!log.configured) {
+  if (verdict.state === "unasked") {
     return (
       <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
         <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>What Twilio&apos;s log says</h2>
@@ -207,7 +269,7 @@ function DeliveryLog({ setup }: { setup: TextingSetup }) {
   }
 
   // COULD NOT ASK ≠ ALL WELL.
-  if (!log.window) {
+  if (verdict.state === "unreadable") {
     return (
       <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--warn)" }}>
         <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>What Twilio&apos;s log says</h2>
@@ -221,13 +283,14 @@ function DeliveryLog({ setup }: { setup: TextingSetup }) {
     );
   }
 
-  const { sent, delivered, failed } = log.window;
+  // Past both non-answers, so the window is there and this is a real count.
+  const { sent, delivered, failed } = log.window!;
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
       <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>What Twilio&apos;s log says</h2>
 
-      {sent === 0 ? (
+      {verdict.state === "nothing-sent" ? (
         <p className="mut" style={{ fontSize: 13.5, margin: 0, lineHeight: 1.55 }}>
           Twilio&apos;s log holds no messages at all in the last {LOG_WINDOW}, so there
           is nothing to judge — that is &ldquo;nothing was sent&rdquo;, not &ldquo;nothing arrived&rdquo;.
@@ -342,7 +405,13 @@ function Holds({ setup }: { setup: TextingSetup }) {
  */
 function WhatIsStillTrue({ setup }: { setup: TextingSetup }) {
   const configured = setup.messaging.ready;
-  const proven = Boolean(setup.log.window && setup.log.window.delivered > 0);
+  // THE SAME BRANCH THE PANEL ABOVE TOOK. This line used to be
+  // `Boolean(setup.log.window && setup.log.window.delivered > 0)` — one
+  // boolean over five different worlds — and its false arm then told him
+  // "Twilio's log shows nothing delivered in the window above" on a page whose
+  // own panel had just said, correctly, that it could not read that log. Item
+  // two is now a no only when we actually looked and the answer was no.
+  const verdict = deliveryVerdict(setup.log);
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginTop: 18, marginBottom: 28 }}>
@@ -360,9 +429,15 @@ function WhatIsStillTrue({ setup }: { setup: TextingSetup }) {
         </li>
         <li>
           <strong>One real message delivered.</strong>{" "}
-          {proven
-            ? `Twilio's log shows ${setup.log.window?.delivered} delivered in the window above.`
-            : "Not yet — Twilio's log shows nothing delivered in the window above."}
+          {verdict.state === "delivered"
+            ? `Twilio's log shows ${verdict.delivered} delivered in the window above.`
+            : verdict.state === "none-delivered"
+              ? "Not yet — Twilio's log shows nothing delivered in the window above."
+              : verdict.state === "nothing-sent"
+                ? "Unanswered — no message appears in Twilio's log at all, which is “nothing was sent”, not “nothing arrived”."
+                : verdict.state === "unreadable"
+                  ? "Unanswered — we couldn't reach Twilio's log just now, so this is not a no. Read the panel above and try again."
+                  : "Unanswered — the credentials that read Twilio's log are not set on this server, so nobody has looked."}
         </li>
         <li>
           <strong>The copy sweep.</strong> Every sentence that says we will text

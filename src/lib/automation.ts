@@ -21,6 +21,7 @@ import { lengthsInWords, latestSeqByChain, hasLaterLink } from "@/app/park/agree
 import { money } from "@/app/park/ledger-helpers";
 import { longDate } from "@/lib/lake-time";
 import { parseDaterange, type Term } from "@/lib/parks";
+import { OWNER_FIXTURE_EMBED, OWNER_FIXTURE_FILTER } from "@/lib/lake-pages";
 import { rushWindowOpen } from "@/lib/rush";
 import { isLastDayOfMonth, nudgeCooling, nearMilestone } from "@/lib/growth";
 import { withinSunset, customerReferralAccrual, crewShareAccrual, creditToApply } from "@/lib/referrals";
@@ -375,6 +376,49 @@ export interface SettleOutcome {
  * Never throws at its caller, for the same reason the alert below never does:
  * it runs after the card has moved.
  */
+/**
+ * ONE EMAIL TO WHOEVER IS ON OPS, FOR A RUN THAT HAS NO OTHER DOOR.
+ *
+ * The nightly has a rail for this — every step's failures and skips collect
+ * into one list and ride out on the digest. The OTHER crons have nothing: they
+ * return their skip list into an HTTP response, and no code in this repo reads
+ * an HTTP response from a cron. The freeze warning is the one where that costs
+ * the most: it fires on one date a year per lake, against an exact date match,
+ * so a lake skipped tonight is not retried tomorrow — the target has moved on.
+ *
+ * Deliberately EMAIL ONLY, and deliberately not notify(): this is a report to
+ * the office, never a notice to a household, and it must not be able to text a
+ * stranger at 8am because a query failed.
+ *
+ * Returns how many accounts took it, so a caller can say "and nobody was
+ * reached" rather than assuming it landed. Never throws at its caller — it is
+ * called from the failure path of something else.
+ */
+export async function alertOps(
+  subject: string,
+  body: string | RawHtml,
+  admin: ReturnType<typeof createServiceClient> = createServiceClient(),
+): Promise<{ notified: number }> {
+  let notified = 0;
+  try {
+    const { data: opsUsers, error: opsErr } = await admin
+      .from("users").select("email").eq("role", "ops").not("email", "is", null);
+    if (opsErr) console.error(`[read failed] the ops emails for "${subject}":`, opsErr);
+    for (const u of opsUsers ?? []) {
+      const to = u.email as string | null;
+      if (!to) continue;
+      const res = await sendEmail({ to, subject, html: body });
+      if (res.ok) notified++;
+    }
+  } catch (e) {
+    console.error(`[alert failed] "${subject}":`, e);
+  }
+  // The last line of defence, and it is the same one alertOpsCrewUnpaid keeps:
+  // an alert that reached nobody is the quietest failure in the product.
+  if (notified === 0) console.error(`[alert unsent] "${subject}" reached NOBODY.`);
+  return { notified };
+}
+
 export async function alertOpsCrewUnpaid(
   admin: ReturnType<typeof createServiceClient>,
   jobId: string,
@@ -1482,16 +1526,26 @@ export async function revalidateAssignments(
         const cooling = new Set((recent ?? []).map((r) => r.kind as string));
         const due = keys.filter((k) => !cooling.has(k));
         if (due.length > 0) {
-          const { data: ops, error: opsErr } = await admin.from("users").select("id, phone, email").eq("role", "ops").not("phone", "is", null);
+          // WHO notify() CAN ACTUALLY REACH — not who has a phone number.
+          //
+          // This read used to filter `.not("phone","is",null)` and then hand
+          // each row to notify(), which sends on BOTH doors and counts either
+          // one as reaching somebody. So an ops account with a working email
+          // and no mobile was outside the audience of this alarm entirely, and
+          // the filter contradicted the sender two lines below it. The shape
+          // here is the one vendor/bank-actions.ts already uses: read the ops
+          // team, then keep whoever has a door.
+          const { data: opsRows, error: opsErr } = await admin.from("users").select("id, phone, email").eq("role", "ops");
           if (opsErr) {
-            console.error("[read failed] the ops phone numbers for a dead-end alert:", opsErr);
-            skipped.push(`${unfilled} job${unfilled === 1 ? "" : "s"} nobody on the platform can claim, and we couldn't read the ops phone numbers to raise it — no dead-end text went out.`);
+            console.error("[read failed] the ops team's contact details for a dead-end alert:", opsErr);
+            skipped.push(`${unfilled} job${unfilled === 1 ? "" : "s"} nobody on the platform can claim, and we couldn't read the ops team's contact details to raise it — no dead-end alert went out.`);
           }
+          const ops = (opsRows ?? []).filter((o) => o.phone || o.email);
           const pretty = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO)
             ? new Date(dateISO + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
             : "the coming days";
           let queuedAny = false;
-          for (const o of ops ?? []) {
+          for (const o of ops) {
             const told = await notify(
               "ops that nobody on the platform can claim this work",
               { phone: o.phone as string | null, email: o.email as string | null },
@@ -1506,7 +1560,7 @@ export async function revalidateAssignments(
           // POST-SEND, and only when a door took it: a night both of ops'
           // doors were shut must not buy a week of silence about work nobody
           // can do. The row is the memory — without it this is the old bug.
-          if (queuedAny && ops && ops.length > 0) {
+          if (queuedAny && ops.length > 0) {
             const logged = await admin
               .from("nudge_log").insert(due.map((kind) => ({ user_id: ops[0].id as string, kind })));
             if (logged.error) {
@@ -2226,15 +2280,21 @@ export async function runNudges(): Promise<{ ok: boolean; creditNudges: number; 
   // B) Territory expansion — waiting demand next door, priced at THEIR rates.
   let territoryNudges = 0;
   const today = todayLakeDate();
+  // A SEEDED BOOKING MUST NOT PUT A REAL CREW IN A TRUCK. The claim board
+  // carries a directional fence so a fixture crew can still rehearse; here the
+  // fence is unconditional, because the pool this loop TEXTS is itself already
+  // fixture-fenced below — nobody rehearses through a nightly text.
   const waiting = mustRead("the jobs waiting on a crew", await admin
     .from("jobs")
-    .select("id, service_id, property_id, services(name, pricing_model), properties(lake_id, lakes(name))")
-    .eq("status", "requested").is("vendor_id", null).gte("date", today).limit(50));
+    .select(`id, service_id, property_id, services(name, pricing_model), properties!inner(lake_id, lakes(name), ${OWNER_FIXTURE_EMBED})`)
+    .eq("status", "requested").is("vendor_id", null).eq(OWNER_FIXTURE_FILTER, false).gte("date", today).limit(50));
   if (waiting && waiting.length > 0) {
+    // Every other crew pool in this file joins users.is_fixture; this one did
+    // not, so the scratch crews were getting territory-expansion mail.
     const crews = mustRead("the active crews", await admin
       .from("vendors")
-      .select("id, user_id, company, service_types, service_lakes, coi_expiry")
-      .eq("status", "active").not("user_id", "is", null));
+      .select("id, user_id, company, service_types, service_lakes, coi_expiry, users!vendors_user_id_fkey!inner(is_fixture)")
+      .eq("status", "active").eq("users.is_fixture", false).not("user_id", "is", null));
     // The pitch quotes a dollar figure built from these rates; without them
     // every crew silently looks like it has no rate for anything.
     const rates = mustRead("the crews' rate cards", await admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"));
@@ -3384,12 +3444,16 @@ export async function birthSpringJobs(): Promise<{ ok: boolean; born: number; st
       stickyOk = sv?.status === "active" && !!sv?.coi_expiry && String(sv.coi_expiry) >= today;
       if (!stickyOk) {
         try {
-          const { data: ops, error: opsErr } = await admin.from("users").select("phone, email").eq("role", "ops").not("phone", "is", null);
+          // Widened off the phone column for the same reason as the dead-end
+          // alert above: notify() treats email as a door in its own right, and
+          // an ops account without a mobile was never in this audience at all.
+          const { data: opsRows, error: opsErr } = await admin.from("users").select("phone, email").eq("role", "ops");
           if (opsErr) {
-            console.error("[read failed] the ops phone numbers for a sticky-custody alert:", opsErr);
-            skipped.push(`Envelope ${g.id}: a stored boat's splash can't auto-assign (the storing crew is benched) and we couldn't read the ops phone numbers to say so — nobody was texted.`);
+            console.error("[read failed] the ops team's contact details for a sticky-custody alert:", opsErr);
+            skipped.push(`Envelope ${g.id}: a stored boat's splash can't auto-assign (the storing crew is benched) and we couldn't read the ops team's contact details to say so — nobody was told.`);
           }
-          for (const o of ops ?? []) {
+          const ops = (opsRows ?? []).filter((o) => o.phone || o.email);
+          for (const o of ops) {
             const told = await notify(
               `ops that a stored boat's spring splash can't auto-assign (group ${g.id})`,
               { phone: o.phone as string | null, email: o.email as string | null },
@@ -4087,9 +4151,20 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number; sk
   // 200-deep page: already-alerted jobs stay 'requested' until a human acts,
   // so a 50-row page could fill up with alerted-but-unresolved rows during a
   // surge and starve job #51. The per-run SMS cap still bounds the noise.
-  // Empty reads as "there is no ops team", and the whole valve returns quietly.
-  const ops = mustRead("the ops team's phone numbers", await admin.from("users").select("id, phone, email").eq("role", "ops").not("phone", "is", null));
-  if (!ops || ops.length === 0) return { ok: true, alerted: 0, skipped };
+  // Empty reads as "there is no ops team", and the whole valve used to return
+  // quietly. Two things were wrong with the old line. It filtered
+  // `.not("phone","is",null)`, so an ops account reachable only by email was
+  // never in the audience of an alarm that notify() would happily have
+  // emailed; and "we have nobody to alert" returned the same {alerted: 0}
+  // shape as "nothing was stranded", so the valve could fall dark for good
+  // with every screen looking healthy.
+  const opsRows = mustRead("the ops team's contact details", await admin.from("users").select("id, phone, email").eq("role", "ops"));
+  const ops = (opsRows ?? []).filter((o) => o.phone || o.email);
+  if (ops.length === 0) {
+    // Names what we could not do, never a count of jobs we never looked at.
+    skipped.push("Jobs may be sitting unclaimed and there is no ops account we can reach — no account with role 'ops' has a phone or an email on it, so nobody was alerted.");
+    return { ok: true, alerted: 0, skipped };
+  }
   for (const j of stuck ?? []) {
     if (alerted >= MAX_ALERTS_PER_RUN) break;
     const svc = one(j.services) as { name?: string; is_water_work?: boolean } | null;
@@ -4130,9 +4205,10 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number; sk
     if (seen && seen.length > 0) continue;
     const svcName = svc?.name ?? "a job";
     // Cause-neutral copy: "unclaimed" is the fact; rate-vs-capacity is for
-    // the Margin Health board to say. Every ops phone hears it; the one-shot
-    // dedupe row is only written after at least one SMS actually went out —
-    // a Twilio hiccup must not burn the job's single lifetime alert.
+    // the Margin Health board to say. Every ops account we can reach hears it,
+    // by whichever door it has; the one-shot dedupe row is only written after
+    // at least one of them actually took the message — a Twilio hiccup must
+    // not burn the job's single lifetime alert.
     // NAMED FOR WHAT IT IS. This was `delivered`, which it never was — it
     // meant Twilio accepted the message. The dedupe below burns the job's one
     // lifetime alert on that basis, so calling it delivery is how an ops alert
@@ -4152,8 +4228,8 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number; sk
     if (queuedAny) {
       const logged = await admin.from("nudge_log").insert({ user_id: ops[0].id, kind: `gap_sla:${j.id}` });
       // POST-SEND: the texts are away. This row is the once-per-job promise —
-      // without it every ops phone hears about this same job every run until
-      // somebody acts on it, which is how ops learns to ignore the channel.
+      // without it ops hears about this same job on every run until somebody
+      // acts on it, which is how ops learns to ignore the channel.
       if (logged.error) {
         console.error(`[write failed] the once-per-job dedupe row for the SLA alert (${j.id}):`, logged.error);
         skipped.push(`ops were alerted about stranded job ${j.id} but the once-per-job dedupe row did not save (${logged.error.message ?? "write failed"}) — they will be texted about it again on every run until it is claimed`);
@@ -4163,7 +4239,7 @@ export async function gapSlaAlerts(): Promise<{ ok: boolean; alerted: number; sk
       // The dedupe row is deliberately NOT written, so the job keeps its one
       // lifetime alert and this retries next run — but a carrier outage that
       // queues nothing must not look like a night with nothing stranded.
-      console.error(`[send failed] the ops SLA alert for job ${j.id}: no message was queued to any ops phone`);
+      console.error(`[send failed] the ops SLA alert for job ${j.id}: no door took the message`);
       skipped.push(`the ops alert for stranded job ${j.id} (${svcName} on ${lk?.name ?? "a lake"}) queued to nobody — will retry next run`);
     }
   }
@@ -4507,6 +4583,29 @@ export async function sendNightlyDigest(results: {
       console.error(`[send failed] tonight's digest to ${email}:`, res.error);
       undelivered.push(`tonight's digest did not reach ${email} (${res.error ?? "send failed"}) — ${needsLook.length > 0 ? `${needsLook.length} thing${needsLook.length === 1 ? "" : "s"} that needed a look went unread with it` : "nothing else reports the night"}`);
     }
+  }
+  // AND THE ONE ENDING THE GUARD ABOVE COULD NOT SEE: NOBODY TO SEND TO.
+  //
+  // Every other way this send can fail already says so — no Resend key, an
+  // unsendable address, a fixture recipient, a park's notice hold, a refused
+  // POST all come back ok:false and land a sentence in `undelivered`. An EMPTY
+  // audience did not: the loop simply never ran, and { ok: true, sent: 0,
+  // skipped: [] } is byte-identical to "sent to everybody". Production holds
+  // exactly ONE account with role 'ops'. One role change, one cleared email —
+  // or a blank string, which `.not("email","is",null)` happily passes and the
+  // `continue` above then drops in total silence — and every alarm in this
+  // product goes to nobody, for ever, with nothing on any screen to say so.
+  //
+  // Tested on the count, not on the audience length, because those two
+  // branches lose a night in exactly the same way and this sentence is true of
+  // both. The console line is the same belt-and-braces alertOpsCrewUnpaid uses
+  // for the same shape: this is the one message that cannot report itself.
+  if (sent === 0 && undelivered.length === 0) {
+    console.error("[alert unsent] tonight's digest reached NOBODY — no account has role 'ops' with a usable email on it.");
+    undelivered.push(
+      "tonight's digest reached nobody — no account has role 'ops' with a usable email on it, " +
+      "so nothing at all reports the night. Everything above went with it.",
+    );
   }
   return { ok: true, sent, skipped: undelivered };
 }

@@ -26,7 +26,7 @@ const crew = (over: Partial<OpsCrew> = {}): OpsCrew => ({
   namedInsuredMismatch: false, hasCoiDoc: true, hasW9Doc: true,
   coiSignedUrl: null, w9SignedUrl: null, score: 80, tier: "priority",
   onTimeRate: 1, completedCount: 10, thumbsUp: 3, thumbsDown: 0,
-  lakes: ["Big Long Lake", "Pretty Lake"], pausedLakes: [], ...over,
+  lakes: ["Big Long Lake", "Pretty Lake"], pausedLakes: [], isFixture: false, ...over,
 });
 const render = (c: OpsCrew) =>
   renderToStaticMarkup(<CrewBoard crews={[c]} activeServiceNames={["Pier install / removal"]} />);
@@ -55,4 +55,74 @@ describe("the crews board says where each crew works", () => {
   it("says nothing about pauses for a crew in good standing", () => {
     expect(render(crew())).not.toContain("paused until");
   });
+});
+
+/**
+ * THE ROSTER CALLED THREE ACCOUNTS WE INVENTED "ACTIVE CREWS", ONE CARD BELOW
+ * THE CARD SAYING THERE ARE NONE.
+ *
+ * Every production vendor is a fixture. getCrewCoverage fences them and prints
+ * "There are no live crews at all — every vendor on the platform is a test
+ * account, and dispatch will not route to one" directly above this board,
+ * which showed three cards with green `active` pills and a score line and no
+ * marker of any kind. getCrews did not even select the column.
+ */
+describe("the crews board marks a test account", () => {
+  it("says nothing extra about a real crew", () => {
+    const html = render(crew());
+    expect(html).not.toContain("Test account");
+    expect(html).not.toContain("test account");
+  });
+
+  it("marks a fixture crew on its own card", () => {
+    const html = render(crew({ isFixture: true }));
+    expect(html).toContain("Test account — nothing will route to it");
+  });
+
+  it("keeps the group count equal to the cards, and names the half that cannot work", () => {
+    // Subtracting fixtures from the count would print "0" above a visible
+    // card — the same lie, one card smaller. The head names both halves.
+    const html = renderToStaticMarkup(
+      <CrewBoard
+        crews={[crew({ id: "a", isFixture: true }), crew({ id: "b", company: "Real Crew", isFixture: false })]}
+        activeServiceNames={["Pier install / removal"]}
+      />,
+    );
+    expect(html).toContain("2");
+    expect(html).toContain("1 test account — nothing routes to it");
+    expect(html).not.toContain("all test accounts");
+  });
+
+  it("says so plainly when the whole group is scratch", () => {
+    const html = renderToStaticMarkup(
+      <CrewBoard
+        crews={[crew({ id: "a", isFixture: true }), crew({ id: "b", isFixture: true })]}
+        activeServiceNames={[]}
+      />,
+    );
+    expect(html).toContain("all test accounts — nothing routes to them");
+  });
+});
+
+/**
+ * DAILY CAPACITY WAS EDITABLE ON A SUSPENDED CARD AND NOTHING SAVED IT.
+ *
+ * The number input renders on every card; "Save capacity" used to render only
+ * for an active crew. So ops could drop an over-dispatched crew to 3, press
+ * Reactivate — whose whole body is `update({ status: "active" })` — and read
+ * "Crew reactivated — back on the board" while the router carried on at the
+ * old number. Collapsed both ways: the control must be there AND carry the
+ * value, so an absence-only assertion cannot pass against a deleted button.
+ */
+describe("capacity can be saved on any card that offers the input", () => {
+  for (const status of ["active", "suspended", "invited"] as const) {
+    it(`offers Save capacity on a ${status} card`, () => {
+      const html = render(crew({ status, daily_capacity: 4 }));
+      expect(html).toContain("Daily capacity");
+      expect(html).toContain("Save capacity");
+      // The input is seeded from the crew's stored number, so the button has a
+      // real value to carry rather than a placeholder.
+      expect(html).toContain('value="4"');
+    });
+  }
 });

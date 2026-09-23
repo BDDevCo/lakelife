@@ -12,6 +12,9 @@ import { getMyStanding } from "@/lib/scoring-data";
 import { tierLabel } from "@/lib/scoring";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
 import { VendorDocs } from "@/components/VendorDocs";
+import { MyCapacity } from "@/components/MyCapacity";
+import { getMyTrucks } from "./trucks-data";
+import { fleetJobCap } from "@/lib/fleet";
 import { getNeedsYou } from "./needs-you-data";
 import { VendorNeedsYou } from "@/components/VendorNeedsYou";
 import { todayLakeDate } from "@/lib/booking";
@@ -90,7 +93,7 @@ export default async function VendorTodayPage() {
   // straight past it. A layout wraps them all.
 
   const admin2 = createServiceClient();
-  const [day, standing, confRes, needsYou] = await Promise.all([
+  const [day, standing, confRes, needsYou, trucks] = await Promise.all([
     getVendorDay(),
     getMyStanding(vendorId),
     admin2.from("job_confirmations").select("verdict").eq("vendor_id", vendorId).not("verdict", "is", null),
@@ -104,7 +107,12 @@ export default async function VendorTodayPage() {
       console.error("[vendor] couldn't build what-needs-you:", e);
       return { held: [], pausedLakes: [], unpriced: [], checkFailed: true };
     }),
+    // Trucks, because the capacity card below must not contradict them:
+    // fleetJobCap DISCARDS vendors.daily_capacity as soon as one active truck
+    // exists, so a crew with trucks has to be told the trucks are the number.
+    getMyTrucks(),
   ]);
+  const activeTrucks = (trucks ?? []).filter((t) => t.active);
   const confRows = mustRead("your customer feedback", confRes);
   const thumbsUp = (confRows ?? []).filter((c) => c.verdict === "good").length;
   const thumbsDown = (confRows ?? []).filter((c) => c.verdict === "issue").length;
@@ -194,6 +202,18 @@ export default async function VendorTodayPage() {
               <div style={{ fontWeight: 800, fontSize: 15 }}>What you&apos;ve agreed to →</div>
               <div className="mut" style={{ fontSize: 13 }}>The terms you accepted, word for word, and the day you accepted them.</div>
             </Link>
+            {/* THE FIFTH GO-LIVE REQUIREMENT, KEPT REACHABLE. Its only other
+                writer sits in the onboarding wizard, which disappears at
+                go-live — so this number was frozen for the life of the crew
+                and cured only by a phone call to ops. */}
+            <MyCapacity
+              capacity={vendor.daily_capacity}
+              truckCount={activeTrucks.length}
+              fleetCap={fleetJobCap(
+                activeTrucks.map((t) => ({ capacity: t.capacity })),
+                vendor.daily_capacity,
+              )}
+            />
             <VendorDocs
               coiUrl={vendor.coi_url}
               coiExpiry={vendor.coi_expiry}

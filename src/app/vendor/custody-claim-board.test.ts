@@ -75,7 +75,14 @@ class Q implements PromiseLike<{ data: Row[] | null; error: null }> {
   constructor(private t: string) {}
   select() { return this; }
   update(p: Row) { this.patch = p; return this; }
-  eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
+  // Dotted columns are EMBED paths ("properties.users.is_fixture"), which is
+  // how PostgREST filters on a joined row — and how the claim board's owner
+  // fence is written. Resolving only the flat name would silently drop every
+  // row and read as "the board is empty".
+  eq(c: string, v: unknown) {
+    this.fs.push((r) => c.split(".").reduce<unknown>((o, k) => (o == null ? undefined : (o as Row)[k]), r) === v);
+    return this;
+  }
   in(c: string, v: unknown[]) { this.fs.push((r) => v.includes(r[c])); return this; }
   is(c: string, v: unknown) { this.fs.push((r) => (v === null ? r[c] == null : r[c] === v)); return this; }
   gte(c: string, v: string) { this.fs.push((r) => String(r[c] ?? "") >= v); return this; }
@@ -143,7 +150,7 @@ const job = (id: string, serviceId: string, name: string, takesCustody: boolean)
   est_minutes: 120,
   created_at: `${TODAY}T09:00:00Z`,
   services: { name, pricing_model: "flat", est_minutes: 120, takes_custody: takesCustody },
-  properties: { lake_id: "lake-1", lat: 41.6, lng: -85.4, address: "9 Cove Ln", lakes: { name: "Big Long" }, users: { phone: null, email: null } },
+  properties: { lake_id: "lake-1", lat: 41.6, lng: -85.4, address: "9 Cove Ln", lakes: { name: "Big Long" }, users: { phone: null, email: null, is_fixture: false } },
 });
 
 beforeEach(() => {
@@ -156,7 +163,7 @@ beforeEach(() => {
     job("j-custody", "svc-custody", CUSTODY, true),
     job("j-mow", "svc-mow", MOW, false),
   ];
-  db.vendors = [{ ...vendor, user_id: USER_ID }];
+  db.vendors = [{ ...vendor, user_id: USER_ID, users: { is_fixture: false } }];
   // 70 against a 100 menu = 30% margin, comfortably over the 25% floor: both
   // jobs are claimable on every gate except the one under test.
   db.vendor_rates = [
@@ -218,5 +225,69 @@ describe("the claim board refuses custody (0145, the second doorway)", () => {
     expect(row.vendor_id).toBe("v1");
     expect(row.status).toBe("scheduled");
     expect(row.vendor_cost).toBe(70);
+  });
+});
+
+/**
+ * THE FENCE THAT ONLY EVER RAN ONE WAY — same two doorways, same harness.
+ *
+ * Five pools keep a test crew away from real work. Nothing kept a REAL crew
+ * away from a test booking: the board listed every open job whoever booked it,
+ * and the claim action re-gated on capacity, insurance, standing and custody
+ * but never on whether the customer existed. The first real crew on the
+ * platform could have been shown, and could have driven to, a job seeded to
+ * rehearse the software.
+ *
+ * These live beside the custody tests because this is the only honest fake of
+ * the two functions in the repo — and, as there, the pairing is the point:
+ * each case has a twin that must still go through.
+ */
+describe("a real crew is never shown a test booking", () => {
+  const fixtureOwned = (id: string): Row => {
+    const j = job(id, "svc-mow", MOW, false);
+    j.properties = { ...(j.properties as Row), users: { phone: null, email: null, is_fixture: true } };
+    return j;
+  };
+  /** Same crew, same everything, except whose account stands behind it. */
+  const asFixtureCrew = () => {
+    db.vendors = [{ ...vendor, user_id: USER_ID, users: { is_fixture: true } }];
+  };
+
+  beforeEach(() => {
+    db.jobs = [fixtureOwned("j-seeded"), job("j-mow", "svc-mow", MOW, false)];
+  });
+
+  it("the board hides the seeded job and keeps the real one", async () => {
+    const b = await board();
+    expect(b.get("j-seeded"), "a test booking reached a real crew's board").toBeUndefined();
+    expect(b.get("j-mow"), "the fence took the real job with it").toBeDefined();
+  });
+
+  it("the claim refuses it, and says why in words that are true", async () => {
+    const res = await claimJob("j-seeded");
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/test booking/);
+    expect(res.error, "nobody took it — it was never real").not.toMatch(/already taken/);
+    const row = db.jobs.find((j) => j.id === "j-seeded")!;
+    expect(row.vendor_id).toBeNull();
+    expect(row.status).toBe("requested");
+  });
+
+  /* THE OTHER HALF. An unconditional fence would close the last path by which
+     the owner's three test crews can take a job at all — ops refuses to
+     hand-assign them and auto-dispatch excludes them — leaving no way to walk
+     claim → complete → payout before a real crew ever arrives. Collapse the
+     direction and these two go red. */
+  it("a test crew still sees a test booking", async () => {
+    asFixtureCrew();
+    const b = await board();
+    expect(b.get("j-seeded"), "the rehearsal path is closed").toBeDefined();
+  });
+
+  it("and can still claim it", async () => {
+    asFixtureCrew();
+    const res = await claimJob("j-seeded");
+    expect(res).toEqual({ ok: true });
+    expect(db.jobs.find((j) => j.id === "j-seeded")!.status).toBe("scheduled");
   });
 });

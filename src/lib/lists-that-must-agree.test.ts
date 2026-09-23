@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { CORRECTABLE, FIELD_LABEL } from "./arrival";
+import { crewListsService } from "./crew-services";
 
 /**
  * FOUR LISTS, AND THE ONE THAT GETS FORGOTTEN.
@@ -156,8 +157,17 @@ describe("both unit-noun tables know the same counts", () => {
  * offered nothing, ever:
  *
  *   CrewBoard.tsx      pill: "generalist (all work)"   <- flat lie to ops
- *   ops/data.ts        service_ok = true               <- annotation
+ *   ops/data.ts        service_ok = true               <- annotation, uncalled
  *   JobFile.tsx        serviceOk() = true              <- a SECOND copy
+ *   JobBoard.tsx       serviceOk() = true              <- the LIVE one, missed
+ *
+ * The fourth copy was missed because this suite never read the file, and the
+ * copy it DID read — ops/data.ts — had no caller at all, so going green there
+ * proved nothing about what ops sees. That file's copy has since been deleted
+ * with the dead function around it, and the two live boards now import ONE
+ * helper, lib/crew-services.ts. That is why the assertions below ask for the
+ * import rather than for the rule written out again: a fifth copy is the
+ * failure mode, so the test refuses to accept one.
  *
  * Live in production when this was written: one active vendor with
  * service_types = [] carrying the "generalist (all work)" pill while being
@@ -168,12 +178,14 @@ describe("both unit-noun tables know the same counts", () => {
 describe("what an empty service list means", () => {
   const crewBoard = strip(read("../components/ops/CrewBoard.tsx"));
   const jobFile = strip(read("../components/ops/JobFile.tsx"));
+  const jobBoard = strip(read("../components/ops/JobBoard.tsx"));
   const opsData = strip(read("../app/ops/data.ts"));
   const dispatch = strip(read("./dispatch.ts"));
 
-  it("found all four files", () => {
+  it("found all five files", () => {
     expect(crewBoard.length).toBeGreaterThan(500);
     expect(jobFile.length).toBeGreaterThan(500);
+    expect(jobBoard.length).toBeGreaterThan(500);
     expect(opsData.length).toBeGreaterThan(500);
     expect(dispatch).toMatch(/serviceTypes/);
   });
@@ -191,17 +203,33 @@ describe("what an empty service list means", () => {
     expect(crewBoard).toMatch(/cannot be dispatched/);
   });
 
-  it("the manual-assign annotation no longer matches everything", () => {
-    // `types.length === 0 ||` was the lie: it made the hint true for a crew
-    // who lists nothing.
-    expect(opsData).not.toMatch(/types\.length === 0 \|\|/);
-    expect(opsData).toMatch(/types\.length > 0 &&/);
+  it("the rule itself answers the empty list with nothing", () => {
+    // THE ASSEMBLY, NOT A COPY OF IT. The one function both boards call, run
+    // for real — a scan for the words could pass on a helper nobody calls.
+    expect(crewListsService([], "Weekly mow & blow")).toBe(false);
+    expect(crewListsService(null, "Weekly mow & blow")).toBe(false);
+    expect(crewListsService(["mow"], "Weekly mow & blow")).toBe(true);
+    expect(crewListsService(["pier"], "Weekly mow & blow")).toBe(false);
   });
 
-  it("the component's own second copy agrees with it", () => {
-    // Two copies of one rule; both used to return true for empty.
-    expect(jobFile).not.toMatch(/if \(!vendor\.service_types\.length\) return true;/);
-    expect(jobFile).toMatch(/if \(!vendor\.service_types\.length\) return false;/);
+  it("both live annotations call it, and neither keeps its own copy", () => {
+    // POINTED AT THE LIVE DOORWAYS. This used to read ops/data.ts, where the
+    // rule sat in a function nothing called, so it went green while the
+    // annotation ops actually reads still answered true for a crew who lists
+    // nothing. A file that grows its own `serviceOk` back has left the list.
+    for (const [name, src] of [["the jobs board", jobBoard], ["the job file", jobFile]] as const) {
+      expect(src, `${name} no longer imports the one copy of the rule`)
+        .toMatch(/import \{ crewListsService \} from "@\/lib\/crew-services";/);
+      expect(src, `${name} has grown a second copy of the rule`)
+        .not.toMatch(/function serviceOk/);
+      expect(src).toMatch(/crewListsService\(v\.service_types,/);
+    }
+  });
+
+  it("the jobs board says which kind of nothing it is, too", () => {
+    // Same two-way label as the job file: "doesn't list this service" and
+    // "lists no services at all" are different problems with different fixes.
+    expect(jobBoard).toMatch(/lists no services at all/);
   });
 
   it("says which kind of nothing it is", () => {

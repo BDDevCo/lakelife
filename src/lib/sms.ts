@@ -67,11 +67,14 @@ export async function sendSms(
   // credentials present, which is the only way to prove a refusal without
   // risking a real send to prove it.
   //
-  // This door has no sandbox behind it. Email has been quietly protected by an
-  // unset EMAIL_FROM; every text this app has ever attempted went straight at
-  // Twilio. All five fixture accounts in production carry 555 numbers — one of
-  // them directory assistance — so this is the door that could actually have
-  // rung a stranger about work at a lake house they have never heard of.
+  // This door has no sandbox behind it. Email had a sandbox sender to fall
+  // back on for a while, and on a deployment with EMAIL_FROM unset it still
+  // does — production is not one of those, so do not read this as a live
+  // description of either channel. Every text this app has ever attempted went
+  // straight at Twilio. All five fixture accounts in production carry 555
+  // numbers — one of them directory assistance — so this is the door that
+  // could actually have rung a stranger about work at a lake house they have
+  // never heard of.
   const refusal = phoneRefusal(to);
   if (refusal) {
     console.warn(`[sms] refused: ${refusal.why}`);

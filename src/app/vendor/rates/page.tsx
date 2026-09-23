@@ -2,10 +2,8 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { VendorNav } from "@/components/VendorNav";
 import { VendorRates } from "@/components/VendorRates";
-import { VendorOnboarding } from "@/components/VendorOnboarding";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { mustRead } from "@/lib/must-read";
 import { getMyVendorId, getMyVendor } from "@/app/vendor/data";
 import { getMyRates } from "@/app/vendor/rates-data";
 
@@ -50,33 +48,40 @@ export default async function VendorRatesPage() {
     );
   }
 
-  // Not active yet? Show the onboarding checklist (same as the Today tab).
+  // AN ONBOARDING CREW CAN PRICE — THIS DOOR JUST DIDN'T LET THEM.
+  //
+  // The invitation email makes rates step 4 and "Tap Go live" step 5, and the
+  // Rates tab sits directly above that checklist in VendorNav. It used to
+  // answer step 4 by returning the same six onboarding steps, none of them
+  // about money — and the wizard offers no rates control at all, so the step
+  // the email promised had no door anywhere. MyServicesEditor points an
+  // onboarding crew here too ("set what you charge for each of these on your
+  // rates page").
+  //
+  // The permission was never the problem. rates-data.ts has said since it was
+  // written that "a still-onboarding crew can set rates", getMyRates asks only
+  // getMyVendorId, and setMyRate refuses a SUSPENDED crew and nothing else.
+  // The right thing existed one import away; the door didn't use it.
   const vendor = await getMyVendor();
-  if (vendor && vendor.status !== "active") {
-    const admin = createServiceClient();
-    // park_only travels with the name: onboarding groups the chips by it,
-    // because "Lawn mowing & trim" and "Park grounds mowing & trim" differ
-    // by one word and are two different jobs.
-    const svcs = mustRead("the service list", await admin.from("services").select("name, park_only").eq("active", true).order("name"));
-    const activeServices = (svcs ?? []).map((s) => ({ name: s.name as string, parkOnly: s.park_only === true }));
-    const lakeRows = mustRead("the lake list", await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name"));
-    const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
-    return (
-      <>
-        <TopBar />
-        <VendorNav />
-        <VendorOnboarding vendor={vendor} activeServices={activeServices} lakes={lakes} />
-      </>
-    );
-  }
-
   const rates = await getMyRates();
+  // Not live yet: a rate here is necessary and not sufficient, and the screen
+  // below says "no rate, no routing" as though it were the only thing left.
+  const notLiveYet = vendor != null && vendor.status !== "active";
 
   return (
     <>
       <TopBar />
       <VendorNav />
-      <VendorRates rates={rates} />
+      {notLiveYet && (
+        <div className="wrap" style={{ paddingTop: 24, maxWidth: 620 }}>
+          <p className="ll-notice">
+            You&apos;re not live yet, so nothing is being offered to you at all — what you set
+            here is on file and waiting. Offers start the moment you tap <b>Go live</b> on the
+            Today tab.
+          </p>
+        </div>
+      )}
+      <VendorRates rates={rates} notLiveYet={notLiveYet} />
     </>
   );
 }

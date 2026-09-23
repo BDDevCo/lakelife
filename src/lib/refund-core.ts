@@ -227,9 +227,12 @@ export async function executeRefund(input: {
         console.error(`[refund ${claim.id}] adjustment insert failed:`, adjErr.message);
         clawbackWarning = `Refund sent, but the crew adjustment of $${adjustMagnitude.toFixed(2)} FAILED to record — fix manually (refund ${claim.id}).`;
         try {
-          const { data: opsUsers, error: opsErr } = await admin.from("users").select("phone, email").eq("role", "ops").not("phone", "is", null).limit(3);
-          if (opsErr) console.error("[read failed] the ops phone list:", opsErr);
-          for (const o of opsUsers ?? []) {
+          // EMAIL IS A DOOR OF ITS OWN. Filtering the audience on a phone
+          // number dropped every ops account without one before notify() —
+          // which would happily have emailed them — ever saw the row.
+          const { data: opsRows, error: opsErr } = await admin.from("users").select("phone, email").eq("role", "ops").limit(3);
+          if (opsErr) console.error("[read failed] the ops team's contact details:", opsErr);
+          for (const o of (opsRows ?? []).filter((r) => r.phone || r.email)) {
             void notify(
               "ops that a crew adjustment failed to record after a refund",
               { phone: o.phone as string | null, email: o.email as string | null },

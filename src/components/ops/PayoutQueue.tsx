@@ -13,6 +13,11 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { markBatchesPaid, markBatchesReturned } from "@/app/ops/payout-actions";
 import type { PayoutQueue as PayoutQueueData } from "@/app/ops/payout-data";
+// NOT the local money() below. That one rounds cents away and puts the sign
+// inside the dollar, so a debt of $59.99 reads "$-60" on the one screen
+// somebody would ring a crew about. This is the pure, negative-safe formatter
+// five other client components already use; it imports nothing server-side.
+import { formatCurrency } from "@/app/vendor/earnings-helpers";
 
 const money = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
 
@@ -60,7 +65,7 @@ const EMPTY_COPY =
   "Nothing queued — payouts batch themselves at month-end, early pulls land here the moment a crew taps.";
 
 export function PayoutQueue({ queue }: { queue: PayoutQueueData }) {
-  const { queuedCount, queuedTotal, exportedCount, exportedTotal, rows, returned } = queue;
+  const { queuedCount, queuedTotal, exportedCount, exportedTotal, rows, returned, owing } = queue;
   const router = useRouter();
   const [busy, start] = useTransition();
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -199,6 +204,40 @@ export function PayoutQueue({ queue }: { queue: PayoutQueueData }) {
                 {prettyDate(r.returnedAt)}
                 <br />
                 <span className="mut">{r.reason}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* THE CREWS EVERY RUN DROPS WITHOUT SAYING SO. payout-data worked this
+          out — released, un-batched pay summed per crew, fixtures fenced off by
+          their owner, deepest in the red first — put it on the type under a
+          comment about crews sitting in the red for months, and nothing ever
+          drew it. `runMonthlyPayoutBatches` skips a below-zero crew on a bare
+          `if (sum <= 0) continue`, with no line in the run's skipped list and
+          nothing in the nightly digest, so this card was the last place it
+          could have been said and it said nothing.
+
+          OUTSIDE the rows.length === 0 branch on purpose: a night with no
+          batches at all is exactly when a crew in the red is invisible. */}
+      {owing.length > 0 && (
+        <div className="ll-card ll-card-pad" style={{ marginTop: 12, background: "rgba(190,60,60,.07)" }}>
+          <strong style={{ fontSize: 14 }}>
+            {owing.length === 1
+              ? "A crew is carrying a balance against future pay"
+              : `${owing.length} crews are carrying a balance against future pay`}
+          </strong>
+          <p className="mut" style={{ fontSize: 12.5, margin: "6px 0 10px", lineHeight: 1.5 }}>
+            A refund clawback landed after their pay had already gone out, so what they
+            are owed is below zero. It comes back out of their next earnings — until it
+            does, the month-end run passes over them without a line, here or in the
+            nightly digest. There is nothing to press; this is where you can see it.
+          </p>
+          <div style={{ display: "grid", gap: 8 }}>
+            {owing.map((c) => (
+              <div key={c.vendorId} style={{ fontSize: 13, lineHeight: 1.5 }}>
+                <span style={{ fontWeight: 700 }}>{c.payee}</span> — owes {formatCurrency(-c.amount)}
               </div>
             ))}
           </div>

@@ -925,7 +925,7 @@ describe("31 January 2027 — the month, closed", () => {
     expect(money(page.summary.outstanding)).toBe("$6,752.89");
   });
 
-  it("what the park is holding, and the one screen that still disagrees about it", async () => {
+  it("what the park is holding, and every screen that says so", async () => {
     const held = await getHeldMoney(PARK);
     // Two rows are still held: Lot 2's excess, keyed on account on the 3rd,
     // and Lot 17's $542.53, released when their bill was cancelled on the 9th.
@@ -936,33 +936,28 @@ describe("31 January 2027 — the month, closed", () => {
       .toEqual([542.53, 542.53]);
 
     const today = (await getToday(PARK))!;
-    // ⚠️ STILL OPEN — PINNED HONEST, NOT PINNED RIGHT.
+    // THE DEFECT THIS PINS, and it is closed now. The line's FIGURE was fixed
+    // first: it used to count what ARRIVED, so a cheque already spent on a
+    // bill was counted here and in the rent line at once. Its POPULATION was
+    // wrong for longer — `offBook` asked `charge_id == null`, and a row
+    // released by a cancelled bill (0169) keeps its charge_id for ever,
+    // because the row does not move. So Lot 17's $542.53 was money on account
+    // by the view's own definition, was counted by the held panel above and by
+    // the resident's own page, and was invisible on the one screen he opens
+    // with coffee.
     //
-    // This line's FIGURE was fixed: it used to count what ARRIVED, so a
-    // cheque already spent on a bill was counted here and in the rent line
-    // at once, and the sentence whose whole job is to explain the gap
-    // between the headline and the rent line was $542.53 wrong about it. It
-    // now reads the view's `remaining`, and its words say so.
-    //
-    // Its POPULATION was not. today-actions builds `offBook` as the payments
-    // with `charge_id == null`, and a row released by a cancelled bill (0169)
-    // keeps its charge_id for ever — the row does not move. So Lot 17's
-    // $542.53 is money on account by the view's own definition, is counted by
-    // the held panel above and by the resident's own page, and is invisible
-    // here. The sentence reads "what's still held of what came in this month"
-    // over a figure that is $542.53 short of exactly that.
-    //
-    // WHAT MUST CHANGE: `offBook` in today-actions.ts has to be the view's
-    // membership, not `charge_id == null` — the same read the held panel
-    // makes. When it is, this pin goes red and the two figures below become
-    // one. today-actions.ts is not this file's to edit.
+    // One rule (`sideOfPayment`, today-helpers) now decides which side a
+    // payment falls on, and the receipts filter is its exact complement — so a
+    // payment against a cancelled bill can never be counted as a receipt AND
+    // as off-book in the same month-to-date figure. The two figures are one.
     expect(today.money.offBookLine).toBe(
-      "$542.53 of that is money on account — what's still held of what came in this month. "
+      "$1,085.06 of that is money on account — what's still held of what came in this month. "
       + "The rent line below counts this month's bills only.",
     );
-    // The disagreement itself, stated, so nobody reads the pin above as a
-    // blessing: one definition, two answers, on one morning.
-    expect(money(held.onAccountTotal)).not.toBe("$542.53");
+    // The agreement asserted rather than assumed, both ways round, so a drift
+    // in either screen turns this red.
+    expect(today.money.offBookLine).toContain(money(held.onAccountTotal));
+    expect(money(held.onAccountTotal)).toBe("$1,085.06");
   });
 });
 

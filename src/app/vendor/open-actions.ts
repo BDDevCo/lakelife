@@ -58,7 +58,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const admin = createServiceClient();
   const vendorRes = await admin
     .from("vendors")
-    .select("id, status, coi_expiry, coi_named_insured, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, company")
+    .select("id, status, coi_expiry, coi_named_insured, service_types, service_lakes, work_days, daily_capacity, base_lat, base_lng, company, users!vendors_user_id_fkey!inner(is_fixture)")
     .eq("user_id", user.id)
     .maybeSingle();
   // "Your crew account isn't set up yet" is a sentence about their account, and
@@ -72,7 +72,7 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   const today = todayLakeDate();
   const jobRes = await admin
     .from("jobs")
-    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model, est_minutes, takes_custody), properties(lake_id, address, users(phone, email))")
+    .select("id, date, status, vendor_id, customer_price, service_id, property_id, is_rush, group_id, created_at, services(name, pricing_model, est_minutes, takes_custody), properties(lake_id, address, users(phone, email, is_fixture))")
     .eq("id", jobId)
     .maybeSingle();
   // "That job was already taken" is the one sentence that walks a crew away
@@ -89,6 +89,20 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
 
   const svc = one(job.services) as { name?: string; pricing_model?: string; takes_custody?: boolean } | null;
   if (!svc?.name) return { ok: false, error: "That job isn't claimable." };
+
+  // THE ACTION IS THE BOUNDARY, NOT THE BOARD (the second doorway of the same
+  // rule). getOpenJobs hides a test booking from a real crew; this refuses it,
+  // so a stale page, a shared link or a replayed request cannot put a real
+  // business in a driveway for work nobody ordered. Directional, exactly as on
+  // the board: a test crew may still claim a test job, which is the only way
+  // the claim → complete → payout chain can be walked before the first real
+  // crew arrives. The sentence names the reason rather than borrowing "already
+  // taken", which would be false.
+  const jobOwner = one((one(job.properties) as { users?: unknown } | null)?.users) as { is_fixture?: boolean } | null;
+  const iAmFixture = !!(one(vendor.users as unknown) as { is_fixture?: boolean } | null)?.is_fixture;
+  if (!iAmFixture && jobOwner?.is_fixture) {
+    return { ok: false, error: "That job isn't real work — it's a test booking, and it never appears on your board." };
+  }
 
   // Phase E: a crew paused on this job's lake can't claim there (and therefore
   // can't auto-re-opt into the lake) until the cooldown runs out.

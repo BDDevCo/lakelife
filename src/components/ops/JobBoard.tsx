@@ -7,6 +7,7 @@ import { assignAndSchedule } from "@/app/ops/actions";
 import { toast } from "@/components/Toast";
 import { RefundModal } from "@/components/ops/RefundModal";
 import type { OpsJob, ActiveVendor } from "@/app/ops/data";
+import { crewListsService } from "@/lib/crew-services";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 const SLOTS = [
@@ -27,16 +28,6 @@ const BUCKETS: Array<{ key: string; label: string; statuses: string[]; tone: str
   // half-truth this codebase keeps finding; the label says the window instead.
   { key: "done", label: "Complete — last 30 days", statuses: ["complete", "paid"], tone: "ok" },
 ];
-
-/** Does this vendor list this service? Empty service_types = generalist. */
-function serviceOk(vendor: ActiveVendor, serviceName: string | null): boolean {
-  if (!vendor.service_types.length) return true;
-  const svc = (serviceName ?? "").toLowerCase();
-  return vendor.service_types.some((t) => {
-    const tt = String(t).toLowerCase();
-    return svc.includes(tt) || tt.includes(svc.split(" ")[0]);
-  });
-}
 
 function prettyDate(d: string | null): string {
   if (!d) return "—";
@@ -178,6 +169,54 @@ function JobRow({
   );
 }
 
+/**
+ * THE OVERRIDE WITH NOBODY TO OVERRIDE TO.
+ *
+ * `getActiveVendors` fences test accounts out of this dropdown — correctly,
+ * and precisely when auto-dispatch has already found nobody. Production's
+ * three vendors are all test accounts, so the list is empty today and stays
+ * empty until a real crew activates: the modal drew an inert "Choose a
+ * vendor…", a disabled Confirm, and a footer still explaining how payout
+ * releases, with not one word about why. This is the control ops reaches for
+ * the first time a real customer books on any lake.
+ *
+ * WORDED FOR WHATEVER THE CAUSE IS. The coverage card on the Crews tab says
+ * "every vendor on the platform is a test account" because it is computed from
+ * numbers this modal never receives; an empty list here only means "no active
+ * crew with insurance on file", which is equally true the day a real crew is
+ * invited but not yet activated. Both modals import this one, so the sentence
+ * cannot be half-corrected later.
+ */
+export function NoCrewToAssign({ title, subtitle, onClose }: { title: string; subtitle: string; onClose: () => void }) {
+  return (
+    <div className="ll-overlay" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="ll-modal" style={{ maxWidth: 460 }}>
+        <div className="ll-modal-head">
+          <div>
+            <span className="ll-pill teal">Manual override</span>
+            <h3 style={{ fontSize: 20, marginTop: 8 }}>{title}</h3>
+            <div className="mut" style={{ fontSize: 13 }}>{subtitle}</div>
+          </div>
+          <button className="ll-x" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="ll-modal-body">
+          <div style={{ padding: "12px 14px", borderRadius: 12, background: "var(--alarm-bg)" }}>
+            <strong style={{ fontSize: 14 }}>No crew can be assigned by hand.</strong>
+            <p style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.55 }}>
+              There is no active crew with insurance on file, so there is nobody to route this to —
+              by hand or by machine. Recruit or activate a crew on the Crews tab of the ops console;
+              that&apos;s the real unblock.
+            </p>
+          </div>
+          <button className="ll-btn ghost" style={{ width: "100%", marginTop: 14 }} onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AssignModal({ job, vendors, onClose }: { job: OpsJob; vendors: ActiveVendor[]; onClose: () => void }) {
   const router = useRouter();
   const price = job.customer_price ?? 0;
@@ -194,7 +233,7 @@ function AssignModal({ job, vendors, onClose }: { job: OpsJob; vendors: ActiveVe
   const options = useMemo(
     () =>
       vendors
-        .map((v) => ({ v, service_ok: serviceOk(v, job.service_name) }))
+        .map((v) => ({ v, service_ok: crewListsService(v.service_types, job.service_name) }))
         // list service-matching vendors first, then the rest
         .sort((a, b) => Number(b.service_ok) - Number(a.service_ok)),
     [vendors, job.service_name],
@@ -227,6 +266,18 @@ function AssignModal({ job, vendors, onClose }: { job: OpsJob; vendors: ActiveVe
     borderRadius: 10, fontSize: 16, fontFamily: "inherit", background: "#fff", color: "var(--text)",
   };
 
+  // After the hooks, before the form: with nobody to choose, every field below
+  // describes a transaction that cannot start.
+  if (vendors.length === 0) {
+    return (
+      <NoCrewToAssign
+        title={job.service_name ?? "Service"}
+        subtitle={`${job.address}${job.owner_name ? ` · ${job.owner_name}` : ""}`}
+        onClose={onClose}
+      />
+    );
+  }
+
   return (
     <div className="ll-overlay" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="ll-modal" style={{ maxWidth: 460 }}>
@@ -246,7 +297,17 @@ function AssignModal({ job, vendors, onClose }: { job: OpsJob; vendors: ActiveVe
               {options.map(({ v, service_ok }) => (
                 <option key={v.id} value={v.id} disabled={!v.coi_ok}>
                   {v.company ?? "Vendor"}
-                  {!v.coi_ok ? " — COI expired/missing" : service_ok ? "" : " — doesn't list this service"}
+                  {/* The same two-way label the job file uses. "Doesn't list
+                      this service" is true but unhelpful for a crew who lists
+                      none at all — the remedy is a different one, so the
+                      sentence has to be too. */}
+                  {!v.coi_ok
+                    ? " — COI expired/missing"
+                    : service_ok
+                      ? ""
+                      : v.service_types.length === 0
+                        ? " — lists no services at all"
+                        : " — doesn't list this service"}
                 </option>
               ))}
             </select>

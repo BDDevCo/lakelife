@@ -3,10 +3,12 @@
  *
  * Every email and text in this app funnels through two functions — sendEmail
  * and sendSms — and until now neither asked anything about the recipient. That
- * was survivable only by accident: EMAIL_FROM is unset, so Resend's sandbox
- * sender silently swallowed everything aimed at a scratch address, and SMS had
- * no such luck at all. Setting one environment variable in Vercel ends the
- * email half of that with no code change and nothing on screen.
+ * was survivable only by accident, and only in one channel: where EMAIL_FROM
+ * is unset, sendEmail falls back to Resend's sandbox sender, which reaches
+ * nobody but the account owner, so a scratch address is swallowed. SMS has no
+ * such luck at any setting. And the accident is one environment variable wide
+ * — the environment lives in Vercel, not in this tree, so nothing here may
+ * assume which way it is set on a given deployment.
  *
  * THE TEST THAT MATTERS IS NOT "IS THIS A FIXTURE". It is: COULD THIS REACH A
  * STRANGER? Those are different questions and only the second one describes a

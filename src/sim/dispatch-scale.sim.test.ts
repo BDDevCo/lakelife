@@ -712,7 +712,7 @@ describe(`dispatch scale sim — two seasons, ${CUSTOMERS} customers, ${crews.le
    * At scale in the book above this fired on the great majority of
    * "day full" answers — see the ops report.
    */
-  it("SIM-FOUND: 'that day just filled up' fires when nothing is full and no date can ever work", () => {
+  it("SIM-FOUND (fixed): a lapsed certificate no longer reads as a full day", () => {
     const lapsed = (id: string): CrewCandidate => ({
       vendorId: id,
       status: "active",
@@ -743,17 +743,20 @@ describe(`dispatch scale sim — two seasons, ${CUSTOMERS} customers, ${crews.le
     };
     const d = decideDispatch(base);
     expect(d.ok).toBe(false);
-    // CURRENT BEHAVIOR: the "day is full" reason — which the booking action
-    // turns into a deleted job + "That day just filled up."
-    expect(d.reasonNoFit).toBe("all_full_or_blocked");
+    // FIXED: standing and insurance are not a full calendar. The reason the
+    // booking flow deletes a job on is now reserved for a genuinely full day;
+    // a pool that cannot be routed keeps its booking as a Finding-a-crew row.
+    expect(d.reasonNoFit).toBe("no_routable_crew");
     expect(d.eligibleCount).toBe(0);
     // Proof that nothing was full: every crew's calendar is empty, and NO
     // date in the season produces a different answer.
     for (const wd of ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]) {
-      expect(decideDispatch({ ...base, weekday: wd }).reasonNoFit).toBe("all_full_or_blocked");
+      expect(decideDispatch({ ...base, weekday: wd }).reasonNoFit).toBe("no_routable_crew");
     }
-    // Contrast: a genuinely full day gives the same reason, so the caller
-    // cannot tell the two apart.
+    // The contrast this test was always asking for: a genuinely full day
+    // still answers all_full_or_blocked, and now ONLY a genuinely full day
+    // does — so the caller can tell the two apart, and only one of them
+    // costs the customer their booking.
     const full = decideDispatch({
       ...base,
       crews: base.crews.map((c) => ({ ...c, coiExpiry: "2027-01-01", assignedThatDay: c.dailyCapacity })),

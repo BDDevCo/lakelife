@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { LakeCondition } from "@/app/ops/data";
 
@@ -7,9 +8,16 @@ vi.mock("@/app/ops/actions", () => ({
   updateLakeConditions: async () => ({ ok: true }),
   promoteLakeToServed: async () => ({ ok: true }),
 }));
-vi.mock("@/components/Toast", () => ({ toast: () => {} }));
+// Widened: the bare `() => {}` had no `.ok` and no `.err`, so nothing in this
+// file could drive save() at all without throwing — which is how the swallowed
+// season warning went unnoticed while a test in season-roll.test.ts was named
+// "saves a freeze-only row but says out loud that water work stays shut".
+vi.mock("@/components/Toast", () => {
+  const toast = Object.assign(() => {}, { ok: () => {}, err: () => {}, info: () => {} });
+  return { toast };
+});
 
-const { LakeConditions } = await import("./LakeConditions");
+const { LakeConditions, saveOutcome } = await import("./LakeConditions");
 
 const lake = (over: Partial<LakeCondition>): LakeCondition => ({
   id: "l1", name: "Big Long Lake",
@@ -160,5 +168,57 @@ describe("ops is told which lakes are waiting, and can say yes", () => {
     const html = renderToStaticMarkup(<LakeConditions lakes={[waiting({ days_waiting: null })]} />);
     expect(html).toContain("couldn&#x27;t work out how long");
     expect(html).not.toContain("waiting 0 days");
+  });
+});
+
+/**
+ * SAVING THE SEASON DATES SWALLOWED THE ONE WARNING THAT SAVE CAN PRODUCE.
+ *
+ * `updateLakeConditions` returns `{ ok: true, warning }` and has exactly one
+ * warning to give: a hard freeze on file with no ice-out leaves the lake CLOSED
+ * for water work for the whole spring (rule 7 — dayStatus fails closed the
+ * moment either date is missing). save() never read `res.warning`, so the save
+ * that shuts a lake's spring calendar reported a flat success with a tick.
+ *
+ * Collapsed both ways below: remove the warning arm and the second case fails;
+ * remove the plain-success arm and the first one does. The source scan is what
+ * ties the helper to the caller, because a helper nothing calls would pass
+ * every assertion above it.
+ */
+describe("what a season save is allowed to say", () => {
+  it("earns the tick when there is nothing to warn about", () => {
+    expect(saveOutcome({ ok: true })).toEqual({
+      kind: "ok",
+      message: "Saved — the booking calendar will reflect these dates.",
+    });
+  });
+
+  it("shows the warning instead, and without a tick", () => {
+    const warning =
+      "Saved — but with no ice-out on file this lake stays CLOSED for water work (rule 7). Add the ice-out date to open the spring calendar.";
+    const out = saveOutcome({ ok: true, warning });
+    expect(out.message).toBe(warning);
+    // `toast.ok` is what draws the tick (Toast.tsx). A sentence saying the
+    // spring calendar is shut is true, and it is not a success.
+    expect(out.kind).toBe("plain");
+    expect(out.kind).not.toBe("ok");
+  });
+
+  it("still says the refusal in the crew's own words when the save failed", () => {
+    expect(saveOutcome({ ok: false, error: "Ops only." })).toEqual({ kind: "err", message: "Ops only." });
+    expect(saveOutcome({ ok: false }).message).toBe("Couldn't save.");
+  });
+
+  it("is the function save() actually calls", () => {
+    // Strip comments first: every sentence quoted here also appears in prose
+    // above the code, and a scan that reads comments proves nothing.
+    const src = readFileSync(new URL("./LakeConditions.tsx", import.meta.url), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(src.length).toBeGreaterThan(500); // the scanner found the file
+    expect(src).toMatch(/const out = saveOutcome\(res\)/);
+    // The success sentence lives in ONE place — the helper. A second copy in
+    // save() is how the warning arm gets quietly stepped over again.
+    expect(src.split("Saved — the booking calendar").length - 1).toBe(1);
   });
 });

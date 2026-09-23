@@ -23,10 +23,14 @@ function validCapacity(n: unknown): number | null {
  * A crew is routable only with a COI document, a W-9 document, and a COI expiry
  * that is still in the future. Returns an error string, or null if clear.
  */
-async function assertRoutable(admin: ReturnType<typeof createServiceClient>, vendorId: string): Promise<string | null> {
+async function assertRoutable(
+  admin: ReturnType<typeof createServiceClient>,
+  vendorId: string,
+  opts: { capacityComingInThisWrite?: boolean } = {},
+): Promise<string | null> {
   const res = await admin
     .from("vendors")
-    .select("id, coi_url, w9_url, coi_expiry, coi_named_insured, company")
+    .select("id, coi_url, w9_url, coi_expiry, coi_named_insured, company, daily_capacity")
     .eq("id", vendorId)
     .maybeSingle();
   // THIS IS THE GATE THAT DECIDES WHETHER A CREW MAY BE ROUTED, and every
@@ -47,6 +51,21 @@ async function assertRoutable(admin: ReturnType<typeof createServiceClient>, ven
     const named = checkNamedInsured(v.coi_named_insured as string, v.company as string | null);
     if (!named.ok) return named.message;
   }
+  // AND THEY HAVE TO HAVE SAID HOW MANY JOBS A DAY THEY CAN TAKE.
+  //
+  // An invited crew now carries a NULL capacity rather than a seeded 1, so the
+  // wizard's step 5 is a real question instead of a pre-ticked one. That makes
+  // this the last door that could put a crew on the board without an answer:
+  // reactivateCrew writes `status: 'active'` and never touched capacity, and
+  // isEligible drops a crew at `cap <= 0` with no message on any screen. A
+  // visible wrong number is bad; an invisible zero is worse. approveCrew is
+  // exempt because it is writing a validated 1–20 in the same statement.
+  if (!opts.capacityComingInThisWrite) {
+    const cap = Math.floor(Number(v.daily_capacity));
+    if (!Number.isFinite(cap) || cap < 1) {
+      return "That crew hasn't said how many jobs a day they can take — set their daily capacity first.";
+    }
+  }
   return null;
 }
 
@@ -64,7 +83,9 @@ export async function approveCrew(vendorId: string, dailyCapacity: number): Prom
   if (cap == null) return { ok: false, error: "Daily capacity must be a whole number from 1 to 20." };
 
   const admin = createServiceClient();
-  const gate = await assertRoutable(admin, vendorId);
+  // The capacity check is skipped here alone: this call is what sets it, from
+  // the validated 1–20 above, in the same UPDATE.
+  const gate = await assertRoutable(admin, vendorId, { capacityComingInThisWrite: true });
   if (gate) return { ok: false, error: gate };
 
   const { error } = await admin
@@ -162,8 +183,8 @@ export async function setCrewCapacity(vendorId: string, n: number): Promise<Crew
  * rule compares that name to the one printed on the certificate, and a
  * mismatch blocks activation, auto-dispatch and the claim board at once. The
  * remedy named by named-insured.ts ("a thirty-second conversation and an edit
- * to vendors.company"), by the crew's own message ("send us a message and
- * we'll get it straightened out") and by the ops board ("check which is wrong
+ * to vendors.company"), by the crew's own message ("email hello@lakelife.ai
+ * and we'll get it straightened out") and by the ops board ("check which is wrong
  * before approving") had no control behind it in any of the three places.
  *
  * It bites hardest on the path about to get the most use: ops types the name

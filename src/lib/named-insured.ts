@@ -148,10 +148,18 @@ export function checkNamedInsured(
       // BOTH NAMES, VERBATIM. A crew told only "these don't match" has to
       // guess which one we think is wrong, and the answer is often that the
       // account is wrong rather than the policy.
+      // AND THE LAST CLAUSE HAS TO BE SOMETHING THEY CAN DO. It used to say
+      // "send us a message", and a crew has no message door anywhere: /messages
+      // is the homeowner↔dispatch thread keyed to a property, VendorNav has no
+      // messages tab, and no crew screen renders a composer. This is the ONE
+      // activation refusal a crew cannot cure themselves — vendors.company has a
+      // single writer and it is ops' — so the sentence that reaches them has to
+      // name a door that exists. The rest of the crew side already says this
+      // one, verbatim.
       message:
         `The certificate names “${(namedInsured ?? "").trim()}” but your account says ` +
         `“${(company ?? "").trim()}”. If the policy is in a different legal name, ` +
-        `send us a message and we'll get it straightened out.`,
+        `email hello@lakelife.ai and we'll get it straightened out.`,
     };
   }
   return { ok: true };

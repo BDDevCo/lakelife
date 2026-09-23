@@ -31,10 +31,11 @@ const set = (env: Partial<Record<string, string>>) => {
 };
 
 describe("what the deployment can actually reach", () => {
-  it("today's real state: neither channel reaches a household", () => {
+  it("neither channel finished: nothing reaches a household", () => {
     // RESEND_API_KEY and the Twilio creds are set; EMAIL_FROM and the
-    // Messaging Service SID are not. That is production as of Sep 2026, and
-    // it is exactly 0 of 81 texts and every email landing in our own inbox.
+    // Messaging Service SID are not. That is a deployment with neither channel
+    // finished — not a claim about production, whose environment lives in
+    // Vercel and is not readable from this tree.
     set({ RESEND_API_KEY: "re_x", TWILIO_ACCOUNT_SID: "AC", TWILIO_AUTH_TOKEN: "tok" });
     const cap = sendCapability();
     expect(cap.email).toBe(false);

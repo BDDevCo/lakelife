@@ -118,12 +118,18 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
       );
     } else {
       const n = res.repriced ?? 0;
+      const checking = res.heldForMargin ?? 0;
       const parts = [
         nothingProposed
           ? "Approved — we've told the crew to go ahead."
           : n > 0
             ? `Approved — profile updated and ${n} upcoming ${n === 1 ? "visit" : "visits"} re-priced.`
-            : "Approved — your profile is updated. Nothing upcoming to re-price yet.",
+            : checking > 0 || (res.heldAgreements ?? 0) > 0
+              // Something upcoming DOES exist — it was held. "Nothing upcoming
+              // to re-price yet" would be false, and the held-visit sentences
+              // below say what actually happened.
+              ? "Approved — your profile is updated."
+              : "Approved — your profile is updated. Nothing upcoming to re-price yet.",
       ];
       if (res.flaggedJobAlreadyDone) {
         parts.push("That visit is already done, so its bill stays as it was.");
@@ -139,6 +145,19 @@ export function ApprovalCard({ flag }: { flag: OwnerFlag }) {
           held === 1
             ? "One upcoming visit has a price you'd already agreed, so we left it exactly as it was."
             : `${held} upcoming visits have prices you'd already agreed, so we left them exactly as they were.`,
+        );
+      }
+      // HELD FOR A REASON THAT IS OURS, NOT THEIRS. A visit whose corrected
+      // size prices under our own margin floor is left exactly as it was and
+      // raised to ops by email. The homeowner hears that it is being checked
+      // and nothing more: the floor is an ops dial they cannot move, and
+      // naming the crew's cost or the percentage would put our margin on a
+      // customer's screen.
+      if (checking > 0) {
+        parts.push(
+          checking === 1
+            ? "We've held one upcoming visit for a quick check on our side — we'll be in touch about it."
+            : `We've held ${checking} upcoming visits for a quick check on our side — we'll be in touch about them.`,
         );
       }
       toast(parts.join(" "));

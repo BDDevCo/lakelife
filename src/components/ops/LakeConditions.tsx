@@ -14,6 +14,30 @@ import { toast } from "@/components/Toast";
 import type { LakeCondition } from "@/app/ops/data";
 import { waitingWords } from "@/lib/lake-visibility";
 
+/**
+ * WHAT A SAVE SHOULD SAY, WORKED OUT WHERE A TEST CAN REACH IT.
+ *
+ * `updateLakeConditions` can return `{ ok: true, warning }`, and it has exactly
+ * one warning to give: a freeze date on file with no ice-out leaves the lake
+ * CLOSED for water work all spring (rule 7 — dayStatus fails closed the moment
+ * either date is missing). save() never read it. So the one save that shuts a
+ * lake's entire spring calendar reported a flat "Saved — the booking calendar
+ * will reflect these dates", with a tick beside it, and the only other thing on
+ * screen was a provisional banner that says nothing about being closed.
+ *
+ * The warning gets a PLAIN toast, not `toast.ok`: Toast.tsx draws the tick for
+ * `ok` alone, and a sentence saying the spring calendar is shut has not earned
+ * one. promote() above uses `toast.ok` for its warning because "it was already
+ * public" genuinely is a success; this one is not.
+ */
+export function saveOutcome(
+  res: { ok: boolean; error?: string | null; warning?: string | null },
+): { kind: "ok" | "plain" | "err"; message: string } {
+  if (!res.ok) return { kind: "err", message: res.error ?? "Couldn't save." };
+  if (res.warning) return { kind: "plain", message: res.warning };
+  return { kind: "ok", message: "Saved — the booking calendar will reflect these dates." };
+}
+
 /** Hard freeze (yyyy-mm-dd) minus 8 days, formatted "Mon D". "—" if empty/invalid. */
 function pullDeadlineLabel(hardFreeze: string): string {
   if (!hardFreeze) return "—";
@@ -107,11 +131,13 @@ function LakeCard({ lake }: { lake: LakeCondition }) {
         iceOut: iceOut || null,
         hardFreeze: hardFreeze || null,
       });
-      if (res.ok) {
-        toast.ok("Saved — the booking calendar will reflect these dates.");
-        router.refresh();
+      const out = saveOutcome(res);
+      if (out.kind === "err") {
+        toast.err(out.message);
       } else {
-        toast.err(res.error ?? "Couldn't save.");
+        if (out.kind === "plain") toast(out.message);
+        else toast.ok(out.message);
+        router.refresh();
       }
     } finally {
       setBusy(false);

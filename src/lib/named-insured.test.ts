@@ -75,6 +75,29 @@ describe("does this certificate belong to this business", () => {
     expect(v.ok === false && v.reason).toBe("mismatch");
   });
 
+  it("names a door that exists — a crew has no message surface anywhere", () => {
+    // THIS IS THE ONE ACTIVATION REFUSAL A CREW CANNOT CURE. vendors.company
+    // has a single writer and it is ops'; retyping the account name onto the
+    // certificate field would be typing a name that is not on the document. So
+    // the last clause has to be executable, and "send us a message" was not:
+    // /messages is the homeowner↔dispatch thread keyed to a property, VendorNav
+    // has no messages tab, and no crew screen renders a composer.
+    const v = checkNamedInsured("Timber Marine LLC", "Northshore Docks");
+    expect(v.ok === false && v.message).toContain("hello@lakelife.ai");
+    expect(v.ok === false && v.message).not.toContain("send us a message");
+    // And it must stay a promise somebody keeps — no-dead-ends.test.ts pins
+    // this clause to ops' setCrewCompany control.
+    expect(v.ok === false && v.message).toContain("straightened out");
+  });
+
+  it("says nothing that would flag the certificate itself", () => {
+    // VendorOnboarding derives `coiFlagged` from /insurance|COI/i over the gap
+    // strings and then renders "No insurance on file, no jobs" — which would be
+    // a fresh lie to a crew whose certificate IS on file.
+    const v = checkNamedInsured("Timber Marine LLC", "Northshore Docks");
+    expect(v.ok === false && v.message).not.toMatch(/insurance|COI/i);
+  });
+
   it("names BOTH businesses in the refusal, because the account is often the wrong one", () => {
     const v = checkNamedInsured("Timber Marine LLC", "Northshore Docks");
     expect(v.ok === false && v.message).toContain("Timber Marine LLC");

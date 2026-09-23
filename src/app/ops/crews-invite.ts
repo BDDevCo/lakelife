@@ -5,7 +5,7 @@ import { sendEmail } from "@/lib/email";
 import { html } from "@/lib/html-safe";
 import { likeLiteral } from "@/lib/sql-like";
 import { assertOps } from "./data";
-import { readFailedMessage } from "@/lib/must-read";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { SERVED_LAKE_MATCH } from "@/lib/lake-visibility";
 
 export interface InviteResult {
@@ -90,7 +90,20 @@ export async function inviteCrew(input: {
     company,
     invite_email: email,
     service_types: serviceTypes,
-    daily_capacity: 1, // routable default; the crew sets their real number at onboarding
+    // NULL, NOT 1 — A DEFAULT MUST BE WHAT IS TRUE ON DAY ONE.
+    //
+    // The old seed of 1 was called a "routable default", but activationGaps
+    // only refuses `cap < 1`, so the seed SATISFIED the go-live gate the crew
+    // was supposed to answer. Step 5 of the wizard rendered ticked with a
+    // "Saved ✓" pill for a number nobody had chosen, the crew never opened it,
+    // and dispatch then routed them exactly one job a day forever — isEligible
+    // refuses at `assignedThatDay >= cap` and canClaim answers "Your day is
+    // full". A number a crew never stated was being read as their answer.
+    //
+    // Null is the honest state: the gap fires, the step is a real step, and no
+    // door to `active` can pass a crew without a capacity — approveCrew
+    // validates 1–20 and assertRoutable now refuses a missing one.
+    daily_capacity: null,
     status: "invited",
   });
   if (insErr) return { ok: false, error: insErr.message };
@@ -263,6 +276,55 @@ export async function resendCrewInvite(vendorId: string): Promise<ResendResult> 
     return { ok: false, error: `Still couldn't send it (${sent.error ?? "unknown"}). Send them this link yourself: ${site}` };
   }
   return { ok: true, email };
+}
+
+/**
+ * IS THIS PERSON A LAKELIFE CREW — claimed row, or an invitation still waiting?
+ *
+ * /welcome is the first screen after a new account verifies its phone, and it
+ * is the homeowner wizard: "let's build your property profile". A crew invited
+ * by ops lands there, because the invitation links the bare site and the verify
+ * panel finishes at /welcome. Their vendors row is still unclaimed at that
+ * moment (user_id null), so their OWN client cannot see it through RLS — which
+ * is why this read is service-role.
+ *
+ * TAKES NO ARGUMENTS ON PURPOSE. This file is "use server", so every export is
+ * a public endpoint; deriving both the id and the address from the session
+ * means the only thing a caller can ever learn is something about themselves.
+ *
+ * It THROWS on a failed read rather than answering false. A dropped connection
+ * that answers "no" renders the property wizard at a crew — the exact class of
+ * bug this function exists to close.
+ */
+export async function hasCrewInvite(): Promise<boolean> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return false;
+
+  const admin = createServiceClient();
+  const claimed = mustRead(
+    "whether you're set up as a LakeLife crew",
+    await admin.from("vendors").select("id").eq("user_id", user.id).maybeSingle(),
+  );
+  if (claimed) return true;
+
+  // Same `.eq` rule as claimCrewInvite below, and for the same reason: `_` in
+  // an ilike pattern matches any single character, which is how a stranger
+  // could once match somebody else's invitation.
+  const email = (user.email ?? "").trim().toLowerCase();
+  if (!email || !EMAIL_RE.test(email)) return false;
+  const invited = mustRead(
+    "whether a crew invitation is waiting for you",
+    await admin
+      .from("vendors")
+      .select("id")
+      .eq("invite_email", email)
+      .is("user_id", null)
+      .maybeSingle(),
+  );
+  return invited != null;
 }
 
 /**

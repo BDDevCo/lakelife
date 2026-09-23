@@ -12,9 +12,12 @@ import { hasTwilioAccount, hasTwilioMessagingEnv } from "@/lib/env";
  *
  *     "Lifted. Notices can now reach your households."
  *
- * That is a promise about the world, and today it is false in both channels at
- * once. It is the last thing the park owner reads before he believes twenty
- * households are being told about their rent.
+ * That is a promise about the world, and on a deployment with neither channel
+ * finished it is false in both at once. It is the last thing the park owner
+ * reads before he believes twenty households are being told about their rent.
+ * Which way any given deployment is set is not readable from this tree — the
+ * environment lives in Vercel, which is exactly why this asks it at runtime
+ * rather than stating it in a comment.
  *
  * ============ WHY CONFIGURATION IS ENOUGH TO KNOW THIS ============
  *

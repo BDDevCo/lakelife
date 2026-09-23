@@ -16,7 +16,7 @@ import { setMyRate } from "@/app/vendor/rates-actions";
 import type { MyRate } from "@/app/vendor/rates-data";
 import type { RateField, RatePayload } from "@/app/vendor/rates-helpers";
 
-export function VendorRates({ rates }: { rates: MyRate[] }) {
+export function VendorRates({ rates, notLiveYet = false }: { rates: MyRate[]; notLiveYet?: boolean }) {
   if (rates.length === 0) {
     return (
       <div className="wrap" style={{ paddingTop: 24, maxWidth: 560 }}>
@@ -41,8 +41,15 @@ export function VendorRates({ rates }: { rates: MyRate[] }) {
         Set your take-home for each kind of work — in your own units. This is your
         private number; LakeLife adds its own on top.
       </p>
+      {/* NECESSARY, NOT SUFFICIENT. "No rate, no routing" is the whole story
+          for a live crew. For a crew still onboarding it is the smaller half:
+          dispatch drops them for not being active before a rate is read at
+          all, so promising that a rate is what stands between them and work
+          would be false. The page above says the rest. */}
       <p style={{ fontSize: 13, fontWeight: 700, color: "var(--warn)", marginBottom: 18 }}>
-        Set a rate to be matched to jobs — no rate, no routing.
+        {notLiveYet
+          ? "Set a rate now so it's on file — no rate, no routing once you're live."
+          : "Set a rate to be matched to jobs — no rate, no routing."}
       </p>
 
       {standard.length > 0 && (

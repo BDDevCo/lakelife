@@ -21,8 +21,10 @@ import { useRouter } from "next/navigation";
 import { assignAndSchedule } from "@/app/ops/actions";
 import { sendOpsMessage, draftReplyForThread } from "@/app/ops/messages-actions";
 import { RefundModal } from "@/components/ops/RefundModal";
+import { NoCrewToAssign } from "@/components/ops/JobBoard";
 import { toast } from "@/components/Toast";
 import type { ActiveVendor } from "@/app/ops/data";
+import { crewListsService } from "@/lib/crew-services";
 import type { OpsJobMessage } from "@/app/ops/job-detail-data";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -38,22 +40,6 @@ const selectStyle: React.CSSProperties = {
   width: "100%", padding: "11px 13px", border: "1.5px solid var(--line)",
   borderRadius: 10, fontSize: 16, fontFamily: "inherit", background: "#fff", color: "var(--text)",
 };
-
-/**
- * Does this crew list this service?
- *
- * A SECOND COPY of the rule in ops/data.ts, and both of them used to answer
- * TRUE for a crew who lists nothing — while dispatch offers that crew nothing.
- * Empty means empty.
- */
-function serviceOk(vendor: ActiveVendor, serviceName: string | null): boolean {
-  if (!vendor.service_types.length) return false;
-  const svc = (serviceName ?? "").toLowerCase();
-  return vendor.service_types.some((t) => {
-    const tt = String(t).toLowerCase();
-    return svc.includes(tt) || tt.includes(svc.split(" ")[0]);
-  });
-}
 
 function whenLabel(iso: string): string {
   return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -145,10 +131,24 @@ function AssignModal({
   const options = useMemo(
     () =>
       vendors
-        .map((v) => ({ v, service_ok: serviceOk(v, serviceName) }))
+        .map((v) => ({ v, service_ok: crewListsService(v.service_types, serviceName) }))
         .sort((a, b) => Number(b.service_ok) - Number(a.service_ok)),
     [vendors, serviceName],
   );
+
+  // The second override doorway, with the same dead end as the board's. Placed
+  // after the hooks, before the form: with nobody to choose, the cost field,
+  // the margin preview and the payout footer all describe a transaction that
+  // cannot start, and the empty dropdown says nothing about why.
+  if (vendors.length === 0) {
+    return (
+      <NoCrewToAssign
+        title={serviceName ?? "Service"}
+        subtitle={`${address ?? "Address on file"}${customerName ? ` · ${customerName}` : ""}`}
+        onClose={onClose}
+      />
+    );
+  }
 
   const costNum = Math.round(Number(cost) * 100) / 100;
   const costValid = Number.isFinite(costNum) && costNum >= 0 && costNum <= price;

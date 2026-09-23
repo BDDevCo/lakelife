@@ -7,6 +7,7 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { SignOutButton } from "@/components/SignOutButton";
 import { listProperties } from "@/app/profile/data";
 import { isParkMember } from "@/app/park/data";
+import { hasCrewInvite } from "@/app/ops/crews-invite";
 
 export default async function WelcomePage() {
   let name = "there";
@@ -31,6 +32,23 @@ export default async function WelcomePage() {
       // send them straight to the portal.
       const properties = await listProperties();
       if (properties.length > 0) redirect("/book");
+
+      // AND A CREW LANDS HERE TOO, on the homeowner wizard.
+      //
+      // The invitation email links the bare site with no ?next, sign-up
+      // finishes at /auth/callback?next=/verify, and VerifyPanel pushes
+      // "/welcome" — so the first screen a real crew ever sees tells them to
+      // build a property profile, and both gold buttons walk them deeper into
+      // it. Nobody has noticed because all three production crews are
+      // fixtures; the first real crew onboards this autumn.
+      //
+      // AFTER the property check on purpose. Someone who already owns a lake
+      // house and was ALSO invited as a crew has told us what they are by
+      // having a property — which identity wins for a dual account is a
+      // product decision, and this routing patch does not get to make it.
+      // /portal is the one doorway that owns the claim: it re-checks the park
+      // rule and then calls claimCrewInvite, which is what flips their role.
+      if (await hasCrewInvite()) redirect("/portal");
 
       email = user.email ?? "";
       // The checklist below IS this read. A failure renders "Welcome to
@@ -114,6 +132,16 @@ export default async function WelcomePage() {
             </Link>
             <SignOutButton />
           </div>
+
+          {/* THE GUARD BEHIND THE REDIRECT ABOVE. A crew whose invitation went
+              to a different address than the one they signed up with isn't
+              matched by that read, and this page's only other control is Sign
+              out — which destroys the session they just built. One true
+              sentence and a door, for anyone the branch missed. */}
+          <p className="mut" style={{ fontSize: 13, marginTop: 14, marginBottom: 0 }}>
+            Here to take jobs as a LakeLife crew?{" "}
+            <Link href="/portal">Open your portal →</Link>
+          </p>
         </div>
       </div>
     </>

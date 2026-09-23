@@ -361,61 +361,6 @@ export async function getJobBoard(): Promise<OpsJob[]> {
   });
 }
 
-// ---- Eligible vendors for a job (COI gate) --------------------------------
-
-export interface EligibleVendor {
-  id: string;
-  company: string | null;
-  coi_ok: boolean;
-  coi_expiry: string | null;
-  service_ok: boolean;
-  daily_capacity: number;
-}
-
-/** Active vendors annotated with COI validity + whether they list this service.
- *  Spec: no valid COI ⇒ not routable. We surface all active vendors but the
- *  server assign action HARD-blocks anyone whose COI isn't valid. */
-export async function getEligibleVendors(serviceName: string | null): Promise<EligibleVendor[]> {
-  const admin = createServiceClient();
-  const today = todayLakeDate();
-  const data = mustRead(
-    "the crews eligible for this job",
-    await admin
-      .from("vendors")
-      .select("id, company, coi_expiry, service_types, daily_capacity, status")
-      .eq("status", "active")
-      .order("company", { ascending: true }),
-  );
-
-  const svc = (serviceName ?? "").toLowerCase();
-  return (data ?? []).map((v) => {
-    const types = (v.service_types as string[] | null) ?? [];
-    // AN EMPTY LIST MATCHES NOTHING, not everything. Dispatch pools only crews
-    // whose service_types includes the name, so a crew listing nothing is
-    // routed nothing — and telling ops they match this job put the annotation
-    // and the router in direct contradiction.
-    //
-    // This is a HINT, not a gate: ops may still assign them by hand, and the
-    // assign action's hard block is the COI. All that changes is that the
-    // sentence beside their name is now true.
-    const service_ok =
-      types.length > 0 &&
-      types.some((t) => {
-        const tt = String(t).toLowerCase();
-        return svc.includes(tt) || tt.includes(svc.split(" ")[0]);
-      });
-    const coi_ok = v.coi_expiry != null && String(v.coi_expiry) >= today;
-    return {
-      id: v.id as string,
-      company: (v.company as string) ?? null,
-      coi_ok,
-      coi_expiry: (v.coi_expiry as string) ?? null,
-      service_ok,
-      daily_capacity: Number(v.daily_capacity ?? 0),
-    };
-  });
-}
-
 export interface ActiveVendor {
   id: string;
   company: string | null;
@@ -826,7 +771,22 @@ async function computeMarginHealthRows(
       .eq("status", "requested")
       .is("vendor_id", null)
       .gte("date", today),
-    admin.from("vendors").select("id, status, coi_expiry, service_types, service_lakes").eq("status", "active"),
+    // FENCED, like every other crew doorway (book/dispatch.ts,
+    // ops/dispatch-data.ts, ops/crews-data.ts, getActiveVendors above). This
+    // read is not a report either. Its crews are counted on the ops board as
+    // "Ready crews"; they decide whether waiting demand is diagnosed as
+    // capacity_stranded (you have crews, expand them) or as the plain recruit
+    // signal (there is nobody there at all); and the cheapest floor-failing
+    // card among them is the single number the nightly pass raises a LIVE menu
+    // price from, unattended. Unfenced, three scratch accounts were counted as
+    // businesses on the one board that says whether the lake business can
+    // earn — one tab from the coverage card saying every vendor is a test
+    // account — and a fixture\'s rate card could have set a real price.
+    admin
+      .from("vendors")
+      .select("id, status, coi_expiry, service_types, service_lakes, users!vendors_user_id_fkey!inner(is_fixture)")
+      .eq("status", "active")
+      .eq("users.is_fixture", false),
     admin.from("vendor_rates").select("vendor_id, service_id, base, unit_rate, band_pricing"),
   ]);
   const jobs = mustRead("the jobs behind margin health", jobsRes);

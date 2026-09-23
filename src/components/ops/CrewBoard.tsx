@@ -51,11 +51,23 @@ export function CrewBoard({ crews, activeServiceNames }: { crews: OpsCrew[]; act
 
       {GROUPS.map((g) => {
         const rows = crews.filter((c) => c.status === g.key);
+        // THE COUNT STAYS THE NUMBER OF CARDS BELOW IT. Subtracting the test
+        // accounts would print "Active crews 0" above three visible cards and
+        // rebuild the same contradiction on one card instead of two. So the
+        // head names both halves instead: three crews, none of them routable.
+        const fixtures = rows.filter((c) => c.isFixture).length;
         return (
           <div key={g.key}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
               <span className={`ll-pill ${g.tone}`}>{g.label}</span>
-              <span className="mut" style={{ fontSize: 13 }}>{rows.length}</span>
+              <span className="mut" style={{ fontSize: 13 }}>
+                {rows.length}
+                {fixtures > 0 && (
+                  fixtures === rows.length
+                    ? ` · all test accounts — nothing routes to ${rows.length === 1 ? "it" : "them"}`
+                    : ` · ${fixtures} test ${fixtures === 1 ? "account" : "accounts"} — nothing routes to ${fixtures === 1 ? "it" : "them"}`
+                )}
+              </span>
             </div>
             {rows.length === 0 ? (
               <div className="mut" style={{ fontSize: 13, padding: "4px 2px" }}>{g.blurb} None right now.</div>
@@ -207,6 +219,21 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
             <span style={{ fontWeight: 800, fontSize: 16 }}>{crew.company ?? "Unnamed crew"}</span>
             <span className={`ll-pill ${pill.tone}`}>{pill.label}</span>
             {showTier && <span className={`ll-pill ${tierPill.tone}`}>{tierPill.label}</span>}
+            {/* Exactly what 0124 already does for a scratch lake
+                (LakeConditions.tsx). The status pill beside this one says
+                "active", the score line says on-time 100%, and every doorway
+                that could send this crew work refuses it by name — so without
+                this the card reads as a live business on the board ops uses to
+                decide whether anyone can take the work. */}
+            {crew.isFixture && (
+              <span
+                className="ll-pill slate"
+                title="A test account we created ourselves. Dispatch, the assign dropdown and the payout run all skip it."
+                style={{ textTransform: "none", letterSpacing: "normal" }}
+              >
+                Test account — nothing will route to it
+              </span>
+            )}
           </div>
           {crew.status === "active" && (
             <div className="mut" style={{ fontSize: 12.5, marginTop: 3 }}>
@@ -298,15 +325,24 @@ function CrewCard({ crew }: { crew: OpsCrew }) {
           />
         </div>
 
-        {crew.status === "active" && (
-          <button
-            className="ll-btn sm"
-            disabled={busy}
-            onClick={() => run(() => setCrewCapacity(crew.id, cap), "Capacity saved.")}
-          >
-            Save capacity
-          </button>
-        )}
+        {/* ON EVERY CARD, BECAUSE THE INPUT IS ON EVERY CARD. This button used
+            to render only for an active crew, so on a suspended card ops could
+            type a new daily capacity, press Reactivate — whose whole body is
+            `update({ status: "active" })` — and be told "Crew reactivated —
+            back on the board" while the number they just typed was thrown
+            away. The over-dispatched crew they dropped to 3 before suspending
+            came back at the old number and the router kept routing at it.
+            setCrewCapacity has no status precondition; it clamps 1–20 and is
+            ops-gated. Widened rather than special-cased: the invited card had
+            the same hole in quieter form, where the number committed only as a
+            side effect of pressing Force-activate. */}
+        <button
+          className="ll-btn sm"
+          disabled={busy}
+          onClick={() => run(() => setCrewCapacity(crew.id, cap), "Capacity saved.")}
+        >
+          Save capacity
+        </button>
 
         <div style={{ flex: 1 }} />
 

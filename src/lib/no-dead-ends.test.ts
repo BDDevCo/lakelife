@@ -156,7 +156,7 @@ describe("a certificate in a different legal name can actually be straightened o
    *
    *   named-insured.ts — "a genuine DBA is a thirty-second conversation and
    *                       an edit to `vendors.company`"
-   *   the crew's message — "send us a message and we'll get it straightened out"
+   *   the crew's message — "email hello@lakelife.ai and we'll get it straightened out"
    *   the ops board — "check which is wrong before approving"
    *
    * `vendors.company` was written in exactly two places, both INSERTs, both

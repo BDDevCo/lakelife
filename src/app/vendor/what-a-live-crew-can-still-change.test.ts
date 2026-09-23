@@ -6,13 +6,20 @@ import { activationGaps, type ActivationInput } from "./onboarding-helpers";
 /**
  * GOING LIVE TOOK AWAY THE SCREEN WHERE YOU SAY WHAT YOU DO.
  *
- * `activationGaps` names seven things a crew must settle before they can work.
- * Six of them have a control an ACTIVE crew (or ops) can still reach. One does
- * not: the work they do. `setServiceTypes` has exactly one caller —
- * VendorOnboarding — and all six vendor pages that render it do so only while
+ * `activationGaps` names seven things a crew must settle before they can work,
+ * and TWO of them were frozen the moment a crew went live.
+ *
+ * The work they do came first. `setServiceTypes` has exactly one caller —
+ * VendorOnboarding — and the vendor pages that render it do so only while
  * `status !== "active"`. Ops has no writer either; the Crews board draws
- * service types as read-only pills. So the list is frozen at the moment of
- * go-live and takes a database edit to change.
+ * service types as read-only pills. So the list was frozen at the moment of
+ * go-live and took a database edit to change.
+ *
+ * How many jobs a day was the same trapdoor, one requirement over, and quieter.
+ * `setDailyCapacity` also had exactly one calling screen, and ops' own
+ * setCrewCapacity was the only cure — a phone call no crew knew to make, while
+ * dispatch answered "Your day is full" after one stop. Its control is
+ * MyCapacity on the Today tab, beside the COI and W-9 for the same reason.
  *
  * WHY IT BITES THE HAVEN FIRST, which is why this is being fixed now.
  *
@@ -96,6 +103,15 @@ const AFTER_GO_LIVE = [
     rendered: "app/vendor/availability/page.tsx",
     why: "a crew's coverage grows — this one was already right, and is the model",
   },
+  {
+    gap: /jobs a day/i,
+    writer: "setDailyCapacity",
+    screen: "components/MyCapacity.tsx",
+    rendered: "app/vendor/page.tsx",
+    why:
+      "the hardest ceiling in routing — isEligible refuses at assignedThatDay " +
+      ">= cap, and the only other writer's only screen vanishes at go-live",
+  },
 ] as const;
 
 describe("the gate still refuses all of these", () => {
@@ -134,10 +150,11 @@ describe("anything activation can refuse you for stays changeable afterwards", (
   }
 
   it("and that page is one a LIVE crew can actually open", () => {
-    // The six pages that render VendorOnboarding all return early on
-    // `status !== "active"`. /vendor/availability deliberately does not — it is
-    // the crew's settings page — which is the whole reason the editors live
-    // there. If that early return ever appears here, every control above
+    // The pages that render VendorOnboarding return early on
+    // `status !== "active"` — five of them, since the Rates tab stopped
+    // bouncing the crew the invitation sends there. /vendor/availability
+    // deliberately does not — it is the crew's settings page — which is the
+    // whole reason the editors live there. If that early return ever appears here, every control above
     // becomes unreachable at exactly the moment it is needed.
     expect(
       src("app/vendor/availability/page.tsx"),

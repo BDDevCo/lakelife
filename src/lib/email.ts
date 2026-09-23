@@ -25,11 +25,19 @@ import { recipientIsHeld, holdRefusal } from "@/lib/notice-hold";
  * owner, which has quietly been doing a job nobody assigned it: every email
  * this app has sent to a scratch address bounced off it harmlessly.
  *
- * THAT SAFETY IS AN ACCIDENT AND IT ENDS WITHOUT A DEPLOY. `EMAIL_FROM` is
- * absent from .env.local and sitting ready in .env.local.example. Setting that
- * one variable in Vercel is a legitimate, expected step — and the moment it
- * lands, every send in the codebase starts reaching real inboxes, with no code
- * change, no migration and nothing on screen to mark the transition.
+ * THAT SAFETY IS AN ACCIDENT AND IT ENDS WITHOUT A DEPLOY. Setting `EMAIL_FROM`
+ * in Vercel is a legitimate, expected step — and the moment it lands, every
+ * send in the codebase starts reaching real inboxes, with no code change, no
+ * migration and nothing on screen to mark the transition.
+ *
+ * WHICH SIDE OF THAT SWITCH A DEPLOYMENT IS ON IS NOT KNOWABLE FROM THIS FILE,
+ * and this comment used to claim it was. It said `EMAIL_FROM` "is absent",
+ * reading .env.local — a local, gitignored dev file that says nothing about
+ * production, whose environment is Vercel's. Production has had EMAIL_FROM set
+ * for some time (the nightly digests deliver from noreply@lakelife.ai), so the
+ * sentence was false everywhere it mattered. Read the deployment, or the
+ * Channels panel at /ops/texting, which asks the running server; never a file
+ * in the tree, and never a comment.
  *
  * So the fallback says so. Not an error — using the sandbox is correct today,
  * and refusing to send would break the app for a configuration that is right.

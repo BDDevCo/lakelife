@@ -13,6 +13,8 @@ import { loadParkRatesChecked } from "@/app/park/rate-data";
 import { mustRead, softRead, readFailedMessage } from "@/lib/must-read";
 import { rushPrice, fillInRate } from "@/lib/rush";
 import { getPlatformSettings } from "@/lib/settings";
+import { marginPct } from "@/lib/dispatch";
+import { money } from "@/app/park/ledger-helpers";
 
 export interface ApprovalResult {
   ok: boolean;
@@ -29,6 +31,21 @@ export interface ApprovalResult {
    * agreed and named here so a person decides.
    */
   heldAgreements?: number;
+  /**
+   * Visits left alone because the corrected size prices them UNDER the margin
+   * floor — the dial dispatch, canClaim and ops' manual assign all refuse to
+   * route below. Approval was the one doorway that re-derived both sides and
+   * never looked at it, so a crew's own rate card could write a job dispatch
+   * would have declined, and a shrinking job could invert it outright.
+   *
+   * Deliberately NOT folded into `heldAgreements`: that counter's one sentence
+   * tells the homeowner we kept a price THEY agreed to, and neither half of
+   * that is true here — the price is the ordinary menu price and the reason is
+   * our margin. It is also not the homeowner's problem to solve, which is why
+   * the detail goes to ops by email and this number carries only "we've held
+   * one visit for a check" to the person who tapped Approve.
+   */
+  heldForMargin?: number;
   /**
    * The visit the crew was standing on when they raised this is already
    * finished and billed. Repricing only touches `requested`/`scheduled`, so
@@ -99,6 +116,9 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
   const admin = createServiceClient();
   let repriced = 0;
   let heldAgreements = 0;
+  let heldForMargin = 0;
+  /** What ops is told about each margin hold. Never shown to a homeowner. */
+  const marginHolds: { jobId: string; service: string; price: number; cost: number }[] = [];
   if (ctx.flag.status === "pending") {
     // Atomic: apply the proposed profile change + mark the flag approved.
     const { error: rpcErr } = await admin.rpc("apply_flag_change", { p_flag_id: flagId });
@@ -324,13 +344,79 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
           // Mirror the claim: a rush job's take-home is the card rate less the
           // fill-in discount, exactly as claimJob computed it.
           const cost = isRush ? fillInRate(card, rushSettings.sameDayFillDiscountPct) : card;
+
+          // THE FLOOR IS A RULE, AND THIS WAS THE ONE DOORWAY WITHOUT IT.
+          //
+          // Every other door that puts a crew's number on a job tests it:
+          // dispatch refuses to route below the floor, canClaim refuses a
+          // crew's own claim with `rate_too_high`, ops' manual assign refuses
+          // it by name, and the gap engine exists SOLELY to price a
+          // below-floor crew down to something that clears. Approval
+          // re-derived both sides from scratch and tested neither — so the
+          // worked example in the comment above (pier at 15 sections, card
+          // $780 on a $940 job = 17.0% against a live 0.20 floor) was written
+          // straight into the row, at the exact rate dispatch had refused.
+          //
+          // The floor was even loaded three lines away as `rushSettings` and
+          // never read: a dial present and never consulted enforces nothing.
+          // The database does not catch it either — guard_job_money_shape
+          // refuses a loss only when vendor_id CHANGES, and this update never
+          // touches vendor_id.
+          //
+          // Held whole, for the reason the rush guard above is held whole: a
+          // job carrying new minutes and an old price is worse than one left
+          // alone. Ops is emailed below, because ops is the only party who can
+          // do anything about it.
+          if (marginPct(price, cost) < rushSettings.marginFloor) {
+            heldForMargin += 1;
+            marginHolds.push({ jobId: j.id as string, service: rule.name, price, cost });
+            continue;
+          }
           update.vendor_cost = cost;
           update.margin = price - cost;
         } else if (j.vendor_cost != null) {
           // No card to re-derive from, OR a gap claim we must not re-derive —
           // keep what was agreed and let the margin follow the new price
           // rather than inventing a crew number.
-          update.margin = price - Number(j.vendor_cost);
+          const cost = Number(j.vendor_cost);
+
+          // THE SAME RULE, THE SECOND DOORWAY — AND ON A RUSH JOB THIS ONE
+          // CAN GO NEGATIVE.
+          //
+          // Here the crew's number is fixed and the customer's moves, so a
+          // flag that SHRINKS the job drags the margin down with the price.
+          // On an ordinary job the `agreed > menu` guard above already holds
+          // that case: a non-rush price only falls when it was above the menu,
+          // and that guard stops the loop before it gets here. A RUSH job
+          // skips that guard on purpose — the premium is a percentage and
+          // re-derives at any size — so this is the branch where a falling
+          // price still lands.
+          //
+          // Worked: a same-day pier removal at 14 sections, menu $892,
+          // confirmed to the customer at $1,115 with the 25% premium, and a
+          // gap-claimed take-home of $690 the crew tapped Claim on. The crew
+          // flags 8 sections; the new price is $755 and this line wrote margin
+          // = 755 − 690 = $65, an 8.6% job. At a $800 take-home it writes
+          // −$45 outright — LakeLife paying the crew more than it bills the
+          // owner, with the payout releasing at vendor_cost. The database
+          // permits every one of those: guard_job_money_shape refuses a loss
+          // only when vendor_id changes, and this update never touches it.
+          //
+          // But the floor ALONE is the wrong test on this branch: a gap claim
+          // is below the floor BY DESIGN — that is what the gap engine
+          // negotiated and the crew accepted — so holding everything under the
+          // floor would freeze every gap-claimed job the moment its owner
+          // approved anything. What must never happen is the reprice making it
+          // WORSE than what both sides agreed. The cost is unchanged here, so
+          // a falling price is exactly a falling margin: hold only when the
+          // price drops AND the result lands under the floor.
+          const noAgreedPrice = !(agreed > 0);
+          if ((noAgreedPrice || price < agreed) && marginPct(price, cost) < rushSettings.marginFloor) {
+            heldForMargin += 1;
+            marginHolds.push({ jobId: j.id as string, service: rule.name, price, cost });
+            continue;
+          }
+          update.margin = price - cost;
         }
         // COUNT WHAT LANDED, not what was attempted. The result was discarded
         // and the counter incremented regardless, so a failed write reported
@@ -340,6 +426,12 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
       }
     }
   }
+
+  // A HELD JOB IS A DECISION SOMEBODY HAS TO MAKE, not a thing that resolves
+  // itself. Margin Health would never name it — it tests rate CARDS at a
+  // representative size and aggregates jobs by service and lake, so one
+  // below-floor visit is diluted, never listed. So it is emailed.
+  await tellOpsMarginHeld(admin, marginHolds);
 
   // RELEASE THE CREW.
   //
@@ -377,7 +469,74 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
     flaggedJobAlreadyDone = st === "complete" || st === "paid";
   }
 
-  return { ok: true, repriced, heldAgreements, flaggedJobAlreadyDone };
+  return { ok: true, repriced, heldAgreements, heldForMargin, flaggedJobAlreadyDone };
+}
+
+/**
+ * TELL OPS THAT A CORRECTION PRICED ITSELF UNDER THE FLOOR.
+ *
+ * The margin floor is an ops dial, set on the ops console, and the homeowner
+ * who tapped Approve can do nothing about it — so the detail goes to the
+ * people who can. Three real options each time, none of which code may pick:
+ * re-route to a crew whose card clears the floor at the new size, put a
+ * scarcity offer to the owner, or take the thin job this once.
+ *
+ * WHAT IT SAYS AND WHY IT SAYS IT TO OPS ONLY: it names the customer price and
+ * the crew's cost side by side. That is exactly the pair vendors may never see
+ * and homeowners have no use for, which is why it is an ops address or
+ * nothing.
+ *
+ * Never throws at its caller. Everything above it is already written — the
+ * profile change applied, the other visits repriced, the crew told — and an
+ * alarm must never undo the thing it is alarming about.
+ */
+async function tellOpsMarginHeld(
+  admin: ReturnType<typeof createServiceClient>,
+  holds: { jobId: string; service: string; price: number; cost: number }[],
+): Promise<void> {
+  if (holds.length === 0) return;
+  const n = holds.length;
+  const visits = `${n} visit${n === 1 ? "" : "s"}`;
+  try {
+    const opsRes = await admin.from("users").select("phone, email").eq("role", "ops");
+    // A failed read here is not "there is nobody in ops". Nothing retries this
+    // alert, so the log is the last line of defence.
+    if (opsRes.error) {
+      console.error(
+        "[read failed] the ops team for a MARGIN-HELD alert:",
+        opsRes.error.code ?? "", opsRes.error.message ?? opsRes.error,
+      );
+    }
+    const lines = holds
+      .map((h) => `${h.service} (visit ${h.jobId}): ${money(h.price)} to the customer against ${money(h.cost)} to the crew`)
+      .join("\n");
+    let reached = 0;
+    for (const u of opsRes.data ?? []) {
+      const told = await notify(
+        "ops that an approved correction priced under the margin floor",
+        { phone: u.phone as string | null, email: u.email as string | null },
+        {
+          sms: `LakeLife: ${visits} held after an owner approved a crew's correction — at the corrected size ${n === 1 ? "it prices" : "they price"} under the margin floor. Needs a decision.`,
+          subject: `${visits} held under the margin floor after an approval`,
+          body:
+            `An owner approved a crew's correction. At the corrected size, ${visits} would have priced under the margin floor, ` +
+            `so nothing was rewritten: ${n === 1 ? "it stands" : "they stand"} at the old size, the old price and the old crew cost.\n\n` +
+            `${lines}\n\n` +
+            `The crew is expecting the corrected job, so this will not sit still on its own. ` +
+            `Each one needs a choice: re-route to a crew that clears the floor at the new size, ` +
+            `put a scarcity offer to the owner, or take it thin this once.`,
+        },
+      );
+      if (told.reached) reached += 1;
+    }
+    if (reached === 0) {
+      console.error(
+        `[alert unsent] ${visits} held under the margin floor after an approval and NOBODY was reached:\n${lines}`,
+      );
+    }
+  } catch {
+    /* The approval is recorded. A failed alarm must never undo it. */
+  }
 }
 
 

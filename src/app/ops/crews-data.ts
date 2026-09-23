@@ -28,6 +28,17 @@ export interface OpsCrew {
   status: "invited" | "active" | "suspended";
   invite_email: string | null;
   /**
+   * A CREW WE INVENTED OURSELVES, ON THE BOARD THAT SAYS WHO CAN WORK.
+   *
+   * Every other crew doorway already fences these out — auto-dispatch, the
+   * assign dropdown, the coverage card, the payout run — and assignAndSchedule
+   * refuses them by name. This roster did not even SELECT the column, so it
+   * counted three scratch accounts as live crews one card below the alarm
+   * saying there are none. Not fenced: ops has to be able to suspend and edit
+   * them. Labelled, so the card stops implying they are routable.
+   */
+  isFixture: boolean;
+  /**
    * WHETHER THE INVITATION EVER LEFT (0154). NULL means it has not — including
    * rows that predate the column, which is why the card says "date unknown"
    * rather than inventing one. Without this, a bounced invite and one somebody
@@ -94,7 +105,7 @@ interface CrewRaw {
   coi_expiry_confirmed_at: string | null;
   w9_url: string | null;
   created_at: string;
-  users: Embed<{ name: string | null; email: string | null; phone: string | null }>;
+  users: Embed<{ name: string | null; email: string | null; phone: string | null; is_fixture: boolean | null }>;
 }
 
 const first = <T>(x: T | T[] | null | undefined): T | null =>
@@ -113,7 +124,7 @@ export async function getCrews(): Promise<OpsCrew[]> {
           // Named for the same reason as the COI cron: two FKs from vendors to
         // users, so a bare users(...) is PGRST201. Unguarded this showed an
         // empty Crews tab reading "nobody invited yet"; guarded it threw.
-        "coi_url, coi_expiry, coi_named_insured, coi_expiry_confirmed_at, w9_url, created_at, users!vendors_user_id_fkey(name, email, phone)",
+        "coi_url, coi_expiry, coi_named_insured, coi_expiry_confirmed_at, w9_url, created_at, users!vendors_user_id_fkey(name, email, phone, is_fixture)",
       ),
     getVendorScores(),
     admin.from("job_confirmations").select("vendor_id, verdict").not("verdict", "is", null),
@@ -173,7 +184,7 @@ export async function getCrews(): Promise<OpsCrew[]> {
 
   const crews = await Promise.all(
     rows.map(async (r): Promise<OpsCrew> => {
-      const u = first(r.users) as { name?: string; email?: string; phone?: string } | null;
+      const u = first(r.users) as { name?: string; email?: string; phone?: string; is_fixture?: boolean | null } | null;
       const claimed = !!u;
       const [coiSignedUrl, w9SignedUrl] = await Promise.all([sign(r.coi_url), sign(r.w9_url)]);
       const status = (["invited", "active", "suspended"].includes(r.status) ? r.status : "invited") as OpsCrew["status"];
@@ -185,6 +196,12 @@ export async function getCrews(): Promise<OpsCrew[]> {
         invite_email: r.invite_email ?? null,
         inviteSentAt: (r.invite_sent_at as string | null) ?? null,
         inviteError: (r.invite_error as string | null) ?? null,
+        // `=== true` because this is a LABEL, not a gate. An invited crew with
+        // no user row yet is unclaimed, not a fixture, and must not be marked
+        // as one; the fences elsewhere use the stricter `!== false` because
+        // refusing work on a missing row is the safe direction and labelling a
+        // real crew a test account is not.
+        isFixture: u?.is_fixture === true,
         contact: {
           name: u?.name ?? null,
           email: (u?.email ?? r.invite_email) ?? null,

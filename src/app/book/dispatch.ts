@@ -3,7 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead, softRead } from "@/lib/must-read";
 import { priceService, type ServiceRule, type PricingProfile } from "@/lib/pricing";
 import { todayLakeDate } from "@/lib/booking";
-import { decideDispatch, isEligible, remainingCapacity, type CrewCandidate, type DispatchDecision, type DispatchInput } from "@/lib/dispatch";
+import { canEverDo, decideDispatch, isEligible, remainingCapacity, type CrewCandidate, type CrewCapability, type DispatchDecision, type DispatchInput } from "@/lib/dispatch";
 import { fleetJobCap, fleetMinuteBudget, fitsTimeBudget, jobMinutesOf, DEFAULT_JOB_MINUTES } from "@/lib/fleet";
 import { getVendorScores } from "@/lib/scoring-data";
 import { toISODate } from "@/lib/booking";
@@ -326,24 +326,52 @@ export async function getServiceAvailability(
       (!lakeId || ((v.service_lakes as string[]) ?? []).includes(lakeId)),
   );
 
-  // COLD START (waitlist rung): when NO active crew serves this lake+service
-  // at all, a wall of "full" dates would be a lie — nothing is full, there's
-  // simply no crew YET. Keep every date open and flag it: the booking becomes
-  // a "Finding a crew" waitlist row, which is itself the recruiting signal.
-  if (!pool.some((v) => v.status === "active")) {
+  /** The capability half of a vendors row — the six fields `canEverDo` reads,
+   *  every one of them already in the select above. Built once here and spread
+   *  into the per-date candidates below, so the calendar cannot ask the
+   *  capability question one way and the day question another. */
+  const capOf = (v: NonNullable<typeof vendors>[number]): CrewCapability => ({
+    status: v.status as string,
+    coiExpiry: (v.coi_expiry as string) ?? null,
+    coiNamedInsured: (v.coi_named_insured as string | null) ?? null,
+    company: (v.company as string | null) ?? null,
+    serviceTypes: (v.service_types as string[]) ?? [],
+    serviceLakes: (v.service_lakes as string[]) ?? [],
+  });
+  const routable = pool.filter((v) => canEverDo(capOf(v), { serviceName, lakeId, todayISO: today }));
+
+  // COLD START (waitlist rung): when NO crew who could actually be SENT serves
+  // this lake+service, a wall of "full" dates would be a lie — nothing is
+  // full, there's simply no crew YET. Keep every date open and flag it: the
+  // booking becomes a "Finding a crew" waitlist row, which is itself the
+  // recruiting signal.
+  //
+  // THE TEST USED TO BE `status === "active"` ALONE, and the per-date loop
+  // below asks the router's fuller question through remainingCapacity →
+  // isEligible → canEverDo. So one active crew whose certificate had lapsed
+  // passed the cold-start check and then failed every single date: a whole
+  // month greyed out, each square titled "Crew at capacity" when nobody was at
+  // capacity, and the honest banner suppressed. Nothing flips `status` when a
+  // certificate runs out — no trigger, no cron — so "active with a lapsed COI"
+  // is the designed steady state, and certificates lapse every year.
+  if (routable.length === 0) {
     // Which gap is it? `pool` filtered on lake AND service, so an empty pool
-    // says nothing about which of the two is missing. Ask the lake on its own.
-    const anyOnThisLake = (vendors ?? []).some(
-      (v) =>
-        v.status === "active" &&
-        (!lakeId || ((v.service_lakes as string[]) ?? []).includes(lakeId)),
-    );
+    // says nothing about which of the two is missing. Ask the lake on its own
+    // — and ask it with the SAME rule, or a lapsed-COI crew on the lake makes
+    // this answer "service", and the customer is told crews work his lake but
+    // none does this job, about a crew who does exactly this job.
+    const anyOnThisLake = (vendors ?? []).some((v) =>
+      ((v.service_types as string[]) ?? []).some((n) =>
+        canEverDo(capOf(v), { serviceName: n, lakeId, todayISO: today })));
     return {
       fullDates: [], capacity: 0, findingCrew: true,
       crewGap: anyOnThisLake ? "service" : "lake",
     };
   }
-  const maxDailyCap = pool.reduce((m, v) => m + Math.max(0, fleetJobCap(unitCapByVendor.get(v.id as string) ?? [], Number(v.daily_capacity ?? 0))), 0);
+  // Capacity counts the crews who can actually be sent, not the ones merely
+  // listed: a number that includes an uninsured crew is a promise of slots
+  // that no date can honour.
+  const maxDailyCap = routable.reduce((m, v) => m + Math.max(0, fleetJobCap(unitCapByVendor.get(v.id as string) ?? [], Number(v.daily_capacity ?? 0))), 0);
 
   const blockedByDate = new Map<string, Set<string>>();
   for (const b of blocks ?? []) {
@@ -365,13 +393,8 @@ export async function getServiceAvailability(
     const weekday = weekdayOf(iso);
     const blockedSet = blockedByDate.get(iso) ?? new Set<string>();
     const crews: CrewCandidate[] = pool.map((v) => ({
+      ...capOf(v),
       vendorId: v.id as string,
-      status: v.status as string,
-      coiExpiry: (v.coi_expiry as string) ?? null,
-      coiNamedInsured: (v.coi_named_insured as string | null) ?? null,
-      company: (v.company as string | null) ?? null,
-      serviceTypes: (v.service_types as string[]) ?? [],
-      serviceLakes: (v.service_lakes as string[]) ?? [],
       workDays: (v.work_days as string[]) ?? [],
       dailyCapacity: fleetJobCap(unitCapByVendor.get(v.id as string) ?? [], Number(v.daily_capacity ?? 0)),
       assignedThatDay: assignedByKey.get(`${v.id}|${iso}`) ?? 0,

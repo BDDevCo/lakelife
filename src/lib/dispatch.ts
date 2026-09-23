@@ -102,8 +102,12 @@ export interface DispatchDecision {
   /** Why no crew could take it — drives the ops "needs attention" signal.
    *  no_crew_on_lake is the geographic dead-end (cold-start lake): crews do
    *  this service, just not HERE — distinct from all_full_or_blocked so the
-   *  booking flow never mistakes "no crew yet" for "day genuinely full". */
-  reasonNoFit?: "no_crew_for_service" | "no_crew_on_lake" | "all_full_or_blocked" | "no_qualifying_rate" | "below_floor" | "no_custody_crew" | "no_full_coverage_crew";
+   *  booking flow never mistakes "no crew yet" for "day genuinely full".
+   *  no_routable_crew is its paperwork twin: a crew IS on this lake doing this
+   *  service, and not one of them can be sent on any day — still onboarding,
+   *  suspended, or no certificate in date. Named apart from no_crew_on_lake
+   *  because that one asserts geography, which would be a lie here. */
+  reasonNoFit?: "no_crew_for_service" | "no_crew_on_lake" | "all_full_or_blocked" | "no_qualifying_rate" | "below_floor" | "no_custody_crew" | "no_full_coverage_crew" | "no_routable_crew";
   eligibleCount?: number; // crews that cleared the hard gates (pre-rate)
 }
 
@@ -269,6 +273,27 @@ export function decideDispatch(input: DispatchInput): DispatchDecision {
     // flow keeps the demand as an honest Finding-a-crew row.
     if (input.storage && input.crews.some((c) => isEligible(c, { ...input, storage: null }))) {
       return { ok: false, reasonNoFit: "no_custody_crew", eligibleCount: 0 };
+    }
+    // STANDING AND PAPERWORK ARE NOT A FULL CALENDAR.
+    //
+    // An empty `eligible` has two completely different causes. Every capable
+    // crew's DAY is full — which is what the two callers of this value act on:
+    // book/actions.ts and book/storage/actions.ts DELETE the booking row and
+    // answer "That day just filled up — pick another date." Or no crew here
+    // could be sent on ANY day: still `invited` and onboarding, suspended by
+    // ops, certificate lapsed or absent, certificate naming somebody else's
+    // business. Every one of those gates is date-independent, so the advice to
+    // pick another date can never come true — each new date deletes the
+    // booking again with the same false sentence, and the demand never becomes
+    // the Finding-a-crew row that is both the honest answer and the recruiting
+    // signal. The first real crew on a lake makes it WORSE than no crew at
+    // all: with nobody listed, the lake gate above keeps the booking.
+    //
+    // Asked with `canEverDo` rather than a fresh status check, so this can
+    // never drift from the rule the router, the coverage board and the claim
+    // board already share.
+    if (!input.crews.some((c) => canEverDo(c, input))) {
+      return { ok: false, reasonNoFit: "no_routable_crew", eligibleCount: 0 };
     }
     return { ok: false, reasonNoFit: "all_full_or_blocked", eligibleCount: 0 };
   }

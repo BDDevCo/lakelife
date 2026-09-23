@@ -11,7 +11,7 @@ import { applyDueRentChangesFor } from "@/lib/rent-changes";
 
 import { runParkNightly } from "@/lib/park-machine";
 import { sweepDisputeDeadlines } from "@/lib/disputes";
-import type { NeedsLookKind } from "@/lib/digest-render";
+import { countNeedsLook, type NeedsLookKind } from "@/lib/digest-render";
 
 export const dynamic = "force-dynamic";
 // TWENTY-SEVEN SEQUENTIAL STEPS. On the default serverless ceiling this run
@@ -46,50 +46,64 @@ export const maxDuration = 300;
  * pushed, because only the push site knows: `failed` here, `skipped` in
  * noteSkips and the reconcile rail, `found` for the park.
  */
-// One definition, in digest-render — the renderer's and the writer's kinds
-// cannot drift apart if there is only one list of them.
-const failures: { step: string; kind?: NeedsLookKind; error: string }[] = [];
-async function step<T>(name: string, fn: () => Promise<T>): Promise<T | null> {
-  try {
-    return await fn();
-  } catch (e) {
-    failures.push({ step: name, kind: "failed", error: e instanceof Error ? e.message : String(e) });
-    return null;
-  }
-}
-
-/**
- * A STEP THAT DIDN'T THROW CAN STILL HAVE FAILED SOMEBODY.
- *
- * `step()` only sees a throw. But the cron rule for these runners is the
- * opposite of throwing: a read that fails inside a loop SKIPS that one job,
- * crew or property and carries on — which is right, and which used to be
- * completely invisible. The step returned `ok:true` with counts that looked
- * exactly like a quiet night, and the only trace was a console line on a
- * server nobody reads. (That is how the COI check reported `{ok:true, due:0}`
- * every night for months while no crew was ever warned.)
- *
- * So the steps that skip now say what they skipped, in words, and those land
- * in the SAME digest section as a thrown step — because to the person reading
- * it at 8am, "the step died" and "the step quietly didn't do it" need the same
- * response.
- */
-function noteSkips(name: string, r: { skipped?: string[] } | null | undefined) {
-  const from = failures.length;
-  for (const s of r?.skipped ?? []) failures.push({ step: name, error: s });
-  // Everything this function pushed is a SKIP — the step ran and left one
-  // item undone — never a throw. The renderer reads an unlabelled entry as a
-  // thrown step (the list's original meaning), so the label is stamped here,
-  // after the push: the push line above is the one nightly-rules.test.ts
-  // pins verbatim as proof that a skip feeds the same list a throw does.
-  for (let i = from; i < failures.length; i++) failures[i].kind = "skipped";
-}
-
 async function run(req: Request) {
   if (!cronAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  failures.length = 0;
+  /**
+   * ONE NIGHT'S LIST BELONGS TO THAT NIGHT — AND IT LIVES INSIDE THE RUN.
+   *
+   * This array, and the two closures under it, used to sit at MODULE scope
+   * with `failures.length = 0` at the top of run(). A Next route handler's
+   * module scope is shared by every invocation on that lambda instance, so
+   * two runs in flight shared one array: the second run's reset wiped the
+   * first run's collected failures mid-flight, and BOTH digests then reported
+   * a clean night. The route exports POST and documents `?date=` for manual
+   * backfills against a run that is 27 sequential round trips at
+   * maxDuration 300, so the overlap is not exotic — and the night he curls a
+   * manual run BECAUSE the scheduled one looked wrong is exactly the night the
+   * list he is reading gets erased. The sibling cron (../intraday/route.ts)
+   * already scopes its own list per request; this one was the outlier.
+   */
+  // One definition, in digest-render — the renderer's and the writer's kinds
+  // cannot drift apart if there is only one list of them.
+  const failures: { step: string; kind?: NeedsLookKind; error: string }[] = [];
+  async function step<T>(name: string, fn: () => Promise<T>): Promise<T | null> {
+    try {
+      return await fn();
+    } catch (e) {
+      failures.push({ step: name, kind: "failed", error: e instanceof Error ? e.message : String(e) });
+      return null;
+    }
+  }
+
+  /**
+   * A STEP THAT DIDN'T THROW CAN STILL HAVE FAILED SOMEBODY.
+   *
+   * `step()` only sees a throw. But the cron rule for these runners is the
+   * opposite of throwing: a read that fails inside a loop SKIPS that one job,
+   * crew or property and carries on — which is right, and which used to be
+   * completely invisible. The step returned `ok:true` with counts that looked
+   * exactly like a quiet night, and the only trace was a console line on a
+   * server nobody reads. (That is how the COI check reported `{ok:true, due:0}`
+   * every night for months while no crew was ever warned.)
+   *
+   * So the steps that skip now say what they skipped, in words, and those land
+   * in the SAME digest section as a thrown step — because to the person reading
+   * it at 8am, "the step died" and "the step quietly didn't do it" need the same
+   * response.
+   */
+  function noteSkips(name: string, r: { skipped?: string[] } | null | undefined) {
+    const from = failures.length;
+    for (const s of r?.skipped ?? []) failures.push({ step: name, error: s });
+    // Everything this function pushed is a SKIP — the step ran and left one
+    // item undone — never a throw. The renderer reads an unlabelled entry as a
+    // thrown step (the list's original meaning), so the label is stamped here,
+    // after the push: the push line above is the one nightly-rules.test.ts
+    // pins verbatim as proof that a skip feeds the same list a throw does.
+    for (let i = from; i < failures.length; i++) failures[i].kind = "skipped";
+  }
+
   const date = new URL(req.url).searchParams.get("date") ?? undefined;
   // Flag yesterday's ghosted jobs (records the no-show, releases for free reschedule)
   // BEFORE self-heal, so released jobs re-enter the dispatch pool the same run.
@@ -207,6 +221,17 @@ async function run(req: Request) {
   // that money is owed, which the park autonomy rule reserves for a human tap.
   // Labelled `found`: nothing failed, and the digest must not say it did.
   for (const u of park?.urgent ?? []) failures.push({ step: "park", kind: "found", error: u });
+  // AND THE CHECKS THAT NEVER RAN. The park machine REPORTS its deaths rather
+  // than throwing them — a failed parks read returns {ok:false, errors:[…]} and
+  // every per-park death is caught into the same array — so `step()`, which
+  // only ever sees a throw, hands back a result that looks perfectly ordinary.
+  // `park.errors` had no reader at all: the park machine could die on every
+  // park, every night, and this email said "Quiet night — nothing needed a
+  // human." Byte-identical to a night that checked every household.
+  //
+  // Labelled `failed`, not `found`: a standing finding is something the machine
+  // looked at and decided; these are checks that did not happen.
+  for (const e of park?.errors ?? []) failures.push({ step: "park", kind: "failed", error: e });
   // A step that died contributes its empty shape rather than blocking the
   // digest — the digest is how ops finds out, so it must survive the failure
   // it is reporting. `failures` carries what actually broke.
@@ -246,7 +271,29 @@ async function run(req: Request) {
   // The digest cannot report its own non-delivery by email. This lands it in
   // the cron response instead — the only place left.
   noteSkips("digest", digest);
-  return NextResponse.json({ ok: failures.length === 0, failures, park, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, rentChanges, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, visitFees, tripFees, digest });
+  /**
+   * A NIGHT THAT BROKE ANSWERS WITH A BROKEN STATUS CODE.
+   *
+   * This route returned 200 whatever happened — `ok` was a field inside the
+   * body, and nothing in this repo reads that body. So Vercel's own cron log,
+   * the one place a night's outcome is recorded without anybody building
+   * anything, was green on a night every step died. A 500 costs nothing and
+   * puts the failure where it is already being looked for.
+   *
+   * COUNTED BY KIND, NOT BY LENGTH. `failures` deliberately carries three
+   * different things (see noteSkips), and the park machine's standing findings
+   * — "19 occupied lots have no bill for January 2027" — are a HEALTHY night's
+   * output. `failures.length === 0` pinned `ok` permanently false at The
+   * Haven, which is the alarm that cries every night until nobody hears it.
+   * Only `failed` turns this red.
+   *
+   * ASSUMED, AND WORTH SAYING OUT LOUD: Vercel does not retry a failed cron
+   * invocation. If that ever changes, a 500 here re-runs all 27 steps —
+   * including the money ones, several of which still have no idempotency key.
+   */
+  const counts = countNeedsLook(failures);
+  const broken = counts.failed > 0;
+  return NextResponse.json({ ok: !broken, counts, failures, park, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, rentChanges, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, visitFees, tripFees, digest }, { status: broken ? 500 : 200 });
 }
 
 export const GET = run; // Vercel Cron issues GET

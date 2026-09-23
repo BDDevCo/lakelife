@@ -170,7 +170,17 @@ export async function chargeProposedFee(jobId: string): Promise<RecoveryResult> 
       // connected nobody's card was asked, so there is no attempt to file and
       // nothing to blame them for.
       if (!charge.ok && charge.reason === NO_PROCESSOR_REASON) {
-        return { ok: false, error: "Card payments aren't switched on yet — nothing was charged, and the fee is still proposed." };
+        // PUT THE ROW BACK, exactly as the four refusals above it do. Without
+        // this the fee stayed claimed at 'fee_charging' — the state 0092 built
+        // for a charge the processor might have half-completed — reached by a
+        // call that provably never left the building. ProposedFees then drew
+        // the mid-flight alarm, both buttons vanished with `decidable`, the
+        // gate at the top of this function answered "There's no fee waiting on
+        // that one" forever, and the nightly never revisits the row. With no
+        // processor connected that was the outcome of the FIRST click on every
+        // proposed fee, under a sentence claiming the fee was still proposed.
+        await admin.from("jobs").update({ recovery_state: "fee_proposed" }).eq("id", jobId);
+        return { ok: false, error: "Card payments aren't switched on yet — nothing was charged. The invoice is raised and still due, and the fee is still proposed." };
       }
       const { error: payErr } = await admin.from("payments").insert({
         invoice_id: invoice.id, amount,

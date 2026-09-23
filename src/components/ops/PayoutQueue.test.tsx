@@ -152,3 +152,59 @@ describe("recording the return", () => {
     expect(html).not.toMatch(/Record .*returned/);
   });
 });
+
+/**
+ * THE CARD WORKED OUT WHO WAS IN THE RED AND THEN NEVER DREW IT.
+ *
+ * payout-data sums released, un-batched pay per crew in cents, fences the
+ * fixtures off by their owner, keeps the ones below zero and sorts them
+ * deepest-first — onto a field that appeared nowhere in src/components. The
+ * month-end run skips those crews on a bare `if (sum <= 0) continue` with no
+ * line in the run's skipped list, so a crew could sit in the red for months
+ * while every run reported a clean night and every screen was silent.
+ *
+ * Pinned both ways: with no debt the block must not appear (an ops money
+ * screen that invents a red box is its own defect), and with one it must name
+ * the crew, the amount to the cent, and the fact that nothing here recovers it.
+ */
+describe("a crew carrying a balance against future pay", () => {
+  const inTheRed = { vendorId: "v-1", payee: "Twin Lakes Crew", amount: -140 };
+
+  it("says nothing when nobody is in the red", () => {
+    const html = renderToStaticMarkup(<PayoutQueue queue={EMPTY} />);
+    expect(html).not.toContain("carrying a balance");
+    expect(html).not.toContain("owes");
+  });
+
+  it("names the crew and the debt on a night with no batches at all", () => {
+    // The whole scenario: nothing queued, nothing exported. If this block sat
+    // inside the rows.length === 0 branch it would be invisible exactly here.
+    const html = renderToStaticMarkup(<PayoutQueue queue={{ ...EMPTY, owing: [inTheRed] }} />);
+    expect(html).toContain("A crew is carrying a balance against future pay");
+    expect(html).toContain("Twin Lakes Crew");
+    expect(html).toContain("owes $140.00");
+    // And it still says the true thing about the queue itself.
+    expect(html).toContain("Nothing queued");
+  });
+
+  it("keeps the cents — this is the screen somebody rings a crew about", () => {
+    // The card's own money() rounds and puts the sign inside the dollar:
+    // "$-60" for a debt of $59.99. formatCurrency does neither.
+    const html = renderToStaticMarkup(
+      <PayoutQueue queue={{ ...EMPTY, owing: [{ ...inTheRed, amount: -59.99 }] }} />,
+    );
+    expect(html).toContain("owes $59.99");
+    expect(html).not.toContain("$-");
+  });
+
+  it("counts more than one, and promises no control it does not have", () => {
+    const html = renderToStaticMarkup(
+      <PayoutQueue
+        queue={{ ...EMPTY, owing: [inTheRed, { vendorId: "v-2", payee: "GreenEdge", amount: -12.5 }] }}
+      />,
+    );
+    expect(html).toContain("2 crews are carrying a balance against future pay");
+    expect(html).toContain("GreenEdge");
+    expect(html).toContain("There is nothing to press");
+  });
+});

@@ -9,6 +9,7 @@ import { fillInRate, rushWindowOpen } from "@/lib/rush";
 import { loadPricingProfileById } from "@/app/book/dispatch";
 import { getPlatformSettings } from "@/lib/settings";
 import { mustRead } from "@/lib/must-read";
+import { OWNER_FIXTURE_EMBED, OWNER_FIXTURE_FILTER } from "@/lib/lake-pages";
 import type { MyVendor } from "./data";
 
 /**
@@ -104,28 +105,56 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
   // at rows 31-34 behind thirty mow jobs saw "No open jobs right now" — while
   // the nightly text was actively pointing them at the board, and the work went
   // unclaimed. The cap is meant to bound the page, not to hide the job.
-  const myServices = mustRead(
-    "your trades",
-    await admin.from("services").select("id").in("name", vendor.service_types),
-  );
+  const [servicesRes, meRes] = await Promise.all([
+    admin.from("services").select("id").in("name", vendor.service_types),
+    // WHOSE CREW IS LOOKING. The board's fence below runs one way for a real
+    // crew and not at all for a test one, so it needs the viewer's own fact.
+    // Derived from the OWNER, never copied onto the crew row — the same
+    // derivation the routing pool uses, and the FK is named because `vendors`
+    // reaches `users` through both `user_id` and `invited_by`.
+    admin.from("vendors").select("id, users!vendors_user_id_fkey!inner(is_fixture)").eq("id", vendor.id).maybeSingle(),
+  ]);
+  const myServices = mustRead("your trades", servicesRes);
+  // A swallowed read here reads as "not a test account", which switches the
+  // fence ON for a test crew and empties the board they are meant to rehearse
+  // the whole claim → complete → payout chain on.
+  const me = mustRead("your crew account", meRes);
+  const meOwner = me?.users as { is_fixture?: boolean } | { is_fixture?: boolean }[] | null | undefined;
+  const iAmFixture = !!(Array.isArray(meOwner) ? meOwner[0]?.is_fixture : meOwner?.is_fixture);
   const myServiceIds = (myServices ?? []).map((s) => s.id as string);
   if (myServiceIds.length === 0) return [];
 
   // "No open jobs right now" on a board the nightly text is actively pointing
   // them at — the same wrong sentence the cap bug produced, arrived at from a
   // dropped connection instead.
-  const jobs = mustRead(
-    "the open jobs",
-    await admin
+  const board = admin
     .from("jobs")
-    .select("id, date, customer_price, service_id, property_id, is_rush, est_minutes, created_at, pickup_lat, pickup_lng, services(name, pricing_model, est_minutes, takes_custody), properties(lake_id, lat, lng, lakes(name))")
+    .select(`id, date, customer_price, service_id, property_id, is_rush, est_minutes, created_at, pickup_lat, pickup_lng, services(name, pricing_model, est_minutes, takes_custody), properties!inner(lake_id, lat, lng, lakes(name), ${OWNER_FIXTURE_EMBED})`)
     .eq("status", "requested")
     .is("vendor_id", null)
     .is("group_id", null) // package visits are routed, never cold-claimed — a claim can't price multi-leg work. This filter is about MULTI-LEG, not custody: a standalone custody service carries no group and passes straight through it. takes_custody below is what guards custody.
     .in("service_id", myServiceIds)
-    .gte("date", today)
-    .order("date", { ascending: true })
-    .limit(BOARD_CAP),
+    .gte("date", today);
+  // THE FENCE THAT ONLY EVER RAN ONE WAY.
+  //
+  // A fixture crew must never be routed real work, and five pools say so. The
+  // mirror image had nobody guarding it: this board showed every open job
+  // whatever kind of account booked it, so the first real crew on the platform
+  // could be shown — and could claim, and could be dispatched to, and could
+  // drive to — a booking that exists only to rehearse the software. A job is a
+  // fixture because its PROPERTY'S OWNER is, the same derivation the public
+  // lake page uses, never a second way of deciding it.
+  //
+  // DIRECTIONAL ON PURPOSE. Fixture crew plus fixture job harms nobody, and
+  // this board is the last path by which the owner's three test crews can take
+  // a job at all — ops refuses to hand-assign them and auto-dispatch excludes
+  // them — so an unconditional fence would close the only way to walk claim →
+  // complete → payout before a real crew ever arrives.
+  const jobs = mustRead(
+    "the open jobs",
+    await (iAmFixture ? board : board.eq(OWNER_FIXTURE_FILTER, false))
+      .order("date", { ascending: true })
+      .limit(BOARD_CAP),
   );
   if (!jobs || jobs.length === 0) return [];
 

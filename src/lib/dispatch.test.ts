@@ -481,11 +481,32 @@ describe("why there is no crew, when there is none", () => {
   });
 
   it("the cold-start branch says which gap it is", () => {
-    const branch = src.slice(src.indexOf('if (!pool.some'), src.indexOf("maxDailyCap"));
+    const branch = src.slice(src.indexOf("const routable ="), src.indexOf("maxDailyCap"));
+    expect(branch.length, "the cold-start branch moved — this scan is measuring nothing")
+      .toBeGreaterThan(200);
     expect(branch).toContain("crewGap");
     // and it decides by asking the LAKE on its own, not by reusing `pool`
-    expect(branch).toMatch(/service_lakes/);
     expect(branch).toMatch(/crewGap: anyOnThisLake \? "service" : "lake"/);
+  });
+
+  /**
+   * THE CALENDAR ASKS THE ROUTER'S QUESTION, NOT A SHORTER ONE.
+   *
+   * Cold start used to be decided on `status === "active"` alone while every
+   * date below it went through canEverDo. One active crew with a lapsed
+   * certificate therefore passed the cold-start check and failed all 31 dates:
+   * a month of squares titled "Crew at capacity" with nobody at capacity, and
+   * the honest "we're finding you a crew" banner suppressed. The gap
+   * derivation needs the same rule or it answers "service" about the very crew
+   * who does the service.
+   */
+  it("cold start and the gap it names both use canEverDo", () => {
+    const branch = src.slice(src.indexOf("const routable ="), src.indexOf("maxDailyCap"));
+    expect((branch.match(/canEverDo\(/g) ?? []).length, "both questions must ask the shared rule")
+      .toBeGreaterThanOrEqual(2);
+    expect(branch, "standing alone cannot decide either question")
+      .not.toMatch(/v\.status === "active"/);
+    expect(branch).toMatch(/todayISO: today/);
   });
 
   it("the banner no longer blames the lake unconditionally", () => {
@@ -630,5 +651,77 @@ describe("0145 wiring: custody is read from the service, not guessed", () => {
     expect(tier, "the tier check should be the conditional one").toBeGreaterThan(-1);
     expect(ins, "insurance must be checked before, and independently of, the tier")
       .toBeLessThan(tier);
+  });
+});
+
+/**
+ * "THAT DAY JUST FILLED UP" WHEN NOTHING IS FULL.
+ *
+ * `all_full_or_blocked` is the one reason the booking flow acts on: it DELETES
+ * the job row and tells the customer to pick another date (book/actions.ts and
+ * book/storage/actions.ts). It used to be the catch-all for an empty eligible
+ * pool, so a lake whose only crew was still onboarding — or suspended, or
+ * carrying a lapsed certificate, or a certificate naming another business —
+ * answered "full" on every date, and no date could ever be different. The
+ * demand was erased instead of becoming a Finding-a-crew waitlist row.
+ *
+ * Every case below is the NORMAL day-one state of a lake: onboarding writes
+ * trades and lakes and activation refuses to run until both are set, so
+ * "invited, capable on paper" is where every real crew must sit.
+ */
+describe("a crew who cannot be sent is not a full calendar", () => {
+  const onLake = (over: Partial<CrewCandidate> = {}) =>
+    input({ lakeId: "lake-1", crews: [crew({ serviceLakes: ["lake-1"], ...over })] });
+
+  it("the only crew is still onboarding -> not 'day full'", () => {
+    const d = decideDispatch(onLake({ status: "invited" }));
+    expect(d.reasonNoFit).toBe("no_routable_crew");
+  });
+
+  it("suspended, lapsed, absent and misnamed certificates all read the same way", () => {
+    expect(decideDispatch(onLake({ status: "suspended" })).reasonNoFit).toBe("no_routable_crew");
+    expect(decideDispatch(onLake({ coiExpiry: "2026-01-01" })).reasonNoFit).toBe("no_routable_crew");
+    expect(decideDispatch(onLake({ coiExpiry: null })).reasonNoFit).toBe("no_routable_crew");
+    expect(decideDispatch(onLake({ coiNamedInsured: "Somebody Else LLC", company: "Our Crew LLC" })).reasonNoFit)
+      .toBe("no_routable_crew");
+  });
+
+  it("and no date can rescue any of them — the gates have nothing to do with the day", () => {
+    for (const weekday of ["Mon", "Tue", "Wed", "Thu", "Fri"]) {
+      expect(decideDispatch({ ...onLake({ status: "invited" }), weekday }).reasonNoFit).toBe("no_routable_crew");
+    }
+  });
+
+  /* THE OTHER HALF OF THE BRANCH. Collapse the new guard and this case starts
+     passing too — an absence-only assertion above would be satisfied by a
+     fixture frozen on the safe side of the condition. A genuinely full day,
+     and a day the crew does not work, must still delete the booking. */
+  it("a genuinely full day is STILL all_full_or_blocked", () => {
+    expect(decideDispatch(onLake({ dailyCapacity: 2, assignedThatDay: 2 })).reasonNoFit)
+      .toBe("all_full_or_blocked");
+    expect(decideDispatch(onLake({ blockedThatDay: true })).reasonNoFit).toBe("all_full_or_blocked");
+    expect(decideDispatch(onLake({ workDays: ["Mon"] })).reasonNoFit).toBe("all_full_or_blocked");
+  });
+
+  it("one routable crew who is full still answers 'full' even beside an invited one", () => {
+    const d = decideDispatch(input({
+      lakeId: "lake-1",
+      crews: [
+        crew({ vendorId: "green", serviceLakes: ["lake-1"], dailyCapacity: 1, assignedThatDay: 1 }),
+        crew({ vendorId: "newbie", serviceLakes: ["lake-1"], status: "invited" }),
+      ],
+    }));
+    expect(d.reasonNoFit).toBe("all_full_or_blocked");
+  });
+
+  it("the narrower custody reason still wins ahead of it", () => {
+    // A crew who clears standing and insurance but no barn is a recruiting gap
+    // with its own name; the new guard must not swallow it.
+    const d = decideDispatch(input({
+      lakeId: "lake-1",
+      storage: { tier: "indoor", boatFeet: 20 },
+      crews: [crew({ serviceLakes: ["lake-1"], garagekeepersExpiry: null })],
+    }));
+    expect(d.reasonNoFit).toBe("no_custody_crew");
   });
 });

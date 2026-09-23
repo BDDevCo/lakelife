@@ -61,6 +61,45 @@ export interface SmsHealth {
   error?: string;
 }
 
+/**
+ * WHICH OF THE FIVE WORLDS THIS LOG IS DESCRIBING.
+ *
+ * "Has a text reached a handset?" has five answers and only one of them is no.
+ * The delivery panel knew that and branched on all of them, in words. The
+ * go-live checklist at the foot of the SAME PAGE collapsed them to a boolean —
+ * `Boolean(log.window && log.window.delivered > 0)` — and its false arm then
+ * asserted "Twilio's log shows nothing delivered in the window above", which
+ * is a statement about a log we may never have read. It bites on exactly the
+ * occasion the page exists for: the reload right after the Messaging Service
+ * SID is set, when Twilio happening to be unreachable would send him back to
+ * Vercel to fix a setting that was never wrong.
+ *
+ * So the branch lives here, once, and both halves of the page read it. Each
+ * renderer keeps its own prose — this decides only WHICH world they are in, so
+ * they cannot disagree about that again.
+ */
+export type DeliveryVerdict =
+  /** No credentials on this server, so nobody looked. Not a no. */
+  | { state: "unasked" }
+  /** We asked and the lookup failed. Also not a no. */
+  | { state: "unreadable" }
+  /** We read the log and it holds no messages at all. "Nothing was sent." */
+  | { state: "nothing-sent" }
+  /** Messages went to the carriers and not one came back delivered. */
+  | { state: "none-delivered"; sent: number; delivered: number }
+  /** At least one message reached a handset. The only yes. */
+  | { state: "delivered"; sent: number; delivered: number };
+
+export function deliveryVerdict(log: SmsHealth): DeliveryVerdict {
+  if (!log.configured) return { state: "unasked" };
+  // Null window is "we could not ask" by this module's own contract — never
+  // zero, which is why it can never be read as a clean sheet.
+  if (!log.window) return { state: "unreadable" };
+  const { sent, delivered } = log.window;
+  if (sent === 0) return { state: "nothing-sent" };
+  return { state: delivered > 0 ? "delivered" : "none-delivered", sent, delivered };
+}
+
 export async function getSmsHealth(): Promise<SmsHealth> {
   // THE ACCOUNT, NOT THE VERIFY SERVICE. This gate used to be `hasTwilioEnv()`,
   // which answered on the VERIFY service SID — so a delivery panel about the

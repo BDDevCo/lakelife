@@ -140,8 +140,16 @@ export async function setMyRate(serviceId: string, payload: RatePayload): Promis
   return {
     ok: true,
     qualifies: true,
-    signal: prev
-      ? "Rate updated — you'll be considered for matching jobs."
-      : "Saved — you'll be considered for matching jobs.",
+    // AN ONBOARDING CREW IS NOT BEING CONSIDERED FOR ANYTHING — dispatch drops a
+    // non-active crew before rates are read at all. True only for a live crew,
+    // and the rates door is now open before go-live.
+    signal:
+      vendor.status !== "active"
+        ? prev
+          ? "Rate updated — it's on file. Offers start when you tap Go live."
+          : "Saved — it's on file. Offers start when you tap Go live."
+        : prev
+          ? "Rate updated — you'll be considered for matching jobs."
+          : "Saved — you'll be considered for matching jobs.",
   };
 }
