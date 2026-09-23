@@ -684,6 +684,39 @@ describe("3 January 2027 — money at the bill window", () => {
     expect(twice.ok).toBe(false);
     expect(twice.error).toBe("That payment is already recorded — check the ledger before entering it again.");
   });
+
+  it("a short payment says what is still owing — the same figure at the \u2295 window before the tap and on the Rent screen after it", async () => {
+    // THE THIRD SHAPE OF MONEY AT THE WINDOW. Exact is two tests up, over is
+    // one; this is the one where the household is short. Both doors have to
+    // reach the same remainder, and neither may say the word "settled".
+    const bill = billOn("16", "2027-01")!;
+    const facts = {
+      oldestOpen: { chargeId: bill.id as string, month: "2027-01", balance: Number(bill.amount), disputed: false },
+      openCount: 1, onAccount: 0, nothingMoreBills: false as boolean | null, olderOpen: [],
+    };
+    // THE \u2295 WINDOW, BEFORE THE TAP. The balance in front of it is the bill
+    // the biller raised, read back out of the ledger — so the $542.53 these
+    // two sentences are computed against is the rate card plus the fee, and
+    // the $242.53 remainder is the door's own arithmetic, not this file's.
+    expect(amountNote("542.53", facts)).toBe("Settles January 2027.");
+    expect(amountNote("300", facts)).toBe("Part of January 2027 — $242.53 will still be owing.");
+
+    // THE RENT SCREEN, AFTER IT. Same bill, same $300.00 in cash, and the
+    // remainder the window projected is the remainder the ledger records.
+    const res = await recordPayment(
+      PARK, bill.id as string, 300, "cash", "", "2027-01-03", undefined, "key-lot16-jan",
+    );
+    expect(res.ok, res.error).toBe(true);
+    expect(res.against).toBe(300);
+    expect(res.onAccount).toBe(0);
+    expect(res.signal).toBe("Recorded. $242.53 still outstanding.");
+    expect(res.signal).not.toContain("settled");
+    // And the paper the household leaves with says it a third time.
+    expect(res.receipt!.balanceAfter).toBe(242.53);
+    expect(receiptBody(res.receipt!)).toContain("Still owing     $242.53");
+    expect(Number(billOn("16", "2027-01")!.paid_total)).toBe(300);
+    expect(billOn("16", "2027-01")!.status).toBe("open");
+  });
 });
 
 // ===========================================================================
@@ -885,8 +918,11 @@ describe("31 January 2027 — the month, closed", () => {
     // cancelled, and Lot 9's re-raised part month back in its place.
     expect(page.rows.filter((r) => r.state !== "void")).toHaveLength(17);
     expect(ledgerHeadline(page.summary, page.lagDays)).toBe(ledgerHeadline(summarise(page.rows), page.lagDays));
-    // The one figure the office reads as "go and get this".
-    expect(money(page.summary.outstanding)).toBe("$7,052.89");
+    // The one figure the office reads as "go and get this". Seventeen live
+    // bills less every payment that stood: Lot 1's, Lot 2's bill half, Lot
+    // 15's two, Lot 9's part month, and Lot 16's $300.00 short one — Lot
+    // 14's bounced and Lot 17's bill is cancelled.
+    expect(money(page.summary.outstanding)).toBe("$6,752.89");
   });
 
   it("what the park is holding, and the one screen that still disagrees about it", async () => {
