@@ -5,10 +5,11 @@ import { mustRead, mustCount, readFailedMessage } from "@/lib/must-read";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { assertMyPark } from "./data";
-import { withParkRate } from "@/lib/park-rates";
+import { withParkRate, parkMayPrice } from "@/lib/park-rates";
 import { loadParkRates } from "./rate-data";
+import { loadPricingProfileById } from "@/app/book/dispatch";
 import {
-  buildParkBlockers, buildGroundsPropertyRow, canEnableParkServices, usesPerLotRate,
+  buildParkBlockers, buildGroundsPropertyRow, canEnableParkServices, parkRateUnit,
   buildOwnedHomeRow, ownedHomeAddress,
   type ParkReadiness, type OwnedHomeInput,
 } from "./service-helpers";
@@ -224,25 +225,57 @@ export interface ParkServiceRow {
   bandPricing: Record<string, unknown> | null;
   frequencyOptions: string[];
   minPhotos: number;
+  /**
+   * WHAT THE PER-UNIT BOX IS FOR, at this park, in this park's own numbers.
+   *
+   * `unitNoun` is the word ("lot", "pier section"); `unitCount` is how many of
+   * them the ENGINE will count at this grounds — asked of `priceService`
+   * itself, not re-derived, so the preview and the invoice cannot drift. Both
+   * null when the model never reads unit_rate (snow is `flat`), and the editor
+   * then draws one box.
+   */
+  unitNoun: string | null;
+  unitCount: number | null;
+  /**
+   * The pricing-profile key the engine multiplies by, so the live preview can
+   * hand `priceService` a profile it recognises instead of a lot count it
+   * doesn't use. Null exactly when `unitNoun` is.
+   */
+  countField: string | null;
+  /**
+   * False for a service the park can BOOK but LakeLife is not park-only about
+   * — the dock. Only used to explain, never to price: both halves are priced
+   * identically, by this park's own row or not at all.
+   */
+  parkOnly: boolean;
 }
 
-/** The grounds menu, priced off the live lot count. */
+/** The grounds menu, priced off what is actually AT the grounds. */
 export async function getParkServiceMenu(parkId: string): Promise<ParkServiceRow[]> {
   if (!(await assertMyPark(parkId))) return [];
   const admin = createServiceClient();
 
-  const [lotsRes, servicesRes, rates] = await Promise.all([
+  const [parkRes, lotsRes, servicesRes, rates] = await Promise.all([
+    admin.from("parks").select("service_property_id").eq("id", parkId).maybeSingle(),
     admin.from("park_lots").select("id", { count: "exact", head: true })
       .eq("park_id", parkId).eq("lifecycle", "live"),
     admin.from("services")
-      .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, min_photos")
-      .eq("active", true).eq("park_only", true),
+      .select("id, name, pricing_model, base, unit_rate, band_pricing, frequency_options, min_photos, park_only, park_bookable")
+      // THE DESK SHOWS WHATEVER THE PARK CAN BUY — both halves, the same two
+      // flags `getPricedServices` selects the booking menu with. It was
+      // `.eq("park_only", true)` while /book already offered the dock, so The
+      // Haven could BOOK a $1,564 pier and had no box anywhere to put Josh's
+      // $840 in. A price screen that cannot reach a bookable service is the
+      // rate in one doorway of two.
+      .eq("active", true).or("park_only.eq.true,park_bookable.eq.true"),
     loadParkRates(parkId),
   ]);
   // The lot count is a MULTIPLIER on every price below it, so a dropped count
   // read as 0 shows him his base rate and calls it the price of a mow.
   const lots = mustCount("your live lots", lotsRes);
   const services = mustRead("the grounds menu", servicesRes);
+  const park = mustRead("your park", parkRes);
+  const propertyId = (park?.service_property_id as string | null) ?? null;
 
   // THIS PARK'S OWN NUMBERS, or none at all.
   //
@@ -250,11 +283,43 @@ export async function getParkServiceMenu(parkId: string): Promise<ParkServiceRow
   // missing rate cannot quietly become somebody else's. A service with no row
   // here comes back priced `null`, and the screen asks for a number instead of
   // showing a confident wrong one.
-  const { priceService } = await import("@/lib/pricing");
-  const n = lots;
+  const { priceService, serviceApplies } = await import("@/lib/pricing");
 
-  return (services ?? []).map((s) => {
+  // THE GROUNDS' REAL PROFILE, not a lot count in a trenchcoat.
+  //
+  // This was `{ lots }`, which is every input a park_only service has — and
+  // exactly none of the inputs the dock has. Josh's $30 a section previewed as
+  // "$0.00 a visit" against it, because `per_section` counts `pier_sections`
+  // and that key was not in the object. The same loader dispatch, autopilot and
+  // the nightly price through is the only one that can be right here.
+  const profile = propertyId
+    ? await loadPricingProfileById(admin, propertyId)
+    // No grounds property minted yet: the blockers list already says so, and
+    // the lot count is genuinely all we know. Nothing here is bookable anyway.
+    : ({ lots } as unknown as Parameters<typeof priceService>[1]);
+  const pp = (profile ?? ({ lots } as unknown as Parameters<typeof priceService>[1]));
+
+  return (services ?? [])
+    // WORK THE GROUNDS CAN ACTUALLY TAKE. park_only services stay listed
+    // unconditionally — they are this park's own four and a price is wanted for
+    // each. The half 0143 opened is filtered by the honest test /book uses:
+    // `serviceApplies` counts the equipment, not the money. A park with no boat
+    // lift is not asked to price a boat-lift pull it could never book.
+    .filter((s) => s.park_only === true
+      || serviceApplies(s as unknown as Parameters<typeof priceService>[0], pp))
+    .map((s) => {
     const own = rates.get(s.id as string);
+    const shape = s as unknown as Parameters<typeof priceService>[0] & { id: string };
+    const unit = parkRateUnit(s.pricing_model as string, s.band_pricing as Record<string, unknown> | null);
+    // HOW MANY OF THEM, ASKED OF THE ENGINE. One dollar of unit rate, and see
+    // what the engine does with it — which is the multiplier it will use on the
+    // invoice, by construction, whatever the model does. Re-deriving it from
+    // `band_pricing` here would be a second pricing path, and a second pricing
+    // path is how the screen and the bill stop agreeing.
+    const unitCount = unit
+      ? priceService({ ...shape, base: 0, unit_rate: 1 }, pp)
+        - priceService({ ...shape, base: 0, unit_rate: 0 }, pp)
+      : null;
     return {
       id: s.id as string,
       name: s.name as string,
@@ -262,10 +327,7 @@ export async function getParkServiceMenu(parkId: string): Promise<ParkServiceRow
         // The SAME engine the customer path uses, with this park's numbers
         // overlaid onto the service's shape. A second pricing path here is how
         // the screen and the invoice drift apart.
-        ? priceService(
-            withParkRate(s as unknown as Parameters<typeof priceService>[0] & { id: string }, rates),
-            { lots: n } as unknown as Parameters<typeof priceService>[1],
-          )
+        ? priceService(withParkRate(shape, rates), pp)
         : null,
       pricingModel: s.pricing_model as string,
       bandPricing: (s.band_pricing as Record<string, unknown> | null) ?? null,
@@ -274,6 +336,13 @@ export async function getParkServiceMenu(parkId: string): Promise<ParkServiceRow
       note: own?.note ?? null,
       frequencyOptions: (s.frequency_options as string[]) ?? [],
       minPhotos: (s.min_photos as number) ?? 0,
+      // A UNIT NOBODY COUNTS IS NOT A UNIT. `per_section` on a grounds with no
+      // dock multiplies by zero; offering the box there is the snow bug wearing
+      // a different hat, so the noun goes away with the count.
+      unitNoun: unit && unitCount ? unit.noun : null,
+      unitCount: unit && unitCount ? unitCount : null,
+      countField: unit && unitCount ? unit.countField : null,
+      parkOnly: s.park_only === true,
     };
   });
 }
@@ -311,7 +380,7 @@ export async function setParkServiceRate(
   // question this paragraph exists to ask.
   const svcRes = await admin
     .from("services")
-    .select("id, name, park_only, active, pricing_model, band_pricing")
+    .select("id, name, park_only, park_bookable, active, pricing_model, band_pricing")
     .eq("id", serviceId)
     .maybeSingle();
   if (svcRes.error) {
@@ -319,24 +388,73 @@ export async function setParkServiceRate(
   }
   const svc = svcRes.data;
   if (!svc) return { ok: false, error: "That service isn't there any more." };
-  if (svc.park_only !== true) {
-    return { ok: false, error: "That isn't one of your park's grounds services — its price is set by LakeLife." };
+  // WIDENED 28 AUG 2026 — "every park carries its own number".
+  //
+  // It was `svc.park_only !== true`, which refused the dock. 0143 had already
+  // let a park BOOK general work and said out loud that whether a park gets its
+  // own number on it was "a business decision, not a schema one, and it is not
+  // made here". It is made now, and the answer is yes: a park's number comes
+  // from that park's own costs or from a crew onboarded to it, never from
+  // LakeLife's retail card and never from another park.
+  //
+  // The refusal below is still true and still useful for what it now refuses —
+  // lake-house work a park cannot buy at all. Pricing something you cannot book
+  // is a number with no reader.
+  if (!parkMayPrice(svc)) {
+    return { ok: false, error: `${svc.name} isn't on your park's menu — it's lake-house work, so there's nothing here for you to price.` };
   }
   if (svc.active === false) {
     return { ok: false, error: `${svc.name} isn't offered at the moment, so there's nothing to price.` };
   }
-  // A PER-LOT RATE THE ENGINE WILL NEVER READ IS A NUMBER THAT LIES ON THE CARD.
+  // A UNIT RATE THE ENGINE WILL NEVER READ IS A NUMBER THAT LIES ON THE CARD.
   //
   // Snow clearing is priced `flat`, and priceService returns `rule.base` —
   // unit_rate is not looked at. Stored anyway it shows back on the services
   // list, reads as part of the price, and is worth nothing at booking. The
   // editor no longer offers the box; this is the same rule on the server,
   // where the numbers actually arrive from a browser.
-  if (unitRate > 0 && !usesPerLotRate(svc.pricing_model as string, svc.band_pricing as Record<string, unknown> | null)) {
+  //
+  // IT ASKS FOR THE UNIT, NOT FOR LOTS. The narrower "does this move with the
+  // lot count?" test that used to stand here answers FALSE for the dock —
+  // per_section counting `pier_sections` — so Josh's "$30 a section" would have
+  // been refused with "put the whole amount in the per-visit box", and $30 flat
+  // is not $840. (That predicate is gone; `parkRateUnit` is the only one left.)
+  const unit = parkRateUnit(svc.pricing_model as string, svc.band_pricing as Record<string, unknown> | null);
+  if (unitRate > 0 && !unit) {
     return {
       ok: false,
-      error: `${svc.name} is priced once per visit, not per lot — put the whole amount in the per-visit box.`,
+      error: `${svc.name} is priced once per visit — put the whole amount in the per-visit box.`,
     };
+  }
+
+  // AND THE UNIT HAS TO BE THERE TO COUNT.
+  //
+  // `per_section` with nothing to count multiplies by zero in silence: the
+  // rate saves, the card shows "$30 a pier section", and every booking prices
+  // at the base. That is the snow bug with a different counter, and the fix is
+  // a different sentence — not "use the other box" but "your grounds has none
+  // of these on file".
+  if (unitRate > 0 && unit) {
+    const propRes = await admin
+      .from("parks").select("service_property_id").eq("id", parkId).maybeSingle();
+    if (propRes.error) {
+      return { ok: false, error: readFailedMessage("your park's grounds", propRes.error) };
+    }
+    const propertyId = (propRes.data?.service_property_id as string | null) ?? null;
+    const profile = propertyId ? await loadPricingProfileById(admin, propertyId) : null;
+    const { priceService } = await import("@/lib/pricing");
+    const shape = { ...svc, base: 0 } as unknown as Parameters<typeof priceService>[0];
+    // Asked of the engine, one dollar at a time — the same question the desk
+    // asks, so the box he was offered and the number we accept agree.
+    const count = profile
+      ? priceService({ ...shape, unit_rate: 1 }, profile) - priceService({ ...shape, unit_rate: 0 }, profile)
+      : 0;
+    if (!(count > 0)) {
+      return {
+        ok: false,
+        error: `${svc.name} is charged per ${unit.noun}, and your grounds has none on file — put the whole amount in the per-visit box, or add them to the property first.`,
+      };
+    }
   }
   const { error } = await admin
     .from("park_service_rates")
@@ -353,6 +471,10 @@ export async function setParkServiceRate(
   if (error) return { ok: false, error: `Couldn't save that — ${error.message}` };
 
   revalidatePath("/park/services");
+  // THE BOOKING SCREEN IS THE OTHER READER. Until this rate existed the service
+  // priced to $0 and /book's `price > 0` filter dropped the tile entirely — so
+  // without this the owner saves his price and the dock is still not there.
+  revalidatePath("/book");
   return { ok: true, signal: "Saved. That's this park's price." };
 }
 

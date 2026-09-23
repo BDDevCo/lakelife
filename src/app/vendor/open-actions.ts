@@ -13,6 +13,8 @@ import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 import { getPlatformSettings } from "@/lib/settings";
 import { notify } from "@/lib/notify";
 import { crewPayout, customerPrice as feeCustomerPrice, type PlatformFee } from "@/lib/platform-fee";
+import { crewSetsThePrice } from "@/lib/park-rates";
+import { parkRatesForProfile } from "@/app/park/rate-data";
 
 /**
  * CLAIM a job off the open board (Phase D). First qualified crew wins — the
@@ -153,6 +155,24 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     return { ok: false, error: readFailedMessage("your rate for this service", vrRes.error) };
   }
   const vr = vrRes.data;
+  // LOADED WHETHER OR NOT THIS CREW HAS A CARD, because it carries `parkId` and
+  // that decides who prices this job at all (below). Leaving it inside the
+  // `if (vr)` would make the money question correct only because a DIFFERENT
+  // guard happens to refuse the no-card case first.
+  //
+  // Same reason as the anchor read below: this loader throws now, and a
+  // rejection out of a "use server" action reaches the crew as a blank
+  // failure. Nothing has been written yet — the guarded UPDATE is further
+  // down — so refusing here leaves the job on the board.
+  let profile: Awaited<ReturnType<typeof loadPricingProfileById>> = null;
+  try {
+    profile = await loadPricingProfileById(admin, job.property_id as string);
+  } catch (e) {
+    if (e instanceof ReadFailed) {
+      return { ok: false, error: readFailedMessage("this property's details", e) };
+    }
+    throw e;
+  }
   let myRate: number | null = null;
   if (vr) {
     const rule: ServiceRule = {
@@ -162,21 +182,22 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
       unit_rate: Number(vr.unit_rate ?? 0),
       band_pricing: (vr.band_pricing as ServiceRule["band_pricing"]) ?? null,
     };
-    // Same reason as the anchor read below: this loader throws now, and a
-    // rejection out of a "use server" action reaches the crew as a blank
-    // failure. Nothing has been written yet — the guarded UPDATE is further
-    // down — so refusing here leaves the job on the board.
-    let profile;
-    try {
-      profile = await loadPricingProfileById(admin, job.property_id as string);
-    } catch (e) {
-      if (e instanceof ReadFailed) {
-        return { ok: false, error: readFailedMessage("this property's details", e) };
-      }
-      throw e;
-    }
     if (profile) myRate = priceService(rule, profile);
   }
+
+  // WHAT THIS PARK PAYS — and it is THE OPEN BOARD, so this is the doorway
+  // where a park's negotiated price could actually be overwritten.
+  //
+  // `null` here means "not a park's grounds"; a Map, even an empty one, means
+  // a park. A failed read is neither, and it refuses: an unread map says "this
+  // park has no rate", which routes a crew-priced service to the crew's card,
+  // and the guarded UPDATE below would then write that card's number over a
+  // number Mike negotiated. That is a wrong charge, not a refusal.
+  const parkRatesRes = await parkRatesForProfile(profile);
+  if (parkRatesRes.failed) {
+    return { ok: false, error: readFailedMessage("what this park pays", null) };
+  }
+  const parkRates = parkRatesRes.rates;
 
   // ⚡ Same-day rush: claimable only inside the window (today, pre-cutoff) and
   // paid at the fill-in rate — the discounted number the board showed. Tapping
@@ -188,7 +209,19 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
   // onto it by the guarded UPDATE below, and every later reader uses those.
   // getPlatformSettings falls back to its documented defaults rather than
   // throwing, so a dropped read cannot silently zero a fee.
-  const fee: PlatformFee | null = svc.crew_priced
+  //
+  // AND IT IS THE SERVICE **AND THE CUSTOMER** THAT DECIDE (0176), not the flag
+  // alone. `fee` set means the crew's card IS the price: canClaim stops testing
+  // `rate_too_high` against the customer's number, and the guarded UPDATE below
+  // WRITES `customer_price` from the card. On a park that holds its own rate
+  // for this service — The Haven's mow at base 20 + $5 a lot — both of those
+  // are wrong: the park's $125 is the price, the margin floor is the right test
+  // against it, and a claim must never overwrite it. Precedence answers that in
+  // the one place every other doorway asks.
+  const fee: PlatformFee | null = crewSetsThePrice(
+    { id: job.service_id as string, crew_priced: svc.crew_priced },
+    parkRates,
+  )
     ? { customerPct: settingsRush.platformFeeCustomerPct, crewPct: settingsRush.platformFeeCrewPct }
     : null;
   if (isRush) {

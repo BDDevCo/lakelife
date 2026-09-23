@@ -3,6 +3,8 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { mustRead } from "@/lib/must-read";
 import { summariseCorrection, correctionCard, type CorrectionCard, type TimedRule } from "@/lib/arrival";
 import { getFullProfile, toPricingProfile } from "@/app/profile/data";
+import { loadParkRatesChecked } from "@/app/park/rate-data";
+import type { ParkRates } from "@/lib/park-rates";
 
 export interface OwnerFlag {
   id: string;
@@ -91,6 +93,10 @@ export async function getOwnerFlags(): Promise<OwnerFlag[]> {
 
   const rulesById = new Map<string, TimedRule>();
   const profilesById = new Map<string, ReturnType<typeof toPricingProfile>>();
+  /** propertyId → that park's own rates. Absent for every lake house (0176). */
+  const parkRatesByProperty = new Map<string, ParkRates>();
+  /** A park whose rates we could not read. No priced line rather than a wrong one. */
+  const parkReadFailed = new Set<string>();
   if (serviceIds.length > 0 || propertyIds.length > 0) {
     // BEST-EFFORT, LOUDLY. A crew is standing in the driveway; losing the
     // priced line is survivable and losing the Approve button is not. The card
@@ -113,10 +119,29 @@ export async function getOwnerFlags(): Promise<OwnerFlag[]> {
         console.error("[read failed] the pricing rules behind your approvals:", ruleRes.error);
       }
       for (const r of ruleRes.data ?? []) rulesById.set(r.id as string, r as unknown as TimedRule);
-      propertyIds.forEach((id, i) => {
+      for (const [i, id] of propertyIds.entries()) {
         const p = profiles[i];
-        if (p?.hasProfile) profilesById.set(id, toPricingProfile(p));
-      });
+        if (!p?.hasProfile) continue;
+        profilesById.set(id, toPricingProfile(p));
+        // THE PARK'S OWN NUMBER, ON THE CARD HE TAPS APPROVE ON (0176).
+        //
+        // This card priced a correction off LakeLife's RETAIL menu while
+        // `approveFlag` — the code that then bills it — priced the same
+        // correction off the park's own row through `withParkRate`. The quote
+        // and the bill came out of different numbers, and on The Haven's
+        // 28-section dock those numbers are $1,564 and $840. Neither file
+        // mentioned `groundsForParkId`, which is why a grep for the park
+        // doorway could not find either of them.
+        if (!p.groundsForParkId) continue;
+        const got = await loadParkRatesChecked(p.groundsForParkId);
+        // A FAILED READ IS NOT AN UNPRICED PARK. Passing `null` on would price
+        // this park off retail again — the exact bug — and passing an empty Map
+        // would call a park with a negotiated rate unrated. So the property is
+        // marked and its cards come back without a priced line, which is the
+        // state this screen already degrades to and already has copy for.
+        if (got.failed) parkReadFailed.add(id);
+        else parkRatesByProperty.set(id, got.rates);
+      }
     } catch (e) {
       console.error("[approvals] couldn't price the proposed changes:", e);
     }
@@ -130,9 +155,14 @@ export async function getOwnerFlags(): Promise<OwnerFlag[]> {
     const rule = j?.service_id ? rulesById.get(j.service_id) : undefined;
     const profile = j?.property_id ? profilesById.get(j.property_id) : undefined;
     if (!rule || !profile) return null;
+    // See the read above: a park we could not price is shown no figure at all.
+    if (j?.property_id && parkReadFailed.has(j.property_id)) return null;
+    const parkRates = j?.property_id
+      ? parkRatesByProperty.get(j.property_id) ?? null
+      : null;
     try {
       return correctionCard(
-        summariseCorrection(rule, profile, proposed as Parameters<typeof summariseCorrection>[2]),
+        summariseCorrection(rule, profile, proposed as Parameters<typeof summariseCorrection>[2], parkRates),
       );
     } catch (e) {
       console.error("[approvals] couldn't summarise a proposed change:", e);

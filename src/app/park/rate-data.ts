@@ -66,6 +66,46 @@ export async function loadParkRatesChecked(
 }
 
 /**
+ * THE PARK'S RATES FOR ONE PROPERTY, in exactly the shape `pricingPathFor` and
+ * `withParkRate` want — and the two answers those functions cannot be allowed
+ * to confuse:
+ *
+ *   `rates: null`   this property is NOT a park's grounds. Retail card.
+ *   `rates: Map`    a park, even when the Map is empty (priced nothing yet).
+ *
+ * `failed` is the third answer and it is never folded into the second. Since
+ * precedence arrived (0176) an unread rate map does not merely mean "no price"
+ * — it routes a crew-priced service to THE CREW'S CARD, which is a wrong
+ * charge rather than a refusal. Every caller here checks it.
+ *
+ * Throws ReadFailed out of `groundsFor` if it cannot tell whether this is a
+ * park at all: "not a park" would price The Haven off the lake-house menu.
+ */
+export async function parkRatesForProperty(
+  propertyId: string,
+): Promise<{ rates: ParkRates | null; failed: boolean }> {
+  const grounds = await groundsFor(propertyId);
+  if (!grounds) return { rates: null, failed: false };
+  const got = await loadParkRatesChecked(grounds.parkId);
+  return { rates: got.rates, failed: got.failed };
+}
+
+/**
+ * The same answer for a caller that has ALREADY loaded the pricing profile —
+ * `loadPricingProfileById` puts `parkId` on it, from the same `groundsFor` read
+ * that counts the lots. Asking twice costs a round trip and, worse, two reads
+ * of one fact can disagree about who the customer is.
+ */
+export async function parkRatesForProfile(
+  profile: { parkId?: string } | null | undefined,
+): Promise<{ rates: ParkRates | null; failed: boolean }> {
+  const parkId = profile?.parkId;
+  if (!parkId) return { rates: null, failed: false };
+  const got = await loadParkRatesChecked(parkId);
+  return { rates: got.rates, failed: got.failed };
+}
+
+/**
  * IS THIS PROPERTY A PARK'S GROUNDS, AND HOW MANY LOTS?
  *
  * Every park price is `base + unit_rate x live lots`, so a pricing profile

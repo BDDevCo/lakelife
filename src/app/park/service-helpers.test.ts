@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   canEnableParkServices, buildParkBlockers, buildGroundsPropertyRow, priceLine,
-  usesPerLotRate,
   type ParkReadiness,
 } from "./service-helpers";
 import { NO_LAKE_LINE } from "./readiness";
@@ -142,53 +141,27 @@ describe("the arithmetic, shown before he commits to it", () => {
   });
 });
 
-describe("a per-lot box on a service that cannot use one", () => {
-  /**
-   * SNOW IS THE ONE THAT BITES, AND IT BITES IN JANUARY.
-   *
-   * Production's four grounds services split two ways. Mowing and the two
-   * cleanups are `per_section` with `band_pricing.count_field = "lots"`, so
-   * `priceService` returns `base + unit_rate × lots`. Snow clearing is `flat`
-   * with `band_pricing` null, and `flat` returns `rule.base` — `unit_rate` is
-   * not read at all.
-   *
-   * The rate editor drew both boxes for every service. So pricing a snow push
-   * at "nothing flat, $15 a lot" showed:
-   *
-   *     $0.00 + $15.00 × 21 lots = $0.00 a visit (rounded to the dollar)
-   *
-   * — a $315 discrepancy reported as rounding, on a Save button disabled by
-   * `preview <= 0` with no other explanation. The one number he most needs to
-   * set before the first snow is the one the screen argues with him about.
-   *
-   * And a unit_rate saved against a flat service is a column with no reader:
-   * stored, shown back on the card, and worth nothing at booking.
-   */
-  it("says yes for the three services that are priced per lot", () => {
-    for (const name of ["Park grounds mowing & trim", "Common-area spring cleanup", "Common-area fall cleanup & leaf haul"]) {
-      expect(usesPerLotRate("per_section", { count_field: "lots" }), name).toBe(true);
-    }
-  });
-
-  it("says no for snow, which is flat and ignores unit_rate outright", () => {
-    expect(usesPerLotRate("flat", null)).toBe(false);
-    expect(usesPerLotRate("flat", { count_field: "lots" })).toBe(false);
-  });
-
-  it("says no when per_section counts something a park has none of", () => {
-    // `cfg.count_field ?? "pier_sections"` — a per_section service with no
-    // band_pricing counts PIER SECTIONS, and a park's grounds has zero. The
-    // per-lot box would multiply by nothing, silently.
-    expect(usesPerLotRate("per_section", null)).toBe(false);
-    expect(usesPerLotRate("per_section", { count_field: "pier_sections" })).toBe(false);
-  });
-
-  it("says no for every other model, rather than guessing", () => {
-    for (const m of ["band", "per_foot", "per_sqft_band", "seasonal_plus_perdiem", ""]) {
-      expect(usesPerLotRate(m, { count_field: "lots" }), m).toBe(false);
-    }
-  });
-});
+/**
+ * `usesPerLotRate` USED TO BE TESTED HERE, AND IT IS GONE (23 Sep 2026).
+ *
+ * It answered "does this service's price move with the LOT COUNT?" — true for
+ * the mow and the two cleanups, false for snow, which is priced `flat` and
+ * never reads unit_rate. That stopped the rate editor drawing a per-lot box on
+ * a snow push and previewing `$0.00 + $15.00 x 21 lots = $0.00 a visit`, a $315
+ * gap the screen blamed on rounding.
+ *
+ * The 28 August widening (a park may price ANYTHING it can buy) replaced it
+ * with `parkRateUnit`, which names the counter the engine will actually read,
+ * and moved its last production caller. The predicate stayed exported, stayed
+ * green, and was asked by nobody but these tests — a symbol with no caller,
+ * which reads to the next person as a rule still in force. Deleted with them.
+ *
+ * The BEHAVIOUR it protected did not go anywhere: "the editor hides the
+ * per-unit box when the model ignores it" and "the server refuses a rate the
+ * engine would throw away", below, are the same rule tested at the two doors
+ * that enforce it, and `park-rates.every-park-its-own.test.ts` covers
+ * `parkRateUnit` itself — including `flat` returning null, which is snow.
+ */
 
 describe("the screen and the server both ask the helper", () => {
   const read = (rel: string) =>
@@ -214,10 +187,20 @@ describe("the screen and the server both ask the helper", () => {
     expect(setup, "ParkSetup lost its address input — the address blocker now lies too").toMatch(/address/i);
   });
 
-  it("the editor hides the per-lot box when the model ignores it", () => {
+  it("the editor hides the per-unit box when the model ignores it", () => {
+    // WIDENED with the overlay (28 Aug decision). The old per-lot predicate
+    // answered the park_only question and was right for it — but it is FALSE
+    // for the dock, which is per_section counting pier_sections, so wiring the
+    // editor to it would have hidden the box Josh's "$30 a section" goes in. The
+    // editor asks the server, which asked priceService against the grounds'
+    // real profile; `perUnit` is that answer.
     const src = read("../../components/ParkServices.tsx");
     expect(src, "the editor still draws both boxes unconditionally")
-      .toMatch(/usesPerLotRate\(/);
+      .toMatch(/\{perUnit &&/);
+    expect(src, "the per-unit branch no longer decides anything")
+      .toMatch(/perUnit \?/);
+    expect(src, "a lot count is not the multiplier for every park service")
+      .not.toMatch(/u \* liveLots/);
   });
 
   it("and the rounding hedge is only ever about rounding", () => {
@@ -226,7 +209,7 @@ describe("the screen and the server both ask the helper", () => {
     const src = read("../../components/ParkServices.tsx");
     expect(src).toMatch(/rounded to the dollar/);
     expect(src, "the hedge still fires on any difference at all")
-      .not.toMatch(/Math\.abs\(b \+ u \* liveLots - preview\) > 0\.005/);
+      .not.toMatch(/Math\.abs\(b \+ u \* unitCount - preview\) > 0\.005/);
   });
 
   it("the server refuses a rate the engine would throw away", () => {
@@ -235,7 +218,7 @@ describe("the screen and the server both ask the helper", () => {
     // shows on the card and is worth nothing at booking.
     const src = read("./service-actions.ts");
     expect(src, "setParkServiceRate never consults the pricing model")
-      .toMatch(/usesPerLotRate\(/);
+      .toMatch(/parkRateUnit\(/);
 
     // AND ITS SELECT FETCHES WHAT THE CHECK READS. A condition widened without
     // its query is this repo's most repeated mistake: it compiles, reads

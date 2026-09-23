@@ -11,6 +11,8 @@ import { getPlatformSettings } from "@/lib/settings";
 import { mustRead } from "@/lib/must-read";
 import { OWNER_FIXTURE_EMBED, OWNER_FIXTURE_FILTER } from "@/lib/lake-pages";
 import { crewPayout, type PlatformFee } from "@/lib/platform-fee";
+import { crewSetsThePrice } from "@/lib/park-rates";
+import { parkRatesForProfile } from "@/app/park/rate-data";
 import { quoteAndPayoutSentence } from "./rates-helpers";
 import type { MyVendor } from "./data";
 
@@ -267,21 +269,6 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
     const prop = one(j.properties) as { lake_id?: string; lat?: number; lng?: number; lakes?: unknown } | null;
     const lakeName = (one(prop?.lakes) as { name?: string } | null)?.name ?? "a nearby lake";
 
-    // THE TWO MONEY MODELS, decided by the SERVICE and nothing else (0174).
-    //
-    // `fee` null = the menu path, byte for byte: the card priced against this
-    // property IS the take-home, and the margin floor still decides who may
-    // claim. `fee` set = the card is the crew's QUOTE, the customer's bill is
-    // built FROM it, and the crew is paid the quote less the crew-side fee.
-    //
-    // Live dials are correct here and only here: this job has not been priced
-    // by anybody yet, so there is nothing frozen on it to read. The moment a
-    // crew claims it, claimJob freezes these same two numbers onto the row
-    // (jobs.fee_customer_pct / fee_crew_pct) and every later reader uses those.
-    const fee: PlatformFee | null = svc?.crew_priced
-      ? { customerPct: settings.platformFeeCustomerPct, crewPct: settings.platformFeeCrewPct }
-      : null;
-
     // Price this job at the crew's OWN rate (their info — rule-1 safe).
     let takeHome: number | null = null;
     let quote: number | null = null; // crew-priced only: the card BEFORE the fee
@@ -302,6 +289,50 @@ export async function getOpenJobs(vendor: MyVendor): Promise<OpenJob[]> {
       // Same-day fill-in: the board shows the DISCOUNTED take-home — tapping
       // Claim is accepting it (the discount is a dial, not a negotiation).
       if (takeHome != null && isRushRow) takeHome = fillInRate(takeHome, settings.sameDayFillDiscountPct);
+    }
+
+    // THE TWO MONEY MODELS, decided by the SERVICE **AND THE CUSTOMER** (0174,
+    // corrected 0176).
+    //
+    // `fee` null = the menu path, byte for byte: the card priced against this
+    // property IS the take-home, and the margin floor still decides who may
+    // claim. `fee` set = the card is the crew's QUOTE, the customer's bill is
+    // built FROM it, and the crew is paid the quote less the crew-side fee.
+    //
+    // This read `svc?.crew_priced` alone, and the ACTION beside it did the
+    // same — so a park holding its own negotiated rate on a service somebody
+    // flagged crew_priced would have shown a crew a quote box for work already
+    // priced at the park's number, and `canClaim` would have stopped testing
+    // the margin floor against it. Precedence is the rule: the park's own row
+    // beats a crew's card, and only where the park has no row does the card
+    // price the work. `parkId` rides on the pricing profile already read above.
+    //
+    // A FAILED RATE READ IS NOT AN EMPTY RATE TABLE. An unread map says "this
+    // park has no rate", which is the crew-card answer — so the failure falls
+    // to the MENU path instead, where the floor still guards the number, and
+    // claimJob refuses the claim outright with a sentence.
+    //
+    // Live dials are correct here and only here: this job has not been priced
+    // by anybody yet, so there is nothing frozen on it to read. The moment a
+    // crew claims it, claimJob freezes these same two numbers onto the row
+    // (jobs.fee_customer_pct / fee_crew_pct) and every later reader uses those.
+    const parkRatesRow = await parkRatesForProfile(profile);
+    if (parkRatesRow.failed) {
+      console.error(
+        "[read failed, degraded] what this park pays, pricing the open board for job",
+        j.id,
+      );
+    }
+    const fee: PlatformFee | null =
+      !parkRatesRow.failed &&
+      crewSetsThePrice(
+        { id: j.service_id as string, crew_priced: svc?.crew_priced },
+        parkRatesRow.rates,
+      )
+        ? { customerPct: settings.platformFeeCustomerPct, crewPct: settings.platformFeeCrewPct }
+        : null;
+
+    if (vr && svc?.name) {
       if (fee) {
         // THE DISCOUNT CUTS THE QUOTE, NOT THE PAYOUT. On a crew-priced job the
         // customer's bill is built from the quote, so discounting the quote

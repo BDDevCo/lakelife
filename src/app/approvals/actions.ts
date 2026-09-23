@@ -8,7 +8,7 @@ import { summariseCorrection, scopeNoteFor, type TimedRule } from "@/lib/arrival
 import { todayLakeDate } from "@/lib/booking";
 import { planRecovery } from "@/lib/recovery";
 import { notify } from "@/lib/notify";
-import { withParkRate, type ParkRates } from "@/lib/park-rates";
+import { withParkRate, crewSetsThePrice, type ParkRates } from "@/lib/park-rates";
 import { loadParkRatesChecked } from "@/app/park/rate-data";
 import { mustRead, softRead, readFailedMessage } from "@/lib/must-read";
 import { rushPrice, fillInRate } from "@/lib/rush";
@@ -284,11 +284,37 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
         // here would hold every crew-priced approval on the platform the day
         // somebody nudged a dial.
         //
-        // PARKS NEVER REACH THIS BRANCH: `parkRates` is set only for a park's
-        // grounds, and a park's rate is the park's.
+        // A PARK REACHES THIS BRANCH TOO, SINCE 0176 — and it used to be fenced
+        // out of it by hand. The line read `raw.crew_priced === true &&
+        // !parkRates`, which is the old "a park is never crew-priced" sentence
+        // in its fourth spelling, and `parkRates` is a Map (often empty) for
+        // EVERY park, so the test was "never, for any park".
+        //
+        // What that cost: a park with no rate of its own books snow from a crew
+        // who onboarded with a card, the crew flags a bigger drive at arrival,
+        // the owner reads "your crew prices this one, so they'll re-quote it at
+        // the corrected size" (arrival.ts, which now answers the same rule) and
+        // taps Approve — and the job fell past here to the menu branch, where
+        // the park's zeroed global row prices to 0, `!(price > 0)` continues,
+        // and NOTHING moved on either end. The promise on the screen and the
+        // money in the row disagreed, silently, with no counter to say so.
+        //
+        // `crewSetsThePrice` is the one precedence rule: false for The Haven's
+        // mow (the park HAS a row, so the park's number governs and the menu
+        // branch below reprices it through `withParkRate` exactly as before),
+        // true for a park with no row on a crew-priced service, and byte for
+        // byte unchanged for every lake house.
         const jobCustomerPct = j.fee_customer_pct == null ? null : Number(j.fee_customer_pct);
         const jobCrewPct = j.fee_crew_pct == null ? null : Number(j.fee_crew_pct);
-        if (raw.crew_priced === true && !parkRates && jobCustomerPct != null && jobCrewPct != null) {
+        //
+        // THE ID COMES OFF THE JOB, not off `raw`. `pricingPathFor` matches a
+        // park's rate row BY service id, and a rule with no id finds no row,
+        // calls the park unrated and hands the mow to a crew's card. `raw` was
+        // looked up by this very id, so they are the same value — naming the
+        // job's column is what stops a future `select` losing the one field the
+        // whole rule turns on.
+        const whoPrices = { id: j.service_id as string, crew_priced: raw.crew_priced };
+        if (crewSetsThePrice(whoPrices, parkRates) && jobCustomerPct != null && jobCrewPct != null) {
           const fee = { customerPct: jobCustomerPct, crewPct: jobCrewPct };
           const vrCrew = j.vendor_id && j.service_id
             ? rateByVendorService.get(`${j.vendor_id}:${j.service_id}`)

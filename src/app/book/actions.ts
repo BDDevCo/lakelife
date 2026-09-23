@@ -2,7 +2,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { batchBookedLine, rushOfferLine } from "@/lib/booking-copy";
-import { withParkRate } from "@/lib/park-rates";
+import { withParkRate, crewSetsThePrice, noPriceForThisPark, type ParkRates } from "@/lib/park-rates";
 import { loadParkRatesChecked } from "@/app/park/rate-data";
 import { getFullProfile, toPricingProfile, getActivePropertyId } from "@/app/profile/data";
 import { priceService, transportFee, billsByDistance, type ServiceRule } from "@/lib/pricing";
@@ -502,10 +502,39 @@ export async function createBookingBatch(
   // services by name, and the customer is told the real reason.
   //
   // `crewPriced` is defined here rather than beside the pricing below because
-  // this is the first decision that needs it. PARK GROUNDS ARE NEVER
-  // CREW-PRICED (see the pricing block): a park's rate is the park's, and a
-  // park booking one of these takes the ordinary menu path.
-  const crewPriced = service.crew_priced === true && !profile.groundsForParkId;
+  // this is the first decision that needs it — which is why the park's rates
+  // are READ here, above the pricing block they used to sit in. Who prices this
+  // booking is now one question with one answer, asked once (`pricingPathFor`),
+  // and the same answer has to be available to the rush refusal and to the
+  // money. Two reads of "is this crew-priced" in one function is how the quote
+  // and the bill start disagreeing.
+  //
+  // A PARK PAYS ITS OWN RATE (0115). The global row for a grounds service
+  // carries no price at all, so without this overlay a mow books at $0 and the
+  // refusal further down fires with a message about boat lifts.
+  //
+  // THE CHECKED VARIANT, because everything below speaks to a person — and
+  // since 23 Sep it decides money as well. `loadParkRates` swallows a failed
+  // read by design (the nightly must not die over one park's prices), and an
+  // unread map here would say "this park has no rate", which now routes a
+  // crew-priced service to THE CREW'S CARD on a park that has its own
+  // negotiated number. A wrong charge, not a refusal. Refused instead.
+  let parkRates: ParkRates | null = null;
+  if (profile.groundsForParkId) {
+    const checked = await loadParkRatesChecked(profile.groundsForParkId);
+    if (checked.failed) {
+      return { ok: false, error: readFailedMessage("what your park pays for this", null) };
+    }
+    parkRates = checked.rates;
+  }
+  // PRECEDENCE, NOT A FENCE (23 Sep 2026 — see src/lib/park-rates.ts).
+  //
+  // This said `service.crew_priced === true && !profile.groundsForParkId`: a
+  // park could never meet a crew's card. The owner corrected that — a park is a
+  // customer, and a contractor onboarded onto LakeLife sells to it the way they
+  // sell to a homeowner. The park's OWN rate still wins where it has one, which
+  // is what keeps the mow where Mike negotiated it.
+  const crewPriced = crewSetsThePrice(service, parkRates);
   if (crewPriced) {
     for (const rushDay of plan.filter((d) => d.ok && d.isRush)) {
       refused.push({
@@ -533,27 +562,10 @@ export async function createBookingBatch(
   // Price it here — the client's number is never trusted. Rush pays the
   // premium; the crew side gets its fill-in discount at claim time.
   //
-  // A PARK PAYS ITS OWN RATE (0115). The global row for a grounds service
-  // carries no price at all, so without this overlay a mow books at $0 and the
-  // refusal below fires with a message about boat lifts.
-  // THE CHECKED VARIANT, because the refusal below speaks to a person.
-  // loadParkRates swallows by design (the nightly must not die over one park's
-  // prices). Here an unread map leaves 0115's zeroed global base in place,
-  // standardPrice comes out $0, and the owner is told to "set what you pay for
-  // it on your park's Services page" — a confident statement about their setup,
-  // sent to somebody who has already set it, pointing at a page where it is
-  // already correct. rate-data.ts exports loadParkRatesChecked for exactly this.
-  let parkRates = new Map();
-  if (profile.groundsForParkId) {
-    const checked = await loadParkRatesChecked(profile.groundsForParkId);
-    if (checked.failed) {
-      return { ok: false, error: readFailedMessage("what your park pays for this", null) };
-    }
-    parkRates = checked.rates;
-  }
-  const priceRule = profile.groundsForParkId
-    ? withParkRate(service, parkRates)
-    : service;
+  // `withParkRate(service, null)` returns the service untouched, so this one
+  // line is both customers: a lake house prices off the retail card, a park
+  // prices off its own row or off nothing at all.
+  const priceRule = withParkRate(service, parkRates);
 
   // ================= WHO SETS THIS PRICE, AND WHEN (0174) =================
   //
@@ -563,13 +575,10 @@ export async function createBookingBatch(
   // and write the money from the decision. Everything below that reads
   // `standardPrice` is fenced accordingly.
   //
-  // PARK GROUNDS TAKE THE MENU PATH, ALWAYS. 0174's CHECK stops a `park_only`
-  // service being crew-priced, but nothing stops a park's grounds booking an
-  // ordinary one — and then a stranger's card would quote work the park
-  // negotiated its own rate for. Park rates never combine. A park booking a
-  // crew-priced service therefore falls through to `withParkRate` above and,
-  // with no park rate on file, hits the honest park refusal below: set what
-  // you pay for it on your Services page.
+  // A PARK REACHES THIS PATH TOO NOW, and only where it has no number of its
+  // own. Where it HAS one, `pricingPathFor` answered `park_rate`, `crewPriced`
+  // is false, and the line below prices off `withParkRate` exactly as it always
+  // did — which is why The Haven's mow cannot move whatever flag is set on it.
   let standardPrice = crewPriced ? 0 : priceService(priceRule, toPricingProfile(profile));
   // SIM-FOUND (Wave 1): a $0 price means the profile has none of what this
   // service counts (0 PWC lifts booking a PWC pull). A $0 job can never
@@ -579,11 +588,20 @@ export async function createBookingBatch(
   // It cannot fire here because nothing has been priced yet; it fires after
   // dispatch, off `pricedToZero`, which says exactly this: the crews' cards
   // exist and every one of them prices this property at nothing.
+  //
+  // AND THE PARK SENTENCE IS NOW ONLY SAID ON THE PATH IT IS TRUE ON. It reads
+  // "set what you pay for it" — instructions, to a person, about a box on
+  // another screen. On a park with no rate for a CREW-PRICED service there is
+  // no box to type in and nothing for him to do: a crew quotes that one. That
+  // branch cannot reach here at all (`crewPriced` is true, so this guard is
+  // skipped and the job books unpriced and dispatches), and `noPriceForThisPark`
+  // is exported from the same file as the precedence rule so the sentence and
+  // the branch that earns it stay together.
   if (!crewPriced && standardPrice <= 0) {
     return {
       ok: false,
       error: profile.groundsForParkId
-        ? `${service.name} has no price for your park yet. Set what you pay for it on your park's Services page and it becomes bookable.`
+        ? noPriceForThisPark(service.name)
         : `${service.name} prices to $0 for your place — your profile shows none of the equipment it covers. Update your property profile and the real price appears.`,
     };
   }

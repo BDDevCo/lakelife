@@ -9,7 +9,6 @@ import {
   enableParkServices, focusParkProperty, setParkServiceRate,
   type ParkServiceRow,
 } from "@/app/park/service-actions";
-import { usesPerLotRate } from "@/app/park/service-helpers";
 
 /**
  * THE PARK'S OWN SERVICE DESK.
@@ -90,9 +89,18 @@ export function ParkServices({
 
         {on && (
           <div style={{ marginTop: 14 }}>
-            {/* THE DERIVATION, not just the price. */}
+            {/* THE DERIVATION, not just the price — AND NOT EVERY ROW'S.
+                This said "every price below is worked out from that" while the
+                list held only park_only work, all of it counted in lots. The
+                park's own dock is counted in SECTIONS, so the sentence stopped
+                being true the moment park_bookable work joined the list. Each
+                row now states its own counter; this one states the park's. */}
             <div style={{ fontSize: 13.5, fontWeight: 800 }}>
-              {liveLots} live {liveLots === 1 ? "lot" : "lots"} — every price below is worked out from that
+              {liveLots} live {liveLots === 1 ? "lot" : "lots"} on the grounds
+            </div>
+            <div className="mut" style={{ fontSize: 12.5, marginTop: 2 }}>
+              Park-wide work is priced from that. Anything counted another way
+              says what it counts, on its own line.
             </div>
 
             {menu.length === 0 ? (
@@ -113,6 +121,21 @@ export function ParkServices({
                 The ones without a price need your rate before they can be booked
                 — every park pays a different number for these, and we will not
                 guess yours from somebody else&apos;s.
+              </p>
+            )}
+
+            {/* WHY YOUR DOCK HAS NO NUMBER ON IT EITHER.
+                These rows are sold to lake homes as well, so unlike the park-only
+                four they DO have a LakeLife price — and it is deliberately not
+                used here. His 28-section dock priced at $1,564 a visit off that
+                card against the $840 Josh charges. The card is not quoted on this
+                screen: naming it would put the number back on his screen, which
+                is the thing that was wrong. */}
+            {menu.some((s) => !s.parkOnly) && (
+              <p className="mut" style={{ fontSize: 12.5, margin: "8px 0 0", lineHeight: 1.5 }}>
+                Some of this work is sold to lake homes too. A park&apos;s number is
+                still its own &mdash; out of your costs, or a crew you onboard &mdash;
+                so the homeowner price is never used for the park.
               </p>
             )}
 
@@ -182,8 +205,17 @@ function RateRow({
   // previewed $277.50 for a rate that actually charged $278 — LakeLife prices
   // in whole dollars, and a preview that does not know that is a lie the owner
   // only finds out about on a bill.
-  // Does the engine read the per-lot number for THIS service? Snow does not.
-  const perLot = usesPerLotRate(row.pricingModel, row.bandPricing);
+  //
+  // DOES THE ENGINE READ THE PER-UNIT NUMBER FOR THIS SERVICE, AND HOW MANY OF
+  // THEM ARE THERE? Both answers come from the server, which asked
+  // `priceService` itself against the grounds' real profile. The narrower
+  // per-lot test that used to stand here says FALSE for a dock — per_section
+  // counting pier_sections — so the box for Josh's "$30 a section" would never
+  // have been drawn, and the preview would have read "$30.00 a visit" for $840
+  // of work. (`parkRateUnit` replaced it; the old predicate is deleted.)
+  const unitNoun = row.unitNoun;
+  const unitCount = row.unitCount ?? 0;
+  const perUnit = unitNoun != null && unitCount > 0;
   const preview = priceService(
     {
       name: row.name,
@@ -192,7 +224,13 @@ function RateRow({
       unit_rate: u,
       band_pricing: row.bandPricing,
     } as unknown as ServiceRule,
-    { lots: liveLots } as unknown as PricingProfile,
+    // The profile the ENGINE will meet: the lot count it has always had, plus
+    // whatever this particular service counts. `{ lots }` alone priced a
+    // per-section service at its base and called it the visit price.
+    ({
+      lots: liveLots,
+      ...(row.countField ? { [row.countField]: unitCount } : {}),
+    }) as unknown as PricingProfile,
   );
 
   return (
@@ -236,19 +274,22 @@ function RateRow({
         }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <div className="ll-field" style={{ marginBottom: 0, width: 130 }}>
-              <label htmlFor={`base-${row.id}`}>{perLot ? "Flat, per visit" : "Per visit"}</label>
+              <label htmlFor={`base-${row.id}`}>{perUnit ? "Flat, per visit" : "Per visit"}</label>
               <input
                 id={`base-${row.id}`} inputMode="decimal" value={base}
                 onChange={(e) => setBase(e.target.value)} placeholder="0.00"
               />
             </div>
             {/* ONLY WHEN THE ENGINE READS IT. Snow clearing is priced `flat`,
-                and priceService returns base alone — a per-lot number typed
+                and priceService returns base alone — a per-unit number typed
                 here was swallowed whole, and the preview called the gap
-                rounding. See usesPerLotRate. */}
-            {perLot && (
-              <div className="ll-field" style={{ marginBottom: 0, width: 130 }}>
-                <label htmlFor={`per-${row.id}`}>Plus, per live lot</label>
+                rounding. The noun is the one the engine counts, so a dock says
+                "pier section" and the mow still says "live lot". */}
+            {perUnit && (
+              <div className="ll-field" style={{ marginBottom: 0, width: 150 }}>
+                <label htmlFor={`per-${row.id}`}>
+                  Plus, per {unitNoun === "lot" ? "live lot" : unitNoun}
+                </label>
                 <input
                   id={`per-${row.id}`} inputMode="decimal" value={per}
                   onChange={(e) => setPer(e.target.value)} placeholder="0.00"
@@ -260,10 +301,11 @@ function RateRow({
           <div style={{ fontSize: 13, fontWeight: 800, marginTop: 8 }}>
             {/* The arithmetic, out loud, at his real lot count — and only the
                 arithmetic the engine will actually do. */}
-            {perLot ? (
+            {perUnit ? (
               <>
-                ${b.toFixed(2)} + ${u.toFixed(2)} &times; {liveLots}{" "}
-                {liveLots === 1 ? "lot" : "lots"} = ${preview.toFixed(2)} a visit
+                ${b.toFixed(2)} + ${u.toFixed(2)} &times; {unitCount}{" "}
+                {unitCount === 1 ? unitNoun : `${unitNoun}s`} = $
+                {preview.toFixed(2)} a visit
               </>
             ) : (
               <>${preview.toFixed(2)} a visit</>
@@ -273,7 +315,7 @@ function RateRow({
                 rounding. The gap is gone; the bound is what stops the sentence
                 ever being asked to cover one again. */}
             {(() => {
-              const gap = Math.abs((perLot ? b + u * liveLots : b) - preview);
+              const gap = Math.abs((perUnit ? b + u * unitCount : b) - preview);
               return gap > 0.005 && gap < 1;
             })() && (
               <span className="mut" style={{ fontWeight: 600 }}>
@@ -282,16 +324,16 @@ function RateRow({
             )}
           </div>
           <p className="mut" style={{ fontSize: 12, margin: "4px 0 8px", lineHeight: 1.5 }}>
-            {perLot ? (
+            {perUnit ? (
               <>
                 Put the whole amount in &ldquo;flat&rdquo; if what you pay doesn&apos;t
-                change when lots fill or empty. Use the per-lot box when it does &mdash;
-                then adding a lot reprices this on its own.
+                change with the number of {unitNoun}s. Use the per-{unitNoun} box
+                when it does &mdash; then the price follows the count on its own.
               </>
             ) : (
               <>
                 One amount each time it&apos;s done. This one doesn&apos;t change
-                when lots fill or empty &mdash; the whole park gets it either way.
+                with the size of the job &mdash; the whole park gets it either way.
               </>
             )}
           </p>

@@ -9,7 +9,8 @@ import { getVendorScores } from "@/lib/scoring-data";
 import { toISODate } from "@/lib/booking";
 import { getPlatformSettings } from "@/lib/settings";
 import { crewPayout as feeCrewPayout } from "@/lib/platform-fee";
-import { groundsFor } from "@/app/park/rate-data";
+import { groundsFor, loadParkRatesChecked } from "@/app/park/rate-data";
+import { crewSetsThePrice, type ParkRates } from "@/lib/park-rates";
 
 // The margin floor now lives in the DATABASE (platform_settings, rule 8) —
 // read via getPlatformSettings(); owner-tunable from the ops dashboard.
@@ -52,7 +53,13 @@ export async function loadPricingProfileById(
   const grounds = await groundsFor(propertyId);
 
   return {
-    ...(grounds ? { lots: grounds.lots } : {}),
+    // WHICH park, not just how many lots. `lots != null` was doing duty as
+    // "this is a park" at the one place that asked, which was fine while the
+    // only question was whether to fence something off. Since precedence
+    // arrived (23 Sep) the answer needs the park's RATES, and rates need an id.
+    // Carried on the same read rather than asking `groundsFor` twice: two reads
+    // of the same fact can disagree, and this one decides money.
+    ...(grounds ? { lots: grounds.lots, parkId: grounds.parkId } : {}),
     sqft: Number(prop.sqft ?? 0),
     beds: Number(prop.beds ?? 0),
     baths: Number(prop.baths ?? 0),
@@ -610,21 +617,53 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
       ? components.reduce((s, c) => s + ((c.estMinutes ?? 0) > 0 ? (c.estMinutes as number) : DEFAULT_JOB_MINUTES), 0)
       : Number(svc.est_minutes ?? 0) > 0 ? Number(svc.est_minutes) : DEFAULT_JOB_MINUTES;
 
-  // ======================= WHO SETS THIS JOB'S PRICE (0174) =======================
+  // ============ WHO SETS THIS JOB'S PRICE (0174, corrected 0176) ============
   //
-  // PARK WORK IS NEVER CREW-PRICED, and this is the fence. 0174 refuses
-  // `park_only and crew_priced` in the database, but that only covers a
-  // service built FOR a park; nothing stops a park's grounds booking an
-  // ordinary crew-priced service, and then the crew's own card would quote
-  // work the park negotiated its own rate for. The Haven's mow is $125 Mike
-  // agreed to — park rates never combine with anything.
+  // This said "PARK WORK IS NEVER CREW-PRICED", and it was wrong — my sentence,
+  // not his. He corrected it on 23 September: a contractor is "uploaded onto
+  // lake life that the park then would be able to see his services offeren on
+  // LakeLife, just like any crew for any home owner or renter in the park".
+  // The park is a CUSTOMER. So the fence becomes precedence, in one helper the
+  // booking doorway and the /book menu also call:
   //
-  // DERIVED FROM DATA ALREADY READ: loadPricingProfileById adds `lots` to the
-  // profile only when `groundsFor` says this property is a park's grounds, so
-  // `lots != null` IS "this is a park" without a second query and without a
-  // second read that could fail differently from the first.
-  const isParkGrounds = (profile as { lots?: number }).lots != null;
-  const crewPriced = svc.crew_priced === true && !isParkGrounds;
+  //   the park's own rate beats a crew's card; with no rate of its own the
+  //   crew's card is the price, the same as for anybody else.
+  //
+  // The Haven's mow does not move: it HAS a row, `pricingPathFor` answers
+  // `park_rate`, `crewPriced` is false, and every line below is byte for byte
+  // what it was. What changes is that snow, the two cleanups and the dock —
+  // four park services, three of which have no rate and no crew — can now be
+  // quoted by a contractor who onboards with their own number.
+  //
+  // DERIVED FROM DATA ALREADY READ: `loadPricingProfileById` puts `parkId` on
+  // the profile only when `groundsFor` says this property is a park's grounds.
+  // It is a declared field on PricingProfile now, not a cast onto an untyped
+  // spread — a field the type does not admit is a field a loader can quietly
+  // stop setting, and this one decides who prices the job.
+  const parkId = profile.parkId ?? null;
+  let parkRates: ParkRates | null = null;
+  if (parkId) {
+    // A FAILED READ IS NOT AN EMPTY RATE TABLE, and the two now answer
+    // differently: an empty table means "let a crew's card price this", so
+    // swallowing the failure would hand a stranger's rate to the mow Mike
+    // negotiated. The job goes back in the pool instead — the same place every
+    // other failed read in this function lands, and the nightly sweep retries.
+    const checked = await loadParkRatesChecked(parkId);
+    if (checked.failed) {
+      console.error("[read failed] what this park pays, dispatching job", jobId);
+      return { assigned: false, decision: { ok: false } };
+    }
+    parkRates = checked.rates;
+  }
+  // THE ID COMES OFF THE JOB, NOT OFF `svc`. The embedded `services(...)`
+  // select above names no `id` column, and `pricingPathFor` matches a park's
+  // rate row BY service id — handed an id-less service it would find no row,
+  // call the park unrated, and let a crew's card price the mow. The one column
+  // the whole rule turns on cannot be the one a select is free to forget.
+  const crewPriced = crewSetsThePrice(
+    { id: job.service_id as string, crew_priced: svc.crew_priced },
+    parkRates,
+  );
 
   // THE JOB'S OWN THREE, NEVER THE LIVE DIAL — when it already has them.
   // A job that has been priced once recomputes from what was frozen onto it,

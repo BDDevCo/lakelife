@@ -94,12 +94,29 @@ describe("the booking menu asks, and does not invent", () => {
     expect(bookPage).toMatch(/priced\.filter\(\(s\) => s\.price > 0 \|\| s\.crewPriced\)/);
   });
 
-  it("A PARK IS NEVER CREW-PRICED, in the code as well as in the database", () => {
-    // The Haven's mow is the $125 Mike negotiated and 21 households sign
-    // leases against $400 + $142.53 on 1 January. None of that is a crew's to
-    // quote. 0174 refuses park_only AND crew_priced at the database; this is
-    // the same rule in the doorway the park menu actually runs through.
-    expect(menuFn()).toMatch(/!isGrounds && !s\.park_only/);
+  it("A PARK'S OWN RATE WINS, AND WHERE IT HAS NONE A CREW MAY QUOTE (0176)", () => {
+    // This pinned `!isGrounds && !s.park_only` — a park could never be shown a
+    // crew-priced service at all. That rule was mine, not his; on 23 September
+    // he said a contractor is onboarded onto LakeLife and the park books him
+    // "just like any crew for any home owner or renter in the park". So the
+    // menu asks the one precedence helper, and the four answers it returns are
+    // what tells the screen's three zero-price cases apart.
+    expect(menuFn()).toMatch(/const path = pricingPathFor\(s, rates\);/);
+    expect(menuFn()).toMatch(/path === "crew_card"/);
+    // The Haven's mow is still safe, and it is safe because it HAS a number:
+    // `pricingPathFor` answers `park_rate` for it whatever flag the service
+    // carries. That is proved in src/lib/park-precedence.test.ts, against the
+    // seeded base 20 / unit 5.
+    expect(menuFn(), "the old fence is being spelled by hand again")
+      .not.toMatch(/!isGrounds && !s\.park_only/);
+  });
+
+  it("'waiting on your price' is said ONLY where a price is the fix", () => {
+    // `parkUnpriced` was `isGrounds && !rates?.has(id)`, which is also true of
+    // a crew-quoted park service — and /book then told the owner to go and
+    // price work no box on his Services page will ever govern. Copy that
+    // instructs an action the screen cannot deliver is a named bug class here.
+    expect(menuFn()).toMatch(/const parkUnpriced =\s*\n?\s*path === "park_no_rate"/);
   });
 });
 

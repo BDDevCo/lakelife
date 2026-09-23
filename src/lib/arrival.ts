@@ -33,6 +33,7 @@
 
 import { priceService, type ServiceRule, type PricingProfile } from "./pricing";
 import { serviceMinutes, type DurationBands } from "./duration";
+import { withParkRate, pricingPathFor, type ParkRates } from "./park-rates";
 
 export type TimedRule = ServiceRule & {
   est_minutes?: number | null;
@@ -46,6 +47,14 @@ export type TimedRule = ServiceRule & {
    * at every size. Read this before printing any figure derived from the rule.
    */
   crew_priced?: boolean | null;
+  /**
+   * WHICH service, so a park's own rate can be found for it (0176).
+   *
+   * Optional only because every caller already selects it; a rule that arrives
+   * without one is treated as a park with no rate rather than as retail, which
+   * is the safe direction — no price beats somebody else's price.
+   */
+  id?: string | null;
 };
 
 /** The profile fields a crew is allowed to correct. Mirrors sanitizeProposed. */
@@ -123,6 +132,18 @@ export interface CorrectionSummary {
    * this is the sentence a homeowner taps Approve under.
    */
   crewPriced: boolean;
+  /**
+   * 0176 — A PARK ON WORK IT HAS NEVER PRICED.
+   *
+   * The three price fields mean nothing here either, and for a third reason:
+   * the customer is a park, this service is not crew-priced, and the park holds
+   * no rate of its own. `withParkRate` zeroes it, so before and after are both
+   * 0 and the delta is 0 at every size — and "The price doesn't change" would
+   * be said about work that has no price at all. There is no honest figure to
+   * print and no crew quoting one; what is true is that nothing bills until the
+   * park's own number exists.
+   */
+  parkUnpriced: boolean;
 }
 
 /**
@@ -137,6 +158,23 @@ export function summariseCorrection(
   rule: TimedRule,
   before: PricingProfile,
   proposed: Partial<Record<CorrectableField, string | number>>,
+  /**
+   * WHAT THIS PARK PAYS — `null` for every lake house, which is the default and
+   * leaves this function byte for byte what it was (0176).
+   *
+   * It is a PARAMETER and not the caller's job to pre-apply, because there are
+   * two callers and they were both wrong in the same way: this function priced
+   * a park's correction off LakeLife's retail card while `approveFlag` — the
+   * code that actually bills it — priced the same correction off the park's own
+   * row through `withParkRate`. The quote the owner tapped Approve under and
+   * the bill that followed were computed from different numbers. Doing the
+   * overlay HERE means the sentence and the charge come out of one expression.
+   *
+   * A caller that could not read the rates must pass `null`... and then get no
+   * card at all, because null would price a park off retail again. Both callers
+   * bail instead; see the comment at each.
+   */
+  parkRates: ParkRates | null = null,
 ): CorrectionSummary {
   const after = { ...before } as PricingProfile;
   const lines: CorrectionLine[] = [];
@@ -158,9 +196,18 @@ export function summariseCorrection(
 
   // 0 and 0 on a crew-priced service, which is why `crewPriced` travels with
   // them — a zero delta here is "no menu", never "no change".
-  const crewPriced = rule.crew_priced === true;
-  const priceBefore = priceService(rule, before);
-  const priceAfter = priceService(rule, after);
+  //
+  // AND THE PARK'S OWN NUMBER, WHERE IT HAS ONE (0176). `pricingPathFor` is the
+  // single precedence rule the booking doorways use; asking it here is what
+  // stops this screen and `approveFlag` disagreeing about who prices the work.
+  // `withParkRate(rule, null)` returns the rule untouched, so a lake house is
+  // unaffected in both lines.
+  const path = pricingPathFor(rule, parkRates);
+  const crewPriced = path === "crew_card";
+  const parkUnpriced = path === "park_no_rate";
+  const priced = withParkRate(rule, parkRates) as TimedRule;
+  const priceBefore = priceService(priced, before);
+  const priceAfter = priceService(priced, after);
   const minutesBefore = serviceMinutes(rule, before);
   const minutesAfter = serviceMinutes(rule, after);
 
@@ -170,6 +217,7 @@ export function summariseCorrection(
     minutesBefore, minutesAfter, minutesDelta: minutesAfter - minutesBefore,
     noChange: lines.length === 0,
     crewPriced,
+    parkUnpriced,
   };
 }
 
@@ -220,6 +268,19 @@ export function correctionMessage(
     // own rate is a bigger number. What we can promise is the rule: nothing is
     // charged until they say yes.
     parts.push(`Your crew prices this one, so they'll re-quote it at the corrected size — nothing is charged until you say yes.`);
+  } else if (s.parkUnpriced) {
+    // THE OTHER ZERO, AND IT IS NOT THE SAME SENTENCE (0176). A crew-priced
+    // service has no figure because a crew will name one; this one has no
+    // figure because the park has never set its rate, and nobody else's number
+    // is allowed to stand in — least of all LakeLife's homeowner card, which
+    // is what put $1,564 a visit in front of an owner holding a $840 quote.
+    // The fix belongs to the park, so the sentence says so.
+    // AND IT PROMISES ONLY WHAT ACTUALLY HAPPENS. An earlier draft said "it'll
+    // bill at whatever you set on your park's Services page", which is a
+    // forecast the code does not make: `approveFlag` prices this service at $0
+    // through the park's absent row, hits `if (!(price > 0)) continue`, and
+    // leaves the visit exactly as booked. The sentence says that instead.
+    parts.push(`Your park hasn't set its own price for this one yet, so there's no figure to change — this visit keeps the price it was booked at until you set your park's rate on its Services page.`);
   } else if (s.priceDelta !== 0) {
     parts.push(
       `That makes it ${money(s.priceAfter)} instead of ${money(s.priceBefore)} — ` +
@@ -521,7 +582,18 @@ export function completionBlock(job: {
 export interface CorrectionCard {
   /** "Pier sections 8 → 12" — the finding, per field. */
   changes: string[];
-  /** The money, or null when it genuinely doesn't move. */
+  /**
+   * The money — or WHY THERE IS NO MONEY TO SHOW, or null when the price
+   * genuinely doesn't move.
+   *
+   * `ApprovalCard` renders `price ?? "The price doesn't change."`, so null is
+   * not a blank: it is a sentence, and it was being printed on two kinds of
+   * card where it is false. A crew-priced correction has a zero delta because
+   * no menu exists and the crew re-quotes at the corrected size; a park with no
+   * rate of its own has a zero delta because nothing has priced the work at
+   * all. Both now carry their own words into this slot rather than falling
+   * through to a promise nobody can keep.
+   */
   price: string | null;
   /** How much longer they'll be there, when that changes. */
   time: string | null;
@@ -534,11 +606,17 @@ export function correctionCard(s: CorrectionSummary): CorrectionCard | null {
     // middle of a sentence ("…and found pier sections 8 → 12"). Here each one
     // is its own line, so it starts like one.
     changes: s.lines.map((l) => `${l.label.charAt(0).toUpperCase()}${l.label.slice(1)} ${l.from} → ${l.to}`),
-    price:
-      s.priceDelta === 0
-        ? null
-        : `${money(s.priceAfter)} instead of ${money(s.priceBefore)} — ` +
-          `${s.priceDelta > 0 ? "up" : "down"} ${money(s.priceDelta)}`,
+    // ORDER MATTERS, and it is the same order `correctionMessage` uses: the
+    // two "there is no figure" reasons are asked BEFORE the delta, because on
+    // both of them the delta is 0 and 0 is what the lie was made of.
+    price: s.crewPriced
+      ? "Your crew prices this one — they'll re-quote it at the corrected size, and nothing is charged until you say yes."
+      : s.parkUnpriced
+        ? "Your park hasn't set its own price for this one yet, so there's no figure to change."
+        : s.priceDelta === 0
+          ? null
+          : `${money(s.priceAfter)} instead of ${money(s.priceBefore)} — ` +
+            `${s.priceDelta > 0 ? "up" : "down"} ${money(s.priceDelta)}`,
     time:
       s.minutesDelta === 0
         ? null

@@ -146,6 +146,15 @@ export interface ServiceRule {
 export interface PricingProfile {
   /** Present only on a park's grounds property. See CountableField. */
   lots?: number;
+  /**
+   * WHICH park's grounds — present exactly when `lots` is, and set by the same
+   * `groundsFor` read in `loadPricingProfileById`. Declared here rather than
+   * spread on untyped and cast back at every reader: since precedence (0176)
+   * this field decides WHO PRICES THE JOB, and a field the type does not admit
+   * is a field a `select` can quietly stop providing. No pricing arithmetic
+   * reads it — `priceService` never looks at it — but four doorways do.
+   */
+  parkId?: string;
   sqft: number;
   beds: number;
   baths: number;

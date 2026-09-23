@@ -63,11 +63,21 @@ describe("a crew-priced service is booked unpriced, then priced by the crew", ()
       .toMatch(/select\("id, name, pricing_model, base, unit_rate, band_pricing, est_minutes, duration_bands, is_water_work, daily_capacity, frequency_options, kind, active, needs_pickup_spot, needs_release, crew_priced"\)/);
   });
 
-  it("A PARK'S GROUNDS IS NEVER CREW-PRICED — the fence is in the flag itself", () => {
-    // Not a second `if` somewhere downstream that a later edit can forget.
-    // One expression decides the whole path, so a park falls through to
-    // withParkRate and the honest "set what you pay for it" refusal.
-    expect(src).toMatch(/const crewPriced = service\.crew_priced === true && !profile\.groundsForParkId;/);
+  it("A PARK'S OWN RATE BEATS A CREW'S CARD — and the rule is not spelled here", () => {
+    // This pinned `service.crew_priced === true && !profile.groundsForParkId`:
+    // a park could never meet a crew's card. The owner corrected that on
+    // 23 September — a park is a customer — so the doorway now ASKS the one
+    // exported precedence rule rather than carrying its own copy of it. Three
+    // doorways spelled that fence three different ways; a rule in one doorway
+    // of three is not a rule.
+    expect(src, "createBooking must ask the shared precedence rule")
+      .toMatch(/const crewPriced = crewSetsThePrice\(service, parkRates\);/);
+    // And it must be asked with the CHECKED read, because an unread rate map
+    // now says "no park rate", which routes to a crew's card — a wrong charge,
+    // not a refusal.
+    expect(src).toMatch(/loadParkRatesChecked\(profile\.groundsForParkId\)/);
+    expect(src, "the old fence is being spelled by hand again")
+      .not.toMatch(/crew_priced === true && !profile\.groundsForParkId/);
   });
 
   it("writes NULL, not 0, when nobody has quoted the visit yet", () => {
@@ -163,11 +173,35 @@ describe("Autopilot cannot lock a price that does not exist", () => {
   it("refuses a crew-priced service, and says why", () => {
     expect(auto, "crew_priced is never selected on the enrollment path")
       .toMatch(/select\("id, name, pricing_model, base, unit_rate, band_pricing, active, crew_priced"\)/);
-    expect(auto).toMatch(/if \(svc\.crew_priced === true && !grounds\)/);
+    // ============ CORRECTED 23 SEPTEMBER 2026 (0176) ============
+    //
+    // This pinned `if (svc.crew_priced === true && !grounds)` — the retracted
+    // "park work is never crew-priced" rule, in its fifth spelling, justified
+    // in the code by a comment citing 0174's CHECK that 0176 drops. What it
+    // actually did was skip this honest refusal for a park and fall through to
+    // "set what your park pays for it on the park's Services page first" —
+    // instructing the owner to type a number into a box that would never
+    // govern crew-quoted work, on Autopilot, which is snow's natural door.
+    //
+    // PRECEDENCE is what is pinned now: a park with its own rate (The Haven's
+    // mow) is NOT crew-priced and enrolls exactly as before; a park with no
+    // rate on a crew-priced service gets this refusal, the same one a lake
+    // house gets, for the same reason.
+    expect(auto, "enrollAutopilot re-derives 'is this a park' beside crew_priced")
+      .not.toMatch(/svc\.crew_priced === true && !grounds/);
+    expect(auto).toMatch(/crewSetsThePrice\(\{ id: serviceId, crew_priced: svc\.crew_priced \}, parkRates\)/);
     expect(auto).toMatch(/the crew who takes it sets its price, so there's no price to lock in/);
   });
 
+  it("reads what the park pays BEFORE it asks who prices the job", () => {
+    // The rates read used to sit below the refusal, which is why the refusal
+    // could not consult it. A failed read still stops everything: an unread map
+    // says "this park has no rate", and that now routes to the crew's card.
+    expect(auto.indexOf("loadParkRatesChecked(")).toBeLessThan(auto.indexOf("crewSetsThePrice("));
+    expect(auto).toMatch(/if \(failed\) \{/);
+  });
+
   it("refuses BEFORE it prices, so no figure is ever frozen onto the enrollment", () => {
-    expect(auto.indexOf("svc.crew_priced === true")).toBeLessThan(auto.indexOf("const locked = priceService("));
+    expect(auto.indexOf("crewSetsThePrice(")).toBeLessThan(auto.indexOf("const locked = priceService("));
   });
 });

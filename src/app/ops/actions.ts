@@ -9,7 +9,9 @@ import { todayLakeDate, dayStatus, effectiveSeason, validateSeasonDates } from "
 import { runRouteBuild } from "@/lib/automation";
 import { getPlatformSettings } from "@/lib/settings";
 import { assertOps } from "./data";
-import { readFailedMessage } from "@/lib/must-read";
+import { readFailedMessage, ReadFailed } from "@/lib/must-read";
+import { crewSetsThePrice, type ParkRates } from "@/lib/park-rates";
+import { parkRatesForProperty } from "@/app/park/rate-data";
 import { SERVED_LAKE_SOURCE } from "@/lib/lake-visibility";
 
 export interface OpsResult {
@@ -92,7 +94,29 @@ export async function assignAndSchedule(
   // The schedule is not the problem, the money is — so this says which door
   // does work. claimJob prices a crew-priced job from that crew's own card and
   // freezes the two percentages in the same write.
-  if (svcRow?.crew_priced === true) {
+  //
+  // AND THE CUSTOMER IS HALF OF THAT QUESTION (0176). This read the flag alone,
+  // under a comment that assumed a park could never be on the crew-priced path.
+  // It can, since the owner corrected that — but only where the park holds no
+  // rate of its own. On The Haven's mow the park's $125 IS the price, the
+  // margin floor is the right test against it, and refusing ops the manual
+  // assignment would take away the one hand-placement door for exactly the job
+  // the park cares about, with a sentence that is false about it twice over.
+  let whoPricesIt: ParkRates | null = null;
+  try {
+    const got = await parkRatesForProperty(job.property_id as string);
+    // A FAILED READ IS NOT "NO RATE". An unread map reads as the crew's card,
+    // which here would REFUSE a park's own-rate job with a sentence about a
+    // model it is not on. Ops is told what actually happened instead.
+    if (got.failed) {
+      return { ok: false, error: readFailedMessage("what this park pays", null) };
+    }
+    whoPricesIt = got.rates;
+  } catch (e) {
+    if (!(e instanceof ReadFailed)) throw e;
+    return { ok: false, error: readFailedMessage("whether this job is a park's", e) };
+  }
+  if (crewSetsThePrice({ id: job.service_id as string, crew_priced: svcRow?.crew_priced }, whoPricesIt)) {
     return {
       ok: false,
       error: "The crew sets the price on this service, so ops can't cost it by hand. Leave it on the open board — whichever crew claims it prices it from their own rate card.",

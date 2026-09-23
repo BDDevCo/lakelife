@@ -200,33 +200,71 @@ export function ownedHomeAddress(lotNumber: string, parkName: string, parkAddres
   return `Lot ${lotNumber}, ${parkName}, ${parkAddress}`;
 }
 
+
 /**
- * DOES THIS SERVICE'S PRICE ACTUALLY MOVE WITH THE LOT COUNT?
+ * WHAT DOES THIS PARK'S UNIT RATE MULTIPLY BY — and what is it called?
  *
- * The rate editor offers two boxes — a flat amount and a per-live-lot amount —
- * and drew both for every grounds service. Production's four split two ways:
+ * THIS REPLACED A NARROWER PREDICATE, `usesPerLotRate`, which asked only "does
+ * this price move with the LOT COUNT?" — true for the mow and the two
+ * cleanups, false for snow (priced `flat`, unit_rate never read). That was the
+ * right question while a park could only buy `park_only` work, and the rate
+ * editor drew a per-lot box for every service until it was asked.
  *
- *   per_section + band_pricing.count_field "lots"  →  base + unit_rate × lots
- *   flat (snow clearing, band_pricing null)        →  base. unit_rate unread.
+ * It is the wrong question now. A park may price anything on its own menu, and
+ * that menu includes work counted in something other than lots — The Haven's
+ * 28-section dock, a boat lift, a PWC lift. `usesPerLotRate` answered FALSE for
+ * the dock (per_section counting `pier_sections`), so wired here it would have
+ * told the owner "Pier install / removal is priced once per visit, not per lot
+ * — put the whole amount in the per-visit box", a lie about a service priced
+ * per section, and would have stored Josh's $30 a section as a $30 flat fee.
  *
- * So pricing a snow push at "nothing flat, $15 a lot" previewed
- * `$0.00 + $15.00 × 21 lots = $0.00 a visit`, blamed the $315 on rounding, and
- * left Save disabled with no other explanation. It is the one number that has
- * to be right before the first snow of the season.
+ * So the old predicate was REMOVED rather than left beside this one (23 Sep
+ * 2026): the overlay pass replaced its last production caller and left it
+ * exported, tested and asked by nobody — a symbol with no caller, which reads
+ * as a live rule to the next person who finds it.
  *
- * The `?? "pier_sections"` default in priceService is the second trap: a
- * per_section service with NO band_pricing counts pier sections, and a park's
- * grounds has none — so the per-lot box would multiply by zero, silently. Only
- * an explicit "lots" counts.
+ * So this returns the COUNTER the engine will read, in the engine's own terms,
+ * with a word for it. `null` means the model never looks at unit_rate at all —
+ * `flat` (snow), `band`, `per_sqft_band` — and the per-unit box must not be
+ * drawn or accepted.
  *
- * Kept as one exported predicate rather than a condition written twice: the
- * screen that draws the box and the action that stores the number have to
- * agree, and two copies of a rule are two rules.
+ * The nouns are for copy only. The ARITHMETIC is never taken from this table:
+ * the desk asks `priceService` itself how many of the thing there are, so a new
+ * pricing model cannot make the preview wrong, only the label generic.
  */
-export function usesPerLotRate(
+const UNIT_NOUNS: Record<string, string> = {
+  lots: "lot",
+  pier_sections: "pier section",
+  boat_lifts: "boat lift",
+  pwc_lifts: "PWC lift",
+};
+
+export interface ParkRateUnit {
+  /** The pricing profile field priceService multiplies by. */
+  countField: string;
+  /** Singular noun for the owner: "pier section". */
+  noun: string;
+}
+
+export function parkRateUnit(
   pricingModel: string | null | undefined,
   bandPricing: Record<string, unknown> | null | undefined,
-): boolean {
-  if (pricingModel !== "per_section") return false;
-  return bandPricing?.count_field === "lots";
+): ParkRateUnit | null {
+  if (pricingModel === "per_section") {
+    // The SAME default priceService applies — `cfg.count_field ?? "pier_sections"`.
+    // Two copies of that default is two rules; this one exists to name the
+    // field, so it must name the one the engine will actually read.
+    const field = (bandPricing?.count_field as string | undefined) ?? "pier_sections";
+    return { countField: field, noun: UNIT_NOUNS[field] ?? "unit" };
+  }
+  if (pricingModel === "per_foot" || pricingModel === "seasonal_plus_perdiem") {
+    // priceService: `base + unit_rate × boatFeet(p)`. No park buys one of these
+    // today; naming it costs nothing and stops the day one does being the day
+    // a park owner is told his boat work is priced per visit.
+    return { countField: "boat_feet", noun: "foot of boat" };
+  }
+  // flat · band · per_sqft_band — unit_rate is never read. A number typed here
+  // would show on the card, read as part of the price, and be worth nothing at
+  // booking.
+  return null;
 }

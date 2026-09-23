@@ -5,7 +5,7 @@ import { readFailedMessage, ReadFailed } from "@/lib/must-read";
 import { priceService, type ServiceRule } from "@/lib/pricing";
 import { loadPricingProfileById } from "@/app/book/dispatch";
 import { groundsFor, loadParkRatesChecked } from "@/app/park/rate-data";
-import { withParkRate } from "@/lib/park-rates";
+import { withParkRate, crewSetsThePrice, type ParkRates } from "@/lib/park-rates";
 
 /**
  * AUTOPILOT enrollment (§8d) — a PER-SERVICE toggle, never a bundle. Turning a
@@ -104,6 +104,22 @@ export async function setAutopilot(propertyId: string, serviceId: string, on: bo
     if (!(e instanceof ReadFailed)) throw e;
     return { ok: false, error: readFailedMessage("whether this property is a park's grounds", e) };
   }
+  // WHAT THIS PARK PAYS — READ FIRST, because since 0176 it decides which of
+  // the two refusals below is the true one, not just what the number is.
+  //
+  // A FAILED RATE READ MUST NOT BECOME "SET YOUR PRICE FIRST". An unread map
+  // leaves 0115's zeroed global base, so `locked` comes out $0 and the refusal
+  // below points a park owner at a Services page where the price is already
+  // set. That sentence is only true when the read worked.
+  let parkRates: ParkRates | null = null;
+  if (grounds) {
+    const { rates, failed } = await loadParkRatesChecked(grounds.parkId);
+    if (failed) {
+      return { ok: false, error: readFailedMessage("what your park pays for this", null) };
+    }
+    parkRates = rates;
+  }
+
   // AUTOPILOT LOCKS TODAY'S MENU PRICE, AND A CREW-PRICED SERVICE HAS NO MENU
   // PRICE TO LOCK (0174).
   //
@@ -114,10 +130,26 @@ export async function setAutopilot(propertyId: string, serviceId: string, on: bo
   // the global row (the shape, not a price) and lock a figure nobody quoted.
   // Every Autopilot visit for the season would then be created at it.
   //
-  // Refused with the reason, not silently. PARK GROUNDS ARE UNAFFECTED: a
-  // park's rate is the park's, `grounds` is set for them, and 0174's CHECK
-  // already refuses `park_only and crew_priced` in the database.
-  if (svc.crew_priced === true && !grounds) {
+  // ============ A FIFTH SPELLING OF THE OLD FENCE, CORRECTED (0176) ============
+  //
+  // This read `svc.crew_priced === true && !grounds`, justified by a comment
+  // saying "0174's CHECK already refuses park_only and crew_priced in the
+  // database". 0176 DROPS that CHECK, and the sentence the owner corrected —
+  // "park work is never crew-priced" — was never true of `park_bookable` work
+  // in the first place, which the CHECK never covered.
+  //
+  // What the fence did here was worse than letting the wrong price through: a
+  // park on a crew-priced service with no rate of its own SKIPPED this honest
+  // refusal, priced to $0 two lines down, and was told to "set what your park
+  // pays for it on the park's Services page first" — instructions to type a
+  // number into a box that will never govern that service, and if he obeyed,
+  // precedence would then make his typed number win and put him back in the
+  // margin-floor gross-up this whole change exists to delete. Snow is seasonal
+  // recurring work and Autopilot is its natural door.
+  //
+  // Precedence answers both: The Haven's mow HAS a row, so `crewSetsThePrice`
+  // is false and the lock below is byte for byte what it was.
+  if (crewSetsThePrice({ id: serviceId, crew_priced: svc.crew_priced }, parkRates)) {
     return {
       ok: false,
       error: `We can't put ${svc.name} on Autopilot yet — the crew who takes it sets its price, so there's no price to lock in.`,
@@ -131,24 +163,15 @@ export async function setAutopilot(propertyId: string, serviceId: string, on: bo
     unit_rate: Number(svc.unit_rate ?? 0),
     band_pricing: (svc.band_pricing as ServiceRule["band_pricing"]) ?? null,
   };
-  // A FAILED RATE READ MUST NOT BECOME "SET YOUR PRICE FIRST". An unread map
-  // leaves 0115's zeroed global base, so `locked` comes out $0 and the refusal
-  // below points a park owner at a Services page where the price is already
-  // set. That sentence is only true when the read worked.
-  let parkRatesFailed = false;
-  let priced = rule as Parameters<typeof priceService>[0];
-  if (grounds) {
-    const { rates, failed } = await loadParkRatesChecked(grounds.parkId);
-    parkRatesFailed = failed;
-    priced = withParkRate({ ...rule, id: serviceId }, rates);
-  }
-  if (parkRatesFailed) {
-    return { ok: false, error: readFailedMessage("what your park pays for this", null) };
-  }
+  const priced = withParkRate({ ...rule, id: serviceId }, parkRates);
   const locked = priceService(priced, profile);
   if (!(locked > 0)) {
     return {
       ok: false,
+      // AND THIS SENTENCE IS NOW ONLY SAID WHERE IT IS TRUE. A park reaching
+      // here has no rate on MENU-priced work — the crew-quoted half was
+      // refused above with its own reason — so the box it points at is the box
+      // that fixes it.
       error: grounds
         ? `We can't lock a price for ${svc.name} — set what your park pays for it on the park's Services page first.`
         : "We couldn't price this service for your place — check your property profile.",

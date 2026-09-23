@@ -11,6 +11,8 @@ import { allowsNotification } from "@/lib/notif-gate";
 import { settleJob } from "@/lib/automation";
 import { todayLakeDate } from "@/lib/booking";
 import { getFullProfile, toPricingProfile } from "@/app/profile/data";
+import { loadParkRatesChecked } from "@/app/park/rate-data";
+import type { ParkRates } from "@/lib/park-rates";
 import {
   summariseCorrection, correctionMessage, noAnswerOutcome, completionBlock,
   arrivalFlagRefusal, arrivalNoteMessage,
@@ -529,10 +531,30 @@ export async function submitFlag(
         if (ruleRes.error) console.error("[read failed] the pricing rule for this correction:", ruleRes.error);
         const rule = ruleRes.data;
         if (rule && profile?.hasProfile) {
+          // THE PARK'S OWN NUMBER, IN THE TEXT AND THE EMAIL (0176).
+          //
+          // This composed the sentence the owner reads on their phone off
+          // LakeLife's RETAIL card, while `approveFlag` bills the same
+          // correction off the park's own row. Two numbers for one decision —
+          // on The Haven's 28-section dock, $1,564 against $840. `parkRates`
+          // is `null` for every lake house, which leaves this call exactly
+          // what it was.
+          //
+          // A FAILED READ SENDS NO NUMBERS, not retail ones: `detail` stays ""
+          // and the generic "found something that doesn't match your profile"
+          // message goes out — the same degraded message an unread pricing
+          // rule already produces two lines above.
+          let parkRates: ParkRates | null = null;
+          if (profile.groundsForParkId) {
+            const got = await loadParkRatesChecked(profile.groundsForParkId);
+            if (got.failed) throw new Error("park rates unreadable");
+            parkRates = got.rates;
+          }
           const summary = summariseCorrection(
             rule as unknown as TimedRule,
             toPricingProfile(profile),
             proposed as Parameters<typeof summariseCorrection>[2],
+            parkRates,
           );
           detail = correctionMessage(summary, {
             serviceName: (rule.name as string) ?? svcName,

@@ -70,12 +70,21 @@ const settings = {
 };
 vi.mock("@/lib/settings", () => ({ getPlatformSettings: async () => settings }));
 vi.mock("@/lib/scoring-data", () => ({ getVendorScores: async () => new Map() }));
-// A lake house, not a park's grounds. The park fence is exercised by its own
-// case below, which turns this back on.
+// A lake house, not a park's grounds. Park PRECEDENCE is exercised by its own
+// two cases below, which turn these back on.
 let isPark = false;
+/** Does this park hold its own rate for svc-1? Both answers are tested. */
+let parkHasOwnRate = false;
+/** Could we read the park's rates at all? A failed read is not an empty one. */
+let parkRateReadFailed = false;
 vi.mock("@/app/park/rate-data", () => ({
   groundsFor: async () => (isPark ? { parkId: "park-1", lots: 21 } : null),
-  loadParkRatesChecked: async () => ({ rates: new Map(), failed: false }),
+  loadParkRatesChecked: async () => ({
+    rates: parkHasOwnRate
+      ? new Map([["svc-1", { base: 125, unit_rate: 0, note: "the park's own number" }]])
+      : new Map(),
+    failed: parkRateReadFailed,
+  }),
 }));
 
 import { autoAssignJob } from "./dispatch";
@@ -138,6 +147,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-22T17:00:00Z"));
   isPark = false;
+  parkHasOwnRate = false;
+  parkRateReadFailed = false;
   for (const k of Object.keys(rows)) delete rows[k];
   writes.length = 0;
   rows.properties = [{ sqft: 0, beds: 0, baths: 0, preferred_vendor: null, lake_id: "lake-1", lat: null, lng: null }];
@@ -224,12 +235,22 @@ describe("the menu path is untouched", () => {
     expect(out.customerPrice).toBeUndefined();
   });
 
-  it("PARK GROUNDS TAKE THE MENU PATH even when the service says crew_priced", async () => {
-    // The Haven's mow is $125 Mike negotiated. 0174's CHECK stops a park_only
-    // service being crew-priced; nothing stops a park's grounds booking an
-    // ordinary one, and a stranger's card must not quote work a park has its
-    // own rate for. Park rates never combine.
+  // ========================= PRECEDENCE, NOT A FENCE (0176) ==================
+  //
+  // This used to be one case: "PARK GROUNDS TAKE THE MENU PATH even when the
+  // service says crew_priced". That was the rule I invented and the owner
+  // corrected on 23 September — a park is a customer, and a contractor
+  // onboarded onto LakeLife sells to it the way they sell to a homeowner. It
+  // is now two cases, because an absence-only test pins nothing: collapse the
+  // condition either way and one of these must go red.
+
+  it("A PARK WITH ITS OWN RATE takes the menu path, even on a crew_priced service", async () => {
+    // The Haven's mow is the number Mike negotiated, and 21 households sign
+    // leases against $400 + $142.53 on 1 January with that mow inside the fee.
+    // What protects it is HAVING a rate, not a fence: precedence prefers the
+    // park's row over any crew's card.
     isPark = true;
+    parkHasOwnRate = true;
     rows.jobs = [job({ customer_price: 125 })]; // crew_priced: true on the service
     rows.vendors = [crew("v1")];
     rows.vendor_rates = [card("v1", 50)];
@@ -241,6 +262,43 @@ describe("the menu path is untouched", () => {
     expect(p).not.toHaveProperty("customer_price");
     expect(p.vendor_cost).toBe(50);
     expect(p.margin).toBe(75); // 125 − 50, the park's price less the crew's rate
+  });
+
+  it("A PARK WITH NO RATE takes the crew's card, like any other customer", async () => {
+    // The whole reason the fence came out. Three of The Haven's four park
+    // services have no rate — snow, spring cleanup, fall cleanup — there is no
+    // snow crew, and the seller's lawn guy sold his plow. A contractor
+    // onboarding with their own card and the park booking it is the fix, and
+    // the old `!isParkGrounds` refused exactly that.
+    isPark = true;
+    parkHasOwnRate = false;
+    rows.jobs = [job()]; // customer_price null: nobody has priced it
+    rows.vendors = [crew("v1")];
+    rows.vendor_rates = [card("v1", 50)];
+
+    const out = await autoAssignJob("job-1");
+    expect(out.assigned).toBe(true);
+    const p = (assignWrite() as { payload: Row }).payload;
+    // The crew-priced write: their card is the quote, both fees frozen on.
+    expect(p.crew_quote).toBe(50);
+    expect(p.customer_price).toBeGreaterThan(50);
+    expect(p.fee_customer_pct).not.toBeNull();
+  });
+
+  it("A FAILED read of the park's rates assigns NOBODY — it is not an empty rate table", async () => {
+    // An unread map says "this park has no rate", which now routes to a
+    // crew's card. Swallowing the failure would hand a stranger's number to
+    // work the park negotiated its own price for.
+    isPark = true;
+    parkHasOwnRate = true;
+    parkRateReadFailed = true;
+    rows.jobs = [job({ customer_price: 125 })];
+    rows.vendors = [crew("v1")];
+    rows.vendor_rates = [card("v1", 50)];
+
+    const out = await autoAssignJob("job-1");
+    expect(out.assigned).toBe(false);
+    expect(assignWrite()).toBeUndefined();
   });
 });
 

@@ -150,6 +150,20 @@ export default async function BookPage() {
   // prints `priceNote` instead of a figure.
   const applicable = priced.filter((s) => s.price > 0 || s.crewPriced);
 
+  // A PARK SERVICE NOBODY HAS PRICED IS NOT AN INAPPLICABLE ONE.
+  //
+  // Both price to $0 and both are dropped by the line above, which is right:
+  // an unpriced service cannot be booked. But the park owner then looks at a
+  // menu with no dock on it and has no way to learn why — and the fix is one
+  // number on a screen he has already been to. `parkUnpriced` is true only when
+  // the grounds actually HAS what the service counts, so this counts services
+  // waiting on his rate and never services his park has no use for.
+  //
+  // COUNTED, NOT NAMED, and never priced: naming LakeLife's homeowner figure
+  // here is exactly how $1,564 a visit got in front of him for $840 of work.
+  const parkUnpricedCount =
+    priced.filter((s) => s.parkUnpriced && s.price <= 0 && !s.crewPriced).length;
+
   // Show the services this customer chose (fall back to all if none chosen).
   //
   // NEVER FOR A PARK'S GROUNDS, and that exception is load-bearing.
@@ -253,6 +267,15 @@ export default async function BookPage() {
             ? " The crew-quoted ones have no number yet: the crew who takes the job sets it, and nothing is charged until the work is done."
             : ""}
         </p>
+        {parkUnpricedCount > 0 && (
+          <p className="ll-notice" style={{ fontSize: 13.5, marginBottom: 16 }}>
+            {parkUnpricedCount === 1
+              ? "One more service is available for the park and is waiting on your price."
+              : `${parkUnpricedCount} more services are available for the park and are waiting on your price.`}{" "}
+            Every park pays its own number for these, so we will not put one here.{" "}
+            <Link href="/park/services">Set your rates</Link> and they appear on this screen.
+          </p>
+        )}
         <InviteMyCrew />
         {(packageCount ?? 0) > 0 && (
           <Link href="/book/storage" style={{ textDecoration: "none", color: "inherit" }}>

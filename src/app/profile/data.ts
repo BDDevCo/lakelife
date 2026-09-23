@@ -1,10 +1,10 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { mustRead, mustCount } from "@/lib/must-read";
+import { mustRead, mustCount, ReadFailed } from "@/lib/must-read";
 import { decryptGate } from "@/lib/gate";
-import { withParkRate, type ParkRates } from "@/lib/park-rates";
-import { loadParkRates } from "@/app/park/rate-data";
+import { withParkRate, pricingPathFor, type ParkRates } from "@/lib/park-rates";
+import { loadParkRatesChecked } from "@/app/park/rate-data";
 
 
 const ACTIVE_PROPERTY_COOKIE = "ll_active_property";
@@ -152,6 +152,22 @@ export interface PricedService {
    * ordinary service, where the price is the whole answer.
    */
   priceNote: string | null;
+  /**
+   * THIS PARK HAS NOT SET ITS NUMBER FOR THIS SERVICE YET.
+   *
+   * `price` is 0 on these rows too, and 0 has always meant two different
+   * things at once here: "your property has none of the equipment this covers"
+   * and "nobody has priced it". A lake house only ever means the first. A park
+   * can mean either, and the fix is different each time — check your profile
+   * versus set your rate — so the two are told apart before anything prints.
+   *
+   * True ONLY on the `park_no_rate` path: the property is a park's grounds,
+   * the park holds no `park_service_rates` row, the service is NOT crew-priced
+   * (a crew-priced one is quoted by whoever takes it — nothing for the owner to
+   * type), and `serviceApplies` says the grounds actually has what it counts.
+   * False everywhere else, always, on a lake house.
+   */
+  parkUnpriced: boolean;
 }
 
 /**
@@ -162,8 +178,13 @@ export interface PricedService {
  * words rather than three near-misses — and so a test can pin it. It promises
  * only what the product actually does: quotes, days and ratings at booking,
  * which is the owner's own description of the screen.
+ *
+ * "ON YOUR LAKE" CAME OUT 23 SEPTEMBER. A park's grounds can reach this
+ * sentence now, and The Haven is a mobile-home park in LaGrange County — not
+ * an address on Big Long, Pretty or Big Turkey. The rest of the sentence is
+ * true of every customer the platform has, so the half that wasn't went.
  */
-export const CREW_QUOTES_THIS = "Crews on your lake set their own price. You'll see their quotes, days and ratings when you book.";
+export const CREW_QUOTES_THIS = "Crews set their own price for this one. You'll see their quotes, days and ratings when you book.";
 
 /**
  * Load one of the owner's property profiles. Pass a propertyId to target a
@@ -406,20 +427,44 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
   // rather than quoting this owner the rate another owner negotiated in a
   // different county. /park/services is where he sets the number, and it says
   // so out loud.
-  const rates = isGrounds
-    ? await loadParkRates(p.groundsForParkId as string)
-    : (new Map() as ParkRates);
+  // `null` IS THE LAKE-HOUSE ANSWER, AND IT HAS TO BE SPELT.
+  //
+  // This was `new Map()` — and an empty map now means "a park that has set no
+  // prices", which zeroes everything it touches. Handing that to a lake house
+  // would price the entire retail catalogue at $0 and delete /book. The type is
+  // `ParkRates | null` so the two cases cannot be confused again by accident:
+  // null = not a park, leave the retail card alone.
+  //
+  // AND THE CHECKED READ, because this menu speaks to a person and, since
+  // precedence (0176), an unread map decides money. `loadParkRates` swallows a
+  // failed read by design — right for the nightly, wrong here twice over: an
+  // empty map turns The Haven's $125 mow into "waiting on your price" on a
+  // Services page where the price has been set since 8 September, and on any
+  // service flagged crew_priced it turns the park's own negotiated number into
+  // "Crews set their own price for this one". Every other read in this function
+  // throws through `mustRead`; so does this one.
+  const checked = isGrounds
+    ? await loadParkRatesChecked(p.groundsForParkId as string)
+    : null;
+  if (checked?.failed) {
+    throw new ReadFailed("what your park pays", undefined);
+  }
+  const rates: ParkRates | null = checked ? checked.rates : null;
 
   const pp = toPricingProfile(p);
   return (services ?? []).map((s) => {
-    // A PARK'S RATE ALWAYS WINS, AND A PARK IS NEVER CREW-PRICED (0174).
+    // A PARK'S RATE ALWAYS WINS — AND WHERE IT HAS NONE, A CREW MAY QUOTE
+    // (0174, corrected 0176).
     //
-    // `withParkRate` is the park doorway, and `services_park_is_never_crew_priced`
-    // refuses `park_only and crew_priced` in the database — so a grounds menu
-    // can never reach the branch below. Belt and braces, in the code the park
-    // menu actually runs through: The Haven's mow is the $125 Mike negotiated,
-    // 21 households sign leases against $400 + $142.53 on 1 January, and none
-    // of that is a crew's to quote.
+    // This line used to read `!isGrounds && !s.park_only`: a park could never
+    // be shown a crew-priced service at all. That was my sentence and he
+    // corrected it — a contractor onboarded onto LakeLife sells to the park
+    // "just like any crew for any home owner or renter in the park". The park
+    // is a customer. So the menu asks `pricingPathFor` instead, and the answer
+    // is precedence: The Haven's mow has a row, so the row wins and nothing
+    // about it moves; snow, the two common-area cleanups and the dock have no
+    // row, so a crew who onboards with a rate can quote them — which is the
+    // only way The Haven gets snow cleared at all this winter.
     //
     // AND ONLY IF THE PROPERTY CAN ACTUALLY USE IT. `price > 0` on /book has
     // always been doing two jobs at once: dropping the unpriced AND dropping
@@ -430,8 +475,25 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
     // added to kill, reopened by the one kind of service it can no longer see.
     // `serviceApplies` is the honest test: it counts the equipment, not the
     // money.
+    const path = pricingPathFor(s, rates);
     const crewPriced =
-      !!s.crew_priced && !isGrounds && !s.park_only
+      path === "crew_card"
+      && serviceApplies(s as unknown as ServiceRule, pp);
+    // A PARK THAT HAS NOT SET ITS NUMBER, told apart from a property that has
+    // none of the equipment — AND from a park service a crew is quoting.
+    // All three price to $0 here and all three vanish from /book's `price > 0`
+    // filter, and each is fixed by a different person: type a rate, update the
+    // property profile, or nobody — a crew quotes it at booking. The screen has
+    // to be able to say which, so this is the `park_no_rate` path and only
+    // that path. It was `isGrounds && !rates?.has(id)`, which was also true of
+    // the crew-quoted half and would have told the owner to go and price work
+    // no box on his Services page will ever govern.
+    //
+    // `serviceApplies` is the honest test for the third: it counts the
+    // equipment, not the money, so the grounds' 28 pier sections make the dock
+    // "unpriced" while a park with no lift is simply not offered one.
+    const parkUnpriced =
+      path === "park_no_rate"
       && serviceApplies(s as unknown as ServiceRule, pp);
     return {
       id: s.id,
@@ -449,6 +511,7 @@ export async function getPricedServices(p: FullProfile): Promise<PricedService[]
       needs_release: s.needs_release ?? false,
       crewPriced,
       priceNote: crewPriced ? CREW_QUOTES_THIS : null,
+      parkUnpriced,
     };
   });
 }

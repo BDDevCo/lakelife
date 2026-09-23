@@ -46,7 +46,7 @@ describe("the scanner is reading the reprice loop", () => {
     expect(code, "approveFlag is gone or renamed").toMatch(/approveFlag/);
     expect(branch.length, "the crew-priced reprice branch was not found").toBeGreaterThan(200);
     // And the branch really is inside the per-job loop, above the menu path.
-    expect(code.indexOf("for (const j of openJobs")).toBeLessThan(code.indexOf("raw.crew_priced === true"));
+    expect(code.indexOf("for (const j of openJobs")).toBeLessThan(code.indexOf("crewSetsThePrice("));
   });
 });
 
@@ -103,9 +103,34 @@ describe("a crew-priced reprice uses the job's own frozen percentages", () => {
     expect(branch).toMatch(/if \(!\(quote > 0\)\) continue;/);
   });
 
-  it("a park's grounds never reaches this branch", () => {
-    // Park rates never combine. `parkRates` is non-null only for a park's
-    // grounds, and a park's rate is the park's.
-    expect(branch).toMatch(/!parkRates/);
+  it("asks the one precedence rule, and no longer fences parks out by hand", () => {
+    // ============ CORRECTED 23 SEPTEMBER 2026 (0176) ============
+    //
+    // This test used to read `expect(branch).toMatch(/!parkRates/)` under the
+    // comment "a park's grounds never reaches this branch". That pinned the
+    // rule the owner RETRACTED — "park work is never crew-priced" — and it was
+    // my sentence, not his:
+    //
+    //   "well josh would be a contractor uploaded onto lake life that the park
+    //    then would be able to see his services offeren on LakeLife, just like
+    //    any crew for any home owner or renter in the park needing services."
+    //
+    // The park is a CUSTOMER. `parkRates` is a Map — usually an EMPTY one — for
+    // every park, so `!parkRates` was "never, for any park", in a fourth
+    // spelling that `park-precedence.test.ts`'s scan could not see.
+    //
+    // What governs now is PRECEDENCE, and the only correct test of it is the
+    // shared helper: The Haven's mow has its own row, so `crewSetsThePrice` is
+    // FALSE and the mow still reprices down the menu branch through
+    // `withParkRate` — while a park with no row on a crew-priced service (snow,
+    // the cleanups, the dock) reaches this branch and gets re-quoted, which is
+    // what the owner's screen already promises it will.
+    expect(branch, "the reprice door re-derives 'is this a park' beside crew_priced again")
+      .not.toMatch(/!parkRates/);
+    expect(branch, "the crew-priced reprice must ask the shared precedence rule")
+      .toMatch(/crewSetsThePrice\(/);
+    // And it must ask with the JOB's service id: a rule with no id matches no
+    // park rate row, which would hand The Haven's $125 mow to a crew's card.
+    expect(branch).toMatch(/id: j\.service_id/);
   });
 });
