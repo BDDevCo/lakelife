@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   moneyBlock, describeOffBook, occupancyLine, generateTasks, visibleTasks, quietState, preCutover,
   addDays, daysBetween, ordinal, householdsIn, holdoverLotsOf, lotOccupancy,
-  oldestUnansweredBill,
+  oldestUnansweredBill, sideOfPayment,
   type TaskFacts, type OccupancySnapshot,
 } from "./today-helpers";
 import { type BillPeriod } from "./cost-helpers";
@@ -1689,11 +1689,41 @@ describe("the read behind it", () => {
     expect(src).not.toMatch(/cutoverOn\s*>=\s*today/);
   });
 
-  it("still keeps the labelled receipts to rows that HAVE a bill", () => {
-    // Every label on a Receipt — lot, period, bill total, bill status — comes
-    // off the charge. Folding billless rows in would give them "?" and "", and
-    // would double-count them into the month total.
-    expect(src).toMatch(/filter\(\(p\) => p\.charge_id != null\)/);
+  /**
+   * THE TWO SIDES ARE ONE RULE, AND THEY ARE EXACT COMPLEMENTS.
+   *
+   * Every label on a Receipt — lot, period, bill total, bill status — comes
+   * off the charge, so the billless rows cannot be folded in: they would get
+   * "?" and "" and would double-count into the month total. But the split was
+   * `charge_id != null` and `charge_id == null`, written a few lines apart,
+   * and 0169 made that wrong on both sides at once: a payment released by a
+   * CANCELLED bill keeps its charge_id, so it sat in receipts while
+   * `park_on_account_payments` — the held panel's definition and the
+   * household's own — called it money on account. Today's on-account line was
+   * short by exactly that payment.
+   *
+   * The danger in fixing it is the complement: if the two filters ever stop
+   * being opposites, a payment against a void bill is counted as a receipt
+   * AND as off-book, and the month-to-date figure — the one he ties to a bank
+   * statement — is over by its amount. So both sides read the same total
+   * function, and that is what these pin.
+   */
+  it("keeps the labelled receipts to rows with a LIVE bill, through the one side function", () => {
+    expect(src).toMatch(/const receipts: Receipt\[\] = \(payments \?\? \[\]\)\.filter\(\(p\) => sideOf\(p\) === "receipt"\)/);
+    // The old shape, by name — on either side.
+    expect(src).not.toMatch(/filter\(\(p\) => p\.charge_id != null\)/);
+    expect(src).not.toMatch(/filter\(\(p\) => p\.charge_id == null\)/);
+  });
+
+  it("takes the off-book side from the same function, so the two cannot drift apart", () => {
+    expect(src).toMatch(/const offBook = \(payments \?\? \[\]\)\.filter\(\(p\) => sideOf\(p\) === "offBook"\)/);
+    // ONE definition, handed the bill's own status — a side decided on
+    // `charge_id` alone is the defect, whichever way round it is written.
+    const sideOf = src.split("\n").join(" ").match(/const sideOf = [\s\S]*?\);/);
+    expect(sideOf, "no `sideOf` in the loader — these scans are measuring nothing").not.toBeNull();
+    expect(sideOf![0]).toContain("sideOfPayment(");
+    expect(sideOf![0]).toMatch(/chargeById\.get\(p\.charge_id as string\)\?\.status/);
+    expect(src).toMatch(/import \{[\s\S]*?sideOfPayment[\s\S]*?\} from "\.\/today-helpers"/);
   });
 
   it("hands the gate the bill's own period start, straight from billPeriod", () => {
@@ -2182,5 +2212,58 @@ describe("a bill nobody entered goes on being asked for", () => {
     expect(src).toContain("floor: floors.reduce");
     expect(src).toContain("goLiveFloor");
     expect(src).toContain("sc.created_at");
+  });
+});
+
+/**
+ * WHICH SIDE OF THE MONEY LINE A PAYMENT IS ON.
+ *
+ * The rule itself, away from the loader: a receipt is money against a LIVE
+ * bill; everything else is off-book. The one that was wrong is the third
+ * case — 0169 releases a cancelled bill's money onto account WITHOUT moving
+ * the row, so `charge_id` alone cannot answer this, and the bill's status is
+ * the other half of the fact. `park_on_account_payments` ends on exactly this
+ * clause: `p.charge_id is null or c.status = 'void'`.
+ */
+describe("which side of the money line a payment is on", () => {
+  it("calls money with no bill behind it off-book", () => {
+    // A deposit, amenity income, or rent handed over before its bill exists.
+    expect(sideOfPayment(null, undefined)).toBe("offBook");
+    expect(sideOfPayment(null, "open")).toBe("offBook");
+  });
+
+  it("calls money against a live bill a receipt", () => {
+    expect(sideOfPayment("charge-9", "open")).toBe("receipt");
+    expect(sideOfPayment("charge-9", "paid")).toBe("receipt");
+  });
+
+  it("calls money released by a CANCELLED bill off-book — the view's own last clause", () => {
+    // The defect this fixes: counted as a receipt here, as money on account
+    // by the held panel and the household's page. One definition, two
+    // answers, on the screen he opens with coffee.
+    expect(sideOfPayment("charge-9", "void")).toBe("offBook");
+  });
+
+  it("treats a bill it cannot see as a bill, not as no bill", () => {
+    // "There is a bill and this screen could not find it" is not the same
+    // fact as "there is no bill", and only the second is money on account.
+    expect(sideOfPayment("charge-9", undefined)).toBe("receipt");
+    expect(sideOfPayment("charge-9", null)).toBe("receipt");
+  });
+
+  it("answers every payment exactly once, which is what keeps the month total honest", () => {
+    // The two filters in the loader are `=== "receipt"` and `=== "offBook"`
+    // on this one function, so a payment on both sides would have to be two
+    // answers from one call. Pinned as a property over every shape the
+    // loader can hand it: a side that is neither is a payment dropped from
+    // the month total, and there is no third value to be both.
+    const shapes: Array<[string | null, string | null | undefined]> = [
+      [null, undefined], [null, "open"], [null, "void"],
+      ["c", "open"], ["c", "paid"], ["c", "void"], ["c", undefined], ["c", null],
+    ];
+    for (const [id, st] of shapes) {
+      const side = sideOfPayment(id, st);
+      expect(["receipt", "offBook"], `${id} / ${st} fell off both sides`).toContain(side);
+    }
   });
 });

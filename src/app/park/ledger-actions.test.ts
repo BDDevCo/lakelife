@@ -2314,3 +2314,97 @@ describe("a row against a cancelled bill is money on account", () => {
     expect(reverse.match(/!pay\.charge_id/g), "one for ownAcct, one for the sibling's bill month — never a third deciding on account").toHaveLength(2);
   });
 });
+
+/**
+ * A DOUBLE-TAP ON "CANCEL THIS BILL".
+ *
+ * The control is on every open ledger row, so a second tap — or two people on
+ * the same bill — is a mis-tap away, and this door used to write regardless:
+ * the second UPDATE re-stamped `voided_at` and `void_reason`, so "when was
+ * this cancelled, and why" answered with whatever the last tap said. 0173
+ * refuses that write by name, which the office would read as a fault on a
+ * bill they can see IS cancelled. Both doorways onto the fact — the status
+ * read before the write, and the write's own `.neq("status", "void")` when
+ * somebody got there first — now say the same true sentence, and it is a
+ * success, because the bill is cancelled and that is what was wanted.
+ */
+describe("cancelling a bill that is already cancelled", () => {
+  it("says so, names the day and the reason it already carries, and never asks the database to write", async () => {
+    janBill("9", { status: "void", voided_at: "2027-01-27T15:00:00Z", void_reason: "moved out January 27, 2027" });
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      "That bill was already cancelled on January 27, 2027 — \"moved out January 27, 2027\". Nothing changed.",
+    );
+    // THE READ DECIDES, so 0173 is never asked to refuse anything: no UPDATE
+    // was attempted at all, and the first cancellation's stamps stand.
+    expect(updated.filter((u) => u.table === "park_charges")).toEqual([]);
+    expect(db.park_charges[0]).toMatchObject({
+      voided_at: "2027-01-27T15:00:00Z", void_reason: "moved out January 27, 2027",
+    });
+    expect(res.signal).not.toContain("raised twice");
+  });
+
+  it("…and a cancellation carrying no day says the rest rather than inventing one", async () => {
+    // A bill cancelled before 0070's stamp existed. The reason is all there is.
+    janBill("9", { status: "void", voided_at: null, void_reason: "raised in error" });
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe("That bill was already cancelled — \"raised in error\". Nothing changed.");
+  });
+
+  it("a cancel that lands between the read and the write leaves the first one's day and reason standing", async () => {
+    janBill("9");
+    beforeUpdate = {
+      table: "park_charges",
+      act: () => Object.assign(db.park_charges[0], {
+        status: "void", voided_at: "2027-01-27T15:00:00Z", void_reason: "moved out January 27, 2027", paid_total: 0,
+      }),
+    };
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe(
+      "That bill was already cancelled on January 27, 2027 — \"moved out January 27, 2027\". Nothing changed.",
+    );
+    // THE FILTER IS WHAT DOES THIS. Without `.neq("status", "void")` on the
+    // write, the second tap's reason replaces the first one's — which is the
+    // record of why the household's money was released.
+    expect(db.park_charges[0]).toMatchObject({
+      voided_at: "2027-01-27T15:00:00Z", void_reason: "moved out January 27, 2027",
+    });
+  });
+
+  it("…and a re-read that fails is said as a failed read, never as a cancellation", async () => {
+    janBill("9");
+    beforeUpdate = {
+      table: "park_charges",
+      act: () => {
+        Object.assign(db.park_charges[0], { status: "void", voided_at: "2027-01-27T15:00:00Z", void_reason: "moved out" });
+        nextReadError = { table: "park_charges", error: { code: "57P01", message: "terminating connection" } };
+      },
+    };
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/couldn't check something just now, so no money has moved/);
+    expect(res.error).not.toMatch(/Cancelled/);
+  });
+
+  it("an ordinary first cancel still writes, and still says Cancelled", async () => {
+    // The other way round the branch: the filtered write matches its row, so
+    // nothing here is skipped by a filter that was meant to catch a re-tap.
+    janBill("9");
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+    expect(res.ok, res.error).toBe(true);
+    expect(res.signal).toBe("Cancelled.");
+    expect(db.park_charges[0]).toMatchObject({ status: "void", void_reason: "raised twice" });
+    expect(updated.filter((u) => u.table === "park_charges")).toHaveLength(1);
+  });
+
+  it("a bill that is not on this park's ledger is not reported as cancelled", async () => {
+    // The same zero-rows-written branch, from the other side: this used to
+    // end in "Cancelled." about a write that matched nothing at all.
+    const res = await voidCharge(PARK, "charge-nope", "raised twice");
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("That bill isn't on this park's ledger, so nothing was cancelled.");
+  });
+});

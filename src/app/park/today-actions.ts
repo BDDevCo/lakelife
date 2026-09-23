@@ -14,7 +14,7 @@ import {
 import { summariseReceipts, customPeriod, type Receipt, type Method } from "./receipts-helpers";
 import {
   moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, householdsIn, holdoverLotsOf, lotOccupancy,
-  oldestUnansweredBill,
+  oldestUnansweredBill, sideOfPayment,
   type MoneyBlock, type Task, type TaskState,
 } from "./today-helpers";
 import { getHeldMoney } from "./money-actions";
@@ -274,7 +274,10 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   // Keyed on park_id, which 0102 made NOT NULL on this table — so no row can
   // escape it, and the query needs no bills to exist.
   //
-  // A payment against a CANCELLED bill (0169: released onto account) stays in receipts — it arrived against that bill; what is still held of it reaches the hand-back card through getHeldMoney below.
+  // A payment released by a CANCELLED bill (0169) is in here too, and it is
+  // sorted onto the off-book side below — its row keeps the void bill's id,
+  // so it is money on account by the view's own definition, and what is still
+  // held of it reaches the hand-back card through getHeldMoney as well.
   const payments = mustRead(
     "the money that's come in",
     await admin.from("park_payments")
@@ -294,11 +297,27 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   );
 
   const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
-  // A Receipt is a payment AGAINST A BILL — every label on it (lot, period,
-  // bill total, bill status) comes off the charge. The billless rows are
-  // summed separately below rather than folded in here with "?" for a lot and
-  // "" for a month, which would also double-count them into the total.
-  const receipts: Receipt[] = (payments ?? []).filter((p) => p.charge_id != null).map((p) => {
+
+  // THE SPLIT, DECIDED ONCE (sideOfPayment) AND PARTITIONED HERE.
+  //
+  // A Receipt is a payment against a LIVE bill — every label on it (lot,
+  // period, bill total, bill status) comes off the charge. Everything else is
+  // off-book: summed separately below rather than folded in here with "?" for
+  // a lot and "" for a month.
+  //
+  // A payment released by a cancelled bill (0169) belongs on the off-book
+  // side: it keeps its charge_id, so the old `charge_id != null` counted it
+  // as a receipt, and Today's money-on-account line came out short by exactly
+  // that payment beside a held panel and a resident page counting it. The two
+  // sides are one call each on the same total function, so neither can drift
+  // into overlapping the other — a payment on both sides is a payment counted
+  // twice in the month-to-date figure.
+  const sideOf = (p: Record<string, unknown>) =>
+    sideOfPayment(
+      (p.charge_id as string | null) ?? null,
+      chargeById.get(p.charge_id as string)?.status as string | undefined,
+    );
+  const receipts: Receipt[] = (payments ?? []).filter((p) => sideOf(p) === "receipt").map((p) => {
     const c = chargeById.get(p.charge_id as string);
     return {
       paymentId: p.id as string,
@@ -328,9 +347,9 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
   const mtd = summariseReceipts(receipts, customPeriod(monthStart, today, today)!);
   const cashToday = summariseReceipts(receipts, customPeriod(today, today, today)!);
 
-  // The billless part, taken off the raw rows because only they carry `kind`
+  // The off-book part, taken off the raw rows because only they carry `kind`
   // — a Receipt is built around a charge and has nowhere to put it.
-  const offBook = (payments ?? []).filter((p) => p.charge_id == null);
+  const offBook = (payments ?? []).filter((p) => sideOf(p) === "offBook");
   const offIn = (from: string, to: string) =>
     offBook.filter((p) => {
       const on = p.received_on as string;

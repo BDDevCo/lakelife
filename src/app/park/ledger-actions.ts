@@ -5,7 +5,7 @@ import { rentForPeriod, lastDayOfMonth } from "./rerate-helpers";
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
-import { todayLakeDate } from "@/lib/booking";
+import { todayLakeDate, lakeDateOf } from "@/lib/booking";
 import { parseDaterange } from "@/lib/parks";
 import { buildStatement } from "./statement-helpers";
 import { feesForTenancy } from "./fee-helpers";
@@ -1325,6 +1325,25 @@ export async function takeDropSlipSerials(
 }
 
 /**
+ * WHAT A BILL THAT IS ALREADY CANCELLED SAYS BACK — one sentence, and both of
+ * voidCharge's doorways onto it say it: the status read before the write, and
+ * the re-read when the write's own `.neq("status", "void")` matched nothing
+ * because somebody got there first. It names the day and the reason the bill
+ * ALREADY carries, which is what makes it an answer rather than a shrug: the
+ * office can see it is the cancellation they meant, and that theirs changed
+ * nothing.
+ */
+// NOT exported: every export of a "use server" module is a public endpoint.
+function alreadyCancelled(bill: { voided_at?: unknown; void_reason?: unknown }): string {
+  const at = bill.voided_at == null ? "" : String(bill.voided_at);
+  // A bill cancelled before 0070's stamp existed carries no day at all; the
+  // sentence says the rest rather than inventing one.
+  const when = at ? ` on ${dayInWords(lakeDateOf(at) ?? at.slice(0, 10))}` : "";
+  const why = String(bill.void_reason ?? "").trim();
+  return `That bill was already cancelled${when}${why ? ` — "${why}"` : ""}. Nothing changed.`;
+}
+
+/**
  * Cancel a bill that should never have been raised — or that a household
  * has paid and then left part-way through. Requires a reason.
  */
@@ -1354,7 +1373,7 @@ export async function voidCharge(
   // doors out. 0072's CHECK no longer stands in the way: the bill's
   // paid_total is zeroed on the same write that voids it.
   const existingRes = await admin
-    .from("park_charges").select("paid_total, period_month, renter_id, reservation_id, amount")
+    .from("park_charges").select("paid_total, period_month, renter_id, reservation_id, amount, status, voided_at, void_reason")
     .eq("id", chargeId).eq("park_id", parkId).maybeSingle();
   // FAILS OPEN IF SWALLOWED. `existing` comes back null on a failed read, the
   // `existing &&` below is false, and the allocation refusal is skipped. The
@@ -1364,6 +1383,20 @@ export async function voidCharge(
     return { ok: false, error: readFailedMessage("what's been paid against that bill", existingRes.error, { money: true }) };
   }
   const existing = existingRes.data;
+
+  // ALREADY CANCELLED IS NOT A FAILURE, AND IT IS NOT A SECOND CANCELLATION.
+  //
+  // "Cancel this bill" is a row control on every ledger line, so a double-tap
+  // — or two people on the same bill — is a mis-tap away. This door used to
+  // write anyway: the second UPDATE silently re-stamped `voided_at` and
+  // `void_reason`, rewriting WHEN and WHY a bill was cancelled, which is the
+  // one thing a cancellation is supposed to carry. 0173 refuses that write by
+  // name ("that bill was cancelled on 23rd September 2026 — a cancellation is
+  // recorded once"), and the office would read a refusal on a bill that IS
+  // cancelled as something having gone wrong. So the door reads the status
+  // and says what is true, without writing.
+  if (existing?.status === "void") return { ok: true, signal: alreadyCancelled(existing) };
+
   let directRows: Array<{ id: string; method: string | null }> = [];
   if (existing && Number(existing.paid_total) > 0) {
     // WHICH KIND OF MONEY IS ON IT. paid_total counts money handed over
@@ -1431,16 +1464,38 @@ export async function voidCharge(
     }
   }
 
-  const { error } = await admin
+  const { data: cancelled, error } = await admin
     .from("park_charges")
     .update({ status: "void", voided_at: new Date().toISOString(), void_reason: reason.trim() })
     .eq("id", chargeId)
-    .eq("park_id", parkId);
+    .eq("park_id", parkId)
+    // THE SAME FILTER voidUnpaidChargesFor WRITES THROUGH, for the same
+    // reason: a cancel that lands between the read above and this write must
+    // not re-stamp the day and the reason the first one wrote. The filter
+    // alone cannot SAY so — a filtered UPDATE that matches nothing is not an
+    // error — so the rows it actually wrote come back, and none of them sends
+    // this down the re-read below rather than into "Cancelled."
+    .neq("status", "void")
+    .select("id");
   if (error) {
     // THE DATABASE'S OWN SENTENCE, when it has one. A line from money on
     // account that landed between the read above and this write is refused
     // by name (0169), and "try again" would never come true for it.
     return { ok: false, error: `Couldn't cancel that — ${dbSaid(error.message, "park_charges", "try again")}.` };
+  }
+  if ((cancelled ?? []).length === 0) {
+    // NOTHING WAS WRITTEN, and there are only two ways that happens: somebody
+    // cancelled it in between, or the bill is not on this park's ledger at
+    // all. Both used to end in "Cancelled." — a sentence about a write that
+    // never happened.
+    const againRes = await admin
+      .from("park_charges").select("status, voided_at, void_reason")
+      .eq("id", chargeId).eq("park_id", parkId).maybeSingle();
+    if (againRes.error) {
+      return { ok: false, error: readFailedMessage("whether that bill had already been cancelled", againRes.error, { money: true }) };
+    }
+    if (againRes.data?.status === "void") return { ok: true, signal: alreadyCancelled(againRes.data) };
+    return { ok: false, error: "That bill isn't on this park's ledger, so nothing was cancelled." };
   }
 
   // RELEASE THE COST SHARES THIS BILL WAS CARRYING (0104).

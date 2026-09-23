@@ -82,7 +82,17 @@
 --     household is refused.
 --
 --   park_payments.renter_id, recorded_by, amenity_booking_id — the same FK
---     write, the same one direction.
+--     write, the same one direction. WITH ONE CORRECTION TO THE SENTENCE
+--     ABOVE, because it is only half true here: for money ON ACCOUNT the
+--     database does NOT get to write that NULL. `park_payments_is_anchored`
+--     (0102) requires `charge_id is not null or renter_id is not null`, so on
+--     a payment with no charge_id the FK's own SET NULL breaks the CHECK and
+--     deleting the household file is refused — today, at HEAD, with this
+--     migration nowhere in sight (proved in a rolled-back block with none of
+--     0173 installed). 0173 neither causes that nor worsens it: the guard
+--     below lets the NULL through, and the CHECK refuses it afterwards. It is
+--     named here so the next person reads "deleting a household file is
+--     refused" and looks at 0102's CHECK, not at these triggers.
 --
 --   park_payment_allocations.applied_by, removed_by — the same again, and the
 --     reason the allocation guard gains a pass-through below: without it,
@@ -94,6 +104,20 @@
 --     return, and the household's confirmation — go from nothing to something
 --     ONCE. Each is allowed on the write that sets it and frozen for ever
 --     after, together with the columns that belong to it.
+--
+--   AND ONE THING THIS MIGRATION DOES MAKE HARDER, said plainly: DELETING A
+--     LOT THAT CARRIES BILLS IS NOW REFUSED. `park_charges.park_lot_id` is
+--     ON DELETE CASCADE (0070), so removing a lot tries to delete its bills,
+--     and the cascade lands on `park_charge_is_never_deleted` — which refuses
+--     by name, as it should: a lot's bills are the record of the months it
+--     was rented, and they must outlive the pad. 0072 already made a lot with
+--     MONEY on it undeletable; this widens that to a lot with any bill at all.
+--     The only live door is the import undo (src/app/park/import-actions.ts),
+--     which deletes the lots an import made ONE AT A TIME, reads each refusal,
+--     and counts the pad as left behind — "2 lots this import made are still
+--     on your roll — check them on Lots & rates". So it degrades honestly and
+--     needs no change: a lot that has been billed is no longer a lot an undo
+--     can take away, and the sentence says so on the screen.
 --
 --   park_payments.returned_at / return_code have no writer in the app yet
 --     (0155 said so and it is still true — the processor webhook is his call).

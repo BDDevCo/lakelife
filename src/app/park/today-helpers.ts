@@ -99,6 +99,40 @@ export interface MoneyBlock {
   offBookLine: string | null;
 }
 
+/**
+ * WHICH SIDE OF THE MONEY LINE A PAYMENT IS ON — ONE RULE, BOTH BUCKETS.
+ *
+ * Today splits the money that arrived in two: RECEIPTS, which are payments
+ * against a bill and take every label they carry off that bill (lot, month,
+ * bill total, bill status), and OFF-BOOK, which is everything with no live
+ * bill behind it — a deposit, amenity income, rent handed over before its
+ * bill exists, and money released by a cancelled one.
+ *
+ * The two used to be `charge_id != null` and `charge_id == null`, written a
+ * few lines apart, and that disagreed with the ledger: 0169's whole model is
+ * that a payment released by a CANCELLED bill KEEPS its charge_id — the row
+ * never moves, the release is derived — so `park_on_account_payments` lists
+ * it as money on account, the held panel counts it and the household's own
+ * screen shows it, while Today counted it as a receipt against a bill that no
+ * longer exists and left it out of the money-on-account line. One definition,
+ * two answers, on the screen he opens with coffee.
+ *
+ * It is ONE function and not two filters because the two must be exact
+ * complements: a payment counted on both sides is counted twice in the
+ * month-to-date figure, which is the number he ties to a bank statement.
+ *
+ * A charge id whose row this screen could not find is a receipt, as it always
+ * was — "there is a bill and we cannot see it" is not the same fact as "there
+ * is no bill", and only the second is money on account.
+ */
+export type MoneySide = "receipt" | "offBook";
+
+export function sideOfPayment(chargeId: string | null, chargeStatus: string | null | undefined): MoneySide {
+  if (chargeId == null) return "offBook";
+  // The view's own last clause: `p.charge_id is null or c.status = 'void'`.
+  return chargeStatus === "void" ? "offBook" : "receipt";
+}
+
 /** What each kind of billless money actually is, in his words. */
 const OFF_BOOK_WHAT: Record<string, string> = {
   // Count-agnostic on purpose: the caller passes which KINDS are present, not
