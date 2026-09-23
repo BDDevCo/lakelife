@@ -187,14 +187,39 @@ describe("work you said you do but never priced", () => {
 
   it("names the work with no rate behind it", async () => {
     db.vendors = [{ id: MINE, service_types: ["Park grounds mowing & trim", "Snow clearing — roads & common drives"] }];
-    db.vendor_rates = [{ vendor_id: MINE, service_id: "s-mow" }];
+    // A REAL NUMBER. These fixtures used to seed `{ vendor_id, service_id }`
+    // with no dollar amount at all and assert it counted as priced — so the
+    // test ENSHRINED the bug: "priced" meant a row existed, while dispatch
+    // demands a rate > 0. A crew could Save a blank form, be told everything
+    // was priced, go live, and be dropped from every job.
+    db.vendor_rates = [{ vendor_id: MINE, service_id: "s-mow", base: 125, unit_rate: 0, band_pricing: null }];
     const out = await getNeedsYou(MINE);
     expect(out.unpriced).toEqual(["Snow clearing — roads & common drives"]);
   });
 
   it("is quiet when every ticked service is priced", async () => {
     db.vendors = [{ id: MINE, service_types: ["Lawn mowing & trim"] }];
-    db.vendor_rates = [{ vendor_id: MINE, service_id: "s-lawn" }];
+    db.vendor_rates = [{ vendor_id: MINE, service_id: "s-lawn", base: 0, unit_rate: 0, band_pricing: { small: 45, medium: 59, large: 77 } }];
+    expect((await getNeedsYou(MINE)).unpriced).toEqual([]);
+  });
+
+  it("A ROW OF ZEROS IS STILL UNPRICED — the case no test covered", async () => {
+    // `coerceRate("")` returns `{ ok: true, value: 0 }` and the band branch
+    // always writes {small:0, medium:0, large:0}, so tapping Save on an empty
+    // form writes exactly this row — and the screen then said "Rate set ✓".
+    // `decideDispatch` drops the crew as `no_qualifying_rate`.
+    db.vendors = [{ id: MINE, service_types: ["Lawn mowing & trim"] }];
+    db.vendor_rates = [{ vendor_id: MINE, service_id: "s-lawn", base: 0, unit_rate: 0, band_pricing: { small: 0, medium: 0, large: 0 } }];
+    expect((await getNeedsYou(MINE)).unpriced).toEqual(["Lawn mowing & trim"]);
+  });
+
+  it("a per_sqft_band card of zero-priced tiers is unpriced too", async () => {
+    // The ops board's old predicate passed this on `tiers.length` alone.
+    db.vendors = [{ id: MINE, service_types: ["Lawn mowing & trim"] }];
+    db.vendor_rates = [{ vendor_id: MINE, service_id: "s-lawn", base: 0, unit_rate: 0, band_pricing: { tiers: [{ max: 1800, price: 0 }, { max: null, price: 0 }] } }];
+    expect((await getNeedsYou(MINE)).unpriced).toEqual(["Lawn mowing & trim"]);
+    // Collapsed the other way: one real tier price and it IS priced.
+    db.vendor_rates = [{ vendor_id: MINE, service_id: "s-lawn", base: 0, unit_rate: 0, band_pricing: { tiers: [{ max: 1800, price: 0 }, { max: null, price: 84 }] } }];
     expect((await getNeedsYou(MINE)).unpriced).toEqual([]);
   });
 

@@ -11,6 +11,7 @@ import { getMyVendorId, getMyVendor, getVendorDay } from "./data";
 import { getMyStanding } from "@/lib/scoring-data";
 import { tierLabel } from "@/lib/scoring";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
+import { loadOnboardingProps } from "./onboarding-props";
 import { VendorDocs } from "@/components/VendorDocs";
 import { MyCapacity } from "@/components/MyCapacity";
 import { getMyTrucks } from "./trucks-data";
@@ -65,24 +66,15 @@ export default async function VendorTodayPage() {
   // Not active yet? Show the onboarding checklist instead of the route.
   const vendor = await getMyVendor();
   if (vendor && vendor.status !== "active") {
-    const admin = createServiceClient();
-    // `park_only` TRAVELS WITH THE NAME. Without it onboarding cannot tell
-    // "Lawn mowing & trim" from "Park grounds mowing & trim", which differ by
-    // one word and are two different jobs at two different prices. The
-    // availability page has read it this way since MyServicesEditor was built
-    // to fix exactly this; the FIRST door never got the same treatment.
-    const svcs = mustRead("the service list", await admin.from("services").select("name, park_only").eq("active", true).order("name"));
-    const activeServices = (svcs ?? []).map((s) => ({
-      name: s.name as string,
-      parkOnly: s.park_only === true,
-    }));
-    const lakeRows = mustRead("the lake list", await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name"));
-    const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
+    // ONE LOADER FOR ALL FIVE DOORWAYS. Each page used to roll its own pair of
+    // reads; the checklist now needs four facts, and four facts copied five
+    // times is four rules written into one doorway of five.
+    const props = await loadOnboardingProps(vendorId, user.id);
     return (
       <>
         <TopBar />
         <VendorNav />
-        <VendorOnboarding vendor={vendor} activeServices={activeServices} lakes={lakes} />
+        <VendorOnboarding vendor={vendor} {...props} />
       </>
     );
   }

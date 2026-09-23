@@ -11,6 +11,8 @@ import {
   payoutFeeLine,
   type EarningRow,
 } from "../../earnings-helpers";
+import { createClient } from "@/lib/supabase/server";
+import { hasPayoutAccount } from "../../bank-data";
 
 export const dynamic = "force-dynamic";
 
@@ -47,7 +49,12 @@ export async function GET(req: Request) {
   const gate = await termsGateForRouteHandler("/vendor");
   if (gate) return gate;
 
-  const html = renderStatement(statement.company, statement.from, statement.to, statement.rows, statement.periodTotal, statement.generatedAt);
+  // THE STATUS COLUMN IS A PROMISE ABOUT A BANK TRANSFER, and this is the
+  // sheet a crew hands their accountant. The month-end batch skips a crew with
+  // no `payout_accounts` row.
+  const { data: { user } } = await (await createClient()).auth.getUser();
+  const bankOnFile = await hasPayoutAccount(user?.id ?? null);
+  const html = renderStatement(statement.company, statement.from, statement.to, statement.rows, statement.periodTotal, statement.generatedAt, bankOnFile);
   return new Response(html, {
     status: 200,
     headers: { "content-type": "text/html; charset=utf-8" },
@@ -79,6 +86,7 @@ function renderStatement(
   rows: EarningRow[],
   periodTotal: number,
   generatedAt: string,
+  bankOnFile: boolean | null,
 ): string {
   const crew = esc(company ?? "Your crew");
   const period = `${formatDateHuman(from)} – ${formatDateHuman(to)}`;
@@ -109,7 +117,7 @@ function renderStatement(
       }</td>
       <td>${esc(r.address ?? "—")}</td>
       <td class="num">${esc(formatCurrency(r.amount))}</td>
-      <td class="status">${esc(statusLabel(r.status))}</td>
+      <td class="status">${esc(statusLabel(r.status, bankOnFile))}</td>
     </tr>`,
           )
           .join("\n");
@@ -196,7 +204,14 @@ ${body}
 
     <p class="note">
       Amounts are your crew&apos;s take-home pay, listed by the day the work was done. Pay is
-      released once a job&apos;s photos are verified and goes out in the month-end payout, unless it
+      released once a job&apos;s photos are verified and goes out in the month-end payout${
+        // THE FOOTNOTE MADE THE SAME PROMISE THE STATUS COLUMN DID. A crew
+        // with no bank account on file is skipped by that batch, so the
+        // sentence their accountant reads has to carry the condition too.
+        bankOnFile === false
+          ? " — but only to a bank account on file, and we don&apos;t have yours yet"
+          : ""
+      }, unless it
       was pulled early — an early pull carries a fee, so a deposit can be smaller than a total shown
       here. This statement is a record of what was EARNED in the period; it is not a record of what
       was paid out, and it is not a tax document. Questions? Contact LakeLife dispatch.

@@ -3,11 +3,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * STEP 4 OF THE INVITATION HAD NO DOOR UNTIL STEP 5 WAS DONE.
+ * STEP 4 OF THE INVITATION HAD NO DOOR UNTIL THE CREW WAS LIVE.
  *
- * The email ops sends a crew makes "set what you charge" step 4 and "Tap Go
- * live" step 5, and VendorNav renders the Rates tab directly above that
- * checklist. The tab answered step 4 by returning the onboarding wizard —
+ * The email ops sends a crew makes "set what you charge" step 4 (the bank is
+ * 5 and "Tap Go live" is 6), and VendorNav renders the Rates tab directly
+ * above that checklist. The tab answered step 4 by returning the wizard —
  * the same six steps, none of them about money, and the wizard offers no rates
  * control at all. MyServicesEditor points an onboarding crew at the same tab.
  *

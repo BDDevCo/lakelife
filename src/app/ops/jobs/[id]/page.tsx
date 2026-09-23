@@ -257,6 +257,36 @@ export default async function OpsJobPage(ctx: { params: Promise<{ id: string }> 
           <div>
             <div className="mut" style={{ fontSize: 11.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em" }}>Crew</div>
             <div style={{ fontSize: 14, fontWeight: 700 }}>{h.crewCompany ?? "Unassigned"}</div>
+            {/* WHY IT IS UNASSIGNED, NAMED — and named DIFFERENTLY for each
+                cause, because they have different cures. A lake nobody has
+                ticked is recruiting. A crew who is here but cannot be sent is
+                paperwork. A crew who is here and has priced nothing is a rate
+                card. Sending ops recruiting for all three was the old
+                behaviour. Absent (not "all clear") when the crew list could
+                not be read, and absent on a job that is no longer looking. */}
+            {file.noCrewReason && (
+              <div style={{ fontSize: 12.5, color: "var(--warn)", fontWeight: 700, marginTop: 2, lineHeight: 1.45 }}>
+                {file.noCrewReason}
+              </div>
+            )}
+            {/* WHO HELD IT AND GAVE IT BACK (0177). §11.1 promises crews may
+                reject jobs; the release is what stops that being
+                indistinguishable from a job nobody ever claimed. */}
+            {file.releases.map((r, i) => (
+              <div key={`${r.on}-${i}`} className="mut" style={{ fontSize: 12.5, marginTop: 4, lineHeight: 1.45 }}>
+                ↩︎ {r.company ?? "A crew"} handed it back on {prettyDay(r.on)} — “{r.reason}”
+              </div>
+            ))}
+            {/* ONLY A GENUINE FAILED READ. While 0177 is unapplied the table
+                does not exist, which is not a failure to check — no row can
+                ever have been written — and treating it as one put this
+                sentence on every job in the system. See the 42P01 note in
+                job-detail-data. */}
+            {!file.releasesChecked && (
+              <div className="mut" style={{ fontSize: 12.5, marginTop: 4 }}>
+                We couldn&apos;t check whether a crew handed this one back.
+              </div>
+            )}
             {h.minPhotos > 0 && (
               <div className="mut" style={{ fontSize: 12.5 }}>
                 📷 {file.photoCount}/{h.minPhotos} photos{file.photoCount >= h.minPhotos ? " — gate clear" : " — gate not met"}

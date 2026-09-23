@@ -3,9 +3,9 @@ import { TopBar } from "@/components/Brand";
 import { VendorNav } from "@/components/VendorNav";
 import { VendorCalendar } from "@/components/VendorCalendar";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { loadOnboardingProps } from "../onboarding-props";
+import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { mustRead } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
 import { getMyVendorId, getMyVendor } from "../data";
 import { getCrewCalendarYear } from "../job-detail-data";
@@ -64,19 +64,15 @@ export default async function VendorSchedulePage() {
   // Not active yet? Show the onboarding checklist (same as the Today tab).
   const vendor = await getMyVendor();
   if (vendor && vendor.status !== "active") {
-    const admin = createServiceClient();
-    // park_only travels with the name: onboarding groups the chips by it,
-    // because "Lawn mowing & trim" and "Park grounds mowing & trim" differ
-    // by one word and are two different jobs.
-    const svcs = mustRead("the service list", await admin.from("services").select("name, park_only").eq("active", true).order("name"));
-    const activeServices = (svcs ?? []).map((s) => ({ name: s.name as string, parkOnly: s.park_only === true }));
-    const lakeRows = mustRead("the lake list", await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name"));
-    const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
+    // ONE LOADER FOR ALL FIVE DOORWAYS. Each page used to roll its own pair of
+    // reads; the checklist now needs four facts, and four facts copied five
+    // times is four rules written into one doorway of five.
+    const props = await loadOnboardingProps(vendorId, user.id);
     return (
       <>
         <TopBar />
         <VendorNav />
-        <VendorOnboarding vendor={vendor} activeServices={activeServices} lakes={lakes} />
+        <VendorOnboarding vendor={vendor} {...props} />
       </>
     );
   }

@@ -3,7 +3,8 @@ import { TopBar } from "@/components/Brand";
 import { VendorNav } from "@/components/VendorNav";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { mustRead } from "@/lib/must-read";
+import { mustRead, softRead } from "@/lib/must-read";
+import { LAKE_GATE_SENTENCE, parkClause } from "@/lib/lake-gate";
 import { getMyVendorId } from "@/app/vendor/data";
 import { todayLakeDate, toISODate } from "@/lib/booking";
 import { AvailabilityGrid, type DayRow, type SlotStatus } from "./AvailabilityGrid";
@@ -68,6 +69,27 @@ export default async function VendorAvailabilityPage() {
   const admin = createServiceClient();
   const lakeRows = mustRead("the lake list", await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name"));
   const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
+
+  // WHICH LAKES HAVE A PARK ON THEM — the same derived clause the onboarding
+  // wizard shows, because THIS is the only lake door a live crew has. The
+  // wizard renders only while status !== 'active', so a crew who went live
+  // with Pretty Lake untapped had no screen anywhere that told them what that
+  // costs them. NOT filtered on parks.active: The Haven is inactive today and
+  // it is precisely the park this sentence exists for. A failed read shows no
+  // clause rather than "this lake has no parks" (softRead -> null).
+  const parksRes = await admin.from("parks").select("name, lake_id").not("lake_id", "is", null);
+  const [parkRows, parksFailed] = softRead("which lakes have a park on them", parksRes, null);
+  let parksByLake: Record<string, string[]> | null = null;
+  if (!parksFailed) {
+    parksByLake = {};
+    for (const pk of parkRows ?? []) {
+      const lid = pk.lake_id as string | null;
+      const nm = (pk.name as string | null)?.trim();
+      if (!lid || !nm) continue;
+      (parksByLake[lid] ??= []).push(nm);
+    }
+  }
+  const parks = parkClause(lakes, parksByLake);
 
   // And every kind of work, for the "Work I do" editor. `park_only` rides
   // along so the editor can separate a park's common ground from a lake
@@ -165,8 +187,14 @@ export default async function VendorAvailabilityPage() {
         <section style={{ marginTop: 28 }}>
           <h2 style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>Lakes I service</h2>
           <div className="ll-card ll-card-pad">
-            <p className="mut" style={{ fontSize: 13, margin: "0 0 10px" }}>
-              Tap the lakes your crew works. New lakes take effect on tomorrow&apos;s dispatch.
+            {/* THE GATE, SAID OUT LOUD — the same sentence the wizard shows,
+                from the same home. "Tap the lakes your crew works" reads as a
+                preference; it is a filter on every job offer this crew will
+                ever see, and an untapped lake fails silently. */}
+            <p className="mut" style={{ fontSize: 13, margin: "0 0 10px", lineHeight: 1.5 }}>
+              Tap the lakes your crew works. {LAKE_GATE_SENTENCE}
+              {parks && <>{" "}{parks}</>}{" "}
+              New lakes take effect on tomorrow&apos;s dispatch.
             </p>
             <MyLakesEditor lakes={lakes} selectedIds={serviceLakes} />
           </div>

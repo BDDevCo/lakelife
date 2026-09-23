@@ -9,6 +9,8 @@ import { coiState, docConfirmState, type CoiState, type DocConfirmState } from "
 import { mustRead } from "@/lib/must-read";
 import { isCoolingDown } from "@/lib/lake-standing";
 import { getPlatformSettings } from "@/lib/settings";
+import { hasRealRate } from "@/app/vendor/rates-helpers";
+import type { PricingParams } from "@/lib/pricing";
 
 /** Crew (vendor) roster for the ops Crews tab. Ops-only, service-role read —
  *  never import this into a vendor/owner surface (it carries no margin, but it
@@ -353,18 +355,18 @@ export async function getCrewCoverage(): Promise<CrewCoverage> {
   const rates = mustRead("what the crews charge", ratesRes) ?? [];
 
   /** Has this crew put a real number against this service? Same four shapes
-   *  the services table uses (0162) — a row of zeroes is not a rate. */
+   *  the services table uses (0162) — a row of zeroes is not a rate.
+   *
+   *  THIS TEST USED TO LIVE HERE ALONE, and it was the only one of four
+   *  readers that got it right; the crew's own go-live card, their Today card
+   *  and the "Rate set ✓" pill all tested row existence. It now lives in
+   *  rates-helpers.hasRealRate, which all four call — and it got slightly
+   *  stricter on the way: `typeof bp.small === "number"` passed a band card of
+   *  all zeros, and a tiers array of zero-priced tiers passed on length alone.
+   *  Neither can price anything, so neither is a rate. */
   const priced = new Set(
     rates
-      .filter((r) => {
-        const bp = (r.band_pricing ?? null) as Record<string, unknown> | null;
-        return (
-          Number(r.base ?? 0) > 0 ||
-          Number(r.unit_rate ?? 0) > 0 ||
-          typeof bp?.small === "number" ||
-          (Array.isArray(bp?.tiers) && (bp!.tiers as unknown[]).length > 0)
-        );
-      })
+      .filter((r) => hasRealRate(r as { base: number | null; unit_rate: number | null; band_pricing: PricingParams | null }))
       .map((r) => `${r.vendor_id}::${r.service_id}`),
   );
 

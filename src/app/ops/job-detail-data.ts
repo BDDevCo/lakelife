@@ -2,7 +2,11 @@ import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertOps } from "./data";
 import { signedJobPhotos, type JobPhoto } from "@/lib/photos";
-import { mustRead, mustCount } from "@/lib/must-read";
+import { mustRead, mustCount, softRead } from "@/lib/must-read";
+import { NO_FIT_LABEL, canEverDo, capabilityNoFit } from "@/lib/dispatch";
+import { hasRealRate } from "@/app/vendor/rates-helpers";
+import type { PricingParams } from "@/lib/pricing";
+import { todayLakeDate } from "@/lib/booking";
 
 /**
  * THE ops job file (owner ask, 2026-07-26): click a job anywhere in the ops
@@ -228,6 +232,46 @@ export interface OpsJobFile {
   flags: OpsFlag[];
   confirmation: { verdict: string | null; note: string | null; respondedAt: string | null } | null;
   group: OpsJobGroup | null;
+  /**
+   * WHY THIS JOB HAS NO CREW, when it has none.
+   *
+   * `decideDispatch` has always produced `no_crew_on_lake` for the geographic
+   * dead end and for a long time NOTHING ANYWHERE READ IT — the only consumer
+   * of `reasonNoFit` was `all_full_or_blocked`, in the two booking doors. So a
+   * Haven job that found no lake-ticked crew left no trace on any screen. This
+   * is the trace, on the file ops opens when they ask "why is this still
+   * sitting there".
+   *
+   * FOUR VERDICTS REACH THIS FIELD, all from `NO_FIT_LABEL`, all decided by
+   * the engine's own functions rather than a copy of them: the three
+   * capability answers via `capabilityNoFit`, plus `no_routable_crew` (crews
+   * are here, none can be SENT — paperwork) and `no_qualifying_rate` (a crew
+   * is here and has not put a number on the work). The last is the one a new
+   * crew actually lands in, and it had no reader anywhere before.
+   *
+   * `null` for a job that HAS a crew (there is nothing to explain), for a job
+   * that is no longer looking for one — cancelled, expired, superseded — and
+   * for a job whose crew list could not be read, because "no crew has ticked
+   * this lake" said off a failed read is a recruiting errand for a crew who
+   * may already be on it.
+   */
+  noCrewReason: string | null;
+  /**
+   * CREWS WHO HELD THIS JOB AND HANDED IT BACK (0177), newest first.
+   *
+   * `jobs.vendor_id` cannot answer this — it points at whoever has the job
+   * NOW, or at nobody. Without the rows a release is indistinguishable from
+   * "nobody ever claimed it", which is the difference between a scheduling
+   * hiccup and a crew quietly handing back the same work every week.
+   *
+   * Empty when nothing has been handed back. Also empty, with a console line,
+   * when the read fails — this is one list on a long file and is not worth
+   * withholding somebody's money story over, but it is NOT allowed to read as
+   * "we checked and there were none": `releasesChecked` carries the difference
+   * and the page must render it.
+   */
+  releases: Array<{ company: string | null; on: string; reason: string }>;
+  releasesChecked: boolean;
 }
 
 // ---- the loader ------------------------------------------------------------
@@ -255,7 +299,7 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
           "created_at, started_at, completed_at, customer_price, vendor_cost, margin, " +
           "property_id, service_id, vendor_id, group_id, " +
           "services(name, min_photos), " +
-          "properties(id, address, nickname, owner_id, lakes(name), users(id, name, email, phone)), " +
+          "properties(id, address, nickname, owner_id, lake_id, lakes(name), users(id, name, email, phone)), " +
           "vendors(id, company)",
       )
       .eq("id", jobId)
@@ -289,6 +333,7 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
       address: string | null;
       nickname: string | null;
       owner_id: string | null;
+      lake_id: string | null;
       lakes: Embed<{ name: string | null }>;
       users: Embed<{ id: string; name: string | null; email: string | null; phone: string | null }>;
     }>;
@@ -660,6 +705,142 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
   mustCount("this job's photo count", photoCountRes);
   const photoCount = photoCountRes.count ?? photos.length;
 
+  // WHO HANDED THIS BACK, AND WHY (0177).
+  const releaseRes = await admin
+    .from("job_releases")
+    .select("released_on, reason, vendors(company)")
+    .eq("job_id", jobId)
+    .order("released_on", { ascending: false });
+  // A TABLE THAT DOES NOT EXIST YET IS NOT A FAILED READ. 0177 is written and
+  // is applied by hand; until it lands, Postgres answers 42P01 and softRead
+  // would put "We couldn't check whether a crew handed this one back" on EVERY
+  // job in the system — a permanent false alarm about a feature nobody has
+  // used. No table means no row can ever have been written, so zero releases
+  // is the literal truth, and `releasesChecked` stays true.
+  //
+  // This is NOT the "a failed read is not an empty one" exemption creeping in:
+  // it is scoped to the one error code that means "this relation has never
+  // existed". Every other error still degrades loudly.
+  const relMissing = (releaseRes.error as { code?: string } | null)?.code === "42P01";
+  const [releaseRows, releasesFailed] = relMissing
+    ? [[] as NonNullable<typeof releaseRes.data>, false as boolean]
+    : softRead("who handed this job back", releaseRes, null);
+  const releases = (releaseRows ?? []).map((r) => ({
+    company: (first(r.vendors as Embed<{ company: string | null }>) ?? {}).company ?? null,
+    on: r.released_on as string,
+    reason: r.reason as string,
+  }));
+
+  // WHY NOBODY HAS THIS JOB — the reader `no_crew_on_lake` never had.
+  //
+  // Only asked for a job that is genuinely unassigned AND still looking; a job
+  // with a crew has nothing to explain, and a cancelled one has nothing to fix.
+  // EVERY TEST BELOW IS THE ENGINE'S OWN FUNCTION, not a copy of it:
+  // `canEverDo` for the paperwork and leg gates, `capabilityNoFit` (which
+  // wraps `noCrewOnLake`) for the three capability verdicts, and
+  // `hasRealRate` for the rate card — the same predicate the crew's own
+  // screens and the coverage board use. Fixture crews are fenced out for the
+  // same reason the needs-attention board fences them — a test crew must never
+  // make a real coverage hole look filled.
+  let noCrewReason: string | null = null;
+  // A CANCELLED JOB HAS NOBODY ON IT ON PURPOSE. This asked only
+  // `!job.vendor_id`, so every cancelled, expired or superseded job in the
+  // system — five of them in production the day this was written — opened with
+  // a recruiting alarm under Crew telling ops to go and hire somebody for work
+  // that is not happening. Only a job still LOOKING for a crew has a dead end
+  // worth naming.
+  const stillLooking = header.status === "requested" || header.status === "scheduled";
+  if (!job.vendor_id && stillLooking && header.serviceName) {
+    const crewRes = await admin
+      .from("vendors")
+      .select("id, company, status, service_types, service_lakes, coi_expiry, coi_named_insured, users!vendors_user_id_fkey!inner(is_fixture)")
+      .eq("status", "active")
+      .eq("users.is_fixture", false);
+    // A FAILED READ IS NOT AN EMPTY CREW LIST. Empty reads as "nobody does
+    // this work anywhere", which is a recruiting errand; `null` says nothing
+    // and the card renders nothing.
+    const [crews, crewsFailed] = softRead("the crews who could take this job", crewRes, null);
+    if (!crewsFailed) {
+      const today = todayLakeDate();
+      // EVERY LEG OF THE VISIT, NOT THE HEADER'S ONE NAME. A grouped visit is
+      // dispatched against `componentNames`; asking about `serviceName` alone
+      // printed the lake-recruiting sentence on jobs where a crew on the lake
+      // covers part of the work, which is a different problem with a different
+      // cure. `items` is already loaded above.
+      const legNames = items.map((i) => i.serviceName).filter((n): n is string => !!n);
+      const componentNames = legNames.length > 1 ? legNames : undefined;
+      const dispatchInput = {
+        serviceName: header.serviceName as string,
+        componentNames,
+        lakeId: prop?.lake_id ?? null,
+      };
+      // THE ENGINE'S OWN PAPERWORK GATE, not a hand-rolled half of it. This
+      // checked `status` and `coi_expiry` and stopped — `canEverDo` also
+      // refuses a certificate that names somebody else's business (0152), so
+      // a crew the engine will never send could be counted here as covering
+      // the lake, and the real dead end would print nothing at all.
+      const routable = (crews ?? [])
+        .map((v) => ({
+          id: v.id as string,
+          status: (v.status as string) ?? "",
+          coiExpiry: (v.coi_expiry as string | null) ?? null,
+          coiNamedInsured: (v.coi_named_insured as string | null) ?? null,
+          company: (v.company as string | null) ?? null,
+          serviceTypes: (v.service_types as string[] | null) ?? [],
+          serviceLakes: (v.service_lakes as string[] | null) ?? [],
+        }))
+        .filter((c) => canEverDo(c, { ...dispatchInput, todayISO: today }));
+      // canEverDo has already applied the lake and leg tests, so a non-empty
+      // `routable` means capability is not the problem. The pool handed to
+      // capabilityNoFit is therefore the full active roster, judged on
+      // capability alone — exactly what decideDispatch hands it.
+      const capability = capabilityNoFit(
+        (crews ?? []).map((v) => ({
+          serviceTypes: (v.service_types as string[] | null) ?? [],
+          serviceLakes: (v.service_lakes as string[] | null) ?? [],
+        })),
+        dispatchInput,
+      );
+      if (capability) {
+        noCrewReason = NO_FIT_LABEL[capability];
+      } else if (routable.length === 0) {
+        // CREWS COVER THE WORK AND THE LAKE, AND NOT ONE OF THEM CAN BE SENT.
+        // Every gate `canEverDo` applies beyond capability is date-independent
+        // — still onboarding, suspended by ops, certificate lapsed or absent,
+        // certificate naming somebody else's business — so the cure is
+        // paperwork, never recruiting and never another date. This sentence
+        // had no reader at all before; the board makes the same distinction
+        // for the lapsed-COI half of it.
+        noCrewReason = NO_FIT_LABEL.no_routable_crew;
+      } else if (header.serviceId && !componentNames) {
+        // THE RATE DEAD END, WHICH IS THE ONE JOSH WILL HIT. A crew who is
+        // active, insured, ticked for the work and ticked for the lake is
+        // still dropped by `decideDispatch` as `no_qualifying_rate` if their
+        // card carries no positive number — and that sentence was written and
+        // selected by nothing. It is NOT an hour-to-hour question like a full
+        // day: a blank rate card stays blank until somebody fills it in.
+        //
+        // SINGLE-SERVICE JOBS ONLY. A package is priced leg by leg, so "has
+        // anybody priced this" is a different question with a different
+        // answer per leg — and guessing it off the header's one service would
+        // be the hand-rolled shortcut this whole block was rewritten to stop.
+        const rateRes = await admin
+          .from("vendor_rates")
+          .select("vendor_id, base, unit_rate, band_pricing")
+          .eq("service_id", header.serviceId as string)
+          .in("vendor_id", routable.map((c) => c.id));
+        const [rateRows, ratesFailed] = softRead("what those crews charge for this work", rateRes, null);
+        // An empty rate list reads as "nobody has priced this", which is the
+        // whole sentence. A dropped read must not say it.
+        if (!ratesFailed && !(rateRows ?? []).some((r) => hasRealRate(r as { base: number | null; unit_rate: number | null; band_pricing: PricingParams | null }))) {
+          noCrewReason = NO_FIT_LABEL.no_qualifying_rate;
+        }
+      }
+      // Anything else is a day or capacity question, which changes hour to
+      // hour — this file does not guess at it.
+    }
+  }
+
   return {
     header,
     items,
@@ -676,5 +857,8 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
     flags,
     confirmation,
     group,
+    noCrewReason,
+    releases,
+    releasesChecked: !releasesFailed,
   };
 }

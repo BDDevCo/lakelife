@@ -9,11 +9,13 @@
  */
 
 import { useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Stepper, ToggleChips } from "@/components/wizard-controls";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { toast } from "@/components/Toast";
 import { TosAgreeModal } from "@/components/TosAgreeModal";
+import { LAKE_GATE_SENTENCE, parkClause } from "@/lib/lake-gate";
 import {
   uploadVendorDoc,
   setServiceTypes,
@@ -22,6 +24,7 @@ import {
   setBaseLocation,
   finishOnboarding,
 } from "@/app/vendor/onboarding-actions";
+import { setPayoutAccount } from "@/app/vendor/bank-actions";
 import { activationGaps } from "@/app/vendor/onboarding-helpers";
 import type { MyVendor } from "@/app/vendor/data";
 
@@ -65,10 +68,23 @@ export function VendorOnboarding({
   vendor,
   activeServices,
   lakes = [],
+  unpriced,
+  parksByLake,
+  bankOnFile,
 }: {
   vendor: MyVendor;
   activeServices: CrewService[];
   lakes?: { id: string; name: string }[];
+  /**
+   * Work they ticked and never priced. `null` means WE COULD NOT CHECK — and
+   * the Go-live card is required to word that differently, because "everything
+   * is priced" is the sentence that keeps a crew sitting at home.
+   */
+  unpriced: string[] | null;
+  /** Park names keyed by lake id, derived from the parks table. `null` = read failed. */
+  parksByLake: Record<string, string[]> | null;
+  /** Have they told us where the money lands? `null` = we could not check. */
+  bankOnFile: boolean | null;
 }) {
   const router = useRouter();
 
@@ -157,6 +173,7 @@ export function VendorOnboarding({
           num={4}
           done={lakesDone}
           lakes={lakes}
+          parksByLake={parksByLake}
           selectedIds={vendor.service_lakes}
           onDone={() => router.refresh()}
         />
@@ -171,11 +188,26 @@ export function VendorOnboarding({
           done={baseDone}
           onDone={() => router.refresh()}
         />
+        {/* WHERE THE MONEY LANDS — asked BEFORE the first payout, not after.
+            Nothing on this platform used to ask a crew for a bank account at
+            all: the only door was a card on the Earnings screen, which a crew
+            has no reason to open until they are owed something. Meanwhile
+            `runMonthlyPayoutBatches` skips a crew with no `payout_accounts`
+            row entirely (`if (!acct) continue`), so the first they would learn
+            of it is a month-end that came and went.
+            NOT in activationGaps, on purpose and for the same reason rates
+            are not: the go-live gate is mechanical, and a bank account is a
+            business decision a crew may reasonably make on their own clock. */}
+        <BankStep
+          num={7}
+          onFile={bankOnFile}
+          onDone={() => router.refresh()}
+        />
       </div>
 
       <div style={{ marginTop: 18 }}>
         {readyToGoLive ? (
-          <GoLiveCard onDone={() => router.refresh()} />
+          <GoLiveCard unpriced={unpriced} onDone={() => router.refresh()} />
         ) : (
           <div className="ll-card ll-card-pad">
             <span className="ll-pill warn">Almost there</span>
@@ -437,16 +469,28 @@ function ServiceStep({
   );
 }
 
+/**
+ * "PRETTY LAKE INCLUDES THE HAVEN" — and every sentence like it, derived.
+ *
+ * THE COPY MOVED TO lib/lake-gate, because this was not the only lake door:
+ * /vendor/availability is where a crew who has already gone live changes the
+ * answer, and it kept the old sentence. Re-exported here so the name and the
+ * tests that pin it do not move.
+ */
+export { parkNote } from "@/lib/lake-gate";
+
 function LakeStep({
   num,
   done,
   lakes,
+  parksByLake,
   selectedIds,
   onDone,
 }: {
   num: number;
   done: boolean;
   lakes: { id: string; name: string }[];
+  parksByLake: Record<string, string[]> | null;
   selectedIds: string[];
   onDone: () => void;
 }) {
@@ -458,6 +502,7 @@ function LakeStep({
 
   const [picked, setPicked] = useState<string[]>(initialNames);
   const [pending, startTransition] = useTransition();
+  const parks = parkClause(lakes, parksByLake);
 
   function toggle(name: string) {
     setPicked((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
@@ -490,8 +535,12 @@ function LakeStep({
         {done && <span className="ll-pill ok">Saved ✓</span>}
       </div>
 
-      <p className="mut" style={{ fontSize: 13, margin: "0 0 10px" }}>
-        Tap every lake your crew works.
+      {/* THE COPY IS THE OTHER HALF OF THE GATE. "Tap every lake your crew
+          works" reads as a preference; it is a filter on every job offer you
+          will ever see, and a lake left untapped fails silently. */}
+      <p className="mut" style={{ fontSize: 13, margin: "0 0 10px", lineHeight: 1.5 }}>
+        Tap every lake your crew works. {LAKE_GATE_SENTENCE}
+        {parks && <>{" "}{parks}</>}
       </p>
 
       {lakes.length === 0 ? (
@@ -614,9 +663,167 @@ function BaseStep({
   );
 }
 
-function GoLiveCard({ onDone }: { onDone: () => void }) {
+/**
+ * WHERE SHOULD THE MONEY LAND?
+ *
+ * Nothing asked a crew this until they went looking on their own Earnings
+ * screen — which a crew has no reason to open before they are owed something.
+ * By then a month-end may already have passed them over: the batch runner
+ * reads `payout_accounts` and does `if (!acct) continue`.
+ *
+ * DELIBERATELY NOT A GO-LIVE GATE (it is absent from `activationGaps`). Rates
+ * are not one either, for the same stated reason: the gate is mechanical. The
+ * cure for a missing bank account is a sentence on the screen they already
+ * open, not a locked door.
+ *
+ * Its own small form rather than a reuse of VendorPayouts' BankCard, because
+ * that card is wrapped in the released/ready/early-pull money furniture a crew
+ * with zero completed jobs has no business reading.
+ */
+function BankStep({
+  num,
+  onFile,
+  onDone,
+}: {
+  num: number;
+  /** null = we could not check. Never render that as "no bank on file". */
+  onFile: boolean | null;
+  onDone: () => void;
+}) {
+  const [bankName, setBankName] = useState("");
+  const [routing, setRouting] = useState("");
+  const [account, setAccount] = useState("");
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+
+  function save() {
+    startTransition(async () => {
+      const res = await setPayoutAccount({ bankName, routing, account });
+      if (!res.ok) {
+        toast.err(res.error ?? "Couldn't save that bank info.");
+        return;
+      }
+      setBankName(""); setRouting(""); setAccount("");
+      setOpen(false);
+      toast("Bank on file — encrypted and ready. 🌊");
+      onDone();
+    });
+  }
+
+  const editing = open || onFile === false;
+
+  return (
+    <div className="ll-card ll-card-pad">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <StepBadge num={num} done={onFile === true} />
+        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>Where should the money land?</h3>
+        {onFile === true ? (
+          <span className="ll-pill ok">On file ✓</span>
+        ) : (
+          <span className="ll-pill slate">Optional</span>
+        )}
+      </div>
+
+      <p className="mut" style={{ fontSize: 13, margin: "0 0 10px", lineHeight: 1.5 }}>
+        {onFile === null
+          ? "We couldn't check whether we have your bank details just now. Payouts only go out to an account on file, so it's worth a look on your Earnings screen."
+          : onFile
+            ? "Your payouts go here. Encrypted at rest — we only ever show the last 4. You can change it any time on your Earnings screen."
+            : "Optional now, but a payout can only go to an account on file — a month-end skips a crew who hasn't added one. Encrypted at rest; we only ever show the last 4."}
+      </p>
+
+      {onFile === true && !open && (
+        <button className="ll-btn ghost sm" onClick={() => setOpen(true)} style={{ minHeight: 44 }}>
+          Change
+        </button>
+      )}
+
+      {editing && (
+        <>
+          <div style={{ display: "grid", gap: 10 }}>
+            <label className="ll-field" style={{ display: "block" }}>
+              <span className="mut" style={{ fontSize: 13 }}>Bank name</span>
+              <input
+                value={bankName}
+                onChange={(e) => setBankName(e.target.value)}
+                placeholder="Lake Community Bank"
+                style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
+              />
+            </label>
+            <label className="ll-field" style={{ display: "block" }}>
+              <span className="mut" style={{ fontSize: 13 }}>Routing number (9 digits)</span>
+              <input
+                inputMode="numeric"
+                value={routing}
+                onChange={(e) => setRouting(e.target.value)}
+                placeholder="•••••••••"
+                maxLength={9}
+                style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
+              />
+            </label>
+            <label className="ll-field" style={{ display: "block" }}>
+              <span className="mut" style={{ fontSize: 13 }}>Account number</span>
+              <input
+                inputMode="numeric"
+                value={account}
+                onChange={(e) => setAccount(e.target.value)}
+                placeholder="••••••••"
+                style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
+              />
+            </label>
+          </div>
+          <button
+            className="ll-btn gold"
+            onClick={save}
+            disabled={pending}
+            style={{ marginTop: 12, width: "100%", minHeight: 48 }}
+          >
+            {pending ? "Saving…" : "Save bank info"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * THE SENTENCE BEFORE THE BUTTON, AND WHAT MAKES IT TRUE.
+ *
+ * "Flip yourself on and jobs start routing to your crew" was told to a crew
+ * who will be offered nothing. Go-live never asks for a rate; `decideDispatch`
+ * refuses a crew with no positive rate (`no_qualifying_rate`) and `canClaim`
+ * refuses with `no_rate`, so a crew who finishes all six cards and flips
+ * themselves on is offered zero work and every board card refuses them. Under
+ * crew pricing it is sharper still: the crew's own card IS the price, so a
+ * crew with no card cannot even be listed for a buyer to choose.
+ *
+ * Exported and pure so a test can collapse the count both ways and require the
+ * copy to change — the paragraph IS the fix, and a test that only checks the
+ * all-priced branch pins nothing.
+ */
+export function goLiveLine(unpriced: string[] | null): string {
+  if (unpriced === null) {
+    // A FAILED READ MUST NOT RENDER AS "EVERYTHING IS PRICED". That sentence
+    // is the reassuring one, and it is the one that keeps a crew at home.
+    return (
+      "We couldn't check your rates just now. We never offer you work you haven't " +
+      "priced, and a card you saved blank counts as unpriced — so take a look at My " +
+      "rates after you flip on."
+    );
+  }
+  if (unpriced.length === 0) {
+    return "Flip yourself on and jobs for the work you've priced start reaching you — no waiting on us.";
+  }
+  const list = unpriced.join(", ");
+  return unpriced.length === 1
+    ? `You can flip yourself on now — but you haven't set a rate for ${list}, and we never offer you work you haven't priced. Set it on My rates, before or after you go live.`
+    : `You can flip yourself on now — but you haven't set a rate for ${list}, and we never offer you work you haven't priced. Set them on My rates, before or after you go live.`;
+}
+
+function GoLiveCard({ unpriced, onDone }: { unpriced: string[] | null; onDone: () => void }) {
   const [pending, startTransition] = useTransition();
   const [tosOpen, setTosOpen] = useState(false);
+  const everythingPriced = unpriced !== null && unpriced.length === 0;
 
   function go(tosAccepted?: boolean) {
     startTransition(async () => {
@@ -643,9 +850,14 @@ function GoLiveCard({ onDone }: { onDone: () => void }) {
       <p style={{ fontSize: 18, fontWeight: 800, margin: "10px 0 4px" }}>
         You&apos;re ready to go live 🌊
       </p>
-      <p className="mut" style={{ fontSize: 14, marginBottom: 14 }}>
-        Flip yourself on and jobs start routing to your crew — no waiting on us.
+      <p className="mut" style={{ fontSize: 14, marginBottom: everythingPriced ? 14 : 10, lineHeight: 1.5 }}>
+        {goLiveLine(unpriced)}
       </p>
+      {!everythingPriced && (
+        <p style={{ marginBottom: 14 }}>
+          <Link className="ll-btn ghost sm" href="/vendor/rates">Set my rates</Link>
+        </p>
+      )}
       <button
         className="ll-btn gold"
         onClick={() => go()}

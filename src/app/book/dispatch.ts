@@ -448,6 +448,18 @@ export interface AssignOutcome {
    * be a wait that can never end.
    */
   pricedToZero?: boolean;
+  /**
+   * A CREW WAS FOUND AND REFUSED ANYWAY, BECAUSE THEY WOULD REPRICE IT (0174).
+   *
+   * The guard below leaves the job 'requested' when the winning crew's card
+   * prices it at a different number from the one the customer already agreed
+   * to. That is not "no crew fits" — it is the opposite, and it needs the
+   * opposite action from ops: a conversation about the price, not recruiting.
+   * The decision it returns carries no `reasonNoFit`, so without this flag the
+   * one screen that asks dispatch live (`retryAssign`) had nothing to say but
+   * "recruit one for this lake".
+   */
+  priceHeld?: boolean;
 }
 
 /**
@@ -747,7 +759,7 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
       `[held] job ${jobId}: crew ${winnerId} would price it at ${decision.result.customerPrice}, ` +
         `and the customer agreed to ${agreedPrice}. Left unassigned at the agreed price.`,
     );
-    return { assigned: false, decision: { ok: false }, pricedToZero };
+    return { assigned: false, decision: { ok: false }, pricedToZero, priceHeld: true };
   }
 
   // DID THIS CALL FREEZE THE PRICE? Only when the service is crew-priced AND

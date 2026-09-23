@@ -160,17 +160,49 @@ describe("statusLabel", () => {
     // The old label promised a Friday. `runMonthlyPayoutBatches` gates on
     // `isLastDayOfMonth`; there is no Friday cadence anywhere in the system,
     // and telling a crew the wrong week for their own money loses crews.
-    expect(statusLabel("released")).toBe("In the next month-end payout");
-    expect(statusLabel("pending")).toBe("Awaiting release");
+    expect(statusLabel("released", true)).toBe("In the next month-end payout");
+    expect(statusLabel("pending", true)).toBe("Awaiting release");
   });
 
   it("never prints a raw database word at a crew", () => {
     // `refund-core` writes 'clawed'. It used to fall straight through and
     // appear as the literal word — on the earnings screen AND in the CSV that
     // goes to the crew's bookkeeper.
-    expect(statusLabel("clawed")).toMatch(/refund went back/);
-    expect(statusLabel("clawed")).not.toContain("clawed");
-    expect(statusLabel("something_new")).toBe("Being worked out");
+    expect(statusLabel("clawed", true)).toMatch(/refund went back/);
+    expect(statusLabel("clawed", true)).not.toContain("clawed");
+    expect(statusLabel("something_new", true)).toBe("Being worked out");
+  });
+
+  /**
+   * THE MONTH-END BATCH SKIPS A CREW WITH NO BANK ACCOUNT — `if (!acct)
+   * continue` in runMonthlyPayoutBatches — while this label promised every
+   * one of them "In the next month-end payout", on the screen, on the printed
+   * statement and in the bookkeeper's CSV.
+   *
+   * Collapsed all three ways: a test that only checks `false` passes against a
+   * label that says the same thing to everybody.
+   */
+  it("does not promise a payout to a crew we cannot pay", () => {
+    expect(statusLabel("released", false)).not.toContain("month-end payout");
+    expect(statusLabel("released", false)).toMatch(/bank details/i);
+  });
+
+  it("says something DIFFERENT once the bank is on file", () => {
+    expect(statusLabel("released", true)).not.toBe(statusLabel("released", false));
+    expect(statusLabel("released", true)).toBe("In the next month-end payout");
+  });
+
+  it("an unchecked bank is neither promise nor accusation", () => {
+    const unknown = statusLabel("released", null);
+    expect(unknown).not.toBe(statusLabel("released", true));
+    expect(unknown).not.toBe(statusLabel("released", false));
+    // It must not tell a crew whose details ARE on file to go and re-enter them.
+    expect(unknown).not.toMatch(/waiting on your bank/i);
+  });
+
+  it("only the released row changes — a paid one is paid whatever the bank says", () => {
+    expect(statusLabel("paid", false)).toBe("Paid");
+    expect(statusLabel("held", false)).toMatch(/make-it-right/);
   });
 });
 
@@ -373,9 +405,9 @@ describe("reportedPayoutStatus — the batch is where the money moving is record
   });
 
   it("and those statuses now reach a label that means something", () => {
-    expect(statusLabel(reportedPayoutStatus("released", "paid"))).toBe("Paid");
-    expect(statusLabel(reportedPayoutStatus("released", "queued"))).toBe("In a payout being sent");
-    expect(statusLabel(reportedPayoutStatus("released", null))).toBe("In the next month-end payout");
+    expect(statusLabel(reportedPayoutStatus("released", "paid"), true)).toBe("Paid");
+    expect(statusLabel(reportedPayoutStatus("released", "queued"), true)).toBe("In a payout being sent");
+    expect(statusLabel(reportedPayoutStatus("released", null), true)).toBe("In the next month-end payout");
   });
 });
 

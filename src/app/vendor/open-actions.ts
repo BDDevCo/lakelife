@@ -430,6 +430,33 @@ export async function claimJob(jobId: string): Promise<ClaimResult> {
     ? { customer_price: billed, crew_quote: quote, fee_customer_pct: fee.customerPct, fee_crew_pct: fee.crewPct }
     : {};
 
+  // THE AGREED-PRICE GUARD, IN THE SECOND DOORWAY.
+  //
+  // `autoAssignJob` refuses to re-assign a crew-priced job at a number the
+  // customer did not agree to (`if (agreedPrice > 0 && …)`), and says so at
+  // length. THIS door had no such guard: it wrote `billed` unconditionally.
+  // It never bit, because the only crew-priced job that could sit on the board
+  // carrying a price was one whose price a release had already nulled — so
+  // there was never a figure to disagree with.
+  //
+  // `releaseJob` changed that deliberately: handing a job back no longer wipes
+  // the price a customer was told, because wiping it disarmed the engine's
+  // guard. That makes THIS the doorway where a different crew could quietly
+  // rewrite the number, and a rule in one doorway of two is not a rule. The
+  // customer is told, in the release email, that the job is looking for a crew
+  // AT THE PRICE THEY AGREED TO; this is what makes that sentence true.
+  //
+  // A crew whose card lands on the same number still takes it — nothing the
+  // customer agreed to has changed.
+  if (fee && !unpriced && Math.abs(billed - priceAtRead) > 0.005) {
+    return {
+      ok: false,
+      error:
+        "This one already carries a price the customer agreed to, and your rate card " +
+        "doesn't match it. We can't change what they were quoted without asking them.",
+    };
+  }
+
   // THE CLAIM — atomic, first valid claim wins. Price-aware: if a scarcity
   // offer bumped the customer price mid-flight, this claim loses cleanly
   // instead of writing a stale margin (hardens the pre-existing race too).

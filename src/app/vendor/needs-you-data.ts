@@ -3,6 +3,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead } from "@/lib/must-read";
 import { isCoolingDown } from "@/lib/lake-standing";
 import { getPlatformSettings } from "@/lib/settings";
+import { hasRealRate } from "@/app/vendor/rates-helpers";
+import type { PricingParams } from "@/lib/pricing";
 
 /**
  * WHAT NEEDS THIS CREW, ON THE SCREEN THEY ALREADY OPEN.
@@ -95,7 +97,9 @@ export async function getNeedsYou(vendorId: string | null): Promise<NeedsYou> {
     // catalogue is what joins them. All three are read together because all
     // three are needed to answer one question.
     admin.from("vendors").select("service_types").eq("id", vendorId).maybeSingle(),
-    admin.from("vendor_rates").select("service_id").eq("vendor_id", vendorId),
+    // THE AMOUNTS, not just the id: a rate row of zeros is not a rate, and
+    // dispatch refuses a crew whose rate is not > 0 (`no_qualifying_rate`).
+    admin.from("vendor_rates").select("service_id, base, unit_rate, band_pricing").eq("vendor_id", vendorId),
     admin.from("services").select("id, name").eq("active", true),
   ]);
 
@@ -159,7 +163,15 @@ export async function getNeedsYou(vendorId: string | null): Promise<NeedsYou> {
   // WORK THEY TICKED AND NEVER PRICED. Ordered as the catalogue orders it, so
   // the same crew sees the same list in the same order every morning.
   const idByName = new Map((catalogue ?? []).map((s) => [s.name as string, s.id as string]));
-  const priced = new Set((myRates ?? []).map((r) => r.service_id as string));
+  // ONE PREDICATE, FOUR DOORWAYS (rates-helpers.hasRealRate). This card, the
+  // go-live card, the rate screen's "Rate set ✓" pill and the ops coverage
+  // board all used to answer "has this crew priced it?" differently — and only
+  // the ops one matched what dispatch actually requires.
+  const priced = new Set(
+    (myRates ?? [])
+      .filter((r) => hasRealRate(r as { base: number | null; unit_rate: number | null; band_pricing: PricingParams | null }))
+      .map((r) => r.service_id as string),
+  );
   const ticked: string[] = (me?.service_types as string[] | null) ?? [];
   const unpriced = ticked.filter((name) => {
     const id = idByName.get(name);

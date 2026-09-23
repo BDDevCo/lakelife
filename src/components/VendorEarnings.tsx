@@ -35,10 +35,17 @@ export function VendorEarnings({
   rows,
   totals,
   today,
+  bankOnFile,
 }: {
   rows: EarningRow[];
   totals: EarningsTotals;
   today: string; // "YYYY-MM-DD" at the lakes (passed from the server)
+  /**
+   * Do we know where to send this money? The month-end batch does
+   * `if (!acct) continue`, so every "In the next month-end payout" below is
+   * conditional on this. `null` = we could not check, which is neither.
+   */
+  bankOnFile: boolean | null;
 }) {
   const [period, setPeriod] = useState<PeriodKey>("ytd");
   const ranges = useMemo(() => periodRanges(today), [today]);
@@ -72,6 +79,18 @@ export function VendorEarnings({
         month-end payout. You can pull released money earlier from the card below,
         for a fee. These are your take-home numbers — yours to keep.
       </p>
+      {/* THE PARAGRAPH ABOVE PROMISES A PAYOUT THE MACHINE WILL NOT MAKE, for
+          a crew with no bank account on file — `runMonthlyPayoutBatches` skips
+          them outright. The card that said so ("Add your bank to unlock
+          payouts") only rendered once money was already ready to pull, so the
+          contradiction sat on this screen for a whole season of earning. */}
+      {bankOnFile === false && (
+        <p style={{ fontSize: 13.5, fontWeight: 700, color: "var(--warn)", marginTop: -8, marginBottom: 16, maxWidth: 560, lineHeight: 1.5 }}>
+          We don&apos;t have your bank details yet, so nothing can be sent — not at
+          month-end, not early. Add them in the card below and your released pay goes
+          out with the next batch.
+        </p>
+      )}
       {feeSummary && (
         <p className="mut" style={{ fontSize: 13, marginTop: -8, marginBottom: 16, maxWidth: 560 }}>
           {feeSummary}
@@ -157,7 +176,7 @@ export function VendorEarnings({
               </div>
               <div className="ll-card" style={{ overflow: "hidden" }}>
                 {g.rows.map((r, i) => (
-                  <JobRow key={r.id} row={r} first={i === 0} />
+                  <JobRow key={r.id} row={r} first={i === 0} bankOnFile={bankOnFile} />
                 ))}
               </div>
             </section>
@@ -247,7 +266,7 @@ function TipsToPassOn({
   );
 }
 
-function JobRow({ row, first }: { row: EarningRow; first: boolean }) {
+function JobRow({ row, first, bankOnFile }: { row: EarningRow; first: boolean; bankOnFile: boolean | null }) {
   const released = row.status === "released";
   const feeLine = payoutFeeLine(row);
   return (
@@ -274,7 +293,7 @@ function JobRow({ row, first }: { row: EarningRow; first: boolean }) {
       <div style={{ textAlign: "right" }}>
         <div style={{ fontSize: 15, fontWeight: 800 }}>{formatCurrency(row.amount)}</div>
         <span className={`ll-pill ${released ? "ok" : "slate"}`} style={{ marginTop: 3 }}>
-          {statusLabel(row.status)}
+          {statusLabel(row.status, bankOnFile)}
         </span>
       </div>
     </div>

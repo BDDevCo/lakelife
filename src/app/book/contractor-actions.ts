@@ -142,12 +142,15 @@ export async function inviteMyContractor(company: string, email: string): Promis
     subject: `${ownerName} wants to keep working with you — on LakeLife`,
     html: html`<p>Hi ${co},</p>
 <p><b>${ownerName}</b> asked to keep you as their crew through LakeLife — you keep your customer, we just handle the scheduling, invoicing and payment behind the scenes.</p>
-<p>Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice. Joining is free.</p>
-<p><b>3 steps:</b></p>
+<p>Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice. Released pay goes to the bank account you give us in step 5, so put one in before your first job. Joining is free.</p>
+<p><b>6 steps:</b></p>
 <ol>
 <li>Create your account at <a href="${site}">${site}</a> — use THIS email (${addr}).</li>
 <li>Upload your insurance certificate (COI) and W-9.</li>
-<li>Set what you charge — your rate is yours to set.</li>
+<li>Tell us what work you do, which lakes you cover, and how many jobs a day you can take. A lake you don't tick is one you never hear about — and the mobile-home and RV parks sit on those same lakes.</li>
+<li>Set what you charge — your rate is yours to set, and we never offer you a job you haven't priced. A blank card counts as unpriced.</li>
+<li>Add your bank details, so a payout has somewhere to land.</li>
+<li>Tap <b>Go live</b>. Jobs for the work you've priced start reaching you from that moment.</li>
 </ol>
 <p>You'll be set as ${ownerName}'s preferred crew, so their jobs come to you first. 🌊</p>`,
   });

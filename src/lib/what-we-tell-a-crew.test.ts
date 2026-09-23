@@ -100,6 +100,109 @@ describe("we don't promise money on a clock we don't control", () => {
       ).not.toMatch(/payouts? releases? the moment/i);
     });
   }
+
+  /**
+   * THE GUARD WAS THE INSTANCE, SO THE CLASS WALKED STRAIGHT BACK IN.
+   *
+   * The regex above pins one phrasing. A later package added "Released pay
+   * goes out in the month-end batch" to BOTH invitations — a different
+   * sentence making the identical promise, and it sailed past a test written
+   * against its own rule. Widened to the thing that is actually forbidden: a
+   * WHEN. `LAKELIFE_PAYMENTS_LIVE` is unset, ACH is still blocked on the
+   * processor, and 0 of 81 texts have delivered since July — we control none
+   * of the clocks an invitation could name.
+   *
+   * What a crew may be told is unchanged and is the whole truth they need:
+   * photo-verifying a job releases the payout, and a payout goes to the bank
+   * account on file. Neither dates anything.
+   */
+  const NAMES_A_PAYOUT_CLOCK =
+    /(month-?end|end of (the )?month|same day|next day|within \d|in \d+ (business )?days?|weekly|fortnight|every (friday|monday|week|month)|by (friday|monday|the \d))[^.]{0,60}(pay|payout|batch|transfer|deposit)|(pay|payout|batch|transfer|deposit)[^.]{0,60}(month-?end|end of (the )?month|same day|next day|within \d|in \d+ (business )?days?|weekly|every (friday|monday|week|month))/i;
+
+  for (const { file } of INVITES) {
+    it(`${file} names no date, batch or cadence for the money`, () => {
+      expect(
+        read(file),
+        `This invitation tells a crew WHEN their money moves. Nothing here ` +
+          `controls that clock — payments are not live, ACH is blocked on the ` +
+          `processor, and a crew who joins on a promised cadence and doesn't ` +
+          `get it is the most expensive kind of unhappy. Say what photo ` +
+          `verification does, and that a payout needs a bank account on file.`,
+      ).not.toMatch(NAMES_A_PAYOUT_CLOCK);
+    });
+  }
+
+  it("the widened guard would have caught the sentence that got past the narrow one", () => {
+    // NON-VACUITY, PINNED. If NAMES_A_PAYOUT_CLOCK is ever loosened back to
+    // something this string slips through, this fails — the test cannot be
+    // reduced to "it matches nothing".
+    expect("Released pay goes out in the month-end batch, to the bank account you give us.")
+      .toMatch(NAMES_A_PAYOUT_CLOCK);
+    // And the sentence we DO allow must still be allowed, or the guard just
+    // forbids talking about money at all.
+    expect("Released pay goes to the bank account you give us in step 5.")
+      .not.toMatch(NAMES_A_PAYOUT_CLOCK);
+  });
+});
+
+describe("a step number in the prose matches the list underneath it", () => {
+  /**
+   * THE FIRST THING JOSH READS, NAMING THE WRONG STEP.
+   *
+   * A bank step was inserted into the ops invitation's list and the sentence
+   * above it — "to the bank account you give us in step 4" — was not
+   * renumbered. Step 4 in that list is the rate card; the bank is 5. The
+   * identical sentence in the homeowner's invitation was correct, because
+   * THAT list happens to have the bank at 4 — which is exactly how a pasted
+   * cross-reference goes wrong in only one of two places.
+   *
+   * Checked against the <li> items themselves rather than a number written
+   * down here, so inserting another step fails this instead of quietly
+   * re-breaking it.
+   */
+  for (const { file, who } of INVITES) {
+    it(`${file} — ${who}`, () => {
+      const s = read(file);
+      const items = [...s.matchAll(/<li>([\s\S]*?)<\/li>/g)].map((m) => m[1]);
+      expect(items.length, "no numbered list found — this scanner is measuring nothing").toBeGreaterThan(3);
+      for (const m of s.matchAll(/step (\d+)/gi)) {
+        const n = Number(m[1]);
+        expect(n, `${file} points at step ${n}, and the list has ${items.length} items`)
+          .toBeLessThanOrEqual(items.length);
+        // The sentences that name a step all name the BANK step today. Pin
+        // that the item they point at is in fact about the bank, which is the
+        // half a bare range check would miss.
+        expect(
+          items[n - 1],
+          `"step ${n}" in ${file} points at an item that is not the bank step:\n${items[n - 1]}`,
+        ).toMatch(/bank/i);
+      }
+    });
+  }
+
+  it("and the list's own count matches the '<n> steps:' heading above it", () => {
+    // "4 steps:" sat above a list that omitted lakes, capacity and the Go live
+    // button — the exact bug crews-invite.ts carries a paragraph about having
+    // fixed, still live in the file that was not fixed.
+    for (const { file } of INVITES) {
+      const s = read(file);
+      const items = [...s.matchAll(/<li>[\s\S]*?<\/li>/g)].length;
+      const heading = s.match(/<b>(\d+) steps:<\/b>/);
+      if (!heading) continue;
+      expect(Number(heading[1]), `${file} promises ${heading[1]} steps and lists ${items}`).toBe(items);
+    }
+  });
+
+  it("neither invitation leaves out a step that gates going live", () => {
+    // A list that never mentions the lakes is the finding this package began
+    // with: an untapped lake is silent, and a crew who follows the email to
+    // the letter never learns that.
+    for (const { file } of INVITES) {
+      const s = read(file);
+      expect(s, `${file} never mentions which lakes the crew covers`).toMatch(/lakes?\b/i);
+      expect(s, `${file} never mentions the Go live button`).toMatch(/go live/i);
+    }
+  });
 });
 
 describe("an invitation IS the email, so a refused send may never read as sent", () => {

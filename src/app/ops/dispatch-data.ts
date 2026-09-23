@@ -1,6 +1,7 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import { expiryActionFor } from "@/lib/waitlist";
+import { noCrewOnLake, NO_FIT_LABEL } from "@/lib/dispatch";
 import { todayLakeDate } from "@/lib/booking";
 import { assertOps } from "./data";
 import { mustRead } from "@/lib/must-read";
@@ -146,8 +147,12 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
     // this label never disagrees with the engine's verdict).
     const doesSvc = (v: { service_types?: string[] | null }) =>
       !!serviceName && ((v.service_types as string[]) ?? []).includes(serviceName);
+    // THE SAME MEMBERSHIP TEST THE ENGINE RUNS, not a second copy of it.
+    // `noCrewOnLake` is what decideDispatch itself calls to return
+    // `no_crew_on_lake`, so this board can no longer drift from the verdict it
+    // is explaining. (It answers the negative, hence the `!`.)
     const onLakeOf = (v: { service_lakes?: string[] | null }) =>
-      !prop?.lake_id || (((v.service_lakes ?? []) as string[]).includes(prop.lake_id as string));
+      !noCrewOnLake([{ serviceLakes: (v.service_lakes as string[]) ?? [] }], prop?.lake_id ?? null);
     const insuredForService = insured.filter(doesSvc);
     // Uninsured-but-otherwise-fitting crews mean the unblock is COI renewal,
     // not recruiting — say so instead of sending ops recruiting for nothing.
@@ -160,7 +165,10 @@ export async function getNeedsAttention(): Promise<NeedsAttentionJob[]> {
         : !insuredForService.some(onLakeOf)
           ? lapsedWouldFit
             ? "A crew fits but their insurance lapsed — COI renewal is the unblock"
-            : `No crew serves ${lake?.name ?? "this lake"} yet — recruiting is the unblock`
+            // ONE HOME FOR THE SENTENCE (lib/dispatch NO_FIT_LABEL), with the
+            // lake's own name in front of it — the board is a list and "this
+            // lake" is useless in a list of lakes.
+            : `${lake?.name ?? "This lake"}: ${NO_FIT_LABEL.no_crew_on_lake}`
           : "All crews are full or below the margin floor";
 
     const preferred_vendor = prop?.preferred_vendor ?? null;

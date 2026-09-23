@@ -74,7 +74,14 @@ describe("rule 2 — a skip reaches the person who reads the email", () => {
     // moves a price a customer has already been quoted, and when it cannot
     // (a crew-priced service has no menu to roll to) the job keeps its
     // same-day premium until a person is told.
-    for (const step of ["feeReconcile", "referrals", "payoutBatch", "monthlyPayouts", "rushFallbacks"]) {
+    // `noShows` belongs on this list for the same reason: its skips are the
+    // only thing that says a crew photographed a job and never tapped
+    // complete — nothing is invoiced, charged or paid until they do, and
+    // NOBODY at LakeLife can clear it for them (completeJob refuses anybody
+    // but the crew). Delete the noteSkips line and the line disappears from
+    // the digest again with every other test still green, which is exactly
+    // how it was silent in the first place.
+    for (const step of ["feeReconcile", "referrals", "payoutBatch", "monthlyPayouts", "rushFallbacks", "noShows"]) {
       expect(s, `${step} skips never reach the digest`).toMatch(
         new RegExp(`noteSkips\\("${step}"`),
       );

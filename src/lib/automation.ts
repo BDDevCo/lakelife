@@ -1333,13 +1333,15 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number; s
   const skipped: string[] = [];
   const stale = mustRead("yesterday's still-scheduled jobs", await admin
     .from("jobs")
-    .select("id, vendor_id, property_id, date, group_id, phase, held_at, no_show_at, stood_down_at, services(name), properties(address, owner_id, lake_id), vendors(user_id)")
+    .select("id, vendor_id, property_id, date, group_id, phase, held_at, no_show_at, stood_down_at, services(name), properties(address, owner_id, lake_id), vendors(user_id, company)")
     .lt("date", today)
     .in("status", ["scheduled", "in_progress"])
     .not("vendor_id", "is", null));
 
   const one = <T>(x: T | T[] | null | undefined): T | null => (x == null ? null : Array.isArray(x) ? x[0] ?? null : x);
   let flagged = 0;
+  /** Photographed-but-never-completed jobs seen tonight (the digest names 20). */
+  let stuckWithPhotos = 0;
 
   for (const j of stale ?? []) {
     // THE CREW DID TURN UP. THIS IS THE ONE THING THIS SWEEP MUST NOT GET
@@ -1369,7 +1371,37 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number; s
       skipped.push(`Job ${j.id} (${j.date}): couldn't count its photos, so we did NOT record a no-show — no strike, no release; tomorrow's sweep looks again.`);
       continue;
     }
-    if ((count ?? 0) > 0) continue; // photos on file → not a ghost, leave for ops
+    if ((count ?? 0) > 0) {
+      // A CREW WHO DID THE WORK AND FORGOT TO TAP COMPLETE WAS NEVER PAID.
+      //
+      // Photos on file means they turned up, so this is rightly not a ghost —
+      // but the `continue` was SILENT. No payout row, no invoice, no charge,
+      // nothing on their earnings screen, no email, no text, no digest line,
+      // no ops alert: the job sat in `scheduled` for ever, and the comment
+      // here said "leave for ops" to a nightly that told ops nothing and gave
+      // them no button. Ops STILL has no button — `completeJob` is the crew's
+      // action and refuses anybody else's session — so the line names the one
+      // person who can actually clear it, and how.
+      //
+      // Reaches a human through `noteSkips("noShows", noShows)` in the nightly
+      // route, which renders `skipped` into the digest ops reads each evening.
+      const who = (one(j.vendors) as { company?: string } | null)?.company ?? "their crew";
+      const what = (one(j.services) as { name?: string } | null)?.name ?? "the job";
+      // CAPPED, LIKE ITS SIBLING. Nothing clears these rows but the crew, so
+      // the same job reappears EVERY night until they tap complete — and an
+      // uncapped list of them would push the night's real failures off the
+      // bottom of the digest. `reconcileUnsettledJobs` caps at 20 and says how
+      // many it didn't name, for the same reason.
+      stuckWithPhotos++;
+      if (stuckWithPhotos <= 20) {
+        skipped.push(
+          `Job ${j.id} (${j.date}): ${what} has photos on file but was never marked complete, ` +
+          `so nothing has been invoiced, charged or paid. Not a no-show — no strike, no release. ` +
+          `Only the crew can clear it: ${who} → /vendor/schedule → the job → Mark complete.`,
+        );
+      }
+      continue;
+    }
 
     // CUSTODY GUARD, BEFORE ANYTHING IS RECORDED. A sticky spring splash whose
     // boat is physically in the assigned crew's barn is never released to the
@@ -1471,6 +1503,14 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number; s
         if (!told.reached && told.note) skipped.push(told.note);
       }
     }
+  }
+  // "…and N more" — the count is the honest part of a capped list; a digest
+  // that quietly names 20 of 40 is a digest that under-reports by half.
+  if (stuckWithPhotos > 20) {
+    skipped.push(
+      `…and ${stuckWithPhotos - 20} more job(s) photographed but never marked complete. ` +
+      `Each one is unpaid until its crew taps Mark complete.`,
+    );
   }
   return { ok: true, flagged, skipped };
 }

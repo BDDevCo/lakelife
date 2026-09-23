@@ -144,12 +144,13 @@ const MUST_FENCE: Record<string, string> = {
   "src/app/profile/setup/page.tsx": "the chips a customer picks their lake from",
   "src/app/vendor/onboarding-actions.ts": "the whitelist behind vendors.service_lakes",
   "src/app/ops/parks-actions.ts": "writes parks.lake_id, and the picker that feeds it",
-  "src/app/vendor/page.tsx": "crew lake picker",
-  "src/app/vendor/open/page.tsx": "crew lake picker",
-  "src/app/vendor/schedule/page.tsx": "crew lake picker",
-  "src/app/vendor/earnings/page.tsx": "crew lake picker",
+  // THE FIVE CREW PAGES THAT EACH HELD THEIR OWN COPY OF THIS READ now share
+  // one loader, so the fence has one place to hold rather than five. The old
+  // per-page entries are gone deliberately: a MUST_FENCE line for a file with
+  // no lake query in it is a rule guarding nothing, and it would have passed
+  // for ever without anybody noticing the read had moved.
+  "src/app/vendor/onboarding-props.ts": "crew lake picker — /vendor, /schedule, /open, /import, /earnings",
   "src/app/vendor/availability/page.tsx": "crew lake picker",
-  "src/app/vendor/import/page.tsx": "crew lake picker",
 };
 
 /**
@@ -199,12 +200,8 @@ const MAY_SEE_FIXTURES: Record<string, string> = {
   "src/app/parks/public-data.ts": "resolves a lake NAME by id for an already-active park; fencing here blanks a label rather than hiding a page",
   "src/app/profile/actions.ts": "a signed-in customer's own property",
   "src/app/profile/setup/page.tsx": "a signed-in customer picking their lake",
-  "src/app/vendor/page.tsx": "signed-in crew",
-  "src/app/vendor/open/page.tsx": "signed-in crew",
-  "src/app/vendor/schedule/page.tsx": "signed-in crew",
-  "src/app/vendor/earnings/page.tsx": "signed-in crew",
+
   "src/app/vendor/availability/page.tsx": "signed-in crew",
-  "src/app/vendor/import/page.tsx": "signed-in crew",
   // Reached only through a nested embed — `lakes(name)` on another table.
   // Every one is a signed-in surface: an owner's own property, a crew's own
   // board, or ops. None is public, which is why the fence still held while

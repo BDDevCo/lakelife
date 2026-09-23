@@ -3,10 +3,10 @@ import { TopBar } from "@/components/Brand";
 import { VendorNav } from "@/components/VendorNav";
 import { VendorEarnings } from "@/components/VendorEarnings";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
+import { loadOnboardingProps } from "../onboarding-props";
 import { VendorPayouts } from "@/components/VendorPayouts";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { mustRead } from "@/lib/must-read";
 import { todayLakeDate } from "@/lib/booking";
 import { getMyVendorId, getMyVendor } from "../data";
 import { getMyEarnings } from "../earnings-data";
@@ -56,19 +56,15 @@ export default async function VendorEarningsPage() {
   // Not active yet? Show the onboarding checklist instead of earnings.
   const vendor = await getMyVendor();
   if (vendor && vendor.status !== "active") {
-    const admin = createServiceClient();
-    // park_only travels with the name: onboarding groups the chips by it,
-    // because "Lawn mowing & trim" and "Park grounds mowing & trim" differ
-    // by one word and are two different jobs.
-    const svcs = mustRead("the service list", await admin.from("services").select("name, park_only").eq("active", true).order("name"));
-    const activeServices = (svcs ?? []).map((s) => ({ name: s.name as string, parkOnly: s.park_only === true }));
-    const lakeRows = mustRead("the lake list", await admin.from("lakes").select("id, name").eq("is_fixture", false).order("name"));
-    const lakes = (lakeRows ?? []).map((l) => ({ id: l.id as string, name: l.name as string }));
+    // ONE LOADER FOR ALL FIVE DOORWAYS. Each page used to roll its own pair of
+    // reads; the checklist now needs four facts, and four facts copied five
+    // times is four rules written into one doorway of five.
+    const props = await loadOnboardingProps(vendorId, user.id);
     return (
       <>
         <TopBar />
         <VendorNav />
-        <VendorOnboarding vendor={vendor} activeServices={activeServices} lakes={lakes} />
+        <VendorOnboarding vendor={vendor} {...props} />
       </>
     );
   }
@@ -94,7 +90,15 @@ export default async function VendorEarningsPage() {
     <>
       <TopBar />
       <VendorNav />
-      <VendorEarnings rows={earnings.rows} totals={earnings.totals} today={today} />
+      {/* The bank fact comes from the SAME read the card below uses, so the
+          status column and the card can never disagree about it. `null` only
+          when the payout picture could not be built at all. */}
+      <VendorEarnings
+        rows={earnings.rows}
+        totals={earnings.totals}
+        today={today}
+        bankOnFile={payoutState ? payoutState.hasAccount : null}
+      />
       {payoutState && <VendorPayouts state={payoutState} />}
       {referral && referral.earnedTotal > 0 && (
         <div className="wrap" style={{ paddingBottom: 24 }}>

@@ -83,7 +83,13 @@ export function MyCapacity({
       <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
         {capacity >= 1
           ? "The most stops we'll route to your crew in one day. Change it whenever your season does."
-          : "You haven't told us yet, so nothing is being routed to you. Set it and jobs start reaching you."}
+          // NOT "Set it and jobs start reaching you" — the last survivor of the
+          // phrase this package went looking for. A daily number is one of
+          // several gates: work you've ticked, lakes you've ticked, a rate
+          // with a real number on it, and the Go live button. Naming one of
+          // them as the unblock is how a crew ends up live, correct in their
+          // own eyes, and offered nothing.
+          : "You haven't told us yet, so nothing is being routed to you. Set it — it's one of the things we check before sending you work."}
       </p>
 
       <Stepper

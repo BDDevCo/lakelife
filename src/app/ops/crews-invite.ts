@@ -192,14 +192,15 @@ async function sendInvitation(
     to: email,
     subject: `${company} — you're invited to LakeLife crews`,
     html: html`<p>Hi ${company},</p>
-<p>LakeLife routes lake-home jobs on ${lakeList} to trusted local crews. Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice.</p>
+<p>LakeLife routes work on ${lakeList} — lake homes, and the mobile-home and RV parks on those lakes — to trusted local crews. Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice. Released pay goes to the bank account you give us in step 5, so put one in before your first job.</p>
 <p><b>You set yourself up — there's no queue and nobody to wait for:</b></p>
 <ol>
 <li>Create your account at <a href="${site}">${site}</a> — use THIS email address (${email}).</li>
 <li>Upload your insurance certificate (COI) and W-9.</li>
 <li>Tell us what work you do, which lakes you cover, and how many jobs a day you can take.</li>
-<li>Set what you charge for each kind of work — we never offer you a job you haven't priced.</li>
-<li>Tap <b>Go live</b>. Jobs start reaching you from that moment.</li>
+<li>Set what you charge for each kind of work — we never offer you a job you haven't priced, and a blank card counts as unpriced.</li>
+<li>Add your bank details, so a payout has somewhere to land. A payout only ever goes to an account on file.</li>
+<li>Tap <b>Go live</b>. Jobs for the work you've priced start reaching you from that moment.</li>
 </ol>
 <p>No insurance on file, no jobs — it's how we keep every dock covered. 🌊</p>`,
   });

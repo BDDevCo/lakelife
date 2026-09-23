@@ -8,6 +8,7 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { todayLakeDate } from "@/lib/booking";
 import { getMyVendorId } from "../../data";
 import { getCrewJobDetail } from "../../job-detail-data";
+import { hasPayoutAccount } from "../../bank-data";
 import { crewStatusLabel, disputeViewForCrew } from "@/lib/job-view";
 import { formatCurrency, statusLabel, earningsRowLabel } from "../../earnings-helpers";
 
@@ -118,6 +119,10 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
   }
 
   const today = todayLakeDate();
+  // "In the next month-end payout" beside this job's pay is a promise about a
+  // bank transfer, and `runMonthlyPayoutBatches` skips a crew with no account
+  // on file. Same rule, fourth doorway.
+  const bankOnFile = await hasPayoutAccount(user.id);
   const pill = STATUS_PILL[job.status] ?? "slate";
   const isCorrection = job.correctionOf != null;
   const dv = job.dispute
@@ -286,7 +291,7 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
                   <span>{earningsRowLabel({ kind: p.kind, service: job.serviceName })}</span>
                   <span style={{ textAlign: "right" }}>
                     <b>{formatCurrency(p.amount)}</b>
-                    <span className="mut" style={{ display: "block", fontSize: 11.5 }}>{statusLabel(p.status)}</span>
+                    <span className="mut" style={{ display: "block", fontSize: 11.5 }}>{statusLabel(p.status, bankOnFile)}</span>
                   </span>
                 </div>
               ))}
@@ -347,6 +352,8 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
           heldAt={job.heldAt}
           noShowAt={job.noShowAt}
           stoodDownAt={job.stoodDownAt}
+          date={job.date}
+          today={today}
         />
       </div>
 

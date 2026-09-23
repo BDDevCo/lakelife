@@ -2,6 +2,8 @@ import { termsGateForRouteHandler } from "@/lib/terms-gate-route";
 import { todayLakeDate } from "@/lib/booking";
 import { getMyEarningsFor } from "../../earnings-data";
 import { periodRanges, csvRow, statusLabel, earningsRowLabel } from "../../earnings-helpers";
+import { createClient } from "@/lib/supabase/server";
+import { hasPayoutAccount } from "../../bank-data";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +40,12 @@ export async function GET(req: Request) {
   const gate = await termsGateForRouteHandler("/vendor");
   if (gate) return gate;
 
+  // THE STATUS COLUMN IS A PROMISE ABOUT A BANK TRANSFER. The month-end batch
+  // skips a crew with no `payout_accounts` row, so "In the next month-end
+  // payout" in a bookkeeper's spreadsheet is false for exactly that crew.
+  const { data: { user } } = await (await createClient()).auth.getUser();
+  const bankOnFile = await hasPayoutAccount(user?.id ?? null);
+
   // A CREW COLUMN, because this file is what the company's bookkeeper opens
   // to split a lump payout. LakeLife pushes to ONE bank account, so without a
   // name beside each tip the office cannot tell who to hand it to.
@@ -50,7 +58,7 @@ export async function GET(req: Request) {
         r.address ?? "",
         r.crew ?? "",
         r.amount.toFixed(2), // plain number for bookkeeping import (no $) — negative for adjustments
-        statusLabel(r.status),
+        statusLabel(r.status, bankOnFile),
       ]),
     );
   }

@@ -21,6 +21,29 @@ export interface PayoutState {
   }>;
 }
 
+/**
+ * DO WE KNOW WHERE TO SEND THIS PERSON'S MONEY?
+ *
+ * `runMonthlyPayoutBatches` does `if (!acct) continue` — a crew with no
+ * `payout_accounts` row is skipped by the month-end batch entirely. Every
+ * screen that prints "In the next month-end payout" therefore has to know this
+ * fact or it is printing a promise the machine will not keep.
+ *
+ * Returns `null` when the read FAILED. Not `false`: "no bank on file" is an
+ * accusation about somebody's account, and a dropped connection has nothing to
+ * say about their account. Callers must word the three cases apart.
+ */
+export async function hasPayoutAccount(userId: string | null | undefined): Promise<boolean | null> {
+  if (!userId) return null;
+  const admin = createServiceClient();
+  const res = await admin.from("payout_accounts").select("user_id").eq("user_id", userId).maybeSingle();
+  if (res.error) {
+    console.error("[read failed] whether this crew has a bank account on file:", res.error);
+    return null;
+  }
+  return !!res.data;
+}
+
 /** The crew's payout picture — last4 only, never the encrypted blobs. */
 export async function getMyPayoutState(): Promise<PayoutState | null> {
   const supabase = await createClient();

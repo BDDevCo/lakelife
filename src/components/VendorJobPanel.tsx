@@ -15,7 +15,7 @@ import { navUrl } from "@/lib/navlink";
 import { toast } from "@/components/Toast";
 import { shotProgress } from "@/lib/shot-list";
 import { WalkAround } from "@/components/WalkAround";
-import { uploadJobPhoto, completeJob, submitFlag } from "@/app/vendor/actions";
+import { uploadJobPhoto, completeJob, submitFlag, releaseJob } from "@/app/vendor/actions";
 import { crewCureJob } from "@/app/vendor/job-detail-actions";
 import { FlagModal } from "@/components/VendorStopCard";
 import { photoGateLabel } from "@/lib/job-view";
@@ -62,6 +62,8 @@ export function CrewJobActions({
   heldAt,
   noShowAt,
   stoodDownAt,
+  date,
+  today,
 }: {
   jobId: string;
   address: string | null;
@@ -85,6 +87,11 @@ export function CrewJobActions({
   heldAt: string | null;
   noShowAt: string | null;
   stoodDownAt: string | null;
+  /** This visit's date (YYYY-MM-DD) and today at the lakes. Only a FUTURE job
+   *  can be handed back — releasing today's is a no-show, not notice, and
+   *  `releaseJob` refuses it server-side either way. */
+  date: string | null;
+  today: string;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -96,6 +103,10 @@ export function CrewJobActions({
   const [completing, setCompleting] = useState(false);
   const [done, setDone] = useState(status === "complete" || status === "paid");
   const [flagOpen, setFlagOpen] = useState(false);
+  const [releaseOpen, setReleaseOpen] = useState(false);
+  const [releaseWhy, setReleaseWhy] = useState("");
+  const [releasing, setReleasing] = useState(false);
+  const [released, setReleased] = useState(false);
 
   async function onFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -159,6 +170,24 @@ export function CrewJobActions({
     router.refresh();
   }
 
+  async function handBack() {
+    if (releasing) return;
+    setReleasing(true);
+    const res = await releaseJob(jobId, releaseWhy);
+    setReleasing(false);
+    if (!res.ok) {
+      toast.err(res.error ?? "Couldn't hand that job back.");
+      return;
+    }
+    setReleased(true);
+    setReleaseOpen(false);
+    // "THE OWNER HAS BEEN TOLD" WAS SAID UNCONDITIONALLY while the server
+    // discarded the send's own answer. It answers now, and when it could not
+    // reach them the crew hears that instead of a reassurance.
+    toast(res.note ?? "Handed back. It's off your schedule and the owner has been told. 🌊");
+    router.refresh();
+  }
+
   const enough = minPhotos <= 0 || count >= minPhotos;
   const progress = shotProgress(photoSlots, shot, count, minPhotos);
 
@@ -171,6 +200,13 @@ export function CrewJobActions({
     stood_down_at: stoodDownAt,
   });
   const ended = !!noShowAt || !!stoodDownAt;
+
+  // FUTURE-DATED ONLY, drawn the same way the server decides it. A control
+  // that appears on today's job and then refuses is a promise the screen
+  // cannot keep — and this codebase has paid for copy naming a control the
+  // screen lacks AND for a control the action refuses.
+  const canHandBack =
+    !done && !released && !blocked && !!date && date > today && status !== "in_progress";
 
   return (
     <div className="ll-card ll-card-pad">
@@ -228,6 +264,11 @@ export function CrewJobActions({
           <button className="ll-btn ghost sm" onClick={() => setFlagOpen(true)}>
             Flag something
           </button>
+          {canHandBack && (
+            <button className="ll-btn ghost sm" onClick={() => setReleaseOpen((v) => !v)}>
+              Can&apos;t make it
+            </button>
+          )}
           {/* HIDDEN, NOT GREYED. The banner above already says what happened
               and what to do next; a dead button beside it is a second thing to
               work out. The server refuses it either way. */}
@@ -237,6 +278,50 @@ export function CrewJobActions({
             </button>
           )}
         </div>
+      )}
+
+      {/* HANDING IT BACK — §11.1's "may accept or reject jobs", with a door.
+          Advance notice is the behaviour we want, so it costs nothing: no
+          strike, no trip fee, no effect on standing. The reason is required
+          because the owner is told, and because a release with no reason is a
+          no-show with better manners. */}
+      {releaseOpen && canHandBack && (
+        <div className="ll-notice" style={{ margin: "12px 0 0" }}>
+          <p style={{ fontSize: 13.5, fontWeight: 700, margin: "0 0 4px" }}>
+            Hand this job back?
+          </p>
+          <p className="mut" style={{ fontSize: 12.5, margin: "0 0 8px", lineHeight: 1.5 }}>
+            It comes off your schedule and goes back on the open board for another crew to
+            pick up. No strike, no fee, nothing against your standing — advance notice is what
+            we want. The owner is told what you say here, in your words.
+          </p>
+          <textarea
+            value={releaseWhy}
+            onChange={(e) => setReleaseWhy(e.target.value)}
+            placeholder="Why can't you make it? e.g. truck's in the shop until Friday"
+            maxLength={300}
+            rows={3}
+            style={{ display: "block", width: "100%", minHeight: 72, marginBottom: 8 }}
+          />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              className="ll-btn sm"
+              onClick={handBack}
+              disabled={releasing || releaseWhy.trim().length === 0}
+            >
+              {releasing ? "Handing back…" : "Hand it back"}
+            </button>
+            <button className="ll-btn ghost sm" onClick={() => setReleaseOpen(false)} disabled={releasing}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      )}
+
+      {released && (
+        <p className="ll-notice" style={{ margin: "12px 0 0", fontSize: 13 }}>
+          Handed back — it&apos;s on the open board now, and the owner has been told.
+        </p>
       )}
 
       {!done && (

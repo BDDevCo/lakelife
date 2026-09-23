@@ -83,9 +83,17 @@ export function VendorNeedsYou({ data, today }: { data: NeedsYou; today: string 
             <div style={{ fontSize: 14, fontWeight: 700 }}>
               {unpriced.length === 1 ? "One kind of work has no rate yet" : `${unpriced.length} kinds of work have no rate yet`}
             </div>
+            {/* "You won't be offered it" read like a queue the crew is still
+                in. It is a hard gate: dispatch refuses them outright.
+                DELIBERATELY NOT "nobody can pick a price they can't see" — that
+                describes choose-your-crew, and no service carries
+                `crew_priced` yet, so it would be a forecast written in the
+                present tense on a live crew's screen. The clause that IS true
+                today is the one about a blank card, which is the thing that
+                actually catches people. */}
             <p style={{ fontSize: 13, margin: "4px 0 0", lineHeight: 1.5, color: "var(--ink-warn)" }}>
-              You won&apos;t be offered {unpriced.length === 1 ? "it" : "any of them"} until
-              you say what you charge — {unpriced.join(", ")}.
+              No rate, no jobs: {unpriced.join(", ")} can&apos;t reach you until you say
+              what you charge — and a card you saved blank counts as unpriced.
             </p>
             <div style={{ marginTop: 8 }}>
               <Link className="ll-btn sm" href="/vendor/rates">Set my rates</Link>

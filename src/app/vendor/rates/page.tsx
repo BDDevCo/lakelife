@@ -51,9 +51,9 @@ export default async function VendorRatesPage() {
 
   // AN ONBOARDING CREW CAN PRICE — THIS DOOR JUST DIDN'T LET THEM.
   //
-  // The invitation email makes rates step 4 and "Tap Go live" step 5, and the
-  // Rates tab sits directly above that checklist in VendorNav. It used to
-  // answer step 4 by returning the same six onboarding steps, none of them
+  // The invitation email makes rates step 4 (bank is 5, "Tap Go live" is 6),
+  // and the Rates tab sits directly above that checklist in VendorNav. It used
+  // to answer step 4 by returning the same six onboarding steps, none of them
   // about money — and the wizard offers no rates control at all, so the step
   // the email promised had no door anywhere. MyServicesEditor points an
   // onboarding crew here too ("set what you charge for each of these on your

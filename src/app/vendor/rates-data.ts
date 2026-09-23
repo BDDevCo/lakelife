@@ -3,7 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import type { PricingModel, PricingParams } from "@/lib/pricing";
 import { mustRead } from "@/lib/must-read";
 import { getMyVendorId } from "./data";
-import { buildRateForm, type RateForm } from "./rates-helpers";
+import { buildRateForm, hasRealRate, type RateForm } from "./rates-helpers";
 import { getPlatformSettings } from "@/lib/settings";
 import type { PlatformFee } from "@/lib/platform-fee";
 
@@ -130,7 +130,10 @@ export async function getMyRates(): Promise<MyRate[]> {
       pricing_model: s.pricing_model as PricingModel,
       kind: ((s.kind as string | null) ?? "standalone") as MyRate["kind"],
       form,
-      hasRate: !!existing,
+      // NOT `!!existing`. A blank Save writes a row of zeros, and the pill
+      // then said "Rate set ✓" over a card dispatch refuses. Same predicate
+      // as the go-live card, the Today card and the ops coverage board.
+      hasRate: hasRealRate(existing as { base: number | null; unit_rate: number | null; band_pricing: PricingParams | null } | undefined),
       crewPriced,
     };
   });

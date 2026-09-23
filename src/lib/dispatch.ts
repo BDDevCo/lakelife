@@ -306,30 +306,119 @@ export function rankCrews(
 }
 
 /**
- * The whole decision. Preferred crew gets first right of refusal (if eligible +
- * their rate clears the floor); otherwise rank the affordable eligible pool.
+ * THE GEOGRAPHIC DEAD END, AS ONE FUNCTION THAT EVERYBODY ASKS.
+ *
+ * `decideDispatch` returns `no_crew_on_lake` here, and for a long time NOTHING
+ * READ IT. The only consumer of `reasonNoFit` anywhere was
+ * `all_full_or_blocked` (book/actions.ts and book/storage/actions.ts); every
+ * other code fell off the end of the world, so a Haven job that found no
+ * lake-ticked crew left no trace on any screen — not the crew's, not ops'.
+ *
+ * THAT IS NO LONGER TRUE, and this comment said it was long after it stopped
+ * being: `NO_FIT_LABEL` below gives every code words, and three doorways read
+ * them — the ops job file, the ops needs-attention board, and `retryAssign`,
+ * which is the one place a person presses a button and the engine answers
+ * live.
+ *
+ * The ops needs-attention board DID reach the same conclusion, from its own
+ * hand-rolled copy of this membership test. A hand-copied rule agrees with
+ * dispatch today and drifts the first time either changes — the exact hazard
+ * `canEverDo` was split out to end. So the test lives here, once, and the
+ * board and the job file both call it.
+ *
+ * @param forService crews who cover EVERY leg of the work — pre-filtered.
+ * @param lakeId     null/absent means no lake to fail on: never a dead end.
  */
-export function decideDispatch(input: DispatchInput): DispatchDecision {
+export function noCrewOnLake(
+  forService: Pick<CrewCandidate, "serviceLakes">[],
+  lakeId: string | null | undefined,
+): boolean {
+  if (!lakeId) return false;
+  return !forService.some((c) => (c.serviceLakes ?? []).includes(lakeId));
+}
+
+/**
+ * THE CAPABILITY STAGE OF THE VERDICT, AS ONE FUNCTION EVERYBODY ASKS.
+ *
+ * Three of the eight reasons are settled before capacity, rates or the
+ * calendar are consulted at all — they are facts about who exists and what
+ * they have ticked, and they do not change hour to hour:
+ *
+ *   no_crew_for_service   nobody covers this work
+ *   no_full_coverage_crew somebody on this lake covers SOME legs of a package
+ *   no_crew_on_lake       crews cover the work, none has ticked this lake
+ *
+ * WHY IT IS A FUNCTION. `decideDispatch` used to hold this inline, and the
+ * ops job file re-derived it from `header.serviceName` alone — with no
+ * package-leg test at all. A grouped visit with a pier crew on Pretty Lake and
+ * an opening crew on Big Turkey would therefore print "No crew has ticked this
+ * lake yet — recruiting is the unblock" on the ops job page while the engine
+ * said `no_full_coverage_crew`. Recruiting is not the cure for a coverage gap,
+ * and ops would have gone looking for a crew who is already there. Same hazard
+ * `noCrewOnLake` was split out to end, one stage up.
+ *
+ * @param crews  the pool to judge. Callers outside the engine must pre-filter
+ *               to crews who could EVER be sent — see canEverDo — because this
+ *               stage asks only about capability, never paperwork.
+ * @param input  serviceName / componentNames / lakeId. `lakeId` null means no
+ *               lake to fail on.
+ * @returns the reason code, or null when capability is not the problem.
+ */
+export function capabilityNoFit(
+  crews: Pick<CrewCandidate, "serviceTypes" | "serviceLakes">[],
+  input: Pick<DispatchInput, "serviceName" | "componentNames" | "lakeId">,
+): NonNullable<DispatchDecision["reasonNoFit"]> | null {
   const neededNames = input.componentNames?.length ? input.componentNames : [input.serviceName];
-  const forService = input.crews.filter((c) => neededNames.every((n) => c.serviceTypes.includes(n)));
+  const forService = crews.filter((c) => neededNames.every((n) => c.serviceTypes.includes(n)));
   // SIM-FOUND (Wave 2): a crew ON the lake covering SOME of a package's legs
   // is a coverage gap, not "no crew on this lake" — the alarming message was
   // firing on lakes with a real (partial) crew. Name it honestly.
   const partialOnLake = (): boolean =>
     !!input.componentNames?.length && !!input.lakeId &&
-    input.crews.some((c) =>
+    crews.some((c) =>
       (c.serviceLakes ?? []).includes(input.lakeId as string) &&
       neededNames.some((n) => c.serviceTypes.includes(n)) &&
       !neededNames.every((n) => c.serviceTypes.includes(n)));
   if (forService.length === 0) {
-    return { ok: false, reasonNoFit: partialOnLake() ? "no_full_coverage_crew" : "no_crew_for_service", eligibleCount: 0 };
+    return partialOnLake() ? "no_full_coverage_crew" : "no_crew_for_service";
   }
-
   // Geographic dead-end BEFORE the capacity read: crews do this service but
   // none serves THIS lake — that's a recruiting problem, not a full calendar.
-  if (input.lakeId && !forService.some((c) => (c.serviceLakes ?? []).includes(input.lakeId as string))) {
-    return { ok: false, reasonNoFit: partialOnLake() ? "no_full_coverage_crew" : "no_crew_on_lake", eligibleCount: 0 };
+  if (noCrewOnLake(forService, input.lakeId)) {
+    return partialOnLake() ? "no_full_coverage_crew" : "no_crew_on_lake";
   }
+  return null;
+}
+
+/**
+ * EVERY REASON CODE, IN WORDS A PERSON CAN ACT ON.
+ *
+ * One home for the sentences, so a new reason code cannot be added without a
+ * reader — and so the ops job file, the ops board and anything later all say
+ * the same thing about the same verdict. `no_crew_on_lake` is the recruiting
+ * signal: it is the only one of these that names a crew who does not exist yet.
+ */
+export const NO_FIT_LABEL: Record<NonNullable<DispatchDecision["reasonNoFit"]>, string> = {
+  no_crew_for_service: "No active, insured crew does this work yet",
+  no_crew_on_lake: "No crew has ticked this lake yet — recruiting is the unblock",
+  no_full_coverage_crew: "A crew here covers only part of this visit",
+  no_routable_crew: "A crew here does this work, but none can be sent on any day — paperwork, not the calendar",
+  all_full_or_blocked: "Every crew who could take it is full or blocked that day",
+  no_qualifying_rate: "No crew here has set a rate for this work",
+  below_floor: "No crew here clears the margin floor at their rate",
+  no_custody_crew: "No crew here is cleared to hold a boat",
+};
+
+/**
+ * The whole decision. Preferred crew gets first right of refusal (if eligible +
+ * their rate clears the floor); otherwise rank the affordable eligible pool.
+ */
+export function decideDispatch(input: DispatchInput): DispatchDecision {
+  // THE CAPABILITY STAGE, ASKED THROUGH THE SHARED FUNCTION rather than
+  // inline — see capabilityNoFit. Two ops screens re-derive this verdict from
+  // their own queries, and a hand-copy of a three-way branch drifts.
+  const capability = capabilityNoFit(input.crews, input);
+  if (capability) return { ok: false, reasonNoFit: capability, eligibleCount: 0 };
 
   const eligible = input.crews.filter((c) => isEligible(c, input));
   if (eligible.length === 0) {

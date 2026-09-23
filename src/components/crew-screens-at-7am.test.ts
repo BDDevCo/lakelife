@@ -139,19 +139,34 @@ describe("onboarding tells park work apart from lake-home work", () => {
     expect(onboarding).toMatch(/priced per lot/);
   });
 
-  it("every loader feeding it carries the flag", () => {
-    // FOUR of them, found by the compiler rather than by grep: the vendor
-    // home, earnings, import and open all build this screen's props from
-    // their own read. One left on select("name") would render every service
-    // as lake-home work.
+  it("the one loader feeding it carries the flag", () => {
+    // THERE USED TO BE FIVE. The vendor home, schedule, open, import and
+    // earnings each rolled their own pair of reads, and one left on
+    // select("name") would render every service as lake-home work. They now
+    // share `loadOnboardingProps`, so the flag has one place to be dropped
+    // from — and the second half of this test is what keeps it that way.
+    const loader = strip(read("../app/vendor/onboarding-props.ts"));
+    expect(loader, "the shared loader reads services without park_only")
+      .toMatch(/select\("[^"]*park_only[^"]*"\)/);
+    expect(loader).toMatch(/parkOnly: s\.park_only === true/);
+  });
+
+  it("and no page has gone back to rolling its own", () => {
+    // The mutation this catches: a page that stops delegating gets its own
+    // read back, and the loader above stays green while that page renders
+    // twenty services as one flat list.
     for (const rel of [
       "../app/vendor/page.tsx",
+      "../app/vendor/schedule/page.tsx",
       "../app/vendor/earnings/page.tsx",
       "../app/vendor/import/page.tsx",
       "../app/vendor/open/page.tsx",
     ]) {
       const src = strip(read(rel));
-      expect(src, `${rel} still reads services without park_only`).toMatch(/select\("name, park_only"\)/);
+      expect(src, `${rel} no longer uses the shared onboarding loader`)
+        .toMatch(/loadOnboardingProps\(/);
+      expect(src, `${rel} is reading the service catalogue itself again`)
+        .not.toMatch(/from\("services"\)/);
     }
   });
 });

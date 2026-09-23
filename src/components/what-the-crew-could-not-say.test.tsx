@@ -44,6 +44,7 @@ vi.mock("@/app/vendor/actions", () => ({
   completeJob: async () => ({ ok: true }),
   uploadJobPhoto: async () => ({ ok: true }),
   getJobPhotoUrls: async () => ({ ok: true, urls: [] }),
+  releaseJob: async () => ({ ok: true }),
 }));
 vi.mock("@/app/vendor/job-detail-actions", () => ({ crewCureJob: async () => ({ ok: true }) }));
 vi.mock("@/app/approvals/actions", () => ({
@@ -258,6 +259,8 @@ describe("a held, no-showed or stood-down visit on the job page", () => {
         heldAt={null}
         noShowAt={null}
         stoodDownAt={null}
+        date="2026-09-30"
+        today="2026-09-23"
         {...extra}
       />,
     );

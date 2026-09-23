@@ -314,13 +314,37 @@ export function reportedPayoutStatus(rowStatus: string, batchStatus: string | nu
   return "queued";
 }
 
-/** Human status label shared by the list, statement, and CSV. */
-export function statusLabel(status: string): string {
+/**
+ * Human status label shared by the list, statement, and CSV.
+ *
+ * `bankOnFile` IS REQUIRED, AND THAT IS THE FIX. "In the next month-end
+ * payout" was printed to every crew with released money — on their earnings
+ * screen, on the statement they print and in the CSV their bookkeeper opens —
+ * while `runMonthlyPayoutBatches` does `if (!acct) continue`, so a crew with no
+ * bank row is skipped by that very batch, month after month. The same page
+ * carried the contradiction out loud: "Add your bank to unlock payouts" sat a
+ * card below it, and only when there was money ready to pull.
+ *
+ * Making the parameter required rather than optional is deliberate: the
+ * compiler names every screen that would otherwise keep making the promise,
+ * which is the only reason all four of them say the same thing today.
+ *
+ *   true  — the money is going somewhere. The original sentence.
+ *   false — it is not, and the reason is fixable by them in a minute.
+ *   null  — WE COULD NOT CHECK. Never rendered as `false`: telling a crew
+ *           their bank details are missing when they are not sends them to
+ *           re-enter an account number for nothing.
+ */
+export function statusLabel(status: string, bankOnFile: boolean | null): string {
   // "IN FRIDAY'S PAYOUT" WAS NOT TRUE. `runMonthlyPayoutBatches` gates on
   // `isLastDayOfMonth` — there is no Friday cadence anywhere in the system.
   // Telling a crew the wrong week for their own money is the fastest way to
   // lose one.
-  if (status === "released") return "In the next month-end payout";
+  if (status === "released") {
+    if (bankOnFile === false) return "Waiting on your bank details — nothing can be sent yet";
+    if (bankOnFile === null) return "Released — we couldn't check your bank details just now";
+    return "In the next month-end payout";
+  }
   if (status === "pending") return "Awaiting release";
   if (status === "held") return "On hold — make-it-right in progress";
   // `refund-core` writes this when a refund claws a payout back. It used to

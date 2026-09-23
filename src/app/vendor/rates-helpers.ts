@@ -473,3 +473,45 @@ export function crewPricedRateLines(
   }
   return out;
 }
+
+/**
+ * DOES THIS ROW ACTUALLY CARRY A PRICE? The one answer, for the four doorways
+ * that were each answering it differently.
+ *
+ * THE BUG THIS ENDS. Three of the four readers tested ROW EXISTENCE
+ * (`!!existing`, `new Set(rates.map(r => r.service_id))`), while every gate
+ * downstream demands a POSITIVE number: `decideDispatch` drops a crew whose
+ * rate is not `> 0` as `no_qualifying_rate`, and `isEligible` blocks them as
+ * `no_rate`. A blank Save writes a row of zeros on purpose — `coerceRate("")`
+ * returns `{ ok: true, value: 0 }` and the band branch always writes
+ * `{small: 0, medium: 0, large: 0}` — so a crew could tap Save with an empty
+ * form, see "Rate set ✓", read "jobs for the work you've priced start reaching
+ * you", go live, and be dropped from every job with nothing on any screen
+ * saying why. Row existence is not a rate.
+ *
+ * THE TEST IS "COULD THIS PRODUCE A POSITIVE PRICE", which is the question the
+ * gates ask. `priceService` reads exactly these four shapes:
+ *   flat / per_foot / per_section  -> base, unit_rate
+ *   band                           -> band_pricing.small|medium|large
+ *   per_sqft_band                  -> band_pricing.tiers[].price
+ * A row whose every number is zero or absent can never price anything, on any
+ * property, so it is not a rate — whatever the row's existence suggests.
+ *
+ * KNOWN AND DELIBERATELY NOT REFUSED: a PARTIALLY filled band card (small and
+ * medium typed, large blank) passes here and is silently refused only on large
+ * lawns. That is a narrower, different defect — it is named in the report and
+ * left, because calling such a crew "unpriced" on every board would be the
+ * opposite lie.
+ */
+export function hasRealRate(row: Partial<ExistingRate> | null | undefined): boolean {
+  if (!row) return false;
+  if (Number(row.base ?? 0) > 0) return true;
+  if (Number(row.unit_rate ?? 0) > 0) return true;
+  const bp = (row.band_pricing ?? null) as PricingParams | null;
+  if (!bp) return false;
+  for (const k of BAND_KEYS) {
+    if (Number((bp as unknown as Record<string, unknown>)[k] ?? 0) > 0) return true;
+  }
+  if (Array.isArray(bp.tiers) && bp.tiers.some((t) => Number(t?.price ?? 0) > 0)) return true;
+  return false;
+}

@@ -7,6 +7,7 @@ import { retryAssign } from "@/app/ops/dispatch-actions";
 import { PreferredCrew } from "./PreferredCrew";
 import type { NeedsAttentionJob, PropertyPreferred } from "@/app/ops/dispatch-data";
 import type { ActiveVendor } from "@/app/ops/data";
+import { NO_FIT_LABEL } from "@/lib/dispatch";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
@@ -145,7 +146,11 @@ function AttentionCard({ job, crews }: { job: NeedsAttentionJob; crews: ActiveVe
       toast.ok("Placed — a crew picked it up. 🌊");
       router.refresh();
     } else {
-      toast("Still no crew fits — recruit one for this lake.");
+      // THE ENGINE'S OWN ANSWER, not a guess about it. This said "Still no
+      // crew fits — recruit one for this lake" whatever dispatch had just
+      // decided, which sent ops recruiting for a full calendar, for a crew who
+      // is already on the lake and unpriced, and for a price disagreement.
+      toast(res.whyNot ?? "Dispatch ran and nobody was placed.");
     }
   }
 
@@ -179,9 +184,15 @@ function AttentionCard({ job, crews }: { job: NeedsAttentionJob; crews: ActiveVe
         </button>
       </div>
 
-      <p className="mut" style={{ fontSize: 11.5, margin: 0 }}>
-        No crew fitting? Recruit a crew for {job.lake_name ?? "this lake"} on the Crews tab — that&apos;s the real unblock.
-      </p>
+      {/* THE STANDING LINE ONLY WHERE IT IS THE CURE. This card's own reason
+          pill already says what the unblock is, and on a full calendar, an
+          unpriced crew or a price hold, recruiting is not it. The lake
+          dead-end is the one reason that names a crew who does not exist yet. */}
+      {job.reason.includes(NO_FIT_LABEL.no_crew_on_lake) && (
+        <p className="mut" style={{ fontSize: 11.5, margin: 0 }}>
+          Recruit a crew for {job.lake_name ?? "this lake"} on the Crews tab — that&apos;s the real unblock.
+        </p>
+      )}
     </div>
   );
 }
