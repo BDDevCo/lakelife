@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { planChannels, smsHoldSays, inviteSmsBody, type RenterChannels } from "./invite-channels";
+import { planChannels, smsHoldSays, inviteSmsBody, GSM7, isGsm7, type RenterChannels } from "./invite-channels";
 
 const base: RenterChannels = {
   email: "donna@example.com",
@@ -86,6 +86,34 @@ describe("the text itself", () => {
     expect(body.startsWith("Cedar Bend:")).toBe(true);
   });
 
+  it("says STOP, because this is the first message after an opt-in", () => {
+    // The A2P campaign filing describes a flow where replying STOP works — and
+    // it does, via Twilio's Advanced Opt-Out. But a campaign whose SAMPLES do
+    // not say so is reviewed against a claim its own evidence contradicts, and
+    // that is a documented rejection reason. CTIA guidance puts the instruction
+    // on the message following opt-in, which is this one.
+    expect(body).toMatch(/Reply STOP to stop\./);
+  });
+
+  it("stays in GSM-7, which is the difference between 2 segments and 4", () => {
+    // ONE character outside GSM-7 forces the WHOLE message into UCS-2, and a
+    // UCS-2 segment holds 70 characters instead of 160. This body is 218
+    // characters: in GSM-7 that is two segments, in UCS-2 it is four — double
+    // the bill and double the A2P segment count, on every household, forever.
+    // It used to contain an em-dash.
+    const outside = [...body].filter((c) => !GSM7.has(c));
+    expect(outside, `these characters force UCS-2: ${JSON.stringify(outside)}`).toEqual([]);
+    expect(isGsm7(body)).toBe(true);
+  });
+
+  it("the GSM-7 check actually bites — an em-dash is not in the alphabet", () => {
+    // Absence-only assertions pass against a broken checker. Prove the set
+    // rejects the exact character that caused this, and accepts a plain hyphen.
+    expect(isGsm7("your rent - here")).toBe(true);
+    expect(isGsm7("your rent \u2014 here")).toBe(false);
+    expect(isGsm7("nice wave \uD83C\uDF0A")).toBe(false);
+  });
+
   it("carries a link and NO code", () => {
     // Same rule as the email. The slip promises we will never text asking for
     // a code; that dies the moment a code travels by message.
@@ -95,7 +123,16 @@ describe("the text itself", () => {
 
   it("says nothing changes, offers a way out, and warns what we never ask", () => {
     expect(body).toMatch(/Nothing about how you pay changes/);
-    expect(body).toMatch(/Ignore this/);
+    // THE WAY OUT USED TO BE "Ignore this if you'd rather not", AND THAT IS A
+    // COURTESY, NOT AN OPT-OUT. A person who ignores a message has not opted
+    // out of anything and will get the next one. "Reply STOP to stop" is the
+    // instruction carriers, CTIA and the A2P campaign filing all expect, and
+    // it is the one that actually does something — Twilio's Advanced Opt-Out
+    // intercepts STOP before the message reaches us.
+    // Pinned in the STOP test above; asserted here too so this test keeps
+    // meaning what its NAME says it means.
+    expect(body).toMatch(/Reply STOP to stop\./);
+    expect(body).not.toMatch(/Ignore this/);
     expect(body).toMatch(/never text asking for a code or card details/);
   });
 });

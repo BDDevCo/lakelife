@@ -99,11 +99,52 @@ export function smsHoldSays(hold: SmsHold): string {
  * Short on purpose — it is read on a lock screen. It carries no code, for the
  * same reason the email doesn't: the printed slip promises we will never text
  * asking for one, and that promise dies the moment a code travels by message.
+ *
+ * ============ IT SAYS STOP, BECAUSE THIS IS THE FIRST MESSAGE ============
+ *
+ * CTIA's guidance is that the message following an opt-in carries the opt-out
+ * instruction, and the A2P campaign filing DESCRIBES a flow in which replying
+ * STOP works. It does work — Twilio's Advanced Opt-Out handles STOP before the
+ * message ever reaches us — but a campaign whose samples do not say so is being
+ * reviewed against a claim its own evidence does not support, and that is a
+ * documented rejection reason. "Ignore this if you'd rather not" is a courtesy,
+ * not an opt-out.
+ *
+ * ============ AND IT IS GSM-7, WHICH IS WORTH REAL MONEY ============
+ *
+ * This body used to contain an em-dash. A single character outside the GSM-7
+ * alphabet forces the WHOLE message into UCS-2, and a UCS-2 segment holds 70
+ * characters instead of 160 — so a 218-character invitation billed as FOUR
+ * segments where it should have been two, on every household, forever. Plain
+ * hyphens read identically on a lock screen.
+ *
+ * KEEP THIS FUNCTION GSM-7. No em-dashes, no curly quotes, no emoji. The test
+ * beside this one asserts it character by character, so a well-meant typographic
+ * "improvement" fails the build rather than doubling the bill.
  */
 export function inviteSmsBody(input: { parkName: string; lotNumber: string; url: string }): string {
   return (
-    `${input.parkName}: you can see lot ${input.lotNumber} — your rent and receipts — here: ` +
-    `${input.url}\n\nNothing about how you pay changes. Ignore this if you'd rather not. ` +
-    `We'll never text asking for a code or card details.`
+    `${input.parkName}: you can see lot ${input.lotNumber} - your rent and receipts - here: ` +
+    `${input.url}\n\nNothing about how you pay changes. We'll never text asking for a code ` +
+    `or card details. Reply STOP to stop.`
   );
+}
+
+/**
+ * The GSM-7 alphabet, for the test that keeps a message in it.
+ *
+ * Exported rather than duplicated in the test file because the point is that
+ * the RULE and the CHECK are the same thing: a body is cheap to send only if
+ * every character is in here.
+ */
+export const GSM7 = new Set(
+  "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?" +
+  "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà" +
+  "^{}\\[~]|€",
+);
+
+/** True when every character survives GSM-7, i.e. 160 chars a segment not 70. */
+export function isGsm7(body: string): boolean {
+  for (const ch of body) if (!GSM7.has(ch)) return false;
+  return true;
 }
